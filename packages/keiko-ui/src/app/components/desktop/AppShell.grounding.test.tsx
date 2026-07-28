@@ -413,6 +413,22 @@ describe("AppShell grounding connections", () => {
     expect(screen.queryByRole("dialog", { name: "Gateway setup" })).toBeNull();
   });
 
+  it("opens a deep-linked singleton when the route has trailing slashes", async () => {
+    const api = workspaceApi();
+    mocks.state.workspaceResult = workspaceResult([], [], api);
+    const previousUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    try {
+      window.history.replaceState(null, "", "/relationships///");
+
+      await renderMounted();
+
+      expect(api.toggleTool).toHaveBeenCalledWith("relationships");
+      expect(window.location.pathname).toBe("/");
+    } finally {
+      window.history.replaceState(null, "", previousUrl);
+    }
+  });
+
   it("tracks pointer and keyboard modality for focus ring policy", async () => {
     await renderMounted();
 

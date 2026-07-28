@@ -67,14 +67,28 @@ const SETUP_SMOKE_CONCURRENCY = 4;
 const CHAT_COMPATIBLE_MODES = new Set(["chat", "completion", "responses"]);
 const EMBEDDING_ID_PATTERN =
   /(?:^|[-_/. ])(?:text-)?embed(?:ding)?s?(?:[-_/. ]|$)|ada-002(?:$|[-_/. ])/i;
-const IMAGE_INPUT_ID_PATTERN =
-  /(?:^|[-_/. ])(?:vision|multimodal|multi-modal|llava|pixtral|omni|gpt-4o)(?:$|[-_/. ])|(?:^|[-_/. ])vl(?:$|[-_/. ])|qwen(?:2(?:\.5)?|3)?[-_/. ]?vl(?:$|[-_/. ])/i;
+const IMAGE_INPUT_ID_PATTERNS: readonly RegExp[] = [
+  /(?:^|[-_/. ])(?:vision|multimodal|multi-modal|llava|pixtral|omni|gpt-4o)(?:$|[-_/. ])/i,
+  /(?:^|[-_/. ])vl(?:$|[-_/. ])/i,
+  /qwen(?:2(?:\.5)?|3)?[-_/. ]?vl(?:$|[-_/. ])/i,
+];
 const ALLOW_LINK_LOCAL_GATEWAY_ENV = "KEIKO_ALLOW_LINK_LOCAL_GATEWAY";
 
 type GatewaySetupTester = NonNullable<UiHandlerDeps["gatewaySetupTester"]>;
 type GatewayModelDiscovery = NonNullable<UiHandlerDeps["gatewayModelDiscovery"]>;
 type FigmaCredentialTester = NonNullable<UiHandlerDeps["figmaCredentialTester"]>;
 type GatewayEgressConfig = NonNullable<GatewayConfig["egress"]>;
+type SetupParseResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly routeError: RouteResult };
+
+function acceptedSetupValue<T>(value: T): SetupParseResult<T> {
+  return { ok: true, value };
+}
+
+function rejectedSetupValue<T>(routeError: RouteResult): SetupParseResult<T> {
+  return { ok: false, routeError };
+}
 
 class BodyTooLargeError extends Error {
   constructor() {
@@ -434,7 +448,7 @@ function isLikelyEmbeddingModelId(modelId: string): boolean {
 }
 
 function isLikelyImageInputModelId(modelId: string): boolean {
-  return IMAGE_INPUT_ID_PATTERN.test(modelId);
+  return IMAGE_INPUT_ID_PATTERNS.some((pattern) => pattern.test(modelId));
 }
 
 function discoveryRecords(item: Record<string, unknown>): readonly Record<string, unknown>[] {
@@ -1204,12 +1218,17 @@ interface SetupVoiceProvider {
   readonly voiceProfiles?: readonly VoicePersonaVoice[] | undefined;
 }
 
-function normalizeSetupApiKeyHeaderName(value: unknown): string | RouteResult {
+function normalizeSetupApiKeyHeaderName(value: unknown): SetupParseResult<string> {
   try {
-    return normalizeApiKeyHeaderName(value, "apiKeyHeaderName", DEFAULT_API_KEY_HEADER_NAME);
+    return acceptedSetupValue(
+      normalizeApiKeyHeaderName(value, "apiKeyHeaderName", DEFAULT_API_KEY_HEADER_NAME),
+    );
   } catch (error) {
     if (error instanceof ConfigInvalidError) {
-      return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
+      return rejectedSetupValue({
+        status: 400,
+        body: errorBody("BAD_REQUEST", error.message),
+      });
     }
     throw error;
   }
@@ -1227,54 +1246,66 @@ function readSetupModelLists(raw: Record<string, unknown>): SetupModelLists | Ro
   return { deploymentNames, imageInputModelIds };
 }
 
-function optionalSetupSecret(value: unknown, path: string): string | RouteResult | undefined {
+function optionalSetupSecret(value: unknown, path: string): SetupParseResult<string | undefined> {
   if (value === undefined) {
-    return undefined;
+    return acceptedSetupValue(undefined);
   }
   if (typeof value !== "string") {
-    return { status: 400, body: errorBody("BAD_REQUEST", `${path} must be a string.`) };
+    return rejectedSetupValue({
+      status: 400,
+      body: errorBody("BAD_REQUEST", `${path} must be a string.`),
+    });
   }
   const trimmed = value.trim();
-  return trimmed.length === 0 ? undefined : trimmed;
+  return acceptedSetupValue(trimmed.length === 0 ? undefined : trimmed);
 }
 
-function optionalSetupPositiveInt(value: unknown, path: string): number | RouteResult | undefined {
+function optionalSetupPositiveInt(
+  value: unknown,
+  path: string,
+): SetupParseResult<number | undefined> {
   if (value === undefined) {
-    return undefined;
+    return acceptedSetupValue(undefined);
   }
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    return { status: 400, body: errorBody("BAD_REQUEST", `${path} must be a positive integer.`) };
+    return rejectedSetupValue({
+      status: 400,
+      body: errorBody("BAD_REQUEST", `${path} must be a positive integer.`),
+    });
   }
-  return value;
+  return acceptedSetupValue(value);
 }
 
-function optionalSetupBoolean(value: unknown, path: string): boolean | RouteResult | undefined {
+function optionalSetupBoolean(value: unknown, path: string): SetupParseResult<boolean | undefined> {
   if (value === undefined) {
-    return undefined;
+    return acceptedSetupValue(undefined);
   }
   if (typeof value !== "boolean") {
-    return { status: 400, body: errorBody("BAD_REQUEST", `${path} must be a boolean.`) };
+    return rejectedSetupValue({
+      status: 400,
+      body: errorBody("BAD_REQUEST", `${path} must be a boolean.`),
+    });
   }
-  return value;
+  return acceptedSetupValue(value);
 }
 
 function parseVoiceProviderLocality(
   value: unknown,
   fallback: VoiceProviderLocality,
-): VoiceProviderLocality | RouteResult {
+): SetupParseResult<VoiceProviderLocality> {
   if (value === undefined) {
-    return fallback;
+    return acceptedSetupValue(fallback);
   }
   if (
     typeof value !== "string" ||
     !VOICE_PROVIDER_LOCALITIES.includes(value as VoiceProviderLocality)
   ) {
-    return {
+    return rejectedSetupValue({
       status: 400,
       body: errorBody("BAD_REQUEST", "voiceProviderLocality is not supported."),
-    };
+    });
   }
-  return value as VoiceProviderLocality;
+  return acceptedSetupValue(value as VoiceProviderLocality);
 }
 
 function hasNonBlankStringField(raw: Record<string, unknown>, key: string): boolean {
@@ -1461,10 +1492,11 @@ function readSetupGatewayCredentials(
     return { status: 400, body: errorBody("BAD_REQUEST", "baseUrl and apiKey are required.") };
   }
   const apiKeyHeaderSource = setupApiKeyHeaderSource(raw, provider, preserveExisting);
-  const apiKeyHeaderName = normalizeSetupApiKeyHeaderName(apiKeyHeaderSource);
-  if (isRouteResult(apiKeyHeaderName)) {
-    return apiKeyHeaderName;
+  const apiKeyHeaderResult = normalizeSetupApiKeyHeaderName(apiKeyHeaderSource);
+  if (!apiKeyHeaderResult.ok) {
+    return apiKeyHeaderResult.routeError;
   }
+  const apiKeyHeaderName = apiKeyHeaderResult.value;
   const invalidConnection = validateSetupConnection(baseUrl, apiKey, apiKeyHeaderName, env);
   if (invalidConnection !== undefined) {
     return invalidConnection;
@@ -1516,13 +1548,16 @@ function submittedVoiceModelId(
   raw: Record<string, unknown>,
   key: string,
   fallback?: string,
-): string | RouteResult | undefined {
+): SetupParseResult<string | undefined> {
   const modelId = trimmedSubmittedString(raw, key) ?? fallback;
-  if (modelId === undefined) return undefined;
+  if (modelId === undefined) return acceptedSetupValue(undefined);
   if (!isUsableModelId(modelId)) {
-    return { status: 400, body: errorBody("BAD_REQUEST", `${key} is invalid.`) };
+    return rejectedSetupValue({
+      status: 400,
+      body: errorBody("BAD_REQUEST", `${key} is invalid.`),
+    });
   }
-  return modelId;
+  return acceptedSetupValue(modelId);
 }
 
 function setupVoiceConnection(
@@ -1553,7 +1588,7 @@ function setupVoiceApiKeyHeaderName(
   raw: Record<string, unknown>,
   existing: ModelProviderConfig | undefined,
   preserveExisting: boolean,
-): string | RouteResult {
+): SetupParseResult<string> {
   return normalizeSetupApiKeyHeaderName(
     setupVoiceApiKeyHeaderSource(raw, existing, preserveExisting),
   );
@@ -1562,7 +1597,7 @@ function setupVoiceApiKeyHeaderName(
 function setupVoiceProviderLocality(
   raw: Record<string, unknown>,
   existingCapability: ModelCapability | undefined,
-): VoiceProviderLocality | RouteResult {
+): SetupParseResult<VoiceProviderLocality> {
   return parseVoiceProviderLocality(
     raw.voiceProviderLocality,
     existingCapability?.voiceProviderLocality ?? "azure-foundry",
@@ -1867,29 +1902,29 @@ function voiceRoleModelIds(
     "voiceRealtimeTranscriptionModelId",
     fallbacks.realtimeTranscription,
   );
-  const routeError = firstRouteResult([speechInput, speechOutput, realtime, realtimeTranscription]);
-  if (routeError !== undefined) {
-    return routeError;
-  }
+  if (!speechInput.ok) return speechInput.routeError;
+  if (!speechOutput.ok) return speechOutput.routeError;
+  if (!realtime.ok) return realtime.routeError;
+  if (!realtimeTranscription.ok) return realtimeTranscription.routeError;
   const realtimeError = validateRealtimeRoleModelIds(
     raw,
-    realtime as string | undefined,
-    realtimeTranscription as string | undefined,
+    realtime.value,
+    realtimeTranscription.value,
     correlationId,
   );
   if (realtimeError !== undefined) return realtimeError;
   const speechOutputError = validateSpeechOutputVoiceProfile(
     raw,
-    speechOutput as string | undefined,
+    speechOutput.value,
     existing,
     correlationId,
   );
   if (speechOutputError !== undefined) return speechOutputError;
   const roleIds = {
-    speechInput: speechInput as string | undefined,
-    speechOutput: speechOutput as string | undefined,
-    realtime: realtime as string | undefined,
-    realtimeTranscription: realtimeTranscription as string | undefined,
+    speechInput: speechInput.value,
+    speechOutput: speechOutput.value,
+    realtime: realtime.value,
+    realtimeTranscription: realtimeTranscription.value,
   };
   return validateExplicitVoiceRoles(raw, roleIds, correlationId) ?? roleIds;
 }
@@ -2440,14 +2475,17 @@ function setupSemanticTurnDetection(
   raw: Record<string, unknown>,
   current: GatewayConfig | undefined,
   preserveExisting: boolean,
-): boolean | RouteResult {
+): SetupParseResult<boolean> {
   const submitted = optionalSetupBoolean(
     raw.voiceSupportsSemanticTurnDetection,
     "voiceSupportsSemanticTurnDetection",
   );
-  if (submitted !== undefined) return submitted;
+  if (!submitted.ok) return submitted;
+  if (submitted.value !== undefined) return acceptedSetupValue(submitted.value);
   const replacesRealtime = realtimeProviderIdentityChanged(raw, current);
-  return preserveExisting && !replacesRealtime ? inheritedSemanticTurnDetection(current) : false;
+  return acceptedSetupValue(
+    preserveExisting && !replacesRealtime ? inheritedSemanticTurnDetection(current) : false,
+  );
 }
 
 function validateVoiceProviders(
@@ -2513,31 +2551,31 @@ function readSetupVoiceProviders(
   const timeoutMs = optionalSetupPositiveInt(raw.voiceTimeoutMs, "voiceTimeoutMs");
   const providerLocality = setupVoiceProviderLocality(raw, existingCapability);
   const supportsSemanticTurnDetection = setupSemanticTurnDetection(raw, current, preserveExisting);
+  if (!apiKeyHeaderName.ok) return apiKeyHeaderName.routeError;
+  if (!timeoutMs.ok) return timeoutMs.routeError;
+  if (!providerLocality.ok) return providerLocality.routeError;
+  if (!supportsSemanticTurnDetection.ok) return supportsSemanticTurnDetection.routeError;
   const routeError = firstRouteResult([
     validateVoiceEndpointUpdate(raw, current, preserveExisting, correlationId),
     validateVoiceConnectionUpdate(raw, current, preserveExisting, correlationId),
     roleIds,
     connection,
-    apiKeyHeaderName,
-    timeoutMs,
-    providerLocality,
-    supportsSemanticTurnDetection,
   ]);
   if (routeError !== undefined) {
     return routeError;
   }
   const defaults = setupVoiceProviderDefaults(
     connection as { readonly baseUrl: string; readonly apiKey: string },
-    apiKeyHeaderName as string,
-    timeoutMs as number | undefined,
-    providerLocality as VoiceProviderLocality,
+    apiKeyHeaderName.value,
+    timeoutMs.value,
+    providerLocality.value,
     existing,
   );
   const generatedProviders = providersForVoiceRoles(
     roleIds as VoiceRoleModelIds,
     defaults,
     raw,
-    supportsSemanticTurnDetection as boolean,
+    supportsSemanticTurnDetection.value,
     existingVoiceProviders,
   );
   const providers = mergeUntouchedVoiceProviders(generatedProviders, existingVoiceProviders, raw);
@@ -2664,16 +2702,16 @@ function readSetupRequest(
     return credentials;
   }
   const timeoutMs = optionalSetupPositiveInt(raw.timeoutMs, "timeoutMs");
-  if (isRouteResult(timeoutMs)) {
-    return timeoutMs;
+  if (!timeoutMs.ok) {
+    return timeoutMs.routeError;
   }
   const modelLists = readSetupModelLists(raw);
   if (isRouteResult(modelLists)) {
     return modelLists;
   }
   const figmaAccessToken = optionalSetupSecret(raw.figmaAccessToken, "figmaAccessToken");
-  if (isRouteResult(figmaAccessToken)) {
-    return figmaAccessToken;
+  if (!figmaAccessToken.ok) {
+    return figmaAccessToken.routeError;
   }
   const voiceProviders = readSetupVoiceProviders(
     raw,
@@ -2691,10 +2729,10 @@ function readSetupRequest(
     correlationId,
     preserveExisting,
     credentials,
-    timeoutMs,
+    timeoutMs: timeoutMs.value,
     modelLists,
     voiceProviders,
-    figmaAccessToken,
+    figmaAccessToken: figmaAccessToken.value,
   });
 }
 

@@ -402,9 +402,53 @@ function lineLooksLikeImport(line: string): boolean {
   return /^\s*import\b/u.test(line) || /^\s*export\s*\{/u.test(line);
 }
 
+const DECLARATION_MODIFIERS: ReadonlySet<string> = new Set([
+  "async",
+  "default",
+  "declare",
+  "public",
+  "private",
+  "protected",
+  "readonly",
+  "static",
+]);
+const DECLARATION_KEYWORDS: ReadonlySet<string> = new Set([
+  "const",
+  "let",
+  "var",
+  "function",
+  "class",
+  "interface",
+  "type",
+  "enum",
+]);
+
+function leadingAsciiWord(text: string): string {
+  let end = 0;
+  while (end < text.length && /[A-Za-z]/u.test(text.charAt(end))) end += 1;
+  return text.slice(0, end);
+}
+
+function consumeWhitespace(text: string, from: number): number {
+  let index = from;
+  while (index < text.length && /\s/u.test(text.charAt(index))) index += 1;
+  return index;
+}
+
 function lineLooksLikeDeclaration(line: string): boolean {
-  return /^\s*(?:export\s+)?(?:(?:async|default|declare|public|private|protected|readonly|static)\s+)*(?:const|let|var|function|class|interface|type|enum)\b/u.test(
-    line,
+  let remaining = line.trimStart();
+  if (remaining.startsWith("export") && /\s/u.test(remaining.charAt("export".length))) {
+    remaining = remaining.slice(consumeWhitespace(remaining, "export".length));
+  }
+  for (;;) {
+    const word = leadingAsciiWord(remaining);
+    if (!DECLARATION_MODIFIERS.has(word) || !/\s/u.test(remaining.charAt(word.length))) break;
+    remaining = remaining.slice(consumeWhitespace(remaining, word.length));
+  }
+  const keyword = leadingAsciiWord(remaining);
+  return (
+    DECLARATION_KEYWORDS.has(keyword) &&
+    (remaining.length === keyword.length || !/\w/u.test(remaining.charAt(keyword.length)))
   );
 }
 

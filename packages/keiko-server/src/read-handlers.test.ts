@@ -534,17 +534,17 @@ describe("GET /api/workspace", () => {
     }
   });
 
-  it("rejects an invalid budget with BAD_REQUEST", () => {
-    const result = handleWorkspace(ctx("/api/workspace?budget=0"), depsWith({}));
-    expect(result.status).toBe(400);
-    expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
-  });
-
-  it("rejects a non-JSON-safe budget with BAD_REQUEST", () => {
-    const result = handleWorkspace(ctx("/api/workspace?budget=9007199254740992"), depsWith({}));
-    expect(result.status).toBe(400);
-    expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
-  });
+  it.each(["0", "00", "1.5", "+1", "１２", "9007199254740992"])(
+    "rejects invalid or unsafe budget syntax: %s",
+    (budget) => {
+      const result = handleWorkspace(
+        ctx(`/api/workspace?budget=${encodeURIComponent(budget)}`),
+        depsWith({}),
+      );
+      expect(result.status).toBe(400);
+      expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+    },
+  );
 
   it("requires an explicit workspace dir", () => {
     const result = handleWorkspace(ctx("/api/workspace"), depsWith({}));
@@ -700,46 +700,22 @@ describe("GET /api/evidence", () => {
     expect((result.body as { entries: unknown[] }).entries).toHaveLength(2);
   });
 
-  it("filters by outcome", () => {
+  it.each([
+    ["outcome=failed", "run-b"],
+    ["workflow=generate-unit-tests", "run-a"],
+    ["date=2026-05-02", "run-b"],
+  ])("filters evidence by %s", (query, expectedRunId) => {
     const store = storeFrom([
       manifestJson("run-a", "generate-unit-tests", "completed", Date.parse("2026-05-01T10:00:00Z")),
       manifestJson("run-b", "investigate-bug", "failed", Date.parse("2026-05-02T10:00:00Z")),
     ]);
     const result = handleEvidenceList(
-      ctx("/api/evidence?outcome=failed"),
+      ctx(`/api/evidence?${query}`),
       depsWith({ evidenceStore: store }),
     );
     const entries = (result.body as { entries: { runId: string }[] }).entries;
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.runId).toBe("run-b");
-  });
-
-  it("filters by workflow", () => {
-    const store = storeFrom([
-      manifestJson("run-a", "generate-unit-tests", "completed", Date.parse("2026-05-01T10:00:00Z")),
-      manifestJson("run-b", "investigate-bug", "failed", Date.parse("2026-05-02T10:00:00Z")),
-    ]);
-    const result = handleEvidenceList(
-      ctx("/api/evidence?workflow=generate-unit-tests"),
-      depsWith({ evidenceStore: store }),
-    );
-    const entries = (result.body as { entries: { runId: string }[] }).entries;
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.runId).toBe("run-a");
-  });
-
-  it("filters by started-at calendar day", () => {
-    const store = storeFrom([
-      manifestJson("run-a", "generate-unit-tests", "completed", Date.parse("2026-05-01T10:00:00Z")),
-      manifestJson("run-b", "investigate-bug", "failed", Date.parse("2026-05-02T10:00:00Z")),
-    ]);
-    const result = handleEvidenceList(
-      ctx("/api/evidence?date=2026-05-02"),
-      depsWith({ evidenceStore: store }),
-    );
-    const entries = (result.body as { entries: { runId: string }[] }).entries;
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.runId).toBe("run-b");
+    expect(entries[0]?.runId).toBe(expectedRunId);
   });
 
   it("filters by model and workspace metadata", () => {

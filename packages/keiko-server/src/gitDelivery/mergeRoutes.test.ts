@@ -475,6 +475,9 @@ describe("merge request validation", () => {
     expect(
       (await handler(ctxFor(PREVIEW, mergeBody({ ownerAndRepo: "no-slash" })), deps())).status,
     ).toBe(400);
+    expect(
+      (await handler(ctxFor(PREVIEW, mergeBody({ prExternalId: "１２" })), deps())).status,
+    ).toBe(400);
   });
 
   it("rejects a malformed expected head sha", async () => {

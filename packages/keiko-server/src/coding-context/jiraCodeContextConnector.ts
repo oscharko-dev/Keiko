@@ -17,7 +17,7 @@ export interface JiraCodeContextHttpPort {
 }
 
 const JIRA_PROJECT_RE = /^[A-Z][A-Z0-9_]{1,20}$/u;
-const JIRA_NUMBER_RE = /^[1-9][0-9]{0,9}$/u;
+const JIRA_NUMBER_RE = /^[1-9]\d{0,9}$/u;
 
 export function createJiraCodeContextConnector(
   http: JiraCodeContextHttpPort,

@@ -7,7 +7,7 @@
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
-import { normaliseCandidateText } from "./assertions.js";
+import { containsNegation, normaliseCandidateText, stripFirstNegation } from "./assertions.js";
 import { buildRequirementExcerpt } from "./requirementExcerpt.js";
 
 export interface RequirementQualityAtomInput {
@@ -28,9 +28,9 @@ interface RequirementQualitySignal {
 }
 
 const AMBIGUITY_PATTERN =
-  /\b(schnell|angemessen|zeitnah|regelma(?:e|ä)ssig|regelmäßig|mo(?:e|ö)glichst|benutzerfreundlich|performant)\b/iu;
+  /\b(schnell|angemessen|zeitnah|regelma[eä]ssig|regelmäßig|mo[eö]glichst|benutzerfreundlich|performant)\b/iu;
 const OPEN_PLACEHOLDER_PATTERN = /\b(tbd|todo|n\/a|offen|noch zu kl(?:ae|ä)ren)\b/iu;
-const WEAK_MODALITY_PATTERN = /\b(sollte|kann|k(?:oe|ö)nnte|mo(?:e|ö)glichst)\b/iu;
+const WEAK_MODALITY_PATTERN = /\b(sollte|kann|k(?:oe|ö)nnte|mo[eö]glichst)\b/iu;
 const REQUIREMENT_MODAL_CLAUSE_PATTERN =
   /\b(muss|müssen|soll|sollen|darf nicht|dürfen nicht|hat zu|haben zu)\b/giu;
 const COUPLED_DUTY_PATTERN =
@@ -40,9 +40,6 @@ const RESPONSE_OR_AVAILABILITY_PATTERN =
 const NUMBER_WITH_MEASURABLE_UNIT_PATTERN =
   /\b\d+(?:[.,]\d+)?\s*(?:ms|millisekunden|sekunden|sek|s|minuten|min|stunden|h|%|prozent|eur|euro|€)\b/iu;
 const AVAILABILITY_TARGET_PATTERN = /\b(?:sla|rto|rpo|\d+(?:[.,]\d+)?\s*(?:%|prozent))\b/iu;
-const NEGATION_PATTERN =
-  /\b(not|never|no longer|cannot|isn't|aren't|won't|doesn't|do not|nicht|kein(?:e|en|em|er|es)?|niemals|nie|ohne)\b/iu;
-
 function collapsedText(value: string): string {
   return normaliseCandidateText(value).replace(/\s+/gu, " ").trim();
 }
@@ -170,13 +167,13 @@ export function analyzeRequirementQuality(
     const text = collapsedText(entry.canonicalText);
     if (text.length === 0) continue;
 
-    const core = text.replace(NEGATION_PATTERN, " ").replace(/\s+/gu, " ").trim();
+    const core = stripFirstNegation(text).replace(/\s+/gu, " ").trim();
     if (core.length > 0) {
       comparables.push({
         atom: entry.atom,
         text,
         core,
-        negated: NEGATION_PATTERN.test(text),
+        negated: containsNegation(text),
       });
     }
 

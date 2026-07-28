@@ -120,7 +120,7 @@ export interface CodeContextPackResult {
 
 const OWNER_REPO_RE =
   /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/u;
-const NUMBER_RE = /^[1-9][0-9]{0,9}$/u;
+const NUMBER_RE = /^[1-9]\d{0,9}$/u;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 

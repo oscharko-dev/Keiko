@@ -157,6 +157,16 @@ describe("coding context pack route", () => {
       packRequest({
         refs: [{ source: "jira", objectKind: "issue", projectKey: "bad key", objectId: "1" }],
       }),
+      packRequest({
+        refs: [
+          {
+            source: "github",
+            objectKind: "issue",
+            ownerAndRepo: "owner/repo",
+            objectId: "１２",
+          },
+        ],
+      }),
       packRequest({ maxBodyBytes: 1 }),
     ];
     for (const body of cases) {

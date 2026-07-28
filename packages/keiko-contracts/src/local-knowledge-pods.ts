@@ -403,10 +403,25 @@ const FUTURE_POD_REASON_BY_KIND: Record<
 // treated as a path while still catching single-segment paths after ANY punctuation or start of
 // string, so this class of gap (three enumerations of "boundary characters" so far) cannot recur
 // by omitting one more separator.
-const FILESYSTEM_PATH_RE =
-  /[A-Za-z]:[\\/]|\\\\|\\[^\\\s]+|~[\\/]|\.\.[\\/]|\/[^/\s]+\/|(?<![A-Za-z0-9_])\/[^/\s]+/u;
-const SECRET_RE =
-  /(?:sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-|AKIA[0-9A-Z]{12,}|[Bb]earer\s+[A-Za-z0-9._~+/=-]{12,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|BEGIN (?:RSA |EC |OPENSSH |PRIVATE )?KEY)/u;
+const FILESYSTEM_PATH_PATTERNS: readonly RegExp[] = [
+  /[A-Za-z]:[\\/]/u,
+  /\\\\/u,
+  /\\[^\\\s]+/u,
+  /~[\\/]/u,
+  /\.\.[\\/]/u,
+  /\/[^/\s]+\//u,
+  /(?<!\w)\/[^/\s]+/u,
+];
+const SECRET_PATTERNS: readonly RegExp[] = [
+  /sk-[\w-]{12,}/u,
+  /ghp_\w{12,}/u,
+  /github_pat_\w{20,}/u,
+  /xox[baprs]-/u,
+  /AKIA[0-9A-Z]{12,}/u,
+  /[Bb]earer\s+[\w.~+/=-]{12,}/u,
+  /eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,}/u,
+  /BEGIN (?:RSA |EC |OPENSSH |PRIVATE )?KEY/u,
+];
 const TOKEN_QUERY_KEYS = new Set([
   "access_token",
   "api_key",
@@ -431,7 +446,7 @@ const TOKEN_QUERY_KEYS = new Set([
 // by shape here. The cookie form requires the header colon and a negative lookbehind so benign
 // prose ("cookie consent banner", "third-party cookies accepted") is not over-redacted; the prompt
 // form matches only unambiguous template delimiters that cannot occur in a real manual summary.
-const COOKIE_HEADER_RE = /(?<![A-Za-z0-9_])(?:set-)?cookie\s*:/iu;
+const COOKIE_HEADER_RE = /(?<!\w)(?:set-)?cookie\s*:/iu;
 const PROMPT_SCAFFOLD_RE =
   /<\|(?:im_(?:start|end)|system|user|assistant|endoftext)\|>|\[\[topic:|\[\/?INST\]|<<\/?SYS>>/iu;
 
@@ -533,7 +548,7 @@ function queryKeyContainsTokenName(key: string): boolean {
   const decoded = safeDecodeUriComponent(key)
     .toLowerCase()
     .replace(/[-.\s]+/gu, "_");
-  return decoded.split(/(?:\[|\])/u).some((part) => {
+  return decoded.split(/[[\]]/u).some((part) => {
     if (TOKEN_QUERY_KEYS.has(part)) return true;
     return part.includes("token") || part.includes("secret") || part.includes("credential");
   });
@@ -721,13 +736,17 @@ function isAsciiDigit(char: string): boolean {
   return code >= 48 && code <= 57;
 }
 
+function matchesAnyPattern(value: string, patterns: readonly RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(value));
+}
+
 function isSafePodText(value: unknown, allowEmpty: boolean): value is string {
   if (typeof value !== "string") return false;
   if (!allowEmpty && value.trim().length === 0) return false;
   return (
     isSafeDisplaySummary(value) &&
-    !FILESYSTEM_PATH_RE.test(value) &&
-    !SECRET_RE.test(value) &&
+    !matchesAnyPattern(value, FILESYSTEM_PATH_PATTERNS) &&
+    !matchesAnyPattern(value, SECRET_PATTERNS) &&
     !containsTokenParameterKey(value) &&
     !containsEndpointLikeText(value) &&
     !COOKIE_HEADER_RE.test(value) &&

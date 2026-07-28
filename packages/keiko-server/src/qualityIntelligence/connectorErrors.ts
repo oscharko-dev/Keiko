@@ -55,7 +55,7 @@ const FORBIDDEN_SUBSTRINGS: readonly string[] = [
 
 const FORBIDDEN_SECRET_PATTERNS: readonly RegExp[] = [
   /AKIA[0-9A-Z]{12,}/u,
-  /(?:ghp_|gho_|github_pat_)[A-Za-z0-9_]{20,}/u,
+  /(?:ghp_|gho_|github_pat_)\w{20,}/u,
   /xox[baprs]-[A-Za-z0-9-]{10,}/u,
   /sk-[A-Za-z0-9]{16,}/u,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/u,

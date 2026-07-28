@@ -147,10 +147,16 @@ function toPosix(value: string): string {
   return value.replaceAll("\\", "/");
 }
 
+function stripTrailingSlashRun(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charAt(end - 1) === "/") end -= 1;
+  return value.slice(0, end);
+}
+
 function normalizeAgentPathForWorkspace(workspaceRoot: string, value: string): string {
   const candidate = toPosix(value.trim());
   if (candidate.length === 0) return "";
-  const workspace = toPosix(workspaceRoot.trim()).replace(/\/+$/u, "");
+  const workspace = stripTrailingSlashRun(toPosix(workspaceRoot.trim()));
   if (workspace.length === 0) return candidate;
   if (candidate === workspace) return ".";
   const prefix = `${workspace}/`;

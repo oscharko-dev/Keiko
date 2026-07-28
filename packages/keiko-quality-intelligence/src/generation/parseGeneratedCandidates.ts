@@ -51,8 +51,12 @@ export const GENERATED_CANDIDATE_TAG_EXPECTED_RESULT_PLACEHOLDER = "expected-res
 const ENGLISH_FALLBACK_EXPECTED_RESULT = "The behaviour matches the cited evidence.";
 const GERMAN_FALLBACK_EXPECTED_RESULT = "Das Verhalten entspricht der zitierten Evidenz.";
 
-const GERMAN_LANGUAGE_SIGNAL_PATTERN =
-  /[äöüÄÖÜß]|\b(?:anforderung|benutzer|betrag|das|dem|den|der|des|die|einzahlung|evidenz|freigabe|konto|kunde|kundin|muss|nicht|oder|pruefe|prüfe|regel|soll|ueberweisung|überweisung|und|verhalten|zahlung)\b/iu;
+const GERMAN_LANGUAGE_SIGNAL_PATTERNS: readonly RegExp[] = [
+  /[äöüß]/iu,
+  /\b(?:anforderung|benutzer|betrag|das|dem|den|der|des|die|einzahlung|evidenz|freigabe|konto)\b/iu,
+  /\b(?:kunde|kundin|muss|nicht|oder|pruefe|prüfe|regel|soll|ueberweisung|überweisung)\b/iu,
+  /\b(?:und|verhalten|zahlung)\b/iu,
+];
 
 const VAGUE_EXPECTED_RESULT_PATTERN =
   /\b(?:all requirements are satisfied|behaviou?r matches(?: the)? cited evidence|expected result|expected outcome|matches the cited evidence|works as expected|das erwartete ergebnis tritt ein|das verhalten entspricht(?: der)? zitierten evidenz|funktioniert wie erwartet|verhalten wie erwartet)\b/iu;
@@ -362,8 +366,10 @@ const deriveCandidateId = (
   return `qi-candidate-${digest}`;
 };
 
-const isProbablyGermanCandidate = (parts: readonly string[]): boolean =>
-  GERMAN_LANGUAGE_SIGNAL_PATTERN.test(parts.join(" "));
+const isProbablyGermanCandidate = (parts: readonly string[]): boolean => {
+  const text = parts.join(" ");
+  return GERMAN_LANGUAGE_SIGNAL_PATTERNS.some((pattern) => pattern.test(text));
+};
 
 const fallbackExpectedResult = (parts: readonly string[]): string =>
   isProbablyGermanCandidate(parts)

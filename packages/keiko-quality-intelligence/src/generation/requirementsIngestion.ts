@@ -47,8 +47,11 @@ const SHORT_DOMAIN_TOKEN = /\b(?:IBAN|BIC|PIN|TAN|SEPA|KYC|AML|PSD2|SCA|MFA)\b/i
 const DOMAIN_REQUIREMENT_ID = /\b[A-ZÄÖÜ]{2,12}-\d{1,8}\b/u;
 const MARKDOWN_HEADING = /^\s{0,3}#{1,6}\s+\S/u;
 const MARKDOWN_TABLE_ROW = /^\s*\|.+\|\s*$/u;
-const GHERKIN_LINE =
-  /^\s*(?:Feature|Funktionalität|Scenario(?: Outline)?|Szenario(?:grundriss)?|Szenariogrundriss|Given|When|Then|And|But|Angenommen|Gegeben|Wenn|Dann|Und|Aber|Examples|Beispiele)\b/iu;
+const GHERKIN_LINE_PATTERNS: readonly RegExp[] = [
+  /^\s*(?:Feature|Scenario(?: Outline)?|Given|When|Then|And|But|Examples)\b/iu,
+  /^\s*(?:Funktionalität|Szenario(?:grundriss)?|Szenariogrundriss)\b/iu,
+  /^\s*(?:Angenommen|Gegeben|Wenn|Dann|Und|Aber|Beispiele)\b/iu,
+];
 const inlineEnumerationMarker = (): RegExp => /(?:^|\s)([a-z])[).]\s+/giu;
 const ABBREVIATION_PATTERNS: readonly RegExp[] = [
   /\bz\.\s*B\./giu,
@@ -87,7 +90,8 @@ const normaliseBlock = (lines: readonly string[]): string =>
 
 const isMarkdownTableRow = (line: string): boolean => MARKDOWN_TABLE_ROW.test(line);
 
-const isGherkinLine = (line: string): boolean => GHERKIN_LINE.test(line);
+const isGherkinLine = (line: string): boolean =>
+  GHERKIN_LINE_PATTERNS.some((pattern) => pattern.test(line));
 
 const collectBlock = (
   lines: readonly string[],

@@ -34,17 +34,24 @@ const categoryLabels = new Map([
 const unsafePublicContentPatterns = [
   {
     label: "absolute local filesystem path",
-    pattern:
+    patterns: [
       /(?:^|[\s(["'`])(?:\/Users\/|\/home\/|\/private\/|\/var\/folders\/|[A-Za-z]:\\|\\\\[A-Za-z0-9_.-]+\\)/u,
+    ],
   },
   {
     label: "secret-like token",
-    pattern:
-      /\b(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|npm_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})\b/u,
+    patterns: [
+      /\bsk-[\w-]{8,}\b/u,
+      /\bghp_\w{12,}\b/u,
+      /\bgithub_pat_\w{12,}\b/u,
+      /\bnpm_\w{12,}\b/u,
+      /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/u,
+      /\bAKIA[0-9A-Z]{16}\b/u,
+    ],
   },
   {
     label: "private key material",
-    pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/u,
+    patterns: [/-----BEGIN [A-Z ]*PRIVATE KEY-----/u],
   },
 ];
 
@@ -106,12 +113,26 @@ function sanitizeUserFacingText(value) {
     .replace(/\s?([.!?])$/u, "$1");
 }
 
+const TRACE_REFERENCE_PATTERNS = [
+  /https:\/\/github\.com\/[^\s)]+\/(?:issues|pull)\/\d+/giu,
+  /\b(?:issues?|prs?|pull requests?)\s*#\d+\b/giu,
+  /#\d+\b/gu,
+];
+
 function extractTraceReferences(value) {
+  const matches = TRACE_REFERENCE_PATTERNS.flatMap((pattern) =>
+    [...value.matchAll(pattern)].map((match) => ({
+      end: (match.index ?? 0) + match[0].length,
+      reference: match[0].trim(),
+      start: match.index ?? 0,
+    })),
+  ).sort((left, right) => left.start - right.start || right.end - left.end);
   const references = new Set();
-  for (const match of value.matchAll(
-    /(https:\/\/github\.com\/[^\s)]+\/(?:issues|pull)\/\d+|\b(?:issues?|prs?|pull requests?)\s*#\d+\b|#\d+\b)/giu,
-  )) {
-    references.add(match[0].trim());
+  let consumedUntil = 0;
+  for (const match of matches) {
+    if (match.start < consumedUntil) continue;
+    references.add(match.reference);
+    consumedUntil = match.end;
   }
   return [...references];
 }
@@ -290,8 +311,8 @@ function renderNotes(entries, rootManifest, options) {
 
 function publicContentFailures(notes) {
   const failures = [];
-  for (const { label, pattern } of unsafePublicContentPatterns) {
-    if (pattern.test(notes)) {
+  for (const { label, patterns } of unsafePublicContentPatterns) {
+    if (patterns.some((pattern) => pattern.test(notes))) {
       failures.push(`release-impact: generated release notes contain ${label}.`);
     }
   }

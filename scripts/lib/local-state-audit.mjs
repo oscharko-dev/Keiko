@@ -72,7 +72,7 @@ const REDACTED_PLACEHOLDER = "[REDACTED]";
 const SECRET_SHAPE_PATTERNS = [
   { label: "OpenAI-style API key", re: /\bsk-[A-Za-z0-9_-]{16,}/g },
   { label: "GitHub token", re: /\bgh[pousr]_[A-Za-z0-9]{20,}/g },
-  { label: "GitHub fine-grained token", re: /\bgithub_pat_[A-Za-z0-9_]{20,}/g },
+  { label: "GitHub fine-grained token", re: /\bgithub_pat_\w{20,}/g },
   { label: "AWS access key id", re: /\bAKIA[0-9A-Z]{16}\b/g },
   { label: "Slack token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}/g },
   { label: "Google API key", re: /\bAIza[0-9A-Za-z_-]{20,}/g },
@@ -85,11 +85,18 @@ const SECRET_SHAPE_PATTERNS = [
 ];
 
 const SECRET_VALUE_PATTERNS = [
-  { label: "x-api-key header", re: /\b(x-api-key\s*:\s*)["']?([^\s"'`,;}]+)/gi },
-  { label: "api key assignment", re: /\b(api[_-]?key\s*[=:]\s*)["']?([^\s"'`,;&}]+)/gi },
+  { label: "x-api-key header", res: [/\b(x-api-key\s*:\s*)["']?([^\s"'`,;}]+)/gi] },
+  {
+    label: "api key assignment",
+    res: [/\b(api[_-]?key\s*[=:]\s*)["']?([^\s"'`,;&}]+)/gi],
+  },
   {
     label: "secret key assignment",
-    re: /\b(passwd|password|api_?token|token|secret_key|secret|client_secret|refresh_token|access_token|id_token|private_key|aws_secret_access_key|secret_access_key|sas_token|jwt_secret|db_password|connection_?string|credential)(["']?\s*[:=]\s*["']?)([^\s"'`,;&}]+)/gi,
+    res: [
+      /\b(passwd|password|api_?token|token|secret_key|secret|client_secret)(["']?\s*[:=]\s*["']?)([^\s"'`,;&}]+)/gi,
+      /\b(refresh_token|access_token|id_token|private_key|aws_secret_access_key)(["']?\s*[:=]\s*["']?)([^\s"'`,;&}]+)/gi,
+      /\b(secret_access_key|sas_token|jwt_secret|db_password|connection_?string|credential)(["']?\s*[:=]\s*["']?)([^\s"'`,;&}]+)/gi,
+    ],
     valueGroup: 3,
   },
 ];
@@ -174,7 +181,7 @@ function tableExists(db, name) {
 }
 
 function quoteIdent(identifier) {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) {
+  if (!/^[A-Za-z_]\w*$/.test(identifier)) {
     throw new Error(`unsupported SQLite identifier: ${identifier}`);
   }
   return `"${identifier}"`;
@@ -703,7 +710,7 @@ function stripTrailingPlaceholderPunctuation(value) {
 
 function isPlaceholderSafe(value) {
   const trimmed = stripTrailingPlaceholderPunctuation(value.trim());
-  return trimmed === REDACTED_PLACEHOLDER || /^(?:true|false|null|[0-9]+)$/iu.test(trimmed);
+  return trimmed === REDACTED_PLACEHOLDER || /^(?:true|false|null|\d+)$/iu.test(trimmed);
 }
 
 function scanForSecretFindings(text) {
@@ -713,10 +720,12 @@ function scanForSecretFindings(text) {
     if (re.test(text)) findings.push(label);
   }
   for (const pattern of SECRET_VALUE_PATTERNS) {
-    pattern.re.lastIndex = 0;
-    for (const match of text.matchAll(pattern.re)) {
-      const value = match[pattern.valueGroup ?? 2];
-      if (typeof value === "string" && !isPlaceholderSafe(value)) findings.push(pattern.label);
+    for (const re of pattern.res) {
+      re.lastIndex = 0;
+      for (const match of text.matchAll(re)) {
+        const value = match[pattern.valueGroup ?? 2];
+        if (typeof value === "string" && !isPlaceholderSafe(value)) findings.push(pattern.label);
+      }
     }
   }
   return [...new Set(findings)];

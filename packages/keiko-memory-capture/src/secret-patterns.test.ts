@@ -191,6 +191,10 @@ describe("looksLikeEuDePii — review-policy markers, not hard rejections", () =
     expect(looksLikeEuDePii("DE89 3704 0044 0532 0130 00")).toBe(true);
   });
 
+  it("detects German IBANs obfuscated with tab separators", () => {
+    expect(looksLikeEuDePii("DE89\t3704\t0044\t0532\t0130\t00")).toBe(true);
+  });
+
   it("detects a labeled German Steuer-ID while avoiding unlabeled long numbers", () => {
     expect(looksLikeEuDePii("Steuer-ID: 12 345 678 901")).toBe(true);
     expect(looksLikeEuDePii("Benchmark 12345678901 passed")).toBe(false);

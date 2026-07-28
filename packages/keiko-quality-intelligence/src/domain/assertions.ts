@@ -15,6 +15,36 @@ import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 // package barrel keep the same `stripUnsafeFormatChars` name without a second implementation.
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 
+const NEGATION_PATTERNS: readonly RegExp[] = [
+  /\b(?:not|never|no longer|cannot|isn't|aren't|won't|doesn't|do not)\b/iu,
+  /\b(?:nicht|kein(?:e|en|em|er|es)?|niemals|nie|ohne)\b/iu,
+];
+
+interface TextMatch {
+  readonly index: number;
+  readonly text: string;
+}
+
+function firstMatch(value: string, patterns: readonly RegExp[]): TextMatch | undefined {
+  let first: TextMatch | undefined;
+  for (const pattern of patterns) {
+    const match = pattern.exec(value);
+    if (match !== null && (first === undefined || match.index < first.index)) {
+      first = { index: match.index, text: match[0] };
+    }
+  }
+  return first;
+}
+
+export const containsNegation = (value: string): boolean =>
+  NEGATION_PATTERNS.some((pattern) => pattern.test(value));
+
+export function stripFirstNegation(value: string): string {
+  const match = firstMatch(value, NEGATION_PATTERNS);
+  if (match === undefined) return value;
+  return `${value.slice(0, match.index)} ${value.slice(match.index + match.text.length)}`;
+}
+
 /**
  * NFKC-normalise + trim a free-text fragment, returning the empty string for
  * `undefined`. Used to make heuristics invariant to compatibility-equivalent

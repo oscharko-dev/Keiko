@@ -30,7 +30,23 @@ describe("collectBestLines", () => {
     expect(best).toEqual([{ line: 4, startLine: 4, endLine: 4, score: 1 }]);
   });
 
-  it("does not extend a Python citation past the last physical line", () => {
+  it.each([
+    [
+      "a Python block at the last physical line",
+      "def handler():\n    return needle\n",
+      { line: 2, startLine: 1, endLine: 2, score: 1 },
+    ],
+    [
+      "a .NET Attribute-suffixed route decorator",
+      [
+        '[HttpGetAttribute("/orders/{id}")]',
+        "public Order GetOrder(string id) {",
+        "  return needle;",
+        "}",
+      ].join("\n"),
+      { line: 3, startLine: 1, endLine: 4, score: 1 },
+    ],
+  ])("includes %s in the enclosing citation", (_case, text, expected) => {
     const best = collectBestLines(
       {
         limits: { elapsedMsMax: 1_000 },
@@ -38,11 +54,11 @@ describe("collectBestLines", () => {
         nowMs: () => 0,
         startMs: 0,
       },
-      "def handler():\n    return needle\n",
+      text,
       { truncated: false },
     );
 
-    expect(best).toEqual([{ line: 2, startLine: 1, endLine: 2, score: 1 }]);
+    expect(best).toEqual([expected]);
   });
 
   it("keeps a genuine nested Python block after brace ranges take precedence", () => {

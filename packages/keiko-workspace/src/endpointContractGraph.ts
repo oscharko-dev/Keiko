@@ -97,8 +97,8 @@ const TS_TYPE_OBJECT = /\btype\s+([A-Za-z_$][\w$]*)\s*=\s*\{([^}]*)\}/gu;
 const AXIOS_CALL_PREFIX =
   /\baxios\.(get|post|put|patch|delete)\s{0,50}(?:<\s*([A-Za-z_$][\w$]*)\s*>)?\s{0,50}\(\s*/gu;
 const STRING_LITERAL_RE = /^(?:`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/u;
-const FETCH_CALL =
-  /\bfetch\s*\(\s*(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")(?:\s*,\s*\{([\s\S]{0,300}?)\})?/gu;
+const FETCH_CALL_PREFIX = /\bfetch\s*\(\s*/gu;
+const FETCH_OPTIONS_RE = /^\s*,\s*\{([\s\S]{0,300}?)\}/u;
 
 function firstStringLiteral(args: string | undefined): string {
   if (args === undefined) return "/";
@@ -313,22 +313,31 @@ function extractAxiosCalls(file: SourceFile, state: EndpointBuildState): void {
   }
 }
 
+function extractFetchCalls(file: SourceFile, state: EndpointBuildState): void {
+  FETCH_CALL_PREFIX.lastIndex = 0;
+  let prefix: RegExpExecArray | null = FETCH_CALL_PREFIX.exec(file.text);
+  while (prefix !== null) {
+    const afterPrefix = file.text.slice(prefix.index + prefix[0].length);
+    const literal = STRING_LITERAL_RE.exec(afterPrefix)?.[0];
+    if (literal !== undefined) {
+      const afterLiteral = afterPrefix.slice(literal.length);
+      addClientCall(
+        state,
+        file,
+        "fetch",
+        methodFromOptions(FETCH_OPTIONS_RE.exec(afterLiteral)?.[1]),
+        literal,
+        lineNumberOf(file.text, prefix.index),
+        undefined,
+      );
+    }
+    prefix = FETCH_CALL_PREFIX.exec(file.text);
+  }
+}
+
 function extractTypeScript(file: SourceFile, state: EndpointBuildState): void {
   extractAxiosCalls(file, state);
-  FETCH_CALL.lastIndex = 0;
-  let fetchCall: RegExpExecArray | null = FETCH_CALL.exec(file.text);
-  while (fetchCall !== null) {
-    addClientCall(
-      state,
-      file,
-      "fetch",
-      methodFromOptions(fetchCall[2]),
-      fetchCall[1] ?? "",
-      lineNumberOf(file.text, fetchCall.index),
-      undefined,
-    );
-    fetchCall = FETCH_CALL.exec(file.text);
-  }
+  extractFetchCalls(file, state);
   extractTsDtos(file, state);
 }
 

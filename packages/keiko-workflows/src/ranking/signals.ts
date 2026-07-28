@@ -110,7 +110,8 @@ export interface ExtractedSignals {
 
 // Fixed regex for stack-frame "at fn (path:line:col)" and "at path:line:col" detection.
 // No user input is interpolated.
-const STACK_FRAME_RE = /^\s*at\s+(?:\S+\s+\(([^\s:]+):\d+(?::\d+)?\)|([^\s:]+):\d+(?::\d+)?)/;
+const FUNCTION_STACK_FRAME_RE = /^\s*at\s+\S+\s+\((?<path>[^\s:]+):\d+(?::\d+)?\)/;
+const BARE_STACK_FRAME_RE = /^\s*at\s+(?<path>[^\s:]+):\d+(?::\d+)?/;
 
 function clampUnit(value: number): number {
   return Math.max(0, Math.min(1, value));
@@ -214,12 +215,12 @@ function computeStacktracePositionBonus(
     if (anc.kind !== "quoted") {
       continue;
     }
-    const match = STACK_FRAME_RE.exec(anc.term);
-    if (match === null) {
+    const match = FUNCTION_STACK_FRAME_RE.exec(anc.term) ?? BARE_STACK_FRAME_RE.exec(anc.term);
+    const framePath = match?.groups?.path;
+    if (framePath === undefined) {
       continue;
     }
-    const framePath = match[1] ?? match[2];
-    if (framePath?.toLowerCase() === lowerScopePath) {
+    if (framePath.toLowerCase() === lowerScopePath) {
       return 1;
     }
   }

@@ -42,7 +42,7 @@ function parseArgs(args: readonly string[]): ContextArgs | null {
   if (dirRaw === null || taskRaw === null || budgetRaw === null) {
     return null;
   }
-  if (budgetRaw !== undefined && !/^[1-9][0-9]*$/.test(budgetRaw)) {
+  if (budgetRaw !== undefined && !/^[1-9]\d*$/.test(budgetRaw)) {
     return null;
   }
   const budget = budgetRaw === undefined ? undefined : Number.parseInt(budgetRaw, 10);

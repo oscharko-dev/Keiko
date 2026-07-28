@@ -171,7 +171,7 @@ const EDITOR_AGENT_MESSAGES: Record<Locale, EditorAgentMessageCatalog> = {
 export type EditorAgentTranslate = (key: EditorAgentMessageKey, values?: MessageValues) => string;
 
 function formatEditorAgentMessage(template: string, values: MessageValues = {}): string {
-  return template.replace(/\{([a-zA-Z0-9_]+)\}/gu, (match, name: string) => {
+  return template.replace(/\{(\w+)\}/gu, (match, name: string) => {
     const value = values[name];
     return value === undefined ? match : String(value);
   });

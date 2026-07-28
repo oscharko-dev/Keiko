@@ -251,6 +251,44 @@ describe("NewWindowDialog agents: start-run contract", () => {
     );
   });
 
+  it("normalizes the active file against a workspace root with trailing slashes", async () => {
+    mockAgentDependencies();
+    vi.mocked(fetchProjects).mockResolvedValue({
+      projects: [project("/repo///")],
+    });
+    render(
+      <NewWindowDialog
+        type="agents"
+        types={WIN_TYPES}
+        filesContext={{
+          id: "files-1",
+          root: "/repo///",
+          activeFilePath: "/repo/src/app.ts",
+        }}
+        onConfirm={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent(
+        "example-chat-model",
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Unit Test Agent" }));
+
+    await waitFor(() =>
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: {
+            workspaceRoot: "/repo///",
+            target: { kind: "file", filePath: "src/app.ts" },
+          },
+        }),
+      ),
+    );
+  });
+
   it("offers the production agents without exposing task utilities as agent choices", async () => {
     const user = userEvent.setup();
     await renderAgentDialog();

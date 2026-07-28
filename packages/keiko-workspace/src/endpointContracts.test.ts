@@ -151,6 +151,24 @@ describe("buildEndpointContractGraph", () => {
       }),
     ]);
   });
+
+  it("preserves fetch literal and options parsing across all supported quote styles", async () => {
+    const { scope, fs } = makeScope({
+      "src/client/fetch-forms.ts": [
+        "fetch('/single', { method: 'POST' });",
+        'fetch("/double", { method: "PUT" });',
+        "fetch(`/template`, { method: `PATCH` });",
+      ].join("\n"),
+    });
+
+    const graph = await buildEndpointContractGraph(scope, DEFAULT_SEARCH_LIMITS, fs);
+
+    expect(graph.clientCalls.map((call) => [call.method, call.path])).toEqual([
+      ["POST", "/single"],
+      ["PUT", "/double"],
+      ["GET", "/template"],
+    ]);
+  });
 });
 
 describe("buildEndpointContractGraph regex complexity safety (S8786 regression)", () => {

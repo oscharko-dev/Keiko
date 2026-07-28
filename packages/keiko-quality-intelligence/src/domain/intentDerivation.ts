@@ -47,7 +47,8 @@ export interface DeriveIntentOptions {
 const REQUIREMENT_VERB_PATTERNS: readonly RegExp[] = [
   /\b(must|shall|should|cannot|may not|may|will)\b/iu,
   /\b(verify|ensure|confirm|reject|prevent|allow|deny)\b/iu,
-  /\b(muss|muessen|soll|sollen|sollte|darf(?:\s+nicht)?|duerfen(?:\s+nicht)?|ist\s+zu|hat\s+zu|haben\s+zu)\b/iu,
+  /\b(muss|muessen|soll|sollen|sollte)\b/iu,
+  /\b(darf(?:\s+nicht)?|duerfen(?:\s+nicht)?|ist\s+zu|hat\s+zu|haben\s+zu)\b/iu,
   /\b(verifizieren|sicherstellen|bestaetigen|ablehnen|verhindern|erlauben|verweigern)\b/iu,
 ];
 

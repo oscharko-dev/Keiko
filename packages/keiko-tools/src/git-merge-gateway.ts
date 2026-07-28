@@ -164,7 +164,7 @@ export class GitMergeArgvError extends Error {
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
 const REF_CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
 const OWNER_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
-const PR_NUMBER_RE = /^[1-9][0-9]{0,9}$/;
+const PR_NUMBER_RE = /^[1-9]\d{0,9}$/;
 const SHA_RE = /^[0-9a-fA-F]{7,64}$/;
 
 function assertRef(value: string, label: string): string {

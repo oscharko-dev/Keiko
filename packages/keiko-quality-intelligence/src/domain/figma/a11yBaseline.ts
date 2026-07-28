@@ -128,9 +128,7 @@ const GENERIC_LAYER_NAME =
 // layer name. This stays structural: it rejects provider-default vocabulary, not board-specific copy.
 const hasDescriptiveName = (node: IrNode): boolean => {
   const trimmed = node.name.trim();
-  return (
-    trimmed.length > 0 && !/^[0-9]+:[0-9]+$/u.test(trimmed) && !GENERIC_LAYER_NAME.test(trimmed)
-  );
+  return trimmed.length > 0 && !/^\d+:\d+$/u.test(trimmed) && !GENERIC_LAYER_NAME.test(trimmed);
 };
 
 const hasAccessibleName = (node: IrNode): boolean =>

@@ -50,6 +50,47 @@ describe("collectImportSpecifiers", () => {
     ]);
   });
 
+  it("collects multiline star and named re-exports without changing their source order", () => {
+    const hits = collectImportSpecifiers(
+      [
+        "export",
+        "  {",
+        "    first,",
+        "    second,",
+        "  }",
+        "  from",
+        '  "./named";',
+        "export",
+        "  *",
+        "  from",
+        '  "./star";',
+      ].join("\n"),
+    );
+
+    expect(hits.map((hit) => [hit.kind, hit.specifier])).toEqual([
+      ["re-export", "./named"],
+      ["re-export", "./star"],
+    ]);
+  });
+
+  it("reports the export keyword line after leading blank lines", () => {
+    const hits = collectImportSpecifiers('\n\nexport * from "./feature";');
+
+    expect(hits.map((hit) => [hit.kind, hit.specifier, hit.line])).toEqual([
+      ["re-export", "./feature", 3],
+    ]);
+  });
+
+  it("rejects a long blank-line run in linear time (S8786 re-export regression)", () => {
+    const adversarial = "\n".repeat(80_000);
+    const startedAtMs = Date.now();
+    const hits = collectImportSpecifiers(adversarial);
+    const elapsedMs = Date.now() - startedAtMs;
+
+    expect(elapsedMs).toBeLessThan(1500);
+    expect(hits).toEqual([]);
+  });
+
   it("counts lines correctly when a supplementary-plane character precedes an import", () => {
     // Regression for the charCodeAt -> codePointAt rename (typescript:S7758). "😀" is 2 UTF-16
     // code units; neither unit's code point ever equals the ASCII line-feed (10), so the line

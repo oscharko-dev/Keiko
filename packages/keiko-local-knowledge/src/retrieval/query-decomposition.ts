@@ -18,8 +18,7 @@ const MIN_PART_TOKENS = 3;
 
 // Conjunction followed by an interrogative — the only conjunction form that safely marks a new
 // question ("… und wie …", "… and what …"). Case-insensitive; the interrogative is kept with
-// the second part via the lookahead (not a capture group — `.split()` would otherwise splice
-// the captured text into its result array).
+// the second part.
 //
 // Both whitespace runs are BOUNDED (`{1,20}`), not `\s+`: `query` is raw, attacker-controlled
 // chat text, and an unbounded quantifier immediately followed by an alternation that can fail,
@@ -31,8 +30,11 @@ const MIN_PART_TOKENS = 3;
 // with the unbounded form, scaling quadratically from there. A bounded run makes the per-position
 // backtrack cost a constant, restoring linear-time matching; no legitimate query has 20+
 // consecutive whitespace characters between words.
-const CONJUNCTION_SPLIT_PATTERN =
-  /\s{1,20}(?:und|sowie|and|plus)\s{1,20}(?=(?:wie|was|wo|wann|warum|wieso|weshalb|welche[rsnm]?|how|what|where|when|why|which|who|whom|whose)\b)/giu;
+const CONJUNCTION_SEPARATOR_PATTERN = /\s{1,20}(?:und|sowie|and|plus)\s{1,20}/giu;
+const INTERROGATIVE_START_PATTERNS: readonly RegExp[] = [
+  /^(?:wie|was|wo|wann|warum|wieso|weshalb|welche[rsnm]?)\b/iu,
+  /^(?:how|what|where|when|why|which|who|whom|whose)\b/iu,
+];
 
 const QUESTION_MARK_SPLIT_PATTERN = /\?+/u;
 const SEMICOLON_SPLIT_PATTERN = /;+/u;
@@ -58,6 +60,24 @@ function splitBy(query: string, pattern: RegExp): readonly string[] {
   return acceptedParts(cleanedParts(query.split(pattern)));
 }
 
+function startsWithInterrogative(value: string): boolean {
+  return INTERROGATIVE_START_PATTERNS.some((pattern) => pattern.test(value));
+}
+
+function splitConjunctionQuestions(query: string): readonly string[] {
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const match of query.matchAll(CONJUNCTION_SEPARATOR_PATTERN)) {
+    const start = match.index;
+    const next = start + match[0].length;
+    if (!startsWithInterrogative(query.slice(next))) continue;
+    parts.push(query.slice(cursor, start));
+    cursor = next;
+  }
+  parts.push(query.slice(cursor));
+  return acceptedParts(cleanedParts(parts));
+}
+
 // Returns the chained sub-queries of `query`, or [] when the query is not a recognizable
 // chain. The original query is NOT included — callers decide how to combine.
 export function decomposeChainedQuery(query: string): readonly string[] {
@@ -70,5 +90,5 @@ export function decomposeChainedQuery(query: string): readonly string[] {
   const bySemicolon = splitBy(trimmed, SEMICOLON_SPLIT_PATTERN);
   if (bySemicolon.length > 0) return bySemicolon;
 
-  return splitBy(trimmed, CONJUNCTION_SPLIT_PATTERN);
+  return splitConjunctionQuestions(trimmed);
 }

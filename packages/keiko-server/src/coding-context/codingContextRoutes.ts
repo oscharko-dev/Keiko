@@ -65,7 +65,7 @@ const MAX_MAX_BODY_BYTES = 65_536;
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const OWNER_AND_REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/u;
 const JIRA_PROJECT_PATTERN = /^[A-Z][A-Z0-9_]{1,20}$/u;
-const OBJECT_ID_PATTERN = /^[1-9][0-9]{0,9}$/u;
+const OBJECT_ID_PATTERN = /^[1-9]\d{0,9}$/u;
 
 // Local, cycle-free error envelope (mirrors routes.ts errorBody; a runtime import from
 // routes.ts would create an ESM cycle because routes.ts spreads this file's route group).

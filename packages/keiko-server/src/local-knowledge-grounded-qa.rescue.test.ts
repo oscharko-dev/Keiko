@@ -486,6 +486,21 @@ describe("local-knowledge citation rescue (#189)", () => {
       "Keine Evidenz",
     );
   });
+
+  it.each([
+    "Bitte zeige die Quellen.",
+    "Erkläre den Befund.",
+    "Ist Evidenz verfügbar?",
+    "Prüfe den Knowledge Pod.",
+  ])("recognizes German query vocabulary across the supported word families: %s", (question) => {
+    expect(localKnowledgeNoEvidenceAnswer(undefined, question)).toContain("Keine Evidenz");
+  });
+
+  it("does not classify an English question as German from a substring match", () => {
+    expect(localKnowledgeNoEvidenceAnswer(undefined, "Is the evidence available?")).toBe(
+      LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER,
+    );
+  });
 });
 
 // ─── redactText fallback ──────────────────────────────────────────────────────
