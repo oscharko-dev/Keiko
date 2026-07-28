@@ -785,6 +785,12 @@ describe("AppShell grounding connections", () => {
     );
     expect(resolveSearchRoot(null, win("editor", { root: "/repo/editor" }))).toBe("/repo/editor");
     expect(resolveSearchRoot(null, win("files", { root: "/repo/files" }))).toBe("/repo/files");
+    expect(
+      resolveSearchRoot(
+        null,
+        win("files", { root: "/repo/configured", resolvedRoot: "/repo/current" }),
+      ),
+    ).toBe("/repo/current");
     expect(resolveSearchRoot(null, win("search", { root: "/repo/search" }))).toBe("/repo/search");
     expect(resolveSearchRoot(null, win("governedGit", { projectPath: "/repo/git" }))).toBe(
       "/repo/git",
@@ -808,6 +814,19 @@ describe("AppShell grounding connections", () => {
     expect(resolveSearchRoot(null, frontmostSearchRootOwner([editor, files, chatWindow]))).toBe(
       "/repo/files",
     );
+  });
+
+  it("ignores absent collections and minimized root owners", (): void => {
+    const editor = { ...win("editor", { root: "/repo/editor" }), z: 4 };
+    const minimizedFiles = {
+      ...win("files", { resolvedRoot: "/repo/files" }),
+      minimized: true,
+      z: 9,
+    };
+
+    expect(frontmostSearchRootOwner(null)).toBeNull();
+    expect(frontmostSearchRootOwner([editor, minimizedFiles])).toBe(editor);
+    expect(frontmostSearchRootOwner([minimizedFiles])).toBeNull();
   });
 
   it("fails closed when Git carries conflicting current and legacy roots", (): void => {

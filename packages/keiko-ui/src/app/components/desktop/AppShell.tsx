@@ -217,11 +217,10 @@ export function resolveSearchRoot(
   const workspaceRoot = nonEmptyRoot(activeWorkspaceRoot);
   if (workspaceRoot !== undefined) return workspaceRoot;
   if (activeWindow === null) return undefined;
-  if (
-    activeWindow.type === "editor" ||
-    activeWindow.type === "files" ||
-    activeWindow.type === "search"
-  ) {
+  if (activeWindow.type === "files") {
+    return nonEmptyRoot(activeWindow.cfg["resolvedRoot"]) ?? nonEmptyRoot(activeWindow.cfg["root"]);
+  }
+  if (activeWindow.type === "editor" || activeWindow.type === "search") {
     return nonEmptyRoot(activeWindow.cfg["root"]);
   }
   return activeWindow.type === "governedGit" ? gitWindowRoot(activeWindow) : undefined;

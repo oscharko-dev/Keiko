@@ -433,6 +433,72 @@ describe("SearchPanel", () => {
     expect(screen.getByText("/repo/b")).toBeInTheDocument();
   });
 
+  it("preserves controls but clears scoped results when manifest targets arrive", async (): Promise<void> => {
+    const view = render(<SearchPanel root="/repo/a" />);
+    await searchFor("needle");
+    fireEvent.change(screen.getByLabelText("Replacement"), { target: { value: "thread" } });
+    fireEvent.change(screen.getByLabelText("Include glob"), {
+      target: { value: "src/**" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+    await screen.findByTestId("replace-diff");
+
+    view.rerender(
+      <SearchPanel
+        root="/repo/a"
+        roots={[
+          { id: "a", root: "/repo/a", label: "Root A" },
+          { id: "b", root: "/repo/b", label: "Root B" },
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole("searchbox", { name: "Search files and symbols" })).toHaveValue(
+      "needle",
+    );
+    expect(screen.getByLabelText("Replacement")).toHaveValue("thread");
+    expect(screen.getByLabelText("Include glob")).toHaveValue("src/**");
+    expect(screen.queryByTestId("replace-diff")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Apply reviewed replace/u })).toBeNull();
+  });
+
+  it("ignores a replacement preview completed for pre-manifest targets", async (): Promise<void> => {
+    const pending = deferred<WorkspaceReplacePreviewResponse>();
+    fetchWorkspaceReplacePreviewMock.mockReturnValueOnce(pending.promise);
+    const view = render(<SearchPanel root="/repo/a" />);
+    await searchFor("needle");
+    fireEvent.change(screen.getByLabelText("Replacement"), { target: { value: "thread" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+    await waitFor((): void => expect(fetchWorkspaceReplacePreviewMock).toHaveBeenCalledOnce());
+
+    view.rerender(
+      <SearchPanel
+        root="/repo/a"
+        roots={[
+          { id: "a", root: "/repo/a", label: "Root A" },
+          { id: "b", root: "/repo/b", label: "Root B" },
+        ]}
+      />,
+    );
+    await act(async (): Promise<void> => {
+      pending.resolve({
+        files: [],
+        fileCount: 0,
+        editCount: 0,
+        truncated: false,
+        omittedFileCount: 0,
+      });
+      await pending.promise;
+    });
+
+    expect(screen.getByRole("searchbox", { name: "Search files and symbols" })).toHaveValue(
+      "needle",
+    );
+    expect(screen.queryByTestId("replace-diff")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Apply reviewed replace/u })).toBeNull();
+    expect(applyWorkspaceReplaceMock).not.toHaveBeenCalled();
+  });
+
   it("ignores a replacement preview that completes after the workspace root changes", async (): Promise<void> => {
     const pending = deferred<WorkspaceReplacePreviewResponse>();
     fetchWorkspaceReplacePreviewMock.mockReturnValueOnce(pending.promise);

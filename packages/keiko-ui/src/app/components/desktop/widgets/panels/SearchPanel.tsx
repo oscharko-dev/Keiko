@@ -461,7 +461,11 @@ function ReplaceReviews({
 }
 
 function searchPanelScopeKey(props: SearchPanelProps): string {
-  return JSON.stringify([props.root ?? null, props.roots ?? null]);
+  return JSON.stringify(props.root ?? null);
+}
+
+function searchTargetsScopeKey(targets: readonly WorkspaceRootTarget[]): string {
+  return JSON.stringify(targets.map((target): readonly string[] => [target.id, target.root]));
 }
 
 export function SearchPanel(props: SearchPanelProps): ReactNode {
@@ -476,6 +480,9 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
     (): readonly WorkspaceRootTarget[] => panelTargets(root, projectName, roots),
     [projectName, root, roots],
   );
+  const targetsScopeKey = useMemo((): string => searchTargetsScopeKey(targets), [targets]);
+  const currentTargetsScopeKey = useRef(targetsScopeKey);
+  currentTargetsScopeKey.current = targetsScopeKey;
   const multiRoot = targets.length > 1;
   const queryInputRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState("");
@@ -513,6 +520,20 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
     t,
   });
   const showReplaceStatus = replaceStatus !== null;
+
+  useEffect((): void => {
+    setResponse(null);
+    setReplacePreviews([]);
+    setStatus("idle");
+    setReplaceStatus(null);
+    setRouteError(null);
+    setRootErrors([]);
+    setReplaceErrors([]);
+    setApplyingRootId(null);
+    setAppliedRootIds(new Set());
+    setReplaceMessages(new Map());
+    setActiveIndex(0);
+  }, [targetsScopeKey]);
 
   useEffect(() => {
     const focusSearch = (): void => queryInputRef.current?.focus();
@@ -604,6 +625,7 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
 
   const previewReplace = useCallback(async (): Promise<void> => {
     if (targets.length === 0 || query.trim().length === 0 || inlineError !== null) return;
+    const requestedTargetsScopeKey = targetsScopeKey;
     setReplaceStatus(
       multiRoot
         ? t("searchPanel.replace.computingMulti")
@@ -626,13 +648,16 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
           replacement,
           maxFiles: WORKSPACE_REPLACE_MAX_FILES,
         });
+        if (currentTargetsScopeKey.current !== requestedTargetsScopeKey) return;
         const sources = await sourcesForPreview(target.root, preview.files);
+        if (currentTargetsScopeKey.current !== requestedTargetsScopeKey) return;
         next.push({
           target,
           response: preview,
           model: buildWorkspaceReplacePatchModel(preview, sources),
         });
       } catch (error) {
+        if (currentTargetsScopeKey.current !== requestedTargetsScopeKey) return;
         errors.push({
           id: target.id,
           label: target.label,
@@ -640,6 +665,7 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
         });
       }
     }
+    if (currentTargetsScopeKey.current !== requestedTargetsScopeKey) return;
     setReplacePreviews(next);
     setReplaceErrors(multiRoot ? errors : []);
     if (!multiRoot) {
@@ -672,6 +698,7 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
     replacement,
     t,
     targets,
+    targetsScopeKey,
   ]);
 
   const applyReplacePreview = useCallback(
