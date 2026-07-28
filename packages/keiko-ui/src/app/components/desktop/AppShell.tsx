@@ -227,6 +227,16 @@ export function resolveSearchRoot(
   return activeWindow.type === "governedGit" ? gitWindowRoot(activeWindow) : undefined;
 }
 
+export function frontmostSearchRootOwner(wins: readonly AppWindow[] | null): AppWindow | null {
+  if (wins === null) return null;
+  let owner: AppWindow | null = null;
+  for (const win of wins) {
+    if (win.minimized === true || resolveSearchRoot(null, win) === undefined) continue;
+    if (owner === null || win.z > owner.z) owner = win;
+  }
+  return owner;
+}
+
 export function openOrFocusSearchWindow(api: WorkspaceApi, root: string | undefined): void {
   // WorkspaceApi.add is the singleton-aware open/focus operation. Passing an explicit undefined
   // clears a stale persisted root, so an unowned or ambiguous Search fails visibly before routing.
@@ -832,6 +842,7 @@ function AppShellInner(): ReactNode {
 
   const winCount = ws.wins?.length ?? 0;
   const active = topWindow(ws.wins);
+  const searchOwner = frontmostSearchRootOwner(ws.wins);
   // GEN-PERF-WORKSPACE-008 — keep the chrome props referentially stable across
   // geometry-only frames (see chromeWindowsSignatureOf): a fresh Set/array per
   // drag frame defeated the LeftRail/RightRail/Footer memos for whole gestures.
@@ -953,9 +964,9 @@ function AppShellInner(): ReactNode {
       if (!(id in WIN_TYPES)) return;
       const panel = id as WindowType;
       const before = openTools.has(panel);
-      const existing = ws.wins?.find((win) => win.type === panel);
+      const existing = ws.wins?.find((win): boolean => win.type === panel);
       if (panel === "search" && (existing === undefined || existing.minimized === true)) {
-        openOrFocusSearchWindow(ws.api, resolveSearchRoot(activeWorkspace.activeRoot, active));
+        openOrFocusSearchWindow(ws.api, resolveSearchRoot(activeWorkspace.activeRoot, searchOwner));
       } else {
         ws.api.toggleTool(panel);
       }
@@ -966,7 +977,7 @@ function AppShellInner(): ReactNode {
         after: !before,
       });
     },
-    [active, activeWorkspace.activeRoot, openTools, undoStack, ws.api, ws.wins],
+    [activeWorkspace.activeRoot, openTools, searchOwner, undoStack, ws.api, ws.wins],
   );
 
   const onNewChat = useCallback((): void => pick("chat"), [pick]);
@@ -993,15 +1004,15 @@ function AppShellInner(): ReactNode {
       else if (commandId === "redo") undoStack.redo();
       else if (commandId === "focus-status") statusRef.current?.focus();
       else if (commandId === "focus-workspace-search") {
-        openOrFocusSearchWindow(ws.api, resolveSearchRoot(activeWorkspace.activeRoot, active));
+        openOrFocusSearchWindow(ws.api, resolveSearchRoot(activeWorkspace.activeRoot, searchOwner));
       } else if (commandId === "quick-access.files") openQuickAccessFiles();
       else if (commandId === "quick-access.commands") openQuickAccessCommands();
     },
     [
-      active,
       activeWorkspace.activeRoot,
       openQuickAccessCommands,
       openQuickAccessFiles,
+      searchOwner,
       undoStack,
       ws.api,
     ],

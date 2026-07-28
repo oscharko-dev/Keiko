@@ -236,6 +236,7 @@ vi.mock("./widgets", () => ({}));
 
 import {
   AppShell,
+  frontmostSearchRootOwner,
   GatewaySetupLoading,
   openOrFocusSearchWindow,
   resolveSearchRoot,
@@ -762,7 +763,7 @@ describe("AppShell grounding connections", () => {
     expect(api.updateConnBoundScope).not.toHaveBeenCalled();
   });
 
-  it("opens or focuses Search with an explicit root and clears it when ownership is unavailable", () => {
+  it("opens or focuses Search with an explicit root and clears it when ownership is unavailable", (): void => {
     const api = workspaceApi();
     const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       callback(0);
@@ -778,7 +779,7 @@ describe("AppShell grounding connections", () => {
     rafSpy.mockRestore();
   });
 
-  it("resolves only explicit active-workspace, Editor, Files, Search, or Git root ownership", () => {
+  it("resolves only explicit active-workspace, Editor, Files, Search, or Git root ownership", (): void => {
     expect(resolveSearchRoot("/task/worktree", win("editor", { root: "/repo/editor" }))).toBe(
       "/task/worktree",
     );
@@ -791,7 +792,25 @@ describe("AppShell grounding connections", () => {
     expect(resolveSearchRoot(null, win("chat", { projectPath: "/repo/chat" }))).toBeUndefined();
   });
 
-  it("fails closed when Git carries conflicting current and legacy roots", () => {
+  it("rejects missing, non-string, empty, and whitespace-only persisted roots", (): void => {
+    expect(resolveSearchRoot(null, win("editor"))).toBeUndefined();
+    expect(resolveSearchRoot(null, win("editor", { root: 42 }))).toBeUndefined();
+    expect(resolveSearchRoot(null, win("files", { root: "" }))).toBeUndefined();
+    expect(resolveSearchRoot(null, win("search", { root: "   " }))).toBeUndefined();
+  });
+
+  it("uses the frontmost eligible root owner beneath an unrelated top window", (): void => {
+    const editor = { ...win("editor", { root: "/repo/editor" }), z: 4 };
+    const files = { ...win("files", { root: "/repo/files" }), z: 6 };
+    const chatWindow = { ...win("chat", { projectPath: "/repo/chat" }), z: 9 };
+
+    expect(frontmostSearchRootOwner([editor, files, chatWindow])).toBe(files);
+    expect(resolveSearchRoot(null, frontmostSearchRootOwner([editor, files, chatWindow]))).toBe(
+      "/repo/files",
+    );
+  });
+
+  it("fails closed when Git carries conflicting current and legacy roots", (): void => {
     expect(
       resolveSearchRoot(
         null,

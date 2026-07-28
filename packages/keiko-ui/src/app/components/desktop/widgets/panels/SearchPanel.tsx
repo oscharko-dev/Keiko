@@ -132,7 +132,7 @@ function panelProjectName(
   t: OptionalWidgetTranslate,
 ): string {
   if (root === undefined) return t("searchPanel.noProjectSelected");
-  return roots?.find((target) => target.root === root)?.label ?? root;
+  return roots?.find((target): boolean => target.root === root)?.label ?? root;
 }
 
 function statusMessage(args: {
@@ -460,11 +460,22 @@ function ReplaceReviews({
   });
 }
 
-export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): ReactNode {
+function searchPanelScopeKey(props: SearchPanelProps): string {
+  return JSON.stringify([props.root ?? null, props.roots ?? null]);
+}
+
+export function SearchPanel(props: SearchPanelProps): ReactNode {
+  return <SearchPanelState key={searchPanelScopeKey(props)} {...props} />;
+}
+
+function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): ReactNode {
   const t = useOptionalWidgetTranslate();
   const openBuffers = useWorkspaceReplaceBuffers();
   const projectName = panelProjectName(root, roots, t);
-  const targets = useMemo(() => panelTargets(root, projectName, roots), [projectName, root, roots]);
+  const targets = useMemo(
+    (): readonly WorkspaceRootTarget[] => panelTargets(root, projectName, roots),
+    [projectName, root, roots],
+  );
   const multiRoot = targets.length > 1;
   const queryInputRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState("");
@@ -491,7 +502,7 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
   const [activeIndex, setActiveIndex] = useState(0);
   const controlsId = useId();
   const inlineError = searchDomain === "text" ? regexSyntaxError(query, mode, t) : null;
-  const groups = useMemo(() => resultGroups(response), [response]);
+  const groups = useMemo((): readonly SearchResultGroup[] => resultGroups(response), [response]);
   const message = statusMessage({
     hasRoot: targets.length > 0,
     multiRoot,

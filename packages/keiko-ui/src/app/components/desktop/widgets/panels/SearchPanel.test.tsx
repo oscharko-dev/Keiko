@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import {
   WORKSPACE_SEARCH_MAX_RESULTS,
+  type WorkspaceReplacePreviewResponse,
   type WorkspaceSearchResponse,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -19,7 +20,15 @@ import {
   type WorkspaceReplaceOpenBufferApply,
 } from "../../WorkspaceReplaceBufferContext";
 
-const staleChatCatalog = vi.hoisted(() => ({
+interface StaleChatCatalog {
+  readonly activeProject: {
+    readonly path: string;
+    readonly name: string;
+    readonly available: boolean;
+  };
+}
+
+const staleChatCatalog = vi.hoisted((): StaleChatCatalog => ({
   activeProject: {
     path: "/repo/stale-chat",
     name: "Stale Chat Project",
@@ -27,7 +36,7 @@ const staleChatCatalog = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@/lib/api", () => ({
+vi.mock("@/lib/api", (): object => ({
   applyWorkspaceReplace: vi.fn(),
   fetchFilesContent: vi.fn(),
   fetchWorkspaceReplacePreview: vi.fn(),
@@ -35,19 +44,19 @@ vi.mock("@/lib/api", () => ({
   fetchWorkspaceSymbols: vi.fn(),
 }));
 
-vi.mock("../../context/ChatSessionContext", () => ({
-  useOptionalChatSessionCatalog: () => ({
+vi.mock("../../context/ChatSessionContext", (): object => ({
+  useOptionalChatSessionCatalog: (): StaleChatCatalog => ({
     activeProject: staleChatCatalog.activeProject,
   }),
 }));
 
-vi.mock("../cards/EditorDiffSurface", () => ({
+vi.mock("../cards/EditorDiffSurface", (): object => ({
   buildWorkspaceReplacePatchModel: (response: {
     readonly files: readonly { readonly path: string }[];
     readonly fileCount: number;
     readonly omittedFileCount: number;
     readonly truncated: boolean;
-  }) => ({
+  }): object => ({
     patchId: "workspace-replace-preview",
     status: "previewed",
     provenance: { origin: "applied-patch" },
@@ -72,7 +81,7 @@ vi.mock("../cards/EditorDiffSurface", () => ({
     unsupportedCount: 0,
     truncated: response.truncated,
   }),
-  default: ({ onApply }: { readonly onApply?: (() => void) | undefined }) => (
+  default: ({ onApply }: { readonly onApply?: (() => void) | undefined }): ReactNode => (
     <div data-testid="replace-diff">
       <button type="button" onClick={onApply}>
         Diff apply
@@ -126,7 +135,23 @@ async function searchFor(query: string): Promise<void> {
   fireEvent.change(screen.getByRole("searchbox", { name: "Search files and symbols" }), {
     target: { value: query },
   });
-  await act(async () => new Promise((resolve) => window.setTimeout(resolve, 260)));
+  await act(
+    async (): Promise<void> =>
+      new Promise((resolve): void => {
+        window.setTimeout(resolve, 260);
+      }),
+  );
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((innerResolve): void => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
 }
 
 describe("SearchPanel", () => {
@@ -193,24 +218,29 @@ describe("SearchPanel", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach((): void => {
     vi.clearAllMocks();
   });
 
-  it("renders an interactive searchbox instead of the previous placeholder", () => {
+  it("renders an interactive searchbox instead of the previous placeholder", (): void => {
     renderPanel();
     expect(screen.getByRole("searchbox", { name: "Search files and symbols" })).toBeEnabled();
     expect(screen.queryByText(/coming soon/i)).toBeNull();
   });
 
-  it("fails visibly without a root instead of borrowing the active Chat project", async () => {
+  it("fails visibly without a root instead of borrowing the active Chat project", async (): Promise<void> => {
     render(<SearchPanel />);
 
     expect(screen.getByRole("searchbox", { name: "Search files and symbols" })).toBeDisabled();
     expect(screen.getByText("No workspace selected")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Select a workspace before searching.");
 
-    await act(async () => new Promise((resolve) => window.setTimeout(resolve, 260)));
+    await act(
+      async (): Promise<void> =>
+        new Promise((resolve): void => {
+          window.setTimeout(resolve, 260);
+        }),
+    );
     expect(fetchWorkspaceSearchMock).not.toHaveBeenCalled();
     expect(fetchWorkspaceReplacePreviewMock).not.toHaveBeenCalled();
   });
@@ -387,6 +417,47 @@ describe("SearchPanel", () => {
         expect.objectContaining({ path: "src/app.ts", baseContentHash: "a".repeat(64) }),
       ]),
     });
+  });
+
+  it("discards an existing replacement preview when the workspace root changes", async (): Promise<void> => {
+    const view = render(<SearchPanel root="/repo/a" />);
+    await searchFor("needle");
+    fireEvent.change(screen.getByLabelText("Replacement"), { target: { value: "thread" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+    await screen.findByTestId("replace-diff");
+
+    view.rerender(<SearchPanel root="/repo/b" />);
+
+    expect(screen.queryByTestId("replace-diff")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Apply reviewed replace" })).toBeNull();
+    expect(screen.getByText("/repo/b")).toBeInTheDocument();
+  });
+
+  it("ignores a replacement preview that completes after the workspace root changes", async (): Promise<void> => {
+    const pending = deferred<WorkspaceReplacePreviewResponse>();
+    fetchWorkspaceReplacePreviewMock.mockReturnValueOnce(pending.promise);
+    const view = render(<SearchPanel root="/repo/a" />);
+    await searchFor("needle");
+    fireEvent.change(screen.getByLabelText("Replacement"), { target: { value: "thread" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+    await waitFor((): void => expect(fetchWorkspaceReplacePreviewMock).toHaveBeenCalledOnce());
+
+    view.rerender(<SearchPanel root="/repo/b" />);
+    await act(async (): Promise<void> => {
+      pending.resolve({
+        files: [],
+        fileCount: 0,
+        editCount: 0,
+        truncated: false,
+        omittedFileCount: 0,
+      });
+      await pending.promise;
+    });
+
+    expect(screen.queryByTestId("replace-diff")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Apply reviewed replace" })).toBeNull();
+    expect(screen.getByText("/repo/b")).toBeInTheDocument();
+    expect(applyWorkspaceReplaceMock).not.toHaveBeenCalled();
   });
 
   it("surfaces replace preview failures without keeping a stale diff", async () => {
