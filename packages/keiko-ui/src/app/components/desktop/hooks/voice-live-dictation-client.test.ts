@@ -70,21 +70,34 @@ function negotiateUntilServerError(correlationId: unknown): Promise<unknown> {
 }
 
 describe("createBrowserVoiceLiveDictationControlClient", () => {
-  it("carries a bounded server correlation id into the UI error", async () => {
-    const error = await negotiateUntilServerError("dictation-corr-2806");
+  it("accepts correlation ids at the exact browser trust-boundary limits", async (): Promise<void> => {
+    for (const correlationId of ["a", "a".repeat(128)]) {
+      const error = await negotiateUntilServerError(correlationId);
 
-    expect(error).toBeInstanceOf(VoiceLiveDictationControlError);
-    expect(error).toMatchObject({
-      reason: "negotiation-failed",
-      correlationId: "dictation-corr-2806",
-    });
+      expect(error).toBeInstanceOf(VoiceLiveDictationControlError);
+      expect(error).toMatchObject({
+        reason: "negotiation-failed",
+        correlationId,
+      });
+    }
   });
 
-  it("drops an unbounded correlation id at the browser trust boundary", async () => {
-    const error = await negotiateUntilServerError("provider detail ".repeat(20));
+  it("drops empty, oversized, non-string, and hostile correlation ids", async (): Promise<void> => {
+    const invalidIds: readonly unknown[] = [
+      "",
+      "a".repeat(129),
+      42,
+      null,
+      "provider detail",
+      "<script>alert(1)</script>",
+      "line\nbreak",
+    ];
+    for (const correlationId of invalidIds) {
+      const error = await negotiateUntilServerError(correlationId);
 
-    expect(error).toBeInstanceOf(VoiceLiveDictationControlError);
-    expect(error).toMatchObject({ reason: "negotiation-failed" });
-    expect((error as VoiceLiveDictationControlError).correlationId).toBeUndefined();
+      expect(error).toBeInstanceOf(VoiceLiveDictationControlError);
+      expect(error).toMatchObject({ reason: "negotiation-failed" });
+      expect((error as VoiceLiveDictationControlError).correlationId).toBeUndefined();
+    }
   });
 });

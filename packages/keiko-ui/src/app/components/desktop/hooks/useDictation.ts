@@ -701,6 +701,10 @@ export function useDictation(options: UseDictationOptions): DictationController 
         }
         if (state === "failed" || state === "closed" || state === "disconnected") {
           if (mountedRef.current && !cancelledRef.current && !stoppingRef.current) {
+            realtimeFallbackToBatchRef.current = true;
+            cancelledRef.current = true;
+            clearAutoStop();
+            cleanupRealtime();
             dispatch({
               type: "error",
               reason: "connection-failed",
@@ -761,6 +765,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
     });
   }, [
     cleanupRealtime,
+    clearAutoStop,
     handleRealtimeDataChannelEvent,
     latency,
     liveControlClientFactory,

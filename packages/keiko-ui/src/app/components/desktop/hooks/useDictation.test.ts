@@ -130,8 +130,10 @@ function makeRealtimeDictationFakes(
   closeControl: ReturnType<typeof vi.fn>;
   sendDataChannelEvent: ReturnType<typeof vi.fn>;
   emitDataChannelEvent: (event: unknown) => void;
+  emitConnectionState: (state: RTCPeerConnectionState) => void;
 } {
   let onDataChannelEvent: ((event: unknown) => void) | undefined;
+  let onConnectionStateChange: ((state: RTCPeerConnectionState) => void) | undefined;
   const applyAnswer = vi.fn(async (): Promise<void> => {
     if (opts.applyAnswerError !== undefined) throw opts.applyAnswerError;
   });
@@ -140,7 +142,9 @@ function makeRealtimeDictationFakes(
   const session: VoiceRtcSession = {
     offerSdp: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n",
     applyAnswer,
-    onConnectionStateChange: vi.fn(),
+    onConnectionStateChange(cb): void {
+      onConnectionStateChange = cb;
+    },
     onLocalVoiceActivity: vi.fn(),
     onDataChannelStateChange: vi.fn(),
     onDataChannelEvent(cb) {
@@ -166,6 +170,7 @@ function makeRealtimeDictationFakes(
     closeControl,
     sendDataChannelEvent,
     emitDataChannelEvent: (event) => onDataChannelEvent?.(event),
+    emitConnectionState: (state): void => onConnectionStateChange?.(state),
   };
 }
 
@@ -990,5 +995,49 @@ describe("useDictation — realtime live dictation (P3)", () => {
     await waitFor(() => expect(result.current.phase).toBe("preview"));
     expect(transcribe).toHaveBeenCalledTimes(1);
     expect(result.current.transcript).toBe("batch transcript");
+  });
+
+  it("releases a lost realtime session and retries through batch STT", async (): Promise<void> => {
+    const fakes = makeRealtimeDictationFakes();
+    const recorder = makeRecorder({});
+    const transcribe = vi.fn(async (): Promise<VoiceTranscriptionResult> => ({
+      transcript: "recovered batch transcript",
+    }));
+    const { result } = renderHook(() =>
+      useDictation({
+        onInsert: vi.fn(),
+        createRecorder: () => recorder.recorder,
+        transcribe,
+        postRollMs: 0,
+        realtime: {
+          enabled: true,
+          createTransport: () => fakes.transport,
+          createControlClient: () => fakes.control,
+        },
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+
+    act(() => fakes.emitConnectionState("disconnected"));
+    await waitFor(() => expect(result.current.phase).toBe("error"));
+    expect(result.current.error).toEqual({
+      reason: "connection-failed",
+      message: "Live dictation connection was lost.",
+    });
+    expect(fakes.closeSession).toHaveBeenCalledTimes(1);
+    expect(fakes.closeControl).toHaveBeenCalledTimes(1);
+
+    act(() => result.current.retry());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+    expect(result.current.mode).toBe("batch");
+    expect(fakes.connect).toHaveBeenCalledTimes(1);
+    expect(recorder.start).toHaveBeenCalledTimes(1);
+
+    act(() => result.current.stop());
+    await waitFor(() => expect(result.current.phase).toBe("preview"));
+    expect(transcribe).toHaveBeenCalledTimes(1);
+    expect(result.current.transcript).toBe("recovered batch transcript");
   });
 });

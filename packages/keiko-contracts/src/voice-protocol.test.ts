@@ -13,6 +13,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { VoiceProfile } from "./gateway.js";
+import type { VoiceErrorMessage } from "./index.js";
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   PREFERRED_VOICE_NEGOTIATION_MODE,
@@ -459,6 +460,22 @@ describe("AC6 — security reasoning over endpoints and credentials is contract-
 });
 
 describe("envelope validation & guards", () => {
+  it("accepts the correlated error shape exported through the package entrypoint", (): void => {
+    const message: VoiceErrorMessage = {
+      protocolVersion: VOICE_PROTOCOL_VERSION,
+      sessionId: "vs-correlated-error",
+      seq: 1,
+      direction: "host-to-client",
+      kind: "error",
+      code: "negotiation-failed",
+      correlationId: "dictation-corr-2806",
+    };
+
+    expect(validateVoiceControlMessage(message)).toEqual({ ok: true });
+    expect(isVoiceControlMessage(message)).toBe(true);
+    expect(message.correlationId).toBe("dictation-corr-2806");
+  });
+
   it("accepts a well-formed envelope for every kind", () => {
     for (const kind of VOICE_CONTROL_MESSAGE_KINDS) {
       const message = wellFormedMessage(kind);
