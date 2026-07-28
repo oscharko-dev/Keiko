@@ -207,7 +207,7 @@ describe("SearchPanel", () => {
     render(<SearchPanel />);
 
     expect(screen.getByRole("searchbox", { name: "Search files and symbols" })).toBeDisabled();
-    expect(screen.getByText("No project selected")).toBeInTheDocument();
+    expect(screen.getByText("No workspace selected")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Select a workspace before searching.");
 
     await act(async () => new Promise((resolve) => window.setTimeout(resolve, 260)));
