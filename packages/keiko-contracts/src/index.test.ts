@@ -712,7 +712,6 @@ describe("keiko-contracts package surface", () => {
     type _Code = import("./index.js").EditorAgentConflictCode;
     type _Action = import("./index.js").EditorAgentAction;
     type _ActionOrigin = import("./index.js").EditorAgentActionOrigin;
-    type _BridgeCapability = import("./index.js").EditorAgentBridgeDecisionCapability;
     type _Result = import("./index.js").EditorAgentActionResult;
     type _Event = import("./index.js").EditorAgentEvent;
     type _Diagnostic = import("./index.js").EditorAgentDiagnostic;
@@ -735,7 +734,6 @@ describe("keiko-contracts package surface", () => {
     pin<_Code>();
     pin<_Action>();
     pin<_ActionOrigin>();
-    pin<_BridgeCapability>();
     pin<_Result>();
     pin<_Event>();
     pin<_Diagnostic>();

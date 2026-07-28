@@ -775,42 +775,43 @@ function createBroadQueryTransformer(model: ModelPort, modelId: string): QueryTr
   };
 }
 
-function buildNoEvidenceAnswer(
-  chat: Chat,
-  assistantContent: string,
-  scopeKind: "capsule" | "capsule-set",
-  scopeLabel: string,
-  redactLabel: (value: string) => string,
-  capsules: readonly KnowledgeCapsule[],
-  capsuleCount: number,
-  sourceCount: number,
-  reason: string,
-  limits: ReturnType<typeof currentGroundingLimits>,
-  uncertainty: readonly GroundedUncertainty[] = [],
-): LocalKnowledgeGroundedAnswer {
-  const safeScopeLabel = activityDisplayName(redactLabel(scopeLabel));
+function buildNoEvidenceAnswer(input: {
+  readonly chat: Chat;
+  readonly assistantContent: string;
+  readonly scopeKind: "capsule" | "capsule-set";
+  readonly scopeLabel: string;
+  readonly redactLabel: LabelRedactor;
+  readonly capsules: readonly KnowledgeCapsule[];
+  readonly capsuleCount: number;
+  readonly sourceCount: number;
+  readonly reason: string;
+  readonly limits: ReturnType<typeof currentGroundingLimits>;
+  readonly uncertainty?: readonly GroundedUncertainty[] | undefined;
+}): LocalKnowledgeGroundedAnswer {
+  const safeScopeLabel = activityDisplayName(input.redactLabel(input.scopeLabel));
+  const scopeHashInput = `${input.chat.id}|${input.scopeLabel}`;
   return {
     groundingKind: "local-knowledge",
-    userMessageId: `pending-user-${chat.id}`,
-    assistantMessageId: `pending-assistant-${chat.id}`,
-    content: assistantContent,
+    userMessageId: `pending-user-${input.chat.id}`,
+    assistantMessageId: `pending-assistant-${input.chat.id}`,
+    content: input.assistantContent,
     citations: [],
-    uncertainty,
+    uncertainty: input.uncertainty ?? [],
     omittedCount: 0,
     elapsedMs: 0,
     noEvidence: true,
-    noEvidenceReason: reason,
+    noEvidenceReason: input.reason,
     contextPack: {
       kind: "local-knowledge",
-      scopeKind,
-      scopeId: `lk-${hashString32(`${chat.id}|${scopeLabel}`)}`,
+      scopeKind: input.scopeKind,
+      scopeId: `lk-${hashString32(scopeHashInput)}`,
       scopeLabel: safeScopeLabel,
-      capsuleCount,
-      sourceCount,
+      capsuleCount: input.capsuleCount,
+      sourceCount: input.sourceCount,
       citationCount: 0,
-      referenceBudget: limits.maxPromptReferences,
+      referenceBudget: input.limits.maxPromptReferences,
       referencesUsed: 0,
-      indexLifecycle: buildLocalKnowledgeIndexLifecycle(capsules),
+      indexLifecycle: buildLocalKnowledgeIndexLifecycle(input.capsules),
     },
   };
 }
@@ -1134,10 +1135,11 @@ function buildLocalKnowledgeContextPack(
   // activityDisplayName; align this, the happy-path builder, with that existing guard.
   const compactScopeLabel = citationLabelPart(selected.scopeLabel, redactLabel);
   const safeScopeLabel = activityDisplayName(compactScopeLabel);
+  const scopeHashInput = `${chat.id}|${compactScopeLabel}`;
   return {
     kind: "local-knowledge",
     scopeKind: selected.scopeKind,
-    scopeId: `lk-${hashString32(`${chat.id}|${compactScopeLabel}`)}`,
+    scopeId: `lk-${hashString32(scopeHashInput)}`,
     scopeLabel: safeScopeLabel,
     capsuleCount: result.pack.scope.capsuleCount,
     sourceCount: result.pack.scope.sourceCount,
@@ -1180,32 +1182,33 @@ function citationsAndActivityForAnswer(
   return { citations, retrievalActivity };
 }
 
-function buildLocalKnowledgeAnswer(
-  chat: Chat,
-  store: KnowledgeStore,
-  selected: SelectedLocalKnowledgeScope,
-  persisted: readonly [ChatMessage, ChatMessage],
-  result: Awaited<ReturnType<typeof runGroundedAnswer>>,
-  elapsedMs: number,
-  assistantContent: string,
-  limits: ReturnType<typeof currentGroundingLimits>,
-  sourceLookup?: LocalKnowledgeCitationSourceLookup,
-  redactLabel?: LabelRedactor,
-  diagnostics?: ServerDiagnosticSink,
-): LocalKnowledgeGroundedAnswer {
-  const [user, assistant] = persisted;
+function buildLocalKnowledgeAnswer(input: {
+  readonly chat: Chat;
+  readonly store: KnowledgeStore;
+  readonly selected: SelectedLocalKnowledgeScope;
+  readonly persisted: readonly [ChatMessage, ChatMessage];
+  readonly result: Awaited<ReturnType<typeof runGroundedAnswer>>;
+  readonly elapsedMs: number;
+  readonly assistantContent: string;
+  readonly limits: ReturnType<typeof currentGroundingLimits>;
+  readonly sourceLookup?: LocalKnowledgeCitationSourceLookup | undefined;
+  readonly redactLabel?: LabelRedactor | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+}): LocalKnowledgeGroundedAnswer {
+  const { result, redactLabel, assistantContent } = input;
+  const [user, assistant] = input.persisted;
   const noEvidenceReason = enforcedNoEvidenceReason(result);
   const answerOnlyMemory = result.answerOnlyContextUsed === true;
   const sourceNoEvidence = result.noEvidence || noEvidenceReason !== undefined;
   const wireNoEvidenceReason = answerOnlyMemory ? "answer-only-memory" : noEvidenceReason;
   const { citations, retrievalActivity } = citationsAndActivityForAnswer(
-    store,
-    selected,
+    input.store,
+    input.selected,
     result,
     noEvidenceReason,
-    sourceLookup,
+    input.sourceLookup,
     redactLabel,
-    diagnostics,
+    input.diagnostics,
   );
   return {
     groundingKind: "local-knowledge",
@@ -1215,50 +1218,51 @@ function buildLocalKnowledgeAnswer(
     citations,
     uncertainty: answerUncertainty(result, noEvidenceReason, assistantContent, redactLabel),
     omittedCount: 0,
-    elapsedMs,
+    elapsedMs: input.elapsedMs,
     noEvidence: sourceNoEvidence,
     ...(wireNoEvidenceReason !== undefined ? { noEvidenceReason: wireNoEvidenceReason } : {}),
     contextPack: buildLocalKnowledgeContextPack(
-      chat,
-      selected,
+      input.chat,
+      input.selected,
       result,
       citations,
       redactLabel,
-      limits,
+      input.limits,
     ),
     ...(retrievalActivity === undefined ? {} : { retrievalActivity }),
   };
 }
 
-function buildStateFailureAnswer(
-  chat: Chat,
-  store: KnowledgeStore,
-  selected: SelectedLocalKnowledgeScope,
-  persisted: readonly [ChatMessage, ChatMessage],
-  stateFailure: { readonly reason: string; readonly message: string },
-  redactLabel: (value: string) => string,
-  limits: ReturnType<typeof currentGroundingLimits>,
-  diagnostics?: ServerDiagnosticSink,
-): GroundedAnswer {
-  const [user, assistant] = persisted;
-  const answer = buildNoEvidenceAnswer(
-    chat,
-    assistant.content,
-    selected.scopeKind,
-    selected.scopeLabel,
-    redactLabel,
-    selected.capsules,
-    selected.capsules.length,
-    selectedSourceCount(selected),
-    stateFailure.reason,
-    limits,
-    [{ kind: stateFailure.reason, claim: persisted[1].content }],
-  );
+function buildStateFailureAnswer(input: {
+  readonly chat: Chat;
+  readonly store: KnowledgeStore;
+  readonly selected: SelectedLocalKnowledgeScope;
+  readonly persisted: readonly [ChatMessage, ChatMessage];
+  readonly stateFailure: { readonly reason: string; readonly message: string };
+  readonly redactLabel: LabelRedactor;
+  readonly limits: ReturnType<typeof currentGroundingLimits>;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+}): GroundedAnswer {
+  const { selected, stateFailure } = input;
+  const [user, assistant] = input.persisted;
+  const answer = buildNoEvidenceAnswer({
+    chat: input.chat,
+    assistantContent: assistant.content,
+    scopeKind: selected.scopeKind,
+    scopeLabel: selected.scopeLabel,
+    redactLabel: input.redactLabel,
+    capsules: selected.capsules,
+    capsuleCount: selected.capsules.length,
+    sourceCount: selectedSourceCount(selected),
+    reason: stateFailure.reason,
+    limits: input.limits,
+    uncertainty: [{ kind: stateFailure.reason, claim: input.persisted[1].content }],
+  });
   const retrievalActivity = tryBuildKnowledgePodRetrievalActivity({
-    store,
+    store: input.store,
     sources: [],
     skipped: [{ selected, reason: stateFailure.reason }],
-    diagnostics,
+    diagnostics: input.diagnostics,
   });
   return {
     ...answer,
@@ -2156,19 +2160,19 @@ function persistScopedGroundedAnswer(
   const persisted = persistRedactedGroundedExchange(deps, chat, input, assistantContent);
   const sourceLookup = buildSelectedScopeSourceLookup(env.store, selected);
   const limits = currentGroundingLimits(deps);
-  const answer = buildLocalKnowledgeAnswer(
+  const answer = buildLocalKnowledgeAnswer({
     chat,
-    env.store,
+    store: env.store,
     selected,
     persisted,
     result,
     elapsedMs,
-    persisted[1].content,
+    assistantContent: persisted[1].content,
     limits,
     sourceLookup,
-    (value: string): string => redactText(deps, value),
-    deps.diagnostics,
-  ) satisfies GroundedAnswer;
+    redactLabel: (value: string): string => redactText(deps, value),
+    diagnostics: deps.diagnostics,
+  }) satisfies GroundedAnswer;
   attachGroundedAnswerWithPreviewCitations(
     deps,
     env,
@@ -2265,16 +2269,16 @@ function stateFailureRoute(
     redactedMessage,
     input.userMessage,
   );
-  const answer = buildStateFailureAnswer(
+  const answer = buildStateFailureAnswer({
     chat,
-    env.store,
+    store: env.store,
     selected,
     persisted,
-    { ...stateFailure, message: redactedMessage },
-    (value: string): string => redactText(deps, value),
-    currentGroundingLimits(deps),
-    deps.diagnostics,
-  );
+    stateFailure: { ...stateFailure, message: redactedMessage },
+    redactLabel: (value: string): string => redactText(deps, value),
+    limits: currentGroundingLimits(deps),
+    diagnostics: deps.diagnostics,
+  });
   deps.store.attachGroundedAnswer(persisted[1].id, answer);
   return { status: 200, body: answer };
 }

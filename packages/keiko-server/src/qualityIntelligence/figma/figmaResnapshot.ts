@@ -9,13 +9,12 @@
 // hash. That hash compare IS the drift signal (#735) — this module performs the re-snapshot; the
 // comparison is the caller's, and Figma is contacted ONLY here, within the snapshot boundary.
 
-import type { FigmaConnector, FigmaFetchOptions } from "./figmaConnector.js";
+import type { FigmaConnector, FigmaFetchOptions, FigmaScopedResult } from "./figmaConnector.js";
 import type { FigmaHttpPort } from "./figmaHttpPort.js";
 import type { FigmaRenderPort } from "./figmaRenderPort.js";
 import { buildFigmaSnapshot, type BuildFigmaSnapshotInput } from "./figmaSnapshotBuilder.js";
 import type { FigmaSnapshot } from "./figmaSnapshotTypes.js";
 import type { FigmaRetryPolicy, FigmaRetrySleep } from "./figmaRetry.js";
-import type { FigmaScopedResult } from "./figmaConnector.js";
 import type { QualityIntelligenceFigma } from "@oscharko-dev/keiko-quality-intelligence";
 
 /** Deterministic clean of the raw scoped nodes into the per-screen IR (#752 lives behind this seam). */

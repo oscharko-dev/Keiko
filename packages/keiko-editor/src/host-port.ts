@@ -15,7 +15,7 @@ import type {
   EditorInlineCompletionRequest,
   EditorInlineCompletionResponse,
   EditorPatchApplyResult,
-  EditorPreviewPatchResult,
+  EditorPreviewedPatch,
   EditorPatchReviewDecision,
   EditorSaveRequest,
   EditorSaveResult,
@@ -87,7 +87,7 @@ export interface EditorHostPort {
     query: EditorFormattingQuery,
     signal?: AbortSignal,
   ) => Promise<EditorFormattingResponse>;
-  readonly previewPatch?: (patchId: string) => Promise<EditorPreviewPatchResult>;
+  readonly previewPatch?: (patchId: string) => Promise<EditorPreviewedPatch>;
   readonly applyPatchReview?: (
     decision: EditorPatchReviewDecision,
   ) => Promise<EditorPatchApplyResult>;

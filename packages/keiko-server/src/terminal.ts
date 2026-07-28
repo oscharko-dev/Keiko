@@ -22,18 +22,25 @@ import {
   CommandCancelledError,
   CommandDeniedError,
   CommandTimeoutError,
+  runCommand,
+  type RunCommandDeps,
+  isTerminalCommandAllowed,
+  TERMINAL_COMMAND_RULES,
+  DEFAULT_SANDBOX_POLICY,
+  type SandboxPolicy,
 } from "@oscharko-dev/keiko-tools";
-import { runCommand, type RunCommandDeps } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
-import { isTerminalCommandAllowed, TERMINAL_COMMAND_RULES } from "@oscharko-dev/keiko-tools";
-import { isWithinWorkspace, resolveWithinWorkspace } from "@oscharko-dev/keiko-workspace";
-import { PathDeniedError, PathEscapeError } from "@oscharko-dev/keiko-workspace";
-import { isDenied } from "@oscharko-dev/keiko-workspace";
-import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import {
+  isWithinWorkspace,
+  resolveWithinWorkspace,
+  PathDeniedError,
+  PathEscapeError,
+  isDenied,
+  type WorkspaceFs,
+  containedRealPathInfo,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { containedRealPathInfo } from "@oscharko-dev/keiko-workspace";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import { DEFAULT_SANDBOX_POLICY, type SandboxPolicy } from "@oscharko-dev/keiko-tools";
 import {
   appendTerminalEvidence,
   buildTerminalEvidenceEntry,
@@ -133,9 +140,11 @@ interface GrepValidationState {
   nextScalar: boolean;
 }
 
+type FindOperandValueKind = "path" | "scalar";
+
 interface OperandValueState {
   afterTerminator: boolean;
-  pending: "path" | "scalar" | undefined;
+  pending: FindOperandValueKind | undefined;
 }
 
 export interface TerminalExecutionManagerOptions {
@@ -565,14 +574,14 @@ const FIND_SCALAR_VALUE_FLAGS: ReadonlySet<string> = new Set([
 ]);
 const FIND_EXPRESSION_OPERATORS: ReadonlySet<string> = new Set(["!", "(", ")", ",", "-and", "-or"]);
 
-function newerFlagValueKind(flag: string): "path" | "scalar" | undefined {
+function newerFlagValueKind(flag: string): FindOperandValueKind | undefined {
   if (!flag.startsWith("-newer")) return undefined;
   if (flag === "-newer") return "path";
   if (flag.length !== "-newerXY".length) return undefined;
   return flag.endsWith("t") ? "scalar" : "path";
 }
 
-function findValueKind(arg: string): "path" | "scalar" | undefined {
+function findValueKind(arg: string): FindOperandValueKind | undefined {
   const flag = flagName(arg);
   if (FIND_PATH_VALUE_FLAGS.has(flag)) return "path";
   if (FIND_SCALAR_VALUE_FLAGS.has(flag)) return "scalar";

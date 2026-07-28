@@ -182,16 +182,21 @@ function pageLabelFor(labels: readonly (string | null)[], pageNumber: number): s
   return labels[pageNumber - 1] ?? undefined;
 }
 
+interface ExtractPdfWindowOptions {
+  readonly firstPage: number;
+  readonly lastPage: number;
+  readonly state: PdfDriveState;
+  readonly ctx: PdfExtractContext;
+  readonly parserOptions: ParserOptions;
+  readonly startedAt: number;
+  readonly pageLabels: readonly (string | null)[];
+}
+
 async function extractPdfWindow(
   doc: PdfDocumentLike,
-  firstPage: number,
-  lastPage: number,
-  state: PdfDriveState,
-  ctx: PdfExtractContext,
-  parserOptions: ParserOptions,
-  startedAt: number,
-  pageLabels: readonly (string | null)[],
+  options: ExtractPdfWindowOptions,
 ): Promise<ProgressiveExtractionWindow> {
+  const { firstPage, lastPage, state, ctx, parserOptions, startedAt, pageLabels } = options;
   const builder = new WindowTextBuilder(ctx.documentId, state.cursor, state.anyPageEmitted);
   const diagnostics: ParserDiagnostic[] = [];
   for (let pageNumber = firstPage; pageNumber <= lastPage; pageNumber += 1) {
@@ -247,8 +252,7 @@ async function* pdfExtractWindows(
   for (let firstPage = resumeFromPage + 1; firstPage <= doc.numPages; firstPage += windowPages) {
     if (options.signal?.aborted === true) return;
     const lastPage = Math.min(firstPage + windowPages - 1, doc.numPages);
-    yield extractPdfWindow(
-      doc,
+    yield extractPdfWindow(doc, {
       firstPage,
       lastPage,
       state,
@@ -256,7 +260,7 @@ async function* pdfExtractWindows(
       parserOptions,
       startedAt,
       pageLabels,
-    );
+    });
   }
 }
 

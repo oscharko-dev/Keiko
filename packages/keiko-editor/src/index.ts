@@ -147,7 +147,6 @@ export type {
   EditorVerificationRef,
   EditorGeneratedPatch,
   EditorPreviewedPatch,
-  EditorPreviewPatchResult,
   EditorPatchReviewDecision,
   EditorPatchApplyResult,
   EditorContextPurpose,

@@ -5197,7 +5197,8 @@ export function queryCodeIntelligenceIndex(
   ];
   atoms.push(...expandGraphNeighborhood(scope, query, nowMs, index, atoms));
   const deduped = new Map<string, EvidenceAtom>();
-  for (const atom of atoms.sort(compareEvidenceAtoms)) {
+  atoms.sort(compareEvidenceAtoms);
+  for (const atom of atoms) {
     if (deduped.has(atom.stableId)) {
       continue;
     }

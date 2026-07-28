@@ -2,8 +2,7 @@
 // state-changing-request gate (POST/DELETE flow through it); GET routes are read-only and exempt.
 // SSE framing mirrors /api/browser/*/events.
 
-import type { ServerResponse } from "node:http";
-import type { IncomingMessage } from "node:http";
+import type { ServerResponse, IncomingMessage } from "node:http";
 import { TerminalToolError } from "./terminal-errors.js";
 import {
   buildTerminalPolicySummary,

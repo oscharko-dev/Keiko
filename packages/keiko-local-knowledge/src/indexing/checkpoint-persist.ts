@@ -8,7 +8,9 @@
 // embedding identity.
 
 import type {
+  ChunkId,
   CoverageQuality,
+  DocumentId,
   EmbeddingModelIdentity,
   ExtractionCheckpointRecord,
   ExtractionPhase,
@@ -16,7 +18,6 @@ import type {
   LargeDocumentExtractionStrategy,
   ParserDiagnostic,
 } from "@oscharko-dev/keiko-contracts";
-import type { ChunkId, DocumentId } from "@oscharko-dev/keiko-contracts";
 import type { DatabaseSync } from "node:sqlite";
 
 const UPSERT_SQL = [

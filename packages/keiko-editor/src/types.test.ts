@@ -17,7 +17,7 @@ import type {
   EditorOutputProvenance,
   EditorPatchApplyResult,
   EditorPatchReviewDecision,
-  EditorPreviewPatchResult,
+  EditorPreviewedPatch,
   EditorRecentEditContext,
   EditorRecentEditSummary,
   EditorRequestIdentity,
@@ -59,7 +59,7 @@ const allOutputProvenance: readonly EditorOutputProvenance[] = [
   { origin: "verification" },
 ];
 
-const previewPatchResult: EditorPreviewPatchResult = {
+const previewPatchResult: EditorPreviewedPatch = {
   patchId: "p1",
   changes: [
     {

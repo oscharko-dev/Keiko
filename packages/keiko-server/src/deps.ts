@@ -15,17 +15,22 @@ import {
   resolveCodingSafeSidecarGatewayProfile,
   resolveOutboundHttpEgressConfig,
   selectConfiguredModel,
+  GatewayError,
+  Gateway,
+  resolveCostClass,
   type EnvSource,
   type GatewayConfig,
   type ModelProviderConfig,
 } from "@oscharko-dev/keiko-model-gateway";
-import { GatewayError, Gateway } from "@oscharko-dev/keiko-model-gateway";
 import { GatewayModelPort } from "@oscharko-dev/keiko-harness";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import { createAuditRedactor } from "@oscharko-dev/keiko-evidence";
-import { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
-import { writeSideFile } from "@oscharko-dev/keiko-evidence";
-import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
+import {
+  createAuditRedactor,
+  writeSideFile,
+  deepRedactStrings,
+  createNodeEvidenceStore,
+  resolveEvidenceDir,
+} from "@oscharko-dev/keiko-evidence";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
 import {
   DEFAULT_CONTEXT_PROFILE,
@@ -43,7 +48,6 @@ import {
 import type { IncomingMessage } from "node:http";
 import { detectWorkspaceAt, isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { createNodeEvidenceStore, resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
@@ -131,6 +135,9 @@ import type {
   TextToSpeechOutcome,
   TextToSpeechRequest,
   TextToSpeechStreamOutcome,
+  GatewayRequest,
+  GatewayStreamChunk,
+  NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   createRelationshipStorePort,
@@ -198,11 +205,6 @@ import type {
   KnowledgeStoreKeyProvider,
   OcrAdapter,
 } from "@oscharko-dev/keiko-local-knowledge";
-import type {
-  GatewayRequest,
-  GatewayStreamChunk,
-  NormalizedResponse,
-} from "@oscharko-dev/keiko-model-gateway";
 import { migrateLocalConfigCredentials } from "./credentialPersistence.js";
 import {
   enforceQiRetentionAtStartup,
@@ -1617,34 +1619,38 @@ function buildWorkspaceProvisioning(
 // provisioning service, evidence store, and active-pointer store (no second worktree/lock/transition
 // engine). Returns undefined whenever any composed dependency is absent (injected UiStore tests), so
 // the active-binding routes degrade to 503 exactly like the provisioning routes.
+interface BuildWorkspaceLifecycleArgs {
+  readonly options: BuildHandlerDepsOptions;
+  readonly instanceStore: WorkspaceInstanceStore | undefined;
+  readonly activePointerStore: ActiveWorkspacePointerStore | undefined;
+  readonly provisioning: WorkspaceProvisioningService | undefined;
+  readonly resolvedUiDbPath: string;
+  readonly evidenceStore: EvidenceStore;
+  readonly redactString: (value: string) => string;
+  readonly mutex: WorkspaceMutexRegistry;
+}
+
 function buildWorkspaceLifecycle(
-  options: BuildHandlerDepsOptions,
-  instanceStore: WorkspaceInstanceStore | undefined,
-  activePointerStore: ActiveWorkspacePointerStore | undefined,
-  provisioning: WorkspaceProvisioningService | undefined,
-  resolvedUiDbPath: string,
-  evidenceStore: EvidenceStore,
-  redactString: (value: string) => string,
-  mutex: WorkspaceMutexRegistry,
+  args: BuildWorkspaceLifecycleArgs,
 ): WorkspaceLifecycleService | undefined {
-  if (options.workspaceLifecycle !== undefined) return options.workspaceLifecycle;
+  if (args.options.workspaceLifecycle !== undefined) return args.options.workspaceLifecycle;
   if (
-    instanceStore === undefined ||
-    activePointerStore === undefined ||
-    provisioning === undefined
+    args.instanceStore === undefined ||
+    args.activePointerStore === undefined ||
+    args.provisioning === undefined
   ) {
     return undefined;
   }
   return createWorkspaceLifecycleService({
-    store: instanceStore,
-    activePointerStore,
-    managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
-    provisioning,
-    evidenceStore,
-    redactString,
+    store: args.instanceStore,
+    activePointerStore: args.activePointerStore,
+    managedRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
+    provisioning: args.provisioning,
+    evidenceStore: args.evidenceStore,
+    redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,
-    mutex,
+    mutex: args.mutex,
   });
 }
 
@@ -1677,36 +1683,38 @@ function buildWorkspaceReconciliation(
 
 // Issue #447 — the controlled repair service. It reuses the #445 provisioning service for the
 // worktree-recreating strategies and the same store/pointer/adapter for the rest (no second engine).
-function buildWorkspaceRepair(
-  options: BuildHandlerDepsOptions,
-  instanceStore: WorkspaceInstanceStore | undefined,
-  activePointerStore: ActiveWorkspacePointerStore | undefined,
-  provisioning: WorkspaceProvisioningService | undefined,
-  resolvedUiDbPath: string,
-  evidenceStore: EvidenceStore,
-  redactString: (value: string) => string,
-  mutex: WorkspaceMutexRegistry,
-): WorkspaceRepairService | undefined {
-  if (options.workspaceRepair !== undefined) return options.workspaceRepair;
+interface BuildWorkspaceRepairArgs {
+  readonly options: BuildHandlerDepsOptions;
+  readonly instanceStore: WorkspaceInstanceStore | undefined;
+  readonly activePointerStore: ActiveWorkspacePointerStore | undefined;
+  readonly provisioning: WorkspaceProvisioningService | undefined;
+  readonly resolvedUiDbPath: string;
+  readonly evidenceStore: EvidenceStore;
+  readonly redactString: (value: string) => string;
+  readonly mutex: WorkspaceMutexRegistry;
+}
+
+function buildWorkspaceRepair(args: BuildWorkspaceRepairArgs): WorkspaceRepairService | undefined {
+  if (args.options.workspaceRepair !== undefined) return args.options.workspaceRepair;
   if (
-    instanceStore === undefined ||
-    activePointerStore === undefined ||
-    provisioning === undefined
+    args.instanceStore === undefined ||
+    args.activePointerStore === undefined ||
+    args.provisioning === undefined
   ) {
     return undefined;
   }
   return createWorkspaceRepairService({
-    store: instanceStore,
-    activePointerStore,
-    evidenceStore,
-    provisioning,
-    managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
+    store: args.instanceStore,
+    activePointerStore: args.activePointerStore,
+    evidenceStore: args.evidenceStore,
+    provisioning: args.provisioning,
+    managedRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
     createAdapter: (workspace) =>
-      createNodeGitWorktreeAdapter({ workspace, processEnv: options.env }),
-    redactString,
+      createNodeGitWorktreeAdapter({ workspace, processEnv: args.options.env }),
+    redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,
-    mutex,
+    mutex: args.mutex,
   });
 }
 
@@ -2535,16 +2543,16 @@ function composeCoreTaskWorkspaceServices(
   );
   return {
     workspaceProvisioning,
-    workspaceLifecycle: buildWorkspaceLifecycle(
+    workspaceLifecycle: buildWorkspaceLifecycle({
       options,
-      workspaceInstanceStore,
-      activeWorkspacePointerStore,
-      workspaceProvisioning,
+      instanceStore: workspaceInstanceStore,
+      activePointerStore: activeWorkspacePointerStore,
+      provisioning: workspaceProvisioning,
       resolvedUiDbPath,
       evidenceStore,
       redactString,
       mutex,
-    ),
+    }),
     workspaceReconciliation: buildWorkspaceReconciliation(
       options,
       workspaceInstanceStore,
@@ -2553,16 +2561,16 @@ function composeCoreTaskWorkspaceServices(
       evidenceStore,
       redactString,
     ),
-    workspaceRepair: buildWorkspaceRepair(
+    workspaceRepair: buildWorkspaceRepair({
       options,
-      workspaceInstanceStore,
-      activeWorkspacePointerStore,
-      workspaceProvisioning,
+      instanceStore: workspaceInstanceStore,
+      activePointerStore: activeWorkspacePointerStore,
+      provisioning: workspaceProvisioning,
       resolvedUiDbPath,
       evidenceStore,
       redactString,
       mutex,
-    ),
+    }),
   };
 }
 

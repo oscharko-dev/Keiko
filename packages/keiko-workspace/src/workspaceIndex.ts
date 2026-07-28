@@ -869,7 +869,8 @@ function snapshotFileSegment(
 }
 
 function tempSnapshotFileSegment(finalSegment: string): string {
-  return `${finalSegment}.${sha256Hex(`${finalSegment}:${randomUUID()}`).slice(0, 16)}.tmp`;
+  const nonce = `${finalSegment}:${randomUUID()}`;
+  return `${finalSegment}.${sha256Hex(nonce).slice(0, 16)}.tmp`;
 }
 
 function assertSafePathSegment(segment: string): string {
@@ -2666,16 +2667,16 @@ export function workspaceIndexCandidateSet(
     sizeBytes: file.sizeBytes,
   }));
   const contentScores = cachedContentScores(prepared.entries, query, policy);
-  const ordered = orderCandidatesForSearch(
+  const ordered = orderCandidatesForSearch({
     files,
     query,
     policy,
-    prepared.discovery.ignoredByDiscovery,
-    prepared.discovery.deniedByDiscovery,
-    prepared.discovery.depthPrunedByDiscovery,
-    0,
+    ignoredByDiscovery: prepared.discovery.ignoredByDiscovery,
+    deniedByDiscovery: prepared.discovery.deniedByDiscovery,
+    depthPrunedByDiscovery: prepared.discovery.depthPrunedByDiscovery,
+    maxFilesPrunedByDiscovery: 0,
     contentScores,
-  );
+  });
   return {
     files: ordered.files,
     directories: prepared.discovery.directories.map((directory) => directory.scopePath),

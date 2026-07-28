@@ -101,10 +101,8 @@ export const scanForbiddenStrings = (value: unknown): boolean => {
 // Zero-width, bidi-control, and BOM format characters. Branch names / refs / pathspecs in these
 // content-free requests never legitimately contain them; a U+202E override or zero-width char would
 // spoof the displayed action target (Trojan-Source). Reject fail-closed at the boundary.
-export const GIT_DELIVERY_UNSAFE_FORMAT_CHAR = new RegExp(
-  "[\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u2064\\u2066-\\u206F\\uFEFF]",
-  "u",
-);
+export const GIT_DELIVERY_UNSAFE_FORMAT_CHAR =
+  /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF]/u;
 
 export const scanUnsafeFormatChars = (value: unknown): boolean => {
   if (typeof value === "string") return GIT_DELIVERY_UNSAFE_FORMAT_CHAR.test(value);
@@ -122,7 +120,7 @@ export const isNonEmptyString = (value: unknown): value is string =>
 // already literalized as
 // :(literal)<value> after a "--" sentinel at the adapter, so this is defence-in-depth, not a live fix.
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
-export const GIT_DELIVERY_PATHSPEC_CONTROL_CHAR = new RegExp("[\\u0000-\\u001f\\u007f]");
+export const GIT_DELIVERY_PATHSPEC_CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
 
 // A staged/unstaged pathspec must be a relative path that cannot escape the repository working tree:
 // no absolute path, no leading "-" (flag injection — also guarded at the adapter), no ".." traversal

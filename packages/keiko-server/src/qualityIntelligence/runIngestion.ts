@@ -1895,17 +1895,35 @@ function ingestStoredFigmaSource(
       );
 }
 
-function ingestOne(
-  source: QualityIntelligenceInlineSource,
-  index: number,
-  registeredAt: string,
-  capsuleResolver: CapsuleResolver | undefined,
-  figmaSnapshotLoader: FigmaSnapshotLoader | undefined,
-  figmaVision: FigmaVisionHintProvider | undefined,
-  byteBudget: number,
-  documentTextExtractor: QiAsyncDocumentTextExtractor | undefined,
-  signal: AbortSignal | undefined,
-): OneSource {
+/**
+ * Shared option shape for {@link ingestOne} and {@link ingestOneAsync} — both dispatch the same
+ * per-source ingestion on the same nine inputs (S107: replaces the positional parameter list so the
+ * async variant can forward straight through to the sync one for the common source kinds).
+ */
+interface IngestOneSourceOptions {
+  readonly source: QualityIntelligenceInlineSource;
+  readonly index: number;
+  readonly registeredAt: string;
+  readonly capsuleResolver: CapsuleResolver | undefined;
+  readonly figmaSnapshotLoader: FigmaSnapshotLoader | undefined;
+  readonly figmaVision: FigmaVisionHintProvider | undefined;
+  readonly byteBudget: number;
+  readonly documentTextExtractor: QiAsyncDocumentTextExtractor | undefined;
+  readonly signal: AbortSignal | undefined;
+}
+
+function ingestOne(options: IngestOneSourceOptions): OneSource {
+  const {
+    source,
+    index,
+    registeredAt,
+    capsuleResolver,
+    figmaSnapshotLoader,
+    figmaVision,
+    byteBudget,
+    documentTextExtractor,
+    signal,
+  } = options;
   switch (source.kind) {
     case "requirements":
       return ingestRequirements(source, index, registeredAt, byteBudget);
@@ -1929,33 +1947,14 @@ function ingestOne(
   }
 }
 
-// eslint-disable-next-line max-lines-per-function
-async function ingestOneAsync(
-  source: QualityIntelligenceInlineSource,
-  index: number,
-  registeredAt: string,
-  capsuleResolver: CapsuleResolver | undefined,
-  figmaSnapshotLoader: FigmaSnapshotLoader | undefined,
-  figmaVision: FigmaVisionHintProvider | undefined,
-  byteBudget: number,
-  documentTextExtractor: QiAsyncDocumentTextExtractor | undefined,
-  signal: AbortSignal | undefined,
-): Promise<OneSource> {
+async function ingestOneAsync(options: IngestOneSourceOptions): Promise<OneSource> {
+  const { source, index, registeredAt, figmaSnapshotLoader, figmaVision, byteBudget } = options;
   if (source.kind === "file") {
+    const { documentTextExtractor, signal } = options;
     return ingestFileAsync(source, index, registeredAt, byteBudget, documentTextExtractor, signal);
   }
   if (source.kind !== "figma-snapshot" && source.kind !== "image") {
-    return ingestOne(
-      source,
-      index,
-      registeredAt,
-      capsuleResolver,
-      figmaSnapshotLoader,
-      figmaVision,
-      byteBudget,
-      documentTextExtractor,
-      signal,
-    );
+    return ingestOne(options);
   }
   if (figmaSnapshotLoader === undefined) {
     throw new QiIngestionError(
@@ -2086,17 +2085,17 @@ function ingestSourceInto(
 ): void {
   let ingested: OneSource;
   try {
-    ingested = ingestOne(
+    ingested = ingestOne({
       source,
       index,
-      input.registeredAt,
-      input.capsuleResolver,
-      input.figmaSnapshotLoader,
-      input.figmaVision,
-      budgets.byteBudget,
-      input.documentTextExtractor,
-      input.signal,
-    );
+      registeredAt: input.registeredAt,
+      capsuleResolver: input.capsuleResolver,
+      figmaSnapshotLoader: input.figmaSnapshotLoader,
+      figmaVision: input.figmaVision,
+      byteBudget: budgets.byteBudget,
+      documentTextExtractor: input.documentTextExtractor,
+      signal: input.signal,
+    });
   } catch (error) {
     if (!(error instanceof QiIngestionError)) throw error;
     acc.firstSkipError ??= error;
@@ -2125,17 +2124,17 @@ async function ingestSourceIntoAsync(
 ): Promise<void> {
   let ingested: OneSource;
   try {
-    ingested = await ingestOneAsync(
+    ingested = await ingestOneAsync({
       source,
       index,
-      input.registeredAt,
-      input.capsuleResolver,
-      input.figmaSnapshotLoader,
-      input.figmaVision,
-      budgets.byteBudget,
-      input.documentTextExtractor,
-      input.signal,
-    );
+      registeredAt: input.registeredAt,
+      capsuleResolver: input.capsuleResolver,
+      figmaSnapshotLoader: input.figmaSnapshotLoader,
+      figmaVision: input.figmaVision,
+      byteBudget: budgets.byteBudget,
+      documentTextExtractor: input.documentTextExtractor,
+      signal: input.signal,
+    });
   } catch (error) {
     if (!(error instanceof QiIngestionError)) throw error;
     acc.firstSkipError ??= error;

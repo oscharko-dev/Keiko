@@ -371,7 +371,7 @@ function createRunRecord(
     research,
     onRuntimeEvent,
   );
-  const backend = createBackendRun(
+  const backend = createBackendRun({
     input,
     request,
     context,
@@ -383,7 +383,7 @@ function createRunRecord(
     leases,
     research,
     onRuntimeEvent,
-  );
+  });
   validateBackendLaunch(backend.launch, context);
   const detachLease = attachRuntimeMutationLease(input, leases, invocationRegistry);
   return {
@@ -463,19 +463,34 @@ function createLeaseCoordinator(
   });
 }
 
-function createBackendRun(
-  input: ProductionCodingRuntimeResolverInput,
-  request: ProductionRuntimeBackendInput["request"],
-  context: CodingRuntimeTrustedContext,
-  minted: MintedRuntime,
-  toolFacade: CodingToolFacade,
-  authority: CodingRuntimeAuthorityService,
-  controller: AbortController,
-  invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
-  leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
-  research: ResearchComposition,
-  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
-): QualifiedProductionRuntimeRun {
+/** One parameter object: the backend run needs the whole run context, not an argument list to mis-order. */
+interface CreateBackendRunInput {
+  readonly input: ProductionCodingRuntimeResolverInput;
+  readonly request: ProductionRuntimeBackendInput["request"];
+  readonly context: CodingRuntimeTrustedContext;
+  readonly minted: MintedRuntime;
+  readonly toolFacade: CodingToolFacade;
+  readonly authority: CodingRuntimeAuthorityService;
+  readonly controller: AbortController;
+  readonly invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>;
+  readonly leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>;
+  readonly research: ResearchComposition;
+  readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+}
+
+function createBackendRun({
+  input,
+  request,
+  context,
+  minted,
+  toolFacade,
+  authority,
+  controller,
+  invocationRegistry,
+  leases,
+  research,
+  onRuntimeEvent,
+}: CreateBackendRunInput): QualifiedProductionRuntimeRun {
   return input.backend.createRun({
     request,
     context,

@@ -16,9 +16,11 @@
 //
 // Pure-domain leaf. NO IO, NO new runtime dependency, NO regex.
 
-import type { QualityIntelligenceExportBundle } from "@oscharko-dev/keiko-contracts";
+import type {
+  QualityIntelligenceExportBundle,
+  QualityIntelligenceTestCaseCandidate,
+} from "@oscharko-dev/keiko-contracts";
 import { assertExportBundleInvariant, compareStrings } from "@oscharko-dev/keiko-contracts";
-import type { QualityIntelligenceTestCaseCandidate } from "@oscharko-dev/keiko-contracts";
 
 /**
  * Lead characters that a spreadsheet may interpret as a formula or DDE invocation.

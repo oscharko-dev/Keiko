@@ -3,8 +3,11 @@
 // It never persists prompts, overlay text, retrieved context, or generated insert text.
 
 import { createHash } from "node:crypto";
-import type { CompletionInteractionMode, UsageMetadata } from "@oscharko-dev/keiko-contracts";
-import type { EvidenceStore } from "@oscharko-dev/keiko-contracts";
+import type {
+  CompletionInteractionMode,
+  EvidenceStore,
+  UsageMetadata,
+} from "@oscharko-dev/keiko-contracts";
 import type { Redactor } from "../deps.js";
 
 export const EDITOR_COMPLETION_MODEL_EVIDENCE_SCHEMA_VERSION = "1" as const;

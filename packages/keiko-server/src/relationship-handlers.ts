@@ -160,10 +160,12 @@ export interface ReconnectInput {
   readonly summary?: string | undefined;
 }
 
+export type RelationshipWalkDirection = "outgoing" | "incoming" | "both";
+
 export interface WalkArgs {
   readonly workspaceId: string;
   readonly originId: string;
-  readonly direction: "outgoing" | "incoming" | "both";
+  readonly direction: RelationshipWalkDirection;
   readonly maxDepth: number;
   readonly maxNodes: number;
   readonly maxRelationships: number;
@@ -172,7 +174,7 @@ export interface WalkArgs {
 export interface ImpactArgs {
   readonly workspaceId: string;
   readonly endpoint: { readonly kind: RelationshipObjectKind; readonly id: string };
-  readonly direction: "outgoing" | "incoming" | "both";
+  readonly direction: RelationshipWalkDirection;
   readonly maxDepth: number;
   readonly maxNodes: number;
   readonly maxRelationships: number;
@@ -528,7 +530,7 @@ function clampBoundedInt(
   return n;
 }
 
-function parseDirection(raw: string | null): "outgoing" | "incoming" | "both" {
+function parseDirection(raw: string | null): RelationshipWalkDirection {
   if (raw === null) return "both";
   if (raw !== "outgoing" && raw !== "incoming" && raw !== "both") {
     throw new HandlerError(400, "relationship/bad-request", "Unknown direction.");

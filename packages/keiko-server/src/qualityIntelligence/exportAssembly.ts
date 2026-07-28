@@ -337,6 +337,24 @@ function buildPageContent(lines: readonly string[]): Uint8Array {
   return concatBytes(chunks);
 }
 
+// Builds the fixed Catalog/Pages/Font objects (object numbers 1-3) that head every assembled PDF.
+function buildCatalogObjects(
+  pageObjNums: readonly number[],
+  pageCount: number,
+): readonly Uint8Array[] {
+  const kidsRefs = pageObjNums.map((n) => `${String(n)} 0 R`).join(" ");
+  return [
+    pdfStr("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"),
+    pdfStr(
+      `2 0 obj\n<< /Type /Pages /Kids [${kidsRefs}]` + ` /Count ${String(pageCount)} >>\nendobj\n`,
+    ),
+    pdfStr(
+      "3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Courier" +
+        " /Encoding /WinAnsiEncoding >>\nendobj\n",
+    ),
+  ];
+}
+
 /**
  * Assembles a deterministic, multi-page, text-only PDF from the given plain-text body. The entire
  * body is rendered across as many pages as needed (no truncation). Byte-stable across identical runs.
@@ -347,17 +365,7 @@ export function assemblePdf(body: string, runId: string): Uint8Array {
   const pageObjNums = pages.map((_, i) => 4 + 2 * i);
   const maxObjNum = 3 + 2 * pages.length;
 
-  const objects: Uint8Array[] = [
-    pdfStr("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"),
-    pdfStr(
-      `2 0 obj\n<< /Type /Pages /Kids [${pageObjNums.map((n) => `${String(n)} 0 R`).join(" ")}]` +
-        ` /Count ${String(pages.length)} >>\nendobj\n`,
-    ),
-    pdfStr(
-      "3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Courier" +
-        " /Encoding /WinAnsiEncoding >>\nendobj\n",
-    ),
-  ];
+  const objects: Uint8Array[] = [...buildCatalogObjects(pageObjNums, pages.length)];
   pages.forEach((pageLines, i) => {
     const pageNum = 4 + 2 * i;
     const contentNum = pageNum + 1;

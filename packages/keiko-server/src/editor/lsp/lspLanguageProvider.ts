@@ -6,6 +6,8 @@
 
 import { lspStatusToProviderDescriptor } from "@oscharko-dev/keiko-contracts";
 import type {
+  LanguageCompletionResult,
+  LanguageHoverResult,
   LanguageProviderDescriptor,
   LanguageServiceOperation,
   LspProcessStatus,
@@ -16,7 +18,6 @@ import type {
   LanguageProvider,
   LanguageSymbolsRaw,
 } from "../languageProvider.js";
-import type { LanguageCompletionResult, LanguageHoverResult } from "@oscharko-dev/keiko-contracts";
 
 export interface LspManagerLanguageProvider extends LanguageProvider {
   readonly descriptor: LanguageProviderDescriptor;

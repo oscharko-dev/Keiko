@@ -638,10 +638,12 @@ export function listRelationshipLifecycleHistory(
   });
 }
 
+export type RelationshipWalkDirection = "outgoing" | "incoming" | "both";
+
 export interface DependencyWalkOptions {
   readonly workspaceId: string;
   readonly originId: string;
-  readonly direction: "outgoing" | "incoming" | "both";
+  readonly direction: RelationshipWalkDirection;
   readonly maxDepth: number;
   readonly maxNodes: number;
   readonly maxRelationships: number;
@@ -671,7 +673,7 @@ export function walkDependencies(
 export interface ImpactWalkOptions {
   readonly workspaceId: string;
   readonly endpoint: { readonly kind: RelationshipObjectKind; readonly id: string };
-  readonly direction: "outgoing" | "incoming" | "both";
+  readonly direction: RelationshipWalkDirection;
   readonly maxDepth: number;
   readonly maxNodes: number;
   readonly maxRelationships: number;
@@ -1082,7 +1084,7 @@ function expandFrontier(
   incomingStatement: StatementSync | undefined,
   workspaceId: string,
   frontier: readonly WalkNode[],
-  direction: "outgoing" | "incoming" | "both",
+  direction: RelationshipWalkDirection,
   state: WalkState,
 ): WalkNode[] {
   const nextFrontier: WalkNode[] = [];
@@ -1104,7 +1106,7 @@ function expandFrontier(
 }
 
 interface WalkOptions {
-  readonly direction: "outgoing" | "incoming" | "both";
+  readonly direction: RelationshipWalkDirection;
   readonly maxDepth: number;
   readonly maxNodes: number;
   readonly maxRelationships: number;
@@ -1182,7 +1184,7 @@ function expandNeighbours(
   incomingStatement: StatementSync | undefined,
   workspaceId: string,
   node: { readonly kind: RelationshipObjectKind; readonly id: string },
-  direction: "outgoing" | "incoming" | "both",
+  direction: RelationshipWalkDirection,
 ): readonly StoredRelationship[] {
   const out: StoredRelationship[] = [];
   if (direction !== "incoming") {

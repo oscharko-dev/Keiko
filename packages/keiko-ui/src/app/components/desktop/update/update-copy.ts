@@ -56,7 +56,7 @@ export function isManualUpdatePath(
   );
 }
 
-export function isPortableManagedInstall(session: UpdateSessionStatus): boolean {
+function isPortableManagedInstall(session: UpdateSessionStatus): boolean {
   const mode = session.installMode;
   return (
     mode.status === "supported" &&

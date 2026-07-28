@@ -119,8 +119,7 @@ function isFormField(el: Element | null): boolean {
 
 function topZ(ws: readonly AppWindow[]): AppWindow | null {
   let best: AppWindow | null = null;
-  for (let i = 0; i < ws.length; i++) {
-    const next = ws[i] as AppWindow;
+  for (const next of ws) {
     if (next.minimized === true) continue;
     if (best === null) {
       best = next;
@@ -798,11 +797,38 @@ function isFiniteRevision(value: unknown): value is number {
 // PERSISTENCE-005). The server's own hard cap is MAX_WORKSPACE_STATE_BODY_BYTES.
 const KEEPALIVE_BODY_BUDGET_BYTES = 60 * 1024;
 
+// Manual UTF-8 byte-length computation for the last-resort path below (no global
+// Blob or TextEncoder). Iterates Unicode code points via the string's own iterator —
+// which pairs UTF-16 surrogates correctly, so no separate surrogate-pair handling is
+// needed here — then sums the UTF-8 byte width per code point (RFC 3629). This
+// produces exactly the same count `unescape(encodeURIComponent(body)).length` did,
+// including throwing on a lone (unpaired) surrogate: that is invalid UTF-16, and
+// `encodeURIComponent` rejects it too, so the replacement fails the same way.
+// (typescript:S1874 — unescape/encodeURIComponent-as-byte-length are both deprecated.)
+// Exported so tests can exercise this path directly (a pure function of its input)
+// instead of stubbing away the global `Blob`/`TextEncoder` to force the fallback.
+export function utf8ByteLength(body: string): number {
+  let bytes = 0;
+  for (const char of body) {
+    // Every code point yielded by for..of on a string is non-empty, so codePointAt(0)
+    // always returns a value here.
+    const codePoint = char.codePointAt(0) as number;
+    if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
+      throw new URIError("URI malformed");
+    }
+    if (codePoint <= 0x7f) bytes += 1;
+    else if (codePoint <= 0x7ff) bytes += 2;
+    else if (codePoint <= 0xffff) bytes += 3;
+    else bytes += 4;
+  }
+  return bytes;
+}
+
 function serializedBodyByteLength(body: string): number {
   if (typeof Blob === "function") return new Blob([body]).size;
   if (typeof TextEncoder === "function") return new TextEncoder().encode(body).length;
   // Last-resort UTF-8 byte estimate.
-  return unescape(encodeURIComponent(body)).length;
+  return utf8ByteLength(body);
 }
 
 // Exported for tests (GEN-PERF-PERSISTENCE-005). A serialized body over the

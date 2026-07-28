@@ -83,10 +83,12 @@ function admittedActivitySource(source: Record<string, unknown>):
     : { aggregateId, sequence, sourceId, data };
 }
 
+type CodingSafeActivitySignalOutcome = CodingSafeActivitySignal | "dropped" | undefined;
+
 function signalFor(
   type: string | undefined,
   data: Record<string, unknown>,
-): CodingSafeActivitySignal | "dropped" | undefined {
+): CodingSafeActivitySignalOutcome {
   if (type === "message.updated.1") return messageSignal(data);
   if (type === "message.part.updated.1") return partSignal(data);
   if (type === "session.next.tool.called") return calledToolSignal(data);
@@ -139,9 +141,7 @@ function assistantMessageSignal(
   };
 }
 
-function partSignal(
-  data: Record<string, unknown>,
-): CodingSafeActivitySignal | "dropped" | undefined {
+function partSignal(data: Record<string, unknown>): CodingSafeActivitySignalOutcome {
   const part = record(data.part);
   const occurredAt = instantFrom(data.time);
   if (part === undefined || occurredAt === undefined) return "dropped";
@@ -155,7 +155,7 @@ function partSignal(
 function planSignal(
   part: Record<string, unknown>,
   occurredAt: string,
-): CodingSafeActivitySignal | "dropped" | undefined {
+): CodingSafeActivitySignalOutcome {
   const state = record(part.state);
   // Only the completed part carries the final argument list; earlier states may stream partials.
   if (state?.status !== "completed") return undefined;
@@ -189,7 +189,7 @@ function planStep(value: unknown): CodingSafeActivityPlanStepInput | undefined {
 function textSignal(
   part: Record<string, unknown>,
   occurredAt: string,
-): CodingSafeActivitySignal | "dropped" | undefined {
+): CodingSafeActivitySignalOutcome {
   if (part.ignored === true || part.synthetic === true) return undefined;
   const messageId = string(part.messageID);
   const text = string(part.text);
@@ -203,7 +203,7 @@ function textSignal(
 function toolPartSignal(
   part: Record<string, unknown>,
   occurredAt: string,
-): CodingSafeActivitySignal | "dropped" | undefined {
+): CodingSafeActivitySignalOutcome {
   const state = record(part.state)?.status;
   if (state === "completed") return undefined;
   const normalizedState = toolPartState(state);

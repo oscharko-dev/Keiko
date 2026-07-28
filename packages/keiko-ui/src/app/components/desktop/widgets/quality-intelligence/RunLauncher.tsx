@@ -14,8 +14,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent,
+  type ReactNode,
 } from "react";
-import type { ReactNode } from "react";
 import type {
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,

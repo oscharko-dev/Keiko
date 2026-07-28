@@ -161,7 +161,7 @@ function resolveBoost(
   // into a single named topic — keeping a single boost per request keeps the cosine math
   // easy to reason about for the determinism test.
   for (const topic of topics) {
-    if (Object.prototype.hasOwnProperty.call(boosts, topic)) {
+    if (Object.hasOwn(boosts, topic)) {
       const raw = boosts[topic];
       if (raw === undefined) continue;
       return { topic, boost: clampBoost(raw) };

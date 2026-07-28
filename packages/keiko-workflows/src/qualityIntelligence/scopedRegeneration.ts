@@ -5,9 +5,11 @@
 // workflow; composes runQualityIntelligenceModelRoutedTestDesign unchanged.
 
 import { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
-import type { QualityIntelligenceModelRoutedTestDesignDeps } from "./modelRoutedTestDesign.js";
+import type {
+  QualityIntelligenceIngestedAtom,
+  QualityIntelligenceModelRoutedTestDesignDeps,
+} from "./modelRoutedTestDesign.js";
 import { runQualityIntelligenceModelRoutedTestDesign } from "./modelRoutedTestDesign.js";
-import type { QualityIntelligenceIngestedAtom } from "./modelRoutedTestDesign.js";
 import type {
   QualityIntelligenceRunSummary,
   QualityIntelligenceProvenanceRefs,

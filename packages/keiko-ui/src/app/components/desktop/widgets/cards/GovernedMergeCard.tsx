@@ -479,9 +479,10 @@ function outcomeCodes(outcome: GitDeliveryMergeExecuteResponse): readonly string
       : []),
     ...(outcome.blockReason !== undefined ? [`reason: ${outcome.blockReason}`] : []),
     ...(outcome.mergeable !== undefined ? [`mergeable: ${outcome.mergeable ? "yes" : "no"}`] : []),
-    ...(outcome.readinessBlockers ?? []).map(
-      (b) => `blocker: ${b.code}${b.actionHint !== undefined ? ` → ${b.actionHint}` : ""}`,
-    ),
+    ...(outcome.readinessBlockers ?? []).map((b) => {
+      const actionHintSuffix = b.actionHint !== undefined ? ` → ${b.actionHint}` : "";
+      return `blocker: ${b.code}${actionHintSuffix}`;
+    }),
     ...(outcome.preflightFindingCodes ?? []).map((c) => `preflight: ${c}`),
     ...(outcome.requiredApprovers ?? []).map((a) => `approver: ${a}`),
     ...(outcome.mergeRejectionReason !== undefined

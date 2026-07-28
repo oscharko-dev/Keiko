@@ -595,16 +595,20 @@ function extractionOptionsFor(
   };
 }
 
-function buildSinkDeps(
-  deps: ExtractDocumentDeps,
-  params: ExtractDocumentParams,
-  context: ProgressiveExtractContext,
-  extractor: ProgressiveExtractor,
-  documentId: DocumentId,
-  contentHash: string,
-  retryCount: number,
-  createdAt: number,
-): SinkDeps {
+interface BuildSinkDepsOptions {
+  readonly deps: ExtractDocumentDeps;
+  readonly params: ExtractDocumentParams;
+  readonly context: ProgressiveExtractContext;
+  readonly extractor: ProgressiveExtractor;
+  readonly documentId: DocumentId;
+  readonly contentHash: string;
+  readonly retryCount: number;
+  readonly createdAt: number;
+}
+
+function buildSinkDeps(options: BuildSinkDepsOptions): SinkDeps {
+  const { deps, params, context, extractor, documentId, contentHash, retryCount, createdAt } =
+    options;
   const capsule = getCapsule(deps.store, params.capsuleId);
   if (capsule === undefined) {
     throw new Error(
@@ -671,27 +675,40 @@ function planForMissingCheckpoint(createdAt: number): ExistingCheckpointPlan {
   };
 }
 
-function retryExceededPlan(
-  deps: ExtractDocumentDeps,
-  params: ExtractDocumentParams,
-  context: ProgressiveExtractContext,
-  extractor: ProgressiveExtractor,
-  contentHash: string,
-  provisional: SinkDeps,
-  existing: NonNullable<ReturnType<typeof selectExtractionCheckpoint>>,
-  state: SinkState,
-  retryCount: number,
-): ExistingCheckpointPlan {
-  const sinkDeps = buildSinkDeps(
+interface RetryExceededPlanOptions {
+  readonly deps: ExtractDocumentDeps;
+  readonly params: ExtractDocumentParams;
+  readonly context: ProgressiveExtractContext;
+  readonly extractor: ProgressiveExtractor;
+  readonly contentHash: string;
+  readonly provisional: SinkDeps;
+  readonly existing: NonNullable<ReturnType<typeof selectExtractionCheckpoint>>;
+  readonly state: SinkState;
+  readonly retryCount: number;
+}
+
+function retryExceededPlan(options: RetryExceededPlanOptions): ExistingCheckpointPlan {
+  const {
     deps,
     params,
     context,
     extractor,
-    provisional.documentId,
+    contentHash,
+    provisional,
+    existing,
+    state,
+    retryCount,
+  } = options;
+  const sinkDeps = buildSinkDeps({
+    deps,
+    params,
+    context,
+    extractor,
+    documentId: provisional.documentId,
     contentHash,
     retryCount,
-    existing.createdAt,
-  );
+    createdAt: existing.createdAt,
+  });
   return {
     state,
     retryCount,
@@ -736,7 +753,7 @@ function planForExistingCheckpoint(
   const retryCount = existing.retryCount + 1;
   const state = checkpointSinkState(deps.store, params, provisional.documentId, existing);
   if (retryCount > context.policy.maxRetryCount) {
-    return retryExceededPlan(
+    return retryExceededPlan({
       deps,
       params,
       context,
@@ -746,7 +763,7 @@ function planForExistingCheckpoint(
       existing,
       state,
       retryCount,
-    );
+    });
   }
   return { state, retryCount, createdAt: existing.createdAt, resume: true, startupDiagnostics: [] };
 }
@@ -871,16 +888,16 @@ function buildProgressiveStart(
   extractor: ProgressiveExtractor,
 ): ProgressiveStart {
   const documentId = progressiveDocumentId(params, context);
-  const provisionalSinkDeps = buildSinkDeps(
+  const provisionalSinkDeps = buildSinkDeps({
     deps,
     params,
     context,
     extractor,
     documentId,
     contentHash,
-    0,
-    deps.store._internal.now(),
-  );
+    retryCount: 0,
+    createdAt: deps.store._internal.now(),
+  });
   return {
     documentId,
     provisionalSinkDeps,
@@ -903,16 +920,16 @@ function sinkDepsForPlan(
   ) {
     return provisionalSinkDeps;
   }
-  return buildSinkDeps(
+  return buildSinkDeps({
     deps,
     params,
     context,
     extractor,
-    start.documentId,
+    documentId: start.documentId,
     contentHash,
-    plan.retryCount,
-    plan.createdAt,
-  );
+    retryCount: plan.retryCount,
+    createdAt: plan.createdAt,
+  });
 }
 
 function finalizeProgressiveSuccess(

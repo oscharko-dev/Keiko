@@ -14,9 +14,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { updateChatConnectedScopes } from "@/lib/api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatUserError } from "./format-error";
-import type { GroundedAnswerContextPackSummary } from "@/lib/types";
+import type { Chat, ChatConnectedScope, GroundedAnswerContextPackSummary } from "@/lib/types";
 import { effectiveScopes } from "./hooks/workspaceActions";
-import type { Chat, ChatConnectedScope } from "@/lib/types";
 
 export interface ConnectedScopePillProps {
   readonly chat: Chat;

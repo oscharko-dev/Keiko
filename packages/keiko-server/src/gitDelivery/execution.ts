@@ -99,7 +99,8 @@ function adapterFor(
 }
 
 export function defaultGitDeliveryActionId(command: unknown, nowMs: number): string {
-  return `gde-action-${sha256Hex(`${JSON.stringify(command)}:${String(nowMs)}`).slice(0, 24)}`;
+  const fingerprintInput = `${JSON.stringify(command)}:${String(nowMs)}`;
+  return `gde-action-${sha256Hex(fingerprintInput).slice(0, 24)}`;
 }
 
 // String-leaf redactor for the evidence ledger, reusing the deps payload redactor (deepRedactStrings

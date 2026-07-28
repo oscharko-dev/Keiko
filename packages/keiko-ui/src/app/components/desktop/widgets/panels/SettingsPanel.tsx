@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { VOICE_PERSONAS } from "@oscharko-dev/keiko-contracts";
 import { fetchConfig, fetchModels, runGatewayReadiness } from "@/lib/api";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import {
   LOCALE_LABELS,
   useLocale,
@@ -232,43 +233,6 @@ function readinessErrorMessage(error: unknown, t: I18nTranslate): string {
   return t("settings.models.readinessError");
 }
 
-async function writeTextWithFallback(text: string): Promise<void> {
-  const writeText = typeof navigator === "undefined" ? undefined : navigator.clipboard?.writeText;
-  if (writeText !== undefined && navigator.clipboard !== undefined) {
-    try {
-      await writeText.call(navigator.clipboard, text);
-      return;
-    } catch {
-      // Try the selection-backed path below for restricted clipboard contexts.
-    }
-  }
-
-  if (typeof document === "undefined" || document.body === null) {
-    throw new Error("clipboard-unavailable");
-  }
-
-  const previousFocus =
-    document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "true");
-  textarea.style.position = "fixed";
-  textarea.style.inset = "0 auto auto -9999px";
-  textarea.style.width = "1px";
-  textarea.style.height = "1px";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  try {
-    textarea.focus();
-    textarea.select();
-    const copied = typeof document.execCommand === "function" && document.execCommand("copy");
-    if (!copied) throw new Error("clipboard-fallback-failed");
-  } finally {
-    textarea.remove();
-    previousFocus?.focus();
-  }
-}
-
 function capabilityLine(report: GatewayReadinessReport): string {
   const capabilities = report.verifiedCapabilities;
   const values = [
@@ -329,7 +293,7 @@ function ReadinessReportCopyButton({
 
   async function handleCopy(): Promise<void> {
     try {
-      await writeTextWithFallback(formatGatewayReadinessReport(report));
+      await copyTextToClipboard(formatGatewayReadinessReport(report));
       setCopyState("copied");
       setStatus(t("settings.models.reportCopied"));
     } catch {

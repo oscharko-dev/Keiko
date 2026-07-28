@@ -7,14 +7,21 @@
 // true is the gated apply path (run-handlers), which re-invokes this engine with apply:true.
 
 import { createHash, randomUUID } from "node:crypto";
-import { DryRunToolPort } from "@oscharko-dev/keiko-harness";
 import {
   canonicalise,
   createSession,
+  DEFAULT_LIMITS,
+  DryRunToolPort,
   HARNESS_VERSION,
   type AgentConfig,
+  type HarnessEvent,
+  type ModelPort,
+  type RunCompletedEvent,
+  type RunResult,
+  type RunStartedEvent,
+  type TaskInput,
+  type TaskType,
 } from "@oscharko-dev/keiko-harness";
-import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   generateUnitTests,
   investigateBug,
@@ -31,15 +38,6 @@ import {
   type VerificationReport,
 } from "@oscharko-dev/keiko-verification";
 import { detectWorkspace, readWorkspaceFile } from "@oscharko-dev/keiko-workspace";
-import type {
-  HarnessEvent,
-  RunCompletedEvent,
-  RunStartedEvent,
-  TaskInput,
-  RunResult,
-  TaskType,
-} from "@oscharko-dev/keiko-harness";
-import { DEFAULT_LIMITS } from "@oscharko-dev/keiko-harness";
 import type { EvidenceReport } from "@oscharko-dev/keiko-evidence";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { RunRequest } from "./run-request.js";

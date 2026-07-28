@@ -267,7 +267,7 @@ export function repositoryReferenceTextParts(
 export function parseExactRepositoryReference(source: string): RepositoryReference | null {
   REPOSITORY_REFERENCE_PATTERN.lastIndex = 0;
   const match = REPOSITORY_REFERENCE_PATTERN.exec(source);
-  if (match === null || match.index !== 0 || (match[0]?.length ?? 0) !== source.length) {
+  if (match?.index !== 0 || (match[0]?.length ?? 0) !== source.length) {
     return null;
   }
   return referenceFromMatch(match, source);

@@ -738,8 +738,6 @@ export type EditorPreviewedPatch = Omit<EditorGeneratedPatch, "status"> & {
   readonly status: "previewed";
 };
 
-export type EditorPreviewPatchResult = EditorPreviewedPatch;
-
 export interface EditorPatchReviewDecision {
   readonly patchId: string;
   readonly decision: "apply" | "reject";

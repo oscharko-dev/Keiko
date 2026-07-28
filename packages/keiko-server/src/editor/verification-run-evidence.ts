@@ -6,9 +6,8 @@
 // Content-free per ADR-0048: enums, counts, and redacted command strings only — never raw
 // stdout/stderr (summarizeForAudit already excludes outputSummary/detail/locations).
 
-import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
+import { deepRedactStrings, EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceManifest, EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import { EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-evidence";
 import { HARNESS_VERSION } from "@oscharko-dev/keiko-harness";
 import type { RunOutcome } from "@oscharko-dev/keiko-harness";
 import { summarizeForAudit } from "@oscharko-dev/keiko-verification";

@@ -211,22 +211,22 @@ function supervisorStart(ctx: SupervisorContext): void {
   }
   const prepared = prepareSpawnOrFail(ctx.deps, executable, preflight, ctx.transition);
   if (prepared === undefined) return;
-  spawnAndInitialize(
-    ctx.state,
-    ctx.deps,
-    ctx.spawn,
-    ctx.now,
-    ctx.transition,
-    prepared.executable,
-    prepared.args,
-    prepared.env,
-    prepared.cleanup,
-    prepared.resourceBudgetSatisfied,
-    prepared.backgroundResourceBudgetSatisfied,
-    (generation, terminateProcess) => {
+  spawnAndInitialize({
+    state: ctx.state,
+    deps: ctx.deps,
+    spawn: ctx.spawn,
+    now: ctx.now,
+    transition: ctx.transition,
+    executable: prepared.executable,
+    args: prepared.args,
+    env: prepared.env,
+    spawnResourceCleanup: prepared.cleanup,
+    resourceBudgetSatisfied: prepared.resourceBudgetSatisfied,
+    backgroundResourceBudgetSatisfied: prepared.backgroundResourceBudgetSatisfied,
+    onCrash: (generation, terminateProcess) => {
       supervisorOnCrash(ctx, generation, terminateProcess);
     },
-  );
+  });
 }
 
 function createManagerRuntime(deps: LspProcessManagerDeps): ManagerRuntime {
@@ -356,20 +356,36 @@ function buildLifecycleEvent(
   };
 }
 
-function spawnAndInitialize(
-  state: RuntimeState,
-  deps: LspProcessManagerDeps,
-  spawn: LspSpawnFn,
-  now: () => number,
-  transition: Transition,
-  executable: string,
-  args: readonly string[],
-  env: Record<string, string>,
-  spawnResourceCleanup: (() => void) | undefined,
-  resourceBudgetSatisfied: (() => boolean) | undefined,
-  backgroundResourceBudgetSatisfied: (() => boolean) | undefined,
-  onCrash: (generation: number, terminateProcess: boolean) => void,
-): void {
+interface SpawnAndInitializeInput {
+  readonly state: RuntimeState;
+  readonly deps: LspProcessManagerDeps;
+  readonly spawn: LspSpawnFn;
+  readonly now: () => number;
+  readonly transition: Transition;
+  readonly executable: string;
+  readonly args: readonly string[];
+  readonly env: Record<string, string>;
+  readonly spawnResourceCleanup: (() => void) | undefined;
+  readonly resourceBudgetSatisfied: (() => boolean) | undefined;
+  readonly backgroundResourceBudgetSatisfied: (() => boolean) | undefined;
+  readonly onCrash: (generation: number, terminateProcess: boolean) => void;
+}
+
+function spawnAndInitialize(input: SpawnAndInitializeInput): void {
+  const {
+    state,
+    deps,
+    spawn,
+    now,
+    transition,
+    executable,
+    args,
+    env,
+    spawnResourceCleanup,
+    resourceBudgetSatisfied,
+    backgroundResourceBudgetSatisfied,
+    onCrash,
+  } = input;
   // On a restart, reject any request still pending against the dead transport IMMEDIATELY instead of
   // letting it linger until requestTimeoutMs: dispose rejects pending with LspRpcDisposedError, which
   // maps to DISPOSED (FIX 3). The new generation guards stale callbacks from the superseded child.
