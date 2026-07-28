@@ -98,6 +98,7 @@ interface ChatWindowCfg extends WindowCfgRecord {
   readonly title?: string;
   readonly modelId?: string;
   readonly selectionHandoffId?: string;
+  readonly newChatRequestId?: string;
 }
 
 interface FilesWindowCfg extends WindowCfgRecord {

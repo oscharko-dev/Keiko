@@ -212,6 +212,51 @@ function useSelectionHandoffControl(args: {
   return { noticeKey, pending: id !== undefined && settledId !== id };
 }
 
+interface ChatCreationControlArgs {
+  readonly chatId: string | undefined;
+  readonly loading: boolean;
+  readonly newChatRequestId: string | undefined;
+  readonly openNewChat: ChatSessionApi["openNewChat"];
+  readonly selectionHandoffId: string | undefined;
+  readonly title: string | undefined;
+  readonly updateCfg: WindowRenderContext["updateCfg"];
+}
+
+function useChatCreationControl(args: ChatCreationControlArgs): boolean {
+  const { chatId, loading, newChatRequestId, openNewChat, selectionHandoffId, title, updateCfg } =
+    args;
+  const pending = chatId === undefined && selectionHandoffId === undefined;
+  const requestId = pending ? (newChatRequestId ?? "initial-unbound-chat") : undefined;
+  const latestRequestIdRef = useRef(requestId);
+  const inFlightRef = useRef(false);
+  const attemptedRequestIdRef = useRef<string | undefined>(undefined);
+  const [queueRevision, setQueueRevision] = useState(0);
+  latestRequestIdRef.current = requestId;
+
+  useEffect((): void => {
+    if (loading || requestId === undefined || inFlightRef.current) return;
+    if (attemptedRequestIdRef.current === requestId) return;
+    attemptedRequestIdRef.current = requestId;
+    inFlightRef.current = true;
+    void openNewChat(undefined, title)
+      .then((created): void => {
+        if (created === undefined || latestRequestIdRef.current !== requestId) return;
+        updateCfg({
+          chatId: created.id,
+          title: created.title,
+          newChatRequestId: undefined,
+        });
+      })
+      .finally((): void => {
+        inFlightRef.current = false;
+        if (latestRequestIdRef.current !== requestId) {
+          setQueueRevision((value): number => value + 1);
+        }
+      });
+  }, [loading, openNewChat, queueRevision, requestId, title, updateCfg]);
+  return pending;
+}
+
 export function ChatWindowSessionHost({
   cfg,
   ctx,
@@ -221,44 +266,31 @@ export function ChatWindowSessionHost({
 }): ReactNode {
   const agentT = useEditorAgentTranslate();
   const session = useChatSessionContext();
-  const creatingRef = useRef(false);
   const chatId = str(cfg, "chatId");
   const title = str(cfg, "title");
   const selectionHandoffId = str(cfg, "selectionHandoffId");
+  const newChatRequestId = str(cfg, "newChatRequestId");
   const { updateCfg } = ctx;
   const { activeChat, activeProject, chats, loading, openChat, openNewChat } = session;
   const activeTarget =
     activeChat !== undefined && activeChat.status !== "closed" ? activeChat : undefined;
   const handoff = useSelectionHandoffControl({ chatId, ctx, id: selectionHandoffId, session });
-
-  useEffect(() => {
-    if (loading || selectionHandoffId !== undefined) return;
-    if (chatId !== undefined) {
-      if (activeTarget?.id === chatId) return;
-      const target = chats.find((chat) => chat.id === chatId && chat.status !== "closed");
-      if (target !== undefined) void openChat(target);
-      return;
-    }
-    if (creatingRef.current) return;
-    creatingRef.current = true;
-    void openNewChat(undefined, title)
-      .then((created) => {
-        if (created !== undefined) updateCfg({ chatId: created.id, title: created.title });
-      })
-      .finally(() => {
-        creatingRef.current = false;
-      });
-  }, [
+  const creatingChat = useChatCreationControl({
     chatId,
-    activeTarget?.id,
-    chats,
     loading,
-    openChat,
+    newChatRequestId,
     openNewChat,
     selectionHandoffId,
     title,
     updateCfg,
-  ]);
+  });
+
+  useEffect((): void => {
+    if (loading || selectionHandoffId !== undefined || chatId === undefined) return;
+    if (activeTarget?.id === chatId) return;
+    const target = chats.find((chat): boolean => chat.id === chatId && chat.status !== "closed");
+    if (target !== undefined) void openChat(target);
+  }, [chatId, activeTarget?.id, chats, loading, openChat, selectionHandoffId]);
 
   useEffect(() => {
     if (loading || chatId === undefined || activeTarget?.id !== chatId) return;
@@ -272,7 +304,10 @@ export function ChatWindowSessionHost({
     activeTarget?.id !== chatId &&
     !session.chats.some((chat) => chat.id === chatId && chat.status !== "closed");
   const waitingForTarget =
-    session.loading || handoff.pending || (chatId !== undefined && activeTarget?.id !== chatId);
+    session.loading ||
+    handoff.pending ||
+    creatingChat ||
+    (chatId !== undefined && activeTarget?.id !== chatId);
   const openRunResult = useCallback(
     (message: ChatMessage): void => {
       if (message.runId === undefined) return;

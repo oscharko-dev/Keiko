@@ -225,9 +225,9 @@ vi.mock("./modals/NewWindowDialog", () => ({
     onConfirm,
   }: {
     readonly onConfirm: (cfg: Record<string, string>) => void;
-  }) => (
+  }): ReactNode => (
     <div role="dialog" aria-label="New window">
-      <button type="button" onClick={() => onConfirm({ title: "Release grounding review" })}>
+      <button type="button" onClick={(): void => onConfirm({ title: "Release grounding review" })}>
         Confirm new chat
       </button>
     </div>
@@ -439,8 +439,8 @@ describe("AppShell grounding connections", () => {
     }
   });
 
-  it("clears the existing singleton binding when the user confirms a new chat", async () => {
-    const add = vi.fn<WorkspaceApi["add"]>(() => "chat-window");
+  it("clears the existing singleton binding when the user confirms a new chat", async (): Promise<void> => {
+    const add = vi.fn<WorkspaceApi["add"]>((): string => "chat-window");
     const api = workspaceApi({ add });
     mocks.state.workspaceResult = workspaceResult(
       [win("chat", { chatId: "chat-1", title: "Release chat" }, "chat-window")],
@@ -460,6 +460,7 @@ describe("AppShell grounding connections", () => {
       title: "Release grounding review",
       chatId: undefined,
       selectionHandoffId: undefined,
+      newChatRequestId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
     });
     expect(Object.hasOwn(newChatCfg ?? {}, "chatId")).toBe(true);
     expect(Object.hasOwn(newChatCfg ?? {}, "selectionHandoffId")).toBe(true);

@@ -58,8 +58,8 @@ vi.mock("../context/ChatSessionContext", () => ({
   useChatSessionContext: () => chatSessionState,
 }));
 
-vi.mock("../ChatWindow", () => ({
-  ChatWindow: () => <div data-testid="chat-window" />,
+vi.mock("../ChatWindow", (): { readonly ChatWindow: () => ReactNode } => ({
+  ChatWindow: (): ReactNode => <div data-testid="chat-window" />,
 }));
 
 // Records the root identity and the reveal triple each mounted editor was handed, so a test can see
@@ -153,6 +153,39 @@ function context(): WindowRenderContext {
     openEditorFile: vi.fn(),
     openWindow: vi.fn(),
   } as unknown as WindowRenderContext;
+}
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolvePromise: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve): void => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: (value: T): void => {
+      resolvePromise?.(value);
+    },
+  };
+}
+
+function chatFixture(id: string, title: string, timestamp: number): Chat {
+  return {
+    id,
+    projectPath: "/repo",
+    title,
+    selectedModel: "example-chat-model",
+    branchLabel: undefined,
+    status: undefined,
+    connectedScope: undefined,
+    localKnowledgeScope: undefined,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
 }
 
 // `boundRoot` is what `resolveBoundRoot` hands the host: the ACTIVE task workspace overrides the
@@ -508,61 +541,152 @@ describe("EditorWindowSessionHost reveal targeting (#2621)", () => {
 });
 
 describe("ChatWindowSessionHost target missing", () => {
-  it("creates and binds one canonical chat while the singleton target is cleared", async () => {
-    const existing = {
-      id: "chat-existing",
-      projectPath: "/repo",
-      title: "Existing chat",
-      selectedModel: "example-chat-model",
-      branchLabel: undefined,
-      status: undefined,
-      connectedScope: undefined,
-      localKnowledgeScope: undefined,
-      createdAt: 1,
-      updatedAt: 1,
-    } satisfies Chat;
-    const created = {
-      ...existing,
-      id: "chat-created",
-      title: "Release grounding review",
-      createdAt: 2,
-      updatedAt: 2,
-    };
-    let resolveCreation: ((chat: Chat) => void) | undefined;
-    const creation = new Promise<Chat>((resolve) => {
-      resolveCreation = resolve;
-    });
+  it("creates and binds one canonical chat while the old composer stays unavailable", async (): Promise<void> => {
+    const existing = chatFixture("chat-existing", "Existing chat", 1);
+    const created = chatFixture("chat-created", "Release grounding review", 2);
+    const creation = deferred<Chat>();
     chatSessionState.activeChat = existing;
     chatSessionState.chats = [existing];
-    chatSessionState.openNewChat.mockReturnValueOnce(creation);
+    chatSessionState.openNewChat.mockReturnValueOnce(creation.promise);
     const ctx = context();
     const view = render(
       <I18nProvider>
-        <ChatWindowSessionHost cfg={{ title: created.title }} ctx={ctx} />
+        <ChatWindowSessionHost
+          cfg={{ title: created.title, newChatRequestId: "request-1" }}
+          ctx={ctx}
+        />
       </I18nProvider>,
     );
 
-    await waitFor(() =>
-      expect(chatSessionState.openNewChat).toHaveBeenCalledWith(undefined, created.title),
-    );
+    await waitFor((): void => {
+      expect(chatSessionState.openNewChat).toHaveBeenCalledWith(undefined, created.title);
+    });
+    expect(screen.getByText("Opening chat...")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-window")).not.toBeInTheDocument();
     view.rerender(
       <I18nProvider>
-        <ChatWindowSessionHost cfg={{ title: created.title }} ctx={ctx} />
+        <ChatWindowSessionHost
+          cfg={{ title: created.title, newChatRequestId: "request-1" }}
+          ctx={ctx}
+        />
       </I18nProvider>,
     );
     expect(chatSessionState.openNewChat).toHaveBeenCalledOnce();
 
-    await act(async () => {
-      resolveCreation?.(created);
-      await creation;
+    await act(async (): Promise<void> => {
+      creation.resolve(created);
+      await creation.promise;
     });
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       chatId: created.id,
       title: created.title,
+      newChatRequestId: undefined,
     });
   });
 
-  it("renders a not-found message when the configured chat has no live match", async () => {
+  it("retries a failed same-title request under a new confirmation identity", async (): Promise<void> => {
+    const first = deferred<Chat | undefined>();
+    const second = deferred<Chat | undefined>();
+    const created = chatFixture("chat-retry", "Same title", 3);
+    const existing = chatFixture("chat-existing", "Existing chat", 1);
+    chatSessionState.activeChat = existing;
+    chatSessionState.chats = [existing];
+    chatSessionState.openNewChat
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const ctx = context();
+    const view = render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ title: created.title, newChatRequestId: "request-1" }}
+          ctx={ctx}
+        />
+      </I18nProvider>,
+    );
+    await waitFor((): void => {
+      expect(chatSessionState.openNewChat).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async (): Promise<void> => {
+      first.resolve(undefined);
+      await first.promise;
+    });
+    view.rerender(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ title: created.title, newChatRequestId: "request-2" }}
+          ctx={ctx}
+        />
+      </I18nProvider>,
+    );
+    await waitFor((): void => {
+      expect(chatSessionState.openNewChat).toHaveBeenCalledTimes(2);
+    });
+
+    await act(async (): Promise<void> => {
+      second.resolve(created);
+      await second.promise;
+    });
+    expect(ctx.updateCfg).toHaveBeenCalledOnce();
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: created.id,
+      title: created.title,
+      newChatRequestId: undefined,
+    });
+  });
+
+  it("serializes replacement requests and ignores an older completion", async (): Promise<void> => {
+    const first = deferred<Chat | undefined>();
+    const second = deferred<Chat | undefined>();
+    const stale = chatFixture("chat-stale", "First title", 2);
+    const latest = chatFixture("chat-latest", "Second title", 3);
+    chatSessionState.openNewChat
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const ctx = context();
+    const view = render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ title: stale.title, newChatRequestId: "request-1" }}
+          ctx={ctx}
+        />
+      </I18nProvider>,
+    );
+    await waitFor((): void => {
+      expect(chatSessionState.openNewChat).toHaveBeenCalledTimes(1);
+    });
+
+    view.rerender(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ title: latest.title, newChatRequestId: "request-2" }}
+          ctx={ctx}
+        />
+      </I18nProvider>,
+    );
+    expect(chatSessionState.openNewChat).toHaveBeenCalledTimes(1);
+    await act(async (): Promise<void> => {
+      first.resolve(stale);
+      await first.promise;
+    });
+    await waitFor((): void => {
+      expect(chatSessionState.openNewChat).toHaveBeenCalledTimes(2);
+    });
+    expect(ctx.updateCfg).not.toHaveBeenCalled();
+
+    await act(async (): Promise<void> => {
+      second.resolve(latest);
+      await second.promise;
+    });
+    expect(ctx.updateCfg).toHaveBeenCalledOnce();
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: latest.id,
+      title: latest.title,
+      newChatRequestId: undefined,
+    });
+  });
+
+  it("renders a not-found message when the configured chat has no live match", async (): Promise<void> => {
     // targetMissing requires: no selectionHandoffId, a configured chatId, session not loading,
     // the active chat not already that id, and no open (non-closed) chat with that id either.
     chatSessionState.activeChat = undefined;

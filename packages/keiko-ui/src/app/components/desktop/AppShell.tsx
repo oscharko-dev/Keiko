@@ -82,6 +82,21 @@ import styles from "./AppShell.module.css";
 const APP_BOOT_RECOVERY_RELOAD_KEY = "keiko.app-boot-recovery-reload-count";
 const EMPTY_SHELL_SHORTCUT_STATE: ShellShortcutState = { labels: new Map(), bindings: [] };
 
+export function prepareNewWindowCfg(
+  type: WindowType,
+  cfg: Cfg,
+  newChatRequestId = crypto.randomUUID(),
+): Cfg {
+  return type === "chat"
+    ? {
+        ...cfg,
+        chatId: undefined,
+        selectionHandoffId: undefined,
+        newChatRequestId,
+      }
+    : cfg;
+}
+
 function preventGatewaySetupDismissal(event: SyntheticEvent<HTMLDialogElement>): void {
   event.preventDefault();
 }
@@ -890,10 +905,7 @@ function AppShellInner(): ReactNode {
       if (current === null) return;
       const normalizedCfg = current === "editor" ? normalizeEditorWindowCfg(cfg) : cfg;
       const { __connectFilesId, ...windowCfg } = normalizedCfg;
-      const targetWindowCfg =
-        current === "chat"
-          ? { ...windowCfg, chatId: undefined, selectionHandoffId: undefined }
-          : windowCfg;
+      const targetWindowCfg = prepareNewWindowCfg(current, windowCfg);
       const createdId = ws.api.add(current, targetWindowCfg);
       if (
         current === "agents" &&
