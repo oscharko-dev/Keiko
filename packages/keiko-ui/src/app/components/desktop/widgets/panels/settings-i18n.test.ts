@@ -1,14 +1,8 @@
-import { createElement, type ReactNode } from "react";
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { I18nProvider } from "@/lib/i18n";
 import settingsMessages from "./settings-i18n.messages.json";
 import { useSettingsTranslate } from "./settings-i18n";
-
-function I18nWrapper({ children }: { readonly children: ReactNode }): ReactNode {
-  return createElement(I18nProvider, null, children);
-}
 
 describe("settings tab translations", () => {
   it("contains exact English and German labels for the Debugging tab", () => {
@@ -19,7 +13,7 @@ describe("settings tab translations", () => {
   });
 
   it("interpolates named values in settings messages", () => {
-    const { result } = renderHook(useSettingsTranslate, { wrapper: I18nWrapper });
+    const { result } = renderHook(useSettingsTranslate);
     expect(result.current("settings.models.modelCount", { count: 3 })).toBe("3 models");
   });
 });
