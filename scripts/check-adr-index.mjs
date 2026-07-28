@@ -17,6 +17,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { isMainModule } from "./lib/is-main-module.mjs";
+
 const ADR_FILE = /^ADR-(\d{4})-.*\.md$/;
 
 function adrNumber(name) {
@@ -107,6 +109,6 @@ function main() {
 }
 
 // Run as a CLI unless imported by a test.
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url)) {
   main();
 }
