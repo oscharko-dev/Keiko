@@ -349,8 +349,9 @@ export function MemoryList({ fetchMemoriesImpl = fetchMemories }: MemoryListProp
   const handleFilterChange = useCallback(
     (next: MemoryFilterState): void => {
       const qs = filtersToParams(next).toString();
+      const queryString = qs.length > 0 ? `?${qs}` : "";
       startTransition(() => {
-        router.push(`/memoriaviva${qs.length > 0 ? `?${qs}` : ""}`);
+        router.push(`/memoriaviva${queryString}`);
       });
     },
     [router, startTransition],

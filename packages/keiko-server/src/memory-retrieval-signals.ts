@@ -358,7 +358,8 @@ function createMemoryVectorIndexPort(
         const entry = byId.get(id);
         return entry === undefined ? [] : [entry];
       });
-      const canonicalEntries = [...requestedEntries].sort(compareMemoryEntryIds);
+      const canonicalEntries = [...requestedEntries];
+      canonicalEntries.sort(compareMemoryEntryIds);
       const cacheGroupKey = memoryPartitionCacheGroupKey(query.partitionKey);
       const cacheKey = memoryPartitionCacheKey(cacheGroupKey, canonicalEntries);
       const result = await searchUsearchAnnIndex({

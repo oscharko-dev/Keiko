@@ -261,7 +261,7 @@
         document.getElementById("utabs").addEventListener("keydown", function (e) {
           var i = tabs.indexOf(document.activeElement);
           if (i < 0) return;
-          var n = i;
+          var n;
           if (e.key === "ArrowRight") n = (i + 1) % tabs.length;
           else if (e.key === "ArrowLeft") n = (i - 1 + tabs.length) % tabs.length;
           else if (e.key === "Home") n = 0;
@@ -302,7 +302,7 @@
         menu.addEventListener("keydown", function (e) {
           var i = items.indexOf(document.activeElement);
           if (i < 0) i = 0;
-          var n = i;
+          var n;
           if (e.key === "ArrowDown") n = (i + 1) % items.length;
           else if (e.key === "ArrowUp") n = (i - 1 + items.length) % items.length;
           else if (e.key === "Home") n = 0;

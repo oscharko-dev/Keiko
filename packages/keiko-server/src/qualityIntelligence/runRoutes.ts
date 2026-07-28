@@ -23,8 +23,8 @@ import type {
   QualityIntelligenceStartRunRequest,
   QualityIntelligenceModelPolicy,
   QualityIntelligenceModelRouting,
+  QualityIntelligence as QI,
 } from "@oscharko-dev/keiko-contracts";
-import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import { QualityIntelligenceHardening } from "@oscharko-dev/keiko-quality-intelligence";
 import { SSE_HEADERS } from "../sse.js";
 import { writeOrDestroy } from "../sse-write.js";

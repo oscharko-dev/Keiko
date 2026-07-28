@@ -89,7 +89,8 @@ function loadChatCompactionRecords(store: EvidenceStore, chatId: string): readon
       }
     }
   }
-  return records.sort((a, b) => a.startedAt - b.startedAt).slice(-MAX_RECORDS);
+  records.sort((a, b) => a.startedAt - b.startedAt);
+  return records.slice(-MAX_RECORDS);
 }
 
 function newestRunIds(runIds: readonly string[], prefix: string): readonly string[] {

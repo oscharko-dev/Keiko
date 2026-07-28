@@ -14,14 +14,14 @@ import {
   createAuditRedactor,
   EVIDENCE_SCHEMA_VERSION,
   persistWorkflowEvidence as persistWorkflowEvidenceCore,
+  deepRedactStrings,
   type EvidenceReport,
   type EvidenceManifest,
   type WorkflowRunKind,
+  type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
-import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import { HARNESS_VERSION, type RunResult, type TaskType } from "@oscharko-dev/keiko-harness";
 import { resolveCostClass, type EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { StreamEvent } from "./sink.js";
 import type { RunKind } from "./run-request.js";
 import type { RunStatus } from "./runs.js";

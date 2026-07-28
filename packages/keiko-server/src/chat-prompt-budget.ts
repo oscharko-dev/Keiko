@@ -1,15 +1,16 @@
-import { countContextTokensForSegments, type ContextProfile } from "@oscharko-dev/keiko-contracts";
+import {
+  countContextTokensForSegments,
+  type ContextAssemblyDiagnostics,
+  type ContextProfile,
+  type ConversationDocumentContextWire,
+  type DiscussionMode,
+} from "@oscharko-dev/keiko-contracts";
 import {
   allocateContext,
   DEFAULT_CONTEXT_BUDGET,
   type AllocatedContextLane,
   type ContextLaneInput,
 } from "@oscharko-dev/keiko-workflows/context-budget";
-import type {
-  ContextAssemblyDiagnostics,
-  ConversationDocumentContextWire,
-  DiscussionMode,
-} from "@oscharko-dev/keiko-contracts";
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type { ConversationMemoryContextEntryWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatMessage } from "./store/index.js";

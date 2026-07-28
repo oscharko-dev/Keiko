@@ -72,13 +72,13 @@ describe("orderCandidatesForSearch", () => {
       file("packages/core/src/PaymentReconciler.ts"),
       file("README.md"),
     ];
-    const { files: ordered } = orderCandidatesForSearch(
+    const { files: ordered } = orderCandidatesForSearch({
       files,
-      query("Where is PaymentReconciler implemented"),
+      query: query("Where is PaymentReconciler implemented"),
       policy,
-      0,
-      0,
-    );
+      ignoredByDiscovery: 0,
+      deniedByDiscovery: 0,
+    });
     expect(ordered[0]?.relativePath).toBe("packages/core/src/PaymentReconciler.ts");
   });
 
@@ -88,13 +88,13 @@ describe("orderCandidatesForSearch", () => {
       file("src/payments/PaymentService.ts"),
       file("docs/payment-service.md"),
     ];
-    const { files: ordered, diagnostics } = orderCandidatesForSearch(
+    const { files: ordered, diagnostics } = orderCandidatesForSearch({
       files,
-      query("Where is the source implementation for PaymentServiceTest?"),
+      query: query("Where is the source implementation for PaymentServiceTest?"),
       policy,
-      0,
-      0,
-    );
+      ignoredByDiscovery: 0,
+      deniedByDiscovery: 0,
+    });
     expect(ordered[0]?.relativePath).toBe("src/payments/PaymentService.ts");
     const source = diagnostics.rankedCandidates.find(
       (entry) => entry.scopePath === "src/payments/PaymentService.ts",
@@ -110,20 +110,20 @@ describe("orderCandidatesForSearch", () => {
       file("src/auth/ApiClient.ts"),
       file("src/auth/TokenValidator.ts"),
     ];
-    const apiClient = orderCandidatesForSearch(
+    const apiClient = orderCandidatesForSearch({
       files,
-      query("Where is ApiClient timeout handling implemented?"),
+      query: query("Where is ApiClient timeout handling implemented?"),
       policy,
-      0,
-      0,
-    ).files.map((entry) => entry.relativePath);
-    const tokenValidator = orderCandidatesForSearch(
+      ignoredByDiscovery: 0,
+      deniedByDiscovery: 0,
+    }).files.map((entry) => entry.relativePath);
+    const tokenValidator = orderCandidatesForSearch({
       files,
-      query("Where does TokenValidator reject expired JWTs?"),
+      query: query("Where does TokenValidator reject expired JWTs?"),
       policy,
-      0,
-      0,
-    ).files.map((entry) => entry.relativePath);
+      ignoredByDiscovery: 0,
+      deniedByDiscovery: 0,
+    }).files.map((entry) => entry.relativePath);
     expect(apiClient[0]).toBe("src/auth/ApiClient.ts");
     expect(tokenValidator[0]).toBe("src/auth/TokenValidator.ts");
     expect(apiClient).not.toEqual(tokenValidator);
@@ -131,22 +131,26 @@ describe("orderCandidatesForSearch", () => {
 
   it("lets a code match outrank manifest and prose priors", () => {
     const files = [file("package.json"), file("README.md"), file("src/payments/refundPayment.ts")];
-    const { files: ordered } = orderCandidatesForSearch(
+    const { files: ordered } = orderCandidatesForSearch({
       files,
-      query("Where is refundPayment implemented?"),
+      query: query("Where is refundPayment implemented?"),
       policy,
-      0,
-      0,
-    );
+      ignoredByDiscovery: 0,
+      deniedByDiscovery: 0,
+    });
     expect(ordered[0]?.relativePath).toBe("src/payments/refundPayment.ts");
   });
 
   it("is deterministic and locale-independent on score ties (code-point order)", () => {
     const files = [file("src/zeta.ts"), file("src/alpha.ts"), file("src/Beta.ts")];
     const run = (): readonly string[] =>
-      orderCandidatesForSearch(files, query("unrelated"), policy, 0, 0).files.map(
-        (f) => f.relativePath,
-      );
+      orderCandidatesForSearch({
+        files,
+        query: query("unrelated"),
+        policy,
+        ignoredByDiscovery: 0,
+        deniedByDiscovery: 0,
+      }).files.map((f) => f.relativePath);
     // Upper-case 'B' (0x42) sorts before lower-case letters in code-point order — a localeCompare
     // tiebreak would instead fold case and reorder, so this pins the deterministic contract.
     expect(run()).toEqual(["src/Beta.ts", "src/alpha.ts", "src/zeta.ts"]);
@@ -154,7 +158,13 @@ describe("orderCandidatesForSearch", () => {
   });
 
   it("reports discovery omission counts in diagnostics", () => {
-    const { diagnostics } = orderCandidatesForSearch([file("a.ts")], query("a"), policy, 7, 3);
+    const { diagnostics } = orderCandidatesForSearch({
+      files: [file("a.ts")],
+      query: query("a"),
+      policy,
+      ignoredByDiscovery: 7,
+      deniedByDiscovery: 3,
+    });
     expect(diagnostics.ignoredByDiscovery).toBe(7);
     expect(diagnostics.deniedByDiscovery).toBe(3);
     expect(diagnostics.filesAfterPolicy).toBe(1);
@@ -249,13 +259,13 @@ describe("orderCandidatesForSearch — polyglot ecosystem awareness", () => {
 
   it("ranks a Maven pom.xml above prose for a project-metadata question", () => {
     const files = [file("README.md"), file("docs/setup.md"), file("pom.xml")];
-    const { files: ordered, diagnostics } = orderCandidatesForSearch(
+    const { files: ordered, diagnostics } = orderCandidatesForSearch({
       files,
-      query("Which Java version does this project use?"),
-      metadataPolicy,
-      0,
-      0,
-    );
+      query: query("Which Java version does this project use?"),
+      policy: metadataPolicy,
+      ignoredByDiscovery: 0,
+      deniedByDiscovery: 0,
+    });
     expect(ordered[0]?.relativePath).toBe("pom.xml");
     expect(diagnostics.candidateBuckets["canonical-metadata"]).toBe(1);
   });
@@ -263,13 +273,13 @@ describe("orderCandidatesForSearch — polyglot ecosystem awareness", () => {
   it.each(["go.mod", "Cargo.toml", "pyproject.toml", "build.gradle", "services/x/pom.xml"])(
     "buckets %s as canonical-metadata",
     (path) => {
-      const { diagnostics } = orderCandidatesForSearch(
-        [file(path)],
-        query("version"),
-        metadataPolicy,
-        0,
-        0,
-      );
+      const { diagnostics } = orderCandidatesForSearch({
+        files: [file(path)],
+        query: query("version"),
+        policy: metadataPolicy,
+        ignoredByDiscovery: 0,
+        deniedByDiscovery: 0,
+      });
       expect(diagnostics.candidateBuckets["canonical-metadata"]).toBe(1);
       expect(diagnostics.rankedCandidates[0]?.ecosystem).toBeDefined();
     },
@@ -282,13 +292,13 @@ describe("orderCandidatesForSearch — polyglot ecosystem awareness", () => {
       file("api/user.pb.go"),
       file("vendor/lib/x.go"),
     ];
-    const { diagnostics } = orderCandidatesForSearch(
+    const { diagnostics } = orderCandidatesForSearch({
       files,
-      query("service"),
-      resolveSearchPolicy(false, { retrievalIntent: "targeted-code-search" }),
-      0,
-      0,
-    );
+      query: query("service"),
+      policy: resolveSearchPolicy(false, { retrievalIntent: "targeted-code-search" }),
+      ignoredByDiscovery: 0,
+      deniedByDiscovery: 0,
+    });
     // The three generated artifacts collapse into low-value; only the hand-authored source is not.
     expect(diagnostics.candidateBuckets["low-value"]).toBe(3);
     expect(diagnostics.candidateBuckets.source).toBe(1);
@@ -318,26 +328,26 @@ describe("orderCandidatesForSearch — polyglot ecosystem awareness", () => {
 
   it("ranks hand-authored config above source wrappers for config-key lookup", () => {
     const files = [file("src/config.ts"), file("config/features.yaml"), file("docs/features.md")];
-    const { files: ordered, diagnostics } = orderCandidatesForSearch(
+    const { files: ordered, diagnostics } = orderCandidatesForSearch({
       files,
-      query("Where is FEATURE_PAYMENTS_V2 configured?"),
-      resolveSearchPolicy(false, { retrievalIntent: "targeted-code-search" }),
-      0,
-      0,
-    );
+      query: query("Where is FEATURE_PAYMENTS_V2 configured?"),
+      policy: resolveSearchPolicy(false, { retrievalIntent: "targeted-code-search" }),
+      ignoredByDiscovery: 0,
+      deniedByDiscovery: 0,
+    });
     expect(ordered[0]?.relativePath).toBe("config/features.yaml");
     expect(diagnostics.candidateBuckets.config).toBe(1);
   });
 
   it("keeps short discriminative code tokens in the lexical score", () => {
     const files = [file("docs/api.md"), file("src/http/ApiIdUrlMapper.ts")];
-    const { files: ordered, diagnostics } = orderCandidatesForSearch(
+    const { files: ordered, diagnostics } = orderCandidatesForSearch({
       files,
-      query("Where is the API id url mapper implemented?"),
-      resolveSearchPolicy(false, { retrievalIntent: "targeted-code-search" }),
-      0,
-      0,
-    );
+      query: query("Where is the API id url mapper implemented?"),
+      policy: resolveSearchPolicy(false, { retrievalIntent: "targeted-code-search" }),
+      ignoredByDiscovery: 0,
+      deniedByDiscovery: 0,
+    });
     expect(ordered[0]?.relativePath).toBe("src/http/ApiIdUrlMapper.ts");
     const source = diagnostics.rankedCandidates.find(
       (entry) => entry.scopePath === "src/http/ApiIdUrlMapper.ts",
@@ -346,13 +356,13 @@ describe("orderCandidatesForSearch — polyglot ecosystem awareness", () => {
   });
 
   it("emits explainable per-file ranking signals for the top candidates", () => {
-    const { diagnostics } = orderCandidatesForSearch(
-      [file("pom.xml"), file("README.md")],
-      query("Which Java version"),
-      metadataPolicy,
-      0,
-      0,
-    );
+    const { diagnostics } = orderCandidatesForSearch({
+      files: [file("pom.xml"), file("README.md")],
+      query: query("Which Java version"),
+      policy: metadataPolicy,
+      ignoredByDiscovery: 0,
+      deniedByDiscovery: 0,
+    });
     const pom = diagnostics.rankedCandidates.find((c) => c.scopePath === "pom.xml");
     expect(pom?.bucket).toBe("canonical-metadata");
     expect(pom?.signals.some((s) => s.name === "bucket:canonical-metadata")).toBe(true);

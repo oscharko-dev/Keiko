@@ -15,10 +15,13 @@ import {
   type RuntimeCommandKind,
   type RuntimeCommandSource,
 } from "@oscharko-dev/keiko-contracts";
-import { readWorkspaceFile, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import { isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
+import {
+  isWithinWorkspace,
+  readWorkspaceFile,
+  type WorkspaceFs,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
 export const DEFAULT_RUNTIME_CAPABILITY_DEADLINE_MS = 250 as const;
 const PACKAGE_READ_BYTES = 262_144;

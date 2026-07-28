@@ -14,7 +14,6 @@ import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 
 type Envelope = QualityIntelligence.QualityIntelligenceSourceEnvelope;
 type EnvelopeId = QualityIntelligence.QualityIntelligenceSourceEnvelopeId;
-type EnvelopeIdentity = string;
 
 /** A logical group of envelopes (e.g. one Conversation Center thread, one repo scan). */
 export interface SourceGroup {
@@ -45,11 +44,8 @@ export interface ReconciledSourceSet {
 const indexEnvelope = (
   envelope: Envelope,
   groupLabel: string,
-  byIdentity: Map<EnvelopeIdentity, Envelope>,
-  provByIdentity: Map<
-    EnvelopeIdentity,
-    { firstGroupLabel: string; contributingGroupLabels: string[] }
-  >,
+  byIdentity: Map<string, Envelope>,
+  provByIdentity: Map<string, { firstGroupLabel: string; contributingGroupLabels: string[] }>,
   conflicts: Set<EnvelopeId>,
   duplicates: Set<EnvelopeId>,
 ): void => {
@@ -80,9 +76,9 @@ const indexEnvelope = (
  *     the provenance entry's `contributingGroupLabels`.
  */
 export const reconcileSourceGroups = (groups: readonly SourceGroup[]): ReconciledSourceSet => {
-  const byIdentity = new Map<EnvelopeIdentity, Envelope>();
+  const byIdentity = new Map<string, Envelope>();
   const provByIdentity = new Map<
-    EnvelopeIdentity,
+    string,
     { firstGroupLabel: string; contributingGroupLabels: string[] }
   >();
   const conflicts = new Set<EnvelopeId>();

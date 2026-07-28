@@ -226,7 +226,6 @@ export type {
   EditorAgentActionResult,
   EditorAgentActionResultRequest,
   EditorAgentBridgeActionRequest,
-  EditorAgentBridgeDecisionCapability,
   EditorAgentConflictCode,
   EditorAgentEvent,
   EditorAgentPaneSnapshot,

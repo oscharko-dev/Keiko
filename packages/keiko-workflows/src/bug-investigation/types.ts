@@ -4,7 +4,11 @@
 // plain JSON-serializable so the #10 audit ledger can persist it. Names are DISTINCT from the
 // unit-test workflow's (ADR-0009 D5) because both barrels are re-exported from the package root.
 
-import type { MemoryWorkflowPort } from "@oscharko-dev/keiko-contracts";
+import type {
+  BugWorkflowLimits,
+  BugWorkflowStatus,
+  MemoryWorkflowPort,
+} from "@oscharko-dev/keiko-contracts";
 import type { WorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { PatchChangeKind, SpawnFn, WorkspaceWriter } from "@oscharko-dev/keiko-tools";
@@ -20,8 +24,6 @@ import type { BugWorkflowEventSink } from "./events.js";
 // BugWorkflowStatus, BugWorkflowLimits, and DEFAULT_BUG_WORKFLOW_LIMITS were extracted to
 // @oscharko-dev/keiko-contracts in issue #158. Re-exported here so consumers of "./types.js"
 // continue to resolve them unchanged.
-import type { BugWorkflowLimits, BugWorkflowStatus } from "@oscharko-dev/keiko-contracts";
-
 export type { BugWorkflowStatus, BugWorkflowLimits } from "@oscharko-dev/keiko-contracts";
 export { DEFAULT_BUG_WORKFLOW_LIMITS } from "@oscharko-dev/keiko-contracts";
 

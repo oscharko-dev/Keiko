@@ -40,12 +40,9 @@ export type QualityIntelligenceCircuitEvent =
   | { readonly kind: "probe" }
   | { readonly kind: "tick"; readonly nowMs: number };
 
+// A success always resets the breaker to the same closed, zero-failure state it starts in.
 function onSuccess(): QualityIntelligenceCircuitBreakerState {
-  return Object.freeze({
-    state: "closed" as const,
-    consecutiveFailures: 0,
-    openedAtMs: null,
-  });
+  return createCircuitBreakerState();
 }
 
 function onFailure(

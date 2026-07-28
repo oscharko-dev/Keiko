@@ -96,6 +96,10 @@ function pluralize(value: number, singular: string, plural = `${singular}s`): st
   return value === 1 ? singular : plural;
 }
 
+function formatEcosystemEntry(eco: { readonly id: string; readonly count: number }): string {
+  return `${eco.id} (${formatCount(eco.count)})`;
+}
+
 function formatScopeLabel(summary: GroundedAnswerContextPackSummary): string {
   if (summary.scopeKind === "workspace-root") {
     return "workspace root";
@@ -158,7 +162,7 @@ function RankingRationale({
       </dl>
       {summary.ecosystems.length > 0 ? (
         <p className="grounded-ranking-ecosystems">
-          {`Ecosystems: ${summary.ecosystems.map((eco) => `${eco.id} (${formatCount(eco.count)})`).join(", ")}`}
+          {`Ecosystems: ${summary.ecosystems.map(formatEcosystemEntry).join(", ")}`}
         </p>
       ) : null}
     </details>

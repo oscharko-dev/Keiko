@@ -17,6 +17,7 @@ import {
   readWorkspaceKeepaliveOvercapCount,
   resetWorkspaceKeepaliveOvercapCount,
   useWorkspace,
+  utf8ByteLength,
   WORKSPACE_KEEPALIVE_BODY_BUDGET_BYTES,
 } from "./useWorkspace";
 import type { AppWindow } from "../windows/types";
@@ -69,6 +70,57 @@ describe("keepaliveBodyFitsBudget (GEN-PERF-PERSISTENCE-005)", () => {
     expect(keepaliveBodyFitsBudget("x".repeat(WORKSPACE_KEEPALIVE_BODY_BUDGET_BYTES + 1))).toBe(
       false,
     );
+  });
+});
+
+// typescript:S1874 — the manual UTF-8 byte-length fallback (no global Blob or
+// TextEncoder) replaced a `unescape(encodeURIComponent(body)).length` last resort.
+// `utf8ByteLength` is exported specifically so these can call it directly and check
+// it against an independent oracle (Node's own UTF-8 encoder via Buffer), not the
+// formula under test, per AGENTS.md's fixture-derivation rule — rather than stubbing
+// away the global `Blob`/`TextEncoder` to force `serializedBodyByteLength` onto this
+// branch, which would mutate shared test-worker state for the duration of each test.
+describe("utf8ByteLength — the last-resort UTF-8 fallback", () => {
+  function independentUtf8ByteLength(value: string): number {
+    return Buffer.byteLength(value, "utf8");
+  }
+
+  it("matches an independent UTF-8 byte-length oracle for multi-byte text", () => {
+    // Combining accents, multi-byte currency signs, and a surrogate-pair emoji.
+    const multiByte = "café €€ 🎉🎊";
+    expect(utf8ByteLength(multiByte)).toBe(independentUtf8ByteLength(multiByte));
+  });
+
+  it("agrees with the independent oracle at the keepalive budget boundary", () => {
+    const euroSign = "€"; // 3 UTF-8 bytes
+    const under = euroSign.repeat(1024); // 3072 bytes, well under budget
+    const over = euroSign.repeat(Math.ceil((WORKSPACE_KEEPALIVE_BODY_BUDGET_BYTES + 3) / 3));
+    expect(utf8ByteLength(under)).toBe(independentUtf8ByteLength(under));
+    expect(utf8ByteLength(under)).toBeLessThanOrEqual(WORKSPACE_KEEPALIVE_BODY_BUDGET_BYTES);
+    expect(utf8ByteLength(over)).toBe(independentUtf8ByteLength(over));
+    expect(utf8ByteLength(over)).toBeGreaterThan(WORKSPACE_KEEPALIVE_BODY_BUDGET_BYTES);
+  });
+
+  it("is 0 for the empty string", () => {
+    expect(utf8ByteLength("")).toBe(0);
+    expect(utf8ByteLength("")).toBe(independentUtf8ByteLength(""));
+  });
+
+  it("agrees with the oracle at the exact budget and the first byte over it", () => {
+    // Single-byte ASCII so the string length is exactly the byte count, isolating the
+    // off-by-one boundary from any multi-byte rounding.
+    const exactBudget = "x".repeat(WORKSPACE_KEEPALIVE_BODY_BUDGET_BYTES);
+    const firstOverBudget = "x".repeat(WORKSPACE_KEEPALIVE_BODY_BUDGET_BYTES + 1);
+    expect(utf8ByteLength(exactBudget)).toBe(independentUtf8ByteLength(exactBudget));
+    expect(utf8ByteLength(exactBudget)).toBe(WORKSPACE_KEEPALIVE_BODY_BUDGET_BYTES);
+    expect(utf8ByteLength(firstOverBudget)).toBe(independentUtf8ByteLength(firstOverBudget));
+    expect(utf8ByteLength(firstOverBudget)).toBe(WORKSPACE_KEEPALIVE_BODY_BUDGET_BYTES + 1);
+  });
+
+  it("throws for a lone surrogate, matching encodeURIComponent's own rejection", () => {
+    // A bare high surrogate is invalid UTF-16; encodeURIComponent throws URIError for
+    // it too, so the fallback must fail the same way rather than silently miscounting.
+    expect(() => utf8ByteLength("\ud800")).toThrow();
   });
 });
 

@@ -146,7 +146,8 @@ function evidenceLines(
     // `detail` is body-derived for value-replacement evidence (conflicts.ts) so it is redacted
     // exactly like a participant body, not treated as a fixed/safe label.
     const detail = entry.detail === undefined ? undefined : redactedString(entry.detail, redactor);
-    lines.push(`- ${entry.kind}${detail === undefined ? "" : `: ${detail}`}`);
+    const detailSuffix = detail === undefined ? "" : `: ${detail}`;
+    lines.push(`- ${entry.kind}${detailSuffix}`);
   }
   return lines;
 }

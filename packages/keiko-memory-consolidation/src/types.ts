@@ -20,8 +20,8 @@ import type {
   MemoryRecord,
   MemoryReviewerId,
   MemoryStatus,
+  MemoryUpdate,
 } from "@oscharko-dev/keiko-contracts/memory";
-import type { MemoryUpdate } from "@oscharko-dev/keiko-contracts/memory";
 
 // ─── Job lifecycle ────────────────────────────────────────────────────────────
 // `ConsolidationJob` is a VALUE OBJECT, not a process handle. The package does not spawn jobs,

@@ -8,9 +8,12 @@
 // context manifest. Persistence failure never fails the request (mirrors the memory-audit handler).
 
 import { createHash } from "node:crypto";
-import type { CodingContextWirePack, CodingContextSourceTier } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingContextSourceTier,
+  CodingContextWirePack,
+  EvidenceStore,
+} from "@oscharko-dev/keiko-contracts";
 import { CODING_CONTEXT_SOURCE_TIERS } from "@oscharko-dev/keiko-contracts";
-import type { EvidenceStore } from "@oscharko-dev/keiko-contracts";
 import type { Redactor } from "../deps.js";
 
 export const CODING_CONTEXT_EVIDENCE_SCHEMA_VERSION = "1" as const;

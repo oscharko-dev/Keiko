@@ -1,9 +1,9 @@
-import type {
-  CodingWorkbenchConnectorScope,
-  CodingWorkbenchMode,
+import {
+  CODING_WORKBENCH_SCHEMA_VERSION,
+  redactCodingWorkbenchEvidenceText,
+  type CodingWorkbenchConnectorScope,
+  type CodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts";
-import { CODING_WORKBENCH_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
-import { redactCodingWorkbenchEvidenceText } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import {

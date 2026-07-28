@@ -45,7 +45,7 @@ function parseHunkHeader(
   line: string,
 ): { oldStart: number; oldCount: number; newStart: number; newCount: number } | null {
   const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
-  if (m === null || m[1] === undefined || m[3] === undefined) return null;
+  if (m?.[1] === undefined || m?.[3] === undefined) return null;
   return {
     oldStart: Number.parseInt(m[1], 10),
     oldCount: m[2] === undefined ? 1 : Number.parseInt(m[2], 10),
@@ -161,7 +161,7 @@ function handleDiffGitLine(line: string, state: ParserState): boolean {
   if (!line.startsWith("diff --git ")) return false;
   flushFile(state);
   const m = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
-  if (m !== null && m[1] !== undefined && m[2] !== undefined) {
+  if (m?.[1] !== undefined && m?.[2] !== undefined) {
     const aPath = m[1];
     const bPath = m[2];
     const path = stripGitPrefix(`b/${bPath}`);

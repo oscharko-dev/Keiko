@@ -122,7 +122,7 @@ function optionalConnectorScopes(record: Record<string, unknown>):
       readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[];
     }
   | undefined {
-  if (!Object.prototype.hasOwnProperty.call(record, "connectorScopes")) return {};
+  if (!Object.hasOwn(record, "connectorScopes")) return {};
   const connectorScopes = connectorScopeArray(record.connectorScopes);
   return connectorScopes === undefined ? undefined : { connectorScopes };
 }
@@ -226,7 +226,7 @@ function optionalBooleanField(
 function optionalApprovalToken(
   record: Record<string, unknown>,
 ): Pick<SidecarPermissionEvent, "approvalToken" | "approvalTokenMalformed"> {
-  if (!Object.prototype.hasOwnProperty.call(record, "approvalToken")) return {};
+  if (!Object.hasOwn(record, "approvalToken")) return {};
   const token = approvalToken(record.approvalToken);
   return token === undefined
     ? { approvalTokenMalformed: true }

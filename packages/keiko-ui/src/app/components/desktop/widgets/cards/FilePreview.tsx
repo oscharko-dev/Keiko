@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { ApiError, fetchFilesPreview } from "../../../../../lib/api";
+import { copyTextToClipboard } from "../../../../../lib/clipboard";
 import { formatBytesPrecise as formatBytes } from "../../../../../lib/format";
 import type { FilesPreviewResponse } from "../../../../../lib/types";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
@@ -98,37 +99,6 @@ export function fullPreviewPath(root: string, relativePath: string): string {
   const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
   const normalizedRelativePath = relativePath.replaceAll("/", separator);
   return `${stripTrailingPathSeparators(root)}${separator}${normalizedRelativePath}`;
-}
-
-async function writeTextWithFallback(text: string): Promise<void> {
-  const writeText = typeof navigator === "undefined" ? undefined : navigator.clipboard?.writeText;
-  if (writeText !== undefined && navigator.clipboard !== undefined) {
-    try {
-      await writeText.call(navigator.clipboard, text);
-      return;
-    } catch {
-      // Selection-backed copy can still work in restricted clipboard contexts.
-    }
-  }
-
-  if (typeof document === "undefined" || document.body === null) {
-    throw new Error("clipboard-unavailable");
-  }
-
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "");
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  textarea.style.pointerEvents = "none";
-  document.body.append(textarea);
-  textarea.select();
-  try {
-    const copied = typeof document.execCommand === "function" && document.execCommand("copy");
-    if (!copied) throw new Error("clipboard-fallback-failed");
-  } finally {
-    textarea.remove();
-  }
 }
 
 function previewKindLabel(preview: FilesPreviewResponse, t: I18nTranslate): string {
@@ -494,7 +464,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
     if (preview === null) return;
     const value = target === "name" ? preview.name : fullPreviewPath(preview.root, preview.path);
     setCopyStatus(null);
-    void writeTextWithFallback(value).then(
+    void copyTextToClipboard(value, { restoreFocus: false }).then(
       () => setCopyStatus(target === "name" ? "nameCopied" : "pathCopied"),
       () => setCopyStatus("clipboardFailed"),
     );

@@ -395,9 +395,10 @@ function tableRows(tableXml: string): readonly Paragraph[] {
     .map((cells, index) => {
       const labels = headers.length > 0 ? headers : normalizeTableHeaders([]);
       const projected = cells
-        .map(
-          (cell, cellIndex) => `${labels[cellIndex] ?? `Column ${String(cellIndex + 1)}`}=${cell}`,
-        )
+        .map((cell, cellIndex) => {
+          const fallbackLabel = `Column ${String(cellIndex + 1)}`;
+          return `${labels[cellIndex] ?? fallbackLabel}=${cell}`;
+        })
         .join(" | ");
       return { text: `Table row ${String(index + 1)}: ${projected}` };
     })
@@ -533,24 +534,33 @@ function appendSectionRecord(
   units.push(sectionUnit(sectionRecord));
 }
 
-function appendLimitedSectionRecord(
-  sections: SectionRecord[],
-  units: ParsedUnit[],
-  diagnostics: ParserDiagnostic[],
-  input: ParserSelectionInput,
-  options: ParserOptions,
-  startedAt: number,
-  sectionPath: readonly string[],
-  start: number,
-  end: number,
-): boolean {
-  const limit = shouldStop(startedAt, options, units.length);
-  const stopped = limitDiagnostic(input, limit);
+interface AppendLimitedSectionRecordArgs {
+  readonly diagnostics: ParserDiagnostic[];
+  readonly end: number;
+  readonly input: ParserSelectionInput;
+  readonly options: ParserOptions;
+  readonly sectionPath: readonly string[];
+  readonly sections: SectionRecord[];
+  readonly start: number;
+  readonly startedAt: number;
+  readonly units: ParsedUnit[];
+}
+
+function appendLimitedSectionRecord(args: AppendLimitedSectionRecordArgs): boolean {
+  const limit = shouldStop(args.startedAt, args.options, args.units.length);
+  const stopped = limitDiagnostic(args.input, limit);
   if (stopped !== undefined) {
-    diagnostics.push(stopped);
+    args.diagnostics.push(stopped);
     return false;
   }
-  appendSectionRecord(sections, units, input, sectionPath, start, end);
+  appendSectionRecord(
+    args.sections,
+    args.units,
+    args.input,
+    args.sectionPath,
+    args.start,
+    args.end,
+  );
   return true;
 }
 
@@ -563,37 +573,49 @@ function buildUnsectionedSections(
   const sections: SectionRecord[] = [];
   const units: ParsedUnit[] = [];
   const diagnostics: ParserDiagnostic[] = [];
-  appendLimitedSectionRecord(sections, units, diagnostics, input, options, startedAt, [], 0, end);
+  appendLimitedSectionRecord({
+    diagnostics,
+    end,
+    input,
+    options,
+    sectionPath: [],
+    sections,
+    start: 0,
+    startedAt,
+    units,
+  });
   return { sections, units, diagnostics };
 }
 
-function appendLeadingPreambleSection(
-  sections: SectionRecord[],
-  units: ParsedUnit[],
-  diagnostics: ParserDiagnostic[],
-  input: ParserSelectionInput,
-  headings: readonly HeadingEntry[],
-  offsets: { readonly starts: readonly number[]; readonly end: number },
-  options: ParserOptions,
-  startedAt: number,
-): boolean {
-  const firstHeading = headings[0];
+interface AppendLeadingPreambleSectionArgs {
+  readonly diagnostics: ParserDiagnostic[];
+  readonly headings: readonly HeadingEntry[];
+  readonly input: ParserSelectionInput;
+  readonly offsets: { readonly starts: readonly number[]; readonly end: number };
+  readonly options: ParserOptions;
+  readonly sections: SectionRecord[];
+  readonly startedAt: number;
+  readonly units: ParsedUnit[];
+}
+
+function appendLeadingPreambleSection(args: AppendLeadingPreambleSectionArgs): boolean {
+  const firstHeading = args.headings[0];
   if (firstHeading === undefined) {
     return true;
   }
-  const firstHeadingStart = offsets.starts[firstHeading.index] ?? 0;
+  const firstHeadingStart = args.offsets.starts[firstHeading.index] ?? 0;
   if (firstHeadingStart > 0) {
-    return appendLimitedSectionRecord(
-      sections,
-      units,
-      diagnostics,
-      input,
-      options,
-      startedAt,
-      [],
-      0,
-      firstHeadingStart,
-    );
+    return appendLimitedSectionRecord({
+      diagnostics: args.diagnostics,
+      end: firstHeadingStart,
+      input: args.input,
+      options: args.options,
+      sectionPath: [],
+      sections: args.sections,
+      start: 0,
+      startedAt: args.startedAt,
+      units: args.units,
+    });
   }
   return true;
 }
@@ -622,17 +644,17 @@ function appendHeadingSection(
     next === undefined
       ? state.offsets.end
       : (state.offsets.starts[next.index] ?? state.offsets.end);
-  return appendLimitedSectionRecord(
-    state.sections,
-    state.units,
-    state.diagnostics,
-    state.input,
-    state.options,
-    state.startedAt,
-    [...state.stack],
-    start,
+  return appendLimitedSectionRecord({
+    diagnostics: state.diagnostics,
     end,
-  );
+    input: state.input,
+    options: state.options,
+    sectionPath: [...state.stack],
+    sections: state.sections,
+    start,
+    startedAt: state.startedAt,
+    units: state.units,
+  });
 }
 
 function appendHeadingSections(
@@ -663,16 +685,16 @@ function buildSections(
     return buildUnsectionedSections(input, options, startedAt, offsets.end);
   }
   if (
-    !appendLeadingPreambleSection(
-      sections,
-      units,
+    !appendLeadingPreambleSection({
       diagnostics,
-      input,
       headings,
+      input,
       offsets,
       options,
+      sections,
       startedAt,
-    )
+      units,
+    })
   ) {
     return { sections, units, diagnostics };
   }

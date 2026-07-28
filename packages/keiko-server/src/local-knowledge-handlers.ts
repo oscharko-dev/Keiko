@@ -1934,18 +1934,34 @@ function localKnowledgeContextualRetrievalOptions(
     : localKnowledgeContextualRetrievalOptionsForSettings(deps, settings);
 }
 
+interface BuildIndexingOptionsInput {
+  readonly deps: UiHandlerDeps;
+  readonly store: ReturnType<typeof openKnowledgeStore>;
+  readonly capsule: KnowledgeCapsule;
+  readonly adapter: OpenAIEmbeddingAdapter;
+  readonly embeddingPreflightCacheScope: object;
+  readonly options: RunCapsuleIndexingJobOptions;
+  readonly sourceSelection: IndexingSourceSelection;
+  readonly ocrAdapter: OcrAdapter;
+  readonly extractionCapabilities: ExtractionCapabilityAvailability;
+  readonly signal: AbortSignal;
+}
+
 function buildIndexingOptions(
-  deps: UiHandlerDeps,
-  store: ReturnType<typeof openKnowledgeStore>,
-  capsule: KnowledgeCapsule,
-  adapter: OpenAIEmbeddingAdapter,
-  embeddingPreflightCacheScope: object,
-  options: RunCapsuleIndexingJobOptions,
-  sourceSelection: IndexingSourceSelection,
-  ocrAdapter: OcrAdapter,
-  extractionCapabilities: ExtractionCapabilityAvailability,
-  signal: AbortSignal,
+  input: BuildIndexingOptionsInput,
 ): Parameters<typeof runIndexingJob>[0] {
+  const {
+    deps,
+    store,
+    capsule,
+    adapter,
+    embeddingPreflightCacheScope,
+    options,
+    sourceSelection,
+    ocrAdapter,
+    extractionCapabilities,
+    signal,
+  } = input;
   const contextualRetrieval = localKnowledgeContextualRetrievalOptions(deps, capsule);
   return {
     capsuleId: capsule.id,
@@ -1986,16 +2002,30 @@ function repositoryPodSourceId(
   return only.scope.kind === "repository" ? only.id : undefined;
 }
 
+interface RunRepositoryPodIndexingJobInput {
+  readonly deps: UiHandlerDeps;
+  readonly store: ReturnType<typeof openKnowledgeStore>;
+  readonly capsule: KnowledgeCapsule;
+  readonly sourceId: KnowledgeSourceId;
+  readonly adapter: OpenAIEmbeddingAdapter;
+  readonly embeddingPreflightCacheScope: object;
+  readonly ocrAdapter: OcrAdapter;
+  readonly signal: AbortSignal;
+}
+
 async function runRepositoryPodIndexingJob(
-  deps: UiHandlerDeps,
-  store: ReturnType<typeof openKnowledgeStore>,
-  capsule: KnowledgeCapsule,
-  sourceId: KnowledgeSourceId,
-  adapter: OpenAIEmbeddingAdapter,
-  embeddingPreflightCacheScope: object,
-  ocrAdapter: OcrAdapter,
-  signal: AbortSignal,
+  input: RunRepositoryPodIndexingJobInput,
 ): Promise<IndexingTerminal | undefined> {
+  const {
+    deps,
+    store,
+    capsule,
+    sourceId,
+    adapter,
+    embeddingPreflightCacheScope,
+    ocrAdapter,
+    signal,
+  } = input;
   let terminal: IndexingTerminal | undefined;
   // The capsule setting is resolved through the SAME helper the folder path uses
   // (`localKnowledgeContextualRetrievalOptions`), so a repository pod honours every
@@ -2113,22 +2143,22 @@ async function dispatchCapsuleIndexingJob(
   } = input;
   const podSourceId = repositoryPodSourceId(store, capsule);
   if (podSourceId !== undefined) {
-    return await runRepositoryPodIndexingJob(
+    return await runRepositoryPodIndexingJob({
       deps,
       store,
       capsule,
-      podSourceId,
+      sourceId: podSourceId,
       adapter,
       embeddingPreflightCacheScope,
       ocrAdapter,
       signal,
-    );
+    });
   }
   const extractionCapabilities = await localKnowledgeExtractionCapabilitiesFor(ocrAdapter);
   return await consumeCapsuleIndexingEvents(
     capsule.id,
     runIndexingJob(
-      buildIndexingOptions(
+      buildIndexingOptions({
         deps,
         store,
         capsule,
@@ -2139,7 +2169,7 @@ async function dispatchCapsuleIndexingJob(
         ocrAdapter,
         extractionCapabilities,
         signal,
-      ),
+      }),
     ),
   );
 }

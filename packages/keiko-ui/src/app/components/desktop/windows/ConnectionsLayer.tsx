@@ -113,7 +113,7 @@ export function resolveConnectionsCached(
     if (a === undefined || b === undefined) continue;
     seen.add(c.id);
     const prev = cache.get(c.id);
-    if (prev !== undefined && prev.conn === c && prev.a === a && prev.b === b) {
+    if (prev?.conn === c && prev.a === a && prev.b === b) {
       out.push(prev.resolved);
       continue;
     }

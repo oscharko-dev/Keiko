@@ -340,7 +340,7 @@ function assertRootWorkspaceContract() {
   );
   for (const workspaceName of listPrivateWorkspacePackages()) {
     const excludedBecause = EXPECTED_BUNDLE_EXCLUSIONS.get(workspaceName);
-    const inDependencies = Object.prototype.hasOwnProperty.call(dependencies, workspaceName);
+    const inDependencies = Object.hasOwn(dependencies, workspaceName);
     const inBundle = bundled.has(workspaceName);
     if (excludedBecause !== undefined) {
       if (inDependencies || inBundle) {

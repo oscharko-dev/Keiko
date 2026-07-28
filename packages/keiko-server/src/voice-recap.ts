@@ -47,8 +47,10 @@ import { isVoiceDisabledByPolicy } from "./read-handlers.js";
 import { desktopChatErrorResult } from "./chat-handlers.js";
 import { resolveConversationMemoryContext } from "./memory-conversation-context.js";
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
-import { memoryCapturePolicyForDeps } from "./memory-capture-policy.js";
-import { isPersistableMemoryCandidate } from "./memory-capture-policy.js";
+import {
+  isPersistableMemoryCandidate,
+  memoryCapturePolicyForDeps,
+} from "./memory-capture-policy.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { isSuppressedByForgetTombstone } from "./memory-suppression.js";

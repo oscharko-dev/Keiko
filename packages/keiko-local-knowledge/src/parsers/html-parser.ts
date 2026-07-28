@@ -657,7 +657,10 @@ function appendTableRows(state: ScanState, tableHtml: string): void {
   for (const row of dataRows) {
     if (state.stopped) return;
     const text = row
-      .map((cell, index) => `${headers[index] ?? `Column ${String(index + 1)}`}=${cell.text}`)
+      .map((cell, index) => {
+        const headerLabel = headers[index] ?? `Column ${String(index + 1)}`;
+        return `${headerLabel}=${cell.text}`;
+      })
       .join(" | ");
     pushCleanedBlock(state, `Table: ${text}`);
   }

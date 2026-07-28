@@ -1315,16 +1315,28 @@ function boundedPolicy(state: RunState): typeof DEFAULT_LARGE_DOCUMENT_RESOURCE_
   return state.options.largeDocumentPolicy ?? DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY;
 }
 
-function writeBoundedCheckpoint(
-  state: RunState,
-  checkpoint: ExtractionCheckpointRecord,
-  fingerprint: CheckpointFingerprint,
-  phase: ExtractionCheckpointRecord["phase"],
-  chunkCursor: number,
-  embeddedChunkCursor: number,
-  lastEmbeddedChunkId: ChunkId | null,
-  terminalDiagnostics = checkpoint.terminalDiagnostics,
-): void {
+interface WriteBoundedCheckpointInput {
+  readonly state: RunState;
+  readonly checkpoint: ExtractionCheckpointRecord;
+  readonly fingerprint: CheckpointFingerprint;
+  readonly phase: ExtractionCheckpointRecord["phase"];
+  readonly chunkCursor: number;
+  readonly embeddedChunkCursor: number;
+  readonly lastEmbeddedChunkId: ChunkId | null;
+  readonly terminalDiagnostics?: ExtractionCheckpointRecord["terminalDiagnostics"];
+}
+
+function writeBoundedCheckpoint(input: WriteBoundedCheckpointInput): void {
+  const {
+    state,
+    checkpoint,
+    fingerprint,
+    phase,
+    chunkCursor,
+    embeddedChunkCursor,
+    lastEmbeddedChunkId,
+    terminalDiagnostics = checkpoint.terminalDiagnostics,
+  } = input;
   upsertExtractionCheckpoint(state.options.store._internal.db, {
     capsuleId: checkpoint.capsuleId,
     documentId: checkpoint.documentId,
@@ -1404,15 +1416,15 @@ function boundedEmbedDeps(
       : {}),
     ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
     onBatch: (cursor, lastId): void => {
-      writeBoundedCheckpoint(
+      writeBoundedCheckpoint({
         state,
         checkpoint,
         fingerprint,
-        "embedding",
-        chunkCount,
-        cursor,
-        lastId,
-      );
+        phase: "embedding",
+        chunkCursor: chunkCount,
+        embeddedChunkCursor: cursor,
+        lastEmbeddedChunkId: lastId,
+      });
     },
   };
 }
@@ -1460,31 +1472,33 @@ function boundedChunkPreparationFailure(
   const db = state.options.store._internal.db;
   if (cause instanceof BoundedIndexingCancelledError || cancellationRequested(state)) {
     updateDocumentStatusRow(db, state.capsule.id, documentId, "pending");
-    writeBoundedCheckpoint(
+    writeBoundedCheckpoint({
       state,
       checkpoint,
       fingerprint,
-      "cancelled",
-      countChunksForDocument(db, state.capsule.id, documentId),
-      countVectorsForDocument(db, state.capsule.id, documentId),
-      null,
-    );
+      phase: "cancelled",
+      chunkCursor: countChunksForDocument(db, state.capsule.id, documentId),
+      embeddedChunkCursor: countVectorsForDocument(db, state.capsule.id, documentId),
+      lastEmbeddedChunkId: null,
+    });
     return { events: [] };
   }
   const error =
     cause instanceof BoundedIndexingPolicyError
       ? cause.toIndexingError()
       : ({ code: "CHUNKING_FAILED", message: "document chunking failed" } as IndexingJobError);
-  writeBoundedCheckpoint(
+  writeBoundedCheckpoint({
     state,
     checkpoint,
     fingerprint,
-    "failed",
-    countChunksForDocument(db, state.capsule.id, documentId),
-    countVectorsForDocument(db, state.capsule.id, documentId),
-    null,
-    [{ severity: "error", code: error.code, message: error.message, documentId }],
-  );
+    phase: "failed",
+    chunkCursor: countChunksForDocument(db, state.capsule.id, documentId),
+    embeddedChunkCursor: countVectorsForDocument(db, state.capsule.id, documentId),
+    lastEmbeddedChunkId: null,
+    terminalDiagnostics: [
+      { severity: "error", code: error.code, message: error.message, documentId },
+    ],
+  });
   return appendDocumentFailure(state, [], result.sourceId, documentId, result.relativePath, error, {
     deleteChunks: true,
   });
@@ -1519,21 +1533,21 @@ function persistBoundedEmbedCheckpoint(
   chunkCount: number,
   embedResult: Awaited<ReturnType<typeof embedDocumentChunksBounded>>,
 ): void {
-  writeBoundedCheckpoint(
+  writeBoundedCheckpoint({
     state,
     checkpoint,
     fingerprint,
-    embedResult.errors.length === 0 ? "complete" : "failed",
-    chunkCount,
-    embedResult.embeddedCursor,
-    embedResult.lastChunkId,
-    embedResult.errors.map((error) => ({
+    phase: embedResult.errors.length === 0 ? "complete" : "failed",
+    chunkCursor: chunkCount,
+    embeddedChunkCursor: embedResult.embeddedCursor,
+    lastEmbeddedChunkId: embedResult.lastChunkId,
+    terminalDiagnostics: embedResult.errors.map((error) => ({
       severity: "error",
       code: error.code,
       message: error.message,
       documentId,
     })),
-  );
+  });
 }
 
 function persistBoundedEmbedCancellation(
@@ -1550,21 +1564,21 @@ function persistBoundedEmbedCancellation(
     documentId,
     "pending",
   );
-  writeBoundedCheckpoint(
+  writeBoundedCheckpoint({
     state,
     checkpoint,
     fingerprint,
-    "cancelled",
-    chunkCount,
-    embedResult.embeddedCursor,
-    embedResult.lastChunkId,
-    embedResult.errors.map((error) => ({
+    phase: "cancelled",
+    chunkCursor: chunkCount,
+    embeddedChunkCursor: embedResult.embeddedCursor,
+    lastEmbeddedChunkId: embedResult.lastChunkId,
+    terminalDiagnostics: embedResult.errors.map((error) => ({
       severity: "info",
       code: error.code,
       message: error.message,
       documentId,
     })),
-  );
+  });
 }
 
 async function persistBoundedEmbeddingResult(
@@ -1623,15 +1637,15 @@ async function* handleBoundedDocument(
   yield* chunkedDocumentEvents(state, sourceId, documentId, result.relativePath, chunkCount);
   persistJobProgress(state);
   const alreadyEmbedded = countVectorsForDocument(db, state.capsule.id, documentId);
-  writeBoundedCheckpoint(
+  writeBoundedCheckpoint({
     state,
     checkpoint,
     fingerprint,
-    "embedding",
-    chunkCount,
-    alreadyEmbedded,
-    null,
-  );
+    phase: "embedding",
+    chunkCursor: chunkCount,
+    embeddedChunkCursor: alreadyEmbedded,
+    lastEmbeddedChunkId: null,
+  });
   const embedded = await persistBoundedEmbeddingResult(
     state,
     result,

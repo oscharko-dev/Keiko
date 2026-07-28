@@ -20,8 +20,10 @@
 //   - completedAt is null (not undefined) when the run has not yet finished so JSON
 //     serialisation is deterministic.
 
-import type { QualityIntelligenceValidationFindingKind } from "./validationFinding.js";
-import type { QualityIntelligenceSeverity } from "./validationFinding.js";
+import type {
+  QualityIntelligenceSeverity,
+  QualityIntelligenceValidationFindingKind,
+} from "./validationFinding.js";
 import type {
   QualityIntelligencePriority,
   QualityIntelligenceRiskClass,

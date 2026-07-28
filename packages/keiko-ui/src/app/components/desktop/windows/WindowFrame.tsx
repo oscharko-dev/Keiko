@@ -146,30 +146,46 @@ interface BodySelection {
   readonly node: ReactNode;
 }
 
-function selectBody(
-  windowId: string,
-  type: WindowType,
-  ew: number,
-  eh: number,
-  cfg: AppWindow["cfg"],
-  linkedRoot: string | null,
-  linkedFilePath: string | undefined,
-  linkedRoots: readonly string[],
-  linkedCapsuleIds: readonly string[],
-  linkedCapsuleSetIds: readonly string[],
-  linkedFigmaSnapshotRunIds: readonly string[],
-  linkedFigmaSnapshotSources: readonly QualityIntelligenceFigmaSnapshotSource[] | undefined,
-  linkedImageSources: readonly QualityIntelligenceImageSource[] | undefined,
-  activeRoot: string | null,
-  activeBinding: WorkspaceBinding | null,
-  updateCfg: (patch: AppWindow["cfg"]) => void,
-  openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null,
-  focusWindow: (id: string) => void,
-  restoreWindow: ((id: string) => void) | undefined,
-  updateWindow: (id: string, patch: Partial<AppWindow>) => void,
-  openEditorFile: WorkspaceApi["openEditorFile"],
-  t: I18nTranslate,
-): BodySelection {
+// S107 (#2725) — selectBody had 22 positional parameters. The 8 `linked*` fields are
+// exactly the `LinkedContext` shape computed at the call site (see below), so this
+// options object carries them as `linked` rather than re-flattening them (AGENTS.md
+// §5 reuse-first) — `...linked` also matches `WindowRenderContext`'s linked* fields
+// directly when building the render props below.
+interface SelectBodyOptions {
+  readonly windowId: string;
+  readonly type: WindowType;
+  readonly ew: number;
+  readonly eh: number;
+  readonly cfg: AppWindow["cfg"];
+  readonly linked: LinkedContext;
+  readonly activeRoot: string | null;
+  readonly activeBinding: WorkspaceBinding | null;
+  readonly updateCfg: (patch: AppWindow["cfg"]) => void;
+  readonly openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
+  readonly focusWindow: (id: string) => void;
+  readonly restoreWindow: ((id: string) => void) | undefined;
+  readonly updateWindow: (id: string, patch: Partial<AppWindow>) => void;
+  readonly openEditorFile: WorkspaceApi["openEditorFile"];
+  readonly t: I18nTranslate;
+}
+
+function selectBody({
+  windowId,
+  type,
+  ew,
+  eh,
+  cfg,
+  linked,
+  activeRoot,
+  activeBinding,
+  updateCfg,
+  openWindow,
+  focusWindow,
+  restoreWindow,
+  updateWindow,
+  openEditorFile,
+  t,
+}: SelectBodyOptions): BodySelection {
   const def = WIN_TYPES[type];
   const typedCfg = cfg as WindowCfgByType[typeof type];
   if (type === "chat") {
@@ -190,14 +206,7 @@ function selectBody(
         controlsNarrow,
         barCompact,
         workflowCompact,
-        linkedRoot,
-        linkedFilePath,
-        linkedRoots,
-        linkedCapsuleIds,
-        linkedCapsuleSetIds,
-        linkedFigmaSnapshotRunIds,
-        linkedFigmaSnapshotSources,
-        linkedImageSources,
+        ...linked,
         activeRoot,
         activeBinding,
         updateCfg,
@@ -225,14 +234,7 @@ function selectBody(
     mode: "full",
     node: def.render(typedCfg, {
       windowId,
-      linkedRoot,
-      linkedFilePath,
-      linkedRoots,
-      linkedCapsuleIds,
-      linkedCapsuleSetIds,
-      linkedFigmaSnapshotRunIds,
-      linkedFigmaSnapshotSources,
-      linkedImageSources,
+      ...linked,
       activeRoot,
       activeBinding,
       updateCfg,
@@ -828,20 +830,13 @@ function WindowFrameImpl({
   const bodyBreakpoints = bodyBreakpointSignature(win.type, ew, eh);
   const { mode: bodyMode, node: body } = useMemo(
     () =>
-      selectBody(
-        win.id,
-        win.type,
+      selectBody({
+        windowId: win.id,
+        type: win.type,
         ew,
         eh,
-        win.cfg,
-        linked.linkedRoot,
-        linked.linkedFilePath,
-        linked.linkedRoots,
-        linked.linkedCapsuleIds,
-        linked.linkedCapsuleSetIds,
-        linked.linkedFigmaSnapshotRunIds,
-        linked.linkedFigmaSnapshotSources,
-        linked.linkedImageSources,
+        cfg: win.cfg,
+        linked,
         activeRoot,
         activeBinding,
         updateCfg,
@@ -851,7 +846,7 @@ function WindowFrameImpl({
         updateWindow,
         openEditorFile,
         t,
-      ),
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- ew/eh intentionally excluded; bodyBreakpoints is their discrete-crossing proxy (GEN-PERF-RENDER-003) so a same-band resize does not rebuild the body
     [
       win.id,
@@ -1101,7 +1096,7 @@ function WindowFrameImpl({
     const priorTop = top ? null : document.querySelector<HTMLElement>('.window[data-top="true"]');
     requestAnimationFrame(() => {
       const target =
-        (priorTop !== null && priorTop.isConnected ? priorTop : null) ??
+        (priorTop?.isConnected ? priorTop : null) ??
         document.querySelector<HTMLElement>('.window[data-top="true"]') ??
         document.querySelector<HTMLElement>(".ws-fab") ??
         document.querySelector<HTMLElement>(".window[data-window-id]");

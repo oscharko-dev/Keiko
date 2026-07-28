@@ -16,6 +16,7 @@
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { auditLocalState } from "./lib/local-state-audit.mjs";
 
@@ -37,13 +38,13 @@ function parseArgs(argv) {
     if (arg === "--self-test") args.selfTest = true;
     else if (arg === "--state-dir") {
       const value = argv[i + 1];
-      if (value === undefined || value.startsWith("--")) return "usage";
+      if (value === undefined || value === "" || value.startsWith("-")) return { kind: "usage" };
       args.stateDir = value;
       i += 1;
-    } else if (arg === "--help" || arg === "-h") return "help";
-    else return "usage";
+    } else if (arg === "--help" || arg === "-h") return { kind: "help" };
+    else return { kind: "usage" };
   }
-  return args;
+  return { kind: "args", ...args };
 }
 
 const USAGE = `Usage:
@@ -94,11 +95,11 @@ async function runSelfTest() {
 
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
-  if (parsed === "help") {
+  if (parsed.kind === "help") {
     console.log(USAGE);
     return 0;
   }
-  if (parsed === "usage") {
+  if (parsed.kind === "usage") {
     console.error(USAGE);
     return 2;
   }
@@ -106,9 +107,22 @@ async function main() {
   return runAudit(parsed.stateDir ?? join(process.cwd(), ".keiko"));
 }
 
-main()
-  .then((code) => process.exit(code))
-  .catch((error) => {
-    console.error(`local-state: FAIL — ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
-  });
+// Exported solely for a direct regression test of the CLI argument parser (a value that
+// looks like a flag, e.g. "-h", must not be swallowed as --state-dir's path) — not part of
+// the module's operational surface.
+export const _testables = Object.freeze({ parseArgs });
+
+// Run as a CLI unless imported by a test. `pathToFileURL` (not manual `file://` string
+// interpolation) is required for this comparison to hold on a path containing a space,
+// `%`, `#`, `?`, or a Windows drive letter — all of which import.meta.url always encodes
+// canonically.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main()
+    .then((code) => process.exit(code))
+    .catch((error) => {
+      console.error(
+        `local-state: FAIL — ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    });
+}

@@ -38,9 +38,9 @@ function resolveWithExistingAncestor(p: string): string {
   let current = absolute;
   for (let i = 0; i < 64; i += 1) {
     if (existsSync(current)) {
-      return tail.length === 0
-        ? realpathOrResolve(current)
-        : join(realpathOrResolve(current), ...tail.reverse());
+      if (tail.length === 0) return realpathOrResolve(current);
+      tail.reverse();
+      return join(realpathOrResolve(current), ...tail);
     }
     tail.push(current.split(sep).pop() ?? "");
     const parent = dirname(current);

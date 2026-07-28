@@ -111,7 +111,8 @@ export function createJiraCodeContextHttpPort(
   const base = pinnedBaseUrl(config);
   const fetchFn = deps.fetchFn ?? globalThis.fetch;
   const timeoutMs = deps.timeoutMs ?? JIRA_TIMEOUT_MS;
-  const authorization = `Basic ${Buffer.from(`${config.email}:${config.apiToken}`).toString("base64")}`;
+  const basicAuthCredentials = `${config.email}:${config.apiToken}`;
+  const authorization = `Basic ${Buffer.from(basicAuthCredentials).toString("base64")}`;
   return {
     readJson: async (request: JiraCodeContextHttpRequest): Promise<unknown> => {
       const url = requestUrl(base, request);

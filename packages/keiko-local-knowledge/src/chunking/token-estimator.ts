@@ -94,8 +94,6 @@ export function charsForTokenBudget(tokenBudget: number): number {
   return tokenBudget * CHUNK_BUDGET_CHARS_PER_TOKEN;
 }
 
-export type Qwen3TokenizerModule = unknown;
-
 export interface Qwen3TokenizerFactoryOptions {
   readonly modelPath?: string;
 }
@@ -168,7 +166,7 @@ function encoderFromCandidate(candidate: unknown): ((text: string) => unknown) |
 }
 
 async function tokenizerCandidateFromModule(
-  moduleLike: Qwen3TokenizerModule,
+  moduleLike: unknown,
   options: Qwen3TokenizerFactoryOptions,
 ): Promise<unknown> {
   if (typeof moduleLike === "object" && moduleLike !== null) {
@@ -194,7 +192,7 @@ async function tokenizerCandidateFromModule(
 }
 
 export async function createQwen3SentencePieceTokenizerFromModule(
-  moduleLike: Qwen3TokenizerModule,
+  moduleLike: unknown,
   options: Qwen3TokenizerFactoryOptions = {},
 ): Promise<LocalKnowledgeTokenizer> {
   const candidate = await tokenizerCandidateFromModule(moduleLike, options);

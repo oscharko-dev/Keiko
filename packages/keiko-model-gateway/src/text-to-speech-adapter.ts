@@ -22,8 +22,7 @@ import {
   readJsonCapped,
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
-import type { OutboundHttpEgressConfig } from "./types.js";
-import type { ProviderEndpointStyle } from "./types.js";
+import type { OutboundHttpEgressConfig, ProviderEndpointStyle } from "./types.js";
 
 // Closed set of response formats the OpenAI-compatible `/audio/speech` contract accepts, mapped to
 // the audio container MIME type the provider returns. The adapter requests one of these and labels

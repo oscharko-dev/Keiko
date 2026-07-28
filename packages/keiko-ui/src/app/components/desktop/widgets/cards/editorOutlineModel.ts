@@ -90,14 +90,13 @@ function findParentIndex(nodes: readonly MutableOutlineNode[], childIndex: numbe
 }
 
 function toOutlineNode(node: MutableOutlineNode, depth: number): EditorOutlineNode {
+  node.children.sort(compareMutableNodes);
   return {
     id: node.id,
     symbol: node.symbol,
     depth,
     ...(node.parentId === undefined ? {} : { parentId: node.parentId }),
-    children: node.children
-      .sort(compareMutableNodes)
-      .map((child) => toOutlineNode(child, depth + 1)),
+    children: node.children.map((child) => toOutlineNode(child, depth + 1)),
   };
 }
 
@@ -122,7 +121,8 @@ export function buildEditorOutlineTree(
       parent.children.push(node);
     }
   }
-  return roots.sort(compareMutableNodes).map((node) => toOutlineNode(node, 1));
+  roots.sort(compareMutableNodes);
+  return roots.map((node) => toOutlineNode(node, 1));
 }
 
 function flattenInto(

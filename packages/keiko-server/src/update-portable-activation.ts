@@ -1,7 +1,10 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { homedir } from "node:os";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import type { UpdatePortableActivationSummary } from "@oscharko-dev/keiko-contracts";
+import type {
+  UpdatePortableActivationSummary,
+  UpdatePortableStagingSummary,
+} from "@oscharko-dev/keiko-contracts";
 import type { UpdateRuntimeFacts } from "./update-install-mode.js";
 import type { UpdateLocalStateManager } from "./update-local-state.js";
 import {
@@ -24,7 +27,6 @@ import {
   type PortablePromotionResult,
   writePortableActivationRecovery,
 } from "./update-portable-activation-files.js";
-import type { UpdatePortableStagingSummary } from "@oscharko-dev/keiko-contracts";
 
 type SpawnFn = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
 type SleepFn = (ms: number) => Promise<void>;

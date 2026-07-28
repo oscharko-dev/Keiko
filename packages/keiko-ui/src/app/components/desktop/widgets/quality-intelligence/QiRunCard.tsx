@@ -194,10 +194,9 @@ function FindingsList({
   );
 }
 
-function coverageStatusLabel(
-  status: "covered" | "weakly-covered" | "uncovered",
-  t: I18nTranslate,
-): string {
+type QiCoverageStatus = "covered" | "weakly-covered" | "uncovered";
+
+function coverageStatusLabel(status: QiCoverageStatus, t: I18nTranslate): string {
   if (status === "covered") return t("qi.coverage.covered");
   if (status === "weakly-covered") return t("qi.coverage.weaklyCovered");
   return t("qi.coverage.uncovered");
@@ -218,12 +217,11 @@ function coverageSummaryText(
       });
 }
 
-const COVERAGE_STATUS_CLASS: Readonly<Record<"covered" | "weakly-covered" | "uncovered", string>> =
-  {
-    covered: "qi-cov-covered",
-    "weakly-covered": "qi-cov-weak",
-    uncovered: "qi-cov-uncovered",
-  };
+const COVERAGE_STATUS_CLASS: Readonly<Record<QiCoverageStatus, string>> = {
+  covered: "qi-cov-covered",
+  "weakly-covered": "qi-cov-weak",
+  uncovered: "qi-cov-uncovered",
+};
 
 // Gap-radar display severity: uncovered (no covering test at all) is the most severe gap, then
 // weakly-covered (only incidental coverage). The server emits coverageByAtom sorted by atomId, NOT
@@ -231,9 +229,11 @@ const COVERAGE_STATUS_CLASS: Readonly<Record<"covered" | "weakly-covered" | "unc
 // gaps in opaque hash order and the worst gaps can fall below the INITIAL_VISIBLE_ROWS fold on
 // large runs. Surfacing uncovered first mirrors the server's sort-before-truncate invariant for
 // findings (#738/#1066) and satisfies the #739 intent: "see at a glance what is NOT tested".
-const COVERAGE_GAP_SEVERITY_ORDER: Readonly<
-  Record<"covered" | "weakly-covered" | "uncovered", number>
-> = { uncovered: 0, "weakly-covered": 1, covered: 2 };
+const COVERAGE_GAP_SEVERITY_ORDER: Readonly<Record<QiCoverageStatus, number>> = {
+  uncovered: 0,
+  "weakly-covered": 1,
+  covered: 2,
+};
 
 function CoveragePanel({
   detail,

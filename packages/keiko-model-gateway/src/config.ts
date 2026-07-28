@@ -1312,10 +1312,7 @@ function parseProvider(
 }
 
 function requireNonNegativeInt(value: unknown, path: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    throw new ConfigInvalidError(`${path} must be a non-negative integer`);
-  }
-  return value;
+  return requireNonNegativeIntStrict(value, path);
 }
 
 function parseGroundingLimits(raw: unknown): GroundingLimits | undefined {

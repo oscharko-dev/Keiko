@@ -81,7 +81,11 @@ function parseRetentionDays(
   return value;
 }
 
-function runDelete(
+// Shared by runDelete/runUpdate: both issue a capsule- and cutoff-scoped statement, then read the
+// change count via `SELECT changes()` so the helper is independent of the node:sqlite result-shape;
+// the function is connection-scoped and returns the row count touched by the most recent
+// INSERT/UPDATE/DELETE on that connection.
+function runCutoffStatement(
   store: KnowledgeStore,
   sql: string,
   capsuleId: KnowledgeCapsuleId,
@@ -89,12 +93,18 @@ function runDelete(
 ): number {
   const stmt = store._internal.db.prepare(sql);
   stmt.run({ capsule_id: capsuleId, cutoff });
-  // Read the change count via `SELECT changes()` so the helper is independent of the
-  // node:sqlite result-shape; the function is connection-scoped and returns the row
-  // count touched by the most recent INSERT/UPDATE/DELETE on that connection.
   const row = store._internal.db.prepare("SELECT changes() AS changes").get() as
     ChangesRow | undefined;
   return row?.changes ?? 0;
+}
+
+function runDelete(
+  store: KnowledgeStore,
+  sql: string,
+  capsuleId: KnowledgeCapsuleId,
+  cutoff: number,
+): number {
+  return runCutoffStatement(store, sql, capsuleId, cutoff);
 }
 
 function runCapsuleDelete(
@@ -115,11 +125,7 @@ function runUpdate(
   capsuleId: KnowledgeCapsuleId,
   cutoff: number,
 ): number {
-  const stmt = store._internal.db.prepare(sql);
-  stmt.run({ capsule_id: capsuleId, cutoff });
-  const row = store._internal.db.prepare("SELECT changes() AS changes").get() as
-    ChangesRow | undefined;
-  return row?.changes ?? 0;
+  return runCutoffStatement(store, sql, capsuleId, cutoff);
 }
 
 function sourceIdsForCapsule(

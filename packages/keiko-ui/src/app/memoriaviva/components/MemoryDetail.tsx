@@ -215,6 +215,10 @@ function TagsList({
 // RecordHeader
 // ---------------------------------------------------------------------------
 
+// The back control renders as either a <button> (when the caller supplies `onBack`) or a
+// <Link> (the default `/memoriaviva` anchor) — its ref target spans both element types.
+type BackControlElement = HTMLAnchorElement | HTMLButtonElement | null;
+
 function BackToMemoriaControl({
   onBack,
   controlRef,
@@ -222,7 +226,7 @@ function BackToMemoriaControl({
   t,
 }: {
   readonly onBack?: (() => void) | undefined;
-  readonly controlRef?: ((node: HTMLAnchorElement | HTMLButtonElement | null) => void) | undefined;
+  readonly controlRef?: ((node: BackControlElement) => void) | undefined;
   readonly children?: ReactNode;
   readonly t: I18nTranslate;
 }): ReactNode {
@@ -307,13 +311,10 @@ export function MemoryDetail({
   // empty state then confirms the removal and offers a way back instead of a
   // dead-end "Memory not found" (uiux-fix F005).
   const [removed, setRemoved] = useState(false);
-  const removedBackControlRef = useRef<HTMLAnchorElement | HTMLButtonElement | null>(null);
-  const setRemovedBackControlRef = useCallback(
-    (node: HTMLAnchorElement | HTMLButtonElement | null): void => {
-      removedBackControlRef.current = node;
-    },
-    [],
-  );
+  const removedBackControlRef = useRef<BackControlElement>(null);
+  const setRemovedBackControlRef = useCallback((node: BackControlElement): void => {
+    removedBackControlRef.current = node;
+  }, []);
 
   const handleRecordChange = useCallback((updated: MemoryRecord | null): void => {
     if (updated === null) setRemoved(true);

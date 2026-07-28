@@ -383,7 +383,8 @@ export function buildGitDeliveryEvidenceRecord(
   const inputs = envelope.resolvedInputs;
   const riskClass = gitDeliveryRiskClassForInputs(inputs);
   const workflowRunIdHash = hash(input.workflowRunId);
-  const evidenceId = `gde-${hash(`${workflowRunIdHash}:${envelope.actionId}`).slice(0, 40)}`;
+  const evidenceIdMaterial = `${workflowRunIdHash}:${envelope.actionId}`;
+  const evidenceId = `gde-${hash(evidenceIdMaterial).slice(0, 40)}`;
   const correlation: GitDeliveryEvidenceCorrelation = {
     workflowRunIdHash,
     actionId: envelope.actionId,

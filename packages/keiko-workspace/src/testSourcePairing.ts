@@ -112,7 +112,8 @@ function mapMainToTestStem(stem: string, testBase: string): string | undefined {
       const prefix = stem.slice(0, index);
       const rest = stem.slice(index + marker.length);
       const dir = basenameOf(rest).dir;
-      return `${prefix}/src/test/${segment}/${dir === "" ? testBase : `${dir}/${testBase}`}`;
+      const testFileName = dir === "" ? testBase : `${dir}/${testBase}`;
+      return `${prefix}/src/test/${segment}/${testFileName}`;
     }
   }
   if (stem.startsWith("src/")) {
@@ -130,16 +131,15 @@ function mapTestToMainStem(stem: string, sourceBase: string): readonly string[] 
       const prefix = stem.slice(0, index);
       const rest = stem.slice(index + marker.length);
       const dir = basenameOf(rest).dir;
-      pushUnique(
-        out,
-        `${prefix}/src/main/${segment}/${dir === "" ? sourceBase : `${dir}/${sourceBase}`}`,
-      );
+      const sourceFileName = dir === "" ? sourceBase : `${dir}/${sourceBase}`;
+      pushUnique(out, `${prefix}/src/main/${segment}/${sourceFileName}`);
     }
   }
   if (stem.startsWith("tests/")) {
     const rest = stem.slice(6);
     const dir = basenameOf(rest).dir;
-    pushUnique(out, `src/${dir === "" ? sourceBase : `${dir}/${sourceBase}`}`);
+    const sourceFileName = dir === "" ? sourceBase : `${dir}/${sourceBase}`;
+    pushUnique(out, `src/${sourceFileName}`);
   }
   return out;
 }
@@ -185,8 +185,10 @@ function candidateTestsFor(path: string): readonly string[] {
     if (mapped !== undefined) {
       pushUnique(out, `${mapped}${ext}`);
     }
-    pushUnique(out, `${dir === "" ? testBase : `${dir}/${testBase}`}${ext}`);
-    pushUnique(out, `${dir === "" ? "tests" : `${dir}/tests`}/${testBase}${ext}`);
+    const testFileName = dir === "" ? testBase : `${dir}/${testBase}`;
+    pushUnique(out, `${testFileName}${ext}`);
+    const testDir = dir === "" ? "tests" : `${dir}/tests`;
+    pushUnique(out, `${testDir}/${testBase}${ext}`);
   }
   return out;
 }
@@ -237,7 +239,8 @@ function candidateSourcesFromNamingConvention(
     if (dir === "tests") {
       pushUnique(out, `${sourceBase}${ext}`);
     }
-    pushUnique(out, `${dir === "" ? sourceBase : `${dir}/${sourceBase}`}${ext}`);
+    const sourceFileName = dir === "" ? sourceBase : `${dir}/${sourceBase}`;
+    pushUnique(out, `${sourceFileName}${ext}`);
   }
   return out;
 }

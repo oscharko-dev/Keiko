@@ -18,8 +18,7 @@ import {
   readJsonCapped,
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
-import type { OutboundHttpEgressConfig } from "./types.js";
-import type { ProviderEndpointStyle } from "./types.js";
+import type { OutboundHttpEgressConfig, ProviderEndpointStyle } from "./types.js";
 
 export interface SpeechToTextRequest {
   readonly endpoint: string;

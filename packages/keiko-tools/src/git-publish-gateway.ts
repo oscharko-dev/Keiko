@@ -299,7 +299,7 @@ export class GitPublishArgvError extends Error {
 // rejecting them is defence-in-depth above git's own ref validation. NUL is NOT matched by \s, so
 // the control range is enumerated via a string-built RegExp (no literal control chars in source).
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
-const REF_CONTROL_CHAR = new RegExp("[\u0000-\u001f\u007f]");
+const REF_CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
 
 function assertRef(value: string, label: string): string {
   if (value.length === 0) {

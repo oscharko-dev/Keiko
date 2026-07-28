@@ -758,9 +758,10 @@ export function renderDryRun(validation: PatchValidation): string {
     ? `PATCH OK — ${String(validation.files.length)} file(s), ${String(validation.totalChangedLines)} changed line(s)`
     : "PATCH REJECTED";
   const fileLines = validation.files.map(renderFileLine);
-  const reasonLines = validation.reasons.map(
-    (r) => `reject[${r.code}]: ${r.message}${r.path === undefined ? "" : ` (${r.path})`}`,
-  );
+  const reasonLines = validation.reasons.map((r) => {
+    const pathSuffix = r.path === undefined ? "" : ` (${r.path})`;
+    return `reject[${r.code}]: ${r.message}${pathSuffix}`;
+  });
   const conflictLines = validation.conflicts.map(
     (c) => `conflict: ${c.path} hunk#${String(c.hunkIndex)}: ${c.reason}`,
   );

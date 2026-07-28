@@ -7,7 +7,12 @@
 // artifact). Route-agnostic: the caller supplies an event callback (wired to SSE) and an
 // AbortSignal (wired to the run registry for cancellation).
 
-import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import {
+  QualityIntelligence,
+  type QualityIntelligence as QI,
+  type QualityIntelligenceStartRunRequest,
+  type QualityIntelligenceModelRouting,
+} from "@oscharko-dev/keiko-contracts";
 import {
   ALL_POLICY_PROFILES,
   regressionDefault,
@@ -23,12 +28,12 @@ import {
   type QualityIntelligenceRunSummary,
   type QualityIntelligenceModelRoutedTestDesignDeps,
 } from "@oscharko-dev/keiko-workflows";
-import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-contracts";
-import type { QualityIntelligenceModelRouting } from "@oscharko-dev/keiko-contracts";
 import { currentRedactionSecrets, type UiHandlerDeps } from "../deps.js";
-import { ingestInlineSourcesAsync } from "./runIngestion.js";
-import type { QiSourceSummary } from "./runIngestion.js";
-import type { QiSkippedSource } from "./runIngestion.js";
+import {
+  ingestInlineSourcesAsync,
+  type QiSourceSummary,
+  type QiSkippedSource,
+} from "./runIngestion.js";
 import { makeCapsuleResolver } from "./capsuleAdapter.js";
 import { extractQiDocumentText } from "./documentTextExtractor.js";
 import { makeFigmaSnapshotLoader, makeFigmaVisionHintProvider } from "./figmaSnapshotAdapter.js";

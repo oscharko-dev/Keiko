@@ -303,7 +303,7 @@ function lifecycleHitsFromScripts(label, scripts) {
   if (!scripts || typeof scripts !== "object") return [];
   const hits = [];
   for (const hook of LIFECYCLE_HOOKS) {
-    if (Object.prototype.hasOwnProperty.call(scripts, hook)) {
+    if (Object.hasOwn(scripts, hook)) {
       hits.push({ package: label, hook });
     }
   }
@@ -615,9 +615,10 @@ function reportTelemetryHits(hits) {
 
 function reportMissingLicenseHits(hits) {
   for (const hit of hits) {
+    const licenseDisplay = hit.license === "" ? "<empty>" : `"${hit.license}"`;
     console.error(
       `  matrix row "${hit.row}" (${hit.decision}) declares no license ` +
-        `(found ${hit.license === "" ? "<empty>" : `"${hit.license}"`})`,
+        `(found ${licenseDisplay})`,
     );
   }
   fail(

@@ -5,10 +5,8 @@ import {
   type ContextBudgetPressure,
   type ContextLaneDiagnostics,
   type ContextProfile,
-} from "@oscharko-dev/keiko-contracts";
-import type {
-  ConversationDocumentContextWire,
-  DiscussionMode,
+  type ConversationDocumentContextWire,
+  type DiscussionMode,
 } from "@oscharko-dev/keiko-contracts";
 import type { ConversationMemoryContextEntryWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { GatewayConversationMessage } from "./conversation-gateway.js";

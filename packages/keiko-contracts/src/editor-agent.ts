@@ -68,8 +68,6 @@ export const EDITOR_AGENT_ACTION_ORIGINS = ["agent", "chat"] as const;
 export type EditorAgentActionOrigin = (typeof EDITOR_AGENT_ACTION_ORIGINS)[number];
 export const DEFAULT_EDITOR_AGENT_ACTION_ORIGIN: EditorAgentActionOrigin = "agent";
 
-export type EditorAgentBridgeDecisionCapability = string;
-
 const EDITOR_AGENT_TEXT_ENCODER = new TextEncoder();
 
 export interface EditorAgentGovernedAuthorityReference {
@@ -598,14 +596,14 @@ export interface EditorAgentBridgeSnapshotRequest {
   readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
   readonly kind: "snapshot";
   readonly snapshot: EditorAgentSessionSnapshot;
-  readonly bridgeDecisionCapability?: EditorAgentBridgeDecisionCapability | undefined;
+  readonly bridgeDecisionCapability?: string | undefined;
 }
 
 export interface EditorAgentActionResultRequest {
   readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
   readonly kind: "result";
   readonly result: EditorAgentActionResult;
-  readonly bridgeDecisionCapability?: EditorAgentBridgeDecisionCapability | undefined;
+  readonly bridgeDecisionCapability?: string | undefined;
 }
 
 /**
@@ -616,7 +614,7 @@ export interface EditorAgentBridgeActionRequest {
   readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
   readonly kind: "action";
   readonly action: EditorAgentAction;
-  readonly bridgeDecisionCapability: EditorAgentBridgeDecisionCapability;
+  readonly bridgeDecisionCapability: string;
 }
 
 export type EditorAgentActionsPostBody =
@@ -632,7 +630,7 @@ export interface EditorAgentActionQueuedResponse {
 
 export interface EditorAgentSnapshotResponse {
   readonly snapshot: EditorAgentSessionSnapshot | null;
-  readonly bridgeDecisionCapability?: EditorAgentBridgeDecisionCapability | undefined;
+  readonly bridgeDecisionCapability?: string | undefined;
 }
 
 export interface EditorAgentParseOk<T> {
@@ -2275,9 +2273,7 @@ export function parseEditorAgentActionsPostBody(
   return value.kind === "result" ? parseActionResultRequest(value) : invalidActionsPostBody();
 }
 
-export function isEditorAgentBridgeDecisionCapability(
-  value: unknown,
-): value is EditorAgentBridgeDecisionCapability {
+export function isEditorAgentBridgeDecisionCapability(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length === EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS &&

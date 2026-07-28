@@ -128,16 +128,28 @@ function semanticEvidence(
   };
 }
 
-function matchPair(
-  a: MemoryRecord,
-  b: MemoryRecord,
-  aBody: PreparedBody,
-  bBody: PreparedBody,
-  jaccardThreshold: number,
-  embeddingA: ConsolidationEmbedding | undefined,
-  embeddingB: ConsolidationEmbedding | undefined,
-  semanticSimilarityThreshold: number | undefined,
-): ConsolidationEvidence | null {
+interface MatchPairInput {
+  readonly a: MemoryRecord;
+  readonly b: MemoryRecord;
+  readonly aBody: PreparedBody;
+  readonly bBody: PreparedBody;
+  readonly jaccardThreshold: number;
+  readonly embeddingA: ConsolidationEmbedding | undefined;
+  readonly embeddingB: ConsolidationEmbedding | undefined;
+  readonly semanticSimilarityThreshold: number | undefined;
+}
+
+function matchPair(input: MatchPairInput): ConsolidationEvidence | null {
+  const {
+    a,
+    b,
+    aBody,
+    bBody,
+    jaccardThreshold,
+    embeddingA,
+    embeddingB,
+    semanticSimilarityThreshold,
+  } = input;
   if (aBody.normalized === bBody.normalized) {
     return lexicalEvidence(a, b, 1, jaccardThreshold, "normalized-body");
   }
@@ -233,16 +245,16 @@ function matchIndexedPair(
   const aBody = prepared[i];
   const bBody = prepared[j];
   if (a === undefined || b === undefined || aBody === undefined || bBody === undefined) return null;
-  return matchPair(
+  return matchPair({
     a,
     b,
     aBody,
     bBody,
     jaccardThreshold,
-    embeddings[i],
-    embeddings[j],
-    options.semanticSimilarityThreshold,
-  );
+    embeddingA: embeddings[i],
+    embeddingB: embeddings[j],
+    semanticSimilarityThreshold: options.semanticSimilarityThreshold,
+  });
 }
 
 function scanPartitionPairs(

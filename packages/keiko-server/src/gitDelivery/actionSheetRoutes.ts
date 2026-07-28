@@ -156,10 +156,7 @@ const scanForbiddenStrings = (value: unknown): boolean => {
 // approval target on the surface whose whole purpose is to show WHICH branch is being approved
 // (Trojan-Source). Reject fail-closed at the boundary. (C0/C1 controls are already barred by git ref
 // rules and the kernel adapter's NUL/flag guards, so this set deliberately omits them.)
-const UNSAFE_FORMAT_CHAR = new RegExp(
-  "[\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u2064\\u2066-\\u206F\\uFEFF]",
-  "u",
-);
+const UNSAFE_FORMAT_CHAR = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF]/u;
 
 const scanUnsafeFormatChars = (value: unknown): boolean => {
   if (typeof value === "string") return UNSAFE_FORMAT_CHAR.test(value);

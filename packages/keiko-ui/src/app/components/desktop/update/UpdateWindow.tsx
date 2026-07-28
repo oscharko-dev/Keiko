@@ -39,7 +39,6 @@ import {
   isPortableBootstrapSetupRequired,
   isPortableExternallyManaged,
   isPortableIntegrityBlocked,
-  isPortableManagedInstall,
   isPortableManagedManualPath,
   isPortableManagedOneClickPath,
   isPortableManagedPolicyDisabled,

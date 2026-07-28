@@ -158,7 +158,7 @@ function resolveStateDir(cwd: string, value: string): string {
 }
 
 function isLifecycleFlag(arg: string): arg is LifecycleFlag {
-  return Object.prototype.hasOwnProperty.call(LIFECYCLE_FLAG_SETTERS, arg);
+  return Object.hasOwn(LIFECYCLE_FLAG_SETTERS, arg);
 }
 
 function collectLifecycleOptions(args: readonly string[]): RawLifecycleOptions | "help" | null {
@@ -401,7 +401,7 @@ async function pairedOpenUrl(baseUrl: string, pairingSecret: string): Promise<st
 function childEnv(env: EnvSource): NodeJS.ProcessEnv {
   const next: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (!Object.prototype.hasOwnProperty.call(env, key) && value !== undefined) {
+    if (!Object.hasOwn(env, key) && value !== undefined) {
       next[key] = value;
     }
   }

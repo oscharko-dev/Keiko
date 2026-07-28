@@ -744,13 +744,19 @@ function projectSheetRows(rows: readonly SheetRow[]): readonly RowProjection[] {
     ? normalizeSheetHeaders(rows[0]?.cells ?? [])
     : new Map<number, string>();
   const dataRows = headerIsSchema ? rows.slice(1) : rows;
-  return dataRows.map((row) => ({
-    sheetName: row.sheetName,
-    rowNumber: row.rowNumber,
-    text: `${row.sheetName}!${String(row.rowNumber)}: ${row.cells
-      .map((cell) => `${headers.get(cell.columnIndex) ?? `Column ${cell.column}`}=${cell.value}`)
-      .join(" | ")}\n`,
-  }));
+  return dataRows.map((row) => {
+    const cellsText = row.cells
+      .map((cell) => {
+        const headerLabel = headers.get(cell.columnIndex) ?? `Column ${cell.column}`;
+        return `${headerLabel}=${cell.value}`;
+      })
+      .join(" | ");
+    return {
+      sheetName: row.sheetName,
+      rowNumber: row.rowNumber,
+      text: `${row.sheetName}!${String(row.rowNumber)}: ${cellsText}\n`,
+    };
+  });
 }
 
 function emitUnits(

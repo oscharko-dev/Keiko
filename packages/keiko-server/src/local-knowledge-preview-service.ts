@@ -82,6 +82,11 @@ function reject(
   };
 }
 
+type CitationDisplayInput = Pick<
+  StoredPdfCitationPreviewCitation,
+  "documentLabel" | "sourceLabel" | "pageNumber" | "pageLabel" | "characterStart" | "characterEnd"
+>;
+
 function citationDisplay(
   stored: StoredPdfCitationPreviewCitation,
   current?: CurrentPdfCitationPreviewSnapshot,
@@ -94,16 +99,10 @@ function citationDisplay(
 function resolveCitationDisplayInput(
   stored: StoredPdfCitationPreviewCitation,
   current?: CurrentPdfCitationPreviewSnapshot,
-): Pick<
-  StoredPdfCitationPreviewCitation,
-  "documentLabel" | "sourceLabel" | "pageNumber" | "pageLabel" | "characterStart" | "characterEnd"
-> {
+): CitationDisplayInput {
   const useCurrentAnchor =
     current === undefined || current.documentContentHash === stored.documentContentHash;
-  const input: Pick<
-    StoredPdfCitationPreviewCitation,
-    "documentLabel" | "sourceLabel" | "pageNumber" | "pageLabel" | "characterStart" | "characterEnd"
-  > = {
+  const input: CitationDisplayInput = {
     documentLabel: current?.documentLabel ?? stored.documentLabel,
   };
   assignOptionalCitationField(input, "sourceLabel", stored.sourceLabel);
@@ -133,10 +132,7 @@ function resolveCitationDisplayInput(
 function assignOptionalCitationField<
   K extends "sourceLabel" | "pageNumber" | "pageLabel" | "characterStart" | "characterEnd",
 >(
-  target: Pick<
-    StoredPdfCitationPreviewCitation,
-    "documentLabel" | "sourceLabel" | "pageNumber" | "pageLabel" | "characterStart" | "characterEnd"
-  >,
+  target: CitationDisplayInput,
   key: K,
   value: StoredPdfCitationPreviewCitation[K] | undefined,
 ): void {

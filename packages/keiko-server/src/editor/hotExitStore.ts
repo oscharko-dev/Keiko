@@ -227,7 +227,8 @@ export function createEditorHotExitStore(
     const incomingSize = index.get(incomingRef)?.contentSizeBytes ?? 0;
     let total = incomingSize + retained.reduce((sum, item) => sum + item.meta.contentSizeBytes, 0);
     if (total <= MAX_TOTAL_BYTES) return;
-    for (const item of retained.sort((left, right) => left.meta.updatedAt - right.meta.updatedAt)) {
+    retained.sort((left, right) => left.meta.updatedAt - right.meta.updatedAt);
+    for (const item of retained) {
       if (total <= MAX_TOTAL_BYTES) break;
       activeVault.delete(item.ref);
       index.delete(item.ref);

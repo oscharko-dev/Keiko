@@ -20,7 +20,6 @@ export {
   type OptionalTokenizerLoadDiagnostic,
   type OptionalTokenizerLoadResult,
   type Qwen3TokenizerFactoryOptions,
-  type Qwen3TokenizerModule,
 } from "./token-estimator.js";
 export {
   CHUNKING_STRATEGY_VERSION,

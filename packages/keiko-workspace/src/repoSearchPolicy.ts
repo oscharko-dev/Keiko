@@ -108,6 +108,17 @@ export interface CandidateOrderingResult {
   readonly diagnostics: SearchDiagnostics;
 }
 
+export interface OrderCandidatesForSearchOptions {
+  readonly files: readonly DiscoveredFile[];
+  readonly query: RetrievalQuery;
+  readonly policy: SearchPolicy;
+  readonly ignoredByDiscovery: number;
+  readonly deniedByDiscovery: number;
+  readonly depthPrunedByDiscovery?: number | undefined;
+  readonly maxFilesPrunedByDiscovery?: number | undefined;
+  readonly contentScores?: ReadonlyMap<string, number> | undefined;
+}
+
 // Canonical-metadata filenames are now owned by the ecosystem registry (ecosystems.ts), which is a
 // superset of the former JS/TS-only literal table and additionally covers Maven/Gradle/Go/Rust/
 // Python/.NET/etc. See isCanonicalMetadataFile.
@@ -1026,15 +1037,18 @@ function unignoreLinesForAllowlist(paths: readonly string[]): readonly string[] 
 }
 
 export function orderCandidatesForSearch(
-  files: readonly DiscoveredFile[],
-  query: RetrievalQuery,
-  policy: SearchPolicy,
-  ignoredByDiscovery: number,
-  deniedByDiscovery: number,
-  depthPrunedByDiscovery = 0,
-  maxFilesPrunedByDiscovery = 0,
-  contentScores?: ReadonlyMap<string, number>,
+  options: OrderCandidatesForSearchOptions,
 ): CandidateOrderingResult {
+  const {
+    files,
+    query,
+    policy,
+    ignoredByDiscovery,
+    deniedByDiscovery,
+    depthPrunedByDiscovery = 0,
+    maxFilesPrunedByDiscovery = 0,
+    contentScores,
+  } = options;
   const ranked = rankCandidates(files, query, policy, contentScores);
   const rankedCandidates: readonly RankedCandidateDiagnostic[] = ranked
     .slice(0, MAX_RANKED_CANDIDATE_DIAGNOSTICS)

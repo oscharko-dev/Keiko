@@ -37,7 +37,6 @@ import { isPrimaryActivationPointer } from "@/app/components/desktop/interaction
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
 import {
   useLocalKnowledgeTranslate as useTranslate,
-  type I18nTranslate,
   type LocalKnowledgeMessageKey,
 } from "./local-knowledge-i18n";
 import type {

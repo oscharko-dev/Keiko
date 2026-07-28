@@ -22,7 +22,7 @@ import { createHash } from "node:crypto";
 
 import type { ParsedUnit } from "@oscharko-dev/keiko-contracts";
 
-import { charsForTokenBudget } from "./token-estimator.js";
+import { charsForTokenBudget, conservativeTokenEstimatorTokenizer } from "./token-estimator.js";
 import type {
   ChunkingOptions,
   ChunkingResult,
@@ -44,7 +44,6 @@ import {
   MAX_OVERLAP_TOKENS,
   CHUNKING_STRATEGY_VERSION,
 } from "./types.js";
-import { conservativeTokenEstimatorTokenizer } from "./token-estimator.js";
 import { CODE_PARSER_ID, isCodeSymbolDefinitionLine } from "../parsers/code-parser.js";
 
 const WHITESPACE_PATTERN = /\s+/gu;

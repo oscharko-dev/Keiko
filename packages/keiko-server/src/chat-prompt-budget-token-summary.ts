@@ -3,10 +3,8 @@ import {
   countContextTokensForSegments,
   type ContextProfile,
   type ContextTokenAccounting,
-} from "@oscharko-dev/keiko-contracts";
-import type {
-  ConversationDocumentContextWire,
-  DiscussionMode,
+  type ConversationDocumentContextWire,
+  type DiscussionMode,
 } from "@oscharko-dev/keiko-contracts";
 import type { ConversationMemoryContextEntryWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {

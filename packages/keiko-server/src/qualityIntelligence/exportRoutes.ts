@@ -151,9 +151,8 @@ function buildModelProvenance(
 }
 
 function coverageRefFor(runId: string, atomId: string): QI.QualityIntelligenceCoverageMapId {
-  return QualityIntelligence.asQualityIntelligenceCoverageMapId(
-    `qi-coverage-${sha256Hex(`${runId}|${atomId}`).slice(0, 32)}`,
-  );
+  const runAtomHash = sha256Hex(`${runId}|${atomId}`).slice(0, 32);
+  return QualityIntelligence.asQualityIntelligenceCoverageMapId(`qi-coverage-${runAtomHash}`);
 }
 
 function findingRefFor(
@@ -362,10 +361,9 @@ function buildBundle(
       }),
     }),
   );
+  const runAdapterHash = sha256Hex(`${runId}|${adapter}`).slice(0, 24);
   return {
-    id: QualityIntelligence.asQualityIntelligenceExportBundleId(
-      `qi-export-${sha256Hex(`${runId}|${adapter}`).slice(0, 24)}`,
-    ),
+    id: QualityIntelligence.asQualityIntelligenceExportBundleId(`qi-export-${runAdapterHash}`),
     runId: QualityIntelligence.asQualityIntelligenceRunId(runId),
     targetAdapter: adapter,
     createdAt,

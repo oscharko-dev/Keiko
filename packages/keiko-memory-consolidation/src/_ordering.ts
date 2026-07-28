@@ -28,16 +28,18 @@ export function scopeCoordinateKey(scope: MemoryRecord["scope"]): string {
 
 // Three-way comparator returning -1 / 0 / +1. Keeps sort callbacks lint-clean and
 // total-order-correct (a < b < c implies cmp(a, c) === -1).
-function cmpString(a: string, b: string): number {
+function cmpOrdered<T extends string | number>(a: T, b: T): number {
   if (a < b) return -1;
   if (a > b) return 1;
   return 0;
 }
 
+function cmpString(a: string, b: string): number {
+  return cmpOrdered(a, b);
+}
+
 function cmpNumber(a: number, b: number): number {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
+  return cmpOrdered(a, b);
 }
 
 // Records inside a duplicate cluster: oldest first; id as tiebreak. Stable across input shuffle.

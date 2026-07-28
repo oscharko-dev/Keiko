@@ -990,7 +990,7 @@ export interface MigrateReviewStateForRegenerationInput {
 }
 
 const hasExplicitCandidateState = (artifact: QiReviewStateArtifact, candidateId: string): boolean =>
-  Object.prototype.hasOwnProperty.call(artifact.candidateStates, candidateId);
+  Object.hasOwn(artifact.candidateStates, candidateId);
 
 const hasCandidateAudit = (artifact: QiReviewStateArtifact, candidateId: string): boolean =>
   artifact.auditLog.some(
