@@ -27,7 +27,6 @@ import {
 } from "@/lib/optional-widget-i18n";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/useWorkspace.types";
 import { Icons } from "../../Icons";
-import { useOptionalChatSessionCatalog } from "../../context/ChatSessionContext";
 import { useWorkspaceReplaceBuffers } from "../../WorkspaceReplaceBufferContext";
 import {
   requestWorkspaceRoots,
@@ -125,6 +124,15 @@ function panelTargets(
 ): readonly WorkspaceRootTarget[] {
   if (roots !== undefined && roots.length > 0) return roots;
   return root === undefined ? [] : [{ id: root, root, label: projectName }];
+}
+
+function panelProjectName(
+  root: string | undefined,
+  roots: readonly WorkspaceRootTarget[] | undefined,
+  t: OptionalWidgetTranslate,
+): string {
+  if (root === undefined) return t("searchPanel.noProjectSelected");
+  return roots?.find((target) => target.root === root)?.label ?? root;
 }
 
 function statusMessage(args: {
@@ -454,14 +462,9 @@ function ReplaceReviews({
 
 export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): ReactNode {
   const t = useOptionalWidgetTranslate();
-  const catalog = useOptionalChatSessionCatalog();
   const openBuffers = useWorkspaceReplaceBuffers();
-  const selectedRoot = root ?? catalog?.activeProject?.path;
-  const projectName = catalog?.activeProject?.name ?? t("searchPanel.noProjectSelected");
-  const targets = useMemo(
-    () => panelTargets(selectedRoot, projectName, roots),
-    [projectName, roots, selectedRoot],
-  );
+  const projectName = panelProjectName(root, roots, t);
+  const targets = useMemo(() => panelTargets(root, projectName, roots), [projectName, root, roots]);
   const multiRoot = targets.length > 1;
   const queryInputRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState("");

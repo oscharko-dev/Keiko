@@ -234,7 +234,12 @@ vi.mock("./install/InstallBanner", () => ({
 
 vi.mock("./widgets", () => ({}));
 
-import { AppShell, GatewaySetupLoading, openOrFocusSearchWindow } from "./AppShell";
+import {
+  AppShell,
+  GatewaySetupLoading,
+  openOrFocusSearchWindow,
+  resolveSearchRoot,
+} from "./AppShell";
 
 const gatewaySetupLoadsAtShellImport = mocks.gatewaySetupDialogModuleLoaded.mock.calls.length;
 
@@ -707,7 +712,14 @@ describe("AppShell grounding connections", () => {
 
   it("dispatches undo, redo, focus-status, and search shortcuts through the shell handler", async () => {
     const api = workspaceApi();
-    mocks.state.workspaceResult = workspaceResult([], [], api);
+    mocks.state.workspaceResult = workspaceResult(
+      [
+        win("search", { root: "/repo/stale-chat" }, "search-window"),
+        { ...win("editor", { root: "/repo/editor-selected" }, "editor-window"), z: 2 },
+      ],
+      [],
+      api,
+    );
     await renderMounted();
 
     const keyboardProps = mocks.useKeyboardShortcuts.mock.calls[0]?.[0] as
@@ -727,7 +739,8 @@ describe("AppShell grounding connections", () => {
     expect(mocks.undo).toHaveBeenCalledTimes(1);
     expect(mocks.redo).toHaveBeenCalledTimes(1);
     expect(statusSpy).toHaveBeenCalled();
-    expect(api.toggleTool).toHaveBeenCalledWith("search");
+    expect(api.add).toHaveBeenCalledWith("search", { root: "/repo/editor-selected" });
+    expect(api.toggleTool).not.toHaveBeenCalledWith("search");
     statusSpy.mockRestore();
     rafSpy.mockRestore();
   });
@@ -749,20 +762,45 @@ describe("AppShell grounding connections", () => {
     expect(api.updateConnBoundScope).not.toHaveBeenCalled();
   });
 
-  it("focuses or restores an existing Search window without toggling it closed", () => {
+  it("opens or focuses Search with an explicit root and clears it when ownership is unavailable", () => {
     const api = workspaceApi();
     const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       callback(0);
       return 0;
     });
 
-    openOrFocusSearchWindow(api, [win("search", {}, "search")]);
-    openOrFocusSearchWindow(api, [{ ...win("search", {}, "search-min"), minimized: true }]);
+    openOrFocusSearchWindow(api, "/repo/editor-selected");
+    openOrFocusSearchWindow(api, undefined);
 
-    expect(api.focus).toHaveBeenCalledWith("search");
-    expect(api.restore).toHaveBeenCalledWith("search-min");
+    expect(api.add).toHaveBeenNthCalledWith(1, "search", { root: "/repo/editor-selected" });
+    expect(api.add).toHaveBeenNthCalledWith(2, "search", { root: undefined });
     expect(api.toggleTool).not.toHaveBeenCalled();
     rafSpy.mockRestore();
+  });
+
+  it("resolves only explicit active-workspace, Editor, Files, Search, or Git root ownership", () => {
+    expect(resolveSearchRoot("/task/worktree", win("editor", { root: "/repo/editor" }))).toBe(
+      "/task/worktree",
+    );
+    expect(resolveSearchRoot(null, win("editor", { root: "/repo/editor" }))).toBe("/repo/editor");
+    expect(resolveSearchRoot(null, win("files", { root: "/repo/files" }))).toBe("/repo/files");
+    expect(resolveSearchRoot(null, win("search", { root: "/repo/search" }))).toBe("/repo/search");
+    expect(resolveSearchRoot(null, win("governedGit", { projectPath: "/repo/git" }))).toBe(
+      "/repo/git",
+    );
+    expect(resolveSearchRoot(null, win("chat", { projectPath: "/repo/chat" }))).toBeUndefined();
+  });
+
+  it("fails closed when Git carries conflicting current and legacy roots", () => {
+    expect(
+      resolveSearchRoot(
+        null,
+        win("governedGit", {
+          projectPath: "/repo/current",
+          workspaceRoot: "/repo/legacy",
+        }),
+      ),
+    ).toBeUndefined();
   });
 
   it("does not open the command palette from the Cmd/Ctrl+K shell shortcut in this release", async () => {

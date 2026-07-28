@@ -197,18 +197,40 @@ function dispatchWorkspaceSearchFocus(): void {
   window.requestAnimationFrame(() => window.dispatchEvent(new Event(WORKSPACE_SEARCH_FOCUS_EVENT)));
 }
 
-export function openOrFocusSearchWindow(
-  api: WorkspaceApi,
-  wins: readonly AppWindow[] | null,
-): void {
-  const existing = wins?.find((w) => w.type === "search");
-  if (existing === undefined) {
-    api.toggleTool("search");
-  } else if (existing.minimized === true) {
-    api.restore(existing.id);
-  } else {
-    api.focus(existing.id);
+function nonEmptyRoot(value: AppWindow["cfg"][string] | string | null): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function gitWindowRoot(win: AppWindow): string | undefined {
+  const projectPath = nonEmptyRoot(win.cfg["projectPath"]);
+  const workspaceRoot = nonEmptyRoot(win.cfg["workspaceRoot"]);
+  if (projectPath !== undefined && workspaceRoot !== undefined && projectPath !== workspaceRoot) {
+    return undefined;
   }
+  return projectPath ?? workspaceRoot;
+}
+
+export function resolveSearchRoot(
+  activeWorkspaceRoot: string | null,
+  activeWindow: AppWindow | null,
+): string | undefined {
+  const workspaceRoot = nonEmptyRoot(activeWorkspaceRoot);
+  if (workspaceRoot !== undefined) return workspaceRoot;
+  if (activeWindow === null) return undefined;
+  if (
+    activeWindow.type === "editor" ||
+    activeWindow.type === "files" ||
+    activeWindow.type === "search"
+  ) {
+    return nonEmptyRoot(activeWindow.cfg["root"]);
+  }
+  return activeWindow.type === "governedGit" ? gitWindowRoot(activeWindow) : undefined;
+}
+
+export function openOrFocusSearchWindow(api: WorkspaceApi, root: string | undefined): void {
+  // WorkspaceApi.add is the singleton-aware open/focus operation. Passing an explicit undefined
+  // clears a stale persisted root, so an unowned or ambiguous Search fails visibly before routing.
+  api.add("search", { root });
   dispatchWorkspaceSearchFocus();
 }
 
@@ -931,7 +953,12 @@ function AppShellInner(): ReactNode {
       if (!(id in WIN_TYPES)) return;
       const panel = id as WindowType;
       const before = openTools.has(panel);
-      ws.api.toggleTool(panel);
+      const existing = ws.wins?.find((win) => win.type === panel);
+      if (panel === "search" && (existing === undefined || existing.minimized === true)) {
+        openOrFocusSearchWindow(ws.api, resolveSearchRoot(activeWorkspace.activeRoot, active));
+      } else {
+        ws.api.toggleTool(panel);
+      }
       undoStack.push({
         kind: "ui.panel.toggle",
         panel,
@@ -939,7 +966,7 @@ function AppShellInner(): ReactNode {
         after: !before,
       });
     },
-    [ws.api, openTools, undoStack],
+    [active, activeWorkspace.activeRoot, openTools, undoStack, ws.api, ws.wins],
   );
 
   const onNewChat = useCallback((): void => pick("chat"), [pick]);
@@ -965,11 +992,19 @@ function AppShellInner(): ReactNode {
       if (commandId === "undo") undoStack.undo();
       else if (commandId === "redo") undoStack.redo();
       else if (commandId === "focus-status") statusRef.current?.focus();
-      else if (commandId === "focus-workspace-search") openOrFocusSearchWindow(ws.api, ws.wins);
-      else if (commandId === "quick-access.files") openQuickAccessFiles();
+      else if (commandId === "focus-workspace-search") {
+        openOrFocusSearchWindow(ws.api, resolveSearchRoot(activeWorkspace.activeRoot, active));
+      } else if (commandId === "quick-access.files") openQuickAccessFiles();
       else if (commandId === "quick-access.commands") openQuickAccessCommands();
     },
-    [openQuickAccessCommands, openQuickAccessFiles, undoStack, ws.api, ws.wins],
+    [
+      active,
+      activeWorkspace.activeRoot,
+      openQuickAccessCommands,
+      openQuickAccessFiles,
+      undoStack,
+      ws.api,
+    ],
   );
   useKeyboardShortcuts({ bindings: shellShortcutState.bindings, dispatch: dispatchShortcut });
 

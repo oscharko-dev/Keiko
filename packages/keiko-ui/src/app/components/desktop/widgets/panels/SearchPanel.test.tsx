@@ -19,12 +19,26 @@ import {
   type WorkspaceReplaceOpenBufferApply,
 } from "../../WorkspaceReplaceBufferContext";
 
+const staleChatCatalog = vi.hoisted(() => ({
+  activeProject: {
+    path: "/repo/stale-chat",
+    name: "Stale Chat Project",
+    available: true,
+  },
+}));
+
 vi.mock("@/lib/api", () => ({
   applyWorkspaceReplace: vi.fn(),
   fetchFilesContent: vi.fn(),
   fetchWorkspaceReplacePreview: vi.fn(),
   fetchWorkspaceSearch: vi.fn(),
   fetchWorkspaceSymbols: vi.fn(),
+}));
+
+vi.mock("../../context/ChatSessionContext", () => ({
+  useOptionalChatSessionCatalog: () => ({
+    activeProject: staleChatCatalog.activeProject,
+  }),
 }));
 
 vi.mock("../cards/EditorDiffSurface", () => ({
@@ -187,6 +201,18 @@ describe("SearchPanel", () => {
     renderPanel();
     expect(screen.getByRole("searchbox", { name: "Search files and symbols" })).toBeEnabled();
     expect(screen.queryByText(/coming soon/i)).toBeNull();
+  });
+
+  it("fails visibly without a root instead of borrowing the active Chat project", async () => {
+    render(<SearchPanel />);
+
+    expect(screen.getByRole("searchbox", { name: "Search files and symbols" })).toBeDisabled();
+    expect(screen.getByText("No project selected")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Select a workspace before searching.");
+
+    await act(async () => new Promise((resolve) => window.setTimeout(resolve, 260)));
+    expect(fetchWorkspaceSearchMock).not.toHaveBeenCalled();
+    expect(fetchWorkspaceReplacePreviewMock).not.toHaveBeenCalled();
   });
 
   it("debounces non-empty queries and posts to the workspace-search route wrapper", async () => {
