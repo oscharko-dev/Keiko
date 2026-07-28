@@ -62,8 +62,7 @@ export function renderPromptEnhancerSummary(scorecard: PromptEnhancerScorecard):
   for (const entry of scorecard.dimensions) {
     lines.push(dimensionLine(entry));
   }
-  lines.push("");
-  lines.push(`Safety gate: ${scorecard.summary.safetyGatePassed ? "PASS" : "FAIL"}`);
+  lines.push("", `Safety gate: ${scorecard.summary.safetyGatePassed ? "PASS" : "FAIL"}`);
   lines.push(
     scorecard.summary.goNoGo === "GO"
       ? "Verdict: GO - every exercised prompt-quality dimension passed."

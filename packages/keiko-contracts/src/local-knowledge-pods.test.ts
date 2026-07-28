@@ -487,6 +487,31 @@ describe("validateKnowledgePodSummary", () => {
     expect(invalidErrors(result)).toContain("governance.locationKind is invalid");
   });
 
+  it("rejects unknown governance, compatibility, and source-kind values", (): void => {
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      sourceKinds: ["unsupported-source"],
+      governance: {
+        ...happySummary().governance,
+        sealingPosture: "remote-store-policy",
+        policyPosture: "remote-policy",
+      },
+      compatibility: {
+        ...happySummary().compatibility,
+        backingKind: "remote-index",
+      },
+    });
+
+    expect(invalidErrors(result)).toEqual(
+      expect.arrayContaining([
+        "sourceKinds entries must be known pod source kinds",
+        "governance.sealingPosture is invalid",
+        "governance.policyPosture is invalid",
+        "compatibility.backingKind is invalid",
+      ]),
+    );
+  });
+
   it("rejects invalid model-use policy summary metadata", () => {
     const result = validateKnowledgePodSummary({
       ...happySummary(),

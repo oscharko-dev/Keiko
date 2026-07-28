@@ -28,7 +28,7 @@ import type { WorkspaceInfo, WorkspaceInstance } from "@oscharko-dev/keiko-contr
 import { runMigrations } from "../store/schema.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";
-import type { WorkspaceProvisioningService } from "./types.js";
+import type { WorkspaceActivateResult, WorkspaceProvisioningService } from "./types.js";
 import { TaskWorkspaceError, type TaskWorkspaceErrorCode } from "./errors.js";
 import {
   deriveManagedWorktreePath,
@@ -541,6 +541,33 @@ describe("activate", () => {
     });
     expect(activated.instance.lifecycleState).toBe("active");
     expect(activated.binding.activeRoot).toBe(provisioned.instance.managedWorktreePath);
+  });
+
+  it("rejects activation from an archived lifecycle state", async (): Promise<void> => {
+    const service = makeService();
+    const provisioned = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "act-archived",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({
+      ...provisioned.instance,
+      lifecycleState: "archived",
+      health: "healthy",
+      lock: null,
+    });
+
+    await rejectsWithCode(
+      (): Promise<WorkspaceActivateResult> =>
+        service.activate({
+          workspaceId: provisioned.instance.workspaceId,
+          taskId: "act-archived",
+          requestedBy: "u",
+          acquireLock: false,
+        }),
+      "ILLEGAL_TRANSITION",
+    );
   });
 
   it("rejects activation when the persisted managed path escapes the managed root", async () => {

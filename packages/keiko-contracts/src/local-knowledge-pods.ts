@@ -346,23 +346,29 @@ const READINESS: ReadonlySet<KnowledgePodReadiness> = new Set([
   "error",
 ]);
 const KINDS: ReadonlySet<KnowledgePodSummaryKind> = new Set(["pod", "pod-set"]);
-const BACKINGS: readonly KnowledgePodBackingKind[] = ["knowledge-capsule", "capsule-set"];
+const BACKINGS: ReadonlySet<KnowledgePodBackingKind> = new Set([
+  "knowledge-capsule",
+  "capsule-set",
+]);
 const LOCATION_KINDS: ReadonlySet<KnowledgePodLocationKind> = new Set([
   "local",
   "remote",
   "federated",
   "ephemeral",
 ]);
-const SEALING_POSTURES: readonly KnowledgePodSealingPosture[] = [
+const SEALING_POSTURES: ReadonlySet<KnowledgePodSealingPosture> = new Set([
   "local-store-policy",
   "sealed-pod-policy",
-];
-const POLICY_POSTURES: readonly KnowledgePodPolicyPosture[] = ["policy-pack", "not-declared"];
+]);
+const POLICY_POSTURES: ReadonlySet<KnowledgePodPolicyPosture> = new Set([
+  "policy-pack",
+  "not-declared",
+]);
 const MODEL_USE_POLICY_SOURCES: ReadonlySet<KnowledgePodModelUsePolicySource> = new Set([
   "explicit",
   "legacy-default",
 ]);
-const SOURCE_KINDS: readonly KnowledgePodSourceKind[] = [
+const SOURCE_KINDS: ReadonlySet<KnowledgePodSourceKind> = new Set([
   "folder",
   "repository",
   "files",
@@ -373,7 +379,7 @@ const SOURCE_KINDS: readonly KnowledgePodSourceKind[] = [
   "ephemeral",
   "policy",
   "unknown",
-];
+]);
 
 type FuturePodPlaceholderKind = "remote" | "federated" | "ephemeral";
 
@@ -961,10 +967,10 @@ function validateGovernance(value: unknown, errors: string[]): void {
   if (!LOCATION_KINDS.has(value.locationKind as KnowledgePodLocationKind)) {
     errors.push("governance.locationKind is invalid");
   }
-  if (!SEALING_POSTURES.includes(value.sealingPosture as KnowledgePodSealingPosture)) {
+  if (!SEALING_POSTURES.has(value.sealingPosture as KnowledgePodSealingPosture)) {
     errors.push("governance.sealingPosture is invalid");
   }
-  if (!POLICY_POSTURES.includes(value.policyPosture as KnowledgePodPolicyPosture)) {
+  if (!POLICY_POSTURES.has(value.policyPosture as KnowledgePodPolicyPosture)) {
     errors.push("governance.policyPosture is invalid");
   }
   if (typeof value.managedServiceDependency !== "boolean") {
@@ -1009,7 +1015,7 @@ function validateCompatibility(value: unknown, errors: string[]): void {
     return;
   }
   onlyKeys(value, COMPATIBILITY_KEYS, "compatibility", errors);
-  if (!BACKINGS.includes(value.backingKind as KnowledgePodBackingKind)) {
+  if (!BACKINGS.has(value.backingKind as KnowledgePodBackingKind)) {
     errors.push("compatibility.backingKind is invalid");
   }
   validateSafeTextArray(value.capsuleIds, "compatibility.capsuleIds", errors, false);
@@ -1179,7 +1185,7 @@ function validateSourceKinds(value: unknown, errors: string[]): void {
     return;
   }
   for (const kind of value) {
-    if (!SOURCE_KINDS.includes(kind as KnowledgePodSourceKind)) {
+    if (!SOURCE_KINDS.has(kind as KnowledgePodSourceKind)) {
       errors.push("sourceKinds entries must be known pod source kinds");
       return;
     }

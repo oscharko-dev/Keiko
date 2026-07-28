@@ -3104,16 +3104,15 @@ function routePathFromAttributeArgs(args: string | undefined): string {
   return /["']([^"']*)["']/u.exec(args ?? "")?.[1] ?? "";
 }
 
-function springMappingPath(args: string | undefined): string | undefined {
-  const value = args ?? "";
-  const named = /\b(?:path|value)\s*=\s*(?:\{\s*)?(["'`])([^"'`]+)\1/u.exec(value)?.[2];
+function springMappingPath(args = ""): string | undefined {
+  const named = /\b(?:path|value)\s*=\s*(?:\{\s*)?(["'`])([^"'`]+)\1/u.exec(args)?.[2];
   if (named !== undefined) {
     return named;
   }
-  if (value.includes("=")) {
+  if (args.includes("=")) {
     return undefined;
   }
-  return routePathFromAttributeArgs(value) || undefined;
+  return routePathFromAttributeArgs(args) || undefined;
 }
 
 function springMappingMethod(composedMethod: string | undefined, args: string | undefined): string {
