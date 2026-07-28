@@ -519,13 +519,13 @@ describe("QiRunCard", () => {
     expect(badge.className).toContain("qi-quality-mid");
   });
 
-  it("renders an em-dash quality badge when qualityScore is null", async () => {
+  it("renders a visible unavailable quality badge when qualityScore is null", async () => {
     const detail = makeDetail("qi-run-q2", [], [], 0, null);
     render(<QiRunCard runId="qi-run-q2" fetchDetailImpl={fetchOk(detail)} />);
     const badge = await screen.findByTestId("qi-quality-badge");
-    expect(badge).toHaveTextContent("—");
-    // The em-dash alone is meaningless to assistive tech — sr-only text carries the meaning.
-    expect(badge).toHaveTextContent("Quality score not available");
+    expect(badge).toHaveTextContent("Unavailable");
+    expect(badge).not.toHaveTextContent("—");
+    expect(badge.querySelector(".sr-only")).toBeNull();
   });
 
   it("applies the high tier class for a score of 90 or above", async () => {

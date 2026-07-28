@@ -390,6 +390,22 @@ export interface QualityIntelligenceModelPolicy {
   readonly updatedAt?: string;
 }
 
+/**
+ * Whether a configured capability can serve as a Quality Intelligence judge.
+ *
+ * A generic structured-output claim is insufficient: the judge schema is enforced through the
+ * gateway's response-format parameter, so an absent or false support flag fails closed. Keeping
+ * this predicate with the shared QI policy contract prevents server selection and browser-visible
+ * readiness from drifting apart.
+ */
+export function isQualityIntelligenceJudgeEligible(capability: ModelCapability): boolean {
+  return (
+    capability.kind === "chat" &&
+    capability.structuredOutput &&
+    capability.supportsResponseFormat === true
+  );
+}
+
 export interface QualityIntelligenceResolvedModelPolicy {
   readonly testDesignModelId?: string;
   readonly judgeModelId?: string;
