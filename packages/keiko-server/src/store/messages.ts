@@ -395,6 +395,84 @@ export function markClientTurnState(
   return result.changes === 1;
 }
 
+interface CanonicalGatewayTurnRows {
+  user?: MessageRow | undefined;
+  assistant?: MessageRow | undefined;
+}
+
+function addCanonicalGatewayRow(
+  turn: CanonicalGatewayTurnRows,
+  row: MessageRow,
+): CanonicalGatewayTurnRows {
+  if (row.role === "user") return { ...turn, user: row };
+  if (row.role === "assistant") return { ...turn, assistant: row };
+  return turn;
+}
+
+function collectCanonicalGatewayTurns(
+  rows: readonly MessageRow[],
+): ReadonlyMap<string, CanonicalGatewayTurnRows> {
+  const turns = new Map<string, CanonicalGatewayTurnRows>();
+  for (const row of rows) {
+    if (row.client_turn_id === null) continue;
+    const turn = turns.get(row.client_turn_id) ?? {};
+    turns.set(row.client_turn_id, addCanonicalGatewayRow(turn, row));
+  }
+  return turns;
+}
+
+function canonicalGatewayMessageIds(
+  rows: readonly MessageRow[],
+  currentUserMessageId: string,
+): ReadonlySet<string> {
+  const eligible = new Set<string>();
+  for (const turn of collectCanonicalGatewayTurns(rows).values()) {
+    if (turn.user?.id === currentUserMessageId) eligible.add(turn.user.id);
+    if (turn.user?.client_turn_state === "completed" && turn.assistant !== undefined) {
+      eligible.add(turn.user.id);
+      eligible.add(turn.assistant.id);
+    }
+  }
+  return eligible;
+}
+
+function legacyGatewayMessageIds(
+  rows: readonly MessageRow[],
+  currentUserMessageId: string,
+): ReadonlySet<string> {
+  const eligible = new Set<string>();
+  let pendingUser: MessageRow | undefined;
+  for (const row of rows) {
+    if (row.client_turn_id !== null) continue;
+    if (row.role === "system") {
+      eligible.add(row.id);
+    } else if (row.role === "user") {
+      pendingUser = row;
+    } else if (row.role === "assistant" && pendingUser !== undefined) {
+      eligible.add(pendingUser.id);
+      eligible.add(row.id);
+      pendingUser = undefined;
+    }
+  }
+  if (pendingUser?.id === currentUserMessageId) eligible.add(pendingUser.id);
+  return eligible;
+}
+
+export function listGatewayMessagesLimited(
+  db: DatabaseSync,
+  chatId: string,
+  currentUserMessageId: string,
+  limit: number,
+): readonly ChatMessage[] {
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw invalidRequest("limit must be a positive integer.");
+  }
+  const rows = db.prepare(SQL_LIST_LIMITED).all(chatId, limit) as unknown as MessageRow[];
+  const canonical = canonicalGatewayMessageIds(rows, currentUserMessageId);
+  const legacy = legacyGatewayMessageIds(rows, currentUserMessageId);
+  return rows.filter((row) => canonical.has(row.id) || legacy.has(row.id)).map(rowToMessage);
+}
+
 export function recoverInterruptedClientTurns(db: DatabaseSync): void {
   db.prepare(
     `

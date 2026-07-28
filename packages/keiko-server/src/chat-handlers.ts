@@ -1342,13 +1342,21 @@ export interface GatewayTurnSnapshot {
   readonly currentUserMessageId: string;
 }
 
+export function gatewayHistoryPrefix(snapshot: GatewayTurnSnapshot): readonly ChatMessage[] {
+  return snapshot.history.filter((message) => message.id !== snapshot.currentUserMessageId);
+}
+
 export function captureGatewayTurnSnapshot(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   userMessage: ChatMessage,
 ): GatewayTurnSnapshot {
   return {
-    history: deps.store.listMessages(request.chatId, CHAT_HISTORY_READ_LIMIT),
+    history: deps.store.listGatewayMessages(
+      request.chatId,
+      userMessage.id,
+      CHAT_HISTORY_READ_LIMIT,
+    ),
     currentUserMessageId: userMessage.id,
   };
 }
@@ -1366,7 +1374,7 @@ export function buildGatewayAssembly(
   if (currentUserIndex < 0) {
     throw new UiStoreError("INTERNAL", "Admitted chat turn is missing from its history.", 500);
   }
-  const historyPrefix = snapshot.history.filter((_message, index) => index !== currentUserIndex);
+  const historyPrefix = gatewayHistoryPrefix(snapshot);
   const selected = selectGatewayPromptAssembly({
     historyPrefix,
     historyTurnCount: usableGatewayMessages(historyPrefix).length,
@@ -1394,6 +1402,7 @@ export interface ChatCompactionTurn {
   readonly modelId: string;
   readonly messageCount: number;
   readonly startedAt: number;
+  readonly historyPrefix: readonly ChatMessage[];
 }
 
 // ADR-0057 D3: best-effort persist of the turn's compaction record AFTER the response completes.
@@ -1410,24 +1419,18 @@ export function recordChatCompaction(deps: UiHandlerDeps, turn: ChatCompactionTu
     finishedAt: Date.now(),
   } satisfies ChatCompactionEvidenceInput;
   persistChatCompactionEvidence(deps, input);
-  scheduleCompactionModelSummary(deps, input);
+  scheduleCompactionModelSummary(deps, input, turn.historyPrefix);
 }
 
 function scheduleCompactionModelSummary(
   deps: UiHandlerDeps,
   input: ChatCompactionEvidenceInput,
+  historyPrefix: readonly ChatMessage[],
 ): void {
   if (
     input.compaction === undefined ||
     pendingCompactionSummaries >= MAX_PENDING_COMPACTION_SUMMARIES
   ) {
-    return;
-  }
-  let historyPrefix: readonly ChatMessage[];
-  try {
-    historyPrefix = deps.store.listMessages(input.chatId).slice(0, input.messageCount);
-  } catch (error) {
-    logCompactionSummaryFailure(error);
     return;
   }
   pendingCompactionSummaries += 1;
@@ -1646,7 +1649,12 @@ async function persistModelChatTurn(
       memory,
       { userMessage, response },
       abortSignal,
-      { assembly, messageCount: messageCountBeforeTurn, startedAt },
+      {
+        assembly,
+        messageCount: messageCountBeforeTurn,
+        startedAt,
+        historyPrefix: gatewayHistoryPrefix(gatewayTurn),
+      },
     );
   } catch (error) {
     failDesktopChatTurn(deps, request);
@@ -1662,6 +1670,7 @@ interface BufferedCompactionContext {
   readonly assembly: ReturnType<typeof buildGatewayAssembly>;
   readonly messageCount: number;
   readonly startedAt: number;
+  readonly historyPrefix: readonly ChatMessage[];
 }
 
 async function finalizeAndRecordBufferedTurn(
@@ -1680,6 +1689,7 @@ async function finalizeAndRecordBufferedTurn(
       modelId: turn.modelId,
       messageCount: compaction.messageCount,
       startedAt: compaction.startedAt,
+      historyPrefix: compaction.historyPrefix,
     });
   }
   return finalized;
@@ -2187,7 +2197,15 @@ function prepareDesktopChatRegenerateRequest(
   const modelId = request.modelId ?? chat.selectedModel;
   const invalidModel = invalidChatModelResult(modelId, deps);
   if (invalidModel !== undefined) return invalidModel;
-  const turn = latestRegenerableTurn(deps.store.listMessages(chat.id), request.assistantMessageId);
+  const visibleTurn = latestRegenerableTurn(
+    deps.store.listMessages(chat.id),
+    request.assistantMessageId,
+  );
+  if (isRouteResult(visibleTurn)) return visibleTurn;
+  const turn = latestRegenerableTurn(
+    deps.store.listGatewayMessages(chat.id, "", CHAT_HISTORY_READ_LIMIT),
+    request.assistantMessageId,
+  );
   if (isRouteResult(turn)) return turn;
   const memoryRequest = regenerateMemoryRequest(request, turn);
   const memoryContext = resolveDesktopMemoryContext(deps, memoryRequest, normalizedProjectPath);

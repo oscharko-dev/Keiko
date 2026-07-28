@@ -816,6 +816,7 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     expect(askGroundedSpy).toHaveBeenCalledWith(
       {
         chatId: groundedChat.id,
+        clientTurnId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
         content: "ground plural scope",
         modelId: "example-chat-model",
         memory: {
@@ -1485,6 +1486,24 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
   it("sets state.error and removes the optimistic user message on a mid-stream generic rejection", async () => {
     const networkError = new TypeError("Failed to fetch");
     vi.spyOn(api, "sendDesktopChatStream").mockRejectedValue(networkError);
+    vi.mocked(api.fetchChatMessages)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValue({
+        messages: [
+          {
+            id: "failed-user-canonical",
+            chatId: "chat-stream",
+            role: "user",
+            content: "trigger network error",
+            timestamp: Date.now() + 100,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      });
 
     const view = await bootStreamingHook();
     act(() => view.result.current.setDraft("trigger network error"));

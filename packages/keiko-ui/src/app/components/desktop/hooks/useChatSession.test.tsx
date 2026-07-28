@@ -1411,7 +1411,7 @@ describe("useChatSession canonical Voice FIFO", () => {
     });
   });
 
-  it("leaves a typed send free of a surface marker so its request stays byte-identical", async () => {
+  it("leaves a typed send free of a Voice capture surface marker", async () => {
     const rendered = await setupVoiceQueueSession();
 
     await act(async () => {
@@ -1419,6 +1419,28 @@ describe("useChatSession canonical Voice FIFO", () => {
     });
 
     expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0].memory).not.toHaveProperty("surface");
+  });
+
+  it("assigns fresh canonical identities to typed sends and preserves a supplied identity", async () => {
+    vi.mocked(sendDesktopChat).mockImplementation((request) =>
+      Promise.resolve(completedTurn(request.content, `assistant-${request.content}`)),
+    );
+    const rendered = await setupVoiceQueueSession();
+
+    await act(async () => {
+      await rendered.result.current.sendMessage({ text: "typed one" });
+      await rendered.result.current.sendMessage({ text: "typed two" });
+      await rendered.result.current.sendMessage({
+        text: "spoken final",
+        clientTurnId: "provider-supplied-turn",
+      });
+    });
+
+    const turnIds = vi.mocked(sendDesktopChat).mock.calls.map(([request]) => request.clientTurnId);
+    expect(turnIds[0]).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(turnIds[1]).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(turnIds[1]).not.toBe(turnIds[0]);
+    expect(turnIds[2]).toBe("provider-supplied-turn");
   });
 
   it("persists a 16,001-character final as one user turn with one assistant before the next utterance", async () => {

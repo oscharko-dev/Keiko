@@ -1538,19 +1538,48 @@ function settledSendMessageOutcome(input: {
   return settled.status === "completed" ? settled : { status: "failed" };
 }
 
+function isNewCanonicalUserMessage(
+  message: ChatMessage,
+  messageIdsBeforeSend: ReadonlySet<string>,
+  content: string,
+  admissionStartedAt: number,
+): boolean {
+  return (
+    message.role === "user" &&
+    message.content === content &&
+    message.timestamp >= admissionStartedAt &&
+    !messageIdsBeforeSend.has(message.id)
+  );
+}
+
 function hasNewCanonicalUserMessage(
   messages: readonly ChatMessage[],
   messageIdsBeforeSend: ReadonlySet<string>,
   content: string,
   admissionStartedAt: number,
 ): boolean {
-  return messages.some(
-    (message) =>
-      message.role === "user" &&
-      message.content === content &&
-      message.timestamp >= admissionStartedAt &&
-      !messageIdsBeforeSend.has(message.id),
+  return messages.some((message) =>
+    isNewCanonicalUserMessage(message, messageIdsBeforeSend, content, admissionStartedAt),
   );
+}
+
+function visibleMessagesAfterFailedSend(
+  messages: readonly ChatMessage[],
+  messageIdsBeforeSend: ReadonlySet<string>,
+  optimistic: ChatMessage,
+  preserveUser: boolean,
+): readonly ChatMessage[] {
+  return preserveUser
+    ? messages
+    : messages.filter(
+        (message) =>
+          !isNewCanonicalUserMessage(
+            message,
+            messageIdsBeforeSend,
+            optimistic.content,
+            optimistic.timestamp,
+          ),
+      );
 }
 
 export interface UseChatSessionOptions {
@@ -1909,6 +1938,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       projectPath: string,
       optimistic: ChatMessage,
       messageIdsBeforeSend: ReadonlySet<string>,
+      preserveCanonicalUser: boolean,
       preserveOptimisticOnMissing: boolean,
       signal: AbortSignal,
     ): Promise<UserPersistenceProof> => {
@@ -1935,10 +1965,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           activeChatIdRef.current === chatId &&
           latestSendSignalRef.current === signal
         ) {
+          const visibleMessages = visibleMessagesAfterFailedSend(
+            payload.messages,
+            messageIdsBeforeSend,
+            optimistic,
+            preserveCanonicalUser,
+          );
           setState((previous) => ({
             ...previous,
             messages: [
-              ...Array.from(payload.messages),
+              ...visibleMessages,
               ...(proof === "missing" && preserveOptimisticOnMissing ? [optimistic] : []),
               ...previous.messages.filter(
                 (message) => message.id.startsWith("local-") && message.id !== optimistic.id,
@@ -2820,6 +2856,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return { status: "not-sent" };
       }
       const { canonicalTarget, chat, project, content, modelId } = admission;
+      const clientTurnId = options?.clientTurnId ?? crypto.randomUUID();
       const currentMessages = sessionStateRef.current.messages;
       const messageIdsBeforeSend = new Set(currentMessages.map((message) => message.id));
       const optimistic =
@@ -2862,7 +2899,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           signal: controller.signal,
           canonicalTarget,
           forceBuffered: options?.forceBuffered === true,
-          clientTurnId: options?.clientTurnId,
+          clientTurnId,
         });
         const settled: SendAttemptOutcome = controller.signal.aborted
           ? { status: "cancelled" }
@@ -2876,6 +2913,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             project.path,
             optimistic,
             messageIdsBeforeSend,
+            exactTurnInProgress ||
+              settled.status === "cancelled" ||
+              options?.clientTurnId !== undefined,
             !exactTurnInProgress &&
               (settled.status === "cancelled" || options?.clientTurnId !== undefined),
             controller.signal,

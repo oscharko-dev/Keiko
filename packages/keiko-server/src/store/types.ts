@@ -97,6 +97,11 @@ export interface UiStore {
 
   readonly listMessages: (chatId: string, limit?: number) => readonly ChatMessage[];
   readonly listMessagesPrefix: (chatId: string, limit: number) => readonly ChatMessage[];
+  readonly listGatewayMessages: (
+    chatId: string,
+    currentUserMessageId: string,
+    limit: number,
+  ) => readonly ChatMessage[];
   readonly countMessages: (chatId: string) => number;
   readonly findMessageById: (id: string) => ChatMessage | undefined;
   readonly createMessage: (msg: NewChatMessage) => ChatMessage;

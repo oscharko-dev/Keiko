@@ -231,6 +231,59 @@ describe("createInMemoryUiStore", () => {
     ]);
     store.close();
   });
+
+  it("keeps visible incomplete turns out of gateway history", () => {
+    const projectDir = mkdtempSync(join(tmpDir, "gateway-history-project-"));
+    const store = createInMemoryUiStore();
+    store.createProject(projectDir);
+    const chat = store.createChat(projectDir, "History", "example-chat-model");
+    const draft = (
+      role: "user" | "assistant",
+      content: string,
+      timestamp: number,
+    ): NewChatMessage => ({
+      chatId: chat.id,
+      role,
+      content,
+      timestamp,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const legacyAnswered = store.createMessage(draft("user", "legacy answered", 1));
+    store.createTurnAssistant(legacyAnswered.id, draft("assistant", "legacy answer", 2));
+    store.createMessage(draft("user", "legacy cancelled orphan", 3));
+    const failed = store.admitChatTurn("failed-turn", draft("user", "canonical failed", 4));
+    expect(failed.kind).toBe("admitted");
+    store.failChatTurn(chat.id, "failed-turn");
+    const completed = store.admitChatTurn("completed-turn", draft("user", "canonical done", 5));
+    if (completed.kind !== "admitted") throw new Error("expected canonical admission");
+    const answer = store.createTurnAssistant(
+      completed.userMessage.id,
+      draft("assistant", "canonical answer", 6),
+    );
+    expect(
+      store.completeChatTurn(chat.id, "completed-turn", "canonical done", answer.id).kind,
+    ).toBe("completed");
+    const current = store.admitChatTurn("current-turn", draft("user", "current question", 7));
+    if (current.kind !== "admitted") throw new Error("expected current admission");
+
+    expect(store.listMessages(chat.id)).toHaveLength(7);
+    expect(
+      store
+        .listGatewayMessages(chat.id, current.userMessage.id, 50)
+        .map((message) => message.content),
+    ).toEqual([
+      "legacy answered",
+      "legacy answer",
+      "canonical done",
+      "canonical answer",
+      "current question",
+    ]);
+    store.close();
+  });
 });
 
 describe("createNodeUiStore — on-disk file", () => {

@@ -68,6 +68,7 @@ import {
   insertMessage as sqlInsertMessage,
   isLatestChatMessage as sqlIsLatestChatMessage,
   listMessages as sqlListMessages,
+  listGatewayMessagesLimited as sqlListGatewayMessagesLimited,
   listMessagesLimited as sqlListMessagesLimited,
   listMessagesPrefixLimited as sqlListMessagesPrefixLimited,
   linkAssistantToClientTurn as sqlLinkAssistantToClientTurn,
@@ -607,6 +608,12 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       limit === undefined ? sqlListMessages(db, chatId) : sqlListMessagesLimited(db, chatId, limit),
     listMessagesPrefix: (chatId: string, limit: number): readonly ChatMessage[] =>
       sqlListMessagesPrefixLimited(db, chatId, limit),
+    listGatewayMessages: (
+      chatId: string,
+      currentUserMessageId: string,
+      limit: number,
+    ): readonly ChatMessage[] =>
+      sqlListGatewayMessagesLimited(db, chatId, currentUserMessageId, limit),
     countMessages: (chatId: string): number => sqlCountMessages(db, chatId),
     findMessageById: (id: string): ChatMessage | undefined => sqlFindMessageById(db, id),
     createMessage: (msg: NewChatMessage): ChatMessage => {
