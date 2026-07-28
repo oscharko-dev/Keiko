@@ -621,7 +621,7 @@ describe("local-knowledge handlers", () => {
 
   it.each([null, 42, { label: "Manuals" }])(
     "rejects malformed non-string source display name %#",
-    async (displayName) => {
+    async (displayName): Promise<void> => {
       const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
       tempDirs.push(tmp);
       seedStore(tmp).store.close();
