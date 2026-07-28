@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { ReactNode } from "react";
 import {
   WORKSPACE_TRUST_SCHEMA_VERSION,
@@ -22,6 +22,15 @@ import {
 const addRoot = vi.hoisted(() => vi.fn());
 const disposeRoot = vi.hoisted(() => vi.fn());
 const manifestRef = vi.hoisted(() => ({ current: null as WorkspaceManifest | null }));
+type UpdateChat = (
+  id: string,
+  patch: { readonly title: string },
+) => Promise<{ readonly chat: Chat }>;
+const updateChatMock = vi.hoisted((): Mock<UpdateChat> => vi.fn<UpdateChat>());
+
+vi.mock("@/lib/api", (): { readonly updateChat: Mock<UpdateChat> } => ({
+  updateChat: updateChatMock,
+}));
 
 // The mock answers the real `WorkspaceManifestView` shape — `issue` is `"load" | "mutation" | null`,
 // and a host that reads `issue === null` must not be told `undefined` by its own test double.
@@ -52,10 +61,11 @@ const chatSessionState = vi.hoisted(() => ({
   loading: false,
   openChat: vi.fn(async (_chat: Chat): Promise<void> => undefined),
   openNewChat: vi.fn(async (): Promise<Chat | undefined> => undefined),
+  replaceChat: vi.fn((_chat: Chat): void => undefined),
 }));
 
-vi.mock("../context/ChatSessionContext", () => ({
-  useChatSessionContext: () => chatSessionState,
+vi.mock("../context/ChatSessionContext", (): object => ({
+  useChatSessionContext: (): typeof chatSessionState => chatSessionState,
 }));
 
 vi.mock("../ChatWindow", (): { readonly ChatWindow: () => ReactNode } => ({
@@ -635,19 +645,17 @@ describe("ChatWindowSessionHost target missing", () => {
     });
   });
 
-  it("serializes replacement requests and ignores an older completion", async (): Promise<void> => {
-    const first = deferred<Chat | undefined>();
-    const second = deferred<Chat | undefined>();
-    const stale = chatFixture("chat-stale", "First title", 2);
-    const latest = chatFixture("chat-latest", "Second title", 3);
-    chatSessionState.openNewChat
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
+  it("adopts a replacement request and binds only its latest title", async (): Promise<void> => {
+    const creation = deferred<Chat | undefined>();
+    const created = chatFixture("chat-created", "First title", 2);
+    const latest = chatFixture(created.id, "Second title", 3);
+    chatSessionState.openNewChat.mockReturnValueOnce(creation.promise);
+    updateChatMock.mockResolvedValueOnce({ chat: latest });
     const ctx = context();
     const view = render(
       <I18nProvider>
         <ChatWindowSessionHost
-          cfg={{ title: stale.title, newChatRequestId: "request-1" }}
+          cfg={{ title: created.title, newChatRequestId: "request-1" }}
           ctx={ctx}
         />
       </I18nProvider>,
@@ -666,19 +674,18 @@ describe("ChatWindowSessionHost target missing", () => {
     );
     expect(chatSessionState.openNewChat).toHaveBeenCalledTimes(1);
     await act(async (): Promise<void> => {
-      first.resolve(stale);
-      await first.promise;
+      creation.resolve(created);
+      await creation.promise;
     });
     await waitFor((): void => {
-      expect(chatSessionState.openNewChat).toHaveBeenCalledTimes(2);
+      expect(ctx.updateCfg).toHaveBeenCalledOnce();
     });
-    expect(ctx.updateCfg).not.toHaveBeenCalled();
 
-    await act(async (): Promise<void> => {
-      second.resolve(latest);
-      await second.promise;
-    });
-    expect(ctx.updateCfg).toHaveBeenCalledOnce();
+    expect(chatSessionState.openNewChat).toHaveBeenCalledOnce();
+    expect(updateChatMock).toHaveBeenCalledOnce();
+    expect(updateChatMock).toHaveBeenCalledWith(created.id, { title: latest.title });
+    expect(chatSessionState.replaceChat).toHaveBeenCalledOnce();
+    expect(chatSessionState.replaceChat).toHaveBeenCalledWith(latest);
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       chatId: latest.id,
       title: latest.title,

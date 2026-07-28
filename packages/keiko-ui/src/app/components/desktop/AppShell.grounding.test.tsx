@@ -466,6 +466,51 @@ describe("AppShell grounding connections", () => {
     expect(Object.hasOwn(newChatCfg ?? {}, "selectionHandoffId")).toBe(true);
   });
 
+  it("drops retained edges without unbinding when a chat window changes conversation", async (): Promise<void> => {
+    const api = workspaceApi();
+    const files = win("files", { root: "/repo" }, "files-window");
+    const connector = win(
+      "connector",
+      { selectedKind: "capsule", selectedId: "cap-1" },
+      "connector-window",
+    );
+    const browser = win("browser", {}, "browser-window");
+    const connections: Connection[] = [
+      { id: "files-chat", a: "files-window", b: "chat-window" },
+      { id: "connector-chat", a: "connector-window", b: "chat-window" },
+      { id: "browser-chat", a: "browser-window", b: "chat-window" },
+    ];
+    const oldChat = chat({ id: "chat-old", connectedScopes: [fileScope("/repo")] });
+    const newChat = chat({ id: "chat-new", connectedScopes: [] });
+    const session = mocks.state.session;
+    if (session === undefined) throw new Error("missing test session");
+    mocks.state.session = { ...session, activeChat: oldChat, chats: [oldChat, newChat] };
+    mocks.state.workspaceResult = workspaceResult(
+      [win("chat", { chatId: "chat-old" }, "chat-window"), files, connector, browser],
+      connections,
+      api,
+    );
+    const view = render(<AppShell />);
+    await screen.findByTestId("workspace");
+    await waitFor((): void => expect(api.updateConnBoundScope).toHaveBeenCalledOnce());
+    vi.mocked(api.updateConnBoundScope).mockClear();
+    mocks.updateChatConnectedScopes.mockClear();
+
+    mocks.state.workspaceResult = workspaceResult(
+      [win("chat", { chatId: "chat-new" }, "chat-window"), files, connector, browser],
+      connections,
+      api,
+    );
+    view.rerender(<AppShell />);
+
+    await waitFor((): void => expect(api.removeConn).toHaveBeenCalledTimes(2));
+    expect(api.removeConn).toHaveBeenCalledWith("files-chat", { unbind: false });
+    expect(api.removeConn).toHaveBeenCalledWith("connector-chat", { unbind: false });
+    expect(api.removeConn).not.toHaveBeenCalledWith("browser-chat", expect.anything());
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(api.updateConnBoundScope).not.toHaveBeenCalled();
+  });
+
   it("tracks pointer and keyboard modality for focus ring policy", async () => {
     await renderMounted();
 

@@ -347,6 +347,16 @@ function chatIdFromWindow(win: AppWindow | undefined): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+function isConversationGroundingConnection(
+  connection: Connection,
+  chatWindowId: string,
+  winsById: ReadonlyMap<string, AppWindow>,
+): boolean {
+  const otherWindowId = connection.a === chatWindowId ? connection.b : connection.a;
+  const otherType = winsById.get(otherWindowId)?.type;
+  return otherType === "files" || otherType === "connector";
+}
+
 function relationshipPathForScope(scope: ChatConnectedScope): string | null {
   if (scope.root === undefined) return null;
   const firstRelativePath = scope.relativePaths[0];
@@ -796,6 +806,37 @@ function AppShellInner(): ReactNode {
   // on the same linkRevision the WindowFrame memo contract uses: it bumps exactly
   // when conns, the window set, or any window's cfg identity change.
   const workspaceLinkRevision = useLinkRevision(ws.wins, ws.conns);
+  const chatConversationIdsRef = useRef<ReadonlyMap<string, string | undefined>>(new Map());
+  const changedChatWindowIdsRef = useRef<ReadonlySet<string>>(new Set());
+  useEffect((): void => {
+    if (ws.wins === null) {
+      changedChatWindowIdsRef.current = new Set();
+      return;
+    }
+    const current = new Map<string, string | undefined>();
+    for (const win of ws.wins) {
+      if (win.type === "chat") current.set(win.id, chatIdFromWindow(win));
+    }
+    const previous = chatConversationIdsRef.current;
+    const changedWindowIds = new Set<string>();
+    chatConversationIdsRef.current = current;
+    for (const [windowId, chatId] of current) {
+      if (!previous.has(windowId) || previous.get(windowId) === chatId) continue;
+      changedWindowIds.add(windowId);
+      for (const connection of ws.conns) {
+        if (
+          (connection.a === windowId || connection.b === windowId) &&
+          isConversationGroundingConnection(connection, windowId, ws.winsById)
+        ) {
+          ws.api.removeConn(connection.id, { unbind: false });
+        }
+      }
+    }
+    changedChatWindowIdsRef.current = changedWindowIds;
+    // workspaceLinkRevision is the cfg/connection signal; geometry-only window identity churn
+    // must not retrigger this ownership transition scan.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceLinkRevision, ws.api]);
   useEffect(() => {
     if (ws.wins === null) return;
     for (const conn of ws.conns) {
@@ -803,7 +844,7 @@ function AppShellInner(): ReactNode {
       const b = ws.winsById.get(conn.b);
       if (a === undefined || b === undefined) continue;
       const chatWindowId = chatWindowIdOf(conn, a, b);
-      if (chatWindowId === null) continue;
+      if (chatWindowId === null || changedChatWindowIdsRef.current.has(chatWindowId)) continue;
       const nextScope = filesChatBindScope(a, b, Date.now());
       if (nextScope === null) continue;
       const previousScope = boundScopeOf(conn);

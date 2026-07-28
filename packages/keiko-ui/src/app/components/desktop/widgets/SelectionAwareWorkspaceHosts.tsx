@@ -1,8 +1,9 @@
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { disposeEditorModelRegistryRoot } from "@oscharko-dev/keiko-editor";
 import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 
+import { updateChat } from "@/lib/api";
 import { useTranslate } from "@/lib/i18n";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 
@@ -131,10 +132,11 @@ function routeSelectionHandoff(
     { readonly kind: "open-project" | "open-chat" | "create-chat" }
   >,
   session: ChatSessionApi,
+  createChat: (project: ProjectWithAvailability) => Promise<unknown>,
 ): Promise<unknown> {
   if (route.kind === "open-project") return session.openProject(route.project);
   if (route.kind === "open-chat") return session.openChat(route.chat);
-  return session.openNewChat(route.project);
+  return createChat(route.project);
 }
 
 function currentRouteAttempt(
@@ -145,8 +147,81 @@ function currentRouteAttempt(
   return ref.current;
 }
 
+interface ChatCreationOwner {
+  readonly kind: "selection" | "window";
+  readonly id: string;
+}
+
+interface ChatCreationCoordinator {
+  readonly release: (owner: ChatCreationOwner) => void;
+  readonly request: (
+    owner: ChatCreationOwner,
+    project?: ProjectWithAvailability,
+    title?: string,
+  ) => Promise<ChatCreationResult>;
+}
+
+interface ChatCreationResult {
+  readonly chat: Chat | undefined;
+  readonly titleSaveFailed: boolean;
+}
+
+function sameCreationOwner(left: ChatCreationOwner, right: ChatCreationOwner): boolean {
+  return left.kind === right.kind && left.id === right.id;
+}
+
+async function reconcileCreatedChatTitle(
+  creation: Promise<Chat | undefined>,
+  title: string | undefined,
+  replaceChat: ChatSessionApi["replaceChat"],
+): Promise<ChatCreationResult> {
+  const chat = await creation;
+  const normalizedTitle = title?.trim();
+  if (chat === undefined || normalizedTitle === undefined || normalizedTitle.length === 0) {
+    return { chat, titleSaveFailed: false };
+  }
+  if (chat.title === normalizedTitle) return { chat, titleSaveFailed: false };
+  try {
+    const response = await updateChat(chat.id, { title: normalizedTitle });
+    replaceChat(response.chat);
+    return { chat: response.chat, titleSaveFailed: false };
+  } catch {
+    return { chat, titleSaveFailed: true };
+  }
+}
+
+function useChatCreationCoordinator(
+  openNewChat: ChatSessionApi["openNewChat"],
+  replaceChat: ChatSessionApi["replaceChat"],
+): ChatCreationCoordinator {
+  const activeRef = useRef<{
+    owner: ChatCreationOwner;
+    promise: Promise<Chat | undefined>;
+  } | null>(null);
+  const request = useCallback<ChatCreationCoordinator["request"]>(
+    (owner, project, title): Promise<ChatCreationResult> => {
+      const active = activeRef.current;
+      if (active !== null) {
+        active.owner = owner;
+        return reconcileCreatedChatTitle(active.promise, title, replaceChat);
+      }
+      const promise = title === undefined ? openNewChat(project) : openNewChat(project, title);
+      activeRef.current = { owner, promise };
+      return reconcileCreatedChatTitle(promise, title, replaceChat);
+    },
+    [openNewChat, replaceChat],
+  );
+  const release = useCallback<ChatCreationCoordinator["release"]>((owner): void => {
+    if (activeRef.current !== null && sameCreationOwner(activeRef.current.owner, owner)) {
+      activeRef.current = null;
+    }
+  }, []);
+  return useMemo((): ChatCreationCoordinator => ({ release, request }), [release, request]);
+}
+
 function useSelectionHandoffControl(args: {
   readonly chatId: string | undefined;
+  readonly coordinator: ChatCreationCoordinator;
   readonly ctx: WindowRenderContext;
   readonly id: string | undefined;
   readonly session: ChatSessionApi;
@@ -156,13 +231,19 @@ function useSelectionHandoffControl(args: {
   const [settledId, setSettledId] = useState<string | null>(null);
   const attemptRef = useRef<SelectionRouteAttempt>({ attempted: false, id: null, inFlight: false });
   const { id, session } = args;
+  useEffect((): (() => void) | undefined => {
+    if (id === undefined) return;
+    return (): void => {
+      discardEditorSelectionHandoff(id);
+    };
+  }, [id]);
   useEffect(() => {
     if (id === undefined || settledId === id) return;
     const metadata = inspectEditorSelectionHandoff(id);
     if (metadata === null) return;
     const delay = Math.max(1, metadata.expiresAt - Date.now() + 1);
-    const timeout = window.setTimeout(() => setRevision((value) => value + 1), delay);
-    return () => window.clearTimeout(timeout);
+    const timeout = window.setTimeout((): void => setRevision((value): number => value + 1), delay);
+    return (): void => window.clearTimeout(timeout);
   }, [id, settledId]);
   useEffect(() => {
     if (id === undefined || settledId === id) return;
@@ -178,6 +259,7 @@ function useSelectionHandoffControl(args: {
     if (route.kind === "fail") {
       discardEditorSelectionHandoff(id);
       args.ctx.updateCfg({ selectionHandoffId: undefined });
+      args.coordinator.release({ kind: "selection", id });
       setNoticeKey(route.noticeKey);
       setSettledId(id);
       return;
@@ -185,14 +267,16 @@ function useSelectionHandoffControl(args: {
     if (route.kind === "consume") {
       const handoff = consumeEditorSelectionHandoff(id, route.workspaceRoot);
       if (handoff === null) {
-        setRevision((value) => value + 1);
+        setRevision((value): number => value + 1);
         return;
       }
       args.ctx.updateCfg({
         chatId: route.chat.id,
         title: route.chat.title,
         selectionHandoffId: undefined,
+        newChatRequestId: undefined,
       });
+      args.coordinator.release({ kind: "selection", id });
       args.ctx.focusWindow(args.ctx.windowId);
       setNoticeKey(null);
       setSettledId(id);
@@ -205,56 +289,91 @@ function useSelectionHandoffControl(args: {
     attempt.inFlight = true;
     const finish = (): void => {
       if (attemptRef.current.id === id) attemptRef.current.inFlight = false;
-      setRevision((value) => value + 1);
+      setRevision((value): number => value + 1);
     };
-    void routeSelectionHandoff(route, session).then(finish, finish);
-  }, [args.chatId, args.ctx, id, revision, session, settledId]);
+    const createChat = (project: ProjectWithAvailability): Promise<unknown> =>
+      args.coordinator.request({ kind: "selection", id }, project);
+    void routeSelectionHandoff(route, session, createChat).then(finish, finish);
+  }, [args.chatId, args.coordinator, args.ctx, id, revision, session, settledId]);
   return { noticeKey, pending: id !== undefined && settledId !== id };
 }
 
 interface ChatCreationControlArgs {
   readonly chatId: string | undefined;
+  readonly coordinator: ChatCreationCoordinator;
   readonly loading: boolean;
   readonly newChatRequestId: string | undefined;
-  readonly openNewChat: ChatSessionApi["openNewChat"];
   readonly selectionHandoffId: string | undefined;
   readonly title: string | undefined;
   readonly updateCfg: WindowRenderContext["updateCfg"];
 }
 
-function useChatCreationControl(args: ChatCreationControlArgs): boolean {
-  const { chatId, loading, newChatRequestId, openNewChat, selectionHandoffId, title, updateCfg } =
+interface ChatCreationControl {
+  readonly error: string | null;
+  readonly pending: boolean;
+}
+
+interface ChatCreationError {
+  readonly chatId: string | undefined;
+  readonly message: string;
+  readonly requestId: string;
+}
+
+function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationControl {
+  const { chatId, coordinator, loading, newChatRequestId, selectionHandoffId, title, updateCfg } =
     args;
+  const [error, setError] = useState<ChatCreationError | null>(null);
   const pending = chatId === undefined && selectionHandoffId === undefined;
   const requestId = pending ? (newChatRequestId ?? "initial-unbound-chat") : undefined;
   const latestRequestIdRef = useRef(requestId);
-  const inFlightRef = useRef(false);
   const attemptedRequestIdRef = useRef<string | undefined>(undefined);
-  const [queueRevision, setQueueRevision] = useState(0);
   latestRequestIdRef.current = requestId;
 
   useEffect((): void => {
-    if (loading || requestId === undefined || inFlightRef.current) return;
+    if (loading || requestId === undefined) return;
     if (attemptedRequestIdRef.current === requestId) return;
+    const owner = { kind: "window", id: requestId } as const;
     attemptedRequestIdRef.current = requestId;
-    inFlightRef.current = true;
-    void openNewChat(undefined, title)
-      .then((created): void => {
-        if (created === undefined || latestRequestIdRef.current !== requestId) return;
-        updateCfg({
-          chatId: created.id,
-          title: created.title,
-          newChatRequestId: undefined,
-        });
-      })
+    setError(null);
+    void coordinator
+      .request(owner, undefined, title)
+      .then(
+        (result): void => {
+          if (latestRequestIdRef.current !== requestId) return;
+          if (result.chat === undefined) {
+            setError({ chatId: undefined, message: "Could not open chat.", requestId });
+            return;
+          }
+          if (result.titleSaveFailed) {
+            setError({
+              chatId: result.chat.id,
+              message: "The chat opened, but its title could not be saved.",
+              requestId,
+            });
+          }
+          updateCfg({
+            chatId: result.chat.id,
+            title: result.chat.title,
+            newChatRequestId: undefined,
+          });
+        },
+        (): void => {
+          if (latestRequestIdRef.current === requestId) {
+            setError({ chatId: undefined, message: "Could not open chat.", requestId });
+          }
+        },
+      )
       .finally((): void => {
-        inFlightRef.current = false;
-        if (latestRequestIdRef.current !== requestId) {
-          setQueueRevision((value): number => value + 1);
-        }
+        coordinator.release(owner);
       });
-  }, [loading, openNewChat, queueRevision, requestId, title, updateCfg]);
-  return pending;
+  }, [coordinator, loading, requestId, title, updateCfg]);
+  const visibleError =
+    error !== null &&
+    error.chatId === chatId &&
+    (chatId !== undefined || error.requestId === requestId)
+      ? error.message
+      : null;
+  return { error: visibleError, pending };
 }
 
 export function ChatWindowSessionHost({
@@ -271,15 +390,22 @@ export function ChatWindowSessionHost({
   const selectionHandoffId = str(cfg, "selectionHandoffId");
   const newChatRequestId = str(cfg, "newChatRequestId");
   const { updateCfg } = ctx;
-  const { activeChat, activeProject, chats, loading, openChat, openNewChat } = session;
+  const { activeChat, activeProject, chats, loading, openChat, openNewChat, replaceChat } = session;
   const activeTarget =
     activeChat !== undefined && activeChat.status !== "closed" ? activeChat : undefined;
-  const handoff = useSelectionHandoffControl({ chatId, ctx, id: selectionHandoffId, session });
+  const creationCoordinator = useChatCreationCoordinator(openNewChat, replaceChat);
+  const handoff = useSelectionHandoffControl({
+    chatId,
+    coordinator: creationCoordinator,
+    ctx,
+    id: selectionHandoffId,
+    session,
+  });
   const creatingChat = useChatCreationControl({
     chatId,
+    coordinator: creationCoordinator,
     loading,
     newChatRequestId,
-    openNewChat,
     selectionHandoffId,
     title,
     updateCfg,
@@ -306,7 +432,7 @@ export function ChatWindowSessionHost({
   const waitingForTarget =
     session.loading ||
     handoff.pending ||
-    creatingChat ||
+    creatingChat.pending ||
     (chatId !== undefined && activeTarget?.id !== chatId);
   const openRunResult = useCallback(
     (message: ChatMessage): void => {
@@ -360,6 +486,11 @@ export function ChatWindowSessionHost({
       {handoff.noticeKey === null ? null : (
         <p className="lk-alert" role="alert">
           {agentT(handoff.noticeKey)}
+        </p>
+      )}
+      {creatingChat.error === null ? null : (
+        <p className="lk-alert" role="alert">
+          {creatingChat.error}
         </p>
       )}
       {body}

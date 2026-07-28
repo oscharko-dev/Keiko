@@ -911,6 +911,12 @@ function chatWindowIdInPair(a: AppWindow | undefined, b: AppWindow | undefined):
   return null;
 }
 
+function chatConversationId(win: AppWindow | undefined): string | undefined {
+  if (win?.type !== "chat") return undefined;
+  const chatId = win.cfg["chatId"];
+  return typeof chatId === "string" && chatId.length > 0 ? chatId : undefined;
+}
+
 /** The id of the endpoint on the other side of `c` from `id`, or null when `id` isn't in `c`. */
 function otherEndpointId(c: Connection, id: string): string | null {
   if (c.a === id) return c.b;
@@ -1192,12 +1198,19 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     fromId: string,
     toId: string,
     chatWindowId: string | null,
+    chatConversationIdAtBind: string | undefined,
     boundScope: ChatConnectedScope | null,
     connectorScope: ChatLocalKnowledgeScope | null,
   ): void => {
     if (!wasAccepted) return;
     const stillLive = winById(fromId) !== undefined && winById(toId) !== undefined;
     if (!stillLive) return;
+    if (
+      chatWindowId !== null &&
+      chatConversationId(winById(chatWindowId)) !== chatConversationIdAtBind
+    ) {
+      return;
+    }
     // Snapshot WHAT the edge bound at bind time. Unbind paths (removeConn / close teardown) must
     // use this snapshot: re-deriving from the window's current cfg unbinds the wrong source after
     // the user navigated the Files window or re-selected another capsule.
@@ -1235,6 +1248,8 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       const connectorScope = boundScope === null ? connectorChatBind(from, to) : null;
       const chatWindowId =
         boundScope !== null || connectorScope !== null ? chatWindowIdInPair(from, to) : null;
+      const chatConversationIdAtBind =
+        chatWindowId === null ? undefined : chatConversationId(winById(chatWindowId));
       const accepted = resolveBindAcceptance(
         chatWindowId,
         boundScope,
@@ -1249,6 +1264,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
             c.from,
             toId,
             chatWindowId,
+            chatConversationIdAtBind,
             boundScope,
             connectorScope,
           ),
@@ -1306,7 +1322,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     };
   };
 
-  const removeConn: WorkspaceApi["removeConn"] = (id) => {
+  const removeConn: WorkspaceApi["removeConn"] = (id, options) => {
     // Epic #532 — if the removed edge was a Files↔Chat binding, unbind that folder from the chat.
     // Epic #189 Slice 3 M3 — if the removed edge was a Connector↔Chat binding, unbind that scope.
     // Release 0.2.0 — prefer the bind-time snapshot stored on the Connection: the window's
@@ -1315,7 +1331,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     // edges persisted before the snapshot fields existed.
     const conn = connById(id);
     setConns((cs) => cs.filter((c) => c.id !== id));
-    if (conn === undefined) return;
+    if (conn === undefined || options?.unbind === false) return;
     const a = winById(conn.a);
     const b = winById(conn.b);
     const bothLive = a !== undefined && b !== undefined;

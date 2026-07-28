@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect, useRef, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import type { Chat } from "@/lib/types";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import type { AppWindow } from "../windows/types";
 import type { EditorSelectionHandoff } from "./cards/editorSelectionHandoff";
@@ -57,8 +58,27 @@ const chatSessionMock = vi.hoisted(() => ({
   sendMessage: vi.fn<(options?: { readonly text?: string }) => Promise<void>>(() =>
     Promise.resolve(),
   ),
+  replaceChat: vi.fn<(chat: Chat) => void>(),
   sending: false,
 }));
+
+type UpdateChat = (
+  id: string,
+  patch: { readonly title?: string },
+) => Promise<{ readonly chat: Chat }>;
+
+interface ApiMock {
+  readonly updateChat: Mock<UpdateChat>;
+}
+
+const apiMock = vi.hoisted((): ApiMock => ({
+  updateChat: vi.fn<UpdateChat>(),
+}));
+
+vi.mock("@/lib/api", async (importOriginal): Promise<object> => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
+  return { ...actual, updateChat: apiMock.updateChat };
+});
 
 vi.mock("../ChatWindow", () => ({
   ChatWindow: ({
@@ -112,6 +132,7 @@ vi.mock("../context/ChatSessionContext", () => ({
     openProject: chatSessionMock.openProject,
     selectedModel: chatSessionMock.selectedModel,
     sendMessage: chatSessionMock.sendMessage,
+    replaceChat: chatSessionMock.replaceChat,
     sending: chatSessionMock.sending,
   }),
 }));
@@ -594,7 +615,18 @@ function makeCtx(): WindowRenderContext & {
   };
 }
 
-beforeEach(() => {
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((innerResolve): void => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
+}
+
+beforeEach((): void => {
   chatSessionMock.activeChat = {
     id: "chat-1",
     title: "Chat 1",
@@ -612,6 +644,8 @@ beforeEach(() => {
   chatSessionMock.openNewChat.mockReset().mockResolvedValue(undefined);
   chatSessionMock.openProject.mockReset().mockResolvedValue(undefined);
   chatSessionMock.sendMessage.mockReset().mockResolvedValue(undefined);
+  chatSessionMock.replaceChat.mockReset();
+  apiMock.updateChat.mockReset();
 });
 
 describe("workspace widget renderer registry", () => {
@@ -691,6 +725,7 @@ describe("workspace widget renderer registry", () => {
       chatId: "chat-origin",
       title: "Origin chat",
       selectionHandoffId: undefined,
+      newChatRequestId: undefined,
     });
     expect(ctx.focusWindow).toHaveBeenCalledWith("ctx-window");
     expect(JSON.stringify(ctx.updateCfg.mock.calls)).not.toContain(originRoot);
@@ -840,7 +875,173 @@ describe("workspace widget renderer registry", () => {
       chatId: "chat-created",
       title: "Created chat",
       selectionHandoffId: undefined,
+      newChatRequestId: undefined,
     });
+  });
+
+  it("adopts an in-flight selection chat when the singleton is reset", async (): Promise<void> => {
+    const ctx = makeCtx();
+    const originRoot = "/workspace/origin";
+    const originProject = { path: originRoot, available: true };
+    const createdChat = {
+      id: "chat-created",
+      title: "Created chat",
+      status: "open",
+      projectPath: originRoot,
+    };
+    const renamedChat = { ...createdChat, title: "Replacement chat" } as Chat;
+    const creation = deferred<typeof createdChat>();
+    chatSessionMock.activeProject = originProject;
+    chatSessionMock.activeChat = undefined;
+    chatSessionMock.projects = [originProject];
+    chatSessionMock.chats = [];
+    chatSessionMock.openNewChat.mockReturnValue(creation.promise);
+    apiMock.updateChat.mockResolvedValue({ chat: renamedChat });
+    const view = render(
+      <>{WIN_TYPES.editor.render({ root: originRoot, file: "src/app.ts" }, ctx)}</>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ask editor selection" }));
+    const openCfg = ctx.openWindow.mock.calls.at(-1)?.[1] as AppWindow["cfg"] | undefined;
+    const selectionHandoffId = openCfg?.["selectionHandoffId"];
+    if (typeof selectionHandoffId !== "string") throw new Error("selection handoff id missing");
+    view.rerender(<>{WIN_TYPES.chat.render({ selectionHandoffId }, ctx)}</>);
+    await waitFor((): void => expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce());
+
+    view.rerender(
+      <>
+        {WIN_TYPES.chat.render(
+          { title: "Replacement chat", newChatRequestId: "replacement-1" },
+          ctx,
+        )}
+      </>,
+    );
+    expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce();
+
+    await act(async (): Promise<void> => {
+      creation.resolve(createdChat);
+      await creation.promise;
+    });
+
+    expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce();
+    expect(chatSessionMock.sendMessage).not.toHaveBeenCalled();
+    expect(apiMock.updateChat).toHaveBeenCalledWith("chat-created", {
+      title: "Replacement chat",
+    });
+    expect(chatSessionMock.replaceChat).toHaveBeenCalledWith(renamedChat);
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: "chat-created",
+      title: "Replacement chat",
+      newChatRequestId: undefined,
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("adopts an in-flight window chat when an editor handoff arrives", async (): Promise<void> => {
+    const ctx = makeCtx();
+    const originRoot = "/workspace/origin";
+    const originProject = { path: originRoot, available: true };
+    const createdChat = {
+      id: "chat-created",
+      title: "Window chat",
+      status: "open",
+      projectPath: originRoot,
+    };
+    const creation = deferred<typeof createdChat>();
+    chatSessionMock.activeProject = originProject;
+    chatSessionMock.activeChat = undefined;
+    chatSessionMock.projects = [originProject];
+    chatSessionMock.chats = [];
+    chatSessionMock.openNewChat.mockImplementation((): Promise<typeof createdChat> =>
+      creation.promise.then((created): typeof createdChat => {
+        chatSessionMock.activeChat = created;
+        chatSessionMock.chats = [created];
+        return created;
+      }),
+    );
+    const view = render(
+      <>{WIN_TYPES.editor.render({ root: originRoot, file: "src/app.ts" }, ctx)}</>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ask editor selection" }));
+    const openCfg = ctx.openWindow.mock.calls.at(-1)?.[1] as AppWindow["cfg"] | undefined;
+    const selectionHandoffId = openCfg?.["selectionHandoffId"];
+    if (typeof selectionHandoffId !== "string") throw new Error("selection handoff id missing");
+    view.rerender(
+      <>
+        {WIN_TYPES.chat.render({ title: "Window chat", newChatRequestId: "window-request" }, ctx)}
+      </>,
+    );
+    await waitFor((): void => expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce());
+
+    view.rerender(
+      <>
+        {WIN_TYPES.chat.render(
+          {
+            title: "Window chat",
+            newChatRequestId: "window-request",
+            selectionHandoffId,
+          },
+          ctx,
+        )}
+      </>,
+    );
+    expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce();
+
+    await act(async (): Promise<void> => {
+      creation.resolve(createdChat);
+      await creation.promise;
+    });
+
+    await waitFor((): void => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
+    expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce();
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: "chat-created",
+      title: "Window chat",
+      selectionHandoffId: undefined,
+      newChatRequestId: undefined,
+    });
+  });
+
+  it("binds the persisted chat and reports when an adopted title cannot be saved", async (): Promise<void> => {
+    const ctx = makeCtx();
+    const createdChat = {
+      id: "chat-created",
+      title: "Created chat",
+      status: "open",
+      projectPath: "/repo",
+    };
+    chatSessionMock.activeChat = undefined;
+    chatSessionMock.chats = [];
+    chatSessionMock.openNewChat.mockResolvedValue(createdChat);
+    apiMock.updateChat.mockRejectedValue(new Error("rename failed"));
+    const view = render(
+      <>
+        {WIN_TYPES.chat.render(
+          { title: "Replacement chat", newChatRequestId: "replacement-1" },
+          ctx,
+        )}
+      </>,
+    );
+
+    await waitFor((): void => {
+      expect(ctx.updateCfg).toHaveBeenCalledWith({
+        chatId: "chat-created",
+        title: "Created chat",
+        newChatRequestId: undefined,
+      });
+    });
+    chatSessionMock.activeChat = createdChat;
+    chatSessionMock.chats = [createdChat];
+    view.rerender(
+      <>{WIN_TYPES.chat.render({ chatId: "chat-created", title: "Created chat" }, ctx)}</>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The chat opened, but its title could not be saved.",
+    );
+    expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce();
+    expect(chatSessionMock.replaceChat).not.toHaveBeenCalled();
   });
 
   it("maps window cfg into widget props and follow-up workspace actions", async () => {
