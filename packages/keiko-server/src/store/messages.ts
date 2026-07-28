@@ -495,10 +495,7 @@ function scanLegacyGatewayRow(
   row: GatewayMessageRow,
   currentUserMessageId: string,
 ): void {
-  if (row.role === "system") {
-    appendGatewayUnit(state, [row], currentUserMessageId);
-    return;
-  }
+  if (row.role === "system") return;
   if (row.role === "assistant") {
     state.legacyAssistant = row;
     return;

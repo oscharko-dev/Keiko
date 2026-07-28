@@ -635,6 +635,11 @@ export const MAX_DESKTOP_CHAT_INPUT_CHARS = 256_000;
 export const MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS = 256;
 export const GROUNDING_SCOPE_IDENTITY_PATTERN = /^gsi-v1:[0-9a-f]{64}$/u;
 
+/**
+ * Serializes the chat and client turn identifiers as one unambiguous, ordered JSON tuple. Both
+ * fields remain distinct even when either contains commas, quotes, brackets, or other delimiter
+ * characters. Callers hash the returned UTF-8 seed when they need a content-free reference.
+ */
 export function canonicalDesktopChatTurnReferenceSeed(
   chatId: string,
   clientTurnId: string,

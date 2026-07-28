@@ -2,7 +2,6 @@
 // Asserts perms 0o700/0o600 on the dir/file (Unix), and that the DB file is NOT inside process.cwd().
 
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
   mkdtempSync,
@@ -16,10 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import type { StoredPdfCitationPreviewCitation } from "@oscharko-dev/keiko-contracts";
-import {
-  MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
-  canonicalDesktopChatTurnReferenceSeed,
-} from "@oscharko-dev/keiko-contracts/bff-wire";
+import { MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   createInMemoryUiStore,
   createNodeUiStore,
@@ -413,11 +409,40 @@ describe("createInMemoryUiStore", () => {
     store.close();
   });
 
-  it("reserves the admitted current turn behind future-timestamp history", (): void => {
+  it("keeps completed history and the admitted turn behind future system rows", (): void => {
     const projectDir = mkdtempSync(join(tmpDir, "gateway-current-skew-project-"));
     const store = createInMemoryUiStore();
     store.createProject(projectDir);
     const chat = store.createChat(projectDir, "Current clock skew", "example-chat-model");
+    const completed = store.admitChatTurn("system-skew-completed-turn", {
+      chatId: chat.id,
+      role: "user",
+      content: "completed request",
+      timestamp: -2,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    if (completed.kind !== "admitted") throw new Error("expected completed admission");
+    const completedAssistant = store.createTurnAssistant(completed.userMessage.id, {
+      chatId: chat.id,
+      role: "assistant",
+      content: "completed answer",
+      timestamp: -1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    store.completeChatTurn(
+      chat.id,
+      "system-skew-completed-turn",
+      "completed request",
+      completedAssistant.id,
+    );
     for (let index = 0; index < 50; index += 1) {
       store.createMessage({
         chatId: chat.id,
@@ -445,8 +470,21 @@ describe("createInMemoryUiStore", () => {
     if (current.kind !== "admitted") throw new Error("expected current admission");
 
     const history = store.listGatewayMessages(chat.id, current.userMessage.id, 4);
-    expect(history).toHaveLength(4);
-    expect(history.some((message): boolean => message.id === current.userMessage.id)).toBe(true);
+    expect(
+      history.map((message): readonly [string, string] => [message.role, message.content]),
+    ).toEqual([
+      ["user", "completed request"],
+      ["assistant", "completed answer"],
+      ["user", "current request"],
+    ]);
+    expect(
+      store
+        .listGatewayMessages(chat.id, "", 2)
+        .map((message): readonly [string, string] => [message.role, message.content]),
+    ).toEqual([
+      ["user", "completed request"],
+      ["assistant", "completed answer"],
+    ]);
     store.close();
   });
 });
@@ -539,9 +577,8 @@ describe("createNodeUiStore — on-disk file", () => {
       client_turn_content_digest: string;
     };
     inspector.close();
-    const expectedTurnReference = createHash("sha256")
-      .update(canonicalDesktopChatTurnReferenceSeed(chat.id, opaqueTurnId), "utf8")
-      .digest("hex");
+    const expectedTurnReference = firstAdmission.userMessage.canonicalTurnRef;
+    if (expectedTurnReference === undefined) throw new Error("expected canonical turn reference");
     expect(stored.client_turn_id).toBe(expectedTurnReference);
     expect(firstAdmission.userMessage.canonicalTurnRef).toBe(expectedTurnReference);
     expect(stored.client_turn_id).not.toBe(opaqueTurnId);

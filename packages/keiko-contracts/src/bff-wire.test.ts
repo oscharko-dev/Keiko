@@ -4,6 +4,7 @@
 // query text, excerpt content) and the documented `-1` sentinel for workspace-root scope.
 
 import { describe, expect, it } from "vitest";
+import { canonicalDesktopChatTurnReferenceSeed } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   buildGroundedAnswerContextPackSummary,
   classifyAttachmentMime,
@@ -54,6 +55,14 @@ import {
 
 type Assert<T extends true> = T;
 type HasKey<T, K extends PropertyKey> = K extends keyof T ? true : false;
+
+it("serializes delimiter-hostile canonical turn identifiers without collisions", (): void => {
+  const seed = canonicalDesktopChatTurnReferenceSeed('chat,]"', 'turn:["one');
+  expect(JSON.parse(seed)).toEqual(['chat,]"', 'turn:["one']);
+  expect(canonicalDesktopChatTurnReferenceSeed("chat,turn", "id")).not.toBe(
+    canonicalDesktopChatTurnReferenceSeed("chat", "turn,id"),
+  );
+});
 
 // Compile-time assertions that the wire request owns these keys. Exported so the linter treats the
 // aliases as used while tsc still fails the build if any key is dropped from the contract.
