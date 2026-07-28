@@ -4650,6 +4650,7 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
   const browserManifest = JSON.parse(
     readFileSync(resolve(evidenceDir, "browser/manifest.json"), "utf8"),
   ) as unknown as Issue1300BrowserManifest;
+  const browserCaptureSource = readFileSync(resolve(evidenceDir, "browser/capture.mjs"), "utf8");
   const visualRegressionMd = readFileSync(
     resolve(here, "../../../..", "docs/design-system/visual-regression.md"),
     "utf8",
@@ -4887,6 +4888,24 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
       }
     }
     expect([...seenCells].sort()).toEqual([...expectedCells].sort());
+  });
+
+  it("the browser evidence harness rejects HTTP method drift", (): void => {
+    expect(browserCaptureSource).toContain(
+      'const POST_API_PATHS = new Set([\n  "/api/desktop/chats",\n  "/api/editor/agent/snapshot",\n  "/api/editor/language",\n]);',
+    );
+    expect(browserCaptureSource).toContain('return POST_API_PATHS.has(pathname) ? "POST" : "GET";');
+    expect(browserCaptureSource).toContain("if (method !== expectedApiMethod(url.pathname)) {");
+    expect(browserCaptureSource).toContain(
+      "unexpectedApiRequests.add(unexpectedApiLabel(route, url));",
+    );
+  });
+
+  it("the browser evidence harness keeps error-notice diagnostics content-free", (): void => {
+    expect(browserCaptureSource).not.toContain('page.locator(".ui-error-notice").allInnerTexts()');
+    expect(browserCaptureSource).toContain(
+      "error notice diagnostic: rendered_count=${info.visibleErrorNoticeCount}",
+    );
   });
 
   // ── 3. Editor matrix gate + carried-forward variance ──────────────────────────

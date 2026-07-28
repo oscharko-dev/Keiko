@@ -852,14 +852,37 @@ function languageOperationBody(route) {
 }
 
 function unexpectedApiLabel(route, url) {
-  if (url.pathname !== "/api/editor/language") {
-    return `${route.request().method()} ${url.pathname}`;
-  }
-  const operation = route.request().postDataJSON()?.operation;
-  return `${route.request().method()} ${url.pathname} (${String(operation)})`;
+  const requestSha256 = createHash("sha256")
+    .update(`${route.request().method()}\0${url.pathname}`)
+    .digest("hex");
+  return `request_sha256=${requestSha256}`;
+}
+
+const POST_API_PATHS = new Set([
+  "/api/desktop/chats",
+  "/api/editor/agent/snapshot",
+  "/api/editor/language",
+]);
+
+function expectedApiMethod(pathname) {
+  return POST_API_PATHS.has(pathname) ? "POST" : "GET";
+}
+
+async function rejectUnexpectedApi(route, url, unexpectedApiRequests) {
+  unexpectedApiRequests.add(unexpectedApiLabel(route, url));
+  await route.fulfill({
+    status: 501,
+    contentType: "application/json",
+    body: JSON.stringify({ error: { code: "STATIC_EVIDENCE_UNEXPECTED_API" } }),
+  });
 }
 
 async function fulfillApiRoute(route, url, unexpectedApiRequests) {
+  const method = route.request().method();
+  if (method !== expectedApiMethod(url.pathname)) {
+    await rejectUnexpectedApi(route, url, unexpectedApiRequests);
+    return;
+  }
   if (Object.hasOwn(SSE_API_BODIES, url.pathname)) {
     await route.fulfill({
       status: 200,
@@ -871,12 +894,7 @@ async function fulfillApiRoute(route, url, unexpectedApiRequests) {
   const body =
     url.pathname === "/api/editor/language" ? languageOperationBody(route) : apiBody(url);
   if (body === undefined) {
-    unexpectedApiRequests.add(unexpectedApiLabel(route, url));
-    await route.fulfill({
-      status: 501,
-      contentType: "application/json",
-      body: JSON.stringify({ error: { code: "STATIC_EVIDENCE_UNEXPECTED_API" } }),
-    });
+    await rejectUnexpectedApi(route, url, unexpectedApiRequests);
     return;
   }
   await route.fulfill({
@@ -927,8 +945,14 @@ for (const vp of VIEWPORTS) {
       const page = await ctx.newPage();
       const unexpectedApiRequests = new Set();
       await installRoutes(page, unexpectedApiRequests);
-      const errs = [];
-      page.on("pageerror", (e) => errs.push(String(e.stack ?? e)));
+      const pageErrorFingerprints = [];
+      page.on("pageerror", (error) => {
+        pageErrorFingerprints.push(
+          createHash("sha256")
+            .update(String(error.stack ?? error))
+            .digest("hex"),
+        );
+      });
       await page.addInitScript(
         ({ theme, windows }) => {
           try {
@@ -984,18 +1008,18 @@ for (const vp of VIEWPORTS) {
         requiredSelectors: scenario.requiredSelectors,
         ...info,
         unexpectedApiRequestCount: unexpectedApiRequests.size,
-        pageErrors: errs.slice(0, 3),
+        pageErrors: pageErrorFingerprints.slice(0, 3),
       });
       shotCount++;
       console.log(
-        `${name}  theme=${info.theme} shell=${info.hasShell} windows=${info.windowCount} notices=${info.visibleErrorNoticeCount} crashed=${info.crashedWindowBodyCount} trust=${info.unavailableTrustStateCount} unknownApi=${unexpectedApiRequests.size} missing=${info.missingRequiredSelectors.length} err=${errs.length}`,
+        `${name}  theme=${info.theme} shell=${info.hasShell} windows=${info.windowCount} notices=${info.visibleErrorNoticeCount} crashed=${info.crashedWindowBodyCount} trust=${info.unavailableTrustStateCount} unknownApi=${unexpectedApiRequests.size} missing=${info.missingRequiredSelectors.length} err=${pageErrorFingerprints.length}`,
       );
       if (info.missingRequiredSelectors.length > 0) {
         console.log(`  missing selectors: ${info.missingRequiredSelectors.join(", ")}`);
       }
       if (info.visibleErrorNoticeCount > 0) {
         console.log(
-          `  error notice diagnostic: ${(await page.locator(".ui-error-notice").allInnerTexts()).join(" | ")}`,
+          `  error notice diagnostic: rendered_count=${info.visibleErrorNoticeCount}`,
         );
       }
       if (unexpectedApiRequests.size > 0) {
