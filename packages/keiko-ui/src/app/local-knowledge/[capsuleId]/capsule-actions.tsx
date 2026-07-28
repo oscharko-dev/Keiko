@@ -10,7 +10,16 @@
 // Focus trap: Tab/Shift+Tab cycle within the dialog; Escape cancels.
 // WCAG: min 30×30 button targets, focus-visible ring, colour tokens for danger text.
 
-import { useEffect, useId, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { createPortal } from "react-dom";
 import { LOCAL_KNOWLEDGE_FILE_FILTERS } from "@oscharko-dev/keiko-contracts";
 import type {
@@ -318,13 +327,25 @@ function selectedSourceSummary(
   return t("localKnowledge.detail.connect.selectedSource", { path: trimmedRoot });
 }
 
-function ConnectSourceForm({
-  capsuleId,
-  onConnected,
-  connectImpl = connectCapsuleSource,
-}: ConnectSourceFormProps): ReactNode {
-  const t = useTranslate();
-  const locale = useLocale();
+interface ConnectSourceState {
+  readonly rootPath: string;
+  readonly setRootPath: Dispatch<SetStateAction<string>>;
+  readonly displayName: string;
+  readonly setDisplayName: Dispatch<SetStateAction<string>>;
+  readonly filesInput: string;
+  readonly setFilesInput: Dispatch<SetStateAction<string>>;
+  readonly specificFilesExpanded: boolean;
+  readonly setSpecificFilesExpanded: Dispatch<SetStateAction<boolean>>;
+  readonly repositoryMode: boolean;
+  readonly busy: boolean;
+  readonly setBusy: Dispatch<SetStateAction<boolean>>;
+  readonly connectError: string | null;
+  readonly setConnectError: Dispatch<SetStateAction<string | null>>;
+  readonly changeRepositoryMode: (checked: boolean) => void;
+  readonly reset: () => void;
+}
+
+function useConnectSourceState(): ConnectSourceState {
   const [rootPath, setRootPath] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [filesInput, setFilesInput] = useState("");
@@ -332,270 +353,439 @@ function ConnectSourceForm({
   const [repositoryMode, setRepositoryMode] = useState(false);
   const [busy, setBusy] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
-  const nativeNoteId = useId();
-  const nativeDialogSupported = useNativeFileDialogCapability();
-  const scope = buildScope(rootPath, filesInput, repositoryMode);
-  const selectedSource = selectedSourceSummary(rootPath, filesInput, repositoryMode, t);
-  const documentFilters = nativeDocumentFilters(t);
-
-  // Repository mode and the specific-files disclosure are mutually exclusive (see buildScope).
-  // Turning repository mode on clears any in-progress file selection instead of leaving it
-  // behind, disabled but stale, in the collapsed disclosure.
-  function handleRepositoryModeChange(checked: boolean): void {
+  function changeRepositoryMode(checked: boolean): void {
     setRepositoryMode(checked);
-    if (checked) {
-      setFilesInput("");
-      setSpecificFilesExpanded(false);
-    }
+    if (!checked) return;
+    setFilesInput("");
+    setSpecificFilesExpanded(false);
   }
-
-  function handleNativeOutcome(
-    outcome: Awaited<ReturnType<typeof pickWithNativeDialog>>,
-    onPicked: (paths: readonly string[]) => void,
-  ): void {
-    if (outcome.kind === "picked") {
-      onPicked(outcome.paths);
-      setConnectError(null);
-      return;
-    }
-    if (outcome.kind === "busy") setConnectError(t("localKnowledge.nativeDialog.busy"));
-    if (outcome.kind === "unsupported") {
-      setConnectError(t("localKnowledge.nativeDialog.unavailable"));
-    }
-    if (outcome.kind === "error") setConnectError(outcome.message);
+  function reset(): void {
+    setRootPath("");
+    setDisplayName("");
+    setFilesInput("");
+    setSpecificFilesExpanded(false);
+    setRepositoryMode(false);
   }
+  return {
+    rootPath,
+    setRootPath,
+    displayName,
+    setDisplayName,
+    filesInput,
+    setFilesInput,
+    specificFilesExpanded,
+    setSpecificFilesExpanded,
+    repositoryMode,
+    busy,
+    setBusy,
+    connectError,
+    setConnectError,
+    changeRepositoryMode,
+    reset,
+  };
+}
 
-  // ADR-0118 keeps file and directory native-dialog modes separate. The UI presents both as
-  // Knowledgequelle actions and normalizes the selected paths into the single source contract.
-  function openNativeFolderPicker(): void {
+type NativeDialogOutcome = Awaited<ReturnType<typeof pickWithNativeDialog>>;
+
+function applyNativeDialogOutcome(
+  outcome: NativeDialogOutcome,
+  onPicked: (paths: readonly string[]) => void,
+  setConnectError: Dispatch<SetStateAction<string | null>>,
+  t: I18nTranslate,
+): void {
+  if (outcome.kind === "picked") {
+    onPicked(outcome.paths);
+    setConnectError(null);
+    return;
+  }
+  if (outcome.kind === "busy") setConnectError(t("localKnowledge.nativeDialog.busy"));
+  if (outcome.kind === "unsupported") {
+    setConnectError(t("localKnowledge.nativeDialog.unavailable"));
+  }
+  if (outcome.kind === "error") setConnectError(outcome.message);
+}
+
+interface NativeSourcePickerController {
+  readonly noteId: string;
+  readonly supported: boolean;
+  readonly openFolder: () => void;
+  readonly openFiles: () => void;
+}
+
+function useNativeSourcePicker(
+  state: ConnectSourceState,
+  documentFilters: readonly NativeFileDialogFilter[],
+  t: I18nTranslate,
+): NativeSourcePickerController {
+  const noteId = useId();
+  const supported = useNativeFileDialogCapability();
+  function openFolder(): void {
     void pickWithNativeDialog({
       mode: "open-directory",
       title: t("localKnowledge.detail.connect.chooseFolder"),
-      ...(rootPath.trim().length > 0 ? { defaultPath: rootPath.trim() } : {}),
-    }).then((outcome) => {
-      handleNativeOutcome(outcome, (paths) => {
-        const picked = paths[0];
-        if (picked !== undefined) setRootPath(picked);
-        setFilesInput("");
-        setSpecificFilesExpanded(false);
-      });
+      ...(state.rootPath.trim().length > 0 ? { defaultPath: state.rootPath.trim() } : {}),
+    }).then((outcome): void => {
+      applyNativeDialogOutcome(
+        outcome,
+        (paths): void => {
+          const picked = paths[0];
+          if (picked !== undefined) state.setRootPath(picked);
+          state.setFilesInput("");
+          state.setSpecificFilesExpanded(false);
+        },
+        state.setConnectError,
+        t,
+      );
     });
   }
-
-  function openNativeFilesPicker(): void {
+  function openFiles(): void {
     void pickWithNativeDialog({
       mode: "open-files",
       title: t("localKnowledge.detail.connect.chooseFiles"),
       filters: documentFilters,
-      ...(rootPath.trim().length > 0 ? { defaultPath: rootPath.trim() } : {}),
-    }).then((outcome) => {
-      handleNativeOutcome(outcome, (paths) => {
-        const mapped = nativePathsToRootAndFiles(paths);
-        setRootPath(mapped.rootPath);
-        setFilesInput(mapped.files.join("\n"));
-        setSpecificFilesExpanded(true);
-      });
+      ...(state.rootPath.trim().length > 0 ? { defaultPath: state.rootPath.trim() } : {}),
+    }).then((outcome): void => {
+      applyNativeDialogOutcome(
+        outcome,
+        (paths): void => {
+          const mapped = nativePathsToRootAndFiles(paths);
+          state.setRootPath(mapped.rootPath);
+          state.setFilesInput(mapped.files.join("\n"));
+          state.setSpecificFilesExpanded(true);
+        },
+        state.setConnectError,
+        t,
+      );
     });
   }
+  return { noteId, supported, openFolder, openFiles };
+}
 
-  async function handleConnect(): Promise<void> {
-    if (scope === null || busy) return;
-    setBusy(true);
-    setConnectError(null);
+interface ConnectSourceSubmissionController {
+  readonly scope: ConnectCapsuleSourceScope | null;
+  readonly selectedSource: string | null;
+  readonly connect: () => Promise<void>;
+}
+
+function useConnectSourceSubmission(
+  capsuleId: KnowledgeCapsuleId,
+  onConnected: () => void,
+  connectImpl: typeof connectCapsuleSource,
+  state: ConnectSourceState,
+  t: I18nTranslate,
+): ConnectSourceSubmissionController {
+  const scope = buildScope(state.rootPath, state.filesInput, state.repositoryMode);
+  const selectedSource = selectedSourceSummary(
+    state.rootPath,
+    state.filesInput,
+    state.repositoryMode,
+    t,
+  );
+  async function connect(): Promise<void> {
+    if (scope === null || state.busy) return;
+    state.setBusy(true);
+    state.setConnectError(null);
     try {
-      const explicitDisplayName = displayName.trim();
-      if (explicitDisplayName === "") {
-        await connectImpl(capsuleId, scope);
-      } else {
-        await connectImpl(capsuleId, scope, explicitDisplayName);
-      }
-      setRootPath("");
-      setDisplayName("");
-      setFilesInput("");
-      setSpecificFilesExpanded(false);
-      setRepositoryMode(false);
+      const explicitDisplayName = state.displayName.trim();
+      if (explicitDisplayName === "") await connectImpl(capsuleId, scope);
+      else await connectImpl(capsuleId, scope, explicitDisplayName);
+      state.reset();
       onConnected();
     } catch (error) {
-      setConnectError(formatError(error, t));
+      state.setConnectError(formatError(error, t));
     } finally {
-      setBusy(false);
+      state.setBusy(false);
     }
   }
+  return { scope, selectedSource, connect };
+}
 
+interface ConnectSourceViewProps {
+  readonly state: ConnectSourceState;
+  readonly picker: NativeSourcePickerController;
+  readonly submission: ConnectSourceSubmissionController;
+  readonly locale: string;
+  readonly t: I18nTranslate;
+}
+
+function SourcePickerIntro({ locale, t }: Pick<ConnectSourceViewProps, "locale" | "t">): ReactNode {
   return (
-    <div className="lkd-connect-form" aria-label={t("localKnowledge.detail.connect.region")}>
+    <div className={detailStyles.sourcePickerCopy}>
+      <Explainable description={t("localKnowledge.detail.help.sourceSetup")}>
+        <span className={detailStyles.sourcePickerTitle}>
+          {t("localKnowledge.detail.connect.sourcePickerTitle")}
+        </span>
+      </Explainable>
+      <span className={detailStyles.sourcePickerDescription}>
+        {t("localKnowledge.detail.connect.sourcePickerDescription")}
+      </span>
+      <span className={detailStyles.sourcePickerFormats}>
+        {t("localKnowledge.detail.connect.supportedFormats", {
+          size: formatBytes(LOCAL_KNOWLEDGE_MAX_FILE_BYTES, locale),
+        })}
+      </span>
+    </div>
+  );
+}
+
+function NativeSourcePickerActions({
+  picker,
+  state,
+  t,
+}: Pick<ConnectSourceViewProps, "picker" | "state" | "t">): ReactNode {
+  return (
+    <div className={detailStyles.sourcePickerActions}>
+      <button
+        type="button"
+        className="lk-btn lk-btn-primary"
+        disabled={state.busy || !picker.supported}
+        aria-describedby={picker.supported ? undefined : picker.noteId}
+        title={t("localKnowledge.detail.help.sourceSetup")}
+        onClick={picker.openFolder}
+      >
+        {t("localKnowledge.detail.connect.pickFolderSource")}
+      </button>
+      <button
+        type="button"
+        className="lk-btn lk-btn-primary"
+        disabled={state.busy || !picker.supported || state.repositoryMode}
+        aria-describedby={picker.supported ? undefined : picker.noteId}
+        title={
+          state.repositoryMode
+            ? t("localKnowledge.detail.connect.repositoryFilesDisabledNote")
+            : t("localKnowledge.detail.help.sourceSetup")
+        }
+        onClick={picker.openFiles}
+      >
+        {t("localKnowledge.detail.connect.pickDocumentSource")}
+      </button>
+    </div>
+  );
+}
+
+function SourcePickerPanel({
+  locale,
+  picker,
+  state,
+  t,
+}: Pick<ConnectSourceViewProps, "locale" | "picker" | "state" | "t">): ReactNode {
+  return (
+    <>
       <div className={detailStyles.sourcePickerPanel}>
-        <div className={detailStyles.sourcePickerCopy}>
-          <Explainable description={t("localKnowledge.detail.help.sourceSetup")}>
-            <span className={detailStyles.sourcePickerTitle}>
-              {t("localKnowledge.detail.connect.sourcePickerTitle")}
-            </span>
-          </Explainable>
-          <span className={detailStyles.sourcePickerDescription}>
-            {t("localKnowledge.detail.connect.sourcePickerDescription")}
-          </span>
-          <span className={detailStyles.sourcePickerFormats}>
-            {t("localKnowledge.detail.connect.supportedFormats", {
-              size: formatBytes(LOCAL_KNOWLEDGE_MAX_FILE_BYTES, locale),
-            })}
-          </span>
-        </div>
-        <div className={detailStyles.sourcePickerActions}>
-          <button
-            type="button"
-            className="lk-btn lk-btn-primary"
-            disabled={busy || !nativeDialogSupported}
-            aria-describedby={nativeDialogSupported ? undefined : nativeNoteId}
-            title={t("localKnowledge.detail.help.sourceSetup")}
-            onClick={openNativeFolderPicker}
-          >
-            {t("localKnowledge.detail.connect.pickFolderSource")}
-          </button>
-          <button
-            type="button"
-            className="lk-btn lk-btn-primary"
-            disabled={busy || !nativeDialogSupported || repositoryMode}
-            aria-describedby={nativeDialogSupported ? undefined : nativeNoteId}
-            title={
-              repositoryMode
-                ? t("localKnowledge.detail.connect.repositoryFilesDisabledNote")
-                : t("localKnowledge.detail.help.sourceSetup")
-            }
-            onClick={openNativeFilesPicker}
-          >
-            {t("localKnowledge.detail.connect.pickDocumentSource")}
-          </button>
-        </div>
+        <SourcePickerIntro locale={locale} t={t} />
+        <NativeSourcePickerActions picker={picker} state={state} t={t} />
       </div>
-      {selectedSource !== null ? (
-        <p className={detailStyles.selectedSourceNote}>{selectedSource}</p>
-      ) : null}
-      {!nativeDialogSupported ? (
-        <span id={nativeNoteId} className="dlg-note">
+      {!picker.supported ? (
+        <span id={picker.noteId} className="dlg-note">
           {t("localKnowledge.nativeDialog.unavailable")}
         </span>
       ) : null}
-      <div className="lkd-connect-row">
-        <label htmlFor="lkd-connect-path-input" className="dlg-label">
-          <Explainable description={t("localKnowledge.detail.help.sourcePath")}>
-            {t("localKnowledge.detail.connect.sourcePath")}
-          </Explainable>
-        </label>
-        <div className="lkd-connect-path-group">
-          <input
-            id="lkd-connect-path-input"
-            type="text"
-            className="dlg-input lkd-connect-input"
-            value={rootPath}
-            disabled={busy}
-            placeholder="/absolute/path/to/source"
-            autoComplete="off"
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setRootPath(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void handleConnect();
-            }}
-          />
-          <button
-            type="button"
-            className="lk-btn lk-btn-primary"
-            disabled={busy || scope === null}
-            aria-busy={busy}
-            onClick={() => void handleConnect()}
-          >
-            {busy
-              ? t("localKnowledge.detail.connect.connecting")
-              : t("localKnowledge.detail.connect.connect")}
-          </button>
-        </div>
-      </div>
-      <div className="lkd-connect-row">
-        <label htmlFor="lkd-connect-display-name-input" className="dlg-label">
-          <Explainable description={t("localKnowledge.detail.help.sourceDisplayName")}>
-            {t("localKnowledge.detail.connect.displayName")}
-          </Explainable>
-        </label>
+    </>
+  );
+}
+
+function ConnectSourcePathRow({
+  state,
+  submission,
+  t,
+}: Pick<ConnectSourceViewProps, "state" | "submission" | "t">): ReactNode {
+  return (
+    <div className="lkd-connect-row">
+      <label htmlFor="lkd-connect-path-input" className="dlg-label">
+        <Explainable description={t("localKnowledge.detail.help.sourcePath")}>
+          {t("localKnowledge.detail.connect.sourcePath")}
+        </Explainable>
+      </label>
+      <div className="lkd-connect-path-group">
         <input
-          id="lkd-connect-display-name-input"
+          id="lkd-connect-path-input"
           type="text"
           className="dlg-input lkd-connect-input"
-          value={displayName}
-          disabled={busy}
-          placeholder={t("localKnowledge.detail.connect.displayNamePlaceholder")}
+          value={state.rootPath}
+          disabled={state.busy}
+          placeholder="/absolute/path/to/source"
           autoComplete="off"
-          onChange={(e: ChangeEvent<HTMLInputElement>) => setDisplayName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void handleConnect();
+          onChange={(event: ChangeEvent<HTMLInputElement>): void =>
+            state.setRootPath(event.target.value)
+          }
+          onKeyDown={(event): void => {
+            if (event.key === "Enter") void submission.connect();
           }}
         />
-      </div>
-      <div className="lkd-connect-row">
-        <label htmlFor="lkd-connect-repository-toggle" className="dlg-label">
-          <input
-            id="lkd-connect-repository-toggle"
-            type="checkbox"
-            checked={repositoryMode}
-            disabled={busy}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              handleRepositoryModeChange(e.target.checked)
-            }
-          />{" "}
-          <Explainable description={t("localKnowledge.detail.help.repositoryMode")}>
-            {t("localKnowledge.detail.connect.repositoryMode")}
-          </Explainable>
-        </label>
-      </div>
-      <details
-        className={detailStyles.specificFilesDisclosure}
-        data-disabled={repositoryMode ? "true" : undefined}
-        open={specificFilesExpanded && !repositoryMode}
-        onToggle={(event) => {
-          if (repositoryMode) return;
-          setSpecificFilesExpanded(event.currentTarget.open);
-        }}
-      >
-        <summary
-          className={detailStyles.specificFilesSummary}
-          aria-disabled={repositoryMode}
-          title={
-            repositoryMode
-              ? t("localKnowledge.detail.connect.repositoryFilesDisabledNote")
-              : undefined
-          }
-          onClick={(event) => {
-            if (repositoryMode) event.preventDefault();
+        <button
+          type="button"
+          className="lk-btn lk-btn-primary"
+          disabled={state.busy || submission.scope === null}
+          aria-busy={state.busy}
+          onClick={(): void => {
+            void submission.connect();
           }}
         >
-          <span>
-            <Explainable description={t("localKnowledge.detail.help.specificFiles")}>
-              {t("localKnowledge.detail.connect.specificFiles")}
-            </Explainable>
-          </span>
-          <span className={detailStyles.disclosureIcon} aria-hidden="true" />
-        </summary>
-        <label htmlFor="lkd-connect-files-input" className="dlg-label">
-          {t("localKnowledge.detail.connect.relativeFiles")}
-        </label>
-        <textarea
-          id="lkd-connect-files-input"
-          className="dlg-input lkd-connect-input"
-          value={filesInput}
-          disabled={busy || repositoryMode}
-          placeholder={"src/app.ts\nREADME.md"}
-          rows={4}
-          onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFilesInput(e.target.value)}
-        />
-      </details>
-      {repositoryMode ? (
-        <p className={detailStyles.selectedSourceNote}>
-          {t("localKnowledge.detail.connect.repositoryFilesDisabledNote")}
-        </p>
+          {state.busy
+            ? t("localKnowledge.detail.connect.connecting")
+            : t("localKnowledge.detail.connect.connect")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SourceDisplayNameRow({
+  state,
+  submission,
+  t,
+}: Pick<ConnectSourceViewProps, "state" | "submission" | "t">): ReactNode {
+  return (
+    <div className="lkd-connect-row">
+      <label htmlFor="lkd-connect-display-name-input" className="dlg-label">
+        <Explainable description={t("localKnowledge.detail.help.sourceDisplayName")}>
+          {t("localKnowledge.detail.connect.displayName")}
+        </Explainable>
+      </label>
+      <input
+        id="lkd-connect-display-name-input"
+        type="text"
+        className="dlg-input lkd-connect-input"
+        value={state.displayName}
+        disabled={state.busy}
+        placeholder={t("localKnowledge.detail.connect.displayNamePlaceholder")}
+        autoComplete="off"
+        onChange={(event: ChangeEvent<HTMLInputElement>): void =>
+          state.setDisplayName(event.target.value)
+        }
+        onKeyDown={(event): void => {
+          if (event.key === "Enter") void submission.connect();
+        }}
+      />
+    </div>
+  );
+}
+
+function RepositoryModeRow({ state, t }: Pick<ConnectSourceViewProps, "state" | "t">): ReactNode {
+  return (
+    <div className="lkd-connect-row">
+      <label htmlFor="lkd-connect-repository-toggle" className="dlg-label">
+        <input
+          id="lkd-connect-repository-toggle"
+          type="checkbox"
+          checked={state.repositoryMode}
+          disabled={state.busy}
+          onChange={(event: ChangeEvent<HTMLInputElement>): void =>
+            state.changeRepositoryMode(event.target.checked)
+          }
+        />{" "}
+        <Explainable description={t("localKnowledge.detail.help.repositoryMode")}>
+          {t("localKnowledge.detail.connect.repositoryMode")}
+        </Explainable>
+      </label>
+    </div>
+  );
+}
+
+function SpecificFilesDisclosure({
+  state,
+  t,
+}: Pick<ConnectSourceViewProps, "state" | "t">): ReactNode {
+  return (
+    <details
+      className={detailStyles.specificFilesDisclosure}
+      data-disabled={state.repositoryMode ? "true" : undefined}
+      open={state.specificFilesExpanded && !state.repositoryMode}
+      onToggle={(event): void => {
+        if (!state.repositoryMode) state.setSpecificFilesExpanded(event.currentTarget.open);
+      }}
+    >
+      <summary
+        className={detailStyles.specificFilesSummary}
+        aria-disabled={state.repositoryMode}
+        title={
+          state.repositoryMode
+            ? t("localKnowledge.detail.connect.repositoryFilesDisabledNote")
+            : undefined
+        }
+        onClick={(event): void => {
+          if (state.repositoryMode) event.preventDefault();
+        }}
+      >
+        <span>
+          <Explainable description={t("localKnowledge.detail.help.specificFiles")}>
+            {t("localKnowledge.detail.connect.specificFiles")}
+          </Explainable>
+        </span>
+        <span className={detailStyles.disclosureIcon} aria-hidden="true" />
+      </summary>
+      <label htmlFor="lkd-connect-files-input" className="dlg-label">
+        {t("localKnowledge.detail.connect.relativeFiles")}
+      </label>
+      <textarea
+        id="lkd-connect-files-input"
+        className="dlg-input lkd-connect-input"
+        value={state.filesInput}
+        disabled={state.busy || state.repositoryMode}
+        placeholder={"src/app.ts\nREADME.md"}
+        rows={4}
+        onChange={(event: ChangeEvent<HTMLTextAreaElement>): void =>
+          state.setFilesInput(event.target.value)
+        }
+      />
+    </details>
+  );
+}
+
+function RepositoryFilesNote({ state, t }: Pick<ConnectSourceViewProps, "state" | "t">): ReactNode {
+  if (!state.repositoryMode) return null;
+  return (
+    <p className={detailStyles.selectedSourceNote}>
+      {t("localKnowledge.detail.connect.repositoryFilesDisabledNote")}
+    </p>
+  );
+}
+
+function ConnectSourceFields(props: ConnectSourceViewProps): ReactNode {
+  return (
+    <div className="lkd-connect-form" aria-label={props.t("localKnowledge.detail.connect.region")}>
+      <SourcePickerPanel
+        locale={props.locale}
+        picker={props.picker}
+        state={props.state}
+        t={props.t}
+      />
+      {props.submission.selectedSource !== null ? (
+        <p className={detailStyles.selectedSourceNote}>{props.submission.selectedSource}</p>
       ) : null}
-      {connectError !== null ? (
+      <ConnectSourcePathRow state={props.state} submission={props.submission} t={props.t} />
+      <SourceDisplayNameRow state={props.state} submission={props.submission} t={props.t} />
+      <RepositoryModeRow state={props.state} t={props.t} />
+      <SpecificFilesDisclosure state={props.state} t={props.t} />
+      <RepositoryFilesNote state={props.state} t={props.t} />
+      {props.state.connectError !== null ? (
         <div role="alert" aria-live="assertive" className="lk-alert">
-          {connectError}
+          {props.state.connectError}
         </div>
       ) : null}
     </div>
+  );
+}
+
+function ConnectSourceForm({
+  capsuleId,
+  onConnected,
+  connectImpl = connectCapsuleSource,
+}: ConnectSourceFormProps): ReactNode {
+  const t = useTranslate();
+  const locale = useLocale();
+  const state = useConnectSourceState();
+  const documentFilters = nativeDocumentFilters(t);
+  const picker = useNativeSourcePicker(state, documentFilters, t);
+  const submission = useConnectSourceSubmission(capsuleId, onConnected, connectImpl, state, t);
+  return (
+    <ConnectSourceFields
+      state={state}
+      picker={picker}
+      submission={submission}
+      locale={locale}
+      t={t}
+    />
   );
 }
 

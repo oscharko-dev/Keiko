@@ -2696,6 +2696,7 @@ function connectScopeRootPath(scope: KnowledgeSourceScope): string {
 
 const DERIVED_SOURCE_DISPLAY_NAME_MAX_CHARS = 100;
 const DERIVED_SOURCE_DISPLAY_NAME_FALLBACK = "Knowledge Source";
+const DOTTED_FOLDER_DISPLAY_LABEL_RE = /^\p{Lu}\p{Ll}{2,}\.\p{Lu}\p{Ll}{2,}$/u;
 
 function boundDerivedSourceDisplayName(value: string): string {
   return Array.from(value).slice(0, DERIVED_SOURCE_DISPLAY_NAME_MAX_CHARS).join("").trim();
@@ -2704,6 +2705,12 @@ function boundDerivedSourceDisplayName(value: string): string {
 function derivedSourceDisplayName(scope: KnowledgeSourceScope): string {
   const raw = basename(connectScopeRootPath(scope)).normalize("NFKC");
   if (stripUnsafeFormatChars(raw) !== raw) return DERIVED_SOURCE_DISPLAY_NAME_FALLBACK;
+  // Classify the intact basename before dots are converted into display separators. The narrow
+  // TitleCase exception preserves human-authored names such as Engineering.Manuals without
+  // turning lower-case DNS names or multi-label hosts into evidence-safe-looking labels.
+  if (!isKnowledgePodEvidenceSafeText(raw) && !DOTTED_FOLDER_DISPLAY_LABEL_RE.test(raw)) {
+    return DERIVED_SOURCE_DISPLAY_NAME_FALLBACK;
+  }
   const normalized = raw.replaceAll(".", " ").replace(/\s+/gu, " ").trim();
   if (!isKnowledgePodEvidenceSafeText(normalized)) {
     return DERIVED_SOURCE_DISPLAY_NAME_FALLBACK;
