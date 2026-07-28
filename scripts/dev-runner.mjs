@@ -12,6 +12,7 @@ import { fileURLToPath, URL } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const uiDir = join(repoRoot, "packages", "keiko-ui");
 const requireFromUi = createRequire(join(uiDir, "package.json"));
+const tscBin = join(repoRoot, "node_modules", "@typescript", "native", "bin", "tsc");
 
 const host = "127.0.0.1";
 const publicBrowserHost = "localhost";
@@ -336,18 +337,12 @@ export function bffProcessArgs(scriptPath, watchEnabled) {
   return watchEnabled ? ["--watch", "--watch-preserve-output", scriptPath] : [scriptPath];
 }
 
-export function packageBuildWatchArgs(rootDir) {
-  return [
-    join(rootDir, "node_modules", "@typescript", "native", "bin", "tsc"),
-    "-b",
-    "tsconfig.packages.json",
-    "--watch",
-    "--preserveWatchOutput",
-  ];
+export function packageBuildWatchArgs() {
+  return [tscBin, "-b", "tsconfig.packages.json", "--watch", "--preserveWatchOutput"];
 }
 
 function startPackageBuildWatch() {
-  spawnChild("packages", process.execPath, packageBuildWatchArgs(repoRoot), {
+  spawnChild("packages", process.execPath, packageBuildWatchArgs(), {
     cwd: repoRoot,
     env: {},
   });

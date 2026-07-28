@@ -159,8 +159,8 @@ describe("bffProcessArgs", () => {
 
 describe("packageBuildWatchArgs", () => {
   it("uses the governed TypeScript 7 compiler for the package watcher", () => {
-    expect(packageBuildWatchArgs("/repo")).toEqual([
-      join("/repo", "node_modules", "@typescript", "native", "bin", "tsc"),
+    expect(packageBuildWatchArgs()).toEqual([
+      join(process.cwd(), "node_modules", "@typescript", "native", "bin", "tsc"),
       "-b",
       "tsconfig.packages.json",
       "--watch",
