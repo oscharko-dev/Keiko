@@ -417,6 +417,19 @@ function judgeAvailabilityFromRouting(
   return routing.preflight.judge?.status === "unavailable" ? "preflight-unavailable" : "available";
 }
 
+function judgeUnavailableMessage(
+  availability: QiJudgeAvailability,
+  t: I18nTranslate,
+): string | null {
+  if (availability === "no-compatible-model") {
+    return t("qi.launcher.judgeUnavailable.noCompatible");
+  }
+  if (availability === "preflight-unavailable") {
+    return t("qi.launcher.judgeUnavailable.preflight");
+  }
+  return null;
+}
+
 function preflightStatusFromRouting(routing: QualityIntelligenceModelRouting): QiPreflightUiStatus {
   const { preflight } = routing;
   if (
@@ -648,12 +661,7 @@ export function RunLauncher({
   const selectedGenerationModelId =
     modelPolicy.testDesignModelId ?? recommendedGenerationId ?? generationModels[0]?.id ?? "";
   const selectedJudgeModelId = modelPolicyResponse?.resolved.judgeModelId ?? "";
-  const judgeUnavailableMessage =
-    judgeAvailability === "no-compatible-model"
-      ? t("qi.launcher.judgeUnavailable.noCompatible")
-      : judgeAvailability === "preflight-unavailable"
-        ? t("qi.launcher.judgeUnavailable.preflight")
-        : null;
+  const unavailableJudgeMessage = judgeUnavailableMessage(judgeAvailability, t);
   const trimmedSeed = seed.trim();
   const parsedSeed = parseSeedInput(trimmedSeed);
   const seedValid = isSeedValid(parsedSeed);
@@ -1412,14 +1420,14 @@ export function RunLauncher({
       </header>
       <div className="qi-launcher-body">
         {renderWorkflowBar()}
-        {judgeUnavailableMessage !== null ? (
+        {unavailableJudgeMessage !== null ? (
           <p
             className="qi-degraded-notice"
             style={NATIVE_BLOCK_STYLE}
             role="note"
             data-testid="qi-judge-unavailable"
           >
-            {judgeUnavailableMessage}
+            {unavailableJudgeMessage}
           </p>
         ) : null}
         {modelPolicyError !== null ? (

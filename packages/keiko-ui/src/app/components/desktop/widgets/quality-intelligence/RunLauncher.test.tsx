@@ -543,6 +543,7 @@ describe("RunLauncher — initial render", () => {
 
 describe("RunLauncher — Quality Intelligence capability truth (#2804)", (): void => {
   it("does not present a structured-only model as an available judge", async (): Promise<void> => {
+    const user = userEvent.setup();
     const generationOnly = chatCapability("generation-only", {
       supportsResponseFormat: false,
     });
@@ -550,8 +551,33 @@ describe("RunLauncher — Quality Intelligence capability truth (#2804)", (): vo
       generationModelId: generationOnly.id,
       judgeUnavailable: true,
     });
+    const preflight: QualityIntelligenceModelPolicyPreflightResponse = {
+      modelRouting: {
+        policyVersion: 1,
+        requested: response.policy,
+        resolved: {
+          testDesignModelId: generationOnly.id,
+          judgeUnavailableReason: "no-compatible-model",
+        },
+        preflight: {
+          status: "passed",
+          generation: {
+            stage: "generate",
+            modelId: generationOnly.id,
+            status: "passed",
+          },
+        },
+      },
+    };
+    const startImpl = makeStreamingFake([DONE_FRAME]).startImpl;
 
-    render(<RunLauncher fetchQiModelPolicyImpl={vi.fn().mockResolvedValue(response)} />);
+    render(
+      <RunLauncher
+        fetchQiModelPolicyImpl={vi.fn().mockResolvedValue(response)}
+        preflightQiModelPolicyImpl={vi.fn().mockResolvedValue(preflight)}
+        startImpl={startImpl}
+      />,
+    );
 
     const judge = await screen.findByRole("combobox", {
       name: "Quality Intelligence judge model",
@@ -559,6 +585,14 @@ describe("RunLauncher — Quality Intelligence capability truth (#2804)", (): vo
     expect(judge).toBeDisabled();
     expect(judge).toHaveTextContent("No judge model");
     expect(screen.getByText("Model preflight: unavailable")).toBeInTheDocument();
+    expect(screen.getByTestId("qi-judge-unavailable")).toHaveTextContent(
+      "No compatible judge model is available. Runs can still succeed, but Quality will be unavailable.",
+    );
+
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Verify checkout");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    await waitFor(() => expect(startImpl).toHaveBeenCalledTimes(1));
     expect(screen.getByTestId("qi-judge-unavailable")).toHaveTextContent(
       "No compatible judge model is available. Runs can still succeed, but Quality will be unavailable.",
     );
@@ -621,6 +655,61 @@ describe("RunLauncher — Quality Intelligence capability truth (#2804)", (): vo
     expect(screen.getByTestId("qi-judge-unavailable")).toHaveTextContent(
       "The selected judge model is unavailable. Runs can still succeed, but Quality will be unavailable.",
     );
+  });
+
+  it("keeps a compatible judge available after a successful preflight", async (): Promise<void> => {
+    const user = userEvent.setup();
+    const judge = chatCapability("judge-ready", { supportsResponseFormat: true });
+    const response = modelPolicyResponse([judge], {
+      generationModelId: judge.id,
+      judgeModelId: judge.id,
+    });
+    const preflight: QualityIntelligenceModelPolicyPreflightResponse = {
+      modelRouting: {
+        policyVersion: 1,
+        requested: response.policy,
+        resolved: {
+          testDesignModelId: judge.id,
+          judgeModelId: judge.id,
+        },
+        preflight: {
+          status: "passed",
+          generation: {
+            stage: "generate",
+            modelId: judge.id,
+            status: "passed",
+          },
+          judge: {
+            stage: "judge",
+            modelId: judge.id,
+            status: "passed",
+          },
+        },
+      },
+    };
+    const startImpl = makeStreamingFake([DONE_FRAME]).startImpl;
+
+    render(
+      <RunLauncher
+        fetchQiModelPolicyImpl={vi.fn().mockResolvedValue(response)}
+        preflightQiModelPolicyImpl={vi.fn().mockResolvedValue(preflight)}
+        startImpl={startImpl}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("combobox", {
+          name: "Quality Intelligence judge model",
+        }),
+      ).toHaveTextContent(judge.id);
+    });
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Verify checkout");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    await waitFor(() => expect(startImpl).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("Model preflight: Ready")).toBeInTheDocument();
+    expect(screen.queryByTestId("qi-judge-unavailable")).not.toBeInTheDocument();
   });
 });
 
