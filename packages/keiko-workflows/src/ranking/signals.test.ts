@@ -114,32 +114,27 @@ describe("extractSignals", () => {
     expect(result.generatedHint).toBe(true);
   });
 
-  it("stacktrace-position-bonus fires when a quoted anchor mentions the path", () => {
+  // PR #251 pin: the mixed-case row proves lowercased planner anchors still match scopePath.
+  it.each([
+    {
+      title: "stacktrace-position-bonus fires when a quoted anchor mentions the path",
+      scopePath: "src/foo.ts",
+      anchorText: "at runFoo (src/foo.ts:42:5)",
+    },
+    {
+      title: "stacktrace-position-bonus fires for anonymous stack frames",
+      scopePath: "src/foo.ts",
+      anchorText: "at src/foo.ts:42:5",
+    },
+    {
+      title: "stacktrace-position-bonus matches case-insensitively against scopePath",
+      scopePath: "src/MyClass.ts",
+      anchorText: "at run (src/myclass.ts:42:5)",
+    },
+  ])("$title", ({ scopePath, anchorText }) => {
     const result = extractSignals(
-      [atom("src/foo.ts", 0.3)],
-      [anchor("at runFoo (src/foo.ts:42:5)", "quoted")],
-      REQUIRED_HINTS,
-    );
-    const bonus = result.signals.find((s) => s.name === "stacktrace-position-bonus");
-    expect(bonus?.value).toBe(1);
-  });
-
-  it("stacktrace-position-bonus fires for anonymous stack frames", () => {
-    const result = extractSignals(
-      [atom("src/foo.ts", 0.3)],
-      [anchor("at src/foo.ts:42:5", "quoted")],
-      REQUIRED_HINTS,
-    );
-    const bonus = result.signals.find((s) => s.name === "stacktrace-position-bonus");
-    expect(bonus?.value).toBe(1);
-  });
-
-  it("stacktrace-position-bonus matches case-insensitively against scopePath", () => {
-    // Copilot review on PR #251: planner anchors are lowercased, so a case-sensitive equality
-    // would miss legitimate matches when the source file has uppercase characters.
-    const result = extractSignals(
-      [atom("src/MyClass.ts", 0.3)],
-      [anchor("at run (src/myclass.ts:42:5)", "quoted")],
+      [atom(scopePath, 0.3)],
+      [anchor(anchorText, "quoted")],
       REQUIRED_HINTS,
     );
     const bonus = result.signals.find((s) => s.name === "stacktrace-position-bonus");

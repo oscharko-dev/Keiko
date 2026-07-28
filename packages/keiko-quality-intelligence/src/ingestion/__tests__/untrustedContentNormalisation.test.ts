@@ -29,15 +29,32 @@ describe("normaliseUntrustedContent", () => {
     expect(result.value).toBe("ABC");
   });
 
-  it("strips C0 control characters", () => {
-    const result = normaliseUntrustedContent("a\x00b\x07c\x1Fd");
-    expect(result.value).toBe("abcd");
-    expect(result.normalisedFromControlChars).toBe(true);
-  });
-
-  it("strips DEL (0x7F) and C1 controls", () => {
-    const result = normaliseUntrustedContent("a\x7Fb\x80c\x9Fd");
-    expect(result.value).toBe("abcd");
+  // The supplementary-plane row pins code-point iteration (S7758) across a surrogate pair.
+  it.each([
+    {
+      title: "strips C0 control characters",
+      input: "a\x00b\x07c\x1Fd",
+      expected: "abcd",
+    },
+    {
+      title: "strips DEL (0x7F) and C1 controls",
+      input: "a\x7Fb\x80c\x9Fd",
+      expected: "abcd",
+    },
+    {
+      title: "strips other C0 controls while keeping surrounding newlines",
+      input: "line1\x07\nline2",
+      expected: "line1\nline2",
+    },
+    {
+      title:
+        "preserves a supplementary-plane character (emoji) while stripping surrounding control chars",
+      input: "a\x00😀\x7Fb",
+      expected: "a😀b",
+    },
+  ])("$title", ({ input, expected }) => {
+    const result = normaliseUntrustedContent(input);
+    expect(result.value).toBe(expected);
     expect(result.normalisedFromControlChars).toBe(true);
   });
 
@@ -50,23 +67,6 @@ describe("normaliseUntrustedContent", () => {
     expect(result.value).toBe("line1\n\tline2\r\nline3");
     expect(result.normalisedFromControlChars).toBe(false);
     expect(result.markdownInjectionEscapes).toBe(0);
-  });
-
-  it("strips other C0 controls while keeping surrounding newlines", () => {
-    // BEL (0x07) is stripped; the LF separating the two lines is preserved.
-    const result = normaliseUntrustedContent("line1\x07\nline2");
-    expect(result.value).toBe("line1\nline2");
-    expect(result.normalisedFromControlChars).toBe(true);
-  });
-
-  it("preserves a supplementary-plane character (emoji) while stripping surrounding control chars", () => {
-    // Regression (S7758): the control-char scan reads code points via
-    // `codePointAt`, not UTF-16 code units via `charCodeAt`. "😀" (U+1F600) is
-    // a 2-code-unit surrogate pair; neither code unit falls in a control range,
-    // so both units must survive and reassemble into the same emoji.
-    const result = normaliseUntrustedContent("a\x00😀\x7Fb");
-    expect(result.value).toBe("a😀b");
-    expect(result.normalisedFromControlChars).toBe(true);
   });
 
   it("escapes Markdown heading lines on every line", () => {

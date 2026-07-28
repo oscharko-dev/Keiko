@@ -49,36 +49,32 @@ describe("splitRequirementsIntoAtoms — line splitting and marker stripping", (
     expect(atoms[2]?.canonicalText).toBe("The system shall encrypt data at rest");
   });
 
-  it("strips '- ' leading marker from lines", () => {
-    const text = "- User must be authenticated\n- Session must expire after 30 minutes";
+  it.each([
+    {
+      title: "strips '- ' leading marker from lines",
+      text: "- User must be authenticated\n- Session must expire after 30 minutes",
+      expected: ["User must be authenticated", "Session must expire after 30 minutes"],
+    },
+    {
+      title: "strips '1. ' numbered marker from lines",
+      text: "1. Login must require two-factor\n2. Password must be at least 12 chars",
+      expected: ["Login must require two-factor", "Password must be at least 12 chars"],
+    },
+    {
+      title: "strips 'a) ' alphabetic marker from lines",
+      text: "a) System must validate input\nb) System must reject invalid data",
+      expected: ["System must validate input", "System must reject invalid data"],
+    },
+    {
+      title: "strips '• ' bullet marker from lines",
+      text: "• Feature X must be available\n• Feature Y must be tested",
+      expected: ["Feature X must be available", "Feature Y must be tested"],
+    },
+  ] as const)("$title", ({ text, expected }) => {
     const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, opts());
     expect(atoms).toHaveLength(2);
-    expect(atoms[0]?.canonicalText).toBe("User must be authenticated");
-    expect(atoms[1]?.canonicalText).toBe("Session must expire after 30 minutes");
-  });
-
-  it("strips '1. ' numbered marker from lines", () => {
-    const text = "1. Login must require two-factor\n2. Password must be at least 12 chars";
-    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, opts());
-    expect(atoms).toHaveLength(2);
-    expect(atoms[0]?.canonicalText).toBe("Login must require two-factor");
-    expect(atoms[1]?.canonicalText).toBe("Password must be at least 12 chars");
-  });
-
-  it("strips 'a) ' alphabetic marker from lines", () => {
-    const text = "a) System must validate input\nb) System must reject invalid data";
-    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, opts());
-    expect(atoms).toHaveLength(2);
-    expect(atoms[0]?.canonicalText).toBe("System must validate input");
-    expect(atoms[1]?.canonicalText).toBe("System must reject invalid data");
-  });
-
-  it("strips '• ' bullet marker from lines", () => {
-    const text = "• Feature X must be available\n• Feature Y must be tested";
-    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, opts());
-    expect(atoms).toHaveLength(2);
-    expect(atoms[0]?.canonicalText).toBe("Feature X must be available");
-    expect(atoms[1]?.canonicalText).toBe("Feature Y must be tested");
+    expect(atoms[0]?.canonicalText).toBe(expected[0]);
+    expect(atoms[1]?.canonicalText).toBe(expected[1]);
   });
 
   it("handles Windows-style CRLF line endings", () => {
@@ -494,18 +490,12 @@ describe("splitRequirementsIntoAtoms — determinism", () => {
 // ─── 7. Edge cases: empty / blank / single-line ───────────────────────────────
 
 describe("splitRequirementsIntoAtoms — edge cases", () => {
-  it("returns empty array for an empty string", () => {
-    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms("", opts());
-    expect(atoms).toHaveLength(0);
-  });
-
-  it("returns empty array for a whitespace-only string", () => {
-    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms("   \n\t  ", opts());
-    expect(atoms).toHaveLength(0);
-  });
-
-  it("returns empty array when all lines are below min-length", () => {
-    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms("ab\ncd\nef", opts());
+  it.each([
+    { title: "returns empty array for an empty string", text: "" },
+    { title: "returns empty array for a whitespace-only string", text: "   \n\t  " },
+    { title: "returns empty array when all lines are below min-length", text: "ab\ncd\nef" },
+  ])("$title", ({ text }) => {
+    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, opts());
     expect(atoms).toHaveLength(0);
   });
 

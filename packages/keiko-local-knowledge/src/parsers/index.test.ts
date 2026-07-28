@@ -60,36 +60,32 @@ describe("createDefaultParserRegistry", () => {
     }
   });
 
-  it("routes JSON to the JSON parser", () => {
+  it.each([
+    { title: "routes JSON to the JSON parser", body: "{}", extension: "json", parserId: "json" },
+    {
+      title: "routes CSV to the CSV parser",
+      body: "a,b\n1,2",
+      extension: "csv",
+      parserId: "csv",
+    },
+    {
+      title: "routes HTML to the HTML parser",
+      body: "<html></html>",
+      extension: "html",
+      parserId: "html",
+    },
+    {
+      title: "routes plain text to the text parser",
+      body: "hello",
+      extension: "txt",
+      parserId: "text",
+    },
+  ])("$title", ({ body, extension, parserId }) => {
     const registry = parsers.createDefaultParserRegistry();
-    const resolution = registry.resolve(selectionFromText("{}", { extension: "json" }));
+    const resolution = registry.resolve(selectionFromText(body, { extension }));
     expect(resolution.kind).toBe("matched");
     if (resolution.kind !== "matched") throw new Error("unreachable");
-    expect(resolution.adapter.capability.parserId).toBe("json");
-  });
-
-  it("routes CSV to the CSV parser", () => {
-    const registry = parsers.createDefaultParserRegistry();
-    const resolution = registry.resolve(selectionFromText("a,b\n1,2", { extension: "csv" }));
-    expect(resolution.kind).toBe("matched");
-    if (resolution.kind !== "matched") throw new Error("unreachable");
-    expect(resolution.adapter.capability.parserId).toBe("csv");
-  });
-
-  it("routes HTML to the HTML parser", () => {
-    const registry = parsers.createDefaultParserRegistry();
-    const resolution = registry.resolve(selectionFromText("<html></html>", { extension: "html" }));
-    expect(resolution.kind).toBe("matched");
-    if (resolution.kind !== "matched") throw new Error("unreachable");
-    expect(resolution.adapter.capability.parserId).toBe("html");
-  });
-
-  it("routes plain text to the text parser", () => {
-    const registry = parsers.createDefaultParserRegistry();
-    const resolution = registry.resolve(selectionFromText("hello", { extension: "txt" }));
-    expect(resolution.kind).toBe("matched");
-    if (resolution.kind !== "matched") throw new Error("unreachable");
-    expect(resolution.adapter.capability.parserId).toBe("text");
+    expect(resolution.adapter.capability.parserId).toBe(parserId);
   });
 
   it("routes markdown to the text parser", () => {

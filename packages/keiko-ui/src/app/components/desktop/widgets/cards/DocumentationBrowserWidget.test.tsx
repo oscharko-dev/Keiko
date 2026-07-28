@@ -272,11 +272,27 @@ describe("DocumentationBrowserWidget — authentication-required (#1869)", () =>
 });
 
 describe("DocumentationBrowserWidget — denied/degraded/already-indexed (#1869)", () => {
-  it("never offers approval for a degraded (action page) proposal", async () => {
+  it.each([
+    {
+      title: "never offers approval for a degraded (action page) proposal",
+      outcome: "degraded",
+      message: "Not a static manual",
+    },
+    {
+      title: "never offers approval for a denied (credentialed/unsafe-scheme) proposal",
+      outcome: "denied",
+      message: "Cannot index this target",
+    },
+    {
+      title: "never offers approval for an unsupported (public site / unsupported scheme) proposal",
+      outcome: "unsupported",
+      message: "Not offered for indexing",
+    },
+  ] as const)("$title", async ({ outcome, message }) => {
     const { user } = await openEligibleManual();
-    mockPropose.mockResolvedValue(proposal("degraded", false));
+    mockPropose.mockResolvedValue(proposal(outcome, false));
     await user.click(screen.getByRole("button", { name: "Prepare for indexing" }));
-    expect(await screen.findByText("Not a static manual")).toBeInTheDocument();
+    expect(await screen.findByText(message)).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Create Knowledge Pod from this manual" }),
     ).not.toBeInTheDocument();
@@ -297,28 +313,6 @@ describe("DocumentationBrowserWidget — denied/degraded/already-indexed (#1869)
     ).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "View your Knowledge Pods" }));
     expect(onOpenKnowledgePods).toHaveBeenCalledTimes(1);
-  });
-
-  it("never offers approval for a denied (credentialed/unsafe-scheme) proposal", async () => {
-    const { user } = await openEligibleManual();
-    mockPropose.mockResolvedValue(proposal("denied", false));
-    await user.click(screen.getByRole("button", { name: "Prepare for indexing" }));
-    expect(await screen.findByText("Cannot index this target")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Create Knowledge Pod from this manual" }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
-  });
-
-  it("never offers approval for an unsupported (public site / unsupported scheme) proposal", async () => {
-    const { user } = await openEligibleManual();
-    mockPropose.mockResolvedValue(proposal("unsupported", false));
-    await user.click(screen.getByRole("button", { name: "Prepare for indexing" }));
-    expect(await screen.findByText("Not offered for indexing")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Create Knowledge Pod from this manual" }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
   });
 });
 

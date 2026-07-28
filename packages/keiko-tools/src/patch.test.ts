@@ -175,18 +175,31 @@ describe("inspectPatch", () => {
 });
 
 describe("validatePatch — rejections", () => {
-  it("rejects an out-of-workspace target path", () => {
-    const diff = "--- a/../../etc/passwd\n+++ b/../../etc/passwd\n@@ -1,1 +1,1 @@\n-x\n+y\n";
+  it.each([
+    {
+      title: "rejects an out-of-workspace target path",
+      diff: "--- a/../../etc/passwd\n+++ b/../../etc/passwd\n@@ -1,1 +1,1 @@\n-x\n+y\n",
+      code: "path-unsafe",
+    },
+    {
+      title: "rejects a denied target path (.env)",
+      diff: "--- /dev/null\n+++ b/.env\n@@ -0,0 +1,1 @@\n+SECRET=1\n",
+      code: "path-denied",
+    },
+    {
+      title: "rejects a git binary patch",
+      diff: "--- a/x\n+++ b/x\nGIT binary patch\nliteral 0\n",
+      code: "binary",
+    },
+    {
+      title: "returns malformed for an unparseable hunk header",
+      diff: "--- a/x\n+++ b/x\n@@ this is not a hunk header @@\n+y\n",
+      code: "malformed",
+    },
+  ])("$title", ({ diff, code }) => {
     const v = validatePatch(info, diff);
     expect(v.ok).toBe(false);
-    expect(v.reasons.map((r) => r.code)).toContain("path-unsafe");
-  });
-
-  it("rejects a denied target path (.env)", () => {
-    const diff = "--- /dev/null\n+++ b/.env\n@@ -0,0 +1,1 @@\n+SECRET=1\n";
-    const v = validatePatch(info, diff);
-    expect(v.ok).toBe(false);
-    expect(v.reasons.map((r) => r.code)).toContain("path-denied");
+    expect(v.reasons.map((r) => r.code)).toContain(code);
   });
 
   it("rejects an oversized diff", () => {
@@ -195,13 +208,6 @@ describe("validatePatch — rejections", () => {
     });
     expect(v.ok).toBe(false);
     expect(v.reasons.map((r) => r.code)).toContain("size-limit");
-  });
-
-  it("rejects a git binary patch", () => {
-    const diff = "--- a/x\n+++ b/x\nGIT binary patch\nliteral 0\n";
-    const v = validatePatch(info, diff);
-    expect(v.ok).toBe(false);
-    expect(v.reasons.map((r) => r.code)).toContain("binary");
   });
 
   it("rejects too many changed lines", () => {
@@ -398,13 +404,6 @@ describe("validatePatch — rejections", () => {
     const v = validatePatch(info, CREATE_DIFF);
     expect(v.ok).toBe(false);
     expect(v.conflicts[0]?.reason).toContain("already exists");
-  });
-
-  it("returns malformed for an unparseable hunk header", () => {
-    const diff = "--- a/x\n+++ b/x\n@@ this is not a hunk header @@\n+y\n";
-    const v = validatePatch(info, diff);
-    expect(v.ok).toBe(false);
-    expect(v.reasons.map((r) => r.code)).toContain("malformed");
   });
 
   it("rejects non-diff text that does not change any file", () => {

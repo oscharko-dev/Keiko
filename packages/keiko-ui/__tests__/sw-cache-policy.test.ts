@@ -247,48 +247,36 @@ describe("sw.js cache policy — sandboxed fetch-handler evaluation", () => {
     expect(sandbox.respondWithCalls).toHaveLength(0);
   });
 
-  it("does NOT call event.respondWith for the /api root literal", () => {
+  it.each([
+    {
+      title: "does NOT call event.respondWith for the /api root literal",
+      url: "http://localhost:3000/api",
+      expectedCalls: 0,
+    },
+    {
+      title: "does not call event.respondWith for /manifest.webmanifest",
+      url: "http://localhost:3000/manifest.webmanifest",
+      expectedCalls: 0,
+    },
+    {
+      title: "DOES call event.respondWith for /_next/static/*.js (static asset)",
+      url: "http://localhost:3000/_next/static/chunk.js",
+      expectedCalls: 1,
+    },
+    {
+      title: "does NOT call event.respondWith for cross-origin requests (same-origin guard)",
+      url: "https://example.com/some.js",
+      expectedCalls: 0,
+    },
+  ])("$title", ({ url, expectedCalls }) => {
     const { context, sandbox } = makeSandbox();
     vm.runInContext(SW_SOURCE, context);
 
     const fetchHandler = sandbox.handlers.get("fetch");
-    const event = makeEvent("fetch", "http://localhost:3000/api", sandbox);
+    const event = makeEvent("fetch", url, sandbox);
     fetchHandler?.(event);
 
-    expect(sandbox.respondWithCalls).toHaveLength(0);
-  });
-
-  it("does not call event.respondWith for /manifest.webmanifest", () => {
-    const { context, sandbox } = makeSandbox();
-    vm.runInContext(SW_SOURCE, context);
-
-    const fetchHandler = sandbox.handlers.get("fetch");
-    const event = makeEvent("fetch", "http://localhost:3000/manifest.webmanifest", sandbox);
-    fetchHandler?.(event);
-
-    expect(sandbox.respondWithCalls).toHaveLength(0);
-  });
-
-  it("DOES call event.respondWith for /_next/static/*.js (static asset)", () => {
-    const { context, sandbox } = makeSandbox();
-    vm.runInContext(SW_SOURCE, context);
-
-    const fetchHandler = sandbox.handlers.get("fetch");
-    const event = makeEvent("fetch", "http://localhost:3000/_next/static/chunk.js", sandbox);
-    fetchHandler?.(event);
-
-    expect(sandbox.respondWithCalls).toHaveLength(1);
-  });
-
-  it("does NOT call event.respondWith for cross-origin requests (same-origin guard)", () => {
-    const { context, sandbox } = makeSandbox();
-    vm.runInContext(SW_SOURCE, context);
-
-    const fetchHandler = sandbox.handlers.get("fetch");
-    const event = makeEvent("fetch", "https://example.com/some.js", sandbox);
-    fetchHandler?.(event);
-
-    expect(sandbox.respondWithCalls).toHaveLength(0);
+    expect(sandbox.respondWithCalls).toHaveLength(expectedCalls);
   });
 
   it("never writes to the cache for an /api/* request even via the runtime path", async () => {

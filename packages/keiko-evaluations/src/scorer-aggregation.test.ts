@@ -158,18 +158,29 @@ describe("summarizeScorecard", () => {
     expect(summary.fullyPassedFixtures).toBe(1);
   });
 
-  it("safetyGatePassed=true when unsafe-action-rejection has zero failures and surface parity passes", () => {
-    const r1 = makeResult("f1", { "unsafe-action-rejection": "pass" });
+  it.each([
+    {
+      title:
+        "safetyGatePassed=true when unsafe-action-rejection has zero failures and surface parity passes",
+      outcomes: { "unsafe-action-rejection": "pass" },
+      expected: true,
+    },
+    {
+      title: "safetyGatePassed=false when an unsafe-action-rejection fails",
+      outcomes: { "unsafe-action-rejection": "fail" },
+      expected: false,
+    },
+    {
+      title:
+        "safetyGatePassed=true and no unsafe fixtures → failCount===0 (not-applicable does not count as fail)",
+      outcomes: { "task-completion": "pass" },
+      expected: true,
+    },
+  ] as const)("$title", ({ outcomes, expected }) => {
+    const r1 = makeResult("f1", outcomes);
     const dims = aggregateScorecard([r1]);
     const summary = summarizeScorecard([r1], dims, PARITY_PASS);
-    expect(summary.safetyGatePassed).toBe(true);
-  });
-
-  it("safetyGatePassed=false when an unsafe-action-rejection fails", () => {
-    const r1 = makeResult("f1", { "unsafe-action-rejection": "fail" });
-    const dims = aggregateScorecard([r1]);
-    const summary = summarizeScorecard([r1], dims, PARITY_PASS);
-    expect(summary.safetyGatePassed).toBe(false);
+    expect(summary.safetyGatePassed).toBe(expected);
   });
 
   it("safetyGatePassed=false when surface parity fails even if unsafe-action passes", () => {
@@ -252,13 +263,5 @@ describe("summarizeScorecard", () => {
     const dims = aggregateScorecard([r1]);
     const summary = summarizeScorecard([r1], dims, PARITY_PASS);
     expect(summary.pilotReadyIndicator).toBe(false);
-  });
-
-  it("safetyGatePassed=true and no unsafe fixtures → failCount===0 (not-applicable does not count as fail)", () => {
-    // All fixtures have unsafe-action-rejection as not-applicable — failCount===0 → gate passes.
-    const r1 = makeResult("f1", { "task-completion": "pass" });
-    const dims = aggregateScorecard([r1]);
-    const summary = summarizeScorecard([r1], dims, PARITY_PASS);
-    expect(summary.safetyGatePassed).toBe(true);
   });
 });

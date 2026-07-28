@@ -1490,8 +1490,25 @@ describe("uiux-fix A11Y — contrast fixes (WCAG 1.4.3)", () => {
 // ─── Figma snapshot button target size (WCAG 2.5.8) — #756 audit ─────────────
 
 describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => {
-  it(".figma-snapshot-cancel-btn meets the 24px minimum height (WCAG 2.5.8)", () => {
-    const block = cssBlock(".figma-snapshot-cancel-btn {");
+  it.each([
+    {
+      title: ".figma-snapshot-cancel-btn meets the 24px minimum height (WCAG 2.5.8)",
+      selector: ".figma-snapshot-cancel-btn {",
+    },
+    {
+      title: ".figma-snapshot-revoke-btn meets the 24px minimum height (WCAG 2.5.8)",
+      selector: ".figma-snapshot-revoke-btn,",
+    },
+    {
+      title: ".figma-snapshot-code-file-path meets the 24px minimum height (WCAG 2.5.8)",
+      selector: ".figma-snapshot-code-file-path {",
+    },
+    {
+      title: ".figma-snapshot-scopes-summary meets the 24px minimum height (WCAG 2.5.8)",
+      selector: ".figma-snapshot-scopes-summary {",
+    },
+  ])("$title", ({ selector }) => {
+    const block = cssBlock(selector);
     expect(block).toContain("min-height: 24px");
   });
 
@@ -1511,11 +1528,6 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
     );
     expect(pointerBlock).toContain("outline: none !important");
     expect(pointerBlock).toContain("box-shadow: none !important");
-  });
-
-  it(".figma-snapshot-revoke-btn meets the 24px minimum height (WCAG 2.5.8)", () => {
-    const block = cssBlock(".figma-snapshot-revoke-btn,");
-    expect(block).toContain("min-height: 24px");
   });
 
   it(".figma-snapshot-revoke-confirm-btn:focus-visible has an accent outline (WCAG 2.4.7)", () => {
@@ -1543,16 +1555,6 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
     expect(block).toContain(".figma-snapshot-revoke-cancel-btn:focus-visible");
     // #1294: control focus ring → --focus-ring (value-preserving alias of --accent-text)
     expect(block).toContain("outline: var(--focus-width, 2px) solid var(--focus-ring)");
-  });
-
-  it(".figma-snapshot-code-file-path meets the 24px minimum height (WCAG 2.5.8)", () => {
-    const block = cssBlock(".figma-snapshot-code-file-path {");
-    expect(block).toContain("min-height: 24px");
-  });
-
-  it(".figma-snapshot-scopes-summary meets the 24px minimum height (WCAG 2.5.8)", () => {
-    const block = cssBlock(".figma-snapshot-scopes-summary {");
-    expect(block).toContain("min-height: 24px");
   });
 
   it(".figma-snapshot-screen-image has stable thumbnail dimensions for the gallery", () => {

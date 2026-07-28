@@ -120,18 +120,12 @@ describe("findForbiddenPaths — build metadata and compiled tests", () => {
 // ---------------------------------------------------------------------------
 
 describe("findForbiddenPaths — .env (environment file)", () => {
-  it("flags the bare .env file", () => {
-    const hits = findForbiddenPaths([".env"]);
-    expect(hits.some((h) => h.label === "an environment file")).toBe(true);
-  });
-
-  it("flags .env.local", () => {
-    const hits = findForbiddenPaths([".env.local"]);
-    expect(hits.some((h) => h.label === "an environment file")).toBe(true);
-  });
-
-  it("flags .env.production", () => {
-    const hits = findForbiddenPaths([".env.production"]);
+  it.each([
+    { title: "flags the bare .env file", path: ".env" },
+    { title: "flags .env.local", path: ".env.local" },
+    { title: "flags .env.production", path: ".env.production" },
+  ])("$title", ({ path }) => {
+    const hits = findForbiddenPaths([path]);
     expect(hits.some((h) => h.label === "an environment file")).toBe(true);
   });
 
@@ -278,18 +272,21 @@ describe("findForbiddenPaths — multi-hit: canvas .node matches both rules", ()
 // ---------------------------------------------------------------------------
 
 describe("findForbiddenPaths — absolute local paths", () => {
-  it("flags a Unix absolute path starting with /", () => {
-    const hits = findForbiddenPaths(["/home/user/projects/keiko/dist/index.js"]);
-    expect(hits.some((h) => h.label === "an absolute local path")).toBe(true);
-  });
-
-  it("flags a Windows absolute path (C:\\...)", () => {
-    const hits = findForbiddenPaths(["C:\\Users\\dev\\keiko\\dist\\index.js"]);
-    expect(hits.some((h) => h.label === "an absolute local path")).toBe(true);
-  });
-
-  it("flags a Windows absolute path with forward slash (C:/...)", () => {
-    const hits = findForbiddenPaths(["C:/Users/dev/keiko/dist/index.js"]);
+  it.each([
+    {
+      title: "flags a Unix absolute path starting with /",
+      path: "/home/user/projects/keiko/dist/index.js",
+    },
+    {
+      title: "flags a Windows absolute path (C:\\...)",
+      path: "C:\\Users\\dev\\keiko\\dist\\index.js",
+    },
+    {
+      title: "flags a Windows absolute path with forward slash (C:/...)",
+      path: "C:/Users/dev/keiko/dist/index.js",
+    },
+  ])("$title", ({ path }) => {
+    const hits = findForbiddenPaths([path]);
     expect(hits.some((h) => h.label === "an absolute local path")).toBe(true);
   });
 

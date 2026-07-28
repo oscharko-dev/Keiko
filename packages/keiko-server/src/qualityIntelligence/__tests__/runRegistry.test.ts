@@ -120,24 +120,14 @@ describe("QiRunRegistry.updateTotals", () => {
 // ─── complete ────────────────────────────────────────────────────────────────
 
 describe("QiRunRegistry.complete", () => {
-  it("removes the run from active set on success", () => {
+  it.each([
+    { title: "removes the run from active set on success", outcome: "succeeded" },
+    { title: "removes the run from active set on failure", outcome: "failed" },
+    { title: "removes the run from active set on cancellation", outcome: "cancelled" },
+  ] as const)("$title", ({ outcome }) => {
     const r = registry();
     r.register("run-1", TS);
-    r.complete("run-1", "succeeded");
-    expect(r.isActive("run-1")).toBe(false);
-  });
-
-  it("removes the run from active set on failure", () => {
-    const r = registry();
-    r.register("run-1", TS);
-    r.complete("run-1", "failed");
-    expect(r.isActive("run-1")).toBe(false);
-  });
-
-  it("removes the run from active set on cancellation", () => {
-    const r = registry();
-    r.register("run-1", TS);
-    r.complete("run-1", "cancelled");
+    r.complete("run-1", outcome);
     expect(r.isActive("run-1")).toBe(false);
   });
 

@@ -118,24 +118,56 @@ describe("looksLikeBrowserSafeSourceEnvelope", () => {
   it("accepts a clean envelope", () => {
     expect(looksLikeBrowserSafeSourceEnvelope(makeRepo())).toBe(true);
   });
-  it("rejects an envelope whose displayLabel contains a URL", () => {
-    const env = { ...makeRepo(), displayLabel: "see https://example.com/foo" };
+  it.each([
+    {
+      title: "rejects an envelope whose displayLabel contains a URL",
+      displayLabel: "see https://example.com/foo",
+    },
+    {
+      title: "rejects an envelope with an empty displayLabel",
+      displayLabel: "",
+    },
+    {
+      title: "rejects an envelope whose displayLabel looks like base64",
+      displayLabel: "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVowMTIzNDU2Nzg5",
+    },
+  ])("$title", ({ displayLabel }) => {
+    const env = { ...makeRepo(), displayLabel };
     expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
   });
-  it("rejects an envelope whose localRef contains a URL", () => {
-    const env = { ...makeRepo(), localRef: "https://example.com/foo" };
+
+  it.each([
+    {
+      title: "rejects an envelope whose localRef contains a URL",
+      localRef: "https://example.com/foo",
+    },
+    {
+      title: "rejects a localRef containing a credential (AKIA)",
+      localRef: "tok:AKIAIOSFODNN7EXAMPLE",
+    },
+    {
+      title: "rejects a localRef with a non-http scheme (ftp)",
+      localRef: "ftp://internal/dump",
+    },
+    {
+      title: "rejects a localRef with a non-http scheme (s3)",
+      localRef: "s3://bucket/creds.json",
+    },
+    {
+      title: "rejects a localRef with a non-http scheme (file)",
+      localRef: "file:///etc/passwd",
+    },
+    {
+      title: "rejects a localRef that is an absolute POSIX path",
+      localRef: "/Users/alice/secret",
+    },
+  ])("$title", ({ localRef }) => {
+    const env = { ...makeRepo(), localRef };
     expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
   });
+
   it("rejects an envelope with an oversized displayLabel", () => {
     const env = { ...makeRepo(), displayLabel: "x".repeat(257) };
-    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
-  });
-  it("rejects an envelope with an empty displayLabel", () => {
-    const env = { ...makeRepo(), displayLabel: "" };
-    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
-  });
-  it("rejects an envelope whose displayLabel looks like base64", () => {
-    const env = { ...makeRepo(), displayLabel: "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVowMTIzNDU2Nzg5" };
     expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
   });
   it("rejects an envelope with a malformed integrity hash", () => {
@@ -148,26 +180,6 @@ describe("looksLikeBrowserSafeSourceEnvelope", () => {
 
   // --- new negative tests (Issue #277 AC1 hardening) ---
 
-  it("rejects a localRef containing a credential (AKIA)", () => {
-    const env = { ...makeRepo(), localRef: "tok:AKIAIOSFODNN7EXAMPLE" };
-    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
-  });
-  it("rejects a localRef with a non-http scheme (ftp)", () => {
-    const env = { ...makeRepo(), localRef: "ftp://internal/dump" };
-    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
-  });
-  it("rejects a localRef with a non-http scheme (s3)", () => {
-    const env = { ...makeRepo(), localRef: "s3://bucket/creds.json" };
-    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
-  });
-  it("rejects a localRef with a non-http scheme (file)", () => {
-    const env = { ...makeRepo(), localRef: "file:///etc/passwd" };
-    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
-  });
-  it("rejects a localRef that is an absolute POSIX path", () => {
-    const env = { ...makeRepo(), localRef: "/Users/alice/secret" };
-    expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
-  });
   it("rejects a provenance.origin containing a URL", () => {
     const env = {
       ...makeRepo(),

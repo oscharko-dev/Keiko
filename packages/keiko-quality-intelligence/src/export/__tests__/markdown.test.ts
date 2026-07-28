@@ -134,15 +134,33 @@ describe("adaptToMarkdown — export sanitisation", () => {
     expect(out).toContain("1. '  =1+1");
   });
 
-  it("escapes a markdown link in a step so a javascript: href cannot render as a live link", () => {
+  it.each([
+    {
+      title: "escapes a markdown link in a step so a javascript: href cannot render as a live link",
+      step: "Click [here](javascript:alert(1)) to continue",
+      escaped: "\\[here\\](",
+      active: "[here](",
+    },
+    {
+      title: "escapes Markdown autolinks",
+      step: "Open <http://evil.example/path>",
+      escaped: "\\<http://evil.example/path\\>",
+      active: "<http://evil.example/path>",
+    },
+    {
+      title: "escapes angle brackets inside Markdown link text",
+      step: "[<script](1)",
+      escaped: "\\[\\<script\\](1)",
+      active: "[<script](1)",
+    },
+  ])("$title", ({ step, escaped, active }) => {
     const c: QualityIntelligenceTestCaseCandidate = {
       ...candidate("tc-1", "X"),
-      steps: ["Click [here](javascript:alert(1)) to continue"],
+      steps: [step],
     };
     const out = adaptToMarkdown(bundle([c]), [c]);
-    // The active link syntax is escaped; the raw clickable form is gone.
-    expect(out).toContain("\\[here\\](");
-    expect(out).not.toContain("[here](");
+    expect(out).toContain(escaped);
+    expect(out).not.toContain(active);
   });
 
   it("escapes a markdown image so a tracking/SSRF pixel cannot render from an exported field", () => {
@@ -179,16 +197,6 @@ describe("adaptToMarkdown — export sanitisation", () => {
     expect(out).not.toContain("[evil]: javascript");
   });
 
-  it("escapes Markdown autolinks", () => {
-    const c: QualityIntelligenceTestCaseCandidate = {
-      ...candidate("tc-1", "X"),
-      steps: ["Open <http://evil.example/path>"],
-    };
-    const out = adaptToMarkdown(bundle([c]), [c]);
-    expect(out).toContain("\\<http://evil.example/path\\>");
-    expect(out).not.toContain("<http://evil.example/path>");
-  });
-
   it("escapes raw HTML tags", () => {
     const c: QualityIntelligenceTestCaseCandidate = {
       ...candidate("tc-1", "X"),
@@ -197,16 +205,6 @@ describe("adaptToMarkdown — export sanitisation", () => {
     const out = adaptToMarkdown(bundle([c]), [c]);
     expect(out).toContain("\\<script\\>alert(1)\\</script\\>");
     expect(out).not.toContain("<script>");
-  });
-
-  it("escapes angle brackets inside Markdown link text", () => {
-    const c: QualityIntelligenceTestCaseCandidate = {
-      ...candidate("tc-1", "X"),
-      steps: ["[<script](1)"],
-    };
-    const out = adaptToMarkdown(bundle([c]), [c]);
-    expect(out).toContain("\\[\\<script\\](1)");
-    expect(out).not.toContain("[<script](1)");
   });
 
   it("escapes existing backslashes before Markdown-active syntax", () => {

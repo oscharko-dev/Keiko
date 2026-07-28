@@ -128,42 +128,28 @@ describe("scoreVoiceTwinQuality: missingMetric (dimension declared but metric ab
     expect(result?.rationale).toContain("interruption-metric");
   });
 
-  it("end-of-turn-metric declared but metrics.endOfTurn missing → fail", () => {
-    const fixture = makeFixture(["end-of-turn-metric"]);
+  it.each([
+    {
+      title: "end-of-turn-metric declared but metrics.endOfTurn missing → fail",
+      dimension: "end-of-turn-metric",
+    },
+    {
+      title:
+        "transcript-correction-metric declared but metrics.transcriptCorrection missing → fail",
+      dimension: "transcript-correction-metric",
+    },
+    {
+      title: "provider-failure-recovery-metric declared but metric missing → fail",
+      dimension: "provider-failure-recovery-metric",
+    },
+    {
+      title: "buffer-boundedness-metric declared but metric missing → fail",
+      dimension: "buffer-boundedness-metric",
+    },
+  ] as const)("$title", ({ dimension }) => {
+    const fixture = makeFixture([dimension]);
     const obs = makeObs({}, {});
-    const result = scoreVoiceTwinQuality(fixture, obs).find(
-      (r) => r.dimension === "end-of-turn-metric",
-    );
-    expect(result?.outcome).toBe("fail");
-    expect(result?.rationale).toMatch(/^failed:/);
-  });
-
-  it("transcript-correction-metric declared but metrics.transcriptCorrection missing → fail", () => {
-    const fixture = makeFixture(["transcript-correction-metric"]);
-    const obs = makeObs({}, {});
-    const result = scoreVoiceTwinQuality(fixture, obs).find(
-      (r) => r.dimension === "transcript-correction-metric",
-    );
-    expect(result?.outcome).toBe("fail");
-    expect(result?.rationale).toMatch(/^failed:/);
-  });
-
-  it("provider-failure-recovery-metric declared but metric missing → fail", () => {
-    const fixture = makeFixture(["provider-failure-recovery-metric"]);
-    const obs = makeObs({}, {});
-    const result = scoreVoiceTwinQuality(fixture, obs).find(
-      (r) => r.dimension === "provider-failure-recovery-metric",
-    );
-    expect(result?.outcome).toBe("fail");
-    expect(result?.rationale).toMatch(/^failed:/);
-  });
-
-  it("buffer-boundedness-metric declared but metric missing → fail", () => {
-    const fixture = makeFixture(["buffer-boundedness-metric"]);
-    const obs = makeObs({}, {});
-    const result = scoreVoiceTwinQuality(fixture, obs).find(
-      (r) => r.dimension === "buffer-boundedness-metric",
-    );
+    const result = scoreVoiceTwinQuality(fixture, obs).find((r) => r.dimension === dimension);
     expect(result?.outcome).toBe("fail");
     expect(result?.rationale).toMatch(/^failed:/);
   });

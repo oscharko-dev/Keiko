@@ -18,18 +18,12 @@ describe("OcrPageResult (type-level)", () => {
     expect(ok.ok).toBe(true);
   });
 
-  it("accepts a valid not-configured failure", () => {
-    const fail: OcrPageResult = { ok: false, reason: "ocr-not-configured" };
-    expect(fail.ok).toBe(false);
-  });
-
-  it("accepts a timeout failure", () => {
-    const fail: OcrPageResult = { ok: false, reason: "timeout" };
-    expect(fail.ok).toBe(false);
-  });
-
-  it("accepts an unsupported-input failure", () => {
-    const fail: OcrPageResult = { ok: false, reason: "unsupported-input" };
+  it.each([
+    { title: "accepts a valid not-configured failure", reason: "ocr-not-configured" },
+    { title: "accepts a timeout failure", reason: "timeout" },
+    { title: "accepts an unsupported-input failure", reason: "unsupported-input" },
+  ] as const)("$title", ({ reason }) => {
+    const fail: OcrPageResult = { ok: false, reason };
     expect(fail.ok).toBe(false);
   });
 

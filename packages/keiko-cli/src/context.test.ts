@@ -100,32 +100,21 @@ describe("runContextCli", () => {
     expect(c.out()).not.toContain("topsecret");
   });
 
-  it("returns 2 on a malformed --budget", async () => {
+  it.each([
+    { title: "returns 2 on a malformed --budget", budget: "notanumber" },
+    {
+      title: "returns 2 when --budget has a non-integer suffix like '10kb'",
+      budget: "10kb",
+    },
+    { title: "returns 2 when --budget is zero", budget: "0" },
+    { title: "returns 2 when --budget is negative", budget: "-100" },
+    {
+      title: "returns 2 when --budget exceeds the safe integer range",
+      budget: "9007199254740992",
+    },
+  ])("$title", async ({ budget }) => {
     const c = makeIo();
-    expect(await runContextCli(["--dir", dir, "--budget", "notanumber"], c.io)).toBe(2);
-    expect(c.err()).toContain("Usage");
-  });
-  it("returns 2 when --budget has a non-integer suffix like '10kb'", async () => {
-    const c = makeIo();
-    expect(await runContextCli(["--dir", dir, "--budget", "10kb"], c.io)).toBe(2);
-    expect(c.err()).toContain("Usage");
-  });
-
-  it("returns 2 when --budget is zero", async () => {
-    const c = makeIo();
-    expect(await runContextCli(["--dir", dir, "--budget", "0"], c.io)).toBe(2);
-    expect(c.err()).toContain("Usage");
-  });
-
-  it("returns 2 when --budget is negative", async () => {
-    const c = makeIo();
-    expect(await runContextCli(["--dir", dir, "--budget", "-100"], c.io)).toBe(2);
-    expect(c.err()).toContain("Usage");
-  });
-
-  it("returns 2 when --budget exceeds the safe integer range", async () => {
-    const c = makeIo();
-    expect(await runContextCli(["--dir", dir, "--budget", "9007199254740992"], c.io)).toBe(2);
+    expect(await runContextCli(["--dir", dir, "--budget", budget], c.io)).toBe(2);
     expect(c.err()).toContain("Usage");
   });
 

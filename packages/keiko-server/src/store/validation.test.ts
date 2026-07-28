@@ -152,14 +152,26 @@ describe("validateProjectPath — fail-closed", () => {
 // Issue #174 — Windows-shaped path validation is host-independent so these branches are pinned on
 // Linux, macOS, and Windows hosts alike. `mustExist: false` skips the OS-specific stat step.
 describe("validateProjectPath — Windows drive paths (cross-platform, mustExist: false)", () => {
-  it("accepts a backslash Windows drive path", () => {
-    const out = validateProjectPath("C:\\Users\\Example\\Project", { mustExist: false });
-    expect(out).toBe("C:\\Users\\Example\\Project");
-  });
-
-  it("accepts a forward-slash Windows drive path and normalizes to backslashes", () => {
-    const out = validateProjectPath("C:/Users/Example/Project", { mustExist: false });
-    expect(out).toBe("C:\\Users\\Example\\Project");
+  it.each([
+    {
+      title: "accepts a backslash Windows drive path",
+      input: "C:\\Users\\Example\\Project",
+      expected: "C:\\Users\\Example\\Project",
+    },
+    {
+      title: "accepts a forward-slash Windows drive path and normalizes to backslashes",
+      input: "C:/Users/Example/Project",
+      expected: "C:\\Users\\Example\\Project",
+    },
+    {
+      title:
+        "accepts a Windows drive path with redundant forward slashes (looks like a URL scheme prefix)",
+      input: "C://Users/Example/Project",
+      expected: "C:\\Users\\Example\\Project",
+    },
+  ])("$title", ({ input, expected }) => {
+    const out = validateProjectPath(input, { mustExist: false });
+    expect(out).toBe(expected);
   });
 
   it("accepts a lowercase drive letter", () => {
@@ -175,11 +187,6 @@ describe("validateProjectPath — Windows drive paths (cross-platform, mustExist
   it("normalizes redundant separators in a Windows drive path", () => {
     const out = validateProjectPath("C:\\\\Users\\\\Example", { mustExist: false });
     expect(out).toBe("C:\\Users\\Example");
-  });
-
-  it("accepts a Windows drive path with redundant forward slashes (looks like a URL scheme prefix)", () => {
-    const out = validateProjectPath("C://Users/Example/Project", { mustExist: false });
-    expect(out).toBe("C:\\Users\\Example\\Project");
   });
 
   it("rejects a Windows drive path with a traversal segment", () => {

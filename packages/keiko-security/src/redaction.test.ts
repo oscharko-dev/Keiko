@@ -199,8 +199,20 @@ describe("redact", () => {
     expect(result).toContain("ssh://[REDACTED]@host/repo.git");
   });
 
-  it("does not over-match general '@' text with no scheme authority", () => {
-    const prose = "ping me at user@example.com or see path/to@file";
+  it.each([
+    {
+      title: "does not over-match general '@' text with no scheme authority",
+      prose: "ping me at user@example.com or see path/to@file",
+    },
+    {
+      title: "does not redact a benign 'password reset' sentence with no assignment",
+      prose: "Follow the password reset link to continue.",
+    },
+    {
+      title: "does not redact a prose sentence containing 'password' with no assignment",
+      prose: "Please reset your password soon.",
+    },
+  ])("$title", ({ prose }) => {
     expect(redact(prose)).toBe(prose);
   });
 
@@ -230,11 +242,6 @@ describe("redact", () => {
     const runId = "00000000-0000-4000-8000-000000000002";
     expect(redact(runId)).toBe(runId);
     expect(redact(`fs-${runId}`)).toBe(`fs-${runId}`);
-  });
-
-  it("does not redact a benign 'password reset' sentence with no assignment", () => {
-    const prose = "Follow the password reset link to continue.";
-    expect(redact(prose)).toBe(prose);
   });
 
   // Epic #177 post-closure audit — new redaction patterns: secret_key, prefixed refresh_token,
@@ -268,11 +275,6 @@ describe("redact", () => {
   it("redacts a Stripe test key (sk_test_)", () => {
     const key = "sk_test_" + "0123456789abcdefXYZ"; // split so the literal is not contiguous
     expect(redact(key)).not.toContain(key);
-  });
-
-  it("does not redact a prose sentence containing 'password' with no assignment", () => {
-    const prose = "Please reset your password soon.";
-    expect(redact(prose)).toBe(prose);
   });
 
   it("does not redact ordinary words that resemble a Stripe key prefix", () => {

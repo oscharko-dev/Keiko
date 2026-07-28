@@ -288,33 +288,24 @@ describe("POST /api/figma/snapshots — FIGMA_BAD_LINK validation", () => {
     expect(body.error.code).toBe("FIGMA_BAD_LINK");
   });
 
-  it("400 on boardLink without node-id", async () => {
+  it.each([
+    {
+      title: "400 on boardLink without node-id",
+      boardLink: "https://www.figma.com/design/KEY123/Board",
+    },
+    {
+      title: "400 on non-figma domain",
+      boardLink: "https://notfigma.com/design/X/B?node-id=0-1",
+    },
+    {
+      title: "400 on evilfigma.com host (suffix-only match guard)",
+      boardLink: "https://evilfigma.com/design/X/B?node-id=0-1",
+    },
+  ])("$title", async ({ boardLink }) => {
     const res = await fetch(`${baseUrl()}/api/figma/snapshots`, {
       method: "POST",
       headers: csrfHeaders(),
-      body: JSON.stringify({ boardLink: "https://www.figma.com/design/KEY123/Board" }),
-    });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("FIGMA_BAD_LINK");
-  });
-
-  it("400 on non-figma domain", async () => {
-    const res = await fetch(`${baseUrl()}/api/figma/snapshots`, {
-      method: "POST",
-      headers: csrfHeaders(),
-      body: JSON.stringify({ boardLink: "https://notfigma.com/design/X/B?node-id=0-1" }),
-    });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("FIGMA_BAD_LINK");
-  });
-
-  it("400 on evilfigma.com host (suffix-only match guard)", async () => {
-    const res = await fetch(`${baseUrl()}/api/figma/snapshots`, {
-      method: "POST",
-      headers: csrfHeaders(),
-      body: JSON.stringify({ boardLink: "https://evilfigma.com/design/X/B?node-id=0-1" }),
+      body: JSON.stringify({ boardLink }),
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string } };

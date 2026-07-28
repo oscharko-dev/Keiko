@@ -2665,47 +2665,26 @@ describe("desktop chat routes", () => {
 
   // Issue #623 — POST /api/desktop/chat returned 500 when projectPath failed path validation.
   // The validateProjectPath throw was uncaught; now it is caught and mapped to the typed 400 envelope.
-  it("returns 400 with a typed error code (not 500) when projectPath is a traversal path", async () => {
+  it.each([
+    {
+      title: "returns 400 with a typed error code (not 500) when projectPath is a traversal path",
+      projectPath: "/valid/../traversal",
+    },
+    {
+      title: "returns 400 with a typed error code (not 500) when projectPath is a relative path",
+      projectPath: "relative/path",
+    },
+    {
+      title: "returns 400 with a typed error code (not 500) when projectPath is a file:// URL",
+      projectPath: "file:///etc/passwd",
+    },
+  ])("$title", async ({ projectPath }) => {
     const sendRes = await fetch(`${base()}/api/desktop/chat`, {
       method: "POST",
       headers: POST_JSON_HEADERS,
       body: JSON.stringify({
         chatId: "any-chat-id",
-        projectPath: "/valid/../traversal",
-        modelId: CHAT_MODEL,
-        content: "hello",
-      }),
-    });
-    expect(sendRes.status).toBe(400);
-    const body = (await sendRes.json()) as { error?: { code?: string } };
-    expect(body.error?.code).toBe("INVALID_PATH");
-    expect(seenRequests).toHaveLength(0);
-  });
-
-  it("returns 400 with a typed error code (not 500) when projectPath is a relative path", async () => {
-    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
-      method: "POST",
-      headers: POST_JSON_HEADERS,
-      body: JSON.stringify({
-        chatId: "any-chat-id",
-        projectPath: "relative/path",
-        modelId: CHAT_MODEL,
-        content: "hello",
-      }),
-    });
-    expect(sendRes.status).toBe(400);
-    const body = (await sendRes.json()) as { error?: { code?: string } };
-    expect(body.error?.code).toBe("INVALID_PATH");
-    expect(seenRequests).toHaveLength(0);
-  });
-
-  it("returns 400 with a typed error code (not 500) when projectPath is a file:// URL", async () => {
-    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
-      method: "POST",
-      headers: POST_JSON_HEADERS,
-      body: JSON.stringify({
-        chatId: "any-chat-id",
-        projectPath: "file:///etc/passwd",
+        projectPath,
         modelId: CHAT_MODEL,
         content: "hello",
       }),

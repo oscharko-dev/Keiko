@@ -1836,30 +1836,25 @@ describe("handleQiExport — Issue #724 GROUP D — evidence targetAdapter for r
     return manifest.exports;
   };
 
-  it("records targetAdapter='markdown' in the evidence row after a markdown export", async () => {
-    await exportAdapter("markdown");
+  // Each row kills a hard-coded adapter label in the persisted evidence.
+  it.each([
+    {
+      title: "records targetAdapter='markdown' in the evidence row after a markdown export",
+      adapter: "markdown",
+    },
+    {
+      title: "records targetAdapter='plain-text' in the evidence row after a plain-text export",
+      adapter: "plain-text",
+    },
+    {
+      title: "records targetAdapter='zip-bundle' in the evidence row after a zip-bundle export",
+      adapter: "zip-bundle",
+    },
+  ] as const)("$title", async ({ adapter }) => {
+    await exportAdapter(adapter);
     const rows = exportsOf();
     expect(rows).toHaveLength(1);
-    // Mutant killed: if buildExportEvidenceRow hardcodes adapter label → wrong value → RED.
-    expect(rows[0]?.targetAdapter).toBe("markdown");
-    expect(rows[0]?.dryRun ?? false).toBe(false);
-  });
-
-  it("records targetAdapter='plain-text' in the evidence row after a plain-text export", async () => {
-    await exportAdapter("plain-text");
-    const rows = exportsOf();
-    expect(rows).toHaveLength(1);
-    // Mutant killed: wrong adapter label in evidence row → assertion fails → RED.
-    expect(rows[0]?.targetAdapter).toBe("plain-text");
-    expect(rows[0]?.dryRun ?? false).toBe(false);
-  });
-
-  it("records targetAdapter='zip-bundle' in the evidence row after a zip-bundle export", async () => {
-    await exportAdapter("zip-bundle");
-    const rows = exportsOf();
-    expect(rows).toHaveLength(1);
-    // Mutant killed: if binaryResponse hardcodes mode label in buildExportEvidenceRow → RED.
-    expect(rows[0]?.targetAdapter).toBe("zip-bundle");
+    expect(rows[0]?.targetAdapter).toBe(adapter);
     expect(rows[0]?.dryRun ?? false).toBe(false);
   });
 });
