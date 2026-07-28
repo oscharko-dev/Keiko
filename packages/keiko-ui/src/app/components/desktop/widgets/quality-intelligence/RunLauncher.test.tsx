@@ -588,11 +588,16 @@ describe("RunLauncher — Quality Intelligence capability truth (#2804)", (): vo
     expect(screen.getByTestId("qi-judge-unavailable")).toHaveTextContent(
       "No compatible judge model is available. Runs can still succeed, but Quality will be unavailable.",
     );
+    expect(screen.getByTestId("qi-judge-availability-announcement")).toHaveTextContent(
+      "No compatible judge model is available. Runs can still succeed, but Quality will be unavailable.",
+    );
 
     await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Verify checkout");
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
 
-    await waitFor(() => expect(startImpl).toHaveBeenCalledTimes(1));
+    await waitFor((): void => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
     expect(screen.getByTestId("qi-judge-unavailable")).toHaveTextContent(
       "No compatible judge model is available. Runs can still succeed, but Quality will be unavailable.",
     );
@@ -640,7 +645,7 @@ describe("RunLauncher — Quality Intelligence capability truth (#2804)", (): vo
       />,
     );
 
-    await waitFor(() => {
+    await waitFor((): void => {
       expect(
         screen.getByRole("combobox", {
           name: "Quality Intelligence judge model",
@@ -650,9 +655,14 @@ describe("RunLauncher — Quality Intelligence capability truth (#2804)", (): vo
     await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Verify checkout");
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
 
-    await waitFor(() => expect(startImpl).toHaveBeenCalledTimes(1));
+    await waitFor((): void => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
     expect(screen.getByText("Model preflight: unavailable")).toBeInTheDocument();
     expect(screen.getByTestId("qi-judge-unavailable")).toHaveTextContent(
+      "The selected judge model is unavailable. Runs can still succeed, but Quality will be unavailable.",
+    );
+    expect(screen.getByTestId("qi-judge-availability-announcement")).toHaveTextContent(
       "The selected judge model is unavailable. Runs can still succeed, but Quality will be unavailable.",
     );
   });
@@ -697,7 +707,7 @@ describe("RunLauncher — Quality Intelligence capability truth (#2804)", (): vo
       />,
     );
 
-    await waitFor(() => {
+    await waitFor((): void => {
       expect(
         screen.getByRole("combobox", {
           name: "Quality Intelligence judge model",
@@ -707,9 +717,12 @@ describe("RunLauncher — Quality Intelligence capability truth (#2804)", (): vo
     await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Verify checkout");
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
 
-    await waitFor(() => expect(startImpl).toHaveBeenCalledTimes(1));
+    await waitFor((): void => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
     expect(screen.getByText("Model preflight: Ready")).toBeInTheDocument();
     expect(screen.queryByTestId("qi-judge-unavailable")).not.toBeInTheDocument();
+    expect(screen.getByTestId("qi-judge-availability-announcement")).toBeEmptyDOMElement();
   });
 });
 

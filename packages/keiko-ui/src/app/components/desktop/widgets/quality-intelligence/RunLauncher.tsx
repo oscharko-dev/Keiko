@@ -1430,6 +1430,14 @@ export function RunLauncher({
             {unavailableJudgeMessage}
           </p>
         ) : null}
+        <span
+          className="sr-only"
+          role="status"
+          aria-live="polite"
+          data-testid="qi-judge-availability-announcement"
+        >
+          {unavailableJudgeMessage ?? ""}
+        </span>
         {modelPolicyError !== null ? (
           <p className="lk-alert" role="alert" data-testid="qi-model-policy-error">
             {modelPolicyError}
