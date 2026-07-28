@@ -3,6 +3,7 @@
 import { execFileSync } from "node:child_process";
 
 import { parseChangedFiles } from "./check-mutation-scope.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 import { isCoverableProductSource, systemGitExecutable } from "./sonar-analysis-scope.mjs";
 import {
   KEIKO_GATE_ID,
@@ -245,4 +246,4 @@ export async function executeSonarPullRequestGateCli(input = {}) {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) await executeSonarPullRequestGateCli();
+if (isMainModule(import.meta.url)) await executeSonarPullRequestGateCli();

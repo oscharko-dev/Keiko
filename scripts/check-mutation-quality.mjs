@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 
+import { isMainModule } from "./lib/is-main-module.mjs";
+
 const defaultReport = "reports/mutation/security/mutation-report.json";
 const defaultBaseline = "docs/qa/security-mutation-baseline.json";
 
@@ -206,4 +208,4 @@ function option(argv, name) {
   return index < 0 ? undefined : argv[index + 1];
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) await executeMutationQualityCli();
+if (isMainModule(import.meta.url)) await executeMutationQualityCli();

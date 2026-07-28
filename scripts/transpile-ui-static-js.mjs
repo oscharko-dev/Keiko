@@ -8,6 +8,7 @@ import presetEnv from "@babel/preset-env";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath, URL } from "node:url";
+import { isMainModule } from "./lib/is-main-module.mjs";
 import {
   rejectUiStaticRootCliOverride,
   rejectUiStaticSymlink,
@@ -97,6 +98,6 @@ export async function runTranspileUiStaticJavaScriptCli(
   await operation();
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url)) {
   await runTranspileUiStaticJavaScriptCli(process.argv.slice(2));
 }

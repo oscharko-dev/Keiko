@@ -3,6 +3,8 @@
 import { appendFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
+import { isMainModule } from "./lib/is-main-module.mjs";
+
 const criticalPrefixes = [
   "packages/keiko-evidence/src/",
   "packages/keiko-memory-vault/src/",
@@ -128,4 +130,4 @@ export function runMutationScopeCli(input = {}) {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) runMutationScopeCli();
+if (isMainModule(import.meta.url)) runMutationScopeCli();

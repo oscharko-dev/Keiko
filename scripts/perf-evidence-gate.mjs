@@ -29,6 +29,7 @@ import {
   partitionFreshnessFindings,
   toolchainTouchedAgainst,
 } from "./check-perf-evidence.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKSPACE_EVIDENCE = join(repoRoot, "docs", "release", "1580-workspace-perf-evidence.json");
@@ -231,4 +232,4 @@ export function executePerfEvidenceCli(cliArgs = process.argv.slice(2), io = {})
   return deps.gate(target, enforceSourceFreshness, reportSubjectDrift);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) executePerfEvidenceCli();
+if (isMainModule(import.meta.url)) executePerfEvidenceCli();
