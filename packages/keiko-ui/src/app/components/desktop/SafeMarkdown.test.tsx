@@ -692,6 +692,102 @@ describe("SafeMarkdown — PDF citation markers", () => {
   });
 });
 
+describe("SafeMarkdown — streaming trailing content", () => {
+  it("keeps trailing content inside plain streaming code fences", (): void => {
+    render(
+      <SafeMarkdown
+        source={"```ts\nconst answer = 42;\n```"}
+        streaming
+        trailing={<span className="ai-stream-cursor" data-testid="stream-cursor" />}
+      />,
+    );
+
+    const pre = document.querySelector(".sm-pre");
+    expect(pre).not.toBeNull();
+    expect(document.querySelector(".sm-code-block-header")).toBeNull();
+    expect(pre?.textContent).toContain("const answer = 42;");
+    expect(within(pre as HTMLElement).getByTestId("stream-cursor")).toBeDefined();
+  });
+
+  it("keeps trailing content inside an empty list item", (): void => {
+    render(
+      <SafeMarkdown
+        source="- "
+        trailing={<span className="ai-stream-cursor" data-testid="stream-cursor" />}
+      />,
+    );
+
+    const item = document.querySelector(".sm-li");
+    expect(item).not.toBeNull();
+    expect(item?.textContent).toBe("");
+    expect(within(item as HTMLElement).getByTestId("stream-cursor")).toBeDefined();
+  });
+
+  it("keeps trailing content inside blockquotes", (): void => {
+    render(
+      <SafeMarkdown
+        source="> quoted"
+        trailing={<span className="ai-stream-cursor" data-testid="stream-cursor" />}
+      />,
+    );
+
+    const blockquote = document.querySelector(".sm-blockquote");
+    expect(blockquote?.textContent).toBe("quoted");
+    expect(within(blockquote as HTMLElement).getByTestId("stream-cursor")).toBeDefined();
+  });
+
+  it("keeps trailing content after horizontal rules", (): void => {
+    render(
+      <SafeMarkdown
+        source="---"
+        trailing={<span className="ai-stream-cursor" data-testid="stream-cursor" />}
+      />,
+    );
+
+    expect(document.querySelector(".sm-hr")).not.toBeNull();
+    expect(screen.getByTestId("stream-cursor")).toBeDefined();
+  });
+
+  it("keeps trailing content inside citation-rendered text fragments", (): void => {
+    const citationPreview = citationPreviewController("available");
+    render(
+      <SafeMarkdown
+        source="See [1]"
+        citationPreview={citationPreview}
+        trailing={<span className="ai-stream-cursor" data-testid="stream-cursor" />}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Open PDF preview for citation [1]" })).toBeDefined();
+    expect(screen.getByTestId("stream-cursor")).toBeDefined();
+  });
+
+  it("keeps trailing content inside emphasis text", (): void => {
+    render(
+      <SafeMarkdown
+        source="*tail*"
+        trailing={<span className="ai-stream-cursor" data-testid="stream-cursor" />}
+      />,
+    );
+
+    const emphasis = document.querySelector("em");
+    expect(emphasis?.textContent).toBe("tail");
+    expect(within(emphasis as HTMLElement).getByTestId("stream-cursor")).toBeDefined();
+  });
+
+  it("renders trailing content for an empty markdown tree", (): void => {
+    render(
+      <SafeMarkdown
+        source=""
+        trailing={<span className="ai-stream-cursor" data-testid="stream-cursor" />}
+      />,
+    );
+
+    expect(document.querySelector(".sm-root .ai-stream-cursor")).not.toBeNull();
+    expect(screen.getByTestId("stream-cursor")).toBeDefined();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // SM-1 — per-message error boundary. A render/parse defect in one assistant
 // message must degrade THAT message to plain text, not crash the conversation.

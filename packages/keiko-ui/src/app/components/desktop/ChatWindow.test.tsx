@@ -2616,6 +2616,55 @@ describe("ChatWindow: no 'example-workspace' placeholder label (#146 MINOR)", ()
 
 // uiux-fix F042 (C208) — per-bubble copy affordance for assistant messages.
 describe("ChatWindow message copy", () => {
+  it("renders the live streaming assistant preview as safe markdown", (): void => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        sending: true,
+        sendStatus: "streaming",
+        messages: [
+          {
+            id: "m1",
+            chatId: "chat-1",
+            role: "user",
+            content: "Show the plan.",
+            timestamp: 1,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+        streamingAssistantMessage: {
+          id: "stream-1",
+          chatId: "chat-1",
+          role: "assistant",
+          content: "# Plan\n\n- First\n- Second",
+          timestamp: 2,
+          runId: undefined,
+          workflowId: undefined,
+          workflowStatus: undefined,
+          shortResult: undefined,
+          taskType: undefined,
+        },
+      }),
+    );
+
+    const assistantContent = document.querySelector<HTMLElement>(
+      'article[data-role="assistant"] .chat-msg-content',
+    );
+    expect(assistantContent).not.toBeNull();
+    expect(screen.getByRole("heading", { level: 3, name: "Plan" })).toBeInTheDocument();
+    expect(screen.getByText("First")).toBeInTheDocument();
+    expect(screen.getByText("Second")).toBeInTheDocument();
+    expect(assistantContent).not.toHaveTextContent("# Plan");
+    expect(assistantContent?.querySelector(".sm-root")).not.toBeNull();
+    const cursor = assistantContent?.querySelector(".ai-stream-cursor");
+    expect(cursor).not.toBeNull();
+    expect(cursor?.closest(".sm-li")).toHaveTextContent("Second");
+  });
+
   it("renders user prompt right-aligned with the answer full-width below", () => {
     renderWindow(
       makeSession({

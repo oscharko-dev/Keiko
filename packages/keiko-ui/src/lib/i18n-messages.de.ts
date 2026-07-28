@@ -1989,6 +1989,8 @@ export const DE_MESSAGES = {
   "gitClientWindow.history.commitDetailsAria": "Commit-Details",
   "runtimeHubWidget.auditMetadataAria": "Laufzeit-Audit-Metadaten",
   "installBanner.regionAria": "Keiko installieren",
+  "markdown.codeBlock.regionAria": "Codeblock: {language}",
+  "markdown.codeBlock.languageText": "Text",
   "manualPod.progress.crawl": "{accepted} Seiten indexiert, {denied} Links übersprungen",
   "manualPod.progress.index": "{processed} von {total} Dokumenten verarbeitet",
   "manualPodCreate.button": "HTML-Handbuch hinzufügen",

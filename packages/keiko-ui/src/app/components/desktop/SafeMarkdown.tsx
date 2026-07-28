@@ -13,6 +13,7 @@
 
 import {
   Component,
+  Fragment,
   memo,
   useCallback,
   useMemo,
@@ -23,7 +24,7 @@ import {
 } from "react";
 import type { EditorAgentConflictCode } from "@oscharko-dev/keiko-contracts";
 import { parseSafeMarkdown, type SafeMarkdownNode } from "@/lib/safe-markdown";
-import { useTranslate } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import {
   highlightLines,
   langOf,
@@ -75,6 +76,8 @@ export interface SafeMarkdownProps {
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
   readonly citationPreview?: CitationPreviewController | undefined;
   readonly onApplyCodeBlock?: AssistantCodeBlockApply | undefined;
+  readonly streaming?: boolean | undefined;
+  readonly trailing?: ReactNode | undefined;
 }
 
 interface RenderOptions {
@@ -83,6 +86,7 @@ interface RenderOptions {
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly onApplyCodeBlock: AssistantCodeBlockApply | undefined;
+  readonly streaming: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,16 +288,24 @@ function tokenSpans(tokens: readonly Token[], lineIndex: number): ReactNode {
   ));
 }
 
+function codeBlockLabel(language: string | undefined, t: I18nTranslate): string {
+  return t("markdown.codeBlock.regionAria", {
+    language: language ?? t("markdown.codeBlock.languageText"),
+  });
+}
+
 function HighlightedCodeBlock({
   text,
   language,
   codeClass,
   long,
+  trailing,
 }: {
   readonly text: string;
   readonly language: string | undefined;
   readonly codeClass: string | undefined;
   readonly long: boolean;
+  readonly trailing?: ReactNode | undefined;
 }): ReactNode {
   // GEN-PERF-CHAT-010 — highlightLines tokenises the whole code block; keying the memo on the
   // immutable [text, language] source keeps it a once-per-block cost instead of re-running on every
@@ -302,29 +314,65 @@ function HighlightedCodeBlock({
     () => highlightLines(text, codeLangFromMarkdown(language)),
     [text, language],
   );
+  const t = useTranslate();
   const lineCountWidth = Math.max(2, String(lines.length).length);
   return (
-    <pre
-      className="sm-pre"
-      data-long={long ? "true" : "false"}
-      role="region"
-      aria-label={`${language ?? "text"} code block`}
-      // Scrollable code pane: tabIndex makes the overflow region keyboard-scrollable.
-      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-      tabIndex={0}
-      style={{ "--sm-code-line-no-width": `${String(lineCountWidth)}ch` } as CSSProperties}
-    >
-      <code className={codeClass}>
-        {lines.map((tokens, lineIndex) => (
-          <span key={lineIndex} className="sm-code-line">
-            <span className="sm-code-line-no" aria-hidden="true">
-              {lineIndex + 1}
+    <section aria-label={codeBlockLabel(language, t)}>
+      <pre
+        className="sm-pre"
+        data-long={long ? "true" : "false"}
+        // Scrollable code pane: tabIndex makes the overflow region keyboard-scrollable.
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+        tabIndex={0}
+        style={{ "--sm-code-line-no-width": `${String(lineCountWidth)}ch` } as CSSProperties}
+      >
+        <code className={codeClass}>
+          {lines.map((tokens, lineIndex) => (
+            <span key={lineIndex} className="sm-code-line">
+              <span className="sm-code-line-no" aria-hidden="true">
+                {lineIndex + 1}
+              </span>
+              <span className="sm-code-line-src">
+                {tokenSpans(tokens, lineIndex)}
+                {lineIndex === lines.length - 1 ? trailing : null}
+              </span>
             </span>
-            <span className="sm-code-line-src">{tokenSpans(tokens, lineIndex)}</span>
-          </span>
-        ))}
-      </code>
-    </pre>
+          ))}
+        </code>
+      </pre>
+    </section>
+  );
+}
+
+function PlainCodeBlock({
+  text,
+  language,
+  codeClass,
+  long,
+  trailing,
+}: {
+  readonly text: string;
+  readonly language: string | undefined;
+  readonly codeClass: string | undefined;
+  readonly long: boolean;
+  readonly trailing?: ReactNode | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <section aria-label={codeBlockLabel(language, t)}>
+      <pre
+        className="sm-pre"
+        data-long={long ? "true" : "false"}
+        // Scrollable code pane: tabIndex makes the overflow region keyboard-scrollable.
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+        tabIndex={0}
+      >
+        <code className={codeClass}>
+          {text}
+          {trailing}
+        </code>
+      </pre>
+    </section>
   );
 }
 
@@ -362,21 +410,92 @@ function renderChildren(
   node: SafeMarkdownNode,
   key: string,
   options: RenderOptions,
-): ReactNode[] | null {
-  if (node.children === undefined) return null;
-  return node.children.map((child, idx) => renderNode(child, key + "-" + String(idx), options));
+  trailing?: ReactNode | undefined,
+): ReactNode[] {
+  const children = node.children ?? [];
+  if (children.length === 0) {
+    return trailing === undefined ? [] : [<Fragment key={`${key}-trailing`}>{trailing}</Fragment>];
+  }
+  const lastIndex = children.length - 1;
+  return children.map((child, idx) =>
+    renderNode(child, key + "-" + String(idx), options, idx === lastIndex ? trailing : undefined),
+  );
+}
+
+function renderCodeBlockHeader(
+  codeText: string,
+  lang: string | undefined,
+  key: string,
+  options: RenderOptions,
+): ReactNode {
+  if (options.streaming) return null;
+  return (
+    <div className="sm-code-block-header">
+      {/* "untitled" read like a missing file name; untagged fences are plain text (C307) */}
+      <span className="sm-code-lang">{lang ?? "text"}</span>
+      <div className="sm-code-copy-wrap">
+        {options.onApplyCodeBlock === undefined ? null : (
+          <ApplyCodeBlockButton
+            text={codeText}
+            language={lang}
+            onApply={options.onApplyCodeBlock}
+            stateKey={
+              options.applyScopeId === undefined ? undefined : `${options.applyScopeId}:${key}`
+            }
+          />
+        )}
+        <CopyButton text={codeText} />
+      </div>
+    </div>
+  );
+}
+
+function renderCodeBlockNode(
+  node: SafeMarkdownNode,
+  key: string,
+  options: RenderOptions,
+  trailing?: ReactNode | undefined,
+): ReactNode {
+  const lang = node.language;
+  const codeText = node.text ?? "";
+  const codeClass = lang !== undefined ? `lang-${lang}` : undefined;
+  const lineCount = codeText.length === 0 ? 1 : codeText.split(/\r\n|\r|\n/u).length;
+  const long = lineCount > 24;
+  return (
+    <div key={key} className="sm-code-block-frame" data-long={long ? "true" : "false"}>
+      {renderCodeBlockHeader(codeText, lang, key, options)}
+      {options.streaming ? (
+        <PlainCodeBlock
+          text={codeText}
+          language={lang}
+          codeClass={codeClass}
+          long={long}
+          trailing={trailing}
+        />
+      ) : (
+        <HighlightedCodeBlock
+          text={codeText}
+          language={lang}
+          codeClass={codeClass}
+          long={long}
+          trailing={trailing}
+        />
+      )}
+    </div>
+  );
 }
 
 function renderBlockNode(
   node: SafeMarkdownNode,
   key: string,
   options: RenderOptions,
+  trailing?: ReactNode | undefined,
 ): ReactNode | null {
   switch (node.kind) {
     case "paragraph":
       return (
         <p key={key} className="sm-p">
-          {renderChildren(node, key, options)}
+          {renderChildren(node, key, options, trailing)}
         </p>
       );
 
@@ -386,7 +505,7 @@ function renderBlockNode(
       const cls = HEADING_CLASSES[level];
       return (
         <Tag key={key} className={cls}>
-          {renderChildren(node, key, options)}
+          {renderChildren(node, key, options, trailing)}
         </Tag>
       );
     }
@@ -394,44 +513,20 @@ function renderBlockNode(
     case "blockquote":
       return (
         <blockquote key={key} className="sm-blockquote">
-          {renderChildren(node, key, options)}
+          {renderChildren(node, key, options, trailing)}
         </blockquote>
       );
 
     case "hr":
-      return <hr key={key} className="sm-hr" />;
-
-    case "code-block": {
-      const lang = node.language;
-      const codeText = node.text ?? "";
-      const codeClass = lang !== undefined ? `lang-${lang}` : undefined;
-      const lineCount = codeText.length === 0 ? 1 : codeText.split(/\r\n|\r|\n/u).length;
-      const long = lineCount > 24;
       return (
-        <div key={key} className="sm-code-block-frame" data-long={long ? "true" : "false"}>
-          <div className="sm-code-block-header">
-            {/* "untitled" read like a missing file name; untagged fences are plain text (C307) */}
-            <span className="sm-code-lang">{lang ?? "text"}</span>
-            <div className="sm-code-copy-wrap">
-              {options.onApplyCodeBlock === undefined ? null : (
-                <ApplyCodeBlockButton
-                  text={codeText}
-                  language={lang}
-                  onApply={options.onApplyCodeBlock}
-                  stateKey={
-                    options.applyScopeId === undefined
-                      ? undefined
-                      : `${options.applyScopeId}:${key}`
-                  }
-                />
-              )}
-              <CopyButton text={codeText} />
-            </div>
-          </div>
-          <HighlightedCodeBlock text={codeText} language={lang} codeClass={codeClass} long={long} />
-        </div>
+        <Fragment key={key}>
+          <hr className="sm-hr" />
+          {trailing}
+        </Fragment>
       );
-    }
+
+    case "code-block":
+      return renderCodeBlockNode(node, key, options, trailing);
 
     default:
       return null;
@@ -442,26 +537,27 @@ function renderListNode(
   node: SafeMarkdownNode,
   key: string,
   options: RenderOptions,
+  trailing?: ReactNode | undefined,
 ): ReactNode | null {
   switch (node.kind) {
     case "ul":
       return (
         <ul key={key} className="sm-ul">
-          {renderChildren(node, key, options)}
+          {renderChildren(node, key, options, trailing)}
         </ul>
       );
 
     case "ol":
       return (
         <ol key={key} className="sm-ol">
-          {renderChildren(node, key, options)}
+          {renderChildren(node, key, options, trailing)}
         </ol>
       );
 
     case "li":
       return (
         <li key={key} className="sm-li">
-          {renderChildren(node, key, options)}
+          {renderChildren(node, key, options, trailing)}
         </li>
       );
 
@@ -474,6 +570,7 @@ function renderTableNode(
   node: SafeMarkdownNode,
   key: string,
   options: RenderOptions,
+  trailing?: ReactNode | undefined,
 ): ReactNode | null {
   const alignStyle = node.align !== undefined ? { textAlign: node.align } : undefined;
 
@@ -481,30 +578,30 @@ function renderTableNode(
     case "table":
       return (
         <div key={key} className="sm-table-wrapper">
-          <table className="sm-table">{renderChildren(node, key, options)}</table>
+          <table className="sm-table">{renderChildren(node, key, options, trailing)}</table>
         </div>
       );
 
     case "thead":
-      return <thead key={key}>{renderChildren(node, key, options)}</thead>;
+      return <thead key={key}>{renderChildren(node, key, options, trailing)}</thead>;
 
     case "tbody":
-      return <tbody key={key}>{renderChildren(node, key, options)}</tbody>;
+      return <tbody key={key}>{renderChildren(node, key, options, trailing)}</tbody>;
 
     case "tr":
-      return <tr key={key}>{renderChildren(node, key, options)}</tr>;
+      return <tr key={key}>{renderChildren(node, key, options, trailing)}</tr>;
 
     case "th":
       return (
         <th key={key} style={alignStyle}>
-          {renderChildren(node, key, options)}
+          {renderChildren(node, key, options, trailing)}
         </th>
       );
 
     case "td":
       return (
         <td key={key} style={alignStyle}>
-          {renderChildren(node, key, options)}
+          {renderChildren(node, key, options, trailing)}
         </td>
       );
 
@@ -572,9 +669,15 @@ function renderCitationText(
   text: string,
   key: string,
   citationPreview: CitationPreviewController | undefined,
+  trailing?: ReactNode | undefined,
 ): ReactNode {
   if (citationPreview === undefined) {
-    return <span key={key}>{text}</span>;
+    return (
+      <span key={key}>
+        {text}
+        {trailing}
+      </span>
+    );
   }
   INLINE_CITATION_MARKER_PATTERN.lastIndex = 0;
   const fragments: ReactNode[] = [];
@@ -601,17 +704,25 @@ function renderCitationText(
   if (cursor < text.length) {
     fragments.push(<span key={`${key}-tail`}>{text.slice(cursor)}</span>);
   }
+  if (trailing !== undefined) {
+    fragments.push(<Fragment key={`${key}-trailing`}>{trailing}</Fragment>);
+  }
   return <span key={key}>{fragments.length === 0 ? text : fragments}</span>;
 }
 
-function renderRepositoryText(text: string, key: string, options: RenderOptions): ReactNode {
+function renderRepositoryText(
+  text: string,
+  key: string,
+  options: RenderOptions,
+  trailing?: ReactNode | undefined,
+): ReactNode {
   const sanitizedText = sanitizeRepositoryEvidenceText(text);
   if (options.openRepositoryReference === undefined) {
-    return renderCitationText(sanitizedText, key, options.citationPreview);
+    return renderCitationText(sanitizedText, key, options.citationPreview, trailing);
   }
   const parts = repositoryReferenceTextParts(sanitizedText);
   if (parts.length === 1 && parts[0]?.kind === "text")
-    return renderCitationText(sanitizedText, key, options.citationPreview);
+    return renderCitationText(sanitizedText, key, options.citationPreview, trailing);
   return (
     <span key={key}>
       {parts.map((part, index) => {
@@ -630,11 +741,17 @@ function renderRepositoryText(text: string, key: string, options: RenderOptions)
           />
         );
       })}
+      {trailing}
     </span>
   );
 }
 
-function renderInlineCode(node: SafeMarkdownNode, key: string, options: RenderOptions): ReactNode {
+function renderInlineCode(
+  node: SafeMarkdownNode,
+  key: string,
+  options: RenderOptions,
+  trailing?: ReactNode | undefined,
+): ReactNode {
   const text = node.text ?? "";
   const reference =
     options.openRepositoryReference === undefined ? null : parseExactRepositoryReference(text);
@@ -650,6 +767,7 @@ function renderInlineCode(node: SafeMarkdownNode, key: string, options: RenderOp
           className="repo-ref-link repo-ref-link-inline-code"
         />
       )}
+      {trailing}
     </code>
   );
 }
@@ -658,13 +776,14 @@ function renderInlineNode(
   node: SafeMarkdownNode,
   key: string,
   options: RenderOptions,
+  trailing?: ReactNode | undefined,
 ): ReactNode | null {
   switch (node.kind) {
     case "text":
-      return renderRepositoryText(node.text ?? "", key, options);
+      return renderRepositoryText(node.text ?? "", key, options, trailing);
 
     case "inline-code":
-      return renderInlineCode(node, key, options);
+      return renderInlineCode(node, key, options, trailing);
 
     case "link":
       return (
@@ -673,37 +792,57 @@ function renderInlineNode(
           {/* target="_blank" is invisible to screen readers — announce the context
               switch in the accessible name without changing the visual layout (C316). */}
           <span className="sr-only"> (opens in new tab)</span>
+          {trailing}
         </a>
       );
 
     case "strong":
-      return <strong key={key}>{renderChildren(node, key, options)}</strong>;
+      return <strong key={key}>{renderChildren(node, key, options, trailing)}</strong>;
 
     case "em":
-      return <em key={key}>{renderChildren(node, key, options)}</em>;
+      return <em key={key}>{renderChildren(node, key, options, trailing)}</em>;
 
     default:
       return null;
   }
 }
 
-function renderNode(node: SafeMarkdownNode, key: string, options: RenderOptions): ReactNode {
-  const block = renderBlockNode(node, key, options);
+function renderNode(
+  node: SafeMarkdownNode,
+  key: string,
+  options: RenderOptions,
+  trailing?: ReactNode | undefined,
+): ReactNode {
+  const block = renderBlockNode(node, key, options, trailing);
   if (block !== null) return block;
 
-  const list = renderListNode(node, key, options);
+  const list = renderListNode(node, key, options, trailing);
   if (list !== null) return list;
 
-  const table = renderTableNode(node, key, options);
+  const table = renderTableNode(node, key, options, trailing);
   if (table !== null) return table;
 
-  const inline = renderInlineNode(node, key, options);
+  const inline = renderInlineNode(node, key, options, trailing);
   if (inline !== null) return inline;
 
   // Exhaustiveness guard — TypeScript narrows node.kind to never here if all
   // cases above are handled. If a new kind is added to SafeMarkdownNode without
   // a handler, this branch renders nothing rather than crashing.
   return null;
+}
+
+function renderMarkdownTree(
+  tree: readonly SafeMarkdownNode[],
+  options: RenderOptions,
+  trailing: ReactNode | undefined,
+): ReactNode[] {
+  if (tree.length === 0) {
+    return trailing === undefined ? [] : [<Fragment key="trailing">{trailing}</Fragment>];
+  }
+  const lastIndex = tree.length - 1;
+  return tree.map((node, i) =>
+    renderNode(node, String(i), options, i === lastIndex ? trailing : undefined),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -722,21 +861,29 @@ function SafeMarkdownImpl({
   openRepositoryReference,
   citationPreview,
   onApplyCodeBlock,
+  streaming = false,
+  trailing,
 }: SafeMarkdownProps): ReactNode {
   const tree = useMemo(() => parseSafeMarkdown(source), [source]);
   const options = useMemo<RenderOptions>(
     () => ({
       applyScopeId,
       citationPreview,
+      streaming,
       repositoryRoots,
       openRepositoryReference,
       onApplyCodeBlock,
     }),
-    [applyScopeId, citationPreview, onApplyCodeBlock, openRepositoryReference, repositoryRoots],
+    [
+      applyScopeId,
+      citationPreview,
+      onApplyCodeBlock,
+      openRepositoryReference,
+      repositoryRoots,
+      streaming,
+    ],
   );
-  return (
-    <div className="sm-root">{tree.map((node, i) => renderNode(node, String(i), options))}</div>
-  );
+  return <div className="sm-root">{renderMarkdownTree(tree, options, trailing)}</div>;
 }
 
 // GEN-PERF-CHAT-010 — memoized so a settled assistant bubble does not re-parse/re-highlight its
@@ -761,6 +908,8 @@ export interface SafeMarkdownBoundaryProps {
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
   readonly citationPreview?: CitationPreviewController | undefined;
   readonly onApplyCodeBlock?: AssistantCodeBlockApply | undefined;
+  readonly streaming?: boolean | undefined;
+  readonly trailing?: ReactNode | undefined;
 }
 
 interface SafeMarkdownBoundaryState {
@@ -782,6 +931,7 @@ export class SafeMarkdownBoundary extends Component<
       return (
         <div className="sm-root sm-fallback" data-markdown-fallback="true">
           {this.props.source}
+          {this.props.trailing}
         </div>
       );
     }
@@ -793,6 +943,8 @@ export class SafeMarkdownBoundary extends Component<
         openRepositoryReference={this.props.openRepositoryReference}
         citationPreview={this.props.citationPreview}
         onApplyCodeBlock={this.props.onApplyCodeBlock}
+        streaming={this.props.streaming}
+        trailing={this.props.trailing}
       />
     );
   }
