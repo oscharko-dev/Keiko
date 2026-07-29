@@ -692,12 +692,13 @@ function AppShellInner(): ReactNode {
     const timer = window.setTimeout(() => setSourceConnectionNotice(null), 10_000);
     return () => window.clearTimeout(timer);
   }, [sourceConnectionNotice]);
-  const rejectForLimit = useCallback((connectedCount: number, cap: number): false => {
-    setSourceConnectionNotice(
-      `Source limit reached — this chat already has ${String(connectedCount)} of ${String(cap)} connected sources. Disconnect a source before connecting another.`,
-    );
-    return false;
-  }, []);
+  const rejectForLimit = useCallback(
+    (connectedCount: number, cap: number): false => {
+      setSourceConnectionNotice(t("chat.grounding.sourceLimit", { connectedCount, cap }));
+      return false;
+    },
+    [t],
+  );
   const rejectForConnectionFailure = useCallback((message: string): false => {
     setSourceConnectionNotice(message);
     return false;
@@ -748,7 +749,7 @@ function AppShellInner(): ReactNode {
     ): Promise<boolean> => {
       const chat = chatForWindow(chatWindowId);
       if (chat === undefined) {
-        return rejectForConnectionFailure("Open a ready chat window before connecting a source.");
+        return rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
       }
       if (target !== undefined && chat.id !== target.conversationId) return false;
       const current =
@@ -771,7 +772,7 @@ function AppShellInner(): ReactNode {
       const scope = { ...nextScope, connectedAtMs: Date.now() };
       const next = appendConnectedScope(current, scope, groundingLimits.maxConnectedSources);
       if (next === null) {
-        return rejectForConnectionFailure("Choose a local folder before connecting it to chat.");
+        return rejectForConnectionFailure(t("chat.grounding.localFolderRequired"));
       }
       if (next === current) {
         return rejectForLimit(current.length + lkScopes.length, cap);
@@ -797,22 +798,16 @@ function AppShellInner(): ReactNode {
       } catch (error: unknown) {
         if (error instanceof ChatBindingCompensationFailure) {
           reportChatBindingCompensationFailure();
-          return rejectForConnectionFailure(
-            "Chat grounding recovery failed. Reload the chat before connecting another source.",
-          );
+          return rejectForConnectionFailure(t("chat.grounding.recoveryRequired"));
         }
         if (
           error instanceof ChatMutationTimeoutFailure ||
           error instanceof ChatMutationQueueBlockedFailure
         ) {
           reportGroundingMutationFailure("Chat grounding mutation timed out.");
-          return rejectForConnectionFailure(
-            "Chat grounding is blocked after a timeout. Reload the chat before trying again.",
-          );
+          return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
         }
-        return rejectForConnectionFailure(
-          "Keiko could not connect that source. Check that it is still available and try again.",
-        );
+        return rejectForConnectionFailure(t("chat.grounding.connectSourceFailed"));
       }
     },
     // GEN-PERF-RENDER-001 — depend on the stable `session.replaceChat` useCallback (the only member
@@ -829,6 +824,7 @@ function AppShellInner(): ReactNode {
       rejectForLimit,
       rejectForConnectionFailure,
       rememberGroundingChat,
+      t,
     ],
   );
   const replaceFilesScope = useCallback(
@@ -847,12 +843,10 @@ function AppShellInner(): ReactNode {
         );
       } catch {
         reportGroundingMutationFailure("Chat grounding mutation timed out.");
-        return rejectForConnectionFailure(
-          "Chat grounding is blocked after a timeout. Reload the chat before trying again.",
-        );
+        return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
       }
     },
-    [groundingMutationKey, rejectForConnectionFailure, replaceFilesScopeNow],
+    [groundingMutationKey, rejectForConnectionFailure, replaceFilesScopeNow, t],
   );
   const handleScopeBind = useCallback(
     async (
@@ -899,7 +893,7 @@ function AppShellInner(): ReactNode {
     ): Promise<boolean> => {
       const chat = chatForWindow(chatWindowId);
       if (chat === undefined) {
-        return rejectForConnectionFailure("Open a ready chat window before connecting a source.");
+        return rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
       }
       if (target !== undefined && chat.id !== target.conversationId) return false;
       const current = effectiveLocalKnowledgeScopes(chat);
@@ -930,22 +924,16 @@ function AppShellInner(): ReactNode {
       } catch (error: unknown) {
         if (error instanceof ChatBindingCompensationFailure) {
           reportChatBindingCompensationFailure();
-          return rejectForConnectionFailure(
-            "Chat grounding recovery failed. Reload the chat before connecting another source.",
-          );
+          return rejectForConnectionFailure(t("chat.grounding.recoveryRequired"));
         }
         if (
           error instanceof ChatMutationTimeoutFailure ||
           error instanceof ChatMutationQueueBlockedFailure
         ) {
           reportGroundingMutationFailure("Chat grounding mutation timed out.");
-          return rejectForConnectionFailure(
-            "Chat grounding is blocked after a timeout. Reload the chat before trying again.",
-          );
+          return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
         }
-        return rejectForConnectionFailure(
-          "Keiko could not connect that knowledge source. Check that it is still available and try again.",
-        );
+        return rejectForConnectionFailure(t("chat.grounding.connectKnowledgeFailed"));
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
@@ -956,6 +944,7 @@ function AppShellInner(): ReactNode {
       rejectForLimit,
       rejectForConnectionFailure,
       rememberGroundingChat,
+      t,
     ],
   );
   const handleConnectorBind = useCallback(
@@ -972,12 +961,10 @@ function AppShellInner(): ReactNode {
         );
       } catch {
         reportGroundingMutationFailure("Chat grounding mutation timed out.");
-        return rejectForConnectionFailure(
-          "Chat grounding is blocked after a timeout. Reload the chat before trying again.",
-        );
+        return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
       }
     },
-    [groundingMutationKey, handleConnectorBindNow, rejectForConnectionFailure],
+    [groundingMutationKey, handleConnectorBindNow, rejectForConnectionFailure, t],
   );
   const handleConnectorUnbind = useCallback(
     (chatWindowId: string, scope: ChatLocalKnowledgeScope): void => {

@@ -64,6 +64,19 @@ function chatMatches(chat: Chat, query: string): boolean {
   );
 }
 
+function createdChatMatchesCurrentProject(
+  created: Chat,
+  requestedProjectPath: string | undefined,
+  currentProjectPath: string | undefined,
+): boolean {
+  if (requestedProjectPath === undefined) {
+    return currentProjectPath === undefined || currentProjectPath === created.projectPath;
+  }
+  return (
+    created.projectPath === requestedProjectPath && currentProjectPath === requestedProjectPath
+  );
+}
+
 export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): ReactNode {
   const session = useChatSessionCatalog();
   const actions = useChatSessionActions();
@@ -140,8 +153,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     const created = await actions.openNewChat(undefined, "New chat");
     if (
       created !== undefined &&
-      created.projectPath === requestedProjectPath &&
-      activeProjectPathRef.current === requestedProjectPath
+      createdChatMatchesCurrentProject(created, requestedProjectPath, activeProjectPathRef.current)
     ) {
       openChatWindow(created);
     }

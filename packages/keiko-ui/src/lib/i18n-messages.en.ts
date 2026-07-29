@@ -403,6 +403,18 @@ export const EN_MESSAGES = {
   "chat.grounding.capsule": "Knowledge Pod: {name}",
   "chat.grounding.capsuleSet": "Knowledge Pod Set: {name}",
   "chat.grounding.unavailable": "{label} (unavailable)",
+  "chat.grounding.sourceLimit":
+    "Source limit reached — this chat already has {connectedCount} of {cap} connected sources. Disconnect a source before connecting another.",
+  "chat.grounding.readyChatRequired": "Open a ready chat window before connecting a source.",
+  "chat.grounding.localFolderRequired": "Choose a local folder before connecting it to chat.",
+  "chat.grounding.recoveryRequired":
+    "Chat grounding recovery failed. Reload the chat before connecting another source.",
+  "chat.grounding.timeoutBlocked":
+    "Chat grounding is blocked after a timeout. Reload the chat before trying again.",
+  "chat.grounding.connectSourceFailed":
+    "Keiko could not connect that source. Check that it is still available and try again.",
+  "chat.grounding.connectKnowledgeFailed":
+    "Keiko could not connect that knowledge source. Check that it is still available and try again.",
   "chat.memory.panel": "Conversation memory",
   "chat.memory.included": "{count} memories included",
   "chat.memory.noneIncluded": "No memories included",
