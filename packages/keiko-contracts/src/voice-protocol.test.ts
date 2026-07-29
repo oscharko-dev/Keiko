@@ -13,7 +13,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { VoiceProfile } from "./gateway.js";
-import type { VoiceErrorMessage } from "./index.js";
+import { decodeVoiceControlMessage, type VoiceErrorMessage } from "./index.js";
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   PREFERRED_VOICE_NEGOTIATION_MODE,
@@ -32,7 +32,6 @@ import {
   VOICE_PROFILE_MEDIA_TRANSPORT,
   VOICE_PROFILE_NEGOTIATION_MODE,
   VOICE_PROTOCOL_VERSION,
-  decodeVoiceControlMessage,
   isVoiceControlMessage,
   isVoiceControlMessageKind,
   isVoiceProtocolVersionSupported,

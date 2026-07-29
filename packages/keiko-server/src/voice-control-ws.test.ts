@@ -511,8 +511,10 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
         config: voiceConfig(true),
         configPresent: true,
         diagnostics: { record: (record): void => void diagnostics.push(record) },
-        voiceRealtimeNegotiationRequest: () =>
-          Promise.reject(new Error("provider-secret-throw-never-diagnosed")),
+        voiceRealtimeNegotiationRequest: async (): Promise<never> => {
+          await Promise.resolve();
+          throw new Error("provider-secret-throw-never-diagnosed");
+        },
       }),
     );
     const { ws: socket, next } = expectOpen(

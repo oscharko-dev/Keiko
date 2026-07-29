@@ -418,8 +418,10 @@ export interface VoicePolicyDecisionMessage extends VoiceControlEnvelope<"policy
 
 export interface VoiceErrorMessage extends VoiceControlEnvelope<"error"> {
   readonly code: VoiceProtocolErrorCode;
-  // Optional content-free support token. Server-side operator diagnostics use the same value so an
-  // opaque UI failure can be correlated without exposing provider, SDP, audio, or transcript data.
+  /**
+   * Optional content-free support token. Server-side operator diagnostics use the same value so an
+   * opaque UI failure can be correlated without exposing provider, SDP, audio, or transcript data.
+   */
   readonly correlationId?: string | undefined;
 }
 
@@ -826,9 +828,13 @@ export function validateVoiceControlMessage(value: unknown): VoiceProtocolValida
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
 
-// Optional support metadata must never hide a valid control-plane failure. This decoder drops only
-// an invalid error correlation id from a copy, then applies the same strict shared validator to the
-// complete remaining message. Required envelope and payload failures still fail closed.
+/**
+ * Decode an untrusted voice-control value through the shared protocol validator.
+ *
+ * Invalid optional error correlation metadata is omitted from a copy so it cannot hide an otherwise
+ * valid control-plane failure. Required envelope and payload failures still fail closed and return
+ * `undefined`.
+ */
 export function decodeVoiceControlMessage(value: unknown): VoiceControlMessage | undefined {
   let candidate = value;
   if (
