@@ -1057,7 +1057,7 @@ describe("useDictation — realtime live dictation (P3)", () => {
     },
   );
 
-  it("releases a disconnected realtime session after its grace window", async (): Promise<void> => {
+  it("ignores late realtime events during batch retry after disconnect", async (): Promise<void> => {
     vi.useFakeTimers();
     const fakes = makeRealtimeDictationFakes();
     const recorder = makeRecorder({});
@@ -1107,6 +1107,19 @@ describe("useDictation — realtime live dictation (P3)", () => {
     expect(result.current.mode).toBe("batch");
     expect(fakes.connect).toHaveBeenCalledTimes(1);
     expect(recorder.start).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(1);
+
+    act(() => {
+      fakes.emitConnectionState("failed");
+      fakes.emitDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.delta",
+        delta: "stale realtime transcript",
+      });
+    });
+    expect(result.current.phase).toBe("recording");
+    expect(result.current.mode).toBe("batch");
+    expect(result.current.liveTranscript).toBe("");
+    expect(vi.getTimerCount()).toBe(1);
 
     act(() => result.current.stop());
     await act(async (): Promise<void> => {

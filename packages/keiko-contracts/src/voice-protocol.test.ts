@@ -22,6 +22,7 @@ import {
   VOICE_CONTROL_MESSAGE_REPLAY,
   VOICE_CONTROL_TRANSPORT_V1,
   VOICE_DATA_CHANNEL_EVENT_KINDS,
+  VOICE_PROTOCOL_ERROR_CODES,
   VOICE_MEDIA_PLANE,
   VOICE_REALTIME_CONTROL_TRANSPORT,
   VOICE_REALTIME_INPUT_DATA_CHANNEL_EVENT_KINDS,
@@ -69,6 +70,7 @@ function wellFormedMessage(kind: VoiceControlMessageKind): Record<string, unknow
           chatContext: { chatId: "chat-abc123" },
         }
       : {}),
+    ...(kind === "error" ? { code: VOICE_PROTOCOL_ERROR_CODES.at(-1) } : {}),
   };
 }
 
@@ -527,6 +529,28 @@ describe("envelope validation & guards", () => {
     });
     expect(message.correlationId).toBe("<provider detail>");
   });
+
+  it.each([undefined, "provider-error", 42])(
+    "rejects a missing or unknown required error code",
+    (code): void => {
+      const message = {
+        ...wellFormedMessage("error"),
+        code,
+      };
+
+      expect(validateVoiceControlMessage(message)).toEqual({
+        ok: false,
+        reasons: ["error code invalid"],
+      });
+      expect(isVoiceControlMessage(message)).toBe(false);
+      expect(
+        decodeVoiceControlMessage({
+          ...message,
+          correlationId: "<invalid optional metadata>",
+        }),
+      ).toBeUndefined();
+    },
+  );
 
   it("accepts a well-formed envelope for every kind", () => {
     for (const kind of VOICE_CONTROL_MESSAGE_KINDS) {

@@ -287,6 +287,7 @@ export const VOICE_PROTOCOL_ERROR_CODES: readonly VoiceProtocolErrorCode[] = [
   "rate-limited",
   "internal",
 ] as const;
+const VOICE_PROTOCOL_ERROR_CODE_SET: ReadonlySet<string> = new Set(VOICE_PROTOCOL_ERROR_CODES);
 
 // ─── Control message envelope + discriminated union ─────────────────────────────
 // Every control message shares the envelope: the protocol version, the session it belongs to, a
@@ -644,6 +645,10 @@ function isOptionalErrorCorrelationId(value: unknown): boolean {
   return value === undefined || isErrorCorrelationId(value);
 }
 
+function isVoiceProtocolErrorCode(value: unknown): value is VoiceProtocolErrorCode {
+  return typeof value === "string" && VOICE_PROTOCOL_ERROR_CODE_SET.has(value);
+}
+
 function isOptionalVoicePersona(value: unknown): value is VoicePersona | undefined {
   return value === undefined || value === "male" || value === "female" || value === "neutral";
 }
@@ -720,6 +725,9 @@ function validateSessionCreatePayload(value: Record<string, unknown>, reasons: s
 }
 
 function validateErrorPayload(value: Record<string, unknown>, reasons: string[]): void {
+  if (!isVoiceProtocolErrorCode(value.code)) {
+    reasons.push("error code invalid");
+  }
   if (!isOptionalErrorCorrelationId(value.correlationId)) {
     reasons.push("error correlationId invalid");
   }

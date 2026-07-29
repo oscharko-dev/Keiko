@@ -404,30 +404,40 @@ export function useDictation(options: UseDictationOptions): DictationController 
       clearTimeout(waiter.timer);
       realtimeFinalWaiterRef.current = undefined;
     }
-    realtimeControlRef.current?.close();
+    const realtimeControl = realtimeControlRef.current;
     realtimeControlRef.current = undefined;
-    realtimeSessionRef.current?.close();
+    const realtimeSession = realtimeSessionRef.current;
     realtimeSessionRef.current = undefined;
+    realtimeControl?.close();
+    realtimeSession?.close();
     realtimeLiveTranscriptRef.current = "";
     realtimeFinalTranscriptRef.current = undefined;
     realtimeTranscriptErrorRef.current = undefined;
     realtimeDeltaSeenRef.current = false;
   }, [clearRealtimeDisconnectGrace]);
 
-  const failRealtimeConnection = useCallback((): void => {
-    if (!mountedRef.current || cancelledRef.current || stoppingRef.current) {
-      return;
-    }
-    realtimeFallbackToBatchRef.current = true;
-    cancelledRef.current = true;
-    clearAutoStop();
-    cleanupRealtime();
-    dispatch({
-      type: "error",
-      reason: "connection-failed",
-      message: "Live dictation connection was lost.",
-    });
-  }, [cleanupRealtime, clearAutoStop]);
+  const failRealtimeConnection = useCallback(
+    (session: VoiceRtcSession): void => {
+      if (
+        realtimeSessionRef.current !== session ||
+        !mountedRef.current ||
+        cancelledRef.current ||
+        stoppingRef.current
+      ) {
+        return;
+      }
+      realtimeFallbackToBatchRef.current = true;
+      cancelledRef.current = true;
+      clearAutoStop();
+      cleanupRealtime();
+      dispatch({
+        type: "error",
+        reason: "connection-failed",
+        message: "Live dictation connection was lost.",
+      });
+    },
+    [cleanupRealtime, clearAutoStop],
+  );
 
   const waitForRealtimeFinal = useCallback((): Promise<{
     readonly text: string;
@@ -704,24 +714,34 @@ export function useDictation(options: UseDictationOptions): DictationController 
     const control = liveControlClientFactory();
     realtimeControlRef.current = control;
 
-    void (async () => {
+    void (async (): Promise<void> => {
       const session = await transport.connect({ signal: abort.signal });
+      if (realtimeStartAbortRef.current !== abort || !mountedRef.current || cancelledRef.current) {
+        session.close();
+        return;
+      }
       realtimeSessionRef.current = session;
       latency.mark("permission_granted");
       latency.mark("rtc_offer_created");
-      if (!mountedRef.current || cancelledRef.current) {
-        startingRef.current = false;
-        cleanupRealtime();
-        return;
-      }
-      session.onDataChannelEvent?.(handleRealtimeDataChannelEvent);
-      session.onDataChannelStateChange?.((state) => {
-        if (state === "open") {
+      const isCurrentRealtimeSession = (): boolean =>
+        realtimeStartAbortRef.current === abort && realtimeSessionRef.current === session;
+      session.onDataChannelEvent?.((event: unknown): void => {
+        if (isCurrentRealtimeSession()) {
+          handleRealtimeDataChannelEvent(event);
+        }
+      });
+      session.onDataChannelStateChange?.((state): void => {
+        if (isCurrentRealtimeSession() && state === "open") {
           latency.mark("datachannel_open");
         }
       });
-      session.onConnectionStateChange?.((state) => {
-        if (!mountedRef.current || cancelledRef.current || stoppingRef.current) {
+      session.onConnectionStateChange?.((state): void => {
+        if (
+          !isCurrentRealtimeSession() ||
+          !mountedRef.current ||
+          cancelledRef.current ||
+          stoppingRef.current
+        ) {
           return;
         }
         if (state === "connected") {
@@ -730,18 +750,18 @@ export function useDictation(options: UseDictationOptions): DictationController 
           return;
         }
         if (state === "failed" || state === "closed") {
-          failRealtimeConnection();
+          failRealtimeConnection(session);
           return;
         }
         if (state === "disconnected") {
           realtimeDisconnectGraceRef.current ??= setTimeout(
-            failRealtimeConnection,
+            (): void => failRealtimeConnection(session),
             LIVE_DICTATION_DISCONNECT_GRACE_MS,
           );
         }
       });
-      session.onLocalVoiceActivity?.((event) => {
-        if (!mountedRef.current || cancelledRef.current) {
+      session.onLocalVoiceActivity?.((event): void => {
+        if (!isCurrentRealtimeSession() || !mountedRef.current || cancelledRef.current) {
           return;
         }
         if (event === "speech-onset") {
@@ -750,12 +770,18 @@ export function useDictation(options: UseDictationOptions): DictationController 
         }
       });
       const answerSdp = await control.negotiate(session.offerSdp);
+      if (!isCurrentRealtimeSession()) {
+        return;
+      }
       if (!mountedRef.current || cancelledRef.current) {
         startingRef.current = false;
         cleanupRealtime();
         return;
       }
       await session.applyAnswer(answerSdp);
+      if (!isCurrentRealtimeSession()) {
+        return;
+      }
       if (!mountedRef.current || cancelledRef.current) {
         startingRef.current = false;
         cleanupRealtime();
@@ -767,8 +793,11 @@ export function useDictation(options: UseDictationOptions): DictationController 
       startingRef.current = false;
       dispatch({ type: "recording" });
       dispatch({ type: "micReady" });
-      autoStopRef.current = setTimeout(() => stopRealtime(), DICTATION_AUTO_STOP_MS);
-    })().catch((error: unknown) => {
+      autoStopRef.current = setTimeout((): void => stopRealtime(), DICTATION_AUTO_STOP_MS);
+    })().catch((error: unknown): void => {
+      if (realtimeStartAbortRef.current !== abort) {
+        return;
+      }
       startingRef.current = false;
       const shouldFallbackToBatch =
         error instanceof VoiceLiveDictationControlError ||
