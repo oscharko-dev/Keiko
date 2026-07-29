@@ -235,6 +235,10 @@ async function replacePage(page: Page, windows: readonly SeedWindow[]): Promise<
 }
 
 async function restrictBetaAndExpectAlphaTrusted(page: Page): Promise<void> {
+  // Project bootstrap may focus either root when both registrations share the same timestamp.
+  // Select Beta explicitly so this proof never depends on catalog tie-breaking.
+  const betaTab = page.getByRole("tab", { name: /M11 Root Beta/u });
+  if ((await betaTab.getAttribute("aria-selected")) !== "true") await betaTab.click();
   const prompt = page.getByRole("alertdialog", { name: "Trust this workspace?" });
   await expect(prompt).toBeVisible();
   await prompt.getByRole("button", { name: "Stay restricted" }).click();
@@ -415,17 +419,18 @@ async function prepareCloseoutJourney(
 }
 
 async function reopenTrustedAlphaAfterProfileSwitch(page: Page, root: string): Promise<Locator> {
-  // The replaced page starts on the explicitly restricted Beta root. Dismiss only that root's
-  // prompt, then select Alpha and prove the profile switch preserved Alpha's server-owned grant.
-  await expect(page.getByRole("tab", { name: /M11 Root Beta/u })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
-  await page
-    .getByRole("alertdialog", { name: "Trust this workspace?" })
-    .getByRole("button", { name: "Stay restricted" })
-    .click();
-  await page.getByRole("tab", { name: /M11 Root Alpha/u }).click();
+  // The active root is server-owned and can legitimately start on either root after replacement.
+  // Clear only Beta's expected restricted prompt when Beta is active, then select Alpha explicitly
+  // and prove the profile switch preserved Alpha's server-owned grant.
+  const betaTab = page.getByRole("tab", { name: /M11 Root Beta/u });
+  if ((await betaTab.getAttribute("aria-selected")) === "true") {
+    await page
+      .getByRole("alertdialog", { name: "Trust this workspace?" })
+      .getByRole("button", { name: "Stay restricted" })
+      .click();
+  }
+  const alphaTab = page.getByRole("tab", { name: /M11 Root Alpha/u });
+  if ((await alphaTab.getAttribute("aria-selected")) !== "true") await alphaTab.click();
   const editor = await openEditorWorkspace(page, { dismissTrustPrompt: false });
   await expect(page.getByRole("alertdialog", { name: "Trust this workspace?" })).toHaveCount(0);
   await expectRootStillTrusted(page.request, root);

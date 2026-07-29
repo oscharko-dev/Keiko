@@ -77,17 +77,12 @@ function reportAudioContextResumeFailure(): void {
   window.reportError(new Error(AUDIO_CONTEXT_RESUME_ERROR));
 }
 
-function resumeAudioContext(context: AudioContext): void {
-  let pendingResume: Promise<void>;
+async function resumeAudioContext(context: AudioContext): Promise<void> {
   try {
-    pendingResume = context.resume();
+    await context.resume();
   } catch {
     reportAudioContextResumeFailure();
-    return;
   }
-  void pendingResume.catch(() => {
-    reportAudioContextResumeFailure();
-  });
 }
 
 // Converts a little-endian PCM16 byte chunk to Int16 samples, carrying any trailing odd byte forward so
@@ -277,7 +272,7 @@ export function createBrowserAssistantSpeechStreamingSink():
     primeFromUserGesture(): void {
       const lease = ensureContext();
       if (lease === undefined) return;
-      resumeAudioContext(lease.context);
+      void resumeAudioContext(lease.context);
       void ensureNode().catch(() => {
         // A later play attempt either retries setup or selects the buffered fallback.
       });
@@ -297,7 +292,7 @@ export function createBrowserAssistantSpeechStreamingSink():
       // AudioContext.resume() may stay pending until the browser's autoplay policy releases output.
       // Starting provider synthesis must not wait behind that browser-local gate: PCM can queue in the
       // worklet and begin as soon as the context runs.
-      resumeAudioContext(lease.context);
+      void resumeAudioContext(lease.context);
       const workletNode = lease.node;
       workletNode.port.postMessage({ type: "config", primeFrames: PRIME_FRAMES });
       workletNode.port.onmessage = (event: MessageEvent): void => {
