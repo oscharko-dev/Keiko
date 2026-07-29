@@ -1195,6 +1195,7 @@ export const DE_MESSAGES = {
     "Der native Ordnerdialog ist nicht verfügbar. Gib den Pfad unten ein.",
   "workspaceContext.selectionFailed":
     "Der Ordner konnte nicht ausgewählt werden. Prüfe den Pfad und versuche es erneut.",
+  "workspaceContext.supportId": "Support-ID: {correlationId}",
   "workspaceContext.selecting": "Wird ausgewählt…",
   "workspaceContext.manual.label": "Oder lokalen Pfad eingeben",
   "workspaceContext.manual.placeholder": "/pfad/zum/ordner",

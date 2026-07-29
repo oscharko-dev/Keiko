@@ -15,6 +15,7 @@ import {
   type RefObject,
 } from "react";
 import type { ProjectWithAvailability } from "@/lib/types";
+import { newClientCorrelationId } from "@/lib/http";
 import { pickWithNativeDialog } from "@/lib/native-file-dialog";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { useActiveWorkspace, type ActiveWorkspaceApi } from "./context/ActiveWorkspaceContext";
@@ -29,6 +30,24 @@ import styles from "./TaskWorkspaceSwitcher.module.css";
 
 const ChevronIcon = Icons.chevron;
 const FolderIcon = Icons.folder;
+const WORKSPACE_SELECTION_DIAGNOSTIC = "Workspace folder selection failed.";
+
+function redactedFailureCategory(cause: unknown): string {
+  if (cause instanceof DOMException) return "DOMException";
+  if (cause instanceof TypeError) return "TypeError";
+  if (cause instanceof Error) return "Error";
+  return "Unknown";
+}
+
+function reportSelectionFailure(cause: unknown, t: I18nTranslate): string {
+  const correlationId = newClientCorrelationId();
+  window.reportError(
+    new Error(
+      `${WORKSPACE_SELECTION_DIAGNOSTIC} Cause category: ${redactedFailureCategory(cause)}. Correlation ID: ${correlationId}`,
+    ),
+  );
+  return `${t("workspaceContext.selectionFailed")} ${t("workspaceContext.supportId", { correlationId })}`;
+}
 
 function trimTrailingSeparators(path: string): string {
   let end = path.length;
@@ -145,8 +164,8 @@ function useFolderSelection(input: {
         }
         setManualPath("");
         close();
-      } catch {
-        setError(t("workspaceContext.selectionFailed"));
+      } catch (cause) {
+        setError(reportSelectionFailure(cause, t));
       } finally {
         setBusy(false);
       }

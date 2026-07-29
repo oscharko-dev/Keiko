@@ -10,7 +10,7 @@ import {
   type RenderResult,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import type { NativeDialogPickOutcome } from "@/lib/native-file-dialog";
 import type { ProjectWithAvailability } from "@/lib/types";
@@ -148,6 +148,10 @@ describe("TaskWorkspaceSwitcher", () => {
     nativeDialogState.pick.mockReset().mockResolvedValue({ kind: "cancelled" });
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("asks for a folder when no workspace context is selected", () => {
     renderSwitcher(api());
 
@@ -217,6 +221,32 @@ describe("TaskWorkspaceSwitcher", () => {
     });
     expect(screen.getByRole("dialog", { name: "Folder or repository" })).toBeInTheDocument();
     expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
+  it("reports a correlated content-free diagnostic when folder registration rejects", async () => {
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
+    nativeDialogState.pick.mockResolvedValue({
+      kind: "picked",
+      paths: [SELECTED_ROOT],
+    });
+    chatActions.addProject.mockRejectedValue(new TypeError("secret customer folder detail"));
+    renderSwitcher(api());
+    const dialog = openDialog();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Choose a folder" }));
+
+    await waitFor(() => expect(reportError).toHaveBeenCalledOnce());
+    const reported = reportError.mock.calls[0]?.[0];
+    expect(reported).toBeInstanceOf(Error);
+    const diagnostic = (reported as Error).message;
+    expect(diagnostic).toMatch(
+      /^Workspace folder selection failed\. Cause category: TypeError\. Correlation ID: .+$/u,
+    );
+    expect(diagnostic).not.toContain("secret customer folder detail");
+    const correlationId = diagnostic.split("Correlation ID: ").at(-1);
+    expect(correlationId).toBeDefined();
+    expect(screen.getByRole("alert")).toHaveTextContent(`Support ID: ${correlationId}`);
   });
 
   it("reports a selection failure when chat actions are unavailable", async () => {

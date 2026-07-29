@@ -1161,6 +1161,7 @@ export const EN_MESSAGES = {
     "The native folder dialog is unavailable. Enter the path below.",
   "workspaceContext.selectionFailed":
     "The folder could not be selected. Check the path and try again.",
+  "workspaceContext.supportId": "Support ID: {correlationId}",
   "workspaceContext.selecting": "Selecting…",
   "workspaceContext.manual.label": "Or enter a local path",
   "workspaceContext.manual.placeholder": "/path/to/folder",
