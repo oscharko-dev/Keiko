@@ -799,7 +799,7 @@ function GatewayBaseUrlField({
         onPaste={
           preserveExisting
             ? undefined
-            : (event) => pasteCredentialWithoutWhitespace(event, onChange)
+            : (event): void => pasteCredentialWithoutWhitespace(event, onChange)
         }
       />
     </label>
@@ -839,7 +839,7 @@ function GatewayApiKeyField({
         onPaste={
           preserveExisting
             ? undefined
-            : (event) => pasteCredentialWithoutWhitespace(event, onChange)
+            : (event): void => pasteCredentialWithoutWhitespace(event, onChange)
         }
       />
     </label>

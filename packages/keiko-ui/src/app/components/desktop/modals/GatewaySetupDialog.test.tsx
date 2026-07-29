@@ -222,19 +222,22 @@ describe("GatewaySetupDialog", () => {
     }
   });
 
-  it("removes whitespace from pasted first-run gateway credentials only", async () => {
+  it("removes whitespace from pasted first-run gateway credentials only", async (): Promise<void> => {
     const { unmount } = render(<GatewaySetupDialog />);
     const baseUrl = screen.getByLabelText(/base url/i);
     const apiToken = screen.getByLabelText(/api token/i);
     const clipboardData = (text: string): Pick<DataTransfer, "getData"> => ({
-      getData: () => text,
+      getData: vi.fn((format: string): string => (format === "text" ? text : "")),
     });
+    const baseUrlClipboardData = clipboardData(" https://llm-gateway.example.com /\n v1 ");
+    const apiTokenClipboardData = clipboardData(" example \t token \n");
 
     expect(
       fireEvent.paste(baseUrl, {
-        clipboardData: clipboardData(" https://llm-gateway.example.com /\n v1 "),
+        clipboardData: baseUrlClipboardData,
       }),
     ).toBe(false);
+    expect(baseUrlClipboardData.getData).toHaveBeenCalledWith("text");
     expect(baseUrl).toHaveValue("https://llm-gateway.example.com/v1");
 
     expect(
@@ -245,9 +248,10 @@ describe("GatewaySetupDialog", () => {
 
     expect(
       fireEvent.paste(apiToken, {
-        clipboardData: clipboardData(" example \t token \n"),
+        clipboardData: apiTokenClipboardData,
       }),
     ).toBe(false);
+    expect(apiTokenClipboardData.getData).toHaveBeenCalledWith("text");
     expect(apiToken).toHaveValue("exampletoken");
 
     unmount();
