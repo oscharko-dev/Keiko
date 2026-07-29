@@ -1,15 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
 import type {
   EditorLocalHistoryOrigin,
-  WorkspaceRootDescriptor,
   WorkspaceRootIdentityDigest,
   WorkspaceRootRef,
 } from "@oscharko-dev/keiko-contracts";
+import type { FilesContentResponse } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { UiHandlerDeps } from "../../deps.js";
 import { emitServerDiagnostic } from "../../diagnostics-log.js";
-import { WorkspaceManifestService } from "../../workspace-manifests.js";
-import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
+import {
+  resolveCurrentWorkspaceRootMembership,
+  WorkspaceRootMembershipError,
+} from "../../workspace-root-membership.js";
 import { EditorLocalHistoryError, editorLocalHistoryWorkspaceId } from "./localHistoryStore.js";
 
 export interface EditorLocalHistoryResolvedRoot {
@@ -20,6 +21,10 @@ export interface EditorLocalHistoryResolvedRoot {
   readonly realRoot: string;
 }
 
+export type EditorLocalHistoryCaptureProtection = NonNullable<
+  FilesContentResponse["localHistoryProtection"]
+>;
+
 function unavailableRoot(detail: string): never {
   throw new EditorLocalHistoryError(
     "INVALID_CAPTURE",
@@ -28,72 +33,25 @@ function unavailableRoot(detail: string): never {
   );
 }
 
-function storedObjectIdentity(
-  deps: Pick<UiHandlerDeps, "store">,
-  rootRef: WorkspaceRootRef,
-): string | undefined {
-  const value = deps.store
-    .findWorkspaceManifestRecordByRoot(rootRef)
-    ?.rootProjects.find(
-      (candidate): boolean => candidate.rootRef === rootRef,
-    )?.objectIdentityDigest;
-  return typeof value === "string" ? value : undefined;
-}
-
-type DurableWorkspaceRootIdentity = ReturnType<typeof inspectWorkspaceRootIdentity> & {
-  readonly objectIdentityDigest: string;
-};
-
-function rootIdentityMatches(
-  inspected: ReturnType<typeof inspectWorkspaceRootIdentity>,
-  root: WorkspaceRootDescriptor,
-  storedObjectIdentityDigest: string | undefined,
-): inspected is DurableWorkspaceRootIdentity {
-  return [
-    inspected.rootRef === root.rootRef,
-    inspected.identityDigest === root.identityDigest,
-    inspected.objectIdentityDigest !== undefined,
-    inspected.objectIdentityDigest === storedObjectIdentityDigest,
-  ].every(Boolean);
-}
-
 export function resolveEditorLocalHistoryRoot(
   deps: Pick<UiHandlerDeps, "store">,
   realRootInput: string,
 ): EditorLocalHistoryResolvedRoot {
-  let realRoot: string;
-  let manifests: ReturnType<WorkspaceManifestService["list"]>;
   try {
-    realRoot = realpathSync(realRootInput);
-    manifests = new WorkspaceManifestService(deps.store).list();
-  } catch {
-    return unavailableRoot("ROOT_UNRESOLVED");
-  }
-  for (const manifest of manifests) {
-    const root = manifest.roots.find((candidate): boolean => candidate.canonicalRoot === realRoot);
-    if (root === undefined) continue;
-    let inspected: ReturnType<typeof inspectWorkspaceRootIdentity>;
-    try {
-      inspected = inspectWorkspaceRootIdentity(realRoot);
-    } catch {
-      return unavailableRoot("IDENTITY_UNREADABLE");
-    }
-    if (!rootIdentityMatches(inspected, root, storedObjectIdentity(deps, root.rootRef))) {
-      return unavailableRoot("IDENTITY_DRIFT");
-    }
+    const membership = resolveCurrentWorkspaceRootMembership(deps.store, realRootInput);
     // Membership still decides ACCESS — a root outside every manifest has no history surface. It
     // no longer decides IDENTITY: the history workspace is derived from the root, so joining or
     // leaving a multi-root workspace carries this root's checkpoints along instead of stranding
     // them under a manifest id the root no longer has (#2616).
     return {
-      workspaceId: editorLocalHistoryWorkspaceId(root.rootRef),
-      rootRef: root.rootRef,
-      rootIdentityDigest: root.identityDigest,
-      objectIdentityDigest: inspected.objectIdentityDigest,
-      realRoot,
+      ...membership,
+      workspaceId: editorLocalHistoryWorkspaceId(membership.rootRef),
     };
+  } catch (error) {
+    return unavailableRoot(
+      error instanceof WorkspaceRootMembershipError ? error.failure : "ROOT_UNRESOLVED",
+    );
   }
-  return unavailableRoot("NOT_A_MEMBER");
 }
 
 function captureFailureCode(error: unknown): string {
@@ -108,9 +66,10 @@ export function emitEditorLocalHistoryCaptureFailure(
   origin: EditorLocalHistoryOrigin,
   error: unknown,
   nowMs = Date.now(),
-): void {
+): string {
+  const correlationId = `local-history-${randomUUID()}`;
   emitServerDiagnostic(deps.diagnostics, {
-    correlationId: `local-history-${randomUUID()}`,
+    correlationId,
     timestamp: new Date(nowMs).toISOString(),
     operation: origin,
     source: "editor.local-history.capture",
@@ -118,6 +77,21 @@ export function emitEditorLocalHistoryCaptureFailure(
     message: "Editor local-history capture failed.",
     code: captureFailureCode(error),
   });
+  return correlationId;
+}
+
+function degradedProtection(
+  error: unknown,
+  correlationId: string,
+): EditorLocalHistoryCaptureProtection {
+  return {
+    status: "degraded",
+    reason:
+      error instanceof EditorLocalHistoryError && error.code === "INVALID_CAPTURE"
+        ? "workspace-unavailable"
+        : "history-unavailable",
+    correlationId,
+  };
 }
 
 export function captureEditorLocalHistorySafely(input: {
@@ -128,8 +102,21 @@ export function captureEditorLocalHistorySafely(input: {
   readonly content: string;
   readonly origin: EditorLocalHistoryOrigin;
   readonly nowMs?: number | undefined;
-}): void {
-  if (input.deps.editorLocalHistoryStore === undefined) return;
+}): EditorLocalHistoryCaptureProtection {
+  if (input.deps.editorLocalHistoryStore === undefined) {
+    const error = new EditorLocalHistoryError(
+      "INDEX_UNAVAILABLE",
+      "Editor Local History is unavailable.",
+      "STORE_UNAVAILABLE",
+    );
+    const correlationId = emitEditorLocalHistoryCaptureFailure(
+      input.deps,
+      input.origin,
+      error,
+      input.nowMs,
+    );
+    return degradedProtection(error, correlationId);
+  }
   try {
     const identity = resolveEditorLocalHistoryRoot(input.deps, input.realRoot);
     input.deps.editorLocalHistoryStore.capture({
@@ -140,7 +127,14 @@ export function captureEditorLocalHistorySafely(input: {
       origin: input.origin,
       nowMs: input.nowMs,
     });
+    return { status: "protected" };
   } catch (error) {
-    emitEditorLocalHistoryCaptureFailure(input.deps, input.origin, error, input.nowMs);
+    const correlationId = emitEditorLocalHistoryCaptureFailure(
+      input.deps,
+      input.origin,
+      error,
+      input.nowMs,
+    );
+    return degradedProtection(error, correlationId);
   }
 }

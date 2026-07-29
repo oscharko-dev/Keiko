@@ -266,12 +266,37 @@ describe("GET /api/projects", () => {
     rmSync(otherDir, { recursive: true });
     const res = await fetch(url("/api/projects"));
     const body = (await res.json()) as {
-      projects: { path: string; available: boolean }[];
+      projects: { path: string; available: boolean; workspaceAvailable: boolean }[];
     };
     expect(body.projects).toHaveLength(2);
     const map = Object.fromEntries(body.projects.map((p) => [p.path, p.available]));
     expect(map[projDir]).toBe(true);
     expect(map[otherDir]).toBe(false);
+    expect(body.projects.find((project) => project.path === projDir)?.workspaceAvailable).toBe(
+      true,
+    );
+  });
+
+  it("keeps a project with missing manifest membership explicitly unavailable", async () => {
+    store.createProject(projDir);
+    const storeWithoutManifestView: UiStore = {
+      ...store,
+      listWorkspaceManifestRecords: () => [],
+    };
+    await restartWithDeps({ store: storeWithoutManifestView });
+
+    const res = await fetch(url("/api/projects"));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      projects: { path: string; available: boolean; workspaceAvailable: boolean }[];
+    };
+    expect(body.projects).toEqual([
+      expect.objectContaining({
+        path: projDir,
+        available: true,
+        workspaceAvailable: false,
+      }),
+    ]);
   });
 
   it("returns the launch project before stale persisted projects", async () => {
@@ -301,11 +326,17 @@ describe("POST /api/projects", () => {
     });
     expect(res.status).toBe(201);
     const body = (await res.json()) as {
-      project: { path: string; name: string; available: boolean };
+      project: {
+        path: string;
+        name: string;
+        available: boolean;
+        workspaceAvailable: boolean;
+      };
     };
     expect(body.project.path).toBe(projDir);
     expect(body.project.name).toBe("Hello");
     expect(body.project.available).toBe(true);
+    expect(body.project.workspaceAvailable).toBe(true);
   });
 
   it("UPSERTs lastOpenedAt on duplicate path (AC3)", async () => {

@@ -22,6 +22,7 @@ import { createUiServer, UI_HOST } from "./server.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { buildCspHeader } from "./csp.js";
 import { resetWorkspaceStateForTests } from "./workspace-state-handlers.js";
+import type { EditorHotExitStore } from "./editor/hotExitStore.js";
 
 let server: Server;
 let staticRoot: string;
@@ -337,6 +338,61 @@ describe("GET/PUT /api/workspace/state", () => {
       workspace: { windows: unknown[] };
     };
     expect(body.workspace.windows).toHaveLength(64);
+  });
+});
+
+describe("bodyless API responses", () => {
+  it("completes a successful hot-exit delete as an empty 204 without a follow-on error", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const snapshotRef = `hot-exit:${"a".repeat(64)}`;
+    let deleted = false;
+    const editorHotExitStore: EditorHotExitStore = {
+      snapshotRefFor: () => snapshotRef,
+      write: () => ({ snapshotRef, contentSizeBytes: 0 }),
+      read: () => null,
+      delete: () => {
+        deleted = true;
+      },
+    };
+    const store = createInMemoryUiStore();
+    const handlerDeps: UiHandlerDeps = {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: buildRedactor({}),
+      diagnostics: { record: (record) => records.push(record) },
+      registry: createRunRegistry(),
+      modelPortFactory: () => undefined,
+      store,
+      editorHotExitStore,
+    };
+    await closeServer();
+    server = createUiServer({ staticRoot, csp: buildCspHeader([]), port, handlerDeps });
+    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+
+    try {
+      const response = await fetchRawWithInit("/api/editor/hot-exit/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+        body: JSON.stringify({
+          workspaceRoot: staticRoot,
+          relativePath: "index.html",
+          snapshotRef,
+        }),
+      });
+      expect(response).toMatchObject({ status: 204, text: "" });
+      expect(response.headers.get("content-length")).toBeNull();
+      expect(deleted).toBe(true);
+      expect(records).toEqual([]);
+    } finally {
+      store.close();
+    }
   });
 });
 

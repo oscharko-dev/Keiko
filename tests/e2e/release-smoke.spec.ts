@@ -235,9 +235,11 @@ async function stubInlineCompletionRoutes(page: Page): Promise<{
 
 async function openSmokeEditor(
   page: Page,
+  request: APIRequestContext,
   projectPath: string,
   relativePath: string,
 ): Promise<ReturnType<Page["getByRole"]>> {
+  await ensureProject(request, projectPath);
   await seedFilesWindow(page, projectPath);
   await page.goto("/");
   const filesWindow = page.getByRole("region", { name: /^Files/u });
@@ -250,6 +252,10 @@ async function openSmokeEditor(
     name: /Editor.*packages\/keiko-cli\/src\/run\.ts/u,
   });
   await expect(editorWindow.locator(".monaco-editor")).toBeVisible();
+  const trustDialog = editorWindow.getByRole("alertdialog", { name: "Trust this workspace?" });
+  await expect(trustDialog).toBeVisible();
+  await trustDialog.getByRole("button", { name: "Trust workspace" }).click();
+  await expect(trustDialog).toBeHidden();
   await filesWindow.getByRole("button", { name: "Close Files window" }).click();
   await expect(filesWindow).toBeHidden();
   return editorWindow;
@@ -337,13 +343,14 @@ test("governed Git action-sheet endpoint is wired, CSRF-protected, and returns t
 
 test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", async ({
   page,
+  request,
 }) => {
   const projectPath = createProjectFixture();
   const relativePath = "packages/keiko-cli/src/run.ts";
   const absolutePath = join(projectPath, relativePath);
   writeFileSync(absolutePath, "", "utf8");
   const assertNoPageErrors = collectPageErrors(page);
-  const editorWindow = await openSmokeEditor(page, projectPath, relativePath);
+  const editorWindow = await openSmokeEditor(page, request, projectPath, relativePath);
 
   // Issue #1205: dirty/saved/conflict state is communicated by the unified status bar's save field.
   const saveField = editorWindow.locator('[data-field="save"]');
@@ -355,6 +362,7 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
     .poll(() => readFileSync(absolutePath, "utf8").replace(/\r\n/gu, "\n"))
     .toBe(savedText);
   await expect(saveField).toHaveText("Saved");
+  await expect(editorWindow.getByTestId("editor-local-history-protection")).toHaveCount(0);
 
   const conflictDraft = "export const e2eFixture = 'conflicting browser draft';\n";
   await replaceMonacoText(page, editorWindow, conflictDraft);
@@ -448,6 +456,7 @@ test("arbitrary folder opening keeps root-relative ids with clear error and empt
 
 test("editor presents the VS Code-feeling UX surface: status bar, tabs, cursor, command palette @smoke", async ({
   page,
+  request,
 }, testInfo) => {
   // Issue #1205: the browser interaction smoke for the VS Code-feeling UX — the unified status bar,
   // accessible tabs, live cursor reporting, and Monaco's native command palette carrying the Keiko
@@ -457,7 +466,7 @@ test("editor presents the VS Code-feeling UX surface: status bar, tabs, cursor, 
   writeFileSync(join(projectPath, relativePath), "", "utf8");
   const assertNoPageErrors = collectPageErrors(page);
 
-  const editorWindow = await openSmokeEditor(page, projectPath, relativePath);
+  const editorWindow = await openSmokeEditor(page, request, projectPath, relativePath);
 
   // The unified status bar is the single status surface (Acceptance Criterion 3).
   const statusBar = editorWindow.getByTestId("editor-status-bar");
@@ -564,7 +573,7 @@ test("editor surfaces diagnostics and hover from the governed language service @
   assertNoPageErrors();
 });
 
-test("editor inline ghost text renders and Tab accepts it @smoke", async ({ page }) => {
+test("editor inline ghost text renders and Tab accepts it @smoke", async ({ page, request }) => {
   const projectPath = createProjectFixture();
   const relativePath = "packages/keiko-cli/src/run.ts";
   const absolutePath = join(projectPath, relativePath);
@@ -572,7 +581,7 @@ test("editor inline ghost text renders and Tab accepts it @smoke", async ({ page
   const { inlineRequests, telemetryReports } = await stubInlineCompletionRoutes(page);
   const assertNoPageErrors = collectPageErrors(page);
 
-  const editorWindow = await openSmokeEditor(page, projectPath, relativePath);
+  const editorWindow = await openSmokeEditor(page, request, projectPath, relativePath);
   await replaceMonacoText(page, editorWindow, "export function answer() {\n  ret");
   await expect.poll(() => inlineRequests.length).toBeGreaterThan(0);
   await expect(page.getByRole("alert").filter({ hasText: "urn 42;" }).first()).toBeVisible();

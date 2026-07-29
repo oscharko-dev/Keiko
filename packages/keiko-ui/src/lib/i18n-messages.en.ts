@@ -15,6 +15,26 @@ export const EN_MESSAGES = {
   "rail.coding": "Coding Workbench",
   "rail.localKnowledge": "Local Knowledge",
   "rail.editor": "Editor",
+  "editor.empty.title": "Open a project",
+  "editor.empty.description":
+    "Choose a project folder to start editing. The editor works inside the selected workspace root.",
+  "editor.empty.selectFolder": "Select folder…",
+  "editor.empty.opening": "Opening…",
+  "editor.empty.open": "Open",
+  "editor.empty.pathLabel": "Project folder path",
+  "editor.empty.pickerTitle": "Select project folder",
+  "editor.empty.dialogBusy": "A native dialog is already open. Close it first.",
+  "editor.empty.pickerUnsupported":
+    "The native folder picker is unavailable on this platform. Enter a path below.",
+  "editor.empty.connectionFailed":
+    "The project could not be connected. Check the folder and try again.",
+  "editor.localHistoryProtection.savedUnprotected":
+    "File saved, but Local History could not protect this version.",
+  "editor.localHistoryProtection.workspaceUnavailable":
+    "Reconnect this project, then edit and save the file again.",
+  "editor.localHistoryProtection.historyUnavailable":
+    "Save again after Local History is available.",
+  "editor.localHistoryProtection.diagnosticReference": "Diagnostic reference: {correlationId}",
   "editor.callHierarchy.title": "Call hierarchy",
   "editor.callHierarchy.incoming": "Incoming calls",
   "editor.callHierarchy.outgoing": "Outgoing calls",
@@ -1926,6 +1946,9 @@ export const EN_MESSAGES = {
   "gitClientWindow.panel.pullRequestOpened": "Pull Request panel opened.",
   "gitClientWindow.panel.mergeOpened": "Merge panel opened.",
   "gitClientWindow.panel.diffOpened": "Diff panel opened.",
+  "gitClientWindow.repository.reconnectFailed": "Repository reconnection failed: {detail}",
+  "gitClientWindow.repository.workspaceUnavailable":
+    "This repository is not currently connected to a workspace. Connect it again to continue.",
   // Accessible names for the named <section> landmarks the #2721 wave introduced. They were
   // hardcoded English on the role="region" elements these sections replace; a screen reader
   // announces them, so they belong in the catalog like any other user-facing string.

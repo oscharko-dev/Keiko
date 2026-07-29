@@ -269,6 +269,9 @@ export interface UpdateChatMessagePatch {
 
 export interface ProjectWithAvailability extends Project {
   readonly available: boolean;
+  // A project row is not sufficient authority for workspace capabilities. Governed consumers
+  // admit only explicit `true`; `false` or an absent field fails closed and requires reconnection.
+  readonly workspaceAvailable?: boolean;
 }
 
 // ─── Chat status (BFF wire — mirror of UiStore Chat["status"]) ───────────────────
@@ -1426,6 +1429,18 @@ export interface FilesContentResponse extends FilesPreviewBase {
   readonly maxBytes: number;
   // Issue #1197: content-free editor-session metadata for the returned document revision.
   readonly session: EditorDocumentSession;
+  // Issue #2811: a successful write must distinguish a restore-point-protected revision from a
+  // successful but unprotected one. The degraded projection is deliberately content-free and
+  // carries only an operator correlation id; Local History membership still fails closed.
+  readonly localHistoryProtection?:
+    | {
+        readonly status: "protected";
+      }
+    | {
+        readonly status: "degraded";
+        readonly reason: "workspace-unavailable" | "history-unavailable";
+        readonly correlationId: string;
+      };
 }
 
 export interface FilesWriteRequest {

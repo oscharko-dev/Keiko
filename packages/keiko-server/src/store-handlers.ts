@@ -5,6 +5,7 @@
 import type { IncomingMessage } from "node:http";
 import { realpathSync, statSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
+import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { containsPath } from "@oscharko-dev/keiko-git";
@@ -14,7 +15,6 @@ import { findCapability, findConfiguredCapability } from "@oscharko-dev/keiko-mo
 import {
   UiStoreError,
   assertUiDbOutsideProject,
-  isProjectAvailable,
   validateProjectPath,
   type Chat,
   type ChatMessage,
@@ -22,12 +22,12 @@ import {
   type ChatLocalKnowledgeScope,
   type ChatRole,
   type NewChatMessage,
-  type Project,
   type UpdateChatMessagePatch,
   type UpdateChatPatch,
   type UpdateProjectPatch,
   type WorkflowStatus,
 } from "./store/index.js";
+import { projectWithWorkspaceAvailability } from "./workspace-root-membership.js";
 import {
   openKnowledgeStore,
   resolveKnowledgeStorePath,
@@ -309,19 +309,6 @@ function optionalBoundedQueryInteger(
 // Response projections
 // ──────────────────────────────────────────────────────────────────────────
 
-interface ProjectWithAvailability {
-  readonly path: string;
-  readonly name: string;
-  readonly favorite: boolean;
-  readonly createdAt: number;
-  readonly lastOpenedAt: number;
-  readonly available: boolean;
-}
-
-function projectWithAvailability(p: Project): ProjectWithAvailability {
-  return { ...p, available: isProjectAvailable(p) };
-}
-
 function putPreferredProjectFirst(
   projects: readonly ProjectWithAvailability[],
   preferredProjectPath: string | undefined,
@@ -353,7 +340,9 @@ function messageBelongsToChat(deps: UiHandlerDeps, chatId: string, messageId: st
 
 export function handleListProjects(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const projects = putPreferredProjectFirst(
-    deps.store.listProjects().map(projectWithAvailability),
+    deps.store
+      .listProjects()
+      .map((project) => projectWithWorkspaceAvailability(deps.store, project)),
     deps.preferredProjectPath,
   );
   return { status: 200, body: { projects } };
@@ -380,7 +369,10 @@ export async function handleCreateProject(
     }
     assertUiDbOutsideProject(deps.uiDbPath, normalizedPath);
     const project = deps.store.createProject(normalizedPath, name);
-    return { status: 201, body: { project: projectWithAvailability(project) } };
+    return {
+      status: 201,
+      body: { project: projectWithWorkspaceAvailability(deps.store, project) },
+    };
   });
 }
 
@@ -406,7 +398,10 @@ export async function handleUpdateProject(
     const body = await readJsonObject(ctx.req);
     const patch = buildProjectPatch(body);
     const project = deps.store.updateProject(targetPath, patch);
-    return { status: 200, body: { project: projectWithAvailability(project) } };
+    return {
+      status: 200,
+      body: { project: projectWithWorkspaceAvailability(deps.store, project) },
+    };
   });
 }
 

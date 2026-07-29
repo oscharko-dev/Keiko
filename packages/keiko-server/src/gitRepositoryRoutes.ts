@@ -7,12 +7,8 @@ import type { RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { errorBody } from "./routes.js";
 import { pathIsDenied } from "./files-deny.js";
-import {
-  assertUiDbOutsideProject,
-  isProjectAvailable,
-  validateProjectPath,
-  type Project,
-} from "./store/index.js";
+import { assertUiDbOutsideProject, validateProjectPath } from "./store/index.js";
+import { projectWithWorkspaceAvailability } from "./workspace-root-membership.js";
 import { defaultGitNetworkProcessRunner, isSafeGitPositional } from "@oscharko-dev/keiko-git";
 
 const MAX_BODY_BYTES = 32 * 1024;
@@ -72,10 +68,6 @@ function requireString(body: Record<string, unknown>, key: string): string {
   const value = optionalString(body, key);
   if (value === undefined) throw new Error(`${key} is required`);
   return value;
-}
-
-function projectWithAvailability(project: Project): Project & { readonly available: boolean } {
-  return { ...project, available: isProjectAvailable(project) };
 }
 
 function invalid(message: string): RouteResult {
@@ -276,7 +268,10 @@ export function createCloneRepositoryHandler(
       if (cloneResult !== null) return cloneResult;
       const normalizedPath = validateProjectPath(destination, { mustExist: true });
       const project = deps.store.createProject(normalizedPath, name);
-      return { status: 201, body: { project: projectWithAvailability(project) } };
+      return {
+        status: 201,
+        body: { project: projectWithWorkspaceAvailability(deps.store, project) },
+      };
     } catch (error) {
       if (error instanceof BodyTooLargeError) {
         return { status: 413, body: errorBody("PAYLOAD_TOO_LARGE", "Request body is too large.") };

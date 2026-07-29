@@ -548,11 +548,11 @@ export function GitClientWindow({
 }: GitClientWindowProps): ReactNode {
   const t = useTranslate();
   const [repositories, setRepositories] = useState<readonly ProjectWithAvailability[]>([]);
-  const [reposLoading, setReposLoading] = useState(false);
+  const [reposLoading, setReposLoading] = useState(true);
   const [reposError, setReposError] = useState<string | null>(null);
-  const [selectedPath, setSelectedPath] = useState<string | null>(
-    projectId !== undefined && projectId !== "" ? projectId : null,
-  );
+  // A persisted project path is only a reconnect candidate. Do not dispatch Git operations until
+  // the current project projection proves that it still has live workspace-manifest membership.
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [branches, setBranches] = useState<readonly GitBranchListEntry[]>([]);
   const [branchesProjectKey, setBranchesProjectKey] = useState<string | null>(null);
   const [branchesLoading, setBranchesLoading] = useState(false);
@@ -635,10 +635,6 @@ export function GitClientWindow({
   useEffect(() => {
     loadRepositories();
   }, [loadRepositories]);
-
-  useEffect(() => {
-    if (projectId !== undefined && projectId !== "") setSelectedPath(projectId);
-  }, [projectId]);
 
   useRightPaneFocus(rightPaneMode, rightPaneRef);
 
@@ -854,7 +850,7 @@ export function GitClientWindow({
     }
   }, [branchOutcome, closeNewBranchDialog]);
 
-  const selectRepository = useCallback(
+  const applyRepositorySelection = useCallback(
     (path: string): void => {
       setSelectedPath(path);
       updateCfg?.({ projectPath: path });
@@ -862,13 +858,48 @@ export function GitClientWindow({
     [updateCfg],
   );
 
+  const reconnectRepository = useCallback(
+    (path: string): void => {
+      setReposLoading(true);
+      setReposError(null);
+      void client.registerRepository({ path }).then(
+        (response) => {
+          applyRepositorySelection(response.project.path);
+          loadRepositories();
+        },
+        (error: unknown) => {
+          setReposLoading(false);
+          setReposError(
+            t("gitClientWindow.repository.reconnectFailed", { detail: formatGitError(error) }),
+          );
+        },
+      );
+    },
+    [applyRepositorySelection, client, loadRepositories, t],
+  );
+
   const onRepositoryAdded = useCallback(
     (project: ProjectWithAvailability): void => {
       loadRepositories();
-      selectRepository(project.path);
+      applyRepositorySelection(project.path);
     },
-    [loadRepositories, selectRepository],
+    [applyRepositorySelection, loadRepositories],
   );
+
+  useEffect(() => {
+    if (reposLoading || reposError !== null) return;
+    const configuredPath = projectId !== undefined && projectId !== "" ? projectId : null;
+    const requestedPath = selectedPath ?? configuredPath;
+    if (requestedPath === null) return;
+    const selected = repositories.find((repository) => repository.path === requestedPath);
+    if (selected?.workspaceAvailable === true) {
+      if (selectedPath !== requestedPath) setSelectedPath(requestedPath);
+      return;
+    }
+    setSelectedPath(null);
+    updateCfg?.({ projectPath: "" });
+    setReposError(t("gitClientWindow.repository.workspaceUnavailable"));
+  }, [projectId, repositories, reposError, reposLoading, selectedPath, t, updateCfg]);
 
   const active = activeGitClientState({
     selectedPath,
@@ -1089,7 +1120,7 @@ export function GitClientWindow({
         syncBusy={syncBusy}
         syncOutcome={syncOutcome}
         syncError={syncError}
-        onSelectRepository={selectRepository}
+        onSelectRepository={reconnectRepository}
         onSwitchBranch={switchBranch}
         onCreateBranch={openNewBranchDialog}
         onRunSync={runSync}
@@ -1102,7 +1133,7 @@ export function GitClientWindow({
             repositories={repositories}
             loading={reposLoading}
             error={reposError}
-            onSelect={selectRepository}
+            onSelect={reconnectRepository}
             onConnect={() => {
               setDialogMode("open");
               setDialogOpen(true);
