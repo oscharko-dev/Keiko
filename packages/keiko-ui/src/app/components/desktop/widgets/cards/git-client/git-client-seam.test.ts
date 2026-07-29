@@ -39,7 +39,11 @@ import {
   violationLabel,
   warningLabel,
 } from "./git-client-seam";
-import type { GitClientSeam } from "./git-client-seam";
+import type { GitClientSeam, GitMutationOutcome } from "./git-client-seam";
+import {
+  GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
+  gitRepositoryStateInvalidationRoot,
+} from "../git-repository-state-events";
 
 // ─── DEFAULT_GIT_CLIENT wiring ────────────────────────────────────────────────
 
@@ -405,6 +409,64 @@ describe("useGitActions", () => {
     await waitFor(() => expect(result.current.flow.busy).toBe(false));
     expect(result.current.flow.outcome).toStrictEqual(successOutcome);
     expect(result.current.flow.error).toBeNull();
+  });
+
+  it("invalidates the mutation's repository after every outcome that may have executed", async () => {
+    const client = makeSeamClient();
+    const listener = vi.fn<(event: Event) => void>();
+    window.addEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, listener);
+    const { result } = renderHook(() => useGitActions(client, "/repo"));
+    const outcomes: readonly GitMutationOutcome[] = [
+      { schemaVersion: "1", status: "succeeded", actionKind: "stage" },
+      { schemaVersion: "1", status: "failed", actionKind: "commit" },
+      { schemaVersion: "1", status: "recovery-required", actionKind: "push" },
+    ];
+
+    for (const outcome of outcomes) {
+      act(() => result.current.runMutation(async () => outcome));
+      await waitFor(() => expect(result.current.flow.busy).toBe(false));
+    }
+    act(() =>
+      result.current.runMutation(async () => ({
+        schemaVersion: "1",
+        status: "blocked",
+        actionKind: "stage",
+      })),
+    );
+    await waitFor(() => expect(result.current.flow.busy).toBe(false));
+
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(listener.mock.calls.map(([event]) => gitRepositoryStateInvalidationRoot(event))).toEqual(
+      ["/repo", "/repo", "/repo"],
+    );
+    window.removeEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, listener);
+  });
+
+  it("invalidates the original repository when a mutation settles after a repository switch", async () => {
+    let resolveMutation!: (outcome: GitMutationOutcome) => void;
+    const pendingMutation = new Promise<GitMutationOutcome>((resolve) => {
+      resolveMutation = resolve;
+    });
+    const listener = vi.fn<(event: Event) => void>();
+    window.addEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, listener);
+    const client = makeSeamClient();
+    const { result, rerender } = renderHook(
+      ({ projectId }: { readonly projectId: string }) => useGitActions(client, projectId),
+      { initialProps: { projectId: "/repo-a" } },
+    );
+
+    act(() => result.current.runMutation(() => pendingMutation));
+    rerender({ projectId: "/repo-b" });
+    await act(async () => {
+      resolveMutation({ schemaVersion: "1", status: "succeeded", actionKind: "commit" });
+      await pendingMutation;
+    });
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(
+      gitRepositoryStateInvalidationRoot(listener.mock.calls[0]?.[0] ?? new Event("missing")),
+    ).toBe("/repo-a");
+    window.removeEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, listener);
   });
 
   it("runMutation sets busy=false and populates error when the op rejects", async () => {

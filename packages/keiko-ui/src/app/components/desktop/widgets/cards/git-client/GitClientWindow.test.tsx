@@ -33,6 +33,7 @@ import type { GitRepositoryStatusResponse } from "@/lib/types";
 import type { GitClientSeam } from "./git-client-seam";
 import { GitClientWindow } from "./GitClientWindow";
 import { parseUnifiedDiff } from "../shared/diffParser";
+import { notifyWorkspaceFileMutated } from "../workspace-file-events";
 
 // ─── ResizeObserver stub (no global shim in vitest.setup.ts) ──────────────────
 
@@ -490,6 +491,20 @@ describe("GitClientWindow — repository list", () => {
 
     await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
     expect(client.getStatus).toHaveBeenCalledWith(REPO_A.path);
+  });
+
+  it("refreshes Git state after a matching editor save without touching another repository", async () => {
+    const getStatus = vi.fn(async () => makeStatus());
+    const client = makeClient({ getStatus });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await screen.findByRole("combobox", { name: "Branch: main" });
+    const initialReads = getStatus.mock.calls.length;
+
+    act(() => notifyWorkspaceFileMutated(REPO_B.path));
+    expect(getStatus).toHaveBeenCalledTimes(initialReads);
+
+    act(() => notifyWorkspaceFileMutated(REPO_A.path));
+    await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(initialReads + 1));
   });
 
   it("hides stale changed-file rows while a newly selected repository is loading", async () => {

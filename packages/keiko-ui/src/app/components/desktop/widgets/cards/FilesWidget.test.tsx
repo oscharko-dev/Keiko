@@ -21,6 +21,7 @@ import { ChatSessionProvider } from "../../context/ChatSessionContext";
 import type { ChatSessionApi } from "../../hooks/useChatSession";
 import { FilePreview } from "./FilePreview";
 import { FilesWidget, filesWidgetTestInternals } from "./FilesWidget";
+import { notifyGitRepositoryStateInvalidated } from "./git-repository-state-events";
 import { resetSharedEventSourcesForTests } from "./sharedEventSource";
 import { notifyWorkspaceFileMutated } from "./workspace-file-events";
 
@@ -409,6 +410,49 @@ describe("FilesWidget", () => {
     notifyWorkspaceFileMutated("/repo");
 
     await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(3));
+    expect(fetchGitStatus).toHaveBeenLastCalledWith("/repo", { includeIgnored: true });
+  });
+
+  it("refreshes every matching Git indicator while leaving unrelated repositories alone", async () => {
+    let repositoryReads = 0;
+    vi.mocked(fetchGitStatus).mockImplementation((root: string) => {
+      if (root === "/repo") {
+        repositoryReads += 1;
+        return Promise.resolve(
+          availableGitStatus([], {
+            branch: repositoryReads === 1 ? "main" : "feature/fresh",
+          }),
+        );
+      }
+      return Promise.resolve(
+        availableGitStatus([], {
+          root,
+          repositoryRoot: root,
+          branch: "unrelated",
+        }),
+      );
+    });
+    vi.mocked(fetchFilesTree).mockImplementation((root: string, path = "") =>
+      Promise.resolve({ root, path, truncated: false, entries: [] }),
+    );
+
+    render(
+      <>
+        <FilesWidget root="/repo" />
+        <FilesWidget root="/repo" />
+        <FilesWidget root="/other" />
+      </>,
+    );
+
+    expect(await screen.findAllByText("Git main clean")).toHaveLength(2);
+    expect(screen.getByText("Git unrelated clean")).toBeInTheDocument();
+    expect(fetchGitStatus).toHaveBeenCalledTimes(2);
+
+    act(() => notifyGitRepositoryStateInvalidated("/repo/project", "/repo"));
+
+    expect(await screen.findAllByText("Git feature/fresh clean")).toHaveLength(2);
+    expect(screen.getByText("Git unrelated clean")).toBeInTheDocument();
+    expect(fetchGitStatus).toHaveBeenCalledTimes(3);
     expect(fetchGitStatus).toHaveBeenLastCalledWith("/repo", { includeIgnored: true });
   });
 
