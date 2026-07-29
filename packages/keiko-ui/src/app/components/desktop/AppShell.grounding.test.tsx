@@ -358,6 +358,14 @@ function capsuleScope(id: string): ChatLocalKnowledgeScope {
   return { kind: "capsule", capsuleId: id as never, connectedAtMs: 1 };
 }
 
+function reportedError(value: unknown, failureMessage: string): Error {
+  expect(value).toBeInstanceOf(Error);
+  if (!(value instanceof Error)) {
+    throw new TypeError(failureMessage);
+  }
+  return value;
+}
+
 function deferred<T>(): {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
@@ -603,11 +611,10 @@ describe("AppShell grounding connections", () => {
     ).resolves.toBe(false);
 
     expect(await screen.findByText(/Keiko could not connect that source/u)).toBeInTheDocument();
-    const reported: unknown = reportError.mock.calls[0]?.[0];
-    expect(reported).toBeInstanceOf(Error);
-    if (!(reported instanceof Error)) {
-      throw new TypeError("Expected grounding diagnostics to report an Error.");
-    }
+    const reported = reportedError(
+      reportError.mock.calls[0]?.[0],
+      "Expected grounding diagnostics to report an Error.",
+    );
     expect(reported.message).toMatch(
       /^Chat grounding mutation failed\. Correlation ID: [A-Za-z0-9._-]{8,128}$/u,
     );
@@ -629,11 +636,10 @@ describe("AppShell grounding connections", () => {
     expect(
       await screen.findByText(/Keiko could not connect that knowledge source/u),
     ).toBeInTheDocument();
-    const reported: unknown = reportError.mock.calls[0]?.[0];
-    expect(reported).toBeInstanceOf(Error);
-    if (!(reported instanceof Error)) {
-      throw new TypeError("Expected connector diagnostics to report an Error.");
-    }
+    const reported = reportedError(
+      reportError.mock.calls[0]?.[0],
+      "Expected connector diagnostics to report an Error.",
+    );
     expect(reported.message).toMatch(
       /^Chat grounding mutation failed\. Correlation ID: [A-Za-z0-9._-]{8,128}$/u,
     );
@@ -798,11 +804,10 @@ describe("AppShell grounding connections", () => {
 
     await expect(binding).resolves.toBe(false);
     expect(await screen.findByText(/Chat grounding recovery failed/u)).toBeInTheDocument();
-    const reported: unknown = reportError.mock.calls[0]?.[0];
-    expect(reported).toBeInstanceOf(Error);
-    if (!(reported instanceof Error)) {
-      throw new TypeError("Expected compensation diagnostics to report an Error.");
-    }
+    const reported = reportedError(
+      reportError.mock.calls[0]?.[0],
+      "Expected compensation diagnostics to report an Error.",
+    );
     expect(reported.message).toMatch(
       /^Chat binding compensation failed\. Correlation ID: [A-Za-z0-9._-]{8,128}$/,
     );
