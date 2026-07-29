@@ -483,6 +483,7 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
   const targetsScopeKey = useMemo((): string => searchTargetsScopeKey(targets), [targets]);
   const currentTargetsScopeKey = useRef(targetsScopeKey);
   currentTargetsScopeKey.current = targetsScopeKey;
+  const applyGeneration = useRef(0);
   const multiRoot = targets.length > 1;
   const queryInputRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState("");
@@ -522,6 +523,7 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
   const showReplaceStatus = replaceStatus !== null;
 
   useEffect((): void => {
+    applyGeneration.current += 1;
     setResponse(null);
     setReplacePreviews([]);
     setStatus("idle");
@@ -703,6 +705,12 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
 
   const applyReplacePreview = useCallback(
     async (preview: RootReplacePreview): Promise<void> => {
+      const requestedTargetsScopeKey = targetsScopeKey;
+      const requestedGeneration = applyGeneration.current + 1;
+      applyGeneration.current = requestedGeneration;
+      const operationIsCurrent = (): boolean =>
+        applyGeneration.current === requestedGeneration &&
+        currentTargetsScopeKey.current === requestedTargetsScopeKey;
       setApplyingRootId(preview.target.id);
       try {
         const result = await applyReviewedReplace({
@@ -710,6 +718,7 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
           openBuffers,
           files: preview.response.files,
         });
+        if (!operationIsCurrent()) return;
         const suffix =
           result.conflictCount > 0
             ? t("searchPanel.replace.conflictsSuffix", {
@@ -732,6 +741,7 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
         );
         setAppliedRootIds((current) => new Set(current).add(preview.target.id));
       } catch (error) {
+        if (!operationIsCurrent()) return;
         const nextMessage = replaceErrorMessage(error, t("searchPanel.error.applyFailed"));
         setReplaceMessages((current) => new Map(current).set(preview.target.id, nextMessage));
         setReplaceStatus(
@@ -743,10 +753,10 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
             : nextMessage,
         );
       } finally {
-        setApplyingRootId(null);
+        if (operationIsCurrent()) setApplyingRootId(null);
       }
     },
-    [multiRoot, openBuffers, t],
+    [multiRoot, openBuffers, t, targetsScopeKey],
   );
 
   return (
