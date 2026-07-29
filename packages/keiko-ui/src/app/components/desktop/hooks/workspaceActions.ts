@@ -1322,7 +1322,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     };
   };
 
-  const removeConn: WorkspaceApi["removeConn"] = (id, options) => {
+  const removeConn: WorkspaceApi["removeConn"] = (id, options): void => {
     // Epic #532 — if the removed edge was a Files↔Chat binding, unbind that folder from the chat.
     // Epic #189 Slice 3 M3 — if the removed edge was a Connector↔Chat binding, unbind that scope.
     // Release 0.2.0 — prefer the bind-time snapshot stored on the Connection: the window's

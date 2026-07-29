@@ -64,7 +64,10 @@ function stringArray(cfg: Record<string, unknown>, key: string): readonly string
 
 type SelectionHandoffNoticeKey = Extract<
   EditorAgentMessageKey,
-  "editor.askSelection.chatUnavailable" | "editor.askSelection.openFailed"
+  | "chat.creation.openFailed"
+  | "chat.creation.titleSaveFailed"
+  | "editor.askSelection.chatUnavailable"
+  | "editor.askSelection.openFailed"
 >;
 
 type SelectionHandoffRoute =
@@ -166,57 +169,128 @@ interface ChatCreationResult {
   readonly titleSaveFailed: boolean;
 }
 
+interface ActiveChatCreation {
+  desiredTitle: string | undefined;
+  owner: ChatCreationOwner;
+  readonly projectPath: string | null;
+  readonly promise: Promise<Chat | undefined>;
+  reconciliation: Promise<ChatCreationResult> | null;
+  titleRevision: number;
+}
+
 function sameCreationOwner(left: ChatCreationOwner, right: ChatCreationOwner): boolean {
   return left.kind === right.kind && left.id === right.id;
 }
 
-async function reconcileCreatedChatTitle(
-  creation: Promise<Chat | undefined>,
-  title: string | undefined,
+function normalizedChatTitle(title: string | undefined): string | undefined {
+  const normalized = title?.trim();
+  return normalized === undefined || normalized.length === 0 ? undefined : normalized;
+}
+
+async function reconcileActiveChatCreation(
+  active: ActiveChatCreation,
+  replaceChat: ChatSessionApi["replaceChat"],
+  isCurrent: () => boolean,
+): Promise<ChatCreationResult> {
+  let chat = await active.promise;
+  if (chat === undefined || !isCurrent()) return { chat: undefined, titleSaveFailed: false };
+  while (isCurrent()) {
+    const revision = active.titleRevision;
+    const title = active.desiredTitle;
+    if (title === undefined || chat.title === title) return { chat, titleSaveFailed: false };
+    try {
+      const response = await updateChat(chat.id, { title });
+      if (!isCurrent()) return { chat: undefined, titleSaveFailed: false };
+      chat = response.chat;
+      if (revision !== active.titleRevision) continue;
+      replaceChat(chat);
+      return { chat, titleSaveFailed: false };
+    } catch {
+      if (revision !== active.titleRevision) continue;
+      return isCurrent()
+        ? { chat, titleSaveFailed: true }
+        : { chat: undefined, titleSaveFailed: false };
+    }
+  }
+  return { chat: undefined, titleSaveFailed: false };
+}
+
+function activeCreationResult(
+  active: ActiveChatCreation,
+  currentRef: { current: ActiveChatCreation | null },
   replaceChat: ChatSessionApi["replaceChat"],
 ): Promise<ChatCreationResult> {
-  const chat = await creation;
-  const normalizedTitle = title?.trim();
-  if (chat === undefined || normalizedTitle === undefined || normalizedTitle.length === 0) {
-    return { chat, titleSaveFailed: false };
-  }
-  if (chat.title === normalizedTitle) return { chat, titleSaveFailed: false };
-  try {
-    const response = await updateChat(chat.id, { title: normalizedTitle });
-    replaceChat(response.chat);
-    return { chat: response.chat, titleSaveFailed: false };
-  } catch {
-    return { chat, titleSaveFailed: true };
-  }
+  if (active.reconciliation !== null) return active.reconciliation;
+  const reconciliation = reconcileActiveChatCreation(
+    active,
+    replaceChat,
+    (): boolean => currentRef.current === active,
+  );
+  const tracked = reconciliation.finally((): void => {
+    if (active.reconciliation === tracked) active.reconciliation = null;
+  });
+  active.reconciliation = tracked;
+  return tracked;
 }
 
 function useChatCreationCoordinator(
   openNewChat: ChatSessionApi["openNewChat"],
   replaceChat: ChatSessionApi["replaceChat"],
 ): ChatCreationCoordinator {
-  const activeRef = useRef<{
-    owner: ChatCreationOwner;
-    promise: Promise<Chat | undefined>;
-  } | null>(null);
+  const activeByProjectRef = useRef(new Map<string | null, ActiveChatCreation>());
+  const currentRef = useRef<ActiveChatCreation | null>(null);
   const request = useCallback<ChatCreationCoordinator["request"]>(
     (owner, project, title): Promise<ChatCreationResult> => {
-      const active = activeRef.current;
-      if (active !== null) {
+      const projectPath = project?.path ?? null;
+      let active = activeByProjectRef.current.get(projectPath);
+      if (active === undefined) {
+        active = {
+          desiredTitle: normalizedChatTitle(title),
+          owner,
+          projectPath,
+          promise: openNewChat(project, title),
+          reconciliation: null,
+          titleRevision: 0,
+        };
+        activeByProjectRef.current.set(projectPath, active);
+      } else {
         active.owner = owner;
-        return reconcileCreatedChatTitle(active.promise, title, replaceChat);
+        active.desiredTitle = normalizedChatTitle(title);
+        active.titleRevision += 1;
       }
-      const promise = title === undefined ? openNewChat(project) : openNewChat(project, title);
-      activeRef.current = { owner, promise };
-      return reconcileCreatedChatTitle(promise, title, replaceChat);
+      currentRef.current = active;
+      return activeCreationResult(active, currentRef, replaceChat);
     },
     [openNewChat, replaceChat],
   );
   const release = useCallback<ChatCreationCoordinator["release"]>((owner): void => {
-    if (activeRef.current !== null && sameCreationOwner(activeRef.current.owner, owner)) {
-      activeRef.current = null;
+    for (const [projectPath, active] of activeByProjectRef.current) {
+      if (!sameCreationOwner(active.owner, owner)) continue;
+      activeByProjectRef.current.delete(projectPath);
+      if (currentRef.current === active) currentRef.current = null;
+      return;
     }
   }, []);
   return useMemo((): ChatCreationCoordinator => ({ release, request }), [release, request]);
+}
+
+const pendingHandoffDisposals = new Map<string, number>();
+
+function retainSelectionHandoff(id: string): void {
+  const timeout = pendingHandoffDisposals.get(id);
+  if (timeout === undefined) return;
+  window.clearTimeout(timeout);
+  pendingHandoffDisposals.delete(id);
+}
+
+function scheduleSelectionHandoffDisposal(id: string): void {
+  retainSelectionHandoff(id);
+  const timeout = window.setTimeout((): void => {
+    if (pendingHandoffDisposals.get(id) !== timeout) return;
+    pendingHandoffDisposals.delete(id);
+    discardEditorSelectionHandoff(id);
+  }, 0);
+  pendingHandoffDisposals.set(id, timeout);
 }
 
 function useSelectionHandoffControl(args: {
@@ -233,8 +307,9 @@ function useSelectionHandoffControl(args: {
   const { id, session } = args;
   useEffect((): (() => void) | undefined => {
     if (id === undefined) return;
+    retainSelectionHandoff(id);
     return (): void => {
-      discardEditorSelectionHandoff(id);
+      scheduleSelectionHandoffDisposal(id);
     };
   }, [id]);
   useEffect(() => {
@@ -299,6 +374,7 @@ function useSelectionHandoffControl(args: {
 }
 
 interface ChatCreationControlArgs {
+  readonly activeProject: ProjectWithAvailability | undefined;
   readonly chatId: string | undefined;
   readonly coordinator: ChatCreationCoordinator;
   readonly loading: boolean;
@@ -309,46 +385,63 @@ interface ChatCreationControlArgs {
 }
 
 interface ChatCreationControl {
-  readonly error: string | null;
+  readonly errorKey: SelectionHandoffNoticeKey | null;
   readonly pending: boolean;
 }
 
 interface ChatCreationError {
   readonly chatId: string | undefined;
-  readonly message: string;
+  readonly messageKey: SelectionHandoffNoticeKey;
   readonly requestId: string;
 }
 
 function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationControl {
-  const { chatId, coordinator, loading, newChatRequestId, selectionHandoffId, title, updateCfg } =
-    args;
+  const {
+    activeProject,
+    chatId,
+    coordinator,
+    loading,
+    newChatRequestId,
+    selectionHandoffId,
+    title,
+    updateCfg,
+  } = args;
   const [error, setError] = useState<ChatCreationError | null>(null);
   const pending = chatId === undefined && selectionHandoffId === undefined;
   const requestId = pending ? (newChatRequestId ?? "initial-unbound-chat") : undefined;
-  const latestRequestIdRef = useRef(requestId);
-  const attemptedRequestIdRef = useRef<string | undefined>(undefined);
-  latestRequestIdRef.current = requestId;
+  const projectPath = activeProject?.path ?? null;
+  const requestKey = requestId === undefined ? undefined : `${requestId}\u0000${projectPath ?? ""}`;
+  const attemptSequenceRef = useRef(0);
+  const attemptedRequestKeyRef = useRef<string | undefined>(undefined);
+  const latestAttemptRef = useRef(0);
 
   useEffect((): void => {
-    if (loading || requestId === undefined) return;
-    if (attemptedRequestIdRef.current === requestId) return;
-    const owner = { kind: "window", id: requestId } as const;
-    attemptedRequestIdRef.current = requestId;
+    if (loading || requestKey === undefined) return;
+    if (attemptedRequestKeyRef.current === requestKey) return;
+    const attempt = attemptSequenceRef.current + 1;
+    const owner = { kind: "window", id: `${requestKey}\u0000${String(attempt)}` } as const;
+    attemptSequenceRef.current = attempt;
+    latestAttemptRef.current = attempt;
+    attemptedRequestKeyRef.current = requestKey;
     setError(null);
     void coordinator
-      .request(owner, undefined, title)
+      .request(owner, activeProject, title)
       .then(
         (result): void => {
-          if (latestRequestIdRef.current !== requestId) return;
+          if (latestAttemptRef.current !== attempt) return;
           if (result.chat === undefined) {
-            setError({ chatId: undefined, message: "Could not open chat.", requestId });
+            setError({
+              chatId: undefined,
+              messageKey: "chat.creation.openFailed",
+              requestId: requestKey,
+            });
             return;
           }
           if (result.titleSaveFailed) {
             setError({
               chatId: result.chat.id,
-              message: "The chat opened, but its title could not be saved.",
-              requestId,
+              messageKey: "chat.creation.titleSaveFailed",
+              requestId: requestKey,
             });
           }
           updateCfg({
@@ -358,22 +451,26 @@ function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationCont
           });
         },
         (): void => {
-          if (latestRequestIdRef.current === requestId) {
-            setError({ chatId: undefined, message: "Could not open chat.", requestId });
+          if (latestAttemptRef.current === attempt) {
+            setError({
+              chatId: undefined,
+              messageKey: "chat.creation.openFailed",
+              requestId: requestKey,
+            });
           }
         },
       )
       .finally((): void => {
         coordinator.release(owner);
       });
-  }, [coordinator, loading, requestId, title, updateCfg]);
+  }, [activeProject, coordinator, loading, requestKey, title, updateCfg]);
   const visibleError =
     error !== null &&
     error.chatId === chatId &&
-    (chatId !== undefined || error.requestId === requestId)
-      ? error.message
+    (chatId !== undefined || error.requestId === requestKey)
+      ? error.messageKey
       : null;
-  return { error: visibleError, pending };
+  return { errorKey: visibleError, pending };
 }
 
 export function ChatWindowSessionHost({
@@ -402,6 +499,7 @@ export function ChatWindowSessionHost({
     session,
   });
   const creatingChat = useChatCreationControl({
+    activeProject,
     chatId,
     coordinator: creationCoordinator,
     loading,
@@ -488,9 +586,9 @@ export function ChatWindowSessionHost({
           {agentT(handoff.noticeKey)}
         </p>
       )}
-      {creatingChat.error === null ? null : (
+      {creatingChat.errorKey === null ? null : (
         <p className="lk-alert" role="alert">
-          {creatingChat.error}
+          {agentT(creatingChat.errorKey)}
         </p>
       )}
       {body}

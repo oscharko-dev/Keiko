@@ -2466,8 +2466,37 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     resolveBind(true);
     await acceptance;
     await flushAsyncBind();
+    await flushAsyncBind();
 
     expect(store.conns).toHaveLength(0);
+  });
+
+  it("applies an accepted edge when its chat identity stays current", async (): Promise<void> => {
+    const store = { conns: [] as Connection[] };
+    let resolveBind!: (accepted: boolean) => void;
+    const acceptance = new Promise<boolean>((resolve): void => {
+      resolveBind = resolve;
+    });
+    const harness = makeConnectHarness(
+      [
+        win("files", { resolvedRoot: "/data/docs" }, "files-1"),
+        win("chat", { chatId: "chat-old" }, "chat-1"),
+      ],
+      [],
+      {
+        connecting: { from: "files-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onScopeBind: (): Promise<boolean> => acceptance,
+      },
+    );
+
+    harness.confirmConnect("chat-1", evt);
+    resolveBind(true);
+    await acceptance;
+    await flushAsyncBind();
+    await flushAsyncBind();
+
+    expect(store.conns).toHaveLength(1);
   });
 
   it("does not draw the edge when onConnectorBind vetoes the bind", async () => {
@@ -2540,7 +2569,12 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
       b: "chat-1",
       boundRoot: "/data/docs",
     };
+    const store = { conns: [edge] };
+    const setConns: Dispatch<SetStateAction<Connection[]>> = (action): void => {
+      store.conns = typeof action === "function" ? action(store.conns) : action;
+    };
     const harness = makeConnectHarness([files, chat], [edge], {
+      setConns,
       onScopeUnbind: (_chatWindowId, scope): void => {
         unboundScopes.push(scope);
       },
@@ -2551,6 +2585,7 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
 
     harness.removeConn(edge.id, { unbind: false });
 
+    expect(store.conns).toHaveLength(0);
     expect(unboundScopes).toEqual([]);
     expect(unboundConnectors).toEqual([]);
   });
