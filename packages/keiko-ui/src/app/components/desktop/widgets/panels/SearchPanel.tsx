@@ -742,7 +742,7 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
       includeText,
       excludeText,
       replacement,
-      isCurrent: () => currentTargetsScopeKey.current === requestedTargetsScopeKey,
+      isCurrent: (): boolean => currentTargetsScopeKey.current === requestedTargetsScopeKey,
       t,
     });
     if (result === null) return;

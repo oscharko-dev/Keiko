@@ -966,8 +966,11 @@ function AppShellInner(): ReactNode {
       const before = existing !== undefined && existing.minimized !== true;
       const opensSearch =
         panel === "search" && (existing === undefined || existing.minimized === true);
+      const searchRoot = opensSearch
+        ? resolveSearchRoot(activeWorkspace.activeRoot, searchOwner)
+        : undefined;
       if (opensSearch) {
-        openOrFocusSearchWindow(ws.api, resolveSearchRoot(activeWorkspace.activeRoot, searchOwner));
+        openOrFocusSearchWindow(ws.api, searchRoot);
       } else {
         ws.api.toggleTool(panel);
       }
@@ -976,6 +979,7 @@ function AppShellInner(): ReactNode {
         panel,
         before,
         after: opensSearch || !before,
+        ...(opensSearch ? { searchRoot } : {}),
       });
     },
     [activeWorkspace.activeRoot, searchOwner, undoStack, ws.api, ws.wins],

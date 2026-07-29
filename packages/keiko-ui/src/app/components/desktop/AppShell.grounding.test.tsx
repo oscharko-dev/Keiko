@@ -1,4 +1,4 @@
-import type { ReactNode, RefObject } from "react";
+import type { ReactElement, ReactNode, RefObject } from "react";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
@@ -200,7 +200,7 @@ vi.mock("./LeftRail", () => ({
 }));
 
 vi.mock("./RightRail", () => ({
-  RightRail: ({ onTool }: { readonly onTool: (id: string) => void }) => {
+  RightRail: ({ onTool }: { readonly onTool: (id: string) => void }): ReactElement => {
     mocks.state.rightRailRendered = true;
     mocks.state.rightRailOnTool = onTool;
     return <aside data-testid="right-rail" />;
@@ -731,10 +731,12 @@ describe("AppShell grounding connections", () => {
       { readonly dispatch?: (commandId: string) => void } | undefined;
     expect(keyboardProps?.dispatch).toBeTypeOf("function");
 
-    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      callback(0);
-      return 0;
-    });
+    const rafSpy = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback): number => {
+        callback(0);
+        return 0;
+      });
     const statusSpy = vi.spyOn(HTMLElement.prototype, "focus");
     keyboardProps?.dispatch?.("undo");
     keyboardProps?.dispatch?.("redo");
@@ -750,16 +752,19 @@ describe("AppShell grounding connections", () => {
     rafSpy.mockRestore();
   });
 
-  it("records a minimized Search restore as a closed-to-open visibility transition", async () => {
+  it("records a rooted minimized Search restore as a closed-to-open transition", async () => {
     const api = workspaceApi();
     mocks.state.workspaceResult = workspaceResult(
-      [{ ...win("search", { root: "/repo" }, "search-window"), minimized: true }],
+      [
+        { ...win("search", { root: "/repo/stale" }, "search-window"), minimized: true },
+        { ...win("editor", { root: "/repo/editor-selected" }, "editor-window"), z: 2 },
+      ],
       [],
       api,
     );
     await renderMounted();
     expect(mocks.state.rightRailOnTool).toBeTypeOf("function");
-    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 0);
+    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((): number => 0);
     vi.mocked(api.add).mockClear();
     mocks.pushUndo.mockClear();
 
@@ -767,12 +772,13 @@ describe("AppShell grounding connections", () => {
       mocks.state.rightRailOnTool?.("search");
     });
 
-    expect(api.add).toHaveBeenCalledWith("search", expect.any(Object));
+    expect(api.add).toHaveBeenCalledWith("search", { root: "/repo/editor-selected" });
     expect(mocks.pushUndo).toHaveBeenCalledWith({
       kind: "ui.panel.toggle",
       panel: "search",
       before: false,
       after: true,
+      searchRoot: "/repo/editor-selected",
     });
     rafSpy.mockRestore();
   });

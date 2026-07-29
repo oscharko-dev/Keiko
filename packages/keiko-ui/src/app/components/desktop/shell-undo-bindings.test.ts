@@ -78,6 +78,38 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
     expect(api.toggleTool).toHaveBeenCalledWith("project");
   });
 
+  it("replays a Search open with its recorded workspace root", (): void => {
+    const api = fakeApi();
+    const action: WorkspaceUiAction = {
+      kind: "ui.panel.toggle",
+      panel: "search",
+      before: false,
+      after: true,
+      searchRoot: "/repo/a",
+    };
+
+    applyShellUndoAction(api, action);
+
+    expect(api.add).toHaveBeenCalledWith("search", { root: "/repo/a" });
+    expect(api.toggleTool).not.toHaveBeenCalled();
+  });
+
+  it("uses the normal toggle when undo closes a rooted Search", (): void => {
+    const api = fakeApi();
+    const action: WorkspaceUiAction = {
+      kind: "ui.panel.toggle",
+      panel: "search",
+      before: true,
+      after: false,
+      searchRoot: "/repo/a",
+    };
+
+    applyShellUndoAction(api, action);
+
+    expect(api.toggleTool).toHaveBeenCalledWith("search");
+    expect(api.add).not.toHaveBeenCalled();
+  });
+
   it("ignores ui.panel.toggle actions for unknown panel ids", () => {
     const api = fakeApi();
     const action: WorkspaceUiAction = {
