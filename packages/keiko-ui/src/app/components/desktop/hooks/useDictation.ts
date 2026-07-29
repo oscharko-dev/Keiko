@@ -51,6 +51,7 @@ const DICTATION_POST_ROLL_MS = 350;
 const DICTATION_CAPTURE_TIMESLICE_MS = 250;
 const DICTATION_AUTO_STOP_MS = MAX_DICTATION_MS - DICTATION_POST_ROLL_MS;
 const LIVE_TRANSCRIPTION_FINAL_TIMEOUT_MS = 4_000;
+const LIVE_DICTATION_DISCONNECT_GRACE_MS = 5_000;
 const HEARD_SPEECH_LEVEL = 0.12;
 
 // The lifecycle phase the composer renders from.
@@ -330,6 +331,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
     | undefined
   >(undefined);
   const autoStopRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const realtimeDisconnectGraceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const stoppingRef = useRef(false);
   // The live voice-activity monitor for the current recording (dialogue mode only). Released whenever
   // the recording ends so the WebAudio analyser never outlives the stream.
@@ -353,6 +355,13 @@ export function useDictation(options: UseDictationOptions): DictationController 
     if (autoStopRef.current !== undefined) {
       clearTimeout(autoStopRef.current);
       autoStopRef.current = undefined;
+    }
+  }, []);
+
+  const clearRealtimeDisconnectGrace = useCallback((): void => {
+    if (realtimeDisconnectGraceRef.current !== undefined) {
+      clearTimeout(realtimeDisconnectGraceRef.current);
+      realtimeDisconnectGraceRef.current = undefined;
     }
   }, []);
 
@@ -387,6 +396,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
   }, []);
 
   const cleanupRealtime = useCallback((): void => {
+    clearRealtimeDisconnectGrace();
     realtimeStartAbortRef.current?.abort();
     realtimeStartAbortRef.current = undefined;
     const waiter = realtimeFinalWaiterRef.current;
@@ -402,7 +412,22 @@ export function useDictation(options: UseDictationOptions): DictationController 
     realtimeFinalTranscriptRef.current = undefined;
     realtimeTranscriptErrorRef.current = undefined;
     realtimeDeltaSeenRef.current = false;
-  }, []);
+  }, [clearRealtimeDisconnectGrace]);
+
+  const failRealtimeConnection = useCallback((): void => {
+    if (!mountedRef.current || cancelledRef.current || stoppingRef.current) {
+      return;
+    }
+    realtimeFallbackToBatchRef.current = true;
+    cancelledRef.current = true;
+    clearAutoStop();
+    cleanupRealtime();
+    dispatch({
+      type: "error",
+      reason: "connection-failed",
+      message: "Live dictation connection was lost.",
+    });
+  }, [cleanupRealtime, clearAutoStop]);
 
   const waitForRealtimeFinal = useCallback((): Promise<{
     readonly text: string;
@@ -696,21 +721,23 @@ export function useDictation(options: UseDictationOptions): DictationController 
         }
       });
       session.onConnectionStateChange?.((state) => {
-        if (state === "connected") {
-          latency.mark("rtc_connected");
+        if (!mountedRef.current || cancelledRef.current || stoppingRef.current) {
+          return;
         }
-        if (state === "failed" || state === "closed" || state === "disconnected") {
-          if (mountedRef.current && !cancelledRef.current && !stoppingRef.current) {
-            realtimeFallbackToBatchRef.current = true;
-            cancelledRef.current = true;
-            clearAutoStop();
-            cleanupRealtime();
-            dispatch({
-              type: "error",
-              reason: "connection-failed",
-              message: "Live dictation connection was lost.",
-            });
-          }
+        if (state === "connected") {
+          clearRealtimeDisconnectGrace();
+          latency.mark("rtc_connected");
+          return;
+        }
+        if (state === "failed" || state === "closed") {
+          failRealtimeConnection();
+          return;
+        }
+        if (state === "disconnected") {
+          realtimeDisconnectGraceRef.current ??= setTimeout(
+            failRealtimeConnection,
+            LIVE_DICTATION_DISCONNECT_GRACE_MS,
+          );
         }
       });
       session.onLocalVoiceActivity?.((event) => {
@@ -765,7 +792,8 @@ export function useDictation(options: UseDictationOptions): DictationController 
     });
   }, [
     cleanupRealtime,
-    clearAutoStop,
+    clearRealtimeDisconnectGrace,
+    failRealtimeConnection,
     handleRealtimeDataChannelEvent,
     latency,
     liveControlClientFactory,

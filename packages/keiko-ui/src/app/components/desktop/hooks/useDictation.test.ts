@@ -997,31 +997,101 @@ describe("useDictation — realtime live dictation (P3)", () => {
     expect(result.current.transcript).toBe("batch transcript");
   });
 
-  it("releases a lost realtime session and retries through batch STT", async (): Promise<void> => {
+  it("keeps a realtime session whose transient disconnect recovers", async (): Promise<void> => {
+    vi.useFakeTimers();
     const fakes = makeRealtimeDictationFakes();
-    const recorder = makeRecorder({});
-    const transcribe = vi.fn(async (): Promise<VoiceTranscriptionResult> => ({
-      transcript: "recovered batch transcript",
-    }));
-    const { result } = renderHook(() =>
+    const { result } = renderHook((): ReturnType<typeof useDictation> =>
       useDictation({
         onInsert: vi.fn(),
-        createRecorder: () => recorder.recorder,
-        transcribe,
-        postRollMs: 0,
         realtime: {
           enabled: true,
-          createTransport: () => fakes.transport,
-          createControlClient: () => fakes.control,
+          createTransport: (): VoiceRtcTransport => fakes.transport,
+          createControlClient: (): VoiceLiveDictationControlClient => fakes.control,
         },
       }),
     );
 
     act(() => result.current.start());
-    await waitFor(() => expect(result.current.phase).toBe("recording"));
+    await act(async (): Promise<void> => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.phase).toBe("recording");
+    expect(vi.getTimerCount()).toBe(1); // Dictation auto-stop only.
 
     act(() => fakes.emitConnectionState("disconnected"));
-    await waitFor(() => expect(result.current.phase).toBe("error"));
+    expect(result.current.phase).toBe("recording");
+    expect(vi.getTimerCount()).toBe(2); // Auto-stop plus disconnect grace.
+
+    act(() => fakes.emitConnectionState("connected"));
+    expect(result.current.phase).toBe("recording");
+    expect(vi.getTimerCount()).toBe(1);
+    expect(fakes.closeSession).not.toHaveBeenCalled();
+    expect(fakes.closeControl).not.toHaveBeenCalled();
+  });
+
+  it.each(["failed", "closed"] as const)(
+    "releases a terminal realtime %s state immediately",
+    async (connectionState): Promise<void> => {
+      const fakes = makeRealtimeDictationFakes();
+      const { result } = renderHook((): ReturnType<typeof useDictation> =>
+        useDictation({
+          onInsert: vi.fn(),
+          realtime: {
+            enabled: true,
+            createTransport: (): VoiceRtcTransport => fakes.transport,
+            createControlClient: (): VoiceLiveDictationControlClient => fakes.control,
+          },
+        }),
+      );
+
+      act(() => result.current.start());
+      await waitFor(() => expect(result.current.phase).toBe("recording"));
+      act(() => fakes.emitConnectionState(connectionState));
+
+      await waitFor(() => expect(result.current.phase).toBe("error"));
+      expect(result.current.error?.reason).toBe("connection-failed");
+      expect(fakes.closeSession).toHaveBeenCalledTimes(1);
+      expect(fakes.closeControl).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("releases a disconnected realtime session after its grace window", async (): Promise<void> => {
+    vi.useFakeTimers();
+    const fakes = makeRealtimeDictationFakes();
+    const recorder = makeRecorder({});
+    const transcribe = vi.fn(async (): Promise<VoiceTranscriptionResult> => ({
+      transcript: "recovered batch transcript",
+    }));
+    const { result } = renderHook((): ReturnType<typeof useDictation> =>
+      useDictation({
+        onInsert: vi.fn(),
+        createRecorder: (): DictationRecorder => recorder.recorder,
+        transcribe,
+        postRollMs: 0,
+        realtime: {
+          enabled: true,
+          createTransport: (): VoiceRtcTransport => fakes.transport,
+          createControlClient: (): VoiceLiveDictationControlClient => fakes.control,
+        },
+      }),
+    );
+
+    act(() => result.current.start());
+    await act(async (): Promise<void> => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.phase).toBe("recording");
+
+    act(() => fakes.emitConnectionState("disconnected"));
+    expect(result.current.phase).toBe("recording");
+    await act(async (): Promise<void> => {
+      await vi.advanceTimersToNextTimerAsync();
+    });
+    expect(result.current.phase).toBe("error");
     expect(result.current.error).toEqual({
       reason: "connection-failed",
       message: "Live dictation connection was lost.",
@@ -1030,13 +1100,19 @@ describe("useDictation — realtime live dictation (P3)", () => {
     expect(fakes.closeControl).toHaveBeenCalledTimes(1);
 
     act(() => result.current.retry());
-    await waitFor(() => expect(result.current.phase).toBe("recording"));
+    await act(async (): Promise<void> => {
+      await Promise.resolve();
+    });
+    expect(result.current.phase).toBe("recording");
     expect(result.current.mode).toBe("batch");
     expect(fakes.connect).toHaveBeenCalledTimes(1);
     expect(recorder.start).toHaveBeenCalledTimes(1);
 
     act(() => result.current.stop());
-    await waitFor(() => expect(result.current.phase).toBe("preview"));
+    await act(async (): Promise<void> => {
+      await vi.advanceTimersToNextTimerAsync();
+    });
+    expect(result.current.phase).toBe("preview");
     expect(transcribe).toHaveBeenCalledTimes(1);
     expect(result.current.transcript).toBe("recovered batch transcript");
   });
