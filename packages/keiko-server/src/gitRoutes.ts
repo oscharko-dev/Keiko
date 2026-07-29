@@ -28,6 +28,7 @@ import {
   containsPath,
   defaultGitProcessRunner,
   resolveGitMembership,
+  type GitProcessOptions,
   type GitProcessResult,
   type GitProcessRunner,
 } from "@oscharko-dev/keiko-git";
@@ -675,6 +676,13 @@ async function assertContainedGitPath(repo: RepositoryContext, path: string): Pr
   }
 }
 
+async function assertOptionalContainedGitPath(
+  repo: RepositoryContext,
+  path: string | undefined,
+): Promise<void> {
+  if (path !== undefined) await assertContainedGitPath(repo, path);
+}
+
 function gitPath(prefix: string, path: string | undefined): string | undefined {
   const normalizedPrefix = prefix === "." ? "" : prefix;
   if (path === undefined) return normalizedPrefix.length > 0 ? normalizedPrefix : undefined;
@@ -694,6 +702,77 @@ function parseScope(input: string | null): GitDiffScope {
 function parseStructuredScope(input: string | null): GitEditorDiffScope {
   if (input === "staged" || input === "unstaged") return input;
   throw new FilesError(400, "BAD_REQUEST", "The diff scope must be staged or unstaged.");
+}
+
+function gitProcessOptions(
+  repo: RepositoryContext,
+  options: NormalizedGitRouteOptions,
+  maxBytes: number,
+): GitProcessOptions {
+  return {
+    cwd: repo.repositoryRoot,
+    maxBytes,
+    timeoutMs: options.timeoutMs,
+    ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
+  };
+}
+
+function isExactUntrackedPath(result: GitProcessResult, path: string): boolean {
+  return result.stdout.split("\0").some((entry): boolean => entry === path);
+}
+
+function normalizeNoIndexDiff(result: GitProcessResult): GitProcessResult {
+  const expectedDifference =
+    result.exitCode === 1 &&
+    !result.truncated &&
+    result.stderr.length === 0 &&
+    result.stdout.length > 0;
+  return expectedDifference ? { ...result, exitCode: 0 } : result;
+}
+
+async function runUntrackedDiff(
+  repo: RepositoryContext,
+  options: NormalizedGitRouteOptions,
+  path: string,
+  original: GitProcessResult,
+  maxBytes: number,
+): Promise<GitProcessResult> {
+  const untracked = await options.runner(
+    [
+      "--no-pager",
+      "--no-optional-locks",
+      "-C",
+      repo.repositoryRoot,
+      "ls-files",
+      "--others",
+      "--exclude-standard",
+      "-z",
+      "--",
+      literalGitPathspec(path),
+    ],
+    gitProcessOptions(repo, options, options.maxStatusBytes),
+  );
+  if (untracked.exitCode !== 0) return untracked;
+  if (untracked.truncated) return { ...untracked, exitCode: 1, stdout: "" };
+  if (!isExactUntrackedPath(untracked, path)) return original;
+  const added = await options.runner(
+    [
+      "--no-pager",
+      "--no-optional-locks",
+      "-C",
+      repo.repositoryRoot,
+      "diff",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--no-color",
+      "--no-index",
+      "--",
+      "/dev/null",
+      path,
+    ],
+    gitProcessOptions(repo, options, maxBytes),
+  );
+  return normalizeNoIndexDiff(added);
 }
 
 async function runDiff(
@@ -716,12 +795,17 @@ async function runDiff(
   if (staged) args.push("--cached");
   const relativePath = gitPath(repo.selectedRootPrefix, path);
   if (relativePath !== undefined) args.push("--", literalGitPathspec(relativePath));
-  return options.runner(args, {
-    cwd: repo.repositoryRoot,
-    maxBytes,
-    timeoutMs: options.timeoutMs,
-    ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
-  });
+  const result = await options.runner(args, gitProcessOptions(repo, options, maxBytes));
+  if (
+    staged ||
+    relativePath === undefined ||
+    result.exitCode !== 0 ||
+    result.truncated ||
+    result.stdout.length > 0
+  ) {
+    return result;
+  }
+  return runUntrackedDiff(repo, options, relativePath, result, maxBytes);
 }
 
 // eslint-disable-next-line max-lines-per-function
@@ -744,7 +828,7 @@ export async function handleGitStatus(
         const body = { ...repo, maxChanges: options.maxChanges };
         return { status: 200, body: redacted(deps, body) };
       }
-      if (path !== undefined) await assertContainedGitPath(repo, path);
+      await assertOptionalContainedGitPath(repo, path);
       const relativePath = gitPath(repo.selectedRootPrefix, path);
       const status = await options.runner(
         [
@@ -821,6 +905,7 @@ export async function handleGitDiff(
         };
         return { status: 200, body: redacted(deps, body) };
       }
+      await assertOptionalContainedGitPath(repo, path);
 
       const runs =
         scope === "all"

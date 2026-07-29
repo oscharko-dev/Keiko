@@ -812,6 +812,127 @@ describe("GET /api/git/diff", () => {
 });
 
 describe("GET /api/git/diff/structured", () => {
+  it("renders an untracked text file as a complete added-file diff", async () => {
+    await runRealGit(["init", "--quiet"]);
+    await writeFile(join(root, "notes.txt"), "first line\nsecond line\n", "utf8");
+    const routeDeps = deps(defaultGitProcessRunner);
+
+    const result = await handleGitStructuredDiff(
+      ctx(
+        `/api/git/diff/structured?root=${encodeURIComponent(root)}&scope=unstaged&path=notes.txt`,
+      ),
+      routeDeps,
+    );
+    expect(result.status).toBe(200);
+    expect(parseGitEditorDiffResponse(result.body)).toMatchObject({ ok: true });
+    expect(result.body).toMatchObject({
+      scope: "unstaged",
+      truncated: false,
+      files: [
+        {
+          path: "notes.txt",
+          layer: "worktree",
+          status: "added",
+          binary: false,
+          addedLines: 2,
+          removedLines: 0,
+          truncated: false,
+        },
+      ],
+    });
+
+    const raw = await handleGitDiff(
+      ctx(`/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree&path=notes.txt`),
+      routeDeps,
+      {
+        runner: defaultGitProcessRunner,
+        maxDiffBytes: 4_096,
+        maxStatusBytes: 4_096,
+        maxChanges: 10,
+      },
+    );
+    expect(raw.status).toBe(200);
+    expect(raw.body).toMatchObject({ truncated: false });
+    expect(raw.body).toHaveProperty("diff", expect.stringContaining("+first line"));
+  });
+
+  it("classifies an untracked binary file without exposing its body", async () => {
+    await runRealGit(["init", "--quiet"]);
+    await writeFile(join(root, "asset.bin"), Uint8Array.from([0, 1, 2, 3]));
+
+    const result = await handleGitStructuredDiff(
+      ctx(
+        `/api/git/diff/structured?root=${encodeURIComponent(root)}&scope=unstaged&path=asset.bin`,
+      ),
+      deps(defaultGitProcessRunner),
+    );
+
+    expect(result.status).toBe(200);
+    expect(parseGitEditorDiffResponse(result.body)).toMatchObject({ ok: true });
+    expect(result.body).toMatchObject({
+      files: [
+        {
+          path: "asset.bin",
+          status: "added",
+          binary: true,
+          hunks: [],
+          addedLines: 0,
+          removedLines: 0,
+        },
+      ],
+    });
+    expect(JSON.stringify(result.body)).not.toContain("\\u0000");
+  });
+
+  it("keeps an empty untracked file visible as an added file", async () => {
+    await runRealGit(["init", "--quiet"]);
+    await writeFile(join(root, "empty.txt"), "", "utf8");
+
+    const result = await handleGitStructuredDiff(
+      ctx(
+        `/api/git/diff/structured?root=${encodeURIComponent(root)}&scope=unstaged&path=empty.txt`,
+      ),
+      deps(defaultGitProcessRunner),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      files: [
+        {
+          path: "empty.txt",
+          status: "added",
+          binary: false,
+          hunks: [],
+          addedLines: 0,
+          removedLines: 0,
+        },
+      ],
+    });
+  });
+
+  it("fails closed when Git cannot read a confirmed untracked file", async () => {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(ok(""))
+      .mockResolvedValueOnce(ok("notes.txt\0"))
+      .mockResolvedValueOnce(fail("fatal: cannot open '/private/secret'", 1));
+
+    const result = await handleGitStructuredDiff(
+      ctx(
+        `/api/git/diff/structured?root=${encodeURIComponent(root)}&scope=unstaged&path=notes.txt`,
+        "cid-untracked-read",
+      ),
+      deps(runner),
+    );
+
+    expect(result).toMatchObject({
+      status: 500,
+      body: { error: { code: "GIT_DIFF_FAILED", correlationId: "cid-untracked-read" } },
+    });
+    expect(JSON.stringify(result.body)).not.toContain("private/secret");
+  });
+
   it("returns contract-valid staged hunks and fixed hardened diff arguments", async () => {
     const runner = vi
       .fn<GitProcessRunner>()
@@ -995,9 +1116,16 @@ describe("GET /api/git/diff/structured", () => {
       ),
       deps(symlinkRunner),
     );
+    const rawRunner = vi.fn<GitProcessRunner>().mockResolvedValueOnce(ok(`${root}\n`));
+    const rawEscaped = await handleGitDiff(
+      ctx(`/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree&path=escape%2Fsecret.ts`),
+      deps(rawRunner),
+    );
     await rm(outside, { recursive: true, force: true });
     expect(escaped.status).toBe(400);
     expect(symlinkRunner).toHaveBeenCalledTimes(1);
+    expect(rawEscaped.status).toBe(400);
+    expect(rawRunner).toHaveBeenCalledTimes(1);
   });
 });
 
