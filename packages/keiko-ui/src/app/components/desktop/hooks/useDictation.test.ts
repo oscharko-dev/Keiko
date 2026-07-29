@@ -1089,7 +1089,14 @@ describe("useDictation — realtime live dictation (P3)", () => {
     act(() => fakes.emitConnectionState("disconnected"));
     expect(result.current.phase).toBe("recording");
     await act(async (): Promise<void> => {
-      await vi.advanceTimersToNextTimerAsync();
+      await vi.advanceTimersByTimeAsync(4_999);
+    });
+    expect(result.current.phase).toBe("recording");
+    expect(fakes.closeSession).not.toHaveBeenCalled();
+    expect(fakes.closeControl).not.toHaveBeenCalled();
+
+    await act(async (): Promise<void> => {
+      await vi.advanceTimersByTimeAsync(1);
     });
     expect(result.current.phase).toBe("error");
     expect(result.current.error).toEqual({
