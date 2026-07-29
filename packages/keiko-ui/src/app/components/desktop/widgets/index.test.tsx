@@ -1211,7 +1211,9 @@ describe("workspace widget renderer registry", () => {
     expect(reportError).toHaveBeenCalledOnce();
     const reported = reportError.mock.calls[0]?.[0];
     expect(reported).toBeInstanceOf(Error);
-    expect((reported as Error).message).toBe("Chat title update failed.");
+    expect((reported as Error).message).toMatch(
+      /^Chat title update failed\. Correlation ID: [A-Za-z0-9._-]{8,128}$/,
+    );
     expect((reported as Error).message).not.toContain("customer-chat-title-detail");
     expect((reported as Error).message).not.toContain("Replacement chat");
   });

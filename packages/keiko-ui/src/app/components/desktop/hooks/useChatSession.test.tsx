@@ -338,6 +338,49 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.messages[0]?.id).toBe("created-msg");
   });
 
+  it("returns a persisted chat without replacing a project selected during creation", async () => {
+    const created = chat({
+      id: "chat-created-in-background",
+      projectPath: "/repo",
+      title: "Background creation",
+    });
+    const otherChat = chat({ id: "chat-other", projectPath: "/other", title: "Other chat" });
+    const creation = deferred<Awaited<ReturnType<typeof createDesktopChat>>>();
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({
+      projects: [project("/repo"), project("/other")],
+    });
+    vi.mocked(fetchChats)
+      .mockResolvedValueOnce({ chats: [chat()] })
+      .mockResolvedValueOnce({ chats: [otherChat] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(createDesktopChat).mockReturnValueOnce(creation.promise);
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    let creationPromise: Promise<Chat | undefined>;
+    act(() => {
+      creationPromise = result.current.openNewChat(project("/repo"), created.title);
+    });
+    await act(async () => {
+      await result.current.openProject(project("/other"));
+    });
+    await act(async () => {
+      creation.resolve({
+        chat: created,
+        project: project("/repo"),
+        projects: [project("/repo"), project("/other")],
+        chats: [created],
+        messages: [],
+      });
+    });
+
+    await expect(creationPromise!).resolves.toEqual(created);
+    expect(result.current.activeProject?.path).toBe("/other");
+    expect(result.current.activeChat?.id).toBe(otherChat.id);
+  });
+
   it("surfaces bootstrap and navigation mutation failures without stale state", async () => {
     vi.mocked(fetchModels).mockRejectedValueOnce(new TypeError("bootstrap unavailable"));
     const failedBootstrap = renderHook(() => useChatSession({ autoCreate: false }));

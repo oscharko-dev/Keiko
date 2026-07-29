@@ -576,8 +576,41 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(reportError).toHaveBeenCalledOnce();
     const reported = reportError.mock.calls[0]?.[0];
     expect(reported).toBeInstanceOf(Error);
-    expect((reported as Error).message).toBe("Chat creation request failed.");
+    expect((reported as Error).message).toMatch(
+      /^Chat creation request failed\. Correlation ID: [A-Za-z0-9._-]{8,128}$/,
+    );
     expect((reported as Error).message).not.toContain("customer-chat-creation-detail");
+    expect((reported as Error).message).not.toContain("Sensitive title");
+  });
+
+  it("correlates a redacted title-update diagnostic", async (): Promise<void> => {
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
+    const created = chatFixture("chat-created", "New chat", 2);
+    chatSessionState.openNewChat.mockResolvedValueOnce(created);
+    updateChatMock.mockRejectedValueOnce(new Error("customer-title-detail"));
+    const ctx = context();
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ title: "Sensitive title", newChatRequestId: "request-title-failure" }}
+          ctx={ctx}
+        />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void => expect(reportError).toHaveBeenCalledOnce());
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: created.id,
+      title: created.title,
+      newChatRequestId: undefined,
+    });
+    const reported = reportError.mock.calls[0]?.[0];
+    expect((reported as Error).message).toMatch(
+      /^Chat title update failed\. Correlation ID: [A-Za-z0-9._-]{8,128}$/,
+    );
+    expect((reported as Error).message).not.toContain("customer-title-detail");
     expect((reported as Error).message).not.toContain("Sensitive title");
   });
 
@@ -788,7 +821,7 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(updateChatMock).not.toHaveBeenCalled();
   });
 
-  it("starts a project-appropriate creation and ignores the stale project result", async (): Promise<void> => {
+  it("adopts a persisted project creation when navigation returns after it settles", async (): Promise<void> => {
     const projectA: ProjectWithAvailability = {
       path: "/repo-a",
       name: "Repo A",
@@ -853,6 +886,23 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       chatId: chatB.id,
       title: chatB.title,
+      newChatRequestId: undefined,
+    });
+
+    chatSessionState.activeProject = projectA;
+    view.rerender(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ title: chatA.title, newChatRequestId: "project-request" }}
+          ctx={ctx}
+        />
+      </I18nProvider>,
+    );
+    await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledTimes(2));
+    expect(chatSessionState.openNewChat).toHaveBeenCalledTimes(2);
+    expect(ctx.updateCfg).toHaveBeenLastCalledWith({
+      chatId: chatA.id,
+      title: chatA.title,
       newChatRequestId: undefined,
     });
   });

@@ -2243,7 +2243,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         if (targetPath !== undefined) input.projectPath = targetPath;
         const created = await createDesktopChat(input);
         if (targetPath !== undefined && activeProjectPathRef.current !== targetPath) {
-          return undefined;
+          return created.chat;
         }
         activeChatIdRef.current = created.chat.id;
         activeProjectPathRef.current = created.project.path;

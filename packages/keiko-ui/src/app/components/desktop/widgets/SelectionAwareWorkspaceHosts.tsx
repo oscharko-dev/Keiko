@@ -4,6 +4,7 @@ import { disposeEditorModelRegistryRoot } from "@oscharko-dev/keiko-editor";
 import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 
 import { updateChat } from "@/lib/api";
+import { newClientCorrelationId } from "@/lib/http";
 import { useTranslate } from "@/lib/i18n";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 
@@ -171,12 +172,14 @@ interface ChatCreationResult {
 }
 
 interface ActiveChatCreation {
+  readonly correlationId: string;
   desiredTitle: string | undefined;
   isOwnerCurrent: () => boolean;
   owner: ChatCreationOwner;
   readonly projectPath: string | null;
   readonly promise: Promise<Chat | undefined>;
   reconciliation: Promise<ChatCreationResult> | null;
+  settledChat: Chat | undefined;
   titleRevision: number;
 }
 
@@ -186,6 +189,16 @@ function sameCreationOwner(left: ChatCreationOwner, right: ChatCreationOwner): b
 
 const CHAT_CREATION_REQUEST_DIAGNOSTIC = "Chat creation request failed.";
 const CHAT_TITLE_UPDATE_DIAGNOSTIC = "Chat title update failed.";
+
+class ChatCreationRequestFailure extends Error {
+  public constructor(readonly correlationId: string) {
+    super(CHAT_CREATION_REQUEST_DIAGNOSTIC);
+  }
+}
+
+function correlatedDiagnostic(message: string, correlationId: string): Error {
+  return new Error(`${message} Correlation ID: ${correlationId}`);
+}
 
 export function normalizedChatTitle(title: string | undefined): string | undefined {
   const normalized = title?.trim();
@@ -216,7 +229,7 @@ async function reconcileChatTitleRevision(
     replaceChat(response.chat);
     return { kind: "settled", result: { chat: response.chat, titleSaveFailed: false } };
   } catch {
-    window.reportError(new Error(CHAT_TITLE_UPDATE_DIAGNOSTIC));
+    window.reportError(correlatedDiagnostic(CHAT_TITLE_UPDATE_DIAGNOSTIC, active.correlationId));
     if (revision !== active.titleRevision) return { kind: "retry", chat };
     const result = isCurrent()
       ? { chat, titleSaveFailed: true }
@@ -230,7 +243,12 @@ async function reconcileActiveChatCreation(
   replaceChat: ChatSessionApi["replaceChat"],
   isCurrent: () => boolean,
 ): Promise<ChatCreationResult> {
-  let chat = await active.promise;
+  let chat: Chat | undefined;
+  try {
+    chat = await active.promise;
+  } catch {
+    throw new ChatCreationRequestFailure(active.correlationId);
+  }
   if (chat === undefined || !isCurrent()) return { chat: undefined, titleSaveFailed: false };
   while (isCurrent()) {
     const step = await reconcileChatTitleRevision(active, chat, replaceChat, isCurrent);
@@ -269,16 +287,28 @@ function useChatCreationCoordinator(
       const projectPath = project?.path ?? null;
       let active = activeByProjectRef.current.get(projectPath);
       if (active === undefined) {
-        active = {
+        const promise = openNewChat(project, title);
+        const created: ActiveChatCreation = {
+          correlationId: newClientCorrelationId(),
           desiredTitle: normalizedChatTitle(title),
           isOwnerCurrent,
           owner,
           projectPath,
-          promise: openNewChat(project, title),
+          promise,
           reconciliation: null,
+          settledChat: undefined,
           titleRevision: 0,
         };
-        activeByProjectRef.current.set(projectPath, active);
+        active = created;
+        activeByProjectRef.current.set(projectPath, created);
+        void promise.then(
+          (chat): void => {
+            created.settledChat = chat;
+          },
+          (): void => {
+            created.settledChat = undefined;
+          },
+        );
       } else {
         active.isOwnerCurrent = isOwnerCurrent;
         active.owner = owner;
@@ -295,6 +325,7 @@ function useChatCreationCoordinator(
   const release = useCallback<ChatCreationCoordinator["release"]>((owner): void => {
     for (const [projectPath, active] of activeByProjectRef.current) {
       if (!sameCreationOwner(active.owner, owner)) continue;
+      if (active.settledChat !== undefined && !active.isOwnerCurrent()) return;
       activeByProjectRef.current.delete(projectPath);
       if (currentRef.current === active) currentRef.current = null;
       return;
@@ -515,8 +546,12 @@ function executeChatCreationRequest(execution: ChatCreationRequestExecution): vo
       (result): void => {
         if (execution.isCurrent()) applyChatCreationResult(execution, result);
       },
-      (): void => {
-        window.reportError(new Error(CHAT_CREATION_REQUEST_DIAGNOSTIC));
+      (failure): void => {
+        const correlationId =
+          failure instanceof ChatCreationRequestFailure
+            ? failure.correlationId
+            : newClientCorrelationId();
+        window.reportError(correlatedDiagnostic(CHAT_CREATION_REQUEST_DIAGNOSTIC, correlationId));
         if (!execution.isCurrent()) return;
         execution.setError({
           chatId: undefined,
