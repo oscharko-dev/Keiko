@@ -876,12 +876,17 @@ export class CodingRuntimeOrchestrator {
     } else if (!terminal.has(state)) {
       return;
     } else {
-      this.deps.safeActivityProjection?.purge(
-        next.runId,
-        state === "taken-over" ? "takeover" : "stop",
-      );
+      this.purgeExplicitlyEndedActivity(next.runId, state);
     }
     this.publishSettlement(next, state, failureCode);
+  }
+
+  private purgeExplicitlyEndedActivity(
+    runId: string,
+    state: CodingWorkbenchRuntimeStateName,
+  ): void {
+    if (state !== "cancelled" && state !== "taken-over") return;
+    this.deps.safeActivityProjection?.purge(runId, state === "taken-over" ? "takeover" : "stop");
   }
 
   private publishSettlement(
