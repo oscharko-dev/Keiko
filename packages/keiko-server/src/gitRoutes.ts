@@ -1,7 +1,9 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { constants, type BigIntStats } from "node:fs";
+import { chmod, mkdir, mkdtemp, open, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import type {
   GitChangedFile,
   GitDiffScope,
@@ -34,6 +36,11 @@ import {
 } from "@oscharko-dev/keiko-git";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSummary,
+} from "./diagnostics-log.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import {
   FilesError,
@@ -686,7 +693,12 @@ async function assertOptionalContainedGitPath(
 function gitPath(prefix: string, path: string | undefined): string | undefined {
   const normalizedPrefix = prefix === "." ? "" : prefix;
   if (path === undefined) return normalizedPrefix.length > 0 ? normalizedPrefix : undefined;
-  return normalizedPrefix.length > 0 ? `${normalizedPrefix}/${path}` : path;
+  const normalizedPath = platformGitPath(path, process.platform);
+  return normalizedPrefix.length > 0 ? `${normalizedPrefix}/${normalizedPath}` : normalizedPath;
+}
+
+export function platformGitPath(path: string, platform: NodeJS.Platform): string {
+  return platform === "win32" ? path.replaceAll("\\", "/") : path;
 }
 
 function literalGitPathspec(path: string): string {
@@ -721,19 +733,153 @@ function isExactUntrackedPath(result: GitProcessResult, path: string): boolean {
   return result.stdout.split("\0").includes(path);
 }
 
-function normalizeNoIndexDiff(result: GitProcessResult): GitProcessResult {
+interface UntrackedFileSnapshot {
+  readonly bytes: Buffer;
+  readonly mode: number;
+  readonly truncated: boolean;
+}
+
+const NOFOLLOW_READ_FLAG = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+
+function sameOpenFile(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    left.isFile() &&
+    right.isFile() &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+function staleUntrackedPath(): FilesError {
+  return new FilesError(
+    409,
+    "STALE_PATH",
+    "The file changed before its Git diff could be prepared.",
+  );
+}
+
+async function readOpenSnapshot(
+  candidate: string,
+  resolved: string,
+  boundary: string,
+  maxBytes: number,
+): Promise<UntrackedFileSnapshot> {
+  const descriptor = await open(resolved, constants.O_RDONLY | NOFOLLOW_READ_FLAG).catch(() => {
+    throw staleUntrackedPath();
+  });
+  try {
+    const before = await descriptor.stat({ bigint: true });
+    const current = await realpath(candidate).catch(() => {
+      throw staleUntrackedPath();
+    });
+    if (!containsPath(boundary, current)) {
+      throw new FilesError(400, "BAD_PATH", "The path must stay inside the selected root.");
+    }
+    const currentStats = await stat(current, { bigint: true }).catch(() => {
+      throw staleUntrackedPath();
+    });
+    if (!sameOpenFile(before, currentStats)) throw staleUntrackedPath();
+    const buffer = Buffer.allocUnsafe(maxBytes + 1);
+    const read = await descriptor.read(buffer, 0, maxBytes + 1, 0);
+    const after = await descriptor.stat({ bigint: true });
+    if (!sameOpenFile(before, after)) throw staleUntrackedPath();
+    return {
+      bytes: buffer.subarray(0, Math.min(read.bytesRead, maxBytes)),
+      mode: Number(before.mode & 0o777n),
+      truncated: read.bytesRead > maxBytes,
+    };
+  } finally {
+    await descriptor.close();
+  }
+}
+
+async function readContainedUntrackedSnapshot(
+  repo: RepositoryContext,
+  path: string,
+  maxBytes: number,
+): Promise<UntrackedFileSnapshot> {
+  const candidate = resolve(repo.realRoot, path);
+  const resolved = await realpath(candidate).catch(() => {
+    throw staleUntrackedPath();
+  });
+  if (!containsPath(repo.realRoot, resolved)) {
+    throw new FilesError(400, "BAD_PATH", "The path must stay inside the selected root.");
+  }
+  const snapshot = await readOpenSnapshot(candidate, resolved, repo.realRoot, maxBytes);
+  const current = await realpath(candidate).catch(() => {
+    throw staleUntrackedPath();
+  });
+  if (!containsPath(repo.realRoot, current)) {
+    throw new FilesError(400, "BAD_PATH", "The path must stay inside the selected root.");
+  }
+  return snapshot;
+}
+
+function normalizeNoIndexDiff(
+  result: GitProcessResult,
+  sourceTruncated: boolean,
+  abortSignal: AbortSignal | undefined,
+): GitProcessResult {
   const expectedDifference =
-    result.exitCode === 1 &&
-    !result.truncated &&
+    (result.exitCode === 1 || result.truncated) &&
+    result.timedOut !== true &&
+    abortSignal?.aborted !== true &&
     result.stderr.length === 0 &&
-    result.stdout.length > 0;
-  return expectedDifference ? { ...result, exitCode: 0 } : result;
+    result.stdout.startsWith("diff --git ");
+  return expectedDifference
+    ? { ...result, exitCode: 0, truncated: result.truncated || sourceTruncated }
+    : result;
+}
+
+async function runSnapshotDiff(
+  options: NormalizedGitRouteOptions,
+  path: string,
+  snapshot: UntrackedFileSnapshot,
+  maxBytes: number,
+): Promise<GitProcessResult> {
+  const snapshotRoot = await mkdtemp(join(tmpdir(), "keiko-git-diff-"));
+  try {
+    const snapshotPath = resolve(snapshotRoot, ...path.split("/"));
+    if (!containsPath(snapshotRoot, snapshotPath)) throw staleUntrackedPath();
+    await mkdir(dirname(snapshotPath), { recursive: true, mode: 0o700 });
+    await writeFile(snapshotPath, snapshot.bytes, { flag: "wx", mode: 0o600 });
+    await chmod(snapshotPath, snapshot.mode);
+    const result = await options.runner(
+      [
+        "--no-pager",
+        "--no-optional-locks",
+        "-C",
+        snapshotRoot,
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--no-index",
+        "--",
+        "/dev/null",
+        path,
+      ],
+      {
+        cwd: snapshotRoot,
+        maxBytes,
+        timeoutMs: options.timeoutMs,
+        ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
+      },
+    );
+    return normalizeNoIndexDiff(result, snapshot.truncated, options.abortSignal);
+  } finally {
+    await rm(snapshotRoot, { recursive: true, force: true });
+  }
 }
 
 async function runUntrackedDiff(
   repo: RepositoryContext,
   options: NormalizedGitRouteOptions,
-  path: string,
+  gitRelativePath: string,
+  selectedPath: string,
   original: GitProcessResult,
   maxBytes: number,
 ): Promise<GitProcessResult> {
@@ -748,31 +894,15 @@ async function runUntrackedDiff(
       "--exclude-standard",
       "-z",
       "--",
-      literalGitPathspec(path),
+      literalGitPathspec(gitRelativePath),
     ],
     gitProcessOptions(repo, options, options.maxStatusBytes),
   );
   if (untracked.exitCode !== 0) return untracked;
   if (untracked.truncated) return { ...untracked, exitCode: 1, stdout: "" };
-  if (!isExactUntrackedPath(untracked, path)) return original;
-  const added = await options.runner(
-    [
-      "--no-pager",
-      "--no-optional-locks",
-      "-C",
-      repo.repositoryRoot,
-      "diff",
-      "--no-ext-diff",
-      "--no-textconv",
-      "--no-color",
-      "--no-index",
-      "--",
-      "/dev/null",
-      path,
-    ],
-    gitProcessOptions(repo, options, maxBytes),
-  );
-  return normalizeNoIndexDiff(added);
+  if (!isExactUntrackedPath(untracked, gitRelativePath)) return original;
+  const snapshot = await readContainedUntrackedSnapshot(repo, selectedPath, maxBytes);
+  return runSnapshotDiff(options, gitRelativePath, snapshot, maxBytes);
 }
 
 async function runDiff(
@@ -798,6 +928,7 @@ async function runDiff(
   const result = await options.runner(args, gitProcessOptions(repo, options, maxBytes));
   if (
     staged ||
+    path === undefined ||
     relativePath === undefined ||
     result.exitCode !== 0 ||
     result.truncated ||
@@ -805,7 +936,7 @@ async function runDiff(
   ) {
     return result;
   }
-  return runUntrackedDiff(repo, options, relativePath, result, maxBytes);
+  return runUntrackedDiff(repo, options, relativePath, path, result, maxBytes);
 }
 
 // eslint-disable-next-line max-lines-per-function
@@ -883,7 +1014,9 @@ export async function handleGitDiff(
   deps: UiHandlerDeps,
   rawOptions?: GitRouteOptions,
 ): Promise<RouteResult> {
-  return runFilesHandler(
+  return runGitDiffHandler(
+    ctx,
+    deps,
     // eslint-disable-next-line max-lines-per-function
     async () => {
       const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
@@ -935,7 +1068,14 @@ export async function handleGitDiff(
         }
         return {
           status: 500,
-          body: errorBody("GIT_DIFF_FAILED", "Git diff is unavailable for this folder."),
+          body: gitReadErrorBody(
+            ctx,
+            deps,
+            new GitRouteReadError("GIT_DIFF_FAILED"),
+            "GIT_DIFF_FAILED",
+            "Git diff is unavailable for this folder.",
+            "The bounded diff read was unavailable.",
+          ),
         };
       }
       const rawDiff = runs
@@ -990,6 +1130,62 @@ function correlatedGitError(ctx: RouteContext, code: string, message: string): R
   };
 }
 
+class GitRouteReadError extends Error {
+  public constructor(public readonly code: string) {
+    super("Git read failed.");
+    this.name = "GitRouteReadError";
+  }
+}
+
+function gitReadErrorBody(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  error: unknown,
+  code: string,
+  message: string,
+  summary: ServerDiagnosticSummary,
+): ReturnType<typeof errorBody> {
+  const correlationId = ctx.correlationId ?? randomUUID();
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation: `GET ${ctx.url.pathname}`,
+      source: "git-routes",
+      error,
+      summary,
+      redact: (value): string => String(deps.redactor(value)),
+    }),
+  );
+  return errorBody(code, message, correlationId);
+}
+
+async function runGitDiffHandler(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  work: () => Promise<RouteResult>,
+): Promise<RouteResult> {
+  try {
+    return await work();
+  } catch (error) {
+    if (!(error instanceof FilesError)) throw error;
+    const correlated = error.code === "BAD_PATH" || error.code === "STALE_PATH";
+    return {
+      status: error.status,
+      body: correlated
+        ? gitReadErrorBody(
+            ctx,
+            deps,
+            error,
+            error.code,
+            error.message,
+            "The bounded diff read was unavailable.",
+          )
+        : errorBody(error.code, error.message),
+    };
+  }
+}
+
 function structuredDiffBody(
   scope: GitEditorDiffScope,
   repo: RepositoryContext,
@@ -1018,7 +1214,7 @@ export async function handleGitStructuredDiff(
   deps: UiHandlerDeps,
   rawOptions?: GitRouteOptions,
 ): Promise<RouteResult> {
-  return runFilesHandler(async () => {
+  return runGitDiffHandler(ctx, deps, async () => {
     const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
     const scope = parseStructuredScope(ctx.url.searchParams.get("scope"));
     const path = validatePath(ctx.url.searchParams.get("path"));

@@ -18,6 +18,7 @@ import {
   type UiHandlerDeps,
 } from "./index.js";
 import type { RouteContext } from "./routes.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import type { UiStore } from "./store/index.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import {
@@ -26,6 +27,7 @@ import {
   handleGitDiff,
   handleGitStructuredDiff,
   handleGitStatus,
+  platformGitPath,
   type GitProcessRunner,
 } from "./gitRoutes.js";
 
@@ -630,6 +632,12 @@ describe("GET /api/git/branches", () => {
 });
 
 describe("GET /api/git/diff", () => {
+  it("normalizes separators only on Windows Git paths", (): void => {
+    expect(platformGitPath("src\\new.ts", "win32")).toBe("src/new.ts");
+    expect(platformGitPath("literal\\name.ts", "darwin")).toBe("literal\\name.ts");
+    expect(platformGitPath("literal\\name.ts", "linux")).toBe("literal\\name.ts");
+  });
+
   it("rejects path traversal before invoking Git diff", async () => {
     const runner = vi.fn<GitProcessRunner>();
 
@@ -812,7 +820,7 @@ describe("GET /api/git/diff", () => {
 });
 
 describe("GET /api/git/diff/structured", () => {
-  it("renders an untracked text file as a complete added-file diff", async () => {
+  it("renders an untracked text file as a complete added-file diff", async (): Promise<void> => {
     await runRealGit(["init", "--quiet"]);
     await writeFile(join(root, "notes.txt"), "first line\nsecond line\n", "utf8");
     const routeDeps = deps(defaultGitProcessRunner);
@@ -856,7 +864,7 @@ describe("GET /api/git/diff/structured", () => {
     expect(raw.body).toHaveProperty("diff", expect.stringContaining("+first line"));
   });
 
-  it("classifies an untracked binary file without exposing its body", async () => {
+  it("classifies an untracked binary file without exposing its body", async (): Promise<void> => {
     await runRealGit(["init", "--quiet"]);
     await writeFile(join(root, "asset.bin"), Uint8Array.from([0, 1, 2, 3]));
 
@@ -884,7 +892,7 @@ describe("GET /api/git/diff/structured", () => {
     expect(JSON.stringify(result.body)).not.toContain("\\u0000");
   });
 
-  it("keeps an empty untracked file visible as an added file", async () => {
+  it("keeps an empty untracked file visible as an added file", async (): Promise<void> => {
     await runRealGit(["init", "--quiet"]);
     await writeFile(join(root, "empty.txt"), "", "utf8");
 
@@ -910,7 +918,8 @@ describe("GET /api/git/diff/structured", () => {
     });
   });
 
-  it("fails closed when Git cannot read a confirmed untracked file", async () => {
+  it("fails closed when Git cannot read a confirmed untracked file", async (): Promise<void> => {
+    await writeFile(join(root, "notes.txt"), "content\n", "utf8");
     const runner = vi
       .fn<GitProcessRunner>()
       .mockResolvedValueOnce(ok(`${root}\n`))
@@ -931,6 +940,119 @@ describe("GET /api/git/diff/structured", () => {
       body: { error: { code: "GIT_DIFF_FAILED", correlationId: "cid-untracked-read" } },
     });
     expect(JSON.stringify(result.body)).not.toContain("private/secret");
+  });
+
+  it("fails closed on truncated untracked confirmation without reading the file", async (): Promise<void> => {
+    await writeFile(join(root, "notes.txt"), "content\n", "utf8");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(ok(""))
+      .mockResolvedValueOnce({ ...ok("notes.txt\0"), truncated: true });
+
+    const result = await handleGitDiff(
+      ctx(
+        `/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree&path=notes.txt`,
+        "cid-untracked-enumeration",
+      ),
+      {
+        ...deps(runner),
+        diagnostics: { record: (record): void => void diagnostics.push(record) },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: 500,
+      body: {
+        error: { code: "GIT_DIFF_FAILED", correlationId: "cid-untracked-enumeration" },
+      },
+    });
+    expect(runner).toHaveBeenCalledTimes(3);
+    expect(runner.mock.calls.flatMap(([args]) => args)).not.toContain("--no-index");
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        correlationId: "cid-untracked-enumeration",
+        operation: "GET /api/git/diff",
+        message: "The bounded diff read was unavailable.",
+      }),
+    );
+  });
+
+  it("returns a bounded truncated diff for a large untracked file", async (): Promise<void> => {
+    await runRealGit(["init", "--quiet"]);
+    await writeFile(join(root, "large.txt"), "large line\n".repeat(200), "utf8");
+
+    const result = await handleGitDiff(
+      ctx(`/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree&path=large.txt`),
+      deps(defaultGitProcessRunner),
+      {
+        runner: defaultGitProcessRunner,
+        maxDiffBytes: 96,
+        maxStatusBytes: 4_096,
+        maxChanges: 10,
+      },
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ available: true, truncated: true });
+    expect(result.body).toHaveProperty("diff", expect.stringMatching(/^diff --git /u));
+  });
+
+  it("rejects a symlink swap after Git confirms the untracked path", async (): Promise<void> => {
+    const directory = join(root, "inside");
+    const outside = await mkdtemp(join(tmpdir(), "keiko-git-outside-"));
+    await mkdir(directory);
+    await writeFile(join(directory, "notes.txt"), "inside\n", "utf8");
+    await writeFile(join(outside, "notes.txt"), "outside-secret\n", "utf8");
+    let noteEnumerationStarted: (() => void) | undefined;
+    let releaseEnumeration: (() => void) | undefined;
+    const enumerationStarted = new Promise<void>((resolveStarted): void => {
+      noteEnumerationStarted = resolveStarted;
+    });
+    const enumerationRelease = new Promise<void>((resolveRelease): void => {
+      releaseEnumeration = resolveRelease;
+    });
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(ok(""))
+      .mockImplementationOnce(async (): Promise<Awaited<ReturnType<GitProcessRunner>>> => {
+        noteEnumerationStarted?.();
+        await enumerationRelease;
+        return ok("inside/notes.txt\0");
+      });
+    const diagnostics: ServerDiagnosticRecord[] = [];
+
+    const pending = handleGitDiff(
+      ctx(
+        `/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree&path=inside%2Fnotes.txt`,
+        "cid-untracked-swap",
+      ),
+      {
+        ...deps(runner),
+        diagnostics: { record: (record): void => void diagnostics.push(record) },
+      },
+    );
+    await enumerationStarted;
+    await rm(directory, { recursive: true });
+    await symlink(outside, directory, "dir");
+    releaseEnumeration?.();
+    const result = await pending;
+    await rm(outside, { recursive: true, force: true });
+
+    expect(result).toMatchObject({
+      status: 400,
+      body: { error: { code: "BAD_PATH", correlationId: "cid-untracked-swap" } },
+    });
+    expect(JSON.stringify(result.body)).not.toContain("outside-secret");
+    expect(runner).toHaveBeenCalledTimes(3);
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        correlationId: "cid-untracked-swap",
+        operation: "GET /api/git/diff",
+      }),
+    );
   });
 
   it("returns contract-valid staged hunks and fixed hardened diff arguments", async () => {
