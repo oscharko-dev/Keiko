@@ -5,6 +5,7 @@ import {
   useId,
   useRef,
   useState,
+  type ClipboardEvent,
   type Dispatch,
   type ReactNode,
   type RefObject,
@@ -757,6 +758,20 @@ interface GatewayBaseUrlFieldProps {
   readonly onChange: Dispatch<SetStateAction<string>>;
 }
 
+function pasteCredentialWithoutWhitespace(
+  event: ClipboardEvent<HTMLInputElement>,
+  onChange: Dispatch<SetStateAction<string>>,
+): void {
+  const pasted = event.clipboardData.getData("text");
+  const sanitized = pasted.replace(/\s/gu, "");
+  if (sanitized === pasted) return;
+
+  event.preventDefault();
+  const input = event.currentTarget;
+  input.setRangeText(sanitized);
+  onChange(input.value);
+}
+
 function GatewayBaseUrlField({
   preserveExisting,
   value,
@@ -781,6 +796,11 @@ function GatewayBaseUrlField({
         disabled={disabled}
         ref={inputRef}
         onChange={(event) => onChange(event.target.value)}
+        onPaste={
+          preserveExisting
+            ? undefined
+            : (event): void => pasteCredentialWithoutWhitespace(event, onChange)
+        }
       />
     </label>
   );
@@ -816,6 +836,11 @@ function GatewayApiKeyField({
         autoComplete="off"
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
+        onPaste={
+          preserveExisting
+            ? undefined
+            : (event): void => pasteCredentialWithoutWhitespace(event, onChange)
+        }
       />
     </label>
   );
