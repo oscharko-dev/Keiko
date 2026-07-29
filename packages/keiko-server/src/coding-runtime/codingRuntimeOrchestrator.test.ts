@@ -10,7 +10,10 @@ import {
   createCodingSafeActivityProjection,
   type CodingSafeActivityProjection,
 } from "./codingSafeActivityProjection.js";
-import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.js";
+import type {
+  CodingRuntimeTaskDispatcher,
+  CodingRuntimeTaskOutcome,
+} from "./productionCodingRuntimeHost.js";
 import {
   createCodingRuntimeOrchestrator,
   type CodingRuntimeOrchestratorResult,
@@ -247,6 +250,55 @@ describe("CodingRuntimeOrchestrator", () => {
       expect.objectContaining({ runId: "run-1", state: "succeeded" }),
     );
   });
+
+  it.each(["succeeded", "failed"] satisfies readonly CodingRuntimeTaskOutcome[])(
+    "retains bounded protected activity after a naturally %s task",
+    async (outcome) => {
+      const projection = createCodingSafeActivityProjection({ now: () => FIXTURE_NOW_MS });
+      const f = fixture(projection);
+      let resolveCompletion: ((settled: CodingRuntimeTaskOutcome) => void) | undefined;
+      const completion = new Promise<CodingRuntimeTaskOutcome>((resolve) => {
+        resolveCompletion = resolve;
+      });
+      f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+
+      await f.orchestrator.start(start);
+      projection.open({
+        runId: "run-1",
+        workspaceId: "workspace-1",
+        authorityExpiresAt: "2026-01-01T01:00:00.000Z",
+        workspaceIsCurrent: () => true,
+      });
+      projection.ingest("run-1", {
+        kind: "message",
+        messageId: "msg-user",
+        role: "user",
+        occurredAt: "2026-01-01T00:00:00.001Z",
+      });
+      projection.ingest("run-1", {
+        kind: "message",
+        messageId: "msg-assistant",
+        role: "assistant",
+        parentMessageId: "msg-user",
+        occurredAt: "2026-01-01T00:00:00.002Z",
+      });
+      projection.ingest("run-1", {
+        kind: "text",
+        messageId: "msg-assistant",
+        text: "TERMINAL_RESULT_CANARY_2828",
+        occurredAt: "2026-01-01T00:00:00.003Z",
+      });
+      resolveCompletion?.(outcome);
+
+      await vi.waitFor(() => {
+        expect(f.orchestrator.getSnapshot("run-1")?.state).toBe(outcome);
+      });
+      expect(projection.currentContent()).toMatchObject({
+        feed: { availability: "available", runId: "run-1" },
+      });
+      expect(JSON.stringify(projection.currentContent())).toContain("TERMINAL_RESULT_CANARY_2828");
+    },
+  );
 
   it("fails closed when a task fails or its runtime cannot be reaped", async () => {
     const failed = fixture();
