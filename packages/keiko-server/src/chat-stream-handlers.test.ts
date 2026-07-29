@@ -900,9 +900,11 @@ describe("desktop chat SSE streaming handler", () => {
     const started = deferred<undefined>();
     let observedSignal: AbortSignal | undefined;
     let modelCalls = 0;
+    const modelRequests: GatewayRequest[] = [];
     const model: ModelPort = {
-      call(_request, signal): Promise<NormalizedResponse> {
+      call(request, signal): Promise<NormalizedResponse> {
         modelCalls += 1;
+        modelRequests.push(request);
         observedSignal = signal;
         started.resolve(undefined);
         return response.promise;
@@ -947,6 +949,11 @@ describe("desktop chat SSE streaming handler", () => {
 
     await expect(successor).resolves.toMatchObject({ status: 200 });
     expect(modelCalls).toBe(2);
+    expect(modelRequests[1]?.messages).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "user", content: "keep the transcript only" }),
+      ]),
+    );
     expect(store.listMessages(chatId)).toMatchObject([
       { role: "user", content: "keep the transcript only" },
       { role: "user", content: "successor waits for cancelled provider" },

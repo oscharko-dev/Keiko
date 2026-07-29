@@ -32,6 +32,7 @@ import {
   desktopChatErrorResult,
   emptyMemoryResult,
   failDesktopChatTurn,
+  gatewayHistoryPrefix,
   admitDesktopChatTurn,
   inspectDesktopChatTurn,
   parseDesktopChatSend,
@@ -333,6 +334,7 @@ async function streamAndPersist(
     modelId,
     messageCount: messageCountBeforeTurn,
     startedAt,
+    historyPrefix: gatewayHistoryPrefix(gatewayTurn),
   });
   writeTerminalFrame(ctx, sseMessage({ event: "done", data: payload }));
 }

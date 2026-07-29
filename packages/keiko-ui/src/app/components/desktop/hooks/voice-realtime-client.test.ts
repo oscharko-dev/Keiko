@@ -7,10 +7,20 @@ import { describe, expect, it, vi } from "vitest";
 import { createBrowserVoiceControlClient, VoiceControlError } from "./voice-realtime-client";
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
+  VOICE_PROFILE_MEDIA_TRANSPORT,
+  VOICE_PROFILE_NEGOTIATION_MODE,
   VOICE_PROTOCOL_VERSION,
+  VOICE_REALTIME_CONTROL_TRANSPORT,
 } from "@oscharko-dev/keiko-contracts";
 
 type WsListener = (event: unknown) => void;
+
+const DEFAULT_SESSION_CREATED_PAYLOAD = {
+  profile: "full-realtime",
+  controlTransport: VOICE_REALTIME_CONTROL_TRANSPORT,
+  mediaTransport: VOICE_PROFILE_MEDIA_TRANSPORT["full-realtime"],
+  negotiationMode: VOICE_PROFILE_NEGOTIATION_MODE["full-realtime"],
+} as const;
 
 // A fake WebSocket that captures listeners and exposes helpers to fire them from tests.
 class FakeWebSocket {
@@ -75,6 +85,7 @@ function serverMsg(kind: string, extra: Record<string, unknown> = {}): Record<st
     seq: 0,
     direction: "host-to-client",
     kind,
+    ...(kind === "session.created" ? DEFAULT_SESSION_CREATED_PAYLOAD : {}),
     ...extra,
   };
 }

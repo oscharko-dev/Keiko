@@ -50,6 +50,23 @@ function event(sequence: number): CodingWorkbenchRuntimeSseEvent {
   };
 }
 
+function statusEvent(
+  sequence: number,
+  state: CodingWorkbenchRuntimeSnapshot["state"],
+  revision: number,
+): CodingWorkbenchRuntimeSseEvent {
+  return {
+    schemaVersion: "1",
+    cursor: `cursor-${String(sequence)}`,
+    sequence,
+    occurredAt: UPDATED_AT,
+    kind: "status",
+    runId: "run-1",
+    state,
+    revision,
+  };
+}
+
 function readiness(): CodingWorkbenchRuntimeReadiness {
   return {
     schemaVersion: "1",
@@ -176,6 +193,77 @@ describe("Coding Workbench live state", () => {
 
     expect(next.events).toEqual([]);
     expect(next.stream).toMatchObject({ status: "idle", value: null });
+  });
+
+  it.each(["succeeded", "failed", "cancelled", "taken-over"] as const)(
+    "retains an SSE-observed %s run when global runtime status returns to idle",
+    (terminalState): void => {
+      let state = codingWorkbenchRuntimeReducer(readyState(), {
+        kind: "run-set",
+        snapshot: snapshot({
+          state: "running",
+          pendingPermission: undefined,
+        }),
+      });
+      state = codingWorkbenchRuntimeReducer(state, {
+        kind: "events-received",
+        events: [statusEvent(1, terminalState, 5)],
+      });
+      expect(state.run.value).toMatchObject({ state: terminalState, revision: 5 });
+      state = codingWorkbenchRuntimeReducer(state, {
+        kind: "resource-loading",
+        resource: "run",
+      });
+
+      const next = codingWorkbenchRuntimeReducer(state, {
+        kind: "run-set",
+        snapshot: snapshot({
+          state: "idle",
+          revision: 0,
+          runId: undefined,
+          pendingPermission: undefined,
+        }),
+      });
+
+      expect(next.run).toMatchObject({
+        status: "ready",
+        value: { runId: "run-1", state: terminalState, revision: 5 },
+      });
+      expect(next.events).toEqual([statusEvent(1, terminalState, 5)]);
+      expect(next.canStart).toBe(true);
+
+      const replaced = codingWorkbenchRuntimeReducer(next, {
+        kind: "run-set",
+        snapshot: snapshot({
+          state: "starting",
+          revision: 1,
+          runId: "run-2",
+          pendingPermission: undefined,
+        }),
+      });
+      expect(replaced.run.value).toMatchObject({ runId: "run-2", state: "starting", revision: 1 });
+      expect(replaced.events).toEqual([]);
+    },
+  );
+
+  it("removes recovery acknowledgement when an SSE event settles the run", (): void => {
+    let state = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "run-set",
+      snapshot: snapshot({
+        state: "recovery-required",
+        revision: 6,
+        recoveryAcknowledged: true,
+        pendingPermission: undefined,
+      }),
+    });
+
+    state = codingWorkbenchRuntimeReducer(state, {
+      kind: "events-received",
+      events: [statusEvent(1, "cancelled", 7)],
+    });
+
+    expect(state.run.value).toMatchObject({ state: "cancelled", revision: 7 });
+    expect(state.run.value).not.toHaveProperty("recoveryAcknowledged");
   });
 
   it("enables recovery Retry only after a server-confirmed acknowledgement", () => {

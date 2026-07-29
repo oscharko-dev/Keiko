@@ -66,6 +66,7 @@ describe("requestRealtimeNegotiation", () => {
     };
     expect(DEFAULT_REALTIME_TRANSCRIPTION_MODEL).toBe("gpt-realtime-whisper");
     expect(DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL).toBe("gpt-realtime-whisper");
+    expect(DEFAULT_REALTIME_TRANSCRIPTION_DELAY).toBe("low");
     expect(DEFAULT_REALTIME_VOICE).toBe("alloy");
     expect(REALTIME_VOICES).toContain("alloy");
     expect(DEFAULT_REALTIME_TURN_DETECTION).toEqual({
@@ -143,6 +144,34 @@ describe("requestRealtimeNegotiation", () => {
     expect(multipart).toContain('"model":"keiko-realtime"');
     expect(multipart).not.toContain("instructions");
     expect(multipart).not.toContain("tool_choice");
+  });
+
+  it("uses the input-only realtime session for standard-key live dictation", async () => {
+    let seenBody: BodyInit | null | undefined;
+    const fetchImpl = mockFetch((_url, init) => {
+      seenBody = init.body;
+      return sdp(ANSWER_SDP);
+    });
+
+    const outcome = await requestConfiguredRealtimeNegotiation({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-realtime",
+      sessionType: "transcription",
+      transcriptionLanguage: "en",
+      transcriptionDelay: "low",
+      offerSdp: OFFER_SDP,
+      fetchImpl,
+    });
+
+    expect(outcome).toEqual({ ok: true, value: { answerSdp: ANSWER_SDP } });
+    expect(seenBody).toBeInstanceOf(Blob);
+    const multipart = await (seenBody as Blob).text();
+    expect(multipart).toContain('"type":"realtime"');
+    expect(multipart).toContain('"turn_detection":null');
+    expect(multipart).toContain(`"model":"${CONFIGURED_TRANSCRIPTION_MODEL}","language":"en"`);
+    expect(multipart).not.toContain('"type":"transcription"');
+    expect(multipart).not.toContain('"delay"');
   });
 
   it("supports a custom apiKeyHeaderName (Azure api-key) and url-encodes the model id", async () => {
@@ -376,7 +405,7 @@ describe("requestRealtimeNegotiation", () => {
     });
   });
 
-  it("builds transcription-only ephemeral sessions for live dictation", async () => {
+  it("builds input-only realtime sessions for live dictation", async () => {
     let clientSecretBody = "{}";
     const fetchImpl = mockFetch((url, init) => {
       if (url.endsWith("/realtime/client_secrets")) {
@@ -414,20 +443,20 @@ describe("requestRealtimeNegotiation", () => {
     };
     expect(parsed).toEqual({
       session: {
-        type: "transcription",
+        type: "realtime",
         model: "keiko-realtime",
+        output_modalities: ["audio"],
         audio: {
           input: {
+            turn_detection: null,
             transcription: {
               model: CONFIGURED_TRANSCRIPTION_MODEL,
               language: "en",
-              delay: DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
             },
           },
         },
       },
     });
-    expect(parsed.session.output_modalities).toBeUndefined();
     expect(parsed.session.instructions).toBeUndefined();
     expect(parsed.session.audio.output).toBeUndefined();
     expect(parsed.session.tools).toBeUndefined();
