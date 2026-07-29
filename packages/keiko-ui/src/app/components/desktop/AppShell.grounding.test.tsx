@@ -251,7 +251,12 @@ vi.mock("./install/InstallBanner", () => ({
 
 vi.mock("./widgets", () => ({}));
 
-import { AppShell, GatewaySetupLoading, openOrFocusSearchWindow } from "./AppShell";
+import {
+  AppShell,
+  CHAT_MUTATION_TIMEOUT_MS,
+  GatewaySetupLoading,
+  openOrFocusSearchWindow,
+} from "./AppShell";
 
 const gatewaySetupLoadsAtShellImport = mocks.gatewaySetupDialogModuleLoaded.mock.calls.length;
 
@@ -382,6 +387,7 @@ describe("AppShell grounding connections", () => {
   });
 
   afterEach((): void => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -682,6 +688,41 @@ describe("AppShell grounding connections", () => {
         expect.objectContaining({ root: "/second" }),
       ]),
     );
+  });
+
+  it("compensates a timed-out bind and blocks later mutations", async (): Promise<void> => {
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
+    const persisted = deferred<{ readonly chat: Chat }>();
+    const nextScope = fileScope("/late");
+    const updated = chat({ connectedScopes: [nextScope], updatedAt: 2 });
+    const restored = chat({ connectedScopes: [], updatedAt: 3 });
+    mocks.updateChatConnectedScopes
+      .mockReturnValueOnce(persisted.promise)
+      .mockResolvedValueOnce({ chat: restored });
+    await renderMounted();
+    vi.useFakeTimers();
+
+    const binding = Promise.resolve(
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", nextScope),
+    );
+    await vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS);
+
+    await expect(binding).resolves.toBe(false);
+    await expect(
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/blocked")),
+    ).resolves.toBe(false);
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce();
+
+    await act(async (): Promise<void> => {
+      persisted.resolve({ chat: updated });
+      await persisted.promise;
+    });
+
+    expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(2, "chat-1", null);
+    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalledWith(updated);
+    expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalledWith("chat-1", "/late");
+    expect(reportError).toHaveBeenCalledTimes(2);
   });
 
   it("surfaces a distinct diagnostic when stale-bind compensation fails", async (): Promise<void> => {

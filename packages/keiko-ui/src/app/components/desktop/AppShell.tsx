@@ -357,7 +357,11 @@ interface ChatMutationQueue {
   readonly tails: Map<string, Promise<void>>;
 }
 
-const CHAT_MUTATION_TIMEOUT_MS = 15_000;
+interface ChatMutationAttempt {
+  readonly isCurrent: () => boolean;
+}
+
+export const CHAT_MUTATION_TIMEOUT_MS = 15_000;
 
 function reportChatBindingCompensationFailure(): void {
   const correlationId = newClientCorrelationId();
@@ -373,16 +377,17 @@ function reportGroundingMutationFailure(message: string): void {
 
 async function persistCurrentChatBinding<T>(
   target: ChatBindingTarget | undefined,
+  attempt: ChatMutationAttempt,
   chatId: string,
   previous: readonly T[],
   next: readonly T[],
   persist: (id: string, scopes: readonly T[] | null) => Promise<{ readonly chat: Chat }>,
   remember: (chat: Chat) => void,
 ): Promise<Chat | undefined> {
-  if (target !== undefined && !target.isCurrent()) return undefined;
+  if (!attempt.isCurrent() || (target !== undefined && !target.isCurrent())) return undefined;
   const response = await persist(chatId, next);
   remember(response.chat);
-  if (target === undefined || target.isCurrent()) return response.chat;
+  if (attempt.isCurrent() && (target === undefined || target.isCurrent())) return response.chat;
   try {
     const compensation = await persist(chatId, previous.length > 0 ? previous : null);
     remember(compensation.chat);
@@ -392,16 +397,20 @@ async function persistCurrentChatBinding<T>(
   return undefined;
 }
 
-async function mutationWithTimeout<T>(mutation: () => Promise<T>): Promise<T> {
+async function mutationWithTimeout<T>(
+  mutation: (attempt: ChatMutationAttempt) => Promise<T>,
+): Promise<T> {
   let timeoutId: number | undefined;
+  let current = true;
+  const attempt: ChatMutationAttempt = { isCurrent: (): boolean => current };
   const timeout = new Promise<never>((_resolve, reject): void => {
-    timeoutId = window.setTimeout(
-      (): void => reject(new ChatMutationTimeoutFailure()),
-      CHAT_MUTATION_TIMEOUT_MS,
-    );
+    timeoutId = window.setTimeout((): void => {
+      current = false;
+      reject(new ChatMutationTimeoutFailure());
+    }, CHAT_MUTATION_TIMEOUT_MS);
   });
   try {
-    return await Promise.race([mutation(), timeout]);
+    return await Promise.race([mutation(attempt), timeout]);
   } finally {
     if (timeoutId !== undefined) window.clearTimeout(timeoutId);
   }
@@ -410,7 +419,7 @@ async function mutationWithTimeout<T>(mutation: () => Promise<T>): Promise<T> {
 async function serializeChatMutation<T>(
   queue: ChatMutationQueue,
   chatKey: string,
-  mutation: () => Promise<T>,
+  mutation: (attempt: ChatMutationAttempt) => Promise<T>,
 ): Promise<T> {
   if (queue.blocked.has(chatKey)) throw new ChatMutationQueueBlockedFailure();
   const preceding = queue.tails.get(chatKey) ?? Promise.resolve();
@@ -745,6 +754,7 @@ function AppShellInner(): ReactNode {
       chatWindowId: string,
       nextScope: ChatConnectedScope,
       previousScope: ChatConnectedScope | null = null,
+      attempt: ChatMutationAttempt,
       target?: ChatBindingTarget,
     ): Promise<boolean> => {
       const chat = chatForWindow(chatWindowId);
@@ -780,6 +790,7 @@ function AppShellInner(): ReactNode {
       try {
         const persisted = await persistCurrentChatBinding(
           target,
+          attempt,
           chat.id,
           current,
           next,
@@ -838,8 +849,8 @@ function AppShellInner(): ReactNode {
         return await serializeChatMutation(
           groundingMutationQueueRef.current,
           groundingMutationKey(chatWindowId, target),
-          async (): Promise<boolean> =>
-            replaceFilesScopeNow(chatWindowId, nextScope, previousScope, target),
+          async (attempt): Promise<boolean> =>
+            replaceFilesScopeNow(chatWindowId, nextScope, previousScope, attempt, target),
         );
       } catch {
         reportGroundingMutationFailure("Chat grounding mutation timed out.");
@@ -889,6 +900,7 @@ function AppShellInner(): ReactNode {
     async (
       chatWindowId: string,
       scope: ChatLocalKnowledgeScope,
+      attempt: ChatMutationAttempt,
       target?: ChatBindingTarget,
     ): Promise<boolean> => {
       const chat = chatForWindow(chatWindowId);
@@ -911,6 +923,7 @@ function AppShellInner(): ReactNode {
       try {
         const persisted = await persistCurrentChatBinding(
           target,
+          attempt,
           chat.id,
           current,
           next,
@@ -957,7 +970,8 @@ function AppShellInner(): ReactNode {
         return await serializeChatMutation(
           groundingMutationQueueRef.current,
           groundingMutationKey(chatWindowId, target),
-          async (): Promise<boolean> => handleConnectorBindNow(chatWindowId, scope, target),
+          async (attempt): Promise<boolean> =>
+            handleConnectorBindNow(chatWindowId, scope, attempt, target),
         );
       } catch {
         reportGroundingMutationFailure("Chat grounding mutation timed out.");
