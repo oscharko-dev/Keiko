@@ -852,9 +852,16 @@ function AppShellInner(): ReactNode {
           async (attempt): Promise<boolean> =>
             replaceFilesScopeNow(chatWindowId, nextScope, previousScope, attempt, target),
         );
-      } catch {
-        reportGroundingMutationFailure("Chat grounding mutation timed out.");
-        return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
+      } catch (error: unknown) {
+        if (
+          error instanceof ChatMutationTimeoutFailure ||
+          error instanceof ChatMutationQueueBlockedFailure
+        ) {
+          reportGroundingMutationFailure("Chat grounding mutation timed out.");
+          return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
+        }
+        reportGroundingMutationFailure("Chat grounding mutation failed.");
+        return rejectForConnectionFailure(t("chat.grounding.connectSourceFailed"));
       }
     },
     [groundingMutationKey, rejectForConnectionFailure, replaceFilesScopeNow, t],
@@ -973,9 +980,16 @@ function AppShellInner(): ReactNode {
           async (attempt): Promise<boolean> =>
             handleConnectorBindNow(chatWindowId, scope, attempt, target),
         );
-      } catch {
-        reportGroundingMutationFailure("Chat grounding mutation timed out.");
-        return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
+      } catch (error: unknown) {
+        if (
+          error instanceof ChatMutationTimeoutFailure ||
+          error instanceof ChatMutationQueueBlockedFailure
+        ) {
+          reportGroundingMutationFailure("Chat grounding mutation timed out.");
+          return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
+        }
+        reportGroundingMutationFailure("Chat grounding mutation failed.");
+        return rejectForConnectionFailure(t("chat.grounding.connectKnowledgeFailed"));
       }
     },
     [groundingMutationKey, handleConnectorBindNow, rejectForConnectionFailure, t],
