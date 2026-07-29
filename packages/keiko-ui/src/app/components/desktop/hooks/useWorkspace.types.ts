@@ -29,6 +29,11 @@ export interface OpenEditorFileRequest {
   readonly lineEnd?: number | undefined;
 }
 
+export interface ChatBindingTarget {
+  readonly conversationId: string | undefined;
+  readonly isCurrent: () => boolean;
+}
+
 export type OpenEditorFileResult =
   | { readonly ok: true; readonly windowId: string }
   | { readonly ok: false; readonly message: string };

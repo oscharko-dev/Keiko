@@ -18,13 +18,20 @@ interface WorkspaceHookOptions {
   readonly onScopeBind?: (
     chatWindowId: string,
     scope: ChatConnectedScope,
+    target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
   readonly onScopeUnbind?: (chatWindowId: string, scope: ChatConnectedScope) => void;
   readonly onConnectorBind?: (
     chatWindowId: string,
     scope: ChatLocalKnowledgeScope,
+    target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
   readonly onConnectorUnbind?: (chatWindowId: string, scope: ChatLocalKnowledgeScope) => void;
+}
+
+interface ChatBindingTarget {
+  readonly conversationId: string | undefined;
+  readonly isCurrent: () => boolean;
 }
 
 interface TestSession {
@@ -346,6 +353,17 @@ function capsuleScope(id: string): ChatLocalKnowledgeScope {
   return { kind: "capsule", capsuleId: id as never, connectedAtMs: 1 };
 }
 
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((innerResolve): void => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
+}
+
 async function renderMounted(): Promise<void> {
   render(<AppShell />);
   await screen.findByTestId("workspace");
@@ -565,6 +583,33 @@ describe("AppShell grounding connections", () => {
     expect(document.querySelector(".source-limit-alert")).toBeNull();
   });
 
+  it("compensates a Files bind when its chat ownership changes in flight", async (): Promise<void> => {
+    const persisted = deferred<{ readonly chat: Chat }>();
+    const updated = chat({ connectedScopes: [fileScope("/repo")] });
+    const restored = chat({ connectedScopes: [] });
+    mocks.updateChatConnectedScopes
+      .mockReturnValueOnce(persisted.promise)
+      .mockResolvedValueOnce({ chat: restored });
+    await renderMounted();
+    let current = true;
+    const target: ChatBindingTarget = {
+      conversationId: "chat-1",
+      isCurrent: (): boolean => current,
+    };
+
+    const binding = Promise.resolve(
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/repo"), target),
+    );
+    await waitFor((): void => expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce());
+    current = false;
+    persisted.resolve({ chat: updated });
+
+    await expect(binding).resolves.toBe(false);
+    expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(2, "chat-1", null);
+    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
+    expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalled();
+  });
+
   // GEN-PERF-RENDER-001 — the four scope-bind callbacks passed to useWorkspace depend on the stable
   // `session.replaceChat` slice, not the whole `session` object. So when the session's identity
   // changes (as it does on every draft/streaming state change) but replaceChat stays stable, the
@@ -716,6 +761,36 @@ describe("AppShell grounding connections", () => {
       expect.arrayContaining([expect.objectContaining({ capsuleId: "cap-b" })]),
     );
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(updated);
+  });
+
+  it("compensates a connector bind when its chat ownership changes in flight", async (): Promise<void> => {
+    const persisted = deferred<{ readonly chat: Chat }>();
+    const updated = chat({ localKnowledgeScopes: [capsuleScope("cap-stale")] });
+    const restored = chat({ localKnowledgeScopes: [] });
+    mocks.updateChatLocalKnowledgeScopes
+      .mockReturnValueOnce(persisted.promise)
+      .mockResolvedValueOnce({ chat: restored });
+    await renderMounted();
+    let current = true;
+    const target: ChatBindingTarget = {
+      conversationId: "chat-1",
+      isCurrent: (): boolean => current,
+    };
+
+    const binding = Promise.resolve(
+      mocks.state.workspaceOptions?.onConnectorBind?.(
+        "chat-window",
+        capsuleScope("cap-stale"),
+        target,
+      ),
+    );
+    await waitFor((): void => expect(mocks.updateChatLocalKnowledgeScopes).toHaveBeenCalledOnce());
+    current = false;
+    persisted.resolve({ chat: updated });
+
+    await expect(binding).resolves.toBe(false);
+    expect(mocks.updateChatLocalKnowledgeScopes).toHaveBeenNthCalledWith(2, "chat-1", null);
+    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
   });
 
   it("hides both side rails while the first-run gateway setup is open", async () => {

@@ -16,6 +16,7 @@ import {
   serializeEditorLayoutStateV2,
 } from "@oscharko-dev/keiko-contracts";
 import type {
+  ChatBindingTarget,
   FilesWindowContext,
   OpenEditorFileResult,
   ViewportWorld,
@@ -889,13 +890,22 @@ interface ConnectArgs {
   // Release 0.2.0 — the bind callback returns whether the bind was ACCEPTED; `false` (e.g. the
   // per-chat source limit is reached) vetoes the edge so no dangling ungrounded edge is drawn.
   readonly onScopeBind?:
-    ((chatWindowId: string, scope: ChatConnectedScope) => boolean | Promise<boolean>) | undefined;
+    | ((
+        chatWindowId: string,
+        scope: ChatConnectedScope,
+        target?: ChatBindingTarget,
+      ) => boolean | Promise<boolean>)
+    | undefined;
   readonly onScopeUnbind?: ((chatWindowId: string, scope: ChatConnectedScope) => void) | undefined;
   // Epic #189 Slice 3 M3 — invoked when a Connector↔Chat relationship edge is created/removed,
   // with the selected ChatLocalKnowledgeScope from the connector window's cfg. The composition
   // root (AppShell) appends/removes it from the active chat's localKnowledgeScopes.
   readonly onConnectorBind?:
-    | ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => boolean | Promise<boolean>)
+    | ((
+        chatWindowId: string,
+        scope: ChatLocalKnowledgeScope,
+        target?: ChatBindingTarget,
+      ) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorUnbind?:
     ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void) | undefined;
@@ -915,6 +925,18 @@ function chatConversationId(win: AppWindow | undefined): string | undefined {
   if (win?.type !== "chat") return undefined;
   const chatId = win.cfg["chatId"];
   return typeof chatId === "string" && chatId.length > 0 ? chatId : undefined;
+}
+
+function chatBindingTarget(
+  chatWindowId: string | null,
+  conversationId: string | undefined,
+  winById: (id: string) => AppWindow | undefined,
+): ChatBindingTarget | undefined {
+  if (chatWindowId === null) return undefined;
+  return {
+    conversationId,
+    isCurrent: (): boolean => chatConversationId(winById(chatWindowId)) === conversationId,
+  };
 }
 
 /** The id of the endpoint on the other side of `c` from `id`, or null when `id` isn't in `c`. */
@@ -940,14 +962,15 @@ function resolveBindAcceptance(
   connectorScope: ChatLocalKnowledgeScope | null,
   onScopeBind: ConnectArgs["onScopeBind"],
   onConnectorBind: ConnectArgs["onConnectorBind"],
+  target: ChatBindingTarget | undefined,
 ): boolean | Promise<boolean> {
   try {
     if (boundScope !== null && chatWindowId !== null) {
-      return onScopeBind?.(chatWindowId, boundScope) ?? true;
+      return onScopeBind?.(chatWindowId, boundScope, target) ?? true;
     }
     if (connectorScope !== null) {
       if (chatWindowId === null) return false;
-      return onConnectorBind?.(chatWindowId, connectorScope) ?? true;
+      return onConnectorBind?.(chatWindowId, connectorScope, target) ?? true;
     }
     return true;
   } catch {
@@ -1250,12 +1273,14 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
         boundScope !== null || connectorScope !== null ? chatWindowIdInPair(from, to) : null;
       const chatConversationIdAtBind =
         chatWindowId === null ? undefined : chatConversationId(winById(chatWindowId));
+      const bindingTarget = chatBindingTarget(chatWindowId, chatConversationIdAtBind, winById);
       const accepted = resolveBindAcceptance(
         chatWindowId,
         boundScope,
         connectorScope,
         onScopeBind,
         onConnectorBind,
+        bindingTarget,
       );
       void Promise.resolve(accepted)
         .then((wasAccepted) =>

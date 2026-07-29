@@ -474,6 +474,14 @@ function useChatCreationLifetime(stateRef: { readonly current: ChatCreationAttem
   return mountedRef;
 }
 
+function useIdentityRevision(identity: object): number {
+  const stateRef = useRef({ identity, revision: 0 });
+  if (stateRef.current.identity !== identity) {
+    stateRef.current = { identity, revision: stateRef.current.revision + 1 };
+  }
+  return stateRef.current.revision;
+}
+
 function applyChatCreationResult(
   execution: ChatCreationRequestExecution,
   result: ChatCreationResult,
@@ -545,7 +553,10 @@ function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationCont
   } = args;
   const [error, setError] = useState<ChatCreationError | null>(null);
   const pending = chatId === undefined && selectionHandoffId === undefined;
-  const requestId = pending ? (newChatRequestId ?? "initial-unbound-chat") : undefined;
+  const coordinatorRevision = useIdentityRevision(coordinator);
+  const requestId = pending
+    ? (newChatRequestId ?? `initial-unbound-chat-${String(coordinatorRevision)}`)
+    : undefined;
   const projectPath = activeProject?.path ?? null;
   const requestKey = requestId === undefined ? undefined : `${requestId}\u0000${projectPath ?? ""}`;
   const attemptStateRef = useRef<ChatCreationAttemptState>({

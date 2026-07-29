@@ -51,7 +51,7 @@ import type {
   GroundingLimits,
 } from "@/lib/types";
 import { recordReadsContextRelationship } from "../../relationships/connector-relationship";
-import type { WorkspaceApi } from "./hooks/useWorkspace.types";
+import type { ChatBindingTarget, WorkspaceApi } from "./hooks/useWorkspace.types";
 import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import type { WorkspaceUiAction, WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
@@ -347,6 +347,20 @@ function chatIdFromWindow(win: AppWindow | undefined): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+async function persistCurrentChatBinding<T>(
+  target: ChatBindingTarget | undefined,
+  chatId: string,
+  previous: readonly T[],
+  next: readonly T[],
+  persist: (id: string, scopes: readonly T[] | null) => Promise<{ readonly chat: Chat }>,
+): Promise<Chat | undefined> {
+  if (target !== undefined && !target.isCurrent()) return undefined;
+  const response = await persist(chatId, next);
+  if (target === undefined || target.isCurrent()) return response.chat;
+  await persist(chatId, previous.length > 0 ? previous : null);
+  return undefined;
+}
+
 function isConversationGroundingConnection(
   connection: Connection,
   chatWindowId: string,
@@ -637,11 +651,14 @@ function AppShellInner(): ReactNode {
       chatWindowId: string,
       nextScope: ChatConnectedScope,
       previousScope: ChatConnectedScope | null = null,
+      target?: ChatBindingTarget,
     ): Promise<boolean> => {
+      if (target !== undefined && !target.isCurrent()) return false;
       const chat = chatForWindow(chatWindowId);
       if (chat === undefined) {
         return rejectForConnectionFailure("Open a ready chat window before connecting a source.");
       }
+      if (target !== undefined && chat.id !== target.conversationId) return false;
       const current =
         previousScope === null
           ? effectiveScopes(chat)
@@ -667,8 +684,15 @@ function AppShellInner(): ReactNode {
         return rejectForLimit(current.length + lkScopes.length, cap);
       }
       try {
-        const res = await updateChatConnectedScopes(chat.id, next);
-        session.replaceChat(res.chat);
+        const persisted = await persistCurrentChatBinding(
+          target,
+          chat.id,
+          current,
+          next,
+          updateChatConnectedScopes,
+        );
+        if (persisted === undefined) return false;
+        session.replaceChat(persisted);
         setSourceConnectionNotice(null);
         // Epic #532 unification — also record the green edge as a governed reads-context
         // relationship so the connection is validated, audited, and visible in the relationship
@@ -698,8 +722,11 @@ function AppShellInner(): ReactNode {
     ],
   );
   const handleScopeBind = useCallback(
-    async (chatWindowId: string, scope: ChatConnectedScope): Promise<boolean> =>
-      replaceFilesScope(chatWindowId, scope),
+    async (
+      chatWindowId: string,
+      scope: ChatConnectedScope,
+      target?: ChatBindingTarget,
+    ): Promise<boolean> => replaceFilesScope(chatWindowId, scope, null, target),
     [replaceFilesScope],
   );
   const handleScopeUnbind = useCallback(
@@ -724,11 +751,17 @@ function AppShellInner(): ReactNode {
   // Release 0.2.0 — same accepted/veto contract as handleScopeBind: at the source limit the
   // bind is rejected with a visible notice instead of silently evicting the oldest source.
   const handleConnectorBind = useCallback(
-    async (chatWindowId: string, scope: ChatLocalKnowledgeScope): Promise<boolean> => {
+    async (
+      chatWindowId: string,
+      scope: ChatLocalKnowledgeScope,
+      target?: ChatBindingTarget,
+    ): Promise<boolean> => {
+      if (target !== undefined && !target.isCurrent()) return false;
       const chat = chatForWindow(chatWindowId);
       if (chat === undefined) {
         return rejectForConnectionFailure("Open a ready chat window before connecting a source.");
       }
+      if (target !== undefined && chat.id !== target.conversationId) return false;
       const current = effectiveLocalKnowledgeScopes(chat);
       const folderScopes = effectiveScopes(chat);
       if (isConnectorScopeConnected(current, scope)) return true;
@@ -742,8 +775,15 @@ function AppShellInner(): ReactNode {
         return rejectForLimit(folderScopes.length + current.length, cap);
       }
       try {
-        const res = await updateChatLocalKnowledgeScopes(chat.id, next);
-        session.replaceChat(res.chat);
+        const persisted = await persistCurrentChatBinding(
+          target,
+          chat.id,
+          current,
+          next,
+          updateChatLocalKnowledgeScopes,
+        );
+        if (persisted === undefined) return false;
+        session.replaceChat(persisted);
         setSourceConnectionNotice(null);
         return true;
       } catch {

@@ -42,6 +42,7 @@ import type { AppWindow, Connection, ConnectingState, View } from "../windows/ty
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
+import type { ChatBindingTarget } from "./useWorkspace.types";
 
 function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-1`): AppWindow {
   return { id, type, x: 0, y: 0, w: 10, h: 10, z: 1, cfg, max: false };
@@ -422,11 +423,13 @@ interface ConnectHarnessOverrides {
   readonly onScopeBind?: (
     chatWindowId: string,
     scope: ChatConnectedScope,
+    target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
   readonly onScopeUnbind?: (chatWindowId: string, scope: ChatConnectedScope) => void;
   readonly onConnectorBind?: (
     chatWindowId: string,
     scope: ChatLocalKnowledgeScope,
+    target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
   readonly onConnectorUnbind?: (chatWindowId: string, scope: ChatLocalKnowledgeScope) => void;
 }
@@ -2447,6 +2450,7 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
   it("discards an accepted edge when the chat changed before the bind settled", async (): Promise<void> => {
     const store = { conns: [] as Connection[] };
     const chatCfg: AppWindow["cfg"] = { chatId: "chat-old" };
+    let observedTarget: ChatBindingTarget | undefined;
     let resolveBind!: (accepted: boolean) => void;
     const acceptance = new Promise<boolean>((resolve): void => {
       resolveBind = resolve;
@@ -2457,12 +2461,18 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
       {
         connecting: { from: "files-1", x: 0, y: 0 },
         setConns: collectingSetConns(store),
-        onScopeBind: (): Promise<boolean> => acceptance,
+        onScopeBind: (_chatWindowId, _scope, target): Promise<boolean> => {
+          observedTarget = target;
+          return acceptance;
+        },
       },
     );
 
     harness.confirmConnect("chat-1", evt);
+    expect(observedTarget?.conversationId).toBe("chat-old");
+    expect(observedTarget?.isCurrent()).toBe(true);
     chatCfg["chatId"] = "chat-new";
+    expect(observedTarget?.isCurrent()).toBe(false);
     resolveBind(true);
     await acceptance;
     await flushAsyncBind();

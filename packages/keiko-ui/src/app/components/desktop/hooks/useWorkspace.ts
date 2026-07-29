@@ -16,7 +16,12 @@ import type { SnapZone } from "../windows/connectionUtils";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
 import { clampWorkspaceWindowOrigin } from "../windowRecovery";
-import type { UseWorkspaceResult, ViewportWorld, WorkspaceApi } from "./useWorkspace.types";
+import type {
+  ChatBindingTarget,
+  UseWorkspaceResult,
+  ViewportWorld,
+  WorkspaceApi,
+} from "./useWorkspace.types";
 import {
   parsePersistedConnections,
   parsePersistedWindows,
@@ -1533,10 +1538,19 @@ function useConnectionPrune(
 export interface UseWorkspaceOptions {
   readonly cameraSmoothness?: number | undefined;
   readonly onScopeBind?:
-    ((chatWindowId: string, scope: ChatConnectedScope) => boolean | Promise<boolean>) | undefined;
+    | ((
+        chatWindowId: string,
+        scope: ChatConnectedScope,
+        target?: ChatBindingTarget,
+      ) => boolean | Promise<boolean>)
+    | undefined;
   readonly onScopeUnbind?: ((chatWindowId: string, scope: ChatConnectedScope) => void) | undefined;
   readonly onConnectorBind?:
-    | ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => boolean | Promise<boolean>)
+    | ((
+        chatWindowId: string,
+        scope: ChatLocalKnowledgeScope,
+        target?: ChatBindingTarget,
+      ) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorUnbind?:
     ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void) | undefined;
@@ -1636,16 +1650,23 @@ export function useWorkspace(
   const onConnectorUnbindRef = useRef(onConnectorUnbind);
   onConnectorUnbindRef.current = onConnectorUnbind;
   const stableScopeBind = useCallback(
-    (chatWindowId: string, scope: ChatConnectedScope): boolean | Promise<boolean> =>
-      onScopeBindRef.current?.(chatWindowId, scope) ?? true,
+    (
+      chatWindowId: string,
+      scope: ChatConnectedScope,
+      target?: ChatBindingTarget,
+    ): boolean | Promise<boolean> => onScopeBindRef.current?.(chatWindowId, scope, target) ?? true,
     [],
   );
   const stableScopeUnbind = useCallback((chatWindowId: string, scope: ChatConnectedScope): void => {
     onScopeUnbindRef.current?.(chatWindowId, scope);
   }, []);
   const stableConnectorBind = useCallback(
-    (chatWindowId: string, scope: ChatLocalKnowledgeScope): boolean | Promise<boolean> =>
-      onConnectorBindRef.current?.(chatWindowId, scope) ?? true,
+    (
+      chatWindowId: string,
+      scope: ChatLocalKnowledgeScope,
+      target?: ChatBindingTarget,
+    ): boolean | Promise<boolean> =>
+      onConnectorBindRef.current?.(chatWindowId, scope, target) ?? true,
     [],
   );
   const stableConnectorUnbind = useCallback(

@@ -64,6 +64,7 @@ const chatSessionState = vi.hoisted(() => ({
   openNewChat: vi.fn(async (): Promise<Chat | undefined> => undefined),
   replaceChat: vi.fn((_chat: Chat): void => undefined),
 }));
+const defaultOpenNewChat = chatSessionState.openNewChat;
 
 vi.mock("../context/ChatSessionContext", (): object => ({
   useChatSessionContext: (): typeof chatSessionState => chatSessionState,
@@ -240,6 +241,7 @@ afterEach(() => {
   editorProps.length = 0;
   editorHandlers.length = 0;
   manifestRef.current = null;
+  chatSessionState.openNewChat = defaultOpenNewChat;
   chatSessionState.activeChat = undefined;
   chatSessionState.activeProject = undefined;
   chatSessionState.chats = [];
@@ -577,6 +579,35 @@ describe("ChatWindowSessionHost target missing", () => {
     expect((reported as Error).message).toBe("Chat creation request failed.");
     expect((reported as Error).message).not.toContain("customer-chat-creation-detail");
     expect((reported as Error).message).not.toContain("Sensitive title");
+  });
+
+  it("retries an initial unbound chat when creation capability recovers", async (): Promise<void> => {
+    const created = chatFixture("chat-recovered", "Recovered chat", 2);
+    defaultOpenNewChat.mockResolvedValueOnce(undefined);
+    const ctx = context();
+    const view = render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{}} ctx={ctx} />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not open chat.");
+    expect(defaultOpenNewChat).toHaveBeenCalledOnce();
+
+    const recoveredOpenNewChat = vi.fn(async (): Promise<Chat | undefined> => created);
+    chatSessionState.openNewChat = recoveredOpenNewChat;
+    view.rerender(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{}} ctx={ctx} />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void => expect(recoveredOpenNewChat).toHaveBeenCalledOnce());
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: created.id,
+      title: created.title,
+      newChatRequestId: undefined,
+    });
   });
 
   it("creates and binds one canonical chat while the old composer stays unavailable", async (): Promise<void> => {
