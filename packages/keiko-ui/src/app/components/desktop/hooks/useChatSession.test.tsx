@@ -338,7 +338,7 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.messages[0]?.id).toBe("created-msg");
   });
 
-  it("returns a persisted chat without replacing a project selected during creation", async () => {
+  it("returns a persisted chat without replacing a project selected during creation", async (): Promise<void> => {
     const created = chat({
       id: "chat-created-in-background",
       projectPath: "/repo",
@@ -357,16 +357,16 @@ describe("useChatSession bootstrap", () => {
     vi.mocked(createDesktopChat).mockReturnValueOnce(creation.promise);
 
     const { result } = renderHook(() => useChatSession({ autoCreate: false }));
-    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor((): void => expect(result.current.loading).toBe(false));
 
     let creationPromise: Promise<Chat | undefined>;
-    act(() => {
+    act((): void => {
       creationPromise = result.current.openNewChat(project("/repo"), created.title);
     });
-    await act(async () => {
+    await act(async (): Promise<void> => {
       await result.current.openProject(project("/other"));
     });
-    await act(async () => {
+    await act(async (): Promise<void> => {
       creation.resolve({
         chat: created,
         project: project("/repo"),

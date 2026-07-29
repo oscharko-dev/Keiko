@@ -108,6 +108,31 @@ describe("ChatHistoryPanel", () => {
     expect(replaceChat).toHaveBeenCalledWith({ ...chat, status: "closed" });
   });
 
+  it("does not open a chat persisted for a project that is no longer active", async () => {
+    const backgroundChat = makeChat({ id: "chat-background", projectPath: "/repo" });
+    const openNewChat = vi.fn(async (): Promise<Chat | undefined> => backgroundChat);
+    const openChatWindow = vi.fn();
+    const activeProject = {
+      path: "/other",
+      name: "other",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 2,
+      available: true,
+    };
+    const user = userEvent.setup();
+    render(
+      <ChatSessionProvider value={makeSession({ activeProject, openNewChat })}>
+        <ChatHistoryPanel openChatWindow={openChatWindow} />
+      </ChatSessionProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "New" }));
+
+    await waitFor((): void => expect(openNewChat).toHaveBeenCalledOnce());
+    expect(openChatWindow).not.toHaveBeenCalled();
+  });
+
   it("keeps the active tab selected after deleting a chat", async () => {
     const chat = makeChat();
     vi.mocked(updateChat).mockResolvedValueOnce({ chat: { ...chat, status: "closed" } });

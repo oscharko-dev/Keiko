@@ -383,6 +383,7 @@ describe("AppShell grounding connections", () => {
 
   afterEach((): void => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   beforeEach(() => {
@@ -648,6 +649,36 @@ describe("AppShell grounding connections", () => {
     expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
     expect(mocks.updateChatLocalKnowledgeScopes).not.toHaveBeenCalled();
     expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a distinct diagnostic when stale-bind compensation fails", async (): Promise<void> => {
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
+    const persisted = deferred<{ readonly chat: Chat }>();
+    mocks.updateChatConnectedScopes
+      .mockReturnValueOnce(persisted.promise)
+      .mockRejectedValueOnce(new Error("customer-compensation-detail"));
+    await renderMounted();
+    let current = true;
+    const target: ChatBindingTarget = {
+      conversationId: "chat-1",
+      isCurrent: (): boolean => current,
+    };
+
+    const binding = Promise.resolve(
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/repo"), target),
+    );
+    await waitFor((): void => expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce());
+    current = false;
+    persisted.resolve({ chat: chat({ connectedScopes: [fileScope("/repo")] }) });
+
+    await expect(binding).resolves.toBe(false);
+    expect(await screen.findByText(/Chat grounding recovery failed/u)).toBeInTheDocument();
+    const reported = reportError.mock.calls[0]?.[0];
+    expect((reported as Error).message).toMatch(
+      /^Chat binding compensation failed\. Correlation ID: [A-Za-z0-9._-]{8,128}$/,
+    );
+    expect((reported as Error).message).not.toContain("customer-compensation-detail");
   });
 
   // GEN-PERF-RENDER-001 — the four scope-bind callbacks passed to useWorkspace depend on the stable

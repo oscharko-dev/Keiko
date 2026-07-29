@@ -42,6 +42,7 @@ import {
   totalSourceCap,
 } from "./hooks/workspaceActions";
 import { fetchConfig, updateChatConnectedScopes, updateChatLocalKnowledgeScopes } from "@/lib/api";
+import { newClientCorrelationId } from "@/lib/http";
 import { I18nProvider, useTranslate } from "@/lib/i18n";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type {
@@ -347,6 +348,15 @@ function chatIdFromWindow(win: AppWindow | undefined): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+class ChatBindingCompensationFailure extends Error {}
+
+function reportChatBindingCompensationFailure(): void {
+  const correlationId = newClientCorrelationId();
+  window.reportError(
+    new Error(`Chat binding compensation failed. Correlation ID: ${correlationId}`),
+  );
+}
+
 async function persistCurrentChatBinding<T>(
   target: ChatBindingTarget | undefined,
   chatId: string,
@@ -357,7 +367,11 @@ async function persistCurrentChatBinding<T>(
   if (target !== undefined && !target.isCurrent()) return undefined;
   const response = await persist(chatId, next);
   if (target === undefined || target.isCurrent()) return response.chat;
-  await persist(chatId, previous.length > 0 ? previous : null);
+  try {
+    await persist(chatId, previous.length > 0 ? previous : null);
+  } catch {
+    throw new ChatBindingCompensationFailure();
+  }
   return undefined;
 }
 
@@ -723,7 +737,13 @@ function AppShellInner(): ReactNode {
         const relationshipPath = relationshipPathForScope(scope);
         if (relationshipPath !== null) recordReadsContextRelationship(chat.id, relationshipPath);
         return true;
-      } catch {
+      } catch (error: unknown) {
+        if (error instanceof ChatBindingCompensationFailure) {
+          reportChatBindingCompensationFailure();
+          return rejectForConnectionFailure(
+            "Chat grounding recovery failed. Reload the chat before connecting another source.",
+          );
+        }
         return rejectForConnectionFailure(
           "Keiko could not connect that source. Check that it is still available and try again.",
         );
@@ -829,7 +849,13 @@ function AppShellInner(): ReactNode {
         session.replaceChat(persisted);
         setSourceConnectionNotice(null);
         return true;
-      } catch {
+      } catch (error: unknown) {
+        if (error instanceof ChatBindingCompensationFailure) {
+          reportChatBindingCompensationFailure();
+          return rejectForConnectionFailure(
+            "Chat grounding recovery failed. Reload the chat before connecting another source.",
+          );
+        }
         return rejectForConnectionFailure(
           "Keiko could not connect that knowledge source. Check that it is still available and try again.",
         );
