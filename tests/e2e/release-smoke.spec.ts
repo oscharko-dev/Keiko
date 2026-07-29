@@ -252,10 +252,11 @@ async function openSmokeEditor(
     name: /Editor.*packages\/keiko-cli\/src\/run\.ts/u,
   });
   await expect(editorWindow.locator(".monaco-editor")).toBeVisible();
-  const trustDialog = editorWindow.getByRole("alertdialog", { name: "Trust this workspace?" });
-  await expect(trustDialog).toBeVisible();
-  await trustDialog.getByRole("button", { name: "Trust workspace" }).click();
-  await expect(trustDialog).toBeHidden();
+  // Creating the selected project is the local human's trust act. The Editor must not ask for
+  // duplicate workspace trust after that folder has already been accepted.
+  await expect(
+    editorWindow.getByRole("alertdialog", { name: "Trust this workspace?" }),
+  ).toHaveCount(0);
   await filesWindow.getByRole("button", { name: "Close Files window" }).click();
   await expect(filesWindow).toBeHidden();
   return editorWindow;
@@ -275,6 +276,13 @@ test("app start exposes the workspace shell and health endpoint @smoke", async (
   await expect(
     page.getByRole("navigation", { name: "Primary workspace navigation" }),
   ).toBeVisible();
+  // The workspace selector is intentionally a post-hydration chunk so it stays out of the
+  // first-load budget. Its trigger must still become interactive on the real app path.
+  const workspaceSelector = page.getByRole("button", { name: /workspace context/i });
+  await expect(workspaceSelector).toBeVisible();
+  await workspaceSelector.click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
   await expect(page.getByText("Keiko").first()).toBeVisible();
   await expect(page.locator(".header .hd-tool-cta")).toHaveCount(0);
   await expect(page.getByLabel(/Keiko version/u)).toBeVisible();
@@ -393,16 +401,13 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   assertNoPageErrors();
 });
 
-test("arbitrary folder opening keeps root-relative ids with clear error and empty states @smoke", async ({
+test("selected workspace keeps root-relative ids and internal navigation @smoke", async ({
   page,
 }) => {
-  // Issue #1374: opening an arbitrary developer workspace must keep every file identifier
-  // ROOT-RELATIVE (never an absolute path that the BFF rejects with 400 BAD_PATH), support parent
-  // navigation, and render clear non-blocking states for unavailable and empty roots without
-  // breaking the app. The temp fixture stands in for a project root (the local worktree path itself
-  // contains a deny-listed `.claude` segment, so it cannot be opened as a root).
+  // The global workspace selector is the one root authority for Files, Editor, and Coding
+  // Workbench. Files still supports in-root navigation and root-relative identifiers, but it does
+  // not expose a second path picker that could appear to override the accepted workspace.
   const projectPath = createProjectFixture();
-  mkdirSync(join(projectPath, "empty-folder"), { recursive: true });
   await seedFilesWindow(page, projectPath);
   const assertNoPageErrors = collectPageErrors(page);
 
@@ -429,27 +434,8 @@ test("arbitrary folder opening keeps root-relative ids with clear error and empt
     ),
   ).toBe(true);
 
-  // Parent navigation: stepping up from a nested folder lists the folder we came from.
-  await filesWindow.getByRole("button", { name: "Open parent folder" }).click();
-  await expect(
-    filesWindow.locator('[role="treeitem"].tr-row[data-path="packages/keiko-cli"]'),
-  ).toBeVisible();
-
-  // D3/AC4: an unavailable root renders a clear, non-blocking error and the app stays alive.
-  const rootInput = filesWindow.getByRole("textbox", { name: /Folder path/u });
-  await rootInput.fill(`${projectPath}/does-not-exist-1374`);
-  await rootInput.press("Enter");
-  await expect(filesWindow.getByRole("alert")).toBeVisible();
-
-  // D3: a permission-denied root (a deny-listed path segment) renders the same clear error state.
-  await rootInput.fill(join(projectPath, ".git"));
-  await rootInput.press("Enter");
-  await expect(filesWindow.getByRole("alert")).toBeVisible();
-
-  // Recovery to an empty folder shows the clear empty state (no editor failure).
-  await rootInput.fill(join(projectPath, "empty-folder"));
-  await rootInput.press("Enter");
-  await expect(filesWindow.getByText("Empty folder.")).toBeVisible();
+  await expect(filesWindow.getByRole("textbox", { name: /Folder path/u })).toHaveCount(0);
+  await expect(filesWindow.getByRole("button", { name: "Open parent folder" })).toHaveCount(0);
 
   assertNoPageErrors();
 });
@@ -508,6 +494,7 @@ test("editor presents the VS Code-feeling UX surface: status bar, tabs, cursor, 
 
 test("editor surfaces diagnostics and hover from the governed language service @smoke", async ({
   page,
+  request,
 }) => {
   // Issue #1201: the deterministic server language service drives Monaco markers (diagnostics) and the
   // hover widget (quick info) for a TS/JS buffer. This proves the end-to-end browser path: edit ->
@@ -519,6 +506,7 @@ test("editor surfaces diagnostics and hover from the governed language service @
   const relativePath = "packages/keiko-cli/src/run.ts";
   // Start from an empty buffer so the replaced content is exactly the analysed overlay.
   writeFileSync(join(projectPath, relativePath), "", "utf8");
+  await ensureProject(request, projectPath);
   await seedFilesWindow(page, projectPath);
   const assertNoPageErrors = collectPageErrors(page);
 

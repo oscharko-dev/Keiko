@@ -161,6 +161,28 @@ describe("createBrowserAssistantSpeechStreamingSink", () => {
     expect(createBrowserAssistantSpeechStreamingSink()).toBeUndefined();
   });
 
+  it("keeps user-gesture priming best-effort when AudioContext construction fails", async () => {
+    vi.stubGlobal(
+      "AudioContext",
+      class {
+        constructor() {
+          throw new Error("browser audio unavailable");
+        }
+      },
+    );
+    vi.stubGlobal("AudioWorkletNode", class {});
+    const sink = createBrowserAssistantSpeechStreamingSink();
+
+    expect(() => sink?.primeFromUserGesture()).not.toThrow();
+    await expect(
+      sink?.play({ text: "Use buffered fallback" }, new AbortController().signal, {
+        onStart: vi.fn(),
+        onEnded: vi.fn(),
+        onError: vi.fn(),
+      }),
+    ).resolves.toBe(false);
+  });
+
   it("closes the AudioContext on dispose and creates fresh WebAudio resources after disposal", async () => {
     const contexts: { close: ReturnType<typeof vi.fn>; suspend: ReturnType<typeof vi.fn> }[] = [];
     const nodes: {

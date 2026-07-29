@@ -1068,7 +1068,7 @@ export function FilesWindowSessionHost({
       <FilesWidget
         {...(root === undefined ? {} : { root })}
         onActiveFileChange={onActiveFileChange}
-        onRootChange={onRootChange}
+        onRootChange={root === undefined ? onRootChange : undefined}
         onOpenFile={(fileRoot: string, path: string) =>
           ctx.openWindow("editor", { root: fileRoot, file: path, openFiles: [path] })
         }

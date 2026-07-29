@@ -234,7 +234,7 @@ vi.mock("./cards/FilesWidget", () => ({
       root: string | null,
       activeDirectoryPath?: string | null,
     ) => void;
-    readonly onRootChange: (root: string) => void;
+    readonly onRootChange?: (root: string) => void;
     readonly onOpenFile: (root: string, path: string) => void;
     readonly onOpenGitDelivery: (root: string) => void;
   }) => (
@@ -243,9 +243,11 @@ vi.mock("./cards/FilesWidget", () => ({
       <button type="button" onClick={() => onActiveFileChange("src/app.ts", "/repo", "/repo/src")}>
         Active file
       </button>
-      <button type="button" onClick={() => onRootChange("/next")}>
-        Change root
-      </button>
+      {onRootChange === undefined ? null : (
+        <button type="button" onClick={() => onRootChange("/next")}>
+          Change root
+        </button>
+      )}
       <button type="button" onClick={() => onOpenFile("/repo", "src/app.ts")}>
         Open file
       </button>
@@ -1229,13 +1231,7 @@ describe("workspace widget renderer registry", () => {
       activeDirectoryPath: "/repo/src",
       resolvedRoot: "/repo",
     });
-    fireEvent.click(screen.getByRole("button", { name: "Change root" }));
-    expect(ctx.updateCfg).toHaveBeenCalledWith({
-      root: "/next",
-      activeFilePath: undefined,
-      activeDirectoryPath: undefined,
-      resolvedRoot: undefined,
-    });
+    expect(screen.queryByRole("button", { name: "Change root" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Open file" }));
     expect(ctx.openWindow).toHaveBeenCalledWith("editor", {
       root: "/repo",
@@ -1244,6 +1240,16 @@ describe("workspace widget renderer registry", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Open Git" }));
     expect(ctx.openWindow).toHaveBeenCalledWith("governedGit", { projectPath: "/repo" });
+
+    const unboundCtx = { ...makeCtx(), linkedRoot: null, linkedRoots: [] };
+    view.rerender(<>{WIN_TYPES.files.render({}, unboundCtx)}</>);
+    fireEvent.click(await screen.findByRole("button", { name: "Change root" }));
+    expect(unboundCtx.updateCfg).toHaveBeenCalledWith({
+      root: "/next",
+      activeFilePath: undefined,
+      activeDirectoryPath: undefined,
+      resolvedRoot: undefined,
+    });
 
     view.rerender(<>{WIN_TYPES.review.render({}, ctx)}</>);
     fireEvent.click(await screen.findByTestId("review-widget"));

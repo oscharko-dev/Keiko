@@ -156,10 +156,12 @@ function ensureManagedWorkspaceIdentity(
 ): void {
   try {
     ctx.deps.ensureManagedWorkspaceIdentity?.(instance, initializeTrust);
-  } catch {
+  } catch (error) {
     throw new TaskWorkspaceError(
       "PROVISIONING_FAILED",
       "managed workspace identity registration failed",
+      [],
+      { cause: error },
     );
   }
 }

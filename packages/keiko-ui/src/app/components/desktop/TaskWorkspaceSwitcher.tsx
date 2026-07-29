@@ -121,6 +121,7 @@ function useFolderSelection(input: {
   readonly close: () => void;
   readonly t: I18nTranslate;
 }): FolderSelection {
+  const { workspaceApi, chatActions, nativeSupported, close, t } = input;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [manualPath, setManualPath] = useState("");
@@ -128,34 +129,38 @@ function useFolderSelection(input: {
   const selectPath = useCallback(
     async (path: string): Promise<void> => {
       const selectedPath = path.trim();
-      if (selectedPath.length === 0 || input.chatActions === null) return;
+      if (selectedPath.length === 0) return;
+      if (chatActions === null) {
+        setError(t("workspaceContext.selectionFailed"));
+        return;
+      }
       setBusy(true);
       setError(null);
       try {
-        await clearTaskOverride(input.workspaceApi);
-        const selected = await input.chatActions.addProject(selectedPath);
+        await clearTaskOverride(workspaceApi);
+        const selected = await chatActions.addProject(selectedPath);
         if (selected === undefined) {
-          setError(input.t("workspaceContext.selectionFailed"));
+          setError(t("workspaceContext.selectionFailed"));
           return;
         }
         setManualPath("");
-        input.close();
+        close();
       } catch {
-        setError(input.t("workspaceContext.selectionFailed"));
+        setError(t("workspaceContext.selectionFailed"));
       } finally {
         setBusy(false);
       }
     },
-    [input],
+    [chatActions, close, t, workspaceApi],
   );
 
   const browse = useCallback((): void => {
-    if (!input.nativeSupported || busy) return;
+    if (!nativeSupported || busy) return;
     setBusy(true);
     setError(null);
     void pickWithNativeDialog({
       mode: "open-directory",
-      title: input.t("workspaceContext.chooseDialogTitle"),
+      title: t("workspaceContext.chooseDialogTitle"),
     })
       .then(async (outcome): Promise<void> => {
         if (outcome.kind === "picked") {
@@ -163,15 +168,15 @@ function useFolderSelection(input: {
           await selectPath(outcome.paths[0] ?? "");
           return;
         }
-        if (outcome.kind === "busy") setError(input.t("workspaceContext.dialogBusy"));
+        if (outcome.kind === "busy") setError(t("workspaceContext.dialogBusy"));
         else if (outcome.kind === "unsupported") {
-          setError(input.t("workspaceContext.dialogUnsupported"));
+          setError(t("workspaceContext.dialogUnsupported"));
         } else if (outcome.kind === "error") setError(outcome.message);
       })
       .finally(() => {
         setBusy(false);
       });
-  }, [busy, input, selectPath]);
+  }, [busy, nativeSupported, selectPath, t]);
 
   return {
     busy,

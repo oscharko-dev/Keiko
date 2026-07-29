@@ -7,7 +7,6 @@ import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { ActiveWorkspaceProvider } from "./context/ActiveWorkspaceContext";
 import { AnnouncerProvider } from "./context/AnnouncerContext";
 import { useActiveWorkspaceState } from "./hooks/useActiveWorkspaceState";
-import { TaskWorkspaceSwitcher } from "./TaskWorkspaceSwitcher";
 import { TwinProvider, useTwin } from "./context/TwinContext";
 import { WsContext, type WsContextValue } from "./context/WsContext";
 import { Footer } from "./Footer";
@@ -171,6 +170,11 @@ export function GatewaySetupLoading({
 const GatewaySetupDialog = dynamic(
   () => import("./modals/GatewaySetupDialog").then((mod) => mod.GatewaySetupDialog),
   { ssr: false, loading: GatewaySetupLoading },
+);
+
+const TaskWorkspaceSwitcher = dynamic(
+  () => import("./TaskWorkspaceSwitcher").then((mod) => mod.TaskWorkspaceSwitcher),
+  { ssr: false, loading: () => null },
 );
 
 const UnifiedQuickAccessPalette = dynamic(

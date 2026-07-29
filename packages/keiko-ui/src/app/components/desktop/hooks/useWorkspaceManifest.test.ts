@@ -80,12 +80,17 @@ describe("useWorkspaceManifest", () => {
     expect(missing.result.current.manifest).toBeNull();
   });
 
-  it("stays empty without a tracked root and never fetches", async () => {
-    const view = renderHook(() => useWorkspaceManifest(undefined));
-    await waitFor(() => expect(view.result.current.loading).toBe(false));
-    expect(view.result.current.manifest).toBeNull();
-    expect(fetchManifestAccess).not.toHaveBeenCalled();
-  });
+  it.each([undefined, ""] as const)(
+    "stays empty without a tracked root (%s) and never fetches",
+    (rootPath) => {
+      const view = renderHook(() => useWorkspaceManifest(rootPath));
+
+      expect(view.result.current.loading).toBe(false);
+      expect(view.result.current.pathReadAuthority).toBe("available");
+      expect(view.result.current.manifest).toBeNull();
+      expect(fetchManifestAccess).not.toHaveBeenCalled();
+    },
+  );
 
   it("surfaces a load failure as the load issue", async () => {
     fetchManifestAccess.mockRejectedValue(new Error("offline"));

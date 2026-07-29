@@ -257,9 +257,10 @@ describe("governed cleanup happy path (AC4)", () => {
     });
     setState(instance, "cleanup-pending");
     let identityRemovalAttempts = 0;
+    const identityFailure = new Error("identity store unavailable");
     const service = cleanup(undefined, undefined, () => {
       identityRemovalAttempts += 1;
-      if (identityRemovalAttempts === 1) throw new Error("identity store unavailable");
+      if (identityRemovalAttempts === 1) throw identityFailure;
     });
     const request = {
       workspaceId: instance.workspaceId,
@@ -268,7 +269,10 @@ describe("governed cleanup happy path (AC4)", () => {
       mode: "complete",
     } as const;
 
-    await expect(service.cleanup(request)).rejects.toMatchObject({ code: "CLEANUP_FAILED" });
+    await expect(service.cleanup(request)).rejects.toMatchObject({
+      code: "CLEANUP_FAILED",
+      cause: identityFailure,
+    });
 
     const partial = store.getById(instance.workspaceId);
     expect(existsSync(instance.managedWorktreePath)).toBe(false);

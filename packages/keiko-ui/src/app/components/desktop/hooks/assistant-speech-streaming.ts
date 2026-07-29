@@ -167,11 +167,17 @@ export function createBrowserAssistantSpeechStreamingSink():
     }
   }
 
-  function ensureContext(): AssistantSpeechContextLease {
+  function ensureContext(): AssistantSpeechContextLease | undefined {
     if (context !== undefined) {
       return { context, generation: lifecycleGeneration };
     }
-    const nextContext = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+    let nextContext: AudioContext;
+    try {
+      nextContext = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+    } catch {
+      // Priming is best-effort and playback can still use the buffered fallback.
+      return undefined;
+    }
     context = nextContext;
     return { context: nextContext, generation: lifecycleGeneration };
   }
@@ -182,6 +188,9 @@ export function createBrowserAssistantSpeechStreamingSink():
     }
     if (setupPromise !== undefined) return setupPromise;
     const lease = ensureContext();
+    if (lease === undefined) {
+      throw new Error("Assistant speech audio context is unavailable.");
+    }
     const pending = initializeNode(lease.context, lease.generation);
     setupPromise = pending;
     try {
@@ -259,6 +268,7 @@ export function createBrowserAssistantSpeechStreamingSink():
   return {
     primeFromUserGesture(): void {
       const lease = ensureContext();
+      if (lease === undefined) return;
       resumeAudioContext(lease.context);
       void ensureNode().catch(() => {
         // A later play attempt either retries setup or selects the buffered fallback.

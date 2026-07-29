@@ -180,6 +180,23 @@ function requestsManagedRootAuthority(deps: UiHandlerDeps, requestedRoot: string
   return containsPath(resolve(managedRoot), resolve(requestedRoot));
 }
 
+async function resolvesManagedRootAuthority(
+  deps: UiHandlerDeps,
+  requestedRoot: string,
+): Promise<boolean> {
+  const managedRoot = deps.managedTaskWorkspaceRoot;
+  if (managedRoot === undefined || requestedRoot.length === 0) return false;
+  const [realManagedRoot, realRequestedRoot] = await Promise.all([
+    realpath(managedRoot).catch(() => undefined),
+    realpath(requestedRoot).catch(() => undefined),
+  ]);
+  return (
+    realManagedRoot !== undefined &&
+    realRequestedRoot !== undefined &&
+    containsPath(realManagedRoot, realRequestedRoot)
+  );
+}
+
 function denyManagedRoot(): never {
   throw new FilesError(403, "DENIED", DENIED_MESSAGE);
 }
@@ -239,7 +256,11 @@ async function resolveSelectedRepositoryRoot(
   deps: UiHandlerDeps,
   requestedRoot: string | null,
 ): Promise<{ readonly root: string; readonly realRoot: string }> {
-  if (requestsManagedRootAuthority(deps, requestedRoot)) {
+  const paired = resolveAppSessionReadAuthority(deps, ctx.req) !== undefined;
+  const needsManagedAuthority =
+    requestsManagedRootAuthority(deps, requestedRoot) ||
+    (paired && requestedRoot !== null && (await resolvesManagedRootAuthority(deps, requestedRoot)));
+  if (needsManagedAuthority) {
     return resolveManagedRepositoryRequest(ctx, deps, requestedRoot ?? "");
   }
   return resolveRequestRoot(ctx, deps, requestedRoot, {

@@ -296,6 +296,36 @@ describe("managed task-worktree Git read authorization (#2482)", () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
+  it("authorizes a paired outside alias through the persisted managed-workspace identity", async () => {
+    const alias = join(root, "paired-managed-alias");
+    await symlink(managedWorktree, alias, "dir");
+    const runner = vi.fn<GitProcessRunner>((args) => {
+      if (args.includes("rev-parse")) return Promise.resolve(ok(`${managedWorktree}\n`));
+      if (args.includes("status")) {
+        return Promise.resolve(ok("## keiko/task/managed-git-auth\0"));
+      }
+      throw new Error(`unexpected git argv: ${args.join(" ")}`);
+    });
+    const getInstance = vi.fn((workspaceId: string): WorkspaceInstance | undefined =>
+      workspaceId === WORKSPACE_ID ? instance : undefined,
+    );
+    const dependencies = {
+      ...deps(runner),
+      workspaceProvisioning: { ...provisioningStub(), getInstance },
+    };
+
+    const result = await handleGitStatus(
+      route(`/api/git/status?root=${encodeURIComponent(alias)}`, pair(dependencies)),
+      dependencies,
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: { available: true, branch: "keiko/task/managed-git-auth" },
+    });
+    expect(getInstance).toHaveBeenCalledWith(WORKSPACE_ID);
+  });
+
   it("classifies an ancestor root as managed overlap before executing Git", async (): Promise<void> => {
     const runner = vi.fn<GitProcessRunner>();
     const result = await handleGitStatus(

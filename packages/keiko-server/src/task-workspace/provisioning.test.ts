@@ -449,19 +449,21 @@ describe("pre-write rejections (AC2)", () => {
 
 describe("drift + partial failure leave a visible classified state (SC4)", () => {
   it("rolls back and classifies a managed workspace identity failure", async () => {
+    const identityFailure = new Error("identity store unavailable");
     const service = makeService(undefined, () => {
-      throw new Error("identity store unavailable");
+      throw identityFailure;
     });
-    await rejectsWithCode(
-      () =>
-        service.provision({
-          repositoryRequestPath: repoRoot,
-          taskId: "identity-failure",
-          baseBranch: "main",
-          requestedBy: "u",
-        }),
-      "PROVISIONING_FAILED",
-    );
+    await expect(
+      service.provision({
+        repositoryRequestPath: repoRoot,
+        taskId: "identity-failure",
+        baseBranch: "main",
+        requestedBy: "u",
+      }),
+    ).rejects.toMatchObject({
+      code: "PROVISIONING_FAILED",
+      cause: identityFailure,
+    });
     const repositoryId = deriveRepositoryId(repoRoot);
     const failed = store.getById(deriveWorkspaceId({ repositoryId, taskId: "identity-failure" }));
     expect(failed?.lifecycleState).toBe("failed");

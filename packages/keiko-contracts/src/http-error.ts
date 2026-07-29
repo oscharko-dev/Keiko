@@ -19,8 +19,8 @@ export abstract class CodedHttpError extends Error {
   abstract readonly code: string;
   readonly status: number;
 
-  protected constructor(message: string, status: number) {
-    super(message);
+  protected constructor(message: string, status: number, options?: ErrorOptions) {
+    super(message, options);
     this.status = status;
     this.name = new.target.name;
   }

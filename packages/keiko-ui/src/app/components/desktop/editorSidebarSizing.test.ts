@@ -53,4 +53,26 @@ describe("editor sidebar sizing", () => {
     );
     expect(editorSidebarWidthFromPointer({ ...input, clientX: 600 })).toBe(950);
   });
+
+  it.each([
+    ["NaN", Number.NaN],
+    ["zero", 0],
+    ["Infinity", Number.POSITIVE_INFINITY],
+  ] as const)("falls back safely for malformed %s widths", (_label, malformed) => {
+    expect(editorSidebarBounds(malformed)).toEqual({
+      min: EDITOR_SIDEBAR_MIN_WIDTH,
+      max: EDITOR_SIDEBAR_DEFAULT_WIDTH,
+    });
+    expect(editorSidebarTrackWidth(malformed)).toBe(
+      "max(48px, min(260px, 95%, calc(100% - 48px)))",
+    );
+    expect(
+      editorSidebarWidthFromPointer({
+        clientX: 200,
+        rectLeft: 0,
+        rectWidth: malformed,
+        logicalWorkspaceWidth: malformed,
+      }),
+    ).toBe(200);
+  });
 });

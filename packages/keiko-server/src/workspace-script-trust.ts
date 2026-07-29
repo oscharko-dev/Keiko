@@ -359,8 +359,10 @@ function trustBasisFactsMatch(
   left: WorkspaceFact<WorkspaceTrustBasisDigest>,
   right: WorkspaceFact<WorkspaceTrustBasisDigest>,
 ): boolean {
-  if (left.outcome !== right.outcome) return false;
-  return left.outcome !== "known" || (right.outcome === "known" && left.value === right.value);
+  if (left.outcome === "known" && right.outcome === "known") {
+    return left.value === right.value;
+  }
+  return left.outcome === "absent" && right.outcome === "absent";
 }
 
 // Reads and validates the persisted record into a tagged assessment. No row is `absent`; a
@@ -498,6 +500,41 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     for (const listener of this.restrictionListeners) listener(canonicalRoot);
   }
 
+  private isTrustedForBasis(
+    canonicalRoot: string,
+    basis: WorkspaceFact<WorkspaceTrustBasisDigest>,
+  ): boolean {
+    const context = currentTrustContext(this.store, canonicalRoot, basis);
+    const expected = context.binding;
+    const assessment = readAssessment(this.store, expected.rootRef);
+    if (!context.objectIdentityMatches) {
+      if (assessment.outcome === "known" && assessment.value.trust === "trusted") {
+        persistRecord(
+          this.store,
+          expected,
+          "restricted",
+          "identity-changed",
+          assessment.value.revision + 1,
+        );
+        this.notifyRestricted(canonicalRoot);
+      }
+      return false;
+    }
+    const projectedTrusted = projectCommandTaskTrustState(assessment, expected) === "trusted";
+    const invalidated = invalidatedTrustedRecord(assessment, expected, projectedTrusted);
+    if (invalidated !== undefined) {
+      persistRecord(
+        this.store,
+        expected,
+        "restricted",
+        invalidationReason(invalidated.binding, expected),
+        invalidated.revision + 1,
+      );
+      this.notifyRestricted(canonicalRoot);
+    }
+    return projectedTrusted;
+  }
+
   public readonly grant = (projectId: string): WorkspaceScriptTrustSnapshot => {
     const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
     const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
@@ -528,16 +565,18 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     trustedProjectId: string,
   ): WorkspaceScriptTrustSnapshot => {
     const trustedRoot = resolveCanonicalRoot(this.store, this.fs, trustedProjectId);
-    if (!this.isTrusted(trustedProjectId, workspaceInfoForRoot(trustedRoot))) {
-      return { trusted: false };
-    }
     const trustedBasis = resolveTrustBasisFact(this.fs, trustedRoot);
+    if (!this.isTrustedForBasis(trustedRoot, trustedBasis)) return { trusted: false };
     const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
     const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
     if (!trustBasisFactsMatch(trustedBasis, basis)) return { trusted: false };
     const binding = requireCurrentObjectIdentity(
       currentTrustContext(this.store, canonicalRoot, basis),
     );
+    const revalidatedTrustedBasis = resolveTrustBasisFact(this.fs, trustedRoot);
+    if (!trustBasisFactsMatch(trustedBasis, revalidatedTrustedBasis)) {
+      return { trusted: false };
+    }
     persistRecord(
       this.store,
       binding,
@@ -596,35 +635,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     try {
       const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId, workspace);
       const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
-      const context = currentTrustContext(this.store, canonicalRoot, basis);
-      const expected = context.binding;
-      const assessment = readAssessment(this.store, expected.rootRef);
-      if (!context.objectIdentityMatches) {
-        if (assessment.outcome === "known" && assessment.value.trust === "trusted") {
-          persistRecord(
-            this.store,
-            expected,
-            "restricted",
-            "identity-changed",
-            assessment.value.revision + 1,
-          );
-          this.notifyRestricted(canonicalRoot);
-        }
-        return false;
-      }
-      const projectedTrusted = projectCommandTaskTrustState(assessment, expected) === "trusted";
-      const invalidated = invalidatedTrustedRecord(assessment, expected, projectedTrusted);
-      if (invalidated !== undefined) {
-        persistRecord(
-          this.store,
-          expected,
-          "restricted",
-          invalidationReason(invalidated.binding, expected),
-          invalidated.revision + 1,
-        );
-        this.notifyRestricted(canonicalRoot);
-      }
-      return projectedTrusted;
+      return this.isTrustedForBasis(canonicalRoot, basis);
     } catch {
       return false;
     }

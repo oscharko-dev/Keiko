@@ -14,8 +14,8 @@ const SAMPLE_STATUS_MAP: Readonly<Record<SampleCode, number>> = {
 class SampleHttpError extends CodedHttpError {
   readonly code: SampleCode;
 
-  constructor(code: SampleCode, message: string) {
-    super(message, httpStatusFor(SAMPLE_STATUS_MAP, code));
+  constructor(code: SampleCode, message: string, options?: ErrorOptions) {
+    super(message, httpStatusFor(SAMPLE_STATUS_MAP, code), options);
     this.code = code;
   }
 }
@@ -42,5 +42,13 @@ describe("CodedHttpError (GEN-DUP-NEAR-008)", () => {
 
   it("httpStatusFor returns the mapped status", () => {
     expect(httpStatusFor(SAMPLE_STATUS_MAP, "not-found")).toBe(404);
+  });
+
+  it("retains an optional internal cause without changing the public message", () => {
+    const cause = new Error("operator-only detail");
+    const err = new SampleHttpError("server-error", "operation failed", { cause });
+
+    expect(err.message).toBe("operation failed");
+    expect(err.cause).toBe(cause);
   });
 });

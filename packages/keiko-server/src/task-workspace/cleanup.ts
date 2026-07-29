@@ -381,8 +381,13 @@ async function finalizeCleanup(
   }
   try {
     ctx.deps.removeManagedWorkspaceIdentity?.(locked);
-  } catch {
-    throw new TaskWorkspaceError("CLEANUP_FAILED", "managed workspace identity removal failed");
+  } catch (error) {
+    throw new TaskWorkspaceError(
+      "CLEANUP_FAILED",
+      "managed workspace identity removal failed",
+      [],
+      { cause: error },
+    );
   }
   ctx.deps.store.delete(locked.workspaceId);
   emit(ctx, {

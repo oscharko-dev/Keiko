@@ -82,7 +82,7 @@ function instance(taskId: string, overrides: Partial<WorkspaceInstance> = {}): W
 // A fake #445 provisioning service: activate reads the instance, walks it to `active`, and persists —
 // the same contract the lifecycle service delegates the switch/resume walk to.
 function fakeProvisioning(
-  ensureIdentity?: (instance: WorkspaceInstance) => void,
+  ensureIdentity: ((instance: WorkspaceInstance) => void) | "omit" = (): void => undefined,
 ): WorkspaceProvisioningService {
   return {
     provision: () => Promise.reject(new Error("provision not used in lifecycle tests")),
@@ -99,7 +99,7 @@ function fakeProvisioning(
       return Promise.resolve({ instance: next, binding: buildBinding(next) });
     },
     getInstance: (id) => store.getById(id),
-    ensureIdentity: ensureIdentity ?? ((): void => undefined),
+    ...(ensureIdentity === "omit" ? {} : { ensureIdentity }),
   };
 }
 
@@ -222,6 +222,19 @@ describe("getActive / list", () => {
         throw new Error("identity store unavailable");
       }),
     );
+
+    expect(restarted.getActive()).toBeUndefined();
+    expect(pointerStore.get()).toBeUndefined();
+  });
+
+  it("fails closed and clears the active pointer when identity repair is unavailable", () => {
+    const inst = store.upsert(instance("restart-without-identity-hook"));
+    pointerStore.set({
+      workspaceId: inst.workspaceId,
+      setBy: "op",
+      atIso: "2026-06-26T00:00:00.000Z",
+    });
+    const restarted = lifecycleWith(fakeProvisioning("omit"));
 
     expect(restarted.getActive()).toBeUndefined();
     expect(pointerStore.get()).toBeUndefined();

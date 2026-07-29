@@ -22,6 +22,7 @@ const SELECTED_ROOT = "/Users/oscharko-dev/Projects/Keiko";
 const catalogState = vi.hoisted(() => ({
   activeProject: undefined as ProjectWithAvailability | undefined,
   projects: [] as ProjectWithAvailability[],
+  actionsAvailable: true,
 }));
 const chatActions = vi.hoisted(() => ({
   addProject: vi.fn<(path: string) => Promise<ProjectWithAvailability | undefined>>(() =>
@@ -38,7 +39,7 @@ vi.mock("./context/ChatSessionContext", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./context/ChatSessionContext")>();
   return {
     ...actual,
-    useOptionalChatSessionActions: () => chatActions,
+    useOptionalChatSessionActions: () => (catalogState.actionsAvailable ? chatActions : null),
     useOptionalChatSessionCatalog: () => ({
       activeProject: catalogState.activeProject,
       projects: catalogState.projects,
@@ -140,6 +141,7 @@ describe("TaskWorkspaceSwitcher", () => {
   beforeEach(() => {
     catalogState.activeProject = undefined;
     catalogState.projects = [];
+    catalogState.actionsAvailable = true;
     chatActions.addProject.mockReset().mockResolvedValue(undefined);
     chatActions.openProject.mockReset().mockResolvedValue(undefined);
     nativeDialogState.supported = true;
@@ -215,6 +217,23 @@ describe("TaskWorkspaceSwitcher", () => {
     });
     expect(screen.getByRole("dialog", { name: "Folder or repository" })).toBeInTheDocument();
     expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
+  it("reports a selection failure when chat actions are unavailable", async () => {
+    catalogState.actionsAvailable = false;
+    nativeDialogState.pick.mockResolvedValue({
+      kind: "picked",
+      paths: [SELECTED_ROOT],
+    });
+    renderSwitcher(api());
+    const dialog = openDialog();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Choose a folder" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The folder could not be selected. Check the path and try again.",
+    );
+    expect(chatActions.addProject).not.toHaveBeenCalled();
   });
 
   it("clears a task override before activating a newly chosen base folder", async () => {

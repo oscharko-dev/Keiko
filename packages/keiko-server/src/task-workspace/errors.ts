@@ -133,8 +133,9 @@ export class TaskWorkspaceError extends CodedHttpError {
     code: TaskWorkspaceErrorCode,
     message: string,
     reasons: readonly string[] = [],
+    options?: ErrorOptions,
   ) {
-    super(message, httpStatusFor(STATUS_MAP, code));
+    super(message, httpStatusFor(STATUS_MAP, code), options);
     this.code = code;
     this.outcome = ERROR_SPECS[code].outcome;
     this.reasons = reasons;

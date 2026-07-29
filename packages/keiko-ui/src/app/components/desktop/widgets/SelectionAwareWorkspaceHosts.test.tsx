@@ -132,11 +132,14 @@ vi.mock("../workspace-trust/useWorkspaceTrust", () => ({
 // The real Explorer only needs to expose the root-bar affordance for this test; its own navigation
 // behaviour is covered by FilesWidget's suite.
 vi.mock("./cards/FilesWidget", () => ({
-  FilesWidget: ({ onRootChange }: { readonly onRootChange?: (next: string) => void }) => (
-    <button type="button" onClick={() => onRootChange?.("/work")}>
-      go up
-    </button>
-  ),
+  FilesWidget: ({ onRootChange }: { readonly onRootChange?: (next: string) => void }): ReactNode =>
+    onRootChange === undefined ? (
+      <div data-testid="files-without-root-bar" />
+    ) : (
+      <button type="button" onClick={() => onRootChange("/work")}>
+        go up
+      </button>
+    ),
 }));
 
 function root(rootRef: string, canonicalRoot: string): WorkspaceRootDescriptor {
@@ -1213,11 +1216,7 @@ describe("ChatWindowSessionHost target missing", () => {
 });
 
 describe("FilesWindowSessionHost", () => {
-  it("navigates the window instead of mutating the workspace when the root bar changes", async () => {
-    // Regression: the root-bar handler called workspace.addRoot for any root that was a manifest
-    // member, so "go up" tried to add the parent directory as a second root. Manifest validation
-    // rejects overlapping roots, so upward navigation simply stopped working in a single-root
-    // workspace. Adding a root stays an explicit action in the multi-root Explorer's toolbar.
+  it("does not expose a second root authority when the global workspace root is bound", async () => {
     manifestRef.current = singleRootManifest("/work/keiko");
     const ctx = context();
 
@@ -1227,9 +1226,24 @@ describe("FilesWindowSessionHost", () => {
       </I18nProvider>,
     );
 
+    expect(await screen.findByTestId("files-without-root-bar")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "go up" })).toBeNull();
+    expect(addRoot).not.toHaveBeenCalled();
+    expect(ctx.updateCfg).not.toHaveBeenCalled();
+  });
+
+  it("retains local root navigation when no global workspace root is bound", async () => {
+    manifestRef.current = null;
+    const ctx = context();
+
+    render(
+      <I18nProvider>
+        <FilesWindowSessionHost cfg={{}} ctx={ctx} root={undefined} />
+      </I18nProvider>,
+    );
+
     await userEvent.click(await screen.findByRole("button", { name: "go up" }));
 
-    expect(addRoot).not.toHaveBeenCalled();
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       root: "/work",
       activeFilePath: undefined,
