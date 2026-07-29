@@ -222,6 +222,60 @@ describe("GatewaySetupDialog", () => {
     }
   });
 
+  it("removes whitespace from pasted first-run gateway credentials only", async (): Promise<void> => {
+    const { unmount } = render(<GatewaySetupDialog />);
+    const baseUrl = screen.getByLabelText(/base url/i);
+    const apiToken = screen.getByLabelText(/api token/i);
+    const clipboardData = (text: string): Pick<DataTransfer, "getData"> => ({
+      getData: vi.fn((format: string): string => (format === "text" ? text : "")),
+    });
+    const baseUrlClipboardData = clipboardData(" https://llm-gateway.example.com /\n v1 ");
+    const apiTokenClipboardData = clipboardData(" example \t token \n");
+
+    expect(
+      fireEvent.paste(baseUrl, {
+        clipboardData: baseUrlClipboardData,
+      }),
+    ).toBe(false);
+    expect(baseUrlClipboardData.getData).toHaveBeenCalledWith("text");
+    expect(baseUrl).toHaveValue("https://llm-gateway.example.com/v1");
+
+    expect(
+      fireEvent.paste(baseUrl, {
+        clipboardData: clipboardData("https://gateway.example.com/v1"),
+      }),
+    ).toBe(true);
+
+    expect(
+      fireEvent.paste(apiToken, {
+        clipboardData: apiTokenClipboardData,
+      }),
+    ).toBe(false);
+    expect(apiTokenClipboardData.getData).toHaveBeenCalledWith("text");
+    expect(apiToken).toHaveValue("exampletoken");
+
+    unmount();
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedApiKeyHeaderName="authorization"
+        storedModels={[modelCapability("internal-chat")]}
+      />,
+    );
+    await userEvent.click(screen.getByText("Replace model gateway settings"));
+
+    expect(
+      fireEvent.paste(screen.getByLabelText(/base url/i), {
+        clipboardData: clipboardData(" https://llm-gateway.example.com/v1 "),
+      }),
+    ).toBe(true);
+    expect(
+      fireEvent.paste(screen.getByLabelText(/api token/i), {
+        clipboardData: clipboardData(" example token "),
+      }),
+    ).toBe(true);
+  });
+
   it("submits an optional custom API key header for proxy gateways", async () => {
     vi.mocked(setupGateway).mockResolvedValueOnce({
       ok: true,
