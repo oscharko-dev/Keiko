@@ -222,6 +222,56 @@ describe("GatewaySetupDialog", () => {
     }
   });
 
+  it("removes whitespace from pasted first-run gateway credentials only", async () => {
+    const { unmount } = render(<GatewaySetupDialog />);
+    const baseUrl = screen.getByLabelText(/base url/i);
+    const apiToken = screen.getByLabelText(/api token/i);
+    const clipboardData = (text: string): Pick<DataTransfer, "getData"> => ({
+      getData: () => text,
+    });
+
+    expect(
+      fireEvent.paste(baseUrl, {
+        clipboardData: clipboardData(" https://llm-gateway.example.com /\n v1 "),
+      }),
+    ).toBe(false);
+    expect(baseUrl).toHaveValue("https://llm-gateway.example.com/v1");
+
+    expect(
+      fireEvent.paste(baseUrl, {
+        clipboardData: clipboardData("https://gateway.example.com/v1"),
+      }),
+    ).toBe(true);
+
+    expect(
+      fireEvent.paste(apiToken, {
+        clipboardData: clipboardData(" example \t token \n"),
+      }),
+    ).toBe(false);
+    expect(apiToken).toHaveValue("exampletoken");
+
+    unmount();
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedApiKeyHeaderName="authorization"
+        storedModels={[modelCapability("internal-chat")]}
+      />,
+    );
+    await userEvent.click(screen.getByText("Replace model gateway settings"));
+
+    expect(
+      fireEvent.paste(screen.getByLabelText(/base url/i), {
+        clipboardData: clipboardData(" https://llm-gateway.example.com/v1 "),
+      }),
+    ).toBe(true);
+    expect(
+      fireEvent.paste(screen.getByLabelText(/api token/i), {
+        clipboardData: clipboardData(" example token "),
+      }),
+    ).toBe(true);
+  });
+
   it("submits an optional custom API key header for proxy gateways", async () => {
     vi.mocked(setupGateway).mockResolvedValueOnce({
       ok: true,
