@@ -188,7 +188,7 @@ export function useGitActions(
       seqRef.current = seq;
       setFlow({ busy: true, outcome: null, error: null });
       void op().then(
-        (res) => {
+        (res): void => {
           if (
             res.status === "succeeded" ||
             res.status === "failed" ||
@@ -198,7 +198,7 @@ export function useGitActions(
           }
           if (seqRef.current === seq) setFlow({ busy: false, outcome: res, error: null });
         },
-        (err: unknown) => {
+        (err: unknown): void => {
           if (seqRef.current === seq)
             setFlow({ busy: false, outcome: null, error: formatGitError(err) });
         },

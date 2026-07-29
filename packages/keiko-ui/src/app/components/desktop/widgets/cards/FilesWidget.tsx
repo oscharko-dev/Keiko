@@ -872,7 +872,7 @@ export function FilesWidget({
     return () => window.removeEventListener("focus", onFocus);
   }, [invalidateGitStatus]);
 
-  useEffect(() => {
+  useEffect((): (() => void) => {
     const onRepositoryStateInvalidated = (event: Event): void => {
       const invalidatedRoots = gitRepositoryStateInvalidationRoots(event);
       const boundRoot = resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : null);
@@ -882,7 +882,8 @@ export function FilesWidget({
           : null;
       if (
         !invalidatedRoots.some(
-          (root) => root === boundRoot || (repositoryRoot !== null && root === repositoryRoot),
+          (root): boolean =>
+            root === boundRoot || (repositoryRoot !== null && root === repositoryRoot),
         )
       ) {
         return;
@@ -890,7 +891,7 @@ export function FilesWidget({
       invalidateGitStatus();
     };
     window.addEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, onRepositoryStateInvalidated);
-    return () =>
+    return (): void =>
       window.removeEventListener(
         GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
         onRepositoryStateInvalidated,

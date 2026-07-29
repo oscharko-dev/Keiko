@@ -853,36 +853,46 @@ export function GitClientWindow({
     };
   }, [client, selectedPath, statusRevision]);
 
-  useEffect(() => {
+  useEffect((): (() => void) => {
     const onRepositoryStateInvalidated = (event: Event): void => {
       const invalidatedRoots = gitRepositoryStateInvalidationRoots(event);
       const repositoryRoot =
         status?.available === true ? (status.repositoryRoot ?? status.root) : null;
       if (
         !invalidatedRoots.some(
-          (root) => root === selectedPath || (repositoryRoot !== null && root === repositoryRoot),
+          (root): boolean =>
+            root === selectedPath || (repositoryRoot !== null && root === repositoryRoot),
         )
       ) {
         return;
       }
-      setStatusRevision((revision) => revision + 1);
+      setStatusRevision((revision): number => revision + 1);
     };
     window.addEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, onRepositoryStateInvalidated);
-    return () =>
+    return (): void =>
       window.removeEventListener(
         GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
         onRepositoryStateInvalidated,
       );
   }, [selectedPath, status]);
 
-  useEffect(() => {
+  useEffect((): (() => void) => {
     const onWorkspaceFileMutated = (event: Event): void => {
-      if (workspaceFileMutationRoot(event) !== selectedPath) return;
-      setStatusRevision((revision) => revision + 1);
+      const mutationRoot = workspaceFileMutationRoot(event);
+      const repositoryRoot =
+        status?.available === true ? (status.repositoryRoot ?? status.root) : null;
+      if (
+        mutationRoot !== selectedPath &&
+        (repositoryRoot === null || mutationRoot !== repositoryRoot)
+      ) {
+        return;
+      }
+      setStatusRevision((revision): number => revision + 1);
     };
     window.addEventListener(WORKSPACE_FILE_MUTATED_EVENT, onWorkspaceFileMutated);
-    return () => window.removeEventListener(WORKSPACE_FILE_MUTATED_EVENT, onWorkspaceFileMutated);
-  }, [selectedPath]);
+    return (): void =>
+      window.removeEventListener(WORKSPACE_FILE_MUTATED_EVENT, onWorkspaceFileMutated);
+  }, [selectedPath, status]);
 
   // After a successful commit, refresh status and remount the composer to clear its fields.
   const commitOutcome = commit.flow.outcome;

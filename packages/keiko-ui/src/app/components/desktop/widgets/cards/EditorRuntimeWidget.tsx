@@ -245,6 +245,10 @@ import {
 import { EditorBreadcrumbBar } from "./EditorBreadcrumbBar";
 import { EditorGitHunkPeek } from "./EditorGitHunkPeek";
 import { useEditorSourceControlTranslate } from "./editor-source-control-i18n";
+import {
+  GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
+  gitRepositoryStateInvalidationRoots,
+} from "./git-repository-state-events";
 import { notifyWorkspaceFileMutated } from "./workspace-file-events";
 import {
   buildEditorOutlineTree,
@@ -2041,6 +2045,7 @@ function EditorRuntimeWidget({
   const [workspaceGitSummary, setWorkspaceGitSummary] = useState<{
     readonly changedFileCount: number;
     readonly truncated: boolean;
+    readonly repositoryRoot: string;
   } | null>(null);
   useEffect(() => {
     if (root === undefined) {
@@ -2054,6 +2059,7 @@ function EditorRuntimeWidget({
           setWorkspaceGitSummary({
             changedFileCount: status.changes.length,
             truncated: status.truncated,
+            repositoryRoot: status.repositoryRoot ?? status.root,
           });
         }
       })
@@ -2064,6 +2070,26 @@ function EditorRuntimeWidget({
       cancelled = true;
     };
   }, [root, gitGutterRefreshNonce]);
+  const workspaceGitRepositoryRoot = workspaceGitSummary?.repositoryRoot ?? null;
+  useEffect((): (() => void) | undefined => {
+    if (root === undefined) return undefined;
+    const onRepositoryStateInvalidated = (event: Event): void => {
+      const invalidatedRoots = gitRepositoryStateInvalidationRoots(event);
+      const matchesEditorRepository = invalidatedRoots.some(
+        (invalidatedRoot): boolean =>
+          invalidatedRoot === root ||
+          (workspaceGitRepositoryRoot !== null && invalidatedRoot === workspaceGitRepositoryRoot),
+      );
+      if (!matchesEditorRepository) return;
+      setGitGutterRefreshNonce((value): number => value + 1);
+    };
+    window.addEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, onRepositoryStateInvalidated);
+    return (): void =>
+      window.removeEventListener(
+        GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
+        onRepositoryStateInvalidated,
+      );
+  }, [root, workspaceGitRepositoryRoot]);
   // Issue #1202: the governed test-generation flow state (pure reducer owned by the editor package).
   // A monotonic sequence backs the cross-boundary request identity for stale-response discard.
   const [testGenState, dispatchTestGen] = useReducer<

@@ -15,6 +15,7 @@ import {
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
+import { notifyGitRepositoryStateInvalidated } from "./git-repository-state-events";
 import { WORKSPACE_FILE_MUTATED_EVENT } from "./workspace-file-events";
 
 vi.mock("../../../../../lib/api", async () => {
@@ -331,6 +332,42 @@ describe("EditorRuntimeWidget Git gutter", () => {
     act(() => surface.props?.onSaveRequested(request));
     await waitFor(() => expect(surface.props?.gitGutterRefreshNonce).toBe(initial + 2));
     expect(mutation).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes Git projections for requested and canonical repository roots", async () => {
+    vi.mocked(fetchFilesContent).mockResolvedValue(
+      fileResponse(undefined, "/repo/project", "src/app.ts"),
+    );
+    vi.mocked(fetchGitStatus).mockResolvedValue({
+      schemaVersion: "1",
+      root: "/repo/project",
+      repositoryRoot: "/repo",
+      state: "available",
+      available: true,
+      detached: false,
+      clean: true,
+      stagedCount: 0,
+      unstagedCount: 0,
+      untrackedCount: 0,
+      conflictedCount: 0,
+      changes: [],
+      truncated: false,
+      maxChanges: 500,
+    });
+    render(
+      <EditorRuntimeWidget windowId="git-invalidation" root="/repo/project" file="src/app.ts" />,
+    );
+    await screen.findByTestId("editor-surface");
+    const initial = surface.props?.gitGutterRefreshNonce ?? 0;
+
+    act(() => notifyGitRepositoryStateInvalidated("/other"));
+    expect(surface.props?.gitGutterRefreshNonce).toBe(initial);
+
+    act(() => notifyGitRepositoryStateInvalidated("/repo/project"));
+    await waitFor(() => expect(surface.props?.gitGutterRefreshNonce).toBe(initial + 1));
+
+    act(() => notifyGitRepositoryStateInvalidated("/repo"));
+    await waitFor(() => expect(surface.props?.gitGutterRefreshNonce).toBe(initial + 2));
   });
 
   it("opens and dismisses the localized shared hunk peek", async () => {

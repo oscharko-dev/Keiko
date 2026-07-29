@@ -494,7 +494,9 @@ describe("GitClientWindow — repository list", () => {
   });
 
   it("refreshes Git state after a matching editor save without touching another repository", async () => {
-    const getStatus = vi.fn(async () => makeStatus());
+    const getStatus = vi.fn(async (): Promise<GitRepositoryStatusResponse> =>
+      makeStatus({ repositoryRoot: "/repos" }),
+    );
     const client = makeClient({ getStatus });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await screen.findByRole("combobox", { name: "Branch: main" });
@@ -505,6 +507,9 @@ describe("GitClientWindow — repository list", () => {
 
     act(() => notifyWorkspaceFileMutated(REPO_A.path));
     await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(initialReads + 1));
+
+    act(() => notifyWorkspaceFileMutated("/repos"));
+    await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(initialReads + 2));
   });
 
   it("hides stale changed-file rows while a newly selected repository is loading", async () => {

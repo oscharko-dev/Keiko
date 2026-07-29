@@ -8,7 +8,7 @@ import {
 } from "./git-repository-state-events";
 
 describe("Git repository state invalidation events", () => {
-  it("carries the requested and canonical repository roots that must be refreshed", () => {
+  it("carries the requested and canonical repository roots that must be refreshed", (): void => {
     const listener = vi.fn<(event: Event) => void>();
     window.addEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, listener);
 
@@ -25,7 +25,19 @@ describe("Git repository state invalidation events", () => {
     window.removeEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, listener);
   });
 
-  it("rejects malformed and empty event details without publishing empty roots", () => {
+  it("keeps a valid primary root when the canonical root is absent or malformed", (): void => {
+    const event = (repositoryRoot?: unknown): CustomEvent<unknown> =>
+      new CustomEvent(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, {
+        detail: { root: "/repo/project", repositoryRoot },
+      });
+
+    expect(gitRepositoryStateInvalidationRoots(event())).toEqual(["/repo/project"]);
+    expect(gitRepositoryStateInvalidationRoots(event(""))).toEqual(["/repo/project"]);
+    expect(gitRepositoryStateInvalidationRoots(event(42))).toEqual(["/repo/project"]);
+    expect(gitRepositoryStateInvalidationRoots(event("/repo/project"))).toEqual(["/repo/project"]);
+  });
+
+  it("rejects malformed and empty event details without publishing empty roots", (): void => {
     const listener = vi.fn<(event: Event) => void>();
     window.addEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, listener);
 
