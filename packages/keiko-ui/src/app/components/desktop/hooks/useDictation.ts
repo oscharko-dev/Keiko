@@ -439,6 +439,17 @@ export function useDictation(options: UseDictationOptions): DictationController 
     [cleanupRealtime, clearAutoStop],
   );
 
+  const scheduleRealtimeDisconnectFailure = useCallback(
+    (session: VoiceRtcSession): void => {
+      realtimeDisconnectGraceRef.current ??= setTimeout(
+        failRealtimeConnection,
+        LIVE_DICTATION_DISCONNECT_GRACE_MS,
+        session,
+      );
+    },
+    [failRealtimeConnection],
+  );
+
   const waitForRealtimeFinal = useCallback((): Promise<{
     readonly text: string;
     readonly note?: string;
@@ -754,10 +765,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
           return;
         }
         if (state === "disconnected") {
-          realtimeDisconnectGraceRef.current ??= setTimeout(
-            (): void => failRealtimeConnection(session),
-            LIVE_DICTATION_DISCONNECT_GRACE_MS,
-          );
+          scheduleRealtimeDisconnectFailure(session);
         }
       });
       session.onLocalVoiceActivity?.((event): void => {
@@ -830,6 +838,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
     latency,
     liveControlClientFactory,
     realtimeTransportFactory,
+    scheduleRealtimeDisconnectFailure,
     stopRealtime,
   ]);
 
