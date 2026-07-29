@@ -123,6 +123,10 @@ function progressDetail(overrides: Partial<CapsuleDetail> = {}): CapsuleDetail {
   } as CapsuleDetail;
 }
 
+function connectedCapsuleResponse(): CapsuleDetailResponse {
+  return { capsule: progressDetail().capsule };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   // clearAllMocks keeps implementations; pin the default pick outcome so a persistent override
@@ -137,7 +141,7 @@ function defaultProps(overrides: Partial<CapsuleActionsProps> = {}): CapsuleActi
     sourceCount: 1,
     lifecycleState: "ready",
     onActionComplete: vi.fn(),
-    connectCapsuleSourceImpl: vi.fn().mockResolvedValue({} as CapsuleDetailResponse),
+    connectCapsuleSourceImpl: vi.fn().mockResolvedValue(connectedCapsuleResponse()),
     deleteCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
     refreshCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
     repairCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
@@ -159,7 +163,7 @@ async function openMaintenance(user: ReturnType<typeof userEvent.setup>): Promis
 describe("CapsuleActions — connect source", () => {
   it("connects a folder scope by default", async () => {
     const user = userEvent.setup();
-    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue(connectedCapsuleResponse());
     const onActionComplete = vi.fn();
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl, onActionComplete })} />);
 
@@ -176,9 +180,33 @@ describe("CapsuleActions — connect source", () => {
     expect(onActionComplete).toHaveBeenCalledOnce();
   });
 
+  it("sends an optional explicit source display name", async () => {
+    const user = userEvent.setup();
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue(connectedCapsuleResponse());
+    render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
+
+    await user.type(screen.getByLabelText(/source path/i), "/docs/manuals");
+    await user.type(
+      screen.getByLabelText(/display name \(optional\)/i),
+      "Engineering Manuals{enter}",
+    );
+
+    await waitFor(() => {
+      expect(connectCapsuleSourceImpl).toHaveBeenCalledWith(
+        DEFAULT_ID,
+        {
+          kind: "folder",
+          rootPath: "/docs/manuals",
+          recursive: true,
+        },
+        "Engineering Manuals",
+      );
+    });
+  });
+
   it("builds a file-list source when relative document paths are provided", async () => {
     const user = userEvent.setup();
-    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue(connectedCapsuleResponse());
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
 
     await user.click(screen.getByText("Index only specific documents"));
@@ -200,7 +228,7 @@ describe("CapsuleActions — connect source", () => {
 
   it("lets the user browse a folder natively instead of typing the path manually", async () => {
     const user = userEvent.setup();
-    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue(connectedCapsuleResponse());
     mockPickWithNativeDialog.mockResolvedValueOnce({ kind: "picked", paths: ["/repo/docs"] });
 
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
@@ -229,7 +257,7 @@ describe("CapsuleActions — connect source", () => {
 
   it("folds natively picked files into a shared root and relative file list", async () => {
     const user = userEvent.setup();
-    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue(connectedCapsuleResponse());
     mockPickWithNativeDialog.mockResolvedValueOnce({
       kind: "picked",
       paths: ["/repo/README.md", "/repo/CHANGELOG.md"],
@@ -265,7 +293,7 @@ describe("CapsuleActions — connect source", () => {
 
   it("uses the picked file's parent folder as the shared root for the files scope", async () => {
     const user = userEvent.setup();
-    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue(connectedCapsuleResponse());
     mockPickWithNativeDialog.mockResolvedValueOnce({
       kind: "picked",
       paths: ["/home/user/Desktop/Inside Agentic AI.pdf"],
@@ -323,7 +351,7 @@ describe("CapsuleActions — connect source", () => {
 describe("CapsuleActions — connect source as a repository", () => {
   it("connects a repository scope when repository mode is enabled", async () => {
     const user = userEvent.setup();
-    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue(connectedCapsuleResponse());
     const onActionComplete = vi.fn();
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl, onActionComplete })} />);
 
@@ -393,7 +421,7 @@ describe("CapsuleActions — connect source as a repository", () => {
 
   it("connects the ordinary folder scope, byte-identical, when repository mode stays off", async () => {
     const user = userEvent.setup();
-    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue(connectedCapsuleResponse());
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
 
     expect(

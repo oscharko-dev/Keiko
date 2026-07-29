@@ -462,6 +462,190 @@ describe("local-knowledge handlers", () => {
     expect(JSON.stringify(result.body)).toContain("manuals");
   });
 
+  it.each([
+    {
+      caseName: "normalizes an ordinary dotted folder label",
+      folderName: "Engineering.Manuals",
+      expectedDisplayName: "Engineering Manuals",
+    },
+    {
+      caseName: "keeps a lower-case hostname fail-closed",
+      folderName: "gateway.example.test",
+      expectedDisplayName: "Knowledge Source",
+    },
+    {
+      caseName: "keeps a mixed-case multi-label hostname fail-closed",
+      folderName: "Gateway.Example.Test",
+      expectedDisplayName: "Knowledge Source",
+    },
+    {
+      caseName: "keeps unsafe format characters fail-closed",
+      folderName: "Man\u200Buals",
+      expectedDisplayName: "Knowledge Source",
+    },
+  ])("$caseName", async ({ expectedDisplayName, folderName }): Promise<void> => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const docsRoot = join(tmp, folderName);
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(join(docsRoot, "guide.md"), "# Guide\n", "utf8");
+
+    const result = await handleConnectLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "POST", {
+          scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+        }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(201);
+    expect(result.body).toMatchObject({
+      sources: [{ displayName: expectedDisplayName }],
+    });
+  });
+
+  it("uses a bounded fallback instead of leaking an unsafe derived folder basename", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const unsafeDerivedName = "ｐａｓｓｗｏｒｄ＝hunter2";
+    const docsRoot = join(tmp, unsafeDerivedName);
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(join(docsRoot, "guide.md"), "# Guide\n", "utf8");
+
+    const result = await handleConnectLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "POST", {
+          scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+        }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(201);
+    expect(result.body).toMatchObject({
+      sources: [{ displayName: "Knowledge Source" }],
+    });
+    const verify = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const auditRows = verify._internal.db
+      .prepare(
+        "SELECT details_json FROM capsule_audit_events WHERE capsule_id = :c AND kind = 'source-added'",
+      )
+      .all({ c: "cap-1" }) as unknown as readonly { readonly details_json: string | null }[];
+    verify.close();
+    const auditEvidence = JSON.stringify(auditRows);
+    expect(auditEvidence).not.toContain(unsafeDerivedName);
+    expect(auditEvidence).not.toContain("hunter2");
+  });
+
+  it("bounds a safe derived folder basename by Unicode code point before persisting it", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const expectedDisplayName = `${"a".repeat(99)}😀`;
+    const docsRoot = join(tmp, `${expectedDisplayName}${"b".repeat(40)}.Manuals`);
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(join(docsRoot, "guide.md"), "# Guide\n", "utf8");
+
+    const result = await handleConnectLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "POST", {
+          scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+        }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(201);
+    expect(result.body).toMatchObject({
+      sources: [{ displayName: expectedDisplayName }],
+    });
+  });
+
+  it("rejects an explicit unsafe source display name without echoing it", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const docsRoot = join(tmp, "manuals");
+    mkdirSync(docsRoot, { recursive: true });
+    const unsafeDisplayName = "https://gateway.example.test/v1?client_secret=value";
+
+    const result = await handleConnectLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "POST", {
+          scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+          displayName: unsafeDisplayName,
+        }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+    const body = JSON.stringify(result.body);
+
+    expect(result.status).toBe(400);
+    expect(body).toContain('Field \\"displayName\\" must be evidence-safe when provided.');
+    expect(body).not.toContain("gateway.example.test");
+    expect(body).not.toContain("client_secret");
+  });
+
+  it("treats an explicit whitespace-only source display name as omitted", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const docsRoot = join(tmp, "manuals");
+    mkdirSync(docsRoot, { recursive: true });
+
+    const result = await handleConnectLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "POST", {
+          scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+          displayName: " \t ",
+        }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(201);
+    expect(result.body).toMatchObject({
+      sources: [{ displayName: "manuals" }],
+    });
+  });
+
+  it.each([null, 42, { label: "Manuals" }])(
+    "rejects malformed non-string source display name %#",
+    async (displayName): Promise<void> => {
+      const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+      tempDirs.push(tmp);
+      seedStore(tmp).store.close();
+      const docsRoot = join(tmp, "manuals");
+      mkdirSync(docsRoot, { recursive: true });
+
+      const result = await handleConnectLocalKnowledgeCapsule(
+        {
+          ...baseCtx(tmp, "POST", {
+            scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+            displayName,
+          }),
+          params: { capsuleId: "cap-1" },
+        },
+        depsFor(tmp),
+      );
+
+      expect(result.status).toBe(400);
+      expect(JSON.stringify(result.body)).toContain(
+        'Field \\"displayName\\" must be a string when provided.',
+      );
+    },
+  );
+
   it("connect is idempotent: the same folder connected twice yields exactly one source", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
