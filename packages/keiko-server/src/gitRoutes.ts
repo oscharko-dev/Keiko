@@ -805,7 +805,7 @@ export function rethrowSnapshotPathError(error: unknown): never {
   throw error;
 }
 
-function rethrowSnapshotOpenError(error: unknown): never {
+export function rethrowSnapshotRaceError(error: unknown): never {
   if (fileSystemErrorCode(error) === "ELOOP") throw staleUntrackedPath();
   return rethrowSnapshotPathError(error);
 }
@@ -818,25 +818,25 @@ async function readOpenSnapshot(
   observer: (() => Promise<void> | void) | undefined,
 ): Promise<UntrackedFileSnapshot> {
   const descriptor = await open(resolved, constants.O_RDONLY | NOFOLLOW_READ_FLAG).catch(
-    rethrowSnapshotOpenError,
+    rethrowSnapshotRaceError,
   );
   try {
     const before = await descriptor.stat({ bigint: true });
-    const current = await realpath(candidate).catch(rethrowSnapshotPathError);
+    const current = await realpath(candidate).catch(rethrowSnapshotRaceError);
     if (!containsPath(boundary, current)) {
       throw new FilesError(400, "BAD_PATH", "The path must stay inside the selected root.");
     }
-    const currentStats = await stat(current, { bigint: true }).catch(rethrowSnapshotPathError);
+    const currentStats = await stat(current, { bigint: true }).catch(rethrowSnapshotRaceError);
     if (!sameOpenFile(before, currentStats)) throw staleUntrackedPath();
     const buffer = await readBoundedSnapshotBytes(descriptor, maxBytes);
     const after = await descriptor.stat({ bigint: true });
     if (!sameOpenFile(before, after)) throw staleUntrackedPath();
     await observer?.();
-    const finalPath = await realpath(candidate).catch(rethrowSnapshotPathError);
+    const finalPath = await realpath(candidate).catch(rethrowSnapshotRaceError);
     if (!containsPath(boundary, finalPath)) {
       throw new FilesError(400, "BAD_PATH", "The path must stay inside the selected root.");
     }
-    const finalStats = await stat(finalPath, { bigint: true }).catch(rethrowSnapshotPathError);
+    const finalStats = await stat(finalPath, { bigint: true }).catch(rethrowSnapshotRaceError);
     if (!sameOpenFile(after, finalStats)) throw staleUntrackedPath();
     return {
       bytes: buffer.subarray(0, Math.min(buffer.length, maxBytes)),

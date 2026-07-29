@@ -31,6 +31,7 @@ import {
   platformGitPath,
   readBoundedSnapshotBytes,
   rethrowSnapshotPathError,
+  rethrowSnapshotRaceError,
   type GitProcessRunner,
 } from "./gitRoutes.js";
 
@@ -675,6 +676,9 @@ describe("GET /api/git/diff", () => {
 
     const cyclic = Object.assign(new Error("stable link cycle"), { code: "ELOOP" });
     expect((): never => rethrowSnapshotPathError(cyclic)).toThrow(cyclic);
+    expect((): never => rethrowSnapshotRaceError(cyclic)).toThrow(
+      expect.objectContaining({ code: "STALE_PATH", status: 409 }),
+    );
   });
 
   it("rejects path traversal before invoking Git diff", async () => {
@@ -1159,6 +1163,77 @@ describe("GET /api/git/diff/structured", () => {
     expect(result).toMatchObject({
       status: 409,
       body: { error: { code: "STALE_PATH", correlationId: "cid-untracked-replaced" } },
+    });
+    expect(JSON.stringify(result.body)).not.toContain("captured");
+  });
+
+  it("rejects an outside-root replacement after snapshot reading", async (): Promise<void> => {
+    await runRealGit(["init", "--quiet"]);
+    const target = join(root, "escaped.txt");
+    const displaced = join(root, "escaped-original.txt");
+    const outside = await mkdtemp(join(tmpdir(), "keiko-git-outside-"));
+    const outsideTarget = join(outside, "secret.txt");
+    await writeFile(target, "captured\n", "utf8");
+    await writeFile(outsideTarget, "outside-secret\n", "utf8");
+
+    try {
+      const result = await handleGitDiff(
+        ctx(
+          `/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree&path=escaped.txt`,
+          "cid-untracked-escaped",
+        ),
+        deps(defaultGitProcessRunner),
+        {
+          runner: defaultGitProcessRunner,
+          maxDiffBytes: 4_096,
+          maxStatusBytes: 4_096,
+          maxChanges: 10,
+          snapshotReadObserver: async (): Promise<void> => {
+            await rename(target, displaced);
+            await symlink(outsideTarget, target);
+          },
+        },
+      );
+
+      expect(result).toMatchObject({
+        status: 400,
+        body: { error: { code: "BAD_PATH", correlationId: "cid-untracked-escaped" } },
+      });
+      expect(JSON.stringify(result.body)).not.toContain("outside-secret");
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("returns STALE_PATH when a symlink loop appears after reading", async (): Promise<void> => {
+    await runRealGit(["init", "--quiet"]);
+    const target = join(root, "looping.txt");
+    const displaced = join(root, "looping-original.txt");
+    const peer = join(root, "loop-peer.txt");
+    await writeFile(target, "captured\n", "utf8");
+
+    const result = await handleGitDiff(
+      ctx(
+        `/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree&path=looping.txt`,
+        "cid-untracked-loop-race",
+      ),
+      deps(defaultGitProcessRunner),
+      {
+        runner: defaultGitProcessRunner,
+        maxDiffBytes: 4_096,
+        maxStatusBytes: 4_096,
+        maxChanges: 10,
+        snapshotReadObserver: async (): Promise<void> => {
+          await rename(target, displaced);
+          await symlink("loop-peer.txt", target);
+          await symlink("looping.txt", peer);
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "STALE_PATH", correlationId: "cid-untracked-loop-race" } },
     });
     expect(JSON.stringify(result.body)).not.toContain("captured");
   });
