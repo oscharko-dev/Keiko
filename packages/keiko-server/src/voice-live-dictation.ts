@@ -392,6 +392,8 @@ class VoiceLiveDictationConnection {
     try {
       outcome = await this.negotiate(offerSdp, controller.signal);
     } catch (error) {
+      // Provider transports may reject instead of returning a typed failure. Preserve the thrown
+      // class for the redacted diagnostic while normalizing its stable machine code below.
       thrown = error;
       outcome = { ok: false, kind: "transport" };
     }

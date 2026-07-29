@@ -770,6 +770,8 @@ export function useDictation(options: UseDictationOptions): DictationController 
         }
       });
       const answerSdp = await control.negotiate(session.offerSdp);
+      // Retry or cancellation can retire this attempt while provider negotiation is pending. Never
+      // apply its answer to the replacement attempt.
       if (!isCurrentRealtimeSession()) {
         return;
       }
@@ -779,6 +781,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
         return;
       }
       await session.applyAnswer(answerSdp);
+      // Applying the answer is asynchronous too; recheck ownership before publishing readiness.
       if (!isCurrentRealtimeSession()) {
         return;
       }
