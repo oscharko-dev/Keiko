@@ -195,6 +195,35 @@ describe("ChatHistoryPanel", () => {
     await waitFor((): void => expect(openChatWindow).toHaveBeenCalledWith(created));
   });
 
+  it("does not open a fallback chat after leaving projectless bootstrap", async (): Promise<void> => {
+    const creation = deferred<Chat | undefined>();
+    const created = makeChat({ id: "chat-fallback", projectPath: "/fallback" });
+    const openNewChat = vi.fn((): Promise<Chat | undefined> => creation.promise);
+    const openChatWindow = vi.fn();
+    const user = userEvent.setup();
+    const view = render(
+      <ChatSessionProvider value={makeSession({ activeProject: undefined, openNewChat })}>
+        <ChatHistoryPanel openChatWindow={openChatWindow} />
+      </ChatSessionProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "New" }));
+    await waitFor((): void => expect(openNewChat).toHaveBeenCalledOnce());
+
+    view.rerender(
+      <ChatSessionProvider
+        value={makeSession({ activeProject: makeProject("/other"), openNewChat })}
+      >
+        <ChatHistoryPanel openChatWindow={openChatWindow} />
+      </ChatSessionProvider>,
+    );
+    await act(async (): Promise<void> => {
+      creation.resolve(created);
+      await creation.promise;
+    });
+
+    expect(openChatWindow).not.toHaveBeenCalled();
+  });
+
   it("keeps the active tab selected after deleting a chat", async () => {
     const chat = makeChat();
     vi.mocked(updateChat).mockResolvedValueOnce({ chat: { ...chat, status: "closed" } });

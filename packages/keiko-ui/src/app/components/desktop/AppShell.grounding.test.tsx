@@ -590,6 +590,26 @@ describe("AppShell grounding connections", () => {
     expect(document.querySelector(".source-limit-alert")).toBeNull();
   });
 
+  it("reports a redacted diagnostic when grounding persistence fails", async (): Promise<void> => {
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
+    mocks.updateChatConnectedScopes.mockRejectedValueOnce(
+      new Error("customer endpoint and response detail"),
+    );
+    await renderMounted();
+
+    await expect(
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/repo")),
+    ).resolves.toBe(false);
+
+    expect(await screen.findByText(/Keiko could not connect that source/u)).toBeInTheDocument();
+    const reported = reportError.mock.calls[0]?.[0] as Error;
+    expect(reported.message).toMatch(
+      /^Chat grounding mutation failed\. Correlation ID: [A-Za-z0-9._-]{8,128}$/u,
+    );
+    expect(reported.message).not.toContain("customer endpoint");
+  });
+
   it("compensates a Files bind when its chat ownership changes in flight", async (): Promise<void> => {
     const persisted = deferred<{ readonly chat: Chat }>();
     const compensation = deferred<{ readonly chat: Chat }>();

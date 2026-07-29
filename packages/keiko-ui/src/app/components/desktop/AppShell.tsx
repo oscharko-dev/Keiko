@@ -818,6 +818,7 @@ function AppShellInner(): ReactNode {
           reportGroundingMutationFailure("Chat grounding mutation timed out.");
           return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
         }
+        reportGroundingMutationFailure("Chat grounding mutation failed.");
         return rejectForConnectionFailure(t("chat.grounding.connectSourceFailed"));
       }
     },
@@ -953,6 +954,7 @@ function AppShellInner(): ReactNode {
           reportGroundingMutationFailure("Chat grounding mutation timed out.");
           return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
         }
+        reportGroundingMutationFailure("Chat grounding mutation failed.");
         return rejectForConnectionFailure(t("chat.grounding.connectKnowledgeFailed"));
       }
     },
