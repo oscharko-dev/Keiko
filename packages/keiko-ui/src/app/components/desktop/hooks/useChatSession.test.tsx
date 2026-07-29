@@ -22,6 +22,7 @@ import {
   canonicalVoicePageOutboxRetainsPlaintextForTests,
   clearCanonicalVoicePageOutboxForTests,
   clearChatSessionBootstrapCacheForTests,
+  canonicalTurnReferenceForClient,
   isInFlight,
   notifyChatDeleted,
   notifyChatUpsert,
@@ -171,6 +172,17 @@ function message(patch: Partial<ChatMessage> = {}): ChatMessage {
     createdAt: 1,
     ...patch,
   } as ChatMessage;
+}
+
+async function canonicalMessage(
+  clientTurnId: string,
+  patch: Partial<ChatMessage> = {},
+): Promise<ChatMessage> {
+  const durable = message(patch);
+  return {
+    ...durable,
+    canonicalTurnRef: await canonicalTurnReferenceForClient(durable.chatId, clientTurnId),
+  };
 }
 
 function deferred<T>(): {
@@ -1047,6 +1059,114 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     }
   });
 
+  it("removes only the exact failed canonical row while preserving identical older turns", async (): Promise<void> => {
+    const { result } = await setupGroundedSession();
+    const earlier = await canonicalMessage("earlier-identical-turn", {
+      id: "earlier-identical-user",
+      chatId: "chat-grounded",
+      content: "same question",
+      timestamp: 10_000,
+    });
+    let failedTurnId: string | undefined;
+    vi.mocked(askGrounded).mockImplementation(async (request): Promise<never> => {
+      failedTurnId = request.clientTurnId;
+      throw new Error("generation failed");
+    });
+    vi.mocked(fetchChatMessages).mockImplementation(
+      async (): Promise<{ readonly messages: readonly ChatMessage[] }> => {
+        if (failedTurnId === undefined) throw new Error("missing failed turn identity");
+        return {
+          messages: [
+            earlier,
+            await canonicalMessage(failedTurnId, {
+              id: "failed-current-user",
+              chatId: "chat-grounded",
+              content: "same question",
+              timestamp: 20_000,
+            }),
+          ],
+        };
+      },
+    );
+
+    let outcome: SendMessageOutcome | undefined;
+    await act(async (): Promise<void> => {
+      outcome = await result.current.sendMessage({
+        text: "same question",
+        reportOutcome: true,
+      });
+    });
+
+    expect(outcome).toEqual({ status: "in-progress" });
+    expect(result.current.messages).toEqual([earlier]);
+  });
+
+  it("recovers a fully committed canonical pair without splitting identical turns", async (): Promise<void> => {
+    const { result } = await setupGroundedSession();
+    const earlierUser = await canonicalMessage("earlier-completed-turn", {
+      id: "earlier-completed-user",
+      chatId: "chat-grounded",
+      content: "same question",
+      timestamp: 10_000,
+    });
+    const earlierAssistant = await canonicalMessage("earlier-completed-turn", {
+      id: "earlier-completed-assistant",
+      chatId: "chat-grounded",
+      role: "assistant",
+      content: "earlier answer",
+      timestamp: 10_001,
+    });
+    let failedTurnId: string | undefined;
+    vi.mocked(askGrounded).mockImplementation(async (request): Promise<never> => {
+      failedTurnId = request.clientTurnId;
+      throw new Error("response lost after commit");
+    });
+    vi.mocked(fetchChatMessages).mockImplementation(
+      async (): Promise<{ readonly messages: readonly ChatMessage[] }> => {
+        if (failedTurnId === undefined) throw new Error("missing failed turn identity");
+        return {
+          messages: [
+            earlierUser,
+            earlierAssistant,
+            await canonicalMessage(failedTurnId, {
+              id: "current-completed-user",
+              chatId: "chat-grounded",
+              content: "same question",
+              timestamp: 20_000,
+            }),
+            await canonicalMessage(failedTurnId, {
+              id: "current-completed-assistant",
+              chatId: "chat-grounded",
+              role: "assistant",
+              content: "current answer",
+              timestamp: 20_001,
+            }),
+          ],
+        };
+      },
+    );
+
+    let outcome: SendMessageOutcome | undefined;
+    await act(async (): Promise<void> => {
+      outcome = await result.current.sendMessage({
+        text: "same question",
+        reportOutcome: true,
+      });
+    });
+
+    expect(outcome).toEqual({
+      status: "completed",
+      assistantMessageId: "current-completed-assistant",
+    });
+    expect(result.current.messages.map((entry) => entry.id)).toEqual([
+      "earlier-completed-user",
+      "earlier-completed-assistant",
+      "current-completed-user",
+      "current-completed-assistant",
+    ]);
+    expect(result.current.error).toBeUndefined();
+  });
+
   it("accepts an identical canonical user message created at this admission boundary", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(20_000);
     try {
@@ -1054,7 +1174,7 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
       vi.mocked(askGrounded).mockRejectedValueOnce(new Error("response lost"));
       vi.mocked(fetchChatMessages).mockResolvedValueOnce({
         messages: [
-          message({
+          await canonicalMessage("accepted-question-turn", {
             id: "new-canonical-user",
             chatId: "chat-grounded",
             content: "accepted question",
@@ -1067,6 +1187,7 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
       await act(async () => {
         outcome = await result.current.sendMessage({
           text: "accepted question",
+          clientTurnId: "accepted-question-turn",
           reportOutcome: true,
         });
       });
@@ -1080,7 +1201,7 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
   it("recognizes the existing canonical user row while a same-id retry is still active", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
     try {
-      const canonicalUser = message({
+      const canonicalUser = await canonicalMessage("same-provider-item", {
         id: "existing-canonical-user",
         chatId: "chat-grounded",
         content: "active canonical question",
@@ -1208,6 +1329,62 @@ describe("useChatSession sendMessage — ungrounded attachment descriptors", () 
       memory: { mode: "autonomous-delivery" },
     });
     expect(result.current.pendingAttachments).toHaveLength(0);
+  });
+
+  it("clears attachments after reconciliation proves a lost response completed", async (): Promise<void> => {
+    const { result } = await setupUngroundedAttachmentSession();
+    let clientTurnId: string | undefined;
+    vi.mocked(sendDesktopChat).mockImplementation(async (request): Promise<never> => {
+      clientTurnId = request.clientTurnId;
+      throw new TypeError("response lost after commit");
+    });
+    vi.mocked(fetchChatMessages).mockImplementation(
+      async (): Promise<{ readonly messages: readonly ChatMessage[] }> => {
+        if (clientTurnId === undefined) return { messages: [] };
+        return {
+          messages: [
+            await canonicalMessage(clientTurnId, {
+              id: "recovered-attachment-user",
+              chatId: "chat-1",
+              content: "Use the recovered attachment.",
+            }),
+            await canonicalMessage(clientTurnId, {
+              id: "recovered-attachment-assistant",
+              chatId: "chat-1",
+              role: "assistant",
+              content: "Recovered answer.",
+            }),
+          ],
+        };
+      },
+    );
+    await act(async (): Promise<void> => {
+      expect(
+        await result.current.addPendingAttachment(
+          new File(["release context"], "release.txt", { type: "text/plain" }),
+        ),
+      ).toEqual({ ok: true });
+    });
+    act((): void => {
+      result.current.setDraft("Use the recovered attachment.");
+    });
+
+    let outcome: SendMessageOutcome | undefined;
+    await act(async (): Promise<void> => {
+      outcome = await result.current.sendMessage({ reportOutcome: true });
+    });
+
+    expect(outcome).toEqual({
+      status: "completed",
+      assistantMessageId: "recovered-attachment-assistant",
+    });
+    expect(result.current.pendingAttachments).toHaveLength(0);
+    expect(result.current.lastSentDocuments).toEqual([
+      expect.objectContaining({
+        displayName: "release.txt",
+        truncated: false,
+      }),
+    ]);
   });
 });
 
@@ -1411,7 +1588,7 @@ describe("useChatSession canonical Voice FIFO", () => {
     });
   });
 
-  it("leaves a typed send free of a surface marker so its request stays byte-identical", async () => {
+  it("leaves a typed send free of a Voice capture surface marker", async (): Promise<void> => {
     const rendered = await setupVoiceQueueSession();
 
     await act(async () => {
@@ -1419,6 +1596,31 @@ describe("useChatSession canonical Voice FIFO", () => {
     });
 
     expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0].memory).not.toHaveProperty("surface");
+  });
+
+  it("assigns fresh canonical identities to typed sends and preserves a supplied identity", async (): Promise<void> => {
+    vi.mocked(sendDesktopChat).mockImplementation(
+      (request): Promise<Awaited<ReturnType<typeof sendDesktopChat>>> =>
+        Promise.resolve(completedTurn(request.content, `assistant-${request.content}`)),
+    );
+    const rendered = await setupVoiceQueueSession();
+
+    await act(async (): Promise<void> => {
+      await rendered.result.current.sendMessage({ text: "typed one" });
+      await rendered.result.current.sendMessage({ text: "typed two" });
+      await rendered.result.current.sendMessage({
+        text: "spoken final",
+        clientTurnId: "provider-supplied-turn",
+      });
+    });
+
+    const turnIds = vi
+      .mocked(sendDesktopChat)
+      .mock.calls.map(([request]): string | undefined => request.clientTurnId);
+    expect(turnIds[0]).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(turnIds[1]).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(turnIds[1]).not.toBe(turnIds[0]);
+    expect(turnIds[2]).toBe("provider-supplied-turn");
   });
 
   it("persists a 16,001-character final as one user turn with one assistant before the next utterance", async () => {
@@ -2399,7 +2601,7 @@ describe("useChatSession canonical Voice FIFO", () => {
     try {
       const retiredChat = chat({ selectedModel: "retired-chat-deployment" });
       const rendered = await setupVoiceQueueSession([retiredChat], [project()], []);
-      const durableUser = message({
+      const durableUser = await canonicalMessage("voice-retired-model", {
         id: "durable-retired-model-user",
         content: "final after model removal",
         role: "user",
@@ -2471,7 +2673,7 @@ describe("useChatSession canonical Voice FIFO", () => {
     );
     vi.mocked(fetchChatMessages).mockResolvedValue({
       messages: [
-        message({
+        await canonicalMessage("older-provider-item", {
           id: "older-identical-user",
           content: "repeat this final",
           role: "user",
@@ -2500,7 +2702,7 @@ describe("useChatSession canonical Voice FIFO", () => {
 
   it("suspends persisted in-progress reconciliation until an explicit exact-id retry", async () => {
     const rendered = await setupVoiceQueueSession();
-    const canonicalUser = message({
+    const canonicalUser = await canonicalMessage("voice-reconcile-long", {
       id: "durable-voice-user",
       content: "long reconciliation",
       role: "user",
@@ -2623,7 +2825,7 @@ describe("useChatSession canonical Voice FIFO", () => {
       vi.mocked(sendDesktopChat).mockReturnValue(response.promise);
       // The BFF persists the canonical user row at admission, long before generation completes;
       // a reopen while the delivery is still pending fetches that durable row.
-      const durableUser = message({
+      const durableUser = await canonicalMessage("voice-inflight-reopen", {
         id: "assistant-inflight-user",
         chatId: "chat-a",
         content: "voice while generating",
@@ -2678,10 +2880,9 @@ describe("useChatSession canonical Voice FIFO", () => {
       const rendered = await setupVoiceQueueSession([chatA, chatB]);
       const response = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
       vi.mocked(sendDesktopChat).mockReturnValue(response.promise);
-      // A durable row from an EARLIER identical-content turn satisfies the content+timestamp
-      // proof. It may suppress this turn's re-append, but it must not release the held
-      // projection: only this turn's own settle path knows which row belongs to it.
-      const earlierIdenticalUser = message({
+      // A durable row from an EARLIER identical-content turn has a different scoped identity.
+      // It must remain visible and cannot prove or replace the current turn's projection.
+      const earlierIdenticalUser = await canonicalMessage("earlier-identical-turn", {
         id: "earlier-turn-user",
         chatId: "chat-a",
         content: "yes",
@@ -2734,7 +2935,7 @@ describe("useChatSession canonical Voice FIFO", () => {
     // The BFF persists the canonical user row at admission, so the row outlives a transport
     // failure with an unknown commit state. Reconciliation rebuilds `messages` from that row and
     // drops the projection's local row — the queue then re-attempts the SAME turn identity.
-    const durableUser = message({
+    const durableUser = await canonicalMessage("voice-durable-retry", {
       id: "durable-retry-user",
       content: spoken,
       role: "user",
@@ -2793,20 +2994,16 @@ describe("useChatSession canonical Voice FIFO", () => {
     const rendered = await setupVoiceQueueSession([chatA, chatB]);
     const response = deferred<Awaited<ReturnType<typeof askGrounded>>>();
     vi.mocked(askGrounded).mockReturnValue(response.promise);
+    const durableUser = await canonicalMessage("grounded-chat-switch", {
+      id: "grounded-chat-switch-user",
+      chatId: "chat-a",
+      content: "grounded voice for A",
+      role: "user",
+      timestamp: Date.now(),
+    });
     vi.mocked(fetchChatMessages).mockImplementation((chatId: string) =>
       Promise.resolve({
-        messages:
-          chatId === "chat-a"
-            ? [
-                message({
-                  id: "grounded-chat-switch-user",
-                  chatId,
-                  content: "grounded voice for A",
-                  role: "user",
-                  timestamp: Date.now(),
-                }),
-              ]
-            : [],
+        messages: chatId === "chat-a" ? [durableUser] : [],
       }),
     );
 

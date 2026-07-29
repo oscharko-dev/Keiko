@@ -130,8 +130,10 @@ function makeRealtimeDictationFakes(
   closeControl: ReturnType<typeof vi.fn>;
   sendDataChannelEvent: ReturnType<typeof vi.fn>;
   emitDataChannelEvent: (event: unknown) => void;
+  emitConnectionState: (state: RTCPeerConnectionState) => void;
 } {
   let onDataChannelEvent: ((event: unknown) => void) | undefined;
+  let onConnectionStateChange: ((state: RTCPeerConnectionState) => void) | undefined;
   const applyAnswer = vi.fn(async (): Promise<void> => {
     if (opts.applyAnswerError !== undefined) throw opts.applyAnswerError;
   });
@@ -140,7 +142,9 @@ function makeRealtimeDictationFakes(
   const session: VoiceRtcSession = {
     offerSdp: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n",
     applyAnswer,
-    onConnectionStateChange: vi.fn(),
+    onConnectionStateChange(cb): void {
+      onConnectionStateChange = cb;
+    },
     onLocalVoiceActivity: vi.fn(),
     onDataChannelStateChange: vi.fn(),
     onDataChannelEvent(cb) {
@@ -166,6 +170,7 @@ function makeRealtimeDictationFakes(
     closeControl,
     sendDataChannelEvent,
     emitDataChannelEvent: (event) => onDataChannelEvent?.(event),
+    emitConnectionState: (state): void => onConnectionStateChange?.(state),
   };
 }
 
@@ -771,6 +776,7 @@ describe("useDictation — realtime live dictation (P3)", () => {
 
     expect(result.current.mode).toBe("realtime");
     expect(fakes.connect).toHaveBeenCalledTimes(1);
+    // Non-triggered outcomes: the current session proceeds through both identity guards.
     expect(fakes.negotiate).toHaveBeenCalledWith(fakes.session.offerSdp);
     expect(fakes.applyAnswer).toHaveBeenCalledTimes(1);
 
@@ -945,9 +951,112 @@ describe("useDictation — realtime live dictation (P3)", () => {
     expect(fakes.negotiate).toHaveBeenCalledTimes(1);
   });
 
+  it("triggers the post-negotiate identity guard after retry retires the session", async (): Promise<void> => {
+    let resolveNegotiation: (answerSdp: string) => void = (): void => {};
+    const pendingNegotiation = new Promise<string>((resolve): void => {
+      resolveNegotiation = resolve;
+    });
+    let resolveRetryConnect: (session: VoiceRtcSession) => void = (): void => {};
+    const pendingRetryConnect = new Promise<VoiceRtcSession>((resolve): void => {
+      resolveRetryConnect = resolve;
+    });
+    const fakes = makeRealtimeDictationFakes();
+    fakes.connect.mockResolvedValueOnce(fakes.session);
+    fakes.connect.mockReturnValueOnce(pendingRetryConnect);
+    fakes.negotiate.mockReturnValueOnce(pendingNegotiation);
+    const { result } = renderHook((): ReturnType<typeof useDictation> =>
+      useDictation({
+        onInsert: vi.fn(),
+        realtime: {
+          enabled: true,
+          createTransport: (): VoiceRtcTransport => fakes.transport,
+          createControlClient: (): VoiceLiveDictationControlClient => fakes.control,
+        },
+      }),
+    );
+
+    act((): void => result.current.start());
+    await waitFor((): void => expect(fakes.negotiate).toHaveBeenCalledTimes(1));
+    expect(result.current.phase).toBe("requesting");
+
+    act((): void => result.current.retry());
+    expect(fakes.connect).toHaveBeenCalledTimes(2);
+    expect(result.current.phase).toBe("requesting");
+
+    await act(async (): Promise<void> => {
+      resolveNegotiation("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n");
+      await Promise.resolve();
+    });
+
+    expect(fakes.applyAnswer).not.toHaveBeenCalled();
+    expect(fakes.closeSession).toHaveBeenCalledTimes(1);
+    expect(fakes.closeControl).toHaveBeenCalledTimes(1);
+    expect(result.current.phase).toBe("requesting");
+
+    act((): void => result.current.cancel());
+    await act(async (): Promise<void> => {
+      resolveRetryConnect(fakes.session);
+      await Promise.resolve();
+    });
+    expect(result.current.phase).toBe("idle");
+  });
+
+  it("triggers the post-applyAnswer identity guard after retry retires the session", async (): Promise<void> => {
+    let resolveApplyAnswer: () => void = (): void => {};
+    const pendingApplyAnswer = new Promise<void>((resolve): void => {
+      resolveApplyAnswer = resolve;
+    });
+    let resolveRetryConnect: (session: VoiceRtcSession) => void = (): void => {};
+    const pendingRetryConnect = new Promise<VoiceRtcSession>((resolve): void => {
+      resolveRetryConnect = resolve;
+    });
+    const fakes = makeRealtimeDictationFakes();
+    fakes.connect.mockResolvedValueOnce(fakes.session);
+    fakes.connect.mockReturnValueOnce(pendingRetryConnect);
+    fakes.applyAnswer.mockReturnValueOnce(pendingApplyAnswer);
+    const { result } = renderHook((): ReturnType<typeof useDictation> =>
+      useDictation({
+        onInsert: vi.fn(),
+        realtime: {
+          enabled: true,
+          createTransport: (): VoiceRtcTransport => fakes.transport,
+          createControlClient: (): VoiceLiveDictationControlClient => fakes.control,
+        },
+      }),
+    );
+
+    act((): void => result.current.start());
+    await waitFor((): void => expect(fakes.applyAnswer).toHaveBeenCalledTimes(1));
+    expect(result.current.phase).toBe("requesting");
+
+    act((): void => result.current.retry());
+    expect(fakes.connect).toHaveBeenCalledTimes(2);
+    expect(result.current.phase).toBe("requesting");
+
+    await act(async (): Promise<void> => {
+      resolveApplyAnswer();
+      await Promise.resolve();
+    });
+
+    expect(fakes.closeSession).toHaveBeenCalledTimes(1);
+    expect(fakes.closeControl).toHaveBeenCalledTimes(1);
+    expect(result.current.phase).toBe("requesting");
+
+    act((): void => result.current.cancel());
+    await act(async (): Promise<void> => {
+      resolveRetryConnect(fakes.session);
+      await Promise.resolve();
+    });
+    expect(result.current.phase).toBe("idle");
+  });
+
   it("retry falls back to the batch STT path after live negotiation fails", async () => {
     const fakes = makeRealtimeDictationFakes({
-      negotiateError: new VoiceLiveDictationControlError("negotiation-failed", "failed"),
+      negotiateError: new VoiceLiveDictationControlError(
+        "negotiation-failed",
+        "failed",
+        "dictation-corr-2806",
+      ),
     });
     const recorder = makeRecorder({});
     const transcribe = vi.fn(async (): Promise<VoiceTranscriptionResult> => ({
@@ -969,7 +1078,11 @@ describe("useDictation — realtime live dictation (P3)", () => {
 
     act(() => result.current.start());
     await waitFor(() => expect(result.current.phase).toBe("error"));
-    expect(result.current.error?.reason).toBe("transcribe-failed");
+    expect(result.current.error).toEqual({
+      reason: "negotiation-failed",
+      message: "Live dictation could not start. Try again to use standard dictation.",
+      correlationId: "dictation-corr-2806",
+    });
     expect(fakes.closeSession).toHaveBeenCalledTimes(1);
     expect(fakes.closeControl).toHaveBeenCalledTimes(1);
 
@@ -982,5 +1095,153 @@ describe("useDictation — realtime live dictation (P3)", () => {
     await waitFor(() => expect(result.current.phase).toBe("preview"));
     expect(transcribe).toHaveBeenCalledTimes(1);
     expect(result.current.transcript).toBe("batch transcript");
+  });
+
+  it("keeps a realtime session whose transient disconnect recovers", async (): Promise<void> => {
+    vi.useFakeTimers();
+    const fakes = makeRealtimeDictationFakes();
+    const { result } = renderHook((): ReturnType<typeof useDictation> =>
+      useDictation({
+        onInsert: vi.fn(),
+        realtime: {
+          enabled: true,
+          createTransport: (): VoiceRtcTransport => fakes.transport,
+          createControlClient: (): VoiceLiveDictationControlClient => fakes.control,
+        },
+      }),
+    );
+
+    act(() => result.current.start());
+    await act(async (): Promise<void> => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.phase).toBe("recording");
+    expect(vi.getTimerCount()).toBe(1); // Dictation auto-stop only.
+
+    act((): void => {
+      fakes.emitConnectionState("disconnected");
+      fakes.emitConnectionState("disconnected");
+    });
+    expect(result.current.phase).toBe("recording");
+    expect(vi.getTimerCount()).toBe(2); // Auto-stop plus disconnect grace.
+
+    act(() => fakes.emitConnectionState("connected"));
+    expect(result.current.phase).toBe("recording");
+    expect(vi.getTimerCount()).toBe(1);
+    expect(fakes.closeSession).not.toHaveBeenCalled();
+    expect(fakes.closeControl).not.toHaveBeenCalled();
+  });
+
+  it.each(["failed", "closed"] as const)(
+    "releases a terminal realtime %s state immediately",
+    async (connectionState): Promise<void> => {
+      const fakes = makeRealtimeDictationFakes();
+      const { result } = renderHook((): ReturnType<typeof useDictation> =>
+        useDictation({
+          onInsert: vi.fn(),
+          realtime: {
+            enabled: true,
+            createTransport: (): VoiceRtcTransport => fakes.transport,
+            createControlClient: (): VoiceLiveDictationControlClient => fakes.control,
+          },
+        }),
+      );
+
+      act(() => result.current.start());
+      await waitFor(() => expect(result.current.phase).toBe("recording"));
+      act(() => fakes.emitConnectionState(connectionState));
+
+      await waitFor(() => expect(result.current.phase).toBe("error"));
+      expect(result.current.error?.reason).toBe("connection-failed");
+      expect(fakes.closeSession).toHaveBeenCalledTimes(1);
+      expect(fakes.closeControl).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("keeps the original disconnect deadline and ignores late events after retry", async (): Promise<void> => {
+    vi.useFakeTimers();
+    const fakes = makeRealtimeDictationFakes();
+    const recorder = makeRecorder({});
+    const transcribe = vi.fn(async (): Promise<VoiceTranscriptionResult> => ({
+      transcript: "recovered batch transcript",
+    }));
+    const { result } = renderHook((): ReturnType<typeof useDictation> =>
+      useDictation({
+        onInsert: vi.fn(),
+        createRecorder: (): DictationRecorder => recorder.recorder,
+        transcribe,
+        postRollMs: 0,
+        realtime: {
+          enabled: true,
+          createTransport: (): VoiceRtcTransport => fakes.transport,
+          createControlClient: (): VoiceLiveDictationControlClient => fakes.control,
+        },
+      }),
+    );
+
+    act(() => result.current.start());
+    await act(async (): Promise<void> => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.phase).toBe("recording");
+
+    act(() => fakes.emitConnectionState("disconnected"));
+    expect(result.current.phase).toBe("recording");
+    await act(async (): Promise<void> => {
+      await vi.advanceTimersByTimeAsync(2_500);
+    });
+    act(() => fakes.emitConnectionState("disconnected"));
+    expect(vi.getTimerCount()).toBe(2); // Auto-stop plus the original disconnect grace.
+    await act(async (): Promise<void> => {
+      await vi.advanceTimersByTimeAsync(2_499);
+    });
+    expect(result.current.phase).toBe("recording");
+    expect(fakes.closeSession).not.toHaveBeenCalled();
+    expect(fakes.closeControl).not.toHaveBeenCalled();
+
+    await act(async (): Promise<void> => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(result.current.phase).toBe("error");
+    expect(result.current.error).toEqual({
+      reason: "connection-failed",
+      message: "Live dictation connection was lost.",
+    });
+    expect(fakes.closeSession).toHaveBeenCalledTimes(1);
+    expect(fakes.closeControl).toHaveBeenCalledTimes(1);
+
+    act(() => result.current.retry());
+    await act(async (): Promise<void> => {
+      await Promise.resolve();
+    });
+    expect(result.current.phase).toBe("recording");
+    expect(result.current.mode).toBe("batch");
+    expect(fakes.connect).toHaveBeenCalledTimes(1);
+    expect(recorder.start).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(1);
+
+    act(() => {
+      fakes.emitConnectionState("failed");
+      fakes.emitDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.delta",
+        delta: "stale realtime transcript",
+      });
+    });
+    expect(result.current.phase).toBe("recording");
+    expect(result.current.mode).toBe("batch");
+    expect(result.current.liveTranscript).toBe("");
+    expect(vi.getTimerCount()).toBe(1);
+
+    act(() => result.current.stop());
+    await act(async (): Promise<void> => {
+      await vi.advanceTimersToNextTimerAsync();
+    });
+    expect(result.current.phase).toBe("preview");
+    expect(transcribe).toHaveBeenCalledTimes(1);
+    expect(result.current.transcript).toBe("recovered batch transcript");
   });
 });

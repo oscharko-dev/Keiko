@@ -15,13 +15,14 @@ import {
   selectConfiguredModel,
   QualityIntelligenceSafeErrorException,
   type ModelSelectionQuery,
-  type ModelCapability,
 } from "@oscharko-dev/keiko-model-gateway";
-import type {
-  QualityIntelligenceModelPolicy,
-  QualityIntelligenceModelPolicyValidation,
-  QualityIntelligenceResolvedModelPolicy,
-  QualityIntelligenceStartRunRequest,
+import {
+  isQualityIntelligenceJudgeEligible,
+  type ModelCapability,
+  type QualityIntelligenceModelPolicy,
+  type QualityIntelligenceModelPolicyValidation,
+  type QualityIntelligenceResolvedModelPolicy,
+  type QualityIntelligenceStartRunRequest,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
 import { QiGenerationError } from "./generationPort.js";
@@ -38,10 +39,6 @@ function profileRequiresResponseFormat(profileId: QiProfileId): boolean {
   );
 }
 
-function hasEnforcedStructuredOutput(capability: ModelCapability): boolean {
-  return capability.structuredOutput && capability.supportsResponseFormat === true;
-}
-
 function isCapabilityCompatibleWithProfile(
   capability: ModelCapability,
   profileId: QiProfileId,
@@ -53,7 +50,9 @@ function isCapabilityCompatibleWithProfile(
     if (error instanceof QualityIntelligenceSafeErrorException) return false;
     throw error;
   }
-  return !profileRequiresResponseFormat(profileId) || hasEnforcedStructuredOutput(capability);
+  return (
+    !profileRequiresResponseFormat(profileId) || isQualityIntelligenceJudgeEligible(capability)
+  );
 }
 
 function isRequestedModelCompatible(
@@ -155,8 +154,8 @@ function defaultJudgeCapability(
   deps: UiHandlerDeps,
   avoidModelId?: string,
 ): ModelCapability | undefined {
-  const candidates = chatCapabilities(deps).filter((entry) =>
-    hasEnforcedStructuredOutput(entry.capability),
+  const candidates = chatCapabilities(deps).filter((entry): boolean =>
+    isQualityIntelligenceJudgeEligible(entry.capability),
   );
   const differentModelCandidates =
     avoidModelId === undefined

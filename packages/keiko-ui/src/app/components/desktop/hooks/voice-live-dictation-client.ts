@@ -7,8 +7,7 @@
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   VOICE_PROTOCOL_VERSION,
-  isVoiceControlMessage,
-  type VoiceControlMessage,
+  decodeVoiceControlMessage,
 } from "@oscharko-dev/keiko-contracts";
 
 const LIVE_TRANSCRIBE_PATH = "/api/voice/transcribe/live";
@@ -18,6 +17,7 @@ export class VoiceLiveDictationControlError extends Error {
   constructor(
     public readonly reason: "unavailable" | "negotiation-failed" | "connection-failed",
     message: string,
+    public readonly correlationId?: string | undefined,
   ) {
     super(message);
     this.name = "VoiceLiveDictationControlError";
@@ -194,17 +194,20 @@ export function createBrowserVoiceLiveDictationControlClient(
             return;
           }
 
-          if (!isVoiceControlMessage(parsed)) {
+          const msg = decodeVoiceControlMessage(parsed);
+          if (msg === undefined) {
             return;
           }
-          const msg = parsed as VoiceControlMessage;
 
           if (msg.kind === "error") {
-            const errorMsg = msg as Extract<VoiceControlMessage, { kind: "error" }>;
             const reason =
-              errorMsg.code === "negotiation-failed" ? "negotiation-failed" : "connection-failed";
+              msg.code === "negotiation-failed" ? "negotiation-failed" : "connection-failed";
             rejectOnce(
-              new VoiceLiveDictationControlError(reason, `Live dictation error: ${errorMsg.code}`),
+              new VoiceLiveDictationControlError(
+                reason,
+                `Live dictation error: ${msg.code}`,
+                msg.correlationId,
+              ),
             );
             return;
           }
@@ -216,8 +219,7 @@ export function createBrowserVoiceLiveDictationControlClient(
           }
 
           if (msg.kind === "signal.sdp.answer" && sessionCreated) {
-            const answerMsg = msg as Extract<VoiceControlMessage, { kind: "signal.sdp.answer" }>;
-            resolveOnce(answerMsg.sdp);
+            resolveOnce(msg.sdp);
           }
         });
       });

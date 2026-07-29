@@ -33,6 +33,7 @@ const QI_EN_MESSAGES = {
   "qi.status.cancelled": "Cancelled",
   "qi.severity.prefix": "Severity:",
   "qi.quality.notAvailable": "Quality score not available",
+  "qi.quality.unavailableLabel": "Unavailable",
   "qi.quality.outOf100": "out of 100",
   "qi.weakTest.aria": "Weak test flagged by the quality judge: {rationale}",
   "qi.weakTest.label": "Weak test",
@@ -176,6 +177,10 @@ const QI_EN_MESSAGES = {
   "qi.launcher.noChatModel": "No chat model",
   "qi.launcher.noJudgeModel": "No judge model",
   "qi.launcher.preflightStatus": "Model preflight: {status}",
+  "qi.launcher.judgeUnavailable.noCompatible":
+    "No compatible judge model is available. Runs can still succeed, but Quality will be unavailable.",
+  "qi.launcher.judgeUnavailable.preflight":
+    "The selected judge model is unavailable. Runs can still succeed, but Quality will be unavailable.",
   "qi.launcher.requirements": "Requirements",
   "qi.launcher.requirementsPlaceholder":
     "Paste requirements or acceptance criteria, one statement per line.",
@@ -255,6 +260,7 @@ const QI_DE_MESSAGES: QiMessageCatalog = {
   "qi.status.cancelled": "Abgebrochen",
   "qi.severity.prefix": "Schweregrad:",
   "qi.quality.notAvailable": "Qualitätswert nicht verfügbar",
+  "qi.quality.unavailableLabel": "Nicht verfügbar",
   "qi.quality.outOf100": "von 100",
   "qi.weakTest.aria": "Schwacher Test vom Qualitäts-Judge markiert: {rationale}",
   "qi.weakTest.label": "Schwacher Test",
@@ -402,6 +408,10 @@ const QI_DE_MESSAGES: QiMessageCatalog = {
   "qi.launcher.noChatModel": "Kein Chat-Modell",
   "qi.launcher.noJudgeModel": "Kein Judge-Modell",
   "qi.launcher.preflightStatus": "Modell-Preflight: {status}",
+  "qi.launcher.judgeUnavailable.noCompatible":
+    "Kein kompatibles Judge-Modell ist verfügbar. Läufe können dennoch erfolgreich sein, aber Quality ist nicht verfügbar.",
+  "qi.launcher.judgeUnavailable.preflight":
+    "Das ausgewählte Judge-Modell ist nicht verfügbar. Läufe können dennoch erfolgreich sein, aber Quality ist nicht verfügbar.",
   "qi.launcher.requirements": "Anforderungen",
   "qi.launcher.requirementsPlaceholder":
     "Füge Anforderungen oder Akzeptanzkriterien ein, jeweils eine Aussage pro Zeile.",

@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow, sendStatusLabel } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import {
+  canonicalTurnReferenceForClient,
   EMPTY_MODEL_RESPONSE_USER_MESSAGE,
   useChatSession,
   type ChatSessionApi,
@@ -816,6 +817,7 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     expect(askGroundedSpy).toHaveBeenCalledWith(
       {
         chatId: groundedChat.id,
+        clientTurnId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
         content: "ground plural scope",
         modelId: "example-chat-model",
         memory: {
@@ -1482,24 +1484,79 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
   // error must be surfaced in state AND the optimistic user-message removed.
   // Mutation: removing setError in the catch branch leaves error null (first assertion fails).
   // Mutation: removing the optimisticId filter leaves the orphaned user row (second assertion fails).
-  it("sets state.error and removes the optimistic user message on a mid-stream generic rejection", async () => {
-    const networkError = new TypeError("Failed to fetch");
-    vi.spyOn(api, "sendDesktopChatStream").mockRejectedValue(networkError);
+  it("sets state.error and removes the optimistic user message on a mid-stream generic rejection", async (): Promise<void> => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(20_000);
+    try {
+      const networkError = new TypeError("Failed to fetch");
+      let failedTurnId: string | undefined;
+      vi.spyOn(api, "sendDesktopChatStream").mockImplementation(async (request): Promise<never> => {
+        failedTurnId = request.clientTurnId;
+        throw networkError;
+      });
+      const earlierTurnRef = await canonicalTurnReferenceForClient(
+        "chat-stream",
+        "earlier-identical-turn",
+      );
+      vi.mocked(api.fetchChatMessages)
+        .mockResolvedValueOnce({ messages: [] })
+        .mockImplementation(async (): Promise<{ readonly messages: readonly ChatMessage[] }> => {
+          if (failedTurnId === undefined) throw new Error("missing failed turn identity");
+          return {
+            messages: [
+              {
+                id: "earlier-identical-user",
+                chatId: "chat-stream",
+                role: "user",
+                content: "trigger network error",
+                timestamp: 10_000,
+                canonicalTurnRef: earlierTurnRef,
+                runId: undefined,
+                workflowId: undefined,
+                workflowStatus: undefined,
+                shortResult: undefined,
+                taskType: undefined,
+              },
+              {
+                id: "failed-user-canonical",
+                chatId: "chat-stream",
+                role: "user",
+                content: "trigger network error",
+                timestamp: 20_000,
+                canonicalTurnRef: await canonicalTurnReferenceForClient(
+                  "chat-stream",
+                  failedTurnId,
+                ),
+                runId: undefined,
+                workflowId: undefined,
+                workflowStatus: undefined,
+                shortResult: undefined,
+                taskType: undefined,
+              },
+            ],
+          };
+        });
 
-    const view = await bootStreamingHook();
-    act(() => view.result.current.setDraft("trigger network error"));
-    await act(async () => {
-      await view.result.current.sendMessage();
-    });
+      const view = await bootStreamingHook();
+      act((): void => view.result.current.setDraft("trigger network error"));
+      await act(async (): Promise<void> => {
+        await view.result.current.sendMessage();
+      });
 
-    expect(view.result.current.sendStatus).toBe("failed");
-    expect(view.result.current.error).toBeTruthy();
-    // No orphaned user message — the optimistic row must have been removed.
-    const users = view.result.current.messages.filter((m) => m.role === "user");
-    expect(users).toHaveLength(0);
-    // No partial assistant content persisted.
-    const assistants = view.result.current.messages.filter((m) => m.role === "assistant");
-    expect(assistants).toHaveLength(0);
+      expect(view.result.current.sendStatus).toBe("failed");
+      expect(view.result.current.error).toBeTruthy();
+      // Only this failed turn is removed; an earlier identical turn stays visible.
+      const users = view.result.current.messages.filter(
+        (message): boolean => message.role === "user",
+      );
+      expect(users.map((message): string => message.id)).toEqual(["earlier-identical-user"]);
+      // No partial assistant content persisted.
+      const assistants = view.result.current.messages.filter(
+        (message): boolean => message.role === "assistant",
+      );
+      expect(assistants).toHaveLength(0);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("maps an empty provider stream error to a user-facing frontend message", async () => {

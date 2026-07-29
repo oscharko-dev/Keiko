@@ -1886,6 +1886,7 @@ export {
   assertNeverVoiceControlMessageKind,
   isVoiceControlMessage,
   validateVoiceControlMessage,
+  decodeVoiceControlMessage,
 } from "./voice-protocol.js";
 
 // ─── Voice transcript segment lifecycle (Issue #500 / Epic #491; ADR-0105) ───────
@@ -3183,6 +3184,7 @@ export type {
   QualityIntelligenceRunStreamError,
   QualityIntelligenceRunStreamMessage,
 } from "./qualityIntelligence/bffWire.js";
+export { isQualityIntelligenceJudgeEligible } from "./qualityIntelligence/bffWire.js";
 // Issue #283 added flat export-adapter consumers.
 export type {
   QualityIntelligenceExportAdapter,

@@ -202,6 +202,9 @@ export interface ChatMessage {
   readonly role: ChatRole;
   readonly content: string;
   readonly timestamp: number;
+  // Path/body-free scoped digest of a canonical client turn. It lets the browser reconcile one
+  // exact durable user row after a failed request without exposing the caller's raw turn identity.
+  readonly canonicalTurnRef?: string | undefined;
   readonly runId: string | undefined;
   readonly workflowId: string | undefined;
   readonly workflowStatus: WorkflowStatus | undefined;
@@ -634,6 +637,18 @@ export const MAX_DESKTOP_CHAT_INPUT_BYTES = 256_000;
 export const MAX_DESKTOP_CHAT_INPUT_CHARS = 256_000;
 export const MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS = 256;
 export const GROUNDING_SCOPE_IDENTITY_PATTERN = /^gsi-v1:[0-9a-f]{64}$/u;
+
+/**
+ * Serializes the chat and client turn identifiers as one unambiguous, ordered JSON tuple. Both
+ * fields remain distinct even when either contains commas, quotes, brackets, or other delimiter
+ * characters. Callers hash the returned UTF-8 seed when they need a content-free reference.
+ */
+export function canonicalDesktopChatTurnReferenceSeed(
+  chatId: string,
+  clientTurnId: string,
+): string {
+  return JSON.stringify([chatId, clientTurnId]);
+}
 
 export function isGroundingScopeIdentity(value: unknown): value is string {
   return typeof value === "string" && GROUNDING_SCOPE_IDENTITY_PATTERN.test(value);
