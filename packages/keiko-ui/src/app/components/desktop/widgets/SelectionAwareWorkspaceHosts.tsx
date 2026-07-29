@@ -187,6 +187,38 @@ function normalizedChatTitle(title: string | undefined): string | undefined {
   return normalized === undefined || normalized.length === 0 ? undefined : normalized;
 }
 
+type ChatCreationReconciliationStep =
+  | { readonly kind: "retry"; readonly chat: Chat }
+  | { readonly kind: "settled"; readonly result: ChatCreationResult };
+
+async function reconcileChatTitleRevision(
+  active: ActiveChatCreation,
+  chat: Chat,
+  replaceChat: ChatSessionApi["replaceChat"],
+  isCurrent: () => boolean,
+): Promise<ChatCreationReconciliationStep> {
+  const revision = active.titleRevision;
+  const title = active.desiredTitle;
+  if (title === undefined || chat.title === title) {
+    return { kind: "settled", result: { chat, titleSaveFailed: false } };
+  }
+  try {
+    const response = await updateChat(chat.id, { title });
+    if (!isCurrent()) {
+      return { kind: "settled", result: { chat: undefined, titleSaveFailed: false } };
+    }
+    if (revision !== active.titleRevision) return { kind: "retry", chat: response.chat };
+    replaceChat(response.chat);
+    return { kind: "settled", result: { chat: response.chat, titleSaveFailed: false } };
+  } catch {
+    if (revision !== active.titleRevision) return { kind: "retry", chat };
+    const result = isCurrent()
+      ? { chat, titleSaveFailed: true }
+      : { chat: undefined, titleSaveFailed: false };
+    return { kind: "settled", result };
+  }
+}
+
 async function reconcileActiveChatCreation(
   active: ActiveChatCreation,
   replaceChat: ChatSessionApi["replaceChat"],
@@ -195,22 +227,9 @@ async function reconcileActiveChatCreation(
   let chat = await active.promise;
   if (chat === undefined || !isCurrent()) return { chat: undefined, titleSaveFailed: false };
   while (isCurrent()) {
-    const revision = active.titleRevision;
-    const title = active.desiredTitle;
-    if (title === undefined || chat.title === title) return { chat, titleSaveFailed: false };
-    try {
-      const response = await updateChat(chat.id, { title });
-      if (!isCurrent()) return { chat: undefined, titleSaveFailed: false };
-      chat = response.chat;
-      if (revision !== active.titleRevision) continue;
-      replaceChat(chat);
-      return { chat, titleSaveFailed: false };
-    } catch {
-      if (revision !== active.titleRevision) continue;
-      return isCurrent()
-        ? { chat, titleSaveFailed: true }
-        : { chat: undefined, titleSaveFailed: false };
-    }
+    const step = await reconcileChatTitleRevision(active, chat, replaceChat, isCurrent);
+    if (step.kind === "settled") return step.result;
+    chat = step.chat;
   }
   return { chat: undefined, titleSaveFailed: false };
 }
