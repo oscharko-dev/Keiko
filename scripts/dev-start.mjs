@@ -247,6 +247,21 @@ export function codingRuntimeRequired(platform = process.platform, arch = proces
   return hostDevLaneTarget(platform, arch) !== undefined;
 }
 
+function healthError(name, error) {
+  if (error instanceof Error) return `${name}: ${error.message}`;
+  return `${name}: ${String(error)}`;
+}
+
+async function requiredRuntimeHealth(baseUrl) {
+  if (!codingRuntimeRequired()) return "ok";
+  try {
+    const runtime = await codingRuntimeHealth(baseUrl);
+    return runtime === "ok" ? "ok" : `runtime: ${runtime}`;
+  } catch (error) {
+    return healthError("runtime", error);
+  }
+}
+
 async function devServerHealth(port) {
   const baseUrl = `http://${host}:${String(port)}`;
   const checks = [
@@ -278,21 +293,15 @@ async function devServerHealth(port) {
     },
   ];
 
-  if (codingRuntimeRequired()) {
-    try {
-      const runtime = await codingRuntimeHealth(baseUrl);
-      if (runtime !== "ok") return `runtime: ${runtime}`;
-    } catch (error) {
-      return `runtime: ${error instanceof Error ? error.message : String(error)}`;
-    }
-  }
+  const runtime = await requiredRuntimeHealth(baseUrl);
+  if (runtime !== "ok") return runtime;
 
   for (const check of checks) {
     try {
       const result = await fetchOk(check.url, check.validate);
       if (result !== "ok") return `${check.name}: ${result}`;
     } catch (error) {
-      return `${check.name}: ${error instanceof Error ? error.message : String(error)}`;
+      return healthError(check.name, error);
     }
   }
   return "ok";

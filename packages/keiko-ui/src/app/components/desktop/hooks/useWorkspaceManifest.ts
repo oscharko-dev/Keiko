@@ -56,6 +56,15 @@ function hasTrackedRoot(rootPath: string | undefined): rootPath is string {
   return Boolean(rootPath);
 }
 
+function resolvePathReadAuthority(
+  rootPath: string | undefined,
+  authorityRoot: string | undefined,
+  authority: WorkspaceManifestView["pathReadAuthority"],
+): WorkspaceManifestView["pathReadAuthority"] {
+  if (authorityRoot === rootPath) return authority;
+  return hasTrackedRoot(rootPath) ? "checking" : "available";
+}
+
 export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceManifestView {
   const tracksRoot = hasTrackedRoot(rootPath);
   const [manifest, setManifest] = useState<WorkspaceManifest | null>(null);
@@ -159,12 +168,11 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
     },
     [mutating],
   );
-  const resolvedPathReadAuthority: WorkspaceManifestView["pathReadAuthority"] =
-    authorityRoot === rootPath
-      ? pathReadAuthority
-      : hasTrackedRoot(rootPath)
-        ? "checking"
-        : "available";
+  const resolvedPathReadAuthority = resolvePathReadAuthority(
+    rootPath,
+    authorityRoot,
+    pathReadAuthority,
+  );
 
   return useMemo<WorkspaceManifestView>(
     () => ({

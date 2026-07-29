@@ -1860,34 +1860,40 @@ function buildWorkspaceHealth(
   });
 }
 
+interface BuildWorkspaceCleanupArgs {
+  readonly options: BuildHandlerDepsOptions;
+  readonly instanceStore: WorkspaceInstanceStore | undefined;
+  readonly activePointerStore: ActiveWorkspacePointerStore | undefined;
+  readonly uiStore: UiStore;
+  readonly resolvedUiDbPath: string;
+  readonly evidenceStore: EvidenceStore;
+  readonly redactString: (value: string) => string;
+  readonly mutex: WorkspaceMutexRegistry;
+}
+
 function buildWorkspaceCleanup(
-  options: BuildHandlerDepsOptions,
-  instanceStore: WorkspaceInstanceStore | undefined,
-  activePointerStore: ActiveWorkspacePointerStore | undefined,
-  uiStore: UiStore,
-  resolvedUiDbPath: string,
-  evidenceStore: EvidenceStore,
-  redactString: (value: string) => string,
-  mutex: WorkspaceMutexRegistry,
+  args: BuildWorkspaceCleanupArgs,
 ): WorkspaceCleanupService | undefined {
-  if (options.workspaceCleanup !== undefined) return options.workspaceCleanup;
-  if (instanceStore === undefined || activePointerStore === undefined) return undefined;
+  if (args.options.workspaceCleanup !== undefined) return args.options.workspaceCleanup;
+  if (args.instanceStore === undefined || args.activePointerStore === undefined) return undefined;
   return createWorkspaceCleanupService({
-    store: instanceStore,
-    activePointerStore,
-    evidenceStore,
-    managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
+    store: args.instanceStore,
+    activePointerStore: args.activePointerStore,
+    evidenceStore: args.evidenceStore,
+    managedRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
     createAdapter: (workspace) =>
-      createNodeGitWorktreeAdapter({ workspace, processEnv: options.env }),
-    redactString,
+      createNodeGitWorktreeAdapter({ workspace, processEnv: args.options.env }),
+    redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,
     removeManagedWorkspaceIdentity: (instance): void => {
-      if (uiStore.listProjects().some((project) => project.path === instance.managedWorktreePath)) {
-        uiStore.deleteProject(instance.managedWorktreePath);
+      if (
+        args.uiStore.listProjects().some((project) => project.path === instance.managedWorktreePath)
+      ) {
+        args.uiStore.deleteProject(instance.managedWorktreePath);
       }
     },
-    mutex,
+    mutex: args.mutex,
   });
 }
 
@@ -2616,34 +2622,27 @@ interface TaskWorkspaceServices {
 
 // Issue #448 — the health + cleanup pair, split out to keep composeTaskWorkspaceServices small.
 function composeHealthAndCleanup(
-  options: BuildHandlerDepsOptions,
-  workspaceInstanceStore: WorkspaceInstanceStore | undefined,
-  activeWorkspacePointerStore: ActiveWorkspacePointerStore | undefined,
-  uiStore: UiStore,
-  resolvedUiDbPath: string,
-  evidenceStore: EvidenceStore,
-  redactString: (value: string) => string,
-  mutex: WorkspaceMutexRegistry,
+  args: ComposeCoreTaskWorkspaceServicesArgs,
 ): Pick<TaskWorkspaceServices, "workspaceHealth" | "workspaceCleanup"> {
   return {
     workspaceHealth: buildWorkspaceHealth(
-      options,
-      workspaceInstanceStore,
-      activeWorkspacePointerStore,
-      resolvedUiDbPath,
-      evidenceStore,
-      redactString,
+      args.options,
+      args.workspaceInstanceStore,
+      args.activeWorkspacePointerStore,
+      args.resolvedUiDbPath,
+      args.evidenceStore,
+      args.redactString,
     ),
-    workspaceCleanup: buildWorkspaceCleanup(
-      options,
-      workspaceInstanceStore,
-      activeWorkspacePointerStore,
-      uiStore,
-      resolvedUiDbPath,
-      evidenceStore,
-      redactString,
-      mutex,
-    ),
+    workspaceCleanup: buildWorkspaceCleanup({
+      options: args.options,
+      instanceStore: args.workspaceInstanceStore,
+      activePointerStore: args.activeWorkspacePointerStore,
+      uiStore: args.uiStore,
+      resolvedUiDbPath: args.resolvedUiDbPath,
+      evidenceStore: args.evidenceStore,
+      redactString: args.redactString,
+      mutex: args.mutex,
+    }),
   };
 }
 
@@ -2716,22 +2715,10 @@ function composeTaskWorkspaceServices(
   // keyspace, so they receive the SAME registry instance. Read-only services (reconciliation, health) do
   // not take it.
   const mutex = createWorkspaceMutexRegistry();
-  const commonArgs = [
-    args.options,
-    args.workspaceInstanceStore,
-    args.activeWorkspacePointerStore,
-    args.uiStore,
-    args.resolvedUiDbPath,
-    args.evidenceStore,
-    args.redactString,
-    mutex,
-  ] as const;
+  const composedArgs = { ...args, mutex };
   return {
-    ...composeCoreTaskWorkspaceServices({
-      ...args,
-      mutex,
-    }),
-    ...composeHealthAndCleanup(...commonArgs),
+    ...composeCoreTaskWorkspaceServices(composedArgs),
+    ...composeHealthAndCleanup(composedArgs),
   };
 }
 

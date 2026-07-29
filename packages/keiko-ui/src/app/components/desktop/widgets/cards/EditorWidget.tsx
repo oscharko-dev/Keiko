@@ -2032,8 +2032,7 @@ export function EditorWidget({
             />
           </aside>
           {/* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- WAI-ARIA window-splitter pattern: focusable role=separator exposes keyboard resizing through aria-valuenow. */}
-          <div
-            role="separator"
+          <hr
             tabIndex={0}
             className="ed-sidebar-resizer"
             aria-label="Resize project tree"

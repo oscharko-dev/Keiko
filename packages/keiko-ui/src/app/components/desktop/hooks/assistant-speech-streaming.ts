@@ -78,13 +78,16 @@ function reportAudioContextResumeFailure(): void {
 }
 
 function resumeAudioContext(context: AudioContext): void {
+  let pendingResume: Promise<void>;
   try {
-    void context.resume().catch(() => {
-      reportAudioContextResumeFailure();
-    });
+    pendingResume = context.resume();
   } catch {
     reportAudioContextResumeFailure();
+    return;
   }
+  void pendingResume.catch(() => {
+    reportAudioContextResumeFailure();
+  });
 }
 
 // Converts a little-endian PCM16 byte chunk to Int16 samples, carrying any trailing odd byte forward so

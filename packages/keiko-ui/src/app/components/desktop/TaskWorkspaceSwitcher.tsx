@@ -10,9 +10,9 @@ import {
   useId,
   useRef,
   useState,
-  type FormEvent,
   type ReactNode,
   type RefObject,
+  type SyntheticEvent,
 } from "react";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { newClientCorrelationId } from "@/lib/http";
@@ -126,7 +126,7 @@ interface FolderSelection {
   readonly manualPath: string;
   readonly setManualPath: (path: string) => void;
   readonly browse: () => void;
-  readonly submitManualPath: (event: FormEvent<HTMLFormElement>) => void;
+  readonly submitManualPath: (event: SyntheticEvent<HTMLFormElement>) => void;
 }
 
 async function clearTaskOverride(api: ActiveWorkspaceApi): Promise<void> {
