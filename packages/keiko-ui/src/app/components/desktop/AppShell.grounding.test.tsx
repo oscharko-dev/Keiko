@@ -853,7 +853,11 @@ describe("AppShell grounding connections", () => {
     );
   });
 
-  it("ignores absent collections and minimized root owners", (): void => {
+  it("returns no root owner when the window collection is absent", (): void => {
+    expect(frontmostSearchRootOwner(null)).toBeNull();
+  });
+
+  it("skips minimized otherwise-eligible root owners", (): void => {
     const editor = { ...win("editor", { root: "/repo/editor" }), z: 4 };
     const minimizedFiles = {
       ...win("files", { resolvedRoot: "/repo/files" }),
@@ -861,7 +865,6 @@ describe("AppShell grounding connections", () => {
       z: 9,
     };
 
-    expect(frontmostSearchRootOwner(null)).toBeNull();
     expect(frontmostSearchRootOwner([editor, minimizedFiles])).toBe(editor);
     expect(frontmostSearchRootOwner([minimizedFiles])).toBeNull();
   });
