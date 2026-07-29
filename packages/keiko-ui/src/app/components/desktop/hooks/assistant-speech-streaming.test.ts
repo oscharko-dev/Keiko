@@ -285,6 +285,46 @@ describe("createBrowserAssistantSpeechStreamingSink", () => {
     expect((reported as Error).message).not.toContain("customer-audio-detail");
   });
 
+  it.each(["asynchronously", "synchronously"] as const)(
+    "reports a content-free diagnostic when AudioContext resume fails %s",
+    async (failureMode) => {
+      const reportError = vi.fn();
+      vi.stubGlobal("reportError", reportError);
+      vi.stubGlobal(
+        "AudioContext",
+        class {
+          readonly audioWorklet = { addModule: vi.fn(() => Promise.resolve()) };
+          readonly destination = {};
+          readonly close = vi.fn(() => Promise.resolve());
+          readonly resume = vi.fn(() => {
+            if (failureMode === "synchronously") {
+              throw new Error("customer-audio-detail");
+            }
+            return Promise.reject(new Error("customer-audio-detail"));
+          });
+        },
+      );
+      vi.stubGlobal(
+        "AudioWorkletNode",
+        class {
+          readonly port = { postMessage: vi.fn(), close: vi.fn(), onmessage: null };
+          readonly connect = vi.fn();
+          readonly disconnect = vi.fn();
+        },
+      );
+
+      const sink = createBrowserAssistantSpeechStreamingSink();
+      expect(() => sink?.primeFromUserGesture()).not.toThrow();
+      await vi.waitFor(() => expect(reportError).toHaveBeenCalledOnce());
+      sink?.dispose();
+
+      const reported = reportError.mock.calls[0]?.[0];
+      expect(reported).toBeInstanceOf(Error);
+      expect((reported as Error).message).toBe("Assistant speech audio context resume failed.");
+      expect((reported as Error).message).not.toContain("customer-audio-detail");
+    },
+  );
+
   it("primes WebAudio synchronously without TTS and reuses the context for playback", async () => {
     const { contexts, nodes } = stubDeferredAudioResume(Promise.resolve());
     vi.mocked(streamAssistantSpeech).mockRejectedValue(new DOMException("cancelled", "AbortError"));

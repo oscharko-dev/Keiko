@@ -50,6 +50,7 @@ const PRIME_FRAMES = 2_400;
 const WORKLET_URL = "/keiko-playback-worklet.js";
 const WORKLET_NAME = "keiko-playback";
 const AUDIO_CONTEXT_CLEANUP_ERROR = "Assistant speech audio context cleanup failed.";
+const AUDIO_CONTEXT_RESUME_ERROR = "Assistant speech audio context resume failed.";
 
 function streamingSupported(): boolean {
   return typeof AudioContext !== "undefined" && typeof AudioWorkletNode !== "undefined";
@@ -72,13 +73,17 @@ interface AssistantSpeechContextLease {
   readonly generation: number;
 }
 
+function reportAudioContextResumeFailure(): void {
+  window.reportError(new Error(AUDIO_CONTEXT_RESUME_ERROR));
+}
+
 function resumeAudioContext(context: AudioContext): void {
   try {
     void context.resume().catch(() => {
-      // Playback remains text-visible when the browser rejects output activation.
+      reportAudioContextResumeFailure();
     });
   } catch {
-    // A synchronously rejected activation is equivalent to a rejected resume promise.
+    reportAudioContextResumeFailure();
   }
 }
 
