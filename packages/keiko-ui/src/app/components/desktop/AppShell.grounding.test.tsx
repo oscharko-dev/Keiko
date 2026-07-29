@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => ({
     groundingLimits: undefined as GroundingLimits | undefined,
     workspaceRendered: false,
     rightRailRendered: false,
+    rightRailOnTool: undefined as ((id: string) => void) | undefined,
   },
   fetchConfig: vi.fn(),
   fetchStartupUpdatePreflight: vi.fn(),
@@ -56,6 +57,7 @@ const mocks = vi.hoisted(() => ({
   registerSw: vi.fn(),
   gatewaySetupDialogModuleLoaded: vi.fn(),
   useKeyboardShortcuts: vi.fn(),
+  pushUndo: vi.fn(),
   undo: vi.fn(),
   redo: vi.fn(),
   dialogShowModal: vi.fn(function dialogShowModal(this: HTMLDialogElement): void {
@@ -145,7 +147,7 @@ vi.mock("./hooks/useUndoStack", () => ({
     canRedo: false,
     undoLabel: null,
     redoLabel: null,
-    push: vi.fn(),
+    push: mocks.pushUndo,
     undo: mocks.undo,
     redo: mocks.redo,
     clear: vi.fn(),
@@ -198,8 +200,9 @@ vi.mock("./LeftRail", () => ({
 }));
 
 vi.mock("./RightRail", () => ({
-  RightRail: () => {
+  RightRail: ({ onTool }: { readonly onTool: (id: string) => void }) => {
     mocks.state.rightRailRendered = true;
+    mocks.state.rightRailOnTool = onTool;
     return <aside data-testid="right-rail" />;
   },
 }));
@@ -407,6 +410,7 @@ describe("AppShell grounding connections", () => {
     mocks.state.workspaceOptions = undefined;
     mocks.state.workspaceRendered = false;
     mocks.state.rightRailRendered = false;
+    mocks.state.rightRailOnTool = undefined;
     document.documentElement.removeAttribute("data-input-modality");
   });
 
@@ -743,6 +747,33 @@ describe("AppShell grounding connections", () => {
     expect(api.add).toHaveBeenCalledWith("search", { root: "/repo/editor-selected" });
     expect(api.toggleTool).not.toHaveBeenCalledWith("search");
     statusSpy.mockRestore();
+    rafSpy.mockRestore();
+  });
+
+  it("records a minimized Search restore as a closed-to-open visibility transition", async () => {
+    const api = workspaceApi();
+    mocks.state.workspaceResult = workspaceResult(
+      [{ ...win("search", { root: "/repo" }, "search-window"), minimized: true }],
+      [],
+      api,
+    );
+    await renderMounted();
+    expect(mocks.state.rightRailOnTool).toBeTypeOf("function");
+    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 0);
+    vi.mocked(api.add).mockClear();
+    mocks.pushUndo.mockClear();
+
+    await act(async (): Promise<void> => {
+      mocks.state.rightRailOnTool?.("search");
+    });
+
+    expect(api.add).toHaveBeenCalledWith("search", expect.any(Object));
+    expect(mocks.pushUndo).toHaveBeenCalledWith({
+      kind: "ui.panel.toggle",
+      panel: "search",
+      before: false,
+      after: true,
+    });
     rafSpy.mockRestore();
   });
 

@@ -375,6 +375,37 @@ async function applyReviewedReplace(args: {
   };
 }
 
+function appliedReplaceMessage(
+  result: Awaited<ReturnType<typeof applyReviewedReplace>>,
+  t: OptionalWidgetTranslate,
+): string {
+  const suffix =
+    result.conflictCount > 0
+      ? t("searchPanel.replace.conflictsSuffix", {
+          count: result.conflictCount,
+          conflicts: conflictSummary(result.conflicts, t),
+        })
+      : "";
+  return t("searchPanel.replace.appliedSummary", {
+    count: result.appliedCount,
+    suffix,
+  });
+}
+
+function rootReplaceStatus(
+  preview: RootReplacePreview,
+  message: string,
+  multiRoot: boolean,
+  t: OptionalWidgetTranslate,
+): string {
+  return multiRoot
+    ? t("searchPanel.replace.rootPrefixedStatus", {
+        rootLabel: preview.target.label,
+        message,
+      })
+    : message;
+}
+
 function RootErrors({
   errors,
   operation,
@@ -724,39 +755,15 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
           files: preview.response.files,
         });
         if (!operationIsCurrent()) return;
-        const suffix =
-          result.conflictCount > 0
-            ? t("searchPanel.replace.conflictsSuffix", {
-                count: result.conflictCount,
-                conflicts: conflictSummary(result.conflicts, t),
-              })
-            : "";
-        const nextMessage = t("searchPanel.replace.appliedSummary", {
-          count: result.appliedCount,
-          suffix,
-        });
+        const nextMessage = appliedReplaceMessage(result, t);
         setReplaceMessages((current) => new Map(current).set(preview.target.id, nextMessage));
-        setReplaceStatus(
-          multiRoot
-            ? t("searchPanel.replace.rootPrefixedStatus", {
-                rootLabel: preview.target.label,
-                message: nextMessage,
-              })
-            : nextMessage,
-        );
+        setReplaceStatus(rootReplaceStatus(preview, nextMessage, multiRoot, t));
         setAppliedRootIds((current) => new Set(current).add(preview.target.id));
       } catch (error) {
         if (!operationIsCurrent()) return;
         const nextMessage = replaceErrorMessage(error, t("searchPanel.error.applyFailed"));
         setReplaceMessages((current) => new Map(current).set(preview.target.id, nextMessage));
-        setReplaceStatus(
-          multiRoot
-            ? t("searchPanel.replace.rootPrefixedStatus", {
-                rootLabel: preview.target.label,
-                message: nextMessage,
-              })
-            : nextMessage,
-        );
+        setReplaceStatus(rootReplaceStatus(preview, nextMessage, multiRoot, t));
       } finally {
         if (operationIsCurrent()) {
           activeApply.current = null;

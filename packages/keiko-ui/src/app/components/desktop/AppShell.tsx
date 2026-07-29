@@ -962,9 +962,11 @@ function AppShellInner(): ReactNode {
     (id: string): void => {
       if (!(id in WIN_TYPES)) return;
       const panel = id as WindowType;
-      const before = openTools.has(panel);
       const existing = ws.wins?.find((win): boolean => win.type === panel);
-      if (panel === "search" && (existing === undefined || existing.minimized === true)) {
+      const before = existing !== undefined && existing.minimized !== true;
+      const opensSearch =
+        panel === "search" && (existing === undefined || existing.minimized === true);
+      if (opensSearch) {
         openOrFocusSearchWindow(ws.api, resolveSearchRoot(activeWorkspace.activeRoot, searchOwner));
       } else {
         ws.api.toggleTool(panel);
@@ -973,10 +975,10 @@ function AppShellInner(): ReactNode {
         kind: "ui.panel.toggle",
         panel,
         before,
-        after: !before,
+        after: opensSearch || !before,
       });
     },
-    [activeWorkspace.activeRoot, openTools, searchOwner, undoStack, ws.api, ws.wins],
+    [activeWorkspace.activeRoot, searchOwner, undoStack, ws.api, ws.wins],
   );
 
   const onNewChat = useCallback((): void => pick("chat"), [pick]);
