@@ -542,7 +542,7 @@ describe("RunLauncher — initial render", () => {
 });
 
 describe("RunLauncher — Quality Intelligence capability truth (#2804)", (): void => {
-  it("does not present a structured-only model as an available judge", async (): Promise<void> => {
+  it("excludes a structured-only model from judge availability", async (): Promise<void> => {
     const user = userEvent.setup();
     const generationOnly = chatCapability("generation-only", {
       supportsResponseFormat: false,
@@ -588,7 +588,10 @@ describe("RunLauncher — Quality Intelligence capability truth (#2804)", (): vo
     expect(screen.getByTestId("qi-judge-unavailable")).toHaveTextContent(
       "No compatible judge model is available. Runs can still succeed, but Quality will be unavailable.",
     );
-    expect(screen.getByTestId("qi-judge-availability-announcement")).toHaveTextContent(
+    const judgeAnnouncement = screen.getByTestId("qi-judge-availability-announcement");
+    expect(judgeAnnouncement).toHaveAttribute("role", "status");
+    expect(judgeAnnouncement).toHaveAttribute("aria-live", "polite");
+    expect(judgeAnnouncement).toHaveTextContent(
       "No compatible judge model is available. Runs can still succeed, but Quality will be unavailable.",
     );
 
@@ -603,7 +606,7 @@ describe("RunLauncher — Quality Intelligence capability truth (#2804)", (): vo
     );
   });
 
-  it("keeps generation available while surfacing an unavailable judge-stage preflight", async (): Promise<void> => {
+  it("allows generation when judge preflight is unavailable", async (): Promise<void> => {
     const user = userEvent.setup();
     const judge = chatCapability("judge-ready", { supportsResponseFormat: true });
     const response = modelPolicyResponse([judge], {

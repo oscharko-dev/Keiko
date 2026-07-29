@@ -1430,6 +1430,7 @@ export function RunLauncher({
             {unavailableJudgeMessage}
           </p>
         ) : null}
+        {/* This region stays mounted while policy/preflight data changes so async messages announce. */}
         <span
           className="sr-only"
           role="status"
