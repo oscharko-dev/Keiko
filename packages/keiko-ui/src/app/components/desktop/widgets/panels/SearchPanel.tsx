@@ -664,7 +664,7 @@ function useSearchFormState(): SearchFormState {
   const [excludeText, setExcludeText] = useState("");
   const [replacement, setReplacement] = useState("");
   return useMemo(
-    () => ({
+    (): SearchFormState => ({
       query,
       setQuery,
       searchDomain,

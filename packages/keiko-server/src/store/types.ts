@@ -81,6 +81,7 @@ export type ChatTurnCompletion =
 export interface UiStore {
   readonly listProjects: () => readonly Project[];
   readonly createProject: (path: string, name?: string) => Project;
+  readonly reconnectProject: (path: string) => Project;
   readonly updateProject: (path: string, patch: UpdateProjectPatch) => Project;
   readonly deleteProject: (path: string) => void;
 

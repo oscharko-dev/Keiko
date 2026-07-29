@@ -402,11 +402,11 @@ export async function handleUpdateProject(
     const body = await readJsonObject(ctx.req);
     const patch = buildProjectPatch(body);
     // An empty PATCH is the existing-project reconnect operation. Re-entering the store's
-    // idempotent paired-write owner repairs a missing single-root manifest atomically while
-    // preserving the existing display name; ordinary metadata patches stay on updateProject.
+    // existing-only paired-write owner repairs a missing single-root manifest atomically without
+    // admitting an unregistered path; ordinary metadata patches stay on updateProject.
     const project =
       Object.keys(patch).length === 0
-        ? deps.store.createProject(targetPath)
+        ? deps.store.reconnectProject(targetPath)
         : deps.store.updateProject(targetPath, patch);
     return {
       status: 200,

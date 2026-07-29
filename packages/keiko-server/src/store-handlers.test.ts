@@ -528,6 +528,20 @@ describe("PATCH /api/projects", () => {
     });
   });
 
+  it("does not register an unknown directory when reconnecting with an empty patch", async () => {
+    const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: "{}",
+    });
+
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("NOT_FOUND");
+    expect(store.listProjects()).toHaveLength(0);
+    expect(store.listWorkspaceManifestRecords()).toHaveLength(0);
+  });
+
   it("returns 404 for unknown project", async () => {
     const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
       method: "PATCH",
