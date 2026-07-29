@@ -776,6 +776,7 @@ describe("useDictation — realtime live dictation (P3)", () => {
 
     expect(result.current.mode).toBe("realtime");
     expect(fakes.connect).toHaveBeenCalledTimes(1);
+    // Non-triggered outcomes: the current session proceeds through both identity guards.
     expect(fakes.negotiate).toHaveBeenCalledWith(fakes.session.offerSdp);
     expect(fakes.applyAnswer).toHaveBeenCalledTimes(1);
 
@@ -950,7 +951,7 @@ describe("useDictation — realtime live dictation (P3)", () => {
     expect(fakes.negotiate).toHaveBeenCalledTimes(1);
   });
 
-  it("ignores a negotiation result after the realtime session is cancelled", async (): Promise<void> => {
+  it("triggers the post-negotiate identity guard after retry retires the session", async (): Promise<void> => {
     let resolveNegotiation: (answerSdp: string) => void = (): void => {};
     const pendingNegotiation = new Promise<string>((resolve): void => {
       resolveNegotiation = resolve;
@@ -1000,7 +1001,7 @@ describe("useDictation — realtime live dictation (P3)", () => {
     expect(result.current.phase).toBe("idle");
   });
 
-  it("ignores answer application after the realtime session is cancelled", async (): Promise<void> => {
+  it("triggers the post-applyAnswer identity guard after retry retires the session", async (): Promise<void> => {
     let resolveApplyAnswer: () => void = (): void => {};
     const pendingApplyAnswer = new Promise<void>((resolve): void => {
       resolveApplyAnswer = resolve;

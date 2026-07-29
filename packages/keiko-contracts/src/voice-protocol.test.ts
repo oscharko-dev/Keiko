@@ -97,7 +97,7 @@ function withoutField(
   value: Readonly<Record<string, unknown>>,
   field: string,
 ): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== field));
+  return Object.fromEntries(Object.entries(value).filter(([key]): boolean => key !== field));
 }
 
 describe("voice protocol — version & catalog", () => {
@@ -600,14 +600,38 @@ describe("envelope validation & guards", () => {
       { ...wellFormedSessionCreatedMessage(), mediaTransport: "peer-to-peer" },
     ],
     [
+      "session.created with another valid profile",
+      { ...wellFormedSessionCreatedMessage(), profile: "speech-to-text" },
+    ],
+    [
+      "session.created with the legacy control transport",
+      { ...wellFormedSessionCreatedMessage(), controlTransport: VOICE_CONTROL_TRANSPORT_V1 },
+    ],
+    [
+      "session.created with another valid media transport",
+      {
+        ...wellFormedSessionCreatedMessage(),
+        mediaTransport: VOICE_PROFILE_MEDIA_TRANSPORT["speech-to-text"],
+      },
+    ],
+    [
       "session.created with invalid negotiation mode",
       { ...wellFormedSessionCreatedMessage(), negotiationMode: "automatic" },
+    ],
+    [
+      "session.created with another valid negotiation mode",
+      {
+        ...wellFormedSessionCreatedMessage(),
+        negotiationMode: VOICE_PROFILE_NEGOTIATION_MODE["speech-to-text"],
+      },
     ],
     [
       "session.created with invalid provider locality",
       { ...wellFormedSessionCreatedMessage(), providerLocality: "provider-detail" },
     ],
     ["signal.sdp.answer without SDP", withoutField(wellFormedSdpAnswerMessage(), "sdp")],
+    ["signal.sdp.answer with empty SDP", { ...wellFormedSdpAnswerMessage(), sdp: "" }],
+    ["signal.sdp.answer with blank SDP", { ...wellFormedSdpAnswerMessage(), sdp: " \r\n " }],
     ["signal.sdp.answer with non-string SDP", { ...wellFormedSdpAnswerMessage(), sdp: 42 }],
     [
       "negotiation message in the client-to-host direction",

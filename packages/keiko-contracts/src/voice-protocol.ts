@@ -50,7 +50,6 @@ export const VOICE_CONTROL_TRANSPORTS: readonly VoiceControlTransport[] = [
   "loopback-http-sse",
   "loopback-websocket",
 ] as const;
-const VOICE_CONTROL_TRANSPORT_SET: ReadonlySet<string> = new Set(VOICE_CONTROL_TRANSPORTS);
 
 // Published v1 transport literal. It describes the original HTTP/SSE realization and is immutable:
 // changing a versioned public constant in place breaks persisted records and downstream consumers.
@@ -70,7 +69,6 @@ export const VOICE_MEDIA_TRANSPORTS: readonly VoiceMediaTransport[] = [
   "gateway-batch",
   "webrtc",
 ] as const;
-const VOICE_MEDIA_TRANSPORT_SET: ReadonlySet<string> = new Set(VOICE_MEDIA_TRANSPORTS);
 
 // Browser ↔ provider negotiation options for the real-time media plane. `proxied-sdp` is preferred:
 // the Keiko host performs SDP negotiation so the browser never holds even the ephemeral token.
@@ -629,14 +627,6 @@ function isVoiceProfile(value: unknown): value is VoiceProfile {
   );
 }
 
-function isVoiceControlTransport(value: unknown): value is VoiceControlTransport {
-  return typeof value === "string" && VOICE_CONTROL_TRANSPORT_SET.has(value);
-}
-
-function isVoiceMediaTransport(value: unknown): value is VoiceMediaTransport {
-  return typeof value === "string" && VOICE_MEDIA_TRANSPORT_SET.has(value);
-}
-
 function isOptionalVoiceProviderLocality(
   value: unknown,
 ): value is VoiceProviderLocality | undefined {
@@ -852,16 +842,16 @@ function isDecodedSessionCreatedMessage(
 ): value is VoiceSessionCreatedMessage {
   return (
     value.kind === "session.created" &&
-    isVoiceProfile(value.profile) &&
-    isVoiceControlTransport(value.controlTransport) &&
-    isVoiceMediaTransport(value.mediaTransport) &&
-    isVoiceNegotiationMode(value.negotiationMode) &&
+    value.profile === "full-realtime" &&
+    value.controlTransport === VOICE_REALTIME_CONTROL_TRANSPORT &&
+    value.mediaTransport === VOICE_PROFILE_MEDIA_TRANSPORT["full-realtime"] &&
+    value.negotiationMode === VOICE_PROFILE_NEGOTIATION_MODE["full-realtime"] &&
     isOptionalVoiceProviderLocality(value.providerLocality)
   );
 }
 
 function isDecodedSdpAnswerMessage(value: VoiceControlMessage): value is VoiceSdpAnswerMessage {
-  return value.kind === "signal.sdp.answer" && typeof value.sdp === "string";
+  return value.kind === "signal.sdp.answer" && isNonEmptyTrimmed(value.sdp);
 }
 
 function isBrowserNegotiationMessage(

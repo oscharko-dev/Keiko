@@ -506,15 +506,16 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
 
   it("classifies a thrown negotiation failure in one body-free correlated diagnostic", async (): Promise<void> => {
     const diagnostics: ServerDiagnosticRecord[] = [];
+    const negotiationRequest = vi.fn(async (): Promise<never> => {
+      await Promise.resolve();
+      throw new Error("provider-secret-throw-never-diagnosed");
+    });
     const port = await boot(
       depsWith({
         config: voiceConfig(true),
         configPresent: true,
         diagnostics: { record: (record): void => void diagnostics.push(record) },
-        voiceRealtimeNegotiationRequest: async (): Promise<never> => {
-          await Promise.resolve();
-          throw new Error("provider-secret-throw-never-diagnosed");
-        },
+        voiceRealtimeNegotiationRequest: negotiationRequest,
       }),
     );
     const { ws: socket, next } = expectOpen(
@@ -543,6 +544,7 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
       state: "ended",
     });
     socket.close();
+    expect(negotiationRequest).toHaveBeenCalledTimes(1);
     expect(diagnostics).toEqual([
       expect.objectContaining({
         correlationId: failure.correlationId,
