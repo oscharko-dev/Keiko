@@ -438,7 +438,7 @@ function ReplaceReviews({
           model={preview.model}
           loadState={{ status: "ready" }}
           actions={{
-            canApply: !applied,
+            canApply: applyingRootId === null && !applied,
             canReject: false,
             canRunVerification: false,
           }}
@@ -484,6 +484,7 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
   const currentTargetsScopeKey = useRef(targetsScopeKey);
   currentTargetsScopeKey.current = targetsScopeKey;
   const applyGeneration = useRef(0);
+  const activeApply = useRef<object | null>(null);
   const multiRoot = targets.length > 1;
   const queryInputRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState("");
@@ -524,6 +525,7 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
 
   useEffect((): void => {
     applyGeneration.current += 1;
+    activeApply.current = null;
     setResponse(null);
     setReplacePreviews([]);
     setStatus("idle");
@@ -705,10 +707,13 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
 
   const applyReplacePreview = useCallback(
     async (preview: RootReplacePreview): Promise<void> => {
+      if (activeApply.current !== null) return;
       const requestedTargetsScopeKey = targetsScopeKey;
-      const requestedGeneration = applyGeneration.current + 1;
-      applyGeneration.current = requestedGeneration;
+      const requestedGeneration = applyGeneration.current;
+      const operation = {};
+      activeApply.current = operation;
       const operationIsCurrent = (): boolean =>
+        activeApply.current === operation &&
         applyGeneration.current === requestedGeneration &&
         currentTargetsScopeKey.current === requestedTargetsScopeKey;
       setApplyingRootId(preview.target.id);
@@ -753,7 +758,10 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
             : nextMessage,
         );
       } finally {
-        if (operationIsCurrent()) setApplyingRootId(null);
+        if (operationIsCurrent()) {
+          activeApply.current = null;
+          setApplyingRootId(null);
+        }
       }
     },
     [multiRoot, openBuffers, t, targetsScopeKey],

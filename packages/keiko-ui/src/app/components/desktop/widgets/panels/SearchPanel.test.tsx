@@ -82,9 +82,15 @@ vi.mock("../cards/EditorDiffSurface", (): object => ({
     unsupportedCount: 0,
     truncated: response.truncated,
   }),
-  default: ({ onApply }: { readonly onApply?: (() => void) | undefined }): ReactNode => (
+  default: ({
+    actions,
+    onApply,
+  }: {
+    readonly actions: { readonly canApply: boolean };
+    readonly onApply?: (() => void) | undefined;
+  }): ReactNode => (
     <div data-testid="replace-diff">
-      <button type="button" onClick={onApply}>
+      <button type="button" disabled={!actions.canApply} onClick={onApply}>
         Diff apply
       </button>
     </div>
@@ -594,9 +600,12 @@ describe("SearchPanel", () => {
         ]}
       />,
     );
+    const expectedRejection = expect(pendingSource.promise).rejects.toThrow(
+      "Obsolete source failed.",
+    );
     await act(async (): Promise<void> => {
       pendingSource.reject(new Error("Obsolete source failed."));
-      await pendingSource.promise.catch((): void => undefined);
+      await expectedRejection;
     });
 
     expect(screen.queryByText("Obsolete source failed.")).toBeNull();
@@ -615,6 +624,10 @@ describe("SearchPanel", () => {
     await screen.findByTestId("replace-diff");
     fireEvent.click(screen.getByRole("button", { name: "Apply reviewed replace" }));
     await waitFor((): void => expect(applyWorkspaceReplaceMock).toHaveBeenCalledOnce());
+    expect(screen.getByRole("button", { name: "Apply reviewed replace" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Diff apply" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Diff apply" }));
+    expect(applyWorkspaceReplaceMock).toHaveBeenCalledOnce();
 
     view.rerender(
       <SearchPanel
