@@ -12,7 +12,7 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import type { VoiceProfile } from "./gateway.js";
+import { VOICE_PROVIDER_LOCALITIES, type VoiceProfile } from "./gateway.js";
 import { decodeVoiceControlMessage, type VoiceErrorMessage } from "./index.js";
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
@@ -71,6 +71,33 @@ function wellFormedMessage(kind: VoiceControlMessageKind): Record<string, unknow
       : {}),
     ...(kind === "error" ? { code: VOICE_PROTOCOL_ERROR_CODES.at(-1) } : {}),
   };
+}
+
+function wellFormedSessionCreatedMessage(): Record<string, unknown> {
+  return {
+    ...wellFormedMessage("session.created"),
+    direction: "host-to-client",
+    profile: "full-realtime",
+    controlTransport: VOICE_REALTIME_CONTROL_TRANSPORT,
+    mediaTransport: VOICE_PROFILE_MEDIA_TRANSPORT["full-realtime"],
+    negotiationMode: VOICE_PROFILE_NEGOTIATION_MODE["full-realtime"],
+    providerLocality: VOICE_PROVIDER_LOCALITIES.at(0),
+  };
+}
+
+function wellFormedSdpAnswerMessage(): Record<string, unknown> {
+  return {
+    ...wellFormedMessage("signal.sdp.answer"),
+    direction: "host-to-client",
+    sdp: "v=0\r\nanswer-sdp",
+  };
+}
+
+function withoutField(
+  value: Readonly<Record<string, unknown>>,
+  field: string,
+): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== field));
 }
 
 describe("voice protocol — version & catalog", () => {
@@ -518,12 +545,14 @@ describe("envelope validation & guards", () => {
   it("decodes an error after discarding only malformed optional correlation metadata", (): void => {
     const message = {
       ...wellFormedMessage("error"),
+      direction: "host-to-client",
       code: "negotiation-failed",
       correlationId: "<provider detail>",
     };
 
     expect(decodeVoiceControlMessage(message)).toEqual({
       ...wellFormedMessage("error"),
+      direction: "host-to-client",
       code: "negotiation-failed",
     });
     expect(message.correlationId).toBe("<provider detail>");
@@ -545,11 +574,57 @@ describe("envelope validation & guards", () => {
       expect(
         decodeVoiceControlMessage({
           ...message,
+          direction: "host-to-client",
           correlationId: "<invalid optional metadata>",
         }),
       ).toBeUndefined();
     },
   );
+
+  it("decodes structurally complete inbound negotiation payloads", (): void => {
+    const created = wellFormedSessionCreatedMessage();
+    const answer = wellFormedSdpAnswerMessage();
+
+    expect(decodeVoiceControlMessage(created)).toEqual(created);
+    expect(decodeVoiceControlMessage(answer)).toEqual(answer);
+  });
+
+  it.each([
+    ["session.created without profile", withoutField(wellFormedSessionCreatedMessage(), "profile")],
+    [
+      "session.created without control transport",
+      withoutField(wellFormedSessionCreatedMessage(), "controlTransport"),
+    ],
+    [
+      "session.created with invalid media transport",
+      { ...wellFormedSessionCreatedMessage(), mediaTransport: "peer-to-peer" },
+    ],
+    [
+      "session.created with invalid negotiation mode",
+      { ...wellFormedSessionCreatedMessage(), negotiationMode: "automatic" },
+    ],
+    [
+      "session.created with invalid provider locality",
+      { ...wellFormedSessionCreatedMessage(), providerLocality: "provider-detail" },
+    ],
+    ["signal.sdp.answer without SDP", withoutField(wellFormedSdpAnswerMessage(), "sdp")],
+    ["signal.sdp.answer with non-string SDP", { ...wellFormedSdpAnswerMessage(), sdp: 42 }],
+    [
+      "negotiation message in the client-to-host direction",
+      { ...wellFormedSdpAnswerMessage(), direction: "client-to-host" },
+    ],
+  ])("rejects an incomplete %s payload", (_label, message): void => {
+    expect(decodeVoiceControlMessage(message)).toBeUndefined();
+  });
+
+  it("ignores control messages outside the browser negotiation subset", (): void => {
+    expect(
+      decodeVoiceControlMessage({
+        ...wellFormedMessage("capability.offer"),
+        direction: "host-to-client",
+      }),
+    ).toBeUndefined();
+  });
 
   it("accepts a well-formed envelope for every kind", () => {
     for (const kind of VOICE_CONTROL_MESSAGE_KINDS) {

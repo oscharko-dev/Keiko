@@ -8,7 +8,6 @@ import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   VOICE_PROTOCOL_VERSION,
   decodeVoiceControlMessage,
-  type VoiceControlMessage,
   type VoiceSessionChatContext,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -231,10 +230,9 @@ export function createBrowserVoiceControlClient(
           }
 
           if (msg.kind === "error") {
-            const errorMsg = msg as Extract<VoiceControlMessage, { kind: "error" }>;
             const reason =
-              errorMsg.code === "negotiation-failed" ? "negotiation-failed" : "connection-failed";
-            rejectOnce(new VoiceControlError(reason, `Voice control error: ${errorMsg.code}`));
+              msg.code === "negotiation-failed" ? "negotiation-failed" : "connection-failed";
+            rejectOnce(new VoiceControlError(reason, `Voice control error: ${msg.code}`));
             return;
           }
 
@@ -247,8 +245,7 @@ export function createBrowserVoiceControlClient(
           }
 
           if (msg.kind === "signal.sdp.answer" && sessionCreated) {
-            const answerMsg = msg as Extract<VoiceControlMessage, { kind: "signal.sdp.answer" }>;
-            resolveOnce(answerMsg.sdp);
+            resolveOnce(msg.sdp);
           }
 
           // "capability.offer" and "media.track.state" (negotiating) are expected and ignored.

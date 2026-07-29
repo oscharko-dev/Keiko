@@ -15,6 +15,7 @@
 // the single capability-gated loopback WebSocket path selected by Issue #497 and narrowed to
 // media-input/transcription authority by ADR-0154.
 
+import { VOICE_PROVIDER_LOCALITIES } from "./gateway.js";
 import type {
   VoicePersona,
   VoiceProfile,
@@ -49,6 +50,7 @@ export const VOICE_CONTROL_TRANSPORTS: readonly VoiceControlTransport[] = [
   "loopback-http-sse",
   "loopback-websocket",
 ] as const;
+const VOICE_CONTROL_TRANSPORT_SET: ReadonlySet<string> = new Set(VOICE_CONTROL_TRANSPORTS);
 
 // Published v1 transport literal. It describes the original HTTP/SSE realization and is immutable:
 // changing a versioned public constant in place breaks persisted records and downstream consumers.
@@ -68,6 +70,7 @@ export const VOICE_MEDIA_TRANSPORTS: readonly VoiceMediaTransport[] = [
   "gateway-batch",
   "webrtc",
 ] as const;
+const VOICE_MEDIA_TRANSPORT_SET: ReadonlySet<string> = new Set(VOICE_MEDIA_TRANSPORTS);
 
 // Browser ↔ provider negotiation options for the real-time media plane. `proxied-sdp` is preferred:
 // the Keiko host performs SDP negotiation so the browser never holds even the ephemeral token.
@@ -80,6 +83,7 @@ export const VOICE_NEGOTIATION_MODES: readonly VoiceNegotiationMode[] = [
   "direct-ephemeral",
   "disabled",
 ] as const;
+const VOICE_NEGOTIATION_MODE_SET: ReadonlySet<string> = new Set(VOICE_NEGOTIATION_MODES);
 
 export const PREFERRED_VOICE_NEGOTIATION_MODE: VoiceNegotiationMode = "proxied-sdp";
 
@@ -597,6 +601,7 @@ const VOICE_SESSION_GROUNDING_FIELDS: ReadonlySet<string> = new Set([
 ]);
 const VOICE_ERROR_CORRELATION_ID_MAX_LENGTH = 128;
 const VOICE_ERROR_CORRELATION_ID_INVALID_CHARACTER = /[^A-Za-z0-9._-]/u;
+const VOICE_PROVIDER_LOCALITY_SET: ReadonlySet<string> = new Set(VOICE_PROVIDER_LOCALITIES);
 
 // ─── Type guards & lookups ───────────────────────────────────────────────────────
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -621,6 +626,22 @@ function isVoiceProfile(value: unknown): value is VoiceProfile {
     value === "speech-to-text" ||
     value === "speech-output" ||
     value === "full-realtime"
+  );
+}
+
+function isVoiceControlTransport(value: unknown): value is VoiceControlTransport {
+  return typeof value === "string" && VOICE_CONTROL_TRANSPORT_SET.has(value);
+}
+
+function isVoiceMediaTransport(value: unknown): value is VoiceMediaTransport {
+  return typeof value === "string" && VOICE_MEDIA_TRANSPORT_SET.has(value);
+}
+
+function isOptionalVoiceProviderLocality(
+  value: unknown,
+): value is VoiceProviderLocality | undefined {
+  return (
+    value === undefined || (typeof value === "string" && VOICE_PROVIDER_LOCALITY_SET.has(value))
   );
 }
 
@@ -748,9 +769,7 @@ export function isVoiceMessageDirection(value: unknown): value is VoiceMessageDi
 }
 
 export function isVoiceNegotiationMode(value: unknown): value is VoiceNegotiationMode {
-  return (
-    typeof value === "string" && (VOICE_NEGOTIATION_MODES as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && VOICE_NEGOTIATION_MODE_SET.has(value);
 }
 
 // The replay class for a control-message kind. `replayable` events are the ones a reconnect
@@ -828,14 +847,45 @@ export function validateVoiceControlMessage(value: unknown): VoiceProtocolValida
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
 
+function isDecodedSessionCreatedMessage(
+  value: VoiceControlMessage,
+): value is VoiceSessionCreatedMessage {
+  return (
+    value.kind === "session.created" &&
+    isVoiceProfile(value.profile) &&
+    isVoiceControlTransport(value.controlTransport) &&
+    isVoiceMediaTransport(value.mediaTransport) &&
+    isVoiceNegotiationMode(value.negotiationMode) &&
+    isOptionalVoiceProviderLocality(value.providerLocality)
+  );
+}
+
+function isDecodedSdpAnswerMessage(value: VoiceControlMessage): value is VoiceSdpAnswerMessage {
+  return value.kind === "signal.sdp.answer" && typeof value.sdp === "string";
+}
+
+function isBrowserNegotiationMessage(
+  value: VoiceControlMessage,
+): value is VoiceSessionCreatedMessage | VoiceSdpAnswerMessage | VoiceErrorMessage {
+  if (value.direction !== "host-to-client") return false;
+  return (
+    value.kind === "error" ||
+    isDecodedSessionCreatedMessage(value) ||
+    isDecodedSdpAnswerMessage(value)
+  );
+}
+
 /**
- * Decode an untrusted voice-control value through the shared protocol validator.
+ * Decode the host-to-browser control messages used by the proxied-SDP negotiation handshake.
  *
  * Invalid optional error correlation metadata is omitted from a copy so it cannot hide an otherwise
- * valid control-plane failure. Required envelope and payload failures still fail closed and return
- * `undefined`.
+ * valid control-plane failure. Only `session.created`, `signal.sdp.answer`, and `error` are returned;
+ * their required payload fields are checked after envelope validation. Other message kinds and
+ * malformed negotiation payloads return `undefined`.
  */
-export function decodeVoiceControlMessage(value: unknown): VoiceControlMessage | undefined {
+export function decodeVoiceControlMessage(
+  value: unknown,
+): VoiceSessionCreatedMessage | VoiceSdpAnswerMessage | VoiceErrorMessage | undefined {
   let candidate = value;
   if (
     isRecord(value) &&
@@ -846,5 +896,7 @@ export function decodeVoiceControlMessage(value: unknown): VoiceControlMessage |
     delete withoutCorrelationId.correlationId;
     candidate = withoutCorrelationId;
   }
-  return isVoiceControlMessage(candidate) ? candidate : undefined;
+  return isVoiceControlMessage(candidate) && isBrowserNegotiationMessage(candidate)
+    ? candidate
+    : undefined;
 }

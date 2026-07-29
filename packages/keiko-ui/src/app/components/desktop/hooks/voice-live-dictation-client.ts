@@ -8,7 +8,6 @@ import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   VOICE_PROTOCOL_VERSION,
   decodeVoiceControlMessage,
-  type VoiceControlMessage,
 } from "@oscharko-dev/keiko-contracts";
 
 const LIVE_TRANSCRIBE_PATH = "/api/voice/transcribe/live";
@@ -201,14 +200,13 @@ export function createBrowserVoiceLiveDictationControlClient(
           }
 
           if (msg.kind === "error") {
-            const errorMsg = msg as Extract<VoiceControlMessage, { kind: "error" }>;
             const reason =
-              errorMsg.code === "negotiation-failed" ? "negotiation-failed" : "connection-failed";
+              msg.code === "negotiation-failed" ? "negotiation-failed" : "connection-failed";
             rejectOnce(
               new VoiceLiveDictationControlError(
                 reason,
-                `Live dictation error: ${errorMsg.code}`,
-                errorMsg.correlationId,
+                `Live dictation error: ${msg.code}`,
+                msg.correlationId,
               ),
             );
             return;
@@ -221,8 +219,7 @@ export function createBrowserVoiceLiveDictationControlClient(
           }
 
           if (msg.kind === "signal.sdp.answer" && sessionCreated) {
-            const answerMsg = msg as Extract<VoiceControlMessage, { kind: "signal.sdp.answer" }>;
-            resolveOnce(answerMsg.sdp);
+            resolveOnce(msg.sdp);
           }
         });
       });
