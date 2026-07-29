@@ -27,7 +27,6 @@ import {
 } from "@/lib/optional-widget-i18n";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/useWorkspace.types";
 import { Icons } from "../../Icons";
-import { useOptionalChatSessionCatalog } from "../../context/ChatSessionContext";
 import { useWorkspaceReplaceBuffers } from "../../WorkspaceReplaceBufferContext";
 import {
   requestWorkspaceRoots,
@@ -125,6 +124,15 @@ function panelTargets(
 ): readonly WorkspaceRootTarget[] {
   if (roots !== undefined && roots.length > 0) return roots;
   return root === undefined ? [] : [{ id: root, root, label: projectName }];
+}
+
+function panelProjectName(
+  root: string | undefined,
+  roots: readonly WorkspaceRootTarget[] | undefined,
+  t: OptionalWidgetTranslate,
+): string {
+  if (root === undefined) return t("searchPanel.noProjectSelected");
+  return roots?.find((target): boolean => target.root === root)?.label ?? root;
 }
 
 function statusMessage(args: {
@@ -295,6 +303,75 @@ async function sourcesForPreview(
   return Object.fromEntries(entries);
 }
 
+type TargetReplacePreviewResult =
+  | { readonly status: "preview"; readonly preview: RootReplacePreview }
+  | { readonly status: "error"; readonly error: RootSearchError }
+  | { readonly status: "stale" };
+
+async function previewReplaceTarget(args: {
+  readonly target: WorkspaceRootTarget;
+  readonly query: string;
+  readonly mode: WorkspaceSearchMode;
+  readonly caseSensitive: boolean;
+  readonly includeText: string;
+  readonly excludeText: string;
+  readonly replacement: string;
+  readonly isCurrent: () => boolean;
+  readonly t: OptionalWidgetTranslate;
+}): Promise<TargetReplacePreviewResult> {
+  try {
+    const response = await fetchWorkspaceReplacePreview({
+      root: args.target.root,
+      query: args.query,
+      mode: args.mode,
+      caseSensitive: args.caseSensitive,
+      includeGlobs: globArray(args.includeText),
+      excludeGlobs: globArray(args.excludeText),
+      replacement: args.replacement,
+      maxFiles: WORKSPACE_REPLACE_MAX_FILES,
+    });
+    if (!args.isCurrent()) return { status: "stale" };
+    const sources = await sourcesForPreview(args.target.root, response.files);
+    if (!args.isCurrent()) return { status: "stale" };
+    return {
+      status: "preview",
+      preview: {
+        target: args.target,
+        response,
+        model: buildWorkspaceReplacePatchModel(response, sources),
+      },
+    };
+  } catch (error) {
+    if (!args.isCurrent()) return { status: "stale" };
+    return {
+      status: "error",
+      error: {
+        id: args.target.id,
+        label: args.target.label,
+        message: replaceErrorMessage(error, args.t("searchPanel.error.previewFailed")),
+      },
+    };
+  }
+}
+
+async function collectReplacePreviews(
+  targets: readonly WorkspaceRootTarget[],
+  request: Omit<Parameters<typeof previewReplaceTarget>[0], "target">,
+): Promise<{
+  readonly previews: readonly RootReplacePreview[];
+  readonly errors: readonly RootSearchError[];
+} | null> {
+  const previews: RootReplacePreview[] = [];
+  const errors: RootSearchError[] = [];
+  for (const target of targets) {
+    const result = await previewReplaceTarget({ ...request, target });
+    if (result.status === "stale") return null;
+    if (result.status === "preview") previews.push(result.preview);
+    else errors.push(result.error);
+  }
+  return { previews, errors };
+}
+
 function replaceSummary(
   response: WorkspaceReplacePreviewResponse | null,
   t: OptionalWidgetTranslate,
@@ -367,6 +444,34 @@ async function applyReviewedReplace(args: {
   };
 }
 
+function appliedReplaceMessage(
+  result: Awaited<ReturnType<typeof applyReviewedReplace>>,
+  t: OptionalWidgetTranslate,
+): string {
+  const suffix =
+    result.conflictCount > 0
+      ? t("searchPanel.replace.conflictsSuffix", {
+          count: result.conflictCount,
+          conflicts: conflictSummary(result.conflicts, t),
+        })
+      : "";
+  return t("searchPanel.replace.appliedSummary", {
+    count: result.appliedCount,
+    suffix,
+  });
+}
+
+function rootPrefixedReplaceStatus(
+  preview: RootReplacePreview,
+  message: string,
+  t: OptionalWidgetTranslate,
+): string {
+  return t("searchPanel.replace.rootPrefixedStatus", {
+    rootLabel: preview.target.label,
+    message,
+  });
+}
+
 function RootErrors({
   errors,
   operation,
@@ -430,7 +535,7 @@ function ReplaceReviews({
           model={preview.model}
           loadState={{ status: "ready" }}
           actions={{
-            canApply: !applied,
+            canApply: applyingRootId === null && !applied,
             canReject: false,
             canRunVerification: false,
           }}
@@ -452,16 +557,31 @@ function ReplaceReviews({
   });
 }
 
-export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): ReactNode {
+function searchPanelScopeKey(props: SearchPanelProps): string {
+  return JSON.stringify(props.root ?? null);
+}
+
+function searchTargetsScopeKey(targets: readonly WorkspaceRootTarget[]): string {
+  return JSON.stringify(targets.map((target): readonly string[] => [target.id, target.root]));
+}
+
+export function SearchPanel(props: SearchPanelProps): ReactNode {
+  return <SearchPanelState key={searchPanelScopeKey(props)} {...props} />;
+}
+
+function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): ReactNode {
   const t = useOptionalWidgetTranslate();
-  const catalog = useOptionalChatSessionCatalog();
   const openBuffers = useWorkspaceReplaceBuffers();
-  const selectedRoot = root ?? catalog?.activeProject?.path;
-  const projectName = catalog?.activeProject?.name ?? t("searchPanel.noProjectSelected");
+  const projectName = panelProjectName(root, roots, t);
   const targets = useMemo(
-    () => panelTargets(selectedRoot, projectName, roots),
-    [projectName, roots, selectedRoot],
+    (): readonly WorkspaceRootTarget[] => panelTargets(root, projectName, roots),
+    [projectName, root, roots],
   );
+  const targetsScopeKey = useMemo((): string => searchTargetsScopeKey(targets), [targets]);
+  const currentTargetsScopeKey = useRef(targetsScopeKey);
+  currentTargetsScopeKey.current = targetsScopeKey;
+  const applyGeneration = useRef(0);
+  const activeApply = useRef<object | null>(null);
   const multiRoot = targets.length > 1;
   const queryInputRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState("");
@@ -488,7 +608,7 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
   const [activeIndex, setActiveIndex] = useState(0);
   const controlsId = useId();
   const inlineError = searchDomain === "text" ? regexSyntaxError(query, mode, t) : null;
-  const groups = useMemo(() => resultGroups(response), [response]);
+  const groups = useMemo((): readonly SearchResultGroup[] => resultGroups(response), [response]);
   const message = statusMessage({
     hasRoot: targets.length > 0,
     multiRoot,
@@ -499,6 +619,22 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
     t,
   });
   const showReplaceStatus = replaceStatus !== null;
+
+  useEffect((): void => {
+    applyGeneration.current += 1;
+    activeApply.current = null;
+    setResponse(null);
+    setReplacePreviews([]);
+    setStatus("idle");
+    setReplaceStatus(null);
+    setRouteError(null);
+    setRootErrors([]);
+    setReplaceErrors([]);
+    setApplyingRootId(null);
+    setAppliedRootIds(new Set());
+    setReplaceMessages(new Map());
+    setActiveIndex(0);
+  }, [targetsScopeKey]);
 
   useEffect(() => {
     const focusSearch = (): void => queryInputRef.current?.focus();
@@ -590,6 +726,7 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
 
   const previewReplace = useCallback(async (): Promise<void> => {
     if (targets.length === 0 || query.trim().length === 0 || inlineError !== null) return;
+    const requestedTargetsScopeKey = targetsScopeKey;
     setReplaceStatus(
       multiRoot
         ? t("searchPanel.replace.computingMulti")
@@ -598,34 +735,18 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
     setReplaceErrors([]);
     setAppliedRootIds(new Set());
     setReplaceMessages(new Map());
-    const next: RootReplacePreview[] = [];
-    const errors: RootSearchError[] = [];
-    for (const target of targets) {
-      try {
-        const preview = await fetchWorkspaceReplacePreview({
-          root: target.root,
-          query: query.trim(),
-          mode,
-          caseSensitive,
-          includeGlobs: globArray(includeText),
-          excludeGlobs: globArray(excludeText),
-          replacement,
-          maxFiles: WORKSPACE_REPLACE_MAX_FILES,
-        });
-        const sources = await sourcesForPreview(target.root, preview.files);
-        next.push({
-          target,
-          response: preview,
-          model: buildWorkspaceReplacePatchModel(preview, sources),
-        });
-      } catch (error) {
-        errors.push({
-          id: target.id,
-          label: target.label,
-          message: replaceErrorMessage(error, t("searchPanel.error.previewFailed")),
-        });
-      }
-    }
+    const result = await collectReplacePreviews(targets, {
+      query: query.trim(),
+      mode,
+      caseSensitive,
+      includeText,
+      excludeText,
+      replacement,
+      isCurrent: (): boolean => currentTargetsScopeKey.current === requestedTargetsScopeKey,
+      t,
+    });
+    if (result === null) return;
+    const { previews: next, errors } = result;
     setReplacePreviews(next);
     setReplaceErrors(multiRoot ? errors : []);
     if (!multiRoot) {
@@ -658,10 +779,20 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
     replacement,
     t,
     targets,
+    targetsScopeKey,
   ]);
 
   const applyReplacePreview = useCallback(
     async (preview: RootReplacePreview): Promise<void> => {
+      if (activeApply.current !== null) return;
+      const requestedTargetsScopeKey = targetsScopeKey;
+      const requestedGeneration = applyGeneration.current;
+      const operation = {};
+      activeApply.current = operation;
+      const operationIsCurrent = (): boolean =>
+        activeApply.current === operation &&
+        applyGeneration.current === requestedGeneration &&
+        currentTargetsScopeKey.current === requestedTargetsScopeKey;
       setApplyingRootId(preview.target.id);
       try {
         const result = await applyReviewedReplace({
@@ -669,43 +800,28 @@ export function SearchPanel({ root, roots, openEditorFile }: SearchPanelProps): 
           openBuffers,
           files: preview.response.files,
         });
-        const suffix =
-          result.conflictCount > 0
-            ? t("searchPanel.replace.conflictsSuffix", {
-                count: result.conflictCount,
-                conflicts: conflictSummary(result.conflicts, t),
-              })
-            : "";
-        const nextMessage = t("searchPanel.replace.appliedSummary", {
-          count: result.appliedCount,
-          suffix,
-        });
+        if (!operationIsCurrent()) return;
+        const nextMessage = appliedReplaceMessage(result, t);
         setReplaceMessages((current) => new Map(current).set(preview.target.id, nextMessage));
         setReplaceStatus(
-          multiRoot
-            ? t("searchPanel.replace.rootPrefixedStatus", {
-                rootLabel: preview.target.label,
-                message: nextMessage,
-              })
-            : nextMessage,
+          multiRoot ? rootPrefixedReplaceStatus(preview, nextMessage, t) : nextMessage,
         );
         setAppliedRootIds((current) => new Set(current).add(preview.target.id));
       } catch (error) {
+        if (!operationIsCurrent()) return;
         const nextMessage = replaceErrorMessage(error, t("searchPanel.error.applyFailed"));
         setReplaceMessages((current) => new Map(current).set(preview.target.id, nextMessage));
         setReplaceStatus(
-          multiRoot
-            ? t("searchPanel.replace.rootPrefixedStatus", {
-                rootLabel: preview.target.label,
-                message: nextMessage,
-              })
-            : nextMessage,
+          multiRoot ? rootPrefixedReplaceStatus(preview, nextMessage, t) : nextMessage,
         );
       } finally {
-        setApplyingRootId(null);
+        if (operationIsCurrent()) {
+          activeApply.current = null;
+          setApplyingRootId(null);
+        }
       }
     },
-    [multiRoot, openBuffers, t],
+    [multiRoot, openBuffers, t, targetsScopeKey],
   );
 
   return (

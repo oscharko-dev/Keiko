@@ -1,4 +1,4 @@
-import type { ReactNode, RefObject } from "react";
+import type { ReactElement, ReactNode, RefObject } from "react";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => ({
     groundingLimits: undefined as GroundingLimits | undefined,
     workspaceRendered: false,
     rightRailRendered: false,
+    rightRailOnTool: undefined as ((id: string) => void) | undefined,
   },
   fetchConfig: vi.fn(),
   fetchStartupUpdatePreflight: vi.fn(),
@@ -56,6 +57,7 @@ const mocks = vi.hoisted(() => ({
   registerSw: vi.fn(),
   gatewaySetupDialogModuleLoaded: vi.fn(),
   useKeyboardShortcuts: vi.fn(),
+  pushUndo: vi.fn(),
   undo: vi.fn(),
   redo: vi.fn(),
   dialogShowModal: vi.fn(function dialogShowModal(this: HTMLDialogElement): void {
@@ -145,7 +147,7 @@ vi.mock("./hooks/useUndoStack", () => ({
     canRedo: false,
     undoLabel: null,
     redoLabel: null,
-    push: vi.fn(),
+    push: mocks.pushUndo,
     undo: mocks.undo,
     redo: mocks.redo,
     clear: vi.fn(),
@@ -198,8 +200,9 @@ vi.mock("./LeftRail", () => ({
 }));
 
 vi.mock("./RightRail", () => ({
-  RightRail: () => {
+  RightRail: ({ onTool }: { readonly onTool: (id: string) => void }): ReactElement => {
     mocks.state.rightRailRendered = true;
+    mocks.state.rightRailOnTool = onTool;
     return <aside data-testid="right-rail" />;
   },
 }));
@@ -234,7 +237,13 @@ vi.mock("./install/InstallBanner", () => ({
 
 vi.mock("./widgets", () => ({}));
 
-import { AppShell, GatewaySetupLoading, openOrFocusSearchWindow } from "./AppShell";
+import {
+  AppShell,
+  frontmostSearchRootOwner,
+  GatewaySetupLoading,
+  openOrFocusSearchWindow,
+  resolveSearchRoot,
+} from "./AppShell";
 
 const gatewaySetupLoadsAtShellImport = mocks.gatewaySetupDialogModuleLoaded.mock.calls.length;
 
@@ -401,6 +410,7 @@ describe("AppShell grounding connections", () => {
     mocks.state.workspaceOptions = undefined;
     mocks.state.workspaceRendered = false;
     mocks.state.rightRailRendered = false;
+    mocks.state.rightRailOnTool = undefined;
     document.documentElement.removeAttribute("data-input-modality");
   });
 
@@ -707,17 +717,26 @@ describe("AppShell grounding connections", () => {
 
   it("dispatches undo, redo, focus-status, and search shortcuts through the shell handler", async () => {
     const api = workspaceApi();
-    mocks.state.workspaceResult = workspaceResult([], [], api);
+    mocks.state.workspaceResult = workspaceResult(
+      [
+        win("search", { root: "/repo/stale-chat" }, "search-window"),
+        { ...win("editor", { root: "/repo/editor-selected" }, "editor-window"), z: 2 },
+      ],
+      [],
+      api,
+    );
     await renderMounted();
 
     const keyboardProps = mocks.useKeyboardShortcuts.mock.calls[0]?.[0] as
       { readonly dispatch?: (commandId: string) => void } | undefined;
     expect(keyboardProps?.dispatch).toBeTypeOf("function");
 
-    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      callback(0);
-      return 0;
-    });
+    const rafSpy = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback): number => {
+        callback(0);
+        return 0;
+      });
     const statusSpy = vi.spyOn(HTMLElement.prototype, "focus");
     keyboardProps?.dispatch?.("undo");
     keyboardProps?.dispatch?.("redo");
@@ -727,8 +746,40 @@ describe("AppShell grounding connections", () => {
     expect(mocks.undo).toHaveBeenCalledTimes(1);
     expect(mocks.redo).toHaveBeenCalledTimes(1);
     expect(statusSpy).toHaveBeenCalled();
-    expect(api.toggleTool).toHaveBeenCalledWith("search");
+    expect(api.add).toHaveBeenCalledWith("search", { root: "/repo/editor-selected" });
+    expect(api.toggleTool).not.toHaveBeenCalledWith("search");
     statusSpy.mockRestore();
+    rafSpy.mockRestore();
+  });
+
+  it("records a rooted minimized Search restore as a closed-to-open transition", async (): Promise<void> => {
+    const api = workspaceApi();
+    mocks.state.workspaceResult = workspaceResult(
+      [
+        { ...win("search", { root: "/repo/stale" }, "search-window"), minimized: true },
+        { ...win("editor", { root: "/repo/editor-selected" }, "editor-window"), z: 2 },
+      ],
+      [],
+      api,
+    );
+    await renderMounted();
+    expect(mocks.state.rightRailOnTool).toBeTypeOf("function");
+    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((): number => 0);
+    vi.mocked(api.add).mockClear();
+    mocks.pushUndo.mockClear();
+
+    await act(async (): Promise<void> => {
+      mocks.state.rightRailOnTool?.("search");
+    });
+
+    expect(api.add).toHaveBeenCalledWith("search", { root: "/repo/editor-selected" });
+    expect(mocks.pushUndo).toHaveBeenCalledWith({
+      kind: "ui.panel.toggle",
+      panel: "search",
+      before: false,
+      after: true,
+      searchRoot: "/repo/editor-selected",
+    });
     rafSpy.mockRestore();
   });
 
@@ -749,20 +800,85 @@ describe("AppShell grounding connections", () => {
     expect(api.updateConnBoundScope).not.toHaveBeenCalled();
   });
 
-  it("focuses or restores an existing Search window without toggling it closed", () => {
+  it("opens or focuses Search with an explicit root and clears it when ownership is unavailable", (): void => {
     const api = workspaceApi();
     const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       callback(0);
       return 0;
     });
 
-    openOrFocusSearchWindow(api, [win("search", {}, "search")]);
-    openOrFocusSearchWindow(api, [{ ...win("search", {}, "search-min"), minimized: true }]);
+    openOrFocusSearchWindow(api, "/repo/editor-selected");
+    openOrFocusSearchWindow(api, undefined);
 
-    expect(api.focus).toHaveBeenCalledWith("search");
-    expect(api.restore).toHaveBeenCalledWith("search-min");
+    expect(api.add).toHaveBeenNthCalledWith(1, "search", { root: "/repo/editor-selected" });
+    expect(api.add).toHaveBeenNthCalledWith(2, "search", { root: undefined });
     expect(api.toggleTool).not.toHaveBeenCalled();
     rafSpy.mockRestore();
+  });
+
+  it("resolves only explicit active-workspace, Editor, Files, Search, or Git root ownership", (): void => {
+    expect(resolveSearchRoot("/task/worktree", win("editor", { root: "/repo/editor" }))).toBe(
+      "/task/worktree",
+    );
+    expect(resolveSearchRoot(null, win("editor", { root: "/repo/editor" }))).toBe("/repo/editor");
+    expect(resolveSearchRoot(null, win("files", { root: "/repo/files" }))).toBe("/repo/files");
+    expect(
+      resolveSearchRoot(
+        null,
+        win("files", { root: "/repo/configured", resolvedRoot: "/repo/current" }),
+      ),
+    ).toBe("/repo/current");
+    expect(resolveSearchRoot(null, win("search", { root: "/repo/search" }))).toBe("/repo/search");
+    expect(resolveSearchRoot(null, win("governedGit", { projectPath: "/repo/git" }))).toBe(
+      "/repo/git",
+    );
+    expect(resolveSearchRoot(null, win("chat", { projectPath: "/repo/chat" }))).toBeUndefined();
+  });
+
+  it("rejects missing, non-string, empty, and whitespace-only persisted roots", (): void => {
+    expect(resolveSearchRoot(null, win("editor"))).toBeUndefined();
+    expect(resolveSearchRoot(null, win("editor", { root: 42 }))).toBeUndefined();
+    expect(resolveSearchRoot(null, win("files", { root: "" }))).toBeUndefined();
+    expect(resolveSearchRoot(null, win("search", { root: "   " }))).toBeUndefined();
+  });
+
+  it("uses the frontmost eligible root owner beneath an unrelated top window", (): void => {
+    const editor = { ...win("editor", { root: "/repo/editor" }), z: 4 };
+    const files = { ...win("files", { root: "/repo/files" }), z: 6 };
+    const chatWindow = { ...win("chat", { projectPath: "/repo/chat" }), z: 9 };
+
+    expect(frontmostSearchRootOwner([editor, files, chatWindow])).toBe(files);
+    expect(resolveSearchRoot(null, frontmostSearchRootOwner([editor, files, chatWindow]))).toBe(
+      "/repo/files",
+    );
+  });
+
+  it("returns no root owner when the window collection is absent", (): void => {
+    expect(frontmostSearchRootOwner(null)).toBeNull();
+  });
+
+  it("skips minimized otherwise-eligible root owners", (): void => {
+    const editor = { ...win("editor", { root: "/repo/editor" }), z: 4 };
+    const minimizedFiles = {
+      ...win("files", { resolvedRoot: "/repo/files" }),
+      minimized: true,
+      z: 9,
+    };
+
+    expect(frontmostSearchRootOwner([editor, minimizedFiles])).toBe(editor);
+    expect(frontmostSearchRootOwner([minimizedFiles])).toBeNull();
+  });
+
+  it("fails closed when Git carries conflicting current and legacy roots", (): void => {
+    expect(
+      resolveSearchRoot(
+        null,
+        win("governedGit", {
+          projectPath: "/repo/current",
+          workspaceRoot: "/repo/legacy",
+        }),
+      ),
+    ).toBeUndefined();
   });
 
   it("does not open the command palette from the Cmd/Ctrl+K shell shortcut in this release", async () => {

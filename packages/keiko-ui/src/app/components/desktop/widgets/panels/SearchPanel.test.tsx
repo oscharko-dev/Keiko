@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import {
   WORKSPACE_SEARCH_MAX_RESULTS,
+  type WorkspaceReplaceApplyResponse,
+  type WorkspaceReplacePreviewResponse,
   type WorkspaceSearchResponse,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -19,7 +21,23 @@ import {
   type WorkspaceReplaceOpenBufferApply,
 } from "../../WorkspaceReplaceBufferContext";
 
-vi.mock("@/lib/api", () => ({
+interface StaleChatCatalog {
+  readonly activeProject: {
+    readonly path: string;
+    readonly name: string;
+    readonly available: boolean;
+  };
+}
+
+const staleChatCatalog = vi.hoisted((): StaleChatCatalog => ({
+  activeProject: {
+    path: "/repo/stale-chat",
+    name: "Stale Chat Project",
+    available: true,
+  },
+}));
+
+vi.mock("@/lib/api", (): object => ({
   applyWorkspaceReplace: vi.fn(),
   fetchFilesContent: vi.fn(),
   fetchWorkspaceReplacePreview: vi.fn(),
@@ -27,13 +45,19 @@ vi.mock("@/lib/api", () => ({
   fetchWorkspaceSymbols: vi.fn(),
 }));
 
-vi.mock("../cards/EditorDiffSurface", () => ({
+vi.mock("../../context/ChatSessionContext", (): object => ({
+  useOptionalChatSessionCatalog: (): StaleChatCatalog => ({
+    activeProject: staleChatCatalog.activeProject,
+  }),
+}));
+
+vi.mock("../cards/EditorDiffSurface", (): object => ({
   buildWorkspaceReplacePatchModel: (response: {
     readonly files: readonly { readonly path: string }[];
     readonly fileCount: number;
     readonly omittedFileCount: number;
     readonly truncated: boolean;
-  }) => ({
+  }): object => ({
     patchId: "workspace-replace-preview",
     status: "previewed",
     provenance: { origin: "applied-patch" },
@@ -58,9 +82,15 @@ vi.mock("../cards/EditorDiffSurface", () => ({
     unsupportedCount: 0,
     truncated: response.truncated,
   }),
-  default: ({ onApply }: { readonly onApply?: (() => void) | undefined }) => (
+  default: ({
+    actions,
+    onApply,
+  }: {
+    readonly actions: { readonly canApply: boolean };
+    readonly onApply?: (() => void) | undefined;
+  }): ReactNode => (
     <div data-testid="replace-diff">
-      <button type="button" onClick={onApply}>
+      <button type="button" disabled={!actions.canApply} onClick={onApply}>
         Diff apply
       </button>
     </div>
@@ -108,11 +138,29 @@ function FakeOpenBuffer({ apply }: { readonly apply: WorkspaceReplaceOpenBufferA
   return null;
 }
 
-async function searchFor(query: string): Promise<void> {
+async function searchFor(
+  query: string,
+  requestCount: () => number = (): number => fetchWorkspaceSearchMock.mock.calls.length,
+): Promise<void> {
+  const callsBeforeSearch = requestCount();
   fireEvent.change(screen.getByRole("searchbox", { name: "Search files and symbols" }), {
     target: { value: query },
   });
-  await act(async () => new Promise((resolve) => window.setTimeout(resolve, 260)));
+  await waitFor((): void => expect(requestCount()).toBeGreaterThan(callsBeforeSearch));
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((innerResolve, innerReject): void => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+  return { promise, reject, resolve };
 }
 
 describe("SearchPanel", () => {
@@ -179,14 +227,31 @@ describe("SearchPanel", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach((): void => {
     vi.clearAllMocks();
   });
 
-  it("renders an interactive searchbox instead of the previous placeholder", () => {
+  it("renders an interactive searchbox instead of the previous placeholder", (): void => {
     renderPanel();
     expect(screen.getByRole("searchbox", { name: "Search files and symbols" })).toBeEnabled();
     expect(screen.queryByText(/coming soon/i)).toBeNull();
+  });
+
+  it("fails visibly without a root instead of borrowing the active Chat project", async (): Promise<void> => {
+    render(<SearchPanel />);
+
+    expect(screen.getByRole("searchbox", { name: "Search files and symbols" })).toBeDisabled();
+    expect(screen.getByText("No workspace selected")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Select a workspace before searching.");
+
+    await act(
+      async (): Promise<void> =>
+        new Promise((resolve): void => {
+          window.setTimeout(resolve, 260);
+        }),
+    );
+    expect(fetchWorkspaceSearchMock).not.toHaveBeenCalled();
+    expect(fetchWorkspaceReplacePreviewMock).not.toHaveBeenCalled();
   });
 
   it("debounces non-empty queries and posts to the workspace-search route wrapper", async () => {
@@ -263,9 +328,13 @@ describe("SearchPanel", () => {
   it("shows a clear inline error for invalid regex without calling the route", async () => {
     renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "Regex" }));
-    await searchFor("[");
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search files and symbols" }), {
+      target: { value: "[" },
+    });
 
-    expect(screen.getByRole("status")).toHaveTextContent("regular expression is not valid");
+    await waitFor((): void =>
+      expect(screen.getByRole("status")).toHaveTextContent("regular expression is not valid"),
+    );
     expect(fetchWorkspaceSearchMock).not.toHaveBeenCalled();
   });
 
@@ -361,6 +430,237 @@ describe("SearchPanel", () => {
         expect.objectContaining({ path: "src/app.ts", baseContentHash: "a".repeat(64) }),
       ]),
     });
+  });
+
+  it("discards an existing replacement preview when the workspace root changes", async (): Promise<void> => {
+    const view = render(<SearchPanel root="/repo/a" />);
+    await searchFor("needle");
+    fireEvent.change(screen.getByLabelText("Replacement"), { target: { value: "thread" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+    await screen.findByTestId("replace-diff");
+
+    view.rerender(<SearchPanel root="/repo/b" />);
+
+    expect(screen.queryByTestId("replace-diff")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Apply reviewed replace" })).toBeNull();
+    expect(screen.getByText("/repo/b")).toBeInTheDocument();
+  });
+
+  it("preserves controls but clears scoped results when manifest targets arrive", async (): Promise<void> => {
+    const view = render(<SearchPanel root="/repo/a" />);
+    await searchFor("needle");
+    fireEvent.change(screen.getByLabelText("Replacement"), { target: { value: "thread" } });
+    fireEvent.change(screen.getByLabelText("Include glob"), {
+      target: { value: "src/**" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+    await screen.findByTestId("replace-diff");
+
+    view.rerender(
+      <SearchPanel
+        root="/repo/a"
+        roots={[
+          { id: "a", root: "/repo/a", label: "Root A" },
+          { id: "b", root: "/repo/b", label: "Root B" },
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole("searchbox", { name: "Search files and symbols" })).toHaveValue(
+      "needle",
+    );
+    expect(screen.getByLabelText("Replacement")).toHaveValue("thread");
+    expect(screen.getByLabelText("Include glob")).toHaveValue("src/**");
+    expect(screen.queryByTestId("replace-diff")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Apply reviewed replace/u })).toBeNull();
+  });
+
+  it("ignores a replacement preview completed for pre-manifest targets", async (): Promise<void> => {
+    const pending = deferred<WorkspaceReplacePreviewResponse>();
+    fetchWorkspaceReplacePreviewMock.mockReturnValueOnce(pending.promise);
+    const view = render(<SearchPanel root="/repo/a" />);
+    await searchFor("needle");
+    fireEvent.change(screen.getByLabelText("Replacement"), { target: { value: "thread" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+    await waitFor((): void => expect(fetchWorkspaceReplacePreviewMock).toHaveBeenCalledOnce());
+
+    view.rerender(
+      <SearchPanel
+        root="/repo/a"
+        roots={[
+          { id: "a", root: "/repo/a", label: "Root A" },
+          { id: "b", root: "/repo/b", label: "Root B" },
+        ]}
+      />,
+    );
+    await act(async (): Promise<void> => {
+      pending.resolve({
+        files: [],
+        fileCount: 0,
+        editCount: 0,
+        truncated: false,
+        omittedFileCount: 0,
+      });
+      await pending.promise;
+    });
+
+    expect(screen.getByRole("searchbox", { name: "Search files and symbols" })).toHaveValue(
+      "needle",
+    );
+    expect(screen.queryByTestId("replace-diff")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Apply reviewed replace/u })).toBeNull();
+    expect(applyWorkspaceReplaceMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a replacement preview that completes after the workspace root changes", async (): Promise<void> => {
+    const pending = deferred<WorkspaceReplacePreviewResponse>();
+    fetchWorkspaceReplacePreviewMock.mockReturnValueOnce(pending.promise);
+    const view = render(<SearchPanel root="/repo/a" />);
+    await searchFor("needle");
+    fireEvent.change(screen.getByLabelText("Replacement"), { target: { value: "thread" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+    await waitFor((): void => expect(fetchWorkspaceReplacePreviewMock).toHaveBeenCalledOnce());
+
+    view.rerender(<SearchPanel root="/repo/b" />);
+    await act(async (): Promise<void> => {
+      pending.resolve({
+        files: [],
+        fileCount: 0,
+        editCount: 0,
+        truncated: false,
+        omittedFileCount: 0,
+      });
+      await pending.promise;
+    });
+
+    expect(screen.queryByTestId("replace-diff")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Apply reviewed replace" })).toBeNull();
+    expect(screen.getByText("/repo/b")).toBeInTheDocument();
+    expect(applyWorkspaceReplaceMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores source content resolved for obsolete replacement targets", async (): Promise<void> => {
+    const pendingSource = deferred<Awaited<ReturnType<typeof fetchFilesContent>>>();
+    fetchFilesContentMock.mockReturnValueOnce(pendingSource.promise);
+    const view = render(<SearchPanel root="/repo/a" />);
+    await searchFor("needle");
+    fireEvent.change(screen.getByLabelText("Replacement"), { target: { value: "thread" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+    await waitFor((): void => expect(fetchFilesContentMock).toHaveBeenCalledOnce());
+
+    view.rerender(
+      <SearchPanel
+        root="/repo/a"
+        roots={[
+          { id: "a", root: "/repo/a", label: "Root A" },
+          { id: "b", root: "/repo/b", label: "Root B" },
+        ]}
+      />,
+    );
+    await act(async (): Promise<void> => {
+      pendingSource.resolve({
+        root: "/repo/a",
+        path: "src/app.ts",
+        name: "app.ts",
+        mime: "text/typescript",
+        symlink: false,
+        content: "const needle = true;\n",
+        sizeBytes: 21,
+        modifiedAt: 1,
+        maxBytes: 262_144,
+        extension: ".ts",
+        session: {
+          schemaVersion: "1",
+          version: { sizeBytes: 21, modifiedAt: 1, contentHash: "b".repeat(64) },
+        },
+      });
+      await pendingSource.promise;
+    });
+
+    expect(screen.queryByTestId("replace-diff")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Apply reviewed replace" })).toBeNull();
+    expect(screen.queryByText(/preview failed/iu)).toBeNull();
+  });
+
+  it("ignores source content rejected for obsolete replacement targets", async (): Promise<void> => {
+    const pendingSource = deferred<Awaited<ReturnType<typeof fetchFilesContent>>>();
+    fetchFilesContentMock.mockReturnValueOnce(pendingSource.promise);
+    const view = render(<SearchPanel root="/repo/a" />);
+    await searchFor("needle");
+    fireEvent.change(screen.getByLabelText("Replacement"), { target: { value: "thread" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+    await waitFor((): void => expect(fetchFilesContentMock).toHaveBeenCalledOnce());
+
+    view.rerender(
+      <SearchPanel
+        root="/repo/a"
+        roots={[
+          { id: "a", root: "/repo/a", label: "Root A" },
+          { id: "b", root: "/repo/b", label: "Root B" },
+        ]}
+      />,
+    );
+    const expectedRejection = expect(pendingSource.promise).rejects.toThrow(
+      "Obsolete source failed.",
+    );
+    await act(async (): Promise<void> => {
+      pendingSource.reject(new Error("Obsolete source failed."));
+      await expectedRejection;
+    });
+
+    expect(screen.queryByText("Obsolete source failed.")).toBeNull();
+    expect(screen.queryByTestId("replace-diff")).toBeNull();
+  });
+
+  it("does not publish an old apply completion into a replacement target scope", async (): Promise<void> => {
+    const oldApply = deferred<WorkspaceReplaceApplyResponse>();
+    applyWorkspaceReplaceMock
+      .mockReturnValueOnce(oldApply.promise)
+      .mockResolvedValueOnce({ appliedCount: 1, conflictCount: 0, conflicts: [] });
+    const view = render(<SearchPanel root="/repo/a" />);
+    await searchFor("needle");
+    fireEvent.change(screen.getByLabelText("Replacement"), { target: { value: "thread" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+    await screen.findByTestId("replace-diff");
+    fireEvent.click(screen.getByRole("button", { name: "Apply reviewed replace" }));
+    await waitFor((): void => expect(applyWorkspaceReplaceMock).toHaveBeenCalledOnce());
+    expect(screen.getByRole("button", { name: "Apply reviewed replace" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Diff apply" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Diff apply" }));
+    expect(applyWorkspaceReplaceMock).toHaveBeenCalledOnce();
+
+    view.rerender(
+      <SearchPanel
+        root="/repo/a"
+        roots={[
+          { id: "a", root: "/repo/a", label: "Root A" },
+          { id: "b", root: "/repo/b", label: "Root B" },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+    await screen.findByRole("button", { name: "Apply reviewed replace in Root B" });
+    fireEvent.click(screen.getByRole("button", { name: "Apply reviewed replace in Root B" }));
+    await screen.findByText("Root B: 1 files applied.");
+
+    await act(async (): Promise<void> => {
+      oldApply.resolve({
+        appliedCount: 0,
+        conflictCount: 1,
+        conflicts: [
+          {
+            path: "src/app.ts",
+            reason: "write-conflict",
+            detail: "obsolete target changed",
+          },
+        ],
+      });
+      await oldApply.promise;
+    });
+
+    expect(screen.getByText("Root B: 1 files applied.")).toBeInTheDocument();
+    expect(screen.queryByText(/obsolete target/iu)).toBeNull();
+    expect(applyWorkspaceReplaceMock).toHaveBeenCalledTimes(2);
   });
 
   it("surfaces replace preview failures without keeping a stale diff", async () => {
@@ -498,7 +798,7 @@ describe("SearchPanel", () => {
     const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
     renderPanel(openEditorFile);
     fireEvent.click(screen.getByRole("button", { name: "Symbols" }));
-    await searchFor("parseConfig");
+    await searchFor("parseConfig", (): number => fetchWorkspaceSymbolsMock.mock.calls.length);
     await screen.findByText("function parseConfig");
 
     expect(fetchWorkspaceSymbolsMock).toHaveBeenCalledWith(

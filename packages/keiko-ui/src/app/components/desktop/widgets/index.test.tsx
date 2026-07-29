@@ -1157,8 +1157,8 @@ describe("active workspace binding override (Issue #446)", () => {
     expect(await screen.findByTestId("search-panel")).toHaveTextContent("/wt/active");
   });
 
-  it("search renderer falls back to the active project in unbound unlinked mode", async () => {
+  it("search renderer stays unbound instead of borrowing the active Chat project", async (): Promise<void> => {
     render(<>{WIN_TYPES.search.render({}, boundCtx(null))}</>);
-    expect(await screen.findByTestId("search-panel")).toHaveTextContent("/repo");
+    expect(await screen.findByTestId("search-panel")).toHaveTextContent("none");
   });
 });
