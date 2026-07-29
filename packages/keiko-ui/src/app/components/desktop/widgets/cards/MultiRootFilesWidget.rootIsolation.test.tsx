@@ -85,6 +85,7 @@ function manifest(roots: readonly WorkspaceRootDescriptor[]): WorkspaceManifest 
 function workspace(current: WorkspaceManifest): WorkspaceManifestView {
   return {
     manifest: current,
+    pathReadAuthority: "available",
     loading: false,
     mutating: false,
     issue: null,

@@ -18,6 +18,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import { EditorWidget } from "./EditorWidget";
+import {
+  EDITOR_SIDEBAR_MIN_WIDTH,
+  EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
+} from "../../editorSidebarSizing";
 
 vi.mock("next/dynamic", () => ({
   default: () => {
@@ -71,7 +75,7 @@ describe("EditorWidget — accessibility (Issue #1375)", () => {
     expect(await axe(container)).toHaveNoViolations();
 
     expect(screen.getByRole("button", { name: "Hide project tree" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Resize project tree" })).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: "Resize project tree" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Split src/a.ts right" }).length).toBeGreaterThan(
       0,
     );
@@ -90,6 +94,17 @@ describe("EditorWidget — accessibility (Issue #1375)", () => {
     expect(separator).toHaveAttribute("aria-valuemin", "15");
     expect(separator).toHaveAttribute("aria-valuemax", "85");
     expect(separator).toHaveAttribute("aria-valuenow", "50");
+    expect(separator.tabIndex).toBe(0);
+  });
+
+  it("exposes the WAI-ARIA window-splitter pattern on the project-tree resizer", () => {
+    render(<EditorWidget root="/repo" file="src/a.ts" />);
+
+    const separator = screen.getByRole("separator", { name: "Resize project tree" });
+    expect(separator).toHaveAttribute("aria-orientation", "vertical");
+    expect(separator).toHaveAttribute("aria-valuemin", String(EDITOR_SIDEBAR_MIN_WIDTH));
+    expect(separator).toHaveAttribute("aria-valuemax", String(EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH));
+    expect(separator).toHaveAttribute("aria-valuenow", "260");
     expect(separator.tabIndex).toBe(0);
   });
 

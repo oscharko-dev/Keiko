@@ -59,6 +59,80 @@ describe("EditorLayoutStateV2 contracts", () => {
     );
   });
 
+  it("round trips a legal final empty pane without losing persisted editor chrome", () => {
+    const empty = layout({ file: "", openFiles: [] });
+    const persisted = {
+      ...empty,
+      sidebarWidth: 272,
+      sidebarCollapsed: true,
+      outlinePanelVisible: false,
+    };
+
+    const restored = layout({
+      file: "",
+      openFiles: [],
+      layoutJson: serializeEditorLayoutStateV2(persisted),
+    });
+
+    expect(restored).toEqual(
+      expect.objectContaining({
+        activePaneId: "pane-1",
+        tree: { type: "pane", paneId: "pane-1" },
+        sidebarWidth: 272,
+        sidebarCollapsed: true,
+        outlinePanelVisible: false,
+      }),
+    );
+    expect(restored.panes).toEqual({
+      "pane-1": {
+        id: "pane-1",
+        openFiles: [],
+        activeFile: "",
+        tabOrder: [],
+      },
+    });
+  });
+
+  it("collapses hostile persisted empty panes instead of retaining empty splits", () => {
+    const restored = layout({
+      layoutJson: JSON.stringify({
+        schemaVersion: EDITOR_LAYOUT_SCHEMA_VERSION,
+        activePaneId: "empty-b",
+        tree: {
+          type: "split",
+          id: "split-1",
+          direction: "row",
+          ratio: 40,
+          first: { type: "pane", paneId: "empty-a" },
+          second: {
+            type: "split",
+            id: "split-2",
+            direction: "column",
+            ratio: 60,
+            first: { type: "pane", paneId: "empty-b" },
+            second: { type: "pane", paneId: "populated" },
+          },
+        },
+        panes: {
+          "empty-a": { id: "empty-a", openFiles: [], activeFile: "", tabOrder: [] },
+          "empty-b": { id: "empty-b", openFiles: [], activeFile: "", tabOrder: [] },
+          populated: {
+            id: "populated",
+            openFiles: ["src/a.ts"],
+            activeFile: "src/a.ts",
+            tabOrder: ["src/a.ts"],
+          },
+        },
+        sidebarWidth: 272,
+      }),
+    });
+
+    expect(restored.tree).toEqual({ type: "pane", paneId: "populated" });
+    expect(restored.activePaneId).toBe("populated");
+    expect(Object.keys(restored.panes)).toEqual(["populated"]);
+    expect(restored.sidebarWidth).toBe(272);
+  });
+
   it("normalizes persisted V2 layout state and clamps unsafe persisted values", () => {
     const restored = layout({
       layoutJson: JSON.stringify({

@@ -57,6 +57,7 @@ import {
   type EditorM7WorkspaceSnippetSnapshot,
   type EditorHotExitSnapshotV1,
 } from "@oscharko-dev/keiko-contracts";
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
@@ -449,6 +450,7 @@ afterEach(() => {
   resetSharedEventSourcesForTests();
   resetEditorProblemsStoreForTests();
   agentActionSequence = 0;
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
   vi.clearAllMocks();
 });
 
@@ -584,6 +586,21 @@ describe("EditorWidget — empty state", () => {
     expect(screen.getByRole("note")).toHaveTextContent(/choose a file from the project tree/i);
     expect(screen.queryByTestId("editor-surface")).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  });
+
+  it("localizes the empty editor state in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+
+    render(
+      <I18nProvider>
+        <EditorRuntimeWidget />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByRole("note")).toHaveTextContent(
+      "Wähle im Projektbaum eine Datei aus, um mit der Bearbeitung zu beginnen.",
+    );
   });
 });
 

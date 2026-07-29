@@ -670,7 +670,7 @@ function jsonSchemaBody(): Readonly<Record<string, unknown>> {
         schema: {
           type: "object",
           additionalProperties: false,
-          properties: { status: { const: "json-ok" } },
+          properties: { status: { type: "string", enum: ["json-ok"] } },
           required: ["status"],
         },
       },

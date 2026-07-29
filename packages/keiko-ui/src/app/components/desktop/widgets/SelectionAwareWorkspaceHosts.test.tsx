@@ -8,7 +8,7 @@ import {
   type WorkspaceRootDescriptor,
   type WorkspaceRootRef,
 } from "@oscharko-dev/keiko-contracts";
-import { I18nProvider } from "@/lib/i18n";
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import type { Chat, ProjectWithAvailability } from "@/lib/types";
 import type { WorkspaceManifestView } from "../hooks/useWorkspaceManifest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
@@ -23,6 +23,15 @@ import {
 const addRoot = vi.hoisted(() => vi.fn());
 const disposeRoot = vi.hoisted(() => vi.fn());
 const manifestRef = vi.hoisted(() => ({ current: null as WorkspaceManifest | null }));
+const manifestAccessRef = vi.hoisted(
+  () =>
+    ({
+      current: "available",
+    }) as {
+      current: WorkspaceManifestView["pathReadAuthority"];
+    },
+);
+const refreshManifest = vi.hoisted(() => vi.fn(async () => undefined));
 type UpdateChat = (
   id: string,
   patch: { readonly title: string },
@@ -38,10 +47,11 @@ vi.mock("@/lib/api", (): { readonly updateChat: Mock<UpdateChat> } => ({
 vi.mock("../hooks/useWorkspaceManifest", () => ({
   useWorkspaceManifest: (): WorkspaceManifestView => ({
     manifest: manifestRef.current,
+    pathReadAuthority: manifestAccessRef.current,
     loading: false,
     issue: null,
     mutating: false,
-    refresh: vi.fn(async () => undefined),
+    refresh: refreshManifest,
     addRoot,
     removeRoot: vi.fn(async () => true),
     reorderRoots: vi.fn(async () => true),
@@ -77,7 +87,14 @@ vi.mock("../ChatWindow", (): { readonly ChatWindow: () => ReactNode } => ({
 // Records the root identity and the reveal triple each mounted editor was handed, so a test can see
 // who a targeted request actually reached. The multi-root host mounts inactive roots inside a hidden
 // `<Activity>`, so the record — not the DOM — is what proves a root was handed nothing.
-const editorProps = vi.hoisted(() => [] as { root: string | undefined; reveal: string }[]);
+const editorProps = vi.hoisted(
+  () =>
+    [] as {
+      root: string | undefined;
+      reveal: string;
+      workspaceTrustUiAvailable: boolean | undefined;
+    }[],
+);
 // The workspace-change callback each mounted editor was given, so a test can drive the same
 // re-homing the real widget performs when it changes its own root.
 const editorHandlers = vi.hoisted(() => [] as EditorWidgetProps["onWorkspaceChange"][]);
@@ -89,9 +106,10 @@ vi.mock("./cards/EditorWidget", () => ({
     revealLineEnd,
     revealRequestId,
     onWorkspaceChange,
+    workspaceTrustUiAvailable,
   }: EditorWidgetProps): ReactNode => {
     const reveal = `${String(revealLineStart ?? "")}:${String(revealLineEnd ?? "")}:${revealRequestId ?? ""}`;
-    editorProps.push({ root, reveal });
+    editorProps.push({ root, reveal, workspaceTrustUiAvailable });
     editorHandlers.push(onWorkspaceChange);
     return <div data-testid={`editor-${root ?? "none"}`}>{reveal}</div>;
   },
@@ -159,11 +177,14 @@ const TWO_ROOTS = manifestOf("workspace-a", [REPO_A, REPO_B]);
 const THREE_ROOTS = manifestOf("workspace-a", [REPO_A, REPO_B, REPO_C]);
 const OTHER_WORKSPACE = manifestOf("workspace-b", [root("root-x", "/repo-x")]);
 
-function context(): WindowRenderContext {
+function context(overrides: Partial<WindowRenderContext> = {}): WindowRenderContext {
   return {
+    activeRoot: null,
+    activeBinding: null,
     updateCfg: vi.fn(),
     openEditorFile: vi.fn(),
     openWindow: vi.fn(),
+    ...overrides,
   } as unknown as WindowRenderContext;
 }
 
@@ -238,14 +259,131 @@ function lastCfgPatch(ctx: WindowRenderContext): Record<string, unknown> {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.clearAllMocks();
+  window.localStorage.clear();
   editorProps.length = 0;
   editorHandlers.length = 0;
   manifestRef.current = null;
+  manifestAccessRef.current = "available";
   chatSessionState.openNewChat = defaultOpenNewChat;
   chatSessionState.activeChat = undefined;
   chatSessionState.activeProject = undefined;
   chatSessionState.chats = [];
   chatSessionState.loading = false;
+});
+
+describe("EditorWindowSessionHost managed task workspace access", () => {
+  it("suppresses workspace-trust presentation for the active managed task root", async () => {
+    const activeRoot = "/managed/task";
+    const ctx = context({
+      activeRoot,
+      activeBinding: {
+        schemaVersion: "1",
+        workspaceId: "ws-managed",
+        taskId: "task-managed",
+        activeRoot,
+        boundSurfaces: ["editor"],
+        gitDeliveryRoot: activeRoot,
+        editorProjectRoot: activeRoot,
+      },
+    });
+
+    render(editorHost({ root: "/repo" }, ctx, activeRoot));
+
+    expect(await screen.findByTestId(`editor-${activeRoot}`)).toBeInTheDocument();
+    expect(editorProps.at(-1)).toMatchObject({
+      root: activeRoot,
+      workspaceTrustUiAvailable: false,
+    });
+  });
+
+  it("renders one calm note and does not mount the editor while the browser is unpaired", () => {
+    const activeRoot = "/managed/task";
+    manifestAccessRef.current = "unpaired";
+    const ctx = context({
+      activeRoot,
+      activeBinding: {
+        schemaVersion: "1",
+        workspaceId: "ws-managed",
+        taskId: "task-managed",
+        activeRoot,
+        boundSurfaces: ["editor"],
+        gitDeliveryRoot: activeRoot,
+        editorProjectRoot: activeRoot,
+      },
+    });
+
+    render(editorHost({ root: "/repo" }, ctx, activeRoot));
+
+    expect(
+      screen.getByRole("note", { name: "Task workspace unavailable in this browser" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId(`editor-${activeRoot}`)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps a normal folder usable when only managed workspace authority is unpaired", async () => {
+    manifestAccessRef.current = "unpaired";
+    render(editorHost({ root: "/repo" }, context()));
+
+    expect(await screen.findByTestId("editor-/repo")).toBeInTheDocument();
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
+  it("offers an explicit retry without clearing the active task workspace", async () => {
+    const activeRoot = "/managed/task";
+    manifestAccessRef.current = "unavailable";
+    const ctx = context({
+      activeRoot,
+      activeBinding: {
+        schemaVersion: "1",
+        workspaceId: "ws-managed",
+        taskId: "task-managed",
+        activeRoot,
+        boundSurfaces: ["editor"],
+        gitDeliveryRoot: activeRoot,
+        editorProjectRoot: activeRoot,
+      },
+    });
+    render(editorHost({}, ctx, activeRoot));
+
+    await userEvent.click(screen.getByRole("button", { name: "Check again" }));
+
+    expect(refreshManifest).toHaveBeenCalledOnce();
+    expect(ctx.updateCfg).not.toHaveBeenCalled();
+  });
+
+  it("renders natural German copy when German is selected", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    const activeRoot = "/managed/task";
+    manifestAccessRef.current = "unpaired";
+    const ctx = context({
+      activeRoot,
+      activeBinding: {
+        schemaVersion: "1",
+        workspaceId: "ws-managed",
+        taskId: "task-managed",
+        activeRoot,
+        boundSurfaces: ["editor"],
+        gitDeliveryRoot: activeRoot,
+        editorProjectRoot: activeRoot,
+      },
+    });
+
+    render(editorHost({}, ctx, activeRoot));
+
+    expect(
+      screen.getByRole("note", {
+        name: "Der Aufgabenarbeitsbereich ist in diesem Browser nicht verfügbar",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Starte Keiko über das Startprogramm neu. Alternativ kannst du oben im Arbeitskontext einen Ordner oder ein Repository auswählen.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Erneut prüfen" })).toBeInTheDocument();
+  });
 });
 
 // Issue #2621 — the removed-root disposal and the reveal both belong to this host, because it is the

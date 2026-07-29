@@ -33,7 +33,7 @@ export const viewport: Viewport = {
 // computed from the exported HTML — no CSP loosening involved.
 const THEME_BOOTSTRAP = `try{var t=localStorage.getItem("keiko.theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}`;
 
-export const LOCALE_BOOTSTRAP = `try{var l=localStorage.getItem("keiko.locale");l=String(l||"en").toLowerCase().replace("_","-");l=l==="de"||l.indexOf("de-")===0?"de":"en";document.documentElement.lang=l;document.documentElement.dataset.locale=l}catch(e){}`;
+export const LOCALE_BOOTSTRAP = `try{var l=null;try{l=localStorage.getItem("keiko.locale")}catch(e){}if(l===null&&typeof navigator==="object")l=navigator.language;l=String(l||"en").toLowerCase().replace("_","-");l=l==="de"||l.indexOf("de-")===0?"de":"en";document.documentElement.lang=l;document.documentElement.dataset.locale=l}catch(e){}`;
 
 // Issue #1214: if a restart/redeploy interrupts the initial RSC/Flight boot, the static
 // prerender shell can remain visible forever and React effects never run. This pre-hydration

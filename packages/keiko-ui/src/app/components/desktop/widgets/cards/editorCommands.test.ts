@@ -35,6 +35,7 @@ function fakeHost(overrides: Partial<EditorPaletteHost> = {}): EditorPaletteHost
     dirtyCount: 0,
     verificationRunning: false,
     verifiableTarget: "src/a.test.ts",
+    workspaceTrustUiAvailable: true,
     verificationCatalog: {
       schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
       projectId: "/repo",
@@ -213,6 +214,14 @@ describe("run affordances (Issue #2212, ADR-0126)", () => {
     );
     commandById("verification.revokeWorkspaceScriptTrust").run(trusted);
     expect(trusted.revokeWorkspaceScriptTrust).toHaveBeenCalledTimes(1);
+  });
+
+  it("withholds trust mutations when the managed workspace owns trust presentation", () => {
+    const managed = fakeHost({ workspaceTrustUiAvailable: false });
+    const commandIds = availablePaletteCommands(managed).map((command) => command.id);
+
+    expect(commandIds).not.toContain("verification.trustWorkspaceScripts");
+    expect(commandIds).not.toContain("verification.revokeWorkspaceScriptTrust");
   });
 });
 

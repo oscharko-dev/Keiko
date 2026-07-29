@@ -39,6 +39,7 @@ import { errorBody } from "./routes.js";
 import type {
   GatewayDiscoveredModels,
   GatewayModelDiscoveryOutput,
+  GatewaySetupTestResult,
   RuntimeGatewayConfig,
   UiHandlerDeps,
 } from "./deps.js";
@@ -51,6 +52,10 @@ import {
   type FigmaConnectorErrorCode,
 } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
 import { classifyTokenFailure } from "./qualityIntelligence/figma/figmaTokenSource.js";
+import {
+  buildQiJudgePreflightRequest,
+  tryParseJudgeVerdict,
+} from "./qualityIntelligence/judgePort.js";
 import { persistSealedGatewayConfig } from "./credentialPersistence.js";
 
 const MAX_BODY_BYTES = 64_000;
@@ -289,6 +294,7 @@ interface ProviderRawOptions {
   readonly retryBaseDelayMs?: number | undefined;
   readonly apiKeyHeaderName?: string | undefined;
   readonly imageInputModelIds?: readonly string[] | undefined;
+  readonly responseFormatModelIds?: readonly string[] | undefined;
   readonly embeddingModelIds?: readonly string[] | undefined;
 }
 
@@ -320,15 +326,19 @@ function providerRaw(
   options: ProviderRawOptions = {},
 ): Record<string, unknown> {
   const defaultCapability = createDefaultSetupCapability(modelId, options.embeddingModelIds);
+  const supportsResponseFormat = options.responseFormatModelIds?.includes(modelId) === true;
   return {
     modelId,
     baseUrl,
     apiKey,
     apiKeyHeaderName: options.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
-    capability:
-      options.imageInputModelIds?.includes(modelId) === true
-        ? { ...defaultCapability, supportsImageInput: true }
-        : defaultCapability,
+    capability: {
+      ...defaultCapability,
+      ...(options.imageInputModelIds?.includes(modelId) === true
+        ? { supportsImageInput: true }
+        : {}),
+      ...(supportsResponseFormat ? { structuredOutput: true, supportsResponseFormat: true } : {}),
+    },
     timeoutMs: options.timeoutMs ?? 30_000,
     maxRetries: options.maxRetries ?? 2,
     retryBaseDelayMs: options.retryBaseDelayMs ?? 500,
@@ -1055,16 +1065,7 @@ function validateSetupConnection(
   }
 }
 
-// Issue #144: pure smoke-test loop extracted from `defaultGatewaySetupTester`
-// for testability. Concurrency is a parameter so callers (tests) can pin peak
-// in-flight count deterministically. Original-order preservation among
-// survivors is part of the observable contract — pinned by gateway-setup tests
-// that assert tested-model-id order matches input order with failed entries
-// dropped.
-//
-// Throws with the exact error message that `defaultGatewaySetupTester` has
-// always thrown so existing call sites and tests keep compiling.
-export async function smokeTestCandidates(
+async function passingCandidates(
   candidates: readonly string[],
   probe: (modelId: string) => Promise<void>,
   concurrency: number,
@@ -1090,7 +1091,24 @@ export async function smokeTestCandidates(
   }
   const workerCount = Math.max(1, Math.min(concurrency, candidates.length));
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
-  const accepted = tested.filter((modelId): modelId is string => modelId !== undefined);
+  return tested.filter((modelId): modelId is string => modelId !== undefined);
+}
+
+// Issue #144: pure smoke-test loop extracted from `defaultGatewaySetupTester`
+// for testability. Concurrency is a parameter so callers (tests) can pin peak
+// in-flight count deterministically. Original-order preservation among
+// survivors is part of the observable contract — pinned by gateway-setup tests
+// that assert tested-model-id order matches input order with failed entries
+// dropped.
+//
+// Throws with the exact error message that `defaultGatewaySetupTester` has
+// always thrown so existing call sites and tests keep compiling.
+export async function smokeTestCandidates(
+  candidates: readonly string[],
+  probe: (modelId: string) => Promise<void>,
+  concurrency: number,
+): Promise<readonly string[]> {
+  const accepted = await passingCandidates(candidates, probe, concurrency);
   if (accepted.length === 0) {
     throw new Error("no discovered model accepted the chat-completions smoke test");
   }
@@ -1100,9 +1118,9 @@ export async function smokeTestCandidates(
 async function defaultGatewaySetupTester(
   config: GatewayConfig,
   candidateModelIds: readonly string[],
-): Promise<readonly string[]> {
+): Promise<GatewaySetupTestResult> {
   const gateway = new Gateway(config);
-  return smokeTestCandidates(
+  const testedModelIds = await smokeTestCandidates(
     candidateModelIds,
     async (modelId) => {
       await gateway.chat({
@@ -1115,6 +1133,21 @@ async function defaultGatewaySetupTester(
     },
     SETUP_SMOKE_CONCURRENCY,
   );
+  const responseFormatModelIds = await passingCandidates(
+    testedModelIds,
+    async (modelId) => {
+      const response = await gateway.chat(buildQiJudgePreflightRequest(modelId));
+      if (tryParseJudgeVerdict(response.content) === null) {
+        throw new Error("response format unsupported");
+      }
+    },
+    SETUP_SMOKE_CONCURRENCY,
+  );
+  return { testedModelIds, responseFormatModelIds };
+}
+
+function gatewaySetupTester(deps: UiHandlerDeps): GatewaySetupTester {
+  return deps.gatewaySetupTester ?? defaultGatewaySetupTester;
 }
 
 const FIGMA_ME_ENDPOINT = "https://api.figma.com/v1/me";
@@ -2791,6 +2824,20 @@ interface SetupCandidateModels {
   readonly imageInputModelIds: readonly string[];
 }
 
+function isGatewaySetupTestResult(
+  result: readonly string[] | GatewaySetupTestResult,
+): result is GatewaySetupTestResult {
+  return "responseFormatModelIds" in result;
+}
+
+function normalizeSetupTestResult(
+  result: readonly string[] | GatewaySetupTestResult,
+): GatewaySetupTestResult {
+  return isGatewaySetupTestResult(result)
+    ? result
+    : { testedModelIds: result, responseFormatModelIds: [] };
+}
+
 function assertImageInputModelsWereTested(
   imageInputModelIds: readonly string[],
   testedModelIds: readonly string[],
@@ -2905,11 +2952,13 @@ function finalRawConfigForSetup(
   testedModelIds: readonly string[],
   embeddingModelIds: readonly string[],
   imageInputModelIds: readonly string[],
+  responseFormatModelIds: readonly string[],
 ): Record<string, unknown> {
   const configuredModelIds = mergeChatAndEmbeddingModelIds(testedModelIds, embeddingModelIds);
   const rawConfig = buildRawConfig(input.baseUrl, input.apiKey, configuredModelIds, {
     apiKeyHeaderName: input.apiKeyHeaderName,
     imageInputModelIds,
+    responseFormatModelIds,
     embeddingModelIds,
     timeoutMs: input.timeoutMs,
   });
@@ -2939,19 +2988,20 @@ function skippedModelIdsForSetup(
 
 function finalRawConfigForTestedSetup(
   input: SetupVerificationInput,
-  testedModelIds: readonly string[],
+  testResult: GatewaySetupTestResult,
   candidateModels: SetupCandidateModels,
 ): Record<string, unknown> {
   const imageInputModelIds = testedImageInputModelIds(
     input.imageInputModelIds,
     candidateModels.imageInputModelIds,
-    testedModelIds,
+    testResult.testedModelIds,
   );
   return finalRawConfigForSetup(
     input,
-    testedModelIds,
+    testResult.testedModelIds,
     candidateModels.embeddingModelIds,
     imageInputModelIds,
+    testResult.responseFormatModelIds,
   );
 }
 
@@ -2984,11 +3034,13 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
     input.env,
     linkLocalGatewayOverrideOptions(input.env),
   );
-  const testedModelIds = await input.tester(candidateConfig, candidateModels.chatModelIds);
-  assertImageInputModelsWereTested(input.imageInputModelIds, testedModelIds);
+  const testResult = normalizeSetupTestResult(
+    await input.tester(candidateConfig, candidateModels.chatModelIds),
+  );
+  assertImageInputModelsWereTested(input.imageInputModelIds, testResult.testedModelIds);
   const rawConfigWithOptionalBlocks = finalRawConfigForTestedSetup(
     input,
-    testedModelIds,
+    testResult,
     candidateModels,
   );
   const config = parseGatewayConfig(
@@ -2999,10 +3051,10 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
   return {
     rawConfig: rawConfigWithOptionalBlocks,
     config,
-    testedModelIds,
+    testedModelIds: testResult.testedModelIds,
     skippedModelIds: skippedModelIdsForSetup(
       candidateModels.modelIds,
-      testedModelIds,
+      testResult.testedModelIds,
       candidateModels.embeddingModelIds,
     ),
   };
@@ -3224,7 +3276,7 @@ async function verifyAndSaveGatewaySetup(
   deps: UiHandlerDeps,
   gatewayConfig: RuntimeGatewayConfig,
 ): Promise<RouteResult> {
-  const tester = deps.gatewaySetupTester ?? defaultGatewaySetupTester;
+  const tester = gatewaySetupTester(deps);
   const discovery = deps.gatewayModelDiscovery ?? defaultGatewayModelDiscovery;
   const figmaFailure = await verifySubmittedFigmaCredential(request, deps);
   if (figmaFailure !== undefined) {

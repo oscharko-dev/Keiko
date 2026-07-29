@@ -26,6 +26,7 @@ import type {
   QualityIntelligenceGenerationPortResult,
 } from "@oscharko-dev/keiko-workflows";
 import type { UiHandlerDeps } from "../deps.js";
+import { currentGatewayConfig } from "../deps.js";
 
 const BASELINE_GENERATION_OUTPUT = JSON.stringify({ testCases: [] });
 const DETERMINISTIC_GENERATION_TOP_P = 1;
@@ -41,9 +42,8 @@ export class QiGenerationError extends Error {
 }
 
 function capabilityFor(deps: UiHandlerDeps, modelId: string): ModelCapability | undefined {
-  return deps.config === undefined
-    ? findCapability(modelId)
-    : findConfiguredCapability(deps.config, modelId);
+  const config = currentGatewayConfig(deps);
+  return config === undefined ? findCapability(modelId) : findConfiguredCapability(config, modelId);
 }
 
 // Invisible / directional format controls that NFKC does NOT remove: zero-width characters

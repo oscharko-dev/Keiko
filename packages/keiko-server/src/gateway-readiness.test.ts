@@ -277,6 +277,21 @@ describe("gateway readiness route", () => {
       ["json_schema", "passed"],
       ["embedding", "passed"],
     ]);
+    expect(requestBodyAt(fetchImpl, 3)).toMatchObject({
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "keiko_readiness_probe",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: { status: { type: "string", enum: ["json-ok"] } },
+            required: ["status"],
+          },
+        },
+      },
+    });
     const serialized = JSON.stringify(report);
     expect(serialized).not.toContain("secret-token");
     expect(serialized).not.toContain("llm-gateway.internal");

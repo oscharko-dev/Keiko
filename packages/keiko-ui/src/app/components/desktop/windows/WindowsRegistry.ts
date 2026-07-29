@@ -203,6 +203,12 @@ export interface WindowRenderContext {
   /** Image-only sources connected to Quality Intelligence. */
   readonly linkedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
   /**
+   * The available folder/repository selected for the whole Workbench. This is the shared base
+   * context below an optional managed task-workspace binding; it never grants task execution
+   * authority by itself.
+   */
+  readonly selectedRoot?: string | null;
+  /**
    * Issue #446 (ADR-0090) — the active task-workspace root, or null in unbound mode. The SINGLE
    * retarget choke point: when a workspace is active this OVERRIDES a bound surface's per-window cfg
    * root, so a switch re-renders every window onto the new root atomically (no stale context).

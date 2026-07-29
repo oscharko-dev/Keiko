@@ -5,6 +5,7 @@ import type {
   WorkspaceRootRef,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  fetchWorkspaceManifestAccess,
   fetchWorkspaceManifests,
   focusWorkspaceRoot,
   workspaceManifestEventValue,
@@ -66,6 +67,25 @@ describe("workspace manifest API", () => {
     releasePairing();
     await expect(request).resolves.toEqual([manifest()]);
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the server's explicit unpaired session signal", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockImplementation(() =>
+          Promise.resolve(
+            new Response(JSON.stringify({ session: "unpaired", manifests: [] }), { status: 200 }),
+          ),
+        ),
+    );
+
+    await expect(fetchWorkspaceManifestAccess()).resolves.toEqual({
+      session: "unpaired",
+      manifests: [],
+    });
+    await expect(fetchWorkspaceManifests()).resolves.toEqual([]);
   });
 
   it("preserves the server error code and correlation id on a rejected workspace request", async () => {

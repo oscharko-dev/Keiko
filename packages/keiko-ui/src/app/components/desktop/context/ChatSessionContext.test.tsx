@@ -9,6 +9,7 @@ import {
   useChatSessionCatalog,
   useChatSessionComposer,
   useChatSessionContext,
+  useOptionalChatSessionProject,
 } from "./ChatSessionContext";
 
 function session(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
@@ -75,6 +76,14 @@ const ActionsProbe = memo(function ActionsProbe(props: {
 
 const FullProbe = memo(function FullProbe(props: { readonly onRender: () => void }): ReactNode {
   useChatSessionContext();
+  props.onRender();
+  return null;
+});
+
+const ProjectProbe = memo(function ProjectProbe(props: {
+  readonly onRender: () => void;
+}): ReactNode {
+  useOptionalChatSessionProject();
   props.onRender();
   return null;
 });
@@ -308,6 +317,44 @@ describe("GEN-PERF-CHAT-014 — composer render insulation from streaming flushe
 });
 
 describe("ChatSessionContext", () => {
+  it("notifies the project slice only when the selected project changes", () => {
+    const onProjectRender = vi.fn();
+    const activeProject = {
+      path: "/repo",
+      name: "repo",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+      workspaceAvailable: false,
+    };
+    const initial = session({ activeProject });
+    const { rerender } = render(
+      <ChatSessionProvider value={initial}>
+        <ProjectProbe onRender={onProjectRender} />
+      </ChatSessionProvider>,
+    );
+
+    rerender(
+      <ChatSessionProvider value={{ ...initial, draft: "unrelated update" }}>
+        <ProjectProbe onRender={onProjectRender} />
+      </ChatSessionProvider>,
+    );
+    expect(onProjectRender).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <ChatSessionProvider
+        value={{
+          ...initial,
+          activeProject: { ...activeProject, path: "/other", name: "other" },
+        }}
+      >
+        <ProjectProbe onRender={onProjectRender} />
+      </ChatSessionProvider>,
+    );
+    expect(onProjectRender).toHaveBeenCalledTimes(2);
+  });
+
   it("does not notify catalog/action consumers for transcript-only changes", () => {
     const onCatalogRender = vi.fn();
     const onActionsRender = vi.fn();

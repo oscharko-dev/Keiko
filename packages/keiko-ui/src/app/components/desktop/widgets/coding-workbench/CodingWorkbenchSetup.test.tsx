@@ -117,11 +117,12 @@ function actions(): CodingWorkbenchRuntimeActions {
 function renderWorkbench(
   api: ActiveWorkspaceApi,
   state: CodingWorkbenchRuntimeState = liveState(),
+  selectedRoot?: string,
 ): ReturnType<typeof render> {
   runtimeHookMock.mockReturnValue({ state, actions: actions() });
   return render(
     <ActiveWorkspaceProvider value={api}>
-      <CodingWorkbenchWindow />
+      <CodingWorkbenchWindow selectedRoot={selectedRoot} />
     </ActiveWorkspaceProvider>,
   );
 }
@@ -152,6 +153,15 @@ describe("CodingWorkbenchSetup", () => {
         ["serious", "critical"].includes(violation.impact ?? ""),
       ),
     ).toEqual([]);
+  });
+
+  it("prefills the selected Workbench repository without granting managed execution authority", () => {
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    expect(setupSection()).toBeInTheDocument();
+    expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/selected");
+    expect(screen.getByRole("button", { name: "Bind workspace" })).toBeEnabled();
+    expect(setActiveMock).not.toHaveBeenCalled();
   });
 
   it("binds the entered checkout through provision, reconciliation, activation, and a refresh", async () => {
@@ -258,6 +268,30 @@ describe("CodingWorkbenchSetup", () => {
     );
     expect(alert).not.toHaveTextContent("WORKSPACE_ROOT_INVALID");
     expect(setActiveMock).not.toHaveBeenCalled();
+  });
+
+  it("explains a blocked task-branch conflict without exposing server detail", async () => {
+    const user = userEvent.setup();
+    const api = workspaceApi();
+    provisionMock.mockRejectedValue(
+      Object.assign(new Error("sensitive repository detail"), {
+        code: "BRANCH_CONFLICT",
+        failureClass: "blocked",
+      }),
+    );
+    renderWorkbench(api, liveState(), "/repos/selected");
+
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(
+      "The task branch for this coding run already exists. Remove the previous branch or its managed workspace. Alternatively, choose a different target branch.",
+    );
+    expect(alert).not.toHaveTextContent("sensitive repository detail");
+    expect(reconcileMock).not.toHaveBeenCalled();
+    expect(setActiveMock).not.toHaveBeenCalled();
+    expect(api.refresh).not.toHaveBeenCalled();
+    expect(setupSection()).toBeInTheDocument();
   });
 
   it("does not render once a binding is active", () => {

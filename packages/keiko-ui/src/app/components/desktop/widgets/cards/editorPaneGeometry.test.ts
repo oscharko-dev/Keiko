@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { DragEvent as ReactDragEvent } from "react";
 import {
   EDITOR_LAYOUT_SCHEMA_VERSION,
+  type EditorLayoutNode,
   type EditorLayoutStateV2,
   type EditorPaneStateV2,
 } from "@oscharko-dev/keiko-contracts";
@@ -22,6 +23,7 @@ import {
   EDITOR_TAB_DRAG_MIME,
   layoutHasClonedPanes,
   layoutHasDuplicateFiles,
+  MAX_EDITOR_PANES,
   normalizeEditorFile,
   normalizeEditorLayoutStructure,
   normalizeEditorOpenFiles,
@@ -62,6 +64,49 @@ function layout(
     sidebarCollapsed: false,
     outlinePanelVisible: true,
   };
+}
+
+function mixedFivePaneLayout(): EditorLayoutStateV2 {
+  const panes = [
+    pane("pane-1", ["src/a.ts"]),
+    pane("pane-2", ["src/b.ts"]),
+    pane("pane-3", ["src/c.ts"]),
+    pane("pane-4", ["src/d.ts"]),
+    pane("pane-5", ["src/e.ts"]),
+  ];
+  return {
+    ...layout(panes, "pane-4"),
+    tree: splitNode(
+      "split-1",
+      "column",
+      splitNode("split-2", "row", paneNode("pane-1"), paneNode("pane-2")),
+      splitNode(
+        "split-3",
+        "row",
+        paneNode("pane-3"),
+        splitNode("split-4", "column", paneNode("pane-4"), paneNode("pane-5")),
+      ),
+    ),
+  };
+}
+
+function nestedPaneLayout(paneCount: number): EditorLayoutStateV2 {
+  const panes = Array.from({ length: paneCount }, (_, index) => {
+    const suffix = String(index + 1);
+    return pane(`pane-${suffix}`, [`src/${suffix}.ts`]);
+  });
+  let tree: EditorLayoutNode = paneNode("pane-1");
+  for (let index = 1; index < panes.length; index += 1) {
+    const paneId = panes[index]?.id;
+    if (paneId === undefined) continue;
+    tree = splitNode(
+      `split-${String(index)}`,
+      index % 2 === 0 ? "column" : "row",
+      tree,
+      paneNode(paneId),
+    );
+  }
+  return { ...layout(panes), tree };
 }
 
 describe("clampNumber", () => {
@@ -138,6 +183,28 @@ describe("createInitialLayout / normalizeEditorLayoutStructure", () => {
     ]);
     const normalized = normalizeEditorLayoutStructure(ROOT, cloned);
     expect(layoutHasDuplicateFiles(normalized)).toBe(false);
+  });
+
+  it("preserves a persisted five-pane mixed recursive layout", () => {
+    const persisted = mixedFivePaneLayout();
+    const normalized = createInitialLayout({
+      root: ROOT,
+      file: "",
+      openFiles: [],
+      layoutJson: JSON.stringify(persisted),
+    });
+
+    expect(Object.keys(normalized.panes)).toHaveLength(5);
+    expect(normalized.activePaneId).toBe("pane-4");
+    expect(normalized.tree).toEqual(persisted.tree);
+  });
+
+  it("keeps the persistence-derived pane ceiling fail closed", () => {
+    const maximum = nestedPaneLayout(MAX_EDITOR_PANES);
+    expect(normalizeEditorLayoutStructure(ROOT, maximum).tree).toEqual(maximum.tree);
+
+    const overLimit = normalizeEditorLayoutStructure(ROOT, nestedPaneLayout(MAX_EDITOR_PANES + 1));
+    expect(Object.keys(overLimit.panes).length).toBeLessThanOrEqual(MAX_EDITOR_PANES);
   });
 });
 

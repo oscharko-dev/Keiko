@@ -1,6 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
+
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 
 import { EditorOutlinePanel } from "./EditorOutlinePanel";
 import type { EditorOutlineSnapshot } from "./editorOutlineModel";
@@ -27,6 +29,10 @@ const NESTED_SYMBOLS: readonly EditorDocumentSymbol[] = [
   { name: "run", kind: "method", range: range(2, 2, 4, 3) },
   { name: "standalone", kind: "function", range: range(6, 0, 8, 1) },
 ];
+
+afterEach(() => {
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
+});
 
 function snapshot(overrides: Partial<EditorOutlineSnapshot> = {}): EditorOutlineSnapshot {
   return {
@@ -116,6 +122,72 @@ describe("EditorOutlinePanel", () => {
       />,
     );
     expect(screen.getByText("Outline is unavailable for this file.")).toBeInTheDocument();
+  });
+
+  it("localizes the outline chrome and unavailable state in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    const view = render(
+      <I18nProvider>
+        <EditorOutlinePanel
+          snapshot={snapshot({ symbols: [], enabled: false })}
+          visible
+          onToggleVisible={vi.fn()}
+          onReveal={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    expect(
+      await screen.findByRole("region", { name: "Arbeitsbereichsgliederung" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Gliederung")).toBeInTheDocument();
+    expect(screen.getByText("Für diese Datei ist keine Gliederung verfügbar.")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Gliederungsbereich ausblenden" }),
+    ).toBeInTheDocument();
+
+    view.rerender(
+      <I18nProvider>
+        <EditorOutlinePanel
+          snapshot={snapshot({ symbols: [], enabled: false })}
+          visible={false}
+          onToggleVisible={vi.fn()}
+          onReveal={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+    expect(
+      screen.getByRole("button", { name: "Gliederungsbereich einblenden" }),
+    ).toBeInTheDocument();
+  });
+
+  it("localizes the remaining outline empty states in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    const view = render(
+      <I18nProvider>
+        <EditorOutlinePanel
+          snapshot={snapshot({ symbols: [], loading: true })}
+          visible
+          onToggleVisible={vi.fn()}
+          onReveal={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+    expect(await screen.findByText("Symbole werden geladen.")).toBeInTheDocument();
+
+    view.rerender(
+      <I18nProvider>
+        <EditorOutlinePanel
+          snapshot={snapshot({ symbols: [] })}
+          visible
+          onToggleVisible={vi.fn()}
+          onReveal={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+    expect(screen.getByText("In dieser Datei wurden keine Symbole gefunden.")).toBeInTheDocument();
   });
 
   it("navigates with ArrowUp, Home, and End", () => {

@@ -66,6 +66,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     transcribeDictation: vi.fn(),
     // Issue #1559 — spied in the dialog-mode suite so we can assert persona routing.
     synthesizeAssistantSpeech: vi.fn(),
+    streamAssistantSpeech: vi.fn(),
   };
 });
 
@@ -354,6 +355,32 @@ function stubRealtimeBrowser(getUserMedia: () => Promise<MediaStream>): void {
   });
   vi.stubGlobal("MediaRecorder", StubMediaRecorder);
   vi.stubGlobal("RTCPeerConnection", StubRTCPeerConnection);
+}
+
+function stubAssistantSpeechAudioOutput(): { readonly resume: ReturnType<typeof vi.fn> } {
+  const resume = vi.fn(() => Promise.resolve());
+  vi.stubGlobal(
+    "AudioContext",
+    class {
+      readonly audioWorklet = { addModule: vi.fn(() => Promise.resolve()) };
+      readonly destination = {};
+      readonly close = vi.fn(() => Promise.resolve());
+      readonly resume = resume;
+    },
+  );
+  vi.stubGlobal(
+    "AudioWorkletNode",
+    class {
+      readonly port = {
+        postMessage: vi.fn(),
+        close: vi.fn(),
+        onmessage: null as ((event: MessageEvent) => void) | null,
+      };
+      readonly connect = vi.fn();
+      readonly disconnect = vi.fn();
+    },
+  );
+  return { resume };
 }
 
 describe("ChatWindow voice dialogue availability", () => {
@@ -775,6 +802,7 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     clearVoiceCapabilityCacheForTests();
     vi.mocked(api.fetchVoiceCapability).mockReset();
     vi.mocked(api.synthesizeAssistantSpeech).mockReset();
+    vi.mocked(api.streamAssistantSpeech).mockReset();
     vi.mocked(api.synthesizeAssistantSpeech).mockResolvedValue({
       audio: btoa("stub-audio"),
       mimeType: "audio/mpeg",
@@ -843,6 +871,26 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
       within(box).getByRole("button", { name: "Mute voice dialogue microphone" }),
     ).toBeInTheDocument();
     expect(within(box).queryByRole("button", { name: "Send message" })).toBeNull();
+  });
+
+  it("primes local speech output synchronously on entry without requesting TTS", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: FULL_REALTIME_WITH_PERSONAS,
+    });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    const output = stubAssistantSpeechAudioOutput();
+    realtimeVoiceMock.start.mockImplementationOnce(() => {
+      expect(output.resume).toHaveBeenCalledOnce();
+    });
+    renderWindow(makeSession());
+
+    const dialogSwitch = await screen.findByRole("switch", { name: "Voice dialogue mode" });
+    fireEvent.click(dialogSwitch);
+
+    expect(output.resume).toHaveBeenCalledOnce();
+    expect(realtimeVoiceMock.start).toHaveBeenCalledOnce();
+    expect(api.streamAssistantSpeech).not.toHaveBeenCalled();
+    expect(api.synthesizeAssistantSpeech).not.toHaveBeenCalled();
   });
 
   it("surfaces a retained hard-admission final with a focused realtime retry action", async () => {

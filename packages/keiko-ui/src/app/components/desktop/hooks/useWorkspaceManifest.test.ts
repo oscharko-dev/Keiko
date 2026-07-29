@@ -4,7 +4,7 @@ import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 import { WORKSPACE_MANIFEST_CHANGED_EVENT } from "@/lib/workspace-manifest-api";
 import { useWorkspaceManifest } from "./useWorkspaceManifest";
 
-const fetchManifests = vi.hoisted(() => vi.fn());
+const fetchManifestAccess = vi.hoisted(() => vi.fn());
 const addRoot = vi.hoisted(() => vi.fn());
 const removeRoot = vi.hoisted(() => vi.fn());
 const reorderRoots = vi.hoisted(() => vi.fn());
@@ -12,7 +12,7 @@ const focusRoot = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/workspace-manifest-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/workspace-manifest-api")>()),
-  fetchWorkspaceManifests: fetchManifests,
+  fetchWorkspaceManifestAccess: fetchManifestAccess,
   addWorkspaceRoot: addRoot,
   removeWorkspaceRoot: removeRoot,
   reorderWorkspaceRoots: reorderRoots,
@@ -65,7 +65,10 @@ afterEach(() => {
 describe("useWorkspaceManifest", () => {
   it("loads the manifest containing the tracked root and clears on miss", async () => {
     const alpha = manifest("ws-a", ["alpha"]);
-    fetchManifests.mockResolvedValue([alpha, manifest("ws-b", ["beta"])]);
+    fetchManifestAccess.mockResolvedValue({
+      session: "paired",
+      manifests: [alpha, manifest("ws-b", ["beta"])],
+    });
 
     const view = renderHook(() => useWorkspaceManifest("/ws/alpha"));
     await waitFor(() => expect(view.result.current.loading).toBe(false));
@@ -81,20 +84,30 @@ describe("useWorkspaceManifest", () => {
     const view = renderHook(() => useWorkspaceManifest(undefined));
     await waitFor(() => expect(view.result.current.loading).toBe(false));
     expect(view.result.current.manifest).toBeNull();
-    expect(fetchManifests).not.toHaveBeenCalled();
+    expect(fetchManifestAccess).not.toHaveBeenCalled();
   });
 
   it("surfaces a load failure as the load issue", async () => {
-    fetchManifests.mockRejectedValue(new Error("offline"));
+    fetchManifestAccess.mockRejectedValue(new Error("offline"));
     const view = renderHook(() => useWorkspaceManifest("/ws/alpha"));
     await waitFor(() => expect(view.result.current.loading).toBe(false));
     expect(view.result.current.manifest).toBeNull();
     expect(view.result.current.issue).toBe("load");
+    expect(view.result.current.pathReadAuthority).toBe("unavailable");
+  });
+
+  it("preserves an explicit unpaired app session without treating it as a load error", async () => {
+    fetchManifestAccess.mockResolvedValue({ session: "unpaired", manifests: [] });
+    const view = renderHook(() => useWorkspaceManifest("/managed/task"));
+    await waitFor(() => expect(view.result.current.loading).toBe(false));
+    expect(view.result.current.manifest).toBeNull();
+    expect(view.result.current.issue).toBeNull();
+    expect(view.result.current.pathReadAuthority).toBe("unpaired");
   });
 
   it("applies change events for the same workspace or a manifest gaining the root", async () => {
     const alpha = manifest("ws-a", ["alpha"]);
-    fetchManifests.mockResolvedValue([alpha]);
+    fetchManifestAccess.mockResolvedValue({ session: "paired", manifests: [alpha] });
     const view = renderHook(() => useWorkspaceManifest("/ws/alpha"));
     await waitFor(() => expect(view.result.current.manifest).not.toBeNull());
 
@@ -119,7 +132,7 @@ describe("useWorkspaceManifest", () => {
 
   it("runs mutations through the member actor and reports mutation failures", async () => {
     const alpha = manifest("ws-a", ["alpha", "beta"]);
-    fetchManifests.mockResolvedValue([alpha]);
+    fetchManifestAccess.mockResolvedValue({ session: "paired", manifests: [alpha] });
     const view = renderHook(() => useWorkspaceManifest("/ws/alpha"));
     await waitFor(() => expect(view.result.current.manifest).not.toBeNull());
 
@@ -158,9 +171,9 @@ describe("useWorkspaceManifest", () => {
     const before = manifest("ws-a", ["alpha"]);
     const after = manifest("ws-a", ["alpha", "beta"]);
     let releaseFetch = (): void => undefined;
-    fetchManifests.mockReturnValue(
+    fetchManifestAccess.mockReturnValue(
       new Promise<unknown>((resolve): void => {
-        releaseFetch = (): void => resolve([before]);
+        releaseFetch = (): void => resolve({ session: "paired", manifests: [before] });
       }),
     );
 
@@ -180,7 +193,7 @@ describe("useWorkspaceManifest", () => {
   });
 
   it("refuses mutations before a manifest is loaded", async () => {
-    fetchManifests.mockResolvedValue([]);
+    fetchManifestAccess.mockResolvedValue({ session: "paired", manifests: [] });
     const view = renderHook(() => useWorkspaceManifest("/ws/alpha"));
     await waitFor(() => expect(view.result.current.loading).toBe(false));
     await act(async () => {

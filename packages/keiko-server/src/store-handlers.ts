@@ -30,6 +30,7 @@ import {
 import {
   projectsWithWorkspaceAvailability,
   projectWithWorkspaceAvailability,
+  userFacingProjects,
 } from "./workspace-root-membership.js";
 import {
   openKnowledgeStore,
@@ -342,8 +343,15 @@ function messageBelongsToChat(deps: UiHandlerDeps, chatId: string, messageId: st
 // ──────────────────────────────────────────────────────────────────────────
 
 export function handleListProjects(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  // Managed worktrees are registered so server-owned trust, manifests, and verification resolve
+  // their exact root identity. They are implementation details, not folders the human selected.
+  // Filter before availability projection so an unpaired catalog read never exposes their paths.
+  const visibleProjects = userFacingProjects(
+    deps.store.listProjects(),
+    deps.managedTaskWorkspaceRoot,
+  );
   const projects = putPreferredProjectFirst(
-    projectsWithWorkspaceAvailability(deps.store, deps.store.listProjects()),
+    projectsWithWorkspaceAvailability(deps.store, visibleProjects),
     deps.preferredProjectPath,
   );
   return { status: 200, body: { projects } };
@@ -373,6 +381,12 @@ export async function handleCreateProject(
     // transaction (`createProjectRecord`). A successful response therefore exposes a current
     // membership projection; consumers never synthesize or assume membership client-side.
     const project = deps.store.createProject(normalizedPath, name);
+    // Choosing a local folder is the explicit local-human trust act. The trust service resolves
+    // every authoritative dimension itself (manifest/root/object identity and package.json basis);
+    // the browser supplies only the path it already selected. When the service is unavailable the
+    // project remains registered but restricted, preserving the legacy injectable test seam without
+    // inventing browser-side authority.
+    deps.workspaceScriptTrust?.grant(project.path);
     return {
       status: 201,
       body: { project: projectWithWorkspaceAvailability(deps.store, project) },

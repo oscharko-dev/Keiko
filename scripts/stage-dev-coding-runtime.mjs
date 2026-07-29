@@ -134,8 +134,8 @@ export async function stageDevCodingRuntime(argv, deps = {}) {
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   log(`[dev-lane] staged ${target} under ${join(STAGED_ROOT, target)}.`);
   log(
-    "[dev-lane] start the dev server with the lane enabled:\n" +
-      "  KEIKO_CODING_RUNTIME_DEV_LANE=1 npm run dev:start\n" +
+    "[dev-lane] start the dev server (the trusted launcher enables this verified lane):\n" +
+      "  npm run dev:start\n" +
       "See docs/coding-runtime/dev-lane.md for the full posture and verification notes.",
   );
   return manifestPath;

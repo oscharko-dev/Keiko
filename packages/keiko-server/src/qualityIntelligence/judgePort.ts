@@ -31,6 +31,7 @@ import {
   TEST_QUALITY_RUBRIC_DIMENSIONS,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
+import { currentGatewayConfig } from "../deps.js";
 
 export const QI_JUDGE_RESPONSE_FORMAT_NAME = "quality_intelligence_test_quality_judge";
 
@@ -58,9 +59,8 @@ export class QiJudgeError extends Error {
 }
 
 function capabilityFor(deps: UiHandlerDeps, modelId: string): ModelCapability | undefined {
-  return deps.config === undefined
-    ? findCapability(modelId)
-    : findConfiguredCapability(deps.config, modelId);
+  const config = currentGatewayConfig(deps);
+  return config === undefined ? findCapability(modelId) : findConfiguredCapability(config, modelId);
 }
 
 interface JudgeSourceContext {
@@ -162,6 +162,25 @@ export function buildJudgePrompt(
     Object.freeze<ChatMessage>({ role: "system", content: system }),
     Object.freeze<ChatMessage>({ role: "user", content: user }),
   ]);
+}
+
+const QI_JUDGE_PREFLIGHT_CANDIDATE =
+  "Titel: Pflichtfeld Betrag ist leer\nSchritte: Betrag leer lassen\nErwartetes Ergebnis: Validierungsfehler wird angezeigt.";
+const QI_JUDGE_PREFLIGHT_SOURCE_CONTEXT: readonly JudgeSourceContext[] = Object.freeze([
+  Object.freeze({
+    atomId: "preflight-atom-1",
+    text: "Wenn das Pflichtfeld Betrag leer ist, muss das System eine Validierungsmeldung anzeigen.",
+  }),
+]);
+
+export function buildQiJudgePreflightRequest(modelId: string): GatewayRequest {
+  return {
+    modelId,
+    messages: buildJudgePrompt(QI_JUDGE_PREFLIGHT_CANDIDATE, QI_JUDGE_PREFLIGHT_SOURCE_CONTEXT),
+    stream: false,
+    temperature: 0,
+    responseFormat: buildQiJudgeResponseFormat(),
+  };
 }
 
 const SAFE_DEFAULT_VERDICT: TestQualityJudgeVerdict = Object.freeze({

@@ -81,7 +81,9 @@ function instance(taskId: string, overrides: Partial<WorkspaceInstance> = {}): W
 
 // A fake #445 provisioning service: activate reads the instance, walks it to `active`, and persists —
 // the same contract the lifecycle service delegates the switch/resume walk to.
-function fakeProvisioning(): WorkspaceProvisioningService {
+function fakeProvisioning(
+  ensureIdentity?: (instance: WorkspaceInstance) => void,
+): WorkspaceProvisioningService {
   return {
     provision: () => Promise.reject(new Error("provision not used in lifecycle tests")),
     activate: ({ workspaceId }): Promise<WorkspaceActivateResult> => {
@@ -97,7 +99,22 @@ function fakeProvisioning(): WorkspaceProvisioningService {
       return Promise.resolve({ instance: next, binding: buildBinding(next) });
     },
     getInstance: (id) => store.getById(id),
+    ensureIdentity: ensureIdentity ?? ((): void => undefined),
   };
+}
+
+function lifecycleWith(provisioning: WorkspaceProvisioningService): WorkspaceLifecycleService {
+  return createWorkspaceLifecycleService({
+    store,
+    activePointerStore: pointerStore,
+    managedRoot,
+    provisioning,
+    evidenceStore: capturingEvidence(),
+    redactString: (s: string): string => s,
+    now: (): number => 1_700_000_000_000,
+    newId: (): string => `id-${String(idCounter++)}`,
+    mutex: __twMutex,
+  });
 }
 
 async function rejectsWithCode(
@@ -122,17 +139,7 @@ beforeEach(() => {
   pointerStore = buildActiveWorkspacePointerStoreOverDatabase(db);
   evidence = [];
   idCounter = 0;
-  service = createWorkspaceLifecycleService({
-    store,
-    activePointerStore: pointerStore,
-    managedRoot,
-    provisioning: fakeProvisioning(),
-    evidenceStore: capturingEvidence(),
-    redactString: (s: string): string => s,
-    now: (): number => 1_700_000_000_000,
-    newId: (): string => `id-${String(idCounter++)}`,
-    mutex: __twMutex,
-  });
+  service = lifecycleWith(fakeProvisioning());
 });
 
 afterEach(() => {
@@ -183,6 +190,41 @@ describe("getActive / list", () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  it("backfills managed identity before exposing a persisted active pointer after restart", () => {
+    const inst = store.upsert(instance("restart"));
+    pointerStore.set({
+      workspaceId: inst.workspaceId,
+      setBy: "op",
+      atIso: "2026-06-26T00:00:00.000Z",
+    });
+    const observed: string[] = [];
+    const restarted = lifecycleWith(
+      fakeProvisioning((candidate) => {
+        observed.push(candidate.managedWorktreePath);
+      }),
+    );
+
+    expect(restarted.getActive()?.instance.workspaceId).toBe(inst.workspaceId);
+    expect(observed).toEqual([inst.managedWorktreePath]);
+  });
+
+  it("fails closed when persisted active identity cannot be repaired after restart", () => {
+    const inst = store.upsert(instance("restart-failure"));
+    pointerStore.set({
+      workspaceId: inst.workspaceId,
+      setBy: "op",
+      atIso: "2026-06-26T00:00:00.000Z",
+    });
+    const restarted = lifecycleWith(
+      fakeProvisioning(() => {
+        throw new Error("identity store unavailable");
+      }),
+    );
+
+    expect(restarted.getActive()).toBeUndefined();
+    expect(pointerStore.get()).toBeUndefined();
   });
 });
 

@@ -1,38 +1,82 @@
-// Component tests for the TaskWorkspaceSwitcher (Issue #446, AC5). Renders inside a stubbed
-// ActiveWorkspace context and proves it exposes the active task identity/branch/path/health/dirty/
-// lock, gates the lifecycle actions to the legal transitions, and wires the action callbacks.
+// Regression coverage for the global folder/repository selector. The dialog intentionally owns
+// only base-context selection; task-workspace lifecycle belongs to its own surface.
 
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+  type RenderResult,
+} from "@testing-library/react";
+import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import type { NativeDialogPickOutcome } from "@/lib/native-file-dialog";
+import type { ProjectWithAvailability } from "@/lib/types";
 import { ActiveWorkspaceProvider, type ActiveWorkspaceApi } from "./context/ActiveWorkspaceContext";
 import { TaskWorkspaceSwitcher } from "./TaskWorkspaceSwitcher";
 
-const catalogState = vi.hoisted(() => ({ activeProjectPath: null as string | null }));
+const SELECTED_ROOT = "/Users/oscharko-dev/Projects/Keiko";
+
+const catalogState = vi.hoisted(() => ({
+  activeProject: undefined as ProjectWithAvailability | undefined,
+  projects: [] as ProjectWithAvailability[],
+}));
+const chatActions = vi.hoisted(() => ({
+  addProject: vi.fn<(path: string) => Promise<ProjectWithAvailability | undefined>>(() =>
+    Promise.resolve(undefined),
+  ),
+  openProject: vi.fn<(project: ProjectWithAvailability) => Promise<void>>(() => Promise.resolve()),
+}));
+const nativeDialogState = vi.hoisted(() => ({
+  supported: true,
+  pick: vi.fn<() => Promise<NativeDialogPickOutcome>>(() => Promise.resolve({ kind: "cancelled" })),
+}));
 
 vi.mock("./context/ChatSessionContext", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./context/ChatSessionContext")>();
   return {
     ...actual,
-    useOptionalChatSessionCatalog: () =>
-      catalogState.activeProjectPath === null
-        ? null
-        : {
-            activeProject: {
-              path: catalogState.activeProjectPath,
-              available: true,
-            },
-          },
+    useOptionalChatSessionActions: () => chatActions,
+    useOptionalChatSessionCatalog: () => ({
+      activeProject: catalogState.activeProject,
+      projects: catalogState.projects,
+    }),
   };
 });
 
-function instance(overrides: Partial<WorkspaceInstance> = {}): WorkspaceInstance {
+vi.mock("./hooks/useNativeFileDialogCapability", () => ({
+  useNativeFileDialogCapability: (): boolean => nativeDialogState.supported,
+}));
+
+vi.mock("@/lib/native-file-dialog", () => ({
+  pickWithNativeDialog: nativeDialogState.pick,
+}));
+
+function project(
+  path: string,
+  overrides: Partial<ProjectWithAvailability> = {},
+): ProjectWithAvailability {
+  return {
+    path,
+    name: path.split("/").at(-1) ?? path,
+    favorite: false,
+    createdAt: 1,
+    lastOpenedAt: 1,
+    available: true,
+    workspaceAvailable: true,
+    ...overrides,
+  };
+}
+
+function instance(): WorkspaceInstance {
   return {
     schemaVersion: "1",
     workspaceId: "ws-1",
     taskId: "task-446",
     repositoryId: "repo",
-    repositoryRoot: "/repo",
+    repositoryRoot: "/old/repository",
     baseBranch: "dev",
     taskBranch: "keiko/task-446",
     managedWorktreePath: "/managed/repo/ws-1",
@@ -45,7 +89,6 @@ function instance(overrides: Partial<WorkspaceInstance> = {}): WorkspaceInstance
     driftMarkers: [],
     recoveryHints: [],
     auditCorrelationId: "ws-1",
-    ...overrides,
   };
 }
 
@@ -70,241 +113,196 @@ function api(overrides: Partial<ActiveWorkspaceApi> = {}): ActiveWorkspaceApi {
   };
 }
 
-function renderSwitcher(value: ActiveWorkspaceApi): void {
-  render(
+function switcher(value: ActiveWorkspaceApi): ReactNode {
+  return (
     <ActiveWorkspaceProvider value={value}>
       <TaskWorkspaceSwitcher />
-    </ActiveWorkspaceProvider>,
+    </ActiveWorkspaceProvider>
   );
 }
 
-function openPanel(): void {
-  fireEvent.click(screen.getByRole("button", { name: /task workspace|task-446/i }));
+function renderSwitcher(value: ActiveWorkspaceApi): RenderResult {
+  return render(switcher(value));
+}
+
+function openDialog(): HTMLElement {
+  fireEvent.click(screen.getByRole("button", { name: /workspace context/i }));
+  return screen.getByRole("dialog", { name: "Folder or repository" });
+}
+
+function registerSelectedProject(path: string): void {
+  const selected = project(path);
+  catalogState.activeProject = selected;
+  catalogState.projects = [selected];
 }
 
 describe("TaskWorkspaceSwitcher", () => {
   beforeEach(() => {
-    catalogState.activeProjectPath = null;
+    catalogState.activeProject = undefined;
+    catalogState.projects = [];
+    chatActions.addProject.mockReset().mockResolvedValue(undefined);
+    chatActions.openProject.mockReset().mockResolvedValue(undefined);
+    nativeDialogState.supported = true;
+    nativeDialogState.pick.mockReset().mockResolvedValue({ kind: "cancelled" });
   });
 
-  it("shows an unbound label and announces no active workspace", () => {
+  it("asks for a folder when no workspace context is selected", () => {
     renderSwitcher(api());
-    expect(screen.getByRole("button", { name: /task workspace/i })).toBeInTheDocument();
-    const status = screen.getByRole("status");
-    expect(status).toHaveClass("tw-switcher-status-sr");
-    expect(status).toHaveTextContent("No active task workspace");
+
+    expect(
+      screen.getByRole("button", { name: "Workspace context: choose a folder" }),
+    ).toHaveAttribute("aria-haspopup", "dialog");
   });
 
-  it("renders the active identity, branch, base branch and a clean badge", () => {
-    renderSwitcher(api({ activeInstance: instance() }));
-    openPanel();
-    // Branch text nests the base inside the branch span, so it matches multiple elements; assert
-    // against the panel's full text instead of a single-element query.
-    const text = document.body.textContent ?? "";
-    expect(text).toContain("keiko/task-446");
-    expect(text).toContain("← dev");
-    expect(screen.getByText("clean")).toBeInTheDocument();
-    expect(screen.getByText("active")).toBeInTheDocument();
+  it("shows the selected folder as the primary workbench context", () => {
+    registerSelectedProject(SELECTED_ROOT);
+    renderSwitcher(api());
+
+    expect(screen.getByRole("button", { name: "Workspace context: Keiko" })).toBeInTheDocument();
+    const dialog = openDialog();
+    expect(within(dialog).getAllByText(SELECTED_ROOT).length).toBeGreaterThan(0);
   });
 
-  it("exposes the trigger as the task workspace context control with live status", () => {
-    renderSwitcher(api({ activeInstance: instance() }));
-    const trigger = screen.getByRole("button", { name: /task workspace context: task-446/i });
-    expect(trigger).toHaveAttribute("aria-describedby", screen.getByRole("status").id);
+  it("does not confuse governed workspace readiness with folder pickability", () => {
+    catalogState.activeProject = project(SELECTED_ROOT, { workspaceAvailable: false });
+    catalogState.projects = [catalogState.activeProject];
+
+    renderSwitcher(api());
+
+    expect(screen.getByRole("button", { name: "Workspace context: Keiko" })).toBeInTheDocument();
   });
 
-  it("uses readable badge styling instead of accent-colored status text", () => {
-    renderSwitcher(api({ activeInstance: instance() }));
-    openPanel();
-    const activeBadge = screen.getByText("active");
-    const style = activeBadge.getAttribute("style") ?? "";
-    expect(style).toContain("color: var(--text-primary");
-    expect(style).toContain("background: color-mix");
-    expect(style).not.toContain("text-on-accent");
+  it("keeps a newly chosen and registered folder active without requiring a chat or model", async () => {
+    nativeDialogState.pick.mockResolvedValue({
+      kind: "picked",
+      paths: [SELECTED_ROOT],
+    });
+    chatActions.addProject.mockImplementation(async (path) => {
+      registerSelectedProject(path);
+      return catalogState.activeProject ?? undefined;
+    });
+    const value = api();
+    const view = renderSwitcher(value);
+    const dialog = openDialog();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Choose a folder" }));
+
+    await waitFor(() => {
+      expect(chatActions.addProject).toHaveBeenCalledWith(SELECTED_ROOT);
+    });
+    view.unmount();
+    renderSwitcher(value);
+    expect(screen.getByRole("button", { name: "Workspace context: Keiko" })).toBeInTheDocument();
+    expect(nativeDialogState.pick).toHaveBeenCalledWith({
+      mode: "open-directory",
+      title: "Choose a folder or repository",
+    });
   });
 
-  it("shows a dirty badge and a lock badge from the instance state", () => {
-    renderSwitcher(
-      api({
-        activeInstance: instance({
-          driftMarkers: ["uncommitted-changes"],
-          lock: { lockId: "l", owner: "op", reason: "mutation", acquiredAt: "t" },
-        }),
-      }),
-    );
-    openPanel();
-    expect(screen.getByText("uncommitted")).toBeInTheDocument();
-    expect(screen.getByText(/locked: mutation/)).toBeInTheDocument();
+  it("keeps the selector open and reports a failed folder registration", async () => {
+    nativeDialogState.pick.mockResolvedValue({
+      kind: "picked",
+      paths: [SELECTED_ROOT],
+    });
+    chatActions.addProject.mockResolvedValue(undefined);
+    renderSwitcher(api());
+    const dialog = openDialog();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Choose a folder" }));
+
+    await waitFor(() => {
+      expect(chatActions.addProject).toHaveBeenCalledWith(SELECTED_ROOT);
+    });
+    expect(screen.getByRole("dialog", { name: "Folder or repository" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
   });
 
-  // Regression for S8786: pathBasename's trailing-separator trim used to be `/[/\\]+$/`, a shape
-  // SonarCloud flags on sight even though this bounded class has no ambiguity of its own
-  // (TaskWorkspaceSwitcher.tsx's trimTrailingSeparators is now regex-free). This asserts a managed
-  // worktree path with a huge run of trailing separators still renders the correct basename and the
-  // panel still opens quickly.
-  it("renders the managed worktree path's basename with a huge trailing-separator run, quickly", () => {
-    const start = Date.now();
-    renderSwitcher(
-      api({
-        activeInstance: instance({
-          managedWorktreePath: `/managed/repo/ws-1${"/".repeat(20_000)}`,
-        }),
-      }),
-    );
-    openPanel();
-    const elapsedMs = Date.now() - start;
-
-    expect(elapsedMs).toBeLessThan(2000);
-    expect(screen.getByText("ws-1")).toBeInTheDocument();
-  });
-
-  it("invokes pause for an active workspace (a legal active→paused transition)", () => {
+  it("clears a task override before activating a newly chosen base folder", async () => {
+    nativeDialogState.pick.mockResolvedValue({
+      kind: "picked",
+      paths: [SELECTED_ROOT],
+    });
+    chatActions.addProject.mockImplementation(async (path) => {
+      registerSelectedProject(path);
+      return catalogState.activeProject ?? undefined;
+    });
     const value = api({ activeInstance: instance() });
     renderSwitcher(value);
-    openPanel();
-    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
-    expect(value.pause).toHaveBeenCalledWith("ws-1");
-  });
+    const dialog = openDialog();
 
-  it("disables handoff while the worktree is dirty", () => {
-    const value = api({ activeInstance: instance({ driftMarkers: ["uncommitted-changes"] }) });
-    renderSwitcher(value);
-    openPanel();
-    const handoff = screen.getByRole("button", { name: /prepare handoff/i });
-    expect(handoff).toHaveAttribute("aria-disabled", "true");
-    fireEvent.click(handoff);
-    expect(value.prepareHandoff).not.toHaveBeenCalled();
-  });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Choose a folder" }));
 
-  it("switches to a listed inactive workspace", () => {
-    const value = api({
-      instances: [
-        instance(),
-        instance({ workspaceId: "ws-2", taskId: "task-2", lifecycleState: "paused" }),
-      ],
-      activeInstance: instance(),
+    await waitFor(() => {
+      expect(value.clearActive).toHaveBeenCalledOnce();
+      expect(chatActions.addProject).toHaveBeenCalledWith(SELECTED_ROOT);
     });
-    renderSwitcher(value);
-    openPanel();
-    const list = screen.getByRole("list", { name: /task workspaces/i });
-    fireEvent.click(within(list).getByRole("button", { name: "Switch" }));
-    expect(value.switchTo).toHaveBeenCalledWith("ws-2");
+    const clearOrder = vi.mocked(value.clearActive).mock.invocationCallOrder.at(0);
+    const addOrder = chatActions.addProject.mock.invocationCallOrder.at(0);
+    if (clearOrder === undefined || addOrder === undefined) {
+      throw new Error("Expected the task override to clear before folder activation");
+    }
+    expect(clearOrder).toBeLessThan(addOrder);
   });
 
-  it("switches to a listed handoff-ready workspace", () => {
-    const value = api({
-      instances: [
-        instance(),
-        instance({ workspaceId: "ws-2", taskId: "task-2", lifecycleState: "handoff-ready" }),
-      ],
-      activeInstance: instance(),
-    });
-    renderSwitcher(value);
-    openPanel();
-    const list = screen.getByRole("list", { name: /task workspaces/i });
-    fireEvent.click(within(list).getByRole("button", { name: "Switch" }));
-    expect(value.switchTo).toHaveBeenCalledWith("ws-2");
+  it("keeps the dialog focused on folder selection without task or recent-list clutter", () => {
+    registerSelectedProject(SELECTED_ROOT);
+    catalogState.projects.push(project("/Users/oscharko-dev/Projects/Other"));
+    renderSwitcher(api({ activeInstance: instance(), instances: [instance()] }));
+
+    const dialog = openDialog();
+
+    expect(
+      within(dialog).getByRole("heading", { name: "Folder or repository" }),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Choose a folder" })).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Or enter a local path")).toBeNull();
+    expect(within(dialog).queryAllByText(/task workspace/i)).toHaveLength(0);
+    expect(within(dialog).queryByText(/recent folders and repositories/i)).toBeNull();
+    expect(within(dialog).queryByRole("list", { name: "Folders and repositories" })).toBeNull();
   });
 
-  it("closes the panel on Escape and restores focus to the trigger", () => {
-    renderSwitcher(api({ activeInstance: instance() }));
-    const trigger = screen.getByRole("button", { name: /task-446/i });
-    fireEvent.click(trigger);
-    expect(trigger).toHaveAttribute("aria-expanded", "true");
-    fireEvent.keyDown(screen.getByRole("group", { name: /task workspace context/i }), {
-      key: "Escape",
-    });
+  it("replaces the native picker with the manual-path fallback when it is unavailable", () => {
+    nativeDialogState.supported = false;
+    renderSwitcher(api());
+
+    const dialog = openDialog();
+    const pathInput = within(dialog).getByLabelText("Or enter a local path");
+
+    expect(within(dialog).queryByRole("button", { name: "Choose a folder" })).toBeNull();
+    expect(pathInput).toBeEnabled();
+    fireEvent.change(pathInput, { target: { value: SELECTED_ROOT } });
+    expect(within(dialog).getByRole("button", { name: "Open" })).toBeEnabled();
+  });
+
+  it("closes on Escape and restores focus to the trigger", () => {
+    registerSelectedProject(SELECTED_ROOT);
+    renderSwitcher(api());
+    const trigger = screen.getByRole("button", { name: "Workspace context: Keiko" });
+    const dialog = openDialog();
+
+    fireEvent.keyDown(dialog, { key: "Escape" });
+
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     expect(trigger).toHaveFocus();
   });
 
-  // GEN-UI-INTERACTION-006 — a pointerdown outside the switcher root dismisses the open panel.
-  it("closes the panel when a pointerdown lands outside the switcher root", () => {
-    renderSwitcher(api({ activeInstance: instance() }));
-    const trigger = screen.getByRole("button", { name: /task-446/i });
-    fireEvent.click(trigger);
-    expect(trigger).toHaveAttribute("aria-expanded", "true");
-
-    fireEvent.pointerDown(document.body);
-
-    expect(trigger).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("group", { name: /task workspace context/i })).toBeNull();
-  });
-
-  it("keeps the panel open when a pointerdown lands inside the switcher root", () => {
-    renderSwitcher(api({ activeInstance: instance() }));
-    const trigger = screen.getByRole("button", { name: /task-446/i });
-    fireEvent.click(trigger);
-    const panel = screen.getByRole("group", { name: /task workspace context/i });
-
-    fireEvent.pointerDown(panel);
-
-    expect(trigger).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("group", { name: /task workspace context/i })).toBeInTheDocument();
-  });
-
-  it("renders an error in an alert region", () => {
-    renderSwitcher(api({ error: "Workspace is locked by another actor" }));
-    openPanel();
-    expect(screen.getByRole("alert")).toHaveTextContent("locked by another actor");
-  });
-
-  it("does not render the create form while no repository context is available", () => {
+  it("closes when a pointerdown lands outside, but not inside", () => {
+    registerSelectedProject(SELECTED_ROOT);
     renderSwitcher(api());
-    openPanel();
-    const panel = screen.getByRole("group", { name: /task workspace context/i });
+    const trigger = screen.getByRole("button", { name: "Workspace context: Keiko" });
+    const dialog = openDialog();
 
-    expect(within(panel).getByText("No active task workspace")).toBeInTheDocument();
-    expect(
-      within(panel).getByText("Open a project before creating a managed task workspace."),
-    ).toBeInTheDocument();
-    expect(screen.queryByPlaceholderText(/446-binding/)).toBeNull();
-    expect(screen.queryByPlaceholderText(/e\.g\. dev/)).toBeNull();
-    expect(screen.queryByRole("button", { name: /create task workspace/i })).toBeNull();
+    fireEvent.pointerDown(dialog);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    fireEvent.pointerDown(document.body);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("creates a task workspace from the form when a repository root is known", () => {
-    const value = api({ instances: [instance()], activeInstance: instance() });
-    renderSwitcher(value);
-    openPanel();
-    fireEvent.change(screen.getByPlaceholderText(/446-binding/), { target: { value: "new-task" } });
-    fireEvent.change(screen.getByPlaceholderText(/e\.g\. dev/), { target: { value: "dev" } });
-    fireEvent.click(screen.getByRole("button", { name: /create task workspace/i }));
-    expect(value.provision).toHaveBeenCalledWith({
-      root: "/repo",
-      taskId: "new-task",
-      baseBranch: "dev",
-    });
-  });
+  it("renders selection failures in an alert region", () => {
+    renderSwitcher(api({ error: "Folder selection failed" }));
 
-  it("creates the first task workspace from the active registered project", () => {
-    catalogState.activeProjectPath = "/registered/repo";
-    const value = api();
-    renderSwitcher(value);
-    openPanel();
-    fireEvent.change(screen.getByPlaceholderText(/446-binding/), {
-      target: { value: "first-task" },
-    });
-    fireEvent.change(screen.getByPlaceholderText(/e\.g\. dev/), { target: { value: "dev" } });
-    fireEvent.click(screen.getByRole("button", { name: /create task workspace/i }));
+    openDialog();
 
-    expect(value.provision).toHaveBeenCalledWith({
-      root: "/registered/repo",
-      taskId: "first-task",
-      baseBranch: "dev",
-    });
-  });
-
-  it("does not submit create while a workspace mutation is in flight", () => {
-    const value = api({ instances: [instance()], activeInstance: instance(), switching: true });
-    renderSwitcher(value);
-    openPanel();
-    fireEvent.change(screen.getByPlaceholderText(/446-binding/), { target: { value: "new-task" } });
-    fireEvent.change(screen.getByPlaceholderText(/e\.g\. dev/), { target: { value: "dev" } });
-    const submit = screen.getByRole("button", { name: /create task workspace/i });
-    expect(submit).toBeDisabled();
-    expect(submit).toHaveAttribute("aria-disabled", "true");
-    fireEvent.click(submit);
-    expect(value.provision).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent("Folder selection failed");
   });
 });

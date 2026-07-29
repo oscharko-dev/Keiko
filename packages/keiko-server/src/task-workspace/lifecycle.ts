@@ -152,6 +152,17 @@ function canExposeBinding(ctx: LifecycleCtx, instance: WorkspaceInstance): boole
   return managedTargetExists(instance.managedWorktreePath);
 }
 
+function activeIdentityAvailable(ctx: LifecycleCtx, instance: WorkspaceInstance): boolean {
+  const ensureIdentity = ctx.deps.provisioning.ensureIdentity;
+  if (ensureIdentity === undefined) return false;
+  try {
+    ensureIdentity(instance);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Resolves the #444 transition context for a direct (pause / handoff) action. The actor holds the
 // mutation lock by construction unless ANOTHER actor holds a live lock (then it is contention, not a
 // transition rejection). worktree-clean is the persisted drift signal; path-contained is the managed
@@ -287,6 +298,14 @@ function getActiveImpl(ctx: LifecycleCtx): ActiveWorkspaceView | undefined {
     return undefined;
   }
   if (!canExposeBinding(ctx, instance)) {
+    ctx.deps.activePointerStore.clear();
+    return undefined;
+  }
+  // Persisted active pointers can outlive the server version that introduced managed-root
+  // Project/Manifest identity. Repair that server-owned identity before any surface receives the
+  // binding; this seam deliberately cannot initialize trust. Failure clears the pointer and leaves
+  // the application unbound instead of exposing a root that verification cannot authorize.
+  if (!activeIdentityAvailable(ctx, instance)) {
     ctx.deps.activePointerStore.clear();
     return undefined;
   }

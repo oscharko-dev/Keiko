@@ -209,6 +209,80 @@ describe("managed task-worktree Git read authorization (#2482)", () => {
     expect(JSON.stringify(result.body)).toContain("+new");
   });
 
+  it("authorizes paired status reads for canonical variants in the production .keiko layout", async () => {
+    const stateManagedRoot = join(root, ".keiko", "ui", "task-workspaces");
+    const stateManagedWorktree = deriveManagedWorktreePath({
+      managedRoot: stateManagedRoot,
+      repositoryId: REPOSITORY_ID,
+      workspaceId: WORKSPACE_ID,
+    });
+    const stateManagedSubfolder = join(stateManagedWorktree, "packages", "example");
+    await mkdir(stateManagedSubfolder, { recursive: true });
+    instance = { ...instance, managedWorktreePath: stateManagedWorktree };
+    const runner = vi.fn<GitProcessRunner>((args, options) => {
+      if (args.includes("rev-parse")) {
+        const prefix = options.cwd === stateManagedSubfolder ? "packages/example/" : "";
+        return Promise.resolve(ok(`${stateManagedWorktree}\n${prefix}\n`));
+      }
+      if (args.includes("status")) {
+        return Promise.resolve(ok("## keiko/task/managed-git-auth\0"));
+      }
+      throw new Error(`unexpected git argv: ${args.join(" ")}`);
+    });
+    const dependencies = { ...deps(runner), managedTaskWorkspaceRoot: stateManagedRoot };
+    const cookie = pair(dependencies);
+
+    for (const variant of [
+      `${stateManagedWorktree}/`,
+      `${stateManagedWorktree}/.`,
+      stateManagedSubfolder,
+    ]) {
+      const result = await handleGitStatus(
+        route(`/api/git/status?root=${encodeURIComponent(variant)}`, cookie),
+        dependencies,
+      );
+      expect(result).toMatchObject({
+        status: 200,
+        body: {
+          available: true,
+          branch: "keiko/task/managed-git-auth",
+          clean: true,
+        },
+      });
+    }
+    expect(runner).toHaveBeenCalledTimes(6);
+  });
+
+  it("rejects unpaired managed-root variants before filesystem or Git access", async () => {
+    const stateManagedRoot = join(root, ".keiko", "ui", "task-workspaces");
+    const stateManagedWorktree = deriveManagedWorktreePath({
+      managedRoot: stateManagedRoot,
+      repositoryId: REPOSITORY_ID,
+      workspaceId: WORKSPACE_ID,
+    });
+    const stateManagedSubfolder = join(stateManagedWorktree, "packages", "example");
+    await mkdir(stateManagedSubfolder, { recursive: true });
+    instance = { ...instance, managedWorktreePath: stateManagedWorktree };
+    const runner = vi.fn<GitProcessRunner>();
+    const dependencies = { ...deps(runner), managedTaskWorkspaceRoot: stateManagedRoot };
+
+    for (const variant of [
+      `${stateManagedWorktree}/`,
+      `${stateManagedWorktree}/.`,
+      stateManagedSubfolder,
+    ]) {
+      const result = await handleGitStatus(
+        route(`/api/git/status?root=${encodeURIComponent(variant)}`),
+        dependencies,
+      );
+      expect(result).toMatchObject({
+        status: 200,
+        body: { available: false, changes: [], stagedCount: 0, unstagedCount: 0 },
+      });
+    }
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   it("classifies an outside symlink alias by resolved root so it cannot bypass the gate", async () => {
     const alias = join(root, "managed-alias");
     await symlink(managedWorktree, alias, "dir");

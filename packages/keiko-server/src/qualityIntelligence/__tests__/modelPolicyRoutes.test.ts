@@ -6,7 +6,7 @@ import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseGatewayConfig, type ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { UiHandlerDeps } from "../../deps.js";
+import type { RuntimeGatewayConfig, UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import type { RouteContext } from "../../routes.js";
@@ -46,13 +46,12 @@ function capability(id: string, overrides: Partial<ModelCapability> = {}): Model
   };
 }
 
-function depsWith(args: {
-  readonly evidenceDir: string;
-  readonly capabilities: readonly ModelCapability[];
-}): UiHandlerDeps {
-  const config = parseGatewayConfig(
+function configWithCapabilities(
+  capabilities: readonly ModelCapability[],
+): ReturnType<typeof parseGatewayConfig> {
+  return parseGatewayConfig(
     {
-      providers: args.capabilities.map((model) => ({
+      providers: capabilities.map((model) => ({
         modelId: model.id,
         baseUrl: "https://provider.invalid/v1",
         apiKey: "secret-key",
@@ -62,6 +61,13 @@ function depsWith(args: {
     },
     {},
   );
+}
+
+function depsWith(args: {
+  readonly evidenceDir: string;
+  readonly capabilities: readonly ModelCapability[];
+}): UiHandlerDeps {
+  const config = configWithCapabilities(args.capabilities);
   return {
     config,
     configPresent: true,
@@ -169,6 +175,75 @@ describe("QI model-policy routes", () => {
     expect(JSON.stringify(body.models)).not.toContain("provider.invalid");
     expect(JSON.stringify(body.models)).not.toContain("secret-key");
     expect(JSON.parse(readFileSync(policyPath, "utf8"))).toMatchObject(body.policy);
+  });
+
+  it("uses the current runtime gateway config after an in-process update", async () => {
+    const initialDeps = depsWith({
+      evidenceDir,
+      capabilities: [capability("initial-json")],
+    });
+    let currentConfig = initialDeps.config;
+    let configPresent = currentConfig !== undefined;
+    const gatewayConfig: RuntimeGatewayConfig = {
+      storagePath: join(tempDir, "keiko.config.json"),
+      current: () => currentConfig,
+      present: () => configPresent,
+      set: (nextConfig, nextPresent) => {
+        currentConfig = nextConfig;
+        configPresent = nextPresent;
+      },
+    };
+    const deps: UiHandlerDeps = {
+      ...initialDeps,
+      config: undefined,
+      configPresent: false,
+      gatewayConfig,
+    };
+
+    expect(handleGetQiModelPolicy(ctx(), deps).body).toMatchObject({
+      policy: {
+        testDesignModelId: "initial-json",
+        judgeModelId: "initial-json",
+      },
+      models: [{ id: "initial-json" }],
+    });
+
+    gatewayConfig.set(configWithCapabilities([capability("runtime-json")]), true);
+    const fetchCalls: string[] = [];
+    stubSuccessfulPreflight(fetchCalls);
+
+    expect(handleGetQiModelPolicy(ctx(), deps).body).toMatchObject({
+      policy: {
+        testDesignModelId: "runtime-json",
+        judgeModelId: "runtime-json",
+      },
+      models: [{ id: "runtime-json" }],
+    });
+    const preflight = await handlePreflightQiModelPolicy(
+      ctx(
+        reqFromJson({
+          modelPolicy: {
+            policyVersion: 1,
+            testDesignModelId: "runtime-json",
+            judgeModelId: "runtime-json",
+          },
+        }),
+      ),
+      deps,
+    );
+
+    expect(preflight.body).toMatchObject({
+      modelRouting: {
+        preflight: {
+          status: "passed",
+          generation: { modelId: "runtime-json", status: "passed" },
+          judge: { modelId: "runtime-json", status: "passed" },
+        },
+      },
+    });
+    expect(fetchCalls).toHaveLength(2);
+    expect(fetchCalls.join("\n")).toContain("runtime-json");
+    expect(fetchCalls.join("\n")).not.toContain("initial-json");
   });
 
   it("rejects a judge model that lacks structured output", async () => {
@@ -502,10 +577,20 @@ describe("QI model-policy routes", () => {
     });
     expect(fetchCalls).toHaveLength(2);
     expect(fetchCalls[0]).not.toContain("response_format");
-    expect(fetchCalls[1]).toContain("response_format");
+    const judgeRequestBody = JSON.parse(fetchCalls[1] ?? "{}") as Record<string, unknown>;
+    expect(judgeRequestBody).toMatchObject({
+      model: "judge-json",
+      temperature: 0,
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "quality_intelligence_test_quality_judge",
+          strict: true,
+        },
+      },
+    });
     expect(fetchCalls[1]).toContain("Du bist ein test-quality judge");
     expect(fetchCalls[1]).toContain("Pflichtfeld Betrag");
-    expect(fetchCalls[1]).toContain("quality_intelligence_test_quality_judge");
     expect(JSON.stringify(result.body)).not.toContain("provider.invalid");
     expect(JSON.stringify(result.body)).not.toContain("secret-key");
   });

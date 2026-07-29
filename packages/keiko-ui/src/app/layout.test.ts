@@ -21,7 +21,10 @@ function makeStorage(initial: Record<string, string> = {}): ScriptStorage {
   };
 }
 
-function runLocaleScript(storage: ScriptStorage): {
+function runLocaleScript(
+  storage: ScriptStorage,
+  browserLanguage = "en-US",
+): {
   readonly lang: string;
   readonly locale: string;
 } {
@@ -33,6 +36,7 @@ function runLocaleScript(storage: ScriptStorage): {
   vm.runInNewContext(LOCALE_BOOTSTRAP, {
     document: { documentElement },
     localStorage: storage,
+    navigator: { language: browserLanguage },
     String,
   });
 
@@ -122,6 +126,13 @@ describe("APP_BOOT_RECOVERY_BOOTSTRAP", () => {
 });
 
 describe("LOCALE_BOOTSTRAP", () => {
+  it("applies the supported browser locale before hydration when no preference is stored", () => {
+    expect(runLocaleScript(makeStorage(), "de-DE")).toEqual({
+      lang: "de",
+      locale: "de",
+    });
+  });
+
   it("applies the stored German locale before hydration", () => {
     expect(runLocaleScript(makeStorage({ "keiko.locale": "de-DE" }))).toEqual({
       lang: "de",
@@ -130,7 +141,7 @@ describe("LOCALE_BOOTSTRAP", () => {
   });
 
   it("falls back to English for unsupported locale values", () => {
-    expect(runLocaleScript(makeStorage({ "keiko.locale": "fr-FR" }))).toEqual({
+    expect(runLocaleScript(makeStorage({ "keiko.locale": "fr-FR" }), "de-DE")).toEqual({
       lang: "en",
       locale: "en",
     });

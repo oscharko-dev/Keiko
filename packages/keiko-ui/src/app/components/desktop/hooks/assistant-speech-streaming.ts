@@ -22,6 +22,9 @@ export interface AssistantSpeechStreamHandlers {
 }
 
 export interface AssistantSpeechStreamingSink {
+  // Creates and resumes the local playback context from the Voice-mode click. It never starts TTS or
+  // plays audio; it only preserves the browser's user activation for later canonical speech.
+  primeFromUserGesture(): void;
   // Streams + plays `input`. Resolves true when this sink took over playback (the caller must NOT also
   // run the buffered path); false when streaming is unsupported up front (caller falls back). An abort
   // mid-stream resolves true (engaged) and is treated as a silent cancel, not an error.
@@ -62,6 +65,21 @@ interface AssistantSpeechNodeLease {
   readonly context: AudioContext;
   readonly generation: number;
   readonly node: AudioWorkletNode;
+}
+
+interface AssistantSpeechContextLease {
+  readonly context: AudioContext;
+  readonly generation: number;
+}
+
+function resumeAudioContext(context: AudioContext): void {
+  try {
+    void context.resume().catch(() => {
+      // Playback remains text-visible when the browser rejects output activation.
+    });
+  } catch {
+    // A synchronously rejected activation is equivalent to a rejected resume promise.
+  }
 }
 
 // Converts a little-endian PCM16 byte chunk to Int16 samples, carrying any trailing odd byte forward so
@@ -149,15 +167,22 @@ export function createBrowserAssistantSpeechStreamingSink():
     }
   }
 
+  function ensureContext(): AssistantSpeechContextLease {
+    if (context !== undefined) {
+      return { context, generation: lifecycleGeneration };
+    }
+    const nextContext = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+    context = nextContext;
+    return { context: nextContext, generation: lifecycleGeneration };
+  }
+
   async function ensureNode(): Promise<AssistantSpeechNodeLease> {
     if (node !== undefined && context !== undefined) {
       return { context, generation: lifecycleGeneration, node };
     }
     if (setupPromise !== undefined) return setupPromise;
-    const generation = lifecycleGeneration;
-    const ctx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
-    context = ctx;
-    const pending = initializeNode(ctx, generation);
+    const lease = ensureContext();
+    const pending = initializeNode(lease.context, lease.generation);
     setupPromise = pending;
     try {
       return await pending;
@@ -232,6 +257,14 @@ export function createBrowserAssistantSpeechStreamingSink():
   }
 
   return {
+    primeFromUserGesture(): void {
+      const lease = ensureContext();
+      resumeAudioContext(lease.context);
+      void ensureNode().catch(() => {
+        // A later play attempt either retries setup or selects the buffered fallback.
+      });
+    },
+
     async play(input, signal, handlers): Promise<boolean> {
       let lease: AssistantSpeechNodeLease;
       try {
@@ -243,10 +276,10 @@ export function createBrowserAssistantSpeechStreamingSink():
       if (!leaseIsCurrent(lease, signal)) return true;
       positionFrames = 0;
       let started = false;
-      await lease.context.resume().catch(() => {
-        // a context that cannot resume still receives data; autoplay policy resolves on the user gesture
-      });
-      if (!leaseIsCurrent(lease, signal)) return true;
+      // AudioContext.resume() may stay pending until the browser's autoplay policy releases output.
+      // Starting provider synthesis must not wait behind that browser-local gate: PCM can queue in the
+      // worklet and begin as soon as the context runs.
+      resumeAudioContext(lease.context);
       const workletNode = lease.node;
       workletNode.port.postMessage({ type: "config", primeFrames: PRIME_FRAMES });
       workletNode.port.onmessage = (event: MessageEvent): void => {

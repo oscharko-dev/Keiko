@@ -79,16 +79,32 @@ export function resolveLocale(input: string | null | undefined): Locale {
   return DEFAULT_LOCALE;
 }
 
+export function resolveInitialLocale(
+  storedLocale: string | null,
+  browserLocale: string | null | undefined,
+): Locale {
+  return resolveLocale(storedLocale ?? browserLocale);
+}
+
 export function translate(locale: Locale, key: MessageKey, values: MessageValues = {}): string {
   return translateFromCatalog(messageCatalogFor(locale), key, values);
 }
 
+function readBrowserLocale(): string | undefined {
+  try {
+    return window.navigator.language;
+  } catch {
+    return undefined;
+  }
+}
+
 function readStoredLocale(): Locale {
   if (typeof window === "undefined") return DEFAULT_LOCALE;
+  const browserLocale = readBrowserLocale();
   try {
-    return resolveLocale(window.localStorage.getItem(I18N_STORAGE_KEY));
+    return resolveInitialLocale(window.localStorage.getItem(I18N_STORAGE_KEY), browserLocale);
   } catch {
-    return DEFAULT_LOCALE;
+    return resolveLocale(browserLocale);
   }
 }
 
@@ -129,7 +145,9 @@ export function I18nProvider({ children }: { readonly children: ReactNode }): Re
     return { locale, ready: isLocaleReady(locale) };
   });
   const { locale, ready } = state;
-  const activeLocale = ready ? locale : DEFAULT_LOCALE;
+  const catalogReady = isLocaleReady(locale);
+  const activeLocale = ready && catalogReady ? locale : DEFAULT_LOCALE;
+  const localeLoadState = useMemo(() => ({ catalogReady, locale }), [catalogReady, locale]);
 
   useEffect(() => {
     applyDocumentLocale(activeLocale);
@@ -137,27 +155,28 @@ export function I18nProvider({ children }: { readonly children: ReactNode }): Re
   }, [activeLocale, locale]);
 
   useEffect(() => {
-    if (ready || isLocaleReady(locale)) {
+    const requestedLocale = localeLoadState.locale;
+    if (localeLoadState.catalogReady) {
       if (!ready) {
         setState((current) =>
-          current.locale === locale ? { locale: current.locale, ready: true } : current,
+          current.locale === requestedLocale ? { locale: current.locale, ready: true } : current,
         );
       }
       return;
     }
     let cancelled = false;
-    void loadLocaleMessages(locale)
+    void loadLocaleMessages(requestedLocale)
       .catch(() => EN_MESSAGES)
       .then(() => {
         if (cancelled) return;
         setState((current) =>
-          current.locale === locale ? { locale: current.locale, ready: true } : current,
+          current.locale === requestedLocale ? { locale: current.locale, ready: true } : current,
         );
       });
     return () => {
       cancelled = true;
     };
-  }, [locale, ready]);
+  }, [localeLoadState, ready]);
 
   const setLocale = useCallback((next: Locale): void => {
     setState((current) => {

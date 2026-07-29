@@ -31,6 +31,7 @@ const skipPackageWatchForTest =
   process.env.NODE_ENV === "test" && process.env.KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH === "1";
 const skipBffWatchForTest =
   process.env.NODE_ENV === "test" && process.env.KEIKO_DEV_TEST_SKIP_BFF_WATCH === "1";
+export const DEV_RUNNER_SHUTDOWN_GRACE_MS = 35_000;
 export function resolveNextBundler(preference) {
   if (preference === "auto" || preference === "turbopack") return "turbopack";
   if (preference === "webpack") return "webpack";
@@ -327,6 +328,7 @@ function startBff() {
 // coding-runtime activation can compose gateway and editor-agent loopback URLs (#2475).
 export function bffChildEnv(bffListenPort, publicUiPort, keikoStateDir) {
   return {
+    KEIKO_CODING_RUNTIME_DEV_LANE: "1",
     KEIKO_DEV_BFF_PORT: String(bffListenPort),
     KEIKO_UI_PORT: String(publicUiPort),
     KEIKO_STATE_DIR: keikoStateDir,
@@ -576,7 +578,7 @@ function shutdown(code = 0) {
       if (child.pid !== undefined) child.kill("SIGKILL");
     }
     process.exit(code);
-  }, 5_000).unref();
+  }, DEV_RUNNER_SHUTDOWN_GRACE_MS).unref();
   if (children.size === 0) process.exit(code);
 }
 

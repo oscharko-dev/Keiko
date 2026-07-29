@@ -20,9 +20,17 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import { EditorWidget } from "./EditorWidget";
+import editorWidgetStyles from "./EditorWidget.module.css";
 import { resetEditorVerificationRunStateForTests } from "./useEditorVerificationRun";
 import { WORKSPACE_TRUST_CHANGED_EVENT } from "../../../../../lib/workspace-trust-api";
 import { EditorQuickAccessTriggerProvider } from "../../EditorQuickAccessTriggerContext";
+import { editorSidebarTrackWidth } from "../../editorSidebarSizing";
+
+function editorWidgetCssClass(name: keyof typeof editorWidgetStyles): string {
+  const value = editorWidgetStyles[name];
+  if (value === undefined) throw new TypeError(`missing EditorWidget CSS module class ${name}`);
+  return value;
+}
 
 const probeState = vi.hoisted(() => ({
   runtimeProps: null as EditorRuntimeWidgetProps | null,
@@ -214,7 +222,7 @@ describe("EditorWidget workspace session", () => {
     expect(screen.getByTestId("editor-empty-browse")).toBeInTheDocument();
     expect(screen.queryByTestId("runtime-probe")).toBeNull();
     expect(screen.queryByTestId("files-probe")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Resize project tree" })).toBeNull();
+    expect(screen.queryByRole("separator", { name: "Resize project tree" })).toBeNull();
   });
 
   it("lets the empty editor pane fill the full editor area when no file is open", () => {
@@ -1212,6 +1220,63 @@ describe("EditorWidget workspace session", () => {
     expect(layout.panes["pane-3"].openFiles).toEqual(["src/b.ts"]);
   });
 
+  it("creates five recursively mixed row and column panes through edge drops", () => {
+    const onWorkspaceChange = vi.fn();
+    const { container } = render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+
+    const dropFromFirstPane = (file: string, zone: "right" | "bottom"): void => {
+      fireEvent.dragStart(screen.getByRole("button", { name: `Tab handle pane-1 ${file}` }), {
+        dataTransfer: { effectAllowed: "", setData: vi.fn() },
+      });
+      const dropZone = container.querySelector(
+        `[data-pane-id="pane-1"] > .ed-pane-drop-zones > .ed-pane-drop-zone.${zone}`,
+      );
+      expect(dropZone).not.toBeNull();
+      fireEvent.drop(dropZone as Element);
+    };
+
+    dropFromFirstPane("src/b.ts", "bottom");
+    dropFromFirstPane("src/c.ts", "right");
+    dropFromFirstPane("src/d.ts", "bottom");
+
+    expect(screen.getAllByTestId("runtime-probe")).toHaveLength(5);
+    expect(container.querySelector(".editor-workspace")).toHaveAttribute("data-pane-count", "5");
+    const separators = screen.getAllByRole("separator", { name: "Resize editor split" });
+    const resizerClass = editorWidgetCssClass("paneResizer");
+    const rowResizerClass = editorWidgetCssClass("paneResizerRow");
+    const columnResizerClass = editorWidgetCssClass("paneResizerColumn");
+    expect(separators).toHaveLength(4);
+    for (const separator of separators) {
+      expect(separator).toHaveClass(resizerClass);
+      expect(separator).toHaveClass(
+        separator.getAttribute("aria-orientation") === "vertical"
+          ? rowResizerClass
+          : columnResizerClass,
+      );
+    }
+    expect(separators.map((separator) => separator.getAttribute("aria-orientation"))).toEqual(
+      expect.arrayContaining(["horizontal", "vertical"]),
+    );
+    expect(
+      container.querySelector(`.ed-panes.column .ed-panes.row > .${rowResizerClass}`),
+    ).toHaveAttribute("aria-orientation", "vertical");
+    expect(
+      container.querySelector(`.ed-panes.row .ed-panes.column > .${columnResizerClass}`),
+    ).toHaveAttribute("aria-orientation", "horizontal");
+    const layout = JSON.parse(
+      String(onWorkspaceChange.mock.calls.at(-1)?.[0]?.layoutJson),
+    ) as Record<string, unknown>;
+    expect(Object.keys(layout["panes"] as Record<string, unknown>)).toHaveLength(5);
+  });
+
   it("moves a dragged tab between pane centers and ignores stale drops", () => {
     const onWorkspaceChange = vi.fn();
     const { container } = render(
@@ -1360,7 +1425,7 @@ describe("EditorWidget workspace session", () => {
       expect(dragGhost?.style.getPropertyValue("--ed-tab-drag-x")).toBe("35px");
       expect(dragGhost?.style.getPropertyValue("--ed-tab-drag-y")).toBe("6px");
       expect(dragGhost?.style.getPropertyValue("--ed-tab-drag-width")).toBe("180px");
-      const sidebarResizer = screen.getByRole("button", { name: "Resize project tree" });
+      const sidebarResizer = screen.getByRole("separator", { name: "Resize project tree" });
       fireEvent.pointerMove(sidebarResizer, {
         pointerId: 1,
         buttons: 1,
@@ -1612,7 +1677,7 @@ describe("EditorWidget workspace session", () => {
           toJSON: () => ({}),
         }) as DOMRect,
     );
-    const sidebarResizer = screen.getByRole("button", { name: "Resize project tree" });
+    const sidebarResizer = screen.getByRole("separator", { name: "Resize project tree" });
     expect(sidebarResizer).not.toHaveClass("ui-tip");
     expect(sidebarResizer).not.toHaveAttribute("data-tip");
     expect(sidebarResizer).not.toHaveAttribute("title");
@@ -1665,6 +1730,235 @@ describe("EditorWidget workspace session", () => {
     fireEvent.mouseUp(window);
     lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
     expect(JSON.parse(String(lastPatch?.layoutJson)).tree.ratio).toBe(20);
+  });
+
+  it("supports narrow and near-full sidebar widths under transformed window coordinates", () => {
+    const onWorkspaceChange = vi.fn();
+    const { container } = render(
+      <EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />,
+    );
+    const workspace = container.querySelector(".editor-workspace") as HTMLElement;
+    Object.defineProperty(workspace, "offsetWidth", {
+      configurable: true,
+      value: 1_000,
+    });
+    workspace.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          left: 100,
+          top: 0,
+          width: 500,
+          height: 300,
+          right: 600,
+          bottom: 300,
+          x: 100,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    const sidebarResizer = screen.getByRole("separator", { name: "Resize project tree" });
+    sidebarResizer.setPointerCapture = vi.fn();
+    sidebarResizer.hasPointerCapture = vi.fn(() => true);
+    sidebarResizer.releasePointerCapture = vi.fn();
+
+    const dragTo = (clientX: number): void => {
+      fireEvent.pointerDown(sidebarResizer, { pointerId: 1 });
+      fireEvent.pointerMove(sidebarResizer, { pointerId: 1, buttons: 1, clientX });
+      fireEvent.pointerUp(sidebarResizer, { pointerId: 1 });
+    };
+
+    dragTo(110);
+    expect(workspace.style.getPropertyValue("--ed-sidebar-width")).toBe(
+      editorSidebarTrackWidth(48),
+    );
+    expect(JSON.parse(String(onWorkspaceChange.mock.calls.at(-1)?.[0]?.layoutJson))).toEqual(
+      expect.objectContaining({ sidebarWidth: 48 }),
+    );
+
+    // The workspace is rendered at transform:scale(.5): 450 screen pixels from its left edge
+    // therefore mean 900 logical editor pixels.
+    dragTo(550);
+    expect(workspace.style.getPropertyValue("--ed-sidebar-width")).toBe(
+      editorSidebarTrackWidth(900),
+    );
+
+    dragTo(600);
+    expect(workspace.style.getPropertyValue("--ed-sidebar-width")).toBe(
+      editorSidebarTrackWidth(950),
+    );
+    expect(JSON.parse(String(onWorkspaceChange.mock.calls.at(-1)?.[0]?.layoutJson))).toEqual(
+      expect.objectContaining({ sidebarWidth: 950 }),
+    );
+  });
+
+  it("keeps a committed sidebar width across semantically unchanged host props", () => {
+    const firstWorkspaceChange = vi.fn();
+    const { container, rerender } = render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts"]}
+        onWorkspaceChange={firstWorkspaceChange}
+      />,
+    );
+    const workspace = container.querySelector(".editor-workspace") as HTMLElement;
+    workspace.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          left: 10,
+          top: 0,
+          width: 800,
+          height: 500,
+          right: 810,
+          bottom: 500,
+          x: 10,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    const sidebarResizer = screen.getByRole("separator", { name: "Resize project tree" });
+    sidebarResizer.setPointerCapture = vi.fn();
+    sidebarResizer.hasPointerCapture = vi.fn(() => true);
+    sidebarResizer.releasePointerCapture = vi.fn();
+
+    fireEvent.pointerDown(sidebarResizer, { pointerId: 1 });
+    fireEvent.pointerMove(sidebarResizer, { pointerId: 1, buttons: 1, clientX: 350 });
+    fireEvent.pointerUp(sidebarResizer, { pointerId: 1 });
+    expect(workspace.style.getPropertyValue("--ed-sidebar-width")).toBe(
+      editorSidebarTrackWidth(340),
+    );
+
+    rerender(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts"]}
+        onWorkspaceChange={vi.fn()}
+      />,
+    );
+
+    expect(workspace.style.getPropertyValue("--ed-sidebar-width")).toBe(
+      editorSidebarTrackWidth(340),
+    );
+
+    const committedLayout = JSON.parse(
+      String(firstWorkspaceChange.mock.calls.at(-1)?.[0]?.layoutJson),
+    );
+    rerender(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts"]}
+        layoutJson={JSON.stringify({ ...committedLayout, sidebarWidth: 400 })}
+        onWorkspaceChange={vi.fn()}
+      />,
+    );
+    expect(workspace.style.getPropertyValue("--ed-sidebar-width")).toBe(
+      editorSidebarTrackWidth(400),
+    );
+
+    rerender(<EditorWidget root="/next" onWorkspaceChange={vi.fn()} />);
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/next");
+    expect(workspace.style.getPropertyValue("--ed-sidebar-width")).toBe(
+      editorSidebarTrackWidth(260),
+    );
+  });
+
+  it("round-trips a resized, root-bound empty editor pane through controlled layout props", () => {
+    const onWorkspaceChange = vi.fn();
+    const { container, rerender } = render(
+      <EditorWidget root="/repo" onWorkspaceChange={onWorkspaceChange} />,
+    );
+    const workspace = container.querySelector(".editor-workspace") as HTMLElement;
+    workspace.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          left: 0,
+          top: 0,
+          width: 900,
+          height: 600,
+          right: 900,
+          bottom: 600,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+
+    fireEvent.keyDown(screen.getByRole("separator", { name: "Resize project tree" }), {
+      key: "ArrowRight",
+    });
+    const committedLayoutJson = String(onWorkspaceChange.mock.calls.at(-1)?.[0]?.layoutJson ?? "");
+    const committedLayout = JSON.parse(committedLayoutJson);
+    expect(committedLayout).toEqual(expect.objectContaining({ sidebarWidth: 272 }));
+    expect(committedLayout.panes["pane-1"]).toEqual({
+      id: "pane-1",
+      activeFile: "",
+      openFiles: [],
+      tabOrder: [],
+    });
+
+    rerender(
+      <EditorWidget root="/repo" layoutJson={committedLayoutJson} onWorkspaceChange={vi.fn()} />,
+    );
+
+    expect(workspace.style.getPropertyValue("--ed-sidebar-width")).toBe(
+      editorSidebarTrackWidth(272),
+    );
+    expect(screen.getByTestId("runtime-file")).toHaveTextContent("");
+  });
+
+  it("keeps a committed split ratio across semantically unchanged host props", () => {
+    const { container, rerender } = render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts"]}
+        onWorkspaceChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+    const splitRoot = container.querySelector(".ed-panes.row") as HTMLElement;
+    splitRoot.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          left: 0,
+          top: 0,
+          width: 1000,
+          height: 500,
+          right: 1000,
+          bottom: 500,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    const splitResizer = screen.getByRole("separator", { name: "Resize editor split" });
+    splitResizer.setPointerCapture = vi.fn();
+    splitResizer.hasPointerCapture = vi.fn(() => true);
+    splitResizer.releasePointerCapture = vi.fn();
+
+    fireEvent.pointerDown(splitResizer, { pointerId: 2 });
+    fireEvent.pointerMove(splitResizer, {
+      pointerId: 2,
+      buttons: 1,
+      clientX: 700,
+      clientY: 20,
+    });
+    fireEvent.pointerUp(splitResizer, { pointerId: 2 });
+    expect(splitRoot.style.getPropertyValue("--ed-split-ratio")).toBe("70%");
+
+    rerender(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts"]}
+        onWorkspaceChange={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelector(".ed-panes.row")).toBe(splitRoot);
+    expect(splitRoot.style.getPropertyValue("--ed-split-ratio")).toBe("70%");
   });
 
   it("resizes column splits vertically and ignores pointer movement without an active drag", () => {
@@ -1745,7 +2039,7 @@ describe("EditorWidget workspace session", () => {
         }) as DOMRect,
     );
 
-    const sidebarResizer = screen.getByRole("button", { name: "Resize project tree" });
+    const sidebarResizer = screen.getByRole("separator", { name: "Resize project tree" });
     fireEvent.keyDown(sidebarResizer, { key: "ArrowRight" });
     let lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
     expect(JSON.parse(String(lastPatch?.layoutJson))).toEqual(
@@ -2087,6 +2381,66 @@ function observeSettledTransitions(
 }
 
 describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
+  it("keeps managed-workspace enforcement server-side without mounting trust UI", async () => {
+    stubVerificationFetch("restricted");
+    try {
+      const { container } = render(
+        <EditorWidget
+          root="/managed/task"
+          file="src/a.ts"
+          workspaceTrustUiAvailable={false}
+          onOpenWorkspaceTrust={vi.fn()}
+        />,
+      );
+      const workspace = workspaceRootOf(container);
+
+      await waitFor(() => {
+        expect(workspace).toHaveAttribute("data-trust-settled", "true");
+      });
+
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining(CATALOG_URL),
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+      expect(screen.queryByTestId("workspace-trust-banner-editor")).toBeNull();
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Manage Workspace Trust" })).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      resetEditorVerificationRunStateForTests();
+    }
+  });
+
+  it("discards an open trust decision when a managed workspace takes over presentation", async () => {
+    stubVerificationFetch("restricted");
+    try {
+      const { rerender } = render(<EditorWidget root="/repo" file="src/a.ts" />);
+
+      expect(
+        await screen.findByRole("alertdialog", { name: /Trust this workspace/iu }),
+      ).toBeInTheDocument();
+
+      rerender(
+        <EditorWidget
+          root="/repo"
+          file="src/a.ts"
+          workspaceTrustUiAvailable={false}
+          onOpenWorkspaceTrust={vi.fn()}
+        />,
+      );
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+
+      rerender(<EditorWidget root="/repo" file="src/a.ts" workspaceTrustUiAvailable />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      resetEditorVerificationRunStateForTests();
+    }
+  });
+
   it("reports settled only in the commit that has already mounted the initial trust prompt", async () => {
     stubVerificationFetch("restricted");
     try {

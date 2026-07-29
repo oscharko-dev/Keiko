@@ -30,6 +30,14 @@ export const EN_MESSAGES = {
     "The project could not be connected. Check the folder and try again.",
   "editor.empty.workspaceUnavailable":
     "The saved workspace identity is no longer current. Remove the stale project entry before reconnecting this folder.",
+  "editor.runtime.chooseFile": "Choose a file from the project tree to start editing.",
+  "editor.outline.title": "Outline",
+  "editor.outline.workspaceLabel": "Workspace outline",
+  "editor.outline.hide": "Hide outline panel",
+  "editor.outline.show": "Show outline panel",
+  "editor.outline.loading": "Loading symbols.",
+  "editor.outline.unavailable": "Outline is unavailable for this file.",
+  "editor.outline.empty": "No symbols found in this file.",
   "editor.localHistoryProtection.savedUnprotected":
     "File saved, but Local History could not protect this version.",
   "editor.localHistoryProtection.workspaceUnavailable":
@@ -1140,6 +1148,29 @@ export const EN_MESSAGES = {
   "taskWorkspace.create.baseBranch": "Base branch",
   "taskWorkspace.create.baseBranchPlaceholder": "e.g. dev",
   "taskWorkspace.create.submit": "Create task workspace",
+  "workspaceContext.trigger.aria": "Workspace context: {name}",
+  "workspaceContext.trigger.choose": "choose a folder",
+  "workspaceContext.status.none": "No folder or repository selected",
+  "workspaceContext.status.project": "Workspace context: {name}",
+  "workspaceContext.folder.title": "Folder or repository",
+  "workspaceContext.choose": "Choose a folder",
+  "workspaceContext.chooseDialogTitle": "Choose a folder or repository",
+  "workspaceContext.dialogBusy": "Another file dialog is already open.",
+  "workspaceContext.dialogUnsupported":
+    "The native folder dialog is unavailable. Enter the path below.",
+  "workspaceContext.selectionFailed":
+    "The folder could not be selected. Check the path and try again.",
+  "workspaceContext.selecting": "Selecting…",
+  "workspaceContext.manual.label": "Or enter a local path",
+  "workspaceContext.manual.placeholder": "/path/to/folder",
+  "workspaceContext.open": "Open",
+  "editor.taskWorkspaceAccess.checking": "Connecting to the task workspace…",
+  "editor.taskWorkspaceAccess.checkingDescription":
+    "Keiko is checking this browser's local workspace access.",
+  "editor.taskWorkspaceAccess.title": "Task workspace unavailable in this browser",
+  "editor.taskWorkspaceAccess.description":
+    "Restart Keiko through the launcher, or choose a folder or repository from the workspace context above.",
+  "editor.taskWorkspaceAccess.retry": "Check again",
   "relationships.health.toggleAria": "Toggle the graph health view",
   "relationships.health.hide": "Hide health",
   "relationships.health.show": "Graph health",

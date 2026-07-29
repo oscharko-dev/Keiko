@@ -224,6 +224,8 @@ export function functionalBffDeps(input: FunctionalBffDepsInput): UiHandlerDeps 
 
 export interface DiscoveryBffDepsInput {
   readonly stateRoot: string;
+  readonly store?: Parameters<typeof buildUiHandlerDeps>[0]["store"];
+  readonly workspaceScriptTrust?: Parameters<typeof buildUiHandlerDeps>[0]["workspaceScriptTrust"];
   readonly workspaceLifecycle: WorkspaceLifecycleService;
   readonly workspaceProvisioning?:
     NonNullable<Parameters<typeof buildUiHandlerDeps>[0]["workspaceProvisioning"]> | undefined;
@@ -261,6 +263,10 @@ export function productionDiscoveryBffDeps(input: DiscoveryBffDepsInput): UiHand
     evidenceDir: join(input.stateRoot, "evidence"),
     env,
     uiDbPath: join(input.stateRoot, "ui-db", "keiko-ui.db"),
+    ...(input.store === undefined ? {} : { store: input.store }),
+    ...(input.workspaceScriptTrust === undefined
+      ? {}
+      : { workspaceScriptTrust: input.workspaceScriptTrust }),
     ...(input.workspaceProvisioning === undefined
       ? {}
       : { workspaceProvisioning: input.workspaceProvisioning }),

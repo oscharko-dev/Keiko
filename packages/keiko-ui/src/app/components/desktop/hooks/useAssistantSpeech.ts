@@ -75,6 +75,12 @@ export interface UseAssistantSpeechOptions {
   readonly createStreamingSink?: (() => AssistantSpeechStreamingSink | undefined) | undefined;
 }
 
+export interface AssistantSpeechBinding extends VoicePlaybackBinding {
+  // Called directly from the Voice-dialogue switch click so the browser can unlock and prepare local
+  // WebAudio output while transient user activation is still available. It never starts synthesis.
+  readonly primeAudioOutput: () => void;
+}
+
 // Builds the default BFF synthesis seam bound to the current persona. A persona is included in the
 // request only when one is selected (Issue #1559); omitting it lets the server select the first
 // explicitly configured persona mapping and never a provider-specific implicit default.
@@ -175,7 +181,7 @@ function playBufferedAudio(
   });
 }
 
-export function useAssistantSpeech(options: UseAssistantSpeechOptions): VoicePlaybackBinding {
+export function useAssistantSpeech(options: UseAssistantSpeechOptions): AssistantSpeechBinding {
   const { profile, enabled, text, messageId, replayAllowed, turnManager, persona } = options;
 
   const playback = useVoicePlayback({ profile, replayAllowed, turnManager });
@@ -422,7 +428,11 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): VoicePla
     playbackRef.current.replay();
   }, []);
 
-  return useMemo<VoicePlaybackBinding>(
+  const primeAudioOutput = useCallback(() => {
+    streamingSinkRef.current?.primeFromUserGesture();
+  }, []);
+
+  return useMemo<AssistantSpeechBinding>(
     () => ({
       snapshot: playback.snapshot,
       toggleMute,
@@ -437,7 +447,8 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): VoicePla
       complete: playback.complete,
       fail: playback.fail,
       reset: playback.reset,
+      primeAudioOutput,
     }),
-    [playback, toggleMute, setMuted, pause, resume, stop, interrupt, replay],
+    [playback, toggleMute, setMuted, pause, resume, stop, interrupt, replay, primeAudioOutput],
   );
 }

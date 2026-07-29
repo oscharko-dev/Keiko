@@ -12,8 +12,11 @@
 // and failure surface as bounded, content-free states with an in-place retry; a workspace that
 // reconciliation cannot verify is NEVER activated, so the run stays unstartable (#2476 AC3).
 
-import { useState, type ReactNode } from "react";
-import { bindVerifiedTaskWorkspace } from "@/lib/verified-task-workspace-binding";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  bindVerifiedTaskWorkspace,
+  type VerifiedTaskWorkspaceBindFailure,
+} from "@/lib/verified-task-workspace-binding";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -29,18 +32,20 @@ const STUDIO_OPERATOR = "studio-operator";
 const DEFAULT_TARGET_BRANCH = "main";
 
 type SetupPhase = "binding" | "verifying";
-type SetupErrorReason = "bind" | "verify";
+type SetupErrorReason = "bind" | "verify" | "branch-conflict";
 type SetupStatus =
   | { readonly kind: "idle" }
   | { readonly kind: "pending"; readonly phase: SetupPhase }
   | { readonly kind: "error"; readonly reason: SetupErrorReason };
 
-// The outcome of the end-to-end bind sequence. `verify-failed` is kept distinct from `bind-failed` so
-// the surface can explain that reconciliation did not confirm the checkout (vs a provisioning or
-// activation failure), while both stay content-free.
-type BindOutcome = "ok" | "bind-failed" | "verify-failed";
+// The outcome of the end-to-end bind sequence stays content-free. A server branch conflict is the
+// only domain reason surfaced beyond the bounded stage because it has a concrete operator remedy.
+type BindOutcome = "ok" | SetupErrorReason;
 
 export interface CodingWorkbenchSetupProps {
+  // The Workbench-wide selected folder/repository is a convenience default only. It does not become
+  // execution authority until this explicit provision → verify → activate action succeeds.
+  readonly selectedRoot?: string | undefined;
   // ActiveWorkspaceApi.refresh from the shared context — re-reads the active binding after the
   // workbench-initiated bind so every bound surface flips to the new workspace atomically.
   readonly refreshWorkspace: (root: string) => Promise<void>;
@@ -72,6 +77,17 @@ export function codingWorkbenchSetupTaskId(targetBranch: string): string {
   return slug.length === 0 ? "coding-workbench" : `coding-workbench-${slug}`;
 }
 
+function setupErrorReason(failure: VerifiedTaskWorkspaceBindFailure): SetupErrorReason {
+  if (
+    failure.stage === "provision" &&
+    failure.reason === "branch-conflict" &&
+    failure.failureClass === "blocked"
+  ) {
+    return "branch-conflict";
+  }
+  return failure.stage === "verify" ? "verify" : "bind";
+}
+
 // Drive provision → reconcile → activate as one operator action. `onPhase` advances the surfaced
 // pending phase from binding to verifying; every server error maps to a bounded, content-free outcome.
 async function executeBind(input: {
@@ -87,12 +103,12 @@ async function executeBind(input: {
     requestedBy: STUDIO_OPERATOR,
     onProvisioned: () => input.onPhase("verifying"),
   });
-  if (!result.ok) return result.stage === "verify" ? "verify-failed" : "bind-failed";
+  if (!result.ok) return setupErrorReason(result);
   try {
     await input.refreshWorkspace(input.root);
     return "ok";
   } catch {
-    return "bind-failed";
+    return "bind";
   }
 }
 
@@ -113,20 +129,15 @@ function createBindSubmitHandler(params: {
       refreshWorkspace: params.refreshWorkspace,
       onPhase: (phase) => params.setStatus({ kind: "pending", phase }),
     }).then((outcome) => {
-      params.setStatus(
-        outcome === "ok"
-          ? { kind: "idle" }
-          : { kind: "error", reason: outcome === "verify-failed" ? "verify" : "bind" },
-      );
+      params.setStatus(outcome === "ok" ? { kind: "idle" } : { kind: "error", reason: outcome });
     });
   };
 }
 
 function alertMessage(reason: SetupErrorReason, t: CodingWorkbenchTranslate): string {
-  // Verify failures point at reconciliation; bind failures reuse the existing provisioning copy.
-  return reason === "verify"
-    ? t("codingWorkbench.setup.reconcileFailed")
-    : t("codingWorkbench.alert.workspaceBindFailed");
+  if (reason === "verify") return t("codingWorkbench.setup.reconcileFailed");
+  if (reason === "branch-conflict") return t("codingWorkbench.setup.branchConflict");
+  return t("codingWorkbench.alert.workspaceBindFailed");
 }
 
 function submitLabel(status: SetupStatus, t: CodingWorkbenchTranslate): string {
@@ -162,11 +173,13 @@ function SetupNotices({
 }
 
 export function CodingWorkbenchSetup({
+  selectedRoot,
   refreshWorkspace,
   runtimeUnavailable,
 }: CodingWorkbenchSetupProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const [repositoryPath, setRepositoryPath] = useState("");
+  const [repositoryPath, setRepositoryPath] = useState(selectedRoot ?? "");
+  const previousSelectedRootRef = useRef(selectedRoot ?? "");
   const [targetBranch, setTargetBranch] = useState(DEFAULT_TARGET_BRANCH);
   const [status, setStatus] = useState<SetupStatus>({ kind: "idle" });
   const pending = status.kind === "pending";
@@ -178,6 +191,15 @@ export function CodingWorkbenchSetup({
     refreshWorkspace,
     setStatus,
   });
+
+  useEffect(() => {
+    const previousSelectedRoot = previousSelectedRootRef.current;
+    const nextSelectedRoot = selectedRoot ?? "";
+    previousSelectedRootRef.current = nextSelectedRoot;
+    setRepositoryPath((current) =>
+      current.trim() === "" || current === previousSelectedRoot ? nextSelectedRoot : current,
+    );
+  }, [selectedRoot]);
 
   return (
     <section className={styles.card} aria-label={t("codingWorkbench.setup.title")}>

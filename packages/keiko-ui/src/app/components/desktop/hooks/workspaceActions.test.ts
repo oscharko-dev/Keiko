@@ -43,6 +43,11 @@ import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
 import type { ChatBindingTarget } from "./useWorkspace.types";
+import {
+  EDITOR_SIDEBAR_DEFAULT_WIDTH,
+  EDITOR_SIDEBAR_MIN_WIDTH,
+  EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
+} from "../editorSidebarSizing";
 
 function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-1`): AppWindow {
   return { id, type, x: 0, y: 0, w: 10, h: 10, z: 1, cfg, max: false };
@@ -52,17 +57,24 @@ function scope(root: string, connectedAtMs = 1): ChatConnectedScope {
   return { kind: "workspace-root", relativePaths: [], root, connectedAtMs };
 }
 
-function editorLayoutJson(root: string, file: string, openFiles: readonly string[]): string {
-  return serializeEditorLayoutStateV2(
-    createEditorLayoutStateV2({
-      root,
-      file,
-      openFiles,
-      defaultSidebarWidth: 260,
-      minSidebarWidth: 180,
-      maxSidebarWidth: 440,
-    }),
-  );
+function editorLayoutJson(
+  root: string,
+  file: string,
+  openFiles: readonly string[],
+  sidebarWidth = EDITOR_SIDEBAR_DEFAULT_WIDTH,
+): string {
+  const layout = createEditorLayoutStateV2({
+    root,
+    file,
+    openFiles,
+    defaultSidebarWidth: EDITOR_SIDEBAR_DEFAULT_WIDTH,
+    minSidebarWidth: EDITOR_SIDEBAR_MIN_WIDTH,
+    maxSidebarWidth: EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
+  });
+  return serializeEditorLayoutStateV2({
+    ...layout,
+    sidebarWidth,
+  });
 }
 
 describe("effectiveScopes", () => {
@@ -1768,7 +1780,7 @@ describe("makeMutations.openEditorFile", () => {
           root: "/repo",
           file: staleFile,
           openFiles: [staleFile],
-          layoutJson: editorLayoutJson("/repo", staleFile, [staleFile]),
+          layoutJson: editorLayoutJson("/repo", staleFile, [staleFile], 1_800),
         },
         "editor-1",
       ),
@@ -1797,12 +1809,13 @@ describe("makeMutations.openEditorFile", () => {
       openFiles: Array.isArray(openFiles) ? openFiles : [],
       layoutJson:
         typeof editor.cfg["layoutJson"] === "string" ? editor.cfg["layoutJson"] : undefined,
-      defaultSidebarWidth: 260,
-      minSidebarWidth: 180,
-      maxSidebarWidth: 440,
+      defaultSidebarWidth: EDITOR_SIDEBAR_DEFAULT_WIDTH,
+      minSidebarWidth: EDITOR_SIDEBAR_MIN_WIDTH,
+      maxSidebarWidth: EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
     });
     expect(activeEditorPane(layout).activeFile).toBe(targetFile);
     expect(activeEditorPane(layout).openFiles).toEqual([staleFile, targetFile]);
+    expect(layout.sidebarWidth).toBe(1_800);
   });
 
   it("opens a new editor for a new root without duplicating an existing different-root editor", () => {

@@ -393,6 +393,29 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.activeChat?.id).toBe(otherChat.id);
   });
 
+  it("selects a newly added folder even when no conversation model can create a chat", async () => {
+    const initial = project("/repo");
+    const selectedRoot = "/Users/oscharko-dev/Projects/Keiko";
+    const added = project(selectedRoot);
+    vi.mocked(fetchModels).mockResolvedValue({ models: [] });
+    vi.mocked(fetchProjects)
+      .mockResolvedValueOnce({ projects: [initial] })
+      .mockResolvedValueOnce({ projects: [initial, added] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    vi.mocked(createProject).mockResolvedValue({ project: added });
+    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+
+    let selected: unknown;
+    await act(async () => {
+      selected = await rendered.result.current.addProject(selectedRoot);
+    });
+
+    expect(selected).toEqual(added);
+    expect(rendered.result.current.activeProject?.path).toBe(selectedRoot);
+    expect(createDesktopChat).not.toHaveBeenCalled();
+  });
+
   it("surfaces bootstrap and navigation mutation failures without stale state", async () => {
     vi.mocked(fetchModels).mockRejectedValueOnce(new TypeError("bootstrap unavailable"));
     const failedBootstrap = renderHook(() => useChatSession({ autoCreate: false }));

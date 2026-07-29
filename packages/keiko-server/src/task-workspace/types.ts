@@ -55,6 +55,9 @@ export interface WorkspaceProvisioningService {
   readonly provision: (request: WorkspaceProvisionRequest) => Promise<WorkspaceProvisionResult>;
   readonly activate: (request: WorkspaceActivateRequest) => Promise<WorkspaceActivateResult>;
   readonly getInstance: (workspaceId: string) => WorkspaceInstance | undefined;
+  // Internal upgrade seam used by the active-binding authority after restart. It may repair only
+  // server-owned Project/Manifest identity; it must never infer or renew execution trust.
+  readonly ensureIdentity?: ((instance: WorkspaceInstance) => void) | undefined;
 }
 
 export interface WorkspaceProvisioningServiceDeps {
@@ -69,6 +72,13 @@ export interface WorkspaceProvisioningServiceDeps {
   // Clock + id generator, injected for deterministic tests. `now` is epoch ms.
   readonly now: () => number;
   readonly newId: () => string;
+  // The server-owned Project → single-root manifest identity for a managed worktree. Production
+  // supplies the existing UiStore paired-write owner; tests may omit it when trust/catalog behavior
+  // is outside their scope. Explicit provision may initialize exact trust; resume, activate, and
+  // getActive call it idempotently without trust initialization so persisted pre-integration
+  // workspaces are repaired before they are exposed as active.
+  readonly ensureManagedWorkspaceIdentity?:
+    ((instance: WorkspaceInstance, initializeTrust: boolean) => void) | undefined;
   // Optional: how long a provisioning/activation lock stays valid before it is treated as stale.
   readonly lockTtlMs?: number | undefined;
   // In-process serializer shared across all mutating workspace services (#449, ADR-0093 D1): provision
@@ -246,6 +256,9 @@ export type WorkspaceHealthServiceDeps = WorkspaceReconciliationServiceDeps;
 // removal cannot race a concurrent mutation of the same workspace. Health stays read-only (no mutex).
 export interface WorkspaceCleanupServiceDeps extends WorkspaceReconciliationServiceDeps {
   readonly mutex: WorkspaceMutexRegistry;
+  // Inverse of ensureManagedWorkspaceIdentity. Production delegates to UiStore.deleteProject,
+  // which removes the single-root manifest and its trust row in the same transaction.
+  readonly removeManagedWorkspaceIdentity?: ((instance: WorkspaceInstance) => void) | undefined;
 }
 
 export interface WorkspaceHealthService {

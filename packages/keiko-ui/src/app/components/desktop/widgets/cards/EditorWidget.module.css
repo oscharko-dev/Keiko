@@ -1,0 +1,40 @@
+/*
+ * These direction-qualified rules deliberately have greater specificity than the legacy
+ * ancestor selectors in globals.css. A nested row split must keep vertical geometry even when it
+ * lives inside a column split (and vice versa).
+ */
+.paneResizer.paneResizerRow[aria-orientation="vertical"] {
+  width: 7px;
+  min-width: 7px;
+  height: 100%;
+  min-height: 0;
+  cursor: col-resize;
+}
+
+.paneResizer.paneResizerRow[aria-orientation="vertical"]::before {
+  top: 14px;
+  right: auto;
+  bottom: 14px;
+  left: 50%;
+  width: 1px;
+  height: auto;
+  transform: translateX(-50%);
+}
+
+.paneResizer.paneResizerColumn[aria-orientation="horizontal"] {
+  width: 100%;
+  min-width: 0;
+  height: 7px;
+  min-height: 7px;
+  cursor: row-resize;
+}
+
+.paneResizer.paneResizerColumn[aria-orientation="horizontal"]::before {
+  top: 50%;
+  right: 14px;
+  bottom: auto;
+  left: 14px;
+  width: auto;
+  height: 1px;
+  transform: translateY(-50%);
+}

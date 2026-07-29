@@ -1,34 +1,52 @@
-// a11y smoke for the TaskWorkspaceSwitcher (Issue #446, AC5). jest-axe runs WCAG 2.2 AA against the
-// collapsed trigger and the expanded panel in the unbound, active-clean, and dirty+locked+recovery
-// states — the disclosure content only enters the accessibility tree when the panel is open.
+// WCAG 2.2 AA smoke for the focused folder/repository selector.
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
-import { describe, expect, it, vi } from "vitest";
-import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProjectWithAvailability } from "@/lib/types";
 import { ActiveWorkspaceProvider, type ActiveWorkspaceApi } from "./context/ActiveWorkspaceContext";
 import { TaskWorkspaceSwitcher } from "./TaskWorkspaceSwitcher";
 
-function instance(overrides: Partial<WorkspaceInstance> = {}): WorkspaceInstance {
+const catalogState = vi.hoisted(() => ({
+  activeProject: undefined as ProjectWithAvailability | undefined,
+  projects: [] as ProjectWithAvailability[],
+}));
+const chatActions = vi.hoisted(() => ({
+  addProject: vi.fn<(path: string) => Promise<ProjectWithAvailability | undefined>>(() =>
+    Promise.resolve(undefined),
+  ),
+  openProject: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock("./context/ChatSessionContext", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./context/ChatSessionContext")>();
   return {
-    schemaVersion: "1",
-    workspaceId: "ws-1",
-    taskId: "task-446",
-    repositoryId: "repo",
-    repositoryRoot: "/repo",
-    baseBranch: "dev",
-    taskBranch: "keiko/task-446",
-    managedWorktreePath: "/managed/repo/ws-1",
-    gitdirIdentity: "g",
-    lifecycleState: "active",
-    health: "healthy",
-    lock: null,
-    createdAt: "t",
-    updatedAt: "2026-06-26T10:00:00.000Z",
-    driftMarkers: [],
-    recoveryHints: [],
-    auditCorrelationId: "ws-1",
-    ...overrides,
+    ...actual,
+    useOptionalChatSessionActions: () => chatActions,
+    useOptionalChatSessionCatalog: () => ({
+      activeProject: catalogState.activeProject,
+      projects: catalogState.projects,
+    }),
+  };
+});
+
+vi.mock("./hooks/useNativeFileDialogCapability", () => ({
+  useNativeFileDialogCapability: (): boolean => true,
+}));
+
+vi.mock("@/lib/native-file-dialog", () => ({
+  pickWithNativeDialog: vi.fn(() => Promise.resolve({ kind: "cancelled" as const })),
+}));
+
+function project(path: string): ProjectWithAvailability {
+  return {
+    path,
+    name: path.split("/").at(-1) ?? path,
+    favorite: false,
+    createdAt: 1,
+    lastOpenedAt: 1,
+    available: true,
+    workspaceAvailable: true,
   };
 }
 
@@ -63,36 +81,30 @@ function renderSwitcher(value: ActiveWorkspaceApi): HTMLElement {
 }
 
 describe("TaskWorkspaceSwitcher a11y", () => {
+  beforeEach(() => {
+    catalogState.activeProject = undefined;
+    catalogState.projects = [];
+    chatActions.addProject.mockClear();
+    chatActions.openProject.mockClear();
+  });
+
   it("collapsed (unbound) has no violations", async () => {
     const container = renderSwitcher(api());
+    const trigger = screen.getByRole("button", {
+      name: "Workspace context: choose a folder",
+    });
+    expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
     expect(await axe(container)).toHaveNoViolations();
   });
 
-  it("expanded with an active clean workspace has no violations", async () => {
-    const container = renderSwitcher(api({ activeInstance: instance(), instances: [instance()] }));
-    fireEvent.click(screen.getByRole("button", { name: /task-446/i }));
-    expect(await axe(container)).toHaveNoViolations();
-  });
+  it("expanded with a selected repository has no violations", async () => {
+    catalogState.activeProject = project("/work/client-portal");
+    catalogState.projects = [catalogState.activeProject];
+    const container = renderSwitcher(api());
 
-  it("expanded with a dirty, locked workspace and recovery hints has no violations", async () => {
-    const container = renderSwitcher(
-      api({
-        activeInstance: instance({
-          health: "drifted",
-          driftMarkers: ["uncommitted-changes"],
-          lock: { lockId: "l", owner: "op", reason: "mutation", acquiredAt: "t" },
-          recoveryHints: [
-            {
-              marker: "uncommitted-changes",
-              strategy: "commit-or-stash-required",
-              operatorActionRequired: true,
-            },
-          ],
-        }),
-        error: "Workspace is locked by another actor",
-      }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: /task-446/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Workspace context: client-portal" }));
+
+    expect(screen.getByRole("dialog", { name: "Folder or repository" })).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
 });

@@ -22,6 +22,7 @@ import type {
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { Icons, type IconName } from "../Icons";
 import { useOptionalActiveWorkspace } from "../context/ActiveWorkspaceContext";
+import { useOptionalChatSessionProject } from "../context/ChatSessionContext";
 import {
   acquireGrabbingBodyStyle,
   isInteractiveControlTarget,
@@ -158,6 +159,7 @@ interface SelectBodyOptions {
   readonly eh: number;
   readonly cfg: AppWindow["cfg"];
   readonly linked: LinkedContext;
+  readonly selectedRoot: string | null;
   readonly activeRoot: string | null;
   readonly activeBinding: WorkspaceBinding | null;
   readonly updateCfg: (patch: AppWindow["cfg"]) => void;
@@ -176,6 +178,7 @@ function selectBody({
   eh,
   cfg,
   linked,
+  selectedRoot,
   activeRoot,
   activeBinding,
   updateCfg,
@@ -207,6 +210,7 @@ function selectBody({
         barCompact,
         workflowCompact,
         ...linked,
+        selectedRoot,
         activeRoot,
         activeBinding,
         updateCfg,
@@ -235,6 +239,7 @@ function selectBody({
     node: def.render(typedCfg, {
       windowId,
       ...linked,
+      selectedRoot,
       activeRoot,
       activeBinding,
       updateCfg,
@@ -774,6 +779,8 @@ function WindowFrameImpl({
   // Issue #446 — the active task-workspace binding (null when no provider is mounted or unbound). It
   // is the single retarget choke point threaded into every window's render context below.
   const activeWorkspace = useOptionalActiveWorkspace();
+  const activeProject = useOptionalChatSessionProject();
+  const selectedRoot = activeProject?.available === true ? activeProject.path : null;
   const activeRoot = activeWorkspace?.activeRoot ?? null;
   const activeBinding = activeWorkspace?.activeBinding ?? null;
   const [draggingWindow, setDraggingWindow] = useState(false);
@@ -837,6 +844,7 @@ function WindowFrameImpl({
         eh,
         cfg: win.cfg,
         linked,
+        selectedRoot,
         activeRoot,
         activeBinding,
         updateCfg,
@@ -854,6 +862,7 @@ function WindowFrameImpl({
       win.cfg,
       bodyBreakpoints,
       linked,
+      selectedRoot,
       activeRoot,
       activeBinding,
       updateCfg,

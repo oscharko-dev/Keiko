@@ -32,6 +32,7 @@ import type { IncomingMessage } from "node:http";
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { currentGatewayConfig } from "../deps.js";
 import type { ChatMessage, NewChatMessage } from "../store/types.js";
 import {
   qiHandoffErrorBody,
@@ -314,7 +315,7 @@ const startHandoffRun = (deps: UiHandlerDeps, roots: readonly string[]): string 
       },
     });
   const runPromise =
-    deps.config === undefined
+    currentGatewayConfig(deps) === undefined
       ? execute()
       : buildQiModelRoutingForRun(deps, {}).then((modelRouting) => execute(modelRouting));
   void runPromise

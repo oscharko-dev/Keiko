@@ -39,6 +39,7 @@ import { acquireGrabbingBodyStyle } from "../../interactionGuards";
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import { reconcileEditorDirtyByPane, type EditorDirtyByPane } from "./editorDirtyState";
 import { deleteEditorHotExitSnapshot } from "./editorHotExitStore";
+import editorWidgetStyles from "./EditorWidget.module.css";
 import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import type { EditorAgentPaneSnapshot } from "../../../../../lib/types";
 import { FilesWidget, type FilesMutationEvent } from "./FilesWidget";
@@ -55,6 +56,14 @@ import {
   type EditorOutlineSnapshot,
 } from "./editorOutlineModel";
 import { type EditorPaletteHost } from "./editorCommands";
+import {
+  EDITOR_SIDEBAR_MIN_WIDTH,
+  EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
+  editorSidebarBounds,
+  editorSidebarTrackWidth,
+  editorSidebarWidthFromPointer,
+  editorWorkspaceLogicalWidth,
+} from "../../editorSidebarSizing";
 import {
   useEditorVerificationRun,
   type EditorVerificationRunControls,
@@ -87,8 +96,6 @@ import {
   draggedTabFromEvent,
   EDITOR_TAB_DRAG_MIME,
   MAX_EDITOR_PANES,
-  MAX_SIDEBAR_WIDTH,
-  MIN_SIDEBAR_WIDTH,
   normalizeEditorFile,
   normalizeEditorLayoutStructure,
   normalizeEditorOpenFiles,
@@ -107,6 +114,12 @@ const SplitIcon = Icons.split;
 const PanelDownIcon = Icons.panelDown;
 const CloseIcon = Icons.close;
 const SidebarIcon = Icons.sidebar;
+
+function splitResizerClassName(direction: EditorSplitDirection): string {
+  const directionClass =
+    direction === "row" ? editorWidgetStyles.paneResizerRow : editorWidgetStyles.paneResizerColumn;
+  return `ed-pane-resizer ${editorWidgetStyles.paneResizer} ${directionClass}`;
+}
 
 const EditorRuntimeWidget = dynamic<EditorRuntimeWidgetProps>(
   () => import("./EditorRuntimeWidget"),
@@ -128,6 +141,7 @@ export interface EditorWidgetProps extends EditorRuntimeWidgetProps {
   readonly onWorkspaceChange?: ((patch: EditorWidgetWorkspacePatch) => void) | undefined;
   readonly onOpenProblems?: ((projectPath: string) => void) | undefined;
   readonly onOpenWorkspaceTrust?: (() => void) | undefined;
+  readonly workspaceTrustUiAvailable?: boolean | undefined;
 }
 
 interface PendingDirtyClose {
@@ -144,10 +158,45 @@ interface PointerTabDragPosition {
   readonly width: number;
 }
 
+interface EditorExternalLayoutInputs {
+  readonly root: string;
+  readonly file: string;
+  readonly openFiles: readonly string[];
+  readonly layoutJson: string | undefined;
+}
+
 const TAB_POINTER_DRAG_THRESHOLD_PX = 6;
 const MIN_SPLIT_RATIO = 15;
 const MAX_SPLIT_RATIO = 85;
 const CLOSED_TAB_HISTORY_LIMIT = 20;
+
+function editorExternalLayoutInputs(
+  root: string | undefined,
+  file: string | undefined,
+  openFiles: readonly string[] | undefined,
+  layoutJson: string | undefined,
+): EditorExternalLayoutInputs {
+  const normalizedRoot = root?.trim() ?? "";
+  const normalizedFile = normalizeEditorFile(normalizedRoot, file);
+  return {
+    root: normalizedRoot,
+    file: normalizedFile,
+    openFiles: normalizeEditorOpenFiles(normalizedRoot, normalizedFile, openFiles),
+    layoutJson,
+  };
+}
+
+function sameEditorExternalLayoutInputs(
+  left: EditorExternalLayoutInputs,
+  right: EditorExternalLayoutInputs,
+): boolean {
+  return (
+    left.root === right.root &&
+    left.file === right.file &&
+    left.layoutJson === right.layoutJson &&
+    sameStringList(left.openFiles, right.openFiles)
+  );
+}
 
 function editorShortcutCommandId(
   registry: EffectiveKeyboardShortcutRegistry,
@@ -534,6 +583,7 @@ export function EditorWidget({
   onWorkspaceChange,
   onOpenProblems,
   onOpenWorkspaceTrust,
+  workspaceTrustUiAvailable = true,
   onOpenDebugPanel,
   sessionActive = true,
   windowId,
@@ -617,6 +667,7 @@ export function EditorWidget({
   const agentReconciliationSeqRef = useRef(0);
   const saveResolversRef = useRef(new Map<number, (ok: boolean) => void>());
   const lastPropRootRef = useRef(root?.trim() ?? "");
+  const lastExternalLayoutInputsRef = useRef<EditorExternalLayoutInputs | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const pointerTabDragRef = useRef<PointerTabDrag | null>(null);
   const tabInsertTargetRef = useRef<TabInsertTarget | null>(null);
@@ -656,13 +707,13 @@ export function EditorWidget({
   );
 
   useEffect(() => {
-    const nextRoot = root?.trim() ?? "";
-    const nextConfiguredFile = normalizeEditorFile(nextRoot, file);
-    const nextOpenFiles = normalizeEditorOpenFiles(
-      nextRoot,
-      nextConfiguredFile,
-      configuredOpenFiles,
-    );
+    const nextInputs = editorExternalLayoutInputs(root, file, configuredOpenFiles, layoutJson);
+    const previousInputs = lastExternalLayoutInputsRef.current;
+    if (previousInputs !== null && sameEditorExternalLayoutInputs(previousInputs, nextInputs)) {
+      return;
+    }
+    lastExternalLayoutInputsRef.current = nextInputs;
+    const { root: nextRoot, file: nextConfiguredFile, openFiles: nextOpenFiles } = nextInputs;
     const nextLayout = createInitialLayout({
       root: nextRoot,
       file: nextConfiguredFile,
@@ -1082,7 +1133,12 @@ export function EditorWidget({
     const node = workspaceRef.current;
     if (node === null) return;
     const rect = node.getBoundingClientRect();
-    const width = clampNumber(clientX - rect.left, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+    const width = editorSidebarWidthFromPointer({
+      clientX,
+      rectLeft: rect.left,
+      rectWidth: rect.width,
+      logicalWorkspaceWidth: editorWorkspaceLogicalWidth(node, rect),
+    });
     node.style.setProperty("--ed-sidebar-width", `${String(width)}px`);
     sidebarGestureRef.current = width;
   }, []);
@@ -1102,7 +1158,7 @@ export function EditorWidget({
   );
 
   const resizeSidebar = useCallback(
-    (event: PointerEvent<HTMLButtonElement>): void => {
+    (event: PointerEvent<HTMLElement>): void => {
       if (event.buttons !== 1) return;
       if (isTabDragActive()) return;
       previewSidebarWidth(event.clientX);
@@ -1112,14 +1168,18 @@ export function EditorWidget({
 
   const resizeSidebarBy = useCallback(
     (delta: number): void => {
+      const node = workspaceRef.current;
+      const bounds =
+        node === null
+          ? {
+              min: EDITOR_SIDEBAR_MIN_WIDTH,
+              max: EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
+            }
+          : editorSidebarBounds(editorWorkspaceLogicalWidth(node));
       commitLayout(
         editorLayoutReducer(layoutRef.current, {
           type: "set-sidebar",
-          width: clampNumber(
-            layoutRef.current.sidebarWidth + delta,
-            MIN_SIDEBAR_WIDTH,
-            MAX_SIDEBAR_WIDTH,
-          ),
+          width: clampNumber(layoutRef.current.sidebarWidth + delta, bounds.min, bounds.max),
           collapsed: false,
         }),
       );
@@ -1168,7 +1228,7 @@ export function EditorWidget({
   );
 
   const beginSidebarMouseResize = useCallback(
-    (event: MouseEvent<HTMLButtonElement>): void => {
+    (event: MouseEvent<HTMLElement>): void => {
       if (isTabDragActive()) return;
       event.preventDefault();
       const move = (moveEvent: globalThis.MouseEvent): void =>
@@ -1204,7 +1264,7 @@ export function EditorWidget({
   );
 
   const handleSidebarResizerKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLButtonElement>): void => {
+    (event: KeyboardEvent<HTMLElement>): void => {
       const step = event.shiftKey ? 32 : 12;
       if (event.key === "ArrowLeft") {
         event.preventDefault();
@@ -1566,10 +1626,21 @@ export function EditorWidget({
     );
     if (decision === "skip") return;
     setPromptedTrustRoot(workspaceRoot);
-    if (decision === "latch-and-prompt") {
+    if (decision === "latch-and-prompt" && workspaceTrustUiAvailable) {
       setTrustDecision({ action: "grant", initialPrompt: true, root: workspaceRoot });
     }
-  }, [promptedTrustRoot, verification.catalog?.workspaceTrust, workspaceRoot]);
+  }, [
+    promptedTrustRoot,
+    verification.catalog?.workspaceTrust,
+    workspaceRoot,
+    workspaceTrustUiAvailable,
+  ]);
+
+  useEffect(() => {
+    if (workspaceTrustUiAvailable) return;
+    setTrustDecision(null);
+    setTrustMutationIssue(undefined);
+  }, [workspaceTrustUiAvailable]);
 
   const confirmTrustDecision = useCallback(async (): Promise<boolean> => {
     if (trustDecision === null || trustMutationPending) return false;
@@ -1611,6 +1682,7 @@ export function EditorWidget({
       verificationRunning: verification.verificationRunning,
       verifiableTarget: verification.verifiableTarget,
       verificationCatalog: verification.catalog,
+      workspaceTrustUiAvailable,
       splitActive: splitActivePane,
       closeActiveSplit: closeActivePane,
       closeActiveTab,
@@ -1650,6 +1722,7 @@ export function EditorWidget({
       verification.verifiableTarget,
       verification.verificationRunning,
       workspaceRoot,
+      workspaceTrustUiAvailable,
     ],
   );
   const commandHostRef = useRef(commandHost);
@@ -1860,7 +1933,7 @@ export function EditorWidget({
         <div
           role="separator"
           tabIndex={0}
-          className="ed-pane-resizer"
+          className={splitResizerClassName(node.direction)}
           aria-label="Resize editor split"
           aria-orientation={node.direction === "row" ? "vertical" : "horizontal"}
           aria-valuemin={MIN_SPLIT_RATIO}
@@ -1915,7 +1988,9 @@ export function EditorWidget({
       data-pane-count={paneCount}
       data-trust-settled={trustSettled}
       ref={workspaceRef}
-      style={{ "--ed-sidebar-width": `${String(layout.sidebarWidth)}px` } as CSSProperties}
+      style={
+        { "--ed-sidebar-width": editorSidebarTrackWidth(layout.sidebarWidth) } as CSSProperties
+      }
     >
       {layout.sidebarCollapsed ? (
         <button
@@ -1956,10 +2031,16 @@ export function EditorWidget({
               onFilesMutated={handleFilesMutated}
             />
           </aside>
-          <button
-            type="button"
+          {/* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- WAI-ARIA window-splitter pattern: focusable role=separator exposes keyboard resizing through aria-valuenow. */}
+          <div
+            role="separator"
+            tabIndex={0}
             className="ed-sidebar-resizer"
             aria-label="Resize project tree"
+            aria-orientation="vertical"
+            aria-valuemin={EDITOR_SIDEBAR_MIN_WIDTH}
+            aria-valuemax={EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH}
+            aria-valuenow={Math.round(layout.sidebarWidth)}
             onPointerDown={(event) => {
               if (isTabDragActive()) return;
               capturePointer(event);
@@ -1976,23 +2057,26 @@ export function EditorWidget({
             onMouseDown={beginSidebarMouseResize}
             onKeyDown={handleSidebarResizerKeyDown}
           />
+          {/* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
         </>
       )}
       <div className={`ed-main ${trustStyles.cmpEditorMain}`}>
-        <WorkspaceTrustBanner
-          status={verification.catalog?.workspaceTrust}
-          // `catalog === null` alone is not a failed read: it is also the state before the first
-          // read returns, and the state right after a root switch resets it. Treating it as "load"
-          // made the banner assert "Workspace Trust could not be read safely" on every editor open
-          // — including for a fully trusted root, where it then vanished — which is the opposite of
-          // the #2625 requirement that a read FAILURE be distinguishable from every other state.
-          // `catalogSettled` is the fact that separates them: it turns true only once the read has
-          // resolved or definitively failed.
-          issue={trustBannerIssue(trustMutationIssue, verification)}
-          surface="editor"
-          onManage={onOpenWorkspaceTrust}
-          editor
-        />
+        {workspaceTrustUiAvailable ? (
+          <WorkspaceTrustBanner
+            status={verification.catalog?.workspaceTrust}
+            // `catalog === null` alone is not a failed read: it is also the state before the first
+            // read returns, and the state right after a root switch resets it. Treating it as "load"
+            // made the banner assert "Workspace Trust could not be read safely" on every editor
+            // open — including for a fully trusted root, where it then vanished — which is the
+            // opposite of the #2625 requirement that a read FAILURE be distinguishable from every
+            // other state. `catalogSettled` is the fact that separates them: it turns true only once
+            // the read has resolved or definitively failed.
+            issue={trustBannerIssue(trustMutationIssue, verification)}
+            surface="editor"
+            onManage={onOpenWorkspaceTrust}
+            editor
+          />
+        ) : null}
         <div
           className={`ed-panes ed-panes-root ${trustStyles.cmpEditorPanes}${
             singlePane ? " single" : ""
@@ -2029,7 +2113,7 @@ export function EditorWidget({
           onCancel={cancelPendingClose}
         />
       ) : null}
-      {trustDecision !== null && pendingClose === null ? (
+      {workspaceTrustUiAvailable && trustDecision !== null && pendingClose === null ? (
         <WorkspaceTrustDecisionDialog
           action={trustDecision.action}
           initialPrompt={trustDecision.initialPrompt}

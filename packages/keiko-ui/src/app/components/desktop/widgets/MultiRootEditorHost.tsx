@@ -168,6 +168,7 @@ function EditorRootTab({
   selected,
   focused,
   idPrefix,
+  workspaceTrustUiAvailable,
   onSelect,
   onKeyDown,
 }: {
@@ -175,6 +176,7 @@ function EditorRootTab({
   readonly selected: boolean;
   readonly focused: boolean;
   readonly idPrefix: string;
+  readonly workspaceTrustUiAvailable: boolean;
   readonly onSelect: () => void;
   readonly onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => void;
 }): ReactNode {
@@ -192,7 +194,9 @@ function EditorRootTab({
       onKeyDown={onKeyDown}
     >
       <span>{root.displayName}</span>
-      <WorkspaceTrustBadge status={trust.status} issue={trust.issue} />
+      {workspaceTrustUiAvailable ? (
+        <WorkspaceTrustBadge status={trust.status} issue={trust.issue} />
+      ) : null}
     </button>
   );
 }
@@ -375,6 +379,9 @@ export function MultiRootEditorHost({
                 : activeRoot.rootRef)
             }
             idPrefix={idPrefix}
+            workspaceTrustUiAvailable={
+              buildBaseProps(root.canonicalRoot).workspaceTrustUiAvailable !== false
+            }
             onSelect={() => selectRoot(root)}
             onKeyDown={(event) => onTabKeyDown(event, root.rootRef)}
             key={root.rootRef}

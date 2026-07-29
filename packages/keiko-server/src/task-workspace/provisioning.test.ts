@@ -67,6 +67,7 @@ function capturingEvidence(): EvidenceStore {
 
 function makeService(
   adapterFactory?: (workspace: WorkspaceInfo) => GitWorktreeAdapter,
+  ensureManagedWorkspaceIdentity?: (instance: WorkspaceInstance, initializeTrust: boolean) => void,
 ): WorkspaceProvisioningService {
   return createWorkspaceProvisioningService({
     store,
@@ -79,6 +80,7 @@ function makeService(
     redactString: (s: string): string => s,
     now: (): number => FIXED_NOW,
     newId: (): string => `id-${String(idCounter++)}`,
+    ...(ensureManagedWorkspaceIdentity === undefined ? {} : { ensureManagedWorkspaceIdentity }),
     mutex: __twMutex,
   });
 }
@@ -174,6 +176,41 @@ describe("provision success (AC1, AC4)", () => {
     expect(result.binding.gitDeliveryRoot).toBe(result.binding.activeRoot);
     expect(result.binding.editorProjectRoot).toBe(result.binding.activeRoot);
     expect(evidence.length).toBeGreaterThan(0);
+  });
+
+  it("establishes the managed workspace identity before every active exposure", async () => {
+    const observed: { readonly instance: WorkspaceInstance; readonly initializeTrust: boolean }[] =
+      [];
+    const service = makeService(undefined, (instance, initializeTrust) => {
+      observed.push({ instance, initializeTrust });
+    });
+    const request = {
+      repositoryRequestPath: repoRoot,
+      taskId: "identity",
+      baseBranch: "main",
+      requestedBy: "u",
+    } as const;
+
+    const provisioned = await service.provision(request);
+    await service.provision(request);
+    await service.activate({
+      workspaceId: provisioned.instance.workspaceId,
+      taskId: request.taskId,
+      requestedBy: request.requestedBy,
+      acquireLock: false,
+    });
+
+    expect(observed.map(({ instance }) => instance.managedWorktreePath)).toEqual([
+      provisioned.instance.managedWorktreePath,
+      provisioned.instance.managedWorktreePath,
+      provisioned.instance.managedWorktreePath,
+    ]);
+    expect(observed.map(({ instance }) => instance.lifecycleState)).toEqual([
+      "provisioning",
+      "active",
+      "active",
+    ]);
+    expect(observed.map(({ initializeTrust }) => initializeTrust)).toEqual([true, true, false]);
   });
 });
 
@@ -411,6 +448,27 @@ describe("pre-write rejections (AC2)", () => {
 });
 
 describe("drift + partial failure leave a visible classified state (SC4)", () => {
+  it("rolls back and classifies a managed workspace identity failure", async () => {
+    const service = makeService(undefined, () => {
+      throw new Error("identity store unavailable");
+    });
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "identity-failure",
+          baseBranch: "main",
+          requestedBy: "u",
+        }),
+      "PROVISIONING_FAILED",
+    );
+    const repositoryId = deriveRepositoryId(repoRoot);
+    const failed = store.getById(deriveWorkspaceId({ repositoryId, taskId: "identity-failure" }));
+    expect(failed?.lifecycleState).toBe("failed");
+    expect(failed?.lock).toBeNull();
+    expect(existsSync(failed?.managedWorktreePath ?? "")).toBe(false);
+  });
+
   it("flags recovery-required when the managed worktree has vanished (stale pointer)", async () => {
     const service = makeService();
     const created = await service.provision({

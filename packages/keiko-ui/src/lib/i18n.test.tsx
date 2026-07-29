@@ -6,6 +6,7 @@ import {
   I18N_STORAGE_KEY,
   I18nProvider,
   loadLocaleMessages,
+  resolveInitialLocale,
   resolveLocale,
   translate,
   useI18n,
@@ -13,6 +14,15 @@ import {
   useTranslate,
 } from "./i18n";
 import { translateOptionalWidget } from "./optional-widget-i18n";
+
+const navigatorLanguageDescriptor = Object.getOwnPropertyDescriptor(window.navigator, "language");
+
+function setNavigatorLanguage(language: string): void {
+  Object.defineProperty(window.navigator, "language", {
+    configurable: true,
+    value: language,
+  });
+}
 
 function Probe(): ReactNode {
   const { locale, setLocale, t } = useI18n();
@@ -46,6 +56,11 @@ afterEach(() => {
   window.localStorage.clear();
   document.documentElement.lang = "en";
   document.documentElement.removeAttribute("data-locale");
+  if (navigatorLanguageDescriptor === undefined) {
+    Reflect.deleteProperty(window.navigator, "language");
+  } else {
+    Object.defineProperty(window.navigator, "language", navigatorLanguageDescriptor);
+  }
 });
 
 describe("resolveLocale", () => {
@@ -59,6 +74,13 @@ describe("resolveLocale", () => {
     expect(resolveLocale("de")).toBe("de");
     expect(resolveLocale("de-DE")).toBe("de");
     expect(resolveLocale("de_AT")).toBe("de");
+  });
+
+  it("uses the browser locale only when no explicit preference exists", () => {
+    expect(resolveInitialLocale(null, "de-DE")).toBe("de");
+    expect(resolveInitialLocale("en", "de-DE")).toBe("en");
+    expect(resolveInitialLocale("fr-FR", "de-DE")).toBe(DEFAULT_LOCALE);
+    expect(resolveInitialLocale(null, "fr-FR")).toBe(DEFAULT_LOCALE);
   });
 });
 
@@ -124,6 +146,37 @@ describe("translate", () => {
 });
 
 describe("I18nProvider", () => {
+  it("uses a supported browser language when no user locale has been stored", async () => {
+    setNavigatorLanguage("de-DE");
+
+    render(
+      <I18nProvider>
+        <Probe />
+      </I18nProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("label")).toHaveTextContent("Einstellungen"));
+    expect(screen.getByTestId("locale")).toHaveTextContent("de");
+    expect(document.documentElement.lang).toBe("de");
+    expect(window.localStorage.getItem(I18N_STORAGE_KEY)).toBe("de");
+  });
+
+  it("keeps an explicit English preference authoritative in a German browser", () => {
+    setNavigatorLanguage("de-DE");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "en");
+
+    render(
+      <I18nProvider>
+        <Probe />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByTestId("label")).toHaveTextContent("Settings");
+    expect(screen.getByTestId("locale")).toHaveTextContent("en");
+    expect(document.documentElement.lang).toBe("en");
+    expect(window.localStorage.getItem(I18N_STORAGE_KEY)).toBe("en");
+  });
+
   it("uses the stored locale, updates document metadata, and persists changes", async () => {
     window.localStorage.setItem(I18N_STORAGE_KEY, "de-DE");
 

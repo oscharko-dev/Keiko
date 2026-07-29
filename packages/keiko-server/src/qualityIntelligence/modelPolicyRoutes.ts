@@ -33,6 +33,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { currentGatewayConfig } from "../deps.js";
 import {
   normaliseQiModelPolicy,
   recommendQiModelPolicy,
@@ -40,7 +41,7 @@ import {
   resolveQiModelPolicy,
   validateQiModelPolicy,
 } from "./modelSelection.js";
-import { buildJudgePrompt, buildQiJudgeResponseFormat, tryParseJudgeVerdict } from "./judgePort.js";
+import { buildQiJudgePreflightRequest, tryParseJudgeVerdict } from "./judgePort.js";
 
 const QI_POLICY_DIR = "quality-intelligence";
 const QI_POLICY_FILE = "model-policy.json";
@@ -144,7 +145,8 @@ function isRouteResult(value: Record<string, unknown> | RouteResult): value is R
 }
 
 function configuredModels(deps: UiHandlerDeps): readonly ModelCapability[] {
-  return deps.config === undefined ? [] : listConfiguredCapabilities(deps.config);
+  const config = currentGatewayConfig(deps);
+  return config === undefined ? [] : listConfiguredCapabilities(config);
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -321,21 +323,7 @@ function requestForPreflight(
   _capability: ModelCapability,
 ): GatewayRequest {
   if (stage === "judge") {
-    return {
-      modelId,
-      messages: buildJudgePrompt(
-        "Titel: Pflichtfeld Betrag ist leer\nSchritte: Betrag leer lassen\nErwartetes Ergebnis: Validierungsfehler wird angezeigt.",
-        [
-          {
-            atomId: "preflight-atom-1",
-            text: "Wenn das Pflichtfeld Betrag leer ist, muss das System eine Validierungsmeldung anzeigen.",
-          },
-        ],
-      ),
-      stream: false,
-      temperature: 0,
-      responseFormat: buildQiJudgeResponseFormat(),
-    };
+    return buildQiJudgePreflightRequest(modelId);
   }
   return {
     modelId,
@@ -357,7 +345,8 @@ async function preflightStage(
   stage: "generate" | "judge",
   modelId: string | undefined,
 ): Promise<QualityIntelligenceModelPreflightStageResult> {
-  if (modelId === undefined || deps.config === undefined) {
+  const config = currentGatewayConfig(deps);
+  if (modelId === undefined || config === undefined) {
     return {
       stage,
       status: "unavailable",
@@ -365,7 +354,7 @@ async function preflightStage(
       message: preflightMessage("unavailable"),
     };
   }
-  const capability = findConfiguredCapability(deps.config, modelId);
+  const capability = findConfiguredCapability(config, modelId);
   if (capability?.kind !== "chat") {
     return {
       stage,
@@ -376,7 +365,7 @@ async function preflightStage(
     };
   }
   try {
-    const response = await new Gateway(deps.config).chat(
+    const response = await new Gateway(config).chat(
       requestForPreflight(stage, modelId, capability),
     );
     if (stage === "judge" && tryParseJudgeVerdict(response.content) === null) {

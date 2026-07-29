@@ -30,10 +30,11 @@ import type {
   WorkspaceUiSelectionState,
 } from "@oscharko-dev/keiko-contracts";
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
-
-const EDITOR_DEFAULT_SIDEBAR_WIDTH = 260;
-const EDITOR_MIN_SIDEBAR_WIDTH = 180;
-const EDITOR_MAX_SIDEBAR_WIDTH = 440;
+import {
+  EDITOR_SIDEBAR_DEFAULT_WIDTH,
+  EDITOR_SIDEBAR_MIN_WIDTH,
+  EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
+} from "../editorSidebarSizing";
 
 function addPosition(
   vp: ViewportWorld,
@@ -138,9 +139,9 @@ function editorOpenLayoutPatch(
     file: currentFile,
     openFiles: mergeEditorCfgOpenFiles(cfg, root, file),
     layoutJson: editorCfgString(cfg, "layoutJson"),
-    defaultSidebarWidth: EDITOR_DEFAULT_SIDEBAR_WIDTH,
-    minSidebarWidth: EDITOR_MIN_SIDEBAR_WIDTH,
-    maxSidebarWidth: EDITOR_MAX_SIDEBAR_WIDTH,
+    defaultSidebarWidth: EDITOR_SIDEBAR_DEFAULT_WIDTH,
+    minSidebarWidth: EDITOR_SIDEBAR_MIN_WIDTH,
+    maxSidebarWidth: EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
   });
   const opened = editorLayoutReducer(layout, {
     type: "open-file",
@@ -472,9 +473,9 @@ function makeOpenEditorFile(args: MutateArgs): WorkspaceApi["openEditorFile"] {
                 root: normalizedRoot,
                 file: normalizedPath,
                 openFiles: [normalizedPath],
-                defaultSidebarWidth: EDITOR_DEFAULT_SIDEBAR_WIDTH,
-                minSidebarWidth: EDITOR_MIN_SIDEBAR_WIDTH,
-                maxSidebarWidth: EDITOR_MAX_SIDEBAR_WIDTH,
+                defaultSidebarWidth: EDITOR_SIDEBAR_DEFAULT_WIDTH,
+                minSidebarWidth: EDITOR_SIDEBAR_MIN_WIDTH,
+                maxSidebarWidth: EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
               }),
             ),
             ...reveal,

@@ -13,6 +13,11 @@ const WORKSPACES_URL = "/api/workspaces";
 
 export const WORKSPACE_MANIFEST_CHANGED_EVENT = "keiko:workspace-manifest-changed";
 
+export interface WorkspaceManifestAccess {
+  readonly session: "paired" | "unpaired";
+  readonly manifests: readonly WorkspaceManifest[];
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -28,11 +33,19 @@ function assertManifest(path: string, value: unknown): WorkspaceManifest {
   return value as WorkspaceManifest;
 }
 
-function manifestListValidator(path: string, value: unknown): readonly WorkspaceManifest[] {
+function manifestListValidator(path: string, value: unknown): WorkspaceManifestAccess {
   if (!isRecord(value) || !Array.isArray(value["manifests"])) {
     throw invalidManifestResponse(path);
   }
-  return value["manifests"].map((candidate) => assertManifest(path, candidate));
+  const session = value["session"];
+  if (session !== undefined && session !== "unpaired") {
+    throw invalidManifestResponse(path);
+  }
+  const manifests = value["manifests"].map((candidate) => assertManifest(path, candidate));
+  if (session === "unpaired" && manifests.length > 0) {
+    throw invalidManifestResponse(path);
+  }
+  return { session: session === "unpaired" ? "unpaired" : "paired", manifests };
 }
 
 function manifestMutationValidator(path: string, value: unknown): WorkspaceManifest {
@@ -59,12 +72,16 @@ export function workspaceManifestEventValue(event: Event): WorkspaceManifest | n
   return validateWorkspaceManifest(manifest).ok ? (manifest as WorkspaceManifest) : null;
 }
 
-export async function fetchWorkspaceManifests(): Promise<readonly WorkspaceManifest[]> {
+export async function fetchWorkspaceManifestAccess(): Promise<WorkspaceManifestAccess> {
   await codingAppSessionPairingSettled();
   return bffFetchJson(WORKSPACES_URL, undefined, {
     validator: manifestListValidator,
     parseFailureMessage: () => "workspace manifest request rejected",
   });
+}
+
+export async function fetchWorkspaceManifests(): Promise<readonly WorkspaceManifest[]> {
+  return (await fetchWorkspaceManifestAccess()).manifests;
 }
 
 export function workspaceRootDispatch(

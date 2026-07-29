@@ -14,6 +14,7 @@ import {
   createInitialCodingWorkbenchRuntimeState,
   type CodingWorkbenchRuntimeState,
 } from "@/lib/coding-workbench-live-state";
+import type { ProjectWithAvailability } from "@/lib/types";
 import { CodingWorkbenchWindow } from "./CodingWorkbenchWindow";
 
 const runtimeHookMock = vi.hoisted(() => vi.fn());
@@ -21,6 +22,10 @@ const questionsHookMock = vi.hoisted(() => vi.fn());
 const activityHookMock = vi.hoisted(() => vi.fn());
 const researchHookMock = vi.hoisted(() => vi.fn());
 const autonomyHookMock = vi.hoisted(() => vi.fn());
+const chatCatalogMock = vi.hoisted(() => ({
+  activeProject: undefined as ProjectWithAvailability | undefined,
+  projects: [] as ProjectWithAvailability[],
+}));
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
@@ -41,6 +46,19 @@ vi.mock("@/lib/useCodingWorkbenchResearch", () => ({
 vi.mock("../../hooks/useAutonomyModePolicy", () => ({
   useAutonomyModePolicy: autonomyHookMock,
 }));
+
+vi.mock("../../context/ChatSessionContext", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../context/ChatSessionContext")>();
+  return {
+    ...actual,
+    useOptionalChatSessionCatalog: () => ({
+      activeProject: chatCatalogMock.activeProject,
+      projects: chatCatalogMock.projects,
+      models: [],
+      noEligibleModels: true,
+    }),
+  };
+});
 
 const AT = "2026-07-13T12:00:00.000Z";
 
@@ -155,12 +173,22 @@ function renderWorkbench(
   liveActions: CodingWorkbenchRuntimeActions = actions(),
 ): CodingWorkbenchRuntimeActions {
   runtimeHookMock.mockReturnValue({ state, actions: liveActions });
-  render(<CodingWorkbenchWindow />);
+  render(
+    <CodingWorkbenchWindow
+      selectedRoot={
+        chatCatalogMock.activeProject?.available === true
+          ? chatCatalogMock.activeProject.path
+          : undefined
+      }
+    />,
+  );
   return liveActions;
 }
 
 describe("CodingWorkbenchWindow", () => {
   beforeEach(() => {
+    chatCatalogMock.activeProject = undefined;
+    chatCatalogMock.projects = [];
     questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
     activityHookMock.mockReturnValue(IDLE_ACTIVITY);
     researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null });
@@ -172,6 +200,25 @@ describe("CodingWorkbenchWindow", () => {
       error: null,
       change: vi.fn(),
     });
+  });
+
+  it("inherits the globally selected folder without requiring a chat model", (): void => {
+    const selectedRoot = "/Users/oscharko-dev/Projects/Keiko";
+    const selectedProject: ProjectWithAvailability = {
+      path: selectedRoot,
+      name: "Keiko",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+      workspaceAvailable: true,
+    };
+    chatCatalogMock.activeProject = selectedProject;
+    chatCatalogMock.projects = [selectedProject];
+
+    renderWorkbench(createInitialCodingWorkbenchRuntimeState());
+
+    expect(screen.getByLabelText("Repository path")).toHaveValue(selectedRoot);
   });
 
   function egressApprovalState(

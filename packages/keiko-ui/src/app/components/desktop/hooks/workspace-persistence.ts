@@ -5,6 +5,11 @@ import { sanitizeEditorRootSessionsJson } from "@/lib/editor-root-sessions";
 import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import { WIN_META } from "../windows/descriptor-meta";
 import type { AppWindow, Connection } from "../windows/types";
+import {
+  EDITOR_SIDEBAR_DEFAULT_WIDTH,
+  EDITOR_SIDEBAR_MIN_WIDTH,
+  EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
+} from "../editorSidebarSizing";
 
 type JsonScalar = string | number | boolean;
 
@@ -404,7 +409,15 @@ function resolveEditorLayoutPaneV2(
   const activeFile = activeFiles?.[0];
   const openFiles = sanitizeEditorOpenFiles(pane["openFiles"]);
   const tabOrder = sanitizeEditorOpenFiles(pane["tabOrder"]) ?? openFiles;
-  if (openFiles === undefined && activeFile === undefined) return undefined;
+  if (openFiles === undefined && activeFile === undefined) {
+    const explicitEmptyPane =
+      pane["activeFile"] === "" &&
+      Array.isArray(pane["openFiles"]) &&
+      pane["openFiles"].length === 0 &&
+      Array.isArray(pane["tabOrder"]) &&
+      pane["tabOrder"].length === 0;
+    return explicitEmptyPane ? { activeFile: "", openFiles: [], tabOrder: [] } : undefined;
+  }
   const files = openFiles ?? activeFiles;
   if (files === undefined) return undefined;
   const resolvedActiveFile =
@@ -467,6 +480,12 @@ function sanitizeEditorLayoutTreeNode(
 function sanitizeEditorLayoutJsonV2(record: Record<string, unknown>): string | undefined {
   const rawPanes = isRecord(record["panes"]) ? record["panes"] : {};
   const panes = buildEditorLayoutPanesV2(rawPanes);
+  if (
+    Object.keys(panes).length > 1 &&
+    Object.values(panes).some((pane) => pane.openFiles.length === 0)
+  ) {
+    return undefined;
+  }
   const paneIds = new Set(Object.keys(panes));
   const tree = sanitizeEditorLayoutTreeNode(record["tree"], paneIds);
   const firstPaneId = Object.keys(panes)[0];
@@ -481,8 +500,14 @@ function sanitizeEditorLayoutJsonV2(record: Record<string, unknown>): string | u
     activePaneId,
     tree,
     panes,
-    sidebarWidth: sanitizeBoundedNumber(record["sidebarWidth"], 180, 440, 260),
+    sidebarWidth: sanitizeBoundedNumber(
+      record["sidebarWidth"],
+      EDITOR_SIDEBAR_MIN_WIDTH,
+      EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
+      EDITOR_SIDEBAR_DEFAULT_WIDTH,
+    ),
     sidebarCollapsed: record["sidebarCollapsed"] === true,
+    outlinePanelVisible: record["outlinePanelVisible"] !== false,
   });
 }
 
@@ -537,7 +562,12 @@ function sanitizeEditorLayoutJsonLegacy(record: Record<string, unknown>): string
     activePaneId,
     direction,
     splitRatio: sanitizeBoundedNumber(record["splitRatio"], 25, 75, 50),
-    sidebarWidth: sanitizeBoundedNumber(record["sidebarWidth"], 180, 440, 260),
+    sidebarWidth: sanitizeBoundedNumber(
+      record["sidebarWidth"],
+      EDITOR_SIDEBAR_MIN_WIDTH,
+      EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
+      EDITOR_SIDEBAR_DEFAULT_WIDTH,
+    ),
     sidebarCollapsed: record["sidebarCollapsed"] === true,
   });
 }

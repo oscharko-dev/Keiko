@@ -8,7 +8,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   addWorkspaceRoot,
-  fetchWorkspaceManifests,
+  fetchWorkspaceManifestAccess,
   focusWorkspaceRoot,
   removeWorkspaceRoot,
   reorderWorkspaceRoots,
@@ -18,6 +18,7 @@ import {
 
 export interface WorkspaceManifestView {
   readonly manifest: WorkspaceManifest | null;
+  readonly pathReadAuthority: "checking" | "available" | "unpaired" | "unavailable";
   readonly loading: boolean;
   readonly mutating: boolean;
   readonly issue: "load" | "mutation" | null;
@@ -54,6 +55,10 @@ function currentRoot(
 export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceManifestView {
   const [manifest, setManifest] = useState<WorkspaceManifest | null>(null);
   const [loading, setLoading] = useState(rootPath !== undefined);
+  const [pathReadAuthority, setPathReadAuthority] = useState<
+    WorkspaceManifestView["pathReadAuthority"]
+  >(rootPath === undefined ? "available" : "checking");
+  const [authorityRoot, setAuthorityRoot] = useState(rootPath);
   const [mutating, setMutating] = useState(false);
   const [issue, setIssue] = useState<"load" | "mutation" | null>(null);
   const requestRef = useRef(0);
@@ -66,18 +71,24 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
     if (rootPath === undefined || rootPath.length === 0) {
       setManifest(null);
       setLoading(false);
+      setAuthorityRoot(undefined);
+      setPathReadAuthority("available");
       return;
     }
     setLoading(true);
+    setAuthorityRoot(rootPath);
+    setPathReadAuthority("checking");
     try {
-      const manifests = await fetchWorkspaceManifests();
+      const access = await fetchWorkspaceManifestAccess();
       if (request === requestRef.current) {
-        setManifest(manifestContainingRoot(manifests, rootPath));
+        setManifest(manifestContainingRoot(access.manifests, rootPath));
+        setPathReadAuthority(access.session === "unpaired" ? "unpaired" : "available");
         setIssue(null);
       }
     } catch {
       if (request === requestRef.current) {
         setManifest(null);
+        setPathReadAuthority("unavailable");
         setIssue("load");
       }
     } finally {
@@ -104,6 +115,8 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
         requestRef.current += 1;
         setManifest(next);
         setLoading(false);
+        setAuthorityRoot(rootPath);
+        setPathReadAuthority("available");
         setIssue(null);
       }
     };
@@ -141,10 +154,17 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
     },
     [mutating],
   );
+  const resolvedPathReadAuthority: WorkspaceManifestView["pathReadAuthority"] =
+    authorityRoot === rootPath
+      ? pathReadAuthority
+      : rootPath === undefined
+        ? "available"
+        : "checking";
 
   return useMemo<WorkspaceManifestView>(
     () => ({
       manifest,
+      pathReadAuthority: resolvedPathReadAuthority,
       loading,
       mutating,
       issue,
@@ -164,6 +184,6 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
           focusWorkspaceRoot(current, actor, targetRootRef),
         ),
     }),
-    [issue, loading, manifest, mutate, mutating, refresh],
+    [issue, loading, manifest, mutate, mutating, refresh, resolvedPathReadAuthority],
   );
 }

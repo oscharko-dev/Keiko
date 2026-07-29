@@ -32,6 +32,15 @@ export const DE_MESSAGES = {
     "Das Projekt konnte nicht verbunden werden. Prüfen Sie den Ordner und versuchen Sie es erneut.",
   "editor.empty.workspaceUnavailable":
     "Die gespeicherte Workspace-Identität ist nicht mehr aktuell. Entfernen Sie den veralteten Projekteintrag, bevor Sie diesen Ordner erneut verbinden.",
+  "editor.runtime.chooseFile":
+    "Wähle im Projektbaum eine Datei aus, um mit der Bearbeitung zu beginnen.",
+  "editor.outline.title": "Gliederung",
+  "editor.outline.workspaceLabel": "Arbeitsbereichsgliederung",
+  "editor.outline.hide": "Gliederungsbereich ausblenden",
+  "editor.outline.show": "Gliederungsbereich einblenden",
+  "editor.outline.loading": "Symbole werden geladen.",
+  "editor.outline.unavailable": "Für diese Datei ist keine Gliederung verfügbar.",
+  "editor.outline.empty": "In dieser Datei wurden keine Symbole gefunden.",
   "editor.localHistoryProtection.savedUnprotected":
     "Die Datei wurde gespeichert, aber der lokale Verlauf konnte diese Version nicht schützen.",
   "editor.localHistoryProtection.workspaceUnavailable":
@@ -1173,6 +1182,30 @@ export const DE_MESSAGES = {
   "taskWorkspace.create.baseBranch": "Basis-Branch",
   "taskWorkspace.create.baseBranchPlaceholder": "z. B. dev",
   "taskWorkspace.create.submit": "Task Workspace erstellen",
+  "workspaceContext.trigger.aria": "Arbeitskontext: {name}",
+  "workspaceContext.trigger.choose": "Ordner auswählen",
+  "workspaceContext.status.none": "Kein Ordner oder Repository ausgewählt",
+  "workspaceContext.status.project": "Arbeitskontext: {name}",
+  "workspaceContext.folder.title": "Ordner oder Repository",
+  "workspaceContext.choose": "Ordner auswählen",
+  "workspaceContext.chooseDialogTitle": "Ordner oder Repository auswählen",
+  "workspaceContext.dialogBusy": "Ein anderer Dateidialog ist bereits geöffnet.",
+  "workspaceContext.dialogUnsupported":
+    "Der native Ordnerdialog ist nicht verfügbar. Gib den Pfad unten ein.",
+  "workspaceContext.selectionFailed":
+    "Der Ordner konnte nicht ausgewählt werden. Prüfe den Pfad und versuche es erneut.",
+  "workspaceContext.selecting": "Wird ausgewählt…",
+  "workspaceContext.manual.label": "Oder lokalen Pfad eingeben",
+  "workspaceContext.manual.placeholder": "/pfad/zum/ordner",
+  "workspaceContext.open": "Öffnen",
+  "editor.taskWorkspaceAccess.checking": "Verbindung zum Aufgabenarbeitsbereich wird hergestellt…",
+  "editor.taskWorkspaceAccess.checkingDescription":
+    "Keiko prüft, ob dieser Browser auf den lokalen Arbeitsbereich zugreifen kann.",
+  "editor.taskWorkspaceAccess.title":
+    "Der Aufgabenarbeitsbereich ist in diesem Browser nicht verfügbar",
+  "editor.taskWorkspaceAccess.description":
+    "Starte Keiko über das Startprogramm neu. Alternativ kannst du oben im Arbeitskontext einen Ordner oder ein Repository auswählen.",
+  "editor.taskWorkspaceAccess.retry": "Erneut prüfen",
   "relationships.health.toggleAria": "Graph-Health-Ansicht umschalten",
   "relationships.health.hide": "Health ausblenden",
   "relationships.health.show": "Graph Health",

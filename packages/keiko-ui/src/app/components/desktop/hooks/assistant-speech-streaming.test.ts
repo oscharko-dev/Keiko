@@ -75,12 +75,14 @@ interface DeferredResumeNode {
 
 function stubDeferredAudioResume(resume: Promise<void>): {
   readonly contexts: Array<{
+    readonly addModule: ReturnType<typeof vi.fn>;
     readonly close: ReturnType<typeof vi.fn>;
     readonly resume: ReturnType<typeof vi.fn>;
   }>;
   readonly nodes: DeferredResumeNode[];
 } {
   const contexts: Array<{
+    readonly addModule: ReturnType<typeof vi.fn>;
     readonly close: ReturnType<typeof vi.fn>;
     readonly resume: ReturnType<typeof vi.fn>;
   }> = [];
@@ -88,12 +90,13 @@ function stubDeferredAudioResume(resume: Promise<void>): {
   vi.stubGlobal(
     "AudioContext",
     class {
-      readonly audioWorklet = { addModule: vi.fn(() => Promise.resolve()) };
+      readonly addModule = vi.fn(() => Promise.resolve());
+      readonly audioWorklet = { addModule: this.addModule };
       readonly destination = {};
       readonly close = vi.fn(() => Promise.resolve());
       readonly resume = vi.fn(() => resume);
       constructor(_options?: AudioContextOptions) {
-        contexts.push({ close: this.close, resume: this.resume });
+        contexts.push({ addModule: this.addModule, close: this.close, resume: this.resume });
       }
     },
   );
@@ -260,6 +263,41 @@ describe("createBrowserAssistantSpeechStreamingSink", () => {
     expect((reported as Error).message).not.toContain("customer-audio-detail");
   });
 
+  it("primes WebAudio synchronously without TTS and reuses the context for playback", async () => {
+    const { contexts, nodes } = stubDeferredAudioResume(Promise.resolve());
+    vi.mocked(streamAssistantSpeech).mockRejectedValue(new DOMException("cancelled", "AbortError"));
+    const sink = createBrowserAssistantSpeechStreamingSink();
+    const controller = new AbortController();
+
+    try {
+      sink?.primeFromUserGesture();
+
+      expect(contexts).toHaveLength(1);
+      expect(contexts[0]?.resume).toHaveBeenCalledOnce();
+      expect(contexts[0]?.addModule).toHaveBeenCalledOnce();
+      expect(streamAssistantSpeech).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(nodes).toHaveLength(1));
+      expect(streamAssistantSpeech).not.toHaveBeenCalled();
+
+      await expect(
+        sink?.play({ text: "Use primed context" }, controller.signal, {
+          onStart: vi.fn(),
+          onEnded: vi.fn(),
+          onError: vi.fn(),
+        }),
+      ).resolves.toBe(true);
+
+      expect(contexts).toHaveLength(1);
+      expect(contexts[0]?.addModule).toHaveBeenCalledOnce();
+      expect(contexts[0]?.resume).toHaveBeenCalledTimes(2);
+      expect(nodes).toHaveLength(1);
+      expect(streamAssistantSpeech).toHaveBeenCalledOnce();
+    } finally {
+      controller.abort();
+      sink?.dispose();
+    }
+  });
+
   it.each(["stop", "dispose"] as const)(
     "invalidates and closes a pending AudioWorklet setup exactly once on %s",
     async (teardown) => {
@@ -286,34 +324,111 @@ describe("createBrowserAssistantSpeechStreamingSink", () => {
     },
   );
 
+  it("starts streaming while AudioContext resume is still pending", async () => {
+    const resume = deferred<void>();
+    const { contexts } = stubDeferredAudioResume(resume.promise);
+    vi.mocked(streamAssistantSpeech).mockRejectedValue(new DOMException("cancelled", "AbortError"));
+    const sink = createBrowserAssistantSpeechStreamingSink();
+    const controller = new AbortController();
+    const playback = sink?.play({ text: "Start speech immediately" }, controller.signal, {
+      onStart: vi.fn(),
+      onEnded: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    try {
+      await vi.waitFor(() => expect(contexts[0]?.resume).toHaveBeenCalledOnce());
+      expect(streamAssistantSpeech).toHaveBeenCalledOnce();
+    } finally {
+      controller.abort();
+      sink?.stop();
+      resume.resolve();
+      await playback;
+    }
+  });
+
+  it("buffers PCM while AudioContext resume is pending and starts only on a position report", async () => {
+    const resume = deferred<void>();
+    const { nodes } = stubDeferredAudioResume(resume.promise);
+    const pcm = leBytes([1, -1, 0x1234]);
+    vi.mocked(streamAssistantSpeech).mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller): void {
+            controller.enqueue(pcm);
+            controller.close();
+          },
+        }),
+      ),
+    );
+    const handlers = { onStart: vi.fn(), onEnded: vi.fn(), onError: vi.fn() };
+    const sink = createBrowserAssistantSpeechStreamingSink();
+    const controller = new AbortController();
+    const playback = sink?.play({ text: "Buffer before playback" }, controller.signal, handlers);
+
+    try {
+      await expect(playback).resolves.toBe(true);
+      await vi.waitFor(() => expect(nodes[0]?.port.postMessage).toHaveBeenCalledTimes(3));
+      expect(nodes[0]?.port.postMessage.mock.calls[0]).toEqual([
+        { type: "config", primeFrames: 2_400 },
+      ]);
+      const queuedSamples = nodes[0]?.port.postMessage.mock.calls[1]?.[0];
+      expect(queuedSamples).toBeInstanceOf(Int16Array);
+      expect(Array.from(queuedSamples as Int16Array)).toEqual([1, -1, 0x1234]);
+      expect(nodes[0]?.port.postMessage.mock.calls[2]).toEqual([{ type: "end" }]);
+      expect(handlers.onStart).not.toHaveBeenCalled();
+      expect(handlers.onEnded).not.toHaveBeenCalled();
+      expect(handlers.onError).not.toHaveBeenCalled();
+
+      resume.resolve();
+      await Promise.resolve();
+      expect(handlers.onStart).not.toHaveBeenCalled();
+      nodes[0]?.port.onmessage?.(
+        new MessageEvent("message", { data: { type: "position", frames: 1_200 } }),
+      );
+      expect(handlers.onStart).toHaveBeenCalledOnce();
+    } finally {
+      controller.abort();
+      sink?.stop();
+      resume.resolve();
+      await playback;
+    }
+  });
+
   it.each(["stop", "dispose"] as const)(
-    "does not revive a playback invalidated during AudioContext resume on %s",
+    "cancels a late response while AudioContext resume is still pending on %s",
     async (teardown) => {
       const resume = deferred<void>();
       const { contexts, nodes } = stubDeferredAudioResume(resume.promise);
-      vi.mocked(streamAssistantSpeech).mockRejectedValue(
-        new DOMException("cancelled", "AbortError"),
-      );
+      const response = deferred<Response>();
+      const cancelBody = vi.fn();
+      vi.mocked(streamAssistantSpeech).mockReturnValue(response.promise);
+      const handlers = { onStart: vi.fn(), onEnded: vi.fn(), onError: vi.fn() };
       const sink = createBrowserAssistantSpeechStreamingSink();
       const controller = new AbortController();
-      const playback = sink?.play({ text: "Never request speech" }, controller.signal, {
-        onStart: vi.fn(),
-        onEnded: vi.fn(),
-        onError: vi.fn(),
-      });
-      await vi.waitFor(() => expect(contexts[0]?.resume).toHaveBeenCalledOnce());
+      const playback = sink?.play({ text: "Cancel pending response" }, controller.signal, handlers);
+      await vi.waitFor(() => expect(streamAssistantSpeech).toHaveBeenCalledOnce());
 
       controller.abort();
       sink?.[teardown]();
-      resume.resolve();
+      response.resolve(new Response(new ReadableStream<Uint8Array>({ cancel: cancelBody })));
 
       await expect(playback).resolves.toBe(true);
-      expect(nodes[0]?.port.postMessage.mock.calls).toEqual([[null]]);
+      resume.resolve();
+      await Promise.resolve();
+      expect(cancelBody).toHaveBeenCalledOnce();
+      expect(nodes[0]?.port.postMessage.mock.calls).toEqual([
+        [{ type: "config", primeFrames: 2_400 }],
+        [null],
+      ]);
       expect(nodes[0]?.port.onmessage).toBeNull();
       expect(nodes[0]?.port.close).toHaveBeenCalledOnce();
       expect(nodes[0]?.disconnect).toHaveBeenCalledOnce();
       expect(contexts[0]?.close).toHaveBeenCalledOnce();
-      expect(streamAssistantSpeech).not.toHaveBeenCalled();
+      expect(streamAssistantSpeech).toHaveBeenCalledOnce();
+      expect(handlers.onStart).not.toHaveBeenCalled();
+      expect(handlers.onEnded).not.toHaveBeenCalled();
+      expect(handlers.onError).not.toHaveBeenCalled();
     },
   );
 

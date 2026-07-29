@@ -18,6 +18,8 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { hostDevLaneTarget, stageDevCodingRuntime } from "./stage-dev-coding-runtime.mjs";
+
 const scriptPath = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(scriptPath), "..");
 const stateDir = resolve(process.env.KEIKO_STATE_DIR ?? join(repoRoot, ".keiko", "dev"));
@@ -29,6 +31,18 @@ const publicBrowserHost = "localhost";
 const explicitPublicPort = process.env.KEIKO_DEV_UI_PORT ?? process.env.KEIKO_UI_PORT;
 let publicPort = Number(explicitPublicPort ?? "1983");
 const runnerScript = join(repoRoot, "scripts", "dev-runner.mjs");
+const devLaneModule = join(
+  repoRoot,
+  "packages",
+  "keiko-server",
+  "dist",
+  "coding-runtime",
+  "devLanePortableCodingRuntime.js",
+);
+const CODING_RUNTIME_DEV_LANE_ENV = "KEIKO_CODING_RUNTIME_DEV_LANE";
+const CODING_RUNTIME_READINESS_PATH =
+  "/api/coding-workbench/runtime/readiness?requestedMode=governed-assist";
+const RUNNER_STOP_TIMEOUT_MS = 40_000;
 const gatewayConfigSeedCandidates = [
   join(repoRoot, ".keiko", "ui", "keiko.config.json"),
   join(repoRoot, "sandbox", ".keiko", "ui", "keiko.config.json"),
@@ -149,7 +163,7 @@ function readState() {
 }
 
 function isAlive(pid) {
-  if (typeof pid !== "number" || !Number.isInteger(pid)) return false;
+  if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -215,6 +229,24 @@ async function fetchOk(url, validate = async () => true) {
   return (await validate(response)) ? "ok" : "unexpected response";
 }
 
+export async function codingRuntimeHealth(baseUrl, fetchFn = globalThis.fetch) {
+  const response = await fetchFn(`${baseUrl}${CODING_RUNTIME_READINESS_PATH}`, {
+    cache: "no-store",
+  });
+  if (!response.ok) return `HTTP ${String(response.status)}`;
+  const body = await response.json();
+  if (body?.runtimeAvailable === true) return "ok";
+  const reason =
+    typeof body?.runtimeUnavailableReason === "string"
+      ? body.runtimeUnavailableReason
+      : "invalid-readiness";
+  return `unavailable (${reason})`;
+}
+
+export function codingRuntimeRequired(platform = process.platform, arch = process.arch) {
+  return hostDevLaneTarget(platform, arch) !== undefined;
+}
+
 async function devServerHealth(port) {
   const baseUrl = `http://${host}:${String(port)}`;
   const checks = [
@@ -246,6 +278,15 @@ async function devServerHealth(port) {
     },
   ];
 
+  if (codingRuntimeRequired()) {
+    try {
+      const runtime = await codingRuntimeHealth(baseUrl);
+      if (runtime !== "ok") return `runtime: ${runtime}`;
+    } catch (error) {
+      return `runtime: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
   for (const check of checks) {
     try {
       const result = await fetchOk(check.url, check.validate);
@@ -263,10 +304,16 @@ async function stopUnhealthyRunner(pid) {
   } catch {
     return;
   }
-  for (let i = 0; i < 20; i += 1) {
-    await sleep(250);
+  const deadline = Date.now() + RUNNER_STOP_TIMEOUT_MS;
+  while (Date.now() <= deadline) {
+    await sleep(500);
     if (!isAlive(pid)) return;
   }
+  throw new Error(
+    `existing development server did not stop within ${String(
+      RUNNER_STOP_TIMEOUT_MS / 1_000,
+    )}s; retry with \`npm run dev:stop -- --force\``,
+  );
 }
 
 async function waitForHealth(port, child) {
@@ -278,6 +325,9 @@ async function waitForHealth(port, child) {
     }
     lastError = await devServerHealth(port);
     if (lastError === "ok") return;
+    if (lastError.startsWith("runtime: unavailable")) {
+      throw new Error(`coding runtime failed readiness: ${lastError}; see ${logFile}`);
+    }
     await sleep(500);
   }
   throw new Error(`development server did not become healthy: ${lastError}; see ${logFile}`);
@@ -371,6 +421,62 @@ function spawnDevelopmentRunner(bffPort, nextPort, pairingSecret) {
   return child;
 }
 
+async function discoverDevCodingRuntime(input) {
+  const module = await import(pathToFileURL(devLaneModule).href);
+  return module.discoverDevLaneOpenCode(input);
+}
+
+const STAGEABLE_DEV_RUNTIME_REASONS = new Set([
+  "payload-missing",
+  "payload-unapproved",
+  "payload-tampered",
+  "secure-read-helper-missing",
+  "secure-read-helper-stale",
+]);
+
+function devRuntimeDiscoveryReason(discovery) {
+  return discovery.outcome === "refused" ? discovery.reason : "inactive";
+}
+
+function requireStageableDevRuntime(discovery) {
+  if (discovery.outcome === "refused" && STAGEABLE_DEV_RUNTIME_REASONS.has(discovery.reason)) {
+    return discovery.reason;
+  }
+  throw new Error(`coding runtime dev lane refused (${devRuntimeDiscoveryReason(discovery)})`);
+}
+
+function requireActivatedDevRuntime(discovery) {
+  if (discovery.outcome === "activated") return;
+  throw new Error(
+    `coding runtime did not activate after staging (${devRuntimeDiscoveryReason(discovery)})`,
+  );
+}
+
+export async function ensureDevCodingRuntime(seams = {}) {
+  const platform = seams.platform ?? process.platform;
+  const arch = seams.arch ?? process.arch;
+  const target = hostDevLaneTarget(platform, arch);
+  if (target === undefined) return false;
+  const env = {
+    ...(seams.env ?? process.env),
+    [CODING_RUNTIME_DEV_LANE_ENV]: "1",
+  };
+  const discover = seams.discover ?? discoverDevCodingRuntime;
+  const stage = seams.stage ?? (() => stageDevCodingRuntime([]));
+  let discovery = await discover({ env, platform, arch });
+  if (discovery.outcome === "activated") {
+    console.log(`[dev:start] verified coding runtime for ${target}`);
+    return true;
+  }
+  const reason = requireStageableDevRuntime(discovery);
+  console.log(`[dev:start] coding runtime ${reason}; preparing ${target}`);
+  await stage();
+  discovery = await discover({ env, platform, arch });
+  requireActivatedDevRuntime(discovery);
+  console.log(`[dev:start] coding runtime ready for ${target}`);
+  return true;
+}
+
 function stopSpawnedChild(child) {
   if (child?.pid === undefined || !isAlive(child.pid)) return;
   try {
@@ -384,6 +490,7 @@ async function launchDevelopmentRunner() {
   ensureDependencies();
   ensureDevGatewayConfig();
   run(npmCommand(), ["run", "build"], repoRoot);
+  await ensureDevCodingRuntime();
   const { bffPort, nextPort } = await resolveDevPorts();
   const pairingSecret = resolveDevPairingSecret();
   const child = spawnDevelopmentRunner(bffPort, nextPort, pairingSecret);

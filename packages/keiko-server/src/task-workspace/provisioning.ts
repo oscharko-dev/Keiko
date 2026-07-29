@@ -149,6 +149,21 @@ function assertPersistedManagedPath(ctx: ProvisioningCtx, instance: WorkspaceIns
   }
 }
 
+function ensureManagedWorkspaceIdentity(
+  ctx: ProvisioningCtx,
+  instance: WorkspaceInstance,
+  initializeTrust: boolean,
+): void {
+  try {
+    ctx.deps.ensureManagedWorkspaceIdentity?.(instance, initializeTrust);
+  } catch {
+    throw new TaskWorkspaceError(
+      "PROVISIONING_FAILED",
+      "managed workspace identity registration failed",
+    );
+  }
+}
+
 // ─── lock helpers ──────────────────────────────────────────────────────────────────────────────
 // Lock liveness + the advisory-lock builder are the consolidated #449 helpers (locks.ts); this thin
 // wrapper binds the provisioning ctx's TTL so the call sites stay terse.
@@ -457,6 +472,7 @@ function resumeExisting(
 ): WorkspaceProvisionResult {
   assertPersistedManagedPath(ctx, existing);
   const identity = gitdirIdentity(repo.worktreePath);
+  ensureManagedWorkspaceIdentity(ctx, existing, true);
   const refreshed = ctx.deps.store.upsert({
     ...existing,
     health: "healthy",
@@ -538,6 +554,7 @@ async function runWorktreeMutation(
   try {
     created = await materializeWorktree(repo, request);
     identity = gitdirIdentity(repo.worktreePath);
+    ensureManagedWorkspaceIdentity(ctx, provisioning, true);
   } catch (error) {
     const failure =
       error instanceof TaskWorkspaceError
@@ -709,6 +726,7 @@ function activateLocked(
   if (!managedTargetExists(instance.managedWorktreePath)) {
     flagActivateDrift(ctx, instance, nowMs);
   }
+  ensureManagedWorkspaceIdentity(ctx, instance, false);
   const { next, type } = activateActiveOrResume(instance);
   const lock = request.acquireLock ? makeLock(ctx, request.requestedBy, "activation", nowMs) : null;
   const persisted = ctx.deps.store.upsert({
@@ -761,5 +779,8 @@ export function createWorkspaceProvisioningService(
       activateImpl(ctx, request),
     getInstance: (workspaceId: string): WorkspaceInstance | undefined =>
       deps.store.getById(workspaceId),
+    ensureIdentity: (instance: WorkspaceInstance): void => {
+      ensureManagedWorkspaceIdentity(ctx, instance, false);
+    },
   };
 }

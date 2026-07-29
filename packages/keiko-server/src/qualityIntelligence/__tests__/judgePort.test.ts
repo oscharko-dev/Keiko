@@ -18,6 +18,7 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createRunRegistry } from "../../index.js";
 import {
   buildJudgePrompt,
+  buildQiJudgePreflightRequest,
   createQiJudgePort,
   QiJudgeError,
   scrubCandidateText,
@@ -310,6 +311,33 @@ describe("buildJudgePrompt", () => {
   });
 });
 
+describe("buildQiJudgePreflightRequest", () => {
+  it("builds the production judge request with the bounded synthetic sample", () => {
+    const request = buildQiJudgePreflightRequest("judge-preflight-model");
+
+    expect(request).toEqual({
+      modelId: "judge-preflight-model",
+      messages: buildJudgePrompt(
+        "Titel: Pflichtfeld Betrag ist leer\nSchritte: Betrag leer lassen\nErwartetes Ergebnis: Validierungsfehler wird angezeigt.",
+        [
+          {
+            atomId: "preflight-atom-1",
+            text: "Wenn das Pflichtfeld Betrag leer ist, muss das System eine Validierungsmeldung anzeigen.",
+          },
+        ],
+      ),
+      stream: false,
+      temperature: 0,
+      responseFormat: {
+        type: "json_schema",
+        name: "quality_intelligence_test_quality_judge",
+        strict: true,
+        schema: TEST_QUALITY_JUDGE_RESPONSE_SCHEMA,
+      },
+    });
+  });
+});
+
 // ─── buildJudgePrompt — prompt-injection flagging (Issue #284 AC1) ────────────
 
 describe("buildJudgePrompt — prompt-injection flagging", () => {
@@ -421,6 +449,23 @@ describe("parseJudgeVerdict", () => {
     expect(verdict.overallRationale).toContain("konnte nicht geparst");
   });
 
+  it("accepts inclusive integer score boundaries", () => {
+    const json = JSON.stringify({
+      dimensions: [
+        { name: "verifiability", score: 0, rationale: "lower boundary" },
+        { name: "atomicity", score: 100, rationale: "upper boundary" },
+        { name: "determinism", score: 50, rationale: "integer" },
+        { name: "ac-fidelity", score: 75, rationale: "integer" },
+      ],
+      overallRationale: "inclusive boundaries",
+    });
+
+    const verdict = parseJudgeVerdict(json);
+
+    expect(verdict.overallRationale).toBe("inclusive boundaries");
+    expect(verdict.dimensions.map((dimension) => dimension.score)).toEqual([0, 100, 50, 75]);
+  });
+
   it("returns safe default when a score is not finite JSON number syntax", () => {
     const json =
       '{"dimensions":[' +
@@ -430,6 +475,24 @@ describe("parseJudgeVerdict", () => {
       '{"name":"ac-fidelity","score":90,"rationale":"f"}' +
       '],"overallRationale":"test"}';
     const verdict = parseJudgeVerdict(json);
+    expect(verdict.verdict).toBe("weak");
+    expect(verdict.overallRationale).toContain("konnte nicht geparst");
+  });
+
+  it("returns safe default when the verdict contains a fifth dimension", () => {
+    const json = JSON.stringify({
+      dimensions: [
+        { name: "verifiability", score: 80, rationale: "v" },
+        { name: "atomicity", score: 80, rationale: "a" },
+        { name: "determinism", score: 80, rationale: "d" },
+        { name: "ac-fidelity", score: 80, rationale: "f" },
+        { name: "verifiability", score: 80, rationale: "extra" },
+      ],
+      overallRationale: "too many dimensions",
+    });
+
+    const verdict = parseJudgeVerdict(json);
+
     expect(verdict.verdict).toBe("weak");
     expect(verdict.overallRationale).toContain("konnte nicht geparst");
   });
@@ -785,9 +848,6 @@ describe("createQiJudgePort.judge — gateway call", () => {
       expect(responseFormat.schema).toEqual(TEST_QUALITY_JUDGE_RESPONSE_SCHEMA);
       expect(responseFormat.name).toBe("quality_intelligence_test_quality_judge");
       expect(responseFormat.strict).toBe(true);
-      expect(responseFormat.schema.properties).toMatchObject({
-        dimensions: { minItems: 4, maxItems: 4 },
-      });
     }
   });
 });

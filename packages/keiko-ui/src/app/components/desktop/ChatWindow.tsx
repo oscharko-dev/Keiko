@@ -2780,6 +2780,7 @@ function ComposerCoreImpl({
     messageId: voiceAnswer?.id,
     persona: voiceDialog.persona,
   });
+  const primeAudioOutput = playback.primeAudioOutput;
   const commitCanonicalVoiceTurn = useCallback(
     ({
       turnId,
@@ -2892,11 +2893,12 @@ function ComposerCoreImpl({
     if (!voiceDialogAvailable) {
       return;
     }
+    primeAudioOutput();
     setPendingVoiceAnswer(null);
     voiceDialogSessionChatIdRef.current = activeChat?.id;
     voiceDialog.enter();
     realtimeVoice.start();
-  }, [activeChat?.id, voiceDialog, voiceDialogAvailable, realtimeVoice]);
+  }, [activeChat?.id, primeAudioOutput, voiceDialog, voiceDialogAvailable, realtimeVoice]);
   const leaveVoiceDialog = useCallback(() => {
     // The live ref read here is the one-shot teardown latch, not a rendering decision: a second
     // leave for the same session finds it already cleared and skips the transport teardown.

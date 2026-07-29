@@ -86,4 +86,36 @@ describe("bindVerifiedTaskWorkspace", () => {
 
     await expect(bindVerifiedTaskWorkspace(INPUT)).resolves.toEqual(expected);
   });
+
+  it("returns a bounded branch-conflict reason without exposing server detail", async () => {
+    api.provision.mockRejectedValue(
+      Object.assign(new Error("sensitive repository detail"), {
+        code: "BRANCH_CONFLICT",
+        failureClass: "blocked",
+      }),
+    );
+
+    await expect(bindVerifiedTaskWorkspace(INPUT)).resolves.toEqual({
+      ok: false,
+      stage: "provision",
+      reason: "branch-conflict",
+      failureClass: "blocked",
+    });
+    expect(api.reconcile).not.toHaveBeenCalled();
+    expect(api.activate).not.toHaveBeenCalled();
+  });
+
+  it("drops branch-conflict metadata with an invalid failure class", async () => {
+    api.provision.mockRejectedValue(
+      Object.assign(new Error("sensitive repository detail"), {
+        code: "BRANCH_CONFLICT",
+        failureClass: "unknown",
+      }),
+    );
+
+    await expect(bindVerifiedTaskWorkspace(INPUT)).resolves.toEqual({
+      ok: false,
+      stage: "provision",
+    });
+  });
 });

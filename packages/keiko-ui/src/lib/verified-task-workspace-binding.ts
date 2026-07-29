@@ -10,10 +10,19 @@ import {
   reconcileTaskWorkspaces,
   setActiveTaskWorkspace,
 } from "./task-workspace-api";
+import { isWorkspaceFailureClass, type WorkspaceFailureClass } from "@oscharko-dev/keiko-contracts";
+
+export type VerifiedTaskWorkspaceBindFailureReason = "branch-conflict";
+
+export interface VerifiedTaskWorkspaceBindFailure {
+  readonly ok: false;
+  readonly stage: "provision" | "verify" | "activate";
+  readonly reason?: VerifiedTaskWorkspaceBindFailureReason;
+  readonly failureClass?: WorkspaceFailureClass;
+}
 
 export type VerifiedTaskWorkspaceBindResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly stage: "provision" | "verify" | "activate" };
+  { readonly ok: true } | VerifiedTaskWorkspaceBindFailure;
 
 export interface VerifiedTaskWorkspaceBindInput {
   readonly root: string;
@@ -27,6 +36,23 @@ export interface VerifiedTaskWorkspaceBindInput {
 // sanitized stage label, but the underlying failure remains diagnosable in the local console.
 function warnBindStage(stage: string, error: unknown): void {
   console.warn(`[keiko] task workspace bind ${stage} failed`, error);
+}
+
+function boundedBindFailure(
+  stage: VerifiedTaskWorkspaceBindFailure["stage"],
+  error: unknown,
+): VerifiedTaskWorkspaceBindFailure {
+  if (typeof error !== "object" || error === null) return { ok: false, stage };
+  const candidate = error as { readonly code?: unknown; readonly failureClass?: unknown };
+  if (candidate.code !== "BRANCH_CONFLICT" || !isWorkspaceFailureClass(candidate.failureClass)) {
+    return { ok: false, stage };
+  }
+  return {
+    ok: false,
+    stage,
+    reason: "branch-conflict",
+    failureClass: candidate.failureClass,
+  };
 }
 
 export async function bindVerifiedTaskWorkspace(
@@ -43,7 +69,7 @@ export async function bindVerifiedTaskWorkspace(
     workspaceId = provisioned.instance.workspaceId;
   } catch (error) {
     warnBindStage("provision", error);
-    return { ok: false, stage: "provision" };
+    return boundedBindFailure("provision", error);
   }
   try {
     // The notification hook must not break the always-resolves contract of this sequence.
@@ -58,13 +84,13 @@ export async function bindVerifiedTaskWorkspace(
     }
   } catch (error) {
     warnBindStage("verify", error);
-    return { ok: false, stage: "verify" };
+    return boundedBindFailure("verify", error);
   }
   try {
     await setActiveTaskWorkspace({ workspaceId, requestedBy: input.requestedBy });
     return { ok: true };
   } catch (error) {
     warnBindStage("activate", error);
-    return { ok: false, stage: "activate" };
+    return boundedBindFailure("activate", error);
   }
 }

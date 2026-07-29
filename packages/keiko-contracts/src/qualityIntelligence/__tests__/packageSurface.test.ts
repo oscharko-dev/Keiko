@@ -99,7 +99,20 @@ const FORBIDDEN_IMPORT_TARGETS: readonly string[] = [
   "@oscharko-dev/ti-",
 ];
 
+const UNSUPPORTED_STRUCTURED_OUTPUT_KEYWORDS = [
+  "minItems",
+  "maxItems",
+  "minimum",
+  "maximum",
+] as const;
+
 const readQiSource = (file: string): string => readFileSync(join(QI_SRC_DIR, file), "utf8");
+
+function schemaPropertyNames(value: unknown): readonly string[] {
+  if (Array.isArray(value)) return value.flatMap(schemaPropertyNames);
+  if (typeof value !== "object" || value === null) return [];
+  return Object.entries(value).flatMap(([key, child]) => [key, ...schemaPropertyNames(child)]);
+}
 
 describe("QI module barrel — value exports", () => {
   for (const name of requiredValueExports) {
@@ -125,11 +138,25 @@ describe("QI module barrel — value exports", () => {
       required: ["dimensions", "overallRationale"],
       properties: {
         dimensions: {
-          minItems: 4,
-          maxItems: 4,
+          type: "array",
+          items: {
+            additionalProperties: false,
+            required: ["name", "score", "rationale"],
+            properties: {
+              name: { enum: Qi.TEST_QUALITY_RUBRIC_DIMENSIONS },
+              score: { type: "integer" },
+            },
+          },
         },
       },
     });
+  });
+
+  it("keeps the exported judge schema within the portable Structured Outputs subset", () => {
+    const propertyNames = schemaPropertyNames(Qi.TEST_QUALITY_JUDGE_RESPONSE_SCHEMA);
+    for (const keyword of UNSUPPORTED_STRUCTURED_OUTPUT_KEYWORDS) {
+      expect(propertyNames).not.toContain(keyword);
+    }
   });
 
   it("exports EXACTLY the required value-export set — no undeclared exports, none missing", () => {

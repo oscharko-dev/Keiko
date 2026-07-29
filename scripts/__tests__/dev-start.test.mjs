@@ -2,6 +2,9 @@ import { Buffer } from "node:buffer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  codingRuntimeHealth,
+  codingRuntimeRequired,
+  ensureDevCodingRuntime,
   maybeOpenPairedBrowser,
   npmCommand,
   pairedDevBrowserUrl,
@@ -10,6 +13,98 @@ import {
   run,
   shouldShellNpmCommand,
 } from "../dev-start.mjs";
+
+describe("dev-start coding runtime lifecycle", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("requires coding-runtime readiness on supported macOS hosts only", () => {
+    expect(codingRuntimeRequired("darwin", "arm64")).toBe(true);
+    expect(codingRuntimeRequired("darwin", "x64")).toBe(true);
+    expect(codingRuntimeRequired("darwin", "ppc64")).toBe(false);
+    expect(codingRuntimeRequired("linux", "x64")).toBe(false);
+  });
+
+  it("reports the server-owned runtime reason instead of accepting a partial start", async () => {
+    const fetchFn = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          runtimeAvailable: false,
+          runtimeUnavailableReason: "secure-read-unavailable",
+        }),
+    });
+
+    await expect(codingRuntimeHealth("http://localhost:1983", fetchFn)).resolves.toBe(
+      "unavailable (secure-read-unavailable)",
+    );
+    expect(fetchFn).toHaveBeenCalledWith(
+      "http://localhost:1983/api/coding-workbench/runtime/readiness?requestedMode=governed-assist",
+      { cache: "no-store" },
+    );
+  });
+
+  it("reuses a verified runtime and stages a repair only when production discovery refuses it", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const activated = {
+      outcome: "activated",
+      runtime: { evidenceClass: "functional-not-platform-qualified" },
+    };
+    const discoverReady = vi.fn().mockResolvedValue(activated);
+    const stageReady = vi.fn();
+    await expect(
+      ensureDevCodingRuntime({
+        platform: "darwin",
+        arch: "arm64",
+        env: {},
+        discover: discoverReady,
+        stage: stageReady,
+      }),
+    ).resolves.toBe(true);
+    expect(stageReady).not.toHaveBeenCalled();
+    expect(discoverReady).toHaveBeenCalledWith({
+      env: { KEIKO_CODING_RUNTIME_DEV_LANE: "1" },
+      platform: "darwin",
+      arch: "arm64",
+    });
+
+    const discoverRepair = vi
+      .fn()
+      .mockResolvedValueOnce({ outcome: "refused", reason: "payload-missing" })
+      .mockResolvedValueOnce(activated);
+    const stageRepair = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      ensureDevCodingRuntime({
+        platform: "darwin",
+        arch: "arm64",
+        env: {},
+        discover: discoverRepair,
+        stage: stageRepair,
+      }),
+    ).resolves.toBe(true);
+    expect(stageRepair).toHaveBeenCalledOnce();
+    expect(discoverRepair).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed when staging cannot produce an activated runtime", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const discover = vi
+      .fn()
+      .mockResolvedValueOnce({ outcome: "refused", reason: "payload-tampered" })
+      .mockResolvedValueOnce({ outcome: "refused", reason: "payload-tampered" });
+
+    await expect(
+      ensureDevCodingRuntime({
+        platform: "darwin",
+        arch: "arm64",
+        env: {},
+        discover,
+        stage: vi.fn().mockResolvedValue(undefined),
+      }),
+    ).rejects.toThrow("coding runtime did not activate after staging (payload-tampered)");
+  });
+});
 
 describe("dev-start npm process wrapper", () => {
   afterEach(() => {
