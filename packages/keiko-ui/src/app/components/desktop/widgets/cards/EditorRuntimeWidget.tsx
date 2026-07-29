@@ -914,6 +914,7 @@ interface EditorFileSessionSnapshot {
   readonly cursor: EditorPosition | null;
   readonly currentSelection: EditorRange | null;
   readonly diagnosticsSummary: EditorDiagnosticsSummary | null;
+  readonly localHistoryProtection?: NonNullable<FilesContentResponse["localHistoryProtection"]>;
 }
 
 interface RenameApplyTarget {
@@ -988,6 +989,9 @@ function cleanEditorSessionSnapshot(input: {
     cursor: null,
     currentSelection: null,
     diagnosticsSummary: null,
+    ...(input.response.localHistoryProtection === undefined
+      ? {}
+      : { localHistoryProtection: input.response.localHistoryProtection }),
   };
 }
 
@@ -2020,6 +2024,9 @@ function EditorRuntimeWidget({
   );
   const [saveStatus, setSaveStatus] = useState<EditorSaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
+  const [localHistoryProtection, setLocalHistoryProtection] = useState<
+    NonNullable<FilesContentResponse["localHistoryProtection"]> | undefined
+  >(undefined);
   const [fileHistoryOpen, setFileHistoryOpen] = useState(false);
   useEffect(() => {
     if (fileHistoryRequestNonce !== undefined) setFileHistoryOpen(true);
@@ -2464,6 +2471,7 @@ function EditorRuntimeWidget({
       cursor,
       currentSelection,
       diagnosticsSummary,
+      ...(localHistoryProtection === undefined ? {} : { localHistoryProtection }),
     });
   }, [
     content,
@@ -2475,6 +2483,7 @@ function EditorRuntimeWidget({
     fileModelMatchesTarget,
     hasTarget,
     loadState,
+    localHistoryProtection,
     maxBytes,
     modifiedAt,
     root,
@@ -2498,6 +2507,7 @@ function EditorRuntimeWidget({
         setLoadState({ status: "ready" });
         setSaveStatus("idle");
         setSaveError(undefined);
+        setLocalHistoryProtection(undefined);
         return;
       }
       const sessionKey = documentSessionKey(root, file);
@@ -2512,6 +2522,7 @@ function EditorRuntimeWidget({
         setLoadState(cached.loadState);
         setSaveStatus(cached.saveStatus);
         setSaveError(cached.saveError);
+        setLocalHistoryProtection(cached.localHistoryProtection);
         setCursor(cached.cursor);
         setCurrentSelection(cached.currentSelection);
         setDiagnosticsSummary(cached.diagnosticsSummary);
@@ -2520,6 +2531,7 @@ function EditorRuntimeWidget({
       setLoadState({ status: "loading" });
       setSaveStatus("idle");
       setSaveError(undefined);
+      setLocalHistoryProtection(undefined);
       void Promise.resolve()
         .then(() => fetchFilesContent(root, file))
         .then(async (response) => {
@@ -2536,6 +2548,7 @@ function EditorRuntimeWidget({
           setModifiedAt(response.modifiedAt);
           setVersion(response.session.version);
           setMaxBytes(response.maxBytes);
+          setLocalHistoryProtection(response.localHistoryProtection);
           setLoadState({ status: "ready" });
           setExternalCompareBaseline(null);
           dispatchExternalChange({ type: "reloadSucceeded" });
@@ -2723,6 +2736,9 @@ function EditorRuntimeWidget({
         cursor: cached?.cursor ?? null,
         currentSelection: cached?.currentSelection ?? null,
         diagnosticsSummary: cached?.diagnosticsSummary ?? null,
+        ...(response.localHistoryProtection === undefined
+          ? {}
+          : { localHistoryProtection: response.localHistoryProtection }),
       });
       await deleteHotExitSnapshotBestEffort(targetRoot, targetFile);
     },
@@ -2739,6 +2755,7 @@ function EditorRuntimeWidget({
       setModifiedAt(response.modifiedAt);
       setVersion(response.session.version);
       setMaxBytes(response.maxBytes);
+      setLocalHistoryProtection(response.localHistoryProtection);
       if (contentRef.current === textToSave) {
         setContent(response.content);
         setFileModel((model: EditorFileModel | null) =>
@@ -2773,6 +2790,9 @@ function EditorRuntimeWidget({
           cursor: cached?.cursor ?? null,
           currentSelection: cached?.currentSelection ?? null,
           diagnosticsSummary: cached?.diagnosticsSummary ?? null,
+          ...(cached?.localHistoryProtection === undefined
+            ? {}
+            : { localHistoryProtection: cached.localHistoryProtection }),
         });
         return false;
       }
@@ -4921,6 +4941,7 @@ function EditorRuntimeWidget({
       setModifiedAt(response.modifiedAt);
       setVersion(response.session.version);
       setMaxBytes(response.maxBytes);
+      setLocalHistoryProtection(response.localHistoryProtection);
       setLoadState({ status: "ready" });
       setSaveStatus("idle");
       setSaveError(undefined);
@@ -6251,6 +6272,21 @@ function EditorRuntimeWidget({
     </>
   );
 
+  const renderLocalHistoryProtectionBanner = (): ReactNode =>
+    localHistoryProtection?.status === "degraded" ? (
+      <output className="ed-recovery" data-testid="editor-local-history-protection">
+        <span>
+          {commonT("editor.localHistoryProtection.savedUnprotected")}{" "}
+          {localHistoryProtection.reason === "workspace-unavailable"
+            ? commonT("editor.localHistoryProtection.workspaceUnavailable")
+            : commonT("editor.localHistoryProtection.historyUnavailable")}{" "}
+          {commonT("editor.localHistoryProtection.diagnosticReference", {
+            correlationId: localHistoryProtection.correlationId,
+          })}
+        </span>
+      </output>
+    ) : null;
+
   const renderExternalChangeBanner = (): ReactNode => (
     <>
       {showExternalChangeBanner ? (
@@ -6401,6 +6437,7 @@ function EditorRuntimeWidget({
         {toolbarNotice}
       </div>
       {renderWorkspaceWatchBanner()}
+      {renderLocalHistoryProtectionBanner()}
       {renderExternalChangeBanner()}
       {renderRecoveryBanner()}
       {renderReloadConfirmation()}

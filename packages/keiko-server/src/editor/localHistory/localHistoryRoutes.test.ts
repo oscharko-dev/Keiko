@@ -319,16 +319,14 @@ describe("editor local-history routes", () => {
       let manifestReads = 0;
       const swappingStore: UiStore = {
         ...originalStore,
-        findWorkspaceManifestRecordByRoot: (
-          rootRef: string,
-        ): ReturnType<UiStore["findWorkspaceManifestRecordByRoot"]> => {
-          const record = originalStore.findWorkspaceManifestRecordByRoot(rootRef);
+        listWorkspaceManifestRecords: (): ReturnType<UiStore["listWorkspaceManifestRecords"]> => {
+          const records = originalStore.listWorkspaceManifestRecords();
           manifestReads += 1;
-          // The second lookup is authorizedEntry's final identity comparison. Queueing the swap
-          // after that synchronous lookup lets authorizedEntry settle first; the handler's await
+          // The second snapshot is authorizedEntry's final identity comparison. Queueing the swap
+          // after that synchronous snapshot lets authorizedEntry settle first; the handler's await
           // then yields to this microtask before revalidateEffectRoot and the store effect.
           if (manifestReads === 2) queueMicrotask(replaceRootObject);
-          return record;
+          return records;
         },
       };
       const readEffect = vi.fn(history.read);

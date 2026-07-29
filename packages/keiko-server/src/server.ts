@@ -77,7 +77,7 @@ function writeJson(
   for (const [key, value] of Object.entries(headers)) {
     res.setHeader(key, typeof value === "string" ? value : [...value]);
   }
-  if (status === 304) {
+  if (status === 204 || status === 304) {
     res.end();
     return;
   }

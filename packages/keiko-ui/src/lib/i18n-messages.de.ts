@@ -17,6 +17,28 @@ export const DE_MESSAGES = {
   "rail.coding": "Coding Workbench",
   "rail.localKnowledge": "Lokales Wissen",
   "rail.editor": "Editor",
+  "editor.empty.title": "Projekt öffnen",
+  "editor.empty.description":
+    "Wählen Sie einen Projektordner aus, um mit der Bearbeitung zu beginnen. Der Editor arbeitet innerhalb des ausgewählten Workspace-Stammverzeichnisses.",
+  "editor.empty.selectFolder": "Ordner auswählen…",
+  "editor.empty.opening": "Wird geöffnet…",
+  "editor.empty.open": "Öffnen",
+  "editor.empty.pathLabel": "Pfad zum Projektordner",
+  "editor.empty.pickerTitle": "Projektordner auswählen",
+  "editor.empty.dialogBusy": "Ein nativer Dialog ist bereits geöffnet. Schließen Sie ihn zuerst.",
+  "editor.empty.pickerUnsupported":
+    "Die native Ordnerauswahl ist auf dieser Plattform nicht verfügbar. Geben Sie unten einen Pfad ein.",
+  "editor.empty.connectionFailed":
+    "Das Projekt konnte nicht verbunden werden. Prüfen Sie den Ordner und versuchen Sie es erneut.",
+  "editor.empty.workspaceUnavailable":
+    "Die gespeicherte Workspace-Identität ist nicht mehr aktuell. Entfernen Sie den veralteten Projekteintrag, bevor Sie diesen Ordner erneut verbinden.",
+  "editor.localHistoryProtection.savedUnprotected":
+    "Die Datei wurde gespeichert, aber der lokale Verlauf konnte diese Version nicht schützen.",
+  "editor.localHistoryProtection.workspaceUnavailable":
+    "Verbinden Sie dieses Projekt erneut. Bearbeiten und speichern Sie die Datei danach noch einmal.",
+  "editor.localHistoryProtection.historyUnavailable":
+    "Speichern Sie erneut, sobald der lokale Verlauf verfügbar ist.",
+  "editor.localHistoryProtection.diagnosticReference": "Diagnosereferenz: {correlationId}",
   "editor.callHierarchy.title": "Aufrufhierarchie",
   "editor.callHierarchy.incoming": "Eingehende Aufrufe",
   "editor.callHierarchy.outgoing": "Ausgehende Aufrufe",
@@ -1983,6 +2005,10 @@ export const DE_MESSAGES = {
   "gitClientWindow.panel.pullRequestOpened": "Pull-Request-Panel geöffnet.",
   "gitClientWindow.panel.mergeOpened": "Merge-Panel geöffnet.",
   "gitClientWindow.panel.diffOpened": "Diff-Panel geöffnet.",
+  "gitClientWindow.repository.reconnectFailed":
+    "Die Repository-Verbindung ist fehlgeschlagen: {detail}",
+  "gitClientWindow.repository.workspaceUnavailable":
+    "Dieses Repository ist derzeit mit keinem Workspace verbunden. Verbinden Sie es erneut, um fortzufahren.",
   // Zugängliche Namen der benannten <section>-Landmarks aus Welle #2721. Sie standen als
   // fest verdrahtetes Englisch auf den role="region"-Elementen, die diese Sections ersetzen;
   // ein Screenreader liest sie vor, also gehören sie wie jeder andere Nutzertext in den Katalog.

@@ -793,6 +793,38 @@ describe("desktop files browser", () => {
     expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
   });
 
+  it("reports a connected user save as protected after capturing the persisted revision", async () => {
+    const captures: EditorLocalHistoryCaptureInput[] = [];
+    const history = {
+      capture: (input: EditorLocalHistoryCaptureInput) => {
+        captures.push(input);
+        return {};
+      },
+    } as unknown as EditorLocalHistoryStore;
+    const content = "saved with local history\n";
+
+    const result = await handleFilesContent(
+      patchContentContext({ root, path: "src/app.ts", content }),
+      {
+        store,
+        redactor: buildRedactor({}),
+        editorLocalHistoryStore: history,
+      } as unknown as UiHandlerDeps,
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: { content, localHistoryProtection: { status: "protected" } },
+    });
+    expect(captures).toHaveLength(1);
+    expect(captures[0]).toMatchObject({
+      content,
+      origin: "user-save",
+      realRoot: root,
+      relativePath: "src/app.ts",
+    });
+  });
+
   it("keeps a user save successful when local-history capture fails", async () => {
     const diagnostics: ServerDiagnosticRecord[] = [];
     const secret = "capture-secret-marker";
@@ -827,19 +859,73 @@ describe("desktop files browser", () => {
 
     expect(result).toMatchObject({
       status: 200,
-      body: { content: "saved despite history failure\n" },
+      body: {
+        content: "saved despite history failure\n",
+        localHistoryProtection: {
+          status: "degraded",
+          reason: "history-unavailable",
+        },
+      },
     });
     await expect(readFile(join(root, "src", "app.ts"), "utf8")).resolves.toBe(
       "saved despite history failure\n",
     );
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]).toMatchObject({
+    const diagnostic = diagnostics[0];
+    expect(diagnostic).toMatchObject({
       operation: "user-save",
       source: "editor.local-history.capture",
       code: "LOCAL_HISTORY_VAULT_WRITE_FAILED",
     });
+    expect(result.body).toMatchObject({
+      localHistoryProtection: { correlationId: diagnostic?.correlationId },
+    });
     expect(JSON.stringify(diagnostics)).not.toContain(secret);
     expect(JSON.stringify(diagnostics)).not.toContain("saved despite history failure");
+  });
+
+  it("fails closed for an unregistered root while preserving the save and original diagnostic", async () => {
+    const arbitrary = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-unregistered-")));
+    extraRoot = arbitrary;
+    await mkdir(join(arbitrary, "src"));
+    await writeFile(join(arbitrary, "src", "app.ts"), "before\n", "utf8");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    let captureCount = 0;
+    const history = {
+      capture: () => {
+        captureCount += 1;
+        return {};
+      },
+    } as unknown as EditorLocalHistoryStore;
+
+    const result = await handleFilesContent(
+      patchContentContext({ root: arbitrary, path: "src/app.ts", content: "after\n" }),
+      {
+        store,
+        redactor: buildRedactor({}),
+        editorLocalHistoryStore: history,
+        diagnostics: { record: (record: ServerDiagnosticRecord) => diagnostics.push(record) },
+      } as unknown as UiHandlerDeps,
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: {
+        content: "after\n",
+        localHistoryProtection: {
+          status: "degraded",
+          reason: "workspace-unavailable",
+          correlationId: diagnostics[0]?.correlationId,
+        },
+      },
+    });
+    expect(captureCount).toBe(0);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      source: "editor.local-history.capture",
+      code: "LOCAL_HISTORY_INVALID_CAPTURE_NOT_A_MEMBER",
+    });
+    await expect(readFile(join(arbitrary, "src", "app.ts"), "utf8")).resolves.toBe("after\n");
   });
 
   it("captures the pre-restore bytes before a conflict-aware restore save", async () => {

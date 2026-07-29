@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useState, type KeyboardEvent, type ReactNode } from "react";
+import { createProject } from "../../../../../lib/api";
+import { useTranslate } from "../../../../../lib/i18n";
 import { pickWithNativeDialog } from "../../../../../lib/native-file-dialog";
 import { useNativeFileDialogCapability } from "../../hooks/useNativeFileDialogCapability";
 import { Icons } from "../../Icons";
@@ -19,32 +21,53 @@ export function EditorEmptyState({
 }: {
   readonly onOpenRoot: (root: string) => void;
 }): ReactNode {
+  const t = useTranslate();
   const nativeSupported = useNativeFileDialogCapability();
   const [path, setPath] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
+
+  const connectProject = useCallback(
+    async (selectedPath: string): Promise<void> => {
+      setNotice(null);
+      setConnecting(true);
+      try {
+        const response = await createProject({ path: selectedPath });
+        if (response.project.workspaceAvailable !== true) {
+          setNotice(t("editor.empty.workspaceUnavailable"));
+          return;
+        }
+        onOpenRoot(response.project.path);
+      } catch {
+        setNotice(t("editor.empty.connectionFailed"));
+      } finally {
+        setConnecting(false);
+      }
+    },
+    [onOpenRoot, t],
+  );
 
   const browse = useCallback(async (): Promise<void> => {
     setNotice(null);
     const outcome = await pickWithNativeDialog({
       mode: "open-directory",
-      title: "Select project folder",
+      title: t("editor.empty.pickerTitle"),
     });
     if (outcome.kind === "picked") {
       const picked = outcome.paths[0];
-      if (picked !== undefined) onOpenRoot(picked);
+      if (picked !== undefined) await connectProject(picked);
       return;
     }
     if (outcome.kind === "cancelled") return;
-    if (outcome.kind === "busy") setNotice("A native dialog is already open. Close it first.");
-    else if (outcome.kind === "unsupported")
-      setNotice("The native folder picker is unavailable on this platform. Enter a path below.");
+    if (outcome.kind === "busy") setNotice(t("editor.empty.dialogBusy"));
+    else if (outcome.kind === "unsupported") setNotice(t("editor.empty.pickerUnsupported"));
     else setNotice(outcome.message);
-  }, [onOpenRoot]);
+  }, [connectProject, t]);
 
   const openManual = useCallback((): void => {
     const trimmed = path.trim();
-    if (trimmed.length > 0) onOpenRoot(trimmed);
-  }, [onOpenRoot, path]);
+    if (trimmed.length > 0) void connectProject(trimmed);
+  }, [connectProject, path]);
 
   const onInputKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>): void => {
@@ -58,38 +81,36 @@ export function EditorEmptyState({
       <span className={styles.icon} aria-hidden="true">
         <EditorIcon size={40} />
       </span>
-      <h2 className={styles.title}>Open a project</h2>
-      <p className={styles.desc}>
-        Choose a project folder to start editing. The editor works inside the selected workspace
-        root.
-      </p>
+      <h2 className={styles.title}>{t("editor.empty.title")}</h2>
+      <p className={styles.desc}>{t("editor.empty.description")}</p>
       <button
         type="button"
         className={styles.primary}
         onClick={() => void browse()}
-        disabled={!nativeSupported}
+        disabled={!nativeSupported || connecting}
         data-testid="editor-empty-browse"
       >
         <FolderIcon size={16} />
-        Select folder…
+        {connecting ? t("editor.empty.opening") : t("editor.empty.selectFolder")}
       </button>
       <div className={styles.manual}>
         <input
           className={styles.input}
           type="text"
           placeholder="/absolute/folder/path"
-          aria-label="Project folder path"
+          aria-label={t("editor.empty.pathLabel")}
           value={path}
           onChange={(event) => setPath(event.target.value)}
           onKeyDown={onInputKeyDown}
+          disabled={connecting}
         />
         <button
           type="button"
           className={styles.open}
           onClick={openManual}
-          disabled={path.trim().length === 0}
+          disabled={path.trim().length === 0 || connecting}
         >
-          Open
+          {connecting ? t("editor.empty.opening") : t("editor.empty.open")}
         </button>
       </div>
       {notice !== null ? (
