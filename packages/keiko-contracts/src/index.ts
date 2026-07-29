@@ -3183,6 +3183,7 @@ export type {
   QualityIntelligenceRunStreamError,
   QualityIntelligenceRunStreamMessage,
 } from "./qualityIntelligence/bffWire.js";
+export { isQualityIntelligenceJudgeEligible } from "./qualityIntelligence/bffWire.js";
 // Issue #283 added flat export-adapter consumers.
 export type {
   QualityIntelligenceExportAdapter,
