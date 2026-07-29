@@ -20,6 +20,7 @@ import { createInMemoryUiStore } from "./store/index.js";
 import type { Chat } from "./store/index.js";
 import {
   type GatewayConfig,
+  type RealtimeNegotiationOutcome,
   type RealtimeNegotiationRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 
@@ -483,6 +484,7 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
     await next(); // media.track.state negotiating
     const failure = await next();
     expect(failure).toMatchObject({ kind: "error", code: "negotiation-failed" });
+    expect(failure.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
     expect(await next()).toMatchObject({
       kind: "media.track.state",
       track: "audio-in",
@@ -503,14 +505,15 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
     expect(JSON.stringify(diagnostics)).not.toContain("provider-secret-throw-never-diagnosed");
   });
 
-  it("correlates a provider negotiation failure with a body-free operator diagnostic", async () => {
+  it("correlates a provider negotiation failure with a body-free operator diagnostic", async (): Promise<void> => {
     const diagnostics: ServerDiagnosticRecord[] = [];
     const port = await boot(
       depsWith({
         config: voiceConfig(true, { apiKey: "provider-secret-never-diagnosed" }),
         configPresent: true,
         diagnostics: { record: (record): void => void diagnostics.push(record) },
-        voiceRealtimeNegotiationRequest: () => Promise.resolve({ ok: false, kind: "wrong-header" }),
+        voiceRealtimeNegotiationRequest: (): Promise<RealtimeNegotiationOutcome> =>
+          Promise.resolve({ ok: false, kind: "wrong-header" }),
       }),
     );
     const { ws: socket, next } = expectOpen(

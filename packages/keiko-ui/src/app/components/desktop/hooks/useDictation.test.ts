@@ -1120,7 +1120,10 @@ describe("useDictation — realtime live dictation (P3)", () => {
     expect(result.current.phase).toBe("recording");
     expect(vi.getTimerCount()).toBe(1); // Dictation auto-stop only.
 
-    act(() => fakes.emitConnectionState("disconnected"));
+    act(() => {
+      fakes.emitConnectionState("disconnected");
+      fakes.emitConnectionState("disconnected");
+    });
     expect(result.current.phase).toBe("recording");
     expect(vi.getTimerCount()).toBe(2); // Auto-stop plus disconnect grace.
 
