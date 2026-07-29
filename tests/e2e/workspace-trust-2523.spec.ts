@@ -8,6 +8,7 @@ import {
   cleanupEditorWorkspaces,
   createEditorWorkspace,
   openEditorWorkspace,
+  revokeEditorWorkspaceTrust,
   seedEditorWindow,
 } from "./support/editorWorkspace.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
@@ -72,6 +73,7 @@ async function openUntrustedEditor(page: Page): Promise<void> {
     data: { path: fixture.root, name: "Workspace Trust E2E" },
   });
   expect(project.ok(), await project.text()).toBe(true);
+  await revokeEditorWorkspaceTrust(page.request, fixture.root);
   await seedEditorWindow(page, {
     root: fixture.root,
     active: SOURCE,

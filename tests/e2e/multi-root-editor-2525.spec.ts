@@ -6,6 +6,7 @@ import {
   createEditorWorkspace,
   EDITOR_SELECTORS,
   firstPane,
+  revokeEditorWorkspaceTrust,
   typeIntoActiveEditor,
 } from "./support/editorWorkspace.js";
 import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
@@ -194,6 +195,8 @@ test("two roots retain independent editor and trust state through focused-root c
   await registerProject(page, a.root, "Multi-root A");
   await registerProject(page, b.root, "Multi-root B");
   await addSecondRoot(page, a.root, b.root);
+  await revokeEditorWorkspaceTrust(page.request, a.root);
+  await revokeEditorWorkspaceTrust(page.request, b.root);
   await seedFilesWindow(page, a.root);
   await page.goto("/");
 

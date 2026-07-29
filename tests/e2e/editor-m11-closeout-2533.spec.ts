@@ -16,6 +16,8 @@ import {
   EDITOR_SELECTORS,
   firstPane,
   openEditorWorkspace,
+  openTreeFile,
+  revokeEditorWorkspaceTrust,
   typeIntoActiveEditor,
 } from "./support/editorWorkspace.js";
 import { FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET } from "./support/file-history-2531.js";
@@ -232,27 +234,20 @@ async function replacePage(page: Page, windows: readonly SeedWindow[]): Promise<
   return replacement;
 }
 
-async function grantAlphaAndRestrictBeta(page: Page): Promise<void> {
+async function restrictBetaAndExpectAlphaTrusted(page: Page): Promise<void> {
   const prompt = page.getByRole("alertdialog", { name: "Trust this workspace?" });
-  await expect(prompt).toBeVisible();
-  const grant = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      response.url().endsWith("/api/editor/verification/trust"),
-  );
-  await prompt.getByRole("button", { name: "Trust workspace" }).click();
-  expect((await grant).status()).toBe(200);
-  await page.getByRole("tab", { name: /M11 Root Beta/u }).click();
   await expect(prompt).toBeVisible();
   await prompt.getByRole("button", { name: "Stay restricted" }).click();
   await expect(page.getByRole("note", { name: "Restricted Mode", exact: true })).toContainText(
     "Restricted Mode",
   );
   await expect(
-    page.getByRole("treeitem", { name: "M11 Root Alpha" }).getByLabel("Trusted workspace"),
-  ).toBeVisible();
-  await expect(
     page.getByRole("treeitem", { name: "M11 Root Beta" }).getByLabel("Restricted Mode"),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: /M11 Root Alpha/u }).click();
+  await expect(prompt).toHaveCount(0);
+  await expect(
+    page.getByRole("treeitem", { name: "M11 Root Alpha" }).getByLabel("Trusted workspace"),
   ).toBeVisible();
 }
 
@@ -400,6 +395,45 @@ async function expectRootStillTrusted(request: APIRequestContext, root: string):
   expect((await response.json()) as { readonly trust: string }).toMatchObject({ trust: "trusted" });
 }
 
+async function prepareCloseoutJourney(
+  page: Page,
+): Promise<{ readonly harness: CloseoutHarness; readonly switched: ProfileSwitchResult }> {
+  const harness = createHarness();
+  await page.goto(`/${pairingFragment()}`);
+  await expect.poll(() => page.url()).not.toContain("keiko-app-session");
+  await registerProject(page.request, harness.alpha.root, "M11 Root Alpha");
+  await registerProject(page.request, harness.beta.root, "M11 Root Beta");
+  await addSecondRoot(page.request, harness);
+  await revokeEditorWorkspaceTrust(page.request, harness.beta.root);
+  const profileRef = await createFocusedProfile(page.request, harness.alpha.root);
+  await seedWindows(page, harness.alpha.root);
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto("/");
+  await openEditorWorkspace(page, { dismissTrustPrompt: false });
+  await restrictBetaAndExpectAlphaTrusted(page);
+  return { harness, switched: await switchProfile(page, harness.alpha.root, profileRef) };
+}
+
+async function reopenTrustedAlphaAfterProfileSwitch(page: Page, root: string): Promise<Locator> {
+  // The replaced page starts on the explicitly restricted Beta root. Dismiss only that root's
+  // prompt, then select Alpha and prove the profile switch preserved Alpha's server-owned grant.
+  await expect(page.getByRole("tab", { name: /M11 Root Beta/u })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page
+    .getByRole("alertdialog", { name: "Trust this workspace?" })
+    .getByRole("button", { name: "Stay restricted" })
+    .click();
+  await page.getByRole("tab", { name: /M11 Root Alpha/u }).click();
+  const editor = await openEditorWorkspace(page, { dismissTrustPrompt: false });
+  await expect(page.getByRole("alertdialog", { name: "Trust this workspace?" })).toHaveCount(0);
+  await expectRootStillTrusted(page.request, root);
+  await editor.locator(`${EDITOR_SELECTORS.treeRow}[data-path="src"]`).click();
+  await openTreeFile(editor, FILE);
+  return editor;
+}
+
 test.afterAll(() => {
   cleanupEditorWorkspaces();
 });
@@ -407,33 +441,9 @@ test.afterAll(() => {
 test("mixed-trust multi-root, profile switching, and local-history restore compose end to end", async ({
   page,
 }, testInfo) => {
-  const harness = createHarness();
-  await page.goto(`/${pairingFragment()}`);
-  await expect.poll(() => page.url()).not.toContain("keiko-app-session");
-  await registerProject(page.request, harness.alpha.root, "M11 Root Alpha");
-  await registerProject(page.request, harness.beta.root, "M11 Root Beta");
-  await addSecondRoot(page.request, harness);
-  const profileRef = await createFocusedProfile(page.request, harness.alpha.root);
-  await seedWindows(page, harness.alpha.root);
-  await page.setViewportSize({ width: 1920, height: 1080 });
-  await page.goto("/");
-  await openEditorWorkspace(page, { dismissTrustPrompt: false });
-  await grantAlphaAndRestrictBeta(page);
-  const switched = await switchProfile(page, harness.alpha.root, profileRef);
+  const { harness, switched } = await prepareCloseoutJourney(page);
   const journeyPage = switched.page;
-  // Every trust assertion in this journey happens BEFORE the profile switch, inside
-  // grantAlphaAndRestrictBeta. The closeout documents nonetheless claim the journey proves "a
-  // profile switch does not alter trust" — and it did not: this call defaulted to
-  // dismissTrustPrompt, so a switch that dropped Alpha's grant would have re-raised the prompt on
-  // the replaced page and the shared helper would have quietly dismissed it, absorbing exactly the
-  // regression the claim is about. Assert the preserved state here instead of delegating it.
-  const editor = await openEditorWorkspace(journeyPage, { dismissTrustPrompt: false });
-  // openEditorWorkspace has already awaited data-trust-settled="true", so "no dialog in the DOM"
-  // provably means "no prompt will be raised for this load" — these need no timeout.
-  await expect(journeyPage.getByRole("alertdialog", { name: "Trust this workspace?" })).toHaveCount(
-    0,
-  );
-  await expectRootStillTrusted(journeyPage.request, harness.alpha.root);
+  const editor = await reopenTrustedAlphaAfterProfileSwitch(journeyPage, harness.alpha.root);
   const pane = firstPane(editor);
   await saveVersion(journeyPage, pane, VERSION_ONE);
   // Read the oldest checkpoint's content from disk instead of hard-coding it (the sibling #2531
