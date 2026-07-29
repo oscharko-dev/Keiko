@@ -718,7 +718,7 @@ function gitProcessOptions(
 }
 
 function isExactUntrackedPath(result: GitProcessResult, path: string): boolean {
-  return result.stdout.split("\0").some((entry): boolean => entry === path);
+  return result.stdout.split("\0").includes(path);
 }
 
 function normalizeNoIndexDiff(result: GitProcessResult): GitProcessResult {
