@@ -555,7 +555,8 @@ function selectGatewayUnits(
   limit: number,
   currentUserMessageId: string,
 ): readonly GatewayMessageRow[] {
-  const newestFirst = [...units].sort((left, right): number => compareGatewayUnits(right, left));
+  const newestFirst = [...units];
+  newestFirst.sort((left, right): number => -compareGatewayUnits(left, right));
   const selected: GatewayMessageRow[][] = [];
   const mandatory = newestFirst.find((unit): boolean =>
     unit.some((row): boolean => row.id === currentUserMessageId),
@@ -572,7 +573,8 @@ function selectGatewayUnits(
     selectedCount += unit.length;
     if (selectedCount === limit) break;
   }
-  return selected.sort(compareGatewayUnits).flat();
+  selected.sort(compareGatewayUnits);
+  return selected.flat();
 }
 
 function collectGatewayRows(
