@@ -752,7 +752,7 @@ describe("AppShell grounding connections", () => {
     rafSpy.mockRestore();
   });
 
-  it("records a rooted minimized Search restore as a closed-to-open transition", async () => {
+  it("records a rooted minimized Search restore as a closed-to-open transition", async (): Promise<void> => {
     const api = workspaceApi();
     mocks.state.workspaceResult = workspaceResult(
       [
