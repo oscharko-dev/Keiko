@@ -416,6 +416,74 @@ interface ChatCreationError {
   readonly requestId: string;
 }
 
+interface ChatCreationRequestExecution {
+  readonly activeProject: ProjectWithAvailability | undefined;
+  readonly coordinator: ChatCreationCoordinator;
+  readonly isCurrent: () => boolean;
+  readonly owner: ChatCreationOwner;
+  readonly requestKey: string;
+  readonly setError: (error: ChatCreationError | null) => void;
+  readonly title: string | undefined;
+  readonly updateCfg: WindowRenderContext["updateCfg"];
+}
+
+function applyChatCreationResult(
+  execution: ChatCreationRequestExecution,
+  result: ChatCreationResult,
+): void {
+  if (result.chat === undefined) {
+    execution.setError({
+      chatId: undefined,
+      messageKey: "chat.creation.openFailed",
+      requestId: execution.requestKey,
+    });
+    return;
+  }
+  if (result.titleSaveFailed) {
+    execution.setError({
+      chatId: result.chat.id,
+      messageKey: "chat.creation.titleSaveFailed",
+      requestId: execution.requestKey,
+    });
+  }
+  execution.updateCfg({
+    chatId: result.chat.id,
+    title: result.chat.title,
+    newChatRequestId: undefined,
+  });
+}
+
+function executeChatCreationRequest(execution: ChatCreationRequestExecution): void {
+  void execution.coordinator
+    .request(execution.owner, execution.activeProject, execution.title)
+    .then(
+      (result): void => {
+        if (execution.isCurrent()) applyChatCreationResult(execution, result);
+      },
+      (): void => {
+        if (!execution.isCurrent()) return;
+        execution.setError({
+          chatId: undefined,
+          messageKey: "chat.creation.openFailed",
+          requestId: execution.requestKey,
+        });
+      },
+    )
+    .finally((): void => {
+      execution.coordinator.release(execution.owner);
+    });
+}
+
+function visibleChatCreationError(
+  error: ChatCreationError | null,
+  chatId: string | undefined,
+  requestKey: string | undefined,
+): SelectionHandoffNoticeKey | null {
+  if (error === null || error.chatId !== chatId) return null;
+  if (chatId === undefined && error.requestId !== requestKey) return null;
+  return error.messageKey;
+}
+
 function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationControl {
   const {
     activeProject,
@@ -445,53 +513,18 @@ function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationCont
     latestAttemptRef.current = attempt;
     attemptedRequestKeyRef.current = requestKey;
     setError(null);
-    void coordinator
-      .request(owner, activeProject, title)
-      .then(
-        (result): void => {
-          if (latestAttemptRef.current !== attempt) return;
-          if (result.chat === undefined) {
-            setError({
-              chatId: undefined,
-              messageKey: "chat.creation.openFailed",
-              requestId: requestKey,
-            });
-            return;
-          }
-          if (result.titleSaveFailed) {
-            setError({
-              chatId: result.chat.id,
-              messageKey: "chat.creation.titleSaveFailed",
-              requestId: requestKey,
-            });
-          }
-          updateCfg({
-            chatId: result.chat.id,
-            title: result.chat.title,
-            newChatRequestId: undefined,
-          });
-        },
-        (): void => {
-          if (latestAttemptRef.current === attempt) {
-            setError({
-              chatId: undefined,
-              messageKey: "chat.creation.openFailed",
-              requestId: requestKey,
-            });
-          }
-        },
-      )
-      .finally((): void => {
-        coordinator.release(owner);
-      });
+    executeChatCreationRequest({
+      activeProject,
+      coordinator,
+      isCurrent: (): boolean => latestAttemptRef.current === attempt,
+      owner,
+      requestKey,
+      setError,
+      title,
+      updateCfg,
+    });
   }, [activeProject, coordinator, loading, requestKey, title, updateCfg]);
-  const visibleError =
-    error !== null &&
-    error.chatId === chatId &&
-    (chatId !== undefined || error.requestId === requestKey)
-      ? error.messageKey
-      : null;
-  return { errorKey: visibleError, pending };
+  return { errorKey: visibleChatCreationError(error, chatId, requestKey), pending };
 }
 
 export function ChatWindowSessionHost({
