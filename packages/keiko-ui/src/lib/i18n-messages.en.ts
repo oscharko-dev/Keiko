@@ -28,6 +28,8 @@ export const EN_MESSAGES = {
     "The native folder picker is unavailable on this platform. Enter a path below.",
   "editor.empty.connectionFailed":
     "The project could not be connected. Check the folder and try again.",
+  "editor.empty.workspaceUnavailable":
+    "The saved workspace identity is no longer current. Remove the stale project entry before reconnecting this folder.",
   "editor.localHistoryProtection.savedUnprotected":
     "File saved, but Local History could not protect this version.",
   "editor.localHistoryProtection.workspaceUnavailable":

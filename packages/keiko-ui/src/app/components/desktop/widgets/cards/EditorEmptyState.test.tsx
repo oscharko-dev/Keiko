@@ -98,6 +98,32 @@ describe("EditorEmptyState", () => {
     expect(screen.queryByText(/server detail/u)).not.toBeInTheDocument();
   });
 
+  it("keeps the editor unbound when registration returns unavailable membership", async () => {
+    createProjectMock.mockResolvedValueOnce({
+      project: {
+        path: "/abs/project",
+        name: "project",
+        favorite: false,
+        createdAt: 1,
+        lastOpenedAt: 1,
+        available: true,
+        workspaceAvailable: false,
+      },
+    });
+    const onOpenRoot = vi.fn();
+    render(<EditorEmptyState onOpenRoot={onOpenRoot} />);
+
+    fireEvent.change(screen.getByLabelText("Project folder path"), {
+      target: { value: "/abs/project" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "The saved workspace identity is no longer current.",
+    );
+    expect(onOpenRoot).not.toHaveBeenCalled();
+  });
+
   it("disables the native picker button when the platform is unsupported", () => {
     capability.supported = false;
     render(<EditorEmptyState onOpenRoot={vi.fn()} />);

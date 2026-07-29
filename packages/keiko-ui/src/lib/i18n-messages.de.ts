@@ -30,6 +30,8 @@ export const DE_MESSAGES = {
     "Die native Ordnerauswahl ist auf dieser Plattform nicht verfügbar. Geben Sie unten einen Pfad ein.",
   "editor.empty.connectionFailed":
     "Das Projekt konnte nicht verbunden werden. Prüfen Sie den Ordner und versuchen Sie es erneut.",
+  "editor.empty.workspaceUnavailable":
+    "Die gespeicherte Workspace-Identität ist nicht mehr aktuell. Entfernen Sie den veralteten Projekteintrag, bevor Sie diesen Ordner erneut verbinden.",
   "editor.localHistoryProtection.savedUnprotected":
     "Die Datei wurde gespeichert, aber der lokale Verlauf konnte diese Version nicht schützen.",
   "editor.localHistoryProtection.workspaceUnavailable":

@@ -1,5 +1,6 @@
 import { realpathSync } from "node:fs";
 import type {
+  WorkspaceManifest,
   WorkspaceRootDescriptor,
   WorkspaceRootIdentityDigest,
   WorkspaceRootRef,
@@ -27,8 +28,34 @@ export interface CurrentWorkspaceRootMembership {
   readonly realRoot: string;
 }
 
+interface IndexedWorkspaceRoot {
+  readonly workspaceId: string;
+  readonly root: WorkspaceRootDescriptor;
+}
+
+type WorkspaceRootMembershipSnapshot = ReadonlyMap<string, IndexedWorkspaceRoot>;
+
 function unavailable(failure: WorkspaceRootMembershipFailure): never {
   throw new WorkspaceRootMembershipError(failure);
+}
+
+function canonicalRoot(rootInput: string): string {
+  try {
+    return realpathSync(rootInput);
+  } catch {
+    return unavailable("ROOT_UNRESOLVED");
+  }
+}
+
+function membershipSnapshot(store: UiStore): WorkspaceRootMembershipSnapshot {
+  const manifests: readonly WorkspaceManifest[] = new WorkspaceManifestService(store).list();
+  const roots = new Map<string, IndexedWorkspaceRoot>();
+  for (const manifest of manifests) {
+    for (const root of manifest.roots) {
+      roots.set(root.canonicalRoot, { workspaceId: manifest.workspaceId, root });
+    }
+  }
+  return roots;
 }
 
 function storedObjectIdentity(store: UiStore, rootRef: WorkspaceRootRef): string | undefined {
@@ -57,6 +84,46 @@ function rootIdentityMatches(
   );
 }
 
+function resolveCanonicalWorkspaceRootMembership(
+  store: UiStore,
+  realRoot: string,
+  snapshot: WorkspaceRootMembershipSnapshot,
+): CurrentWorkspaceRootMembership {
+  const indexed = snapshot.get(realRoot);
+  if (indexed === undefined) return unavailable("NOT_A_MEMBER");
+  let inspected: ReturnType<typeof inspectWorkspaceRootIdentity>;
+  try {
+    inspected = inspectWorkspaceRootIdentity(realRoot);
+  } catch {
+    return unavailable("IDENTITY_UNREADABLE");
+  }
+  if (
+    !rootIdentityMatches(inspected, indexed.root, storedObjectIdentity(store, indexed.root.rootRef))
+  ) {
+    return unavailable("IDENTITY_DRIFT");
+  }
+  return {
+    workspaceId: indexed.workspaceId,
+    rootRef: indexed.root.rootRef,
+    rootIdentityDigest: indexed.root.identityDigest,
+    objectIdentityDigest: inspected.objectIdentityDigest,
+    realRoot,
+  };
+}
+
+function hasMembershipInSnapshot(
+  store: UiStore,
+  rootInput: string,
+  snapshot: WorkspaceRootMembershipSnapshot,
+): boolean {
+  try {
+    resolveCanonicalWorkspaceRootMembership(store, canonicalRoot(rootInput), snapshot);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The single membership and identity decision for user-connected workspace roots. Files may still
  * browse an arbitrary folder, but governed workspace capabilities and recovery protection consume
@@ -66,35 +133,14 @@ export function resolveCurrentWorkspaceRootMembership(
   store: UiStore,
   rootInput: string,
 ): CurrentWorkspaceRootMembership {
-  let realRoot: string;
-  let manifests: ReturnType<WorkspaceManifestService["list"]>;
+  const realRoot = canonicalRoot(rootInput);
+  let snapshot: WorkspaceRootMembershipSnapshot;
   try {
-    realRoot = realpathSync(rootInput);
-    manifests = new WorkspaceManifestService(store).list();
+    snapshot = membershipSnapshot(store);
   } catch {
     return unavailable("ROOT_UNRESOLVED");
   }
-  for (const manifest of manifests) {
-    const root = manifest.roots.find((candidate): boolean => candidate.canonicalRoot === realRoot);
-    if (root === undefined) continue;
-    let inspected: ReturnType<typeof inspectWorkspaceRootIdentity>;
-    try {
-      inspected = inspectWorkspaceRootIdentity(realRoot);
-    } catch {
-      return unavailable("IDENTITY_UNREADABLE");
-    }
-    if (!rootIdentityMatches(inspected, root, storedObjectIdentity(store, root.rootRef))) {
-      return unavailable("IDENTITY_DRIFT");
-    }
-    return {
-      workspaceId: manifest.workspaceId,
-      rootRef: root.rootRef,
-      rootIdentityDigest: root.identityDigest,
-      objectIdentityDigest: inspected.objectIdentityDigest,
-      realRoot,
-    };
-  }
-  return unavailable("NOT_A_MEMBER");
+  return resolveCanonicalWorkspaceRootMembership(store, realRoot, snapshot);
 }
 
 export function hasCurrentWorkspaceRootMembership(store: UiStore, rootInput: string): boolean {
@@ -115,4 +161,24 @@ export function projectWithWorkspaceAvailability(
     available: isProjectAvailable(project),
     workspaceAvailable: hasCurrentWorkspaceRootMembership(store, project.path),
   };
+}
+
+export function projectsWithWorkspaceAvailability(
+  store: UiStore,
+  projects: readonly Project[],
+): readonly ProjectWithAvailability[] {
+  let snapshot: WorkspaceRootMembershipSnapshot;
+  try {
+    snapshot = membershipSnapshot(store);
+  } catch {
+    return projects.map((project) => ({
+      ...project,
+      available: isProjectAvailable(project),
+      workspaceAvailable: false,
+    }));
+  }
+  return projects.map((project) => {
+    const workspaceAvailable = hasMembershipInSnapshot(store, project.path, snapshot);
+    return { ...project, available: isProjectAvailable(project), workspaceAvailable };
+  });
 }

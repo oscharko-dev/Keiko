@@ -27,7 +27,10 @@ import {
   type UpdateProjectPatch,
   type WorkflowStatus,
 } from "./store/index.js";
-import { projectWithWorkspaceAvailability } from "./workspace-root-membership.js";
+import {
+  projectsWithWorkspaceAvailability,
+  projectWithWorkspaceAvailability,
+} from "./workspace-root-membership.js";
 import {
   openKnowledgeStore,
   resolveKnowledgeStorePath,
@@ -340,9 +343,7 @@ function messageBelongsToChat(deps: UiHandlerDeps, chatId: string, messageId: st
 
 export function handleListProjects(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const projects = putPreferredProjectFirst(
-    deps.store
-      .listProjects()
-      .map((project) => projectWithWorkspaceAvailability(deps.store, project)),
+    projectsWithWorkspaceAvailability(deps.store, deps.store.listProjects()),
     deps.preferredProjectPath,
   );
   return { status: 200, body: { projects } };

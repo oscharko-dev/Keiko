@@ -487,6 +487,38 @@ describe("GitClientWindow — repository list", () => {
     expect(updateCfg).toHaveBeenCalledWith({ projectPath: REPO_A.path });
   });
 
+  it.each([
+    ["false", { ...REPO_A, workspaceAvailable: false }],
+    [
+      "absent",
+      {
+        path: REPO_A.path,
+        name: REPO_A.name,
+        favorite: false,
+        createdAt: 0,
+        lastOpenedAt: 0,
+        available: true,
+      },
+    ],
+  ] satisfies readonly (readonly [string, ProjectWithAvailability])[])(
+    "rejects a reconnect whose workspace membership is %s",
+    async (_label, project) => {
+      const updateCfg = vi.fn();
+      const client = makeClient({
+        registerRepository: vi.fn(async () => makeProjectResponse(project)),
+      });
+      render(<GitClientWindow client={client} updateCfg={updateCfg} />);
+      fireEvent.click(await screen.findByRole("button", { name: /alpha/ }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "This repository is not currently connected to a workspace.",
+      );
+      expect(updateCfg).not.toHaveBeenCalledWith({ projectPath: REPO_A.path });
+      expect(client.listBranches).not.toHaveBeenCalled();
+      expect(client.getStatus).not.toHaveBeenCalled();
+    },
+  );
+
   it("selecting a repo triggers a branch and status load for the chosen path", async () => {
     const client = makeClient();
     render(<GitClientWindow client={client} />);
@@ -686,6 +718,27 @@ describe("GitClientWindow — add-repository dialog", () => {
     await waitFor(() =>
       expect(client.registerRepository).toHaveBeenCalledWith({ path: "/home/me/existing-repo" }),
     );
+  });
+
+  it("does not select a newly added repository without explicit workspace membership", async () => {
+    const user = userEvent.setup();
+    const updateCfg = vi.fn();
+    const unavailable = makeRepo("/home/me/stale-repo", "stale", { workspaceAvailable: false });
+    const client = makeClient({
+      registerRepository: vi.fn(async () => makeProjectResponse(unavailable)),
+    });
+    render(<GitClientWindow client={client} updateCfg={updateCfg} />);
+    await user.click(await screen.findByRole("button", { name: "Connect repository" }));
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Open local repository" }));
+    await user.type(within(dialog).getByLabelText("Local repository path"), "/home/me/stale-repo");
+    await user.click(within(dialog).getByRole("button", { name: "Open repository" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This repository is not currently connected to a workspace.",
+    );
+    expect(updateCfg).not.toHaveBeenCalledWith({ projectPath: unavailable.path });
+    expect(client.getStatus).not.toHaveBeenCalled();
   });
 
   it("closes the dialog on Escape", async () => {

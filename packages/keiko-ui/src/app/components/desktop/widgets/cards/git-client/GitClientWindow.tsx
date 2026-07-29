@@ -858,16 +858,29 @@ export function GitClientWindow({
     [updateCfg],
   );
 
+  const applyConnectedRepository = useCallback(
+    (project: ProjectWithAvailability): boolean => {
+      if (project.workspaceAvailable !== true) {
+        setReposLoading(false);
+        setReposError(t("gitClientWindow.repository.workspaceUnavailable"));
+        return false;
+      }
+      setReposError(null);
+      applyRepositorySelection(project.path);
+      return true;
+    },
+    [applyRepositorySelection, t],
+  );
+
   const reconnectRepository = useCallback(
     (path: string): void => {
       setReposLoading(true);
       setReposError(null);
       void client.registerRepository({ path }).then(
-        (response) => {
-          applyRepositorySelection(response.project.path);
-          loadRepositories();
+        (response): void => {
+          if (applyConnectedRepository(response.project)) loadRepositories();
         },
-        (error: unknown) => {
+        (error: unknown): void => {
           setReposLoading(false);
           setReposError(
             t("gitClientWindow.repository.reconnectFailed", { detail: formatGitError(error) }),
@@ -875,15 +888,14 @@ export function GitClientWindow({
         },
       );
     },
-    [applyRepositorySelection, client, loadRepositories, t],
+    [applyConnectedRepository, client, loadRepositories, t],
   );
 
   const onRepositoryAdded = useCallback(
     (project: ProjectWithAvailability): void => {
-      loadRepositories();
-      applyRepositorySelection(project.path);
+      if (applyConnectedRepository(project)) loadRepositories();
     },
-    [applyRepositorySelection, loadRepositories],
+    [applyConnectedRepository, loadRepositories],
   );
 
   useEffect(() => {

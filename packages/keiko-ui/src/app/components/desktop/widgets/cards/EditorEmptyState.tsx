@@ -33,6 +33,10 @@ export function EditorEmptyState({
       setConnecting(true);
       try {
         const response = await createProject({ path: selectedPath });
+        if (response.project.workspaceAvailable !== true) {
+          setNotice(t("editor.empty.workspaceUnavailable"));
+          return;
+        }
         onOpenRoot(response.project.path);
       } catch {
         setNotice(t("editor.empty.connectionFailed"));

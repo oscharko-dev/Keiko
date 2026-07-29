@@ -16,6 +16,7 @@ import type {
 import type { UiHandlerDeps } from "../../deps.js";
 import { createInMemoryUiStore, type UiStore } from "../../store/index.js";
 import { WorkspaceManifestService } from "../../workspace-manifests.js";
+import { projectsWithWorkspaceAvailability } from "../../workspace-root-membership.js";
 import { resolveEditorLocalHistoryRoot } from "./localHistoryCapture.js";
 import {
   createEditorLocalHistoryStore,
@@ -114,6 +115,60 @@ afterEach(() => {
 });
 
 describe("editor local-history across workspace root membership", () => {
+  it("fails closed with a distinct guard for every unavailable membership state", () => {
+    expect(() => resolveEditorLocalHistoryRoot(deps, join(tmp, "missing"))).toThrow(
+      expect.objectContaining({ code: "INVALID_CAPTURE", detail: "ROOT_UNRESOLVED" }),
+    );
+
+    const unregistered = join(tmp, "unregistered");
+    mkdirSync(unregistered);
+    expect(() => resolveEditorLocalHistoryRoot(deps, unregistered)).toThrow(
+      expect.objectContaining({ code: "INVALID_CAPTURE", detail: "NOT_A_MEMBER" }),
+    );
+
+    rmSync(rootA, { recursive: true });
+    mkdirSync(join(rootA, "src"), { recursive: true });
+    expect(() => resolveEditorLocalHistoryRoot(deps, rootA)).toThrow(
+      expect.objectContaining({ code: "INVALID_CAPTURE", detail: "IDENTITY_DRIFT" }),
+    );
+  });
+
+  it("reports identity metadata that disappears after root resolution as unreadable", () => {
+    const listRecords = store.listWorkspaceManifestRecords;
+    const disappearingStore: UiStore = {
+      ...store,
+      listWorkspaceManifestRecords: () => {
+        const records = listRecords();
+        rmSync(rootA, { recursive: true });
+        return records;
+      },
+    };
+
+    expect(() => resolveEditorLocalHistoryRoot({ store: disappearingStore }, rootA)).toThrow(
+      expect.objectContaining({ code: "INVALID_CAPTURE", detail: "IDENTITY_UNREADABLE" }),
+    );
+  });
+
+  it("projects multiple projects from one validated manifest snapshot", () => {
+    const listRecords = store.listWorkspaceManifestRecords;
+    let listCount = 0;
+    const countingStore: UiStore = {
+      ...store,
+      listWorkspaceManifestRecords: () => {
+        listCount += 1;
+        return listRecords();
+      },
+    };
+
+    expect(projectsWithWorkspaceAvailability(countingStore, store.listProjects())).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: rootA, workspaceAvailable: true }),
+        expect.objectContaining({ path: rootB, workspaceAvailable: true }),
+      ]),
+    );
+    expect(listCount).toBe(1);
+  });
+
   it("keeps a root's checkpoints when it joins another workspace and when it leaves again", () => {
     captureIn(rootA, "before membership\n", 1_000);
     const captured = historyIn(rootA, 1_001);
