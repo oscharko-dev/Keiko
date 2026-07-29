@@ -449,6 +449,60 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
     socket.close();
   });
 
+  it("classifies a thrown negotiation failure in one body-free correlated diagnostic", async (): Promise<void> => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const negotiationRequest = vi.fn(async (): Promise<never> => {
+      await Promise.resolve();
+      throw new Error("provider-secret-throw-never-diagnosed");
+    });
+    const port = await boot(
+      depsWith({
+        config: voiceConfig(true),
+        configPresent: true,
+        diagnostics: { record: (record): void => void diagnostics.push(record) },
+        voiceRealtimeNegotiationRequest: negotiationRequest,
+      }),
+    );
+    const { ws: socket, next } = expectOpen(
+      await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH }),
+    );
+    socket.send(liveSessionCreate());
+    await next(); // session.created
+    await next(); // capability.offer
+    socket.send(
+      JSON.stringify({
+        protocolVersion: "1",
+        sessionId: "sess-live-1",
+        seq: 1,
+        direction: "client-to-host",
+        kind: "signal.sdp.offer",
+        sdp: OFFER_SDP,
+      }),
+    );
+
+    await next(); // media.track.state negotiating
+    const failure = await next();
+    expect(failure).toMatchObject({ kind: "error", code: "negotiation-failed" });
+    expect(await next()).toMatchObject({
+      kind: "media.track.state",
+      track: "audio-in",
+      state: "ended",
+    });
+    socket.close();
+    expect(negotiationRequest).toHaveBeenCalledTimes(1);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        correlationId: failure.correlationId,
+        operation: "voice.live-dictation.negotiate",
+        source: "voice.live-dictation",
+        errorClass: "Error",
+        code: "transport",
+        message: "server-operation-failed",
+      }),
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toContain("provider-secret-throw-never-diagnosed");
+  });
+
   it("correlates a provider negotiation failure with a body-free operator diagnostic", async () => {
     const diagnostics: ServerDiagnosticRecord[] = [];
     const port = await boot(
@@ -502,60 +556,6 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
     expect(serialized).not.toContain(OFFER_SDP);
     expect(serialized).not.toContain("realtime.example.com");
     socket.close();
-  });
-
-  it("classifies a thrown negotiation failure in one body-free correlated diagnostic", async (): Promise<void> => {
-    const diagnostics: ServerDiagnosticRecord[] = [];
-    const negotiationRequest = vi.fn(async (): Promise<never> => {
-      await Promise.resolve();
-      throw new Error("provider-secret-throw-never-diagnosed");
-    });
-    const port = await boot(
-      depsWith({
-        config: voiceConfig(true),
-        configPresent: true,
-        diagnostics: { record: (record): void => void diagnostics.push(record) },
-        voiceRealtimeNegotiationRequest: negotiationRequest,
-      }),
-    );
-    const { ws: socket, next } = expectOpen(
-      await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH }),
-    );
-    socket.send(liveSessionCreate());
-    await next(); // session.created
-    await next(); // capability.offer
-    socket.send(
-      JSON.stringify({
-        protocolVersion: "1",
-        sessionId: "sess-live-1",
-        seq: 1,
-        direction: "client-to-host",
-        kind: "signal.sdp.offer",
-        sdp: OFFER_SDP,
-      }),
-    );
-
-    await next(); // media.track.state negotiating
-    const failure = await next();
-    expect(failure).toMatchObject({ kind: "error", code: "negotiation-failed" });
-    expect(await next()).toMatchObject({
-      kind: "media.track.state",
-      track: "audio-in",
-      state: "ended",
-    });
-    socket.close();
-    expect(negotiationRequest).toHaveBeenCalledTimes(1);
-    expect(diagnostics).toEqual([
-      expect.objectContaining({
-        correlationId: failure.correlationId,
-        operation: "voice.live-dictation.negotiate",
-        source: "voice.live-dictation",
-        errorClass: "Error",
-        code: "transport",
-        message: "server-operation-failed",
-      }),
-    ]);
-    expect(JSON.stringify(diagnostics)).not.toContain("provider-secret-throw-never-diagnosed");
   });
 
   it("rejects chat context and persona on the live dictation endpoint", async () => {

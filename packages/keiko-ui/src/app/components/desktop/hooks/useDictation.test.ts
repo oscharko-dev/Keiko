@@ -1157,7 +1157,7 @@ describe("useDictation — realtime live dictation (P3)", () => {
     },
   );
 
-  it("ignores late realtime events during batch retry after disconnect", async (): Promise<void> => {
+  it("keeps the original disconnect deadline and ignores late events after retry", async (): Promise<void> => {
     vi.useFakeTimers();
     const fakes = makeRealtimeDictationFakes();
     const recorder = makeRecorder({});
@@ -1189,7 +1189,12 @@ describe("useDictation — realtime live dictation (P3)", () => {
     act(() => fakes.emitConnectionState("disconnected"));
     expect(result.current.phase).toBe("recording");
     await act(async (): Promise<void> => {
-      await vi.advanceTimersByTimeAsync(4_999);
+      await vi.advanceTimersByTimeAsync(2_500);
+    });
+    act(() => fakes.emitConnectionState("disconnected"));
+    expect(vi.getTimerCount()).toBe(2); // Auto-stop plus the original disconnect grace.
+    await act(async (): Promise<void> => {
+      await vi.advanceTimersByTimeAsync(2_499);
     });
     expect(result.current.phase).toBe("recording");
     expect(fakes.closeSession).not.toHaveBeenCalled();
