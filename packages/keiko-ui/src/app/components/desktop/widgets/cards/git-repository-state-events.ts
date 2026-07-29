@@ -11,7 +11,7 @@ interface GitRepositoryStateInvalidationDetail {
 export function notifyGitRepositoryStateInvalidated(root: string, repositoryRoot?: string): void {
   if (root.length === 0) return;
   window.dispatchEvent(
-    new CustomEvent(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, {
+    new CustomEvent<GitRepositoryStateInvalidationDetail>(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, {
       detail: {
         root,
         ...(repositoryRoot !== undefined && repositoryRoot.length > 0 && repositoryRoot !== root

@@ -2043,13 +2043,14 @@ function EditorRuntimeWidget({
   // gitContextSummary. Event-driven only (root change, save, explicit refresh) — mirrors the
   // gutter's own refresh triggers so this never becomes a polling loop.
   const [workspaceGitSummary, setWorkspaceGitSummary] = useState<{
+    readonly requestedRoot: string;
     readonly changedFileCount: number;
     readonly truncated: boolean;
     readonly repositoryRoot: string;
   } | null>(null);
   useEffect(() => {
+    setWorkspaceGitSummary((current) => (current?.requestedRoot === root ? current : null));
     if (root === undefined) {
-      setWorkspaceGitSummary(null);
       return;
     }
     let cancelled = false;
@@ -2057,6 +2058,7 @@ function EditorRuntimeWidget({
       .then((status) => {
         if (!cancelled) {
           setWorkspaceGitSummary({
+            requestedRoot: root,
             changedFileCount: status.changes.length,
             truncated: status.truncated,
             repositoryRoot: status.repositoryRoot ?? status.root,
@@ -2070,7 +2072,9 @@ function EditorRuntimeWidget({
       cancelled = true;
     };
   }, [root, gitGutterRefreshNonce]);
-  const workspaceGitRepositoryRoot = workspaceGitSummary?.repositoryRoot ?? null;
+  const activeWorkspaceGitSummary =
+    workspaceGitSummary?.requestedRoot === root ? workspaceGitSummary : null;
+  const workspaceGitRepositoryRoot = activeWorkspaceGitSummary?.repositoryRoot ?? null;
   useEffect((): (() => void) | undefined => {
     if (root === undefined) return undefined;
     const onRepositoryStateInvalidated = (event: Event): void => {
@@ -4536,8 +4540,8 @@ function EditorRuntimeWidget({
         // Git window use. root is already guaranteed defined by the early return above.
         gitContextSummary: {
           hasConflictMarkers: mergeConflicts.count > 0,
-          changedFileCount: workspaceGitSummary?.changedFileCount ?? 0,
-          truncated: mergeConflicts.truncated || (workspaceGitSummary?.truncated ?? false),
+          changedFileCount: activeWorkspaceGitSummary?.changedFileCount ?? 0,
+          truncated: mergeConflicts.truncated || (activeWorkspaceGitSummary?.truncated ?? false),
         },
         ...(agentDocumentVersion === null ? {} : { documentVersion: agentDocumentVersion }),
         activeFileContentHash: activeContentHash,
@@ -4580,7 +4584,7 @@ function EditorRuntimeWidget({
       paneId,
       root,
       windowId,
-      workspaceGitSummary,
+      activeWorkspaceGitSummary,
     ],
   );
 

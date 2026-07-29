@@ -422,24 +422,26 @@ describe("useGitActions", () => {
       { schemaVersion: "1", status: "recovery-required", actionKind: "push" },
     ];
 
-    for (const outcome of outcomes) {
-      act(() => result.current.runMutation(async () => outcome));
+    try {
+      for (const outcome of outcomes) {
+        act(() => result.current.runMutation(async () => outcome));
+        await waitFor(() => expect(result.current.flow.busy).toBe(false));
+      }
+      act(() =>
+        result.current.runMutation(async () => ({
+          schemaVersion: "1",
+          status: "blocked",
+          actionKind: "stage",
+        })),
+      );
       await waitFor(() => expect(result.current.flow.busy).toBe(false));
+      expect(listener).toHaveBeenCalledTimes(3);
+      expect(
+        listener.mock.calls.map(([event]) => gitRepositoryStateInvalidationRoot(event)),
+      ).toEqual(["/repo", "/repo", "/repo"]);
+    } finally {
+      window.removeEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, listener);
     }
-    act(() =>
-      result.current.runMutation(async () => ({
-        schemaVersion: "1",
-        status: "blocked",
-        actionKind: "stage",
-      })),
-    );
-    await waitFor(() => expect(result.current.flow.busy).toBe(false));
-
-    expect(listener).toHaveBeenCalledTimes(3);
-    expect(listener.mock.calls.map(([event]) => gitRepositoryStateInvalidationRoot(event))).toEqual(
-      ["/repo", "/repo", "/repo"],
-    );
-    window.removeEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, listener);
   });
 
   it("invalidates the original repository when a mutation settles after a repository switch", async () => {
@@ -455,18 +457,21 @@ describe("useGitActions", () => {
       { initialProps: { projectId: "/repo-a" } },
     );
 
-    act(() => result.current.runMutation(() => pendingMutation));
-    rerender({ projectId: "/repo-b" });
-    await act(async () => {
-      resolveMutation({ schemaVersion: "1", status: "succeeded", actionKind: "commit" });
-      await pendingMutation;
-    });
+    try {
+      act(() => result.current.runMutation(() => pendingMutation));
+      rerender({ projectId: "/repo-b" });
+      await act(async () => {
+        resolveMutation({ schemaVersion: "1", status: "succeeded", actionKind: "commit" });
+        await pendingMutation;
+      });
 
-    expect(listener).toHaveBeenCalledOnce();
-    expect(
-      gitRepositoryStateInvalidationRoot(listener.mock.calls[0]?.[0] ?? new Event("missing")),
-    ).toBe("/repo-a");
-    window.removeEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, listener);
+      expect(listener).toHaveBeenCalledOnce();
+      expect(
+        gitRepositoryStateInvalidationRoot(listener.mock.calls[0]?.[0] ?? new Event("missing")),
+      ).toBe("/repo-a");
+    } finally {
+      window.removeEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, listener);
+    }
   });
 
   it("runMutation sets busy=false and populates error when the op rejects", async () => {

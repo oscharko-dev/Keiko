@@ -370,6 +370,72 @@ describe("EditorRuntimeWidget Git gutter", () => {
     await waitFor(() => expect(surface.props?.gitGutterRefreshNonce).toBe(initial + 2));
   });
 
+  it("does not match the previous canonical root after switching repositories", async () => {
+    let resolveRepositoryBStatus!: (status: Awaited<ReturnType<typeof fetchGitStatus>>) => void;
+    const repositoryBStatus = new Promise<Awaited<ReturnType<typeof fetchGitStatus>>>((resolve) => {
+      resolveRepositoryBStatus = resolve;
+    });
+    vi.mocked(fetchFilesContent).mockImplementation(async (requestedRoot, path) =>
+      fileResponse(undefined, requestedRoot, path),
+    );
+    vi.mocked(fetchGitStatus).mockImplementation((requestedRoot) =>
+      requestedRoot === "/repo-a"
+        ? Promise.resolve({
+            schemaVersion: "1",
+            root: "/repo-a",
+            repositoryRoot: "/canonical/repo-a",
+            state: "available",
+            available: true,
+            detached: false,
+            clean: true,
+            stagedCount: 0,
+            unstagedCount: 0,
+            untrackedCount: 0,
+            conflictedCount: 0,
+            changes: [],
+            truncated: false,
+            maxChanges: 500,
+          })
+        : repositoryBStatus,
+    );
+    const rendered = render(
+      <EditorRuntimeWidget windowId="git-switch" root="/repo-a" file="src/app.ts" />,
+    );
+    await screen.findByTestId("editor-surface");
+    const initial = surface.props?.gitGutterRefreshNonce ?? 0;
+
+    act(() => notifyGitRepositoryStateInvalidated("/canonical/repo-a"));
+    await waitFor(() => expect(surface.props?.gitGutterRefreshNonce).toBe(initial + 1));
+
+    rendered.rerender(
+      <EditorRuntimeWidget windowId="git-switch" root="/repo-b" file="src/app.ts" />,
+    );
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledWith("/repo-b"));
+    const switched = surface.props?.gitGutterRefreshNonce ?? 0;
+    act(() => notifyGitRepositoryStateInvalidated("/canonical/repo-a"));
+    expect(surface.props?.gitGutterRefreshNonce).toBe(switched);
+
+    await act(async () => {
+      resolveRepositoryBStatus({
+        schemaVersion: "1",
+        root: "/repo-b",
+        repositoryRoot: "/canonical/repo-b",
+        state: "available",
+        available: true,
+        detached: false,
+        clean: true,
+        stagedCount: 0,
+        unstagedCount: 0,
+        untrackedCount: 0,
+        conflictedCount: 0,
+        changes: [],
+        truncated: false,
+        maxChanges: 500,
+      });
+      await repositoryBStatus;
+    });
+  });
+
   it("opens and dismisses the localized shared hunk peek", async () => {
     await renderEditor();
     act(() => surface.props?.editorGitGutter?.onPeek({ hunk: HUNK, layer: "unstaged" }));

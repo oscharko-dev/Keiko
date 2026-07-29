@@ -856,8 +856,7 @@ export function GitClientWindow({
   useEffect((): (() => void) => {
     const onRepositoryStateInvalidated = (event: Event): void => {
       const invalidatedRoots = gitRepositoryStateInvalidationRoots(event);
-      const repositoryRoot =
-        status?.available === true ? (status.repositoryRoot ?? status.root) : null;
+      const repositoryRoot = mutationRepositoryRoot ?? null;
       if (
         !invalidatedRoots.some(
           (root): boolean =>
@@ -874,13 +873,12 @@ export function GitClientWindow({
         GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
         onRepositoryStateInvalidated,
       );
-  }, [selectedPath, status]);
+  }, [mutationRepositoryRoot, selectedPath]);
 
   useEffect((): (() => void) => {
     const onWorkspaceFileMutated = (event: Event): void => {
       const mutationRoot = workspaceFileMutationRoot(event);
-      const repositoryRoot =
-        status?.available === true ? (status.repositoryRoot ?? status.root) : null;
+      const repositoryRoot = mutationRepositoryRoot ?? null;
       if (
         mutationRoot !== selectedPath &&
         (repositoryRoot === null || mutationRoot !== repositoryRoot)
@@ -892,7 +890,7 @@ export function GitClientWindow({
     window.addEventListener(WORKSPACE_FILE_MUTATED_EVENT, onWorkspaceFileMutated);
     return (): void =>
       window.removeEventListener(WORKSPACE_FILE_MUTATED_EVENT, onWorkspaceFileMutated);
-  }, [selectedPath, status]);
+  }, [mutationRepositoryRoot, selectedPath]);
 
   // After a successful commit, refresh status and remount the composer to clear its fields.
   const commitOutcome = commit.flow.outcome;

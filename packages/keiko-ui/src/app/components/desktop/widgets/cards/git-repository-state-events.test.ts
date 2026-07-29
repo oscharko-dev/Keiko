@@ -12,17 +12,20 @@ describe("Git repository state invalidation events", () => {
     const listener = vi.fn<(event: Event) => void>();
     window.addEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, listener);
 
-    notifyGitRepositoryStateInvalidated("/repo/project", "/repo");
+    try {
+      notifyGitRepositoryStateInvalidated("/repo/project", "/repo");
 
-    expect(listener).toHaveBeenCalledOnce();
-    const event = listener.mock.calls[0]?.[0] ?? new Event("missing");
-    expect(gitRepositoryStateInvalidationRoot(event)).toBe("/repo/project");
-    expect(gitRepositoryStateInvalidationRoots(event)).toEqual(["/repo/project", "/repo"]);
-    expect((event as CustomEvent<unknown>).detail).toEqual({
-      root: "/repo/project",
-      repositoryRoot: "/repo",
-    });
-    window.removeEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, listener);
+      expect(listener).toHaveBeenCalledOnce();
+      const event = listener.mock.calls[0]?.[0] ?? new Event("missing");
+      expect(gitRepositoryStateInvalidationRoot(event)).toBe("/repo/project");
+      expect(gitRepositoryStateInvalidationRoots(event)).toEqual(["/repo/project", "/repo"]);
+      expect((event as CustomEvent<unknown>).detail).toEqual({
+        root: "/repo/project",
+        repositoryRoot: "/repo",
+      });
+    } finally {
+      window.removeEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, listener);
+    }
   });
 
   it("keeps a valid primary root when the canonical root is absent or malformed", (): void => {
@@ -41,20 +44,23 @@ describe("Git repository state invalidation events", () => {
     const listener = vi.fn<(event: Event) => void>();
     window.addEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, listener);
 
-    notifyGitRepositoryStateInvalidated("");
+    try {
+      notifyGitRepositoryStateInvalidated("");
 
-    expect(listener).not.toHaveBeenCalled();
-    expect(
-      gitRepositoryStateInvalidationRoot(new Event(GIT_REPOSITORY_STATE_INVALIDATED_EVENT)),
-    ).toBeNull();
-    expect(
-      gitRepositoryStateInvalidationRoot(
-        new CustomEvent(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, { detail: {} }),
-      ),
-    ).toBeNull();
-    expect(
-      gitRepositoryStateInvalidationRoots(new Event(GIT_REPOSITORY_STATE_INVALIDATED_EVENT)),
-    ).toEqual([]);
-    window.removeEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, listener);
+      expect(listener).not.toHaveBeenCalled();
+      expect(
+        gitRepositoryStateInvalidationRoot(new Event(GIT_REPOSITORY_STATE_INVALIDATED_EVENT)),
+      ).toBeNull();
+      expect(
+        gitRepositoryStateInvalidationRoot(
+          new CustomEvent(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, { detail: {} }),
+        ),
+      ).toBeNull();
+      expect(
+        gitRepositoryStateInvalidationRoots(new Event(GIT_REPOSITORY_STATE_INVALIDATED_EVENT)),
+      ).toEqual([]);
+    } finally {
+      window.removeEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, listener);
+    }
   });
 });
