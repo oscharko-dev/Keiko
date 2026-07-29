@@ -586,6 +586,7 @@ export function GitClientWindow({
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("diff");
   const [rightPaneAnnouncement, setRightPaneAnnouncement] = useState("");
   const syncSeqRef = useRef(0);
+  const repositoryConnectSeqRef = useRef(0);
   const newBranchReturnFocusRef = useRef<HTMLElement | null>(null);
   const rightPaneRef = useRef<HTMLDivElement | null>(null);
   const diffPaneRef = useRef<HTMLDivElement | null>(null);
@@ -874,13 +875,17 @@ export function GitClientWindow({
 
   const reconnectRepository = useCallback(
     (path: string): void => {
+      const requestSequence = repositoryConnectSeqRef.current + 1;
+      repositoryConnectSeqRef.current = requestSequence;
       setReposLoading(true);
       setReposError(null);
       void client.registerRepository({ path }).then(
         (response): void => {
+          if (requestSequence !== repositoryConnectSeqRef.current) return;
           if (applyConnectedRepository(response.project)) loadRepositories();
         },
         (error: unknown): void => {
+          if (requestSequence !== repositoryConnectSeqRef.current) return;
           setReposLoading(false);
           setReposError(
             t("gitClientWindow.repository.reconnectFailed", { detail: formatGitError(error) }),
@@ -893,6 +898,7 @@ export function GitClientWindow({
 
   const onRepositoryAdded = useCallback(
     (project: ProjectWithAvailability): void => {
+      repositoryConnectSeqRef.current += 1;
       if (applyConnectedRepository(project)) loadRepositories();
     },
     [applyConnectedRepository, loadRepositories],

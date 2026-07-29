@@ -487,6 +487,59 @@ describe("GitClientWindow — repository list", () => {
     expect(updateCfg).toHaveBeenCalledWith({ projectPath: REPO_A.path });
   });
 
+  it("keeps the latest repository when overlapping reconnects resolve out of order", async () => {
+    let resolveAlpha!: (value: ReturnType<typeof makeProjectResponse>) => void;
+    let resolveBeta!: (value: ReturnType<typeof makeProjectResponse>) => void;
+    const alpha = new Promise<ReturnType<typeof makeProjectResponse>>((resolve) => {
+      resolveAlpha = resolve;
+    });
+    const beta = new Promise<ReturnType<typeof makeProjectResponse>>((resolve) => {
+      resolveBeta = resolve;
+    });
+    const updateCfg = vi.fn();
+    const client = makeClient({
+      registerRepository: vi.fn(({ path }) => (path === REPO_A.path ? alpha : beta)),
+    });
+    render(<GitClientWindow client={client} updateCfg={updateCfg} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /alpha/ }));
+    fireEvent.click(screen.getByRole("button", { name: /beta/ }));
+    act(() => resolveBeta(makeProjectResponse(REPO_B)));
+    await waitFor(() => expect(updateCfg).toHaveBeenCalledWith({ projectPath: REPO_B.path }));
+
+    act(() => resolveAlpha(makeProjectResponse(REPO_A)));
+    await waitFor(() => expect(client.registerRepository).toHaveBeenCalledTimes(2));
+    expect(updateCfg).not.toHaveBeenCalledWith({ projectPath: REPO_A.path });
+    expect(screen.getByRole("combobox", { name: "Repository" })).toHaveTextContent("beta");
+  });
+
+  it("ignores a stale reconnect failure after a newer selection succeeds", async () => {
+    let rejectAlpha!: (reason: unknown) => void;
+    let resolveBeta!: (value: ReturnType<typeof makeProjectResponse>) => void;
+    const alpha = new Promise<ReturnType<typeof makeProjectResponse>>((_resolve, reject) => {
+      rejectAlpha = reject;
+    });
+    const beta = new Promise<ReturnType<typeof makeProjectResponse>>((resolve) => {
+      resolveBeta = resolve;
+    });
+    const client = makeClient({
+      registerRepository: vi.fn(({ path }) => (path === REPO_A.path ? alpha : beta)),
+    });
+    render(<GitClientWindow client={client} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /alpha/ }));
+    fireEvent.click(screen.getByRole("button", { name: /beta/ }));
+    act(() => resolveBeta(makeProjectResponse(REPO_B)));
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Repository" })).toHaveTextContent("beta"),
+    );
+
+    act(() => rejectAlpha(new Error("stale reconnect failed")));
+    await waitFor(() => expect(client.registerRepository).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText("stale reconnect failed")).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Repository" })).toHaveTextContent("beta");
+  });
+
   it.each([
     ["false", { ...REPO_A, workspaceAvailable: false }],
     [

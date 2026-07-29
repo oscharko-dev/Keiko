@@ -7,7 +7,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { isProjectAvailable, type Project, type UiStore } from "./store/index.js";
-import { WorkspaceManifestService } from "./workspace-manifests.js";
+import { parseWorkspaceManifestRecord } from "./workspace-manifests.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 
 export type WorkspaceRootMembershipFailure =
@@ -31,6 +31,7 @@ export interface CurrentWorkspaceRootMembership {
 interface IndexedWorkspaceRoot {
   readonly workspaceId: string;
   readonly root: WorkspaceRootDescriptor;
+  readonly objectIdentityDigest: string | undefined;
 }
 
 type WorkspaceRootMembershipSnapshot = ReadonlyMap<string, IndexedWorkspaceRoot>;
@@ -48,23 +49,21 @@ function canonicalRoot(rootInput: string): string {
 }
 
 function membershipSnapshot(store: UiStore): WorkspaceRootMembershipSnapshot {
-  const manifests: readonly WorkspaceManifest[] = new WorkspaceManifestService(store).list();
   const roots = new Map<string, IndexedWorkspaceRoot>();
-  for (const manifest of manifests) {
+  for (const record of store.listWorkspaceManifestRecords()) {
+    const manifest: WorkspaceManifest = parseWorkspaceManifestRecord(record);
     for (const root of manifest.roots) {
-      roots.set(root.canonicalRoot, { workspaceId: manifest.workspaceId, root });
+      const value = record.rootProjects.find(
+        (candidate): boolean => candidate.rootRef === root.rootRef,
+      )?.objectIdentityDigest;
+      roots.set(root.canonicalRoot, {
+        workspaceId: manifest.workspaceId,
+        root,
+        objectIdentityDigest: typeof value === "string" ? value : undefined,
+      });
     }
   }
   return roots;
-}
-
-function storedObjectIdentity(store: UiStore, rootRef: WorkspaceRootRef): string | undefined {
-  const value = store
-    .findWorkspaceManifestRecordByRoot(rootRef)
-    ?.rootProjects.find(
-      (candidate): boolean => candidate.rootRef === rootRef,
-    )?.objectIdentityDigest;
-  return typeof value === "string" ? value : undefined;
 }
 
 type DurableWorkspaceRootIdentity = ReturnType<typeof inspectWorkspaceRootIdentity> & {
@@ -85,7 +84,6 @@ function rootIdentityMatches(
 }
 
 function resolveCanonicalWorkspaceRootMembership(
-  store: UiStore,
   realRoot: string,
   snapshot: WorkspaceRootMembershipSnapshot,
 ): CurrentWorkspaceRootMembership {
@@ -97,9 +95,7 @@ function resolveCanonicalWorkspaceRootMembership(
   } catch {
     return unavailable("IDENTITY_UNREADABLE");
   }
-  if (
-    !rootIdentityMatches(inspected, indexed.root, storedObjectIdentity(store, indexed.root.rootRef))
-  ) {
+  if (!rootIdentityMatches(inspected, indexed.root, indexed.objectIdentityDigest)) {
     return unavailable("IDENTITY_DRIFT");
   }
   return {
@@ -112,12 +108,11 @@ function resolveCanonicalWorkspaceRootMembership(
 }
 
 function hasMembershipInSnapshot(
-  store: UiStore,
   rootInput: string,
   snapshot: WorkspaceRootMembershipSnapshot,
 ): boolean {
   try {
-    resolveCanonicalWorkspaceRootMembership(store, canonicalRoot(rootInput), snapshot);
+    resolveCanonicalWorkspaceRootMembership(canonicalRoot(rootInput), snapshot);
     return true;
   } catch {
     return false;
@@ -140,7 +135,7 @@ export function resolveCurrentWorkspaceRootMembership(
   } catch {
     return unavailable("ROOT_UNRESOLVED");
   }
-  return resolveCanonicalWorkspaceRootMembership(store, realRoot, snapshot);
+  return resolveCanonicalWorkspaceRootMembership(realRoot, snapshot);
 }
 
 export function hasCurrentWorkspaceRootMembership(store: UiStore, rootInput: string): boolean {
@@ -171,14 +166,14 @@ export function projectsWithWorkspaceAvailability(
   try {
     snapshot = membershipSnapshot(store);
   } catch {
-    return projects.map((project) => ({
+    return projects.map((project): ProjectWithAvailability => ({
       ...project,
       available: isProjectAvailable(project),
       workspaceAvailable: false,
     }));
   }
-  return projects.map((project) => {
-    const workspaceAvailable = hasMembershipInSnapshot(store, project.path, snapshot);
+  return projects.map((project): ProjectWithAvailability => {
+    const workspaceAvailable = hasMembershipInSnapshot(project.path, snapshot);
     return { ...project, available: isProjectAvailable(project), workspaceAvailable };
   });
 }
