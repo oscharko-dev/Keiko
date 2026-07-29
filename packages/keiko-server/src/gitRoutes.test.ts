@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,6 +29,7 @@ import {
   handleGitStructuredDiff,
   handleGitStatus,
   platformGitPath,
+  readBoundedSnapshotBytes,
   type GitProcessRunner,
 } from "./gitRoutes.js";
 
@@ -638,6 +640,29 @@ describe("GET /api/git/diff", () => {
     expect(platformGitPath("literal\\name.ts", "linux")).toBe("literal\\name.ts");
   });
 
+  it("reads a bounded snapshot through repeated short descriptor reads", async (): Promise<void> => {
+    const source = Buffer.from("complete", "utf8");
+    let calls = 0;
+    const descriptor = {
+      read: (
+        buffer: Buffer,
+        offset: number,
+        length: number,
+        position: number,
+      ): Promise<{ readonly bytesRead: number }> => {
+        calls += 1;
+        const bytesRead = Math.min(2, length, source.length - position);
+        if (bytesRead > 0) source.copy(buffer, offset, position, position + bytesRead);
+        return Promise.resolve({ bytesRead });
+      },
+    };
+
+    const snapshot = await readBoundedSnapshotBytes(descriptor, source.length);
+
+    expect(snapshot.toString("utf8")).toBe("complete");
+    expect(calls).toBeGreaterThan(1);
+  });
+
   it("rejects path traversal before invoking Git diff", async () => {
     const runner = vi.fn<GitProcessRunner>();
 
@@ -1051,6 +1076,83 @@ describe("GET /api/git/diff/structured", () => {
       expect.objectContaining({
         correlationId: "cid-untracked-swap",
         operation: "GET /api/git/diff",
+      }),
+    );
+  });
+
+  it("returns correlated STALE_PATH when a file changes during snapshot reading", async (): Promise<void> => {
+    await runRealGit(["init", "--quiet"]);
+    const target = join(root, "changing.txt");
+    await writeFile(target, "before\n", "utf8");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+
+    const result = await handleGitDiff(
+      ctx(
+        `/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree&path=changing.txt`,
+        "cid-untracked-stale",
+      ),
+      {
+        ...deps(defaultGitProcessRunner),
+        diagnostics: { record: (record): void => void diagnostics.push(record) },
+      },
+      {
+        runner: defaultGitProcessRunner,
+        maxDiffBytes: 4_096,
+        maxStatusBytes: 4_096,
+        maxChanges: 10,
+        snapshotReadObserver: async (): Promise<void> => {
+          await writeFile(target, "changed-after-read\n", "utf8");
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "STALE_PATH", correlationId: "cid-untracked-stale" } },
+    });
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        correlationId: "cid-untracked-stale",
+        message: "The bounded diff read was unavailable.",
+      }),
+    );
+  });
+
+  it("maps ordinary snapshot failures to a correlated Git diff error", async (): Promise<void> => {
+    await runRealGit(["init", "--quiet"]);
+    await writeFile(join(root, "failure.txt"), "content\n", "utf8");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+
+    const result = await handleGitDiff(
+      ctx(
+        `/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree&path=failure.txt`,
+        "cid-untracked-io",
+      ),
+      {
+        ...deps(defaultGitProcessRunner),
+        diagnostics: { record: (record): void => void diagnostics.push(record) },
+      },
+      {
+        runner: defaultGitProcessRunner,
+        maxDiffBytes: 4_096,
+        maxStatusBytes: 4_096,
+        maxChanges: 10,
+        snapshotReadObserver: (): never => {
+          throw new Error("private snapshot failure");
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: 500,
+      body: { error: { code: "GIT_DIFF_FAILED", correlationId: "cid-untracked-io" } },
+    });
+    expect(JSON.stringify(result.body)).not.toContain("private snapshot failure");
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        correlationId: "cid-untracked-io",
+        operation: "GET /api/git/diff",
+        errorClass: "Error",
       }),
     );
   });

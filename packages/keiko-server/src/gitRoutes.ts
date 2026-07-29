@@ -78,6 +78,8 @@ export interface GitRouteOptions {
   readonly maxChanges?: number | undefined;
   readonly timeoutMs?: number | undefined;
   readonly abortSignal?: AbortSignal | undefined;
+  /** Optional deterministic observation seam for concurrent snapshot-read verification. */
+  readonly snapshotReadObserver?: (() => Promise<void> | void) | undefined;
 }
 
 export interface NormalizedGitRouteOptions {
@@ -87,6 +89,7 @@ export interface NormalizedGitRouteOptions {
   readonly maxChanges: number;
   readonly timeoutMs: number;
   readonly abortSignal?: AbortSignal | undefined;
+  readonly snapshotReadObserver?: (() => Promise<void> | void) | undefined;
 }
 
 export interface RepositoryContext {
@@ -156,6 +159,9 @@ export function optionsWithDefaults(
     maxChanges: options?.maxChanges ?? DEFAULT_MAX_CHANGES,
     timeoutMs: options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     ...(options?.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
+    ...(options?.snapshotReadObserver === undefined
+      ? {}
+      : { snapshotReadObserver: options.snapshotReadObserver }),
   };
 }
 
@@ -741,6 +747,29 @@ interface UntrackedFileSnapshot {
 
 const NOFOLLOW_READ_FLAG = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
 
+interface SnapshotReadable {
+  read(
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number,
+  ): Promise<{ readonly bytesRead: number }>;
+}
+
+export async function readBoundedSnapshotBytes(
+  descriptor: SnapshotReadable,
+  maxBytes: number,
+): Promise<Buffer> {
+  const buffer = Buffer.allocUnsafe(maxBytes + 1);
+  let offset = 0;
+  while (offset < buffer.length) {
+    const read = await descriptor.read(buffer, offset, buffer.length - offset, offset);
+    if (read.bytesRead === 0) break;
+    offset += read.bytesRead;
+  }
+  return buffer.subarray(0, offset);
+}
+
 function sameOpenFile(left: BigIntStats, right: BigIntStats): boolean {
   return (
     left.isFile() &&
@@ -766,30 +795,33 @@ async function readOpenSnapshot(
   resolved: string,
   boundary: string,
   maxBytes: number,
+  observer: (() => Promise<void> | void) | undefined,
 ): Promise<UntrackedFileSnapshot> {
-  const descriptor = await open(resolved, constants.O_RDONLY | NOFOLLOW_READ_FLAG).catch(() => {
-    throw staleUntrackedPath();
-  });
+  const descriptor = await open(resolved, constants.O_RDONLY | NOFOLLOW_READ_FLAG).catch(
+    (): never => {
+      throw staleUntrackedPath();
+    },
+  );
   try {
     const before = await descriptor.stat({ bigint: true });
-    const current = await realpath(candidate).catch(() => {
+    const current = await realpath(candidate).catch((): never => {
       throw staleUntrackedPath();
     });
     if (!containsPath(boundary, current)) {
       throw new FilesError(400, "BAD_PATH", "The path must stay inside the selected root.");
     }
-    const currentStats = await stat(current, { bigint: true }).catch(() => {
+    const currentStats = await stat(current, { bigint: true }).catch((): never => {
       throw staleUntrackedPath();
     });
     if (!sameOpenFile(before, currentStats)) throw staleUntrackedPath();
-    const buffer = Buffer.allocUnsafe(maxBytes + 1);
-    const read = await descriptor.read(buffer, 0, maxBytes + 1, 0);
+    const buffer = await readBoundedSnapshotBytes(descriptor, maxBytes);
+    await observer?.();
     const after = await descriptor.stat({ bigint: true });
     if (!sameOpenFile(before, after)) throw staleUntrackedPath();
     return {
-      bytes: buffer.subarray(0, Math.min(read.bytesRead, maxBytes)),
+      bytes: buffer.subarray(0, Math.min(buffer.length, maxBytes)),
       mode: Number(before.mode & 0o777n),
-      truncated: read.bytesRead > maxBytes,
+      truncated: buffer.length > maxBytes,
     };
   } finally {
     await descriptor.close();
@@ -800,16 +832,17 @@ async function readContainedUntrackedSnapshot(
   repo: RepositoryContext,
   path: string,
   maxBytes: number,
+  observer: (() => Promise<void> | void) | undefined,
 ): Promise<UntrackedFileSnapshot> {
   const candidate = resolve(repo.realRoot, path);
-  const resolved = await realpath(candidate).catch(() => {
+  const resolved = await realpath(candidate).catch((): never => {
     throw staleUntrackedPath();
   });
   if (!containsPath(repo.realRoot, resolved)) {
     throw new FilesError(400, "BAD_PATH", "The path must stay inside the selected root.");
   }
-  const snapshot = await readOpenSnapshot(candidate, resolved, repo.realRoot, maxBytes);
-  const current = await realpath(candidate).catch(() => {
+  const snapshot = await readOpenSnapshot(candidate, resolved, repo.realRoot, maxBytes, observer);
+  const current = await realpath(candidate).catch((): never => {
     throw staleUntrackedPath();
   });
   if (!containsPath(repo.realRoot, current)) {
@@ -901,7 +934,12 @@ async function runUntrackedDiff(
   if (untracked.exitCode !== 0) return untracked;
   if (untracked.truncated) return { ...untracked, exitCode: 1, stdout: "" };
   if (!isExactUntrackedPath(untracked, gitRelativePath)) return original;
-  const snapshot = await readContainedUntrackedSnapshot(repo, selectedPath, maxBytes);
+  const snapshot = await readContainedUntrackedSnapshot(
+    repo,
+    selectedPath,
+    maxBytes,
+    options.snapshotReadObserver,
+  );
   return runSnapshotDiff(options, gitRelativePath, snapshot, maxBytes);
 }
 
@@ -1168,7 +1206,19 @@ async function runGitDiffHandler(
   try {
     return await work();
   } catch (error) {
-    if (!(error instanceof FilesError)) throw error;
+    if (!(error instanceof FilesError)) {
+      return {
+        status: 500,
+        body: gitReadErrorBody(
+          ctx,
+          deps,
+          error,
+          "GIT_DIFF_FAILED",
+          "Git diff is unavailable for this folder.",
+          "The bounded diff read was unavailable.",
+        ),
+      };
+    }
     const correlated = error.code === "BAD_PATH" || error.code === "STALE_PATH";
     return {
       status: error.status,
