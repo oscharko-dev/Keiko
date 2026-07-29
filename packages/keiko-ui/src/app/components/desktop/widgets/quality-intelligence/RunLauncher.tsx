@@ -1424,7 +1424,7 @@ export function RunLauncher({
           <p
             className="qi-degraded-notice"
             style={NATIVE_BLOCK_STYLE}
-            role="note"
+            aria-hidden="true"
             data-testid="qi-judge-unavailable"
           >
             {unavailableJudgeMessage}

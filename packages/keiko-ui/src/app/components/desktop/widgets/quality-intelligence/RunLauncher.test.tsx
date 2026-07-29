@@ -585,7 +585,10 @@ describe("RunLauncher — Quality Intelligence capability truth (#2804)", (): vo
     expect(judge).toBeDisabled();
     expect(judge).toHaveTextContent("No judge model");
     expect(screen.getByText("Model preflight: unavailable")).toBeInTheDocument();
-    expect(screen.getByTestId("qi-judge-unavailable")).toHaveTextContent(
+    const visibleJudgeNotice = screen.getByTestId("qi-judge-unavailable");
+    expect(visibleJudgeNotice).toHaveAttribute("aria-hidden", "true");
+    expect(visibleJudgeNotice).not.toHaveAttribute("role");
+    expect(visibleJudgeNotice).toHaveTextContent(
       "No compatible judge model is available. Runs can still succeed, but Quality will be unavailable.",
     );
     const judgeAnnouncement = screen.getByTestId("qi-judge-availability-announcement");
