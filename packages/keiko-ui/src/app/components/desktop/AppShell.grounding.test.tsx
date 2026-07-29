@@ -585,11 +585,14 @@ describe("AppShell grounding connections", () => {
 
   it("compensates a Files bind when its chat ownership changes in flight", async (): Promise<void> => {
     const persisted = deferred<{ readonly chat: Chat }>();
+    const compensation = deferred<{ readonly chat: Chat }>();
     const updated = chat({ connectedScopes: [fileScope("/repo")] });
     const restored = chat({ connectedScopes: [] });
+    const concurrent = chat({ connectedScopes: [fileScope("/other")] });
     mocks.updateChatConnectedScopes
       .mockReturnValueOnce(persisted.promise)
-      .mockResolvedValueOnce({ chat: restored });
+      .mockReturnValueOnce(compensation.promise)
+      .mockResolvedValueOnce({ chat: concurrent });
     await renderMounted();
     let current = true;
     const target: ChatBindingTarget = {
@@ -601,13 +604,50 @@ describe("AppShell grounding connections", () => {
       mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/repo"), target),
     );
     await waitFor((): void => expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce());
+    const concurrentBinding = Promise.resolve(
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/other")),
+    );
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce();
     current = false;
     persisted.resolve({ chat: updated });
 
-    await expect(binding).resolves.toBe(false);
+    await waitFor((): void => expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2));
     expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(2, "chat-1", null);
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
+    compensation.resolve({ chat: restored });
+    await expect(binding).resolves.toBe(false);
+    await expect(concurrentBinding).resolves.toBe(true);
+    expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(
+      3,
+      "chat-1",
+      expect.arrayContaining([expect.objectContaining({ root: "/other" })]),
+    );
+    expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(concurrent);
+    expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalledWith("chat-1", "/repo");
+    expect(mocks.recordReadsContextRelationship).toHaveBeenCalledWith("chat-1", "/other");
+  });
+
+  it("rejects an already-stale binding target before either persistence API runs", async () => {
+    await renderMounted();
+    const target: ChatBindingTarget = {
+      conversationId: "chat-1",
+      isCurrent: (): boolean => false,
+    };
+
+    const [filesAccepted, connectorAccepted] = await Promise.all([
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/repo"), target),
+      mocks.state.workspaceOptions?.onConnectorBind?.(
+        "chat-window",
+        capsuleScope("cap-stale"),
+        target,
+      ),
+    ]);
+
+    expect(filesAccepted).toBe(false);
+    expect(connectorAccepted).toBe(false);
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(mocks.updateChatLocalKnowledgeScopes).not.toHaveBeenCalled();
     expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
-    expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalled();
   });
 
   // GEN-PERF-RENDER-001 — the four scope-bind callbacks passed to useWorkspace depend on the stable

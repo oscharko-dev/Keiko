@@ -361,6 +361,24 @@ async function persistCurrentChatBinding<T>(
   return undefined;
 }
 
+async function serializeChatMutation<T>(
+  queue: Map<string, Promise<void>>,
+  chatKey: string,
+  mutation: () => Promise<T>,
+): Promise<T> {
+  const preceding = queue.get(chatKey) ?? Promise.resolve();
+  const result = preceding.then(mutation, mutation);
+  const settled = result.then(
+    (): void => undefined,
+    (): void => undefined,
+  );
+  queue.set(chatKey, settled);
+  void settled.then((): void => {
+    if (queue.get(chatKey) === settled) queue.delete(chatKey);
+  });
+  return result;
+}
+
 function isConversationGroundingConnection(
   connection: Connection,
   chatWindowId: string,
@@ -641,19 +659,24 @@ function AppShellInner(): ReactNode {
     },
     [session.activeChat, session.chats],
   );
+  const groundingMutationQueueRef = useRef(new Map<string, Promise<void>>());
+  const groundingMutationKey = useCallback(
+    (chatWindowId: string, target?: ChatBindingTarget): string =>
+      target?.conversationId ?? chatForWindow(chatWindowId)?.id ?? `window:${chatWindowId}`,
+    [chatForWindow],
+  );
   // Files↔Chat edges bind the Files window's visible scope: repository root, opened folder, or
   // previewed file. The green edge is now the only UI affordance for this binding.
   // Release 0.2.0 — returns whether the bind was accepted: at the source limit the bind is
   // REJECTED (with a visible notice) instead of silently evicting the oldest source, and the
   // caller skips drawing the edge so no dangling ungrounded edge appears.
-  const replaceFilesScope = useCallback(
+  const replaceFilesScopeNow = useCallback(
     async (
       chatWindowId: string,
       nextScope: ChatConnectedScope,
       previousScope: ChatConnectedScope | null = null,
       target?: ChatBindingTarget,
     ): Promise<boolean> => {
-      if (target !== undefined && !target.isCurrent()) return false;
       const chat = chatForWindow(chatWindowId);
       if (chat === undefined) {
         return rejectForConnectionFailure("Open a ready chat window before connecting a source.");
@@ -721,6 +744,21 @@ function AppShellInner(): ReactNode {
       rejectForConnectionFailure,
     ],
   );
+  const replaceFilesScope = useCallback(
+    (
+      chatWindowId: string,
+      nextScope: ChatConnectedScope,
+      previousScope: ChatConnectedScope | null = null,
+      target?: ChatBindingTarget,
+    ): Promise<boolean> =>
+      serializeChatMutation(
+        groundingMutationQueueRef.current,
+        groundingMutationKey(chatWindowId, target),
+        async (): Promise<boolean> =>
+          replaceFilesScopeNow(chatWindowId, nextScope, previousScope, target),
+      ),
+    [groundingMutationKey, replaceFilesScopeNow],
+  );
   const handleScopeBind = useCallback(
     async (
       chatWindowId: string,
@@ -731,32 +769,37 @@ function AppShellInner(): ReactNode {
   );
   const handleScopeUnbind = useCallback(
     (chatWindowId: string, scope: ChatConnectedScope): void => {
-      const chat = chatForWindow(chatWindowId);
-      if (chat === undefined) return;
-      const next = removeConnectedScope(effectiveScopes(chat), scope);
-      void updateChatConnectedScopes(chat.id, next.length > 0 ? next : null)
-        .then((res) => {
-          session.replaceChat(res.chat);
-        })
-        .catch((error: unknown) => {
-          // uiux-fix F008 C074 — a failed unbind silently left the chat grounded after edge removal.
-          console.warn("[keiko] connected-scope unbind failed", error);
-        });
+      const chatKey = groundingMutationKey(chatWindowId);
+      void serializeChatMutation(
+        groundingMutationQueueRef.current,
+        chatKey,
+        async (): Promise<void> => {
+          const chat = chatForWindow(chatWindowId);
+          if (chat === undefined) return;
+          const next = removeConnectedScope(effectiveScopes(chat), scope);
+          try {
+            const res = await updateChatConnectedScopes(chat.id, next.length > 0 ? next : null);
+            session.replaceChat(res.chat);
+          } catch (error: unknown) {
+            // uiux-fix F008 C074 — a failed unbind silently left the chat grounded after edge removal.
+            console.warn("[keiko] connected-scope unbind failed", error);
+          }
+        },
+      );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
-    [chatForWindow, session.replaceChat],
+    [chatForWindow, groundingMutationKey, session.replaceChat],
   );
   // Epic #189 Slice 3 M3 — a Connector↔Chat relationship edge binds/unbinds the connector scope
   // on the active chat's localKnowledgeScopes, so the gesture grounds the chat via vector search.
   // Release 0.2.0 — same accepted/veto contract as handleScopeBind: at the source limit the
   // bind is rejected with a visible notice instead of silently evicting the oldest source.
-  const handleConnectorBind = useCallback(
+  const handleConnectorBindNow = useCallback(
     async (
       chatWindowId: string,
       scope: ChatLocalKnowledgeScope,
       target?: ChatBindingTarget,
     ): Promise<boolean> => {
-      if (target !== undefined && !target.isCurrent()) return false;
       const chat = chatForWindow(chatWindowId);
       if (chat === undefined) {
         return rejectForConnectionFailure("Open a ready chat window before connecting a source.");
@@ -801,21 +844,45 @@ function AppShellInner(): ReactNode {
       rejectForConnectionFailure,
     ],
   );
+  const handleConnectorBind = useCallback(
+    (
+      chatWindowId: string,
+      scope: ChatLocalKnowledgeScope,
+      target?: ChatBindingTarget,
+    ): Promise<boolean> =>
+      serializeChatMutation(
+        groundingMutationQueueRef.current,
+        groundingMutationKey(chatWindowId, target),
+        async (): Promise<boolean> => handleConnectorBindNow(chatWindowId, scope, target),
+      ),
+    [groundingMutationKey, handleConnectorBindNow],
+  );
   const handleConnectorUnbind = useCallback(
     (chatWindowId: string, scope: ChatLocalKnowledgeScope): void => {
-      const chat = chatForWindow(chatWindowId);
-      if (chat === undefined) return;
-      const key =
-        scope.kind === "capsule" ? `capsule:${scope.capsuleId}` : `set:${scope.capsuleSetId}`;
-      const next = removeConnectorScope(effectiveLocalKnowledgeScopes(chat), key);
-      void updateChatLocalKnowledgeScopes(chat.id, next.length > 0 ? next : null)
-        .then((res) => {
-          session.replaceChat(res.chat);
-        })
-        .catch(() => undefined);
+      const chatKey = groundingMutationKey(chatWindowId);
+      void serializeChatMutation(
+        groundingMutationQueueRef.current,
+        chatKey,
+        async (): Promise<void> => {
+          const chat = chatForWindow(chatWindowId);
+          if (chat === undefined) return;
+          const key =
+            scope.kind === "capsule" ? `capsule:${scope.capsuleId}` : `set:${scope.capsuleSetId}`;
+          const next = removeConnectorScope(effectiveLocalKnowledgeScopes(chat), key);
+          try {
+            const res = await updateChatLocalKnowledgeScopes(
+              chat.id,
+              next.length > 0 ? next : null,
+            );
+            session.replaceChat(res.chat);
+          } catch {
+            // Best-effort unbind retains the server state when persistence is unavailable.
+          }
+        },
+      );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
-    [chatForWindow, session.replaceChat],
+    [chatForWindow, groundingMutationKey, session.replaceChat],
   );
   const [cameraSmoothness, setCameraSmoothness] = useState<number>(readWorkspaceCameraSmoothness);
 
