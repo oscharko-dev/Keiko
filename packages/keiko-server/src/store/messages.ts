@@ -560,8 +560,11 @@ function selectGatewayUnits(
   const mandatory = newestFirst.find((unit): boolean =>
     unit.some((row): boolean => row.id === currentUserMessageId),
   );
-  let selectedCount = mandatory?.length ?? 0;
-  if (mandatory !== undefined && selectedCount <= limit) selected.push([...mandatory]);
+  let selectedCount = 0;
+  if (mandatory !== undefined && mandatory.length <= limit) {
+    selected.push([...mandatory]);
+    selectedCount = mandatory.length;
+  }
   for (const unit of newestFirst) {
     if (unit === mandatory) continue;
     if (unit.length > limit - selectedCount) break;
