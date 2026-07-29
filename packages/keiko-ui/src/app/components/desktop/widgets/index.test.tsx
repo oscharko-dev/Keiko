@@ -1019,8 +1019,18 @@ describe("workspace widget renderer registry", () => {
     const createdChat = {
       id: "chat-created",
       title: "Window chat",
-      status: "open",
+      status: "open" as const,
       projectPath: originRoot,
+    };
+    const renamedChat: Chat = {
+      ...createdChat,
+      title: "Latest window chat",
+      selectedModel: "model-1",
+      branchLabel: undefined,
+      connectedScope: undefined,
+      localKnowledgeScope: undefined,
+      createdAt: 1,
+      updatedAt: 2,
     };
     const creation = deferred<typeof createdChat>();
     chatSessionMock.activeProject = originProject;
@@ -1034,6 +1044,17 @@ describe("workspace widget renderer registry", () => {
         return created;
       }),
     );
+    chatSessionMock.replaceChat.mockImplementation((chat): void => {
+      const sessionChat = {
+        id: chat.id,
+        title: chat.title,
+        status: chat.status ?? "open",
+        projectPath: chat.projectPath ?? originRoot,
+      };
+      chatSessionMock.activeChat = sessionChat;
+      chatSessionMock.chats = [sessionChat];
+    });
+    apiMock.updateChat.mockResolvedValue({ chat: renamedChat });
     const view = render(
       <>{WIN_TYPES.editor.render({ root: originRoot, file: "src/app.ts" }, ctx)}</>,
     );
@@ -1052,9 +1073,19 @@ describe("workspace widget renderer registry", () => {
     view.rerender(
       <>
         {WIN_TYPES.chat.render(
+          { title: renamedChat.title, newChatRequestId: "window-request-latest" },
+          ctx,
+        )}
+      </>,
+    );
+    expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce();
+
+    view.rerender(
+      <>
+        {WIN_TYPES.chat.render(
           {
-            title: "Window chat",
-            newChatRequestId: "window-request",
+            title: renamedChat.title,
+            newChatRequestId: "window-request-latest",
             selectionHandoffId,
           },
           ctx,
@@ -1070,9 +1101,13 @@ describe("workspace widget renderer registry", () => {
 
     await waitFor((): void => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
     expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce();
+    expect(apiMock.updateChat).toHaveBeenCalledWith(createdChat.id, {
+      title: renamedChat.title,
+    });
+    expect(chatSessionMock.replaceChat).toHaveBeenCalledWith(renamedChat);
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       chatId: "chat-created",
-      title: "Window chat",
+      title: renamedChat.title,
       selectionHandoffId: undefined,
       newChatRequestId: undefined,
     });

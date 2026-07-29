@@ -255,8 +255,10 @@ function useChatCreationCoordinator(
         activeByProjectRef.current.set(projectPath, active);
       } else {
         active.owner = owner;
-        active.desiredTitle = normalizedChatTitle(title);
-        active.titleRevision += 1;
+        if (owner.kind === "window" || title !== undefined) {
+          active.desiredTitle = normalizedChatTitle(title);
+          active.titleRevision += 1;
+        }
       }
       currentRef.current = active;
       return activeCreationResult(active, currentRef, replaceChat);

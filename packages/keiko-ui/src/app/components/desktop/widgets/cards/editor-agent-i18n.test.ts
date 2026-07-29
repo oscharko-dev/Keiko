@@ -27,7 +27,7 @@ describe("editor agent translations", () => {
     );
   });
 
-  it("localizes chat creation failures in English and German", () => {
+  it("localizes chat creation failures in English and German", (): void => {
     expect(translateEditorAgent("en", "chat.creation.openFailed")).toBe("Could not open chat.");
     expect(translateEditorAgent("de", "chat.creation.openFailed")).toBe(
       "Der Chat konnte nicht geöffnet werden.",

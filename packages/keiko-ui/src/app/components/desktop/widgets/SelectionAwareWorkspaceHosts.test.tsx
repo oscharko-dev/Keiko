@@ -696,6 +696,39 @@ describe("ChatWindowSessionHost target missing", () => {
     });
   });
 
+  it("does not persist an empty normalized title", async (): Promise<void> => {
+    const creation = deferred<Chat | undefined>();
+    const created = chatFixture("chat-created", "New chat", 2);
+    chatSessionState.activeChat = undefined;
+    chatSessionState.activeProject = undefined;
+    chatSessionState.chats = [];
+    chatSessionState.openNewChat.mockReturnValueOnce(creation.promise);
+    const ctx = context();
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ title: "   ", newChatRequestId: "request-empty-title" }}
+          ctx={ctx}
+        />
+      </I18nProvider>,
+    );
+    await waitFor((): void => expect(chatSessionState.openNewChat).toHaveBeenCalledOnce());
+
+    await act(async (): Promise<void> => {
+      creation.resolve(created);
+      await creation.promise;
+    });
+
+    await waitFor((): void =>
+      expect(ctx.updateCfg).toHaveBeenCalledWith({
+        chatId: created.id,
+        title: created.title,
+        newChatRequestId: undefined,
+      }),
+    );
+    expect(updateChatMock).not.toHaveBeenCalled();
+  });
+
   it("starts a project-appropriate creation and ignores the stale project result", async (): Promise<void> => {
     const projectA: ProjectWithAvailability = {
       path: "/repo-a",
