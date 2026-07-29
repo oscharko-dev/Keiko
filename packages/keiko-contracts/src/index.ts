@@ -1886,6 +1886,7 @@ export {
   assertNeverVoiceControlMessageKind,
   isVoiceControlMessage,
   validateVoiceControlMessage,
+  decodeVoiceControlMessage,
 } from "./voice-protocol.js";
 
 // ─── Voice transcript segment lifecycle (Issue #500 / Epic #491; ADR-0105) ───────

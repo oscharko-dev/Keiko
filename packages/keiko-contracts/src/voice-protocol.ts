@@ -15,6 +15,7 @@
 // the single capability-gated loopback WebSocket path selected by Issue #497 and narrowed to
 // media-input/transcription authority by ADR-0154.
 
+import { VOICE_PROVIDER_LOCALITIES } from "./gateway.js";
 import type {
   VoicePersona,
   VoiceProfile,
@@ -80,6 +81,7 @@ export const VOICE_NEGOTIATION_MODES: readonly VoiceNegotiationMode[] = [
   "direct-ephemeral",
   "disabled",
 ] as const;
+const VOICE_NEGOTIATION_MODE_SET: ReadonlySet<string> = new Set(VOICE_NEGOTIATION_MODES);
 
 export const PREFERRED_VOICE_NEGOTIATION_MODE: VoiceNegotiationMode = "proxied-sdp";
 
@@ -287,6 +289,7 @@ export const VOICE_PROTOCOL_ERROR_CODES: readonly VoiceProtocolErrorCode[] = [
   "rate-limited",
   "internal",
 ] as const;
+const VOICE_PROTOCOL_ERROR_CODE_SET: ReadonlySet<string> = new Set(VOICE_PROTOCOL_ERROR_CODES);
 
 // ─── Control message envelope + discriminated union ─────────────────────────────
 // Every control message shares the envelope: the protocol version, the session it belongs to, a
@@ -417,6 +420,11 @@ export interface VoicePolicyDecisionMessage extends VoiceControlEnvelope<"policy
 
 export interface VoiceErrorMessage extends VoiceControlEnvelope<"error"> {
   readonly code: VoiceProtocolErrorCode;
+  /**
+   * Optional content-free support token. Server-side operator diagnostics use the same value so an
+   * opaque UI failure can be correlated without exposing provider, SDP, audio, or transcript data.
+   */
+  readonly correlationId?: string | undefined;
 }
 
 export type VoiceControlMessage =
@@ -589,6 +597,9 @@ const VOICE_SESSION_GROUNDING_FIELDS: ReadonlySet<string> = new Set([
   "sourceCount",
   "kind",
 ]);
+const VOICE_ERROR_CORRELATION_ID_MAX_LENGTH = 128;
+const VOICE_ERROR_CORRELATION_ID_INVALID_CHARACTER = /[^A-Za-z0-9._-]/u;
+const VOICE_PROVIDER_LOCALITY_SET: ReadonlySet<string> = new Set(VOICE_PROVIDER_LOCALITIES);
 
 // ─── Type guards & lookups ───────────────────────────────────────────────────────
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -616,6 +627,14 @@ function isVoiceProfile(value: unknown): value is VoiceProfile {
   );
 }
 
+function isOptionalVoiceProviderLocality(
+  value: unknown,
+): value is VoiceProviderLocality | undefined {
+  return (
+    value === undefined || (typeof value === "string" && VOICE_PROVIDER_LOCALITY_SET.has(value))
+  );
+}
+
 function profileNegotiationMatches(profile: unknown, negotiationMode: unknown): boolean {
   if (!isVoiceProfile(profile)) return true;
   if (!isVoiceNegotiationMode(negotiationMode)) return true;
@@ -624,6 +643,23 @@ function profileNegotiationMatches(profile: unknown, negotiationMode: unknown): 
 
 function isOptionalTranscriptionLanguage(value: unknown): boolean {
   return value === undefined || isNonEmptyTrimmed(value);
+}
+
+function isErrorCorrelationId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= VOICE_ERROR_CORRELATION_ID_MAX_LENGTH &&
+    !VOICE_ERROR_CORRELATION_ID_INVALID_CHARACTER.test(value)
+  );
+}
+
+function isOptionalErrorCorrelationId(value: unknown): boolean {
+  return value === undefined || isErrorCorrelationId(value);
+}
+
+function isVoiceProtocolErrorCode(value: unknown): value is VoiceProtocolErrorCode {
+  return typeof value === "string" && VOICE_PROTOCOL_ERROR_CODE_SET.has(value);
 }
 
 function isOptionalVoicePersona(value: unknown): value is VoicePersona | undefined {
@@ -701,6 +737,15 @@ function validateSessionCreatePayload(value: Record<string, unknown>, reasons: s
   validateSessionCreateOptions(value, reasons);
 }
 
+function validateErrorPayload(value: Record<string, unknown>, reasons: string[]): void {
+  if (!isVoiceProtocolErrorCode(value.code)) {
+    reasons.push("error code invalid");
+  }
+  if (!isOptionalErrorCorrelationId(value.correlationId)) {
+    reasons.push("error correlationId invalid");
+  }
+}
+
 export function isVoiceControlMessageKind(value: unknown): value is VoiceControlMessageKind {
   return (
     typeof value === "string" && (VOICE_CONTROL_MESSAGE_KINDS as readonly string[]).includes(value)
@@ -714,9 +759,7 @@ export function isVoiceMessageDirection(value: unknown): value is VoiceMessageDi
 }
 
 export function isVoiceNegotiationMode(value: unknown): value is VoiceNegotiationMode {
-  return (
-    typeof value === "string" && (VOICE_NEGOTIATION_MODES as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && VOICE_NEGOTIATION_MODE_SET.has(value);
 }
 
 // The replay class for a control-message kind. `replayable` events are the ones a reconnect
@@ -770,14 +813,16 @@ function validateEnvelope(value: Record<string, unknown>, reasons: string[]): vo
   }
 }
 
-// Structural guard for the shared envelope plus the v1-compatible session.create payload. Productive
-// transports apply their own narrower direction/authority allowlists after this decoder.
+// Structural guard for the shared envelope, the v1-compatible session.create payload, and bounded
+// content-free error correlation identifiers. Productive transports apply their own narrower
+// direction/authority allowlists after this decoder.
 export function isVoiceControlMessage(value: unknown): value is VoiceControlMessage {
   return validateVoiceControlMessage(value).ok;
 }
 
-// Deep validation of the shared envelope plus the published v1-compatible session.create shape,
-// returning every reason it is malformed. It grants no productive authority by itself.
+// Deep validation of the shared envelope, the published v1-compatible session.create shape, and the
+// content-free portion of error payloads, returning every reason it is malformed. It grants no
+// productive authority by itself.
 export function validateVoiceControlMessage(value: unknown): VoiceProtocolValidation {
   if (!isRecord(value)) {
     return { ok: false, reasons: ["message must be an object"] };
@@ -786,6 +831,62 @@ export function validateVoiceControlMessage(value: unknown): VoiceProtocolValida
   validateEnvelope(value, reasons);
   if (value.kind === "session.create") {
     validateSessionCreatePayload(value, reasons);
+  } else if (value.kind === "error") {
+    validateErrorPayload(value, reasons);
   }
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+}
+
+function isDecodedSessionCreatedMessage(
+  value: VoiceControlMessage,
+): value is VoiceSessionCreatedMessage {
+  return (
+    value.kind === "session.created" &&
+    value.profile === "full-realtime" &&
+    value.controlTransport === VOICE_REALTIME_CONTROL_TRANSPORT &&
+    value.mediaTransport === VOICE_PROFILE_MEDIA_TRANSPORT["full-realtime"] &&
+    value.negotiationMode === VOICE_PROFILE_NEGOTIATION_MODE["full-realtime"] &&
+    isOptionalVoiceProviderLocality(value.providerLocality)
+  );
+}
+
+function isDecodedSdpAnswerMessage(value: VoiceControlMessage): value is VoiceSdpAnswerMessage {
+  return value.kind === "signal.sdp.answer" && isNonEmptyTrimmed(value.sdp);
+}
+
+function isBrowserNegotiationMessage(
+  value: VoiceControlMessage,
+): value is VoiceSessionCreatedMessage | VoiceSdpAnswerMessage | VoiceErrorMessage {
+  if (value.direction !== "host-to-client") return false;
+  return (
+    value.kind === "error" ||
+    isDecodedSessionCreatedMessage(value) ||
+    isDecodedSdpAnswerMessage(value)
+  );
+}
+
+/**
+ * Decode the host-to-browser control messages used by the proxied-SDP negotiation handshake.
+ *
+ * Invalid optional error correlation metadata is omitted from a copy so it cannot hide an otherwise
+ * valid control-plane failure. Only `session.created`, `signal.sdp.answer`, and `error` are returned;
+ * their required payload fields are checked after envelope validation. Other message kinds and
+ * malformed negotiation payloads return `undefined`.
+ */
+export function decodeVoiceControlMessage(
+  value: unknown,
+): VoiceSessionCreatedMessage | VoiceSdpAnswerMessage | VoiceErrorMessage | undefined {
+  let candidate = value;
+  if (
+    isRecord(value) &&
+    value.kind === "error" &&
+    !isOptionalErrorCorrelationId(value.correlationId)
+  ) {
+    const withoutCorrelationId = { ...value };
+    delete withoutCorrelationId.correlationId;
+    candidate = withoutCorrelationId;
+  }
+  return isVoiceControlMessage(candidate) && isBrowserNegotiationMessage(candidate)
+    ? candidate
+    : undefined;
 }

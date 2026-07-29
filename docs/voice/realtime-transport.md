@@ -65,6 +65,15 @@ client                                   BFF (/api/voice/control)            pro
   atomically as GA multipart form data. Ephemeral-session providers receive the same input-only
   configuration when the host mints the short-lived secret, followed by the raw SDP call. Neither path
   configures assistant instructions, tools, output voice, or native response generation.
+- Live dictation uses that realtime WebRTC contract in both authentication modes: provider session
+  `type` is `realtime`, `turn_detection` is `null`, and the input-transcription object contains only
+  the configured deployment alias plus an optional language hint. It never mixes the dedicated
+  transcription-session `delay` field into `/realtime/calls` or `/realtime/client_secrets`; the
+  browser explicitly commits the captured input buffer.
+- A failed live-dictation negotiation emits one body-free operator diagnostic and returns the same
+  bounded correlation id with the stable `negotiation-failed` control code. The composer localizes
+  that failure class and shows the support id; provider bodies, endpoints, credentials, SDP, audio,
+  and transcript text remain server-side-secret or never-persisted.
 - Per-direction monotonic `seq` + idempotency on `(sessionId, seq)`; a re-sent `session.create` with
   the same `idempotencyKey` resumes the detached session and replays the bounded `replayable` buffer
   rather than creating a duplicate (protocol §7). The key remains bound to its original session,

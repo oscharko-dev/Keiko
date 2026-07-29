@@ -316,6 +316,8 @@ describe("VoiceDictationPreview", () => {
     ["no-microphone", /No microphone was found/u],
     ["unsupported", /does not support microphone dictation/u],
     ["unavailable", /not available right now/u],
+    ["negotiation-failed", /could not connect/u],
+    ["connection-failed", /connection was interrupted/u],
     ["transcribe-failed", /could not be completed/u],
     ["capture-failed", /could not be completed/u],
   ] as const)("renders a scoped headline for the %s error reason", (reason, pattern) => {
@@ -331,6 +333,25 @@ describe("VoiceDictationPreview", () => {
       />,
     );
     expect(screen.getByRole("alert")).toHaveTextContent(pattern);
+  });
+
+  it("shows the content-free support id for a correlated live failure", () => {
+    render(
+      <VoiceDictationPreview
+        phase="error"
+        transcript=""
+        error={{
+          reason: "negotiation-failed",
+          message: "redacted",
+          correlationId: "dictation-corr-2806",
+        }}
+        onTranscriptChange={vi.fn()}
+        onInsert={vi.fn()}
+        onDiscard={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Support ID: dictation-corr-2806");
   });
 
   it("has no axe violations in preview and error states", async () => {
