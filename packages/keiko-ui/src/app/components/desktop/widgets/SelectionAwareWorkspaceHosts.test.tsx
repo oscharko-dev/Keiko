@@ -17,6 +17,7 @@ import {
   ChatWindowSessionHost,
   EditorWindowSessionHost,
   FilesWindowSessionHost,
+  normalizedChatTitle,
 } from "./SelectionAwareWorkspaceHosts";
 
 const addRoot = vi.hoisted(() => vi.fn());
@@ -234,6 +235,7 @@ function lastCfgPatch(ctx: WindowRenderContext): Record<string, unknown> {
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
   editorProps.length = 0;
   editorHandlers.length = 0;
@@ -551,6 +553,32 @@ describe("EditorWindowSessionHost reveal targeting (#2621)", () => {
 });
 
 describe("ChatWindowSessionHost target missing", () => {
+  it("rejects whitespace-only titles at the owning normalization boundary", (): void => {
+    expect(normalizedChatTitle(" \t\n ")).toBeUndefined();
+  });
+
+  it("reports a content-free diagnostic when chat creation rejects", async (): Promise<void> => {
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
+    chatSessionState.openNewChat.mockRejectedValueOnce(new Error("customer-chat-creation-detail"));
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ title: "Sensitive title", newChatRequestId: "request-failure" }}
+          ctx={context()}
+        />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not open chat.");
+    expect(reportError).toHaveBeenCalledOnce();
+    const reported = reportError.mock.calls[0]?.[0];
+    expect(reported).toBeInstanceOf(Error);
+    expect((reported as Error).message).toBe("Chat creation request failed.");
+    expect((reported as Error).message).not.toContain("customer-chat-creation-detail");
+    expect((reported as Error).message).not.toContain("Sensitive title");
+  });
+
   it("creates and binds one canonical chat while the old composer stays unavailable", async (): Promise<void> => {
     const existing = chatFixture("chat-existing", "Existing chat", 1);
     const created = chatFixture("chat-created", "Release grounding review", 2);

@@ -161,6 +161,7 @@ interface ChatCreationCoordinator {
     owner: ChatCreationOwner,
     project?: ProjectWithAvailability,
     title?: string,
+    isOwnerCurrent?: () => boolean,
   ) => Promise<ChatCreationResult>;
 }
 
@@ -171,6 +172,7 @@ interface ChatCreationResult {
 
 interface ActiveChatCreation {
   desiredTitle: string | undefined;
+  isOwnerCurrent: () => boolean;
   owner: ChatCreationOwner;
   readonly projectPath: string | null;
   readonly promise: Promise<Chat | undefined>;
@@ -182,7 +184,10 @@ function sameCreationOwner(left: ChatCreationOwner, right: ChatCreationOwner): b
   return left.kind === right.kind && left.id === right.id;
 }
 
-function normalizedChatTitle(title: string | undefined): string | undefined {
+const CHAT_CREATION_REQUEST_DIAGNOSTIC = "Chat creation request failed.";
+const CHAT_TITLE_UPDATE_DIAGNOSTIC = "Chat title update failed.";
+
+export function normalizedChatTitle(title: string | undefined): string | undefined {
   const normalized = title?.trim();
   return normalized === undefined || normalized.length === 0 ? undefined : normalized;
 }
@@ -211,6 +216,7 @@ async function reconcileChatTitleRevision(
     replaceChat(response.chat);
     return { kind: "settled", result: { chat: response.chat, titleSaveFailed: false } };
   } catch {
+    window.reportError(new Error(CHAT_TITLE_UPDATE_DIAGNOSTIC));
     if (revision !== active.titleRevision) return { kind: "retry", chat };
     const result = isCurrent()
       ? { chat, titleSaveFailed: true }
@@ -243,7 +249,7 @@ function activeCreationResult(
   const reconciliation = reconcileActiveChatCreation(
     active,
     replaceChat,
-    (): boolean => currentRef.current === active,
+    (): boolean => currentRef.current === active && active.isOwnerCurrent(),
   );
   const tracked = reconciliation.finally((): void => {
     if (active.reconciliation === tracked) active.reconciliation = null;
@@ -259,12 +265,13 @@ function useChatCreationCoordinator(
   const activeByProjectRef = useRef(new Map<string | null, ActiveChatCreation>());
   const currentRef = useRef<ActiveChatCreation | null>(null);
   const request = useCallback<ChatCreationCoordinator["request"]>(
-    (owner, project, title): Promise<ChatCreationResult> => {
+    (owner, project, title, isOwnerCurrent = (): boolean => true): Promise<ChatCreationResult> => {
       const projectPath = project?.path ?? null;
       let active = activeByProjectRef.current.get(projectPath);
       if (active === undefined) {
         active = {
           desiredTitle: normalizedChatTitle(title),
+          isOwnerCurrent,
           owner,
           projectPath,
           promise: openNewChat(project, title),
@@ -273,6 +280,7 @@ function useChatCreationCoordinator(
         };
         activeByProjectRef.current.set(projectPath, active);
       } else {
+        active.isOwnerCurrent = isOwnerCurrent;
         active.owner = owner;
         if (owner.kind === "window" || title !== undefined) {
           active.desiredTitle = normalizedChatTitle(title);
@@ -427,6 +435,45 @@ interface ChatCreationRequestExecution {
   readonly updateCfg: WindowRenderContext["updateCfg"];
 }
 
+interface ChatCreationAttemptState {
+  active: {
+    readonly coordinator: ChatCreationCoordinator;
+    readonly owner: ChatCreationOwner;
+  } | null;
+  attemptedRequestKey: string | undefined;
+  latestAttempt: number;
+  sequence: number;
+}
+
+function invalidateChatCreationAttempt(state: ChatCreationAttemptState): void {
+  state.sequence += 1;
+  state.latestAttempt = state.sequence;
+  state.attemptedRequestKey = undefined;
+  state.active?.coordinator.release(state.active.owner);
+  state.active = null;
+}
+
+function useChatCreationLifetime(stateRef: { readonly current: ChatCreationAttemptState }): {
+  readonly current: boolean;
+} {
+  const mountedRef = useRef(true);
+  const disposalRef = useRef<number | null>(null);
+  useEffect((): (() => void) => {
+    const state = stateRef.current;
+    mountedRef.current = true;
+    if (disposalRef.current !== null) window.clearTimeout(disposalRef.current);
+    disposalRef.current = null;
+    return (): void => {
+      mountedRef.current = false;
+      disposalRef.current = window.setTimeout((): void => {
+        invalidateChatCreationAttempt(state);
+        disposalRef.current = null;
+      }, 0);
+    };
+  }, [stateRef]);
+  return mountedRef;
+}
+
 function applyChatCreationResult(
   execution: ChatCreationRequestExecution,
   result: ChatCreationResult,
@@ -455,12 +502,13 @@ function applyChatCreationResult(
 
 function executeChatCreationRequest(execution: ChatCreationRequestExecution): void {
   void execution.coordinator
-    .request(execution.owner, execution.activeProject, execution.title)
+    .request(execution.owner, execution.activeProject, execution.title, execution.isCurrent)
     .then(
       (result): void => {
         if (execution.isCurrent()) applyChatCreationResult(execution, result);
       },
       (): void => {
+        window.reportError(new Error(CHAT_CREATION_REQUEST_DIAGNOSTIC));
         if (!execution.isCurrent()) return;
         execution.setError({
           chatId: undefined,
@@ -500,30 +548,43 @@ function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationCont
   const requestId = pending ? (newChatRequestId ?? "initial-unbound-chat") : undefined;
   const projectPath = activeProject?.path ?? null;
   const requestKey = requestId === undefined ? undefined : `${requestId}\u0000${projectPath ?? ""}`;
-  const attemptSequenceRef = useRef(0);
-  const attemptedRequestKeyRef = useRef<string | undefined>(undefined);
-  const latestAttemptRef = useRef(0);
+  const attemptStateRef = useRef<ChatCreationAttemptState>({
+    active: null,
+    attemptedRequestKey: undefined,
+    latestAttempt: 0,
+    sequence: 0,
+  });
+  const currentRequestKeyRef = useRef(requestKey);
+  currentRequestKeyRef.current = requestKey;
+  const mountedRef = useChatCreationLifetime(attemptStateRef);
 
   useEffect((): void => {
-    if (loading || requestKey === undefined) return;
-    if (attemptedRequestKeyRef.current === requestKey) return;
-    const attempt = attemptSequenceRef.current + 1;
+    if (requestKey === undefined) {
+      invalidateChatCreationAttempt(attemptStateRef.current);
+      return;
+    }
+    if (loading || attemptStateRef.current.attemptedRequestKey === requestKey) return;
+    const attempt = attemptStateRef.current.sequence + 1;
     const owner = { kind: "window", id: `${requestKey}\u0000${String(attempt)}` } as const;
-    attemptSequenceRef.current = attempt;
-    latestAttemptRef.current = attempt;
-    attemptedRequestKeyRef.current = requestKey;
+    attemptStateRef.current.sequence = attempt;
+    attemptStateRef.current.latestAttempt = attempt;
+    attemptStateRef.current.attemptedRequestKey = requestKey;
+    attemptStateRef.current.active = { coordinator, owner };
     setError(null);
     executeChatCreationRequest({
       activeProject,
       coordinator,
-      isCurrent: (): boolean => latestAttemptRef.current === attempt,
+      isCurrent: (): boolean =>
+        mountedRef.current &&
+        currentRequestKeyRef.current === requestKey &&
+        attemptStateRef.current.latestAttempt === attempt,
       owner,
       requestKey,
       setError,
       title,
       updateCfg,
     });
-  }, [activeProject, coordinator, loading, requestKey, title, updateCfg]);
+  }, [activeProject, coordinator, loading, mountedRef, requestKey, title, updateCfg]);
   return { errorKey: visibleChatCreationError(error, chatId, requestKey), pending };
 }
 

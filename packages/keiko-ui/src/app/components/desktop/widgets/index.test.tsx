@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode, useEffect, useRef, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { Chat } from "@/lib/types";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import type { AppWindow } from "../windows/types";
@@ -651,6 +651,10 @@ beforeEach((): void => {
   apiMock.updateChat.mockReset();
 });
 
+afterEach((): void => {
+  vi.unstubAllGlobals();
+});
+
 describe("workspace widget renderer registry", () => {
   it("registers a renderer for every declared window type", () => {
     expect(missingWindowRenderTypes()).toEqual([]);
@@ -1113,8 +1117,60 @@ describe("workspace widget renderer registry", () => {
     });
   });
 
+  it("keeps the handoff chat bound when a pending window creation settles late", async (): Promise<void> => {
+    const ctx = makeCtx();
+    const existingChat = chatSessionMock.activeChat;
+    if (existingChat === undefined) throw new Error("existing chat fixture missing");
+    const creation = deferred<{
+      readonly id: string;
+      readonly title: string;
+      readonly status: string;
+      readonly projectPath: string;
+    }>();
+    chatSessionMock.openNewChat.mockReturnValue(creation.promise);
+    const view = render(<>{WIN_TYPES.editor.render({ root: "/repo", file: "src/app.ts" }, ctx)}</>);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ask editor selection" }));
+    const openCfg = ctx.openWindow.mock.calls.at(-1)?.[1] as AppWindow["cfg"] | undefined;
+    const selectionHandoffId = openCfg?.["selectionHandoffId"];
+    if (typeof selectionHandoffId !== "string") throw new Error("selection handoff id missing");
+    view.rerender(
+      <>
+        {WIN_TYPES.chat.render({ title: "Window chat", newChatRequestId: "window-request" }, ctx)}
+      </>,
+    );
+    await waitFor((): void => expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce());
+
+    view.rerender(
+      <>{WIN_TYPES.chat.render({ newChatRequestId: "window-request", selectionHandoffId }, ctx)}</>,
+    );
+    await waitFor((): void => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: existingChat.id,
+      title: existingChat.title,
+      selectionHandoffId: undefined,
+      newChatRequestId: undefined,
+    });
+
+    await act(async (): Promise<void> => {
+      creation.resolve({
+        id: "chat-created-late",
+        title: "Window chat",
+        status: "open",
+        projectPath: "/repo",
+      });
+      await creation.promise;
+    });
+
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: "chat-created-late" }),
+    );
+  });
+
   it("binds the persisted chat and reports when an adopted title cannot be saved", async (): Promise<void> => {
     const ctx = makeCtx();
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
     const createdChat = {
       id: "chat-created",
       title: "Created chat",
@@ -1124,7 +1180,7 @@ describe("workspace widget renderer registry", () => {
     chatSessionMock.activeChat = undefined;
     chatSessionMock.chats = [];
     chatSessionMock.openNewChat.mockResolvedValue(createdChat);
-    apiMock.updateChat.mockRejectedValue(new Error("rename failed"));
+    apiMock.updateChat.mockRejectedValue(new Error("customer-chat-title-detail"));
     const view = render(
       <>
         {WIN_TYPES.chat.render(
@@ -1152,6 +1208,12 @@ describe("workspace widget renderer registry", () => {
     );
     expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce();
     expect(chatSessionMock.replaceChat).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledOnce();
+    const reported = reportError.mock.calls[0]?.[0];
+    expect(reported).toBeInstanceOf(Error);
+    expect((reported as Error).message).toBe("Chat title update failed.");
+    expect((reported as Error).message).not.toContain("customer-chat-title-detail");
+    expect((reported as Error).message).not.toContain("Replacement chat");
   });
 
   it("maps window cfg into widget props and follow-up workspace actions", async () => {
