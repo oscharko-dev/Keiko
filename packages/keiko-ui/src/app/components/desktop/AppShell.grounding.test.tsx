@@ -628,7 +628,7 @@ describe("AppShell grounding connections", () => {
     expect(mocks.recordReadsContextRelationship).toHaveBeenCalledWith("chat-1", "/other");
   });
 
-  it("rejects an already-stale binding target before either persistence API runs", async () => {
+  it("rejects an already-stale binding target before either persistence API runs", async (): Promise<void> => {
     await renderMounted();
     const target: ChatBindingTarget = {
       conversationId: "chat-1",
@@ -649,6 +649,39 @@ describe("AppShell grounding connections", () => {
     expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
     expect(mocks.updateChatLocalKnowledgeScopes).not.toHaveBeenCalled();
     expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
+  });
+
+  it("derives a queued bind from the latest confirmed grounding state", async (): Promise<void> => {
+    const firstPersist = deferred<{ readonly chat: Chat }>();
+    const firstScope = fileScope("/first");
+    const secondScope = fileScope("/second");
+    const firstChat = chat({ connectedScopes: [firstScope], updatedAt: 2 });
+    const secondChat = chat({ connectedScopes: [firstScope, secondScope], updatedAt: 3 });
+    mocks.updateChatConnectedScopes
+      .mockReturnValueOnce(firstPersist.promise)
+      .mockResolvedValueOnce({ chat: secondChat });
+    await renderMounted();
+
+    const firstBinding = Promise.resolve(
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", firstScope),
+    );
+    await waitFor((): void => expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce());
+    const secondBinding = Promise.resolve(
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", secondScope),
+    );
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce();
+    firstPersist.resolve({ chat: firstChat });
+
+    await expect(firstBinding).resolves.toBe(true);
+    await expect(secondBinding).resolves.toBe(true);
+    expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(
+      2,
+      "chat-1",
+      expect.arrayContaining([
+        expect.objectContaining({ root: "/first" }),
+        expect.objectContaining({ root: "/second" }),
+      ]),
+    );
   });
 
   it("surfaces a distinct diagnostic when stale-bind compensation fails", async (): Promise<void> => {

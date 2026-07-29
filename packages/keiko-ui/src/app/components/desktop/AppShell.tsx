@@ -349,6 +349,15 @@ function chatIdFromWindow(win: AppWindow | undefined): string | undefined {
 }
 
 class ChatBindingCompensationFailure extends Error {}
+class ChatMutationTimeoutFailure extends Error {}
+class ChatMutationQueueBlockedFailure extends Error {}
+
+interface ChatMutationQueue {
+  readonly blocked: Set<string>;
+  readonly tails: Map<string, Promise<void>>;
+}
+
+const CHAT_MUTATION_TIMEOUT_MS = 15_000;
 
 function reportChatBindingCompensationFailure(): void {
   const correlationId = newClientCorrelationId();
@@ -357,38 +366,71 @@ function reportChatBindingCompensationFailure(): void {
   );
 }
 
+function reportGroundingMutationFailure(message: string): void {
+  const correlationId = newClientCorrelationId();
+  window.reportError(new Error(`${message} Correlation ID: ${correlationId}`));
+}
+
 async function persistCurrentChatBinding<T>(
   target: ChatBindingTarget | undefined,
   chatId: string,
   previous: readonly T[],
   next: readonly T[],
   persist: (id: string, scopes: readonly T[] | null) => Promise<{ readonly chat: Chat }>,
+  remember: (chat: Chat) => void,
 ): Promise<Chat | undefined> {
   if (target !== undefined && !target.isCurrent()) return undefined;
   const response = await persist(chatId, next);
+  remember(response.chat);
   if (target === undefined || target.isCurrent()) return response.chat;
   try {
-    await persist(chatId, previous.length > 0 ? previous : null);
+    const compensation = await persist(chatId, previous.length > 0 ? previous : null);
+    remember(compensation.chat);
   } catch {
     throw new ChatBindingCompensationFailure();
   }
   return undefined;
 }
 
+async function mutationWithTimeout<T>(mutation: () => Promise<T>): Promise<T> {
+  let timeoutId: number | undefined;
+  const timeout = new Promise<never>((_resolve, reject): void => {
+    timeoutId = window.setTimeout(
+      (): void => reject(new ChatMutationTimeoutFailure()),
+      CHAT_MUTATION_TIMEOUT_MS,
+    );
+  });
+  try {
+    return await Promise.race([mutation(), timeout]);
+  } finally {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+  }
+}
+
 async function serializeChatMutation<T>(
-  queue: Map<string, Promise<void>>,
+  queue: ChatMutationQueue,
   chatKey: string,
   mutation: () => Promise<T>,
 ): Promise<T> {
-  const preceding = queue.get(chatKey) ?? Promise.resolve();
-  const result = preceding.then(mutation, mutation);
+  if (queue.blocked.has(chatKey)) throw new ChatMutationQueueBlockedFailure();
+  const preceding = queue.tails.get(chatKey) ?? Promise.resolve();
+  const execute = async (): Promise<T> => {
+    if (queue.blocked.has(chatKey)) throw new ChatMutationQueueBlockedFailure();
+    try {
+      return await mutationWithTimeout(mutation);
+    } catch (error: unknown) {
+      if (error instanceof ChatMutationTimeoutFailure) queue.blocked.add(chatKey);
+      throw error;
+    }
+  };
+  const result = preceding.then(execute, execute);
   const settled = result.then(
     (): void => undefined,
     (): void => undefined,
   );
-  queue.set(chatKey, settled);
+  queue.tails.set(chatKey, settled);
   void settled.then((): void => {
-    if (queue.get(chatKey) === settled) queue.delete(chatKey);
+    if (queue.tails.get(chatKey) === settled) queue.tails.delete(chatKey);
   });
   return result;
 }
@@ -660,20 +702,33 @@ function AppShellInner(): ReactNode {
     setSourceConnectionNotice(message);
     return false;
   }, []);
+  const confirmedGroundingChatsRef = useRef(new Map<string, Chat>());
+  const rememberGroundingChat = useCallback((chat: Chat): void => {
+    confirmedGroundingChatsRef.current.set(chat.id, chat);
+  }, []);
   const chatForWindow = useCallback(
     (chatWindowId: string): Chat | undefined => {
       const chatId = chatIdFromWindow(
         wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId),
       );
       if (chatId === undefined) return undefined;
-      const chat =
+      const sessionChat =
         session.chats.find((chat) => chat.id === chatId) ??
         (session.activeChat?.id === chatId ? session.activeChat : undefined);
+      const confirmed = confirmedGroundingChatsRef.current.get(chatId);
+      const chat =
+        confirmed !== undefined &&
+        (sessionChat === undefined || confirmed.updatedAt >= sessionChat.updatedAt)
+          ? confirmed
+          : sessionChat;
       return chat?.status === "closed" ? undefined : chat;
     },
     [session.activeChat, session.chats],
   );
-  const groundingMutationQueueRef = useRef(new Map<string, Promise<void>>());
+  const groundingMutationQueueRef = useRef<ChatMutationQueue>({
+    blocked: new Set(),
+    tails: new Map(),
+  });
   const groundingMutationKey = useCallback(
     (chatWindowId: string, target?: ChatBindingTarget): string =>
       target?.conversationId ?? chatForWindow(chatWindowId)?.id ?? `window:${chatWindowId}`,
@@ -704,6 +759,7 @@ function AppShellInner(): ReactNode {
       if (isScopeConnected(current, nextScope)) {
         if (previousScope !== null) {
           const res = await updateChatConnectedScopes(chat.id, current.length > 0 ? current : null);
+          rememberGroundingChat(res.chat);
           session.replaceChat(res.chat);
         }
         return true;
@@ -727,6 +783,7 @@ function AppShellInner(): ReactNode {
           current,
           next,
           updateChatConnectedScopes,
+          rememberGroundingChat,
         );
         if (persisted === undefined) return false;
         session.replaceChat(persisted);
@@ -742,6 +799,15 @@ function AppShellInner(): ReactNode {
           reportChatBindingCompensationFailure();
           return rejectForConnectionFailure(
             "Chat grounding recovery failed. Reload the chat before connecting another source.",
+          );
+        }
+        if (
+          error instanceof ChatMutationTimeoutFailure ||
+          error instanceof ChatMutationQueueBlockedFailure
+        ) {
+          reportGroundingMutationFailure("Chat grounding mutation timed out.");
+          return rejectForConnectionFailure(
+            "Chat grounding is blocked after a timeout. Reload the chat before trying again.",
           );
         }
         return rejectForConnectionFailure(
@@ -762,22 +828,31 @@ function AppShellInner(): ReactNode {
       groundingLimits,
       rejectForLimit,
       rejectForConnectionFailure,
+      rememberGroundingChat,
     ],
   );
   const replaceFilesScope = useCallback(
-    (
+    async (
       chatWindowId: string,
       nextScope: ChatConnectedScope,
       previousScope: ChatConnectedScope | null = null,
       target?: ChatBindingTarget,
-    ): Promise<boolean> =>
-      serializeChatMutation(
-        groundingMutationQueueRef.current,
-        groundingMutationKey(chatWindowId, target),
-        async (): Promise<boolean> =>
-          replaceFilesScopeNow(chatWindowId, nextScope, previousScope, target),
-      ),
-    [groundingMutationKey, replaceFilesScopeNow],
+    ): Promise<boolean> => {
+      try {
+        return await serializeChatMutation(
+          groundingMutationQueueRef.current,
+          groundingMutationKey(chatWindowId, target),
+          async (): Promise<boolean> =>
+            replaceFilesScopeNow(chatWindowId, nextScope, previousScope, target),
+        );
+      } catch {
+        reportGroundingMutationFailure("Chat grounding mutation timed out.");
+        return rejectForConnectionFailure(
+          "Chat grounding is blocked after a timeout. Reload the chat before trying again.",
+        );
+      }
+    },
+    [groundingMutationKey, rejectForConnectionFailure, replaceFilesScopeNow],
   );
   const handleScopeBind = useCallback(
     async (
@@ -799,16 +874,18 @@ function AppShellInner(): ReactNode {
           const next = removeConnectedScope(effectiveScopes(chat), scope);
           try {
             const res = await updateChatConnectedScopes(chat.id, next.length > 0 ? next : null);
+            rememberGroundingChat(res.chat);
             session.replaceChat(res.chat);
-          } catch (error: unknown) {
-            // uiux-fix F008 C074 — a failed unbind silently left the chat grounded after edge removal.
-            console.warn("[keiko] connected-scope unbind failed", error);
+          } catch {
+            reportGroundingMutationFailure("Connected-scope unbind failed.");
           }
         },
-      );
+      ).catch((): void => {
+        reportGroundingMutationFailure("Connected-scope unbind timed out.");
+      });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
-    [chatForWindow, groundingMutationKey, session.replaceChat],
+    [chatForWindow, groundingMutationKey, rememberGroundingChat, session.replaceChat],
   );
   // Epic #189 Slice 3 M3 — a Connector↔Chat relationship edge binds/unbinds the connector scope
   // on the active chat's localKnowledgeScopes, so the gesture grounds the chat via vector search.
@@ -844,6 +921,7 @@ function AppShellInner(): ReactNode {
           current,
           next,
           updateChatLocalKnowledgeScopes,
+          rememberGroundingChat,
         );
         if (persisted === undefined) return false;
         session.replaceChat(persisted);
@@ -854,6 +932,15 @@ function AppShellInner(): ReactNode {
           reportChatBindingCompensationFailure();
           return rejectForConnectionFailure(
             "Chat grounding recovery failed. Reload the chat before connecting another source.",
+          );
+        }
+        if (
+          error instanceof ChatMutationTimeoutFailure ||
+          error instanceof ChatMutationQueueBlockedFailure
+        ) {
+          reportGroundingMutationFailure("Chat grounding mutation timed out.");
+          return rejectForConnectionFailure(
+            "Chat grounding is blocked after a timeout. Reload the chat before trying again.",
           );
         }
         return rejectForConnectionFailure(
@@ -868,20 +955,29 @@ function AppShellInner(): ReactNode {
       groundingLimits,
       rejectForLimit,
       rejectForConnectionFailure,
+      rememberGroundingChat,
     ],
   );
   const handleConnectorBind = useCallback(
-    (
+    async (
       chatWindowId: string,
       scope: ChatLocalKnowledgeScope,
       target?: ChatBindingTarget,
-    ): Promise<boolean> =>
-      serializeChatMutation(
-        groundingMutationQueueRef.current,
-        groundingMutationKey(chatWindowId, target),
-        async (): Promise<boolean> => handleConnectorBindNow(chatWindowId, scope, target),
-      ),
-    [groundingMutationKey, handleConnectorBindNow],
+    ): Promise<boolean> => {
+      try {
+        return await serializeChatMutation(
+          groundingMutationQueueRef.current,
+          groundingMutationKey(chatWindowId, target),
+          async (): Promise<boolean> => handleConnectorBindNow(chatWindowId, scope, target),
+        );
+      } catch {
+        reportGroundingMutationFailure("Chat grounding mutation timed out.");
+        return rejectForConnectionFailure(
+          "Chat grounding is blocked after a timeout. Reload the chat before trying again.",
+        );
+      }
+    },
+    [groundingMutationKey, handleConnectorBindNow, rejectForConnectionFailure],
   );
   const handleConnectorUnbind = useCallback(
     (chatWindowId: string, scope: ChatLocalKnowledgeScope): void => {
@@ -900,15 +996,18 @@ function AppShellInner(): ReactNode {
               chat.id,
               next.length > 0 ? next : null,
             );
+            rememberGroundingChat(res.chat);
             session.replaceChat(res.chat);
           } catch {
-            // Best-effort unbind retains the server state when persistence is unavailable.
+            reportGroundingMutationFailure("Local knowledge scope unbind failed.");
           }
         },
-      );
+      ).catch((): void => {
+        reportGroundingMutationFailure("Local knowledge scope unbind timed out.");
+      });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
-    [chatForWindow, groundingMutationKey, session.replaceChat],
+    [chatForWindow, groundingMutationKey, rememberGroundingChat, session.replaceChat],
   );
   const [cameraSmoothness, setCameraSmoothness] = useState<number>(readWorkspaceCameraSmoothness);
 
