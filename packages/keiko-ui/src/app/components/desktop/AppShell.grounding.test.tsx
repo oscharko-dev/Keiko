@@ -603,11 +603,41 @@ describe("AppShell grounding connections", () => {
     ).resolves.toBe(false);
 
     expect(await screen.findByText(/Keiko could not connect that source/u)).toBeInTheDocument();
-    const reported = reportError.mock.calls[0]?.[0] as Error;
+    const reported: unknown = reportError.mock.calls[0]?.[0];
+    expect(reported).toBeInstanceOf(Error);
+    if (!(reported instanceof Error)) {
+      throw new TypeError("Expected grounding diagnostics to report an Error.");
+    }
     expect(reported.message).toMatch(
       /^Chat grounding mutation failed\. Correlation ID: [A-Za-z0-9._-]{8,128}$/u,
     );
     expect(reported.message).not.toContain("customer endpoint");
+  });
+
+  it("reports a redacted diagnostic when connector persistence fails", async (): Promise<void> => {
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
+    mocks.updateChatLocalKnowledgeScopes.mockRejectedValueOnce(
+      new Error("customer connector endpoint and response detail"),
+    );
+    await renderMounted();
+
+    await expect(
+      mocks.state.workspaceOptions?.onConnectorBind?.("chat-window", capsuleScope("cap-sensitive")),
+    ).resolves.toBe(false);
+
+    expect(
+      await screen.findByText(/Keiko could not connect that knowledge source/u),
+    ).toBeInTheDocument();
+    const reported: unknown = reportError.mock.calls[0]?.[0];
+    expect(reported).toBeInstanceOf(Error);
+    if (!(reported instanceof Error)) {
+      throw new TypeError("Expected connector diagnostics to report an Error.");
+    }
+    expect(reported.message).toMatch(
+      /^Chat grounding mutation failed\. Correlation ID: [A-Za-z0-9._-]{8,128}$/u,
+    );
+    expect(reported.message).not.toContain("customer connector endpoint");
   });
 
   it("compensates a Files bind when its chat ownership changes in flight", async (): Promise<void> => {
@@ -768,11 +798,15 @@ describe("AppShell grounding connections", () => {
 
     await expect(binding).resolves.toBe(false);
     expect(await screen.findByText(/Chat grounding recovery failed/u)).toBeInTheDocument();
-    const reported = reportError.mock.calls[0]?.[0];
-    expect((reported as Error).message).toMatch(
+    const reported: unknown = reportError.mock.calls[0]?.[0];
+    expect(reported).toBeInstanceOf(Error);
+    if (!(reported instanceof Error)) {
+      throw new TypeError("Expected compensation diagnostics to report an Error.");
+    }
+    expect(reported.message).toMatch(
       /^Chat binding compensation failed\. Correlation ID: [A-Za-z0-9._-]{8,128}$/,
     );
-    expect((reported as Error).message).not.toContain("customer-compensation-detail");
+    expect(reported.message).not.toContain("customer-compensation-detail");
   });
 
   // GEN-PERF-RENDER-001 — the four scope-bind callbacks passed to useWorkspace depend on the stable
