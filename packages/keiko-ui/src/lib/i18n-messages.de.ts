@@ -166,6 +166,7 @@ export const DE_MESSAGES = {
     "Verwaltete Sprachserver bleiben deaktiviert, bis dieser Wurzel vertraut wird.",
   "workspaceTrust.reason.humanGrant":
     "Das Vertrauen wurde ausdrücklich für den aktuellen Arbeitsbereich erteilt.",
+  "workspaceTrust.reason.derivedFromTrustedRoot": "Vom freigegebenen Repository abgeleitet.",
   "workspaceTrust.reason.humanRevocation":
     "Das Vertrauen wurde ausdrücklich für diesen Arbeitsbereich widerrufen.",
   "workspaceTrust.reason.identityChanged":

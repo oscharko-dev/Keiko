@@ -1640,7 +1640,10 @@ export function ensureManagedTaskWorkspaceIdentity(input: {
   // An absent target record may be initialized from this explicit provisioning act. A restricted
   // record is authoritative evidence of revocation or drift and must never be silently overwritten.
   if (input.uiStore.readWorkspaceTrustRecord(rootRef) !== undefined) return;
-  input.workspaceScriptTrust.grant(input.instance.managedWorktreePath);
+  input.workspaceScriptTrust.deriveFromTrustedRoot(
+    input.instance.managedWorktreePath,
+    input.instance.repositoryRoot,
+  );
 }
 
 function withManagedWorkspaceIdentity(

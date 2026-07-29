@@ -412,8 +412,9 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     const repositoryRoot = tmp("managed-root-source-");
     const managedRoot = join(stateDir, "task-workspaces", "repo-1", "workspace-1");
     mkdirSync(managedRoot, { recursive: true });
-    writeFileSync(join(repositoryRoot, "package.json"), JSON.stringify({ name: "source" }));
-    writeFileSync(join(managedRoot, "package.json"), JSON.stringify({ name: "managed" }));
+    const packageManifest = JSON.stringify({ name: "shared" });
+    writeFileSync(join(repositoryRoot, "package.json"), packageManifest);
+    writeFileSync(join(managedRoot, "package.json"), packageManifest);
     const instance = managedWorkspaceInstance(repositoryRoot, managedRoot);
     const store = createInMemoryUiStore();
     const deps = buildUiHandlerDeps({
@@ -441,7 +442,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       expect(trust.status(managedRoot)).toMatchObject({
         projectId: managedRoot,
         trust: "trusted",
-        reason: "human-grant",
+        reason: "derived-from-trusted-root",
       });
       const sourceRootRef = requiredManifestRootRef(store, repositoryRoot);
       const managedRootRef = requiredManifestRootRef(store, managedRoot);
@@ -495,6 +496,35 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
 
       const managedRootRef = requiredManifestRootRef(store, managedRoot);
       expect(store.readWorkspaceTrustRecord(managedRootRef)).toBeUndefined();
+      expect(workspaceScriptTrust.status(managedRoot)).toMatchObject({
+        projectId: managedRoot,
+        trust: "restricted",
+        reason: "state-unavailable",
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("does not derive managed trust when the package-script basis differs", () => {
+    const repositoryRoot = tmp("managed-root-basis-source-");
+    const managedRoot = tmp("managed-root-basis-target-");
+    writeFileSync(join(repositoryRoot, "package.json"), JSON.stringify({ name: "source" }));
+    writeFileSync(join(managedRoot, "package.json"), JSON.stringify({ name: "target" }));
+    const instance = managedWorkspaceInstance(repositoryRoot, managedRoot);
+    const store = createInMemoryUiStore();
+    const workspaceScriptTrust = createWorkspaceScriptTrustService({ store });
+
+    try {
+      store.createProject(repositoryRoot);
+      workspaceScriptTrust.grant(repositoryRoot);
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore: store,
+        workspaceScriptTrust,
+        instance,
+        initializeTrust: true,
+      });
+
       expect(workspaceScriptTrust.status(managedRoot)).toMatchObject({
         projectId: managedRoot,
         trust: "restricted",

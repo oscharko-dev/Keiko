@@ -1,11 +1,11 @@
-.root {
+.cmp-r {
   position: relative;
   display: flex;
   min-width: 0;
   align-items: center;
 }
 
-.trigger {
+.cmp-t {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) 14px;
   gap: var(--space-2);
@@ -21,25 +21,25 @@
   text-align: left;
 }
 
-.trigger:hover,
-.trigger[aria-expanded="true"] {
+.cmp-t:hover,
+.cmp-t[aria-expanded="true"] {
   border-color: var(--border-accent);
   background: var(--button-secondary-surface-hover);
 }
 
-.trigger:focus-visible,
-.primaryButton:focus-visible,
-.secondaryButton:focus-visible,
-.manualControl input:focus-visible {
+.cmp-t:focus-visible,
+.cmp-pb:focus-visible,
+.cmp-sb:focus-visible,
+.cmp-mc input:focus-visible {
   outline: var(--focus-width) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
-.triggerIcon {
+.cmp-ti {
   color: var(--text-accent);
 }
 
-.triggerName {
+.cmp-tn {
   overflow: hidden;
   color: var(--text-primary);
   font-size: var(--text-body-sm);
@@ -49,16 +49,16 @@
   white-space: nowrap;
 }
 
-.triggerChevron {
+.cmp-tc {
   color: var(--text-tertiary);
   transition: transform var(--duration-fast) var(--ease-out);
 }
 
-.trigger[aria-expanded="true"] .triggerChevron {
+.cmp-t[aria-expanded="true"] .cmp-tc {
   transform: rotate(180deg);
 }
 
-.panel {
+.cmp-p {
   position: absolute;
   z-index: var(--z-popover);
   top: calc(100% + var(--space-2));
@@ -74,13 +74,13 @@
   box-shadow: var(--popover-shadow);
 }
 
-.panel h2 {
+.cmp-p h2 {
   margin: 0;
   font-size: var(--text-title-sm);
   line-height: 1.25;
 }
 
-.current {
+.cmp-c {
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr);
   gap: var(--space-3);
@@ -92,12 +92,12 @@
   background: var(--card-surface);
 }
 
-.current[data-empty="true"] {
+.cmp-c[data-empty="true"] {
   border-style: dashed;
   background: transparent;
 }
 
-.currentIcon {
+.cmp-ci {
   display: grid;
   width: 36px;
   height: 36px;
@@ -107,20 +107,20 @@
   color: var(--text-accent);
 }
 
-.currentCopy {
+.cmp-cc {
   display: grid;
   min-width: 0;
   gap: 3px;
 }
 
-.currentCopy strong {
+.cmp-cc strong {
   overflow: hidden;
   font-size: var(--text-body-md);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.path {
+.cmp-pt {
   overflow: hidden;
   color: var(--text-secondary);
   font-family: var(--font-mono);
@@ -130,8 +130,8 @@
   white-space: nowrap;
 }
 
-.primaryButton,
-.secondaryButton {
+.cmp-pb,
+.cmp-sb {
   display: inline-flex;
   gap: var(--space-2);
   align-items: center;
@@ -143,47 +143,47 @@
   font-weight: var(--weight-strong);
 }
 
-.primaryButton {
+.cmp-pb {
   width: 100%;
   border-color: var(--button-primary-border);
   background: var(--button-primary-surface);
   color: var(--button-primary-text);
 }
 
-.primaryButton:hover:not(:disabled) {
+.cmp-pb:hover:not(:disabled) {
   background: var(--button-primary-surface-hover);
 }
 
-.secondaryButton {
+.cmp-sb {
   border-color: var(--button-secondary-border);
   background: var(--button-secondary-surface);
   color: var(--button-secondary-text);
 }
 
-.primaryButton:disabled,
-.secondaryButton:disabled {
+.cmp-pb:disabled,
+.cmp-sb:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
 
-.manualForm {
+.cmp-mf {
   display: grid;
   gap: var(--space-2);
 }
 
-.manualForm label {
+.cmp-mf label {
   color: var(--text-secondary);
   font-size: var(--text-body-sm);
   font-weight: var(--weight-strong);
 }
 
-.manualControl {
+.cmp-mc {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--space-2);
 }
 
-.manualControl input {
+.cmp-mc input {
   min-width: 0;
   min-height: var(--control-height);
   padding: 0 var(--control-pad-x);
@@ -195,11 +195,11 @@
   font-size: var(--text-code-sm);
 }
 
-.manualControl input::placeholder {
+.cmp-mc input::placeholder {
   color: var(--input-placeholder);
 }
 
-.error {
+.cmp-e {
   margin: 0;
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--feedback-danger-border);
@@ -210,7 +210,7 @@
   line-height: 1.4;
 }
 
-.srOnly {
+.cmp-sr {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -222,12 +222,12 @@
 }
 
 @media (max-width: 640px) {
-  .trigger {
+  .cmp-t {
     min-width: 0;
     max-width: 46vw;
   }
 
-  .panel {
+  .cmp-p {
     position: fixed;
     top: 48px;
     right: 12px;
@@ -237,13 +237,13 @@
 }
 
 @media (forced-colors: active) {
-  .trigger,
-  .panel,
-  .current,
-  .primaryButton,
-  .secondaryButton,
-  .manualControl input,
-  .error {
+  .cmp-t,
+  .cmp-p,
+  .cmp-c,
+  .cmp-pb,
+  .cmp-sb,
+  .cmp-mc input,
+  .cmp-e {
     border-color: CanvasText;
   }
 }

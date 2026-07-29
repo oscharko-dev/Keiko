@@ -201,7 +201,7 @@ function Trigger(props: {
     <button
       ref={props.triggerRef}
       type="button"
-      className={styles.trigger}
+      className={styles["cmp-t"]}
       aria-expanded={props.open}
       aria-controls={props.panelId}
       aria-describedby={props.statusId}
@@ -211,9 +211,9 @@ function Trigger(props: {
       data-bound={props.selected ? "true" : "false"}
       onClick={props.toggle}
     >
-      <FolderIcon className={styles.triggerIcon ?? ""} size={16} aria-hidden="true" />
-      <span className={styles.triggerName}>{props.name}</span>
-      <ChevronIcon className={styles.triggerChevron ?? ""} size={13} aria-hidden="true" />
+      <FolderIcon className={styles["cmp-ti"] ?? ""} size={16} aria-hidden="true" />
+      <span className={styles["cmp-tn"]}>{props.name}</span>
+      <ChevronIcon className={styles["cmp-tc"] ?? ""} size={13} aria-hidden="true" />
     </button>
   );
 }
@@ -224,14 +224,14 @@ function CurrentFolder(props: {
 }): ReactNode {
   const name = projectName(props.project, props.t);
   return (
-    <div className={styles.current} data-empty={props.project === undefined ? "true" : "false"}>
-      <span className={styles.currentIcon} aria-hidden="true">
+    <div className={styles["cmp-c"]} data-empty={props.project === undefined ? "true" : "false"}>
+      <span className={styles["cmp-ci"]} aria-hidden="true">
         <FolderIcon size={18} />
       </span>
-      <span className={styles.currentCopy}>
+      <span className={styles["cmp-cc"]}>
         <strong>{name}</strong>
         {props.project === undefined ? null : (
-          <span className={styles.path} title={props.project.path}>
+          <span className={styles["cmp-pt"]} title={props.project.path}>
             {props.project.path}
           </span>
         )}
@@ -247,9 +247,9 @@ function ManualPathForm(props: {
 }): ReactNode {
   const pathId = useId();
   return (
-    <form className={styles.manualForm} onSubmit={props.selection.submitManualPath}>
+    <form className={styles["cmp-mf"]} onSubmit={props.selection.submitManualPath}>
       <label htmlFor={pathId}>{props.t("workspaceContext.manual.label")}</label>
-      <div className={styles.manualControl}>
+      <div className={styles["cmp-mc"]}>
         <input
           ref={props.inputRef}
           id={pathId}
@@ -262,7 +262,7 @@ function ManualPathForm(props: {
         />
         <button
           type="submit"
-          className={styles.secondaryButton}
+          className={styles["cmp-sb"]}
           disabled={props.selection.busy || props.selection.manualPath.trim().length === 0}
         >
           {props.selection.busy
@@ -289,7 +289,7 @@ function FolderPanel(props: {
   return (
     <div
       id={props.panelId}
-      className={styles.panel}
+      className={styles["cmp-p"]}
       role="dialog"
       aria-modal="false"
       aria-labelledby={props.titleId}
@@ -300,7 +300,7 @@ function FolderPanel(props: {
         <button
           ref={props.pickerRef}
           type="button"
-          className={styles.primaryButton}
+          className={styles["cmp-pb"]}
           disabled={props.selection.busy}
           onClick={props.selection.browse}
         >
@@ -313,7 +313,7 @@ function FolderPanel(props: {
         <ManualPathForm inputRef={props.pathRef} selection={props.selection} t={props.t} />
       )}
       {error === null ? null : (
-        <p role="alert" className={styles.error}>
+        <p role="alert" className={styles["cmp-e"]}>
           {error}
         </p>
       )}
@@ -352,7 +352,7 @@ function SwitcherContent(props: {
   const workspaceError = props.api.error ?? props.sessionError ?? null;
 
   return (
-    <div ref={rootRef} className={styles.root}>
+    <div ref={rootRef} className={styles["cmp-r"]}>
       <Trigger
         triggerRef={triggerRef}
         panelId={panelId}
@@ -364,7 +364,7 @@ function SwitcherContent(props: {
         toggle={() => setOpen((value) => !value)}
         t={props.t}
       />
-      <span id={statusId} role="status" aria-live="polite" className={styles.srOnly}>
+      <span id={statusId} role="status" aria-live="polite" className={styles["cmp-sr"]}>
         {props.project === undefined
           ? props.t("workspaceContext.status.none")
           : props.t("workspaceContext.status.project", { name })}

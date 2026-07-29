@@ -120,6 +120,12 @@ describe("canonical workspace trust", () => {
       }).ok,
     ).toBe(true);
     expect(
+      validateWorkspaceTrustRecord({
+        ...trustedRecord(),
+        reason: "derived-from-trusted-root",
+      }).ok,
+    ).toBe(true);
+    expect(
       validateWorkspaceTrustRecord({ ...trustedRecord(), trust: "trusted", reason: "policy" }).ok,
     ).toBe(false);
     expect(
@@ -127,6 +133,13 @@ describe("canonical workspace trust", () => {
         ...trustedRecord(),
         trust: "restricted",
         reason: "human-grant",
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateWorkspaceTrustRecord({
+        ...trustedRecord(),
+        trust: "restricted",
+        reason: "derived-from-trusted-root",
       }).ok,
     ).toBe(false);
   });
@@ -248,6 +261,9 @@ describe("canonical workspace trust", () => {
     expect(
       isWorkspaceTrustStatus({ ...trustedStatus(), trust: "restricted", reason: "human-grant" }),
     ).toBe(false);
+    expect(
+      isWorkspaceTrustStatus({ ...trustedStatus(), reason: "derived-from-trusted-root" }),
+    ).toBe(true);
     expect(isWorkspaceTrustStatus({ ...trustedStatus(), manifestDigest: "secret" })).toBe(false);
     expect(isWorkspaceTrustStatus({ ...trustedStatus(), projectId: "bad\u0000root" })).toBe(false);
     expect(

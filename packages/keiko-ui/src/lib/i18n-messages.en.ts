@@ -160,6 +160,7 @@ export const EN_MESSAGES = {
   "workspaceTrust.banner.languages":
     "Managed language servers remain disabled until this root is trusted.",
   "workspaceTrust.reason.humanGrant": "Trust was granted explicitly for the current workspace.",
+  "workspaceTrust.reason.derivedFromTrustedRoot": "Derived from the trusted repository.",
   "workspaceTrust.reason.humanRevocation": "Trust was revoked explicitly for this workspace.",
   "workspaceTrust.reason.identityChanged": "Trust expired because the workspace identity changed.",
   "workspaceTrust.reason.manifestChanged": "Trust expired because the workspace manifest changed.",
