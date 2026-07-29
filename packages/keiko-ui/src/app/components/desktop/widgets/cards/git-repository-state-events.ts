@@ -1,6 +1,6 @@
 export const GIT_REPOSITORY_STATE_INVALIDATED_EVENT = "keiko:git-repository-state-invalidated";
 
-export interface GitRepositoryStateInvalidationDetail {
+interface GitRepositoryStateInvalidationDetail {
   readonly root: string;
   readonly repositoryRoot?: string | undefined;
 }
