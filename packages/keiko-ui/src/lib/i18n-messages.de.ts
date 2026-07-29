@@ -440,6 +440,20 @@ export const DE_MESSAGES = {
   "chat.grounding.capsule": "Knowledge Pod: {name}",
   "chat.grounding.capsuleSet": "Knowledge Pod Set: {name}",
   "chat.grounding.unavailable": "{label} (nicht verfügbar)",
+  "chat.grounding.sourceLimit":
+    "Quellenlimit erreicht — dieser Chat hat bereits {connectedCount} von {cap} verbundenen Quellen. Trenne eine Quelle, bevor du eine weitere verbindest.",
+  "chat.grounding.readyChatRequired":
+    "Öffne ein bereites Chatfenster, bevor du eine Quelle verbindest.",
+  "chat.grounding.localFolderRequired":
+    "Wähle einen lokalen Ordner aus, bevor du ihn mit dem Chat verbindest.",
+  "chat.grounding.recoveryRequired":
+    "Die Wiederherstellung des Chat-Groundings ist fehlgeschlagen. Lade den Chat neu, bevor du eine weitere Quelle verbindest.",
+  "chat.grounding.timeoutBlocked":
+    "Das Chat-Grounding ist nach einer Zeitüberschreitung blockiert. Lade den Chat neu, bevor du es erneut versuchst.",
+  "chat.grounding.connectSourceFailed":
+    "Keiko konnte diese Quelle nicht verbinden. Prüfe, ob sie noch verfügbar ist, und versuche es erneut.",
+  "chat.grounding.connectKnowledgeFailed":
+    "Keiko konnte diese Wissensquelle nicht verbinden. Prüfe, ob sie noch verfügbar ist, und versuche es erneut.",
   "chat.memory.panel": "Konversationsspeicher",
   "chat.memory.included": "{count} Erinnerungen einbezogen",
   "chat.memory.noneIncluded": "Keine Erinnerungen einbezogen",

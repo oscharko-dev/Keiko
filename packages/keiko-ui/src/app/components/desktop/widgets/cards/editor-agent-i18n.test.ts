@@ -27,6 +27,19 @@ describe("editor agent translations", () => {
     );
   });
 
+  it("localizes chat creation failures in English and German", (): void => {
+    expect(translateEditorAgent("en", "chat.creation.openFailed")).toBe("Could not open chat.");
+    expect(translateEditorAgent("de", "chat.creation.openFailed")).toBe(
+      "Der Chat konnte nicht geöffnet werden.",
+    );
+    expect(translateEditorAgent("en", "chat.creation.titleSaveFailed")).toBe(
+      "The chat opened, but its title could not be saved.",
+    );
+    expect(translateEditorAgent("de", "chat.creation.titleSaveFailed")).toBe(
+      "Der Chat wurde geöffnet, aber sein Titel konnte nicht gespeichert werden.",
+    );
+  });
+
   it("localizes conflict and recent-action surfaces", () => {
     expect(translateEditorAgent("de", "conflict.title.dirty")).toBe(
       "Konflikt mit ungespeicherten Änderungen",

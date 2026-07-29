@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Chat } from "@/lib/types";
@@ -77,6 +77,28 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
   };
 }
 
+function makeProject(path: string): NonNullable<ChatSessionApi["activeProject"]> {
+  return {
+    path,
+    name: path.slice(1),
+    favorite: false,
+    createdAt: 1,
+    lastOpenedAt: 2,
+    available: true,
+  };
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolvePromise!: (value: T) => void;
+  const promise = new Promise<T>((resolve): void => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: resolvePromise };
+}
+
 function renderPanel(session: ChatSessionApi = makeSession()): void {
   render(
     <ChatSessionProvider value={session}>
@@ -106,6 +128,100 @@ describe("ChatHistoryPanel", () => {
 
     await waitFor(() => expect(updateChat).toHaveBeenCalledWith("chat-1", { status: "closed" }));
     expect(replaceChat).toHaveBeenCalledWith({ ...chat, status: "closed" });
+  });
+
+  it("does not open a chat after the active project changes during creation", async (): Promise<void> => {
+    const creation = deferred<Chat | undefined>();
+    const backgroundChat = makeChat({ id: "chat-background", projectPath: "/repo" });
+    const openNewChat = vi.fn((): Promise<Chat | undefined> => creation.promise);
+    const openChatWindow = vi.fn();
+    const user = userEvent.setup();
+    const view = render(
+      <ChatSessionProvider
+        value={makeSession({ activeProject: makeProject("/repo"), openNewChat })}
+      >
+        <ChatHistoryPanel openChatWindow={openChatWindow} />
+      </ChatSessionProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "New" }));
+    await waitFor((): void => expect(openNewChat).toHaveBeenCalledOnce());
+    view.rerender(
+      <ChatSessionProvider
+        value={makeSession({ activeProject: makeProject("/other"), openNewChat })}
+      >
+        <ChatHistoryPanel openChatWindow={openChatWindow} />
+      </ChatSessionProvider>,
+    );
+    await act(async (): Promise<void> => {
+      creation.resolve(backgroundChat);
+      await creation.promise;
+    });
+
+    expect(openChatWindow).not.toHaveBeenCalled();
+  });
+
+  it("opens a created chat when the requested project remains active", async (): Promise<void> => {
+    const created = makeChat({ id: "chat-created", projectPath: "/repo" });
+    const openNewChat = vi.fn(async (): Promise<Chat | undefined> => created);
+    const openChatWindow = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ChatSessionProvider
+        value={makeSession({ activeProject: makeProject("/repo"), openNewChat })}
+      >
+        <ChatHistoryPanel openChatWindow={openChatWindow} />
+      </ChatSessionProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "New" }));
+
+    await waitFor((): void => expect(openChatWindow).toHaveBeenCalledWith(created));
+  });
+
+  it("opens the adopted fallback project chat from projectless bootstrap", async (): Promise<void> => {
+    const created = makeChat({ id: "chat-fallback", projectPath: "/fallback" });
+    const openNewChat = vi.fn(async (): Promise<Chat | undefined> => created);
+    const openChatWindow = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ChatSessionProvider value={makeSession({ activeProject: undefined, openNewChat })}>
+        <ChatHistoryPanel openChatWindow={openChatWindow} />
+      </ChatSessionProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "New" }));
+
+    await waitFor((): void => expect(openChatWindow).toHaveBeenCalledWith(created));
+  });
+
+  it("does not open a fallback chat after leaving projectless bootstrap", async (): Promise<void> => {
+    const creation = deferred<Chat | undefined>();
+    const created = makeChat({ id: "chat-fallback", projectPath: "/fallback" });
+    const openNewChat = vi.fn((): Promise<Chat | undefined> => creation.promise);
+    const openChatWindow = vi.fn();
+    const user = userEvent.setup();
+    const view = render(
+      <ChatSessionProvider value={makeSession({ activeProject: undefined, openNewChat })}>
+        <ChatHistoryPanel openChatWindow={openChatWindow} />
+      </ChatSessionProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "New" }));
+    await waitFor((): void => expect(openNewChat).toHaveBeenCalledOnce());
+
+    view.rerender(
+      <ChatSessionProvider
+        value={makeSession({ activeProject: makeProject("/other"), openNewChat })}
+      >
+        <ChatHistoryPanel openChatWindow={openChatWindow} />
+      </ChatSessionProvider>,
+    );
+    await act(async (): Promise<void> => {
+      creation.resolve(created);
+      await creation.promise;
+    });
+
+    expect(openChatWindow).not.toHaveBeenCalled();
   });
 
   it("keeps the active tab selected after deleting a chat", async () => {

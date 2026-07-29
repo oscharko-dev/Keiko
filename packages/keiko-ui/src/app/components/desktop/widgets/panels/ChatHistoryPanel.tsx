@@ -64,6 +64,19 @@ function chatMatches(chat: Chat, query: string): boolean {
   );
 }
 
+function createdChatMatchesCurrentProject(
+  created: Chat,
+  requestedProjectPath: string | undefined,
+  currentProjectPath: string | undefined,
+): boolean {
+  if (requestedProjectPath === undefined) {
+    return currentProjectPath === undefined || currentProjectPath === created.projectPath;
+  }
+  return (
+    created.projectPath === requestedProjectPath && currentProjectPath === requestedProjectPath
+  );
+}
+
 export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): ReactNode {
   const session = useChatSessionCatalog();
   const actions = useChatSessionActions();
@@ -78,6 +91,8 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const tablistRef = useRef<HTMLDivElement | null>(null);
   const confirmDeleteRef = useRef<HTMLButtonElement | null>(null);
+  const activeProjectPathRef = useRef(session.activeProject?.path);
+  activeProjectPathRef.current = session.activeProject?.path;
   const tabActiveId = useId();
   const tabDeletedId = useId();
   const panelId = useId();
@@ -134,8 +149,14 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
 
   const createNew = async (): Promise<void> => {
     setError(null);
+    const requestedProjectPath = activeProjectPathRef.current;
     const created = await actions.openNewChat(undefined, "New chat");
-    if (created !== undefined) openChatWindow(created);
+    if (
+      created !== undefined &&
+      createdChatMatchesCurrentProject(created, requestedProjectPath, activeProjectPathRef.current)
+    ) {
+      openChatWindow(created);
+    }
   };
 
   const startRename = (chat: Chat): void => {

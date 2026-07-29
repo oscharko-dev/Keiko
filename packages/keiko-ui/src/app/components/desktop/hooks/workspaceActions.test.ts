@@ -42,6 +42,7 @@ import type { AppWindow, Connection, ConnectingState, View } from "../windows/ty
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
+import type { ChatBindingTarget } from "./useWorkspace.types";
 
 function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-1`): AppWindow {
   return { id, type, x: 0, y: 0, w: 10, h: 10, z: 1, cfg, max: false };
@@ -422,11 +423,13 @@ interface ConnectHarnessOverrides {
   readonly onScopeBind?: (
     chatWindowId: string,
     scope: ChatConnectedScope,
+    target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
   readonly onScopeUnbind?: (chatWindowId: string, scope: ChatConnectedScope) => void;
   readonly onConnectorBind?: (
     chatWindowId: string,
     scope: ChatLocalKnowledgeScope,
+    target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
   readonly onConnectorUnbind?: (chatWindowId: string, scope: ChatLocalKnowledgeScope) => void;
 }
@@ -2444,6 +2447,68 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     expect(store.conns[0]?.boundRoot).toBe("/data/docs");
   });
 
+  it("discards an accepted edge when the chat changed before the bind settled", async (): Promise<void> => {
+    const store = { conns: [] as Connection[] };
+    const chatCfg: AppWindow["cfg"] = { chatId: "chat-old" };
+    let observedTarget: ChatBindingTarget | undefined;
+    let resolveBind!: (accepted: boolean) => void;
+    const acceptance = new Promise<boolean>((resolve): void => {
+      resolveBind = resolve;
+    });
+    const harness = makeConnectHarness(
+      [win("files", { resolvedRoot: "/data/docs" }, "files-1"), win("chat", chatCfg, "chat-1")],
+      [],
+      {
+        connecting: { from: "files-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onScopeBind: (_chatWindowId, _scope, target): Promise<boolean> => {
+          observedTarget = target;
+          return acceptance;
+        },
+      },
+    );
+
+    harness.confirmConnect("chat-1", evt);
+    expect(observedTarget?.conversationId).toBe("chat-old");
+    expect(observedTarget?.isCurrent()).toBe(true);
+    chatCfg["chatId"] = "chat-new";
+    expect(observedTarget?.isCurrent()).toBe(false);
+    resolveBind(true);
+    await acceptance;
+    await flushAsyncBind();
+    await flushAsyncBind();
+
+    expect(store.conns).toHaveLength(0);
+  });
+
+  it("applies an accepted edge when its chat identity stays current", async (): Promise<void> => {
+    const store = { conns: [] as Connection[] };
+    let resolveBind!: (accepted: boolean) => void;
+    const acceptance = new Promise<boolean>((resolve): void => {
+      resolveBind = resolve;
+    });
+    const harness = makeConnectHarness(
+      [
+        win("files", { resolvedRoot: "/data/docs" }, "files-1"),
+        win("chat", { chatId: "chat-old" }, "chat-1"),
+      ],
+      [],
+      {
+        connecting: { from: "files-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onScopeBind: (): Promise<boolean> => acceptance,
+      },
+    );
+
+    harness.confirmConnect("chat-1", evt);
+    resolveBind(true);
+    await acceptance;
+    await flushAsyncBind();
+    await flushAsyncBind();
+
+    expect(store.conns).toHaveLength(1);
+  });
+
   it("does not draw the edge when onConnectorBind vetoes the bind", async () => {
     const store = { conns: [] as Connection[] };
     const harness = makeConnectHarness(
@@ -2503,6 +2568,38 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
 // Release 0.2.0 — unbind must remove the source the edge BOUND, not whatever the window's cfg
 // points at NOW (the user may have navigated the Files window / re-selected another capsule).
 describe("removeConn — unbinds the bind-time snapshot, not the current cfg", () => {
+  it("can remove a reset edge without mutating the conversation it previously bound", (): void => {
+    const unboundScopes: ChatConnectedScope[] = [];
+    const unboundConnectors: ChatLocalKnowledgeScope[] = [];
+    const files = win("files", { resolvedRoot: "/data/docs" }, "files-1");
+    const chat = win("chat", {}, "chat-1");
+    const edge: Connection = {
+      id: "files-1~chat-1",
+      a: "files-1",
+      b: "chat-1",
+      boundRoot: "/data/docs",
+    };
+    const store = { conns: [edge] };
+    const setConns: Dispatch<SetStateAction<Connection[]>> = (action): void => {
+      store.conns = typeof action === "function" ? action(store.conns) : action;
+    };
+    const harness = makeConnectHarness([files, chat], [edge], {
+      setConns,
+      onScopeUnbind: (_chatWindowId, scope): void => {
+        unboundScopes.push(scope);
+      },
+      onConnectorUnbind: (_chatWindowId, scope): void => {
+        unboundConnectors.push(scope);
+      },
+    });
+
+    harness.removeConn(edge.id, { unbind: false });
+
+    expect(store.conns).toHaveLength(0);
+    expect(unboundScopes).toEqual([]);
+    expect(unboundConnectors).toEqual([]);
+  });
+
   it("unbinds the bound capsule even after the connector window selected another capsule", () => {
     const unbound: ChatLocalKnowledgeScope[] = [];
     const connector = win(
