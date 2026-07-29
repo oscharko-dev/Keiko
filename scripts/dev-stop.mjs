@@ -60,46 +60,61 @@ export async function waitForPidsToExit(pids, timeoutMs, seams = {}) {
   return remaining;
 }
 
-async function stopOrphanedChildren(childPids, force) {
-  const signal = force ? "SIGKILL" : "SIGTERM";
-  for (const pid of childPids) killPid(pid, signal);
-  return waitForPidsToExit(childPids, force ? FORCE_STOP_GRACE_MS : DEV_STOP_GRACE_MS);
+function removePidFile() {
+  rmSync(pidFile, { force: true });
 }
 
-async function stopStaleRunner(state, force) {
+const DEFAULT_STOP_SEAMS = {
+  killPid,
+  waitForPidsToExit,
+  removePidFile,
+  log: console.log,
+  error: console.error,
+};
+
+export async function stopOrphanedChildren(childPids, force, seams = {}) {
+  const ops = { ...DEFAULT_STOP_SEAMS, ...seams };
+  const signal = force ? "SIGKILL" : "SIGTERM";
+  for (const pid of childPids) ops.killPid(pid, signal);
+  return ops.waitForPidsToExit(childPids, force ? FORCE_STOP_GRACE_MS : DEV_STOP_GRACE_MS);
+}
+
+export async function stopStaleRunner(state, force, seams = {}) {
+  const ops = { ...DEFAULT_STOP_SEAMS, stopOrphanedChildren, ...seams };
   const childPids = trackedChildPids(state);
-  const remaining = await stopOrphanedChildren(childPids, force);
+  const remaining = await ops.stopOrphanedChildren(childPids, force);
   if (remaining.length > 0) {
-    console.error(
+    ops.error(
       `Keiko dev UI has ${String(
         remaining.length,
       )} tracked process(es) still running. Retry with \`npm run dev:stop -- --force\`.`,
     );
     return 1;
   }
-  rmSync(pidFile, { force: true });
-  console.log("Removed stale Keiko dev UI PID file after tracked processes stopped.");
+  ops.removePidFile();
+  ops.log("Removed stale Keiko dev UI PID file after tracked processes stopped.");
   return 0;
 }
 
-async function stopLiveRunner(state, force) {
+export async function stopLiveRunner(state, force, seams = {}) {
+  const ops = { ...DEFAULT_STOP_SEAMS, ...seams };
   const runnerPid = state.runnerPid;
   const childPids = trackedChildPids(state);
-  console.log(`Stopping Keiko dev UI (pid ${String(runnerPid)}) ...`);
-  killPid(runnerPid, force ? "SIGKILL" : "SIGTERM");
+  ops.log(`Stopping Keiko dev UI (pid ${String(runnerPid)}) ...`);
+  ops.killPid(runnerPid, force ? "SIGKILL" : "SIGTERM");
   if (force) {
-    for (const pid of childPids) killPid(pid, "SIGKILL");
+    for (const pid of childPids) ops.killPid(pid, "SIGKILL");
   }
-  const remaining = await waitForPidsToExit(
+  const remaining = await ops.waitForPidsToExit(
     [runnerPid, ...childPids],
     force ? FORCE_STOP_GRACE_MS : DEV_STOP_GRACE_MS,
   );
   if (remaining.length === 0) {
-    rmSync(pidFile, { force: true });
-    console.log(force ? "Keiko dev UI force-stopped." : "Keiko dev UI stopped cleanly.");
+    ops.removePidFile();
+    ops.log(force ? "Keiko dev UI force-stopped." : "Keiko dev UI stopped cleanly.");
     return 0;
   }
-  console.error(
+  ops.error(
     `Keiko dev UI did not stop within ${String(
       (force ? FORCE_STOP_GRACE_MS : DEV_STOP_GRACE_MS) / 1_000,
     )}s. Retry with \`npm run dev:stop -- --force\`.`,
@@ -107,14 +122,25 @@ async function stopLiveRunner(state, force) {
   return 1;
 }
 
-export async function main(argv = process.argv.slice(2)) {
+const DEFAULT_MAIN_SEAMS = {
+  readState,
+  isAlive,
+  stopLiveRunner,
+  stopStaleRunner,
+  log: console.log,
+};
+
+export async function main(argv = process.argv.slice(2), seams = {}) {
+  const ops = { ...DEFAULT_MAIN_SEAMS, ...seams };
   const force = argv.includes("--force");
-  const state = readState();
+  const state = ops.readState();
   if (state === undefined) {
-    console.log("Keiko dev UI is not running.");
+    ops.log("Keiko dev UI is not running.");
     return 0;
   }
-  return isAlive(state.runnerPid) ? stopLiveRunner(state, force) : stopStaleRunner(state, force);
+  return ops.isAlive(state.runnerPid)
+    ? ops.stopLiveRunner(state, force)
+    : ops.stopStaleRunner(state, force);
 }
 
 if (process.argv[1] === scriptPath) {

@@ -45,6 +45,47 @@ describe("dev-start coding runtime lifecycle", () => {
     );
   });
 
+  it.each([
+    {
+      response: { ok: false, status: 503 },
+      expected: "HTTP 503",
+    },
+    {
+      response: {
+        ok: true,
+        json: () => Promise.resolve({ runtimeAvailable: true }),
+      },
+      expected: "ok",
+    },
+    {
+      response: {
+        ok: true,
+        json: () => Promise.resolve({ runtimeAvailable: false }),
+      },
+      expected: "unavailable (invalid-readiness)",
+    },
+  ])("classifies coding-runtime health as $expected", async ({ response, expected }) => {
+    await expect(
+      codingRuntimeHealth("http://localhost:1983", vi.fn().mockResolvedValue(response)),
+    ).resolves.toBe(expected);
+  });
+
+  it("skips runtime staging on unsupported hosts", async () => {
+    const discover = vi.fn();
+    const stage = vi.fn();
+
+    await expect(
+      ensureDevCodingRuntime({
+        platform: "linux",
+        arch: "x64",
+        discover,
+        stage,
+      }),
+    ).resolves.toBe(false);
+    expect(discover).not.toHaveBeenCalled();
+    expect(stage).not.toHaveBeenCalled();
+  });
+
   it("reuses a verified runtime and stages a repair only when production discovery refuses it", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const activated = {
@@ -103,6 +144,21 @@ describe("dev-start coding runtime lifecycle", () => {
         stage: vi.fn().mockResolvedValue(undefined),
       }),
     ).rejects.toThrow("coding runtime did not activate after staging (payload-tampered)");
+  });
+
+  it("fails closed when discovery refuses a non-stageable runtime state", async () => {
+    await expect(
+      ensureDevCodingRuntime({
+        platform: "darwin",
+        arch: "arm64",
+        env: {},
+        discover: vi.fn().mockResolvedValue({
+          outcome: "refused",
+          reason: "unsupported-platform",
+        }),
+        stage: vi.fn(),
+      }),
+    ).rejects.toThrow("coding runtime dev lane refused (unsupported-platform)");
   });
 });
 
