@@ -950,6 +950,105 @@ describe("useDictation — realtime live dictation (P3)", () => {
     expect(fakes.negotiate).toHaveBeenCalledTimes(1);
   });
 
+  it("ignores a negotiation result after the realtime session is cancelled", async (): Promise<void> => {
+    let resolveNegotiation: (answerSdp: string) => void = (): void => {};
+    const pendingNegotiation = new Promise<string>((resolve): void => {
+      resolveNegotiation = resolve;
+    });
+    let resolveRetryConnect: (session: VoiceRtcSession) => void = (): void => {};
+    const pendingRetryConnect = new Promise<VoiceRtcSession>((resolve): void => {
+      resolveRetryConnect = resolve;
+    });
+    const fakes = makeRealtimeDictationFakes();
+    fakes.connect.mockResolvedValueOnce(fakes.session);
+    fakes.connect.mockReturnValueOnce(pendingRetryConnect);
+    fakes.negotiate.mockReturnValueOnce(pendingNegotiation);
+    const { result } = renderHook((): ReturnType<typeof useDictation> =>
+      useDictation({
+        onInsert: vi.fn(),
+        realtime: {
+          enabled: true,
+          createTransport: (): VoiceRtcTransport => fakes.transport,
+          createControlClient: (): VoiceLiveDictationControlClient => fakes.control,
+        },
+      }),
+    );
+
+    act((): void => result.current.start());
+    await waitFor((): void => expect(fakes.negotiate).toHaveBeenCalledTimes(1));
+    expect(result.current.phase).toBe("requesting");
+
+    act((): void => result.current.retry());
+    expect(fakes.connect).toHaveBeenCalledTimes(2);
+    expect(result.current.phase).toBe("requesting");
+
+    await act(async (): Promise<void> => {
+      resolveNegotiation("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n");
+      await Promise.resolve();
+    });
+
+    expect(fakes.applyAnswer).not.toHaveBeenCalled();
+    expect(fakes.closeSession).toHaveBeenCalledTimes(1);
+    expect(fakes.closeControl).toHaveBeenCalledTimes(1);
+    expect(result.current.phase).toBe("requesting");
+
+    act((): void => result.current.cancel());
+    await act(async (): Promise<void> => {
+      resolveRetryConnect(fakes.session);
+      await Promise.resolve();
+    });
+    expect(result.current.phase).toBe("idle");
+  });
+
+  it("ignores answer application after the realtime session is cancelled", async (): Promise<void> => {
+    let resolveApplyAnswer: () => void = (): void => {};
+    const pendingApplyAnswer = new Promise<void>((resolve): void => {
+      resolveApplyAnswer = resolve;
+    });
+    let resolveRetryConnect: (session: VoiceRtcSession) => void = (): void => {};
+    const pendingRetryConnect = new Promise<VoiceRtcSession>((resolve): void => {
+      resolveRetryConnect = resolve;
+    });
+    const fakes = makeRealtimeDictationFakes();
+    fakes.connect.mockResolvedValueOnce(fakes.session);
+    fakes.connect.mockReturnValueOnce(pendingRetryConnect);
+    fakes.applyAnswer.mockReturnValueOnce(pendingApplyAnswer);
+    const { result } = renderHook((): ReturnType<typeof useDictation> =>
+      useDictation({
+        onInsert: vi.fn(),
+        realtime: {
+          enabled: true,
+          createTransport: (): VoiceRtcTransport => fakes.transport,
+          createControlClient: (): VoiceLiveDictationControlClient => fakes.control,
+        },
+      }),
+    );
+
+    act((): void => result.current.start());
+    await waitFor((): void => expect(fakes.applyAnswer).toHaveBeenCalledTimes(1));
+    expect(result.current.phase).toBe("requesting");
+
+    act((): void => result.current.retry());
+    expect(fakes.connect).toHaveBeenCalledTimes(2);
+    expect(result.current.phase).toBe("requesting");
+
+    await act(async (): Promise<void> => {
+      resolveApplyAnswer();
+      await Promise.resolve();
+    });
+
+    expect(fakes.closeSession).toHaveBeenCalledTimes(1);
+    expect(fakes.closeControl).toHaveBeenCalledTimes(1);
+    expect(result.current.phase).toBe("requesting");
+
+    act((): void => result.current.cancel());
+    await act(async (): Promise<void> => {
+      resolveRetryConnect(fakes.session);
+      await Promise.resolve();
+    });
+    expect(result.current.phase).toBe("idle");
+  });
+
   it("retry falls back to the batch STT path after live negotiation fails", async () => {
     const fakes = makeRealtimeDictationFakes({
       negotiateError: new VoiceLiveDictationControlError(
