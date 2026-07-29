@@ -251,6 +251,26 @@ function createProjectRecord(
   }
 }
 
+function reconnectProjectRecord(
+  db: DatabaseSync,
+  options: ResolvedFactoryOptions,
+  path: string,
+): Project {
+  const normalized = validateProjectPath(path, { mustExist: false });
+  const now = options.now();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const project = sqlUpdateProject(db, normalized, {}, now);
+    validateProjectPath(project.path, { mustExist: true });
+    ensureProjectWorkspaceManifest(db, project.path, project.name, now);
+    db.exec("COMMIT");
+    return project;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function updateProjectRecord(
   db: DatabaseSync,
   options: ResolvedFactoryOptions,
@@ -586,6 +606,7 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     listProjects: () => sqlListProjects(db),
     createProject: (path: string, name?: string): Project =>
       createProjectRecord(db, options, path, name),
+    reconnectProject: (path: string): Project => reconnectProjectRecord(db, options, path),
     updateProject: (path: string, patch: UpdateProjectPatch): Project =>
       updateProjectRecord(db, options, path, patch),
     deleteProject: (path: string): void => {

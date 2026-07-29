@@ -560,7 +560,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "searchPanel.label.workspaceSearch": "Workspace-Suche",
   "searchPanel.mode.literal": "Wörtlich",
   "searchPanel.mode.regex": "Regex",
-  "searchPanel.noProjectSelected": "Kein Projekt ausgewählt",
+  "searchPanel.noProjectSelected": "Kein Workspace ausgewählt",
   "searchPanel.option.caseSensitive": "Groß-/Kleinschreibung beachten",
   "searchPanel.option.matchWholeWord": "Nur ganzes Wort",
   "searchPanel.replace.appliedSummary": "{count} Dateien angewendet.{suffix}",

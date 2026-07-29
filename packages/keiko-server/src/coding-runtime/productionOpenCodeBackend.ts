@@ -121,7 +121,6 @@ function createOpenCodeRun(
       permissionPort,
       dispose: (): void => {
         safeActivity.clear();
-        safeActivityProjection.purge(run.minted.authorityRef.runId, "stop");
       },
     };
   } catch (error) {

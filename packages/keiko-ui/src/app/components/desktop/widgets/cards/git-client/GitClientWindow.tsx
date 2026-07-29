@@ -42,6 +42,12 @@ import { DiffPane } from "./DiffPane";
 import { NewBranchDialog } from "./NewBranchDialog";
 import { deriveSyncView } from "./SyncControl";
 import {
+  GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
+  gitRepositoryStateInvalidationRoots,
+  notifyGitRepositoryStateInvalidated,
+} from "../git-repository-state-events";
+import { WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationRoots } from "../workspace-file-events";
+import {
   BODY_STYLE,
   DIFF_HEADER_STYLE,
   PANE_STYLE,
@@ -246,11 +252,12 @@ interface SyncExecutionContext {
   readonly startedAt: number;
   readonly aheadBefore: number;
   readonly behindBefore: number;
+  readonly projectId: string;
+  readonly repositoryRoot: string | undefined;
   readonly sequenceRef: RefObject<number>;
   readonly setBusy: Dispatch<SetStateAction<boolean>>;
   readonly setOutcome: Dispatch<SetStateAction<string | null>>;
   readonly setError: Dispatch<SetStateAction<string | null>>;
-  readonly setStatusRevision: Dispatch<SetStateAction<number>>;
 }
 
 function syncOutcomeWithMetrics(
@@ -266,11 +273,17 @@ function syncOutcomeWithMetrics(
   return t("gitClientWindow.sync.outcome", { label, seconds: elapsedSeconds, delta });
 }
 
-function completeSync(context: SyncExecutionContext, message: string): void {
+function completeSync(
+  context: SyncExecutionContext,
+  message: string,
+  repositoryMayHaveChanged: boolean,
+): void {
+  if (repositoryMayHaveChanged) {
+    notifyGitRepositoryStateInvalidated(context.projectId, context.repositoryRoot);
+  }
   if (context.sequenceRef.current !== context.sequence) return;
   context.setBusy(false);
   context.setOutcome(message);
-  context.setStatusRevision((revision) => revision + 1);
 }
 
 function failSync(context: SyncExecutionContext, error: unknown): void {
@@ -297,6 +310,7 @@ function runFetchOrPullSync(
           t("gitClientWindow.sync.blocked", {
             reason: preview.blockReason ?? t("gitClientWindow.sync.unavailableLower"),
           }),
+          false,
         );
         return undefined;
       }
@@ -314,6 +328,7 @@ function runFetchOrPullSync(
             t("gitClientWindow.sync.operationStatus", { label, status: result.status }),
             t,
           ),
+          true,
         );
       },
       (error: unknown) => failSync(context, error),
@@ -358,6 +373,7 @@ function runPushSync(
           t("gitClientWindow.sync.blocked", {
             reason: preview.policyBlockReason ?? preview.preflightBlockingCodes.join(", "),
           }),
+          false,
         );
         return undefined;
       }
@@ -377,6 +393,7 @@ function runPushSync(
             t("gitClientWindow.sync.operationStatus", { label, status: result.status }),
             t,
           ),
+          true,
         );
       },
       (error: unknown) => failSync(context, error),
@@ -386,13 +403,13 @@ function runPushSync(
 interface GitSyncActionOptions {
   readonly activeSummary: GitRepositorySummary | null;
   readonly client: GitClientSeam;
+  readonly repositoryRoot: string | undefined;
   readonly selectedPath: string | null;
   readonly syncView: SyncView;
   readonly sequenceRef: RefObject<number>;
   readonly setBusy: Dispatch<SetStateAction<boolean>>;
   readonly setOutcome: Dispatch<SetStateAction<string | null>>;
   readonly setError: Dispatch<SetStateAction<string | null>>;
-  readonly setStatusRevision: Dispatch<SetStateAction<number>>;
   readonly t: I18nTranslate;
 }
 
@@ -400,13 +417,13 @@ function useGitSyncAction(options: GitSyncActionOptions): () => void {
   const {
     activeSummary,
     client,
+    repositoryRoot,
     selectedPath,
     syncView,
     sequenceRef,
     setBusy,
     setOutcome,
     setError,
-    setStatusRevision,
     t,
   } = options;
   return useCallback((): void => {
@@ -421,23 +438,24 @@ function useGitSyncAction(options: GitSyncActionOptions): () => void {
       startedAt: performance.now(),
       aheadBefore: activeSummary?.ahead ?? 0,
       behindBefore: activeSummary?.behind ?? 0,
+      projectId: selectedPath,
+      repositoryRoot,
       sequenceRef,
       setBusy,
       setOutcome,
       setError,
-      setStatusRevision,
     };
     runFetchOrPullSync(client, selectedPath, syncView, context, t);
     runPushSync(client, selectedPath, syncView, context, t);
   }, [
     activeSummary,
     client,
+    repositoryRoot,
     selectedPath,
     sequenceRef,
     setBusy,
     setError,
     setOutcome,
-    setStatusRevision,
     syncView,
     t,
   ]);
@@ -548,11 +566,11 @@ export function GitClientWindow({
 }: GitClientWindowProps): ReactNode {
   const t = useTranslate();
   const [repositories, setRepositories] = useState<readonly ProjectWithAvailability[]>([]);
-  const [reposLoading, setReposLoading] = useState(false);
+  const [reposLoading, setReposLoading] = useState(true);
   const [reposError, setReposError] = useState<string | null>(null);
-  const [selectedPath, setSelectedPath] = useState<string | null>(
-    projectId !== undefined && projectId !== "" ? projectId : null,
-  );
+  // A persisted project path is only a reconnect candidate. Do not dispatch Git operations until
+  // the current project projection proves that it still has live workspace-manifest membership.
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [branches, setBranches] = useState<readonly GitBranchListEntry[]>([]);
   const [branchesProjectKey, setBranchesProjectKey] = useState<string | null>(null);
   const [branchesLoading, setBranchesLoading] = useState(false);
@@ -586,6 +604,7 @@ export function GitClientWindow({
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("diff");
   const [rightPaneAnnouncement, setRightPaneAnnouncement] = useState("");
   const syncSeqRef = useRef(0);
+  const repositoryConnectSeqRef = useRef(0);
   const newBranchReturnFocusRef = useRef<HTMLElement | null>(null);
   const rightPaneRef = useRef<HTMLDivElement | null>(null);
   const diffPaneRef = useRef<HTMLDivElement | null>(null);
@@ -596,9 +615,13 @@ export function GitClientWindow({
   // Two independent governed-mutation flows: one for staging, one for the commit composer. Each
   // carries its own stale-guard so concurrent stage clicks and a later commit do not cross results.
   const projectKey = selectedPath ?? "";
-  const branchActions = useGitActions(client, projectKey);
-  const staging = useGitActions(client, projectKey);
-  const commit = useGitActions(client, projectKey);
+  const mutationRepositoryRoot =
+    statusProjectKey === selectedPath && status?.available === true
+      ? (status.repositoryRoot ?? status.root)
+      : undefined;
+  const branchActions = useGitActions(client, projectKey, mutationRepositoryRoot);
+  const staging = useGitActions(client, projectKey, mutationRepositoryRoot);
+  const commit = useGitActions(client, projectKey, mutationRepositoryRoot);
   const resetBranchActions = branchActions.reset;
   const resetStaging = staging.reset;
   const resetCommit = commit.reset;
@@ -635,10 +658,6 @@ export function GitClientWindow({
   useEffect(() => {
     loadRepositories();
   }, [loadRepositories]);
-
-  useEffect(() => {
-    if (projectId !== undefined && projectId !== "") setSelectedPath(projectId);
-  }, [projectId]);
 
   useRightPaneFocus(rightPaneMode, rightPaneRef);
 
@@ -831,17 +850,51 @@ export function GitClientWindow({
     };
   }, [client, selectedPath, statusRevision]);
 
-  // Refresh the changed-file list + visible diff after a successful staging mutation.
-  const stagingOutcome = staging.flow.outcome;
-  useEffect(() => {
-    if (stagingOutcome?.status === "succeeded") setStatusRevision((r) => r + 1);
-  }, [stagingOutcome]);
+  useEffect((): (() => void) => {
+    const onRepositoryStateInvalidated = (event: Event): void => {
+      const invalidatedRoots = gitRepositoryStateInvalidationRoots(event);
+      const repositoryRoot = mutationRepositoryRoot ?? null;
+      if (
+        !invalidatedRoots.some(
+          (root): boolean =>
+            root === selectedPath || (repositoryRoot !== null && root === repositoryRoot),
+        )
+      ) {
+        return;
+      }
+      setStatusRevision((revision): number => revision + 1);
+    };
+    window.addEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, onRepositoryStateInvalidated);
+    return (): void =>
+      window.removeEventListener(
+        GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
+        onRepositoryStateInvalidated,
+      );
+  }, [mutationRepositoryRoot, selectedPath]);
+
+  useEffect((): (() => void) => {
+    const onWorkspaceFileMutated = (event: Event): void => {
+      const mutationRoots = workspaceFileMutationRoots(event);
+      const repositoryRoot = mutationRepositoryRoot ?? null;
+      if (
+        !mutationRoots.some(
+          (root): boolean =>
+            root === selectedPath || (repositoryRoot !== null && root === repositoryRoot),
+        )
+      ) {
+        return;
+      }
+      setStatusRevision((revision): number => revision + 1);
+    };
+    window.addEventListener(WORKSPACE_FILE_MUTATED_EVENT, onWorkspaceFileMutated);
+    return (): void =>
+      window.removeEventListener(WORKSPACE_FILE_MUTATED_EVENT, onWorkspaceFileMutated);
+  }, [mutationRepositoryRoot, selectedPath]);
 
   // After a successful commit, refresh status and remount the composer to clear its fields.
   const commitOutcome = commit.flow.outcome;
   useEffect(() => {
     if (commitOutcome?.status === "succeeded") {
-      setStatusRevision((r) => r + 1);
       setCommitNonce((n) => n + 1);
     }
   }, [commitOutcome]);
@@ -850,11 +903,10 @@ export function GitClientWindow({
   useEffect(() => {
     if (branchOutcome?.status === "succeeded") {
       closeNewBranchDialog();
-      setStatusRevision((r) => r + 1);
     }
   }, [branchOutcome, closeNewBranchDialog]);
 
-  const selectRepository = useCallback(
+  const applyRepositorySelection = useCallback(
     (path: string): void => {
       setSelectedPath(path);
       updateCfg?.({ projectPath: path });
@@ -862,13 +914,67 @@ export function GitClientWindow({
     [updateCfg],
   );
 
+  const applyConnectedRepository = useCallback(
+    (project: ProjectWithAvailability): boolean => {
+      if (project.workspaceAvailable !== true) {
+        setReposLoading(false);
+        setReposError(t("gitClientWindow.repository.workspaceUnavailable"));
+        return false;
+      }
+      setReposError(null);
+      applyRepositorySelection(project.path);
+      return true;
+    },
+    [applyRepositorySelection, t],
+  );
+
+  const reconnectRepository = useCallback(
+    (path: string): void => {
+      const requestSequence = repositoryConnectSeqRef.current + 1;
+      repositoryConnectSeqRef.current = requestSequence;
+      setReposLoading(true);
+      setReposError(null);
+      void client.reconnectRepository(path).then(
+        (response): void => {
+          if (requestSequence !== repositoryConnectSeqRef.current) return;
+          if (applyConnectedRepository(response.project)) loadRepositories();
+        },
+        (error: unknown): void => {
+          if (requestSequence !== repositoryConnectSeqRef.current) return;
+          setReposLoading(false);
+          setReposError(
+            t("gitClientWindow.repository.reconnectFailed", { detail: formatGitError(error) }),
+          );
+        },
+      );
+    },
+    [applyConnectedRepository, client, loadRepositories, t],
+  );
+
   const onRepositoryAdded = useCallback(
     (project: ProjectWithAvailability): void => {
-      loadRepositories();
-      selectRepository(project.path);
+      // Create/clone owns manifest establishment. Reconnect through the existing-project route
+      // before selection so the Git window consumes a fresh server membership projection rather
+      // than trusting the mutation response or attempting duplicate project creation.
+      reconnectRepository(project.path);
     },
-    [loadRepositories, selectRepository],
+    [reconnectRepository],
   );
+
+  useEffect(() => {
+    if (reposLoading || reposError !== null) return;
+    const configuredPath = projectId !== undefined && projectId !== "" ? projectId : null;
+    const requestedPath = selectedPath ?? configuredPath;
+    if (requestedPath === null) return;
+    const selected = repositories.find((repository) => repository.path === requestedPath);
+    if (selected?.workspaceAvailable === true) {
+      if (selectedPath !== requestedPath) setSelectedPath(requestedPath);
+      return;
+    }
+    setSelectedPath(null);
+    updateCfg?.({ projectPath: "" });
+    setReposError(t("gitClientWindow.repository.workspaceUnavailable"));
+  }, [projectId, repositories, reposError, reposLoading, selectedPath, t, updateCfg]);
 
   const active = activeGitClientState({
     selectedPath,
@@ -1023,13 +1129,16 @@ export function GitClientWindow({
   const runSync = useGitSyncAction({
     activeSummary,
     client,
+    repositoryRoot:
+      activeStatus?.available === true
+        ? (activeStatus.repositoryRoot ?? activeStatus.root)
+        : undefined,
     selectedPath,
     syncView,
     sequenceRef: syncSeqRef,
     setBusy: setSyncBusy,
     setOutcome: setSyncOutcome,
     setError: setSyncError,
-    setStatusRevision,
     t,
   });
 
@@ -1089,7 +1198,7 @@ export function GitClientWindow({
         syncBusy={syncBusy}
         syncOutcome={syncOutcome}
         syncError={syncError}
-        onSelectRepository={selectRepository}
+        onSelectRepository={reconnectRepository}
         onSwitchBranch={switchBranch}
         onCreateBranch={openNewBranchDialog}
         onRunSync={runSync}
@@ -1102,7 +1211,7 @@ export function GitClientWindow({
             repositories={repositories}
             loading={reposLoading}
             error={reposError}
-            onSelect={selectRepository}
+            onSelect={reconnectRepository}
             onConnect={() => {
               setDialogMode("open");
               setDialogOpen(true);

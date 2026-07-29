@@ -245,6 +245,10 @@ import {
 import { EditorBreadcrumbBar } from "./EditorBreadcrumbBar";
 import { EditorGitHunkPeek } from "./EditorGitHunkPeek";
 import { useEditorSourceControlTranslate } from "./editor-source-control-i18n";
+import {
+  GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
+  gitRepositoryStateInvalidationRoots,
+} from "./git-repository-state-events";
 import { notifyWorkspaceFileMutated } from "./workspace-file-events";
 import {
   buildEditorOutlineTree,
@@ -608,6 +612,13 @@ interface EditorTabInsertTarget {
   readonly edge: "before" | "after";
 }
 
+interface WorkspaceGitSummary {
+  readonly requestedRoot: string;
+  readonly changedFileCount: number;
+  readonly truncated: boolean;
+  readonly repositoryRoot: string;
+}
+
 export interface EditorRuntimeWidgetProps {
   readonly windowId?: string | undefined;
   /** Keeps runtime state while omitting the inactive root's Monaco surface. */
@@ -914,6 +925,7 @@ interface EditorFileSessionSnapshot {
   readonly cursor: EditorPosition | null;
   readonly currentSelection: EditorRange | null;
   readonly diagnosticsSummary: EditorDiagnosticsSummary | null;
+  readonly localHistoryProtection?: NonNullable<FilesContentResponse["localHistoryProtection"]>;
 }
 
 interface RenameApplyTarget {
@@ -988,6 +1000,9 @@ function cleanEditorSessionSnapshot(input: {
     cursor: null,
     currentSelection: null,
     diagnosticsSummary: null,
+    ...(input.response.localHistoryProtection === undefined
+      ? {}
+      : { localHistoryProtection: input.response.localHistoryProtection }),
   };
 }
 
@@ -2020,6 +2035,9 @@ function EditorRuntimeWidget({
   );
   const [saveStatus, setSaveStatus] = useState<EditorSaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
+  const [localHistoryProtection, setLocalHistoryProtection] = useState<
+    NonNullable<FilesContentResponse["localHistoryProtection"]> | undefined
+  >(undefined);
   const [fileHistoryOpen, setFileHistoryOpen] = useState(false);
   useEffect(() => {
     if (fileHistoryRequestNonce !== undefined) setFileHistoryOpen(true);
@@ -2038,13 +2056,12 @@ function EditorRuntimeWidget({
   // Issue #2234 (ADR-0127): content-free workspace change-count backing the agent snapshot's
   // gitContextSummary. Event-driven only (root change, save, explicit refresh) — mirrors the
   // gutter's own refresh triggers so this never becomes a polling loop.
-  const [workspaceGitSummary, setWorkspaceGitSummary] = useState<{
-    readonly changedFileCount: number;
-    readonly truncated: boolean;
-  } | null>(null);
+  const [workspaceGitSummary, setWorkspaceGitSummary] = useState<WorkspaceGitSummary | null>(null);
   useEffect(() => {
+    setWorkspaceGitSummary((current): WorkspaceGitSummary | null =>
+      current?.requestedRoot === root ? current : null,
+    );
     if (root === undefined) {
-      setWorkspaceGitSummary(null);
       return;
     }
     let cancelled = false;
@@ -2052,8 +2069,10 @@ function EditorRuntimeWidget({
       .then((status) => {
         if (!cancelled) {
           setWorkspaceGitSummary({
+            requestedRoot: root,
             changedFileCount: status.changes.length,
             truncated: status.truncated,
+            repositoryRoot: status.repositoryRoot ?? status.root,
           });
         }
       })
@@ -2064,6 +2083,28 @@ function EditorRuntimeWidget({
       cancelled = true;
     };
   }, [root, gitGutterRefreshNonce]);
+  const activeWorkspaceGitSummary =
+    workspaceGitSummary?.requestedRoot === root ? workspaceGitSummary : null;
+  const workspaceGitRepositoryRoot = activeWorkspaceGitSummary?.repositoryRoot ?? null;
+  useEffect((): (() => void) | undefined => {
+    if (root === undefined) return undefined;
+    const onRepositoryStateInvalidated = (event: Event): void => {
+      const invalidatedRoots = gitRepositoryStateInvalidationRoots(event);
+      const matchesEditorRepository = invalidatedRoots.some(
+        (invalidatedRoot): boolean =>
+          invalidatedRoot === root ||
+          (workspaceGitRepositoryRoot !== null && invalidatedRoot === workspaceGitRepositoryRoot),
+      );
+      if (!matchesEditorRepository) return;
+      setGitGutterRefreshNonce((value): number => value + 1);
+    };
+    window.addEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, onRepositoryStateInvalidated);
+    return (): void =>
+      window.removeEventListener(
+        GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
+        onRepositoryStateInvalidated,
+      );
+  }, [root, workspaceGitRepositoryRoot]);
   // Issue #1202: the governed test-generation flow state (pure reducer owned by the editor package).
   // A monotonic sequence backs the cross-boundary request identity for stale-response discard.
   const [testGenState, dispatchTestGen] = useReducer<
@@ -2464,6 +2505,7 @@ function EditorRuntimeWidget({
       cursor,
       currentSelection,
       diagnosticsSummary,
+      ...(localHistoryProtection === undefined ? {} : { localHistoryProtection }),
     });
   }, [
     content,
@@ -2475,6 +2517,7 @@ function EditorRuntimeWidget({
     fileModelMatchesTarget,
     hasTarget,
     loadState,
+    localHistoryProtection,
     maxBytes,
     modifiedAt,
     root,
@@ -2498,6 +2541,7 @@ function EditorRuntimeWidget({
         setLoadState({ status: "ready" });
         setSaveStatus("idle");
         setSaveError(undefined);
+        setLocalHistoryProtection(undefined);
         return;
       }
       const sessionKey = documentSessionKey(root, file);
@@ -2512,6 +2556,7 @@ function EditorRuntimeWidget({
         setLoadState(cached.loadState);
         setSaveStatus(cached.saveStatus);
         setSaveError(cached.saveError);
+        setLocalHistoryProtection(cached.localHistoryProtection);
         setCursor(cached.cursor);
         setCurrentSelection(cached.currentSelection);
         setDiagnosticsSummary(cached.diagnosticsSummary);
@@ -2520,6 +2565,7 @@ function EditorRuntimeWidget({
       setLoadState({ status: "loading" });
       setSaveStatus("idle");
       setSaveError(undefined);
+      setLocalHistoryProtection(undefined);
       void Promise.resolve()
         .then(() => fetchFilesContent(root, file))
         .then(async (response) => {
@@ -2536,6 +2582,7 @@ function EditorRuntimeWidget({
           setModifiedAt(response.modifiedAt);
           setVersion(response.session.version);
           setMaxBytes(response.maxBytes);
+          setLocalHistoryProtection(response.localHistoryProtection);
           setLoadState({ status: "ready" });
           setExternalCompareBaseline(null);
           dispatchExternalChange({ type: "reloadSucceeded" });
@@ -2723,6 +2770,9 @@ function EditorRuntimeWidget({
         cursor: cached?.cursor ?? null,
         currentSelection: cached?.currentSelection ?? null,
         diagnosticsSummary: cached?.diagnosticsSummary ?? null,
+        ...(response.localHistoryProtection === undefined
+          ? {}
+          : { localHistoryProtection: response.localHistoryProtection }),
       });
       await deleteHotExitSnapshotBestEffort(targetRoot, targetFile);
     },
@@ -2739,6 +2789,7 @@ function EditorRuntimeWidget({
       setModifiedAt(response.modifiedAt);
       setVersion(response.session.version);
       setMaxBytes(response.maxBytes);
+      setLocalHistoryProtection(response.localHistoryProtection);
       if (contentRef.current === textToSave) {
         setContent(response.content);
         setFileModel((model: EditorFileModel | null) =>
@@ -2773,6 +2824,9 @@ function EditorRuntimeWidget({
           cursor: cached?.cursor ?? null,
           currentSelection: cached?.currentSelection ?? null,
           diagnosticsSummary: cached?.diagnosticsSummary ?? null,
+          ...(cached?.localHistoryProtection === undefined
+            ? {}
+            : { localHistoryProtection: cached.localHistoryProtection }),
         });
         return false;
       }
@@ -2833,6 +2887,9 @@ function EditorRuntimeWidget({
           kind: "changed",
           relativePath: file,
           provenance: "local",
+          ...(workspaceGitRepositoryRoot === null
+            ? {}
+            : { repositoryRoot: workspaceGitRepositoryRoot }),
         });
         if (activeSessionKeyRef.current !== saveSessionKey) {
           await settleInactiveSave(saveSessionKey, textToSave, response, root, file);
@@ -2855,6 +2912,7 @@ function EditorRuntimeWidget({
       root,
       settleActiveSave,
       settleInactiveSave,
+      workspaceGitRepositoryRoot,
     ],
   );
 
@@ -4510,8 +4568,8 @@ function EditorRuntimeWidget({
         // Git window use. root is already guaranteed defined by the early return above.
         gitContextSummary: {
           hasConflictMarkers: mergeConflicts.count > 0,
-          changedFileCount: workspaceGitSummary?.changedFileCount ?? 0,
-          truncated: mergeConflicts.truncated || (workspaceGitSummary?.truncated ?? false),
+          changedFileCount: activeWorkspaceGitSummary?.changedFileCount ?? 0,
+          truncated: mergeConflicts.truncated || (activeWorkspaceGitSummary?.truncated ?? false),
         },
         ...(agentDocumentVersion === null ? {} : { documentVersion: agentDocumentVersion }),
         activeFileContentHash: activeContentHash,
@@ -4554,7 +4612,7 @@ function EditorRuntimeWidget({
       paneId,
       root,
       windowId,
-      workspaceGitSummary,
+      activeWorkspaceGitSummary,
     ],
   );
 
@@ -4921,6 +4979,7 @@ function EditorRuntimeWidget({
       setModifiedAt(response.modifiedAt);
       setVersion(response.session.version);
       setMaxBytes(response.maxBytes);
+      setLocalHistoryProtection(response.localHistoryProtection);
       setLoadState({ status: "ready" });
       setSaveStatus("idle");
       setSaveError(undefined);
@@ -6251,6 +6310,21 @@ function EditorRuntimeWidget({
     </>
   );
 
+  const renderLocalHistoryProtectionBanner = (): ReactNode =>
+    localHistoryProtection?.status === "degraded" ? (
+      <output className="ed-recovery" data-testid="editor-local-history-protection">
+        <span>
+          {commonT("editor.localHistoryProtection.savedUnprotected")}{" "}
+          {localHistoryProtection.reason === "workspace-unavailable"
+            ? commonT("editor.localHistoryProtection.workspaceUnavailable")
+            : commonT("editor.localHistoryProtection.historyUnavailable")}{" "}
+          {commonT("editor.localHistoryProtection.diagnosticReference", {
+            correlationId: localHistoryProtection.correlationId,
+          })}
+        </span>
+      </output>
+    ) : null;
+
   const renderExternalChangeBanner = (): ReactNode => (
     <>
       {showExternalChangeBanner ? (
@@ -6401,6 +6475,7 @@ function EditorRuntimeWidget({
         {toolbarNotice}
       </div>
       {renderWorkspaceWatchBanner()}
+      {renderLocalHistoryProtectionBanner()}
       {renderExternalChangeBanner()}
       {renderRecoveryBanner()}
       {renderReloadConfirmation()}

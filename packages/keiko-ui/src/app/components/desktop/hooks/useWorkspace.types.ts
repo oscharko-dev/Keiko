@@ -29,6 +29,11 @@ export interface OpenEditorFileRequest {
   readonly lineEnd?: number | undefined;
 }
 
+export interface ChatBindingTarget {
+  readonly conversationId: string | undefined;
+  readonly isCurrent: () => boolean;
+}
+
 export type OpenEditorFileResult =
   | { readonly ok: true; readonly windowId: string }
   | { readonly ok: false; readonly message: string };
@@ -61,7 +66,7 @@ export interface WorkspaceApi {
   readonly startConnect: (fromId: string, e: ReactPointerEvent<Element>) => void;
   readonly confirmConnect: (toId: string, e: ReactPointerEvent<Element>) => void;
   readonly cancelConnect: () => void;
-  readonly removeConn: (connId: string) => void;
+  readonly removeConn: (connId: string, options?: { readonly unbind?: boolean }) => void;
   readonly updateConnBoundScope: (connId: string, scope: ChatConnectedScope) => void;
   readonly connect: (a: string, b: string) => void;
   readonly linkedFilesRoot: (id: string) => string | null;

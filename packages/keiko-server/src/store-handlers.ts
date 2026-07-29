@@ -5,6 +5,7 @@
 import type { IncomingMessage } from "node:http";
 import { realpathSync, statSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
+import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { containsPath } from "@oscharko-dev/keiko-git";
@@ -14,7 +15,6 @@ import { findCapability, findConfiguredCapability } from "@oscharko-dev/keiko-mo
 import {
   UiStoreError,
   assertUiDbOutsideProject,
-  isProjectAvailable,
   validateProjectPath,
   type Chat,
   type ChatMessage,
@@ -22,12 +22,15 @@ import {
   type ChatLocalKnowledgeScope,
   type ChatRole,
   type NewChatMessage,
-  type Project,
   type UpdateChatMessagePatch,
   type UpdateChatPatch,
   type UpdateProjectPatch,
   type WorkflowStatus,
 } from "./store/index.js";
+import {
+  projectsWithWorkspaceAvailability,
+  projectWithWorkspaceAvailability,
+} from "./workspace-root-membership.js";
 import {
   openKnowledgeStore,
   resolveKnowledgeStorePath,
@@ -309,19 +312,6 @@ function optionalBoundedQueryInteger(
 // Response projections
 // ──────────────────────────────────────────────────────────────────────────
 
-interface ProjectWithAvailability {
-  readonly path: string;
-  readonly name: string;
-  readonly favorite: boolean;
-  readonly createdAt: number;
-  readonly lastOpenedAt: number;
-  readonly available: boolean;
-}
-
-function projectWithAvailability(p: Project): ProjectWithAvailability {
-  return { ...p, available: isProjectAvailable(p) };
-}
-
 function putPreferredProjectFirst(
   projects: readonly ProjectWithAvailability[],
   preferredProjectPath: string | undefined,
@@ -353,7 +343,7 @@ function messageBelongsToChat(deps: UiHandlerDeps, chatId: string, messageId: st
 
 export function handleListProjects(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const projects = putPreferredProjectFirst(
-    deps.store.listProjects().map(projectWithAvailability),
+    projectsWithWorkspaceAvailability(deps.store, deps.store.listProjects()),
     deps.preferredProjectPath,
   );
   return { status: 200, body: { projects } };
@@ -379,8 +369,14 @@ export async function handleCreateProject(
       );
     }
     assertUiDbOutsideProject(deps.uiDbPath, normalizedPath);
+    // The store owner writes the project row and its single-root workspace manifest in one
+    // transaction (`createProjectRecord`). A successful response therefore exposes a current
+    // membership projection; consumers never synthesize or assume membership client-side.
     const project = deps.store.createProject(normalizedPath, name);
-    return { status: 201, body: { project: projectWithAvailability(project) } };
+    return {
+      status: 201,
+      body: { project: projectWithWorkspaceAvailability(deps.store, project) },
+    };
   });
 }
 
@@ -405,8 +401,17 @@ export async function handleUpdateProject(
     const targetPath = requireQuery(ctx, "path");
     const body = await readJsonObject(ctx.req);
     const patch = buildProjectPatch(body);
-    const project = deps.store.updateProject(targetPath, patch);
-    return { status: 200, body: { project: projectWithAvailability(project) } };
+    // An empty PATCH is the existing-project reconnect operation. Re-entering the store's
+    // existing-only paired-write owner repairs a missing single-root manifest atomically without
+    // admitting an unregistered path; ordinary metadata patches stay on updateProject.
+    const project =
+      Object.keys(patch).length === 0
+        ? deps.store.reconnectProject(targetPath)
+        : deps.store.updateProject(targetPath, patch);
+    return {
+      status: 200,
+      body: { project: projectWithWorkspaceAvailability(deps.store, project) },
+    };
   });
 }
 

@@ -340,9 +340,7 @@ function SearchPanelSessionHost({
   readonly cfg: Record<string, unknown>;
   readonly ctx: WindowRenderContext;
 }): ReactNode {
-  const { activeProject } = useChatSessionContext();
-  const root =
-    ctx.activeRoot ?? str(cfg, "root") ?? ctx.linkedRoot ?? activeProject?.path ?? undefined;
+  const root = ctx.activeRoot ?? str(cfg, "root") ?? ctx.linkedRoot ?? undefined;
   const workspace = useWorkspaceManifest(root);
   const roots = useMemo(
     () => workspaceRootTargets(root, workspace.manifest),

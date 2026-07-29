@@ -49,6 +49,7 @@ import {
   queueEditorAgentBridgeAction,
   pdfCitationPreviewDocumentUrl,
   prepareUpdateRemediationStatus,
+  reconnectProject,
   runGatewayReadiness,
   checkUpdatePreflight,
   cancelUpdateSession,
@@ -2170,6 +2171,42 @@ describe("cloneRepository", () => {
           repositoryUrl: "https://github.com/acme/app.git",
           destinationPath: "/repo/app",
         }),
+      }),
+    );
+  });
+});
+
+describe("reconnectProject", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("revalidates an existing project through PATCH without invoking creation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        project: {
+          path: "/repo/existing",
+          name: "existing",
+          favorite: false,
+          createdAt: 1,
+          lastOpenedAt: 2,
+          available: true,
+          workspaceAvailable: true,
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(reconnectProject("/repo/existing")).resolves.toMatchObject({
+      project: { path: "/repo/existing", workspaceAvailable: true },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/projects?path=%2Frepo%2Fexisting",
+      expect.objectContaining({
+        method: "PATCH",
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+        body: "{}",
       }),
     );
   });

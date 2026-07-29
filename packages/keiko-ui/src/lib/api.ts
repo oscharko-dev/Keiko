@@ -887,6 +887,15 @@ export async function updateProject(
   return response;
 }
 
+/**
+ * Revalidates an existing project through the update route without invoking project creation.
+ * The empty patch touches lastOpenedAt and returns the server's current workspace-membership
+ * projection, so consumers can fail closed on stale or detached repository entries.
+ */
+export async function reconnectProject(path: string): Promise<ProjectResponse> {
+  return updateProject(path, {});
+}
+
 export async function deleteProject(path: string): Promise<void> {
   await fetchJson<void>(`/api/projects?path=${encodeURIComponent(path)}`, {
     method: "DELETE",

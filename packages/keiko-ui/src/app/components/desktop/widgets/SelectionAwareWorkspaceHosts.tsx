@@ -1,8 +1,10 @@
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { disposeEditorModelRegistryRoot } from "@oscharko-dev/keiko-editor";
 import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 
+import { updateChat } from "@/lib/api";
+import { newClientCorrelationId } from "@/lib/http";
 import { useTranslate } from "@/lib/i18n";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 
@@ -63,7 +65,10 @@ function stringArray(cfg: Record<string, unknown>, key: string): readonly string
 
 type SelectionHandoffNoticeKey = Extract<
   EditorAgentMessageKey,
-  "editor.askSelection.chatUnavailable" | "editor.askSelection.openFailed"
+  | "chat.creation.openFailed"
+  | "chat.creation.titleSaveFailed"
+  | "editor.askSelection.chatUnavailable"
+  | "editor.askSelection.openFailed"
 >;
 
 type SelectionHandoffRoute =
@@ -131,10 +136,11 @@ function routeSelectionHandoff(
     { readonly kind: "open-project" | "open-chat" | "create-chat" }
   >,
   session: ChatSessionApi,
+  createChat: (project: ProjectWithAvailability) => Promise<unknown>,
 ): Promise<unknown> {
   if (route.kind === "open-project") return session.openProject(route.project);
   if (route.kind === "open-chat") return session.openChat(route.chat);
-  return session.openNewChat(route.project);
+  return createChat(route.project);
 }
 
 function currentRouteAttempt(
@@ -145,8 +151,211 @@ function currentRouteAttempt(
   return ref.current;
 }
 
+interface ChatCreationOwner {
+  readonly kind: "selection" | "window";
+  readonly id: string;
+}
+
+interface ChatCreationCoordinator {
+  readonly release: (owner: ChatCreationOwner) => void;
+  readonly request: (
+    owner: ChatCreationOwner,
+    project?: ProjectWithAvailability,
+    title?: string,
+    isOwnerCurrent?: () => boolean,
+  ) => Promise<ChatCreationResult>;
+}
+
+interface ChatCreationResult {
+  readonly chat: Chat | undefined;
+  readonly titleSaveFailed: boolean;
+}
+
+interface ActiveChatCreation {
+  readonly correlationId: string;
+  desiredTitle: string | undefined;
+  isOwnerCurrent: () => boolean;
+  owner: ChatCreationOwner;
+  readonly projectPath: string | null;
+  readonly promise: Promise<Chat | undefined>;
+  reconciliation: Promise<ChatCreationResult> | null;
+  settledChat: Chat | undefined;
+  titleRevision: number;
+}
+
+function sameCreationOwner(left: ChatCreationOwner, right: ChatCreationOwner): boolean {
+  return left.kind === right.kind && left.id === right.id;
+}
+
+const CHAT_CREATION_REQUEST_DIAGNOSTIC = "Chat creation request failed.";
+const CHAT_TITLE_UPDATE_DIAGNOSTIC = "Chat title update failed.";
+
+class ChatCreationRequestFailure extends Error {
+  public constructor(readonly correlationId: string) {
+    super(CHAT_CREATION_REQUEST_DIAGNOSTIC);
+  }
+}
+
+function correlatedDiagnostic(message: string, correlationId: string): Error {
+  return new Error(`${message} Correlation ID: ${correlationId}`);
+}
+
+export function normalizedChatTitle(title: string | undefined): string | undefined {
+  const normalized = title?.trim();
+  return normalized === undefined || normalized.length === 0 ? undefined : normalized;
+}
+
+type ChatCreationReconciliationStep =
+  | { readonly kind: "retry"; readonly chat: Chat }
+  | { readonly kind: "settled"; readonly result: ChatCreationResult };
+
+async function reconcileChatTitleRevision(
+  active: ActiveChatCreation,
+  chat: Chat,
+  replaceChat: ChatSessionApi["replaceChat"],
+  isCurrent: () => boolean,
+): Promise<ChatCreationReconciliationStep> {
+  const revision = active.titleRevision;
+  const title = active.desiredTitle;
+  if (title === undefined || chat.title === title) {
+    return { kind: "settled", result: { chat, titleSaveFailed: false } };
+  }
+  try {
+    const response = await updateChat(chat.id, { title });
+    if (!isCurrent()) {
+      return { kind: "settled", result: { chat: undefined, titleSaveFailed: false } };
+    }
+    if (revision !== active.titleRevision) return { kind: "retry", chat: response.chat };
+    replaceChat(response.chat);
+    return { kind: "settled", result: { chat: response.chat, titleSaveFailed: false } };
+  } catch {
+    window.reportError(correlatedDiagnostic(CHAT_TITLE_UPDATE_DIAGNOSTIC, active.correlationId));
+    if (revision !== active.titleRevision) return { kind: "retry", chat };
+    const result = isCurrent()
+      ? { chat, titleSaveFailed: true }
+      : { chat: undefined, titleSaveFailed: false };
+    return { kind: "settled", result };
+  }
+}
+
+async function reconcileActiveChatCreation(
+  active: ActiveChatCreation,
+  replaceChat: ChatSessionApi["replaceChat"],
+  isCurrent: () => boolean,
+): Promise<ChatCreationResult> {
+  let chat: Chat | undefined;
+  try {
+    chat = await active.promise;
+  } catch {
+    throw new ChatCreationRequestFailure(active.correlationId);
+  }
+  if (chat === undefined || !isCurrent()) return { chat: undefined, titleSaveFailed: false };
+  while (isCurrent()) {
+    const step = await reconcileChatTitleRevision(active, chat, replaceChat, isCurrent);
+    if (step.kind === "settled") return step.result;
+    chat = step.chat;
+  }
+  return { chat: undefined, titleSaveFailed: false };
+}
+
+function activeCreationResult(
+  active: ActiveChatCreation,
+  currentRef: { current: ActiveChatCreation | null },
+  replaceChat: ChatSessionApi["replaceChat"],
+): Promise<ChatCreationResult> {
+  if (active.reconciliation !== null) return active.reconciliation;
+  const reconciliation = reconcileActiveChatCreation(
+    active,
+    replaceChat,
+    (): boolean => currentRef.current === active && active.isOwnerCurrent(),
+  );
+  const tracked = reconciliation.finally((): void => {
+    if (active.reconciliation === tracked) active.reconciliation = null;
+  });
+  active.reconciliation = tracked;
+  return tracked;
+}
+
+function useChatCreationCoordinator(
+  openNewChat: ChatSessionApi["openNewChat"],
+  replaceChat: ChatSessionApi["replaceChat"],
+): ChatCreationCoordinator {
+  const activeByProjectRef = useRef(new Map<string | null, ActiveChatCreation>());
+  const currentRef = useRef<ActiveChatCreation | null>(null);
+  const request = useCallback<ChatCreationCoordinator["request"]>(
+    (owner, project, title, isOwnerCurrent = (): boolean => true): Promise<ChatCreationResult> => {
+      const projectPath = project?.path ?? null;
+      let active = activeByProjectRef.current.get(projectPath);
+      if (active === undefined) {
+        const promise = openNewChat(project, title);
+        const created: ActiveChatCreation = {
+          correlationId: newClientCorrelationId(),
+          desiredTitle: normalizedChatTitle(title),
+          isOwnerCurrent,
+          owner,
+          projectPath,
+          promise,
+          reconciliation: null,
+          settledChat: undefined,
+          titleRevision: 0,
+        };
+        active = created;
+        activeByProjectRef.current.set(projectPath, created);
+        void promise.then(
+          (chat): void => {
+            created.settledChat = chat;
+          },
+          (): void => {
+            created.settledChat = undefined;
+          },
+        );
+      } else {
+        active.isOwnerCurrent = isOwnerCurrent;
+        active.owner = owner;
+        if (owner.kind === "window" || title !== undefined) {
+          active.desiredTitle = normalizedChatTitle(title);
+          active.titleRevision += 1;
+        }
+      }
+      currentRef.current = active;
+      return activeCreationResult(active, currentRef, replaceChat);
+    },
+    [openNewChat, replaceChat],
+  );
+  const release = useCallback<ChatCreationCoordinator["release"]>((owner): void => {
+    for (const [projectPath, active] of activeByProjectRef.current) {
+      if (!sameCreationOwner(active.owner, owner)) continue;
+      if (active.settledChat !== undefined && !active.isOwnerCurrent()) return;
+      activeByProjectRef.current.delete(projectPath);
+      if (currentRef.current === active) currentRef.current = null;
+      return;
+    }
+  }, []);
+  return useMemo((): ChatCreationCoordinator => ({ release, request }), [release, request]);
+}
+
+const pendingHandoffDisposals = new Map<string, number>();
+
+function retainSelectionHandoff(id: string): void {
+  const timeout = pendingHandoffDisposals.get(id);
+  if (timeout === undefined) return;
+  window.clearTimeout(timeout);
+  pendingHandoffDisposals.delete(id);
+}
+
+function scheduleSelectionHandoffDisposal(id: string): void {
+  retainSelectionHandoff(id);
+  const timeout = window.setTimeout((): void => {
+    if (pendingHandoffDisposals.get(id) !== timeout) return;
+    pendingHandoffDisposals.delete(id);
+    discardEditorSelectionHandoff(id);
+  }, 0);
+  pendingHandoffDisposals.set(id, timeout);
+}
+
 function useSelectionHandoffControl(args: {
   readonly chatId: string | undefined;
+  readonly coordinator: ChatCreationCoordinator;
   readonly ctx: WindowRenderContext;
   readonly id: string | undefined;
   readonly session: ChatSessionApi;
@@ -156,13 +365,20 @@ function useSelectionHandoffControl(args: {
   const [settledId, setSettledId] = useState<string | null>(null);
   const attemptRef = useRef<SelectionRouteAttempt>({ attempted: false, id: null, inFlight: false });
   const { id, session } = args;
+  useEffect((): (() => void) | undefined => {
+    if (id === undefined) return;
+    retainSelectionHandoff(id);
+    return (): void => {
+      scheduleSelectionHandoffDisposal(id);
+    };
+  }, [id]);
   useEffect(() => {
     if (id === undefined || settledId === id) return;
     const metadata = inspectEditorSelectionHandoff(id);
     if (metadata === null) return;
     const delay = Math.max(1, metadata.expiresAt - Date.now() + 1);
-    const timeout = window.setTimeout(() => setRevision((value) => value + 1), delay);
-    return () => window.clearTimeout(timeout);
+    const timeout = window.setTimeout((): void => setRevision((value): number => value + 1), delay);
+    return (): void => window.clearTimeout(timeout);
   }, [id, settledId]);
   useEffect(() => {
     if (id === undefined || settledId === id) return;
@@ -178,6 +394,7 @@ function useSelectionHandoffControl(args: {
     if (route.kind === "fail") {
       discardEditorSelectionHandoff(id);
       args.ctx.updateCfg({ selectionHandoffId: undefined });
+      args.coordinator.release({ kind: "selection", id });
       setNoticeKey(route.noticeKey);
       setSettledId(id);
       return;
@@ -185,14 +402,16 @@ function useSelectionHandoffControl(args: {
     if (route.kind === "consume") {
       const handoff = consumeEditorSelectionHandoff(id, route.workspaceRoot);
       if (handoff === null) {
-        setRevision((value) => value + 1);
+        setRevision((value): number => value + 1);
         return;
       }
       args.ctx.updateCfg({
         chatId: route.chat.id,
         title: route.chat.title,
         selectionHandoffId: undefined,
+        newChatRequestId: undefined,
       });
+      args.coordinator.release({ kind: "selection", id });
       args.ctx.focusWindow(args.ctx.windowId);
       setNoticeKey(null);
       setSettledId(id);
@@ -205,11 +424,214 @@ function useSelectionHandoffControl(args: {
     attempt.inFlight = true;
     const finish = (): void => {
       if (attemptRef.current.id === id) attemptRef.current.inFlight = false;
-      setRevision((value) => value + 1);
+      setRevision((value): number => value + 1);
     };
-    void routeSelectionHandoff(route, session).then(finish, finish);
-  }, [args.chatId, args.ctx, id, revision, session, settledId]);
+    const createChat = (project: ProjectWithAvailability): Promise<unknown> =>
+      args.coordinator.request({ kind: "selection", id }, project);
+    void routeSelectionHandoff(route, session, createChat).then(finish, finish);
+  }, [args.chatId, args.coordinator, args.ctx, id, revision, session, settledId]);
   return { noticeKey, pending: id !== undefined && settledId !== id };
+}
+
+interface ChatCreationControlArgs {
+  readonly activeProject: ProjectWithAvailability | undefined;
+  readonly chatId: string | undefined;
+  readonly coordinator: ChatCreationCoordinator;
+  readonly loading: boolean;
+  readonly newChatRequestId: string | undefined;
+  readonly selectionHandoffId: string | undefined;
+  readonly title: string | undefined;
+  readonly updateCfg: WindowRenderContext["updateCfg"];
+}
+
+interface ChatCreationControl {
+  readonly errorKey: SelectionHandoffNoticeKey | null;
+  readonly pending: boolean;
+}
+
+interface ChatCreationError {
+  readonly chatId: string | undefined;
+  readonly messageKey: SelectionHandoffNoticeKey;
+  readonly requestId: string;
+}
+
+interface ChatCreationRequestExecution {
+  readonly activeProject: ProjectWithAvailability | undefined;
+  readonly coordinator: ChatCreationCoordinator;
+  readonly isCurrent: () => boolean;
+  readonly owner: ChatCreationOwner;
+  readonly requestKey: string;
+  readonly setError: (error: ChatCreationError | null) => void;
+  readonly title: string | undefined;
+  readonly updateCfg: WindowRenderContext["updateCfg"];
+}
+
+interface ChatCreationAttemptState {
+  active: {
+    readonly coordinator: ChatCreationCoordinator;
+    readonly owner: ChatCreationOwner;
+  } | null;
+  attemptedRequestKey: string | undefined;
+  latestAttempt: number;
+  sequence: number;
+}
+
+function invalidateChatCreationAttempt(state: ChatCreationAttemptState): void {
+  state.sequence += 1;
+  state.latestAttempt = state.sequence;
+  state.attemptedRequestKey = undefined;
+  state.active?.coordinator.release(state.active.owner);
+  state.active = null;
+}
+
+function useChatCreationLifetime(stateRef: { readonly current: ChatCreationAttemptState }): {
+  readonly current: boolean;
+} {
+  const mountedRef = useRef(true);
+  const disposalRef = useRef<number | null>(null);
+  useEffect((): (() => void) => {
+    const state = stateRef.current;
+    mountedRef.current = true;
+    if (disposalRef.current !== null) window.clearTimeout(disposalRef.current);
+    disposalRef.current = null;
+    return (): void => {
+      mountedRef.current = false;
+      disposalRef.current = window.setTimeout((): void => {
+        invalidateChatCreationAttempt(state);
+        disposalRef.current = null;
+      }, 0);
+    };
+  }, [stateRef]);
+  return mountedRef;
+}
+
+function useIdentityRevision(identity: object): number {
+  const stateRef = useRef({ identity, revision: 0 });
+  if (stateRef.current.identity !== identity) {
+    stateRef.current = { identity, revision: stateRef.current.revision + 1 };
+  }
+  return stateRef.current.revision;
+}
+
+function applyChatCreationResult(
+  execution: ChatCreationRequestExecution,
+  result: ChatCreationResult,
+): void {
+  if (result.chat === undefined) {
+    execution.setError({
+      chatId: undefined,
+      messageKey: "chat.creation.openFailed",
+      requestId: execution.requestKey,
+    });
+    return;
+  }
+  if (result.titleSaveFailed) {
+    execution.setError({
+      chatId: result.chat.id,
+      messageKey: "chat.creation.titleSaveFailed",
+      requestId: execution.requestKey,
+    });
+  }
+  execution.updateCfg({
+    chatId: result.chat.id,
+    title: result.chat.title,
+    newChatRequestId: undefined,
+  });
+}
+
+function executeChatCreationRequest(execution: ChatCreationRequestExecution): void {
+  void execution.coordinator
+    .request(execution.owner, execution.activeProject, execution.title, execution.isCurrent)
+    .then(
+      (result): void => {
+        if (execution.isCurrent()) applyChatCreationResult(execution, result);
+      },
+      (failure): void => {
+        const correlationId =
+          failure instanceof ChatCreationRequestFailure
+            ? failure.correlationId
+            : newClientCorrelationId();
+        window.reportError(correlatedDiagnostic(CHAT_CREATION_REQUEST_DIAGNOSTIC, correlationId));
+        if (!execution.isCurrent()) return;
+        execution.setError({
+          chatId: undefined,
+          messageKey: "chat.creation.openFailed",
+          requestId: execution.requestKey,
+        });
+      },
+    )
+    .finally((): void => {
+      execution.coordinator.release(execution.owner);
+    });
+}
+
+function visibleChatCreationError(
+  error: ChatCreationError | null,
+  chatId: string | undefined,
+  requestKey: string | undefined,
+): SelectionHandoffNoticeKey | null {
+  if (error === null || error.chatId !== chatId) return null;
+  if (chatId === undefined && error.requestId !== requestKey) return null;
+  return error.messageKey;
+}
+
+function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationControl {
+  const {
+    activeProject,
+    chatId,
+    coordinator,
+    loading,
+    newChatRequestId,
+    selectionHandoffId,
+    title,
+    updateCfg,
+  } = args;
+  const [error, setError] = useState<ChatCreationError | null>(null);
+  const pending = chatId === undefined && selectionHandoffId === undefined;
+  const coordinatorRevision = useIdentityRevision(coordinator);
+  const requestId = pending
+    ? (newChatRequestId ?? `initial-unbound-chat-${String(coordinatorRevision)}`)
+    : undefined;
+  const projectPath = activeProject?.path ?? null;
+  const requestKey = requestId === undefined ? undefined : `${requestId}\u0000${projectPath ?? ""}`;
+  const attemptStateRef = useRef<ChatCreationAttemptState>({
+    active: null,
+    attemptedRequestKey: undefined,
+    latestAttempt: 0,
+    sequence: 0,
+  });
+  const currentRequestKeyRef = useRef(requestKey);
+  currentRequestKeyRef.current = requestKey;
+  const mountedRef = useChatCreationLifetime(attemptStateRef);
+
+  useEffect((): void => {
+    if (requestKey === undefined) {
+      invalidateChatCreationAttempt(attemptStateRef.current);
+      return;
+    }
+    if (loading || attemptStateRef.current.attemptedRequestKey === requestKey) return;
+    const attempt = attemptStateRef.current.sequence + 1;
+    const owner = { kind: "window", id: `${requestKey}\u0000${String(attempt)}` } as const;
+    attemptStateRef.current.sequence = attempt;
+    attemptStateRef.current.latestAttempt = attempt;
+    attemptStateRef.current.attemptedRequestKey = requestKey;
+    attemptStateRef.current.active = { coordinator, owner };
+    setError(null);
+    executeChatCreationRequest({
+      activeProject,
+      coordinator,
+      isCurrent: (): boolean =>
+        mountedRef.current &&
+        currentRequestKeyRef.current === requestKey &&
+        attemptStateRef.current.latestAttempt === attempt,
+      owner,
+      requestKey,
+      setError,
+      title,
+      updateCfg,
+    });
+  }, [activeProject, coordinator, loading, mountedRef, requestKey, title, updateCfg]);
+  return { errorKey: visibleChatCreationError(error, chatId, requestKey), pending };
 }
 
 export function ChatWindowSessionHost({
@@ -221,44 +643,39 @@ export function ChatWindowSessionHost({
 }): ReactNode {
   const agentT = useEditorAgentTranslate();
   const session = useChatSessionContext();
-  const creatingRef = useRef(false);
   const chatId = str(cfg, "chatId");
   const title = str(cfg, "title");
   const selectionHandoffId = str(cfg, "selectionHandoffId");
+  const newChatRequestId = str(cfg, "newChatRequestId");
   const { updateCfg } = ctx;
-  const { activeChat, activeProject, chats, loading, openChat, openNewChat } = session;
+  const { activeChat, activeProject, chats, loading, openChat, openNewChat, replaceChat } = session;
   const activeTarget =
     activeChat !== undefined && activeChat.status !== "closed" ? activeChat : undefined;
-  const handoff = useSelectionHandoffControl({ chatId, ctx, id: selectionHandoffId, session });
-
-  useEffect(() => {
-    if (loading || selectionHandoffId !== undefined) return;
-    if (chatId !== undefined) {
-      if (activeTarget?.id === chatId) return;
-      const target = chats.find((chat) => chat.id === chatId && chat.status !== "closed");
-      if (target !== undefined) void openChat(target);
-      return;
-    }
-    if (creatingRef.current) return;
-    creatingRef.current = true;
-    void openNewChat(undefined, title)
-      .then((created) => {
-        if (created !== undefined) updateCfg({ chatId: created.id, title: created.title });
-      })
-      .finally(() => {
-        creatingRef.current = false;
-      });
-  }, [
+  const creationCoordinator = useChatCreationCoordinator(openNewChat, replaceChat);
+  const handoff = useSelectionHandoffControl({
     chatId,
-    activeTarget?.id,
-    chats,
+    coordinator: creationCoordinator,
+    ctx,
+    id: selectionHandoffId,
+    session,
+  });
+  const creatingChat = useChatCreationControl({
+    activeProject,
+    chatId,
+    coordinator: creationCoordinator,
     loading,
-    openChat,
-    openNewChat,
+    newChatRequestId,
     selectionHandoffId,
     title,
     updateCfg,
-  ]);
+  });
+
+  useEffect((): void => {
+    if (loading || selectionHandoffId !== undefined || chatId === undefined) return;
+    if (activeTarget?.id === chatId) return;
+    const target = chats.find((chat): boolean => chat.id === chatId && chat.status !== "closed");
+    if (target !== undefined) void openChat(target);
+  }, [chatId, activeTarget?.id, chats, loading, openChat, selectionHandoffId]);
 
   useEffect(() => {
     if (loading || chatId === undefined || activeTarget?.id !== chatId) return;
@@ -272,7 +689,10 @@ export function ChatWindowSessionHost({
     activeTarget?.id !== chatId &&
     !session.chats.some((chat) => chat.id === chatId && chat.status !== "closed");
   const waitingForTarget =
-    session.loading || handoff.pending || (chatId !== undefined && activeTarget?.id !== chatId);
+    session.loading ||
+    handoff.pending ||
+    creatingChat.pending ||
+    (chatId !== undefined && activeTarget?.id !== chatId);
   const openRunResult = useCallback(
     (message: ChatMessage): void => {
       if (message.runId === undefined) return;
@@ -325,6 +745,11 @@ export function ChatWindowSessionHost({
       {handoff.noticeKey === null ? null : (
         <p className="lk-alert" role="alert">
           {agentT(handoff.noticeKey)}
+        </p>
+      )}
+      {creatingChat.errorKey === null ? null : (
+        <p className="lk-alert" role="alert">
+          {agentT(creatingChat.errorKey)}
         </p>
       )}
       {body}

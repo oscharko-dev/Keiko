@@ -35,7 +35,15 @@ if (typeof window !== "undefined" && typeof window.ResizeObserver === "undefined
 // ─── Fixture helpers ───────────────────────────────────────────────────────────
 
 function makeRepo(path: string, name: string): ProjectWithAvailability {
-  return { path, name, favorite: false, createdAt: 0, lastOpenedAt: 0, available: true };
+  return {
+    path,
+    name,
+    favorite: false,
+    createdAt: 0,
+    lastOpenedAt: 0,
+    available: true,
+    workspaceAvailable: true,
+  };
 }
 
 const REPO_A = makeRepo("/repos/alpha", "alpha");
@@ -150,7 +158,12 @@ function makeHistory(overrides: Partial<GitHistoryResponse> = {}): GitHistoryRes
 function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
   return {
     listRepositories: vi.fn(async () => ({ projects: [REPO_A, REPO_B] })),
-    registerRepository: vi.fn(async () => ({ project: REPO_A })),
+    registerRepository: vi.fn(async ({ path }) => ({
+      project: path === REPO_B.path ? REPO_B : REPO_A,
+    })),
+    reconnectRepository: vi.fn(async (path) => ({
+      project: path === REPO_B.path ? REPO_B : REPO_A,
+    })),
     cloneRepository: vi.fn(async () => ({ project: REPO_A })),
     listBranches: vi.fn(async () => makeBranchList()),
     getSummary: vi.fn(async () => makeSummary()),
@@ -369,26 +382,26 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
   });
 
   describe("tablist and tabs", () => {
-    it("renders role=tablist with accessible label", () => {
+    it("renders role=tablist with accessible label", async () => {
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      const tablist = screen.getByRole("tablist");
+      const tablist = await screen.findByRole("tablist");
       expect(tablist).toBeInTheDocument();
       // aria-label is "Changes and history"
       expect(tablist).toHaveAttribute("aria-label", "Changes and history");
     });
 
-    it("each tab has role=tab and correct aria-selected", () => {
+    it("each tab has role=tab and correct aria-selected", async () => {
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      const changesTab = screen.getByRole("tab", { name: "Changes" });
+      const changesTab = await screen.findByRole("tab", { name: "Changes" });
       const historyTab = screen.getByRole("tab", { name: "History" });
 
       expect(changesTab).toHaveAttribute("aria-selected", "true");
       expect(historyTab).toHaveAttribute("aria-selected", "false");
     });
 
-    it("each tab has a matching aria-controls pointing to its mounted panel", () => {
+    it("each tab has a matching aria-controls pointing to its mounted panel", async () => {
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      const changesTab = screen.getByRole("tab", { name: "Changes" });
+      const changesTab = await screen.findByRole("tab", { name: "Changes" });
       const historyTab = screen.getByRole("tab", { name: "History" });
 
       for (const tab of [changesTab, historyTab]) {
@@ -398,9 +411,9 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       }
     });
 
-    it("active tab has tabIndex=0 and inactive has tabIndex=-1", () => {
+    it("active tab has tabIndex=0 and inactive has tabIndex=-1", async () => {
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      const changesTab = screen.getByRole("tab", { name: "Changes" });
+      const changesTab = await screen.findByRole("tab", { name: "Changes" });
       const historyTab = screen.getByRole("tab", { name: "History" });
 
       expect(changesTab).toHaveAttribute("tabindex", "0");
@@ -411,7 +424,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       const user = userEvent.setup();
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
 
-      await user.click(screen.getByRole("tab", { name: "History" }));
+      await user.click(await screen.findByRole("tab", { name: "History" }));
 
       expect(screen.getByRole("tab", { name: "History" })).toHaveAttribute("tabindex", "0");
       expect(screen.getByRole("tab", { name: "Changes" })).toHaveAttribute("tabindex", "-1");
@@ -558,7 +571,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       // and reachable regardless of width.
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
       expect(await screen.findByRole("combobox", { name: "Repository" })).toBeInTheDocument();
-      expect(screen.getByRole("combobox", { name: "Branch: main" })).toBeInTheDocument();
+      expect(await screen.findByRole("combobox", { name: "Branch: main" })).toBeInTheDocument();
       expect(screen.getByRole("region", { name: "Diff" })).toBeInTheDocument();
     });
 
@@ -581,7 +594,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       const user = userEvent.setup();
       const client = makeClient({ getHistory: vi.fn(async () => makeHistory()) });
       render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-      await user.click(screen.getByRole("tab", { name: "History" }));
+      await user.click(await screen.findByRole("tab", { name: "History" }));
 
       const listbox = await screen.findByRole("listbox", { name: "Commit history" });
       expect(listbox).toBeInTheDocument();

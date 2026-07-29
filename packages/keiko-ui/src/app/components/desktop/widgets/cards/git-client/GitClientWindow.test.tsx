@@ -33,6 +33,7 @@ import type { GitRepositoryStatusResponse } from "@/lib/types";
 import type { GitClientSeam } from "./git-client-seam";
 import { GitClientWindow } from "./GitClientWindow";
 import { parseUnifiedDiff } from "../shared/diffParser";
+import { notifyWorkspaceFileMutated } from "../workspace-file-events";
 
 // ─── ResizeObserver stub (no global shim in vitest.setup.ts) ──────────────────
 
@@ -62,6 +63,7 @@ function makeRepo(
     createdAt: 0,
     lastOpenedAt: 0,
     available: true,
+    workspaceAvailable: true,
     ...extra,
   };
 }
@@ -348,7 +350,12 @@ function makeMergePreview(
 function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
   return {
     listRepositories: vi.fn(async () => ({ projects: [REPO_A, REPO_B] })),
-    registerRepository: vi.fn(async () => makeProjectResponse(REPO_A)),
+    registerRepository: vi.fn(async ({ path }) =>
+      makeProjectResponse(path === REPO_B.path ? REPO_B : REPO_A),
+    ),
+    reconnectRepository: vi.fn(async (path) =>
+      makeProjectResponse(path === REPO_B.path ? REPO_B : REPO_A),
+    ),
     cloneRepository: vi.fn(async () => makeProjectResponse(REPO_A)),
     listBranches: vi.fn(async () => makeBranchList()),
     getSummary: vi.fn(async () => makeSummary()),
@@ -470,7 +477,7 @@ describe("GitClientWindow — repository list", () => {
     expect(screen.getByRole("button", { name: /beta/ })).toBeInTheDocument();
   });
 
-  it("selecting a repo from the connect panel calls updateCfg with the repo path", async () => {
+  it("revalidates a repo without registering it again before persisting the path", async () => {
     const updateCfg = vi.fn();
     const client = makeClient();
     render(<GitClientWindow client={client} updateCfg={updateCfg} />);
@@ -478,8 +485,105 @@ describe("GitClientWindow — repository list", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /alpha/ }));
 
+    await waitFor(() => expect(client.reconnectRepository).toHaveBeenCalledWith(REPO_A.path));
+    expect(client.registerRepository).not.toHaveBeenCalled();
     expect(updateCfg).toHaveBeenCalledWith({ projectPath: REPO_A.path });
   });
+
+  it("keeps the latest repository when overlapping reconnects resolve out of order", async (): Promise<void> => {
+    let resolveAlpha!: (value: ReturnType<typeof makeProjectResponse>) => void;
+    let resolveBeta!: (value: ReturnType<typeof makeProjectResponse>) => void;
+    const alpha = new Promise<ReturnType<typeof makeProjectResponse>>((resolve): void => {
+      resolveAlpha = resolve;
+    });
+    const beta = new Promise<ReturnType<typeof makeProjectResponse>>((resolve): void => {
+      resolveBeta = resolve;
+    });
+    const updateCfg = vi.fn();
+    const client = makeClient({
+      reconnectRepository: vi.fn((path): Promise<ReturnType<typeof makeProjectResponse>> =>
+        path === REPO_A.path ? alpha : beta,
+      ),
+    });
+    render(<GitClientWindow client={client} updateCfg={updateCfg} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /alpha/ }));
+    fireEvent.click(screen.getByRole("button", { name: /beta/ }));
+    act((): void => resolveBeta(makeProjectResponse(REPO_B)));
+    await waitFor((): void => {
+      expect(updateCfg).toHaveBeenCalledWith({ projectPath: REPO_B.path });
+    });
+
+    act((): void => resolveAlpha(makeProjectResponse(REPO_A)));
+    await waitFor((): void => {
+      expect(client.reconnectRepository).toHaveBeenCalledTimes(2);
+    });
+    expect(updateCfg).not.toHaveBeenCalledWith({ projectPath: REPO_A.path });
+    expect(screen.getByRole("combobox", { name: "Repository" })).toHaveTextContent("beta");
+  });
+
+  it("ignores a stale reconnect failure after a newer selection succeeds", async (): Promise<void> => {
+    let rejectAlpha!: (reason: unknown) => void;
+    let resolveBeta!: (value: ReturnType<typeof makeProjectResponse>) => void;
+    const alpha = new Promise<ReturnType<typeof makeProjectResponse>>((_resolve, reject): void => {
+      rejectAlpha = reject;
+    });
+    const beta = new Promise<ReturnType<typeof makeProjectResponse>>((resolve): void => {
+      resolveBeta = resolve;
+    });
+    const client = makeClient({
+      reconnectRepository: vi.fn((path): Promise<ReturnType<typeof makeProjectResponse>> =>
+        path === REPO_A.path ? alpha : beta,
+      ),
+    });
+    render(<GitClientWindow client={client} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /alpha/ }));
+    fireEvent.click(screen.getByRole("button", { name: /beta/ }));
+    act((): void => resolveBeta(makeProjectResponse(REPO_B)));
+    await waitFor((): void => {
+      expect(screen.getByRole("combobox", { name: "Repository" })).toHaveTextContent("beta");
+    });
+
+    act((): void => rejectAlpha(new Error("stale reconnect failed")));
+    await waitFor((): void => {
+      expect(client.reconnectRepository).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByText("stale reconnect failed")).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Repository" })).toHaveTextContent("beta");
+  });
+
+  it.each([
+    ["false", { ...REPO_A, workspaceAvailable: false }],
+    [
+      "absent",
+      {
+        path: REPO_A.path,
+        name: REPO_A.name,
+        favorite: false,
+        createdAt: 0,
+        lastOpenedAt: 0,
+        available: true,
+      },
+    ],
+  ] satisfies readonly (readonly [string, ProjectWithAvailability])[])(
+    "rejects a reconnect whose workspace membership is %s",
+    async (_label, project) => {
+      const updateCfg = vi.fn();
+      const client = makeClient({
+        reconnectRepository: vi.fn(async () => makeProjectResponse(project)),
+      });
+      render(<GitClientWindow client={client} updateCfg={updateCfg} />);
+      fireEvent.click(await screen.findByRole("button", { name: /alpha/ }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "This repository is not currently connected to a workspace.",
+      );
+      expect(updateCfg).not.toHaveBeenCalledWith({ projectPath: REPO_A.path });
+      expect(client.listBranches).not.toHaveBeenCalled();
+      expect(client.getStatus).not.toHaveBeenCalled();
+    },
+  );
 
   it("selecting a repo triggers a branch and status load for the chosen path", async () => {
     const client = makeClient();
@@ -490,6 +594,58 @@ describe("GitClientWindow — repository list", () => {
 
     await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
     expect(client.getStatus).toHaveBeenCalledWith(REPO_A.path);
+  });
+
+  it("refreshes Git state after requested, canonical, and aliased editor saves", async (): Promise<void> => {
+    const getStatus = vi.fn(async (): Promise<GitRepositoryStatusResponse> =>
+      makeStatus({ repositoryRoot: "/repos" }),
+    );
+    const client = makeClient({ getStatus });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await screen.findByRole("combobox", { name: "Branch: main" });
+    const initialReads = getStatus.mock.calls.length;
+
+    act((): void => notifyWorkspaceFileMutated(REPO_B.path));
+    expect(getStatus).toHaveBeenCalledTimes(initialReads);
+
+    act((): void => notifyWorkspaceFileMutated(REPO_A.path));
+    await waitFor((): void => expect(getStatus).toHaveBeenCalledTimes(initialReads + 1));
+
+    act((): void => notifyWorkspaceFileMutated("/repos"));
+    await waitFor((): void => expect(getStatus).toHaveBeenCalledTimes(initialReads + 2));
+
+    act((): void => notifyWorkspaceFileMutated("/editor/alias", { repositoryRoot: "/repos" }));
+    await waitFor((): void => expect(getStatus).toHaveBeenCalledTimes(initialReads + 3));
+  });
+
+  it("ignores the previous canonical root while a newly selected repository is loading", async (): Promise<void> => {
+    let resolveBetaStatus!: (value: GitRepositoryStatusResponse) => void;
+    const betaStatus = new Promise<GitRepositoryStatusResponse>((resolve): void => {
+      resolveBetaStatus = resolve;
+    });
+    const getStatus = vi.fn((path: string): Promise<GitRepositoryStatusResponse> =>
+      path === REPO_A.path
+        ? Promise.resolve(makeStatus({ repositoryRoot: "/canonical/alpha" }))
+        : betaStatus,
+    );
+    const client = makeClient({ getStatus });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    expect(await screen.findByText("No changes")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: /beta/ }));
+    await waitFor((): void => expect(getStatus).toHaveBeenCalledWith(REPO_B.path));
+    expect(screen.getByText("Loading changes…")).toBeInTheDocument();
+    const readsAfterSwitch = getStatus.mock.calls.length;
+
+    act((): void => notifyWorkspaceFileMutated("/canonical/alpha"));
+    expect(getStatus).toHaveBeenCalledTimes(readsAfterSwitch);
+
+    await act(async (): Promise<void> => {
+      resolveBetaStatus(makeStatus({ root: REPO_B.path }));
+      await betaStatus;
+    });
   });
 
   it("hides stale changed-file rows while a newly selected repository is loading", async () => {
@@ -582,6 +738,24 @@ describe("GitClientWindow — repository list", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Network failure");
   });
 
+  it("does not dispatch Git reads for a configured project without workspace membership", async () => {
+    const unavailable = makeRepo("/repos/legacy", "legacy", { workspaceAvailable: false });
+    const updateCfg = vi.fn();
+    const client = makeClient({
+      listRepositories: vi.fn(async () => ({ projects: [unavailable] })),
+    });
+    render(<GitClientWindow projectId={unavailable.path} client={client} updateCfg={updateCfg} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This repository is not currently connected to a workspace.",
+    );
+    expect(updateCfg).toHaveBeenCalledWith({ projectPath: "" });
+    expect(client.listBranches).not.toHaveBeenCalled();
+    expect(client.getSummary).not.toHaveBeenCalled();
+    expect(client.getRemotes).not.toHaveBeenCalled();
+    expect(client.getStatus).not.toHaveBeenCalled();
+  });
+
   it("offers Connect repository and Clone from URL actions in the connect panel", async () => {
     render(<GitClientWindow client={makeClient()} />);
     expect(screen.getByRole("button", { name: "Connect repository" })).toBeInTheDocument();
@@ -641,6 +815,8 @@ describe("GitClientWindow — add-repository dialog", () => {
         destinationPath: "/tmp/repo",
       }),
     );
+    await waitFor(() => expect(client.reconnectRepository).toHaveBeenCalledWith(REPO_A.path));
+    expect(client.registerRepository).not.toHaveBeenCalled();
   });
 
   it("Open local mode calls registerRepository with {path}", async () => {
@@ -662,6 +838,29 @@ describe("GitClientWindow — add-repository dialog", () => {
     await waitFor(() =>
       expect(client.registerRepository).toHaveBeenCalledWith({ path: "/home/me/existing-repo" }),
     );
+    await waitFor(() => expect(client.reconnectRepository).toHaveBeenCalledWith(REPO_A.path));
+  });
+
+  it("does not select a newly added repository without explicit workspace membership", async () => {
+    const user = userEvent.setup();
+    const updateCfg = vi.fn();
+    const unavailable = makeRepo("/home/me/stale-repo", "stale", { workspaceAvailable: false });
+    const client = makeClient({
+      registerRepository: vi.fn(async () => makeProjectResponse(unavailable)),
+      reconnectRepository: vi.fn(async () => makeProjectResponse(unavailable)),
+    });
+    render(<GitClientWindow client={client} updateCfg={updateCfg} />);
+    await user.click(await screen.findByRole("button", { name: "Connect repository" }));
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Open local repository" }));
+    await user.type(within(dialog).getByLabelText("Local repository path"), "/home/me/stale-repo");
+    await user.click(within(dialog).getByRole("button", { name: "Open repository" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This repository is not currently connected to a workspace.",
+    );
+    expect(updateCfg).not.toHaveBeenCalledWith({ projectPath: unavailable.path });
+    expect(client.getStatus).not.toHaveBeenCalled();
   });
 
   it("closes the dialog on Escape", async () => {
@@ -1197,7 +1396,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
 describe("GitClientWindow — Changes/History tabs", () => {
   it("renders a tablist with Changes and History tabs, Changes aria-selected initially", async () => {
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-    const tablist = screen.getByRole("tablist");
+    const tablist = await screen.findByRole("tablist");
     expect(tablist).toBeInTheDocument();
 
     const changesTab = within(tablist).getByRole("tab", { name: "Changes" });
@@ -1210,7 +1409,7 @@ describe("GitClientWindow — Changes/History tabs", () => {
   it("clicking History tab makes it aria-selected and deselects Changes", async () => {
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-    const tablist = screen.getByRole("tablist");
+    const tablist = await screen.findByRole("tablist");
 
     await user.click(within(tablist).getByRole("tab", { name: "History" }));
 
@@ -1226,7 +1425,7 @@ describe("GitClientWindow — Changes/History tabs", () => {
 
   it("ArrowRight on Changes tab moves focus and selection to History", async () => {
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-    const changesTab = screen.getByRole("tab", { name: "Changes" });
+    const changesTab = await screen.findByRole("tab", { name: "Changes" });
     changesTab.focus();
     fireEvent.keyDown(changesTab, { key: "ArrowRight" });
 
@@ -1240,7 +1439,7 @@ describe("GitClientWindow — Changes/History tabs", () => {
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
 
     // Navigate to History first
-    await user.click(screen.getByRole("tab", { name: "History" }));
+    await user.click(await screen.findByRole("tab", { name: "History" }));
     const historyTab = screen.getByRole("tab", { name: "History" });
     historyTab.focus();
     fireEvent.keyDown(historyTab, { key: "ArrowLeft" });
@@ -1254,7 +1453,7 @@ describe("GitClientWindow — Changes/History tabs", () => {
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
 
-    await user.click(screen.getByRole("tab", { name: "History" }));
+    await user.click(await screen.findByRole("tab", { name: "History" }));
     const historyTab = screen.getByRole("tab", { name: "History" });
     historyTab.focus();
     fireEvent.keyDown(historyTab, { key: "Home" });
@@ -1266,7 +1465,7 @@ describe("GitClientWindow — Changes/History tabs", () => {
 
   it("End key on Changes tab moves to History", async () => {
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-    const changesTab = screen.getByRole("tab", { name: "Changes" });
+    const changesTab = await screen.findByRole("tab", { name: "Changes" });
     changesTab.focus();
     fireEvent.keyDown(changesTab, { key: "End" });
 
@@ -1523,14 +1722,14 @@ describe("GitClientWindow — required visible / absent words", () => {
     expect(await screen.findByRole("combobox", { name: "Repository" })).toBeInTheDocument();
   });
 
-  it("renders 'Changes' as a visible tab label", () => {
+  it("renders 'Changes' as a visible tab label", async () => {
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-    expect(screen.getByRole("tab", { name: "Changes" })).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "Changes" })).toBeInTheDocument();
   });
 
-  it("renders 'History' as a visible tab label", () => {
+  it("renders 'History' as a visible tab label", async () => {
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-    expect(screen.getByRole("tab", { name: "History" })).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "History" })).toBeInTheDocument();
   });
 
   it("renders 'Branch' as the branch combobox label in the toolbar", async () => {

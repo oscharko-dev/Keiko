@@ -1,4 +1,4 @@
-import type { ReactNode, RefObject } from "react";
+import type { ReactElement, ReactNode, RefObject } from "react";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
@@ -18,13 +18,20 @@ interface WorkspaceHookOptions {
   readonly onScopeBind?: (
     chatWindowId: string,
     scope: ChatConnectedScope,
+    target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
   readonly onScopeUnbind?: (chatWindowId: string, scope: ChatConnectedScope) => void;
   readonly onConnectorBind?: (
     chatWindowId: string,
     scope: ChatLocalKnowledgeScope,
+    target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
   readonly onConnectorUnbind?: (chatWindowId: string, scope: ChatLocalKnowledgeScope) => void;
+}
+
+interface ChatBindingTarget {
+  readonly conversationId: string | undefined;
+  readonly isCurrent: () => boolean;
 }
 
 interface TestSession {
@@ -47,6 +54,7 @@ const mocks = vi.hoisted(() => ({
     groundingLimits: undefined as GroundingLimits | undefined,
     workspaceRendered: false,
     rightRailRendered: false,
+    rightRailOnTool: undefined as ((id: string) => void) | undefined,
   },
   fetchConfig: vi.fn(),
   fetchStartupUpdatePreflight: vi.fn(),
@@ -56,6 +64,7 @@ const mocks = vi.hoisted(() => ({
   registerSw: vi.fn(),
   gatewaySetupDialogModuleLoaded: vi.fn(),
   useKeyboardShortcuts: vi.fn(),
+  pushUndo: vi.fn(),
   undo: vi.fn(),
   redo: vi.fn(),
   dialogShowModal: vi.fn(function dialogShowModal(this: HTMLDialogElement): void {
@@ -145,7 +154,7 @@ vi.mock("./hooks/useUndoStack", () => ({
     canRedo: false,
     undoLabel: null,
     redoLabel: null,
-    push: vi.fn(),
+    push: mocks.pushUndo,
     undo: mocks.undo,
     redo: mocks.redo,
     clear: vi.fn(),
@@ -198,8 +207,9 @@ vi.mock("./LeftRail", () => ({
 }));
 
 vi.mock("./RightRail", () => ({
-  RightRail: () => {
+  RightRail: ({ onTool }: { readonly onTool: (id: string) => void }): ReactElement => {
     mocks.state.rightRailRendered = true;
+    mocks.state.rightRailOnTool = onTool;
     return <aside data-testid="right-rail" />;
   },
 }));
@@ -221,7 +231,17 @@ vi.mock("./modals/GatewaySetupDialog", () => {
 });
 
 vi.mock("./modals/NewWindowDialog", () => ({
-  NewWindowDialog: () => <div role="dialog" aria-label="New window" />,
+  NewWindowDialog: ({
+    onConfirm,
+  }: {
+    readonly onConfirm: (cfg: Record<string, string>) => void;
+  }): ReactNode => (
+    <div role="dialog" aria-label="New window">
+      <button type="button" onClick={(): void => onConfirm({ title: "Release grounding review" })}>
+        Confirm new chat
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("./modals/Palette", () => ({
@@ -234,7 +254,14 @@ vi.mock("./install/InstallBanner", () => ({
 
 vi.mock("./widgets", () => ({}));
 
-import { AppShell, GatewaySetupLoading, openOrFocusSearchWindow } from "./AppShell";
+import {
+  AppShell,
+  CHAT_MUTATION_TIMEOUT_MS,
+  frontmostSearchRootOwner,
+  GatewaySetupLoading,
+  openOrFocusSearchWindow,
+  resolveSearchRoot,
+} from "./AppShell";
 
 const gatewaySetupLoadsAtShellImport = mocks.gatewaySetupDialogModuleLoaded.mock.calls.length;
 
@@ -336,6 +363,25 @@ function capsuleScope(id: string): ChatLocalKnowledgeScope {
   return { kind: "capsule", capsuleId: id as never, connectedAtMs: 1 };
 }
 
+function reportedError(value: unknown, failureMessage: string): Error {
+  expect(value).toBeInstanceOf(Error);
+  if (!(value instanceof Error)) {
+    throw new TypeError(failureMessage);
+  }
+  return value;
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((innerResolve): void => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
+}
+
 async function renderMounted(): Promise<void> {
   render(<AppShell />);
   await screen.findByTestId("workspace");
@@ -354,7 +400,9 @@ describe("AppShell grounding connections", () => {
   });
 
   afterEach((): void => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   beforeEach(() => {
@@ -401,6 +449,7 @@ describe("AppShell grounding connections", () => {
     mocks.state.workspaceOptions = undefined;
     mocks.state.workspaceRendered = false;
     mocks.state.rightRailRendered = false;
+    mocks.state.rightRailOnTool = undefined;
     document.documentElement.removeAttribute("data-input-modality");
   });
 
@@ -427,6 +476,78 @@ describe("AppShell grounding connections", () => {
     } finally {
       window.history.replaceState(null, "", previousUrl);
     }
+  });
+
+  it("clears the existing singleton binding when the user confirms a new chat", async (): Promise<void> => {
+    const add = vi.fn<WorkspaceApi["add"]>((): string => "chat-window");
+    const api = workspaceApi({ add });
+    mocks.state.workspaceResult = workspaceResult(
+      [win("chat", { chatId: "chat-1", title: "Release chat" }, "chat-window")],
+      [],
+      api,
+    );
+    const user = userEvent.setup();
+    await renderMounted();
+
+    await user.click(screen.getByTestId("left-rail"));
+    await user.click(screen.getByRole("button", { name: "Confirm new chat" }));
+
+    expect(add).toHaveBeenCalledOnce();
+    expect(add.mock.calls[0]?.[0]).toBe("chat");
+    const newChatCfg = add.mock.calls[0]?.[1];
+    expect(newChatCfg).toStrictEqual({
+      title: "Release grounding review",
+      chatId: undefined,
+      selectionHandoffId: undefined,
+      newChatRequestId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
+    });
+    expect(Object.hasOwn(newChatCfg ?? {}, "chatId")).toBe(true);
+    expect(Object.hasOwn(newChatCfg ?? {}, "selectionHandoffId")).toBe(true);
+  });
+
+  it("drops retained edges without unbinding when a chat window changes conversation", async (): Promise<void> => {
+    const api = workspaceApi();
+    const files = win("files", { root: "/repo" }, "files-window");
+    const connector = win(
+      "connector",
+      { selectedKind: "capsule", selectedId: "cap-1" },
+      "connector-window",
+    );
+    const browser = win("browser", {}, "browser-window");
+    const connections: Connection[] = [
+      { id: "files-chat", a: "files-window", b: "chat-window" },
+      { id: "connector-chat", a: "connector-window", b: "chat-window" },
+      { id: "browser-chat", a: "browser-window", b: "chat-window" },
+    ];
+    const oldChat = chat({ id: "chat-old", connectedScopes: [fileScope("/repo")] });
+    const newChat = chat({ id: "chat-new", connectedScopes: [] });
+    const session = mocks.state.session;
+    if (session === undefined) throw new Error("missing test session");
+    mocks.state.session = { ...session, activeChat: oldChat, chats: [oldChat, newChat] };
+    mocks.state.workspaceResult = workspaceResult(
+      [win("chat", { chatId: "chat-old" }, "chat-window"), files, connector, browser],
+      connections,
+      api,
+    );
+    const view = render(<AppShell />);
+    await screen.findByTestId("workspace");
+    await waitFor((): void => expect(api.updateConnBoundScope).toHaveBeenCalledOnce());
+    vi.mocked(api.updateConnBoundScope).mockClear();
+    mocks.updateChatConnectedScopes.mockClear();
+
+    mocks.state.workspaceResult = workspaceResult(
+      [win("chat", { chatId: "chat-new" }, "chat-window"), files, connector, browser],
+      connections,
+      api,
+    );
+    view.rerender(<AppShell />);
+
+    await waitFor((): void => expect(api.removeConn).toHaveBeenCalledTimes(2));
+    expect(api.removeConn).toHaveBeenCalledWith("files-chat", { unbind: false });
+    expect(api.removeConn).toHaveBeenCalledWith("connector-chat", { unbind: false });
+    expect(api.removeConn).not.toHaveBeenCalledWith("browser-chat", expect.anything());
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(api.updateConnBoundScope).not.toHaveBeenCalled();
   });
 
   it("tracks pointer and keyboard modality for focus ring policy", async () => {
@@ -481,6 +602,222 @@ describe("AppShell grounding connections", () => {
     // The app-level announcer mounts a permanent (empty) role="alert" region, so scope the
     // "no notice" assertion to the inline source-limit alert specifically.
     expect(document.querySelector(".source-limit-alert")).toBeNull();
+  });
+
+  it("reports a redacted diagnostic when grounding persistence fails", async (): Promise<void> => {
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
+    mocks.updateChatConnectedScopes.mockRejectedValueOnce(
+      new Error("customer endpoint and response detail"),
+    );
+    await renderMounted();
+
+    await expect(
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/repo")),
+    ).resolves.toBe(false);
+
+    expect(await screen.findByText(/Keiko could not connect that source/u)).toBeInTheDocument();
+    const reported = reportedError(
+      reportError.mock.calls[0]?.[0],
+      "Expected grounding diagnostics to report an Error.",
+    );
+    expect(reported.message).toMatch(
+      /^Chat grounding mutation failed\. Correlation ID: [A-Za-z0-9._-]{8,128}$/u,
+    );
+    expect(reported.message).not.toContain("customer endpoint");
+  });
+
+  it("reports a redacted diagnostic when connector persistence fails", async (): Promise<void> => {
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
+    mocks.updateChatLocalKnowledgeScopes.mockRejectedValueOnce(
+      new Error("customer connector endpoint and response detail"),
+    );
+    await renderMounted();
+
+    await expect(
+      mocks.state.workspaceOptions?.onConnectorBind?.("chat-window", capsuleScope("cap-sensitive")),
+    ).resolves.toBe(false);
+
+    expect(
+      await screen.findByText(/Keiko could not connect that knowledge source/u),
+    ).toBeInTheDocument();
+    const reported = reportedError(
+      reportError.mock.calls[0]?.[0],
+      "Expected connector diagnostics to report an Error.",
+    );
+    expect(reported.message).toMatch(
+      /^Chat grounding mutation failed\. Correlation ID: [A-Za-z0-9._-]{8,128}$/u,
+    );
+    expect(reported.message).not.toContain("customer connector endpoint");
+  });
+
+  it("compensates a Files bind when its chat ownership changes in flight", async (): Promise<void> => {
+    const persisted = deferred<{ readonly chat: Chat }>();
+    const compensation = deferred<{ readonly chat: Chat }>();
+    const updated = chat({ connectedScopes: [fileScope("/repo")] });
+    const restored = chat({ connectedScopes: [] });
+    const concurrent = chat({ connectedScopes: [fileScope("/other")] });
+    mocks.updateChatConnectedScopes
+      .mockReturnValueOnce(persisted.promise)
+      .mockReturnValueOnce(compensation.promise)
+      .mockResolvedValueOnce({ chat: concurrent });
+    await renderMounted();
+    let current = true;
+    const target: ChatBindingTarget = {
+      conversationId: "chat-1",
+      isCurrent: (): boolean => current,
+    };
+
+    const binding = Promise.resolve(
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/repo"), target),
+    );
+    await waitFor((): void => expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce());
+    const concurrentBinding = Promise.resolve(
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/other")),
+    );
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce();
+    current = false;
+    persisted.resolve({ chat: updated });
+
+    await waitFor((): void => expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2));
+    expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(2, "chat-1", null);
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
+    compensation.resolve({ chat: restored });
+    await expect(binding).resolves.toBe(false);
+    await expect(concurrentBinding).resolves.toBe(true);
+    expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(
+      3,
+      "chat-1",
+      expect.arrayContaining([expect.objectContaining({ root: "/other" })]),
+    );
+    expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(concurrent);
+    expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalledWith("chat-1", "/repo");
+    expect(mocks.recordReadsContextRelationship).toHaveBeenCalledWith("chat-1", "/other");
+  });
+
+  it("rejects an already-stale binding target before either persistence API runs", async (): Promise<void> => {
+    await renderMounted();
+    const target: ChatBindingTarget = {
+      conversationId: "chat-1",
+      isCurrent: (): boolean => false,
+    };
+
+    const [filesAccepted, connectorAccepted] = await Promise.all([
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/repo"), target),
+      mocks.state.workspaceOptions?.onConnectorBind?.(
+        "chat-window",
+        capsuleScope("cap-stale"),
+        target,
+      ),
+    ]);
+
+    expect(filesAccepted).toBe(false);
+    expect(connectorAccepted).toBe(false);
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(mocks.updateChatLocalKnowledgeScopes).not.toHaveBeenCalled();
+    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
+  });
+
+  it("derives a queued bind from the latest confirmed grounding state", async (): Promise<void> => {
+    const firstPersist = deferred<{ readonly chat: Chat }>();
+    const firstScope = fileScope("/first");
+    const secondScope = fileScope("/second");
+    const firstChat = chat({ connectedScopes: [firstScope], updatedAt: 2 });
+    const secondChat = chat({ connectedScopes: [firstScope, secondScope], updatedAt: 3 });
+    mocks.updateChatConnectedScopes
+      .mockReturnValueOnce(firstPersist.promise)
+      .mockResolvedValueOnce({ chat: secondChat });
+    await renderMounted();
+
+    const firstBinding = Promise.resolve(
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", firstScope),
+    );
+    await waitFor((): void => expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce());
+    const secondBinding = Promise.resolve(
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", secondScope),
+    );
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce();
+    firstPersist.resolve({ chat: firstChat });
+
+    await expect(firstBinding).resolves.toBe(true);
+    await expect(secondBinding).resolves.toBe(true);
+    expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(
+      2,
+      "chat-1",
+      expect.arrayContaining([
+        expect.objectContaining({ root: "/first" }),
+        expect.objectContaining({ root: "/second" }),
+      ]),
+    );
+  });
+
+  it("compensates a timed-out bind and blocks later mutations", async (): Promise<void> => {
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
+    const persisted = deferred<{ readonly chat: Chat }>();
+    const nextScope = fileScope("/late");
+    const updated = chat({ connectedScopes: [nextScope], updatedAt: 2 });
+    const restored = chat({ connectedScopes: [], updatedAt: 3 });
+    mocks.updateChatConnectedScopes
+      .mockReturnValueOnce(persisted.promise)
+      .mockResolvedValueOnce({ chat: restored });
+    await renderMounted();
+    vi.useFakeTimers();
+
+    const binding = Promise.resolve(
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", nextScope),
+    );
+    await vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS);
+
+    await expect(binding).resolves.toBe(false);
+    await expect(
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/blocked")),
+    ).resolves.toBe(false);
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce();
+
+    await act(async (): Promise<void> => {
+      persisted.resolve({ chat: updated });
+      await persisted.promise;
+    });
+
+    expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(2, "chat-1", null);
+    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalledWith(updated);
+    expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalledWith("chat-1", "/late");
+    expect(reportError).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces a distinct diagnostic when stale-bind compensation fails", async (): Promise<void> => {
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
+    const persisted = deferred<{ readonly chat: Chat }>();
+    mocks.updateChatConnectedScopes
+      .mockReturnValueOnce(persisted.promise)
+      .mockRejectedValueOnce(new Error("customer-compensation-detail"));
+    await renderMounted();
+    let current = true;
+    const target: ChatBindingTarget = {
+      conversationId: "chat-1",
+      isCurrent: (): boolean => current,
+    };
+
+    const binding = Promise.resolve(
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/repo"), target),
+    );
+    await waitFor((): void => expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce());
+    current = false;
+    persisted.resolve({ chat: chat({ connectedScopes: [fileScope("/repo")] }) });
+
+    await expect(binding).resolves.toBe(false);
+    expect(await screen.findByText(/Chat grounding recovery failed/u)).toBeInTheDocument();
+    const reported = reportedError(
+      reportError.mock.calls[0]?.[0],
+      "Expected compensation diagnostics to report an Error.",
+    );
+    expect(reported.message).toMatch(
+      /^Chat binding compensation failed\. Correlation ID: [A-Za-z0-9._-]{8,128}$/,
+    );
+    expect(reported.message).not.toContain("customer-compensation-detail");
   });
 
   // GEN-PERF-RENDER-001 — the four scope-bind callbacks passed to useWorkspace depend on the stable
@@ -636,6 +973,36 @@ describe("AppShell grounding connections", () => {
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(updated);
   });
 
+  it("compensates a connector bind when its chat ownership changes in flight", async (): Promise<void> => {
+    const persisted = deferred<{ readonly chat: Chat }>();
+    const updated = chat({ localKnowledgeScopes: [capsuleScope("cap-stale")] });
+    const restored = chat({ localKnowledgeScopes: [] });
+    mocks.updateChatLocalKnowledgeScopes
+      .mockReturnValueOnce(persisted.promise)
+      .mockResolvedValueOnce({ chat: restored });
+    await renderMounted();
+    let current = true;
+    const target: ChatBindingTarget = {
+      conversationId: "chat-1",
+      isCurrent: (): boolean => current,
+    };
+
+    const binding = Promise.resolve(
+      mocks.state.workspaceOptions?.onConnectorBind?.(
+        "chat-window",
+        capsuleScope("cap-stale"),
+        target,
+      ),
+    );
+    await waitFor((): void => expect(mocks.updateChatLocalKnowledgeScopes).toHaveBeenCalledOnce());
+    current = false;
+    persisted.resolve({ chat: updated });
+
+    await expect(binding).resolves.toBe(false);
+    expect(mocks.updateChatLocalKnowledgeScopes).toHaveBeenNthCalledWith(2, "chat-1", null);
+    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
+  });
+
   it("hides both side rails while the first-run gateway setup is open", async () => {
     mocks.state.session = {
       ...(mocks.state.session as TestSession),
@@ -707,17 +1074,26 @@ describe("AppShell grounding connections", () => {
 
   it("dispatches undo, redo, focus-status, and search shortcuts through the shell handler", async () => {
     const api = workspaceApi();
-    mocks.state.workspaceResult = workspaceResult([], [], api);
+    mocks.state.workspaceResult = workspaceResult(
+      [
+        win("search", { root: "/repo/stale-chat" }, "search-window"),
+        { ...win("editor", { root: "/repo/editor-selected" }, "editor-window"), z: 2 },
+      ],
+      [],
+      api,
+    );
     await renderMounted();
 
     const keyboardProps = mocks.useKeyboardShortcuts.mock.calls[0]?.[0] as
       { readonly dispatch?: (commandId: string) => void } | undefined;
     expect(keyboardProps?.dispatch).toBeTypeOf("function");
 
-    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      callback(0);
-      return 0;
-    });
+    const rafSpy = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback): number => {
+        callback(0);
+        return 0;
+      });
     const statusSpy = vi.spyOn(HTMLElement.prototype, "focus");
     keyboardProps?.dispatch?.("undo");
     keyboardProps?.dispatch?.("redo");
@@ -727,8 +1103,40 @@ describe("AppShell grounding connections", () => {
     expect(mocks.undo).toHaveBeenCalledTimes(1);
     expect(mocks.redo).toHaveBeenCalledTimes(1);
     expect(statusSpy).toHaveBeenCalled();
-    expect(api.toggleTool).toHaveBeenCalledWith("search");
+    expect(api.add).toHaveBeenCalledWith("search", { root: "/repo/editor-selected" });
+    expect(api.toggleTool).not.toHaveBeenCalledWith("search");
     statusSpy.mockRestore();
+    rafSpy.mockRestore();
+  });
+
+  it("records a rooted minimized Search restore as a closed-to-open transition", async (): Promise<void> => {
+    const api = workspaceApi();
+    mocks.state.workspaceResult = workspaceResult(
+      [
+        { ...win("search", { root: "/repo/stale" }, "search-window"), minimized: true },
+        { ...win("editor", { root: "/repo/editor-selected" }, "editor-window"), z: 2 },
+      ],
+      [],
+      api,
+    );
+    await renderMounted();
+    expect(mocks.state.rightRailOnTool).toBeTypeOf("function");
+    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((): number => 0);
+    vi.mocked(api.add).mockClear();
+    mocks.pushUndo.mockClear();
+
+    await act(async (): Promise<void> => {
+      mocks.state.rightRailOnTool?.("search");
+    });
+
+    expect(api.add).toHaveBeenCalledWith("search", { root: "/repo/editor-selected" });
+    expect(mocks.pushUndo).toHaveBeenCalledWith({
+      kind: "ui.panel.toggle",
+      panel: "search",
+      before: false,
+      after: true,
+      searchRoot: "/repo/editor-selected",
+    });
     rafSpy.mockRestore();
   });
 
@@ -749,20 +1157,85 @@ describe("AppShell grounding connections", () => {
     expect(api.updateConnBoundScope).not.toHaveBeenCalled();
   });
 
-  it("focuses or restores an existing Search window without toggling it closed", () => {
+  it("opens or focuses Search with an explicit root and clears it when ownership is unavailable", (): void => {
     const api = workspaceApi();
     const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       callback(0);
       return 0;
     });
 
-    openOrFocusSearchWindow(api, [win("search", {}, "search")]);
-    openOrFocusSearchWindow(api, [{ ...win("search", {}, "search-min"), minimized: true }]);
+    openOrFocusSearchWindow(api, "/repo/editor-selected");
+    openOrFocusSearchWindow(api, undefined);
 
-    expect(api.focus).toHaveBeenCalledWith("search");
-    expect(api.restore).toHaveBeenCalledWith("search-min");
+    expect(api.add).toHaveBeenNthCalledWith(1, "search", { root: "/repo/editor-selected" });
+    expect(api.add).toHaveBeenNthCalledWith(2, "search", { root: undefined });
     expect(api.toggleTool).not.toHaveBeenCalled();
     rafSpy.mockRestore();
+  });
+
+  it("resolves only explicit active-workspace, Editor, Files, Search, or Git root ownership", (): void => {
+    expect(resolveSearchRoot("/task/worktree", win("editor", { root: "/repo/editor" }))).toBe(
+      "/task/worktree",
+    );
+    expect(resolveSearchRoot(null, win("editor", { root: "/repo/editor" }))).toBe("/repo/editor");
+    expect(resolveSearchRoot(null, win("files", { root: "/repo/files" }))).toBe("/repo/files");
+    expect(
+      resolveSearchRoot(
+        null,
+        win("files", { root: "/repo/configured", resolvedRoot: "/repo/current" }),
+      ),
+    ).toBe("/repo/current");
+    expect(resolveSearchRoot(null, win("search", { root: "/repo/search" }))).toBe("/repo/search");
+    expect(resolveSearchRoot(null, win("governedGit", { projectPath: "/repo/git" }))).toBe(
+      "/repo/git",
+    );
+    expect(resolveSearchRoot(null, win("chat", { projectPath: "/repo/chat" }))).toBeUndefined();
+  });
+
+  it("rejects missing, non-string, empty, and whitespace-only persisted roots", (): void => {
+    expect(resolveSearchRoot(null, win("editor"))).toBeUndefined();
+    expect(resolveSearchRoot(null, win("editor", { root: 42 }))).toBeUndefined();
+    expect(resolveSearchRoot(null, win("files", { root: "" }))).toBeUndefined();
+    expect(resolveSearchRoot(null, win("search", { root: "   " }))).toBeUndefined();
+  });
+
+  it("uses the frontmost eligible root owner beneath an unrelated top window", (): void => {
+    const editor = { ...win("editor", { root: "/repo/editor" }), z: 4 };
+    const files = { ...win("files", { root: "/repo/files" }), z: 6 };
+    const chatWindow = { ...win("chat", { projectPath: "/repo/chat" }), z: 9 };
+
+    expect(frontmostSearchRootOwner([editor, files, chatWindow])).toBe(files);
+    expect(resolveSearchRoot(null, frontmostSearchRootOwner([editor, files, chatWindow]))).toBe(
+      "/repo/files",
+    );
+  });
+
+  it("returns no root owner when the window collection is absent", (): void => {
+    expect(frontmostSearchRootOwner(null)).toBeNull();
+  });
+
+  it("skips minimized otherwise-eligible root owners", (): void => {
+    const editor = { ...win("editor", { root: "/repo/editor" }), z: 4 };
+    const minimizedFiles = {
+      ...win("files", { resolvedRoot: "/repo/files" }),
+      minimized: true,
+      z: 9,
+    };
+
+    expect(frontmostSearchRootOwner([editor, minimizedFiles])).toBe(editor);
+    expect(frontmostSearchRootOwner([minimizedFiles])).toBeNull();
+  });
+
+  it("fails closed when Git carries conflicting current and legacy roots", (): void => {
+    expect(
+      resolveSearchRoot(
+        null,
+        win("governedGit", {
+          projectPath: "/repo/current",
+          workspaceRoot: "/repo/legacy",
+        }),
+      ),
+    ).toBeUndefined();
   });
 
   it("does not open the command palette from the Cmd/Ctrl+K shell shortcut in this release", async () => {

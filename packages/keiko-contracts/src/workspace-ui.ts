@@ -131,6 +131,11 @@ export type WorkspaceUiAction =
       readonly panel: string;
       readonly before: boolean;
       readonly after: boolean;
+      /**
+       * Present only for a Search open transition. Keeping the selected root on the in-memory
+       * action lets redo recreate the singleton with the same workspace ownership.
+       */
+      readonly searchRoot?: string | undefined;
     }
   | {
       readonly kind: "ui.selection.change";

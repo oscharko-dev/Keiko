@@ -59,6 +59,7 @@ function makeSeam(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
   return {
     listRepositories: vi.fn(async () => ({ projects: [] })),
     registerRepository: vi.fn<GitClientSeam["registerRepository"]>(),
+    reconnectRepository: vi.fn<GitClientSeam["reconnectRepository"]>(),
     cloneRepository: vi.fn<GitClientSeam["cloneRepository"]>(),
     listBranches: vi.fn<GitClientSeam["listBranches"]>(),
     getSummary: vi.fn<GitClientSeam["getSummary"]>(),

@@ -76,7 +76,7 @@ function unavailable(): never {
   );
 }
 
-function parseManifest(row: WorkspaceManifestRecordRow): WorkspaceManifest {
+export function parseWorkspaceManifestRecord(row: WorkspaceManifestRecordRow): WorkspaceManifest {
   let parsed: unknown;
   try {
     parsed = JSON.parse(row.recordJson);
@@ -183,7 +183,7 @@ function authorizeDispatch(
   }
   const dispatch = input as WorkspaceRootDispatch;
   const row = requireManifest(store, dispatch.workspaceId);
-  const manifest = parseManifest(row);
+  const manifest = parseWorkspaceManifestRecord(row);
   if (!dispatchMatchesManifest(dispatch, manifest)) {
     throw new WorkspaceManifestError(
       "WORKSPACE_DISPATCH_STALE",
@@ -362,11 +362,13 @@ export class WorkspaceManifestService {
   }
 
   public list(): readonly WorkspaceManifest[] {
-    return this.store.listWorkspaceManifestRecords().map(parseManifest);
+    return this.store
+      .listWorkspaceManifestRecords()
+      .map((row): WorkspaceManifest => parseWorkspaceManifestRecord(row));
   }
 
   public get(workspaceId: string): WorkspaceManifest {
-    return parseManifest(requireManifest(this.store, workspaceId));
+    return parseWorkspaceManifestRecord(requireManifest(this.store, workspaceId));
   }
 
   public binding(workspaceId: string): WorkspaceBindingV2 {
@@ -397,7 +399,7 @@ export class WorkspaceManifestService {
       );
     }
     const owner = this.store.findWorkspaceManifestRecordByProject(project.path);
-    const absorbed = owner === undefined ? [] : [parseManifest(owner)];
+    const absorbed = owner === undefined ? [] : [parseWorkspaceManifestRecord(owner)];
     if (absorbed.some((candidate) => candidate.roots.length !== 1)) {
       throw new WorkspaceManifestError(
         "WORKSPACE_ROOT_ALREADY_BOUND",

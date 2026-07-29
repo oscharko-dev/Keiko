@@ -1030,6 +1030,49 @@ describe("EditorWidget — edit and save", () => {
     expect(surface.props?.fileModel.dirty).toBe(false);
   });
 
+  it("keeps a degraded save successful while making missing protection actionable", async () => {
+    await renderLoaded();
+    vi.mocked(saveFilesContent).mockResolvedValueOnce(
+      fileResponse({
+        modifiedAt: 2,
+        content: "const value = 2;\n",
+        localHistoryProtection: {
+          status: "degraded",
+          reason: "workspace-unavailable",
+          correlationId: "local-history-correlation-2811",
+        },
+      }),
+    );
+    act(() => {
+      surface.props?.onContentChange({ text: "const value = 2;\n", sizeBytes: 17 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+
+    const warning = await screen.findByTestId("editor-local-history-protection");
+    expect(warning).toHaveTextContent(
+      "File saved, but Local History could not protect this version.",
+    );
+    expect(warning).toHaveTextContent("Reconnect this project");
+    expect(warning).toHaveTextContent("local-history-correlation-2811");
+    expect(surface.props?.saveStatus).toBe("saved");
+    expect(surface.props?.fileModel.dirty).toBe(false);
+
+    vi.mocked(saveFilesContent).mockResolvedValueOnce(
+      fileResponse({
+        modifiedAt: 3,
+        content: "const value = 3;\n",
+        localHistoryProtection: { status: "protected" },
+      }),
+    );
+    act(() => {
+      surface.props?.onContentChange({ text: "const value = 3;\n", sizeBytes: 17 }, "human");
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(screen.queryByTestId("editor-local-history-protection")).not.toBeInTheDocument();
+    });
+  });
+
   it("surfaces a clean external disk edit and reloads only after the user chooses Reload", async () => {
     const FakeSource = installFakeEventSource();
     await renderLoaded();

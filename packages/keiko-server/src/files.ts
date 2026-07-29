@@ -37,6 +37,7 @@ import {
   type EditorDocumentSession,
   type EditorDocumentVersion,
 } from "@oscharko-dev/keiko-contracts";
+import type { FilesContentResponse as FilesContentWireResponse } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import { notifyHostLspWorkspaceFileChanged } from "./editor/lsp/hostLanguageOperation.js";
 import { captureEditorLocalHistorySafely } from "./editor/localHistory/localHistoryCapture.js";
@@ -147,12 +148,7 @@ export type FilesPreviewResponse =
       readonly maxBytes?: number | undefined;
     });
 
-export interface FilesContentResponse extends FilesPreviewBase {
-  readonly content: string;
-  readonly maxBytes: number;
-  // Issue #1197: content-free editor-session metadata for the returned document revision.
-  readonly session: EditorDocumentSession;
-}
+export type FilesContentResponse = FilesContentWireResponse;
 
 class BodyTooLargeError extends Error {
   public constructor() {
@@ -1661,7 +1657,9 @@ async function writeResolvedFilesContent(args: {
   readonly content: string;
   readonly expectedModifiedAt?: number | undefined;
   readonly baseVersion?: EditorDocumentVersion | undefined;
-  readonly beforeWrite?: ((content: string) => void) | undefined;
+  readonly beforeWrite?:
+    | ((content: string) => NonNullable<FilesContentWireResponse["localHistoryProtection"]>)
+    | undefined;
 }): Promise<FilesContentResponse> {
   if (!args.target.stats.isFile()) {
     throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
@@ -1679,9 +1677,10 @@ async function writeResolvedFilesContent(args: {
       `This file is too large to edit here (limit ${String(MAX_TEXT_PREVIEW_BYTES)} bytes).`,
     );
   }
+  let localHistoryProtection: FilesContentWireResponse["localHistoryProtection"];
   if (args.beforeWrite !== undefined) {
     const current = await readStableEditableContent(args.target);
-    args.beforeWrite(current.content);
+    localHistoryProtection = args.beforeWrite(current.content);
   }
   const updatedStats = await writeExistingResolvedFile(args.target, args.content);
   return {
@@ -1691,6 +1690,7 @@ async function writeResolvedFilesContent(args: {
     content: args.content,
     maxBytes: MAX_TEXT_PREVIEW_BYTES,
     session: editorSession(documentVersion(args.content, updatedStats)),
+    ...(localHistoryProtection === undefined ? {} : { localHistoryProtection }),
   };
 }
 
@@ -2440,8 +2440,8 @@ async function readFilesContentRoute(ctx: RouteContext, deps: UiHandlerDeps): Pr
 function createPreRestoreCapture(
   deps: UiHandlerDeps,
   target: ResolvedTarget,
-): (content: string) => void {
-  return (content): void => {
+): (content: string) => NonNullable<FilesContentWireResponse["localHistoryProtection"]> {
+  return (content) =>
     captureEditorLocalHistorySafely({
       deps,
       realRoot: target.realRoot,
@@ -2450,16 +2450,15 @@ function createPreRestoreCapture(
       content,
       origin: "pre-restore",
     });
-  };
 }
 
 function captureNormalFileSave(
   deps: UiHandlerDeps,
   target: ResolvedTarget,
   fields: FilesWriteFields,
-): void {
-  if (fields.historyOrigin !== undefined) return;
-  captureEditorLocalHistorySafely({
+): FilesContentWireResponse["localHistoryProtection"] {
+  if (fields.historyOrigin !== undefined) return undefined;
+  return captureEditorLocalHistorySafely({
     deps,
     realRoot: target.realRoot,
     relativePath: target.relativePath,
@@ -2506,8 +2505,11 @@ async function writeFilesContentRoute(
       fields.historyOrigin === "pre-restore" ? createPreRestoreCapture(deps, target) : undefined,
   });
   notifyHostLspWorkspaceFileChanged(target.realRoot, target.path);
-  captureNormalFileSave(deps, target, fields);
-  return { status: 200, body: response };
+  const localHistoryProtection = captureNormalFileSave(deps, target, fields);
+  return {
+    status: 200,
+    body: localHistoryProtection === undefined ? response : { ...response, localHistoryProtection },
+  };
 }
 
 export async function handleFilesContent(

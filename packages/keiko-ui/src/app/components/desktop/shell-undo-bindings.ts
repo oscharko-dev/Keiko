@@ -21,6 +21,10 @@ import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 
 export function applyShellUndoAction(api: WorkspaceApi, action: WorkspaceUiAction): void {
   if (action.kind === "ui.panel.toggle" && action.panel in WIN_TYPES) {
+    if (action.panel === "search" && action.after && Object.hasOwn(action, "searchRoot")) {
+      api.add("search", { root: action.searchRoot });
+      return;
+    }
     api.toggleTool(action.panel as WindowType);
   }
 }
