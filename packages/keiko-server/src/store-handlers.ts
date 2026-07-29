@@ -369,6 +369,9 @@ export async function handleCreateProject(
       );
     }
     assertUiDbOutsideProject(deps.uiDbPath, normalizedPath);
+    // The store owner writes the project row and its single-root workspace manifest in one
+    // transaction (`createProjectRecord`). A successful response therefore exposes a current
+    // membership projection; consumers never synthesize or assume membership client-side.
     const project = deps.store.createProject(normalizedPath, name);
     return {
       status: 201,
@@ -398,7 +401,13 @@ export async function handleUpdateProject(
     const targetPath = requireQuery(ctx, "path");
     const body = await readJsonObject(ctx.req);
     const patch = buildProjectPatch(body);
-    const project = deps.store.updateProject(targetPath, patch);
+    // An empty PATCH is the existing-project reconnect operation. Re-entering the store's
+    // idempotent paired-write owner repairs a missing single-root manifest atomically while
+    // preserving the existing display name; ordinary metadata patches stay on updateProject.
+    const project =
+      Object.keys(patch).length === 0
+        ? deps.store.createProject(targetPath)
+        : deps.store.updateProject(targetPath, patch);
     return {
       status: 200,
       body: { project: projectWithWorkspaceAvailability(deps.store, project) },

@@ -64,12 +64,18 @@ describe("git repository routes", () => {
 
     expect(result.status).toBe(201);
     expect(result.body).toMatchObject({
-      project: { path: destination, name: "Customer App", available: true },
+      project: {
+        path: destination,
+        name: "Customer App",
+        available: true,
+        workspaceAvailable: true,
+      },
     });
     expect(cloneRunner).toHaveBeenCalledWith("https://github.com/acme/app.git", destination);
     expect(store.listProjects()).toContainEqual(
       expect.objectContaining({ path: destination, name: "Customer App" }),
     );
+    expect(store.listWorkspaceManifestRecords()).toHaveLength(1);
   });
 
   it("clones a repository URL containing a supplementary-plane character (not a control character)", async () => {

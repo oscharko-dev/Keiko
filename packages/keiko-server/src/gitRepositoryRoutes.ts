@@ -267,6 +267,8 @@ export function createCloneRepositoryHandler(
       const cloneResult = await cloneRunner(repositoryUrl, destination);
       if (cloneResult !== null) return cloneResult;
       const normalizedPath = validateProjectPath(destination, { mustExist: true });
+      // Registration owns the paired project + single-root manifest transaction. Only after that
+      // durable membership exists do we return the cloned repository to the Git client.
       const project = deps.store.createProject(normalizedPath, name);
       return {
         status: 201,

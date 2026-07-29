@@ -353,6 +353,9 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
     registerRepository: vi.fn(async ({ path }) =>
       makeProjectResponse(path === REPO_B.path ? REPO_B : REPO_A),
     ),
+    reconnectRepository: vi.fn(async (path) =>
+      makeProjectResponse(path === REPO_B.path ? REPO_B : REPO_A),
+    ),
     cloneRepository: vi.fn(async () => makeProjectResponse(REPO_A)),
     listBranches: vi.fn(async () => makeBranchList()),
     getSummary: vi.fn(async () => makeSummary()),
@@ -474,7 +477,7 @@ describe("GitClientWindow — repository list", () => {
     expect(screen.getByRole("button", { name: /beta/ })).toBeInTheDocument();
   });
 
-  it("reconnects a repo selected from the connect panel before persisting the path", async () => {
+  it("revalidates a repo without registering it again before persisting the path", async () => {
     const updateCfg = vi.fn();
     const client = makeClient();
     render(<GitClientWindow client={client} updateCfg={updateCfg} />);
@@ -482,9 +485,8 @@ describe("GitClientWindow — repository list", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /alpha/ }));
 
-    await waitFor(() =>
-      expect(client.registerRepository).toHaveBeenCalledWith({ path: REPO_A.path }),
-    );
+    await waitFor(() => expect(client.reconnectRepository).toHaveBeenCalledWith(REPO_A.path));
+    expect(client.registerRepository).not.toHaveBeenCalled();
     expect(updateCfg).toHaveBeenCalledWith({ projectPath: REPO_A.path });
   });
 
@@ -499,7 +501,7 @@ describe("GitClientWindow — repository list", () => {
     });
     const updateCfg = vi.fn();
     const client = makeClient({
-      registerRepository: vi.fn(({ path }): Promise<ReturnType<typeof makeProjectResponse>> =>
+      reconnectRepository: vi.fn((path): Promise<ReturnType<typeof makeProjectResponse>> =>
         path === REPO_A.path ? alpha : beta,
       ),
     });
@@ -514,7 +516,7 @@ describe("GitClientWindow — repository list", () => {
 
     act((): void => resolveAlpha(makeProjectResponse(REPO_A)));
     await waitFor((): void => {
-      expect(client.registerRepository).toHaveBeenCalledTimes(2);
+      expect(client.reconnectRepository).toHaveBeenCalledTimes(2);
     });
     expect(updateCfg).not.toHaveBeenCalledWith({ projectPath: REPO_A.path });
     expect(screen.getByRole("combobox", { name: "Repository" })).toHaveTextContent("beta");
@@ -530,7 +532,7 @@ describe("GitClientWindow — repository list", () => {
       resolveBeta = resolve;
     });
     const client = makeClient({
-      registerRepository: vi.fn(({ path }): Promise<ReturnType<typeof makeProjectResponse>> =>
+      reconnectRepository: vi.fn((path): Promise<ReturnType<typeof makeProjectResponse>> =>
         path === REPO_A.path ? alpha : beta,
       ),
     });
@@ -545,7 +547,7 @@ describe("GitClientWindow — repository list", () => {
 
     act((): void => rejectAlpha(new Error("stale reconnect failed")));
     await waitFor((): void => {
-      expect(client.registerRepository).toHaveBeenCalledTimes(2);
+      expect(client.reconnectRepository).toHaveBeenCalledTimes(2);
     });
     expect(screen.queryByText("stale reconnect failed")).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Repository" })).toHaveTextContent("beta");
@@ -569,7 +571,7 @@ describe("GitClientWindow — repository list", () => {
     async (_label, project) => {
       const updateCfg = vi.fn();
       const client = makeClient({
-        registerRepository: vi.fn(async () => makeProjectResponse(project)),
+        reconnectRepository: vi.fn(async () => makeProjectResponse(project)),
       });
       render(<GitClientWindow client={client} updateCfg={updateCfg} />);
       fireEvent.click(await screen.findByRole("button", { name: /alpha/ }));
@@ -813,6 +815,8 @@ describe("GitClientWindow — add-repository dialog", () => {
         destinationPath: "/tmp/repo",
       }),
     );
+    await waitFor(() => expect(client.reconnectRepository).toHaveBeenCalledWith(REPO_A.path));
+    expect(client.registerRepository).not.toHaveBeenCalled();
   });
 
   it("Open local mode calls registerRepository with {path}", async () => {
@@ -834,6 +838,7 @@ describe("GitClientWindow — add-repository dialog", () => {
     await waitFor(() =>
       expect(client.registerRepository).toHaveBeenCalledWith({ path: "/home/me/existing-repo" }),
     );
+    await waitFor(() => expect(client.reconnectRepository).toHaveBeenCalledWith(REPO_A.path));
   });
 
   it("does not select a newly added repository without explicit workspace membership", async () => {
@@ -842,6 +847,7 @@ describe("GitClientWindow — add-repository dialog", () => {
     const unavailable = makeRepo("/home/me/stale-repo", "stale", { workspaceAvailable: false });
     const client = makeClient({
       registerRepository: vi.fn(async () => makeProjectResponse(unavailable)),
+      reconnectRepository: vi.fn(async () => makeProjectResponse(unavailable)),
     });
     render(<GitClientWindow client={client} updateCfg={updateCfg} />);
     await user.click(await screen.findByRole("button", { name: "Connect repository" }));

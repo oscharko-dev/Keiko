@@ -38,6 +38,7 @@ import {
   fetchGitSummary,
   fetchGitStatus,
   fetchProjects,
+  reconnectProject,
   type GitDeliveryCommitPreviewResponse,
   type GitDeliveryMutationResponse,
 } from "@/lib/api";
@@ -57,6 +58,7 @@ export interface GitClientSeam {
   // Read surface consumed by the #1574 shell.
   readonly listRepositories: typeof fetchProjects;
   readonly registerRepository: typeof createProject;
+  readonly reconnectRepository: typeof reconnectProject;
   readonly cloneRepository: typeof fetchCloneRepository;
   readonly listBranches: typeof fetchGitBranches;
   readonly getSummary: typeof fetchGitSummary;
@@ -85,6 +87,7 @@ export interface GitClientSeam {
 export const DEFAULT_GIT_CLIENT: GitClientSeam = {
   listRepositories: fetchProjects,
   registerRepository: createProject,
+  reconnectRepository: reconnectProject,
   cloneRepository: fetchCloneRepository,
   listBranches: fetchGitBranches,
   getSummary: fetchGitSummary,

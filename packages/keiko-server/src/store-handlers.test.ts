@@ -508,6 +508,26 @@ describe("PATCH /api/projects", () => {
     expect(body.project.available).toBe(true);
   });
 
+  it("revalidates an existing project's current workspace membership with an empty patch", async () => {
+    store.createProject(projDir, "existing");
+
+    const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: "{}",
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      project: { path: string; available: boolean; workspaceAvailable: boolean };
+    };
+    expect(body.project).toMatchObject({
+      path: projDir,
+      available: true,
+      workspaceAvailable: true,
+    });
+  });
+
   it("returns 404 for unknown project", async () => {
     const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
       method: "PATCH",

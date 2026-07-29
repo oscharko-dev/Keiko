@@ -148,13 +148,7 @@ export type FilesPreviewResponse =
       readonly maxBytes?: number | undefined;
     });
 
-export interface FilesContentResponse extends FilesPreviewBase {
-  readonly content: string;
-  readonly maxBytes: number;
-  // Issue #1197: content-free editor-session metadata for the returned document revision.
-  readonly session: EditorDocumentSession;
-  readonly localHistoryProtection?: FilesContentWireResponse["localHistoryProtection"];
-}
+export type FilesContentResponse = FilesContentWireResponse;
 
 class BodyTooLargeError extends Error {
   public constructor() {

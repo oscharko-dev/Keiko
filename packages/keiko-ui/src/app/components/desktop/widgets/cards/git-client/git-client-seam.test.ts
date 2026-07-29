@@ -29,6 +29,7 @@ import {
   fetchGitSummary,
   fetchGitStatus,
   fetchProjects,
+  reconnectProject,
 } from "@/lib/api";
 import type { GitDeliveryCommitPreviewResponse } from "@/lib/api";
 import {
@@ -54,6 +55,10 @@ describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
 
   it("registerRepository is createProject", () => {
     expect(DEFAULT_GIT_CLIENT.registerRepository).toBe(createProject);
+  });
+
+  it("reconnectRepository is reconnectProject", () => {
+    expect(DEFAULT_GIT_CLIENT.reconnectRepository).toBe(reconnectProject);
   });
 
   it("cloneRepository is cloneRepository (fetchCloneRepository)", () => {
@@ -240,6 +245,17 @@ describe("useGitActions", () => {
           createdAt: 0,
           lastOpenedAt: 0,
           available: true,
+        },
+      })),
+      reconnectRepository: vi.fn(async (path) => ({
+        project: {
+          path,
+          name: "r",
+          favorite: false,
+          createdAt: 0,
+          lastOpenedAt: 0,
+          available: true,
+          workspaceAvailable: true,
         },
       })),
       cloneRepository: vi.fn(async () => ({

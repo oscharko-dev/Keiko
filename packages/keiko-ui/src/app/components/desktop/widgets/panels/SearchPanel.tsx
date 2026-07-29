@@ -1,6 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type RefObject,
+  type SetStateAction,
+} from "react";
 import {
   WORKSPACE_REPLACE_MAX_FILES,
   WORKSPACE_SEARCH_MAX_RESULTS,
@@ -569,21 +580,81 @@ export function SearchPanel(props: SearchPanelProps): ReactNode {
   return <SearchPanelState key={searchPanelScopeKey(props)} {...props} />;
 }
 
-function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): ReactNode {
-  const t = useOptionalWidgetTranslate();
-  const openBuffers = useWorkspaceReplaceBuffers();
-  const projectName = panelProjectName(root, roots, t);
-  const targets = useMemo(
-    (): readonly WorkspaceRootTarget[] => panelTargets(root, projectName, roots),
-    [projectName, root, roots],
-  );
-  const targetsScopeKey = useMemo((): string => searchTargetsScopeKey(targets), [targets]);
-  const currentTargetsScopeKey = useRef(targetsScopeKey);
-  currentTargetsScopeKey.current = targetsScopeKey;
-  const applyGeneration = useRef(0);
-  const activeApply = useRef<object | null>(null);
-  const multiRoot = targets.length > 1;
-  const queryInputRef = useRef<HTMLInputElement | null>(null);
+interface SearchFormState {
+  readonly query: string;
+  readonly setQuery: Dispatch<SetStateAction<string>>;
+  readonly searchDomain: SearchDomain;
+  readonly setSearchDomain: Dispatch<SetStateAction<SearchDomain>>;
+  readonly mode: WorkspaceSearchMode;
+  readonly setMode: Dispatch<SetStateAction<WorkspaceSearchMode>>;
+  readonly caseSensitive: boolean;
+  readonly setCaseSensitive: Dispatch<SetStateAction<boolean>>;
+  readonly wholeWord: boolean;
+  readonly setWholeWord: Dispatch<SetStateAction<boolean>>;
+  readonly includeText: string;
+  readonly setIncludeText: Dispatch<SetStateAction<string>>;
+  readonly excludeText: string;
+  readonly setExcludeText: Dispatch<SetStateAction<string>>;
+  readonly replacement: string;
+  readonly setReplacement: Dispatch<SetStateAction<string>>;
+}
+
+interface SearchResultsState {
+  readonly response: SearchAggregate | null;
+  readonly setResponse: Dispatch<SetStateAction<SearchAggregate | null>>;
+  readonly status: SearchStatus;
+  readonly setStatus: Dispatch<SetStateAction<SearchStatus>>;
+  readonly routeError: string | null;
+  readonly setRouteError: Dispatch<SetStateAction<string | null>>;
+  readonly rootErrors: readonly RootSearchError[];
+  readonly setRootErrors: Dispatch<SetStateAction<readonly RootSearchError[]>>;
+  readonly activeIndex: number;
+  readonly setActiveIndex: Dispatch<SetStateAction<number>>;
+}
+
+interface ReplaceResultsState {
+  readonly previews: readonly RootReplacePreview[];
+  readonly setPreviews: Dispatch<SetStateAction<readonly RootReplacePreview[]>>;
+  readonly status: string | null;
+  readonly setStatus: Dispatch<SetStateAction<string | null>>;
+  readonly errors: readonly RootSearchError[];
+  readonly setErrors: Dispatch<SetStateAction<readonly RootSearchError[]>>;
+  readonly applyingRootId: string | null;
+  readonly setApplyingRootId: Dispatch<SetStateAction<string | null>>;
+  readonly appliedRootIds: ReadonlySet<string>;
+  readonly setAppliedRootIds: Dispatch<SetStateAction<ReadonlySet<string>>>;
+  readonly messages: ReadonlyMap<string, string>;
+  readonly setMessages: Dispatch<SetStateAction<ReadonlyMap<string, string>>>;
+}
+
+interface ReplaceOperationRefs {
+  readonly currentTargetsScopeKey: RefObject<string>;
+  readonly applyGeneration: RefObject<number>;
+  readonly activeApply: RefObject<object | null>;
+}
+
+type SearchRunner = (signal?: AbortSignal) => Promise<void>;
+
+interface SearchPanelController {
+  readonly t: OptionalWidgetTranslate;
+  readonly projectName: string;
+  readonly targets: readonly WorkspaceRootTarget[];
+  readonly multiRoot: boolean;
+  readonly queryInputRef: RefObject<HTMLInputElement | null>;
+  readonly controlsId: string;
+  readonly form: SearchFormState;
+  readonly search: SearchResultsState;
+  readonly replace: ReplaceResultsState;
+  readonly inlineError: string | null;
+  readonly message: string;
+  readonly groups: readonly SearchResultGroup[];
+  readonly runSearch: SearchRunner;
+  readonly openMatch: (match: RootAwareSearchResult) => void;
+  readonly previewReplace: () => Promise<void>;
+  readonly applyReplacePreview: (preview: RootReplacePreview) => Promise<void>;
+}
+
+function useSearchFormState(): SearchFormState {
   const [query, setQuery] = useState("");
   const [searchDomain, setSearchDomain] = useState<SearchDomain>("text");
   const [mode, setMode] = useState<WorkspaceSearchMode>("literal");
@@ -592,88 +663,162 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
   const [includeText, setIncludeText] = useState("");
   const [excludeText, setExcludeText] = useState("");
   const [replacement, setReplacement] = useState("");
+  return useMemo(
+    () => ({
+      query,
+      setQuery,
+      searchDomain,
+      setSearchDomain,
+      mode,
+      setMode,
+      caseSensitive,
+      setCaseSensitive,
+      wholeWord,
+      setWholeWord,
+      includeText,
+      setIncludeText,
+      excludeText,
+      setExcludeText,
+      replacement,
+      setReplacement,
+    }),
+    [caseSensitive, excludeText, includeText, mode, query, replacement, searchDomain, wholeWord],
+  );
+}
+
+function useSearchResultsState(targetsScopeKey: string): SearchResultsState {
   const [response, setResponse] = useState<SearchAggregate | null>(null);
-  const [replacePreviews, setReplacePreviews] = useState<readonly RootReplacePreview[]>([]);
   const [status, setStatus] = useState<SearchStatus>("idle");
-  // `replaceStatus` is `null` until the first replace-related action runs, so visibility never
-  // depends on comparing translated display text against a hardcoded sentinel (that comparison
-  // silently breaks once the sentinel and the status text are translated independently).
-  const [replaceStatus, setReplaceStatus] = useState<string | null>(null);
   const [routeError, setRouteError] = useState<string | null>(null);
   const [rootErrors, setRootErrors] = useState<readonly RootSearchError[]>([]);
-  const [replaceErrors, setReplaceErrors] = useState<readonly RootSearchError[]>([]);
-  const [applyingRootId, setApplyingRootId] = useState<string | null>(null);
-  const [appliedRootIds, setAppliedRootIds] = useState<ReadonlySet<string>>(new Set());
-  const [replaceMessages, setReplaceMessages] = useState<ReadonlyMap<string, string>>(new Map());
   const [activeIndex, setActiveIndex] = useState(0);
-  const controlsId = useId();
-  const inlineError = searchDomain === "text" ? regexSyntaxError(query, mode, t) : null;
-  const groups = useMemo((): readonly SearchResultGroup[] => resultGroups(response), [response]);
-  const message = statusMessage({
-    hasRoot: targets.length > 0,
-    multiRoot,
-    query,
-    status,
-    response,
-    error: inlineError ?? routeError,
-    t,
-  });
-  const showReplaceStatus = replaceStatus !== null;
-
   useEffect((): void => {
-    applyGeneration.current += 1;
-    activeApply.current = null;
     setResponse(null);
-    setReplacePreviews([]);
     setStatus("idle");
-    setReplaceStatus(null);
     setRouteError(null);
     setRootErrors([]);
-    setReplaceErrors([]);
-    setApplyingRootId(null);
-    setAppliedRootIds(new Set());
-    setReplaceMessages(new Map());
     setActiveIndex(0);
   }, [targetsScopeKey]);
+  return {
+    response,
+    setResponse,
+    status,
+    setStatus,
+    routeError,
+    setRouteError,
+    rootErrors,
+    setRootErrors,
+    activeIndex,
+    setActiveIndex,
+  };
+}
 
+function useReplaceResultsState(
+  targetsScopeKey: string,
+  refs: ReplaceOperationRefs,
+): ReplaceResultsState {
+  const [previews, setPreviews] = useState<readonly RootReplacePreview[]>([]);
+  const [status, setStatus] = useState<string | null>(null);
+  const [errors, setErrors] = useState<readonly RootSearchError[]>([]);
+  const [applyingRootId, setApplyingRootId] = useState<string | null>(null);
+  const [appliedRootIds, setAppliedRootIds] = useState<ReadonlySet<string>>(new Set());
+  const [messages, setMessages] = useState<ReadonlyMap<string, string>>(new Map());
+  useEffect((): void => {
+    refs.applyGeneration.current += 1;
+    refs.activeApply.current = null;
+    setPreviews([]);
+    setStatus(null);
+    setErrors([]);
+    setApplyingRootId(null);
+    setAppliedRootIds(new Set());
+    setMessages(new Map());
+  }, [refs, targetsScopeKey]);
+  return {
+    previews,
+    setPreviews,
+    status,
+    setStatus,
+    errors,
+    setErrors,
+    applyingRootId,
+    setApplyingRootId,
+    appliedRootIds,
+    setAppliedRootIds,
+    messages,
+    setMessages,
+  };
+}
+
+function useReplaceOperationRefs(targetsScopeKey: string): ReplaceOperationRefs {
+  const currentTargetsScopeKey = useRef(targetsScopeKey);
+  const applyGeneration = useRef(0);
+  const activeApply = useRef<object | null>(null);
+  currentTargetsScopeKey.current = targetsScopeKey;
+  return useMemo(
+    () => ({ currentTargetsScopeKey, applyGeneration, activeApply }),
+    [activeApply, applyGeneration, currentTargetsScopeKey],
+  );
+}
+
+function useSearchFocus(queryInputRef: RefObject<HTMLInputElement | null>): void {
   useEffect(() => {
     const focusSearch = (): void => queryInputRef.current?.focus();
     window.addEventListener(WORKSPACE_SEARCH_FOCUS_EVENT, focusSearch);
     return () => window.removeEventListener(WORKSPACE_SEARCH_FOCUS_EVENT, focusSearch);
-  }, []);
+  }, [queryInputRef]);
+}
 
-  const runSearch = useCallback(
+async function fetchSearchAggregate(
+  targets: readonly WorkspaceRootTarget[],
+  form: SearchFormState,
+  t: OptionalWidgetTranslate,
+  signal?: AbortSignal,
+): Promise<SearchAggregate> {
+  const options = signal === undefined ? undefined : { signal };
+  const outcomes = await requestWorkspaceRoots(targets, (target) =>
+    form.searchDomain === "symbols"
+      ? fetchWorkspaceSymbols(
+          {
+            root: target.root,
+            query: form.query.trim(),
+            maxResults: WORKSPACE_SEARCH_MAX_RESULTS,
+          },
+          options,
+        ).then((result) => symbolResponseToSearchResponse(result, t))
+      : fetchWorkspaceSearch(
+          requestFromState({
+            root: target.root,
+            query: form.query,
+            mode: form.mode,
+            caseSensitive: form.caseSensitive,
+            wholeWord: form.wholeWord,
+            includeText: form.includeText,
+            excludeText: form.excludeText,
+          }),
+          options,
+        ),
+  );
+  return aggregateSearch(outcomes);
+}
+
+function useSearchRunner(args: {
+  readonly targets: readonly WorkspaceRootTarget[];
+  readonly form: SearchFormState;
+  readonly search: SearchResultsState;
+  readonly inlineError: string | null;
+  readonly multiRoot: boolean;
+  readonly t: OptionalWidgetTranslate;
+}): SearchRunner {
+  const { targets, form, search, inlineError, multiRoot, t } = args;
+  const { setStatus, setRouteError, setRootErrors, setResponse, setActiveIndex } = search;
+  return useCallback(
     async (signal?: AbortSignal): Promise<void> => {
-      if (targets.length === 0 || query.trim().length === 0 || inlineError !== null) return;
+      if (targets.length === 0 || form.query.trim().length === 0 || inlineError !== null) return;
       setStatus("loading");
       setRouteError(null);
       setRootErrors([]);
-      const options = signal === undefined ? undefined : { signal };
-      const outcomes = await requestWorkspaceRoots(targets, (target) =>
-        searchDomain === "symbols"
-          ? fetchWorkspaceSymbols(
-              {
-                root: target.root,
-                query: query.trim(),
-                maxResults: WORKSPACE_SEARCH_MAX_RESULTS,
-              },
-              options,
-            ).then((result) => symbolResponseToSearchResponse(result, t))
-          : fetchWorkspaceSearch(
-              requestFromState({
-                root: target.root,
-                query,
-                mode,
-                caseSensitive,
-                wholeWord,
-                includeText,
-                excludeText,
-              }),
-              options,
-            ),
-      );
+      const next = await fetchSearchAggregate(targets, form, t, signal);
       if (signal?.aborted === true) return;
-      const next = aggregateSearch(outcomes);
       const failure = searchFailureMessage(next, t);
       setResponse(failure === null ? next : null);
       setRootErrors(multiRoot ? next.errors : []);
@@ -682,22 +827,31 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
       setStatus(failure === null ? "ready" : "error");
     },
     [
-      caseSensitive,
-      excludeText,
-      includeText,
+      form,
       inlineError,
-      mode,
       multiRoot,
-      query,
-      searchDomain,
+      setActiveIndex,
+      setResponse,
+      setRootErrors,
+      setRouteError,
+      setStatus,
       t,
       targets,
-      wholeWord,
     ],
   );
+}
 
+function useDebouncedSearch(args: {
+  readonly query: string;
+  readonly inlineError: string | null;
+  readonly targetCount: number;
+  readonly runSearch: SearchRunner;
+  readonly search: SearchResultsState;
+}): void {
+  const { query, inlineError, targetCount, runSearch, search } = args;
+  const { setResponse, setRootErrors, setStatus } = search;
   useEffect(() => {
-    if (query.trim().length === 0 || inlineError !== null || targets.length === 0) {
+    if (query.trim().length === 0 || inlineError !== null || targetCount === 0) {
       setResponse(null);
       setRootErrors([]);
       setStatus("idle");
@@ -709,273 +863,507 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [inlineError, query, runSearch, targets.length]);
+  }, [inlineError, query, runSearch, setResponse, setRootErrors, setStatus, targetCount]);
+}
 
-  const openMatch = useCallback(
-    (match: RootAwareSearchResult): void => {
-      if (openEditorFile === undefined) return;
-      openEditorFile({
-        root: match.root,
-        path: match.path,
-        lineStart: match.lineRange.startLine,
-        lineEnd: match.lineRange.endLine,
-      });
-    },
-    [openEditorFile],
+interface ReplaceActionArgs {
+  readonly targets: readonly WorkspaceRootTarget[];
+  readonly targetsScopeKey: string;
+  readonly multiRoot: boolean;
+  readonly form: SearchFormState;
+  readonly replace: ReplaceResultsState;
+  readonly refs: ReplaceOperationRefs;
+  readonly openBuffers: ReturnType<typeof useWorkspaceReplaceBuffers>;
+  readonly inlineError: string | null;
+  readonly t: OptionalWidgetTranslate;
+}
+
+async function runReplacePreview(args: ReplaceActionArgs): Promise<void> {
+  if (
+    args.targets.length === 0 ||
+    args.form.query.trim().length === 0 ||
+    args.inlineError !== null
+  ) {
+    return;
+  }
+  args.replace.setStatus(
+    args.multiRoot
+      ? args.t("searchPanel.replace.computingMulti")
+      : args.t("searchPanel.replace.computingSingle"),
   );
-
-  const previewReplace = useCallback(async (): Promise<void> => {
-    if (targets.length === 0 || query.trim().length === 0 || inlineError !== null) return;
-    const requestedTargetsScopeKey = targetsScopeKey;
-    setReplaceStatus(
-      multiRoot
-        ? t("searchPanel.replace.computingMulti")
-        : t("searchPanel.replace.computingSingle"),
+  args.replace.setErrors([]);
+  args.replace.setAppliedRootIds(new Set());
+  args.replace.setMessages(new Map());
+  const result = await collectReplacePreviews(args.targets, {
+    query: args.form.query.trim(),
+    mode: args.form.mode,
+    caseSensitive: args.form.caseSensitive,
+    includeText: args.form.includeText,
+    excludeText: args.form.excludeText,
+    replacement: args.form.replacement,
+    isCurrent: (): boolean => args.refs.currentTargetsScopeKey.current === args.targetsScopeKey,
+    t: args.t,
+  });
+  if (result === null) return;
+  args.replace.setPreviews(result.previews);
+  args.replace.setErrors(args.multiRoot ? result.errors : []);
+  if (!args.multiRoot) {
+    args.replace.setStatus(
+      result.previews[0] === undefined
+        ? (result.errors[0]?.message ?? args.t("searchPanel.error.previewFailed"))
+        : replaceSummary(result.previews[0].response, args.t),
     );
-    setReplaceErrors([]);
-    setAppliedRootIds(new Set());
-    setReplaceMessages(new Map());
-    const result = await collectReplacePreviews(targets, {
-      query: query.trim(),
-      mode,
-      caseSensitive,
-      includeText,
-      excludeText,
-      replacement,
-      isCurrent: (): boolean => currentTargetsScopeKey.current === requestedTargetsScopeKey,
-      t,
+    return;
+  }
+  const errorSuffix =
+    result.errors.length === 0
+      ? ""
+      : args.t("searchPanel.replace.multiErrorsSuffix", { count: result.errors.length });
+  args.replace.setStatus(
+    args.t("searchPanel.replace.multiReady", {
+      count: result.previews.length,
+      errors: errorSuffix,
+    }),
+  );
+}
+
+function replaceCompletion(
+  args: ReplaceActionArgs,
+  preview: RootReplacePreview,
+  nextMessage: string,
+): void {
+  args.replace.setMessages((current) => new Map(current).set(preview.target.id, nextMessage));
+  args.replace.setStatus(
+    args.multiRoot ? rootPrefixedReplaceStatus(preview, nextMessage, args.t) : nextMessage,
+  );
+}
+
+async function runApplyReplacePreview(
+  args: ReplaceActionArgs,
+  preview: RootReplacePreview,
+): Promise<void> {
+  if (args.refs.activeApply.current !== null) return;
+  const requestedGeneration = args.refs.applyGeneration.current;
+  const operation = {};
+  args.refs.activeApply.current = operation;
+  const operationIsCurrent = (): boolean =>
+    args.refs.activeApply.current === operation &&
+    args.refs.applyGeneration.current === requestedGeneration &&
+    args.refs.currentTargetsScopeKey.current === args.targetsScopeKey;
+  args.replace.setApplyingRootId(preview.target.id);
+  try {
+    const result = await applyReviewedReplace({
+      root: preview.target.root,
+      openBuffers: args.openBuffers,
+      files: preview.response.files,
     });
-    if (result === null) return;
-    const { previews: next, errors } = result;
-    setReplacePreviews(next);
-    setReplaceErrors(multiRoot ? errors : []);
-    if (!multiRoot) {
-      setReplaceStatus(
-        next[0] === undefined
-          ? (errors[0]?.message ?? t("searchPanel.error.previewFailed"))
-          : replaceSummary(next[0].response, t),
-      );
-      return;
-    }
-    setReplaceStatus(
-      t("searchPanel.replace.multiReady", {
-        count: next.length,
-        errors:
-          errors.length === 0
-            ? ""
-            : t("searchPanel.replace.multiErrorsSuffix", {
-                count: errors.length,
-              }),
-      }),
+    if (!operationIsCurrent()) return;
+    replaceCompletion(args, preview, appliedReplaceMessage(result, args.t));
+    args.replace.setAppliedRootIds((current) => new Set(current).add(preview.target.id));
+  } catch (error) {
+    if (!operationIsCurrent()) return;
+    replaceCompletion(
+      args,
+      preview,
+      replaceErrorMessage(error, args.t("searchPanel.error.applyFailed")),
     );
-  }, [
-    caseSensitive,
-    excludeText,
-    includeText,
-    inlineError,
-    mode,
-    multiRoot,
-    query,
-    replacement,
-    t,
-    targets,
-    targetsScopeKey,
-  ]);
+  } finally {
+    if (operationIsCurrent()) {
+      args.refs.activeApply.current = null;
+      args.replace.setApplyingRootId(null);
+    }
+  }
+}
 
-  const applyReplacePreview = useCallback(
-    async (preview: RootReplacePreview): Promise<void> => {
-      if (activeApply.current !== null) return;
-      const requestedTargetsScopeKey = targetsScopeKey;
-      const requestedGeneration = applyGeneration.current;
-      const operation = {};
-      activeApply.current = operation;
-      const operationIsCurrent = (): boolean =>
-        activeApply.current === operation &&
-        applyGeneration.current === requestedGeneration &&
-        currentTargetsScopeKey.current === requestedTargetsScopeKey;
-      setApplyingRootId(preview.target.id);
-      try {
-        const result = await applyReviewedReplace({
-          root: preview.target.root,
-          openBuffers,
-          files: preview.response.files,
-        });
-        if (!operationIsCurrent()) return;
-        const nextMessage = appliedReplaceMessage(result, t);
-        setReplaceMessages((current) => new Map(current).set(preview.target.id, nextMessage));
-        setReplaceStatus(
-          multiRoot ? rootPrefixedReplaceStatus(preview, nextMessage, t) : nextMessage,
-        );
-        setAppliedRootIds((current) => new Set(current).add(preview.target.id));
-      } catch (error) {
-        if (!operationIsCurrent()) return;
-        const nextMessage = replaceErrorMessage(error, t("searchPanel.error.applyFailed"));
-        setReplaceMessages((current) => new Map(current).set(preview.target.id, nextMessage));
-        setReplaceStatus(
-          multiRoot ? rootPrefixedReplaceStatus(preview, nextMessage, t) : nextMessage,
-        );
-      } finally {
-        if (operationIsCurrent()) {
-          activeApply.current = null;
-          setApplyingRootId(null);
-        }
-      }
-    },
-    [multiRoot, openBuffers, t, targetsScopeKey],
+function createReplaceActions(
+  args: ReplaceActionArgs,
+): Pick<SearchPanelController, "previewReplace" | "applyReplacePreview"> {
+  return {
+    previewReplace: async (): Promise<void> => runReplacePreview(args),
+    applyReplacePreview: async (preview): Promise<void> => runApplyReplacePreview(args, preview),
+  };
+}
+
+interface SearchPanelScope {
+  readonly projectName: string;
+  readonly targets: readonly WorkspaceRootTarget[];
+  readonly targetsScopeKey: string;
+  readonly multiRoot: boolean;
+}
+
+function useSearchPanelScope(
+  root: string | undefined,
+  roots: readonly WorkspaceRootTarget[] | undefined,
+  t: OptionalWidgetTranslate,
+): SearchPanelScope {
+  const projectName = panelProjectName(root, roots, t);
+  const targets = useMemo(
+    (): readonly WorkspaceRootTarget[] => panelTargets(root, projectName, roots),
+    [projectName, root, roots],
   );
+  const targetsScopeKey = useMemo((): string => searchTargetsScopeKey(targets), [targets]);
+  return { projectName, targets, targetsScopeKey, multiRoot: targets.length > 1 };
+}
 
+function useSearchPanelPresentation(
+  scope: SearchPanelScope,
+  form: SearchFormState,
+  search: SearchResultsState,
+  t: OptionalWidgetTranslate,
+): Pick<SearchPanelController, "inlineError" | "groups" | "message"> {
+  const inlineError =
+    form.searchDomain === "text" ? regexSyntaxError(form.query, form.mode, t) : null;
+  const groups = useMemo(
+    (): readonly SearchResultGroup[] => resultGroups(search.response),
+    [search.response],
+  );
+  const message = statusMessage({
+    hasRoot: scope.targets.length > 0,
+    multiRoot: scope.multiRoot,
+    query: form.query,
+    status: search.status,
+    response: search.response,
+    error: inlineError ?? search.routeError,
+    t,
+  });
+  return { inlineError, groups, message };
+}
+
+interface SearchPanelActionArgs {
+  readonly scope: SearchPanelScope;
+  readonly form: SearchFormState;
+  readonly search: SearchResultsState;
+  readonly replace: ReplaceResultsState;
+  readonly refs: ReplaceOperationRefs;
+  readonly openBuffers: ReturnType<typeof useWorkspaceReplaceBuffers>;
+  readonly openEditorFile: SearchPanelProps["openEditorFile"];
+  readonly inlineError: string | null;
+  readonly t: OptionalWidgetTranslate;
+}
+
+function useSearchPanelActions(
+  args: SearchPanelActionArgs,
+): Pick<
+  SearchPanelController,
+  "runSearch" | "openMatch" | "previewReplace" | "applyReplacePreview"
+> {
+  const { scope, form, search, replace, refs, openBuffers, openEditorFile, inlineError, t } = args;
+  const runSearch = useSearchRunner({
+    targets: scope.targets,
+    form,
+    search,
+    inlineError,
+    multiRoot: scope.multiRoot,
+    t,
+  });
+  useDebouncedSearch({
+    query: form.query,
+    inlineError,
+    targetCount: scope.targets.length,
+    runSearch,
+    search,
+  });
+  const replaceActions = createReplaceActions({
+    targets: scope.targets,
+    targetsScopeKey: scope.targetsScopeKey,
+    multiRoot: scope.multiRoot,
+    form,
+    replace,
+    refs,
+    openBuffers,
+    inlineError,
+    t,
+  });
+  const openMatch = (match: RootAwareSearchResult): void => {
+    openEditorFile?.({
+      root: match.root,
+      path: match.path,
+      lineStart: match.lineRange.startLine,
+      lineEnd: match.lineRange.endLine,
+    });
+  };
+  return { runSearch, openMatch, ...replaceActions };
+}
+
+function useSearchPanelController({
+  root,
+  roots,
+  openEditorFile,
+}: SearchPanelProps): SearchPanelController {
+  const t = useOptionalWidgetTranslate();
+  const openBuffers = useWorkspaceReplaceBuffers();
+  const scope = useSearchPanelScope(root, roots, t);
+  const refs = useReplaceOperationRefs(scope.targetsScopeKey);
+  const form = useSearchFormState();
+  const search = useSearchResultsState(scope.targetsScopeKey);
+  const replace = useReplaceResultsState(scope.targetsScopeKey, refs);
+  const queryInputRef = useRef<HTMLInputElement | null>(null);
+  const controlsId = useId();
+  const presentation = useSearchPanelPresentation(scope, form, search, t);
+  const actions = useSearchPanelActions({
+    scope,
+    form,
+    search,
+    replace,
+    refs,
+    openBuffers,
+    openEditorFile,
+    inlineError: presentation.inlineError,
+    t,
+  });
+  useSearchFocus(queryInputRef);
+  return {
+    t,
+    projectName: scope.projectName,
+    targets: scope.targets,
+    multiRoot: scope.multiRoot,
+    queryInputRef,
+    controlsId,
+    form,
+    search,
+    replace,
+    ...presentation,
+    ...actions,
+  };
+}
+
+function ToggleButton({
+  pressed,
+  onClick,
+  children,
+}: {
+  readonly pressed: boolean;
+  readonly onClick: () => void;
+  readonly children: ReactNode;
+}): ReactNode {
   return (
-    <div className={`srch ${styles.panel}`}>
-      <form
-        className={styles.controls}
-        onSubmit={(event) => {
-          event.preventDefault();
-          void runSearch();
-        }}
-      >
-        <div className="srch-box">
-          <SearchIcon size={15} aria-hidden="true" />
-          <input
-            ref={queryInputRef}
-            type="search"
-            aria-label={t("searchPanel.input.ariaLabel")}
-            aria-describedby={controlsId}
-            placeholder={t("searchPanel.input.placeholder")}
-            value={query}
-            disabled={targets.length === 0}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </div>
-        <div className="tw-label srch-label">
-          {projectName}{" "}
-          <span className="srch-meta mono">{t("searchPanel.label.workspaceSearch")}</span>
-        </div>
-        <div className={styles.controlRow}>
-          <div className={styles.modeGroup} aria-label={t("searchPanel.group.searchDomain")}>
-            <button
-              className={styles.modeButton}
-              type="button"
-              aria-pressed={searchDomain === "text"}
-              onClick={() => setSearchDomain("text")}
-            >
-              {t("searchPanel.domain.text")}
-            </button>
-            <button
-              className={styles.modeButton}
-              type="button"
-              aria-pressed={searchDomain === "symbols"}
-              onClick={() => setSearchDomain("symbols")}
-            >
-              {t("searchPanel.domain.symbols")}
-            </button>
-          </div>
-          <div className={styles.modeGroup} aria-label={t("searchPanel.group.searchMode")}>
-            <button
-              className={styles.modeButton}
-              type="button"
-              aria-pressed={mode === "literal"}
-              onClick={() => setMode("literal")}
-            >
-              {t("searchPanel.mode.literal")}
-            </button>
-            <button
-              className={styles.modeButton}
-              type="button"
-              aria-pressed={mode === "regex"}
-              onClick={() => setMode("regex")}
-            >
-              {t("searchPanel.mode.regex")}
-            </button>
-          </div>
-          <label className={styles.checkLabel}>
-            <input
-              type="checkbox"
-              checked={caseSensitive}
-              onChange={(event) => setCaseSensitive(event.target.checked)}
-            />{" "}
-            {t("searchPanel.option.caseSensitive")}
-          </label>
-          <label className={styles.checkLabel}>
-            <input
-              type="checkbox"
-              checked={wholeWord}
-              onChange={(event) => setWholeWord(event.target.checked)}
-            />{" "}
-            {t("searchPanel.option.matchWholeWord")}
-          </label>
-        </div>
-        <div className={styles.globGrid}>
-          <label className={styles.fieldLabel}>
-            {t("searchPanel.field.includeGlob")}
-            <input
-              className={`${styles.globInput} mono`}
-              value={includeText}
-              placeholder={t("searchPanel.field.includeGlobPlaceholder")}
-              onChange={(event) => setIncludeText(event.target.value)}
-            />
-          </label>
-          <label className={styles.fieldLabel}>
-            {t("searchPanel.field.excludeGlob")}
-            <input
-              className={`${styles.globInput} mono`}
-              value={excludeText}
-              placeholder={t("searchPanel.field.excludeGlobPlaceholder")}
-              onChange={(event) => setExcludeText(event.target.value)}
-            />
-          </label>
-        </div>
-        <label className={styles.fieldLabel}>
-          {t("searchPanel.field.replacement")}
-          <input
-            className={`${styles.globInput} mono`}
-            value={replacement}
-            placeholder={t("searchPanel.field.replacementPlaceholder")}
-            onChange={(event) => setReplacement(event.target.value)}
-          />
-        </label>
-        <button
-          className={styles.modeButton}
-          type="button"
-          disabled={targets.length === 0 || query.trim().length === 0 || inlineError !== null}
-          onClick={() => void previewReplace()}
+    <button className={styles.modeButton} type="button" aria-pressed={pressed} onClick={onClick}>
+      {children}
+    </button>
+  );
+}
+
+function SearchQueryHeader({
+  controller,
+}: {
+  readonly controller: SearchPanelController;
+}): ReactNode {
+  const { form, queryInputRef, targets, controlsId, t, projectName } = controller;
+  return (
+    <>
+      <div className="srch-box">
+        <SearchIcon size={15} aria-hidden="true" />
+        <input
+          ref={queryInputRef}
+          type="search"
+          aria-label={t("searchPanel.input.ariaLabel")}
+          aria-describedby={controlsId}
+          placeholder={t("searchPanel.input.placeholder")}
+          value={form.query}
+          disabled={targets.length === 0}
+          onChange={(event) => form.setQuery(event.target.value)}
+        />
+      </div>
+      <div className="tw-label srch-label">
+        {projectName}{" "}
+        <span className="srch-meta mono">{t("searchPanel.label.workspaceSearch")}</span>
+      </div>
+    </>
+  );
+}
+
+function SearchModeControls({
+  controller,
+}: {
+  readonly controller: SearchPanelController;
+}): ReactNode {
+  const { form, t } = controller;
+  return (
+    <div className={styles.controlRow}>
+      <div className={styles.modeGroup} aria-label={t("searchPanel.group.searchDomain")}>
+        <ToggleButton
+          pressed={form.searchDomain === "text"}
+          onClick={() => form.setSearchDomain("text")}
         >
-          {t("searchPanel.action.previewReplace")}
-        </button>
-      </form>
+          {t("searchPanel.domain.text")}
+        </ToggleButton>
+        <ToggleButton
+          pressed={form.searchDomain === "symbols"}
+          onClick={() => form.setSearchDomain("symbols")}
+        >
+          {t("searchPanel.domain.symbols")}
+        </ToggleButton>
+      </div>
+      <div className={styles.modeGroup} aria-label={t("searchPanel.group.searchMode")}>
+        <ToggleButton pressed={form.mode === "literal"} onClick={() => form.setMode("literal")}>
+          {t("searchPanel.mode.literal")}
+        </ToggleButton>
+        <ToggleButton pressed={form.mode === "regex"} onClick={() => form.setMode("regex")}>
+          {t("searchPanel.mode.regex")}
+        </ToggleButton>
+      </div>
+      <label className={styles.checkLabel}>
+        <input
+          type="checkbox"
+          checked={form.caseSensitive}
+          onChange={(event) => form.setCaseSensitive(event.target.checked)}
+        />{" "}
+        {t("searchPanel.option.caseSensitive")}
+      </label>
+      <label className={styles.checkLabel}>
+        <input
+          type="checkbox"
+          checked={form.wholeWord}
+          onChange={(event) => form.setWholeWord(event.target.checked)}
+        />{" "}
+        {t("searchPanel.option.matchWholeWord")}
+      </label>
+    </div>
+  );
+}
+
+function SearchGlobFields({
+  controller,
+}: {
+  readonly controller: SearchPanelController;
+}): ReactNode {
+  const { form, t } = controller;
+  return (
+    <div className={styles.globGrid}>
+      <label className={styles.fieldLabel}>
+        {t("searchPanel.field.includeGlob")}
+        <input
+          className={`${styles.globInput} mono`}
+          value={form.includeText}
+          placeholder={t("searchPanel.field.includeGlobPlaceholder")}
+          onChange={(event) => form.setIncludeText(event.target.value)}
+        />
+      </label>
+      <label className={styles.fieldLabel}>
+        {t("searchPanel.field.excludeGlob")}
+        <input
+          className={`${styles.globInput} mono`}
+          value={form.excludeText}
+          placeholder={t("searchPanel.field.excludeGlobPlaceholder")}
+          onChange={(event) => form.setExcludeText(event.target.value)}
+        />
+      </label>
+    </div>
+  );
+}
+
+function ReplaceControls({
+  controller,
+}: {
+  readonly controller: SearchPanelController;
+}): ReactNode {
+  const { form, targets, inlineError, previewReplace, t } = controller;
+  return (
+    <>
+      <label className={styles.fieldLabel}>
+        {t("searchPanel.field.replacement")}
+        <input
+          className={`${styles.globInput} mono`}
+          value={form.replacement}
+          placeholder={t("searchPanel.field.replacementPlaceholder")}
+          onChange={(event) => form.setReplacement(event.target.value)}
+        />
+      </label>
+      <button
+        className={styles.modeButton}
+        type="button"
+        disabled={targets.length === 0 || form.query.trim().length === 0 || inlineError !== null}
+        onClick={() => void previewReplace()}
+      >
+        {t("searchPanel.action.previewReplace")}
+      </button>
+    </>
+  );
+}
+
+function SearchControls({ controller }: { readonly controller: SearchPanelController }): ReactNode {
+  return (
+    <form
+      className={styles.controls}
+      onSubmit={(event) => {
+        event.preventDefault();
+        void controller.runSearch();
+      }}
+    >
+      <SearchQueryHeader controller={controller} />
+      <SearchModeControls controller={controller} />
+      <SearchGlobFields controller={controller} />
+      <ReplaceControls controller={controller} />
+    </form>
+  );
+}
+
+function SearchPanelOutput({
+  controller,
+}: {
+  readonly controller: SearchPanelController;
+}): ReactNode {
+  const { controlsId, inlineError, search, replace, t } = controller;
+  return (
+    <>
       {/* <output> owns role=status; NATIVE_BLOCK_STYLE restores the block box the <div> had,
           because .status declares no display of its own (#2721). */}
       <output
         id={controlsId}
-        className={`${styles.status} ${(inlineError ?? routeError) ? styles.error : ""}`}
+        className={`${styles.status} ${(inlineError ?? search.routeError) ? styles.error : ""}`}
         style={NATIVE_BLOCK_STYLE}
       >
-        {message}
+        {controller.message}
       </output>
-      <RootErrors errors={rootErrors} operation="searched" t={t} />
-      {showReplaceStatus ? (
+      <RootErrors errors={search.rootErrors} operation="searched" t={t} />
+      {replace.status !== null ? (
         <output className={styles.status} style={NATIVE_BLOCK_STYLE}>
-          {replaceStatus}
+          {replace.status}
         </output>
       ) : null}
-      <RootErrors errors={replaceErrors} operation="previewed" t={t} />
+      <RootErrors errors={replace.errors} operation="previewed" t={t} />
+    </>
+  );
+}
+
+function SearchPanelResults({
+  controller,
+}: {
+  readonly controller: SearchPanelController;
+}): ReactNode {
+  const { groups, multiRoot, search, replace, openMatch, applyReplacePreview, t } = controller;
+  return (
+    <>
       {groups.length > 0 ? (
         <SearchResultList
           groups={groups}
           showRootLabels={multiRoot}
-          activeIndex={activeIndex}
-          onActiveIndexChange={setActiveIndex}
+          activeIndex={search.activeIndex}
+          onActiveIndexChange={search.setActiveIndex}
           onOpen={openMatch}
         />
       ) : null}
       <ReplaceReviews
-        previews={replacePreviews}
+        previews={replace.previews}
         multiRoot={multiRoot}
-        applyingRootId={applyingRootId}
-        appliedRootIds={appliedRootIds}
-        messages={replaceMessages}
+        applyingRootId={replace.applyingRootId}
+        appliedRootIds={replace.appliedRootIds}
+        messages={replace.messages}
         onApply={(preview) => void applyReplacePreview(preview)}
         t={t}
       />
+    </>
+  );
+}
+
+function SearchPanelState(props: SearchPanelProps): ReactNode {
+  const controller = useSearchPanelController(props);
+
+  return (
+    <div className={`srch ${styles.panel}`}>
+      <SearchControls controller={controller} />
+      <SearchPanelOutput controller={controller} />
+      <SearchPanelResults controller={controller} />
     </div>
   );
 }

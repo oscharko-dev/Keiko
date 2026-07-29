@@ -161,6 +161,9 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
     registerRepository: vi.fn(async ({ path }) => ({
       project: path === REPO_B.path ? REPO_B : REPO_A,
     })),
+    reconnectRepository: vi.fn(async (path) => ({
+      project: path === REPO_B.path ? REPO_B : REPO_A,
+    })),
     cloneRepository: vi.fn(async () => ({ project: REPO_A })),
     listBranches: vi.fn(async () => makeBranchList()),
     getSummary: vi.fn(async () => makeSummary()),

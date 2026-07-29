@@ -238,20 +238,22 @@ describe("SearchPanel", () => {
   });
 
   it("fails visibly without a root instead of borrowing the active Chat project", async (): Promise<void> => {
-    render(<SearchPanel />);
+    vi.useFakeTimers();
+    try {
+      render(<SearchPanel />);
 
-    expect(screen.getByRole("searchbox", { name: "Search files and symbols" })).toBeDisabled();
-    expect(screen.getByText("No workspace selected")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Select a workspace before searching.");
+      expect(screen.getByRole("searchbox", { name: "Search files and symbols" })).toBeDisabled();
+      expect(screen.getByText("No workspace selected")).toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent("Select a workspace before searching.");
 
-    await act(
-      async (): Promise<void> =>
-        new Promise((resolve): void => {
-          window.setTimeout(resolve, 260);
-        }),
-    );
-    expect(fetchWorkspaceSearchMock).not.toHaveBeenCalled();
-    expect(fetchWorkspaceReplacePreviewMock).not.toHaveBeenCalled();
+      await act(async (): Promise<void> => {
+        await vi.runAllTimersAsync();
+      });
+      expect(fetchWorkspaceSearchMock).not.toHaveBeenCalled();
+      expect(fetchWorkspaceReplacePreviewMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("debounces non-empty queries and posts to the workspace-search route wrapper", async () => {

@@ -934,7 +934,7 @@ export function GitClientWindow({
       repositoryConnectSeqRef.current = requestSequence;
       setReposLoading(true);
       setReposError(null);
-      void client.registerRepository({ path }).then(
+      void client.reconnectRepository(path).then(
         (response): void => {
           if (requestSequence !== repositoryConnectSeqRef.current) return;
           if (applyConnectedRepository(response.project)) loadRepositories();
@@ -953,10 +953,12 @@ export function GitClientWindow({
 
   const onRepositoryAdded = useCallback(
     (project: ProjectWithAvailability): void => {
-      repositoryConnectSeqRef.current += 1;
-      if (applyConnectedRepository(project)) loadRepositories();
+      // Create/clone owns manifest establishment. Reconnect through the existing-project route
+      // before selection so the Git window consumes a fresh server membership projection rather
+      // than trusting the mutation response or attempting duplicate project creation.
+      reconnectRepository(project.path);
     },
-    [applyConnectedRepository, loadRepositories],
+    [reconnectRepository],
   );
 
   useEffect(() => {
