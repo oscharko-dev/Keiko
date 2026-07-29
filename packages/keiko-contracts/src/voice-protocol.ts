@@ -592,6 +592,7 @@ const VOICE_SESSION_GROUNDING_FIELDS: ReadonlySet<string> = new Set([
   "sourceCount",
   "kind",
 ]);
+const VOICE_ERROR_CORRELATION_ID = /^[A-Za-z0-9._-]{1,128}$/;
 
 // ─── Type guards & lookups ───────────────────────────────────────────────────────
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -627,6 +628,12 @@ function profileNegotiationMatches(profile: unknown, negotiationMode: unknown): 
 
 function isOptionalTranscriptionLanguage(value: unknown): boolean {
   return value === undefined || isNonEmptyTrimmed(value);
+}
+
+function isOptionalErrorCorrelationId(value: unknown): boolean {
+  return (
+    value === undefined || (typeof value === "string" && VOICE_ERROR_CORRELATION_ID.test(value))
+  );
 }
 
 function isOptionalVoicePersona(value: unknown): value is VoicePersona | undefined {
@@ -704,6 +711,12 @@ function validateSessionCreatePayload(value: Record<string, unknown>, reasons: s
   validateSessionCreateOptions(value, reasons);
 }
 
+function validateErrorPayload(value: Record<string, unknown>, reasons: string[]): void {
+  if (!isOptionalErrorCorrelationId(value.correlationId)) {
+    reasons.push("error correlationId invalid");
+  }
+}
+
 export function isVoiceControlMessageKind(value: unknown): value is VoiceControlMessageKind {
   return (
     typeof value === "string" && (VOICE_CONTROL_MESSAGE_KINDS as readonly string[]).includes(value)
@@ -773,14 +786,16 @@ function validateEnvelope(value: Record<string, unknown>, reasons: string[]): vo
   }
 }
 
-// Structural guard for the shared envelope plus the v1-compatible session.create payload. Productive
-// transports apply their own narrower direction/authority allowlists after this decoder.
+// Structural guard for the shared envelope, the v1-compatible session.create payload, and bounded
+// content-free error correlation identifiers. Productive transports apply their own narrower
+// direction/authority allowlists after this decoder.
 export function isVoiceControlMessage(value: unknown): value is VoiceControlMessage {
   return validateVoiceControlMessage(value).ok;
 }
 
-// Deep validation of the shared envelope plus the published v1-compatible session.create shape,
-// returning every reason it is malformed. It grants no productive authority by itself.
+// Deep validation of the shared envelope, the published v1-compatible session.create shape, and the
+// content-free portion of error payloads, returning every reason it is malformed. It grants no
+// productive authority by itself.
 export function validateVoiceControlMessage(value: unknown): VoiceProtocolValidation {
   if (!isRecord(value)) {
     return { ok: false, reasons: ["message must be an object"] };
@@ -789,6 +804,8 @@ export function validateVoiceControlMessage(value: unknown): VoiceProtocolValida
   validateEnvelope(value, reasons);
   if (value.kind === "session.create") {
     validateSessionCreatePayload(value, reasons);
+  } else if (value.kind === "error") {
+    validateErrorPayload(value, reasons);
   }
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }

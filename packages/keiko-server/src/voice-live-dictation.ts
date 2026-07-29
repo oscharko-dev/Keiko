@@ -416,16 +416,14 @@ class VoiceLiveDictationConnection {
 
   private reportNegotiationFailure(kind: RealtimeNegotiationErrorKind, thrown: unknown): void {
     const correlationId = randomUUID();
-    emitServerDiagnostic(
-      this.diagnostics,
-      serverDiagnosticFromError({
-        correlationId,
-        operation: "voice.live-dictation.negotiate",
-        source: "voice.live-dictation",
-        error: thrown ?? new LiveDictationNegotiationError(kind),
-        redact: (message: string): string => String(this.redact(message)),
-      }),
-    );
+    const diagnostic = serverDiagnosticFromError({
+      correlationId,
+      operation: "voice.live-dictation.negotiate",
+      source: "voice.live-dictation",
+      error: thrown ?? new LiveDictationNegotiationError(kind),
+      redact: (message: string): string => String(this.redact(message)),
+    });
+    emitServerDiagnostic(this.diagnostics, { ...diagnostic, code: kind });
     emit(this.ws, this.session, this.redact, {
       kind: "error",
       code: "negotiation-failed",

@@ -476,6 +476,37 @@ describe("envelope validation & guards", () => {
     expect(message.correlationId).toBe("dictation-corr-2806");
   });
 
+  it.each(["a", "a".repeat(128)])(
+    "accepts a bounded content-free error correlation id",
+    (correlationId): void => {
+      const message = {
+        ...wellFormedMessage("error"),
+        code: "negotiation-failed",
+        correlationId,
+      };
+
+      expect(validateVoiceControlMessage(message)).toEqual({ ok: true });
+      expect(isVoiceControlMessage(message)).toBe(true);
+    },
+  );
+
+  it.each(["", "a".repeat(129), 42, null, "provider detail", "<script>alert(1)</script>"])(
+    "rejects malformed or content-bearing error correlation ids",
+    (correlationId): void => {
+      const message = {
+        ...wellFormedMessage("error"),
+        code: "negotiation-failed",
+        correlationId,
+      };
+
+      expect(validateVoiceControlMessage(message)).toEqual({
+        ok: false,
+        reasons: ["error correlationId invalid"],
+      });
+      expect(isVoiceControlMessage(message)).toBe(false);
+    },
+  );
+
   it("accepts a well-formed envelope for every kind", () => {
     for (const kind of VOICE_CONTROL_MESSAGE_KINDS) {
       const message = wellFormedMessage(kind);

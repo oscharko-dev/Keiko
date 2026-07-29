@@ -66,6 +66,12 @@ function negotiateUntilServerError(correlationId: unknown): Promise<unknown> {
       correlationId,
     }),
   );
+  socket.fire(
+    "message",
+    serverMessage("error", {
+      code: "negotiation-failed",
+    }),
+  );
   return outcome;
 }
 

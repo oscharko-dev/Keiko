@@ -13,7 +13,6 @@ import {
 
 const LIVE_TRANSCRIBE_PATH = "/api/voice/transcribe/live";
 const NEGOTIATE_TIMEOUT_MS = DEFAULT_VOICE_PROTOCOL_TIMEOUTS.signalingMs;
-const CORRELATION_ID = /^[A-Za-z0-9._-]{1,128}$/;
 
 export class VoiceLiveDictationControlError extends Error {
   constructor(
@@ -24,10 +23,6 @@ export class VoiceLiveDictationControlError extends Error {
     super(message);
     this.name = "VoiceLiveDictationControlError";
   }
-}
-
-function safeCorrelationId(value: unknown): string | undefined {
-  return typeof value === "string" && CORRELATION_ID.test(value) ? value : undefined;
 }
 
 export interface VoiceLiveDictationControlClient {
@@ -213,7 +208,7 @@ export function createBrowserVoiceLiveDictationControlClient(
               new VoiceLiveDictationControlError(
                 reason,
                 `Live dictation error: ${errorMsg.code}`,
-                safeCorrelationId(errorMsg.correlationId),
+                errorMsg.correlationId,
               ),
             );
             return;
