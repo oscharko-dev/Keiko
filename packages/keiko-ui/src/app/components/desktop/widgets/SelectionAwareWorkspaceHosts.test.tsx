@@ -555,7 +555,8 @@ describe("EditorWindowSessionHost reveal targeting (#2621)", () => {
 });
 
 describe("ChatWindowSessionHost target missing", () => {
-  it("rejects whitespace-only titles at the owning normalization boundary", (): void => {
+  it("rejects empty and whitespace-only titles at the owning normalization boundary", (): void => {
+    expect(normalizedChatTitle("")).toBeUndefined();
     expect(normalizedChatTitle(" \t\n ")).toBeUndefined();
   });
 
