@@ -36,6 +36,10 @@ import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import { FileIcon } from "../shared/projectTree";
 import { FilePreview } from "./FilePreview";
 import {
+  GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
+  gitRepositoryStateInvalidationRoots,
+} from "./git-repository-state-events";
+import {
   useFilesWidgetTranslate,
   type FilesWidgetMessageKey,
   type FilesWidgetTranslate,
@@ -867,6 +871,32 @@ export function FilesWidget({
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [invalidateGitStatus]);
+
+  useEffect((): (() => void) => {
+    const onRepositoryStateInvalidated = (event: Event): void => {
+      const invalidatedRoots = gitRepositoryStateInvalidationRoots(event);
+      const boundRoot = resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : null);
+      const repositoryRoot =
+        gitStatusState.status?.available === true
+          ? (gitStatusState.status.repositoryRoot ?? gitStatusState.status.root)
+          : null;
+      if (
+        !invalidatedRoots.some(
+          (root): boolean =>
+            root === boundRoot || (repositoryRoot !== null && root === repositoryRoot),
+        )
+      ) {
+        return;
+      }
+      invalidateGitStatus();
+    };
+    window.addEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, onRepositoryStateInvalidated);
+    return (): void =>
+      window.removeEventListener(
+        GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
+        onRepositoryStateInvalidated,
+      );
+  }, [apiRoot, gitStatusState.status, invalidateGitStatus, resolvedRoot]);
 
   useEffect(() => {
     const onMutation = (event: Event): void => {

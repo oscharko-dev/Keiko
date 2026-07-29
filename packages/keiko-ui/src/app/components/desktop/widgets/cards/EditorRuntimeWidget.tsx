@@ -245,6 +245,10 @@ import {
 import { EditorBreadcrumbBar } from "./EditorBreadcrumbBar";
 import { EditorGitHunkPeek } from "./EditorGitHunkPeek";
 import { useEditorSourceControlTranslate } from "./editor-source-control-i18n";
+import {
+  GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
+  gitRepositoryStateInvalidationRoots,
+} from "./git-repository-state-events";
 import { notifyWorkspaceFileMutated } from "./workspace-file-events";
 import {
   buildEditorOutlineTree,
@@ -606,6 +610,13 @@ interface EditorTabHandleContext {
 interface EditorTabInsertTarget {
   readonly file: string;
   readonly edge: "before" | "after";
+}
+
+interface WorkspaceGitSummary {
+  readonly requestedRoot: string;
+  readonly changedFileCount: number;
+  readonly truncated: boolean;
+  readonly repositoryRoot: string;
 }
 
 export interface EditorRuntimeWidgetProps {
@@ -2045,13 +2056,12 @@ function EditorRuntimeWidget({
   // Issue #2234 (ADR-0127): content-free workspace change-count backing the agent snapshot's
   // gitContextSummary. Event-driven only (root change, save, explicit refresh) — mirrors the
   // gutter's own refresh triggers so this never becomes a polling loop.
-  const [workspaceGitSummary, setWorkspaceGitSummary] = useState<{
-    readonly changedFileCount: number;
-    readonly truncated: boolean;
-  } | null>(null);
+  const [workspaceGitSummary, setWorkspaceGitSummary] = useState<WorkspaceGitSummary | null>(null);
   useEffect(() => {
+    setWorkspaceGitSummary((current): WorkspaceGitSummary | null =>
+      current?.requestedRoot === root ? current : null,
+    );
     if (root === undefined) {
-      setWorkspaceGitSummary(null);
       return;
     }
     let cancelled = false;
@@ -2059,8 +2069,10 @@ function EditorRuntimeWidget({
       .then((status) => {
         if (!cancelled) {
           setWorkspaceGitSummary({
+            requestedRoot: root,
             changedFileCount: status.changes.length,
             truncated: status.truncated,
+            repositoryRoot: status.repositoryRoot ?? status.root,
           });
         }
       })
@@ -2071,6 +2083,28 @@ function EditorRuntimeWidget({
       cancelled = true;
     };
   }, [root, gitGutterRefreshNonce]);
+  const activeWorkspaceGitSummary =
+    workspaceGitSummary?.requestedRoot === root ? workspaceGitSummary : null;
+  const workspaceGitRepositoryRoot = activeWorkspaceGitSummary?.repositoryRoot ?? null;
+  useEffect((): (() => void) | undefined => {
+    if (root === undefined) return undefined;
+    const onRepositoryStateInvalidated = (event: Event): void => {
+      const invalidatedRoots = gitRepositoryStateInvalidationRoots(event);
+      const matchesEditorRepository = invalidatedRoots.some(
+        (invalidatedRoot): boolean =>
+          invalidatedRoot === root ||
+          (workspaceGitRepositoryRoot !== null && invalidatedRoot === workspaceGitRepositoryRoot),
+      );
+      if (!matchesEditorRepository) return;
+      setGitGutterRefreshNonce((value): number => value + 1);
+    };
+    window.addEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, onRepositoryStateInvalidated);
+    return (): void =>
+      window.removeEventListener(
+        GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
+        onRepositoryStateInvalidated,
+      );
+  }, [root, workspaceGitRepositoryRoot]);
   // Issue #1202: the governed test-generation flow state (pure reducer owned by the editor package).
   // A monotonic sequence backs the cross-boundary request identity for stale-response discard.
   const [testGenState, dispatchTestGen] = useReducer<
@@ -2853,6 +2887,9 @@ function EditorRuntimeWidget({
           kind: "changed",
           relativePath: file,
           provenance: "local",
+          ...(workspaceGitRepositoryRoot === null
+            ? {}
+            : { repositoryRoot: workspaceGitRepositoryRoot }),
         });
         if (activeSessionKeyRef.current !== saveSessionKey) {
           await settleInactiveSave(saveSessionKey, textToSave, response, root, file);
@@ -2875,6 +2912,7 @@ function EditorRuntimeWidget({
       root,
       settleActiveSave,
       settleInactiveSave,
+      workspaceGitRepositoryRoot,
     ],
   );
 
@@ -4530,8 +4568,8 @@ function EditorRuntimeWidget({
         // Git window use. root is already guaranteed defined by the early return above.
         gitContextSummary: {
           hasConflictMarkers: mergeConflicts.count > 0,
-          changedFileCount: workspaceGitSummary?.changedFileCount ?? 0,
-          truncated: mergeConflicts.truncated || (workspaceGitSummary?.truncated ?? false),
+          changedFileCount: activeWorkspaceGitSummary?.changedFileCount ?? 0,
+          truncated: mergeConflicts.truncated || (activeWorkspaceGitSummary?.truncated ?? false),
         },
         ...(agentDocumentVersion === null ? {} : { documentVersion: agentDocumentVersion }),
         activeFileContentHash: activeContentHash,
@@ -4574,7 +4612,7 @@ function EditorRuntimeWidget({
       paneId,
       root,
       windowId,
-      workspaceGitSummary,
+      activeWorkspaceGitSummary,
     ],
   );
 

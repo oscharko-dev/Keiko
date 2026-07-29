@@ -41,6 +41,7 @@ import {
   type GitDeliveryCommitPreviewResponse,
   type GitDeliveryMutationResponse,
 } from "@/lib/api";
+import { notifyGitRepositoryStateInvalidated } from "../git-repository-state-events";
 
 // The outcome of any Git mutation. Push execute adds the publish-rejection / recovery fields; they
 // are optional so a branch/staging/commit outcome (which omits them) is assignable.
@@ -160,6 +161,7 @@ export interface GitActionFlowState {
 export function useGitActions(
   client: GitClientSeam,
   projectId: string,
+  repositoryRoot?: string,
 ): {
   readonly flow: GitActionFlowState;
   readonly preview: GitDeliveryCommitPreviewResponse | null;
@@ -180,20 +182,30 @@ export function useGitActions(
   const seqRef = useRef(0);
   const previewSeqRef = useRef(0);
 
-  const runMutation = useCallback((op: () => Promise<GitMutationOutcome>): void => {
-    const seq = seqRef.current + 1;
-    seqRef.current = seq;
-    setFlow({ busy: true, outcome: null, error: null });
-    void op().then(
-      (res) => {
-        if (seqRef.current === seq) setFlow({ busy: false, outcome: res, error: null });
-      },
-      (err: unknown) => {
-        if (seqRef.current === seq)
-          setFlow({ busy: false, outcome: null, error: formatGitError(err) });
-      },
-    );
-  }, []);
+  const runMutation = useCallback(
+    (op: () => Promise<GitMutationOutcome>): void => {
+      const seq = seqRef.current + 1;
+      seqRef.current = seq;
+      setFlow({ busy: true, outcome: null, error: null });
+      void op().then(
+        (res): void => {
+          if (
+            res.status === "succeeded" ||
+            res.status === "failed" ||
+            res.status === "recovery-required"
+          ) {
+            notifyGitRepositoryStateInvalidated(projectId, repositoryRoot);
+          }
+          if (seqRef.current === seq) setFlow({ busy: false, outcome: res, error: null });
+        },
+        (err: unknown): void => {
+          if (seqRef.current === seq)
+            setFlow({ busy: false, outcome: null, error: formatGitError(err) });
+        },
+      );
+    },
+    [projectId, repositoryRoot],
+  );
 
   const runPreview = useCallback(
     (messageDraft: string): void => {

@@ -15,7 +15,8 @@ import {
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
-import { WORKSPACE_FILE_MUTATED_EVENT } from "./workspace-file-events";
+import { notifyGitRepositoryStateInvalidated } from "./git-repository-state-events";
+import { WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationDetail } from "./workspace-file-events";
 
 vi.mock("../../../../../lib/api", async () => {
   const actual =
@@ -331,6 +332,120 @@ describe("EditorRuntimeWidget Git gutter", () => {
     act(() => surface.props?.onSaveRequested(request));
     await waitFor(() => expect(surface.props?.gitGutterRefreshNonce).toBe(initial + 2));
     expect(mutation).toHaveBeenCalledOnce();
+    expect(
+      workspaceFileMutationDetail(mutation.mock.calls[0]?.[0] ?? new Event("missing")),
+    ).toMatchObject({
+      root: "/repo",
+      repositoryRoot: "/repo",
+      relativePath: "src/app.ts",
+      provenance: "local",
+    });
+  });
+
+  it("refreshes Git projections for requested and canonical repository roots", async () => {
+    vi.mocked(fetchFilesContent).mockResolvedValue(
+      fileResponse(undefined, "/repo/project", "src/app.ts"),
+    );
+    vi.mocked(fetchGitStatus).mockResolvedValue({
+      schemaVersion: "1",
+      root: "/repo/project",
+      repositoryRoot: "/repo",
+      state: "available",
+      available: true,
+      detached: false,
+      clean: true,
+      stagedCount: 0,
+      unstagedCount: 0,
+      untrackedCount: 0,
+      conflictedCount: 0,
+      changes: [],
+      truncated: false,
+      maxChanges: 500,
+    });
+    render(
+      <EditorRuntimeWidget windowId="git-invalidation" root="/repo/project" file="src/app.ts" />,
+    );
+    await screen.findByTestId("editor-surface");
+    const initial = surface.props?.gitGutterRefreshNonce ?? 0;
+
+    act(() => notifyGitRepositoryStateInvalidated("/other"));
+    expect(surface.props?.gitGutterRefreshNonce).toBe(initial);
+
+    act(() => notifyGitRepositoryStateInvalidated("/repo/project"));
+    await waitFor(() => expect(surface.props?.gitGutterRefreshNonce).toBe(initial + 1));
+
+    act(() => notifyGitRepositoryStateInvalidated("/repo"));
+    await waitFor(() => expect(surface.props?.gitGutterRefreshNonce).toBe(initial + 2));
+  });
+
+  it("does not match the previous canonical root after switching repositories", async (): Promise<void> => {
+    let resolveRepositoryBStatus!: (status: Awaited<ReturnType<typeof fetchGitStatus>>) => void;
+    const repositoryBStatus = new Promise<Awaited<ReturnType<typeof fetchGitStatus>>>(
+      (resolve): void => {
+        resolveRepositoryBStatus = resolve;
+      },
+    );
+    vi.mocked(fetchFilesContent).mockImplementation(
+      async (requestedRoot, path): Promise<FilesContentResponse> =>
+        fileResponse(undefined, requestedRoot, path),
+    );
+    vi.mocked(fetchGitStatus).mockImplementation(
+      (requestedRoot): ReturnType<typeof fetchGitStatus> =>
+        requestedRoot === "/repo-a"
+          ? Promise.resolve({
+              schemaVersion: "1",
+              root: "/repo-a",
+              repositoryRoot: "/canonical/repo-a",
+              state: "available",
+              available: true,
+              detached: false,
+              clean: true,
+              stagedCount: 0,
+              unstagedCount: 0,
+              untrackedCount: 0,
+              conflictedCount: 0,
+              changes: [],
+              truncated: false,
+              maxChanges: 500,
+            })
+          : repositoryBStatus,
+    );
+    const rendered = render(
+      <EditorRuntimeWidget windowId="git-switch" root="/repo-a" file="src/app.ts" />,
+    );
+    await screen.findByTestId("editor-surface");
+    const initial = surface.props?.gitGutterRefreshNonce ?? 0;
+
+    act((): void => notifyGitRepositoryStateInvalidated("/canonical/repo-a"));
+    await waitFor((): void => expect(surface.props?.gitGutterRefreshNonce).toBe(initial + 1));
+
+    rendered.rerender(
+      <EditorRuntimeWidget windowId="git-switch" root="/repo-b" file="src/app.ts" />,
+    );
+    await waitFor((): void => expect(fetchGitStatus).toHaveBeenCalledWith("/repo-b"));
+    const switched = surface.props?.gitGutterRefreshNonce ?? 0;
+    act((): void => notifyGitRepositoryStateInvalidated("/canonical/repo-a"));
+    expect(surface.props?.gitGutterRefreshNonce).toBe(switched);
+
+    await act(async (): Promise<void> => {
+      resolveRepositoryBStatus({
+        schemaVersion: "1",
+        root: "/repo-b",
+        repositoryRoot: "/canonical/repo-b",
+        state: "available",
+        available: true,
+        detached: false,
+        clean: true,
+        stagedCount: 0,
+        unstagedCount: 0,
+        untrackedCount: 0,
+        conflictedCount: 0,
+        changes: [],
+        truncated: false,
+        maxChanges: 500,
+      });
+      await repositoryBStatus;
+    });
   });
 
   it("opens and dismisses the localized shared hunk peek", async () => {

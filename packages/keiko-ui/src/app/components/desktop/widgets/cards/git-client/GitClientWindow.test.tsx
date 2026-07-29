@@ -33,6 +33,7 @@ import type { GitRepositoryStatusResponse } from "@/lib/types";
 import type { GitClientSeam } from "./git-client-seam";
 import { GitClientWindow } from "./GitClientWindow";
 import { parseUnifiedDiff } from "../shared/diffParser";
+import { notifyWorkspaceFileMutated } from "../workspace-file-events";
 
 // ─── ResizeObserver stub (no global shim in vitest.setup.ts) ──────────────────
 
@@ -591,6 +592,58 @@ describe("GitClientWindow — repository list", () => {
 
     await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
     expect(client.getStatus).toHaveBeenCalledWith(REPO_A.path);
+  });
+
+  it("refreshes Git state after requested, canonical, and aliased editor saves", async (): Promise<void> => {
+    const getStatus = vi.fn(async (): Promise<GitRepositoryStatusResponse> =>
+      makeStatus({ repositoryRoot: "/repos" }),
+    );
+    const client = makeClient({ getStatus });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await screen.findByRole("combobox", { name: "Branch: main" });
+    const initialReads = getStatus.mock.calls.length;
+
+    act((): void => notifyWorkspaceFileMutated(REPO_B.path));
+    expect(getStatus).toHaveBeenCalledTimes(initialReads);
+
+    act((): void => notifyWorkspaceFileMutated(REPO_A.path));
+    await waitFor((): void => expect(getStatus).toHaveBeenCalledTimes(initialReads + 1));
+
+    act((): void => notifyWorkspaceFileMutated("/repos"));
+    await waitFor((): void => expect(getStatus).toHaveBeenCalledTimes(initialReads + 2));
+
+    act((): void => notifyWorkspaceFileMutated("/editor/alias", { repositoryRoot: "/repos" }));
+    await waitFor((): void => expect(getStatus).toHaveBeenCalledTimes(initialReads + 3));
+  });
+
+  it("ignores the previous canonical root while a newly selected repository is loading", async (): Promise<void> => {
+    let resolveBetaStatus!: (value: GitRepositoryStatusResponse) => void;
+    const betaStatus = new Promise<GitRepositoryStatusResponse>((resolve): void => {
+      resolveBetaStatus = resolve;
+    });
+    const getStatus = vi.fn((path: string): Promise<GitRepositoryStatusResponse> =>
+      path === REPO_A.path
+        ? Promise.resolve(makeStatus({ repositoryRoot: "/canonical/alpha" }))
+        : betaStatus,
+    );
+    const client = makeClient({ getStatus });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    expect(await screen.findByText("No changes")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: /beta/ }));
+    await waitFor((): void => expect(getStatus).toHaveBeenCalledWith(REPO_B.path));
+    expect(screen.getByText("Loading changes…")).toBeInTheDocument();
+    const readsAfterSwitch = getStatus.mock.calls.length;
+
+    act((): void => notifyWorkspaceFileMutated("/canonical/alpha"));
+    expect(getStatus).toHaveBeenCalledTimes(readsAfterSwitch);
+
+    await act(async (): Promise<void> => {
+      resolveBetaStatus(makeStatus({ root: REPO_B.path }));
+      await betaStatus;
+    });
   });
 
   it("hides stale changed-file rows while a newly selected repository is loading", async () => {
