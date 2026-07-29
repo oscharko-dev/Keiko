@@ -612,6 +612,13 @@ interface EditorTabInsertTarget {
   readonly edge: "before" | "after";
 }
 
+interface WorkspaceGitSummary {
+  readonly requestedRoot: string;
+  readonly changedFileCount: number;
+  readonly truncated: boolean;
+  readonly repositoryRoot: string;
+}
+
 export interface EditorRuntimeWidgetProps {
   readonly windowId?: string | undefined;
   /** Keeps runtime state while omitting the inactive root's Monaco surface. */
@@ -2042,14 +2049,11 @@ function EditorRuntimeWidget({
   // Issue #2234 (ADR-0127): content-free workspace change-count backing the agent snapshot's
   // gitContextSummary. Event-driven only (root change, save, explicit refresh) — mirrors the
   // gutter's own refresh triggers so this never becomes a polling loop.
-  const [workspaceGitSummary, setWorkspaceGitSummary] = useState<{
-    readonly requestedRoot: string;
-    readonly changedFileCount: number;
-    readonly truncated: boolean;
-    readonly repositoryRoot: string;
-  } | null>(null);
+  const [workspaceGitSummary, setWorkspaceGitSummary] = useState<WorkspaceGitSummary | null>(null);
   useEffect(() => {
-    setWorkspaceGitSummary((current) => (current?.requestedRoot === root ? current : null));
+    setWorkspaceGitSummary((current): WorkspaceGitSummary | null =>
+      current?.requestedRoot === root ? current : null,
+    );
     if (root === undefined) {
       return;
     }
@@ -2863,6 +2867,9 @@ function EditorRuntimeWidget({
           kind: "changed",
           relativePath: file,
           provenance: "local",
+          ...(workspaceGitRepositoryRoot === null
+            ? {}
+            : { repositoryRoot: workspaceGitRepositoryRoot }),
         });
         if (activeSessionKeyRef.current !== saveSessionKey) {
           await settleInactiveSave(saveSessionKey, textToSave, response, root, file);
@@ -2885,6 +2892,7 @@ function EditorRuntimeWidget({
       root,
       settleActiveSave,
       settleInactiveSave,
+      workspaceGitRepositoryRoot,
     ],
   );
 

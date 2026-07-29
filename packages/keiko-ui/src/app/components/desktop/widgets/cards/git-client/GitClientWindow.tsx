@@ -46,7 +46,7 @@ import {
   gitRepositoryStateInvalidationRoots,
   notifyGitRepositoryStateInvalidated,
 } from "../git-repository-state-events";
-import { WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationRoot } from "../workspace-file-events";
+import { WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationRoots } from "../workspace-file-events";
 import {
   BODY_STYLE,
   DIFF_HEADER_STYLE,
@@ -877,11 +877,13 @@ export function GitClientWindow({
 
   useEffect((): (() => void) => {
     const onWorkspaceFileMutated = (event: Event): void => {
-      const mutationRoot = workspaceFileMutationRoot(event);
+      const mutationRoots = workspaceFileMutationRoots(event);
       const repositoryRoot = mutationRepositoryRoot ?? null;
       if (
-        mutationRoot !== selectedPath &&
-        (repositoryRoot === null || mutationRoot !== repositoryRoot)
+        !mutationRoots.some(
+          (root): boolean =>
+            root === selectedPath || (repositoryRoot !== null && root === repositoryRoot),
+        )
       ) {
         return;
       }

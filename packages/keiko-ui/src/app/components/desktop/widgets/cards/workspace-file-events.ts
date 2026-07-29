@@ -2,6 +2,7 @@ export const WORKSPACE_FILE_MUTATED_EVENT = "keiko:workspace-file-mutated";
 
 export interface WorkspaceFileMutationDetail {
   readonly root: string;
+  readonly repositoryRoot?: string | undefined;
   readonly relativePath?: string | undefined;
   readonly kind?: string | undefined;
   readonly sequence?: number | undefined;
@@ -13,7 +14,7 @@ export function notifyWorkspaceFileMutated(
   detail: Omit<WorkspaceFileMutationDetail, "root"> = {},
 ): void {
   window.dispatchEvent(
-    new CustomEvent(WORKSPACE_FILE_MUTATED_EVENT, {
+    new CustomEvent<WorkspaceFileMutationDetail>(WORKSPACE_FILE_MUTATED_EVENT, {
       detail: { root, ...detail },
     }),
   );
@@ -32,6 +33,9 @@ export function workspaceFileMutationDetail(event: Event): WorkspaceFileMutation
   if (typeof root !== "string" || root.length === 0) return null;
   return {
     root,
+    ...(typeof detail.repositoryRoot === "string" && detail.repositoryRoot.length > 0
+      ? { repositoryRoot: detail.repositoryRoot }
+      : {}),
     ...(typeof detail.relativePath === "string" ? { relativePath: detail.relativePath } : {}),
     ...(typeof detail.kind === "string" ? { kind: detail.kind } : {}),
     ...(typeof detail.sequence === "number" && Number.isSafeInteger(detail.sequence)
@@ -47,4 +51,13 @@ export function workspaceFileMutationDetail(event: Event): WorkspaceFileMutation
 
 export function workspaceFileMutationRoot(event: Event): string | null {
   return workspaceFileMutationDetail(event)?.root ?? null;
+}
+
+export function workspaceFileMutationRoots(event: Event): readonly string[] {
+  const detail = workspaceFileMutationDetail(event);
+  if (detail === null) return [];
+  const repositoryRoot = detail.repositoryRoot;
+  return repositoryRoot === undefined || repositoryRoot === detail.root
+    ? [detail.root]
+    : [detail.root, repositoryRoot];
 }
