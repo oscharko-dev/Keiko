@@ -7,9 +7,9 @@
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   VOICE_PROTOCOL_VERSION,
+  decodeVoiceControlMessage,
   type VoiceControlMessage,
   type VoiceSessionChatContext,
-  isVoiceControlMessage,
 } from "@oscharko-dev/keiko-contracts";
 
 // Upper bound on the whole proxied-SDP handshake (open → session.created → answer). A server that
@@ -225,11 +225,10 @@ export function createBrowserVoiceControlClient(
             return;
           }
 
-          if (!isVoiceControlMessage(parsed)) {
+          const msg = decodeVoiceControlMessage(parsed);
+          if (msg === undefined) {
             return;
           }
-
-          const msg = parsed as VoiceControlMessage;
 
           if (msg.kind === "error") {
             const errorMsg = msg as Extract<VoiceControlMessage, { kind: "error" }>;

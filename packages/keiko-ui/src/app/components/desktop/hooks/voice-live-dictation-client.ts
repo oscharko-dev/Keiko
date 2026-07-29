@@ -7,7 +7,7 @@
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   VOICE_PROTOCOL_VERSION,
-  isVoiceControlMessage,
+  decodeVoiceControlMessage,
   type VoiceControlMessage,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -195,10 +195,10 @@ export function createBrowserVoiceLiveDictationControlClient(
             return;
           }
 
-          if (!isVoiceControlMessage(parsed)) {
+          const msg = decodeVoiceControlMessage(parsed);
+          if (msg === undefined) {
             return;
           }
-          const msg = parsed as VoiceControlMessage;
 
           if (msg.kind === "error") {
             const errorMsg = msg as Extract<VoiceControlMessage, { kind: "error" }>;

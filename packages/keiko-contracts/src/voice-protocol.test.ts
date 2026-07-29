@@ -31,6 +31,7 @@ import {
   VOICE_PROFILE_MEDIA_TRANSPORT,
   VOICE_PROFILE_NEGOTIATION_MODE,
   VOICE_PROTOCOL_VERSION,
+  decodeVoiceControlMessage,
   isVoiceControlMessage,
   isVoiceControlMessageKind,
   isVoiceProtocolVersionSupported,
@@ -490,22 +491,42 @@ describe("envelope validation & guards", () => {
     },
   );
 
-  it.each(["", "a".repeat(129), 42, null, "provider detail", "<script>alert(1)</script>"])(
-    "rejects malformed or content-bearing error correlation ids",
-    (correlationId): void => {
-      const message = {
-        ...wellFormedMessage("error"),
-        code: "negotiation-failed",
-        correlationId,
-      };
+  it.each([
+    "",
+    "a".repeat(129),
+    `dictation-corr-2806\n`,
+    `${"a".repeat(128)}\n`,
+    42,
+    null,
+    "provider detail",
+    "<script>alert(1)</script>",
+  ])("rejects malformed or content-bearing error correlation ids", (correlationId): void => {
+    const message = {
+      ...wellFormedMessage("error"),
+      code: "negotiation-failed",
+      correlationId,
+    };
 
-      expect(validateVoiceControlMessage(message)).toEqual({
-        ok: false,
-        reasons: ["error correlationId invalid"],
-      });
-      expect(isVoiceControlMessage(message)).toBe(false);
-    },
-  );
+    expect(validateVoiceControlMessage(message)).toEqual({
+      ok: false,
+      reasons: ["error correlationId invalid"],
+    });
+    expect(isVoiceControlMessage(message)).toBe(false);
+  });
+
+  it("decodes an error after discarding only malformed optional correlation metadata", (): void => {
+    const message = {
+      ...wellFormedMessage("error"),
+      code: "negotiation-failed",
+      correlationId: "<provider detail>",
+    };
+
+    expect(decodeVoiceControlMessage(message)).toEqual({
+      ...wellFormedMessage("error"),
+      code: "negotiation-failed",
+    });
+    expect(message.correlationId).toBe("<provider detail>");
+  });
 
   it("accepts a well-formed envelope for every kind", () => {
     for (const kind of VOICE_CONTROL_MESSAGE_KINDS) {

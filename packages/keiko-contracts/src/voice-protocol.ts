@@ -592,7 +592,8 @@ const VOICE_SESSION_GROUNDING_FIELDS: ReadonlySet<string> = new Set([
   "sourceCount",
   "kind",
 ]);
-const VOICE_ERROR_CORRELATION_ID = /^[A-Za-z0-9._-]{1,128}$/;
+const VOICE_ERROR_CORRELATION_ID_MAX_LENGTH = 128;
+const VOICE_ERROR_CORRELATION_ID_INVALID_CHARACTER = /[^A-Za-z0-9._-]/u;
 
 // ─── Type guards & lookups ───────────────────────────────────────────────────────
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -630,10 +631,17 @@ function isOptionalTranscriptionLanguage(value: unknown): boolean {
   return value === undefined || isNonEmptyTrimmed(value);
 }
 
-function isOptionalErrorCorrelationId(value: unknown): boolean {
+function isErrorCorrelationId(value: unknown): value is string {
   return (
-    value === undefined || (typeof value === "string" && VOICE_ERROR_CORRELATION_ID.test(value))
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= VOICE_ERROR_CORRELATION_ID_MAX_LENGTH &&
+    !VOICE_ERROR_CORRELATION_ID_INVALID_CHARACTER.test(value)
   );
+}
+
+function isOptionalErrorCorrelationId(value: unknown): boolean {
+  return value === undefined || isErrorCorrelationId(value);
 }
 
 function isOptionalVoicePersona(value: unknown): value is VoicePersona | undefined {
@@ -808,4 +816,21 @@ export function validateVoiceControlMessage(value: unknown): VoiceProtocolValida
     validateErrorPayload(value, reasons);
   }
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+}
+
+// Optional support metadata must never hide a valid control-plane failure. This decoder drops only
+// an invalid error correlation id from a copy, then applies the same strict shared validator to the
+// complete remaining message. Required envelope and payload failures still fail closed.
+export function decodeVoiceControlMessage(value: unknown): VoiceControlMessage | undefined {
+  let candidate = value;
+  if (
+    isRecord(value) &&
+    value.kind === "error" &&
+    !isOptionalErrorCorrelationId(value.correlationId)
+  ) {
+    const withoutCorrelationId = { ...value };
+    delete withoutCorrelationId.correlationId;
+    candidate = withoutCorrelationId;
+  }
+  return isVoiceControlMessage(candidate) ? candidate : undefined;
 }
