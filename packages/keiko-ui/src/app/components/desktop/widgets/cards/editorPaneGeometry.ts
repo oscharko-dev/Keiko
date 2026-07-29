@@ -22,12 +22,20 @@ import {
   type EditorPaneStateV2,
   type EditorSplitDirection,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  EDITOR_SIDEBAR_DEFAULT_WIDTH,
+  EDITOR_SIDEBAR_MIN_WIDTH,
+  EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
+} from "../../editorSidebarSizing";
 
 export const EDITOR_TAB_DRAG_MIME = "application/x-keiko-editor-tab";
-export const MIN_SIDEBAR_WIDTH = 180;
-const DEFAULT_SIDEBAR_WIDTH = 260;
-export const MAX_SIDEBAR_WIDTH = 440;
-export const MAX_EDITOR_PANES = 3;
+// Keep live layout growth inside the persistence trust boundary instead of imposing a small
+// product-level pane limit. workspace-persistence accepts at most 32 nested split levels and a
+// nested binary split chain can therefore contain 33 pane leaves; per-root layout JSON is
+// independently capped at 48 KB. This admits normal IDE arrangements (including mixed five-pane
+// grids) while retaining bounded live DOM and recursive layout growth.
+const MAX_PERSISTED_EDITOR_SPLIT_DEPTH = 32;
+export const MAX_EDITOR_PANES = MAX_PERSISTED_EDITOR_SPLIT_DEPTH + 1;
 
 export interface DraggedTab {
   readonly paneId: string;
@@ -143,9 +151,9 @@ export function createInitialLayout(input: {
       file: input.file,
       openFiles: input.openFiles,
       layoutJson: input.layoutJson,
-      defaultSidebarWidth: DEFAULT_SIDEBAR_WIDTH,
-      minSidebarWidth: MIN_SIDEBAR_WIDTH,
-      maxSidebarWidth: MAX_SIDEBAR_WIDTH,
+      defaultSidebarWidth: EDITOR_SIDEBAR_DEFAULT_WIDTH,
+      minSidebarWidth: EDITOR_SIDEBAR_MIN_WIDTH,
+      maxSidebarWidth: EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
     }),
   );
 }

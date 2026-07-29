@@ -65,6 +65,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.verifying": "Verifying…",
   "codingWorkbench.setup.reconcileFailed":
     "The workspace could not be verified. Reconciliation did not confirm a clean, matching checkout, so the run stays unavailable. Review the repository and try again.",
+  "codingWorkbench.setup.branchConflict":
+    "The task branch for this coding run already exists. Remove the previous branch or its managed workspace. Alternatively, choose a different target branch.",
   "codingWorkbench.setup.runtimeUnavailable":
     "Starting a coding run is unavailable on this installation until the coding runtime is active. You can bind a workspace now; the run becomes startable once the runtime is confirmed.",
   "codingWorkbench.readiness.modelSource.label": "Model source",

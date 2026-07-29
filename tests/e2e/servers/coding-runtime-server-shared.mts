@@ -47,7 +47,11 @@ import {
   buildCspHeader,
   extractInlineScriptHashes,
 } from "../../../packages/keiko-server/src/csp.js";
-import { buildUiHandlerDeps, type UiHandlerDeps } from "../../../packages/keiko-server/src/deps.js";
+import {
+  buildUiHandlerDeps,
+  ensureManagedTaskWorkspaceIdentity,
+  type UiHandlerDeps,
+} from "../../../packages/keiko-server/src/deps.js";
 import {
   createVerificationRunnerManager,
   type VerificationRunnerManager,
@@ -61,7 +65,7 @@ import { createWorkspaceMutexRegistry } from "../../../packages/keiko-server/src
 import { createWorkspaceProvisioningService } from "../../../packages/keiko-server/src/task-workspace/provisioning.js";
 import { createWorkspaceReconciliationService } from "../../../packages/keiko-server/src/task-workspace/reconciliation.js";
 import { buildWorkspaceInstanceStoreOverDatabase } from "../../../packages/keiko-server/src/task-workspace/store.js";
-import type { WorkspaceProvisioningService } from "../../../packages/keiko-server/src/task-workspace/types.js";
+import { createWorkspaceScriptTrustService } from "../../../packages/keiko-server/src/workspace-script-trust.js";
 
 type WorkspaceAdapterFactory = (
   workspace: Parameters<typeof createNodeGitWorktreeAdapter>[0]["workspace"],
@@ -71,6 +75,8 @@ interface JourneyWorkspaceServices {
   readonly provisioning: ReturnType<typeof createWorkspaceProvisioningService>;
   readonly lifecycle: ReturnType<typeof createWorkspaceLifecycleService>;
   readonly reconciliation: ReturnType<typeof createWorkspaceReconciliationService>;
+  readonly uiStore: ReturnType<typeof createInMemoryUiStore>;
+  readonly workspaceScriptTrust: ReturnType<typeof createWorkspaceScriptTrustService>;
 }
 
 /**
@@ -150,6 +156,8 @@ function createRepositoryFixture(config: CodingRuntimeJourneyServerConfig, state
 function createWorkspaceServices(managedRoot: string): JourneyWorkspaceServices {
   const db = new DatabaseSync(":memory:");
   runMigrations(db);
+  const uiStore = createInMemoryUiStore();
+  const workspaceScriptTrust = createWorkspaceScriptTrustService({ store: uiStore });
   const adapter: WorkspaceAdapterFactory = (workspace) =>
     createNodeGitWorktreeAdapter({ workspace, processEnv: { PATH: process.env.PATH ?? "" } });
   const shared = {
@@ -163,7 +171,18 @@ function createWorkspaceServices(managedRoot: string): JourneyWorkspaceServices 
   };
   const activePointerStore = buildActiveWorkspacePointerStoreOverDatabase(db);
   const mutex = createWorkspaceMutexRegistry();
-  const provisioning = createWorkspaceProvisioningService({ ...shared, mutex });
+  const provisioning = createWorkspaceProvisioningService({
+    ...shared,
+    ensureManagedWorkspaceIdentity: (instance, initializeTrust): void => {
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore,
+        workspaceScriptTrust,
+        instance,
+        initializeTrust,
+      });
+    },
+    mutex,
+  });
   const lifecycle = createWorkspaceLifecycleService({
     ...shared,
     activePointerStore,
@@ -171,7 +190,7 @@ function createWorkspaceServices(managedRoot: string): JourneyWorkspaceServices 
     mutex,
   });
   const reconciliation = createWorkspaceReconciliationService({ ...shared, activePointerStore });
-  return { provisioning, lifecycle, reconciliation };
+  return { provisioning, lifecycle, reconciliation, uiStore, workspaceScriptTrust };
 }
 
 function verificationRunner(fixtureLabel: string): Pick<VerificationRunnerManager, "runToReport"> {
@@ -305,6 +324,8 @@ function scriptedComposition(
     evidenceDir: join(bffStateRoot, "evidence"),
     env,
     uiDbPath: join(bffStateRoot, "ui-db", "keiko-ui.db"),
+    store: services.uiStore,
+    workspaceScriptTrust: services.workspaceScriptTrust,
     workspaceProvisioning: services.provisioning,
     workspaceLifecycle: services.lifecycle,
     workspaceReconciliation: services.reconciliation,
@@ -343,22 +364,6 @@ function journeyScript(config: CodingRuntimeJourneyServerConfig, stateDir: strin
   };
 }
 
-function registerManagedProject(
-  provisioning: WorkspaceProvisioningService,
-  store: () => UiHandlerDeps["store"] | undefined,
-  fixtureLabel: string,
-): WorkspaceProvisioningService {
-  return {
-    provision: async (request): ReturnType<WorkspaceProvisioningService["provision"]> => {
-      const result = await provisioning.provision(request);
-      store()?.createProject(result.instance.managedWorktreePath, fixtureLabel);
-      return result;
-    },
-    activate: (request) => provisioning.activate(request),
-    getInstance: (workspaceId) => provisioning.getInstance(workspaceId),
-  };
-}
-
 function gatewayObserver(): ((request: GatewayRequest) => void) | undefined {
   const outputPath = process.env.KEIKO_2483_GATEWAY_OBSERVATION_PATH;
   if (outputPath === undefined || outputPath.length === 0) return undefined;
@@ -387,16 +392,12 @@ function productionDiscoveryComposition(
   port: number,
   services: JourneyWorkspaceServices,
 ): JourneyComposition {
-  const projectStore: { current: UiHandlerDeps["store"] | undefined } = { current: undefined };
   const observeGatewayRequest = gatewayObserver();
-  const provisioning = registerManagedProject(
-    services.provisioning,
-    () => projectStore.current,
-    config.fixtureLabel,
-  );
   const deps = productionDiscoveryBffDeps({
     stateRoot: join(stateDir, "bff-state"),
-    workspaceProvisioning: provisioning,
+    store: services.uiStore,
+    workspaceScriptTrust: services.workspaceScriptTrust,
+    workspaceProvisioning: services.provisioning,
     workspaceLifecycle: services.lifecycle,
     workspaceReconciliation: services.reconciliation,
     script: journeyScript(config, stateDir),
@@ -406,7 +407,6 @@ function productionDiscoveryComposition(
       : { launcherSessionSecret: config.launcherSessionSecret }),
     ...(observeGatewayRequest === undefined ? {} : { observeGatewayRequest }),
   });
-  projectStore.current = deps.store;
   return { deps };
 }
 

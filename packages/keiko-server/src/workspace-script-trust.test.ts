@@ -148,6 +148,65 @@ describe("WorkspaceScriptTrustService", () => {
     }
   });
 
+  it("does not derive trust from unavailable or changed source trust bases", () => {
+    const targetRoot = mkdtempSync(join(tmpdir(), "keiko-derived-trust-target-"));
+    writeFileSync(join(targetRoot, "package.json"), MANIFEST, "utf8");
+    store.createProject(targetRoot, "target");
+    const sourceManifestPath = join(nodeWorkspaceFs.realPath(root), "package.json");
+    const targetManifestPath = join(nodeWorkspaceFs.realPath(targetRoot), "package.json");
+    let sourceReads = 0;
+    const changingFs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readFileUtf8: (absolutePath): string => {
+        if (absolutePath === sourceManifestPath) {
+          sourceReads += 1;
+          return sourceReads < 3 ? MANIFEST : "[]";
+        }
+        if (absolutePath === targetManifestPath) return "[]";
+        return nodeWorkspaceFs.readFileUtf8(absolutePath);
+      },
+    };
+    const trust = createWorkspaceScriptTrustService({ store, fs: changingFs });
+
+    try {
+      expect(trust.grant(root)).toEqual({ trusted: true });
+      expect(trust.deriveFromTrustedRoot(targetRoot, root)).toEqual({ trusted: false });
+      const targetRootRef = deriveWorkspaceRootRef(nodeWorkspaceFs.realPath(targetRoot));
+      expect(store.readWorkspaceTrustRecord(targetRootRef)).toBeUndefined();
+    } finally {
+      rmSync(targetRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("revalidates the authorized source basis immediately before persisting derived trust", () => {
+    const targetRoot = mkdtempSync(join(tmpdir(), "keiko-derived-trust-revalidation-"));
+    writeFileSync(join(targetRoot, "package.json"), MANIFEST, "utf8");
+    store.createProject(targetRoot, "target");
+    const sourceManifestPath = join(nodeWorkspaceFs.realPath(root), "package.json");
+    let sourceReads = 0;
+    const changingFs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readFileUtf8: (absolutePath): string => {
+        if (absolutePath !== sourceManifestPath) {
+          return nodeWorkspaceFs.readFileUtf8(absolutePath);
+        }
+        sourceReads += 1;
+        return sourceReads < 3 ? MANIFEST : JSON.stringify({ name: "changed" });
+      },
+    };
+    const trust = createWorkspaceScriptTrustService({ store, fs: changingFs });
+
+    try {
+      trust.grant(root);
+      expect(trust.deriveFromTrustedRoot(targetRoot, root)).toEqual({ trusted: false });
+      expect(sourceReads).toBeGreaterThanOrEqual(3);
+      const targetRootRef = deriveWorkspaceRootRef(nodeWorkspaceFs.realPath(targetRoot));
+      expect(store.readWorkspaceTrustRecord(targetRootRef)).toBeUndefined();
+    } finally {
+      rmSync(targetRoot, { recursive: true, force: true });
+    }
+  });
+
   it("notifies recomputeForRoots listeners with the CANONICAL root even for symlinked inputs (#2628)", () => {
     // Guards the CodeRabbit finding on PR #2688: revoke and the isTrusted invalidation
     // path emit canonicalRoot to listeners, so recomputeForRoots must do the same or a

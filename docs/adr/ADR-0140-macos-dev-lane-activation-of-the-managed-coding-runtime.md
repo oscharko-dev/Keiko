@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (Issue #2475, Epic #2473 Wave 1, 2026-07-17).
+Accepted (Issue #2475, Epic #2473 Wave 1, 2026-07-17; launcher lifecycle amendment
+2026-07-29).
 
 ## Amends
 
@@ -34,6 +35,14 @@ windows-x64 discovery: dev-lane discovery on macOS (arm64/x64). It is inactive u
 carries `evidenceClass: "functional-not-platform-qualified"` and an availability record in which
 only checks the lane actually performs are marked verified (`signatureVerified: false`,
 `qualificationVerified: false`). Nothing on this lane may present itself as platform-qualified.
+
+`npm run dev:start` is the trusted development launcher and is itself the operator's explicit
+selection of this repository-confined lane. On a supported macOS checkout it supplies the enable
+token to the BFF, evaluates production discovery after the package build, stages the
+review-approved payload and secure-read helper only when discovery reports a repairable staged
+artifact failure, and then evaluates production discovery again. The launcher fails instead of
+reporting a usable development server when runtime readiness remains unavailable. Direct BFF
+startup outside this launcher still requires the explicit environment token.
 
 ### D2 — Structural confinement to repository checkouts
 
@@ -72,6 +81,15 @@ unrecognized values are ignored fail-closed. Enabling the dev lane never widens 
 readiness projection reports the same ceiling the mint clamp enforces; the previously reported
 autonomous-delivery ceiling was a separate authority knob and could diverge from enforcement.
 
+### D6 — Development stop owns bounded runtime teardown
+
+`npm run dev:stop` signals the trusted development runner first. The runner gives the BFF longer
+than the BFF's complete bounded runtime-disposal window before escalating, so the coding
+orchestrator can revoke authority, terminate the owned OpenCode process group, and close runtime
+state before UI and watcher processes disappear. The stop command waits for the runner and every
+tracked child; it does not report success while a tracked process remains alive. `--force` remains
+an explicit last-resort hard stop.
+
 ## Consequences
 
 - The Wave-1 anti-false-green proof becomes executable: an env-gated production-discovery variant
@@ -79,6 +97,9 @@ autonomous-delivery ceiling was a separate authority knob and could diverge from
   runtime seam.
 - The dev runner exports `KEIKO_UI_PORT` to the BFF, mirroring the packaged CLI, so activation
   can compose loopback gateway and editor-agent URLs.
+- The supported development launcher makes the verified runtime part of ordinary `dev:start`
+  readiness instead of allowing a partially functional UI to count as a successful start.
+- The development stop window now contains the BFF's bounded runtime-disposal window.
 - Wave 5 (packaged platform qualification) is unaffected: it supplies the receipts, signing
   evidence, and platform inspection that let packaged installs satisfy ADR-0137 D5 unmodified.
 - Operational guidance, the stage → start walkthrough, and the reason table live in

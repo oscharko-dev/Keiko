@@ -379,6 +379,16 @@ async function finalizeCleanup(
   if (ctx.deps.activePointerStore.get()?.workspaceId === locked.workspaceId) {
     ctx.deps.activePointerStore.clear();
   }
+  try {
+    ctx.deps.removeManagedWorkspaceIdentity?.(locked);
+  } catch (error) {
+    throw new TaskWorkspaceError(
+      "CLEANUP_FAILED",
+      "managed workspace identity removal failed",
+      [],
+      { cause: error },
+    );
+  }
   ctx.deps.store.delete(locked.workspaceId);
   emit(ctx, {
     outcome: "cleanup-completed",

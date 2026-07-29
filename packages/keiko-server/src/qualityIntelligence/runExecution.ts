@@ -28,7 +28,7 @@ import {
   type QualityIntelligenceRunSummary,
   type QualityIntelligenceModelRoutedTestDesignDeps,
 } from "@oscharko-dev/keiko-workflows";
-import { currentRedactionSecrets, type UiHandlerDeps } from "../deps.js";
+import { currentGatewayConfig, currentRedactionSecrets, type UiHandlerDeps } from "../deps.js";
 import {
   ingestInlineSourcesAsync,
   type QiSourceSummary,
@@ -114,9 +114,10 @@ function resolveExecutionStrategy(
   modelRouting: QualityIntelligenceModelRouting,
 ): ResolvedExecutionStrategy {
   const modelId = modelRouting.resolved.testDesignModelId;
+  const config = currentGatewayConfig(deps);
   const capability =
-    deps.config !== undefined && modelId !== undefined
-      ? findConfiguredCapability(deps.config, modelId)
+    config !== undefined && modelId !== undefined
+      ? findConfiguredCapability(config, modelId)
       : undefined;
   // Seeded runs without an explicit model are release evidence. If automatic routing would pick a
   // model that cannot apply the seed, prefer the deterministic structural baseline over

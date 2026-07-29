@@ -215,14 +215,14 @@ function str(cfg: Record<string, unknown>, key: string): string | undefined {
 
 // Issue #446 (ADR-0090) — the single root-resolution choke point for bound surfaces. When a task
 // workspace is active, its managed-worktree root OVERRIDES the window's per-window cfg root and the
-// linked-window fallback, so a switch atomically retargets every surface and none can keep executing
-// against the previous workspace (AC1/AC2, SC1/SC3). In unbound mode (no active workspace) the legacy
-// cfg → linkedRoot chain is preserved unchanged.
+// selected Workbench root, per-window cfg, and linked-window fallback, so a switch atomically
+// retargets every surface and none can keep executing against the previous workspace (AC1/AC2,
+// SC1/SC3). In unbound mode the Workbench-wide selected folder is the shared base context.
 export function resolveBoundRoot(
-  ctx: Pick<WindowRenderContext, "activeRoot" | "linkedRoot">,
+  ctx: Pick<WindowRenderContext, "activeRoot" | "selectedRoot" | "linkedRoot">,
   cfgRoot: string | undefined,
 ): string | undefined {
-  return ctx.activeRoot ?? cfgRoot ?? ctx.linkedRoot ?? undefined;
+  return ctx.activeRoot ?? ctx.selectedRoot ?? cfgRoot ?? ctx.linkedRoot ?? undefined;
 }
 
 // Issue #2619 — `surface` replaces the free-text label: it selects the window's entry in
@@ -564,7 +564,9 @@ registerWindowRender("runtime", (cfg, ctx) => {
     </BoundRootSurface>
   );
 });
-registerWindowRender("coding", () => <CodingWorkbenchWindow />);
+registerWindowRender("coding", (_cfg, ctx) => (
+  <CodingWorkbenchWindow selectedRoot={ctx.selectedRoot ?? undefined} />
+));
 // Epic #1571, Issue #1574 — Git client window shell. The active project root acts as the projectId.
 // Read it from cfg (projectPath / workspaceRoot, like terminal/agents) and fall back to a linked
 // Files/Editor window root; an empty state renders when none is available. The shell persists the

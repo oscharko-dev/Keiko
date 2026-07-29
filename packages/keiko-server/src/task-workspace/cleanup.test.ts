@@ -99,6 +99,7 @@ function provisioning(): WorkspaceProvisioningService {
 function cleanup(
   instanceStore: WorkspaceInstanceStore = store,
   adapterFactory: (workspace: WorkspaceInfo) => GitWorktreeAdapter = realAdapter,
+  removeManagedWorkspaceIdentity?: (instance: WorkspaceInstance) => void,
 ): WorkspaceCleanupService {
   return createWorkspaceCleanupService({
     store: instanceStore,
@@ -109,6 +110,7 @@ function cleanup(
     redactString: (s: string): string => s,
     now: (): number => nowMs,
     newId: (): string => `id-${String(idCounter++)}`,
+    ...(removeManagedWorkspaceIdentity === undefined ? {} : { removeManagedWorkspaceIdentity }),
     mutex: __twMutex,
   });
 }
@@ -188,6 +190,7 @@ afterEach(() => {
 describe("governed cleanup happy path (AC4)", () => {
   it("request → complete removes the worktree, deletes the row, and clears the active pointer", async () => {
     const instance = await provisionTask("t-archive");
+    const removedIdentities: WorkspaceInstance[] = [];
     expect(existsSync(instance.managedWorktreePath)).toBe(true);
     pointerStore.set({
       workspaceId: instance.workspaceId,
@@ -205,7 +208,9 @@ describe("governed cleanup happy path (AC4)", () => {
     expect(requested.outcome).toBe("requested");
     expect(store.getById(instance.workspaceId)?.lifecycleState).toBe("cleanup-pending");
 
-    const completed = await cleanup().cleanup({
+    const completed = await cleanup(undefined, undefined, (removed) => {
+      removedIdentities.push(removed);
+    }).cleanup({
       workspaceId: instance.workspaceId,
       requestedBy: "u",
       operatorApproved: true,
@@ -215,6 +220,9 @@ describe("governed cleanup happy path (AC4)", () => {
     expect(existsSync(instance.managedWorktreePath)).toBe(false);
     expect(store.getById(instance.workspaceId)).toBeUndefined();
     expect(pointerStore.get()).toBeUndefined();
+    expect(removedIdentities.map((removed) => removed.managedWorktreePath)).toEqual([
+      instance.managedWorktreePath,
+    ]);
 
     // Audit trail is content-free: cleanup events carry no path / repo root (SC3).
     const cleanupEvents = evidence.filter((e) => parseEvent(e.json).operation === "cleanup");
@@ -238,6 +246,59 @@ describe("governed cleanup happy path (AC4)", () => {
     });
     expect(result.outcome).toBe("requested");
     expect(store.getById(instance.workspaceId)?.lifecycleState).toBe("cleanup-pending");
+  });
+
+  it("keeps an identity-removal failure recoverable and completes on retry", async () => {
+    const instance = await provisionTask("t-identity-removal-retry");
+    pointerStore.set({
+      workspaceId: instance.workspaceId,
+      setBy: "u",
+      atIso: "2026-06-26T00:00:00Z",
+    });
+    setState(instance, "cleanup-pending");
+    let identityRemovalAttempts = 0;
+    const identityFailure = new Error("identity store unavailable");
+    const service = cleanup(undefined, undefined, () => {
+      identityRemovalAttempts += 1;
+      if (identityRemovalAttempts === 1) throw identityFailure;
+    });
+    const request = {
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    } as const;
+
+    await expect(service.cleanup(request)).rejects.toMatchObject({
+      code: "CLEANUP_FAILED",
+      cause: identityFailure,
+    });
+
+    const partial = store.getById(instance.workspaceId);
+    expect(existsSync(instance.managedWorktreePath)).toBe(false);
+    expect(pointerStore.get()).toBeUndefined();
+    expect(partial).toMatchObject({
+      lifecycleState: "cleanup-pending",
+      lock: { owner: "u", reason: "cleanup" },
+    });
+    expect(evidence.some((entry) => parseEvent(entry.json).outcome === "cleanup-completed")).toBe(
+      false,
+    );
+
+    await expect(service.cleanup(request)).resolves.toMatchObject({
+      outcome: "refused",
+      refusalReason: "lock-live",
+    });
+    expect(identityRemovalAttempts).toBe(1);
+    expect(store.getById(instance.workspaceId)).toBeDefined();
+    nowMs += 24 * 60 * 60 * 1_000;
+
+    await expect(service.cleanup(request)).resolves.toMatchObject({ outcome: "completed" });
+    expect(identityRemovalAttempts).toBe(2);
+    expect(store.getById(instance.workspaceId)).toBeUndefined();
+    expect(
+      evidence.filter((entry) => parseEvent(entry.json).outcome === "cleanup-completed"),
+    ).toHaveLength(1);
   });
 });
 

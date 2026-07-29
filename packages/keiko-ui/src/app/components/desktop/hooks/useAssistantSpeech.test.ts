@@ -489,14 +489,19 @@ describe("useAssistantSpeech — Issue #1559 persona routing", () => {
 function makeFakeStreamingSink(engage: boolean): {
   sink: AssistantSpeechStreamingSink;
   handlers: () => AssistantSpeechStreamHandlers | undefined;
+  primes: () => number;
   stops: () => number;
   disposes: () => number;
 } {
   let captured: AssistantSpeechStreamHandlers | undefined;
+  let primes = 0;
   let stops = 0;
   let disposes = 0;
   return {
     sink: {
+      primeFromUserGesture: (): void => {
+        primes += 1;
+      },
       play: (_input, _signal, handlers): Promise<boolean> => {
         captured = handlers;
         return Promise.resolve(engage);
@@ -510,12 +515,31 @@ function makeFakeStreamingSink(engage: boolean): {
       },
     },
     handlers: () => captured,
+    primes: () => primes,
     stops: () => stops,
     disposes: () => disposes,
   };
 }
 
 describe("useAssistantSpeech — streamed PCM playback", () => {
+  it("primes local output synchronously without starting synthesis or playback", () => {
+    const fake = makeFakeStreamingSink(true);
+    const h = harness({
+      enabled: false,
+      text: undefined,
+      messageId: undefined,
+      createStreamingSink: () => fake.sink,
+    });
+    const { result } = renderHook(() => useAssistantSpeech(h.options));
+
+    act(() => result.current.primeAudioOutput());
+
+    expect(fake.primes()).toBe(1);
+    expect(fake.handlers()).toBeUndefined();
+    expect(h.synthCalls).toHaveLength(0);
+    expect(h.audios).toHaveLength(0);
+  });
+
   it("uses the streaming sink when it engages and drives the playback lifecycle (no buffered work)", async () => {
     const fake = makeFakeStreamingSink(true);
     const h = harness({ createStreamingSink: () => fake.sink });

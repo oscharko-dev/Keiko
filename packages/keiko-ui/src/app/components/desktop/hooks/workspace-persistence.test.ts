@@ -6,6 +6,10 @@ import {
   sanitizePersistedConnections,
   sanitizePersistedWindows,
 } from "./workspace-persistence";
+import {
+  EDITOR_SIDEBAR_MIN_WIDTH,
+  EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
+} from "../editorSidebarSizing";
 
 function win(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -132,7 +136,7 @@ describe("workspace-persistence", () => {
       activePaneId: "pane-2",
       direction: "column",
       splitRatio: 82,
-      sidebarWidth: 999,
+      sidebarWidth: Number.MAX_SAFE_INTEGER,
       sidebarCollapsed: true,
     });
 
@@ -150,7 +154,7 @@ describe("workspace-persistence", () => {
         activePaneId: "pane-2",
         direction: "column",
         splitRatio: 75,
-        sidebarWidth: 440,
+        sidebarWidth: EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
         sidebarCollapsed: true,
       }),
     );
@@ -224,6 +228,108 @@ describe("workspace-persistence", () => {
     expect(JSON.stringify(savedLayout)).not.toContain(".env");
     expect(JSON.stringify(savedLayout)).not.toContain("token=");
     expect(JSON.stringify(savedLayout)).not.toContain("../.ssh");
+  });
+
+  it("preserves the legal empty final editor pane and its presentation state", () => {
+    const layoutJson = JSON.stringify({
+      schemaVersion: 2,
+      root: "/repo",
+      activePaneId: "pane-1",
+      tree: { type: "pane", paneId: "pane-1" },
+      panes: {
+        "pane-1": {
+          id: "pane-1",
+          activeFile: "",
+          openFiles: [],
+          tabOrder: [],
+        },
+      },
+      sidebarWidth: 372,
+      sidebarCollapsed: true,
+      outlinePanelVisible: false,
+    });
+
+    const persisted = sanitizePersistedWindows([
+      win({ id: "editor-1", type: "editor", cfg: { root: "/repo", layoutJson } }),
+    ]);
+    const savedLayout = JSON.parse(String(persisted[0]?.cfg.layoutJson));
+
+    expect(savedLayout).toEqual(
+      expect.objectContaining({
+        sidebarWidth: 372,
+        sidebarCollapsed: true,
+        outlinePanelVisible: false,
+      }),
+    );
+    expect(savedLayout.panes["pane-1"]).toEqual({
+      id: "pane-1",
+      activeFile: "",
+      openFiles: [],
+      tabOrder: [],
+    });
+  });
+
+  it("clamps a persisted empty editor pane to the shared narrow sidebar bound", () => {
+    const layoutJson = JSON.stringify({
+      schemaVersion: 2,
+      root: "/repo",
+      activePaneId: "pane-1",
+      tree: { type: "pane", paneId: "pane-1" },
+      panes: {
+        "pane-1": {
+          id: "pane-1",
+          activeFile: "",
+          openFiles: [],
+          tabOrder: [],
+        },
+      },
+      sidebarWidth: -1_000,
+    });
+
+    const persisted = sanitizePersistedWindows([
+      win({ id: "editor-1", type: "editor", cfg: { root: "/repo", layoutJson } }),
+    ]);
+    const savedLayout = JSON.parse(String(persisted[0]?.cfg.layoutJson));
+
+    expect(savedLayout.sidebarWidth).toBe(EDITOR_SIDEBAR_MIN_WIDTH);
+    expect(savedLayout.panes["pane-1"].openFiles).toEqual([]);
+  });
+
+  it("rejects a persisted split that tries to retain an empty sibling pane", () => {
+    const layoutJson = JSON.stringify({
+      schemaVersion: 2,
+      root: "/repo",
+      activePaneId: "pane-1",
+      tree: {
+        type: "split",
+        id: "split-1",
+        direction: "row",
+        ratio: 50,
+        first: { type: "pane", paneId: "pane-1" },
+        second: { type: "pane", paneId: "pane-2" },
+      },
+      panes: {
+        "pane-1": {
+          id: "pane-1",
+          activeFile: "src/app.ts",
+          openFiles: ["src/app.ts"],
+          tabOrder: ["src/app.ts"],
+        },
+        "pane-2": {
+          id: "pane-2",
+          activeFile: "",
+          openFiles: [],
+          tabOrder: [],
+        },
+      },
+      sidebarWidth: 372,
+    });
+
+    const persisted = sanitizePersistedWindows([
+      win({ id: "editor-1", type: "editor", cfg: { root: "/repo", layoutJson } }),
+    ]);
+
+    expect(persisted[0]?.cfg.layoutJson).toBeUndefined();
   });
 
   it("persists bounded per-root editor layouts through one sanitized scalar cfg field", () => {

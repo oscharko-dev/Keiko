@@ -18,6 +18,11 @@ import {
 import { paneLineRevealProps } from "./EditorWidget";
 import type { EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import { EditorWidget } from "./EditorWidget";
+import {
+  EDITOR_SIDEBAR_DEFAULT_WIDTH,
+  EDITOR_SIDEBAR_MIN_WIDTH,
+  EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
+} from "../../editorSidebarSizing";
 
 const panes = vi.hoisted(() => [] as EditorRuntimeWidgetProps[]);
 
@@ -52,9 +57,9 @@ function splitLayout(): ReturnType<typeof editorLayoutReducer> {
     root: ROOT,
     file: ADDRESSED,
     openFiles: [ADDRESSED, SIBLING],
-    defaultSidebarWidth: 260,
-    minSidebarWidth: 180,
-    maxSidebarWidth: 440,
+    defaultSidebarWidth: EDITOR_SIDEBAR_DEFAULT_WIDTH,
+    minSidebarWidth: EDITOR_SIDEBAR_MIN_WIDTH,
+    maxSidebarWidth: EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
   });
   // Split the addressed file out into the new pane, which becomes the active one — the shape
   // `openEditorFile` produces, where the file it just opened is what the user is looking at.

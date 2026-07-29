@@ -8,7 +8,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   addWorkspaceRoot,
-  fetchWorkspaceManifests,
+  fetchWorkspaceManifestAccess,
   focusWorkspaceRoot,
   removeWorkspaceRoot,
   reorderWorkspaceRoots,
@@ -18,6 +18,7 @@ import {
 
 export interface WorkspaceManifestView {
   readonly manifest: WorkspaceManifest | null;
+  readonly pathReadAuthority: "checking" | "available" | "unpaired" | "unavailable";
   readonly loading: boolean;
   readonly mutating: boolean;
   readonly issue: "load" | "mutation" | null;
@@ -51,9 +52,27 @@ function currentRoot(
   return manifest.roots.find((root) => root.rootRef === rootRef) ?? null;
 }
 
+function hasTrackedRoot(rootPath: string | undefined): rootPath is string {
+  return Boolean(rootPath);
+}
+
+function resolvePathReadAuthority(
+  rootPath: string | undefined,
+  authorityRoot: string | undefined,
+  authority: WorkspaceManifestView["pathReadAuthority"],
+): WorkspaceManifestView["pathReadAuthority"] {
+  if (authorityRoot === rootPath) return authority;
+  return hasTrackedRoot(rootPath) ? "checking" : "available";
+}
+
 export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceManifestView {
+  const tracksRoot = hasTrackedRoot(rootPath);
   const [manifest, setManifest] = useState<WorkspaceManifest | null>(null);
-  const [loading, setLoading] = useState(rootPath !== undefined);
+  const [loading, setLoading] = useState(tracksRoot);
+  const [pathReadAuthority, setPathReadAuthority] = useState<
+    WorkspaceManifestView["pathReadAuthority"]
+  >(tracksRoot ? "checking" : "available");
+  const [authorityRoot, setAuthorityRoot] = useState(tracksRoot ? rootPath : undefined);
   const [mutating, setMutating] = useState(false);
   const [issue, setIssue] = useState<"load" | "mutation" | null>(null);
   const requestRef = useRef(0);
@@ -63,21 +82,27 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
   const refresh = useCallback(async (): Promise<void> => {
     requestRef.current += 1;
     const request = requestRef.current;
-    if (rootPath === undefined || rootPath.length === 0) {
+    if (!hasTrackedRoot(rootPath)) {
       setManifest(null);
       setLoading(false);
+      setAuthorityRoot(undefined);
+      setPathReadAuthority("available");
       return;
     }
     setLoading(true);
+    setAuthorityRoot(rootPath);
+    setPathReadAuthority("checking");
     try {
-      const manifests = await fetchWorkspaceManifests();
+      const access = await fetchWorkspaceManifestAccess();
       if (request === requestRef.current) {
-        setManifest(manifestContainingRoot(manifests, rootPath));
+        setManifest(manifestContainingRoot(access.manifests, rootPath));
+        setPathReadAuthority(access.session === "unpaired" ? "unpaired" : "available");
         setIssue(null);
       }
     } catch {
       if (request === requestRef.current) {
         setManifest(null);
+        setPathReadAuthority("unavailable");
         setIssue("load");
       }
     } finally {
@@ -93,7 +118,7 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
       if (next === null) return;
       const sameWorkspace = current?.workspaceId === next.workspaceId;
       const containsTrackedRoot =
-        rootPath !== undefined && next.roots.some((root) => root.canonicalRoot === rootPath);
+        hasTrackedRoot(rootPath) && next.roots.some((root) => root.canonicalRoot === rootPath);
       if (sameWorkspace || containsTrackedRoot) {
         // Issue #2747 — a delivered manifest is newer than anything `refresh()` still has in flight,
         // so it takes the request token with it. Without this a fetch that predates the change
@@ -104,6 +129,8 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
         requestRef.current += 1;
         setManifest(next);
         setLoading(false);
+        setAuthorityRoot(rootPath);
+        setPathReadAuthority("available");
         setIssue(null);
       }
     };
@@ -141,10 +168,16 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
     },
     [mutating],
   );
+  const resolvedPathReadAuthority = resolvePathReadAuthority(
+    rootPath,
+    authorityRoot,
+    pathReadAuthority,
+  );
 
   return useMemo<WorkspaceManifestView>(
     () => ({
       manifest,
+      pathReadAuthority: resolvedPathReadAuthority,
       loading,
       mutating,
       issue,
@@ -164,6 +197,6 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
           focusWorkspaceRoot(current, actor, targetRootRef),
         ),
     }),
-    [issue, loading, manifest, mutate, mutating, refresh],
+    [issue, loading, manifest, mutate, mutating, refresh, resolvedPathReadAuthority],
   );
 }

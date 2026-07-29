@@ -44,12 +44,13 @@ import {
   deriveContextProfileFromCapability,
   type ContextProfile,
   type UpdatePreflightReport,
+  type WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import type { IncomingMessage } from "node:http";
 import { detectWorkspaceAt, isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
@@ -330,6 +331,11 @@ export interface GatewayDiscoveredModels {
   readonly imageInputModelIds?: readonly string[];
 }
 
+export interface GatewaySetupTestResult {
+  readonly testedModelIds: readonly string[];
+  readonly responseFormatModelIds: readonly string[];
+}
+
 export type GatewayModelDiscoveryOutput = readonly string[] | GatewayDiscoveredModels;
 export type ContextProfileResolver = (modelId: string) => ContextProfile;
 export type CodingSidecarGatewayModelSourceResolver = () => CodingWorkbenchModelSource;
@@ -538,7 +544,10 @@ export interface UiHandlerDeps {
   readonly gatewayConfig?: RuntimeGatewayConfig | undefined;
   // Test seam for first-run setup. Production uses the real OpenAI-compatible gateway call.
   readonly gatewaySetupTester?:
-    | ((config: GatewayConfig, candidateModelIds: readonly string[]) => Promise<readonly string[]>)
+    | ((
+        config: GatewayConfig,
+        candidateModelIds: readonly string[],
+      ) => Promise<readonly string[] | GatewaySetupTestResult>)
     | undefined;
   // Test seam for model discovery. Production calls the OpenAI-compatible /models endpoint.
   readonly gatewayModelDiscovery?:
@@ -814,7 +823,10 @@ export interface BuildHandlerDepsOptions {
   readonly initialProjectPath?: string | undefined;
   // Optional setup tester (tests); production performs a real gateway call.
   readonly gatewaySetupTester?:
-    | ((config: GatewayConfig, candidateModelIds: readonly string[]) => Promise<readonly string[]>)
+    | ((
+        config: GatewayConfig,
+        candidateModelIds: readonly string[],
+      ) => Promise<readonly string[] | GatewaySetupTestResult>)
     | undefined;
   // Optional setup discovery seam (tests); production calls the model-list endpoint.
   readonly gatewayModelDiscovery?:
@@ -1592,26 +1604,129 @@ function composedManagedWorktreeRoot(
   return managedRoot;
 }
 
+function managedWorkspaceRootRef(uiStore: UiStore, managedRoot: string): string {
+  const rootRef = uiStore
+    .findWorkspaceManifestRecordByProject(managedRoot)
+    ?.rootProjects.find((root) => root.projectPath === managedRoot)?.rootRef;
+  if (rootRef === undefined) {
+    throw new Error("Managed workspace manifest identity is unavailable.");
+  }
+  return rootRef;
+}
+
+export function ensureManagedTaskWorkspaceIdentity(input: {
+  readonly uiStore: UiStore;
+  readonly workspaceScriptTrust: WorkspaceScriptTrustService;
+  readonly instance: WorkspaceInstance;
+  readonly initializeTrust: boolean;
+}): void {
+  const projectRegistered = input.uiStore
+    .listProjects()
+    .some((project) => project.path === input.instance.managedWorktreePath);
+  const manifestRegistered =
+    input.uiStore.findWorkspaceManifestRecordByProject(input.instance.managedWorktreePath) !==
+    undefined;
+  if (!projectRegistered || !manifestRegistered) {
+    input.uiStore.createProject(
+      input.instance.managedWorktreePath,
+      `${basename(input.instance.repositoryRoot)} · Coding Workbench`,
+    );
+  }
+  if (!input.initializeTrust) return;
+  if (input.workspaceScriptTrust.trustLevelForRoot(input.instance.repositoryRoot) !== "trusted") {
+    return;
+  }
+  const rootRef = managedWorkspaceRootRef(input.uiStore, input.instance.managedWorktreePath);
+  // An absent target record may be initialized from this explicit provisioning act. A restricted
+  // record is authoritative evidence of revocation or drift and must never be silently overwritten.
+  if (input.uiStore.readWorkspaceTrustRecord(rootRef) !== undefined) return;
+  input.workspaceScriptTrust.deriveFromTrustedRoot(
+    input.instance.managedWorktreePath,
+    input.instance.repositoryRoot,
+  );
+}
+
+function withManagedWorkspaceIdentity(
+  provisioning: WorkspaceProvisioningService,
+  uiStore: UiStore,
+  workspaceScriptTrust: WorkspaceScriptTrustService,
+): WorkspaceProvisioningService {
+  return {
+    provision: async (request): ReturnType<WorkspaceProvisioningService["provision"]> => {
+      const result = await provisioning.provision(request);
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore,
+        workspaceScriptTrust,
+        instance: result.instance,
+        initializeTrust: true,
+      });
+      return result;
+    },
+    activate: async (request): ReturnType<WorkspaceProvisioningService["activate"]> => {
+      const result = await provisioning.activate(request);
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore,
+        workspaceScriptTrust,
+        instance: result.instance,
+        initializeTrust: false,
+      });
+      return result;
+    },
+    getInstance: (workspaceId): WorkspaceInstance | undefined =>
+      provisioning.getInstance(workspaceId),
+    ensureIdentity: (instance): void => {
+      provisioning.ensureIdentity?.(instance);
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore,
+        workspaceScriptTrust,
+        instance,
+        initializeTrust: false,
+      });
+    },
+  };
+}
+
+interface BuildWorkspaceProvisioningArgs {
+  readonly options: BuildHandlerDepsOptions;
+  readonly instanceStore: WorkspaceInstanceStore | undefined;
+  readonly uiStore: UiStore;
+  readonly workspaceScriptTrust: WorkspaceScriptTrustService;
+  readonly resolvedUiDbPath: string;
+  readonly evidenceStore: EvidenceStore;
+  readonly redactString: (value: string) => string;
+  readonly mutex: WorkspaceMutexRegistry;
+}
+
 function buildWorkspaceProvisioning(
-  options: BuildHandlerDepsOptions,
-  store: WorkspaceInstanceStore | undefined,
-  resolvedUiDbPath: string,
-  evidenceStore: EvidenceStore,
-  redactString: (value: string) => string,
-  mutex: WorkspaceMutexRegistry,
+  args: BuildWorkspaceProvisioningArgs,
 ): WorkspaceProvisioningService | undefined {
-  if (options.workspaceProvisioning !== undefined) return options.workspaceProvisioning;
-  if (store === undefined) return undefined;
+  const { options, instanceStore, uiStore, workspaceScriptTrust } = args;
+  if (options.workspaceProvisioning !== undefined) {
+    return withManagedWorkspaceIdentity(
+      options.workspaceProvisioning,
+      uiStore,
+      workspaceScriptTrust,
+    );
+  }
+  if (instanceStore === undefined) return undefined;
   return createWorkspaceProvisioningService({
-    store,
-    evidenceStore,
-    managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
+    store: instanceStore,
+    evidenceStore: args.evidenceStore,
+    managedRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
     createAdapter: (workspace) =>
       createNodeGitWorktreeAdapter({ workspace, processEnv: options.env }),
-    redactString,
+    redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,
-    mutex,
+    ensureManagedWorkspaceIdentity: (instance, initializeTrust): void => {
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore,
+        workspaceScriptTrust,
+        instance,
+        initializeTrust,
+      });
+    },
+    mutex: args.mutex,
   });
 }
 
@@ -1745,28 +1860,40 @@ function buildWorkspaceHealth(
   });
 }
 
+interface BuildWorkspaceCleanupArgs {
+  readonly options: BuildHandlerDepsOptions;
+  readonly instanceStore: WorkspaceInstanceStore | undefined;
+  readonly activePointerStore: ActiveWorkspacePointerStore | undefined;
+  readonly uiStore: UiStore;
+  readonly resolvedUiDbPath: string;
+  readonly evidenceStore: EvidenceStore;
+  readonly redactString: (value: string) => string;
+  readonly mutex: WorkspaceMutexRegistry;
+}
+
 function buildWorkspaceCleanup(
-  options: BuildHandlerDepsOptions,
-  instanceStore: WorkspaceInstanceStore | undefined,
-  activePointerStore: ActiveWorkspacePointerStore | undefined,
-  resolvedUiDbPath: string,
-  evidenceStore: EvidenceStore,
-  redactString: (value: string) => string,
-  mutex: WorkspaceMutexRegistry,
+  args: BuildWorkspaceCleanupArgs,
 ): WorkspaceCleanupService | undefined {
-  if (options.workspaceCleanup !== undefined) return options.workspaceCleanup;
-  if (instanceStore === undefined || activePointerStore === undefined) return undefined;
+  if (args.options.workspaceCleanup !== undefined) return args.options.workspaceCleanup;
+  if (args.instanceStore === undefined || args.activePointerStore === undefined) return undefined;
   return createWorkspaceCleanupService({
-    store: instanceStore,
-    activePointerStore,
-    evidenceStore,
-    managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
+    store: args.instanceStore,
+    activePointerStore: args.activePointerStore,
+    evidenceStore: args.evidenceStore,
+    managedRoot: resolveManagedWorktreeRoot(args.resolvedUiDbPath),
     createAdapter: (workspace) =>
-      createNodeGitWorktreeAdapter({ workspace, processEnv: options.env }),
-    redactString,
+      createNodeGitWorktreeAdapter({ workspace, processEnv: args.options.env }),
+    redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,
-    mutex,
+    removeManagedWorkspaceIdentity: (instance): void => {
+      if (
+        args.uiStore.listProjects().some((project) => project.path === instance.managedWorktreePath)
+      ) {
+        args.uiStore.deleteProject(instance.managedWorktreePath);
+      }
+    },
+    mutex: args.mutex,
   });
 }
 
@@ -1870,6 +1997,7 @@ function buildUpdateRemediation(options: {
 interface BuildPeripheralsArgs {
   readonly options: BuildHandlerDepsOptions;
   readonly uiStore: UiStore;
+  readonly workspaceScriptTrust: WorkspaceScriptTrustService;
   readonly evidenceStore: EvidenceStore;
   readonly redactString: (value: string) => string;
   readonly liveRedactor: Redactor;
@@ -2298,8 +2426,7 @@ function resolveTrustAndManagedLspControl(args: BuildPeripheralsArgs): {
   readonly managedLspControl: ManagedLspControlService;
   readonly disposeTrustLspBridge: () => void;
 } {
-  const workspaceScriptTrust =
-    args.options.workspaceScriptTrust ?? createWorkspaceScriptTrustService({ store: args.uiStore });
+  const workspaceScriptTrust = args.workspaceScriptTrust;
   const managedLspControl =
     args.options.managedLspControl ??
     createNodeManagedLspControl({
@@ -2467,6 +2594,7 @@ function resolveEvidenceDirAndEnforceRetention(options: BuildHandlerDepsOptions)
 
 interface PersistenceBundle {
   readonly uiStore: UiStore;
+  readonly workspaceScriptTrust: WorkspaceScriptTrustService;
   // Passthrough of ComposedPersistence.dispose (closes the shared sqlite handle).
   readonly dispose: (() => void) | undefined;
   readonly relationship: RelationshipHandlerDeps | undefined;
@@ -2494,112 +2622,129 @@ interface TaskWorkspaceServices {
 
 // Issue #448 — the health + cleanup pair, split out to keep composeTaskWorkspaceServices small.
 function composeHealthAndCleanup(
-  options: BuildHandlerDepsOptions,
-  workspaceInstanceStore: WorkspaceInstanceStore | undefined,
-  activeWorkspacePointerStore: ActiveWorkspacePointerStore | undefined,
-  resolvedUiDbPath: string,
-  evidenceStore: EvidenceStore,
-  redactString: (value: string) => string,
-  mutex: WorkspaceMutexRegistry,
+  args: ComposeCoreTaskWorkspaceServicesArgs,
 ): Pick<TaskWorkspaceServices, "workspaceHealth" | "workspaceCleanup"> {
   return {
     workspaceHealth: buildWorkspaceHealth(
-      options,
-      workspaceInstanceStore,
-      activeWorkspacePointerStore,
-      resolvedUiDbPath,
-      evidenceStore,
-      redactString,
+      args.options,
+      args.workspaceInstanceStore,
+      args.activeWorkspacePointerStore,
+      args.resolvedUiDbPath,
+      args.evidenceStore,
+      args.redactString,
     ),
-    workspaceCleanup: buildWorkspaceCleanup(
-      options,
-      workspaceInstanceStore,
-      activeWorkspacePointerStore,
-      resolvedUiDbPath,
-      evidenceStore,
-      redactString,
-      mutex,
-    ),
+    workspaceCleanup: buildWorkspaceCleanup({
+      options: args.options,
+      instanceStore: args.workspaceInstanceStore,
+      activePointerStore: args.activeWorkspacePointerStore,
+      uiStore: args.uiStore,
+      resolvedUiDbPath: args.resolvedUiDbPath,
+      evidenceStore: args.evidenceStore,
+      redactString: args.redactString,
+      mutex: args.mutex,
+    }),
   };
+}
+
+interface ComposeCoreTaskWorkspaceServicesArgs {
+  readonly options: BuildHandlerDepsOptions;
+  readonly workspaceInstanceStore: WorkspaceInstanceStore | undefined;
+  readonly activeWorkspacePointerStore: ActiveWorkspacePointerStore | undefined;
+  readonly uiStore: UiStore;
+  readonly workspaceScriptTrust: WorkspaceScriptTrustService;
+  readonly resolvedUiDbPath: string;
+  readonly evidenceStore: EvidenceStore;
+  readonly redactString: (value: string) => string;
+  readonly mutex: WorkspaceMutexRegistry;
 }
 
 // Issue #445/#446/#447 — provisioning + active-binding lifecycle + reconciliation + repair.
 function composeCoreTaskWorkspaceServices(
-  options: BuildHandlerDepsOptions,
-  workspaceInstanceStore: WorkspaceInstanceStore | undefined,
-  activeWorkspacePointerStore: ActiveWorkspacePointerStore | undefined,
-  resolvedUiDbPath: string,
-  evidenceStore: EvidenceStore,
-  redactString: (value: string) => string,
-  mutex: WorkspaceMutexRegistry,
+  args: ComposeCoreTaskWorkspaceServicesArgs,
 ): Omit<TaskWorkspaceServices, "workspaceHealth" | "workspaceCleanup"> {
-  const workspaceProvisioning = buildWorkspaceProvisioning(
-    options,
-    workspaceInstanceStore,
-    resolvedUiDbPath,
-    evidenceStore,
-    redactString,
-    mutex,
-  );
+  const workspaceProvisioning = buildWorkspaceProvisioning({
+    options: args.options,
+    instanceStore: args.workspaceInstanceStore,
+    uiStore: args.uiStore,
+    workspaceScriptTrust: args.workspaceScriptTrust,
+    resolvedUiDbPath: args.resolvedUiDbPath,
+    evidenceStore: args.evidenceStore,
+    redactString: args.redactString,
+    mutex: args.mutex,
+  });
   return {
     workspaceProvisioning,
     workspaceLifecycle: buildWorkspaceLifecycle({
-      options,
-      instanceStore: workspaceInstanceStore,
-      activePointerStore: activeWorkspacePointerStore,
+      options: args.options,
+      instanceStore: args.workspaceInstanceStore,
+      activePointerStore: args.activeWorkspacePointerStore,
       provisioning: workspaceProvisioning,
-      resolvedUiDbPath,
-      evidenceStore,
-      redactString,
-      mutex,
+      resolvedUiDbPath: args.resolvedUiDbPath,
+      evidenceStore: args.evidenceStore,
+      redactString: args.redactString,
+      mutex: args.mutex,
     }),
     workspaceReconciliation: buildWorkspaceReconciliation(
-      options,
-      workspaceInstanceStore,
-      activeWorkspacePointerStore,
-      resolvedUiDbPath,
-      evidenceStore,
-      redactString,
+      args.options,
+      args.workspaceInstanceStore,
+      args.activeWorkspacePointerStore,
+      args.resolvedUiDbPath,
+      args.evidenceStore,
+      args.redactString,
     ),
     workspaceRepair: buildWorkspaceRepair({
-      options,
-      instanceStore: workspaceInstanceStore,
-      activePointerStore: activeWorkspacePointerStore,
+      options: args.options,
+      instanceStore: args.workspaceInstanceStore,
+      activePointerStore: args.activeWorkspacePointerStore,
       provisioning: workspaceProvisioning,
-      resolvedUiDbPath,
-      evidenceStore,
-      redactString,
-      mutex,
+      resolvedUiDbPath: args.resolvedUiDbPath,
+      evidenceStore: args.evidenceStore,
+      redactString: args.redactString,
+      mutex: args.mutex,
     }),
   };
 }
 
+type ComposeTaskWorkspaceServicesArgs = Omit<ComposeCoreTaskWorkspaceServicesArgs, "mutex">;
+
 function composeTaskWorkspaceServices(
-  options: BuildHandlerDepsOptions,
-  workspaceInstanceStore: WorkspaceInstanceStore | undefined,
-  activeWorkspacePointerStore: ActiveWorkspacePointerStore | undefined,
-  resolvedUiDbPath: string,
-  evidenceStore: EvidenceStore,
-  redactString: (value: string) => string,
+  args: ComposeTaskWorkspaceServicesArgs,
 ): TaskWorkspaceServices {
   // One shared in-process mutex registry across ALL mutating task-workspace services (#449, ADR-0093 D1):
   // provisioning, lifecycle, repair, and cleanup must serialize against each other on the same `ws:`
   // keyspace, so they receive the SAME registry instance. Read-only services (reconciliation, health) do
   // not take it.
   const mutex = createWorkspaceMutexRegistry();
-  const args = [
+  const composedArgs = { ...args, mutex };
+  return {
+    ...composeCoreTaskWorkspaceServices(composedArgs),
+    ...composeHealthAndCleanup(composedArgs),
+  };
+}
+
+function composePersistenceTaskWorkspaceServices(
+  options: BuildHandlerDepsOptions,
+  persistence: ComposedPersistence,
+  resolvedUiDbPath: string,
+  evidenceStore: EvidenceStore,
+  redactString: (value: string) => string,
+): {
+  readonly workspaceScriptTrust: WorkspaceScriptTrustService;
+  readonly services: TaskWorkspaceServices;
+} {
+  const workspaceScriptTrust =
+    options.workspaceScriptTrust ?? createWorkspaceScriptTrustService({ store: persistence.store });
+  const services = composeTaskWorkspaceServices({
     options,
-    workspaceInstanceStore,
-    activeWorkspacePointerStore,
+    workspaceInstanceStore: persistence.workspaceInstanceStore,
+    activeWorkspacePointerStore: persistence.activeWorkspacePointerStore,
+    uiStore: persistence.store,
+    workspaceScriptTrust,
     resolvedUiDbPath,
     evidenceStore,
     redactString,
-    mutex,
-  ] as const;
-  return {
-    ...composeCoreTaskWorkspaceServices(...args),
-    ...composeHealthAndCleanup(...args),
-  };
+  });
+  return { workspaceScriptTrust, services };
 }
 
 function buildPersistenceBundle(
@@ -2614,19 +2759,11 @@ function buildPersistenceBundle(
     redactString,
     options.env,
   );
-  const {
-    store,
-    dispose,
-    relationship,
-    workspaceInstanceStore,
-    activeWorkspacePointerStore,
-    codingRuntimeSnapshotStore,
-  } = persistence;
+  const { store, dispose, relationship, codingRuntimeSnapshotStore } = persistence;
   try {
-    const services = composeTaskWorkspaceServices(
+    const { workspaceScriptTrust, services } = composePersistenceTaskWorkspaceServices(
       options,
-      workspaceInstanceStore,
-      activeWorkspacePointerStore,
+      persistence,
       resolvedUiDbPath,
       evidenceStore,
       redactString,
@@ -2637,6 +2774,7 @@ function buildPersistenceBundle(
     );
     return {
       uiStore: store,
+      workspaceScriptTrust,
       dispose,
       relationship,
       codingRuntimeSnapshotStore,
@@ -2777,6 +2915,7 @@ function buildAssemblyPeripherals(
   return buildPeripherals({
     options: args.options,
     uiStore: args.bundle.uiStore,
+    workspaceScriptTrust: args.bundle.workspaceScriptTrust,
     evidenceStore: args.evidenceStore,
     redactString: args.redactString,
     liveRedactor: args.liveRedactor,

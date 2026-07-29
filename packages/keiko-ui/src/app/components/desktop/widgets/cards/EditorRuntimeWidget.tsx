@@ -5999,7 +5999,7 @@ function EditorRuntimeWidget({
     } else {
       panel = (
         <div className="ed-empty" role="note">
-          Choose a file from the project tree to start editing.
+          {commonT("editor.runtime.chooseFile")}
         </div>
       );
     }

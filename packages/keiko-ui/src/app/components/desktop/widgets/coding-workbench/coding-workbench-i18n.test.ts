@@ -41,6 +41,15 @@ describe("Coding Workbench translations", () => {
     );
   });
 
+  it("localizes the task-branch conflict with actionable copy", () => {
+    expect(translateCodingWorkbench("en", "codingWorkbench.setup.branchConflict")).toBe(
+      "The task branch for this coding run already exists. Remove the previous branch or its managed workspace. Alternatively, choose a different target branch.",
+    );
+    expect(translateCodingWorkbench("de", "codingWorkbench.setup.branchConflict")).toBe(
+      "Der Aufgabenbranch für diesen Coding-Lauf existiert bereits. Entferne den früheren Branch oder den zugehörigen verwalteten Arbeitsbereich. Alternativ kannst du einen anderen Zielbranch wählen.",
+    );
+  });
+
   it("localizes the #2387 research grant, revoke, and auxiliary-outcome vocabulary", () => {
     const keys = [
       "codingWorkbench.research.chipLabel",

@@ -6,9 +6,10 @@
 // so a restored older manifest never resurrects it — before either the command runner or editor
 // verification can execute a script. Trust survives server restarts; an absent store trusts nothing.
 //
-// The public interface and the derived binary decider `(projectId, workspace) => boolean` are
-// unchanged: consumers keep their existing fail-closed decider seams. The canonical binding derivation
-// lives in ./workspaceTrust/canonicalTrustIdentity.ts; the row persistence lives in the UiStore.
+// Existing consumers keep their fail-closed binary decider seams. A separate derivation operation
+// records server-provenance trust for a managed root only when an explicitly trusted source root has
+// the same package-script basis. The canonical binding derivation lives in
+// ./workspaceTrust/canonicalTrustIdentity.ts; the row persistence lives in the UiStore.
 
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
@@ -90,6 +91,10 @@ export interface WorkspaceScriptTrustSnapshot {
 
 export interface WorkspaceScriptTrustService {
   readonly grant: (projectId: string) => WorkspaceScriptTrustSnapshot;
+  readonly deriveFromTrustedRoot: (
+    projectId: string,
+    trustedProjectId: string,
+  ) => WorkspaceScriptTrustSnapshot;
   readonly revoke: (projectId: string) => WorkspaceScriptTrustSnapshot;
   readonly status: (projectId: string) => WorkspaceTrustStatus;
   readonly isTrusted: (projectId: string, workspace: WorkspaceInfo) => boolean;
@@ -350,6 +355,16 @@ function resolveTrustBasisFact(
   }
 }
 
+function trustBasisFactsMatch(
+  left: WorkspaceFact<WorkspaceTrustBasisDigest>,
+  right: WorkspaceFact<WorkspaceTrustBasisDigest>,
+): boolean {
+  if (left.outcome === "known" && right.outcome === "known") {
+    return left.value === right.value;
+  }
+  return left.outcome === "absent" && right.outcome === "absent";
+}
+
 // Reads and validates the persisted record into a tagged assessment. No row is `absent`; a
 // present-but-unparseable or contract-invalid record is `unavailable` (fail closed). The store read
 // is the hostile-input boundary — every corrupt or future-shaped record resolves to restricted.
@@ -389,8 +404,8 @@ function buildRecord(
   };
 }
 
-// grant/revoke are explicit human actions: a store-read fault must fail loud rather than silently
-// reset the monotonic revision. The fail-closed `isTrusted` path never calls this.
+// Trust mutations must fail loud on a store-read fault rather than silently reset the monotonic
+// revision. The fail-closed `isTrusted` path never calls this.
 function nextRevision(store: UiStore, rootRef: string): number {
   return (store.readWorkspaceTrustRecord(rootRef)?.revision ?? -1) + 1;
 }
@@ -485,6 +500,41 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     for (const listener of this.restrictionListeners) listener(canonicalRoot);
   }
 
+  private isTrustedForBasis(
+    canonicalRoot: string,
+    basis: WorkspaceFact<WorkspaceTrustBasisDigest>,
+  ): boolean {
+    const context = currentTrustContext(this.store, canonicalRoot, basis);
+    const expected = context.binding;
+    const assessment = readAssessment(this.store, expected.rootRef);
+    if (!context.objectIdentityMatches) {
+      if (assessment.outcome === "known" && assessment.value.trust === "trusted") {
+        persistRecord(
+          this.store,
+          expected,
+          "restricted",
+          "identity-changed",
+          assessment.value.revision + 1,
+        );
+        this.notifyRestricted(canonicalRoot);
+      }
+      return false;
+    }
+    const projectedTrusted = projectCommandTaskTrustState(assessment, expected) === "trusted";
+    const invalidated = invalidatedTrustedRecord(assessment, expected, projectedTrusted);
+    if (invalidated !== undefined) {
+      persistRecord(
+        this.store,
+        expected,
+        "restricted",
+        invalidationReason(invalidated.binding, expected),
+        invalidated.revision + 1,
+      );
+      this.notifyRestricted(canonicalRoot);
+    }
+    return projectedTrusted;
+  }
+
   public readonly grant = (projectId: string): WorkspaceScriptTrustSnapshot => {
     const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
     const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
@@ -505,6 +555,33 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
       binding,
       "trusted",
       "human-grant",
+      nextRevision(this.store, binding.rootRef),
+    );
+    return { trusted: true };
+  };
+
+  public readonly deriveFromTrustedRoot = (
+    projectId: string,
+    trustedProjectId: string,
+  ): WorkspaceScriptTrustSnapshot => {
+    const trustedRoot = resolveCanonicalRoot(this.store, this.fs, trustedProjectId);
+    const trustedBasis = resolveTrustBasisFact(this.fs, trustedRoot);
+    if (!this.isTrustedForBasis(trustedRoot, trustedBasis)) return { trusted: false };
+    const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
+    const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
+    if (!trustBasisFactsMatch(trustedBasis, basis)) return { trusted: false };
+    const binding = requireCurrentObjectIdentity(
+      currentTrustContext(this.store, canonicalRoot, basis),
+    );
+    const revalidatedTrustedBasis = resolveTrustBasisFact(this.fs, trustedRoot);
+    if (!trustBasisFactsMatch(trustedBasis, revalidatedTrustedBasis)) {
+      return { trusted: false };
+    }
+    persistRecord(
+      this.store,
+      binding,
+      "trusted",
+      "derived-from-trusted-root",
       nextRevision(this.store, binding.rootRef),
     );
     return { trusted: true };
@@ -558,35 +635,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     try {
       const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId, workspace);
       const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
-      const context = currentTrustContext(this.store, canonicalRoot, basis);
-      const expected = context.binding;
-      const assessment = readAssessment(this.store, expected.rootRef);
-      if (!context.objectIdentityMatches) {
-        if (assessment.outcome === "known" && assessment.value.trust === "trusted") {
-          persistRecord(
-            this.store,
-            expected,
-            "restricted",
-            "identity-changed",
-            assessment.value.revision + 1,
-          );
-          this.notifyRestricted(canonicalRoot);
-        }
-        return false;
-      }
-      const projectedTrusted = projectCommandTaskTrustState(assessment, expected) === "trusted";
-      const invalidated = invalidatedTrustedRecord(assessment, expected, projectedTrusted);
-      if (invalidated !== undefined) {
-        persistRecord(
-          this.store,
-          expected,
-          "restricted",
-          invalidationReason(invalidated.binding, expected),
-          invalidated.revision + 1,
-        );
-        this.notifyRestricted(canonicalRoot);
-      }
-      return projectedTrusted;
+      return this.isTrustedForBasis(canonicalRoot, basis);
     } catch {
       return false;
     }

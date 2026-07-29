@@ -32,6 +32,7 @@ type WorkspaceTrustBadgeState = "trusted" | "restricted" | "unavailable";
 
 const REASON_KEYS: Readonly<Record<WorkspaceTrustReason, MessageKey>> = {
   "human-grant": "workspaceTrust.reason.humanGrant",
+  "derived-from-trusted-root": "workspaceTrust.reason.derivedFromTrustedRoot",
   "human-revocation": "workspaceTrust.reason.humanRevocation",
   "identity-changed": "workspaceTrust.reason.identityChanged",
   "manifest-changed": "workspaceTrust.reason.manifestChanged",

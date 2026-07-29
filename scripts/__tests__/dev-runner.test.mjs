@@ -17,6 +17,7 @@ import { setTimeout } from "node:timers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  DEV_RUNNER_SHUTDOWN_GRACE_MS,
   bffChildEnv,
   bffProcessArgs,
   canonicalLocalhostRedirectLocation,
@@ -204,10 +205,15 @@ describe("bffChildEnv", () => {
   // activation can compose its loopback gateway URL against the public proxy port.
   it("exports the public UI port alongside the BFF listen port and state dir", () => {
     expect(bffChildEnv(1984, 1983, "/state/dir")).toEqual({
+      KEIKO_CODING_RUNTIME_DEV_LANE: "1",
       KEIKO_DEV_BFF_PORT: "1984",
       KEIKO_UI_PORT: "1983",
       KEIKO_STATE_DIR: "/state/dir",
     });
+  });
+
+  it("gives runtime disposal its complete bounded shutdown window", () => {
+    expect(DEV_RUNNER_SHUTDOWN_GRACE_MS).toBeGreaterThan(30_000);
   });
 });
 

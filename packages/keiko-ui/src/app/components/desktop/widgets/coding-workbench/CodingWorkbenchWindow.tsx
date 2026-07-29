@@ -61,7 +61,11 @@ function latestChangesSignal(events: readonly CodingWorkbenchRuntimeSseEvent[]):
   return null;
 }
 
-export function CodingWorkbenchWindow(): ReactNode {
+export function CodingWorkbenchWindow({
+  selectedRoot,
+}: {
+  readonly selectedRoot?: string | undefined;
+}): ReactNode {
   const activeWorkspace = useOptionalActiveWorkspace() ?? EMPTY_WORKSPACE;
   const { state, actions } = useCodingWorkbenchRuntime({ workspace: activeWorkspace });
   const autonomyPolicy = useAutonomyModePolicy();
@@ -105,6 +109,7 @@ export function CodingWorkbenchWindow(): ReactNode {
       state={state}
       actions={actions}
       activeWorkspace={activeWorkspace}
+      selectedRoot={selectedRoot}
       taskIntent={taskIntent}
       onTaskIntentChange={setTaskIntent}
       focusRef={focusRef}
@@ -121,6 +126,7 @@ interface WorkbenchContentProps {
   readonly state: CodingWorkbenchRuntimeState;
   readonly actions: CodingWorkbenchRuntimeActions;
   readonly activeWorkspace: UseCodingWorkbenchRuntimeInput["workspace"];
+  readonly selectedRoot: string | undefined;
   readonly taskIntent: string;
   readonly onTaskIntentChange: (taskIntent: string) => void;
   readonly focusRef: RefObject<HTMLHeadingElement | null>;
@@ -135,6 +141,7 @@ function WorkbenchContent({
   state,
   actions,
   activeWorkspace,
+  selectedRoot,
   taskIntent,
   onTaskIntentChange,
   focusRef,
@@ -166,6 +173,7 @@ function WorkbenchContent({
         state={state}
         actions={actions}
         activeWorkspace={activeWorkspace}
+        selectedRoot={selectedRoot}
         taskIntent={taskIntent}
         onTaskIntentChange={onTaskIntentChange}
         onDecision={onDecision}
@@ -179,6 +187,7 @@ function WorkbenchColumns({
   state,
   actions,
   activeWorkspace,
+  selectedRoot,
   taskIntent,
   onTaskIntentChange,
   onDecision,
@@ -240,6 +249,7 @@ function WorkbenchColumns({
     return (
       <div className={styles.emptySession}>
         <CodingWorkbenchSetup
+          selectedRoot={selectedRoot}
           refreshWorkspace={(root) => activeWorkspace.refresh(root)}
           runtimeUnavailable={runtimeUnavailable}
         />

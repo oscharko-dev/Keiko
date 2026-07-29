@@ -999,7 +999,7 @@ export interface UseChatSessionResult {
   openNewChat: (project?: ProjectWithAvailability, title?: string) => Promise<Chat | undefined>;
   openProject: (project: ProjectWithAvailability) => Promise<void>;
   openChat: (chat: Chat) => Promise<void>;
-  addProject: (path: string) => Promise<void>;
+  addProject: (path: string) => Promise<ProjectWithAvailability | undefined>;
   // Issue #1561 — `options.text` sends an explicit committed transcript (the spoken-turn handoff) through
   // the same context-bearing path as a typed send; absent, it sends the current draft as before.
   sendMessage: SendMessage;
@@ -2442,20 +2442,22 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   );
 
   const addProject = useCallback(
-    async (path: string): Promise<void> => {
+    async (path: string): Promise<ProjectWithAvailability | undefined> => {
       const trimmed = path.trim();
-      if (trimmed.length === 0) return;
+      if (trimmed.length === 0) return undefined;
       setError(undefined);
       try {
         const created = await createProject({ path: trimmed });
         const projectPayload = await fetchProjects();
         setState((previous) => ({ ...previous, projects: Array.from(projectPayload.projects) }));
-        await openNewChat(created.project);
+        await openProject(created.project);
+        return created.project;
       } catch (error_) {
         setError(errorMessage(error_));
+        return undefined;
       }
     },
-    [openNewChat],
+    [openProject],
   );
 
   // Removes a temp optimistic message from state by id (AC#3 — no partial kept).

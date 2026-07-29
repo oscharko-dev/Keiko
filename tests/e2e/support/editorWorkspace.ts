@@ -11,7 +11,7 @@
  * EditorWidget.tsx / EditorRuntimeWidget.tsx / EditorStatusBar.tsx in keiko-ui and the
  * keiko-editor-hot-exit IndexedDB store in editorHotExitStore.ts.
  */
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -56,6 +56,7 @@ const HOT_EXIT_DB = "keiko-editor-hot-exit";
 const HOT_EXIT_STORE = "snapshots";
 
 const WORKSPACE_LS_KEY = "keiko.workspace.v4";
+const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 
 interface EditorWorkspaceFile {
   readonly path: string;
@@ -73,6 +74,21 @@ export interface GitEditorWorkspace {
   readonly nestedChangedPath: string;
   readonly ignoredPath: string;
   readonly conflictDiskContent: string;
+}
+
+/** Explicitly revoke the trust established by a test's human-equivalent project selection. */
+export async function revokeEditorWorkspaceTrust(
+  request: APIRequestContext,
+  root: string,
+): Promise<void> {
+  const response = await request.delete("/api/editor/verification/trust", {
+    headers: MUTATION_HEADERS,
+    data: { projectId: root },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  expect((await response.json()) as { readonly trust: string }).toMatchObject({
+    trust: "restricted",
+  });
 }
 
 interface SeedEditorWindowOptions {
@@ -335,7 +351,9 @@ export async function openEditorWorkspace(
   page: Page,
   options: { readonly dismissTrustPrompt?: boolean } = {},
 ): Promise<Locator> {
-  const workspace = page.locator(EDITOR_SELECTORS.workspace).first();
+  // Multi-root editors keep inactive root workspaces mounted. Resolve the active workspace instead
+  // of binding to the first (potentially hidden and still initializing) root.
+  const workspace = page.locator(EDITOR_SELECTORS.workspace).filter({ visible: true }).first();
   await expect(workspace.locator(EDITOR_SELECTORS.tablist).first()).toBeVisible();
   // Condition-based settlement on the app's own readiness signal (#2696). The workspace root only
   // reports `data-trust-settled="true"` once the trust status for the bound root has resolved (or

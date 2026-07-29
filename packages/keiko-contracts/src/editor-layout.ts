@@ -199,7 +199,10 @@ function normalizePane(value: unknown, fallbackId: string): EditorPaneStateV2 | 
   const openFiles = stringArray(value.openFiles);
   const tabOrder = stringArray(value.tabOrder);
   const pane = createPane(id, activeFile, orderedFiles(activeFile, openFiles, tabOrder));
-  return pane.openFiles.length > 0 || pane.activeFile.length > 0 ? pane : null;
+  const explicitlyEmpty =
+    Array.isArray(value.openFiles) &&
+    (typeof value.activeFile === "string" || typeof value.file === "string");
+  return pane.openFiles.length > 0 || pane.activeFile.length > 0 || explicitlyEmpty ? pane : null;
 }
 
 function parseDirection(value: unknown): EditorSplitDirection {
@@ -233,11 +236,12 @@ function normalizePaneNode(
 function normalizeSplitNode(
   value: Record<string, unknown>,
   panes: Readonly<Record<string, EditorPaneStateV2>>,
-): EditorLayoutSplitNode | null {
+): EditorLayoutNode | null {
   if (value.type !== "split") return null;
   const first = normalizeTree(value.first, panes);
   const second = normalizeTree(value.second, panes);
-  if (first === null || second === null) return null;
+  if (first === null) return second;
+  if (second === null) return first;
   const id = typeof value.id === "string" && value.id.length > 0 ? value.id : "split-1";
   const ratio = typeof value.ratio === "number" && Number.isFinite(value.ratio) ? value.ratio : 50;
   return {
@@ -273,6 +277,26 @@ function normalizePaneList(value: unknown): readonly EditorPaneStateV2[] {
   return value
     .map((pane, index) => normalizePane(pane, `pane-${String(index + 1)}`))
     .filter((pane): pane is EditorPaneStateV2 => pane !== null);
+}
+
+function structurallyUsefulPanes(
+  panes: readonly EditorPaneStateV2[],
+  preferredPaneId: unknown,
+): readonly EditorPaneStateV2[] {
+  const populated = panes.filter((pane) => pane.openFiles.length > 0);
+  if (populated.length > 0) return populated;
+  const preferred =
+    typeof preferredPaneId === "string"
+      ? panes.find((pane) => pane.id === preferredPaneId)
+      : undefined;
+  const finalPane = preferred ?? panes[0];
+  return finalPane === undefined ? [] : [finalPane];
+}
+
+function paneRecord(panes: readonly EditorPaneStateV2[]): Record<string, EditorPaneStateV2> {
+  const record: Record<string, EditorPaneStateV2> = {};
+  for (const pane of panes) record[pane.id] = pane;
+  return record;
 }
 
 function persistedSidebarWidth(
@@ -311,7 +335,9 @@ function parseV2(
   record: Record<string, unknown>,
   input: CreateEditorLayoutStateV2Input,
 ): EditorLayoutStateV2 | null {
-  const panes = normalizePaneRecord(record.panes);
+  const panes = paneRecord(
+    structurallyUsefulPanes(Object.values(normalizePaneRecord(record.panes)), record.activePaneId),
+  );
   const firstPaneId = Object.keys(panes)[0];
   if (firstPaneId === undefined) return null;
   const tree = normalizeTree(record.tree, panes) ?? { type: "pane", paneId: firstPaneId };
@@ -354,10 +380,9 @@ function parseV1(
   record: Record<string, unknown>,
   input: CreateEditorLayoutStateV2Input,
 ): EditorLayoutStateV2 | null {
-  const panesList = normalizePaneList(record.panes);
+  const panesList = structurallyUsefulPanes(normalizePaneList(record.panes), record.activePaneId);
   if (panesList.length === 0) return null;
-  const panes: Record<string, EditorPaneStateV2> = {};
-  for (const pane of panesList) panes[pane.id] = pane;
+  const panes = paneRecord(panesList);
   const first = panesList[0];
   if (first === undefined) return null;
   const second = panesList[1];

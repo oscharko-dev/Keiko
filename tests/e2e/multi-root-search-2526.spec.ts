@@ -3,7 +3,11 @@ import { join } from "node:path";
 import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { validateWorkspaceManifest, type WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 
-import { cleanupEditorWorkspaces, createEditorWorkspace } from "./support/editorWorkspace.js";
+import {
+  cleanupEditorWorkspaces,
+  createEditorWorkspace,
+  revokeEditorWorkspaceTrust,
+} from "./support/editorWorkspace.js";
 import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
@@ -133,6 +137,8 @@ async function setupIssue(page: Page, harness: IssueHarness): Promise<void> {
   await registerProject(page, harness.rootA.root, "Root A");
   await registerProject(page, harness.rootB.root, "Root B");
   await addSecondRoot(page, harness.rootA.root, harness.rootB.root);
+  await revokeEditorWorkspaceTrust(page.request, harness.rootA.root);
+  await revokeEditorWorkspaceTrust(page.request, harness.rootB.root);
   await seedIssueWindows(page, harness.rootA.root);
   await page.setViewportSize({ width: 1600, height: 1000 });
   await page.goto("/");

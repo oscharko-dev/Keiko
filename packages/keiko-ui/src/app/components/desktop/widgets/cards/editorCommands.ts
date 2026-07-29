@@ -25,6 +25,7 @@ export interface EditorPaletteHost {
   readonly verificationRunning: boolean;
   readonly verifiableTarget: string | null;
   readonly verificationCatalog: EditorVerificationCatalog | null;
+  readonly workspaceTrustUiAvailable: boolean;
   splitActive(direction: "row" | "column"): void;
   closeActiveSplit(): void;
   closeActiveTab(): void;
@@ -175,14 +176,19 @@ export const EDITOR_PALETTE_COMMANDS: readonly EditorPaletteCommand[] = [
     titleKey: "editor.command.trustWorkspaceScripts",
     run: (host) => host.trustWorkspaceScripts(),
     isAvailable: (host) =>
-      !host.verificationRunning && hasScriptTrustState(host, "approval-required"),
+      host.workspaceTrustUiAvailable &&
+      !host.verificationRunning &&
+      hasScriptTrustState(host, "approval-required"),
   },
   {
     id: "verification.revokeWorkspaceScriptTrust",
     title: "Revoke Workspace Script Trust",
     titleKey: "editor.command.revokeWorkspaceScriptTrust",
     run: (host) => host.revokeWorkspaceScriptTrust(),
-    isAvailable: (host) => !host.verificationRunning && hasScriptTrustState(host, "trusted"),
+    isAvailable: (host) =>
+      host.workspaceTrustUiAvailable &&
+      !host.verificationRunning &&
+      hasScriptTrustState(host, "trusted"),
   },
 ];
 

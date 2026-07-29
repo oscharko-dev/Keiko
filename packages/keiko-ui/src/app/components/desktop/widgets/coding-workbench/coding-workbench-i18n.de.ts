@@ -67,6 +67,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.verifying": "Wird verifiziert…",
   "codingWorkbench.setup.reconcileFailed":
     "Der Workspace konnte nicht verifiziert werden. Die Reconciliation hat keinen sauberen, passenden Checkout bestätigt, daher bleibt der Lauf nicht verfügbar. Prüfe das Repository und versuche es erneut.",
+  "codingWorkbench.setup.branchConflict":
+    "Der Aufgabenbranch für diesen Coding-Lauf existiert bereits. Entferne den früheren Branch oder den zugehörigen verwalteten Arbeitsbereich. Alternativ kannst du einen anderen Zielbranch wählen.",
   "codingWorkbench.setup.runtimeUnavailable":
     "Das Starten eines Coding-Laufs ist auf dieser Installation nicht verfügbar, bis die Coding-Runtime aktiv ist. Du kannst jetzt einen Workspace binden; der Lauf wird startbar, sobald die Runtime bestätigt ist.",
   "codingWorkbench.readiness.modelSource.label": "Modellquelle",

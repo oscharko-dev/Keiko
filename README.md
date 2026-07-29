@@ -150,13 +150,18 @@ npm run dev:start
 This checks whether dependencies are installed, runs the root build needed by the Node BFF, starts
 the UI through `next dev`, and exposes the app through one loopback URL. If the default port
 `1983` is already in use and no port was explicitly configured, the script chooses the next free
-loopback port. The dev server binds the loopback interface and prints a `localhost` browser URL.
+loopback port. On supported macOS checkouts it also verifies or prepares the approved coding
+runtime and does not report a successful start until runtime readiness is available. The dev
+server binds the loopback interface and prints a `localhost` browser URL.
 
 Stop the development UI:
 
 ```bash
 npm run dev:stop
 ```
+
+The stop command waits for the BFF to dispose the coding runtime and for every tracked development
+process to exit. Use `npm run dev:stop -- --force` only when bounded graceful shutdown fails.
 
 For a versioned sandbox that installs the current root package through `file:..`, rebuilds the
 packaged UI on every start, and then runs the built artifact, use [`sandbox/`](sandbox/).

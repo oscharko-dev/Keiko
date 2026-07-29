@@ -11,6 +11,8 @@ import {
 } from "react";
 import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import { Icons } from "../../Icons";
 import {
   buildEditorOutlineTree,
@@ -88,19 +90,20 @@ function kindLabel(kind: EditorDocumentSymbol["kind"]): string {
   return kind.replace(/[A-Z]/gu, (letter) => ` ${letter.toLowerCase()}`);
 }
 
-function outlineEmptyText(snapshot: EditorOutlineSnapshot | undefined): string {
+function outlineEmptyText(snapshot: EditorOutlineSnapshot | undefined, t: I18nTranslate): string {
   let text: string;
   if (snapshot?.loading === true) {
-    text = "Loading symbols.";
+    text = t("editor.outline.loading");
   } else if (snapshot?.enabled === false) {
-    text = "Outline is unavailable for this file.";
+    text = t("editor.outline.unavailable");
   } else {
-    text = "No symbols found in this file.";
+    text = t("editor.outline.empty");
   }
   return text;
 }
 
 export function EditorOutlinePanel(props: EditorOutlinePanelProps): ReactNode {
+  const t = useTranslate();
   const snapshot = props.snapshot;
   const tree = useMemo(() => buildEditorOutlineTree(snapshot?.symbols ?? []), [snapshot?.symbols]);
   const allNodeIds = useMemo(() => collectNodeIds(tree), [tree]);
@@ -166,18 +169,21 @@ export function EditorOutlinePanel(props: EditorOutlinePanelProps): ReactNode {
   );
 
   const hasSymbols = tree.length > 0;
-  const emptyText = outlineEmptyText(snapshot);
+  const emptyText = outlineEmptyText(snapshot, t);
 
   return (
-    <section className={styles.outline} aria-label="Workspace outline">
+    <section className={styles.outline} aria-label={t("editor.outline.workspaceLabel")}>
       <div className={styles.outlineHeader}>
-        <span className={styles.outlineTitle} title={snapshot?.filePath ?? "Outline"}>
-          Outline
+        <span
+          className={styles.outlineTitle}
+          title={snapshot?.filePath ?? t("editor.outline.title")}
+        >
+          {t("editor.outline.title")}
         </span>
         <button
           type="button"
           className={styles.outlineToggle}
-          aria-label={props.visible ? "Hide outline panel" : "Show outline panel"}
+          aria-label={props.visible ? t("editor.outline.hide") : t("editor.outline.show")}
           aria-expanded={props.visible}
           onClick={props.onToggleVisible}
         >

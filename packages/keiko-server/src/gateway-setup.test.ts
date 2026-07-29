@@ -36,6 +36,7 @@ import {
   stripTrailingSlashes,
 } from "./gateway-setup.js";
 import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
+import { recommendQiModelPolicy } from "./qualityIntelligence/modelSelection.js";
 import type { RouteContext } from "./routes.js";
 
 const tmpDirs: string[] = [];
@@ -302,6 +303,80 @@ function voiceElectionProviders(): readonly Record<string, unknown>[] {
 }
 
 describe("handleGatewaySetup", () => {
+  it("persists verified response-format support and makes it available to QI immediately", async () => {
+    const uiDir = await tempDir("keiko-gw-response-format-ui-");
+    const evidenceDir = await tempDir("keiko-gw-response-format-ev-");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (_url, init): Promise<Response> => {
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+        readonly model?: string;
+        readonly response_format?: unknown;
+      };
+      if (body.response_format !== undefined && body.model === "plain-chat") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: { message: "unsupported" } }), {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      const content =
+        body.response_format === undefined
+          ? "OK"
+          : JSON.stringify({
+              dimensions: [
+                { name: "verifiability", score: 90, rationale: "ok" },
+                { name: "atomicity", score: 90, rationale: "ok" },
+                { name: "determinism", score: 90, rationale: "ok" },
+                { name: "ac-fidelity", score: 90, rationale: "ok" },
+              ],
+              overallRationale: "ok",
+            });
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 3, completion_tokens: 1 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    };
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+
+    try {
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://llm-gateway.example.com/v1",
+          apiKey: "example-secret-token",
+          deploymentNames: ["schema-capable", "plain-chat"],
+        }),
+        deps,
+      );
+
+      expect(result.status).toBe(200);
+      expect(requiredCapability(requiredGatewayConfig(deps), "schema-capable")).toMatchObject({
+        structuredOutput: true,
+        supportsResponseFormat: true,
+      });
+      expect(requiredCapability(requiredGatewayConfig(deps), "plain-chat")).toMatchObject({
+        structuredOutput: false,
+        supportsResponseFormat: false,
+      });
+      expect(recommendQiModelPolicy(deps).judgeModelId).toBe("schema-capable");
+      const persisted = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+      expect(persisted).toContain('"supportsResponseFormat": true');
+    } finally {
+      globalThis.fetch = originalFetch;
+      deps.store.close();
+    }
+  });
+
   it("includes the request correlation id when the setup body is not an object", async () => {
     const uiDir = await tempDir("keiko-gw-invalid-ui-");
     const evidenceDir = await tempDir("keiko-gw-invalid-ev-");
@@ -2695,7 +2770,7 @@ describe("handleGatewaySetup", () => {
         deps,
       );
       expect(result.status).toBe(200);
-      expect(seenModels).toEqual(["phi-4", "gpt-oss-120b"]);
+      expect(seenModels).toEqual(["phi-4", "gpt-oss-120b", "phi-4", "gpt-oss-120b"]);
       expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
         "phi-4",
         "gpt-oss-120b",
@@ -2775,7 +2850,7 @@ describe("handleGatewaySetup", () => {
         deps,
       );
       expect(result.status).toBe(200);
-      expect(seen.map((call) => call.model)).toEqual(["Mistral-Large-3", "gpt-5.4"]);
+      expect(seen.map((call) => call.model)).toEqual(["Mistral-Large-3", "gpt-5.4", "gpt-5.4"]);
       expect(seen.every((call) => call.firstRole === "system")).toBe(true);
       expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
         "gpt-5.4",
@@ -2915,6 +2990,9 @@ describe("handleGatewaySetup", () => {
       expect(seenUrls).not.toContain("https://llm-gateway.example.com/model/info");
       expect(seenUrls.some((url) => url.endsWith("/models"))).toBe(false);
       expect(seenModels).toEqual([
+        "litellm-chat-large",
+        "litellm-vision-chat",
+        "litellm-unknown-mode",
         "litellm-chat-large",
         "litellm-vision-chat",
         "litellm-unknown-mode",
@@ -3262,7 +3340,12 @@ describe("handleGatewaySetup", () => {
         deps,
       );
       expect(result.status).toBe(200);
-      expect(seenModels).toEqual(["example-chat-model-large", "example-chat-model-fast"]);
+      expect(seenModels).toEqual([
+        "example-chat-model-large",
+        "example-chat-model-fast",
+        "example-chat-model-large",
+        "example-chat-model-fast",
+      ]);
       expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
         "example-chat-model-large",
         "example-chat-model-fast",

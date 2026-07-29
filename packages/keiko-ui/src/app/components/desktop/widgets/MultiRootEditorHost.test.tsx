@@ -14,6 +14,7 @@ import type { EditorWidgetProps } from "./cards/EditorWidget";
 import { MultiRootEditorHost } from "./MultiRootEditorHost";
 
 const disposeRoot = vi.fn();
+const useWorkspaceTrustMock = vi.fn((_root: string) => ({ status: undefined }));
 vi.mock("@oscharko-dev/keiko-editor", () => ({
   disposeEditorModelRegistryRoot: (...args: unknown[]) => disposeRoot(...args),
 }));
@@ -64,7 +65,7 @@ vi.mock("next/dynamic", () => ({
 }));
 
 vi.mock("../workspace-trust/useWorkspaceTrust", () => ({
-  useWorkspaceTrust: () => ({ status: undefined }),
+  useWorkspaceTrust: (root: string) => useWorkspaceTrustMock(root),
 }));
 
 function root(
@@ -101,6 +102,7 @@ function manifest(roots?: readonly WorkspaceRootDescriptor[]): WorkspaceManifest
 function workspace(current: WorkspaceManifest): WorkspaceManifestView {
   return {
     manifest: current,
+    pathReadAuthority: "available",
     loading: false,
     mutating: false,
     issue: null,
@@ -185,6 +187,32 @@ describe("MultiRootEditorHost focused-root exception (#2619)", () => {
 });
 
 describe("MultiRootEditorHost", () => {
+  it("hides trust presentation only for the verified managed root", () => {
+    const current = manifest();
+    render(
+      <I18nProvider>
+        <MultiRootEditorHost
+          manifest={current}
+          workspace={workspace(current)}
+          configuredRoot="/repo-a"
+          cfg={{ root: "/repo-a" }}
+          buildBaseProps={(targetRoot) => ({
+            windowId: "editor-window",
+            workspaceTrustUiAvailable: targetRoot !== "/repo-a",
+          })}
+          updateCfg={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    const managedTab = screen.getByRole("tab", { name: /Repo A/u });
+    const ordinaryTab = screen.getByRole("tab", { name: /Repo B/u });
+    expect(managedTab.querySelector("[data-trust]")).toBeNull();
+    expect(ordinaryTab.querySelector('[data-trust="restricted"]')).not.toBeNull();
+    expect(useWorkspaceTrustMock).toHaveBeenCalledWith("/repo-a");
+    expect(useWorkspaceTrustMock).toHaveBeenCalledWith("/repo-b");
+  });
+
   it("retains dirty host and layout state while switching roots", async () => {
     const user = userEvent.setup();
     render(<Harness current={manifest()} />);

@@ -37,6 +37,7 @@ export const WORKSPACE_TRUST_LEVELS: readonly WorkspaceTrustLevel[] = Object.fre
 
 export type WorkspaceTrustReason =
   | "human-grant"
+  | "derived-from-trusted-root"
   | "human-revocation"
   | "identity-changed"
   | "manifest-changed"
@@ -46,6 +47,7 @@ export type WorkspaceTrustReason =
 
 export const WORKSPACE_TRUST_REASONS: readonly WorkspaceTrustReason[] = Object.freeze([
   "human-grant",
+  "derived-from-trusted-root",
   "human-revocation",
   "identity-changed",
   "manifest-changed",
@@ -151,7 +153,8 @@ function trustReasonMatchesLevel(
   level: WorkspaceTrustLevel,
   reason: WorkspaceTrustReason,
 ): boolean {
-  return level === "trusted" ? reason === "human-grant" : reason !== "human-grant";
+  const trustedReason = reason === "human-grant" || reason === "derived-from-trusted-root";
+  return level === "trusted" ? trustedReason : !trustedReason;
 }
 
 function isWorkspaceTrustLevel(value: unknown): value is WorkspaceTrustLevel {

@@ -1,4 +1,5 @@
 import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import type {
   WorkspaceManifest,
   WorkspaceRootDescriptor,
@@ -6,6 +7,7 @@ import type {
   WorkspaceRootRef,
 } from "@oscharko-dev/keiko-contracts";
 import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { containsPath } from "@oscharko-dev/keiko-git";
 import { isProjectAvailable, type Project, type UiStore } from "./store/index.js";
 import { parseWorkspaceManifestRecord } from "./workspace-manifests.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
@@ -176,4 +178,17 @@ export function projectsWithWorkspaceAvailability(
     const workspaceAvailable = hasMembershipInSnapshot(project.path, snapshot);
     return { ...project, available: isProjectAvailable(project), workspaceAvailable };
   });
+}
+
+/**
+ * Internal managed worktrees need durable project records for exact-root trust and verification,
+ * but they are not human-selected project-catalog entries.
+ */
+export function userFacingProjects(
+  projects: readonly Project[],
+  managedTaskWorkspaceRoot: string | undefined,
+): readonly Project[] {
+  if (managedTaskWorkspaceRoot === undefined) return projects;
+  const managedRoot = resolve(managedTaskWorkspaceRoot);
+  return projects.filter((project) => !containsPath(managedRoot, resolve(project.path)));
 }

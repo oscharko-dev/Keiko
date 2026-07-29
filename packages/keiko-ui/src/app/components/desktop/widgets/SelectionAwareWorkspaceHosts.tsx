@@ -13,6 +13,10 @@ import type { ChatSessionApi } from "../hooks/useChatSession";
 import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
+import {
+  ManagedTaskWorkspaceUnavailable,
+  type ManagedTaskWorkspaceAccess,
+} from "./cards/ManagedTaskWorkspaceUnavailable";
 import { MultiRootFilesWidget } from "./cards/MultiRootFilesWidget";
 import { gitObjectId } from "./gitObjectId";
 import { MultiRootEditorHost } from "./MultiRootEditorHost";
@@ -843,6 +847,13 @@ export function EditorWindowSessionHost({
     manifest: workspace.manifest,
     updateCfg: ctx.updateCfg,
   });
+  const effectiveRoot = root ?? configuredRoot;
+  const managedAccess: ManagedTaskWorkspaceAccess | null =
+    ctx.activeBinding !== null &&
+    effectiveRoot === ctx.activeBinding.activeRoot &&
+    workspace.pathReadAuthority !== "available"
+      ? workspace.pathReadAuthority
+      : null;
   const buildBaseProps = useCallback(
     (targetRoot: string): EditorSessionBaseProps => ({
       ...editorSessionBaseProps(targetRoot, cfg, ctx),
@@ -850,6 +861,14 @@ export function EditorWindowSessionHost({
     }),
     [cfg, ctx],
   );
+  if (managedAccess !== null) {
+    return (
+      <ManagedTaskWorkspaceUnavailable
+        access={managedAccess}
+        onRetry={() => void workspace.refresh()}
+      />
+    );
+  }
   if (workspace.manifest !== null && workspace.manifest.roots.length > 1) {
     return (
       <MultiRootEditorHost
@@ -949,6 +968,8 @@ function editorSessionBaseProps(
     linkedFilePath: ctx.linkedFilePath,
     linkedCapsuleIds: ctx.linkedCapsuleIds,
     linkedCapsuleSetIds: ctx.linkedCapsuleSetIds,
+    workspaceTrustUiAvailable:
+      ctx.activeBinding === null || targetRoot !== ctx.activeBinding.activeRoot,
     windowId: ctx.windowId,
     openEditorFile: ctx.openEditorFile,
     onOpenGitCommit: (projectPath, commit) => {
@@ -1047,7 +1068,7 @@ export function FilesWindowSessionHost({
       <FilesWidget
         {...(root === undefined ? {} : { root })}
         onActiveFileChange={onActiveFileChange}
-        onRootChange={onRootChange}
+        onRootChange={root === undefined ? onRootChange : undefined}
         onOpenFile={(fileRoot: string, path: string) =>
           ctx.openWindow("editor", { root: fileRoot, file: path, openFiles: [path] })
         }

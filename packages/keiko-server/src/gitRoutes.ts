@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import { chmod, mkdir, mkdtemp, open, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import type {
   GitChangedFile,
   GitDiffScope,
@@ -44,10 +44,12 @@ import {
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import {
   FilesError,
+  metadataIsSafe,
   requiresManagedRootAuthority,
   resolveRequestRoot,
   runFilesHandler,
 } from "./files.js";
+import { DENIED_MESSAGE } from "./files-deny.js";
 import { parseGitBlamePorcelain } from "./gitBlameParser.js";
 import { parseGitEditorUnifiedDiff } from "./gitDiffParser.js";
 
@@ -170,16 +172,100 @@ export function optionsWithDefaults(
  * task-worktree root? No filesystem call, so it cannot itself leak existence. Returns false when no
  * managed root is composed or no root was requested — those fall through to the normal path.
  */
-function unauthorizedManagedRootRequest(
-  deps: UiHandlerDeps,
-  ctx: RouteContext,
-  requestedRoot: string | null,
-): boolean {
+function requestsManagedRootAuthority(deps: UiHandlerDeps, requestedRoot: string | null): boolean {
   const managedRoot = deps.managedTaskWorkspaceRoot;
   if (managedRoot === undefined || requestedRoot === null || requestedRoot.length === 0) {
     return false;
   }
   return containsPath(resolve(managedRoot), resolve(requestedRoot));
+}
+
+async function resolvesManagedRootAuthority(
+  deps: UiHandlerDeps,
+  requestedRoot: string,
+): Promise<boolean> {
+  const managedRoot = deps.managedTaskWorkspaceRoot;
+  if (managedRoot === undefined || requestedRoot.length === 0) return false;
+  const [realManagedRoot, realRequestedRoot] = await Promise.all([
+    realpath(managedRoot).catch(() => undefined),
+    realpath(requestedRoot).catch(() => undefined),
+  ]);
+  return (
+    realManagedRoot !== undefined &&
+    realRequestedRoot !== undefined &&
+    containsPath(realManagedRoot, realRequestedRoot)
+  );
+}
+
+function denyManagedRoot(): never {
+  throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+}
+
+async function resolveManagedCandidateDirectory(
+  deps: UiHandlerDeps,
+  requestedRoot: string,
+): Promise<string> {
+  if (!metadataIsSafe(requestedRoot, deps.redactor)) denyManagedRoot();
+  let resolved: string;
+  try {
+    resolved = await realpath(requestedRoot);
+    if (!(await stat(resolved)).isDirectory()) {
+      throw new Error("managed Git root is not a directory");
+    }
+  } catch {
+    throw new FilesError(400, "INVALID_DIRECTORY", "The directory does not exist.");
+  }
+  if (!metadataIsSafe(resolved, deps.redactor)) denyManagedRoot();
+  return resolved;
+}
+
+/**
+ * Admits a paired managed-worktree root spelling only after mapping its canonical target back to
+ * the persisted WorkspaceInstance. This keeps trailing separators, dot segments, case aliases, and
+ * repository subfolders usable without letting the `.keiko` deny-list become an authorization
+ * bypass: the exact owning worktree still passes Files' managed-root identity gate first.
+ */
+async function resolveManagedRepositoryRequest(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  requestedRoot: string,
+): Promise<{ readonly root: string; readonly realRoot: string }> {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) denyManagedRoot();
+  const managedRoot = deps.managedTaskWorkspaceRoot;
+  if (managedRoot === undefined) denyManagedRoot();
+  const realManagedRoot = await realpath(managedRoot).catch(() => denyManagedRoot());
+  const realCandidate = await resolveManagedCandidateDirectory(deps, requestedRoot);
+  if (!containsPath(realManagedRoot, realCandidate)) denyManagedRoot();
+  const segments = relative(realManagedRoot, realCandidate)
+    .split(/[\\/]/u)
+    .filter((segment) => segment.length > 0);
+  const repositoryId = segments[0];
+  const workspaceId = segments[1];
+  if (repositoryId === undefined || workspaceId === undefined) denyManagedRoot();
+  const persistedRoot = await resolveRequestRoot(
+    ctx,
+    deps,
+    join(managedRoot, repositoryId, workspaceId),
+  );
+  if (!containsPath(persistedRoot.realRoot, realCandidate)) denyManagedRoot();
+  return { root: requestedRoot, realRoot: realCandidate };
+}
+
+async function resolveSelectedRepositoryRoot(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  requestedRoot: string | null,
+): Promise<{ readonly root: string; readonly realRoot: string }> {
+  const paired = resolveAppSessionReadAuthority(deps, ctx.req) !== undefined;
+  const needsManagedAuthority =
+    requestsManagedRootAuthority(deps, requestedRoot) ||
+    (paired && requestedRoot !== null && (await resolvesManagedRootAuthority(deps, requestedRoot)));
+  if (needsManagedAuthority) {
+    return resolveManagedRepositoryRequest(ctx, deps, requestedRoot ?? "");
+  }
+  return resolveRequestRoot(ctx, deps, requestedRoot, {
+    managedRootAuthority: "defer-to-caller",
+  });
 }
 
 async function isResolvedManagedRoot(
@@ -214,14 +300,16 @@ export async function resolveRepository(
   // managed worktree paths, which is exactly what this gate exists to prevent. The post-realpath
   // check below stays as defence in depth for symlink and alias forms the raw prefix cannot see.
   if (
-    unauthorizedManagedRootRequest(deps, ctx, requestedRoot) &&
+    requestsManagedRootAuthority(deps, requestedRoot) &&
     resolveAppSessionReadAuthority(deps, ctx.req) === undefined
   ) {
     return genericUnavailable(requestedRoot ?? "", "unknown");
   }
-  const selectedRoot = await resolveRequestRoot(ctx, deps, requestedRoot, {
-    managedRootAuthority: "defer-to-caller",
-  });
+  // A launcher-paired request inside a managed worktree must use Files' persisted-identity
+  // authorization path. Falling through to the arbitrary-folder resolver rejects the production
+  // `<project>/.keiko/...` layout at the deny-list before the owning managed-root identity can be
+  // proven. Canonicalization preserves Git's established trailing/dot/subfolder root semantics.
+  const selectedRoot = await resolveSelectedRepositoryRoot(ctx, deps, requestedRoot);
   // Issue #2482 / ADR-0141 W1.9: any generic Git read whose RESOLVED root is inside Keiko's
   // managed task-worktree root requires the launcher-attested app session. Classifying after
   // resolveRoot closes trailing-separator, `.`-segment, and outside-symlink aliases of a managed

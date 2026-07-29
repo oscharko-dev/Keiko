@@ -309,6 +309,25 @@ describe("desktop chat routes", () => {
     expect(body.messages).toEqual([]);
   });
 
+  it("keeps internal managed-worktree projects out of the returned project catalog", async () => {
+    const managedRoot = join(projectDir, ".keiko", "ui", "task-workspaces");
+    const managedProject = join(managedRoot, "repo-id", "workspace-id");
+    mkdirSync(managedProject, { recursive: true });
+    store.createProject(managedProject, "Managed project");
+    await restartWithDeps(deps(fakeModel("response"), { managedTaskWorkspaceRoot: managedRoot }));
+
+    const res = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { projects: { path: string }[] };
+    expect(body.projects.map((project) => project.path)).toEqual([projectDir]);
+    expect(store.listProjects().map((project) => project.path)).toContain(managedProject);
+  });
+
   it("uses the preferred launch project when no projectPath is supplied", async () => {
     const staleDir = join(tmp, "aaa-stale-project");
     mkdirSync(staleDir);

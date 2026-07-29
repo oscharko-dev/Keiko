@@ -25,6 +25,7 @@ import {
   type QualityIntelligenceStartRunRequest,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
+import { currentGatewayConfig } from "../deps.js";
 import { QiGenerationError } from "./generationPort.js";
 
 type QiProfileId = MgQI.QualityIntelligenceTaskProfileId;
@@ -60,8 +61,9 @@ function isRequestedModelCompatible(
   modelId: string,
   profileId: QiProfileId,
 ): boolean {
-  if (deps.config === undefined) return false;
-  const capability = findConfiguredCapability(deps.config, modelId);
+  const config = currentGatewayConfig(deps);
+  if (config === undefined) return false;
+  const capability = findConfiguredCapability(config, modelId);
   if (capability === undefined) return false;
   return isCapabilityCompatibleWithProfile(capability, profileId);
 }
@@ -70,28 +72,31 @@ function configuredChatCapability(
   deps: UiHandlerDeps,
   modelId: string,
 ): ModelCapability | undefined {
-  if (deps.config === undefined) return undefined;
-  const capability = findConfiguredCapability(deps.config, modelId);
+  const config = currentGatewayConfig(deps);
+  if (config === undefined) return undefined;
+  const capability = findConfiguredCapability(config, modelId);
   return capability?.kind === "chat" ? capability : undefined;
 }
 
 function configuredCapability(deps: UiHandlerDeps, modelId: string): ModelCapability | undefined {
-  if (deps.config === undefined) return undefined;
-  return findConfiguredCapability(deps.config, modelId);
+  const config = currentGatewayConfig(deps);
+  return config === undefined ? undefined : findConfiguredCapability(config, modelId);
 }
 
 function configuredCapabilities(deps: UiHandlerDeps): readonly ModelCapability[] {
-  return deps.config === undefined ? [] : listConfiguredCapabilities(deps.config);
+  const config = currentGatewayConfig(deps);
+  return config === undefined ? [] : listConfiguredCapabilities(config);
 }
 
 function selectCapabilityByGatewayQuery(
   deps: UiHandlerDeps,
   query: ModelSelectionQuery,
 ): { readonly modelId: string; readonly capability: ModelCapability } | undefined {
-  if (deps.config === undefined) return undefined;
-  const modelId = selectConfiguredModel(deps.config, query);
+  const config = currentGatewayConfig(deps);
+  if (config === undefined) return undefined;
+  const modelId = selectConfiguredModel(config, query);
   if (modelId === undefined) return undefined;
-  const capability = findConfiguredCapability(deps.config, modelId);
+  const capability = findConfiguredCapability(config, modelId);
   if (capability === undefined) return undefined;
   return { modelId, capability };
 }
@@ -448,9 +453,6 @@ export function resolveModelForQiCapability(
     if (isRequestedModelCompatible(deps, trimmed, profileId)) {
       return { kind: "model", modelId: trimmed };
     }
-  }
-  if (deps.config === undefined) {
-    return unavailableCapabilitySelection(profileId);
   }
   const candidates = configuredCapabilities(deps)
     .map((capability, index) => ({ capability, index }))

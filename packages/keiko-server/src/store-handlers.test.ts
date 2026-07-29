@@ -38,6 +38,7 @@ import {
   updateCapsuleState,
   type CreateCapsuleInput,
 } from "@oscharko-dev/keiko-local-knowledge";
+import { createWorkspaceScriptTrustService } from "./workspace-script-trust.js";
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const PATCH_HEADERS = POST_HEADERS;
@@ -314,10 +315,49 @@ describe("GET /api/projects", () => {
     expect(body.projects.map((project) => project.path)).toEqual([projDir, staleDir]);
     expect(body.projects[0]?.available).toBe(true);
   });
+
+  it("hides internal managed-worktree projects while keeping the selected source project", async () => {
+    const managedRoot = join(projDir, ".keiko", "ui", "task-workspaces");
+    const managedProject = join(managedRoot, "repo-id", "workspace-id");
+    mkdirSync(managedProject, { recursive: true });
+    store.createProject(projDir, "Selected source");
+    store.createProject(managedRoot, "Managed root");
+    store.createProject(managedProject, "Managed project");
+    await restartWithDeps({ managedTaskWorkspaceRoot: managedRoot });
+
+    const res = await fetch(url("/api/projects"));
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { projects: { path: string }[] };
+    expect(body.projects.map((project) => project.path)).toEqual([projDir]);
+    expect(store.listProjects().map((project) => project.path)).toEqual(
+      expect.arrayContaining([managedProject, managedRoot, projDir]),
+    );
+    expect(store.listProjects()).toHaveLength(3);
+  });
 });
 
 // ─── Route 14: POST /api/projects ────────────────────────────────────────────
 describe("POST /api/projects", () => {
+  it("records the explicit folder selection as the exact root trust grant", async () => {
+    writeFileSync(join(projDir, "package.json"), JSON.stringify({ name: "selected-root" }));
+    const workspaceScriptTrust = createWorkspaceScriptTrustService({ store });
+    await restartWithDeps({ workspaceScriptTrust });
+
+    const res = await fetch(url("/api/projects"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({ path: projDir }),
+    });
+
+    expect(res.status).toBe(201);
+    expect(workspaceScriptTrust.status(projDir)).toMatchObject({
+      projectId: projDir,
+      trust: "trusted",
+      reason: "human-grant",
+    });
+  });
+
   it("creates a project, returns 201 with availability", async () => {
     const res = await fetch(url("/api/projects"), {
       method: "POST",

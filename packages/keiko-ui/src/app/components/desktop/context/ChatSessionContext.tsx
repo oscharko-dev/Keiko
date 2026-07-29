@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useMemo, type ReactNode } from "react";
+import type { ProjectWithAvailability } from "@/lib/types";
 import type { ChatSessionApi } from "../hooks/useChatSession";
 
 type ChatSessionActionKeys =
@@ -59,6 +60,7 @@ const ChatSessionStateContext = createContext<ChatSessionSettledState | null>(nu
 const ChatSessionStreamContext = createContext<ChatSessionStream | null>(null);
 const ChatSessionActionsContext = createContext<ChatSessionActions | null>(null);
 const ChatSessionCatalogContext = createContext<ChatSessionCatalog | null>(null);
+const ChatSessionProjectContext = createContext<ProjectWithAvailability | null>(null);
 const ChatSessionActivityContext = createContext<ChatSessionActivity | null>(null);
 
 interface ChatSessionProviderProps {
@@ -210,13 +212,15 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
   return (
     <ChatSessionActionsContext.Provider value={actions}>
       <ChatSessionCatalogContext.Provider value={catalog}>
-        <ChatSessionActivityContext.Provider value={activity}>
-          <ChatSessionStateContext.Provider value={state}>
-            <ChatSessionStreamContext.Provider value={stream}>
-              {children}
-            </ChatSessionStreamContext.Provider>
-          </ChatSessionStateContext.Provider>
-        </ChatSessionActivityContext.Provider>
+        <ChatSessionProjectContext.Provider value={value.activeProject ?? null}>
+          <ChatSessionActivityContext.Provider value={activity}>
+            <ChatSessionStateContext.Provider value={state}>
+              <ChatSessionStreamContext.Provider value={stream}>
+                {children}
+              </ChatSessionStreamContext.Provider>
+            </ChatSessionStateContext.Provider>
+          </ChatSessionActivityContext.Provider>
+        </ChatSessionProjectContext.Provider>
       </ChatSessionCatalogContext.Provider>
     </ChatSessionActionsContext.Provider>
   );
@@ -275,6 +279,14 @@ export function useChatSessionActions(): ChatSessionActions {
 
 export function useOptionalChatSessionCatalog(): ChatSessionCatalog | null {
   return useContext(ChatSessionCatalogContext);
+}
+
+export function useOptionalChatSessionProject(): ProjectWithAvailability | null {
+  return useContext(ChatSessionProjectContext);
+}
+
+export function useOptionalChatSessionActions(): ChatSessionActions | null {
+  return useContext(ChatSessionActionsContext);
 }
 
 export function useOptionalChatSessionActivity(): ChatSessionActivity | null {

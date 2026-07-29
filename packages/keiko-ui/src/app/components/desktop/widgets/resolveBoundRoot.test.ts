@@ -1,18 +1,34 @@
 // Unit coverage for the single bound-surface root choke point (Issue #446, ADR-0090 D4). Proves the
 // override precedence that every bound surface (files/editor/terminal/commands/runtime/container/
-// git-delivery) relies on: an active workspace root wins over the per-window cfg and the linked-window
-// fallback (AC1/AC2, SC1/SC3); in unbound mode the legacy cfg → linkedRoot chain is preserved.
+// git-delivery) relies on: an active workspace root wins over the Workbench-wide selected root,
+// per-window cfg, and linked-window fallback (AC1/AC2, SC1/SC3).
 
 import { describe, expect, it } from "vitest";
 import { resolveBoundRoot } from "./index";
 
 describe("resolveBoundRoot", () => {
   it("returns the active root when a workspace is active, overriding cfg and linkedRoot", () => {
-    expect(resolveBoundRoot({ activeRoot: "/wt/a", linkedRoot: "/repo" }, "/cfg")).toBe("/wt/a");
+    expect(
+      resolveBoundRoot(
+        { activeRoot: "/wt/a", selectedRoot: "/selected", linkedRoot: "/repo" },
+        "/cfg",
+      ),
+    ).toBe("/wt/a");
   });
 
-  it("falls back to the cfg root in unbound mode", () => {
-    expect(resolveBoundRoot({ activeRoot: null, linkedRoot: "/repo" }, "/cfg")).toBe("/cfg");
+  it("uses the Workbench-wide selected root in unbound mode", () => {
+    expect(
+      resolveBoundRoot(
+        { activeRoot: null, selectedRoot: "/selected", linkedRoot: "/repo" },
+        "/cfg",
+      ),
+    ).toBe("/selected");
+  });
+
+  it("falls back to the cfg root when no Workbench root is selected", () => {
+    expect(
+      resolveBoundRoot({ activeRoot: null, selectedRoot: null, linkedRoot: "/repo" }, "/cfg"),
+    ).toBe("/cfg");
   });
 
   it("falls back to the linked-window root when unbound and cfg is absent", () => {

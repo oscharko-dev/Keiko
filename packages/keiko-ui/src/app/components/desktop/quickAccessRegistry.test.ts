@@ -33,6 +33,7 @@ function host(): EditorPaletteHost {
     dirtyCount: 1,
     verificationRunning: false,
     verifiableTarget: "src/app.test.ts",
+    workspaceTrustUiAvailable: true,
     verificationCatalog: {
       schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
       projectId: "/repo",

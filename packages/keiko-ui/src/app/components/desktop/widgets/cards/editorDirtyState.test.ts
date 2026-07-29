@@ -7,14 +7,19 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import { reconcileEditorDirtyByPane, type EditorDirtyByPane } from "./editorDirtyState";
+import {
+  EDITOR_SIDEBAR_DEFAULT_WIDTH,
+  EDITOR_SIDEBAR_MIN_WIDTH,
+  EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
+} from "../../editorSidebarSizing";
 
 const INPUT: CreateEditorLayoutStateV2Input = {
   root: "/repo",
   file: "src/a.ts",
   openFiles: ["src/a.ts", "src/b.ts"],
-  defaultSidebarWidth: 260,
-  minSidebarWidth: 180,
-  maxSidebarWidth: 440,
+  defaultSidebarWidth: EDITOR_SIDEBAR_DEFAULT_WIDTH,
+  minSidebarWidth: EDITOR_SIDEBAR_MIN_WIDTH,
+  maxSidebarWidth: EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
 };
 
 function baseLayout(): EditorLayoutStateV2 {

@@ -95,6 +95,14 @@ async function openEditorFor(page: Page, root: string): Promise<Locator> {
     data: { path: root, name: "Editor verification E2E" },
   });
   expect(project.ok(), await project.text()).toBe(true);
+  // The global folder selector is the human authorization point for a selected root. This fixture
+  // registers that choice through the same governed trust route before opening the editor; the
+  // managed editor intentionally exposes no second trust command or prompt for the active root.
+  const trust = await page.request.post("/api/editor/verification/trust", {
+    headers: MUTATION_HEADERS,
+    data: { projectId: root },
+  });
+  expect(trust.status(), await trust.text()).toBe(200);
   await seedEditorWindow(page, { root, active: SOURCE, openFiles: [SOURCE, FAILING_TEST] });
   await page.goto("/");
   return openEditorWorkspace(page);
@@ -130,23 +138,6 @@ async function openProblems(page: Page): Promise<void> {
   // The filter exists in both empty and populated states, so it proves the project-bound panel
   // opened without presuming the result that each scenario asserts immediately afterwards.
   await expect(page.locator(`[data-testid="problems-filter-severity"]`)).toBeVisible();
-}
-
-async function trustWorkspaceScripts(page: Page): Promise<void> {
-  const trustResponse = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      response.url().endsWith("/api/editor/verification/trust"),
-  );
-  const catalogRefresh = page.waitForResponse(
-    (response) =>
-      response.request().method() === "GET" &&
-      response.url().includes("/api/editor/verification/catalog?projectId="),
-  );
-  await runPaletteCommand(page, "Trust Workspace Scripts");
-  await page.getByRole("button", { name: "Trust workspace" }).click();
-  expect((await trustResponse).status()).toBe(200);
-  expect((await catalogRefresh).status()).toBe(200);
 }
 
 async function awaitRunCompletion(pane: Locator): Promise<void> {
@@ -202,7 +193,6 @@ test("running a workspace typecheck through the command palette exercises the no
   const workspaceLocator = await openEditorFor(page, ws.root);
   const pane = firstPane(workspaceLocator);
 
-  await trustWorkspaceScripts(page);
   await runPaletteCommand(page, "Run Typecheck");
   await awaitRunCompletion(pane);
 
@@ -221,7 +211,6 @@ test("cancelling a run mid-flight through the command palette settles without le
   const workspaceLocator = await openEditorFor(page, ws.root);
   const pane = firstPane(workspaceLocator);
 
-  await trustWorkspaceScripts(page);
   const cancelledResponse = page.waitForResponse(
     (response) =>
       response.request().method() === "DELETE" &&

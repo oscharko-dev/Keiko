@@ -20,15 +20,13 @@ export const TEST_QUALITY_JUDGE_RESPONSE_SCHEMA: Readonly<Record<string, unknown
   properties: {
     dimensions: {
       type: "array",
-      minItems: TEST_QUALITY_RUBRIC_DIMENSIONS.length,
-      maxItems: TEST_QUALITY_RUBRIC_DIMENSIONS.length,
       items: {
         type: "object",
         additionalProperties: false,
         required: ["name", "score", "rationale"],
         properties: {
           name: { type: "string", enum: [...TEST_QUALITY_RUBRIC_DIMENSIONS] },
-          score: { type: "integer", minimum: 0, maximum: 100 },
+          score: { type: "integer" },
           rationale: { type: "string" },
         },
       },

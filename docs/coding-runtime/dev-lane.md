@@ -28,8 +28,10 @@ activation, not a platform qualification:
   a packaged-install manifest (`.portable/…`) or is not a repository checkout (no `.git` /
   `tsconfig.packages.json`). **No packaged install — Windows or macOS — can adopt this lane**;
   packaged behavior is unchanged and stays fail-closed until the Wave-5 packaged qualification.
-- **Opt-in only.** The lane does nothing unless `KEIKO_CODING_RUNTIME_DEV_LANE` is explicitly
-  enabled (`1`, `true`, `on`, `yes`, `enabled`). Any other value keeps it inactive.
+- **Trusted-launcher opt-in only.** `npm run dev:start` is the operator's explicit selection of
+  development mode and supplies `KEIKO_CODING_RUNTIME_DEV_LANE=1` to the BFF on supported macOS
+  checkouts. Direct BFF startup does nothing unless the environment value is explicitly enabled
+  (`1`, `true`, `on`, `yes`, `enabled`).
 
 ## Prerequisites
 
@@ -37,15 +39,17 @@ activation, not a platform qualification:
 - Xcode Command Line Tools (`xcrun clang`) — the secure-read helper is compiled locally.
 - Network access to `github.com` release assets for the one-time payload download.
 
-## Stage → start
+## Start
 
 ```bash
-# 1. Stage the review-approved OpenCode payload and build the secure-read helper.
-npm run dev:coding-runtime:stage
-
-# 2. Start the dev server with the lane enabled.
-KEIKO_CODING_RUNTIME_DEV_LANE=1 npm run dev:start
+npm run dev:start
 ```
+
+The trusted launcher builds the packages and evaluates the same production discovery used by the
+BFF. A current verified runtime is reused. When discovery reports a missing, stale, or tampered
+staged artifact, the launcher runs the equivalent of `npm run dev:coding-runtime:stage`, evaluates
+production discovery again, and fails the start if activation still does not succeed. The
+standalone staging command remains available for deliberate pre-provisioning.
 
 Staging writes `.portable-sidecar-payloads/<target>/`:
 
@@ -69,7 +73,7 @@ failed prerequisite:
 | Reason                    | Meaning                                                                                                                    | Typical fix                                                 |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
 | `runtime-disabled`        | `KEIKO_CODING_SIDECAR_DISABLED` kill switch is set.                                                                        | Unset the kill switch.                                      |
-| `platform-unqualified`    | No packaged qualification and the dev lane is not enabled.                                                                 | Enable the lane (dev checkout) or use a qualified install.  |
+| `platform-unqualified`    | No packaged qualification and the trusted dev launcher was not used.                                                       | Use `npm run dev:start` or a qualified install.             |
 | `dev-lane-refused`        | Lane enabled, but the host is not a permitted dev checkout (packaged manifest present, no checkout markers, or non-macOS). | Run from a real macOS repository checkout.                  |
 | `payload-missing`         | Staged payload or evidence files absent.                                                                                   | `npm run dev:coding-runtime:stage`                          |
 | `payload-unapproved`      | Approvals catalog missing, unparseable, or redistribution not approved.                                                    | Restore `portable-runtime-approvals.json`.                  |
@@ -85,7 +89,7 @@ lane flag:
 
 ```bash
 KEIKO_CODING_DEPLOYMENT_CEILING=supervised-coding \
-KEIKO_CODING_RUNTIME_DEV_LANE=1 npm run dev:start
+npm run dev:start
 ```
 
 - The shipped default stays `governed-assist`; unrecognized values are ignored fail-closed.
@@ -97,6 +101,17 @@ KEIKO_CODING_RUNTIME_DEV_LANE=1 npm run dev:start
   authoritative. This lane makes `supervised-coding` honestly reachable through the explicit
   ceiling above; W1.3 owns rendering the honest readiness states (including
   `runtimeUnavailableReason`) in the product UI.
+
+## Stop
+
+```bash
+npm run dev:stop
+```
+
+The stop command gives the BFF its complete bounded disposal window so it can revoke coding
+authority and terminate the managed OpenCode process group before the runner exits. It waits for
+all tracked development children and reports a failure rather than claiming success while one
+remains. `npm run dev:stop -- --force` is the explicit hard-stop fallback.
 
 ## Minimal gateway provider profile for Code tasks
 

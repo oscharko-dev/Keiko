@@ -234,7 +234,7 @@ vi.mock("./cards/FilesWidget", () => ({
       root: string | null,
       activeDirectoryPath?: string | null,
     ) => void;
-    readonly onRootChange: (root: string) => void;
+    readonly onRootChange?: (root: string) => void;
     readonly onOpenFile: (root: string, path: string) => void;
     readonly onOpenGitDelivery: (root: string) => void;
   }) => (
@@ -243,9 +243,11 @@ vi.mock("./cards/FilesWidget", () => ({
       <button type="button" onClick={() => onActiveFileChange("src/app.ts", "/repo", "/repo/src")}>
         Active file
       </button>
-      <button type="button" onClick={() => onRootChange("/next")}>
-        Change root
-      </button>
+      {onRootChange === undefined ? null : (
+        <button type="button" onClick={() => onRootChange("/next")}>
+          Change root
+        </button>
+      )}
       <button type="button" onClick={() => onOpenFile("/repo", "src/app.ts")}>
         Open file
       </button>
@@ -1229,13 +1231,7 @@ describe("workspace widget renderer registry", () => {
       activeDirectoryPath: "/repo/src",
       resolvedRoot: "/repo",
     });
-    fireEvent.click(screen.getByRole("button", { name: "Change root" }));
-    expect(ctx.updateCfg).toHaveBeenCalledWith({
-      root: "/next",
-      activeFilePath: undefined,
-      activeDirectoryPath: undefined,
-      resolvedRoot: undefined,
-    });
+    expect(screen.queryByRole("button", { name: "Change root" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Open file" }));
     expect(ctx.openWindow).toHaveBeenCalledWith("editor", {
       root: "/repo",
@@ -1244,6 +1240,16 @@ describe("workspace widget renderer registry", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Open Git" }));
     expect(ctx.openWindow).toHaveBeenCalledWith("governedGit", { projectPath: "/repo" });
+
+    const unboundCtx = { ...makeCtx(), linkedRoot: null, linkedRoots: [] };
+    view.rerender(<>{WIN_TYPES.files.render({}, unboundCtx)}</>);
+    fireEvent.click(await screen.findByRole("button", { name: "Change root" }));
+    expect(unboundCtx.updateCfg).toHaveBeenCalledWith({
+      root: "/next",
+      activeFilePath: undefined,
+      activeDirectoryPath: undefined,
+      resolvedRoot: undefined,
+    });
 
     view.rerender(<>{WIN_TYPES.review.render({}, ctx)}</>);
     fireEvent.click(await screen.findByTestId("review-widget"));
@@ -1458,9 +1464,20 @@ describe("workspace widget renderer registry", () => {
 // renderer (not just the resolveBoundRoot helper): a mutation removing the override from a renderer
 // must fail here. Covers AC1/AC2 + the SC "no surface remains pointed at the previous workspace".
 describe("active workspace binding override (Issue #446)", () => {
-  function boundCtx(activeRoot: string | null): WindowRenderContext {
-    return { ...makeCtx(), activeRoot, linkedRoot: null };
+  function boundCtx(
+    activeRoot: string | null,
+    selectedRoot: string | null = null,
+  ): WindowRenderContext {
+    return { ...makeCtx(), activeRoot, selectedRoot, linkedRoot: null };
   }
+
+  it("roots an unbound editor in the folder selected by the global workspace context", async () => {
+    const selectedRoot = "/Users/oscharko-dev/Projects/Keiko";
+
+    render(<>{WIN_TYPES.editor.render({}, boundCtx(null, selectedRoot))}</>);
+
+    expect(await screen.findByTestId("editor-widget")).toHaveTextContent(`${selectedRoot}:`);
+  });
 
   it("files renderer uses the active root, overriding the per-window cfg root", async () => {
     render(<>{WIN_TYPES.files.render({ root: "/cfg/old" }, boundCtx("/wt/active"))}</>);
