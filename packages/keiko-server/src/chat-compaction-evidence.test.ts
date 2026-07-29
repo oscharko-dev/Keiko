@@ -204,7 +204,9 @@ function seedHistory(chatId: string, count: number): void {
 function seedOversizedHistory(chatId: string): number {
   const seedBaseTimestamp = 1_700_000_000_000;
   const huge = "x".repeat(150_000);
-  const count = 3;
+  // Keep every seeded legacy user turn paired with an assistant response. An unmatched legacy
+  // tail is intentionally excluded from gateway history because it may be an interrupted turn.
+  const count = 4;
   for (let i = 0; i < count; i += 1) {
     store.createMessage({
       chatId,
@@ -224,7 +226,9 @@ function seedOversizedHistory(chatId: string): number {
 function seedStructuredOversizedHistory(chatId: string): number {
   const seedBaseTimestamp = 1_700_000_100_000;
   const huge = "x".repeat(150_000);
-  const count = 3;
+  // Use two completed legacy pairs so this fixture exercises compaction without depending on an
+  // orphaned user row being admitted to a later model prompt.
+  const count = 4;
   for (let i = 0; i < count; i += 1) {
     store.createMessage({
       chatId,

@@ -7,9 +7,8 @@
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   VOICE_PROTOCOL_VERSION,
-  type VoiceControlMessage,
+  decodeVoiceControlMessage,
   type VoiceSessionChatContext,
-  isVoiceControlMessage,
 } from "@oscharko-dev/keiko-contracts";
 
 // Upper bound on the whole proxied-SDP handshake (open → session.created → answer). A server that
@@ -225,17 +224,15 @@ export function createBrowserVoiceControlClient(
             return;
           }
 
-          if (!isVoiceControlMessage(parsed)) {
+          const msg = decodeVoiceControlMessage(parsed);
+          if (msg === undefined) {
             return;
           }
 
-          const msg = parsed as VoiceControlMessage;
-
           if (msg.kind === "error") {
-            const errorMsg = msg as Extract<VoiceControlMessage, { kind: "error" }>;
             const reason =
-              errorMsg.code === "negotiation-failed" ? "negotiation-failed" : "connection-failed";
-            rejectOnce(new VoiceControlError(reason, `Voice control error: ${errorMsg.code}`));
+              msg.code === "negotiation-failed" ? "negotiation-failed" : "connection-failed";
+            rejectOnce(new VoiceControlError(reason, `Voice control error: ${msg.code}`));
             return;
           }
 
@@ -248,8 +245,7 @@ export function createBrowserVoiceControlClient(
           }
 
           if (msg.kind === "signal.sdp.answer" && sessionCreated) {
-            const answerMsg = msg as Extract<VoiceControlMessage, { kind: "signal.sdp.answer" }>;
-            resolveOnce(answerMsg.sdp);
+            resolveOnce(msg.sdp);
           }
 
           // "capability.offer" and "media.track.state" (negotiating) are expected and ignored.

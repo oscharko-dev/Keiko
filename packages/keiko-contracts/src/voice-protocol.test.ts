@@ -12,7 +12,8 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import type { VoiceProfile } from "./gateway.js";
+import { VOICE_PROVIDER_LOCALITIES, type VoiceProfile } from "./gateway.js";
+import { decodeVoiceControlMessage, type VoiceErrorMessage } from "./index.js";
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   PREFERRED_VOICE_NEGOTIATION_MODE,
@@ -21,6 +22,7 @@ import {
   VOICE_CONTROL_MESSAGE_REPLAY,
   VOICE_CONTROL_TRANSPORT_V1,
   VOICE_DATA_CHANNEL_EVENT_KINDS,
+  VOICE_PROTOCOL_ERROR_CODES,
   VOICE_MEDIA_PLANE,
   VOICE_REALTIME_CONTROL_TRANSPORT,
   VOICE_REALTIME_INPUT_DATA_CHANNEL_EVENT_KINDS,
@@ -67,7 +69,35 @@ function wellFormedMessage(kind: VoiceControlMessageKind): Record<string, unknow
           chatContext: { chatId: "chat-abc123" },
         }
       : {}),
+    ...(kind === "error" ? { code: VOICE_PROTOCOL_ERROR_CODES.at(-1) } : {}),
   };
+}
+
+function wellFormedSessionCreatedMessage(): Record<string, unknown> {
+  return {
+    ...wellFormedMessage("session.created"),
+    direction: "host-to-client",
+    profile: "full-realtime",
+    controlTransport: VOICE_REALTIME_CONTROL_TRANSPORT,
+    mediaTransport: VOICE_PROFILE_MEDIA_TRANSPORT["full-realtime"],
+    negotiationMode: VOICE_PROFILE_NEGOTIATION_MODE["full-realtime"],
+    providerLocality: VOICE_PROVIDER_LOCALITIES.at(0),
+  };
+}
+
+function wellFormedSdpAnswerMessage(): Record<string, unknown> {
+  return {
+    ...wellFormedMessage("signal.sdp.answer"),
+    direction: "host-to-client",
+    sdp: "v=0\r\nanswer-sdp",
+  };
+}
+
+function withoutField(
+  value: Readonly<Record<string, unknown>>,
+  field: string,
+): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([key]): boolean => key !== field));
 }
 
 describe("voice protocol — version & catalog", () => {
@@ -459,6 +489,167 @@ describe("AC6 — security reasoning over endpoints and credentials is contract-
 });
 
 describe("envelope validation & guards", () => {
+  it("accepts the correlated error shape exported through the package entrypoint", (): void => {
+    const message: VoiceErrorMessage = {
+      protocolVersion: VOICE_PROTOCOL_VERSION,
+      sessionId: "vs-correlated-error",
+      seq: 1,
+      direction: "host-to-client",
+      kind: "error",
+      code: "negotiation-failed",
+      correlationId: "dictation-corr-2806",
+    };
+
+    expect(validateVoiceControlMessage(message)).toEqual({ ok: true });
+    expect(isVoiceControlMessage(message)).toBe(true);
+    expect(message.correlationId).toBe("dictation-corr-2806");
+  });
+
+  it.each(["a", "a".repeat(128)])(
+    "accepts a bounded content-free error correlation id",
+    (correlationId): void => {
+      const message = {
+        ...wellFormedMessage("error"),
+        code: "negotiation-failed",
+        correlationId,
+      };
+
+      expect(validateVoiceControlMessage(message)).toEqual({ ok: true });
+      expect(isVoiceControlMessage(message)).toBe(true);
+    },
+  );
+
+  it.each([
+    "",
+    "a".repeat(129),
+    `dictation-corr-2806\n`,
+    `${"a".repeat(128)}\n`,
+    42,
+    null,
+    "provider detail",
+    "<script>alert(1)</script>",
+  ])("rejects malformed or content-bearing error correlation ids", (correlationId): void => {
+    const message = {
+      ...wellFormedMessage("error"),
+      code: "negotiation-failed",
+      correlationId,
+    };
+
+    expect(validateVoiceControlMessage(message)).toEqual({
+      ok: false,
+      reasons: ["error correlationId invalid"],
+    });
+    expect(isVoiceControlMessage(message)).toBe(false);
+  });
+
+  it("decodes an error after discarding only malformed optional correlation metadata", (): void => {
+    const message = {
+      ...wellFormedMessage("error"),
+      direction: "host-to-client",
+      code: "negotiation-failed",
+      correlationId: "<provider detail>",
+    };
+
+    expect(decodeVoiceControlMessage(message)).toEqual({
+      ...wellFormedMessage("error"),
+      direction: "host-to-client",
+      code: "negotiation-failed",
+    });
+    expect(message.correlationId).toBe("<provider detail>");
+  });
+
+  it.each([undefined, "provider-error", 42])(
+    "rejects a missing or unknown required error code",
+    (code): void => {
+      const message = {
+        ...wellFormedMessage("error"),
+        code,
+      };
+
+      expect(validateVoiceControlMessage(message)).toEqual({
+        ok: false,
+        reasons: ["error code invalid"],
+      });
+      expect(isVoiceControlMessage(message)).toBe(false);
+      expect(
+        decodeVoiceControlMessage({
+          ...message,
+          direction: "host-to-client",
+          correlationId: "<invalid optional metadata>",
+        }),
+      ).toBeUndefined();
+    },
+  );
+
+  it("decodes structurally complete inbound negotiation payloads", (): void => {
+    const created = wellFormedSessionCreatedMessage();
+    const answer = wellFormedSdpAnswerMessage();
+
+    expect(decodeVoiceControlMessage(created)).toEqual(created);
+    expect(decodeVoiceControlMessage(answer)).toEqual(answer);
+  });
+
+  it.each([
+    ["session.created without profile", withoutField(wellFormedSessionCreatedMessage(), "profile")],
+    [
+      "session.created without control transport",
+      withoutField(wellFormedSessionCreatedMessage(), "controlTransport"),
+    ],
+    [
+      "session.created with invalid media transport",
+      { ...wellFormedSessionCreatedMessage(), mediaTransport: "peer-to-peer" },
+    ],
+    [
+      "session.created with another valid profile",
+      { ...wellFormedSessionCreatedMessage(), profile: "speech-to-text" },
+    ],
+    [
+      "session.created with the legacy control transport",
+      { ...wellFormedSessionCreatedMessage(), controlTransport: VOICE_CONTROL_TRANSPORT_V1 },
+    ],
+    [
+      "session.created with another valid media transport",
+      {
+        ...wellFormedSessionCreatedMessage(),
+        mediaTransport: VOICE_PROFILE_MEDIA_TRANSPORT["speech-to-text"],
+      },
+    ],
+    [
+      "session.created with invalid negotiation mode",
+      { ...wellFormedSessionCreatedMessage(), negotiationMode: "automatic" },
+    ],
+    [
+      "session.created with another valid negotiation mode",
+      {
+        ...wellFormedSessionCreatedMessage(),
+        negotiationMode: VOICE_PROFILE_NEGOTIATION_MODE["speech-to-text"],
+      },
+    ],
+    [
+      "session.created with invalid provider locality",
+      { ...wellFormedSessionCreatedMessage(), providerLocality: "provider-detail" },
+    ],
+    ["signal.sdp.answer without SDP", withoutField(wellFormedSdpAnswerMessage(), "sdp")],
+    ["signal.sdp.answer with empty SDP", { ...wellFormedSdpAnswerMessage(), sdp: "" }],
+    ["signal.sdp.answer with blank SDP", { ...wellFormedSdpAnswerMessage(), sdp: " \r\n " }],
+    ["signal.sdp.answer with non-string SDP", { ...wellFormedSdpAnswerMessage(), sdp: 42 }],
+    [
+      "negotiation message in the client-to-host direction",
+      { ...wellFormedSdpAnswerMessage(), direction: "client-to-host" },
+    ],
+  ])("rejects an incomplete %s payload", (_label, message): void => {
+    expect(decodeVoiceControlMessage(message)).toBeUndefined();
+  });
+
+  it("ignores control messages outside the browser negotiation subset", (): void => {
+    expect(
+      decodeVoiceControlMessage({
+        ...wellFormedMessage("capability.offer"),
+        direction: "host-to-client",
+      }),
+    ).toBeUndefined();
+  });
+
   it("accepts a well-formed envelope for every kind", () => {
     for (const kind of VOICE_CONTROL_MESSAGE_KINDS) {
       const message = wellFormedMessage(kind);

@@ -15,6 +15,7 @@ import {
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
   MAX_DESKTOP_CHAT_INPUT_BYTES,
   MAX_DESKTOP_CHAT_INPUT_CHARS,
+  canonicalDesktopChatTurnReferenceSeed,
   isGroundingScopeIdentity,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
@@ -1060,6 +1061,20 @@ interface SessionState {
   selectedModel: string | undefined;
 }
 
+function projectOptimisticMessage(
+  previous: SessionState,
+  chatId: string,
+  optimistic: ChatMessage,
+  queueOwned: boolean,
+): SessionState {
+  const alreadyVisible = previous.messages.some((message): boolean => message.id === optimistic.id);
+  const alreadyDurable =
+    queueOwned &&
+    hasDurableCanonicalUserRow(previous.messages, optimistic.content, optimistic.timestamp);
+  if (previous.activeChat?.id !== chatId || alreadyVisible || alreadyDurable) return previous;
+  return { ...previous, messages: [...previous.messages, optimistic] };
+}
+
 const INITIAL_STATE: SessionState = {
   projects: [],
   chats: [],
@@ -1538,19 +1553,87 @@ function settledSendMessageOutcome(input: {
   return settled.status === "completed" ? settled : { status: "failed" };
 }
 
-function hasNewCanonicalUserMessage(
+export async function canonicalTurnReferenceForClient(
+  chatId: string,
+  clientTurnId: string,
+): Promise<string> {
+  const runtime = await import("./canonical-voice-hasher-runtime");
+  return runtime.sha256Hex(canonicalDesktopChatTurnReferenceSeed(chatId, clientTurnId));
+}
+
+function isExactCanonicalUserMessage(message: ChatMessage, canonicalTurnRef: string): boolean {
+  return message.role === "user" && message.canonicalTurnRef === canonicalTurnRef;
+}
+
+function hasExactCanonicalUserMessage(
   messages: readonly ChatMessage[],
-  messageIdsBeforeSend: ReadonlySet<string>,
-  content: string,
-  admissionStartedAt: number,
+  canonicalTurnRef: string,
 ): boolean {
-  return messages.some(
-    (message) =>
-      message.role === "user" &&
-      message.content === content &&
-      message.timestamp >= admissionStartedAt &&
-      !messageIdsBeforeSend.has(message.id),
+  return messages.some((message): boolean =>
+    isExactCanonicalUserMessage(message, canonicalTurnRef),
   );
+}
+
+function exactCanonicalAssistant(
+  messages: readonly ChatMessage[],
+  canonicalTurnRef: string,
+): ChatMessage | undefined {
+  return messages.find(
+    (message): boolean =>
+      message.role === "assistant" && message.canonicalTurnRef === canonicalTurnRef,
+  );
+}
+
+function canonicalTurnPresentation(
+  messages: readonly ChatMessage[],
+  canonicalTurnRef: string,
+  canonicalUser: FailedSendPresentation["canonicalUser"],
+): readonly ChatMessage[] {
+  const hasUser = hasExactCanonicalUserMessage(messages, canonicalTurnRef);
+  const hasAssistant = exactCanonicalAssistant(messages, canonicalTurnRef) !== undefined;
+  if (hasUser && hasAssistant) return messages;
+  return messages.filter(
+    (message): boolean =>
+      message.canonicalTurnRef !== canonicalTurnRef ||
+      (message.role === "user" && canonicalUser === "preserve"),
+  );
+}
+
+interface FailedSendPresentation {
+  readonly canonicalUser: "hide" | "preserve";
+  readonly missingOptimistic: "hide" | "preserve";
+}
+
+interface CanonicalTurnReconciliation {
+  readonly persistence: UserPersistenceProof;
+  readonly completedAssistantMessageId?: string;
+}
+
+interface SendAttemptSettlementRequest {
+  readonly terminal: SendAttemptOutcome;
+  readonly chat: Chat;
+  readonly projectPath: string;
+  readonly optimistic: ChatMessage;
+  readonly clientTurnId: string;
+  readonly signal: AbortSignal;
+  readonly preserveUserOnMissing: boolean;
+}
+
+interface SettledSendAttempt {
+  readonly settled: SendAttemptOutcome;
+  readonly persistence: UserPersistenceProof;
+}
+
+function failedSendPresentation(
+  exactTurnInProgress: boolean,
+  settled: SendAttemptOutcome,
+  preserveUserOnMissing: boolean,
+): FailedSendPresentation {
+  const keepRetryableUser = settled.status === "cancelled" || preserveUserOnMissing;
+  return {
+    canonicalUser: exactTurnInProgress || keepRetryableUser ? "preserve" : "hide",
+    missingOptimistic: !exactTurnInProgress && keepRetryableUser ? "preserve" : "hide",
+  };
 }
 
 export interface UseChatSessionOptions {
@@ -1908,45 +1991,52 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       chatId: string,
       projectPath: string,
       optimistic: ChatMessage,
-      messageIdsBeforeSend: ReadonlySet<string>,
-      preserveOptimisticOnMissing: boolean,
+      clientTurnId: string,
+      presentation: FailedSendPresentation,
       signal: AbortSignal,
-    ): Promise<UserPersistenceProof> => {
+    ): Promise<CanonicalTurnReconciliation> => {
       const controller = new AbortController();
       const timer = setTimeout(() => {
         controller.abort();
       }, CANONICAL_USER_RECONCILIATION_TIMEOUT_MS);
       reconciliationControllersRef.current.set(controller, timer);
       try {
+        const canonicalTurnRef = await canonicalTurnReferenceForClient(chatId, clientTurnId);
         const payload = await raceUiAbort(
           fetchChatMessages(chatId, projectPath, controller.signal),
           controller.signal,
         );
-        const proof = hasNewCanonicalUserMessage(
-          payload.messages,
-          messageIdsBeforeSend,
-          optimistic.content,
-          optimistic.timestamp,
-        )
+        const persistence = hasExactCanonicalUserMessage(payload.messages, canonicalTurnRef)
           ? "persisted"
           : "missing";
+        const assistant = exactCanonicalAssistant(payload.messages, canonicalTurnRef);
         if (
           mountedRef.current &&
           activeChatIdRef.current === chatId &&
           latestSendSignalRef.current === signal
         ) {
+          const visibleMessages = canonicalTurnPresentation(
+            payload.messages,
+            canonicalTurnRef,
+            presentation.canonicalUser,
+          );
           setState((previous) => ({
             ...previous,
             messages: [
-              ...Array.from(payload.messages),
-              ...(proof === "missing" && preserveOptimisticOnMissing ? [optimistic] : []),
+              ...visibleMessages,
+              ...(persistence === "missing" && presentation.missingOptimistic === "preserve"
+                ? [optimistic]
+                : []),
               ...previous.messages.filter(
                 (message) => message.id.startsWith("local-") && message.id !== optimistic.id,
               ),
             ],
           }));
         }
-        return proof;
+        return {
+          persistence,
+          ...(assistant === undefined ? {} : { completedAssistantMessageId: assistant.id }),
+        };
       } catch {
         // A failed reconciliation cannot prove that the request was rejected. Keep the reviewed user
         // text visible and report an uncertain outcome; silently removing it would lose a final voice
@@ -1962,7 +2052,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
               : { ...previous, messages: [...previous.messages, optimistic] },
           );
         }
-        return "unknown";
+        return { persistence: "unknown" };
       } finally {
         clearTimeout(timer);
         reconciliationControllersRef.current.delete(controller);
@@ -2785,6 +2875,67 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     ],
   );
 
+  const settleSendAttempt = useCallback(
+    async (request: SendAttemptSettlementRequest): Promise<SettledSendAttempt> => {
+      let settled: SendAttemptOutcome = request.signal.aborted
+        ? { status: "cancelled" }
+        : request.terminal;
+      if (settled.status === "completed") return { settled, persistence: "persisted" };
+      const exactTurnInProgress =
+        request.terminal.status === "failed" && request.terminal.canonicalTurnInProgress === true;
+      const reconciliation = await reconcileCanonicalUserPersistence(
+        request.chat.id,
+        request.projectPath,
+        request.optimistic,
+        request.clientTurnId,
+        failedSendPresentation(exactTurnInProgress, settled, request.preserveUserOnMissing),
+        request.signal,
+      );
+      const persistence = exactTurnInProgress ? "persisted" : reconciliation.persistence;
+      if (
+        reconciliation.persistence !== "persisted" ||
+        reconciliation.completedAssistantMessageId === undefined
+      ) {
+        return { settled, persistence };
+      }
+      settled = {
+        status: "completed",
+        assistantMessageId: reconciliation.completedAssistantMessageId,
+      };
+      if (
+        mountedRef.current &&
+        activeChatIdRef.current === request.chat.id &&
+        latestSendSignalRef.current === request.signal
+      ) {
+        setError(undefined);
+      }
+      return { settled, persistence };
+    },
+    [reconcileCanonicalUserPersistence],
+  );
+
+  const presentCompletedSend = useCallback(
+    (input: {
+      readonly settled: SendAttemptOutcome;
+      readonly canonicalTarget: CanonicalVoiceSendTarget | undefined;
+      readonly chatId: string;
+      readonly signal: AbortSignal;
+      readonly disclosures: readonly SentDocumentDisclosure[];
+    }): void => {
+      if (input.settled.status !== "completed" || input.canonicalTarget !== undefined) return;
+      if (
+        !mountedRef.current ||
+        activeChatIdRef.current !== input.chatId ||
+        latestSendSignalRef.current !== input.signal
+      ) {
+        return;
+      }
+      clearPendingAttachments();
+      setLastSentDocuments(input.disclosures);
+    },
+    [clearPendingAttachments],
+  );
+
   // Issue #152 — unified cancel that aborts any in-flight send (grounded OR
   // ungrounded). Replaces the prior `cancelGrounded`-only surface. When no
   // request is in flight this is a safe no-op. We flip sendStatus to
@@ -2820,8 +2971,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return { status: "not-sent" };
       }
       const { canonicalTarget, chat, project, content, modelId } = admission;
-      const currentMessages = sessionStateRef.current.messages;
-      const messageIdsBeforeSend = new Set(currentMessages.map((message) => message.id));
+      const clientTurnId = options?.clientTurnId ?? crypto.randomUUID();
       const optimistic =
         options?.optimisticMessage ?? canonicalVoiceOptimisticMessage(chat.id, content);
       // Synchronously commit to "queued" so a re-entrant call in the same tick
@@ -2837,12 +2987,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       // queue-owned re-projection (optimisticMessage present) also consults the durable-admission
       // proof. The typed Composer path stays untouched: there identical text is a new turn.
       setState((previous) =>
-        previous.activeChat?.id !== chat.id ||
-        previous.messages.some((message) => message.id === optimistic.id) ||
-        (options?.optimisticMessage !== undefined &&
-          hasDurableCanonicalUserRow(previous.messages, optimistic.content, optimistic.timestamp))
-          ? previous
-          : { ...previous, messages: [...previous.messages, optimistic] },
+        projectOptimisticMessage(
+          previous,
+          chat.id,
+          optimistic,
+          options?.optimisticMessage !== undefined,
+        ),
       );
       // Issue #152 — fresh controller per send. The previous controller (if
       // any) was either already settled or already aborted via cancelSend.
@@ -2862,36 +3012,28 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           signal: controller.signal,
           canonicalTarget,
           forceBuffered: options?.forceBuffered === true,
-          clientTurnId: options?.clientTurnId,
+          clientTurnId,
         });
-        const settled: SendAttemptOutcome = controller.signal.aborted
-          ? { status: "cancelled" }
-          : terminal;
-        const exactTurnInProgress =
-          terminal.status === "failed" && terminal.canonicalTurnInProgress === true;
-        let persistence: UserPersistenceProof = "persisted";
-        if (settled.status !== "completed") {
-          const reconciliation = await reconcileCanonicalUserPersistence(
-            chat.id,
-            project.path,
-            optimistic,
-            messageIdsBeforeSend,
-            !exactTurnInProgress &&
-              (settled.status === "cancelled" || options?.clientTurnId !== undefined),
-            controller.signal,
-          );
-          if (!exactTurnInProgress) persistence = reconciliation;
-        }
+        const { settled, persistence } = await settleSendAttempt({
+          terminal,
+          chat,
+          projectPath: project.path,
+          optimistic,
+          clientTurnId,
+          signal: controller.signal,
+          preserveUserOnMissing: options?.clientTurnId !== undefined,
+        });
         // Only the latest attempt owns the shared lifecycle. cancelSend leaves this attempt's signal
         // as owner until settlement; an immediate replacement installs a different signal and cannot
         // be clobbered by this continuation.
         updateOwnedSendStatus(controller.signal, settled.status);
-        if (terminal.status === "completed" && canonicalTarget === undefined) {
-          // AC #3 (#147): clear pending attachments after a successful send.
-          clearPendingAttachments();
-          // Issue #148 — record which documents contributed context so the UI can disclose them.
-          setLastSentDocuments(disclosures);
-        }
+        presentCompletedSend({
+          settled,
+          canonicalTarget,
+          chatId: chat.id,
+          signal: controller.signal,
+          disclosures,
+        });
         return settledSendMessageOutcome({ settled, terminal, persistence, canonicalTarget });
       } finally {
         if (sendControllerRef.current === controller) {
@@ -2909,9 +3051,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.selectedModel,
       state.models,
       pendingAttachments,
-      clearPendingAttachments,
       executeSendAttempt,
-      reconcileCanonicalUserPersistence,
+      presentCompletedSend,
+      settleSendAttempt,
       updateOwnedSendStatus,
       updateSendStatus,
     ],

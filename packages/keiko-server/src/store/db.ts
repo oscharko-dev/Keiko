@@ -6,7 +6,10 @@ import { DatabaseSync } from "node:sqlite";
 import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
+  canonicalDesktopChatTurnReferenceSeed,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: the single 0o700/0o600 hardening pair.
 import {
   chmodIfPresent,
@@ -68,6 +71,7 @@ import {
   insertMessage as sqlInsertMessage,
   isLatestChatMessage as sqlIsLatestChatMessage,
   listMessages as sqlListMessages,
+  listGatewayMessagesLimited as sqlListGatewayMessagesLimited,
   listMessagesLimited as sqlListMessagesLimited,
   listMessagesPrefixLimited as sqlListMessagesPrefixLimited,
   linkAssistantToClientTurn as sqlLinkAssistantToClientTurn,
@@ -287,7 +291,7 @@ function validateClientTurnId(clientTurnId: string): void {
 
 function storedClientTurnId(chatId: string, clientTurnId: string): string {
   return createHash("sha256")
-    .update(JSON.stringify([chatId, clientTurnId]), "utf8")
+    .update(canonicalDesktopChatTurnReferenceSeed(chatId, clientTurnId), "utf8")
     .digest("hex");
 }
 
@@ -607,6 +611,12 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       limit === undefined ? sqlListMessages(db, chatId) : sqlListMessagesLimited(db, chatId, limit),
     listMessagesPrefix: (chatId: string, limit: number): readonly ChatMessage[] =>
       sqlListMessagesPrefixLimited(db, chatId, limit),
+    listGatewayMessages: (
+      chatId: string,
+      currentUserMessageId: string,
+      limit: number,
+    ): readonly ChatMessage[] =>
+      sqlListGatewayMessagesLimited(db, chatId, currentUserMessageId, limit),
     countMessages: (chatId: string): number => sqlCountMessages(db, chatId),
     findMessageById: (id: string): ChatMessage | undefined => sqlFindMessageById(db, id),
     createMessage: (msg: NewChatMessage): ChatMessage => {

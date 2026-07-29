@@ -136,7 +136,8 @@ export function SeverityBadge({ severity }: { readonly severity: string }): Reac
 }
 
 // Quality score badge (Epic #736 / Issue #748). Colour tier is driven by the rounded score:
-// ≥90 strong (green), 70-89 mixed (amber), <70 weak (red). null renders an em-dash placeholder.
+// ≥90 strong (green), 70-89 mixed (amber), <70 weak (red). null is visibly unavailable because a
+// missing judge result must not look like a merely pending numeric value (#2804).
 // Each tier reuses a token combination already proven ≥4.5:1 in both themes (see globals.css).
 function qualityTierClass(rounded: number): string {
   if (rounded >= 90) return "qi-quality-high";
@@ -144,15 +145,14 @@ function qualityTierClass(rounded: number): string {
   return "qi-quality-low";
 }
 
-// aria-label is prohibited (and ignored) on a generic <span>, so the score context is carried by
-// screen-reader-only text instead: the bare em-dash / number alone would be meaningless to AT.
+// aria-label is prohibited (and ignored) on a generic <span>, so numeric score context is carried by
+// screen-reader-only text instead.
 export function QualityScoreBadge({ score }: { readonly score: number | null }): ReactNode {
   const t = useTranslate();
   if (score === null) {
     return (
       <span className="qi-badge qi-badge-default" data-testid="qi-quality-badge">
-        <span aria-hidden="true">—</span>
-        <span className="sr-only">{t("qi.quality.notAvailable")}</span>
+        {t("qi.quality.unavailableLabel")}
       </span>
     );
   }

@@ -6,9 +6,9 @@
 
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import { randomUUID } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket as WsSocket } from "ws";
 import {
-  DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
   findConfiguredCapability,
   requestRealtimeNegotiation,
   resolveVoiceCapability,
@@ -16,8 +16,8 @@ import {
   type GatewayConfig,
   type ModelProviderConfig,
   type RealtimeNegotiationOutcome,
+  type RealtimeNegotiationErrorKind,
   type RealtimeNegotiationRequest,
-  type RealtimeTranscriptionDelay,
   type VoiceCapabilityResolution,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
@@ -31,6 +31,11 @@ import {
 import { isAllowedHost } from "./host-check.js";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";
 import { isVoiceDisabledByPolicy, isVoiceRealtimeCapable } from "./read-handlers.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
 import {
   MAX_VOICE_CONTROL_FRAME_BYTES,
   sweepControlHeartbeat,
@@ -63,6 +68,12 @@ type LiveDictationNegotiateFn = (
   offerSdp: string,
   signal: AbortSignal,
 ) => Promise<RealtimeNegotiationOutcome>;
+
+class LiveDictationNegotiationError extends Error {
+  constructor(readonly code: RealtimeNegotiationErrorKind) {
+    super("live dictation negotiation failed");
+  }
+}
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 type HostMessagePayload = DistributiveOmit<
@@ -168,7 +179,6 @@ function buildLiveDictationNegotiationRequest(
   deps: UiHandlerDeps,
   signal: AbortSignal,
   transcriptionLanguage: string | undefined,
-  transcriptionDelay: RealtimeTranscriptionDelay = DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
 ): RealtimeNegotiationRequest {
   const egress = provider.egress ?? currentGatewayEgressConfig(deps);
   return {
@@ -183,7 +193,6 @@ function buildLiveDictationNegotiationRequest(
     modelId: provider.modelId,
     sessionType: "transcription",
     transcriptionModel,
-    transcriptionDelay,
     ...(transcriptionLanguage !== undefined ? { transcriptionLanguage } : {}),
     offerSdp,
     signal,
@@ -279,6 +288,7 @@ class VoiceLiveDictationConnection {
     private readonly session: LiveDictationSessionState,
     private readonly negotiate: LiveDictationNegotiateFn,
     private readonly redact: (value: unknown) => unknown,
+    private readonly diagnostics: ServerDiagnosticSink | undefined,
   ) {}
 
   start(): void {
@@ -378,9 +388,13 @@ class VoiceLiveDictationConnection {
     const controller = new AbortController();
     this.negotiation = controller;
     let outcome: RealtimeNegotiationOutcome;
+    let thrown: unknown;
     try {
       outcome = await this.negotiate(offerSdp, controller.signal);
-    } catch {
+    } catch (error) {
+      // Provider transports may reject instead of returning a typed failure. Preserve the thrown
+      // class for the redacted diagnostic while normalizing its stable machine code below.
+      thrown = error;
       outcome = { ok: false, kind: "transport" };
     }
     if (this.negotiation !== controller || this.closed) {
@@ -388,12 +402,7 @@ class VoiceLiveDictationConnection {
     }
     this.negotiation = undefined;
     if (!outcome.ok) {
-      emit(this.ws, this.session, this.redact, { kind: "error", code: "negotiation-failed" });
-      emit(this.ws, this.session, this.redact, {
-        kind: "media.track.state",
-        track: "audio-in",
-        state: "ended",
-      });
+      this.reportNegotiationFailure(outcome.kind, thrown);
       return;
     }
     emit(this.ws, this.session, this.redact, {
@@ -404,6 +413,28 @@ class VoiceLiveDictationConnection {
       kind: "media.track.state",
       track: "audio-in",
       state: "live",
+    });
+  }
+
+  private reportNegotiationFailure(kind: RealtimeNegotiationErrorKind, thrown: unknown): void {
+    const correlationId = randomUUID();
+    const diagnostic = serverDiagnosticFromError({
+      correlationId,
+      operation: "voice.live-dictation.negotiate",
+      source: "voice.live-dictation",
+      error: thrown ?? new LiveDictationNegotiationError(kind),
+      redact: (message: string): string => String(this.redact(message)),
+    });
+    emitServerDiagnostic(this.diagnostics, { ...diagnostic, code: kind });
+    emit(this.ws, this.session, this.redact, {
+      kind: "error",
+      code: "negotiation-failed",
+      correlationId,
+    });
+    emit(this.ws, this.session, this.redact, {
+      kind: "media.track.state",
+      track: "audio-in",
+      state: "ended",
     });
   }
 
@@ -578,6 +609,7 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
         session,
         this.buildNegotiate(deps, session.transcriptionLanguage),
         deps.redactor,
+        deps.diagnostics,
       );
       connection.start();
     });
