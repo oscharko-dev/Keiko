@@ -303,6 +303,75 @@ async function sourcesForPreview(
   return Object.fromEntries(entries);
 }
 
+type TargetReplacePreviewResult =
+  | { readonly status: "preview"; readonly preview: RootReplacePreview }
+  | { readonly status: "error"; readonly error: RootSearchError }
+  | { readonly status: "stale" };
+
+async function previewReplaceTarget(args: {
+  readonly target: WorkspaceRootTarget;
+  readonly query: string;
+  readonly mode: WorkspaceSearchMode;
+  readonly caseSensitive: boolean;
+  readonly includeText: string;
+  readonly excludeText: string;
+  readonly replacement: string;
+  readonly isCurrent: () => boolean;
+  readonly t: OptionalWidgetTranslate;
+}): Promise<TargetReplacePreviewResult> {
+  try {
+    const response = await fetchWorkspaceReplacePreview({
+      root: args.target.root,
+      query: args.query,
+      mode: args.mode,
+      caseSensitive: args.caseSensitive,
+      includeGlobs: globArray(args.includeText),
+      excludeGlobs: globArray(args.excludeText),
+      replacement: args.replacement,
+      maxFiles: WORKSPACE_REPLACE_MAX_FILES,
+    });
+    if (!args.isCurrent()) return { status: "stale" };
+    const sources = await sourcesForPreview(args.target.root, response.files);
+    if (!args.isCurrent()) return { status: "stale" };
+    return {
+      status: "preview",
+      preview: {
+        target: args.target,
+        response,
+        model: buildWorkspaceReplacePatchModel(response, sources),
+      },
+    };
+  } catch (error) {
+    if (!args.isCurrent()) return { status: "stale" };
+    return {
+      status: "error",
+      error: {
+        id: args.target.id,
+        label: args.target.label,
+        message: replaceErrorMessage(error, args.t("searchPanel.error.previewFailed")),
+      },
+    };
+  }
+}
+
+async function collectReplacePreviews(
+  targets: readonly WorkspaceRootTarget[],
+  request: Omit<Parameters<typeof previewReplaceTarget>[0], "target">,
+): Promise<{
+  readonly previews: readonly RootReplacePreview[];
+  readonly errors: readonly RootSearchError[];
+} | null> {
+  const previews: RootReplacePreview[] = [];
+  const errors: RootSearchError[] = [];
+  for (const target of targets) {
+    const result = await previewReplaceTarget({ ...request, target });
+    if (result.status === "stale") return null;
+    if (result.status === "preview") previews.push(result.preview);
+    else errors.push(result.error);
+  }
+  return { previews, errors };
+}
+
 function replaceSummary(
   response: WorkspaceReplacePreviewResponse | null,
   t: OptionalWidgetTranslate,
@@ -392,18 +461,15 @@ function appliedReplaceMessage(
   });
 }
 
-function rootReplaceStatus(
+function rootPrefixedReplaceStatus(
   preview: RootReplacePreview,
   message: string,
-  multiRoot: boolean,
   t: OptionalWidgetTranslate,
 ): string {
-  return multiRoot
-    ? t("searchPanel.replace.rootPrefixedStatus", {
-        rootLabel: preview.target.label,
-        message,
-      })
-    : message;
+  return t("searchPanel.replace.rootPrefixedStatus", {
+    rootLabel: preview.target.label,
+    message,
+  });
 }
 
 function RootErrors({
@@ -669,38 +735,18 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
     setReplaceErrors([]);
     setAppliedRootIds(new Set());
     setReplaceMessages(new Map());
-    const next: RootReplacePreview[] = [];
-    const errors: RootSearchError[] = [];
-    for (const target of targets) {
-      try {
-        const preview = await fetchWorkspaceReplacePreview({
-          root: target.root,
-          query: query.trim(),
-          mode,
-          caseSensitive,
-          includeGlobs: globArray(includeText),
-          excludeGlobs: globArray(excludeText),
-          replacement,
-          maxFiles: WORKSPACE_REPLACE_MAX_FILES,
-        });
-        if (currentTargetsScopeKey.current !== requestedTargetsScopeKey) return;
-        const sources = await sourcesForPreview(target.root, preview.files);
-        if (currentTargetsScopeKey.current !== requestedTargetsScopeKey) return;
-        next.push({
-          target,
-          response: preview,
-          model: buildWorkspaceReplacePatchModel(preview, sources),
-        });
-      } catch (error) {
-        if (currentTargetsScopeKey.current !== requestedTargetsScopeKey) return;
-        errors.push({
-          id: target.id,
-          label: target.label,
-          message: replaceErrorMessage(error, t("searchPanel.error.previewFailed")),
-        });
-      }
-    }
-    if (currentTargetsScopeKey.current !== requestedTargetsScopeKey) return;
+    const result = await collectReplacePreviews(targets, {
+      query: query.trim(),
+      mode,
+      caseSensitive,
+      includeText,
+      excludeText,
+      replacement,
+      isCurrent: () => currentTargetsScopeKey.current === requestedTargetsScopeKey,
+      t,
+    });
+    if (result === null) return;
+    const { previews: next, errors } = result;
     setReplacePreviews(next);
     setReplaceErrors(multiRoot ? errors : []);
     if (!multiRoot) {
@@ -757,13 +803,17 @@ function SearchPanelState({ root, roots, openEditorFile }: SearchPanelProps): Re
         if (!operationIsCurrent()) return;
         const nextMessage = appliedReplaceMessage(result, t);
         setReplaceMessages((current) => new Map(current).set(preview.target.id, nextMessage));
-        setReplaceStatus(rootReplaceStatus(preview, nextMessage, multiRoot, t));
+        setReplaceStatus(
+          multiRoot ? rootPrefixedReplaceStatus(preview, nextMessage, t) : nextMessage,
+        );
         setAppliedRootIds((current) => new Set(current).add(preview.target.id));
       } catch (error) {
         if (!operationIsCurrent()) return;
         const nextMessage = replaceErrorMessage(error, t("searchPanel.error.applyFailed"));
         setReplaceMessages((current) => new Map(current).set(preview.target.id, nextMessage));
-        setReplaceStatus(rootReplaceStatus(preview, nextMessage, multiRoot, t));
+        setReplaceStatus(
+          multiRoot ? rootPrefixedReplaceStatus(preview, nextMessage, t) : nextMessage,
+        );
       } finally {
         if (operationIsCurrent()) {
           activeApply.current = null;
