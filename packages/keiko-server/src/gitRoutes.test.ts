@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -666,12 +666,15 @@ describe("GET /api/git/diff", () => {
 
   it("classifies only path-race failures as stale snapshots", (): void => {
     const disappeared = Object.assign(new Error("gone"), { code: "ENOENT" });
-    expect(() => rethrowSnapshotPathError(disappeared)).toThrow(
+    expect((): never => rethrowSnapshotPathError(disappeared)).toThrow(
       expect.objectContaining({ code: "STALE_PATH", status: 409 }),
     );
 
     const denied = Object.assign(new Error("private permission detail"), { code: "EACCES" });
-    expect(() => rethrowSnapshotPathError(denied)).toThrow(denied);
+    expect((): never => rethrowSnapshotPathError(denied)).toThrow(denied);
+
+    const cyclic = Object.assign(new Error("stable link cycle"), { code: "ELOOP" });
+    expect((): never => rethrowSnapshotPathError(cyclic)).toThrow(cyclic);
   });
 
   it("rejects path traversal before invoking Git diff", async () => {
@@ -1127,6 +1130,61 @@ describe("GET /api/git/diff/structured", () => {
         message: "The bounded diff read was unavailable.",
       }),
     );
+  });
+
+  it("returns correlated STALE_PATH when the requested file is replaced after reading", async (): Promise<void> => {
+    await runRealGit(["init", "--quiet"]);
+    const target = join(root, "replaced.txt");
+    const displaced = join(root, "displaced.txt");
+    await writeFile(target, "captured\n", "utf8");
+
+    const result = await handleGitDiff(
+      ctx(
+        `/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree&path=replaced.txt`,
+        "cid-untracked-replaced",
+      ),
+      deps(defaultGitProcessRunner),
+      {
+        runner: defaultGitProcessRunner,
+        maxDiffBytes: 4_096,
+        maxStatusBytes: 4_096,
+        maxChanges: 10,
+        snapshotReadObserver: async (): Promise<void> => {
+          await rename(target, displaced);
+          await writeFile(target, "replacement\n", "utf8");
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "STALE_PATH", correlationId: "cid-untracked-replaced" } },
+    });
+    expect(JSON.stringify(result.body)).not.toContain("captured");
+  });
+
+  it("treats a stable cyclic symlink as a non-retryable Git diff failure", async (): Promise<void> => {
+    await runRealGit(["init", "--quiet"]);
+    await symlink("cycle.txt", join(root, "cycle.txt"));
+
+    const result = await handleGitDiff(
+      ctx(
+        `/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree&path=cycle.txt`,
+        "cid-untracked-cycle",
+      ),
+      deps(defaultGitProcessRunner),
+      {
+        runner: defaultGitProcessRunner,
+        maxDiffBytes: 4_096,
+        maxStatusBytes: 4_096,
+        maxChanges: 10,
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: 500,
+      body: { error: { code: "GIT_DIFF_FAILED", correlationId: "cid-untracked-cycle" } },
+    });
   });
 
   it("maps ordinary snapshot failures to a correlated Git diff error", async (): Promise<void> => {

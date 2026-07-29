@@ -790,15 +790,24 @@ function staleUntrackedPath(): FilesError {
   );
 }
 
-const STALE_PATH_ERROR_CODES = new Set(["ELOOP", "ENOENT", "ENOTDIR", "ESTALE"]);
+const STALE_PATH_ERROR_CODES = new Set(["ENOENT", "ENOTDIR", "ESTALE"]);
 
-export function rethrowSnapshotPathError(error: unknown): never {
+function fileSystemErrorCode(error: unknown): string | undefined {
   const code =
     typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-  if (typeof code === "string" && STALE_PATH_ERROR_CODES.has(code)) {
+  return typeof code === "string" ? code : undefined;
+}
+
+export function rethrowSnapshotPathError(error: unknown): never {
+  if (STALE_PATH_ERROR_CODES.has(fileSystemErrorCode(error) ?? "")) {
     throw staleUntrackedPath();
   }
   throw error;
+}
+
+function rethrowSnapshotOpenError(error: unknown): never {
+  if (fileSystemErrorCode(error) === "ELOOP") throw staleUntrackedPath();
+  return rethrowSnapshotPathError(error);
 }
 
 async function readOpenSnapshot(
@@ -809,7 +818,7 @@ async function readOpenSnapshot(
   observer: (() => Promise<void> | void) | undefined,
 ): Promise<UntrackedFileSnapshot> {
   const descriptor = await open(resolved, constants.O_RDONLY | NOFOLLOW_READ_FLAG).catch(
-    rethrowSnapshotPathError,
+    rethrowSnapshotOpenError,
   );
   try {
     const before = await descriptor.stat({ bigint: true });
@@ -820,9 +829,15 @@ async function readOpenSnapshot(
     const currentStats = await stat(current, { bigint: true }).catch(rethrowSnapshotPathError);
     if (!sameOpenFile(before, currentStats)) throw staleUntrackedPath();
     const buffer = await readBoundedSnapshotBytes(descriptor, maxBytes);
-    await observer?.();
     const after = await descriptor.stat({ bigint: true });
     if (!sameOpenFile(before, after)) throw staleUntrackedPath();
+    await observer?.();
+    const finalPath = await realpath(candidate).catch(rethrowSnapshotPathError);
+    if (!containsPath(boundary, finalPath)) {
+      throw new FilesError(400, "BAD_PATH", "The path must stay inside the selected root.");
+    }
+    const finalStats = await stat(finalPath, { bigint: true }).catch(rethrowSnapshotPathError);
+    if (!sameOpenFile(after, finalStats)) throw staleUntrackedPath();
     return {
       bytes: buffer.subarray(0, Math.min(buffer.length, maxBytes)),
       mode: Number(before.mode & 0o777n),
@@ -844,12 +859,7 @@ async function readContainedUntrackedSnapshot(
   if (!containsPath(repo.realRoot, resolved)) {
     throw new FilesError(400, "BAD_PATH", "The path must stay inside the selected root.");
   }
-  const snapshot = await readOpenSnapshot(candidate, resolved, repo.realRoot, maxBytes, observer);
-  const current = await realpath(candidate).catch(rethrowSnapshotPathError);
-  if (!containsPath(repo.realRoot, current)) {
-    throw new FilesError(400, "BAD_PATH", "The path must stay inside the selected root.");
-  }
-  return snapshot;
+  return readOpenSnapshot(candidate, resolved, repo.realRoot, maxBytes, observer);
 }
 
 function normalizeNoIndexDiff(
