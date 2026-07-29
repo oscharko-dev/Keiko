@@ -902,7 +902,7 @@ async function enableDebugging(page: Page, root: string): Promise<void> {
   expect(activated.status, "debug activation").toBe(200);
 }
 
-async function registerDebugPerformanceProject(page: Page, root: string): Promise<void> {
+async function registerPerformanceProject(page: Page, root: string): Promise<void> {
   const project = await page.request.post("/api/projects", {
     data: { name: "Editor performance debug evidence", path: root },
     headers: { "x-keiko-csrf": "1" },
@@ -953,7 +953,7 @@ function sessionFrom(value: unknown): IdleDebugSessionSnapshot & { readonly sess
 }
 
 async function startIdleDebugSession(page: Page, root: string): Promise<IdleDebugSession> {
-  await registerDebugPerformanceProject(page, root);
+  await registerPerformanceProject(page, root);
   await enableDebugging(page, root);
   await page.goto("/");
   await openDebugEnabledEditor(page);
@@ -2011,6 +2011,10 @@ test("records Keiko Editor browser release evidence (B4/B5/B6/B11) @release-evid
   d12RunProvenance = resolveD12RunProvenance(page);
   d12BaselineMeasuredWork = null;
   const projectPath = createProjectFixture();
+  // The global workspace selector is the root authority for Files and Editor. Register the
+  // disposable fixture through the same project route before measuring so the harness opens the
+  // fixture's run.ts rather than a same-named file below the process launch directory.
+  await registerPerformanceProject(page, projectPath);
   await seedFilesWindow(page, projectPath);
   const capture = installWorkerCapture(page);
   const measurements = await collectEvidenceMeasurements(page, capture, projectPath);
