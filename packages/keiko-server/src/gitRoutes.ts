@@ -790,6 +790,17 @@ function staleUntrackedPath(): FilesError {
   );
 }
 
+const STALE_PATH_ERROR_CODES = new Set(["ELOOP", "ENOENT", "ENOTDIR", "ESTALE"]);
+
+export function rethrowSnapshotPathError(error: unknown): never {
+  const code =
+    typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+  if (typeof code === "string" && STALE_PATH_ERROR_CODES.has(code)) {
+    throw staleUntrackedPath();
+  }
+  throw error;
+}
+
 async function readOpenSnapshot(
   candidate: string,
   resolved: string,
@@ -798,21 +809,15 @@ async function readOpenSnapshot(
   observer: (() => Promise<void> | void) | undefined,
 ): Promise<UntrackedFileSnapshot> {
   const descriptor = await open(resolved, constants.O_RDONLY | NOFOLLOW_READ_FLAG).catch(
-    (): never => {
-      throw staleUntrackedPath();
-    },
+    rethrowSnapshotPathError,
   );
   try {
     const before = await descriptor.stat({ bigint: true });
-    const current = await realpath(candidate).catch((): never => {
-      throw staleUntrackedPath();
-    });
+    const current = await realpath(candidate).catch(rethrowSnapshotPathError);
     if (!containsPath(boundary, current)) {
       throw new FilesError(400, "BAD_PATH", "The path must stay inside the selected root.");
     }
-    const currentStats = await stat(current, { bigint: true }).catch((): never => {
-      throw staleUntrackedPath();
-    });
+    const currentStats = await stat(current, { bigint: true }).catch(rethrowSnapshotPathError);
     if (!sameOpenFile(before, currentStats)) throw staleUntrackedPath();
     const buffer = await readBoundedSnapshotBytes(descriptor, maxBytes);
     await observer?.();
@@ -835,16 +840,12 @@ async function readContainedUntrackedSnapshot(
   observer: (() => Promise<void> | void) | undefined,
 ): Promise<UntrackedFileSnapshot> {
   const candidate = resolve(repo.realRoot, path);
-  const resolved = await realpath(candidate).catch((): never => {
-    throw staleUntrackedPath();
-  });
+  const resolved = await realpath(candidate).catch(rethrowSnapshotPathError);
   if (!containsPath(repo.realRoot, resolved)) {
     throw new FilesError(400, "BAD_PATH", "The path must stay inside the selected root.");
   }
   const snapshot = await readOpenSnapshot(candidate, resolved, repo.realRoot, maxBytes, observer);
-  const current = await realpath(candidate).catch((): never => {
-    throw staleUntrackedPath();
-  });
+  const current = await realpath(candidate).catch(rethrowSnapshotPathError);
   if (!containsPath(repo.realRoot, current)) {
     throw new FilesError(400, "BAD_PATH", "The path must stay inside the selected root.");
   }

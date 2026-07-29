@@ -30,6 +30,7 @@ import {
   handleGitStatus,
   platformGitPath,
   readBoundedSnapshotBytes,
+  rethrowSnapshotPathError,
   type GitProcessRunner,
 } from "./gitRoutes.js";
 
@@ -661,6 +662,16 @@ describe("GET /api/git/diff", () => {
 
     expect(snapshot.toString("utf8")).toBe("complete");
     expect(calls).toBeGreaterThan(1);
+  });
+
+  it("classifies only path-race failures as stale snapshots", (): void => {
+    const disappeared = Object.assign(new Error("gone"), { code: "ENOENT" });
+    expect(() => rethrowSnapshotPathError(disappeared)).toThrow(
+      expect.objectContaining({ code: "STALE_PATH", status: 409 }),
+    );
+
+    const denied = Object.assign(new Error("private permission detail"), { code: "EACCES" });
+    expect(() => rethrowSnapshotPathError(denied)).toThrow(denied);
   });
 
   it("rejects path traversal before invoking Git diff", async () => {
