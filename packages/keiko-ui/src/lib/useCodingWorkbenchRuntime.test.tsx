@@ -257,6 +257,41 @@ describe("useCodingWorkbenchRuntime", () => {
     view.unmount();
   });
 
+  it("retains SSE terminal truth when post-settlement status is idle", async (): Promise<void> => {
+    const running = snapshot({ state: "running", pendingPermission: undefined });
+    const terminal = snapshot({ state: "succeeded", revision: 5, pendingPermission: undefined });
+    const idle = snapshot({
+      state: "idle",
+      revision: 0,
+      runId: undefined,
+      pendingPermission: undefined,
+    });
+    installBootstrap(running, idle);
+    const activeWorkspace = workspace();
+    const view = renderHook((): ReturnType<typeof useCodingWorkbenchRuntime> =>
+      useCodingWorkbenchRuntime({ workspace: activeWorkspace }),
+    );
+
+    await waitFor((): void => expect(FakeEventSource.instances).toHaveLength(1));
+    act((): void => {
+      FakeEventSource.instances[0]?.dispatch(
+        "status",
+        JSON.stringify({ ...event(1), state: "succeeded", revision: 5 }),
+      );
+    });
+    await waitFor((): void => {
+      expect(view.result.current.state.run).toEqual({
+        status: "ready",
+        value: terminal,
+        error: null,
+      });
+    });
+    const terminalEvents = view.result.current.state.events;
+    expect(terminalEvents).toHaveLength(1);
+    expect(view.result.current.state.events).toEqual(terminalEvents);
+    view.unmount();
+  });
+
   it("commits observations at no more than 10Hz even when status facts are interleaved", () => {
     vi.useFakeTimers();
     const observationCommitTimes: number[] = [];

@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildGroundedAnswerContextPackSummary,
+  canonicalDesktopChatTurnReferenceSeed,
   classifyAttachmentMime,
   DEFAULT_GROUNDING_LIMITS,
   DESKTOP_CHAT_SEND_ABORT_CONTRACT,
@@ -17,6 +18,7 @@ import {
   isDesktopChatStreamEvent,
   MAX_ATTACHMENT_BYTES,
   MAX_CONNECTED_SOURCES,
+  MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
   MAX_LOCAL_KNOWLEDGE_SOURCES,
   parseUpdateMemoryAutonomyPolicyWire,
   resolveGroundingLimits,
@@ -54,6 +56,24 @@ import {
 
 type Assert<T extends true> = T;
 type HasKey<T, K extends PropertyKey> = K extends keyof T ? true : false;
+
+it("serializes delimiter-hostile canonical turn identifiers without collisions", (): void => {
+  const seed = canonicalDesktopChatTurnReferenceSeed('chat,]"', 'turn:["one');
+  expect(JSON.parse(seed)).toEqual(['chat,]"', 'turn:["one']);
+  expect(canonicalDesktopChatTurnReferenceSeed("chat,turn", "id")).not.toBe(
+    canonicalDesktopChatTurnReferenceSeed("chat", "turn,id"),
+  );
+});
+
+it("serializes empty and maximum-length canonical turn identifiers", (): void => {
+  expect(canonicalDesktopChatTurnReferenceSeed("", "")).toBe('["",""]');
+  expect(canonicalDesktopChatTurnReferenceSeed("c", "t")).toBe('["c","t"]');
+  const maximumClientTurnId = "t".repeat(MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS);
+  expect(JSON.parse(canonicalDesktopChatTurnReferenceSeed("chat", maximumClientTurnId))).toEqual([
+    "chat",
+    maximumClientTurnId,
+  ]);
+});
 
 // Compile-time assertions that the wire request owns these keys. Exported so the linter treats the
 // aliases as used while tsc still fails the build if any key is dropped from the contract.

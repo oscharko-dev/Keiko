@@ -24,6 +24,7 @@ import {
   copyHeadersSafely,
   forwardedUpstreamHeaders,
   normalizeUpstreamLocation,
+  packageBuildWatchArgs,
   proxyHttp,
   publicBrowserUrl,
   readNextLockInfo,
@@ -152,6 +153,18 @@ describe("bffProcessArgs", () => {
   it("uses a stable one-shot process for hermetic tests", () => {
     expect(bffProcessArgs("/repo/scripts/dev-bff.mjs", false)).toEqual([
       "/repo/scripts/dev-bff.mjs",
+    ]);
+  });
+});
+
+describe("packageBuildWatchArgs", () => {
+  it("uses the governed TypeScript 7 compiler for the package watcher", () => {
+    expect(packageBuildWatchArgs()).toEqual([
+      join(process.cwd(), "node_modules", "@typescript", "native", "bin", "tsc"),
+      "-b",
+      "tsconfig.packages.json",
+      "--watch",
+      "--preserveWatchOutput",
     ]);
   });
 });

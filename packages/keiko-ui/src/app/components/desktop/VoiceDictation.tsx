@@ -21,6 +21,7 @@ import { Icons } from "./Icons";
 import { NATIVE_FIELDSET_STYLE } from "./native-element-styles";
 import type {
   DictationController,
+  DictationError,
   DictationErrorReason,
   DictationPhase,
 } from "./hooks/useDictation";
@@ -150,6 +151,10 @@ function errorHeadline(reason: DictationErrorReason, t: I18nTranslate): string {
       return t("voice.dictation.error.unsupported");
     case "unavailable":
       return t("voice.dictation.error.unavailable");
+    case "negotiation-failed":
+      return t("voice.dictation.error.negotiationFailed");
+    case "connection-failed":
+      return t("voice.dictation.error.connectionFailed");
     case "transcribe-failed":
     case "capture-failed":
       return t("voice.dictation.error.failed");
@@ -164,7 +169,7 @@ interface VoiceDictationPreviewProps {
   readonly audioLevel?: number | undefined;
   readonly heardSpeech?: boolean | undefined;
   readonly micReady?: boolean | undefined;
-  readonly error: { readonly reason: DictationErrorReason; readonly message: string } | undefined;
+  readonly error: DictationError | undefined;
   readonly onTranscriptChange: (value: string) => void;
   readonly onInsert: () => void;
   readonly onDiscard: () => void;
@@ -253,7 +258,7 @@ function TranscribingPreview({ t }: { readonly t: I18nTranslate }): ReactNode {
 }
 
 interface ErrorPreviewProps {
-  readonly error: { readonly reason: DictationErrorReason; readonly message: string };
+  readonly error: DictationError;
   readonly retryRef: Ref<HTMLButtonElement>;
   readonly onRetry: () => void;
   readonly onDiscard: () => void;
@@ -264,6 +269,11 @@ function ErrorPreview({ error, retryRef, onRetry, onDiscard, t }: ErrorPreviewPr
   return (
     <div className="cmp-voice-preview cmp-voice-error" role="alert" aria-atomic="true">
       <p className="cmp-voice-error-text">{errorHeadline(error.reason, t)}</p>
+      {error.correlationId === undefined ? null : (
+        <p className="cmp-voice-error-text">
+          {t("voice.dictation.error.supportId", { correlationId: error.correlationId })}
+        </p>
+      )}
       <div className="cmp-voice-actions">
         <button type="button" ref={retryRef} className="cmp-voice-btn" onClick={onRetry}>
           {t("common.tryAgain")}

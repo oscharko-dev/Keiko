@@ -20,6 +20,11 @@ const VOICE_EN_MESSAGES = {
     "Microphone access was denied. Allow microphone access in your browser to dictate.",
   "voice.dictation.error.unsupported": "This browser does not support microphone dictation.",
   "voice.dictation.error.unavailable": "Speech-to-text dictation is not available right now.",
+  "voice.dictation.error.negotiationFailed":
+    "Live dictation could not connect. Try again to use standard dictation.",
+  "voice.dictation.error.connectionFailed":
+    "The live dictation connection was interrupted. Try again to use standard dictation.",
+  "voice.dictation.error.supportId": "Support ID: {correlationId}",
   "voice.dictation.error.failed": "Dictation could not be completed.",
   "voice.dictation.preparingMic": "Preparing mic…",
   "voice.dictation.capturing": "Capturing speech…",
@@ -90,6 +95,11 @@ const VOICE_DE_MESSAGES: VoiceMessageCatalog = {
     "Der Zugriff auf das Mikrofon wurde verweigert. Erlaube den Mikrofonzugriff im Browser, um diktieren zu können.",
   "voice.dictation.error.unsupported": "Dieser Browser unterstützt kein Mikrofondiktat.",
   "voice.dictation.error.unavailable": "Speech-to-Text-Diktat ist gerade nicht verfügbar.",
+  "voice.dictation.error.negotiationFailed":
+    "Live-Diktat konnte keine Verbindung herstellen. Versuche es erneut, um das Standarddiktat zu verwenden.",
+  "voice.dictation.error.connectionFailed":
+    "Die Live-Diktat-Verbindung wurde unterbrochen. Versuche es erneut, um das Standarddiktat zu verwenden.",
+  "voice.dictation.error.supportId": "Support-ID: {correlationId}",
   "voice.dictation.error.failed": "Das Diktat konnte nicht abgeschlossen werden.",
   "voice.dictation.preparingMic": "Mikrofon wird vorbereitet…",
   "voice.dictation.capturing": "Sprache wird erfasst…",
