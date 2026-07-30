@@ -376,7 +376,7 @@ export interface CodingRuntimeManager {
   reconcile(runId: string): Promise<CodingRuntimeStopResult>;
   health(): CodingRuntimeHealthReport;
   /**
-   * The reviewable changeset facts of the ask the operator is deciding about (#2853). Bound to both
+   * The reviewable changeset facts of the ask the operator is deciding about (#2802). Bound to both
    * the active run and the exact pending request id, so a stale panel or a foreign run can never
    * read a review, and it is served only over the authenticated app-session channel.
    */
@@ -424,7 +424,7 @@ interface ActiveRuntime {
   stdoutParser: CodingRuntimeLineParser | undefined;
   stderrDrainer: CodingRuntimeStderrDrainer | undefined;
   /**
-   * The reviewable changeset facts of the ask currently awaiting an operator decision (#2853).
+   * The reviewable changeset facts of the ask currently awaiting an operator decision (#2802).
    * Transient and run-local: it never enters a runtime event, a snapshot, the SSE projection or
    * evidence, because the paths are model-selected content (#2644).
    */
@@ -2166,7 +2166,7 @@ const ACTION_CLASS_RESOURCE_SCOPE: Readonly<
 >);
 
 /**
- * Projects the reviewable changeset facts of a governed `file-edit` ask (#2853). The admission
+ * Projects the reviewable changeset facts of a governed `file-edit` ask (#2802). The admission
  * projection has already fail-closed on every escaping, duplicated or oversized path shape, and the
  * shared public contract re-validates here: a review is retained only when the whole payload is
  * admissible, so an operator surface can never render a path the runtime itself would refuse.

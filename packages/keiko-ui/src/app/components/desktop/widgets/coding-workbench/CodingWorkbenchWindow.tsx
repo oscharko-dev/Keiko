@@ -559,7 +559,7 @@ function ChangesetReviewPanel({
  * paired, the panel says so rather than implying there is no destination.
  */
 /**
- * The reviewable body of a `file-edit` approval (#2853): the workspace-relative files the change
+ * The reviewable body of a `file-edit` approval (#2802): the workspace-relative files the change
  * would write and its magnitude. Without this the card carries only vocabulary — kind, class, risk
  * — and a human cannot exercise control over a change they are not shown (ADR-0129 D1).
  *

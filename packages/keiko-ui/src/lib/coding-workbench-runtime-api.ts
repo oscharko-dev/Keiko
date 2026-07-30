@@ -281,7 +281,7 @@ export function getCodingWorkbenchRuntimeResearch(
 
 /**
  * Read the reviewable facts of the pending edit approval over the authenticated app-session channel
- * (#2853): which workspace-relative files it would write and how large the change is. The paths are
+ * (#2802): which workspace-relative files it would write and how large the change is. The paths are
  * model-selected content and therefore never ride the general runtime snapshot (#2644); no patch
  * bytes and no model prose cross this boundary. An unpaired window receives the constant
  * `{ session: "unpaired" }` projection instead of an error.

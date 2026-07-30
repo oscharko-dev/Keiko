@@ -3468,7 +3468,7 @@ describe("governed-assist approval reviewability", () => {
     );
     harness.children[0]?.stdout.write(
       permissionLine({
-        requestId: "perm-2853-edit",
+        requestId: "perm-2802-edit",
         kind: "workspace-write",
         actionClass: "workspace-write",
         reasonCode: "approval-required",
@@ -3486,10 +3486,10 @@ describe("governed-assist approval reviewability", () => {
     await settle();
 
     expect(events.find((event) => event.kind === "permission-requested")).toMatchObject({
-      permissionRequest: { requestId: "perm-2853-edit", actionKind: "file-edit" },
+      permissionRequest: { requestId: "perm-2802-edit", actionKind: "file-edit" },
     });
-    expect(manager.pendingApprovalReview("run-1991", "perm-2853-edit")).toEqual({
-      requestId: "perm-2853-edit",
+    expect(manager.pendingApprovalReview("run-1991", "perm-2802-edit")).toEqual({
+      requestId: "perm-2802-edit",
       paths: ["src/a.ts", "src/b.ts"],
       pathsTruncated: false,
       fileCount: 2,
@@ -3512,7 +3512,7 @@ describe("governed-assist approval reviewability", () => {
     );
     harness.children[0]?.stdout.write(
       permissionLine({
-        requestId: "perm-2853-escape",
+        requestId: "perm-2802-escape",
         kind: "workspace-write",
         actionClass: "workspace-write",
         reasonCode: "approval-required",
@@ -3529,8 +3529,8 @@ describe("governed-assist approval reviewability", () => {
     );
     await settle();
 
-    expect(manager.pendingApprovalReview("run-1991", "perm-2853-escape")).toBeUndefined();
-    expect(manager.pendingApprovalReview("run-1991", "perm-2853-other")).toBeUndefined();
-    expect(manager.pendingApprovalReview("run-2088", "perm-2853-escape")).toBeUndefined();
+    expect(manager.pendingApprovalReview("run-1991", "perm-2802-escape")).toBeUndefined();
+    expect(manager.pendingApprovalReview("run-1991", "perm-2802-other")).toBeUndefined();
+    expect(manager.pendingApprovalReview("run-2088", "perm-2802-escape")).toBeUndefined();
   });
 });

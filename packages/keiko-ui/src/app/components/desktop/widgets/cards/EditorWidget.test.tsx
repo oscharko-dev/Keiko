@@ -3224,7 +3224,18 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     await userEvent.click(inactive);
     expect(onSelect).toHaveBeenCalledWith("package.json");
 
-    await userEvent.click(screen.getByRole("button", { name: "Close package.json" }));
+    // #2802 — the close affordance is a non-focusable descendant of its own `role="tab"` element
+    // (a `role="tablist"` may own nothing else), so it is no longer an exposed button. The close
+    // INTENT is what this pin owns, and it now has to hold on both the pointer and the keyboard.
+    const close = inactive.querySelector<HTMLElement>('[data-tab-close-file="package.json"]');
+    expect(close).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Close package.json" })).toBeNull();
+
+    await userEvent.click(close as HTMLElement);
+    expect(onClose).toHaveBeenCalledWith("package.json");
+
+    onClose.mockClear();
+    fireEvent.keyDown(inactive, { key: "Delete" });
     expect(onClose).toHaveBeenCalledWith("package.json");
   });
 

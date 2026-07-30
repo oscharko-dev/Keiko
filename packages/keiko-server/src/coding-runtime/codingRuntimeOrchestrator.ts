@@ -273,7 +273,7 @@ export class CodingRuntimeOrchestrator {
 
   /**
    * The reviewable changeset facts of the approval the operator is being asked to decide, for the
-   * AUTHENTICATED approval-review channel only (#2853). A human cannot exercise control over a
+   * AUTHENTICATED approval-review channel only (#2802). A human cannot exercise control over a
    * change they are not shown (ADR-0129 D1), so the path list and the change magnitude reach the
    * card — but never through the unauthenticated status or SSE projection, which stay content-free
    * (#2644), and never a byte of the patch.

@@ -536,7 +536,7 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.queryByText("Research destination")).not.toBeInTheDocument();
   });
 
-  it("#2853: shows the files and magnitude of the edit the operator is approving", async () => {
+  it("#2802: shows the files and magnitude of the edit the operator is approving", async () => {
     approvalReviewHookMock.mockReturnValue({
       status: "ready",
       review: {
@@ -560,7 +560,7 @@ describe("CodingWorkbenchWindow", () => {
     expect(await axe(document.body)).toHaveNoViolations();
   });
 
-  it("#2853: marks a truncated file list instead of understating the blast radius", () => {
+  it("#2802: marks a truncated file list instead of understating the blast radius", () => {
     approvalReviewHookMock.mockReturnValue({
       status: "ready",
       review: {
@@ -579,7 +579,7 @@ describe("CodingWorkbenchWindow", () => {
     expect(changes).toHaveTextContent("9");
   });
 
-  it("#2853: says the changed files are unavailable rather than implying there are none", () => {
+  it("#2802: says the changed files are unavailable rather than implying there are none", () => {
     approvalReviewHookMock.mockReturnValue({ status: "unavailable", review: null });
     renderWorkbench(editApprovalState());
 
@@ -589,7 +589,7 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("button", { name: "Approve once" })).toBeInTheDocument();
   });
 
-  it("#2853: shows no changed-file block for an approval that writes no file", () => {
+  it("#2802: shows no changed-file block for an approval that writes no file", () => {
     approvalReviewHookMock.mockReturnValue({ status: "idle", review: null });
     renderWorkbench(egressApprovalState());
 

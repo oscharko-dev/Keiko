@@ -22,6 +22,7 @@
 import { useCallback, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslate } from "@/lib/i18n";
 import { detectSupport } from "./browserSupport";
+import { readInstallState, writeInstallState } from "./installState";
 import { useInstallPrompt } from "./useInstallPrompt";
 
 // ---------------------------------------------------------------------------
@@ -57,14 +58,15 @@ function isStandalone(): boolean {
   return window.matchMedia("(display-mode: standalone)").matches;
 }
 
+// Both reads run inside the render-time visibility gate below, so they go through the guarded
+// accessor: a browser with site data blocked throws on the `localStorage` access itself, and an
+// unguarded throw during render is uncontained (0.3.0 release audit).
 function isAlreadyInstalled(): boolean {
-  if (typeof window === "undefined") return false;
-  return localStorage.getItem("keiko.pwa.installed") === "true";
+  return readInstallState("keiko.pwa.installed") === "true";
 }
 
 function isAlreadyDismissed(): boolean {
-  if (typeof window === "undefined") return false;
-  const raw = localStorage.getItem("keiko.pwa.dismissed");
+  const raw = readInstallState("keiko.pwa.dismissed");
   if (raw === null) return false;
   // The stored value is an ISO timestamp; honour it as a TTL. Unparseable
   // legacy values stay dismissed (conservative — no surprise re-prompt).
@@ -86,9 +88,9 @@ export function InstallBanner(): ReactNode {
   );
   const installButtonRef = useRef<HTMLButtonElement>(null);
 
-  // Dismiss handler — writes to localStorage, sets local dismissed state.
+  // Dismiss handler — persists the deferral when it can, and always honours it for this session.
   const dismiss = useCallback((): void => {
-    localStorage.setItem("keiko.pwa.dismissed", new Date().toISOString());
+    writeInstallState("keiko.pwa.dismissed", new Date().toISOString());
     setDismissed(true);
   }, []);
 

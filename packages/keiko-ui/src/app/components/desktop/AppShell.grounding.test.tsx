@@ -248,10 +248,6 @@ vi.mock("./modals/Palette", () => ({
   Palette: () => <div role="dialog" aria-label="Palette" />,
 }));
 
-vi.mock("./install/InstallBanner", () => ({
-  InstallBanner: () => <div data-testid="install-banner" />,
-}));
-
 vi.mock("./widgets", () => ({}));
 
 import {

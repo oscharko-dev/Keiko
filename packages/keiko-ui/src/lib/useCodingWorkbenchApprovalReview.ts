@@ -29,7 +29,7 @@ interface ScopedApprovalReviewState extends UseCodingWorkbenchApprovalReviewInpu
 
 /**
  * Reads the reviewable changeset facts of the pending approval from their one authenticated channel
- * (#2853). A human cannot exercise control over a change they are not shown (ADR-0129 D1), and the
+ * (#2802). A human cannot exercise control over a change they are not shown (ADR-0129 D1), and the
  * paths are model-selected, so the general runtime snapshot remains structurally unable to carry
  * them (#2644). An unpaired or failing channel renders an honest "unavailable" — never an empty
  * list that would read as "this change touches nothing".
