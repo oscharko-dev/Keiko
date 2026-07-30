@@ -66,7 +66,7 @@ interface CandidateMetadata {
 // ─── Verbatim extraction prompt ──────────────────────────────────────────────
 export const SALIENCE_SYSTEM_PROMPT = `You extract durable memories from a chat turn so an assistant can remember the user across future conversations.
 
-Return ONLY a JSON array (no prose, no markdown fences). Each element:
+Return ONLY a JSON object of the shape {"items":[...]} (no prose, no markdown fences). Each element of "items":
 { "body": string, "type": string, "confidence": number, "scope": string, "source": "user", "tags": string[] }
 
 Capture ONLY facts the USER asserted about THEMSELVES or THEIR work that are durable and worth remembering: identity, stable preferences, project and technology facts, decisions, constraints, goals, environment, team, and recurring workflow lessons. Write each "body" as a concise, self-contained, third-person statement in the same language as the user's fact or the conversation. Do not translate German or multilingual facts into English.
@@ -82,7 +82,7 @@ EXCLUDE: questions; one-off ephemeral task requests; anything the ASSISTANT said
 
 "type" is one of: identity, preference, fact, decision, constraint, goal, lesson, procedural. "scope" is one of: user (personal facts/preferences), project (project-specific facts), workspace. "source" MUST be "user"; never emit assistant-sourced facts. "confidence" is 0..1. "tags" is a short list of lowercase keywords.
 
-If there is nothing durable to capture, return [].`;
+If there is nothing durable to capture, return {"items":[]}.`;
 
 function buildLegacyUserPrompt(messages: readonly SalienceModelMessage[]): string {
   return messages
@@ -210,6 +210,9 @@ function isRawSalienceItem(value: unknown): value is RawSalienceItem {
 // when the whole payload parses as that object shape, or null to fall back to the balanced-array
 // scan. Defensive: any parse failure yields null, never a throw.
 function unwrapWrappedItems(text: string): readonly unknown[] | null {
+  // Bare-array replies (the fallback path) skip straight to the balanced-array scan instead of
+  // paying a guaranteed-to-fail full-text parse first (#2842 review).
+  if (!text.trimStart().startsWith("{")) return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);

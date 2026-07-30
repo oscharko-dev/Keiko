@@ -93,8 +93,12 @@ const ATLAS_FACTS = JSON.stringify([
 ]);
 
 describe("SALIENCE_SYSTEM_PROMPT", () => {
-  it("instructs JSON-array-only output and excludes assistant claims", () => {
-    expect(SALIENCE_SYSTEM_PROMPT).toContain("JSON array");
+  it("instructs machine-parseable wrapped-object output and excludes assistant claims", (): void => {
+    // #2842 review: the prompt must describe the SAME shape the structured-output schema mandates
+    // ({"items":[...]}), so schema-enforcing and prompt-only models converge on one contract.
+    expect(SALIENCE_SYSTEM_PROMPT).toContain('{"items":[...]}');
+    expect(SALIENCE_SYSTEM_PROMPT).toContain('return {"items":[]}');
+    expect(SALIENCE_SYSTEM_PROMPT).not.toContain("Return ONLY a JSON array");
     expect(SALIENCE_SYSTEM_PROMPT).toContain("assistant");
     expect(SALIENCE_SYSTEM_PROMPT).toContain('"source": "user"');
   });
