@@ -138,7 +138,7 @@ export function shellShortcutRefusalDiagnostic(
     parts.push(`unknown-commands=${String(refusals.length - named.length)}`);
   }
   if (settingRefusalReasonCode !== null) parts.push(`setting=${settingRefusalReasonCode}`);
-  return `shell-shortcuts: refused persisted keybinding overrides (${parts.join(", ")}); affected commands keep their default binding`;
+  return `shell-shortcuts: refused persisted keybinding overrides (${parts.join(", ")}); affected commands keep their default binding`; // i18n-exempt: console-only operator diagnostic, never rendered to the end user
 }
 
 function surfaceShellShortcutRefusals(

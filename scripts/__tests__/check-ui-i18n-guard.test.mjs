@@ -180,6 +180,35 @@ test("requires catalog review only for i18n-relevant added lines", () => {
   );
 });
 
+// `return \`...\`` looks identical to the heuristic whether the string is rendered to a user or only
+// ever passed to `console.warn` — a redacted operator diagnostic has exactly this shape. The
+// `i18n-exempt` marker the ledger scan already trusts for "provably not user-facing" now suppresses
+// relevance here too, own-line only (this pre-filter sees a diffed, filtered list of added lines, not
+// full source, so an "or the line above" lookup is not reliably available).
+test("an i18n-exempt marker suppresses relevance for a diagnostic-only string return", () => {
+  const line =
+    'return `shell-shortcuts: refused override (${id})`; // i18n-exempt: console-only operator diagnostic, never rendered';
+  expect(hasI18nRelevantAddedLine(line)).toBe(false);
+});
+
+// The counterpart: recognising the marker must not become a way to smuggle real UI copy past the
+// gate. An identically-shaped return with no marker is still caught.
+test("still requires review for the same shape with no i18n-exempt marker", () => {
+  expect(
+    hasI18nRelevantAddedLine('return `shell-shortcuts: refused override (${id})`;'),
+  ).toBe(true);
+});
+
+// And the marker cannot be used wordlessly here either — the ledger scan's own invariant, which this
+// return-statement position is not covered by that scan's own weak-exemption check.
+test("a wordless i18n-exempt does not suppress relevance for a string return", () => {
+  expect(
+    hasI18nRelevantAddedLine(
+      'return `shell-shortcuts: refused override (${id})`; // i18n-exempt: x',
+    ),
+  ).toBe(true);
+});
+
 test("detects changed files from the push event before SHA", () => {
   const calls = [];
   const files = changedFilesFromGit(
@@ -499,6 +528,89 @@ test("still rejects a hardcoded registry label in a module that names the scoped
 
       expect(result.ok).toBe(false);
       expect(result.problems.join("\n")).toMatch(/untranslated user-facing literal/);
+    },
+  );
+});
+
+// Whole-gate regression pin for the shellShortcutState.ts refusal diagnostic (0.3.0 audit, #2802):
+// a module whose ONLY "user-facing-shaped" line is a marked, redacted, console-only operator
+// diagnostic must not be forced to adopt the i18n API — the string is never rendered.
+const DIAGNOSTIC_ONLY_FILE = "packages/keiko-ui/src/app/feature/feature-diagnostic.ts";
+const DIAGNOSTIC_ONLY_SOURCE =
+  "export function featureRefusalDiagnostic(id) {\n" +
+  "  // i18n-exempt: console-only operator diagnostic, never rendered to the end user\n" +
+  '  return `feature: refused override (${id})`;\n' +
+  "}\n\n" +
+  "export function surfaceFeatureRefusal(id) {\n" +
+  "  const message = featureRefusalDiagnostic(id);\n" +
+  '  if (typeof console !== "undefined") console.warn(message);\n' +
+  "}\n";
+
+test("does not require the i18n API for a module whose only literal is a marked operator diagnostic", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [DIAGNOSTIC_ONLY_FILE]: DIAGNOSTIC_ONLY_SOURCE,
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [SINGLE_FILE_UI, DIAGNOSTIC_ONLY_FILE, EN_CATALOG, DE_CATALOG],
+      });
+
+      expect(result.i18nRelevantFiles).not.toContain(DIAGNOSTIC_ONLY_FILE);
+      expect(result.problems).toEqual([]);
+      expect(result.ok).toBe(true);
+    },
+  );
+});
+
+// The counterpart at whole-gate level: the same shape with NO marker still fails, so the exemption
+// cannot be read as "diagnostic strings are exempt from i18n by convention".
+test("still requires the i18n API for the same diagnostic shape with no i18n-exempt marker", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [DIAGNOSTIC_ONLY_FILE]: DIAGNOSTIC_ONLY_SOURCE.replace(
+        "  // i18n-exempt: console-only operator diagnostic, never rendered to the end user\n",
+        "",
+      ),
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [SINGLE_FILE_UI, DIAGNOSTIC_ONLY_FILE, EN_CATALOG, DE_CATALOG],
+      });
+
+      expect(result.i18nRelevantFiles).toContain(DIAGNOSTIC_ONLY_FILE);
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/do not use the i18n API/);
+    },
+  );
+});
+
+// And a wordless marker on that same file must not succeed either — the escape hatch cannot be used
+// wordlessly at this position any more than at a JSX/attribute/label position.
+test("still requires the i18n API when the marker's reason is too short", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [DIAGNOSTIC_ONLY_FILE]: DIAGNOSTIC_ONLY_SOURCE.replace(
+        "console-only operator diagnostic, never rendered to the end user",
+        "x",
+      ),
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [SINGLE_FILE_UI, DIAGNOSTIC_ONLY_FILE, EN_CATALOG, DE_CATALOG],
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/do not use the i18n API/);
     },
   );
 });

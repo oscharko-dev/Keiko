@@ -581,9 +581,33 @@ export function untranslatedLiteralsInSource(source) {
   return { findings, weakExemptions };
 }
 
+// `hasUserFacingTextLine` cannot distinguish a string that is RENDERED from one that is only ever
+// passed to `console.warn`/`console.error` — a `return \`...\`` shape looks identical either way to
+// a line-level heuristic. The per-literal ledger scan already trusts a diff-visible, reason-gated
+// `// i18n-exempt:` marker for exactly this "provably not user-facing" claim (untranslatedLiteralsInLine
+// positions); this relevance pre-filter did not consult it, so a changed file whose ONLY
+// "user-facing-shaped" line was a redacted operator diagnostic was still forced through "must use the
+// i18n API" (0.3.0 audit, #2802 — packages/keiko-ui/.../shellShortcutState.ts's refusal diagnostic).
+// The marker must sit on the line itself: `hasI18nRelevantChange` diffs to a filtered list of added
+// lines, so an "own line or the line above" lookup (the ledger scan's convention) is not reliably
+// available here.
+// A wordless (or too-short) `i18n-exempt` cannot suppress relevance either: the ledger scan's own
+// invariant is that the escape hatch "cannot be used wordlessly", and a return-statement position is
+// never examined by that scan's weak-exemption check, so this is the only place that invariant can
+// be enforced for it. An under-justified marker is treated as absent, not as a distinct failure —
+// the line still trips "does not use the i18n API", which fails the gate either way.
+function isUsableExemptReason(line) {
+  const reason = i18nExemptReason(line);
+  return reason !== null && reason.length >= I18N_EXEMPT_MIN_REASON;
+}
+
+function hasUnexemptedUserFacingTextLine(line) {
+  return hasUserFacingTextLine(line) && !isUsableExemptReason(line);
+}
+
 export function hasI18nRelevantAddedLine(line) {
   return (
-    hasUserFacingTextLine(line) ||
+    hasUnexemptedUserFacingTextLine(line) ||
     // A registry `label:`/`description:` literal is user-facing text that no JSX/attribute/return
     // pattern above can see — the shape the whole window-type table was written in.
     untranslatedLiteralsInLine(line).length > 0 ||
@@ -645,7 +669,16 @@ function hasNewI18nSignature(addedLines, removedLines) {
 }
 
 function sourceHasUserFacingText(source) {
-  return source.split(/\r?\n/).some(hasUserFacingTextLine);
+  const lines = source.split(/\r?\n/);
+  // Full source is available here (unlike the git-diff path), so this honours the ledger scan's own
+  // "own line or the line immediately above" exemption convention rather than the own-line-only rule
+  // `hasUnexemptedUserFacingTextLine` uses for a filtered diff-line list. The reason-length floor
+  // mirrors `isUsableExemptReason`: a wordless marker must not suppress relevance either.
+  return lines.some((line, index) => {
+    if (!hasUserFacingTextLine(line)) return false;
+    const reason = exemptReasonFor(lines, index);
+    return reason === null || reason.length < I18N_EXEMPT_MIN_REASON;
+  });
 }
 
 // When a real diff is available, only newly introduced signals decide relevance: a change is
@@ -657,7 +690,7 @@ function hasI18nRelevantChange(repoRoot, file) {
   const changedLines = gitChangedLinesForFile(repoRoot, file);
   if (changedLines !== null) {
     if (!changedLines.added.some(hasI18nRelevantAddedLine)) return false;
-    if (changedLines.added.some(hasUserFacingTextLine)) return true;
+    if (changedLines.added.some(hasUnexemptedUserFacingTextLine)) return true;
     return hasNewI18nSignature(changedLines.added, changedLines.removed);
   }
   const source = readText(repoRoot, file);
