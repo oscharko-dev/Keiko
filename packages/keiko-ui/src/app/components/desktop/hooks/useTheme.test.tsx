@@ -51,4 +51,16 @@ describe("useTheme", () => {
     expect(result.current.theme).toBe("light");
     expect(document.documentElement.dataset.theme).toBe("light");
   });
+
+  it("keeps multiple mounted theme controls synchronized", async () => {
+    const first = renderHook(() => useTheme());
+    const second = renderHook(() => useTheme());
+
+    await waitFor(() => expect(first.result.current.theme).toBe("dark"));
+    act(() => first.result.current.toggle());
+
+    await waitFor(() => expect(second.result.current.theme).toBe("light"));
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(window.localStorage.getItem("keiko.theme")).toBe("light");
+  });
 });

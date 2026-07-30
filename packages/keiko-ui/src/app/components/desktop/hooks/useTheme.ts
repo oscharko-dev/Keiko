@@ -6,6 +6,7 @@ export type Theme = "light" | "dark";
 
 const STORAGE_KEY = "keiko.theme";
 const DEFAULT_THEME: Theme = "dark";
+const THEME_CHANGE_EVENT = "keiko:theme-change";
 
 function readStoredTheme(): Theme {
   if (typeof window === "undefined") return DEFAULT_THEME;
@@ -36,6 +37,15 @@ export function useTheme(): UseThemeResult {
   }, []);
 
   useEffect(() => {
+    const handleThemeChange = (event: Event): void => {
+      const nextTheme = (event as CustomEvent<Theme>).detail;
+      if (nextTheme === "light" || nextTheme === "dark") setTheme(nextTheme);
+    };
+    window.addEventListener(THEME_CHANGE_EVENT, handleThemeChange);
+    return (): void => window.removeEventListener(THEME_CHANGE_EVENT, handleThemeChange);
+  }, []);
+
+  useEffect(() => {
     if (!hydrated) return;
     if (typeof document !== "undefined") {
       document.documentElement.dataset.theme = theme;
@@ -45,6 +55,7 @@ export function useTheme(): UseThemeResult {
     } catch {
       /* localStorage may be unavailable; theme is still applied in-memory. */
     }
+    window.dispatchEvent(new CustomEvent<Theme>(THEME_CHANGE_EVENT, { detail: theme }));
   }, [theme, hydrated]);
 
   const toggle = useCallback(() => {
