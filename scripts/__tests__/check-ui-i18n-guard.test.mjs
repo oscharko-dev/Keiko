@@ -449,6 +449,60 @@ test("accepts a shared-catalog key helper with the -i18n.ts suffix and no local 
   );
 });
 
+// A feature-scoped catalog has the same two seams as the shared one: a hook for components, and the
+// translate TYPE as a parameter for the non-component modules that cannot call a hook. The guard
+// listed `useCodingWorkbenchTranslate` but not `CodingWorkbenchTranslate`, so a label module that
+// routes every string through `t(...)` was still reported as "does not use the i18n API".
+const SCOPED_SEAM_FILE = "packages/keiko-ui/src/app/feature/feature-labels.ts";
+const SCOPED_SEAM_SOURCE =
+  'import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";\n\n' +
+  "export function stateLabel(t: CodingWorkbenchTranslate): string {\n" +
+  '  return t("codingWorkbench.state.idle");\n' +
+  "}\n";
+
+test("accepts a non-component module that takes a feature-scoped translate function", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [SCOPED_SEAM_FILE]: SCOPED_SEAM_SOURCE,
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [SINGLE_FILE_UI, SCOPED_SEAM_FILE, EN_CATALOG, DE_CATALOG],
+      });
+
+      expect(result.problems).toEqual([]);
+      expect(result.ok).toBe(true);
+    },
+  );
+});
+
+// The counterpart: recognising the scoped seam must not become a way to opt out of i18n. Naming the
+// type buys a file nothing on the per-literal ledger, which is the rule that actually protects the
+// rendered positions — here a registry `label` field.
+test("still rejects a hardcoded registry label in a module that names the scoped translate type", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [SCOPED_SEAM_FILE]:
+        'import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";\n\n' +
+        'export const ROWS = [{ id: "idle", label: "Run is idle" }];\n',
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [SINGLE_FILE_UI, SCOPED_SEAM_FILE, EN_CATALOG, DE_CATALOG],
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/untranslated user-facing literal/);
+    },
+  );
+});
+
 test("a key helper does not satisfy the catalog-update requirement by itself", async () => {
   await withFixture(
     {

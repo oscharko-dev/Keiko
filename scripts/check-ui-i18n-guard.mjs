@@ -37,6 +37,11 @@ const I18N_USAGE_PATTERNS = [
   // the window-type registry among them — as "does not use the i18n API", which is one half of why
   // hardcoded English in a `.ts` registry was invisible to it.
   /\bI18nTranslate\b/,
+  // The feature-scoped analogue of `I18nTranslate`, for the same reason: a non-component module in
+  // the Coding Workbench takes its catalog's translate function as a parameter rather than calling
+  // the hook. The hook was listed above but the type was not, so a label module that routes every
+  // string through `t(...)` was still reported as "does not use the i18n API".
+  /\bCodingWorkbenchTranslate\b/,
   /\btranslateOptionalWidget\s*\(/,
   /\blocalizedWindow[A-Za-z]*\s*\(/,
 ];

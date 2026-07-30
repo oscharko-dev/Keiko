@@ -1,9 +1,7 @@
 {
   "$comment": "Ratcheted ledger of pre-existing untranslated user-facing literals in the Keiko UI, one entry per file (see scripts/check-ui-i18n-guard.mjs). A literal listed here is known debt the check:ui-i18n gate tolerates; ANY literal not listed fails the gate. The ledger only shrinks - regenerate it with `npm run check:ui-i18n -- --write-baseline` after removing literals, and never add an entry to silence a new one. For a literal that is genuinely not user-facing, mark the source line `// i18n-exempt: <reason>` instead, so the claim is visible in the diff.",
   "files": {
-    "packages/keiko-ui/src/app/atlassian-connectors/page.tsx": [
-      "Keiko | Atlassian connectors"
-    ],
+    "packages/keiko-ui/src/app/atlassian-connectors/page.tsx": ["Keiko | Atlassian connectors"],
     "packages/keiko-ui/src/app/components/desktop/AppShell.tsx": [
       "Connected",
       "Connecting",
@@ -47,9 +45,7 @@
       "Why these files were selected",
       "Why these files?"
     ],
-    "packages/keiko-ui/src/app/components/desktop/Header.tsx": [
-      "Keiko"
-    ],
+    "packages/keiko-ui/src/app/components/desktop/Header.tsx": ["Keiko"],
     "packages/keiko-ui/src/app/components/desktop/hooks/voice-dialogue-evaluation/index.ts": [
       "Deprecated STT+TTS fallback deployment (full-realtime without browser WebRTC media)",
       "No-voice deployment (no voice model configured)",
@@ -57,9 +53,7 @@
       "Speech-output-only deployment (spoken answer, no capture)",
       "Speech-to-text-only deployment (dictation, no spoken answer)"
     ],
-    "packages/keiko-ui/src/app/components/desktop/LeftRail.tsx": [
-      "Git"
-    ],
+    "packages/keiko-ui/src/app/components/desktop/LeftRail.tsx": ["Git"],
     "packages/keiko-ui/src/app/components/desktop/modals/GatewaySetupDialog.tsx": [
       "API key header",
       "API token",
@@ -97,9 +91,7 @@
     "packages/keiko-ui/src/app/components/desktop/repositoryReferences.tsx": [
       "Select repository source"
     ],
-    "packages/keiko-ui/src/app/components/desktop/SafeMarkdown.tsx": [
-      "(opens in new tab)"
-    ],
+    "packages/keiko-ui/src/app/components/desktop/SafeMarkdown.tsx": ["(opens in new tab)"],
     "packages/keiko-ui/src/app/components/desktop/VoiceDialogMode.tsx": [
       "Interrupt",
       "Interrupt the assistant",
@@ -479,40 +471,20 @@
       "Zoom content in",
       "Zoom content out"
     ],
-    "packages/keiko-ui/src/app/components/desktop/WorkflowHandoff.tsx": [
-      "Workflow result actions"
-    ],
+    "packages/keiko-ui/src/app/components/desktop/WorkflowHandoff.tsx": ["Workflow result actions"],
     "packages/keiko-ui/src/app/layout.tsx": [
       "Keiko — a governed agentic workspace for knowledge work.",
       "Keiko | Ex experientia disco"
     ],
-    "packages/keiko-ui/src/app/local-knowledge/capsule/page.tsx": [
-      "Knowledge Pod Detail — Keiko"
-    ],
-    "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": [
-      "MemoriaViva"
-    ],
-    "packages/keiko-ui/src/app/memoriaviva/consolidation/page.tsx": [
-      "Keiko"
-    ],
-    "packages/keiko-ui/src/app/memoriaviva/detail/MemoryDetailClient.tsx": [
-      "No memory selected"
-    ],
-    "packages/keiko-ui/src/app/memoriaviva/detail/page.tsx": [
-      "Keiko"
-    ],
-    "packages/keiko-ui/src/app/memoriaviva/health-scan/page.tsx": [
-      "Keiko"
-    ],
-    "packages/keiko-ui/src/app/memoriaviva/journal/page.tsx": [
-      "Keiko"
-    ],
-    "packages/keiko-ui/src/app/memoriaviva/page.tsx": [
-      "Keiko"
-    ],
-    "packages/keiko-ui/src/app/memoriaviva/review-queue/page.tsx": [
-      "Keiko"
-    ],
+    "packages/keiko-ui/src/app/local-knowledge/capsule/page.tsx": ["Knowledge Pod Detail — Keiko"],
+    "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": ["MemoriaViva"],
+    "packages/keiko-ui/src/app/memoriaviva/consolidation/page.tsx": ["Keiko"],
+    "packages/keiko-ui/src/app/memoriaviva/detail/MemoryDetailClient.tsx": ["No memory selected"],
+    "packages/keiko-ui/src/app/memoriaviva/detail/page.tsx": ["Keiko"],
+    "packages/keiko-ui/src/app/memoriaviva/health-scan/page.tsx": ["Keiko"],
+    "packages/keiko-ui/src/app/memoriaviva/journal/page.tsx": ["Keiko"],
+    "packages/keiko-ui/src/app/memoriaviva/page.tsx": ["Keiko"],
+    "packages/keiko-ui/src/app/memoriaviva/review-queue/page.tsx": ["Keiko"],
     "packages/keiko-ui/src/lib/local-knowledge-api.ts": [
       "Embedding mismatch",
       "Embedding opaque",
