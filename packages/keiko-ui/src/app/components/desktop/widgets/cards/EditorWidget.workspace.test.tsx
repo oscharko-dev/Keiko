@@ -314,7 +314,6 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-
 // The pre-flight ask resolves through a promise chain; flushing microtasks inside act() lets the
 // veto/allow verdict land without wrapping the (already act-wrapped) fireEvent click itself (S8980).
 async function flushPreflight(): Promise<void> {
