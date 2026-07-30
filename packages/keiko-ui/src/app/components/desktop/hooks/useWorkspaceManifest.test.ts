@@ -110,6 +110,20 @@ describe("useWorkspaceManifest", () => {
     expect(view.result.current.pathReadAuthority).toBe("unpaired");
   });
 
+  // This surface reads the marker to decide whether canonical paths are DISCLOSABLE, not to grant an
+  // authority: only an explicit "unpaired" withholds them, and an unasserted marker keeps the
+  // pre-existing lenient default. Pinned so tightening the shared layer's absent-marker default to
+  // "unknown" (fail closed for the pairing-authority callers) stays behaviour-preserving here.
+  it("keeps path disclosure available when the response asserts no pairing marker", async () => {
+    const alpha = manifest("ws-a", ["alpha"]);
+    fetchManifestAccess.mockResolvedValue({ session: "unknown", manifests: [alpha] });
+    const view = renderHook(() => useWorkspaceManifest("/ws/alpha"));
+    await waitFor(() => expect(view.result.current.loading).toBe(false));
+    expect(view.result.current.manifest?.workspaceId).toBe("ws-a");
+    expect(view.result.current.pathReadAuthority).toBe("available");
+    expect(view.result.current.issue).toBeNull();
+  });
+
   it("applies change events for the same workspace or a manifest gaining the root", async () => {
     const alpha = manifest("ws-a", ["alpha"]);
     fetchManifestAccess.mockResolvedValue({ session: "paired", manifests: [alpha] });

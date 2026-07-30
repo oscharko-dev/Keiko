@@ -49,6 +49,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Dieses Fenster ist nicht für Frageinhalte gekoppelt. Starten Sie Keiko über den Launcher neu, um eine neue App-Sitzung zu koppeln.",
   "codingWorkbench.pairing.unpaired":
     "Browserfenster nicht gekoppelt — öffnen Sie Keiko über den Launcher, um Coding-Läufe zu ermöglichen.",
+  "codingWorkbench.questions.answerFailed":
+    "Ihre Antwort wurde nicht angenommen ({code}). Die Frage ist weiterhin offen — senden Sie sie erneut.",
+  "codingWorkbench.questions.rejectFailed":
+    "Das Ablehnen der Frage wurde nicht angenommen ({code}). Die Frage ist weiterhin offen — versuchen Sie es erneut.",
   "codingWorkbench.questions.retry": "Erneut prüfen",
   "codingWorkbench.questions.requestTitle": "Die Laufzeit benötigt Ihre Eingabe",
   "codingWorkbench.questions.required": "Beantworten Sie jede Frage vor dem Senden.",
@@ -258,6 +262,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changesetReview.retry": "Erneut versuchen",
   "codingWorkbench.changesetReview.deliveryFailed":
     "Diese Entscheidung konnte dem Task nicht bestätigt werden. Bitte erneut versuchen.",
+  "codingWorkbench.changesetReview.deliveryFailedCode":
+    "Diese Entscheidung konnte dem Task nicht bestätigt werden ({code}). Die Änderung wurde nicht geschrieben — bitte erneut versuchen.",
   "codingWorkbench.recovery.eyebrow": "Wiederherstellung erforderlich",
   "codingWorkbench.recovery.title": "Vor erneutem Versuch abgleichen",
   "codingWorkbench.recovery.summary":

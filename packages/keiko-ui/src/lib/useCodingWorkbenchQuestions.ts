@@ -43,10 +43,28 @@ export type CodingWorkbenchQuestionsStatus =
   /** The presented app-session cookie is not valid (#2478): honest re-pair state, never a silent empty list. */
   | "unpaired";
 
+/** Which of the two settle actions the operator invoked. Never inferred from the error. */
+export type CodingWorkbenchQuestionAction = "answer" | "reject";
+
+/**
+ * F-09a: a refused answer/reject carries machine facts the operator needs to retry or report — the
+ * transport's own error code and, when the response carried one, the correlation id that ties this
+ * exact failure to one redacted server-side diagnostic. Before this existed the hook kept only a
+ * projected `errorCode` that no surface rendered, so a failed answer was reported with the listing
+ * sentence ("Questions could not be refreshed.") and the pending question vanished with it.
+ */
+export interface CodingWorkbenchQuestionMutationFailure {
+  readonly action: CodingWorkbenchQuestionAction;
+  readonly code: string;
+  readonly correlationId?: string;
+}
+
 export interface CodingWorkbenchQuestionsState {
   readonly status: CodingWorkbenchQuestionsStatus;
   readonly questions: readonly CodingWorkbenchRuntimeQuestionRequest[];
   readonly errorCode: string | null;
+  /** Non-null only while the last answer/reject attempt is unresolved and its question still open. */
+  readonly mutationFailure: CodingWorkbenchQuestionMutationFailure | null;
 }
 
 export interface UseCodingWorkbenchQuestionsInput {
@@ -76,6 +94,7 @@ const EMPTY_STATE: CodingWorkbenchQuestionsState = {
   status: "empty",
   questions: [],
   errorCode: null,
+  mutationFailure: null,
 };
 
 interface QuestionContext {
@@ -327,7 +346,7 @@ async function runQuestionListing(input: ActiveListingInput): Promise<boolean> {
       const response = await listQuestionAttempt(input);
       if (controller.signal.aborted) return false;
       if (response.session === "unpaired") {
-        setState({ status: "unpaired", questions: [], errorCode: null });
+        setState({ ...EMPTY_STATE, status: "unpaired" });
         return false;
       }
       setState(listedState(response.questions, input.consumedRef));
@@ -385,22 +404,33 @@ function listedState(
     status: visible.length === 0 ? "empty" : "ready",
     questions: visible,
     errorCode: null,
+    mutationFailure: null,
   };
 }
 
-function failureState(error: unknown): CodingWorkbenchQuestionsState {
+function failureStatus(error: unknown): CodingWorkbenchQuestionsStatus {
   const offline = error instanceof TypeError || globalThis.navigator?.onLine === false;
+  return offline ? "offline" : "error";
+}
+
+/** The machine error code the transport carried, or the one fallback for a non-API rejection. */
+function failureCode(error: unknown): string {
+  return error instanceof ApiError ? error.code : "CODING_RUNTIME_QUESTION_FAILED";
+}
+
+function failureState(error: unknown): CodingWorkbenchQuestionsState {
   return {
-    status: offline ? "offline" : "error",
+    status: failureStatus(error),
     questions: [],
-    errorCode: error instanceof ApiError ? error.code : "CODING_RUNTIME_QUESTION_FAILED",
+    errorCode: failureCode(error),
+    mutationFailure: null,
   };
 }
 
 function useQuestionMutation(
   context: QuestionContext | null,
 ): (
-  action: "answer" | "reject",
+  action: CodingWorkbenchQuestionAction,
   questionId: string,
   answers?: readonly (readonly string[])[],
 ) => Promise<boolean> {
@@ -410,7 +440,12 @@ function useQuestionMutation(
       context.submissionRef.current = true;
       const controller = new AbortController();
       context.abortRef.current = controller;
-      context.setState((current) => ({ ...current, status: "submitting", errorCode: null }));
+      context.setState((current) => ({
+        ...current,
+        status: "submitting",
+        errorCode: null,
+        mutationFailure: null,
+      }));
       try {
         await runQuestionMutation(context, controller, action, questionId, answers);
         context.consumedRef.current.add(questionId);
@@ -418,13 +453,14 @@ function useQuestionMutation(
           status: "stale",
           questions: current.questions.filter(({ id }) => id !== questionId),
           errorCode: null,
+          mutationFailure: null,
         }));
         await context.refreshSnapshot();
         context.bumpEpoch();
         return true;
       } catch (error) {
         if (controller.signal.aborted) return false;
-        context.setState(mutationFailureState(error));
+        context.setState((current) => mutationFailureState(error, action, current));
         return false;
       } finally {
         if (context.abortRef.current === controller) {
@@ -440,7 +476,7 @@ function useQuestionMutation(
 function runQuestionMutation(
   context: QuestionContext,
   controller: AbortController,
-  action: "answer" | "reject",
+  action: CodingWorkbenchQuestionAction,
   questionId: string,
   answers: readonly (readonly string[])[],
 ): Promise<unknown> {
@@ -458,9 +494,32 @@ function runQuestionMutation(
     : rejectCodingWorkbenchRuntimeQuestion(context.runId, envelope, controller.signal);
 }
 
-function mutationFailureState(error: unknown): CodingWorkbenchQuestionsState {
-  if (error instanceof ApiError && (error.status === 409 || error.status === 400)) {
-    return { status: "stale", questions: [], errorCode: "CODING_RUNTIME_QUESTION_STALE" };
-  }
-  return failureState(error);
+/**
+ * F-09a: a refused answer/reject keeps the question the operator was working on. Dropping it to an
+ * empty list made the one surface that could retry disappear, so a transient 409 or a dropped
+ * connection silently cost the operator the question and stalled the run. The projected `errorCode`
+ * keeps its historic stale wording for the listing surface; `mutationFailure` carries the transport's
+ * OWN code plus the correlation id, which is what an operator can act on and report.
+ */
+function mutationFailureState(
+  error: unknown,
+  action: CodingWorkbenchQuestionAction,
+  current: CodingWorkbenchQuestionsState,
+): CodingWorkbenchQuestionsState {
+  const stale = error instanceof ApiError && (error.status === 409 || error.status === 400);
+  return {
+    status: stale ? "stale" : failureStatus(error),
+    questions: current.questions,
+    errorCode: stale ? "CODING_RUNTIME_QUESTION_STALE" : failureCode(error),
+    mutationFailure: questionMutationFailure(error, action),
+  };
+}
+
+function questionMutationFailure(
+  error: unknown,
+  action: CodingWorkbenchQuestionAction,
+): CodingWorkbenchQuestionMutationFailure {
+  const correlationId = error instanceof ApiError ? error.correlationId : undefined;
+  const code = failureCode(error);
+  return correlationId === undefined ? { action, code } : { action, code, correlationId };
 }

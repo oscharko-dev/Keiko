@@ -240,7 +240,14 @@ async function applyRootBindingChanges(
 export function handleListWorkspaceManifests(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   if (!hasWorkspacePathReadAuthority(ctx, deps)) return unpairedWorkspaceList();
   try {
-    return { status: 200, body: { manifests: new WorkspaceManifestService(deps.store).list() } };
+    // The pairing marker is asserted on BOTH outcomes, never left to be inferred from its absence:
+    // clients read it as an authority input (an unpaired window cannot resolve run authority,
+    // ADR-0141), so silence must stay indistinguishable from "not asserted" rather than being
+    // coerced into a pairing this route never granted.
+    return {
+      status: 200,
+      body: { session: "paired", manifests: new WorkspaceManifestService(deps.store).list() },
+    };
   } catch (error) {
     return failure(error, ctx.correlationId);
   }

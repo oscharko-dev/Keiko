@@ -518,6 +518,96 @@ describe("useCodingWorkbenchQuestions", () => {
     stale.unmount();
   });
 
+  // F-09a: a refused answer/reject used to project `questions: []`, so the very question the
+  // operator was answering vanished together with any way to retry it, and the transport's own
+  // error code plus correlation id were dropped in favour of a projected code no surface rendered.
+  // The mutation failure must name WHICH action failed — an unaccepted answer is not "questions
+  // could not be refreshed" — and the pending question must survive it.
+  it("keeps the pending question and names a refused answer with its code and correlation id", async () => {
+    vi.mocked(listCodingWorkbenchRuntimeQuestions).mockResolvedValue(pending);
+    const refused = new ApiError("CODING_RUNTIME_QUESTION_REJECTED", "Refused.", 422);
+    refused.correlationId = "ui-correlation-11";
+    vi.mocked(answerCodingWorkbenchRuntimeQuestion).mockRejectedValue(refused);
+    const view = renderHook(() => useCodingWorkbenchQuestions(activeInput()));
+    await flush();
+    expect(view.result.current.questions).toEqual(pending.questions);
+
+    await act(async () => {
+      expect(await view.result.current.answer("que_1", [["Continue"]])).toBe(false);
+    });
+
+    expect(view.result.current.questions).toEqual(pending.questions);
+    expect(view.result.current.mutationFailure).toEqual({
+      action: "answer",
+      code: "CODING_RUNTIME_QUESTION_REJECTED",
+      correlationId: "ui-correlation-11",
+    });
+    view.unmount();
+  });
+
+  it("attributes a refused reject to the reject action and omits an absent correlation id", async () => {
+    vi.mocked(listCodingWorkbenchRuntimeQuestions).mockResolvedValue(pending);
+    vi.mocked(rejectCodingWorkbenchRuntimeQuestion).mockRejectedValue(
+      new ApiError("CODING_RUNTIME_QUESTION_REJECTED", "Refused.", 500),
+    );
+    const view = renderHook(() => useCodingWorkbenchQuestions(activeInput()));
+    await flush();
+
+    await act(async () => {
+      expect(await view.result.current.reject("que_1")).toBe(false);
+    });
+
+    expect(view.result.current.questions).toEqual(pending.questions);
+    expect(view.result.current.mutationFailure).toEqual({
+      action: "reject",
+      code: "CODING_RUNTIME_QUESTION_REJECTED",
+    });
+    view.unmount();
+  });
+
+  // A revision race is the most common refusal and the one most likely to succeed on a retry, so
+  // it is exactly the case where losing the question is worst. `errorCode` keeps its historic stale
+  // projection for the listing surface; the mutation failure carries the transport's OWN code.
+  it("keeps the question retryable after a stale revision refusal", async () => {
+    vi.mocked(listCodingWorkbenchRuntimeQuestions).mockResolvedValue(pending);
+    vi.mocked(answerCodingWorkbenchRuntimeQuestion).mockRejectedValue(
+      new ApiError("CODING_RUNTIME_QUESTION_REVISION", "Stale.", 409),
+    );
+    const view = renderHook(() => useCodingWorkbenchQuestions(activeInput()));
+    await flush();
+
+    await act(async () => {
+      await view.result.current.answer("que_1", [["Continue"]]);
+    });
+
+    expect(view.result.current).toMatchObject({
+      status: "stale",
+      errorCode: "CODING_RUNTIME_QUESTION_STALE",
+      questions: pending.questions,
+      mutationFailure: { action: "answer", code: "CODING_RUNTIME_QUESTION_REVISION" },
+    });
+    view.unmount();
+  });
+
+  it("clears a prior mutation failure once the question is answered", async () => {
+    vi.mocked(listCodingWorkbenchRuntimeQuestions).mockResolvedValue(pending);
+    vi.mocked(answerCodingWorkbenchRuntimeQuestion)
+      .mockRejectedValueOnce(new ApiError("CODING_RUNTIME_QUESTION_REJECTED", "Refused.", 500))
+      .mockResolvedValueOnce(snapshot);
+    const view = renderHook(() => useCodingWorkbenchQuestions(activeInput()));
+    await flush();
+    await act(async () => {
+      await view.result.current.answer("que_1", [["Continue"]]);
+    });
+    expect(view.result.current.mutationFailure).not.toBeNull();
+
+    await act(async () => {
+      expect(await view.result.current.answer("que_1", [["Continue"]])).toBe(true);
+    });
+    expect(view.result.current.mutationFailure).toBeNull();
+    view.unmount();
+  });
+
   // #2478: revocation/expiry surfaces as the honest re-pair state — never a silent empty list —
   // and the unpaired projection skips the snapshot re-anchor (the server never touched the run).
   it("surfaces an unpaired session distinctly from an empty question list", async () => {

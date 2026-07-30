@@ -13,6 +13,7 @@ import {
 } from "@/lib/coding-workbench-live-state";
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import {
+  changesetDeliveryAlert,
   eventDetail,
   lifecycleAnnouncement,
   modelSourceLabel,
@@ -282,5 +283,30 @@ describe("app-session pairing truth (release-audit F-08/RG-12)", () => {
       },
     };
     expect(visibleAlert(state, t, false)).toBe("codingWorkbench.alert.runtimeRefreshFailed");
+// F-09a: the editor-changeset approve/deny used to discard its error in a bare `catch { return
+// false }`, so the review could only say "could not confirm this decision" — no code to act on and
+// no support id to report, on the one decision that blocks the run's file write.
+describe("changesetDeliveryAlert (F-09a)", () => {
+  const tv: CodingWorkbenchTranslate = (key, values) =>
+    values === undefined ? key : `${key} ${JSON.stringify(values)}`;
+
+  it("names the machine error code of an undelivered decision", () => {
+    const alert = changesetDeliveryAlert({ code: "BRIDGE_LEASE_INACTIVE" }, tv);
+    expect(alert).toContain("codingWorkbench.changesetReview.deliveryFailedCode");
+    expect(alert).toContain("BRIDGE_LEASE_INACTIVE");
+    expect(alert).not.toContain("codingWorkbench.alert.actionFailedSupportId");
+  });
+
+  it("appends the correlation id as a copyable support id when the transport carried one", () => {
+    const alert = changesetDeliveryAlert(
+      { code: "BRIDGE_LEASE_INACTIVE", correlationId: "ui-correlation-4" },
+      tv,
+    );
+    expect(alert).toContain("codingWorkbench.alert.actionFailedSupportId");
+    expect(alert).toContain("ui-correlation-4");
+  });
+
+  it("falls back to the code-free sentence rather than an empty alert", () => {
+    expect(changesetDeliveryAlert(null, tv)).toBe("codingWorkbench.changesetReview.deliveryFailed");
   });
 });

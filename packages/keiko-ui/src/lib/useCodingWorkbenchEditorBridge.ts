@@ -27,13 +27,24 @@ import {
   parseUnifiedDiff,
   type DiffParseResult,
 } from "@/app/components/desktop/widgets/cards/shared/diffParser";
-import { postEditorAgentSessionSnapshot } from "./api";
+import { ApiError, postEditorAgentSessionSnapshot } from "./api";
 import type {
   EditorAgentAction,
   EditorAgentActionResultRequest,
   EditorAgentSessionSnapshot,
   EditorAgentSnapshotResponse,
 } from "./types";
+
+/**
+ * F-09a: the machine facts of the failure that stopped a changeset decision from reaching the run.
+ * Before this existed, `attemptDecision` ended in a bare `catch { return false }` that discarded the
+ * error outright, so the surfaced alert could only say "something failed" — the operator had no code
+ * to act on and no correlation id to report, on the one action that blocks the run's file write.
+ */
+export interface CodingWorkbenchDecisionFailure {
+  readonly code: string;
+  readonly correlationId?: string;
+}
 
 export interface CodingWorkbenchChangesetReview {
   readonly actionId: string;
@@ -47,6 +58,8 @@ export interface CodingWorkbenchChangesetReview {
    * through while the underlying tool call is actually still unresolved.
    */
   readonly deliveryFailed: boolean;
+  /** The last delivery failure's code and correlation id. Non-null exactly when `deliveryFailed`. */
+  readonly deliveryFailure: CodingWorkbenchDecisionFailure | null;
 }
 
 // The bridge's live SSE connection can be mid-reconnect (e.g. a snapshot refresh rotated its
@@ -88,16 +101,35 @@ function decisionRequest(
   };
 }
 
+/** Delivered, or not delivered with the reason why — never a bare boolean that loses the reason. */
+type DecisionOutcome =
+  | { readonly delivered: true }
+  | { readonly delivered: false; readonly failure: CodingWorkbenchDecisionFailure };
+
+/** A fetch that never reached the BFF: distinct from a BFF that answered and refused. */
+const DECISION_UNREACHABLE_CODE = "EDITOR_CHANGESET_DECISION_UNREACHABLE";
+/** Anything else, e.g. the bridge decision capability missing for this session. */
+const DECISION_FAILED_CODE = "EDITOR_CHANGESET_DECISION_FAILED";
+
+function decisionFailure(error: unknown): CodingWorkbenchDecisionFailure {
+  if (error instanceof ApiError) {
+    return error.correlationId === undefined
+      ? { code: error.code }
+      : { code: error.code, correlationId: error.correlationId };
+  }
+  return { code: error instanceof TypeError ? DECISION_UNREACHABLE_CODE : DECISION_FAILED_CODE };
+}
+
 async function attemptDecision(
   action: EditorAgentAction,
   status: "succeeded" | "failed",
   message: string | undefined,
-): Promise<boolean> {
+): Promise<DecisionOutcome> {
   try {
     await postEditorAgentResultRequest(action, decisionRequest(action, status, message));
-    return true;
-  } catch {
-    return false;
+    return { delivered: true };
+  } catch (error) {
+    return { delivered: false, failure: decisionFailure(error) };
   }
 }
 
@@ -105,9 +137,10 @@ async function submitDecisionWithRetry(
   action: EditorAgentAction,
   status: "succeeded" | "failed",
   message: string | undefined,
-): Promise<boolean> {
+): Promise<DecisionOutcome> {
   for (const delay of DECISION_RETRY_DELAYS_MS) {
-    if (await attemptDecision(action, status, message)) return true;
+    const outcome = await attemptDecision(action, status, message);
+    if (outcome.delivered) return outcome;
     await wait(delay);
   }
   return attemptDecision(action, status, message);
@@ -183,6 +216,7 @@ interface PendingChangeset {
   readonly diff: DiffParseResult;
   readonly deciding: boolean;
   readonly deliveryFailed: boolean;
+  readonly deliveryFailure: CodingWorkbenchDecisionFailure | null;
 }
 
 export function useCodingWorkbenchEditorBridge(
@@ -216,6 +250,7 @@ export function useCodingWorkbenchEditorBridge(
       diff: parseUnifiedDiff(action.changeset?.patch ?? ""),
       deciding: false,
       deliveryFailed: false,
+      deliveryFailure: null,
     });
   }, []);
 
@@ -260,16 +295,25 @@ export function useCodingWorkbenchEditorBridge(
       if (current === null || decidingRef.current) return;
       lastDecisionRef.current = { status, ...(message === undefined ? {} : { message }) };
       decidingRef.current = true;
-      setPending({ ...current, deciding: true, deliveryFailed: false });
+      setPending({ ...current, deciding: true, deliveryFailed: false, deliveryFailure: null });
       void (async () => {
-        let delivered = await submitDecisionWithRetry(current.action, status, message);
-        if (!delivered) {
+        let outcome = await submitDecisionWithRetry(current.action, status, message);
+        if (!outcome.delivered) {
           await forceReconnect();
-          delivered = await submitDecisionWithRetry(current.action, status, message);
+          outcome = await submitDecisionWithRetry(current.action, status, message);
         }
         decidingRef.current = false;
         if (pendingRef.current?.action.actionId !== current.action.actionId) return;
-        setPending(delivered ? null : { ...current, deciding: false, deliveryFailed: true });
+        setPending(
+          outcome.delivered
+            ? null
+            : {
+                ...current,
+                deciding: false,
+                deliveryFailed: true,
+                deliveryFailure: outcome.failure,
+              },
+        );
       })();
     },
     [forceReconnect],
@@ -290,6 +334,7 @@ export function useCodingWorkbenchEditorBridge(
             diff: pending.diff,
             deciding: pending.deciding,
             deliveryFailed: pending.deliveryFailed,
+            deliveryFailure: pending.deliveryFailure,
           },
     approve,
     deny,

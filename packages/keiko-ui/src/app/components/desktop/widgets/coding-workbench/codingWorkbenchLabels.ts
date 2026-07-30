@@ -6,6 +6,7 @@ import type {
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
+import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import type {
   CodingWorkbenchResourceStatus,
   CodingWorkbenchRuntimeState,
@@ -231,20 +232,48 @@ function eventOutcomeDetail(
   });
 }
 
-// F-09a: a rejected runtime mutation (any non-ok start/stop/approval result — never only one
-// status code) must surface as a visible, actionable alert naming the machine error code and,
-// when the transport carried one, the correlation id that ties this exact failure to its redacted
-// server-side diagnostic. A generic sentence alone left the operator with a dead start button.
-function mutationFailureAlert(
-  error: NonNullable<CodingWorkbenchRuntimeState["mutation"]["error"]>,
+/**
+ * The machine facts every rejected workbench action carries. Structural on purpose: the runtime
+ * mutation error, a refused runtime question, and an undelivered changeset decision are produced by
+ * three different layers and all three get the identical treatment.
+ */
+export interface CodingWorkbenchFailureFacts {
+  readonly code: string;
+  readonly correlationId?: string | undefined;
+}
+
+// F-09a: a rejected action (any non-ok result — never only one status code) must surface as a
+// visible, actionable alert naming the machine error code and, when the transport carried one, the
+// correlation id that ties this exact failure to its redacted server-side diagnostic. A generic
+// sentence alone left the operator with a dead button and nothing to report. `summaryKey` is the
+// caller's sentence saying WHICH action failed: "the requested runtime action", "sending your
+// answer" and "confirming this decision" are three different truths and must not share one.
+export function actionFailureAlert(
+  summaryKey: CodingWorkbenchMessageKey,
+  failure: CodingWorkbenchFailureFacts,
   t: CodingWorkbenchTranslate,
 ): string {
-  const summary = t("codingWorkbench.alert.actionFailedCode", { code: error.code });
-  return error.correlationId === undefined
+  const summary = t(summaryKey, { code: failure.code });
+  return failure.correlationId === undefined
     ? summary
     : `${summary} ${t("codingWorkbench.alert.actionFailedSupportId", {
-        correlationId: error.correlationId,
+        correlationId: failure.correlationId,
       })}`;
+}
+
+/**
+ * F-09a: an editor-changeset approve/deny that never reached the run must name the code that stopped
+ * it — the run's file write is blocked until this decision lands, so "it failed" is not enough to
+ * act on. `null` is only reachable if a delivery failure is ever flagged without facts; the generic
+ * sentence keeps that path honest rather than rendering an empty alert.
+ */
+export function changesetDeliveryAlert(
+  failure: CodingWorkbenchFailureFacts | null,
+  t: CodingWorkbenchTranslate,
+): string {
+  return failure === null
+    ? t("codingWorkbench.changesetReview.deliveryFailed")
+    : actionFailureAlert("codingWorkbench.changesetReview.deliveryFailedCode", failure, t);
 }
 
 export function visibleAlert(
@@ -252,7 +281,9 @@ export function visibleAlert(
   t: CodingWorkbenchTranslate,
   setupVisible: boolean,
 ): string | null {
-  if (state.mutation.error) return mutationFailureAlert(state.mutation.error, t);
+  if (state.mutation.error) {
+    return actionFailureAlert("codingWorkbench.alert.actionFailedCode", state.mutation.error, t);
+  }
   for (const [resource, value] of [
     ["authentication", state.profile],
     ["authenticationSetup", state.codexSetup],

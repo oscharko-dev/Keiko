@@ -88,6 +88,46 @@ describe("workspace manifest API", () => {
     await expect(fetchWorkspaceManifests()).resolves.toEqual([]);
   });
 
+  it("carries the server's explicit paired assertion through to the caller", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ session: "paired", manifests: [manifest()] })),
+        ),
+    );
+
+    await expect(fetchWorkspaceManifestAccess()).resolves.toEqual({
+      session: "paired",
+      manifests: [manifest()],
+    });
+  });
+
+  // Pairing is an authority input, so it must be ASSERTED, never inferred from silence: a response
+  // with no marker resolves to "unknown" and can therefore never be read as a granted pairing.
+  // Coercing the absent marker to "paired" let a response the server never marked claim a pairing.
+  it("resolves an absent session marker to unknown instead of claiming a pairing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ manifests: [manifest()] }))),
+    );
+
+    const access = await fetchWorkspaceManifestAccess();
+    expect(access.session).toBe("unknown");
+    expect(access.session).not.toBe("paired");
+    expect(access.manifests).toEqual([manifest()]);
+  });
+
+  it("rejects a response whose session marker is neither assertion", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ session: "maybe", manifests: [] }))),
+    );
+
+    await expect(fetchWorkspaceManifestAccess()).rejects.toThrow(/invalid/i);
+  });
+
   it("preserves the server error code and correlation id on a rejected workspace request", async () => {
     const correlationId = "workspace-request-2625";
     vi.stubGlobal(

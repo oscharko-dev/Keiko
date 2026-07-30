@@ -13,8 +13,18 @@ const WORKSPACES_URL = "/api/workspaces";
 
 export const WORKSPACE_MANIFEST_CHANGED_EVENT = "keiko:workspace-manifest-changed";
 
+/**
+ * The launcher-pairing marker the workspaces read carries, as ASSERTED by the server.
+ *
+ * `"unknown"` is not a server state: it is what this client resolves to when the response carries no
+ * marker at all. Pairing is an authority input (an unpaired window's run start is guaranteed to fail
+ * authority resolution, ADR-0141), so it may never be inferred from silence — a caller that gates on
+ * a pairing must require the explicit `"paired"` assertion and treat `"unknown"` as not-granted.
+ */
+export type WorkspaceManifestSessionPairing = "paired" | "unpaired" | "unknown";
+
 export interface WorkspaceManifestAccess {
-  readonly session: "paired" | "unpaired";
+  readonly session: WorkspaceManifestSessionPairing;
   readonly manifests: readonly WorkspaceManifest[];
 }
 
@@ -33,19 +43,25 @@ function assertManifest(path: string, value: unknown): WorkspaceManifest {
   return value as WorkspaceManifest;
 }
 
+// A present marker must be one of the two server assertions; an absent one is NOT read as a pairing.
+// Coercing silence into "paired" let a response the server never marked claim a pairing, which fails
+// open for every caller that gates an authority decision on it.
+function sessionPairing(path: string, marker: unknown): WorkspaceManifestSessionPairing {
+  if (marker === undefined) return "unknown";
+  if (marker !== "paired" && marker !== "unpaired") throw invalidManifestResponse(path);
+  return marker;
+}
+
 function manifestListValidator(path: string, value: unknown): WorkspaceManifestAccess {
   if (!isRecord(value) || !Array.isArray(value["manifests"])) {
     throw invalidManifestResponse(path);
   }
-  const session = value["session"];
-  if (session !== undefined && session !== "unpaired") {
-    throw invalidManifestResponse(path);
-  }
+  const session = sessionPairing(path, value["session"]);
   const manifests = value["manifests"].map((candidate) => assertManifest(path, candidate));
   if (session === "unpaired" && manifests.length > 0) {
     throw invalidManifestResponse(path);
   }
-  return { session: session === "unpaired" ? "unpaired" : "paired", manifests };
+  return { session, manifests };
 }
 
 function manifestMutationValidator(path: string, value: unknown): WorkspaceManifest {
