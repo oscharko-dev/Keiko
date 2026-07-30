@@ -26,11 +26,13 @@ import type {
   VoiceCapabilityResolution,
   VoicePersona,
 } from "./types.js";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchModelSource,
   CodingWorkbenchSidecarGatewayProjection,
   CodingWorkbenchSidecarGatewayResult,
   CodingWorkbenchSidecarGatewayUnavailableReason,
+  GatewayVerificationState,
 } from "@oscharko-dev/keiko-contracts";
 
 const voiceCapabilityCache = new WeakMap<
@@ -64,6 +66,12 @@ export interface SafeModelCapability extends Omit<ModelCapability, "tokenAccount
 export interface ResolveCodingSafeSidecarGatewayProfileOptions {
   readonly deploymentPolicyDisabled?: boolean | undefined;
   readonly modelSource?: CodingWorkbenchModelSource | undefined;
+  /**
+   * F-01: the last live-probe outcome for this gateway, which only the caller holding the server's
+   * probe record can know. This resolver reads configuration alone, so an omitted value stays
+   * `unverified` — the fail-closed state — and never implies a healthy provider.
+   */
+  readonly gatewayVerification?: GatewayVerificationState | undefined;
 }
 
 function matches(capability: ModelCapability, query: ModelSelectionQuery): boolean {
@@ -175,6 +183,7 @@ function codingSidecarUnavailable(
 
 function codingSidecarProjection(
   capability: ModelCapability,
+  verification: GatewayVerificationState,
 ): CodingWorkbenchSidecarGatewayProjection {
   return {
     status: "available",
@@ -189,6 +198,7 @@ function codingSidecarProjection(
       maxInputMessages: 64,
       maxRequestBytes: 64_000,
     },
+    verification,
   };
 }
 
@@ -295,7 +305,7 @@ export function resolveCodingSafeSidecarGatewayProfile(
   if (!hasCredential(provider)) {
     return codingSidecarUnavailable("missing-credentials");
   }
-  return codingSidecarProjection(selected);
+  return codingSidecarProjection(selected, options.gatewayVerification ?? UNVERIFIED_GATEWAY);
 }
 
 // Completion-oriented model selection (Issue #1210, ADR-0042 D5). Resolves the configured

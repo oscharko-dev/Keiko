@@ -3,9 +3,12 @@ import type {
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
+  CodingWorkbenchSidecarGatewayResult,
+  GatewayVerificationState,
 } from "@oscharko-dev/keiko-contracts";
 import {
   codingWorkbenchRuntimeReducer,
+  codingWorkbenchSourceFromManaged,
   createInitialCodingWorkbenchRuntimeState,
   type CodingWorkbenchRuntimeState,
 } from "./coding-workbench-live-state";
@@ -86,6 +89,7 @@ function readyState(switching = false): CodingWorkbenchRuntimeState {
       modelSource: "keiko-model-gateway",
       runtimeSource: "keiko-sidecar",
       available: true,
+      verification: "verified",
     },
   });
   state = codingWorkbenchRuntimeReducer(state, {
@@ -99,6 +103,40 @@ function readyState(switching = false): CodingWorkbenchRuntimeState {
     },
   });
   return codingWorkbenchRuntimeReducer(state, { kind: "runtime-set", readiness: readiness() });
+}
+
+function managedProfile(
+  verification: GatewayVerificationState,
+): CodingWorkbenchSidecarGatewayResult {
+  return {
+    status: "available",
+    profileId: "coding-safe-openai-compatible",
+    modelAlias: "model-redacted",
+    localEndpointPath: "/api/coding-sidecar/gateway",
+    supportsStreaming: false,
+    supportsToolCalling: true,
+    runMetadata: {
+      maxPromptTokens: 128_000,
+      maxOutputTokens: 4_096,
+      maxInputMessages: 64,
+      maxRequestBytes: 64_000,
+    },
+    verification,
+  };
+}
+
+function startableStateWithSource(
+  verification: GatewayVerificationState,
+): CodingWorkbenchRuntimeState {
+  let state = codingWorkbenchRuntimeReducer(readyState(false), {
+    kind: "source-set",
+    source: codingWorkbenchSourceFromManaged(managedProfile(verification)),
+  });
+  state = codingWorkbenchRuntimeReducer(state, {
+    kind: "run-set",
+    snapshot: snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }),
+  });
+  return state;
 }
 
 describe("Coding Workbench live state", () => {
@@ -350,6 +388,37 @@ describe("mode selection, setup plans, and mutation failures", () => {
       value: { method: "chatgpt-device-code" },
       error: null,
     });
+  });
+
+  // F-01: `sourceReady` (and therefore Start) used to be satisfied by a configured sidecar profile
+  // alone, so a gateway the product had just failed to reach still presented a startable source.
+  it("stops treating a source as ready when its last probe failed", () => {
+    const failed = startableStateWithSource("failed");
+
+    expect(failed.source.value).toMatchObject({ available: true, verification: "failed" });
+    expect(failed.canStart).toBe(false);
+  });
+
+  it("keeps an unprobed source startable but labelled unverified, and a verified one ready", () => {
+    // Absence of evidence must not gate the product behind an optional readiness check — it has to
+    // be visible in the projection instead, which is what the source row renders.
+    const unverified = startableStateWithSource("unverified");
+    expect(unverified.source.value?.verification).toBe("unverified");
+    expect(unverified.canStart).toBe(true);
+
+    const verified = startableStateWithSource("verified");
+    expect(verified.source.value?.verification).toBe("verified");
+    expect(verified.canStart).toBe(true);
+  });
+
+  it("carries the probe outcome from the sidecar profile into the source projection", () => {
+    expect(codingWorkbenchSourceFromManaged(managedProfile("partial"))).toMatchObject({
+      available: true,
+      verification: "partial",
+    });
+    expect(
+      codingWorkbenchSourceFromManaged({ status: "unavailable", reason: "missing-credentials" }),
+    ).toMatchObject({ available: false, verification: "unverified" });
   });
 
   it("projects a failed mutation as a scoped retryable error", () => {

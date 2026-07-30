@@ -1,3 +1,5 @@
+import type { GatewayVerificationState } from "./gateway-verification.js";
+
 export const CODING_WORKBENCH_SCHEMA_VERSION = "1" as const;
 
 export type CodingWorkbenchMode = "governed-assist" | "supervised-coding" | "autonomous-delivery";
@@ -512,6 +514,13 @@ export interface CodingWorkbenchSidecarGatewayProjection {
   readonly supportsStreaming: boolean;
   readonly supportsToolCalling: boolean;
   readonly runMetadata: CodingWorkbenchSidecarGatewayRunMetadata;
+  /**
+   * F-01: `status: "available"` is a statement about the stored configuration — a coding-safe model
+   * is configured with credentials. It is NOT a statement that the gateway answers. This field
+   * carries the last live-probe outcome so the Workbench can say "configured, not verified" instead
+   * of projecting a healthy source, and can demote readiness when a probe actually failed.
+   */
+  readonly verification: GatewayVerificationState;
 }
 
 export interface CodingWorkbenchSidecarGatewayUnavailable {

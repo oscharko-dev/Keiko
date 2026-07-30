@@ -1765,6 +1765,36 @@ describe("coding-sidecar gateway", () => {
     expect(put).not.toHaveBeenCalled();
   });
 
+  // F-01: `status: "available"` describes the stored configuration. A deps assembly with no probe
+  // record must therefore publish `verification: "unverified"` — the Workbench renders this field,
+  // and a missing one would let it keep reading a configured source as a healthy one.
+  it("publishes the last probe outcome alongside the config-derived profile", () => {
+    const context = {
+      req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
+      res: mockResponse().res,
+      params: {},
+      url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+    } satisfies RouteContext;
+    const config = configValue(provider(), capability());
+    const unprobed = handleCodingSidecarGatewayProfile(context, depsValue(config));
+
+    expect(unprobed.body).toMatchObject({ status: "available", verification: "unverified" });
+
+    const verified = handleCodingSidecarGatewayProfile(context, {
+      ...depsValue(config),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        verification: () => "verified",
+        recordVerification: () => undefined,
+      },
+    });
+
+    expect(verified.body).toMatchObject({ status: "available", verification: "verified" });
+  });
+
   it("fails closed through the profile route when the injected model source is subscription-backed", () => {
     const context = {
       req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),

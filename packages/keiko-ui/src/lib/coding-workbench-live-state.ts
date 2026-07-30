@@ -1,3 +1,7 @@
+import {
+  gatewayVerificationContradictsReadiness,
+  UNVERIFIED_GATEWAY,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchCodexAuthSetupPlan,
   CodingWorkbenchCodexSubscriptionProfile,
@@ -10,6 +14,7 @@ import type {
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
   CodingWorkbenchSidecarGatewayResult,
+  GatewayVerificationState,
   TaskWorkspaceHealth,
 } from "@oscharko-dev/keiko-contracts";
 import { retainCodingWorkbenchRuntimeEvents } from "./coding-workbench-event-retention";
@@ -45,6 +50,13 @@ export interface CodingWorkbenchSourceProjection {
   readonly runtimeSource: CodingWorkbenchRuntimeSource;
   readonly available: boolean;
   readonly unavailableReason?: string | undefined;
+  /**
+   * F-01: what a live probe last said about this source. `available` answers "is a source
+   * configured"; this answers "did anyone confirm it answers". A never-probed source is
+   * `unverified` — labelled as unconfirmed, never rendered as healthy — and a `failed` probe stops
+   * the source counting as ready at all.
+   */
+  readonly verification: GatewayVerificationState;
 }
 
 export function codingWorkbenchSourceFromManaged(
@@ -56,6 +68,7 @@ export function codingWorkbenchSourceFromManaged(
         modelSource: "keiko-model-gateway",
         runtimeSource: "keiko-sidecar",
         available: true,
+        verification: profile.verification,
       }
     : {
         runtimePreference: "managed-gateway",
@@ -63,6 +76,9 @@ export function codingWorkbenchSourceFromManaged(
         runtimeSource: "keiko-sidecar",
         available: false,
         unavailableReason: profile.reason,
+        // An unavailable profile was never probed as a usable source; saying anything else would
+        // attach a health claim to a source the config already rules out.
+        verification: UNVERIFIED_GATEWAY,
       };
 }
 
@@ -202,10 +218,16 @@ function isUnboundIdle(snapshot: CodingWorkbenchRuntimeSnapshot): boolean {
 
 function projectReadiness(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
   const runtime = state.runtime.value;
+  // F-01: `available` is stored-config truth. A probe that ran and could not reach the gateway
+  // contradicts it, so the source stops counting as ready — starting a run against a source the
+  // product just failed to reach is the "green claim not backed by a probe" this closes. A source
+  // nobody has probed stays startable and is labelled unverified instead: withholding the start
+  // button on an absence of evidence would gate the whole product behind an optional check.
   const sourceReady =
     state.source.status === "ready" &&
     state.source.value?.runtimePreference === state.runtimePreference &&
-    state.source.value.available === true;
+    state.source.value.available === true &&
+    !gatewayVerificationContradictsReadiness(state.source.value.verification);
   const workspaceReady =
     state.workspace.status === "ready" &&
     state.workspace.value?.health === "healthy" &&

@@ -409,6 +409,30 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     });
   });
 
+  // F-01: "no probe has confirmed this provider" is its own input value and its own reason code.
+  // Before it existed, a caller with no probe outcome had to choose between claiming `healthy`
+  // (which is how a configured-but-unreachable gateway rendered as an active green badge) and
+  // claiming `unhealthy` (a failure nobody observed).
+  it("separates an unverified provider from an unhealthy one, and denies both", () => {
+    expect(resolveEditorM7AiActivation(aiInput({ providerHealth: "unverified" }))).toMatchObject({
+      state: "degraded",
+      reasonCode: "PROVIDER_UNVERIFIED",
+      policyResult: "denied",
+    });
+    expect(resolveEditorM7AiActivation(aiInput({ providerHealth: "degraded" }))).toMatchObject({
+      state: "degraded",
+      reasonCode: "PROVIDER_UNHEALTHY",
+      policyResult: "denied",
+    });
+    expect(
+      resolveEditorM7AiActivation({ ...aiInput(), providerHealth: "probably-fine" }),
+    ).toMatchObject({
+      state: "denied",
+      reasonCode: "INVALID_INPUT",
+      policyResult: "denied",
+    });
+  });
+
   it("parses content-free editor settings SSE events and rejects malformed setting ids", () => {
     expect(
       parseEditorM7SettingsEvent({

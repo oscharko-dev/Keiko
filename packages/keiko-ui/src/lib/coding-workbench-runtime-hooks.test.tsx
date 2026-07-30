@@ -232,6 +232,9 @@ describe("useCodingWorkbenchRuntimeResources source refresh", () => {
         runtimeSource: "codex-cli-adapter",
         available: false,
         unavailableReason: "expired",
+        // F-01: an authenticated CLI session is not a live model round-trip, so this source carries
+        // no probe confirmation either way.
+        verification: "unverified",
       },
     });
   });

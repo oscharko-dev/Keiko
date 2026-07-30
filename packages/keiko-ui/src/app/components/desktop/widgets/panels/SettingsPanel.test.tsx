@@ -339,16 +339,91 @@ describe("SettingsPanel gateway summary semantics", () => {
   });
 
   // uiux-fix C286: discovered-but-not-chat-capable models must not claim chat works.
+  // F-01 strengthens the same row: with no readiness check run, the summary must not claim a
+  // connected gateway either — the label assertion moved to the honest unverified wording and the
+  // "Gateway connected" claim is now pinned ABSENT, which is strictly more than this test asserted.
   it("does not claim chat capability when no discovered model is conversation-eligible", async () => {
     primeFetches([embeddingCapability("test-embed-1")]);
     render(<SettingsPanel />);
     await waitFor(() => {
-      expect(screen.getByText("Gateway connected")).toBeInTheDocument();
+      expect(screen.getByText("Not verified")).toBeInTheDocument();
     });
+    expect(screen.queryByText("Gateway connected")).toBeNull();
     expect(
       screen.getByText(/none of the discovered models can be used for conversation/i),
     ).toBeInTheDocument();
     expect(screen.queryByText(/keiko can use the configured gateway models for chat/i)).toBeNull();
+  });
+
+  // F-01: with a chat-capable model discovered and no probe run, the summary used to read "Gateway
+  // connected" + "Keiko can use the configured gateway models" — a connection claim derived purely
+  // from a parsed config file. The gateway may be unreachable, expired, or firewalled.
+  it("does not claim a connected gateway before a readiness check has confirmed one", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    const { container } = render(<SettingsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Not verified")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Gateway connected")).toBeNull();
+    expect(
+      screen.getByText(/no readiness check has confirmed that this gateway answers/i),
+    ).toBeInTheDocument();
+    // Scoped to the gateway summary row's own dot: the per-model dot answers a different question
+    // (is this model conversation-eligible by capability), and is not a health claim.
+    const summaryDot = container.querySelector('.ml-status[title="configured, not verified"]');
+    expect(summaryDot).not.toBeNull();
+    expect(summaryDot?.className).toContain("untested");
+    expect(container.querySelector('.ml-status[title="gateway configured"]')).toBeNull();
+  });
+
+  it("promotes the summary once a readiness check passes and demotes it when one fails", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockResolvedValue({
+      modelId: "test-chat-1",
+      checkedAt: "2026-07-30T09:00:00.000Z",
+      overallStatus: "ready",
+      probes: [{ name: "chat", status: "passed", latencyMs: 12, evidence: "Working today" }],
+      verifiedCapabilities: {},
+    });
+    const { container } = render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Gateway connected")).toBeInTheDocument();
+    });
+    const promoted = container.querySelector('.ml-status[title="gateway configured"]');
+    expect(promoted?.className).toContain("connected");
+
+    runGatewayReadinessMock.mockResolvedValue({
+      modelId: "test-chat-1",
+      checkedAt: "2026-07-30T09:05:00.000Z",
+      overallStatus: "failed",
+      probes: [
+        { name: "chat", status: "failed", latencyMs: 30, evidence: "Basic chat could not answer." },
+      ],
+      verifiedCapabilities: {},
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run readiness check" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Gateway check failed")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Gateway connected")).toBeNull();
+    const demoted = container.querySelector('.ml-status[title="gateway check failed"]');
+    expect(demoted?.className).toContain("error");
+  });
+
+  it("demotes the summary when the readiness run itself could not complete", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockRejectedValue(new Error("readiness transport failed"));
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Gateway check failed")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Not verified")).toBeNull();
   });
 });
 

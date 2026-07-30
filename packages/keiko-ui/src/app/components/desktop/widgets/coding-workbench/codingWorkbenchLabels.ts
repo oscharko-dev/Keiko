@@ -1,9 +1,11 @@
+import { gatewayVerificationContradictsReadiness } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchModelSource,
   CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
+  GatewayVerificationState,
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import type {
@@ -29,6 +31,18 @@ export function modelSourceLabel(
   if (source === "openai-api-key-through-gateway")
     return t("codingWorkbench.modelSource.openaiGateway");
   return t("codingWorkbench.modelSource.codexSubscription");
+}
+
+/**
+ * F-01: the source row used to read "Keiko Gateway · Available" from stored configuration alone.
+ * This names what a live probe actually said, so an unprobed gateway reads as unconfirmed instead of
+ * healthy, and a failed probe is visible rather than hidden behind a configured source.
+ */
+export function sourceVerificationLabel(
+  verification: GatewayVerificationState,
+  t: CodingWorkbenchTranslate,
+): string {
+  return t(`codingWorkbench.source.verification.${verification}`);
 }
 
 export function runStateLabel(
@@ -92,9 +106,12 @@ export function lifecycleAnnouncement(
   researchGrant: CodingWorkbenchRuntimeResearchGrant | null = null,
 ): string {
   const snapshot = state.run.value;
+  // F-01: the spoken readiness must match the projected one — a source whose last probe failed is
+  // announced as unavailable, not ready, exactly as `projectReadiness` treats it.
   const sourceAvailable =
     state.source.value?.runtimePreference === state.runtimePreference &&
-    state.source.value.available;
+    state.source.value.available &&
+    !gatewayVerificationContradictsReadiness(state.source.value.verification);
   const workspaceAvailable = state.workspace.value?.health === "healthy";
   const runtimeAvailable = state.runtime.value?.runtimeAvailable === true;
   const recovery =

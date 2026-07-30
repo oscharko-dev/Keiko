@@ -101,6 +101,10 @@ export function sourceProfile(): CodingWorkbenchSidecarGatewayResult {
       maxInputMessages: 64,
       maxRequestBytes: 1_000_000,
     },
+    // F-01: the live-runtime scenario drives a run to completion, which the Workbench only permits
+    // against a source a probe actually confirmed. A fixture that left this unverified would be
+    // asserting the demoted path, not the happy one.
+    verification: "verified",
   };
 }
 

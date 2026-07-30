@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
 import { createDefaultChatCapability, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
-import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts";
+import { maxUtf8BytesForTokenBudget, UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import {
@@ -372,6 +372,8 @@ describe("gateway readiness route", () => {
         set: (next) => {
           current = next ?? pinned;
         },
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
       },
     };
 
@@ -601,6 +603,61 @@ describe("gateway readiness route", () => {
       "unsupported",
       "unsupported",
     ]);
+    deps.store.close();
+  });
+
+  // F-01: this run is the product's only live gateway evidence. Recording its outcome on the config
+  // holder is what lets the editor AI-assist badge and the Workbench source projection stop
+  // inferring readiness from configuration alone; without it they have nothing to read.
+  it("records the probe outcome on the config holder for other surfaces to read", async () => {
+    const recorded: string[] = [];
+    const config = gatewayConfig();
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchForDefaultSuccess()),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: (state) => {
+          recorded.push(state);
+        },
+      },
+    };
+
+    const report = await runGatewayReadiness({ modelId: "test-chat-model" }, deps);
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    expect(report.overallStatus).toBe("ready");
+    expect(recorded).toEqual(["verified"]);
+    deps.store.close();
+  });
+
+  it("records a failed chat probe as a failed verification, never as unverified", async () => {
+    const recorded: string[] = [];
+    const config = gatewayConfig();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("unexpected-answer"))) as typeof fetch;
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: (state) => {
+          recorded.push(state);
+        },
+      },
+    };
+
+    await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
+
+    expect(recorded).toEqual(["failed"]);
     deps.store.close();
   });
 });

@@ -31,6 +31,10 @@ export type EditorM7ReasonCode =
   | "MODEL_CAPABILITY_MISSING"
   | "BUDGET_UNAVAILABLE"
   | "PROVIDER_UNHEALTHY"
+  // F-01: no live probe has confirmed the provider for the current gateway configuration. Distinct
+  // from PROVIDER_UNHEALTHY (a probe answered and said no) so a surface can say "not checked yet"
+  // instead of claiming either health or a failure it never observed.
+  | "PROVIDER_UNVERIFIED"
   | "EXPLICIT_OPT_IN_REQUIRED"
   | "PRODUCT_UNSUPPORTED"
   | "ACTIVE";
@@ -1422,7 +1426,11 @@ export interface EditorM7AiActivationInput {
   readonly explicitOptIn: boolean;
   readonly modelCapability: "available" | "missing";
   readonly budget: "available" | "exhausted";
-  readonly providerHealth: "healthy" | "degraded" | "unhealthy";
+  /**
+   * F-01: `unverified` is the fail-closed input for "no live probe has confirmed this provider".
+   * A caller that cannot name a probe outcome must pass it rather than `healthy`.
+   */
+  readonly providerHealth: "healthy" | "degraded" | "unhealthy" | "unverified";
   readonly securityPrerequisites: "satisfied" | "missing";
   readonly legacyFlag?: "unset" | "disabled" | "enabled" | undefined;
 }
@@ -1449,7 +1457,12 @@ const AI_FEATURES = Object.freeze([
 const AI_OPERATOR_CEILINGS = Object.freeze(["allowed", "denied"] as const);
 const AI_MODEL_CAPABILITIES = Object.freeze(["available", "missing"] as const);
 const AI_BUDGET_STATES = Object.freeze(["available", "exhausted"] as const);
-const AI_PROVIDER_HEALTH_STATES = Object.freeze(["healthy", "degraded", "unhealthy"] as const);
+const AI_PROVIDER_HEALTH_STATES = Object.freeze([
+  "healthy",
+  "degraded",
+  "unhealthy",
+  "unverified",
+] as const);
 const AI_SECURITY_PREREQUISITES = Object.freeze(["satisfied", "missing"] as const);
 const AI_LEGACY_FLAGS = Object.freeze(["unset", "disabled", "enabled"] as const);
 
@@ -1570,11 +1583,14 @@ function aiBudgetRule(input: EditorM7AiActivationInput): EditorM7AiActivationSta
     : undefined;
 }
 
+// F-01: an unconfirmed provider is reported as unconfirmed, not as unhealthy — both fail closed
+// (degraded is never `allowed`), but only one of them is true when no probe has run.
 function aiProviderHealthRule(
   input: EditorM7AiActivationInput,
 ): EditorM7AiActivationStatus | undefined {
-  return input.providerHealth === "healthy"
-    ? undefined
+  if (input.providerHealth === "healthy") return undefined;
+  return input.providerHealth === "unverified"
+    ? aiStatus(input.feature, "degraded", "PROVIDER_UNVERIFIED")
     : aiStatus(input.feature, "degraded", "PROVIDER_UNHEALTHY");
 }
 

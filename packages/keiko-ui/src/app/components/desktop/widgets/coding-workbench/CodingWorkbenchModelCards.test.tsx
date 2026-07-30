@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import {
   CODING_WORKBENCH_SCHEMA_VERSION,
+  UNVERIFIED_GATEWAY,
   type CodingWorkbenchCodexAuthSetupPlan,
   type CodingWorkbenchCodexSubscriptionProfile,
 } from "@oscharko-dev/keiko-contracts";
@@ -85,6 +86,7 @@ function codexState(
       modelSource: "chatgpt-codex-subscription-profile" as const,
       runtimeSource: "codex-cli-adapter" as const,
       available: true,
+      verification: UNVERIFIED_GATEWAY,
     }),
     ...overrides,
   };
@@ -118,6 +120,43 @@ describe("ModelRuntimeStatus source cards", () => {
     }
   });
 
+  // F-01: this row is the Workbench's "server-confirmed source" readout. It used to render
+  // "Keiko Gateway - Available" from a configured profile, with no statement about whether anything
+  // had confirmed the gateway answers.
+  it("says a configured source is unverified until a probe confirms it", () => {
+    renderStatus(
+      codexState({
+        source: ready({
+          runtimePreference: "codex-subscription" as const,
+          modelSource: "chatgpt-codex-subscription-profile" as const,
+          runtimeSource: "codex-cli-adapter" as const,
+          available: true,
+          verification: UNVERIFIED_GATEWAY,
+        }),
+      }),
+    );
+
+    expect(screen.getByText(/configured, not verified/u)).toBeInTheDocument();
+    expect(screen.queryByText(/verified by the last gateway check/u)).toBeNull();
+  });
+
+  it("surfaces a failed probe with the re-check hint instead of an available source", () => {
+    renderStatus(
+      codexState({
+        source: ready({
+          runtimePreference: "codex-subscription" as const,
+          modelSource: "chatgpt-codex-subscription-profile" as const,
+          runtimeSource: "codex-cli-adapter" as const,
+          available: true,
+          verification: "failed",
+        }),
+      }),
+    );
+
+    expect(screen.getByText(/the last gateway check failed/u)).toBeInTheDocument();
+    expect(screen.getByText(/Re-run the readiness check/u)).toBeInTheDocument();
+  });
+
   it("offers a retry when the confirmed source is unavailable and refreshes it", async () => {
     const user = userEvent.setup();
     const actions = renderStatus(
@@ -127,6 +166,7 @@ describe("ModelRuntimeStatus source cards", () => {
           modelSource: "chatgpt-codex-subscription-profile" as const,
           runtimeSource: "codex-cli-adapter" as const,
           available: false,
+          verification: UNVERIFIED_GATEWAY,
         }),
       }),
     );

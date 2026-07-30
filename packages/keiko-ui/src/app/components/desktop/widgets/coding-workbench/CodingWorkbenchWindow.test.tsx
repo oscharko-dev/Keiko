@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
 import type {
   AvailableCodingSafeActivityFeed,
   CodingWorkbenchRuntimeSnapshot,
@@ -137,6 +138,7 @@ function liveState(
         modelSource: "keiko-model-gateway",
         runtimeSource: "keiko-sidecar",
         available: true,
+        verification: "verified",
       },
       error: null,
     },
@@ -376,6 +378,7 @@ describe("CodingWorkbenchWindow", () => {
             runtimeSource: "keiko-sidecar",
             available: false,
             unavailableReason: "no-tool-calling",
+            verification: UNVERIFIED_GATEWAY,
           },
           error: null,
         },

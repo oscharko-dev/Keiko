@@ -1,4 +1,5 @@
 import { useCallback, useRef, type Dispatch, type RefObject } from "react";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchCodexAuthMethod,
   CodingWorkbenchRuntimeApprovalDecision,
@@ -167,6 +168,10 @@ function setCodexSubscriptionSource(
       runtimeSource: profile.runtimeSource,
       available: profile.status === "connected",
       ...(profile.status === "connected" ? {} : { unavailableReason: profile.status }),
+      // F-01: the subscription profile reports whether an authenticated CLI session exists, which is
+      // not a live model round-trip. The gateway readiness probe says nothing about this source, so
+      // it stays unverified rather than borrowing a confirmation from a connected auth state.
+      verification: UNVERIFIED_GATEWAY,
     },
   });
 }

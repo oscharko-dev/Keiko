@@ -16,7 +16,7 @@ import {
   type CodingWorkbenchSidecarGatewayRunMetadata,
   type CodingWorkbenchSidecarGatewayResult,
 } from "@oscharko-dev/keiko-contracts";
-import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
+import { currentGatewayConfig, currentGatewayVerification, type UiHandlerDeps } from "./deps.js";
 import { OPENCODE_RUNTIME_MODEL_ALIAS } from "./coding-runtime/opencodeLaunchProfile.js";
 import { hasExactOpenCodeVisibleToolContract } from "./coding-runtime/opencodeToolSchemas.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
@@ -445,6 +445,11 @@ function resolveGatewayProfile(deps: UiHandlerDeps): ResolvedGatewayProfile {
   const result = resolveCodingSafeSidecarGatewayProfile(config, {
     deploymentPolicyDisabled: sidecarPolicyDisabled(deps),
     modelSource,
+    // F-01: the projection this route publishes must carry the last live-probe outcome, not just
+    // the stored config. The admission decision below is deliberately unchanged: a stale negative
+    // probe must not lock out a gateway that answers now — a request that cannot be served fails on
+    // its own live error, while the projection is what a surface is allowed to CLAIM.
+    gatewayVerification: currentGatewayVerification(deps),
   });
   return { config, modelSource, result };
 }

@@ -32,6 +32,7 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
           maxInputMessages: 64,
           maxRequestBytes: 64_000,
         },
+        verification: "verified",
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -39,6 +40,7 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
     await expect(fetchCodingWorkbenchSidecarGatewayProfile()).resolves.toMatchObject({
       status: "available",
       modelAlias: "azure-coding-model",
+      verification: "verified",
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/coding-sidecar/gateway/profile",
@@ -68,6 +70,41 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
+  });
+
+  // F-01: the Workbench renders this field to say whether a live probe confirmed the source. A BFF
+  // that omits it, or reports a word outside the vocabulary, must fail the contract rather than be
+  // quietly defaulted — the caller would otherwise be free to read "no field" as healthy.
+  it("rejects an available profile that carries no probe outcome", async () => {
+    const profile = {
+      status: "available",
+      profileId: "coding-safe-openai-compatible",
+      modelAlias: "azure-coding-model",
+      localEndpointPath: "/api/coding-sidecar/gateway",
+      supportsStreaming: false,
+      supportsToolCalling: true,
+      runMetadata: {
+        maxPromptTokens: 128_000,
+        maxOutputTokens: 4_096,
+        maxInputMessages: 64,
+        maxRequestBytes: 64_000,
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(profile)));
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
+
+    vi.unstubAllGlobals();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse({ ...profile, verification: "probably-fine" })),
+    );
     await expect(fetchCodingWorkbenchSidecarGatewayProfile()).rejects.toMatchObject({
       code: "CONTRACT_VALIDATION_FAILED",
       status: 502,
