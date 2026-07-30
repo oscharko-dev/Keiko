@@ -795,3 +795,157 @@ describe("POST /api/editor/workspace-search/replace-apply", () => {
     expect(content).toContain('export const marker = readConfig("large-file");');
   });
 });
+
+// ─── Secret-shaped source text (editor P1: a silent, release-blocking replace failure) ───────────
+//
+// The workspace read path redacts at the IO boundary for the evidence/RAG lane. Search & replace
+// derived its match coordinates, its base-content hash, and its replacement text from that REDACTED
+// text, while the `keiko-tools` write preflight reads the file RAW and compares every `-` line of
+// the rendered diff against the raw lines. So every file containing so much as one secret-shaped
+// assignment — token/password/api_key/client_secret/private_key, a Bearer header, URL userinfo, a
+// phone number, an IBAN, a PEM header: all common in real source — could never be replaced, and the
+// failure surfaced as a false "write-conflict" with nothing written.
+//
+// These fixtures use redaction PATTERNS only; none of them is a real credential.
+describe("workspace search & replace over secret-shaped source text", () => {
+  const SECRET_LINE = 'const token = "s3cr3tlookupvalue";';
+  const PEM_LINES = [
+    "-----BEGIN PRIVATE KEY-----",
+    "AAAAB3NzaC1yc2EAAAADAQABAAABgQ",
+    "CqGKukO1De7zhZj6H0qtjTkVxwTCpv",
+    "-----END PRIVATE KEY-----",
+  ];
+
+  async function previewFile(
+    body: Record<string, unknown>,
+  ): Promise<{ path: string; baseContentHash: string; edits: readonly unknown[] }> {
+    const preview = await handleEditorWorkspaceReplacePreview(
+      postContext(body, "/api/editor/workspace-search/replace-preview"),
+      deps(),
+    );
+    expect(preview.status).toBe(200);
+    const parsed = preview.body as {
+      files: { path: string; baseContentHash: string; edits: readonly unknown[] }[];
+    };
+    const file = parsed.files[0];
+    if (file === undefined) throw new Error("missing preview file");
+    return file;
+  }
+
+  it("finds a match on the line after a secret-shaped assignment", async () => {
+    await writeFile(
+      join(root, "src", "secret.ts"),
+      [SECRET_LINE, 'export const marker = "needleaftersecret";', ""].join("\n"),
+      "utf8",
+    );
+
+    const result = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ query: "needleaftersecret", includeGlobs: ["src/secret.ts"] })),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      results: { path: string; lineRange: { startLine: number; endLine: number } }[];
+    };
+    expect(body.results.map((entry) => entry.path)).toContain("src/secret.ts");
+    expect(
+      body.results.some((entry) => entry.lineRange.startLine <= 2 && entry.lineRange.endLine >= 2),
+    ).toBe(true);
+  });
+
+  it("finds a match that only exists inside the redacted region itself", async () => {
+    await writeFile(join(root, "src", "secret-only.ts"), `${SECRET_LINE}\n`, "utf8");
+
+    const result = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ query: "s3cr3tlookupvalue", includeGlobs: ["src/secret-only.ts"] })),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { results: { path: string }[] };
+    expect(body.results.map((entry) => entry.path)).toContain("src/secret-only.ts");
+  });
+
+  it("reports the real file line for a match after a multi-line PEM block", async () => {
+    await writeFile(
+      join(root, "src", "pem-search.ts"),
+      [...PEM_LINES, 'export const marker = "needleafterpem";', ""].join("\n"),
+      "utf8",
+    );
+
+    const result = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ query: "needleafterpem", includeGlobs: ["src/pem-search.ts"] })),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      results: { path: string; lineRange: { startLine: number; endLine: number } }[];
+    };
+    // Raw: line 5. A redacted read collapsed the 4-line block into one token and reported line 2.
+    expect(
+      body.results.some((entry) => entry.lineRange.startLine <= 5 && entry.lineRange.endLine >= 5),
+    ).toBe(true);
+  });
+
+  it("applies a replacement in a file containing a secret-shaped assignment", async () => {
+    await writeFile(
+      join(root, "src", "secret-apply.ts"),
+      [SECRET_LINE, 'export const marker = parseConfig("a");', ""].join("\n"),
+      "utf8",
+    );
+
+    const file = await previewFile(replaceBody({ includeGlobs: ["src/secret-apply.ts"] }));
+    const result = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: [file] }, "/api/editor/workspace-search/replace-apply"),
+      deps(),
+    );
+    const content = await readFile(join(root, "src", "secret-apply.ts"), "utf8");
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ appliedCount: 1, conflictCount: 0, conflicts: [] });
+    // The secret-shaped line must survive the write byte-for-byte: the editor lane reads and writes
+    // the real file, it never persists the redacted view back over the user's source.
+    expect(content).toBe([SECRET_LINE, 'export const marker = readConfig("a");', ""].join("\n"));
+  });
+
+  it("applies a replacement preceded on the SAME line by a redacted value", async () => {
+    // "[REDACTED]" is wider than the value it replaces, so a redacted read reported this match's
+    // column several characters to the right of where it really is.
+    await writeFile(
+      join(root, "src", "same-line.ts"),
+      'const token = "abc"; export const marker = parseConfig("a");\n',
+      "utf8",
+    );
+
+    const file = await previewFile(replaceBody({ includeGlobs: ["src/same-line.ts"] }));
+    const result = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: [file] }, "/api/editor/workspace-search/replace-apply"),
+      deps(),
+    );
+    const content = await readFile(join(root, "src", "same-line.ts"), "utf8");
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ appliedCount: 1, conflictCount: 0, conflicts: [] });
+    expect(content).toBe('const token = "abc"; export const marker = readConfig("a");\n');
+  });
+
+  it("applies a replacement after a multi-line PEM block, at the real file line", async () => {
+    const original = [...PEM_LINES, 'export const marker = parseConfig("a");', ""].join("\n");
+    await writeFile(join(root, "src", "pem.ts"), original, "utf8");
+
+    const file = await previewFile(replaceBody({ includeGlobs: ["src/pem.ts"] }));
+    const previewEdits = file.edits as { range: { startLine: number } }[];
+    const result = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: [file] }, "/api/editor/workspace-search/replace-apply"),
+      deps(),
+    );
+    const content = await readFile(join(root, "src", "pem.ts"), "utf8");
+
+    expect(previewEdits.map((edit) => edit.range.startLine)).toEqual([5]);
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ appliedCount: 1, conflictCount: 0, conflicts: [] });
+    expect(content).toBe([...PEM_LINES, 'export const marker = readConfig("a");', ""].join("\n"));
+  });
+});

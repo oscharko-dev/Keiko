@@ -2,7 +2,12 @@ import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { discoverFiles, discoverWithStats, readWorkspaceFile } from "./discovery.js";
+import {
+  discoverFiles,
+  discoverWithStats,
+  readWorkspaceFile,
+  readWorkspaceFileForEditing,
+} from "./discovery.js";
 import { detectWorkspace, detectWorkspaceAt } from "./detect.js";
 import {
   FileTooLargeError,
@@ -333,6 +338,104 @@ describe("readWorkspaceFile", () => {
     file("euros.txt", "€€€€");
     expect(() => readWorkspaceFile(detectWorkspace(dir), "euros.txt", { maxBytes: 10 })).toThrow(
       FileTooLargeError,
+    );
+  });
+});
+
+// The editor lane (see the read-lane boundary note in discovery.ts). It must return the RAW bytes
+// AND run the identical security chain — a raw read is not a relaxed read.
+describe("readWorkspaceFileForEditing", () => {
+  const SECRET_LINE = 'const token = "s3cr3t-lookup-value";';
+
+  it("returns the raw bytes where the evidence-lane read redacts them", () => {
+    file("app.ts", `${SECRET_LINE}\n`);
+    const workspace = detectWorkspace(dir);
+    const raw = readWorkspaceFileForEditing(workspace, "app.ts");
+    const redacted = readWorkspaceFile(workspace, "app.ts");
+
+    expect(raw.rawText).toBe(`${SECRET_LINE}\n`);
+    expect(raw.rawText).toContain("s3cr3t-lookup-value");
+    expect(redacted.text).not.toContain("s3cr3t-lookup-value");
+    expect(redacted.text).toContain("[REDACTED]");
+  });
+
+  it("preserves line numbering that redaction collapses (multi-line PEM block)", () => {
+    // redact() rewrites a whole BEGIN/END PRIVATE KEY block as ONE token, so every line after it
+    // shifts in the redacted view. Editor coordinates drive a WRITE and must address the real file.
+    file(
+      "key.ts",
+      [
+        "-----BEGIN PRIVATE KEY-----",
+        "AAAAB3NzaC1yc2EAAAADAQABAAABgQ",
+        "-----END PRIVATE KEY-----",
+        'export const marker = "needle-after-pem";',
+        "",
+      ].join("\n"),
+    );
+    const workspace = detectWorkspace(dir);
+    const rawLines = readWorkspaceFileForEditing(workspace, "key.ts").rawText.split("\n");
+    const redactedLines = readWorkspaceFile(workspace, "key.ts").text.split("\n");
+
+    // Raw: the marker is the 4th line (index 3). Redacted: the 3-line PEM block became one token,
+    // so the same marker moved to index 1 and the file lost two lines.
+    expect(rawLines[3]).toContain("needle-after-pem");
+    expect(redactedLines[1]).toContain("needle-after-pem");
+    expect(redactedLines).toHaveLength(rawLines.length - 2);
+  });
+
+  it("reports sizeBytes as the UTF-8 byte count", () => {
+    file("multi.txt", "é".repeat(10));
+    const content = readWorkspaceFileForEditing(detectWorkspace(dir), "multi.txt", {
+      maxBytes: 20,
+    });
+    expect(content.sizeBytes).toBe(20);
+    expect(content.truncated).toBe(false);
+  });
+
+  it("still rejects a traversal escape", () => {
+    expect(() => readWorkspaceFileForEditing(detectWorkspace(dir), "../escape")).toThrow(
+      PathEscapeError,
+    );
+  });
+
+  it("still rejects an always-on denied path", () => {
+    file(".env", "SECRET=1");
+    expect(() => readWorkspaceFileForEditing(detectWorkspace(dir), ".env")).toThrow(
+      PathDeniedError,
+    );
+  });
+
+  it("still rejects a symlink that escapes the workspace", () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-outside-raw-"));
+    try {
+      writeFileSync(join(outside, "secret.txt"), "TOPSECRET", "utf8");
+      symlinkSync(join(outside, "secret.txt"), join(dir, "leak.txt"));
+      expect(() => readWorkspaceFileForEditing(detectWorkspace(dir), "leak.txt")).toThrow(
+        PathEscapeError,
+      );
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("still rejects a hard-linked workspace alias", () => {
+    file("real.txt", "body");
+    linkSync(join(dir, "real.txt"), join(dir, "alias.txt"));
+    expect(() => readWorkspaceFileForEditing(detectWorkspace(dir), "alias.txt")).toThrow(
+      PathDeniedError,
+    );
+  });
+
+  it("still enforces the read cap", () => {
+    file("big.txt", "x".repeat(64));
+    expect(() =>
+      readWorkspaceFileForEditing(detectWorkspace(dir), "big.txt", { maxBytes: 10 }),
+    ).toThrow(FileTooLargeError);
+  });
+
+  it("still surfaces an unreadable in-root file as a WorkspaceReadError", () => {
+    expect(() => readWorkspaceFileForEditing(detectWorkspace(dir), "missing.txt")).toThrow(
+      WorkspaceReadError,
     );
   });
 });

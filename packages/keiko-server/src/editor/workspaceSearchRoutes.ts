@@ -28,12 +28,20 @@ import {
   buildSymbolGraph,
   detectWorkspaceAt,
   readExcerpt,
-  readWorkspaceFile,
   searchText,
   type SymbolGraphRecord,
   type SearchScope,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+// The editor lane's UNREDACTED read (see keiko-workspace/src/editorRead.ts). Workspace search &
+// replace is editor-owned and NON-evidence: it must derive its match coordinates, its base-content
+// hash, and its replacement text from the same RAW bytes the `keiko-tools` write preflight reads.
+// The evidence-redacted `readWorkspaceFile` on the package barrel produced edits whose `-` lines
+// never matched the file, so every replace touching a file with secret-shaped text (a
+// token/password/api_key assignment, a Bearer header, URL userinfo, a phone number, an IBAN, a PEM
+// header) failed as a false write-conflict and wrote nothing. Nothing here reaches evidence: the
+// route wraps its response in the live-payload redactor before it leaves the BFF.
+import { readWorkspaceFileForEditing } from "@oscharko-dev/keiko-workspace/internal/editor-read";
 import { applyPatch, validatePatch, type PatchLimits } from "@oscharko-dev/keiko-tools";
 import {
   createContainedNodeWorkspaceWriter,
@@ -63,6 +71,11 @@ const REPLACE_APPLY_PREFLIGHT_LIMITS: PatchLimits = {
   maxChangedLines: 100_000,
   maxFilesChanged: 1,
 };
+// Every workspace read AND every match this route computes runs on the editor lane, so the line and
+// column coordinates it reports address the real file. `searchText`/`readExcerpt` default to the
+// redacted evidence lane; passing this makes the choice explicit at each call site.
+const EDITOR_SEARCH_LANE = { contentLane: "editor" } as const;
+const EDITOR_READ_OPTIONS = { maxBytes: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned } as const;
 const PREFLIGHT_WRITER: WorkspaceWriter = {
   writeFileUtf8: () => undefined,
   mkdirp: () => undefined,
@@ -221,7 +234,7 @@ async function snippetForMatch(
       endLine: endLine + 1,
       maxBytes: WORKSPACE_SEARCH_SNIPPET_BYTES,
     },
-    { signal },
+    { signal, ...EDITOR_SEARCH_LANE },
   );
   return result.content;
 }
@@ -235,6 +248,7 @@ async function buildSearchResponse(
   const result = await searchText(scope, query, DEFAULT_SEARCH_LIMITS, {
     signal,
     candidatePathGlobs: candidatePathGlobs(request),
+    ...EDITOR_SEARCH_LANE,
   });
   const matches = [];
   for (const atom of result.atoms) {
@@ -349,16 +363,16 @@ function buildReplaceFileEdit(
   replacement: string,
   expandCaptures: boolean,
 ): WorkspaceReplacePreviewFileEdit | undefined {
-  const content = readWorkspaceFile(
+  const content = readWorkspaceFileForEditing(
     scope.workspace,
     path,
-    { maxBytes: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned },
+    EDITOR_READ_OPTIONS,
     nodeWorkspaceFs,
   );
-  const edits = editsForContent(content.text, regex, replacement, expandCaptures);
+  const edits = editsForContent(content.rawText, regex, replacement, expandCaptures);
   return edits.length === 0
     ? undefined
-    : { path, baseContentHash: contentHash(content.text), edits };
+    : { path, baseContentHash: contentHash(content.rawText), edits };
 }
 
 // Returns the distinct file paths `searchText` found at least one match in, in ranked order.
@@ -409,6 +423,7 @@ async function buildReplacePreviewResponse(
   const result = await searchText(scope, query, DEFAULT_SEARCH_LIMITS, {
     signal,
     candidatePathGlobs: candidatePathGlobs(request),
+    ...EDITOR_SEARCH_LANE,
   });
   const paths = collectMatchedPaths(result.atoms);
   const files = buildReplacePreviewFiles(scope, request, paths);
@@ -651,18 +666,18 @@ function applyReplaceFile(
   file: WorkspaceReplaceApplyFile,
   signal: AbortSignal,
 ): WorkspaceReplaceApplyConflict | null {
-  const content = readWorkspaceFile(
+  const content = readWorkspaceFileForEditing(
     scope.workspace,
     file.path,
-    { maxBytes: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned },
+    EDITOR_READ_OPTIONS,
     nodeWorkspaceFs,
   );
-  if (contentHash(content.text) !== file.baseContentHash) {
+  if (contentHash(content.rawText) !== file.baseContentHash) {
     return conflictFor(file, "file changed since preview");
   }
-  const next = applyReplaceEditsToText(content.text, file.edits);
+  const next = applyReplaceEditsToText(content.rawText, file.edits);
   if (next === null) return conflictFor(file, "preview edits no longer match current content");
-  const patchConflict = validateReplacePatchPreflight(scope, file, content.text, next, signal);
+  const patchConflict = validateReplacePatchPreflight(scope, file, content.rawText, next, signal);
   if (patchConflict !== null) return patchConflict;
   const writer = createContainedNodeWorkspaceWriter(scope.workspace.root);
   writer.writeFileUtf8(join(scope.workspace.root, file.path), next);
