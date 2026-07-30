@@ -1,9 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
-import { checkStatusTransition, MEMORY_STATUSES } from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryId, MemoryNegationTier } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  checkStatusTransition,
+  MEMORY_NEGATION_TIERS,
+  MEMORY_STATUSES,
+  memoryNegationTokens,
+} from "@oscharko-dev/keiko-contracts/memory";
 
-import { buildConflictTransitions, detectConflictPair, jaccardSimilarity } from "./conflict.js";
+import {
+  buildConflictTransitions,
+  detectConflictPair,
+  GOVERNANCE_NEGATION_TIERS,
+  jaccardSimilarity,
+} from "./conflict.js";
 import { GovernanceError } from "./errors.js";
 import { ctx, FIXED_NOW_MS, makeRecord, must, projectScope } from "./_support.js";
 
@@ -109,6 +119,53 @@ describe("detectConflictPair", () => {
       type: "decision",
     });
     expect(detectConflictPair(a, b).hasConflict).toBe(false);
+  });
+});
+
+// ─── Cross-layer negation-vocabulary pin (#208 consolidation <-> #209 governance) ────────────────
+//
+// The word list used to be duplicated here and in the consolidation layer, and the two copies had
+// drifted while a comment above `detectConflictPair` asserted they were the same detector. There is
+// now one owning table in keiko-contracts and this pin fixes the RELATIONSHIP between the layers:
+// governance reads the "english-particle" tier and nothing else, because the negative quantifiers
+// ("no", "never", …) must keep reaching the separate `polarity-mismatch` / no-conflict outcomes.
+// Every expectation is derived from the production table and from the tier list the production code
+// itself resolves, so a token added to either side is caught rather than restated.
+describe("negation vocabulary shared with the consolidation layer", () => {
+  const BASE_BODY = "we ship the release on friday";
+  const base = makeRecord({ id: "m-a", body: BASE_BODY, type: "decision" });
+
+  function withToken(token: string): ReturnType<typeof makeRecord> {
+    return makeRecord({ id: "m-b", body: `${BASE_BODY} ${token}`, type: "decision" });
+  }
+
+  const governanceTiers = new Set<MemoryNegationTier>(GOVERNANCE_NEGATION_TIERS);
+  const otherTiers = MEMORY_NEGATION_TIERS.filter((tier) => !governanceTiers.has(tier));
+
+  it("reads a non-empty, strict subset of the shared vocabulary", () => {
+    const mine = memoryNegationTokens(GOVERNANCE_NEGATION_TIERS);
+    const shared = memoryNegationTokens(MEMORY_NEGATION_TIERS);
+    expect(mine.size).toBeGreaterThan(0);
+    expect(mine.size).toBeLessThan(shared.size);
+    for (const token of mine) {
+      expect(shared.has(token)).toBe(true);
+    }
+  });
+
+  it("reports negation-flip for every token of the tier it reads", () => {
+    for (const token of memoryNegationTokens(GOVERNANCE_NEGATION_TIERS)) {
+      expect(detectConflictPair(base, withToken(token))).toEqual({
+        hasConflict: true,
+        reason: "negation-flip",
+      });
+    }
+  });
+
+  it("does NOT treat a tier it deliberately skips as a negation particle", () => {
+    expect(otherTiers.length).toBeGreaterThan(0);
+    for (const token of memoryNegationTokens(otherTiers)) {
+      expect(detectConflictPair(base, withToken(token))).toEqual({ hasConflict: false });
+    }
   });
 });
 

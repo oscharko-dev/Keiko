@@ -40,7 +40,9 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 // never matched the file, so every replace touching a file with secret-shaped text (a
 // token/password/api_key assignment, a Bearer header, URL userinfo, a phone number, an IBAN, a PEM
 // header) failed as a false write-conflict and wrote nothing. Nothing here reaches evidence: the
-// route wraps its response in the live-payload redactor before it leaves the BFF.
+// search and apply responses are wrapped in the live-payload redactor before they leave the BFF,
+// and the replace-preview response is browser-only round-trip data that must stay byte-exact — see
+// the boundary note above `handleEditorWorkspaceReplacePreview`.
 import { readWorkspaceFileForEditing } from "@oscharko-dev/keiko-workspace/internal/editor-read";
 import { applyPatch, validatePatch, type PatchLimits } from "@oscharko-dev/keiko-tools";
 import {
@@ -755,6 +757,40 @@ export async function handleEditorWorkspaceSymbols(
   });
 }
 
+// The replace PREVIEW response is the one payload on this route that is deliberately NOT
+// re-serialized through the live-payload redactor, and this is the reasoning, boundary by boundary.
+//
+//   * WHAT IT CARRIES. Every string leaf of `WorkspaceReplacePreviewResponse` is round-trip control
+//     data the caller must hand back unchanged: `originalText` is a byte-exact slice of the file
+//     that `applyReplaceEditsToText` compares against the raw bytes, `newText` is the replacement
+//     this same browser just typed and is what apply WRITES, `baseContentHash` is a sha256 the
+//     apply route matches, `path` is workspace-relative. `deepRedactStrings` rewrites each leaf
+//     independently, so a leaf that is ITSELF secret-shaped came back masked — and redacting a
+//     value the caller must echo back does not hide it, it corrupts the exchange. A masked
+//     `originalText` made a secret-shaped string unreplaceable ("preview edits no longer match
+//     current content"); a masked `newText` wrote "[REDACTED]" into the user's source under a 200.
+//
+//   * WHO READS IT. Browser only. `/api/editor/workspace-search/replace-preview` and
+//     `.../replace-apply` are registered for the UI alone; the editor agent bridge
+//     (`agentRoutes.ts` -> `runSearchWorkspaceAction`) reaches `handleEditorWorkspaceSearch` and
+//     `handleEditorWorkspaceSymbols` and nothing here. No model prompt, transcript, manifest,
+//     evidence atom, audit record or operator diagnostic is built from this response — `writeJson`
+//     serializes it to the socket and the only diagnostic sink on the path fires on a throw, with
+//     the redactor already applied to the message.
+//
+//   * WHAT IT EXPOSES THAT IS NOT ALREADY EXPOSED. Nothing. `GET /api/files/content`
+//     (`readFilesContent` -> `editableTextContent`) already returns the same files' bytes to the
+//     same browser unredacted — it has to, or the editor would save the mask over the source. The
+//     preview returns strictly smaller slices of exactly those bytes, for exactly those files.
+//
+//   * WHY VERBATIM IS THE GOVERNED FORM. The preview IS the artifact the human approves before a
+//     write. A masked diff asks for approval of text that is not in the file and will not be
+//     written, which is the same class of failure the raw-read lane
+//     (`keiko-workspace/src/editorRead.ts`) was opened for, one hop further out.
+//
+// Everything else on this route keeps the redactor. The SEARCH response is agent-reachable and its
+// snippets can reach a model prompt, so it stays redacted; the APPLY response carries counts plus
+// conflict `detail` strings, which are diagnostics, so it stays redacted too.
 export async function handleEditorWorkspaceReplacePreview(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -770,7 +806,7 @@ export async function handleEditorWorkspaceReplacePreview(
     const scope = buildSearchScope(root.realRoot);
     try {
       const response = await buildReplacePreviewResponse(scope, request, clientAbortSignal(ctx));
-      return { status: 200, body: deps.redactor(response) };
+      return { status: 200, body: response };
     } catch (error) {
       const routeError = searchRouteErrorResult(error);
       if (routeError !== undefined) return routeError;

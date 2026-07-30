@@ -106,6 +106,15 @@ export {
   validateMemoryValidityInterval,
 } from "./memory-validation.js";
 
+// ─── Shared negation vocabulary (consolidation #208 + governance #209) ────────
+export type { MemoryNegationTier } from "./memory-negation.js";
+export {
+  MEMORY_NEGATION_TIERS,
+  MEMORY_NEGATION_VOCABULARY,
+  hasMemoryNegationToken,
+  memoryNegationTokens,
+} from "./memory-negation.js";
+
 // ─── Operation validators ─────────────────────────────────────────────────────
 export {
   validateMemoryAcceptance,

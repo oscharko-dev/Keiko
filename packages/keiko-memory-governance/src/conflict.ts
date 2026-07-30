@@ -3,11 +3,18 @@
 // detectConflictPair — pure pairwise predicate over two MemoryRecords. The detection is
 // deliberately narrow:
 //
-//   - "negation-flip"      one side carries a negation marker (" not " or "nt ") that the
-//                          other does not, and the non-negated tokens otherwise align
-//                          (Jaccard >= 0.4). Same negation detection as the consolidation
-//                          layer (#208 conflicts.ts), reused here so the two layers agree
-//                          on what counts as a polarity-flip.
+//   - "negation-flip"      one side carries a negation PARTICLE that the other does not, and
+//                          the non-negated tokens otherwise align (Jaccard >= 0.4). The word
+//                          list is not defined here: it is the "english-particle" tier of
+//                          MEMORY_NEGATION_VOCABULARY in keiko-contracts, the same table the
+//                          consolidation layer (#208 conflicts.ts) reads, so the two layers
+//                          cannot drift apart. Matching is WHOLE-TOKEN over the normalized
+//                          body — a word merely ending in "nt" ("important") is not a
+//                          negation. This layer reads that tier ONLY: the negative
+//                          quantifiers ("no", "never", "none", "without") and the German
+//                          particles belong to consolidation's fused detector, because here
+//                          a "no"/"false" flip is the separate "polarity-mismatch" reason
+//                          below and folding it into negation would erase that distinction.
 //   - "polarity-mismatch"  the bodies share the same subject (Jaccard >= 0.4) and one
 //                          side has a "yes"/"true" affirmation marker while the other has
 //                          a "no"/"false" denial marker. Distinct from negation: this is
@@ -37,6 +44,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts/memory";
 import {
   checkStatusTransition,
+  hasMemoryNegationToken,
+  memoryNegationTokens,
   validateMemorySupersession,
 } from "@oscharko-dev/keiko-contracts/memory";
 
@@ -115,34 +124,13 @@ export function jaccardSimilarity(a: string, b: string): number {
   return union === 0 ? 0 : intersect / union;
 }
 
-const NEGATION_CONTRACTIONS: readonly string[] = [
-  "aint",
-  "arent",
-  "cant",
-  "couldnt",
-  "didnt",
-  "doesnt",
-  "dont",
-  "hadnt",
-  "hasnt",
-  "havent",
-  "isnt",
-  "mustnt",
-  "shouldnt",
-  "wasnt",
-  "werent",
-  "wont",
-  "wouldnt",
-] as const;
+// Exported for the drift guard in conflict.test.ts: the pin derives the tier this layer reads from
+// the value the production code actually resolved, never from a second copy of the tier name.
+export const GOVERNANCE_NEGATION_TIERS = ["english-particle"] as const;
+const NEGATION_TOKENS = memoryNegationTokens(GOVERNANCE_NEGATION_TIERS);
 
 function hasNegation(body: string): boolean {
-  for (const token of tokenize(body)) {
-    if (token === "not") return true;
-    for (const contraction of NEGATION_CONTRACTIONS) {
-      if (token === contraction) return true;
-    }
-  }
-  return false;
+  return hasMemoryNegationToken(tokenize(body), NEGATION_TOKENS);
 }
 
 const AFFIRM_MARKERS: readonly string[] = [" yes ", " true ", " correct ", " confirmed "];
