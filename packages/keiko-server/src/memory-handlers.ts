@@ -1389,17 +1389,17 @@ function persistConflictTransitions(
   resolution: ReturnType<typeof buildConflictTransitions>,
   reason: string,
 ): void {
+  // Bi-temporal-lite (#204, C1) deliberately does NOT apply here. `buildConflictTransitions` moves
+  // every loser to `conflicted`, and MEMORY_STATUS_TRANSITIONS lets `conflicted` return to
+  // `accepted` — closing the belief window would assert that the belief ended, which is false for a
+  // record still open to rehabilitation. The window is closed only where supersession is monotonic:
+  // the correction-acceptance path (`buildCorrectionAcceptanceUpdates`, which calls
+  // `supersededValidity`). If conflict resolution ever starts emitting a `superseded` transition,
+  // that transition must close the window here at the same time.
   for (const transition of resolution.statusTransitions) {
-    // Bi-temporal-lite (#204, C1): a record losing a conflict and being SUPERSEDED gets its belief
-    // window closed at the transition time, same as the correction path. Other transitions (e.g.
-    // the winner re-accepted) leave validity untouched.
-    const existing =
-      transition.to === "superseded" ? vault.getMemory(transition.memoryId) : undefined;
-    const validity =
-      existing !== undefined ? supersededValidity(existing, transition.transitionedAt) : null;
     vault.updateMemory(
       transition.memoryId,
-      { status: transition.to, staleReason: reason, ...(validity !== null ? { validity } : {}) },
+      { status: transition.to, staleReason: reason },
       transition.transitionedAt,
     );
   }

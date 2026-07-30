@@ -7,9 +7,12 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { runConsolidation } from "@oscharko-dev/keiko-memory-consolidation";
+import { MEMORY_STATUS_TRANSITIONS } from "@oscharko-dev/keiko-contracts";
 import type {
   MemoryAuditEvent,
   MemoryConversationId,
+  MemoryEdgeId,
   MemoryId,
   MemoryRecord,
   MemoryReviewerId,
@@ -993,6 +996,33 @@ describe("memory handlers", () => {
     );
   });
 
+  // Pins what `persistConflictTransitions` documents: a conflict loser lands in `conflicted`, a
+  // state MEMORY_STATUS_TRANSITIONS lets return to `accepted`, so its belief window must stay OPEN.
+  // Only monotonic supersession (the correction-acceptance path) closes a window.
+  it("leaves a conflict loser rehabilitable with its belief window open", async () => {
+    const vault = makeVault();
+    const evidenceStore = createInMemoryEvidenceStore();
+    vault.insertMemory(makeMemory("validity-winner", "formatter is biome"));
+    vault.insertMemory(makeMemory("validity-loser", "formatter is prettier"));
+    const before = vault.getMemory(memoryId("validity-loser"))?.validity;
+
+    const result = await handleResolveMemoryConflict(
+      makeCtx("/api/memory/conflicts/resolve", {
+        winner: "validity-winner",
+        losers: ["validity-loser"],
+        reason: "reviewed and winner selected",
+      }),
+      makeDeps({ memoryVault: vault, evidenceStore }),
+    );
+
+    expect(result.status).toBe(200);
+    const loser = vault.getMemory(memoryId("validity-loser"));
+    expect(loser?.status).toBe("conflicted");
+    expect(loser?.validity).toEqual(before);
+    expect(loser?.validity).not.toHaveProperty("validUntil");
+    expect(MEMORY_STATUS_TRANSITIONS.conflicted).toContain("accepted");
+  });
+
   it("rejects conflict resolution for duplicate ids before mutating state", async () => {
     const vault = makeVault();
     vault.insertMemory(makeMemory("conflict-dup-winner", "formatter is biome"));
@@ -1069,6 +1099,65 @@ describe("memory handlers", () => {
     expect(result.status).toBe(400);
     expect(vault.getMemory(memoryId("conflict-real-loser"))?.status).toBe("accepted");
     expect(vault.listOutgoingEdges(memoryId("conflict-real-loser"))).toEqual([]);
+  });
+
+  // Structural pin for MemoryConsolidation.tsx's withheld merge control: the winner/losers are
+  // taken VERBATIM from the consolidation engine's own review item (no hand-written pair), so this
+  // stays true if the engine's clustering or winner selection moves. A duplicate cluster is by
+  // construction above the dedup overlap threshold that disqualifies `value-mismatch`, so the
+  // resolution route can never accept what a duplicate-derived merge item proposes.
+  it("refuses the merge action the consolidation engine emits for a duplicate cluster", async () => {
+    const vault = makeVault();
+    const capturedAt = Date.now();
+    const ids = ["dup-a", "dup-b", "dup-c"];
+    ids.forEach((id, index) => {
+      const at = capturedAt + index * 1_000;
+      vault.insertMemory(
+        makeMemory(id, "The user prefers tabs over spaces.", {
+          createdAt: at,
+          updatedAt: at,
+          validity: { validFrom: at },
+        }),
+      );
+    });
+    const records = ids.flatMap((id) => {
+      const record = vault.getMemory(memoryId(id));
+      return record === undefined ? [] : [record];
+    });
+
+    let reviewSeq = 0;
+    let edgeSeq = 0;
+    const consolidated = runConsolidation(records, {
+      nowMs: Date.now(),
+      newEdgeId: () => `edge-${String((edgeSeq += 1))}` as MemoryEdgeId,
+      newReviewItemId: () => `rv-${String((reviewSeq += 1))}`,
+      includeStatuses: ["accepted", "proposed", "conflicted"],
+    });
+    const mergeAction = consolidated.reviewItems
+      .map((item) => item.proposedAction)
+      .find((action) => action?.kind === "merge");
+    if (mergeAction === undefined) {
+      throw new TypeError("consolidation no longer emits a merge action for a duplicate cluster");
+    }
+
+    const result = await handleResolveMemoryConflict(
+      makeCtx("/api/memory/conflicts/resolve", {
+        winner: mergeAction.winner,
+        losers: mergeAction.losers,
+        reason: "resolved from consolidation review item",
+      }),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(400);
+    // The refusal is the conflict precondition itself, not an incidental status-transition guard.
+    expect(asJson(result)).toMatchObject({
+      error: { message: "Governance constraint violated (invalid-resolution)." },
+    });
+    for (const loser of mergeAction.losers) {
+      expect(vault.getMemory(loser)?.status).toBe("accepted");
+      expect(vault.listOutgoingEdges(loser)).toEqual([]);
+    }
   });
 });
 

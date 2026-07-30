@@ -86,8 +86,12 @@ function surfaceLabel(capture: JournalCapture, t: I18nTranslate): string {
     : t("memoria.journal.surface.conversationCenter");
 }
 
+// The badge reports what the record IS, not what the capture decided. `outcome` is capture-time
+// audit history and never moves; the record does — the review queue, the detail view and the
+// maintenance sweep all accept records after capture. Falling back to the capture outcome keeps a
+// server build that predates `currentStatus` rendering exactly as before.
 function statusForCapture(capture: PersistedJournalCapture): MemoryRecord["status"] {
-  return capture.outcome === "proposed" ? "proposed" : "accepted";
+  return capture.currentStatus ?? (capture.outcome === "proposed" ? "proposed" : "accepted");
 }
 
 function captureTime(occurredAt: number): string {
@@ -138,7 +142,7 @@ function JournalActions({
   onForget,
   t,
 }: JournalActionsProps): ReactNode {
-  const proposed = capture.outcome === "proposed";
+  const proposed = statusForCapture(capture) === "proposed";
   const busy = busyAction !== null;
   const indicator = journalIndicatorLabel(acknowledged, proposed, t);
   return (
@@ -400,12 +404,16 @@ interface ActionHookOptions {
   readonly t: I18nTranslate;
 }
 
+// Only the live status moves, and only when Keep actually promoted the record. `outcome` is the
+// audit record of what happened at capture and is never rewritten locally; a record that was
+// already accepted, archived or superseded keeps the status it has — acknowledging it must not
+// claim a transition that did not happen.
 function acknowledgeJournalRow(row: JournalRowState, memoryId: string): JournalRowState {
   const capture = row.capture;
   if (capture.outcome === "rejected" || capture.memoryId !== memoryId) return row;
-  if (capture.outcome !== "proposed") return { capture, acknowledged: true };
+  if (statusForCapture(capture) !== "proposed") return { capture, acknowledged: true };
   return {
-    capture: { ...capture, outcome: "auto-accepted" },
+    capture: { ...capture, currentStatus: "accepted" },
     acknowledged: true,
   };
 }
@@ -429,8 +437,11 @@ function useKeepAction(
       if (busyId !== null || current?.acknowledged === true) return;
       setBusyId(capture.memoryId);
       options.setActionError(null);
+      // Accept only a record that is STILL proposed: the server answers an accept on any other
+      // status with 409, so keying this off the capture-time outcome made Keep fail for every
+      // memory accepted after capture.
       const accept =
-        capture.outcome === "proposed" ? acceptImpl(capture.memoryId) : Promise.resolve();
+        statusForCapture(capture) === "proposed" ? acceptImpl(capture.memoryId) : Promise.resolve();
       void accept
         .then(() => {
           keptIds.current.add(capture.memoryId);

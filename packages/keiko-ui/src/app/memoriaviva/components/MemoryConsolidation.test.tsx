@@ -268,6 +268,58 @@ describe("MemoryConsolidation", () => {
     });
   });
 
+  // A duplicate-derived review item always carries a `merge` action, and POST
+  // /api/memory/conflicts/resolve refuses any pair that is not a *detected conflict* — which a
+  // near/exact duplicate can never be (memory-handlers.test.ts pins that server contract against
+  // the engine's own output). Offering the control there produced a guaranteed 400 on every click.
+  it.each([
+    ["duplicate-review" as const, [memoryId("dup-old"), memoryId("dup-new")]],
+    [
+      "multi-way-duplicate" as const,
+      [memoryId("dup-old"), memoryId("dup-mid"), memoryId("dup-new")],
+    ],
+  ])(
+    "does not offer conflict resolution for a %s merge item the server always rejects",
+    async (reason, relatedMemoryIds) => {
+      const losers = relatedMemoryIds.slice(0, -1);
+      const winner = relatedMemoryIds.at(-1);
+      if (winner === undefined) throw new TypeError("fixture requires a winner");
+      const startJobImpl = vi.fn().mockResolvedValue(runningJob());
+      const fetchJobImpl = vi.fn().mockResolvedValue(
+        completedJob([
+          {
+            id: "rv-merge",
+            reason,
+            relatedMemoryIds,
+            proposedAction: { kind: "merge", winner, losers },
+            detectedAt: 1_700_000_000_500,
+          },
+        ]),
+      );
+      const resolveConflictImpl = vi.fn();
+      const user = userEvent.setup();
+
+      render(
+        <MemoryConsolidation
+          startJobImpl={startJobImpl}
+          fetchJobImpl={fetchJobImpl}
+          cancelJobImpl={vi.fn()}
+          resolveConflictImpl={resolveConflictImpl}
+          pollIntervalMs={5}
+        />,
+      );
+
+      await user.click(screen.getByRole("button", { name: /start consolidation/i }));
+
+      // The proposal itself stays visible — only the unusable action is withheld.
+      await waitFor(() => {
+        expect(screen.getByText(/merge into/i)).toBeInTheDocument();
+      });
+      expect(screen.queryByRole("button", { name: /resolve conflict/i })).not.toBeInTheDocument();
+      expect(resolveConflictImpl).not.toHaveBeenCalled();
+    },
+  );
+
   it("cancels an active job", async () => {
     const startJobImpl = vi.fn().mockResolvedValue(runningJob());
     const fetchJobImpl = vi.fn();

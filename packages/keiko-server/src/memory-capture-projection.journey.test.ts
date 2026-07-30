@@ -5,7 +5,11 @@ import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import type { CodingWorkbenchMode, NormalizedResponse } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchMode,
+  MemoryStatus,
+  NormalizedResponse,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   ConversationId,
   MemoryReviewerId,
@@ -21,7 +25,11 @@ import {
   createMemoryAuditDeleteCommitHandler,
   createMemoryAuditHandler,
 } from "./memory-audit-handler.js";
-import { handleForgetMemory, handleListMemories } from "./memory-handlers.js";
+import {
+  handleAcceptMemoryProposal,
+  handleForgetMemory,
+  handleListMemories,
+} from "./memory-handlers.js";
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
 import { captureSalientFromTurn } from "./memory-salience.js";
 import type { RouteContext } from "./routes.js";
@@ -38,6 +46,7 @@ interface RecentCaptureWire {
   readonly reason: string;
   readonly memoryId?: string;
   readonly bodyExcerpt?: string;
+  readonly currentStatus?: MemoryStatus;
 }
 
 const temporaryDirectories: string[] = [];
@@ -243,6 +252,49 @@ describe("recent memory capture journey", () => {
     const afterForget = recentCaptures(autonomous, since);
     expect(afterForget.map((capture) => capture.outcome)).toEqual(["rejected", "auto-accepted"]);
     expect(recentCaptures(autonomous, since)).toEqual(afterForget);
+  });
+
+  // End-to-end shape of the Journal defect: a governed-assist capture is proposed, the operator
+  // accepts it elsewhere (review queue / detail view / maintenance sweep), and the Journal row must
+  // then reflect `accepted`. Driving the real accept route rather than patching the vault keeps the
+  // expectation derived from the production transition.
+  it("reports the live status after a proposed capture is accepted elsewhere", async () => {
+    const evidenceStore = createInMemoryEvidenceStore();
+    const vault = makeVault(evidenceStore);
+    const ctx = context();
+    const governed = depsFor(
+      vault,
+      evidenceStore,
+      "governed-assist",
+      modelFact("The user reviews release notes every Friday."),
+    );
+
+    await captureSalientFromTurn(
+      governed,
+      makeRequest("We reviewed the release notes."),
+      ctx,
+      "gpt-test",
+      "ok",
+    );
+
+    const proposed = recentCaptures(governed, 0);
+    expect(proposed.map(({ outcome, currentStatus }) => [outcome, currentStatus])).toEqual([
+      ["proposed", "proposed"],
+    ]);
+    const proposedId = proposed[0]?.memoryId;
+    expect(proposedId).toBeDefined();
+
+    const accepted = handleAcceptMemoryProposal(
+      makeRouteContext(`/api/memory/proposals/${String(proposedId)}/accept`, {}, proposedId),
+      governed,
+    );
+    expect(accepted.status).toBe(200);
+
+    const afterAccept = recentCaptures(governed, 0);
+    // The capture-time audit outcome is history; only the live status moves.
+    expect(afterAccept.map(({ outcome, currentStatus }) => [outcome, currentStatus])).toEqual([
+      ["proposed", "accepted"],
+    ]);
   });
 });
 

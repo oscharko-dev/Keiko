@@ -9,6 +9,7 @@ import {
   type MemoryRecord,
   type MemoryScope,
   type MemorySourceKind,
+  type MemoryStatus,
   validateMemoryScope,
 } from "@oscharko-dev/keiko-contracts";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -83,6 +84,12 @@ export interface MemoryCaptureDecision {
   readonly occurredAt: number;
   readonly reason: MemoryCaptureDecisionReason;
   readonly memoryId?: string;
+  // The record's CURRENT status, not the capture-time one. `outcome` is audit history and is never
+  // rewritten; a record proposed at capture can afterwards be accepted (review queue, detail view,
+  // maintenance sweep), archived, or superseded. Present exactly when `memoryId` is — a decision
+  // without a live record is either a record-free rejection or already dropped. Body-free: a
+  // contract enum, no record content.
+  readonly currentStatus?: MemoryStatus;
 }
 
 export interface BuildMemoryCaptureDecisionAuditEventInput {
@@ -244,6 +251,7 @@ function buildProjectedDecision(
   event: CaptureAuditEvent,
   parsed: ParsedCaptureDecisionSummary,
   memoryId: string | undefined,
+  currentStatus: MemoryStatus | undefined,
 ): MemoryCaptureDecision {
   return {
     eventId: event.eventId,
@@ -254,6 +262,7 @@ function buildProjectedDecision(
     occurredAt: event.occurredAt,
     reason: parsed.reason,
     ...(memoryId === undefined ? {} : { memoryId }),
+    ...(currentStatus === undefined ? {} : { currentStatus }),
   };
 }
 
@@ -276,9 +285,12 @@ function projectEvent(
   if (parsed === null || !eventMatchesOutcome(event, parsed.outcome)) return null;
   if (!allowedScopeKeys.has(auditScopeKey(event.scope))) return null;
   const memoryId = projectedMemoryId(event, parsed, liveById, forgotten);
-  return memoryId === null
-    ? null
-    : { decision: buildProjectedDecision(event, parsed, memoryId), ledgerOrder };
+  if (memoryId === null) return null;
+  const live = memoryId === undefined ? undefined : liveById.get(event.memoryId);
+  return {
+    decision: buildProjectedDecision(event, parsed, memoryId, live?.status),
+    ledgerOrder,
+  };
 }
 
 function compareIndexedDecisions(
