@@ -81,6 +81,12 @@ interface FilesWidgetProps {
   // Notified after a successful create/rename/delete so the host can re-home open editor tabs (rename)
   // or close them (delete). Omitted in read-only contexts; its presence does not gate the affordances.
   readonly onFilesMutated?: ((event: FilesMutationEvent) => void) | undefined;
+  // Consulted BEFORE a rename, drag-move, or delete reaches the server — the pre-flight counterpart
+  // of `onFilesMutated`. The host owns the open buffers, so only it can tell whether the path (or,
+  // for a directory, anything beneath it) has unsaved changes; resolving `false` vetoes the mutation
+  // so the buffer is never orphaned by a path that no longer exists. Omitted where no editor host
+  // owns buffers for this root, which reads as "nothing to veto".
+  readonly onBeforeEntryMutation?: ((path: string) => Promise<boolean>) | undefined;
 }
 
 export interface FilesMutationEvent {
@@ -585,6 +591,7 @@ export function FilesWidget({
   onOpenFile,
   onOpenGitDelivery,
   onFilesMutated,
+  onBeforeEntryMutation,
 }: FilesWidgetProps): ReactNode {
   const t = useTranslate();
   const tGit = useFilesWidgetTranslate();
@@ -656,9 +663,21 @@ export function FilesWidget({
   const [draggedPath, setDraggedPath] = useState<string | null>(null);
   const onFilesMutatedRef = useRef(onFilesMutated);
   onFilesMutatedRef.current = onFilesMutated;
+  // Read through a ref for the same reason as `onFilesMutated`: the mutation callbacks below would
+  // otherwise take a new identity whenever the host's dirty state changes.
+  const onBeforeEntryMutationRef = useRef(onBeforeEntryMutation);
+  onBeforeEntryMutationRef.current = onBeforeEntryMutation;
 
   const invalidateGitStatus = useCallback((): void => {
     setGitStatusRevision((revision) => revision + 1);
+  }, []);
+
+  // Ask the host whether `path` may be renamed, moved, or deleted. `true` when no host is attached:
+  // absence of an owner of open buffers is not a veto. A host that prompts resolves only after the
+  // user decides, so the caller must hold its busy flag across the await.
+  const mayMutateEntry = useCallback(async (path: string): Promise<boolean> => {
+    const consult = onBeforeEntryMutationRef.current;
+    return consult === undefined ? true : await consult(path);
   }, []);
 
   const clearTreeTooltipTimer = useCallback((): void => {
@@ -1008,6 +1027,9 @@ export function FilesWidget({
     setOpError(null);
     try {
       if (pendingEntry.kind === "rename") {
+        // Vetoed while the target holds unsaved changes: leave the inline editor open with the typed
+        // name so nothing the user entered is lost, and send no request.
+        if (!(await mayMutateEntry(pendingEntry.path))) return;
         const parent = entryParent(pendingEntry.path);
         const result = await renameFilesEntry({
           root: mutationRoot,
@@ -1049,6 +1071,7 @@ export function FilesWidget({
     entryDraft,
     invalidateGitStatus,
     loadDirectory,
+    mayMutateEntry,
     mutationRoot,
     onOpenFile,
     opBusy,
@@ -1063,6 +1086,13 @@ export function FilesWidget({
       setOpBusy(true);
       setOpError(null);
       try {
+        // Vetoed while the target (or, for a folder, anything inside it) holds unsaved changes: drop
+        // the confirmation too, so declining the unsaved-changes prompt leaves no destructive modal
+        // behind and focus returns to the originating tree row.
+        if (!(await mayMutateEntry(entry.path))) {
+          setConfirmDelete(null);
+          return;
+        }
         const result = await deleteFilesEntry({ root: mutationRoot, path: entry.path });
         setConfirmDelete(null);
         if (selectedPath === entry.path) setSelectedPath(null);
@@ -1075,7 +1105,7 @@ export function FilesWidget({
         setOpBusy(false);
       }
     },
-    [invalidateGitStatus, loadDirectory, mutationRoot, opBusy, selectedPath, t],
+    [invalidateGitStatus, loadDirectory, mayMutateEntry, mutationRoot, opBusy, selectedPath, t],
   );
 
   const duplicateEntry = useCallback(
@@ -1118,6 +1148,8 @@ export function FilesWidget({
       setOpBusy(true);
       setOpError(null);
       try {
+        // A move is a rename, so it orphans an unsaved buffer exactly the same way: ask first.
+        if (!(await mayMutateEntry(sourcePath))) return;
         const result = await renameFilesEntry({ root: mutationRoot, path: sourcePath, newPath });
         await loadDirectory(entryParent(sourcePath) ?? "");
         await loadDirectory(targetDir ?? "");
@@ -1129,7 +1161,7 @@ export function FilesWidget({
         setOpBusy(false);
       }
     },
-    [invalidateGitStatus, loadDirectory, mutationRoot, opBusy, t],
+    [invalidateGitStatus, loadDirectory, mayMutateEntry, mutationRoot, opBusy, t],
   );
 
   const openContextMenu = useCallback(

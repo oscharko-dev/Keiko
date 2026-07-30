@@ -2087,6 +2087,137 @@ describe("FilesWidget file operations", () => {
     await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(2));
   });
 
+  // Renaming, moving or deleting a path whose buffer has unsaved changes used to reach the server
+  // with no consultation at all, so the unsaved buffer was discarded silently. Every path-destroying
+  // mutation now asks the host that owns the open buffers FIRST, and a veto sends no request.
+  describe("unsaved-buffer pre-flight (onBeforeEntryMutation)", () => {
+    it("sends no rename request when the host vetoes the inline rename", async () => {
+      const onBeforeEntryMutation = vi.fn(() => Promise.resolve(false));
+      render(<FilesWidget root="/repo" onBeforeEntryMutation={onBeforeEntryMutation} />);
+      fireEvent.contextMenu(await screen.findByText("app.ts"));
+
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Rename…" }));
+      const input = await screen.findByLabelText("Rename app.ts");
+      await userEvent.clear(input);
+      await userEvent.type(input, "renamed.ts{Enter}");
+
+      await waitFor(() => expect(onBeforeEntryMutation).toHaveBeenCalledWith("app.ts"));
+      expect(renameFilesEntry).not.toHaveBeenCalled();
+      // The typed name survives the veto so nothing the user entered is lost.
+      expect(screen.getByLabelText("Rename app.ts")).toHaveValue("renamed.ts");
+    });
+
+    it("renames once the host allows it, leaving the happy path unchanged", async () => {
+      vi.mocked(renameFilesEntry).mockResolvedValue({
+        root: "/repo",
+        path: "renamed.ts",
+        previousPath: "app.ts",
+        kind: "file",
+      });
+      const onBeforeEntryMutation = vi.fn(() => Promise.resolve(true));
+      const onFilesMutated = vi.fn();
+      render(
+        <FilesWidget
+          root="/repo"
+          onBeforeEntryMutation={onBeforeEntryMutation}
+          onFilesMutated={onFilesMutated}
+        />,
+      );
+      fireEvent.contextMenu(await screen.findByText("app.ts"));
+
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Rename…" }));
+      const input = await screen.findByLabelText("Rename app.ts");
+      await userEvent.clear(input);
+      await userEvent.type(input, "renamed.ts{Enter}");
+
+      await waitFor(() =>
+        expect(renameFilesEntry).toHaveBeenCalledWith({
+          root: "/repo",
+          path: "app.ts",
+          newPath: "renamed.ts",
+        }),
+      );
+      expect(onBeforeEntryMutation).toHaveBeenCalledWith("app.ts");
+      expect(onFilesMutated).toHaveBeenCalledWith({
+        op: "rename",
+        mutation: expect.objectContaining({ path: "renamed.ts", previousPath: "app.ts" }),
+      });
+    });
+
+    it("asks with the folder path when a directory is renamed", async () => {
+      const onBeforeEntryMutation = vi.fn(() => Promise.resolve(false));
+      render(<FilesWidget root="/repo" onBeforeEntryMutation={onBeforeEntryMutation} />);
+      fireEvent.contextMenu(await screen.findByText("src"));
+
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Rename…" }));
+      const input = await screen.findByLabelText("Rename src");
+      await userEvent.clear(input);
+      await userEvent.type(input, "lib{Enter}");
+
+      // The host is asked about the directory, which is what lets it find the dirty files inside it.
+      await waitFor(() => expect(onBeforeEntryMutation).toHaveBeenCalledWith("src"));
+      expect(renameFilesEntry).not.toHaveBeenCalled();
+    });
+
+    it("deletes nothing and closes the confirmation when the host vetoes the delete", async () => {
+      const onBeforeEntryMutation = vi.fn(() => Promise.resolve(false));
+      render(<FilesWidget root="/repo" onBeforeEntryMutation={onBeforeEntryMutation} />);
+      fireEvent.contextMenu(await screen.findByText("app.ts"));
+
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Delete…" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(onBeforeEntryMutation).toHaveBeenCalledWith("app.ts"));
+      expect(deleteFilesEntry).not.toHaveBeenCalled();
+      // No destructive modal is left behind after the veto.
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
+    it("sends no rename request when the host vetoes a drag-move", async () => {
+      const onBeforeEntryMutation = vi.fn(() => Promise.resolve(false));
+      render(<FilesWidget root="/repo" onBeforeEntryMutation={onBeforeEntryMutation} />);
+      await screen.findByText("app.ts");
+
+      const source = screen.getByRole("treeitem", { name: /app\.ts/ });
+      const target = screen.getByRole("treeitem", { name: /src/ });
+      const dataTransfer = {
+        setData: vi.fn(),
+        getData: vi.fn(),
+        effectAllowed: "",
+        dropEffect: "",
+      };
+      fireEvent.dragStart(source, { dataTransfer });
+      fireEvent.dragOver(target, { dataTransfer });
+      fireEvent.drop(target, { dataTransfer });
+
+      await waitFor(() => expect(onBeforeEntryMutation).toHaveBeenCalledWith("app.ts"));
+      expect(renameFilesEntry).not.toHaveBeenCalled();
+    });
+
+    it("does not consult the host for a create or a duplicate, which target a new path", async () => {
+      vi.mocked(createFilesEntry).mockResolvedValue({
+        root: "/repo",
+        path: "new.ts",
+        kind: "file",
+      });
+      const onBeforeEntryMutation = vi.fn(() => Promise.resolve(true));
+      render(
+        <FilesWidget
+          root="/repo"
+          onOpenFile={vi.fn()}
+          onBeforeEntryMutation={onBeforeEntryMutation}
+        />,
+      );
+      await screen.findByText("app.ts");
+
+      await userEvent.click(screen.getByRole("button", { name: "New file" }));
+      await userEvent.type(await screen.findByLabelText("New file name"), "new.ts{Enter}");
+
+      await waitFor(() => expect(createFilesEntry).toHaveBeenCalled());
+      expect(onBeforeEntryMutation).not.toHaveBeenCalled();
+    });
+  });
+
   // GEN-PERF-WIDGET-004 — while a tooltip is visible, pointer motion must not commit a React
   // render (the tooltip moves imperatively). Count Profiler commits across a pointermove burst.
   it("does not re-render the tree on pointermove while a tooltip is visible", async () => {
