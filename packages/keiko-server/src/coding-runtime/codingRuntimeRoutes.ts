@@ -467,7 +467,7 @@ export function handleCodingRuntimeResearch(ctx: RouteContext, deps: UiHandlerDe
 }
 
 /**
- * The authenticated approval-review projection (#2853): which workspace files the pending edit
+ * The authenticated approval-review projection (#2802): which workspace files the pending edit
  * approval would write and how large the change is. A human cannot exercise control over a change
  * they are not shown (ADR-0129 D1) — and the paths are model-selected, so like the research ask
  * they may not ride the general runtime snapshot or the SSE projection (#2644). An unpaired caller

@@ -19,35 +19,22 @@ import { openEditorWorkspace, seedEditorWindow } from "./support/editorWorkspace
 // serious/critical violation NOT on this list, so new regressions are still caught. Keep this list
 // SHORT and shrinking — it is a to-fix ledger, not a mute button.
 //
-// The prior residual (RB-14, .win-zpct color-contrast — the zoom-percentage badge rendered
-// --text-tertiary under the zoom cluster's opacity:0.72, measuring 3.45:1 in a real browser) was
-// fixed at the source in the SHA-pinned globals.css via the --win-zoom-pct token (dark 6.15:1 /
-// light 4.97:1) and needs no entry.
+// Currently EMPTY, and both prior residuals were fixed at the source rather than aged here:
+//   - RB-14, .win-zpct color-contrast — the zoom-percentage badge rendered --text-tertiary under
+//     the zoom cluster's opacity:0.72, measuring 3.45:1 in a real browser. Fixed in the SHA-pinned
+//     globals.css via the --win-zoom-pct token (dark 6.15:1 / light 4.97:1).
+//   - aria-required-children on .ed-tablist — the editor tab strip owned a close `button` per tab
+//     and the overflow `details`, neither of which a role="tablist" may own. Fixed by the WAI-ARIA
+//     APG closable-tab shape (#2802): the close affordance is a non-focusable descendant of its
+//     role="tab" element with Delete/Backspace on the tab, and the tablist role sits on a row that
+//     holds nothing but tabs. Pinned in jsdom by EditorRuntimeWidget.a11y.test.tsx, which reproduces
+//     both owned-child cases, so a regression fails before this lane ever runs.
 const KNOWN_A11Y_ISSUES: readonly {
   readonly id: string;
   readonly selector: string;
   readonly reason: string;
   readonly owner: string;
-}[] = [
-  {
-    id: "aria-required-children",
-    selector: ".ed-tablist",
-    // Found by THIS lane the first time it scanned the Editor window (0.3.0 release audit) — it had
-    // no real-browser a11y proof before, in either theme. The editor tab strip renders each tab as
-    // `<span.ed-tab><button role="tab">…</button><button.ed-tab-close>×</button></span>`. The
-    // wrapper carries no role and is not focusable, so axe flattens it and the close button becomes
-    // a directly-owned child of role="tablist" with role="button", which tablist does not permit.
-    // The fix is the APG shape — the close control must be a DESCENDANT of the role="tab" element —
-    // which moves role/aria-selected/aria-controls/id/roving-tabindex/drag handling off
-    // `.ed-tab-hit` onto `.ed-tab` and rewrites the tab-strip keyboard model. That is a tab-strip
-    // refactor against a large set of pinned editor unit and e2e selectors, not a focus-containment
-    // fix, so it is recorded rather than attempted blind here. Scoped to this rule on this selector:
-    // any other unallowed-child or any contrast regression in the same window still fails the gate.
-    reason:
-      "Editor tab close button is an owned child of role=tablist; needs the APG close-inside-tab restructure (tracked, not owned by this gate).",
-    owner: "editor",
-  },
-];
+}[] = [];
 
 // Returns serious/critical violations after removing nodes explained by KNOWN_A11Y_ISSUES. A
 // violation survives only if it has at least one node whose target is NOT covered by an allowlist

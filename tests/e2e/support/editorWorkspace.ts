@@ -23,9 +23,13 @@ export const EDITOR_SELECTORS = {
   sidebar: "aside.ed-sidebar[aria-label='Editor files']",
   sidebarRestore: ".ed-sidebar-restore[aria-label='Show project tree']",
   treeRow: "[role='treeitem'].tr-row",
-  tablist: ".ed-tablist[role='tablist'][aria-label='Open documents']",
+  // `.ed-tablist` is the measured strip box; the `role='tablist'` row inside it holds nothing but
+  // tabs, because a tablist may not own the overflow chooser that also lives in the strip (#2802).
+  tablist: ".ed-tablist [role='tablist'][aria-label='Open documents']",
   // The outer tab element carries the `active`/`data-dirty` state; `role='tab'` and the
-  // `data-tip`/`aria-selected` affordances live on the inner `.ed-tab-hit` button it wraps.
+  // `data-tip`/`aria-selected` affordances live on the inner `.ed-tab-hit` button it wraps. The
+  // close × is a non-focusable descendant of that button (the APG closable-tab shape), keyed by
+  // `data-tab-close-file` since it is deliberately hidden from assistive technology.
   tab: ".ed-tab",
   tabHit: ".ed-tab-hit",
   tabLabel: ".ed-tab-label",

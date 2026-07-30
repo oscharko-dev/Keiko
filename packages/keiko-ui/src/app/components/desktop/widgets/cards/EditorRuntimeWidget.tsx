@@ -35,6 +35,9 @@ import {
   useState,
   type ButtonHTMLAttributes,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { toExactArrayBuffer } from "@/lib/bytes";
@@ -6150,116 +6153,158 @@ function EditorRuntimeWidget({
     );
   };
 
+  /**
+   * Close the focused tab from the keyboard (0.3.0 release audit, #2802).
+   *
+   * `role="tab"` presents its children, so the close control inside a tab cannot itself be
+   * focusable — axe reports `nested-interactive` for that shape, which is how the previous
+   * standalone close button became an owned child of the tablist in the first place. The WAI-ARIA
+   * APG's deletable-tabs pattern puts the affordance on the tab instead; Backspace is accepted
+   * alongside Delete because that is the key Mac keyboards send.
+   */
+  const handleTabCloseKey = (path: string, event: ReactKeyboardEvent<HTMLElement>): void => {
+    if (onCloseOpenFile === undefined) return;
+    if (event.key !== "Delete" && event.key !== "Backspace") return;
+    event.preventDefault();
+    void handleCloseTab(path);
+  };
+
+  const renderTabCloseAffordance = (path: string): ReactNode => {
+    if (onCloseOpenFile === undefined) return null;
+    return (
+      <span
+        className={`ed-tab-close ${runtimeStyles.tabClose}`}
+        // Decoration for the pointer: the tab owns the name and the keyboard path, and an exposed
+        // control here would be an unallowed owned child of the tablist again.
+        aria-hidden="true"
+        data-tab-close-file={path}
+        onPointerDown={(event: ReactPointerEvent<HTMLSpanElement>) => {
+          // The tab arms pointer drags; pressing × must not start one.
+          event.stopPropagation();
+        }}
+        onClick={(event: ReactMouseEvent<HTMLSpanElement>) => {
+          // The tab is the selection target; closing must not also select it.
+          event.stopPropagation();
+          void handleCloseTab(path);
+        }}
+      >
+        ×
+      </span>
+    );
+  };
+
+  const renderOpenDocumentTab = (path: string): ReactNode => {
+    const active = path === file;
+    const tabDomId = active ? tabId : `${editorDomIdPrefix}-tab-${safeDomIdSegment(path)}`;
+    const tabDirty = effectiveDirtyFiles.has(path);
+    const tabConflictCount = active ? mergeConflicts.count : 0;
+    const tabHandle = renderTabHandle?.(path, active, tabDirty, {
+      mergeConflicts: tabConflictCount,
+    });
+    const insertEdge = tabInsertTarget?.file === path ? tabInsertTarget.edge : null;
+    const conflictAttr = tabHandle?.["data-merge-conflicts"] ?? String(tabConflictCount);
+    const closable = onCloseOpenFile !== undefined;
+    return (
+      <span
+        className={`ed-tab${active ? " active" : ""}`}
+        data-dirty={tabDirty ? "true" : "false"}
+        data-pane-id={paneId}
+        data-tab-file={path}
+        data-tab-draggable={tabHandle?.["data-tab-draggable"]}
+        data-tab-held={tabHandle?.["data-tab-held"]}
+        data-merge-conflicts={conflictAttr}
+        data-tab-insert-before={insertEdge === "before" ? "true" : "false"}
+        data-tab-insert-after={insertEdge === "after" ? "true" : "false"}
+        key={path}
+      >
+        <button
+          type="button"
+          className={`ed-tab-hit ui-tip${closable ? ` ${runtimeStyles.tabHitClosable}` : ""}`}
+          draggable={tabHandle?.draggable}
+          role="tab"
+          id={tabDomId}
+          aria-selected={active ? "true" : "false"}
+          aria-controls={tabpanelId}
+          tabIndex={active ? 0 : -1}
+          data-tip={path}
+          data-pane-id={paneId}
+          data-tab-file={path}
+          data-tab-draggable={tabHandle?.["data-tab-draggable"]}
+          data-tab-held={tabHandle?.["data-tab-held"]}
+          data-merge-conflicts={conflictAttr}
+          aria-label={tabAriaLabel(path, tabConflictCount, sourceControlT)}
+          onClickCapture={tabHandle?.onClickCapture}
+          onDragStart={tabHandle?.onDragStart}
+          onDragEnd={tabHandle?.onDragEnd}
+          onPointerDown={tabHandle?.onPointerDown}
+          onKeyDown={(event) => {
+            handleTabCloseKey(path, event);
+            if (event.defaultPrevented) return;
+            tabHandle?.onKeyDown?.(event);
+          }}
+          onClick={() => handleSelectTab(path)}
+          onAuxClick={(event) => {
+            // Middle-click closes the tab (VS Code parity), routed through the same
+            // dirty-close guard as the × affordance.
+            if (event.button === 1 && closable) {
+              event.preventDefault();
+              void handleCloseTab(path);
+            }
+          }}
+        >
+          <FileIcon name={path} />
+          <span className="ed-tab-label">{path}</span>
+          {tabConflictCount > 0 ? (
+            <span className={conflictStyles.badge} aria-hidden="true">
+              {tabConflictCount}
+            </span>
+          ) : null}
+          {tabDirty ? (
+            <span className="ed-dirty" aria-hidden="true">
+              ●
+            </span>
+          ) : null}
+          {renderTabCloseAffordance(path)}
+        </button>
+      </span>
+    );
+  };
+
   const renderOpenDocumentTabs = (): ReactNode => (
     <div
       className="ed-tablist"
       ref={tablistRef}
-      role="tablist"
-      aria-label="Open documents"
       // GEN-PERF-EDITOR-003: the held-file scalar exists to trip React.memo for the one pane whose
       // tab visual must repaint; surfacing it as a DOM marker is its one real read and gives the
       // drag e2e a stable observation point.
       data-held-tab-file={heldTabFile}
     >
-      {visibleTabs.length > 0 ? (
-        visibleTabs.map((path) => {
-          const active = path === file;
-          const tabDomId = active ? tabId : `${editorDomIdPrefix}-tab-${safeDomIdSegment(path)}`;
-          const tabDirty = effectiveDirtyFiles.has(path);
-          const tabConflictCount = active ? mergeConflicts.count : 0;
-          const tabHandle = renderTabHandle?.(path, active, tabDirty, {
-            mergeConflicts: tabConflictCount,
-          });
-          const insertEdge = tabInsertTarget?.file === path ? tabInsertTarget.edge : null;
-          return (
+      {/*
+        0.3.0 release audit (#2802) — `role="tablist"` sits on this inner row rather than on
+        `.ed-tablist`, because a tablist may own nothing but tabs and the overflow chooser below is
+        not one. `.ed-tablist` stays the measured element so `readableTabCapacity` keeps reserving
+        the chooser's width from a box that still contains it.
+      */}
+      <div className={runtimeStyles.tabRow} role="tablist" aria-label="Open documents">
+        {visibleTabs.length > 0 ? (
+          visibleTabs.map((path) => renderOpenDocumentTab(path))
+        ) : (
+          <span className="ed-tab active" data-dirty="false">
             <span
-              className={`ed-tab${active ? " active" : ""}`}
-              data-dirty={tabDirty ? "true" : "false"}
-              data-pane-id={paneId}
-              data-tab-file={path}
-              data-tab-draggable={tabHandle?.["data-tab-draggable"]}
-              data-tab-held={tabHandle?.["data-tab-held"]}
-              data-merge-conflicts={tabHandle?.["data-merge-conflicts"] ?? String(tabConflictCount)}
-              data-tab-insert-before={insertEdge === "before" ? "true" : "false"}
-              data-tab-insert-after={insertEdge === "after" ? "true" : "false"}
-              key={path}
+              className="ed-tab-hit ui-tip"
+              role="tab"
+              id={tabId}
+              aria-selected="true"
+              aria-controls={tabpanelId}
+              tabIndex={0}
+              data-tip="Editor"
             >
-              <button
-                type="button"
-                className="ed-tab-hit ui-tip"
-                draggable={tabHandle?.draggable}
-                role="tab"
-                id={tabDomId}
-                aria-selected={active ? "true" : "false"}
-                aria-controls={tabpanelId}
-                tabIndex={active ? 0 : -1}
-                data-tip={path}
-                data-pane-id={paneId}
-                data-tab-file={path}
-                data-tab-draggable={tabHandle?.["data-tab-draggable"]}
-                data-tab-held={tabHandle?.["data-tab-held"]}
-                data-merge-conflicts={
-                  tabHandle?.["data-merge-conflicts"] ?? String(tabConflictCount)
-                }
-                aria-label={tabAriaLabel(path, tabConflictCount, sourceControlT)}
-                onClickCapture={tabHandle?.onClickCapture}
-                onDragStart={tabHandle?.onDragStart}
-                onDragEnd={tabHandle?.onDragEnd}
-                onPointerDown={tabHandle?.onPointerDown}
-                onKeyDown={tabHandle?.onKeyDown}
-                onClick={() => handleSelectTab(path)}
-                onAuxClick={(event) => {
-                  // Middle-click closes the tab (VS Code parity), routed through the same
-                  // dirty-close guard as the × button.
-                  if (event.button === 1 && onCloseOpenFile !== undefined) {
-                    event.preventDefault();
-                    void handleCloseTab(path);
-                  }
-                }}
-              >
-                <FileIcon name={path} />
-                <span className="ed-tab-label">{path}</span>
-                {tabConflictCount > 0 ? (
-                  <span className={conflictStyles.badge} aria-hidden="true">
-                    {tabConflictCount}
-                  </span>
-                ) : null}
-                {tabDirty ? (
-                  <span className="ed-dirty" aria-hidden="true">
-                    ●
-                  </span>
-                ) : null}
-              </button>
-              {onCloseOpenFile !== undefined ? (
-                <button
-                  type="button"
-                  className="ed-tab-close ui-tip"
-                  aria-label={`Close ${path}`}
-                  data-tip={`Close ${path}`}
-                  onClick={() => void handleCloseTab(path)}
-                >
-                  ×
-                </button>
-              ) : null}
+              <EditorIcon size={12} />
+              <span className="ed-tab-label">Editor</span>
             </span>
-          );
-        })
-      ) : (
-        <span className="ed-tab active" data-dirty="false">
-          <span
-            className="ed-tab-hit ui-tip"
-            role="tab"
-            id={tabId}
-            aria-selected="true"
-            aria-controls={tabpanelId}
-            tabIndex={0}
-            data-tip="Editor"
-          >
-            <EditorIcon size={12} />
-            <span className="ed-tab-label">Editor</span>
           </span>
-        </span>
-      )}
+        )}
+      </div>
       {compactTabs && summaryTabs.length > 0 ? (
         <details
           ref={summaryMenuRef}

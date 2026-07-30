@@ -167,6 +167,47 @@ describe("useInstallPrompt", () => {
     expect(localStorage.getItem("keiko.pwa.installed")).toBeNull();
   });
 
+  // 0.3.0 release audit — `localStorage.setItem` is not total: Safari private mode and an
+  // exhausted quota both make it throw. Both writes here sit BEFORE the lines that retire the
+  // consumed prompt, so a throw left the hook reporting `available: true` for a prompt the browser
+  // can never show again — the Install button then silently does nothing.
+  it("retires the consumed prompt even when persisting the accepted install throws", async () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("quota", "QuotaExceededError");
+    });
+    const { result } = renderHook(() => useInstallPrompt());
+    const event = makePromptEvent("accepted");
+
+    act(() => {
+      fireBeforeInstallPrompt(event);
+    });
+    expect(result.current.available).toBe(true);
+
+    await act(async () => {
+      await result.current.triggerInstall();
+    });
+
+    expect(result.current.available).toBe(false);
+  });
+
+  it("retires the consumed prompt even when persisting an appinstalled event throws", () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("quota", "QuotaExceededError");
+    });
+    const { result } = renderHook(() => useInstallPrompt());
+
+    act(() => {
+      fireBeforeInstallPrompt(makePromptEvent());
+    });
+    expect(result.current.available).toBe(true);
+
+    act(() => {
+      fireAppInstalled();
+    });
+
+    expect(result.current.available).toBe(false);
+  });
+
   it("removes both event listeners on unmount", () => {
     const removeSpy = vi.spyOn(window, "removeEventListener");
     const { unmount } = renderHook(() => useInstallPrompt());

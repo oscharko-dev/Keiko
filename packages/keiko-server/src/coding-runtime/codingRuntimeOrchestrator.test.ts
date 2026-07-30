@@ -563,7 +563,7 @@ describe("CodingRuntimeOrchestrator", () => {
     });
   });
 
-  it("#2853: serves the approval review only for the live, unconsumed challenge", async () => {
+  it("#2802: serves the approval review only for the live, unconsumed challenge", async () => {
     const f = fixture();
     const review = {
       requestId: "permission-1",

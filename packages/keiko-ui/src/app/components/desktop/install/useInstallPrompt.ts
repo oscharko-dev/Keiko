@@ -10,6 +10,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { writeInstallState } from "./installState";
 
 // Minimal local type for the non-standard BeforeInstallPromptEvent.
 // https://developer.mozilla.org/en-US/docs/Web/API/BeforeInstallPromptEvent
@@ -50,7 +51,9 @@ export function useInstallPrompt(): UseInstallPromptResult {
     };
 
     const onAppInstalled = (): void => {
-      localStorage.setItem("keiko.pwa.installed", "true");
+      // Retiring the consumed prompt is the part that must always happen: a `beforeinstallprompt`
+      // can be used once, so a failed persist must not leave `available` advertising it.
+      writeInstallState("keiko.pwa.installed", "true");
       promptRef.current = null;
       setAvailable(false);
     };
@@ -72,7 +75,7 @@ export function useInstallPrompt(): UseInstallPromptResult {
     const { outcome } = await prompt.userChoice;
 
     if (outcome === "accepted") {
-      localStorage.setItem("keiko.pwa.installed", "true");
+      writeInstallState("keiko.pwa.installed", "true");
     }
 
     // Clear the stored prompt whether accepted or dismissed — it can only be used once.

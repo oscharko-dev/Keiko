@@ -618,3 +618,186 @@ describe("EditorRuntimeWidget toolbar — no-op announcement (GEN-UI-INTERACTION
     expect(notice).toHaveAttribute("aria-live", "polite");
   });
 });
+
+// ─── Document tab strip — WAI-ARIA tablist structure (0.3.0 release audit, #2802) ─────────────
+//
+// The real-browser axe lane found `aria-required-children` (critical) on `.ed-tablist` the first
+// time it scanned the Editor window, and the finding was parked in that lane's KNOWN_A11Y_ISSUES
+// ledger instead of fixed. The rule is structural, not visual, so jsdom reproduces it exactly:
+// every element a `role="tablist"` owns must be a `role="tab"`, and both the per-tab close control
+// and the overflow chooser were owned children with other roles.
+
+function tablistRoot(container: Element): HTMLElement {
+  const strip = container.querySelector<HTMLElement>(".ed-tablist");
+  if (strip === null) throw new Error("tab strip did not render");
+  return strip;
+}
+
+function stubTablistWidth(width: number): { mockRestore: () => void } {
+  return vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: HTMLElement,
+  ): DOMRect {
+    if (this.classList.contains("ed-tablist")) {
+      return {
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: width,
+        bottom: 32,
+        width,
+        height: 32,
+        toJSON: () => ({}),
+      } as DOMRect;
+    }
+    return {
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 0,
+      bottom: 0,
+      width: 0,
+      height: 0,
+      toJSON: () => ({}),
+    } as DOMRect;
+  });
+}
+
+describe("EditorRuntimeWidget document tabs — tablist structure (#2802)", () => {
+  it("owns only tabs when every open document carries a close affordance", async () => {
+    vi.mocked(fetchFilesContent).mockResolvedValue(fileResponse());
+    const { container } = render(
+      <EditorRuntimeWidget
+        windowId="a11y-tabstrip"
+        root="/repo"
+        file="src/app.ts"
+        paneId="pane-1"
+        openFiles={["src/app.ts", "src/b.ts"]}
+        onCloseOpenFile={() => true}
+      />,
+    );
+    await screen.findByTestId("editor-surface");
+
+    expect(await axe(tablistRoot(container))).toHaveNoViolations();
+  });
+
+  it("owns only tabs when the overflow chooser is rendered", async () => {
+    const rectSpy = stubTablistWidth(260);
+    try {
+      vi.mocked(fetchFilesContent).mockResolvedValue(fileResponse());
+      const { container } = render(
+        <EditorRuntimeWidget
+          windowId="a11y-tabstrip-overflow"
+          root="/repo"
+          file="src/app.ts"
+          paneId="pane-1"
+          openFiles={["src/app.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts"]}
+          onCloseOpenFile={() => true}
+        />,
+      );
+      await screen.findByTestId("editor-surface");
+      await waitFor(() => {
+        expect(container.querySelector(".ed-tab-summary-menu")).not.toBeNull();
+      });
+
+      expect(await axe(tablistRoot(container))).toHaveNoViolations();
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+});
+
+// The close control is decoration now, so the keyboard affordance the APG prescribes for a
+// deletable tab has to actually exist — otherwise the structural fix would remove a real capability
+// from keyboard and AT users instead of correcting it.
+
+describe("EditorRuntimeWidget document tabs — closable-tab keyboard model (#2802)", () => {
+  const onSelect = vi.fn();
+
+  afterEach(() => {
+    onSelect.mockClear();
+  });
+
+  async function renderTabs(onCloseOpenFile?: (file: string) => boolean): Promise<Element> {
+    vi.mocked(fetchFilesContent).mockResolvedValue(fileResponse());
+    const closeProps = onCloseOpenFile === undefined ? {} : { onCloseOpenFile };
+    const { container } = render(
+      <EditorRuntimeWidget
+        windowId="a11y-tab-close"
+        root="/repo"
+        file="src/app.ts"
+        paneId="pane-1"
+        openFiles={["src/app.ts", "src/b.ts"]}
+        onSelectOpenFile={onSelect}
+        {...closeProps}
+      />,
+    );
+    await screen.findByTestId("editor-surface");
+    return container;
+  }
+
+  it("closes the focused tab on Delete", async () => {
+    const onClose = vi.fn(() => true);
+    await renderTabs(onClose);
+
+    fireEvent.keyDown(screen.getByRole("tab", { name: "src/app.ts" }), { key: "Delete" });
+
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalledWith("src/app.ts");
+    });
+  });
+
+  it("closes the focused tab on Backspace, the key Mac keyboards send", async () => {
+    const onClose = vi.fn(() => true);
+    await renderTabs(onClose);
+
+    fireEvent.keyDown(screen.getByRole("tab", { name: "src/b.ts" }), { key: "Backspace" });
+
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalledWith("src/b.ts");
+    });
+  });
+
+  it("leaves other keys to the tab strip's own navigation model", async () => {
+    const onClose = vi.fn(() => true);
+    await renderTabs(onClose);
+
+    fireEvent.keyDown(screen.getByRole("tab", { name: "src/app.ts" }), { key: "ArrowRight" });
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("renders no close affordance and ignores Delete when the host cannot close tabs", async () => {
+    const container = await renderTabs();
+
+    expect(container.querySelector(".ed-tab-close")).toBeNull();
+    // Both branches of the guard: the key path is inert too, not merely invisible.
+    fireEvent.keyDown(screen.getByRole("tab", { name: "src/app.ts" }), { key: "Delete" });
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("closes on a click of the × without also selecting the tab", async () => {
+    const onClose = vi.fn(() => true);
+    const container = await renderTabs(onClose);
+    const close = container.querySelector<HTMLElement>('[data-tab-close-file="src/b.ts"]');
+    expect(close).not.toBeNull();
+
+    fireEvent.click(close as HTMLElement);
+
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalledWith("src/b.ts");
+    });
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("keeps the × out of the accessibility tree so the tab stays a valid owned child", async () => {
+    const onClose = vi.fn(() => true);
+    const container = await renderTabs(onClose);
+
+    const close = container.querySelector('[data-tab-close-file="src/app.ts"]');
+    expect(close).toHaveAttribute("aria-hidden", "true");
+    expect(close?.closest('[role="tab"]')).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Close src/app.ts" })).toBeNull();
+  });
+});

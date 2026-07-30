@@ -150,7 +150,7 @@ export function createProductionRuntimeManager(
     reconcile: (runId) => settle(runId, "reconcile"),
     health: () => slot.manager()?.health() ?? { status: "stopped" },
     // Delegated to the slot's live manager and additionally slot-matched, so a review can never be
-    // read from a run the slot no longer owns (#2853).
+    // read from a run the slot no longer owns (#2802).
     pendingApprovalReview: (runId, requestId) =>
       slot.matches(runId) ? slot.manager()?.pendingApprovalReview(runId, requestId) : undefined,
   };

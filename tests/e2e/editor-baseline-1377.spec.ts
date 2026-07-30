@@ -124,7 +124,9 @@ function tabFor(pane: Locator, file: string): Locator {
 }
 
 function closeButton(pane: Locator, file: string): Locator {
-  return pane.locator(`${EDITOR_SELECTORS.tabClose}[aria-label="Close ${file}"]`);
+  // The × is aria-hidden decoration inside the tab (#2802), so it is keyed by its data attribute
+  // rather than by an accessible name it must not have.
+  return pane.locator(`${EDITOR_SELECTORS.tabClose}[data-tab-close-file="${file}"]`);
 }
 
 async function attachShot(page: Page, testInfo: TestInfo, name: string): Promise<void> {

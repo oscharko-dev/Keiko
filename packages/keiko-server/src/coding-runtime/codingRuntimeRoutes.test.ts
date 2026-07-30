@@ -390,7 +390,7 @@ describe("coding runtime routes", () => {
     expect(JSON.stringify(result.body)).not.toContain("nodejs.org");
   });
 
-  it("#2853: the paired approval-review route shows the operator the files the change would write", () => {
+  it("#2802: the paired approval-review route shows the operator the files the change would write", () => {
     const session = pairedAppSession();
 
     const reviewed = handleCodingRuntimeApprovalReview(
@@ -419,7 +419,7 @@ describe("coding runtime routes", () => {
     });
   });
 
-  it("#2853: an unpaired approval-review read yields the constant projection, never a path", () => {
+  it("#2802: an unpaired approval-review read yields the constant projection, never a path", () => {
     const session = pairedAppSession();
     const unpairedProjection = { status: 200, body: { session: "unpaired" } };
     // Same constant shape for a live run, an unknown run, a missing runId, and a server composed
@@ -441,7 +441,7 @@ describe("coding runtime routes", () => {
     }
   });
 
-  it("#2853: a paired review of an unknown run conceals existence instead of reporting no review", () => {
+  it("#2802: a paired review of an unknown run conceals existence instead of reporting no review", () => {
     const session = pairedAppSession();
 
     const result = handleCodingRuntimeApprovalReview(
@@ -458,7 +458,7 @@ describe("coding runtime routes", () => {
     expect(JSON.stringify(result.body)).not.toContain("src/alpha.ts");
   });
 
-  it("#2853: the content-free status and run projections never carry a reviewable path", () => {
+  it("#2802: the content-free status and run projections never carry a reviewable path", () => {
     const session = pairedAppSession();
     const status = handleCodingRuntimeStatus(
       context("", {}, "/api/coding-workbench/runtime/status", session.cookie),
