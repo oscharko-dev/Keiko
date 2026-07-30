@@ -66,7 +66,12 @@ export {
 // ─── Validate stage (#1313) ─────────────────────────────────────────────────────
 export type {
   AssessPromptSafetyArgs,
+  AssessPromptTextSafetyArgs,
   CandidateSafetyScreen,
   ScreenedPromptCandidate,
 } from "./validate.js";
-export { assessPromptSafety, screenCandidatesForSafety } from "./validate.js";
+export {
+  assessPromptSafety,
+  assessPromptTextSafety,
+  screenCandidatesForSafety,
+} from "./validate.js";

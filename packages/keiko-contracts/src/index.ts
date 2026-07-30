@@ -3483,6 +3483,7 @@ export {
   leastPrivilegeForAnalysis,
   summarizePromptSafety,
   assessEnhancedPromptStructuralSafety,
+  collectProhibitedPromptTextFindings,
   validatePromptSafetyAssessment,
 } from "./prompt-enhancer-safety.js";
 // Prompt Enhancer BFF wire surface (#1314; ADR-0044 §1 "BFF /api/prompt-enhancer/* routes"). The

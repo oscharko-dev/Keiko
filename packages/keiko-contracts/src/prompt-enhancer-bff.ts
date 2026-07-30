@@ -102,7 +102,11 @@ export type PromptEnhancementModelFallbackReason =
   | "model-invalid-json"
   | "model-invalid-prompt"
   | "model-no-change"
-  | "model-unsafe-prompt";
+  // The model returned a prompt the validate stage rejected; the deterministic prompt was kept.
+  | "model-unsafe-prompt"
+  // The deterministic prompt was itself rejected by the validate stage, so it was never handed onward
+  // for refinement: a refined artefact would supersede the rejection the user has to see.
+  | "prompt-rejected-by-validation";
 
 export interface PromptEnhancementModelRouting {
   readonly availability: PromptEnhancementModelAvailability;
