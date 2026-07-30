@@ -77,15 +77,65 @@ function twinDecide(policy: readonly PolicyRow[], kind: GateKind, risk: Risk): D
 
 const TwinContext = createContext<TwinContextValue | null>(null);
 
-function readJson<T>(key: string, fallback: T): T {
-  if (typeof window === "undefined") return fallback;
+const DECISIONS: ReadonlySet<Decision> = new Set(["allow", "ask", "deny"]);
+
+function isDecision(value: unknown): value is Decision {
+  return typeof value === "string" && DECISIONS.has(value as Decision);
+}
+
+function isPolicyRow(value: unknown): value is PolicyRow {
+  if (typeof value !== "object" || value === null) return false;
+  const row = value as Record<string, unknown>;
+  return (
+    typeof row["id"] === "string" &&
+    typeof row["action"] === "string" &&
+    typeof row["scope"] === "string" &&
+    isDecision(row["decision"])
+  );
+}
+
+function isBridges(value: unknown): value is Bridges {
+  if (typeof value !== "object" || value === null) return false;
+  const bridges = value as Record<string, unknown>;
+  return (
+    typeof bridges["calendar"] === "boolean" &&
+    typeof bridges["mail"] === "boolean" &&
+    typeof bridges["jira"] === "boolean" &&
+    typeof bridges["docs"] === "boolean"
+  );
+}
+
+// F2 — the parsed value used to be blind-cast (`parsed as T`) with zero shape validation, so a
+// malformed persisted `keiko.twin.policy`/`keiko.twin.bridges` reached KeikoTwinPanel's render as
+// garbage typed as PolicyRow[]/Bridges. `policy.map(...)` throws when policy isn't an array at
+// all, and `DEC_META[r.decision]` is undefined (a further throw) when a row's `decision` isn't
+// one of the three known values — both inside the panel's render, with only WindowBodyBoundary's
+// generic retry fallback to show for it and no way to actually see or fix the twin's governance
+// policy. Validate the shape at the read boundary and fail closed to the safe default, exactly
+// like the readMode()/readPersona() readers below already do for their own keys.
+function readPolicy(): readonly PolicyRow[] {
+  if (typeof window === "undefined") return DEFAULT_POLICY;
   try {
-    const raw = window.localStorage.getItem(key);
-    if (raw === null) return fallback;
+    const raw = window.localStorage.getItem(KEY_POLICY);
+    if (raw === null) return DEFAULT_POLICY;
     const parsed: unknown = JSON.parse(raw);
-    return parsed === null || parsed === undefined ? fallback : (parsed as T);
+    if (!Array.isArray(parsed)) return DEFAULT_POLICY;
+    const rows = parsed.filter(isPolicyRow);
+    return rows.length > 0 ? rows : DEFAULT_POLICY;
   } catch {
-    return fallback;
+    return DEFAULT_POLICY;
+  }
+}
+
+function readBridges(): Bridges {
+  if (typeof window === "undefined") return DEFAULT_BRIDGES;
+  try {
+    const raw = window.localStorage.getItem(KEY_BRIDGES);
+    if (raw === null) return DEFAULT_BRIDGES;
+    const parsed: unknown = JSON.parse(raw);
+    return isBridges(parsed) ? parsed : DEFAULT_BRIDGES;
+  } catch {
+    return DEFAULT_BRIDGES;
   }
 }
 
@@ -151,8 +201,8 @@ export function TwinProvider({ children }: { readonly children: ReactNode }): Re
   useEffect(() => {
     setMode(readMode());
     setPersona(readPersona());
-    setPolicy(readJson<readonly PolicyRow[]>(KEY_POLICY, DEFAULT_POLICY));
-    setBridges(readJson<Bridges>(KEY_BRIDGES, DEFAULT_BRIDGES));
+    setPolicy(readPolicy());
+    setBridges(readBridges());
     removeLegacyKey(LEGACY_KEY_MEMORY);
     setHydrated(true);
   }, []);

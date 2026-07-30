@@ -136,8 +136,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// F1/F1b — `value in WIN_TYPES` also matches inherited Object.prototype properties
+// ("toString", "constructor", "__proto__", ...), so a persisted window record with one of
+// those exact strings as its `type` was accepted as a real WindowType. The corrupted window
+// then survived sanitizeWindow and later exploded wherever WIN_TYPES[type]/WIN_META[type]
+// is dereferenced during render — outside any window-level error boundary — white-screening
+// the whole desktop; when the same hostile record also carried a `cfg` object, the very same
+// unvalidated type reached sanitizeCfgForPersistence, which throws while building
+// allowedKeys (INTERNAL_CFG_KEYS[type]/WIN_TYPES[type].config resolve to the inherited,
+// non-iterable Object.prototype member and the array-spread throws), and that throw is
+// caught by parsePersistedWindows' outer try/catch — silently discarding the ENTIRE saved
+// layout, not just the one bad record. Object.hasOwn only matches the registry's own declared
+// window types, exactly like the already-fixed sibling check in workspaceClipboard.ts.
 function hasWindowType(value: unknown): value is WindowType {
-  return typeof value === "string" && value in WIN_TYPES;
+  return typeof value === "string" && Object.hasOwn(WIN_TYPES, value);
 }
 
 function alnumLower(value: string): string {

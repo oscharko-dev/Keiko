@@ -1517,6 +1517,11 @@ export const DE_MESSAGES = {
   "atlassianConnectors.list.added": "Hinzugefügt",
   "atlassianConnectors.list.health": "Status",
   "atlassianConnectors.list.healthUnknown": "Noch nicht geprüft",
+  "atlassianConnectors.routeError.title":
+    "Bei den Atlassian-Connectoren ist ein Fehler aufgetreten",
+  "atlassianConnectors.routeError.body":
+    "Diese Seite konnte nicht dargestellt werden. Ihre Connectoren und deren Einstellungen sind davon nicht betroffen.",
+  "atlassianConnectors.routeError.retry": "Erneut versuchen",
   "atlassianConnectors.list.manage": "Verwalten",
   "atlassianConnectors.list.delete": "Löschen",
   "atlassianConnectors.delete.confirm":
