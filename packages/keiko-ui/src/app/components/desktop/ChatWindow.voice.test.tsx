@@ -324,6 +324,30 @@ describe("ChatWindow canonical spoken-turn recovery", () => {
     await userEvent.click(retry);
     expect(retryPendingCanonicalVoiceTurn).toHaveBeenCalledOnce();
   });
+
+  // #2842 — a retry that keeps failing left the composer permanently dead with no way out. The
+  // wedged turn must also be discardable, and the discard must not double as a retry.
+  it("offers a discard action beside the retry for a wedged spoken turn", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: NONE });
+    const retryPendingCanonicalVoiceTurn = vi.fn();
+    const discardPendingCanonicalVoiceTurn = vi.fn();
+    renderWindow(
+      makeSession({
+        canonicalVoiceTurnRequiresRetry: true,
+        retryPendingCanonicalVoiceTurn,
+        discardPendingCanonicalVoiceTurn,
+      }),
+    );
+    await waitFor(() => expect(api.fetchVoiceCapability).toHaveBeenCalled());
+
+    const alert = screen.getByRole("alert");
+    const discard = within(alert).getByRole("button", { name: "Discard spoken turn" });
+    expect(discard).toBeEnabled();
+
+    await userEvent.click(discard);
+    expect(discardPendingCanonicalVoiceTurn).toHaveBeenCalledOnce();
+    expect(retryPendingCanonicalVoiceTurn).not.toHaveBeenCalled();
+  });
 });
 
 const FULL_REALTIME: VoiceCapabilityResolution = {
@@ -1138,13 +1162,17 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     });
   });
 
-  it("cancels canonical generation when the user barges in", async () => {
+  // Relocated pin (#2842): barge-in still cancels the canonical generation, but through the
+  // owner-scoped interrupt. The blanket cancelSend aborted whatever was in flight — including a
+  // typed composer send Voice does not own — and left the queued turn to be re-sent.
+  it("cancels only the canonical generation Voice owns when the user barges in", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
       voice: FULL_REALTIME_WITH_PERSONAS,
     });
     stubRealtimeBrowser(async () => ({}) as MediaStream);
     const cancelSend = vi.fn();
-    renderWindow(makeSession({ cancelSend }));
+    const interruptCanonicalVoiceDelivery = vi.fn();
+    renderWindow(makeSession({ cancelSend, interruptCanonicalVoiceDelivery }));
 
     await waitFor(() => expect(useRealtimeVoice).toHaveBeenCalled());
     const options = vi.mocked(useRealtimeVoice).mock.calls.at(-1)?.[0];
@@ -1152,7 +1180,8 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
 
     act(() => options?.onUserSpeechStart?.());
 
-    expect(cancelSend).toHaveBeenCalledOnce();
+    expect(interruptCanonicalVoiceDelivery).toHaveBeenCalledOnce();
+    expect(cancelSend).not.toHaveBeenCalled();
   });
 
   it("speaks the settled canonical answer without replaying older chat history", async () => {

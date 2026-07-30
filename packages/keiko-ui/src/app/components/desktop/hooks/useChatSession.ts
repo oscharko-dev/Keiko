@@ -652,7 +652,17 @@ export type SendMessageOutcome =
       readonly suspend?: true;
     }
   | { readonly status: "in-progress" | "not-sent" }
-  | { readonly status: "cancelled"; readonly userPersisted: boolean };
+  | {
+      readonly status: "cancelled";
+      readonly userPersisted: boolean;
+      // The local human deliberately ended this turn: a Voice barge-in, or an explicit discard of a
+      // wedged spoken turn. ADR-0154 D4 returns the floor to input capture and the dialog generation
+      // has already advanced, so a re-sent turn could never speak. Terminal regardless of
+      // persistence, which is strictly stronger than D1/D4's persisted-cancellation rule and never
+      // weakens it. A cancellation Keiko did not ask for (chat switch, unmount, unknown
+      // reconciliation) carries no such proof of intent and stays retryable.
+      readonly interrupted?: true;
+    };
 
 interface CanonicalVoiceTurnInput {
   readonly text: string;
@@ -698,6 +708,16 @@ interface CanonicalVoiceSettledDelivery {
   readonly outcome: SendMessageOutcome;
 }
 
+interface CanonicalVoiceOutboxStatus {
+  // The chat that owns the head-of-queue spoken turn whose bounded delivery window ran out. The
+  // outbox itself is page-scoped, but its suspension is reported per chat: a single wedged turn must
+  // never disable typed sending in every other conversation on the page.
+  readonly suspendedChatId: string | undefined;
+  // Bumped on every membership change so a chat-scoped gate derived from the queue re-renders even
+  // when the suspended chat itself does not change.
+  readonly revision: number;
+}
+
 interface CanonicalVoicePageOutbox {
   readonly queueRef: { current: CanonicalVoiceQueueItem[] };
   readonly queueBytesRef: { current: number };
@@ -713,8 +733,8 @@ interface CanonicalVoicePageOutbox {
   drainingOwner: symbol | undefined;
   activeDelivery: { readonly key: string; readonly abort: () => void } | undefined;
   readonly wakes: Set<() => void>;
-  readonly suspensionSubscribers: Set<(suspended: boolean) => void>;
-  suspended: boolean;
+  readonly statusSubscribers: Set<(status: CanonicalVoiceOutboxStatus) => void>;
+  status: CanonicalVoiceOutboxStatus;
 }
 
 // Page-lifecycle outbox: accepted provider finals survive ChatSession/Voice component replacement
@@ -731,14 +751,27 @@ const canonicalVoicePageOutbox: CanonicalVoicePageOutbox = {
   drainingOwner: undefined,
   activeDelivery: undefined,
   wakes: new Set(),
-  suspensionSubscribers: new Set(),
-  suspended: false,
+  statusSubscribers: new Set(),
+  status: { suspendedChatId: undefined, revision: 0 },
 };
 
-function setCanonicalVoicePageOutboxSuspended(suspended: boolean): void {
-  if (canonicalVoicePageOutbox.suspended === suspended) return;
-  canonicalVoicePageOutbox.suspended = suspended;
-  for (const subscriber of canonicalVoicePageOutbox.suspensionSubscribers) subscriber(suspended);
+function publishCanonicalVoicePageOutboxStatus(suspendedChatId: string | undefined): void {
+  canonicalVoicePageOutbox.status = {
+    suspendedChatId,
+    revision: canonicalVoicePageOutbox.status.revision + 1,
+  };
+  for (const subscriber of canonicalVoicePageOutbox.statusSubscribers) {
+    subscriber(canonicalVoicePageOutbox.status);
+  }
+}
+
+function setCanonicalVoicePageOutboxSuspended(suspendedChatId: string | undefined): void {
+  if (canonicalVoicePageOutbox.status.suspendedChatId === suspendedChatId) return;
+  publishCanonicalVoicePageOutboxStatus(suspendedChatId);
+}
+
+function canonicalVoicePageOutboxSuspended(): boolean {
+  return canonicalVoicePageOutbox.status.suspendedChatId !== undefined;
 }
 
 function releaseCanonicalVoiceProjectionByKey(key: string): void {
@@ -758,17 +791,31 @@ function clearSettledCanonicalVoiceDeliveries(chatId: string): void {
   }
 }
 
+function cacheCanonicalVoiceSettledDelivery(
+  key: string,
+  entry: CanonicalVoiceSettledDelivery,
+): void {
+  const settled = canonicalVoicePageOutbox.settledRef.current;
+  settled.set(key, entry);
+  if (settled.size <= CANONICAL_VOICE_QUEUE_MAX_ITEMS * 2) return;
+  const oldestKey = settled.keys().next().value as string | undefined;
+  if (oldestKey !== undefined) settled.delete(oldestKey);
+}
+
 function abortRemovedCanonicalVoiceDelivery(removedKeys: ReadonlySet<string>): void {
   const activeDelivery = canonicalVoicePageOutbox.activeDelivery;
   if (activeDelivery !== undefined && removedKeys.has(activeDelivery.key)) activeDelivery.abort();
 }
 
-function resolveRemovedCanonicalVoiceItems(items: readonly CanonicalVoiceQueueItem[]): number {
+function resolveRemovedCanonicalVoiceItems(
+  items: readonly CanonicalVoiceQueueItem[],
+  outcome: SendMessageOutcome,
+): number {
   let removedBytes = 0;
   for (const item of items) {
     releaseCanonicalVoiceProjectionByKey(item.key);
     canonicalVoicePageOutbox.deliveriesRef.current.delete(item.key);
-    item.resolve({ status: "failed", retryable: false });
+    item.resolve(outcome);
     removedBytes += item.byteLength;
   }
   return removedBytes;
@@ -784,25 +831,63 @@ function removeCanonicalVoiceQueueItems(
   }
 }
 
-function purgeCanonicalVoicePageOutboxChat(chatId: string): void {
+function removeCanonicalVoicePageOutboxItems(
+  removed: readonly CanonicalVoiceQueueItem[],
+  outcome: SendMessageOutcome,
+): void {
   const queue = canonicalVoicePageOutbox.queueRef.current;
-  const headKey = queue[0]?.key;
-  const removed = queue.filter((item) => item.target.chat.id === chatId);
-  clearSettledCanonicalVoiceDeliveries(chatId);
-  if (removed.length === 0) return;
   const removedKeys = new Set(removed.map((item) => item.key));
-  const removedHead = headKey !== undefined && removedKeys.has(headKey);
   abortRemovedCanonicalVoiceDelivery(removedKeys);
-  const removedBytes = resolveRemovedCanonicalVoiceItems(removed);
+  const removedBytes = resolveRemovedCanonicalVoiceItems(removed, outcome);
   canonicalVoicePageOutbox.queueBytesRef.current = Math.max(
     0,
     canonicalVoicePageOutbox.queueBytesRef.current - removedBytes,
   );
   removeCanonicalVoiceQueueItems(queue, removedKeys);
-  if (removedHead && canonicalVoicePageOutbox.suspended) {
-    setCanonicalVoicePageOutboxSuspended(false);
+  // Suspension outlives a removal only while the suspended chat still owns a queued turn; once its
+  // last item is gone there is nothing left for the user to retry or discard.
+  const suspendedChatId = canonicalVoicePageOutbox.status.suspendedChatId;
+  const stillSuspended =
+    suspendedChatId !== undefined && canonicalVoicePageOutboxHasPendingTurn(suspendedChatId);
+  publishCanonicalVoicePageOutboxStatus(stillSuspended ? suspendedChatId : undefined);
+  if (!stillSuspended) wakeCanonicalVoicePageOutbox();
+}
+
+function purgeCanonicalVoicePageOutboxChat(chatId: string): void {
+  const removed = canonicalVoicePageOutbox.queueRef.current.filter(
+    (item) => item.target.chat.id === chatId,
+  );
+  clearSettledCanonicalVoiceDeliveries(chatId);
+  if (removed.length === 0) return;
+  removeCanonicalVoicePageOutboxItems(removed, { status: "failed", retryable: false });
+}
+
+// The local human's escape hatch from a wedged spoken turn. Terminal by intent: the identity is
+// cached as settled so a replayed final resolves from that cache instead of re-entering the queue,
+// and the transcript is released from the outbox without ever reaching another store. Reports
+// whether the discarded set owned the active delivery, so the caller can stop that request too
+// instead of paying for an answer nobody will ever read.
+function discardCanonicalVoicePageOutboxChat(chatId: string): {
+  readonly discarded: boolean;
+  readonly ownedActiveDelivery: boolean;
+} {
+  const removed = canonicalVoicePageOutbox.queueRef.current.filter(
+    (item) => item.target.chat.id === chatId,
+  );
+  if (removed.length === 0) return { discarded: false, ownedActiveDelivery: false };
+  const activeKey = canonicalVoicePageOutbox.activeDelivery?.key;
+  const ownedActiveDelivery =
+    activeKey !== undefined && removed.some((item) => item.key === activeKey);
+  const outcome: SendMessageOutcome = {
+    status: "cancelled",
+    userPersisted: false,
+    interrupted: true,
+  };
+  for (const item of removed) {
+    cacheCanonicalVoiceSettledDelivery(item.key, { contentDigest: item.contentDigest, outcome });
   }
-  if (removedHead || !canonicalVoicePageOutbox.suspended) wakeCanonicalVoicePageOutbox();
+  removeCanonicalVoicePageOutboxItems(removed, outcome);
+  return { discarded: true, ownedActiveDelivery };
 }
 
 export function canonicalVoicePageOutboxRetainsPlaintextForTests(content: string): boolean {
@@ -828,8 +913,8 @@ export function clearCanonicalVoicePageOutboxForTests(): void {
   canonicalVoicePageOutbox.activeDelivery?.abort();
   canonicalVoicePageOutbox.activeDelivery = undefined;
   canonicalVoicePageOutbox.wakes.clear();
-  setCanonicalVoicePageOutboxSuspended(false);
-  canonicalVoicePageOutbox.suspensionSubscribers.clear();
+  setCanonicalVoicePageOutboxSuspended(undefined);
+  canonicalVoicePageOutbox.statusSubscribers.clear();
 }
 
 function wakeCanonicalVoicePageOutbox(): void {
@@ -899,7 +984,10 @@ function canonicalVoiceOutcomeIsPersisted(outcome: SendMessageOutcome): boolean 
 function canonicalVoiceOutcomeIsTerminal(outcome: SendMessageOutcome): boolean {
   return (
     outcome.status === "completed" ||
-    (outcome.status === "cancelled" && outcome.userPersisted) ||
+    // ADR-0154 D1/D4 keep a persisted cancellation terminal. A deliberate interruption is terminal
+    // as well, with or without a persisted user row: the dialog generation has moved on, so a resend
+    // could only produce an answer the user never hears (#2842).
+    (outcome.status === "cancelled" && (outcome.userPersisted || outcome.interrupted === true)) ||
     (outcome.status === "failed" && outcome.retryable === false && outcome.suspend !== true)
   );
 }
@@ -1026,9 +1114,17 @@ export interface UseChatSessionResult {
   canonicalVoiceCaptureMustPause?: (() => boolean) | undefined;
   // A finite delivery window has ended without a terminal canonical result for the active chat.
   // The transcript remains in the page-lifecycle outbox until this explicit action starts one more
-  // bounded window with the same immutable clientTurnId. No background poll is armed.
+  // bounded window with the same immutable clientTurnId. No background poll is armed. True only for
+  // a chat that still owns a queued turn, so a wedged conversation never gates the whole page.
   canonicalVoiceTurnRequiresRetry?: boolean | undefined;
   retryPendingCanonicalVoiceTurn?: (() => void) | undefined;
+  // The second half of that recovery: drop the active chat's queued spoken turns instead of
+  // retrying them, so a delivery that keeps failing cannot leave the composer permanently dead.
+  discardPendingCanonicalVoiceTurn?: (() => void) | undefined;
+  // ADR-0154 D4 barge-in. Cancels the in-flight canonical send ONLY while Voice owns it — a typed
+  // composer send is a separate user intent — and makes that cancellation terminal for the
+  // interrupted utterance so the Chat-owned queue never re-sends it.
+  interruptCanonicalVoiceDelivery?: (() => void) | undefined;
   regenerateMessage: (assistantMessageId: string) => Promise<void>;
   // Issue #152 — cancel the in-flight send (grounded OR ungrounded). No-op
   // when sendStatus is terminal/idle. Sets sendStatus to "cancelled" and
@@ -1548,10 +1644,14 @@ function settledSendMessageOutcome(input: {
   readonly terminal: SendAttemptOutcome;
   readonly persistence: UserPersistenceProof;
   readonly canonicalTarget: CanonicalVoiceSendTarget | undefined;
+  readonly interrupted: boolean;
 }): SendMessageOutcome {
-  const { settled, terminal, persistence, canonicalTarget } = input;
+  const { settled, terminal, persistence, canonicalTarget, interrupted } = input;
   if (settled.status === "cancelled") {
-    return { status: "cancelled", userPersisted: persistence === "persisted" };
+    const userPersisted = persistence === "persisted";
+    return interrupted
+      ? { status: "cancelled", userPersisted, interrupted: true }
+      : { status: "cancelled", userPersisted };
   }
   const canonicalFailure =
     settled.status === "failed" && terminal.status === "failed" && canonicalTarget !== undefined;
@@ -1683,6 +1783,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // adds signal support to sendDesktopChat in this issue).
   const sendControllerRef = useRef<AbortController | null>(null);
   const sendControllerOwnerRef = useRef<"composer" | "canonical-voice" | null>(null);
+  // Set only by the deliberate Voice interrupt, and read once by the attempt that owns this exact
+  // signal. It is the proof of intent that makes the resulting cancellation terminal for the queue;
+  // any other abort (chat switch, unmount, replacement) leaves it untouched and stays retryable.
+  const interruptedSendSignalRef = useRef<AbortSignal | null>(null);
   const sendSlotWaitersRef = useRef<Set<() => void>>(new Set());
   // Unlike sendControllerRef this remains bound to a cancelled attempt until that attempt settles.
   // A replacement writes a new signal synchronously, preventing late callbacks from the old attempt
@@ -1700,8 +1804,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const canonicalVoiceDeliveriesRef = canonicalVoicePageOutbox.deliveriesRef;
   const canonicalVoiceSettledRef = canonicalVoicePageOutbox.settledRef;
   const drainCanonicalVoiceQueueRef = useRef<() => void>(() => undefined);
-  const [canonicalVoiceOutboxSuspended, setCanonicalVoiceOutboxSuspended] = useState(
-    canonicalVoicePageOutbox.suspended,
+  const [canonicalVoiceOutboxStatus, setCanonicalVoiceOutboxStatus] = useState(
+    canonicalVoicePageOutbox.status,
   );
   const [error, setError] = useState<string | undefined>();
   // Issue #185 — most recent grounded answer for the active chat. Cleared when the active
@@ -3003,14 +3107,34 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // request is in flight this is a safe no-op. We flip sendStatus to
   // "cancelled" immediately so the UI re-renders out of the in-flight state
   // even before the fetch rejection reaches the awaited site.
-  const cancelSend = useCallback(() => {
-    if (!isInFlight(sendStatusRef.current)) return;
-    sendControllerRef.current?.abort();
+  const releaseCancelledSendController = useCallback((): void => {
     sendControllerRef.current = null;
     sendControllerOwnerRef.current = null;
     setRegeneratingMessageId(undefined);
     updateSendStatus("cancelled");
   }, [updateSendStatus]);
+
+  const cancelSend = useCallback(() => {
+    if (!isInFlight(sendStatusRef.current)) return;
+    sendControllerRef.current?.abort();
+    releaseCancelledSendController();
+  }, [releaseCancelledSendController]);
+
+  // ADR-0154 D4 barge-in. Unlike cancelSend (the visible stop control, which cancels whatever the
+  // user can see in flight) this is scoped by send owner exactly like openChat's abort: a typed
+  // composer send belongs to a different intent and must survive. The interrupted signal is recorded
+  // first so the attempt reports a terminal cancellation and the Chat-owned queue advances instead
+  // of re-sending an answer whose dialog generation has already been retired (#2842).
+  const interruptCanonicalVoiceDelivery = useCallback((): void => {
+    if (!isInFlight(sendStatusRef.current)) return;
+    if (sendControllerOwnerRef.current !== "canonical-voice") return;
+    const controller = sendControllerRef.current;
+    if (controller !== null) {
+      interruptedSendSignalRef.current = controller.signal;
+      controller.abort();
+    }
+    releaseCancelledSendController();
+  }, [releaseCancelledSendController]);
 
   // Issue #185 → #152: cancelGrounded is preserved as a thin alias so existing
   // call sites (ChatWindow.tsx grounded TypingBubble) keep working. New code
@@ -3096,7 +3220,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           disclosures,
           consumedAttachmentIds,
         });
-        return settledSendMessageOutcome({ settled, terminal, persistence, canonicalTarget });
+        return settledSendMessageOutcome({
+          settled,
+          terminal,
+          persistence,
+          canonicalTarget,
+          interrupted: interruptedSendSignalRef.current === controller.signal,
+        });
       } finally {
         if (sendControllerRef.current === controller) {
           sendControllerRef.current = null;
@@ -3104,6 +3234,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         }
         if (latestSendSignalRef.current === controller.signal) {
           latestSendSignalRef.current = null;
+        }
+        if (interruptedSendSignalRef.current === controller.signal) {
+          interruptedSendSignalRef.current = null;
         }
       }
     },
@@ -3135,15 +3268,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   const cacheSettledCanonicalVoiceDelivery = useCallback(
     (item: CanonicalVoiceQueueItem, outcome: SendMessageOutcome): void => {
-      canonicalVoiceSettledRef.current.set(item.key, {
-        contentDigest: item.contentDigest,
-        outcome,
-      });
-      if (canonicalVoiceSettledRef.current.size <= CANONICAL_VOICE_QUEUE_MAX_ITEMS * 2) return;
-      const oldestKey = canonicalVoiceSettledRef.current.keys().next().value as string | undefined;
-      if (oldestKey !== undefined) canonicalVoiceSettledRef.current.delete(oldestKey);
+      cacheCanonicalVoiceSettledDelivery(item.key, { contentDigest: item.contentDigest, outcome });
     },
-    [canonicalVoiceSettledRef],
+    [],
   );
 
   const requestQueuedCanonicalVoiceDelivery = useCallback(
@@ -3187,7 +3314,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     ): boolean => {
       if (delivery === undefined) return false;
       if (delivery.kind === "suspended") {
-        setCanonicalVoicePageOutboxSuspended(true);
+        setCanonicalVoicePageOutboxSuspended(item.target.chat.id);
         return false;
       }
       if (delivery.kind === "aborted") {
@@ -3223,7 +3350,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     if (
       loading ||
       canonicalVoicePageOutbox.drainingOwner !== undefined ||
-      canonicalVoicePageOutbox.suspended
+      canonicalVoicePageOutboxSuspended()
     )
       return;
     canonicalVoicePageOutbox.drainingOwner = owner;
@@ -3243,7 +3370,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       if (canonicalVoicePageOutbox.drainingOwner === owner) {
         canonicalVoicePageOutbox.drainingOwner = undefined;
       }
-      if (canonicalVoiceQueueRef.current.length > 0 && !canonicalVoicePageOutbox.suspended) {
+      if (canonicalVoiceQueueRef.current.length > 0 && !canonicalVoicePageOutboxSuspended()) {
         wakeCanonicalVoicePageOutbox();
       }
     }
@@ -3259,13 +3386,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   };
 
   useEffect(() => {
-    const observeSuspension = (suspended: boolean): void => {
-      setCanonicalVoiceOutboxSuspended(suspended);
+    const observeStatus = (status: CanonicalVoiceOutboxStatus): void => {
+      setCanonicalVoiceOutboxStatus(status);
     };
-    canonicalVoicePageOutbox.suspensionSubscribers.add(observeSuspension);
-    observeSuspension(canonicalVoicePageOutbox.suspended);
+    canonicalVoicePageOutbox.statusSubscribers.add(observeStatus);
+    observeStatus(canonicalVoicePageOutbox.status);
     return () => {
-      canonicalVoicePageOutbox.suspensionSubscribers.delete(observeSuspension);
+      canonicalVoicePageOutbox.statusSubscribers.delete(observeStatus);
     };
   }, []);
 
@@ -3274,7 +3401,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     const wake = (): void => {
       if (
         canonicalVoiceQueueControllerRef.current.signal.aborted ||
-        canonicalVoicePageOutbox.suspended
+        canonicalVoicePageOutboxSuspended()
       )
         return;
       drainCanonicalVoiceQueueRef.current();
@@ -3393,7 +3520,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           ? previous
           : { ...previous, messages: [...previous.messages, optimistic] },
       );
-      if (!canonicalVoicePageOutbox.suspended) void drainCanonicalVoiceQueue();
+      if (!canonicalVoicePageOutboxSuspended()) void drainCanonicalVoiceQueue();
       return promise;
     },
     [
@@ -3408,17 +3535,39 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   );
 
   const retryPendingCanonicalVoiceTurn = useCallback((): void => {
-    if (!canonicalVoicePageOutbox.suspended || canonicalVoiceQueueRef.current.length === 0) return;
+    if (!canonicalVoicePageOutboxSuspended() || canonicalVoiceQueueRef.current.length === 0) return;
     setError(undefined);
-    setCanonicalVoicePageOutboxSuspended(false);
+    setCanonicalVoicePageOutboxSuspended(undefined);
     void drainCanonicalVoiceQueue();
   }, [canonicalVoiceQueueRef, drainCanonicalVoiceQueue]);
+
+  const discardPendingCanonicalVoiceTurn = useCallback((): void => {
+    const chatId = activeChatIdRef.current;
+    if (chatId === undefined) return;
+    const { discarded, ownedActiveDelivery } = discardCanonicalVoicePageOutboxChat(chatId);
+    if (!discarded) return;
+    // Reached only when the discard took the turn whose request is on the wire (the wedged case has
+    // no delivery in flight). Scoped to that turn: the interrupt is a no-op unless Voice still owns
+    // the send, so a typed composer send is never touched.
+    if (ownedActiveDelivery) interruptCanonicalVoiceDelivery();
+    setError(undefined);
+    // A head-of-line wedge in another chat leaves the outbox suspended and this drain returns
+    // immediately; otherwise the queue resumes with the remaining turns.
+    void drainCanonicalVoiceQueue();
+  }, [drainCanonicalVoiceQueue, interruptCanonicalVoiceDelivery]);
 
   const canonicalVoiceCaptureMustPause = useCallback((): boolean => {
     return canonicalVoiceQueueRef.current.length >= CANONICAL_VOICE_QUEUE_REGULAR_MAX_ITEMS;
   }, [canonicalVoiceQueueRef]);
 
-  const canonicalVoiceTurnRequiresRetry = canonicalVoiceOutboxSuspended;
+  // #2842 — the outbox suspends page-wide because its FIFO is page-wide, but the composer gate is
+  // per chat: only a conversation that still owns a queued spoken turn is asked to retry or discard.
+  // Every other chat keeps a live composer. The status object's revision is what makes a membership
+  // change (an enqueue here, a discard elsewhere) publish a fresh identity and re-derive this gate.
+  const canonicalVoiceTurnRequiresRetry =
+    canonicalVoiceOutboxStatus.suspendedChatId !== undefined &&
+    state.activeChat !== undefined &&
+    canonicalVoicePageOutboxHasPendingTurn(state.activeChat.id);
 
   const regenerateMessage = useCallback(
     async (assistantMessageId: string): Promise<void> => {
@@ -3548,6 +3697,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       canonicalVoiceCaptureMustPause,
       canonicalVoiceTurnRequiresRetry,
       retryPendingCanonicalVoiceTurn,
+      discardPendingCanonicalVoiceTurn,
+      interruptCanonicalVoiceDelivery,
       regenerateMessage,
       cancelSend,
       replaceChat,
@@ -3595,6 +3746,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       canonicalVoiceCaptureMustPause,
       canonicalVoiceTurnRequiresRetry,
       retryPendingCanonicalVoiceTurn,
+      discardPendingCanonicalVoiceTurn,
+      interruptCanonicalVoiceDelivery,
       regenerateMessage,
       cancelSend,
       replaceChat,

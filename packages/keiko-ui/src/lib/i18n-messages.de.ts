@@ -435,6 +435,7 @@ export const DE_MESSAGES = {
   "chat.voice.pendingTurn":
     "Dein gesprochener Beitrag wartet noch auf eine bestätigte Antwort. Versuche ihn erneut, bevor du eine weitere Nachricht sendest.",
   "chat.voice.retryPendingTurn": "Gesprochenen Beitrag erneut versuchen",
+  "chat.voice.discardPendingTurn": "Gesprochenen Beitrag verwerfen",
   "chat.error.send": "Nachricht konnte nicht gesendet werden.",
   "chat.error.load": "Chat konnte nicht geladen werden.",
   "chat.error.scopeUpdate": "Wissensbereich konnte nicht aktualisiert werden.",
