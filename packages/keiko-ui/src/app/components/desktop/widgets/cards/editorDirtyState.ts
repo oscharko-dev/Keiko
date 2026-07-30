@@ -21,6 +21,30 @@ function dirtyFileSet(dirtyByPane: EditorDirtyByPane): ReadonlySet<string> {
   return files;
 }
 
+/**
+ * Every dirty file at `path` or beneath it, across all panes.
+ *
+ * This answers the one question a Files-tree rename, drag-move, or delete has to ask before it
+ * touches the filesystem: which unsaved buffers would this mutation orphan? It deliberately reads
+ * the whole index rather than one pane's slice — the same file can be open (and dirty) in several
+ * panes, and a directory operation carries every dirty file beneath it, so a pane-scoped answer
+ * would silently miss both cases.
+ *
+ * The workspace root itself (`""`) matches nothing: the server refuses to rename or delete a root
+ * (`BAD_PATH`), so there is no mutation to prompt for. Results are sorted so the unsaved-changes
+ * prompt lists the affected files deterministically.
+ */
+export function dirtyFilesUnderPath(
+  dirtyByPane: EditorDirtyByPane,
+  path: string,
+): readonly string[] {
+  if (path.length === 0) return [];
+  const descendantPrefix = `${path}/`;
+  return [...dirtyFileSet(dirtyByPane)]
+    .filter((file) => file === path || file.startsWith(descendantPrefix))
+    .sort((left, right) => left.localeCompare(right));
+}
+
 function sameDirtyByPane(left: EditorDirtyByPane, right: EditorDirtyByPane): boolean {
   const leftPanes = Object.keys(left);
   if (leftPanes.length !== Object.keys(right).length) return false;

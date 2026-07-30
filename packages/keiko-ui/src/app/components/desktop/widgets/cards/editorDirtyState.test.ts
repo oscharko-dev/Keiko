@@ -6,7 +6,11 @@ import {
   type EditorLayoutStateV2,
 } from "@oscharko-dev/keiko-contracts";
 
-import { reconcileEditorDirtyByPane, type EditorDirtyByPane } from "./editorDirtyState";
+import {
+  dirtyFilesUnderPath,
+  reconcileEditorDirtyByPane,
+  type EditorDirtyByPane,
+} from "./editorDirtyState";
 import {
   EDITOR_SIDEBAR_DEFAULT_WIDTH,
   EDITOR_SIDEBAR_MIN_WIDTH,
@@ -151,5 +155,53 @@ describe("reconcileEditorDirtyByPane", () => {
   it("returns the same reference when the layout already matches the index", () => {
     const dirty: EditorDirtyByPane = { "pane-1": { "src/a.ts": true } };
     expect(reconcileEditorDirtyByPane(dirty, baseLayout())).toBe(dirty);
+  });
+});
+
+describe("dirtyFilesUnderPath", () => {
+  it("matches the mutated file itself", () => {
+    const dirty: EditorDirtyByPane = { "pane-1": { "src/a.ts": true, "src/b.ts": true } };
+    expect(dirtyFilesUnderPath(dirty, "src/a.ts")).toEqual(["src/a.ts"]);
+  });
+
+  it("returns nothing for a clean file", () => {
+    const dirty: EditorDirtyByPane = { "pane-1": { "src/a.ts": true } };
+    expect(dirtyFilesUnderPath(dirty, "src/b.ts")).toEqual([]);
+  });
+
+  it("collects every dirty file beneath a mutated directory", () => {
+    const dirty: EditorDirtyByPane = {
+      "pane-1": { "src/nested/b.ts": true, "src/a.ts": true, "docs/readme.md": true },
+    };
+    expect(dirtyFilesUnderPath(dirty, "src")).toEqual(["src/a.ts", "src/nested/b.ts"]);
+  });
+
+  it("does not treat a sibling with a shared name prefix as a descendant", () => {
+    // "src-generated/x.ts" starts with "src" but is not inside it; only a "/" boundary counts.
+    const dirty: EditorDirtyByPane = { "pane-1": { "src-generated/x.ts": true } };
+    expect(dirtyFilesUnderPath(dirty, "src")).toEqual([]);
+  });
+
+  it("reports a file that is dirty in a second pane, deduplicated", () => {
+    const dirty: EditorDirtyByPane = {
+      "pane-1": { "src/a.ts": true },
+      "pane-2": { "src/a.ts": true },
+    };
+    expect(dirtyFilesUnderPath(dirty, "src/a.ts")).toEqual(["src/a.ts"]);
+  });
+
+  it("reports a dirty file held only by a non-active pane", () => {
+    const dirty: EditorDirtyByPane = { "pane-2": { "src/b.ts": true } };
+    expect(dirtyFilesUnderPath(dirty, "src/b.ts")).toEqual(["src/b.ts"]);
+  });
+
+  it("matches nothing for the workspace root, which cannot be renamed or deleted", () => {
+    const dirty: EditorDirtyByPane = { "pane-1": { "src/a.ts": true } };
+    expect(dirtyFilesUnderPath(dirty, "")).toEqual([]);
+  });
+
+  it("returns nothing when no buffer is dirty", () => {
+    expect(dirtyFilesUnderPath({}, "src/a.ts")).toEqual([]);
+    expect(dirtyFilesUnderPath({ "pane-1": {} }, "src")).toEqual([]);
   });
 });
