@@ -90,33 +90,46 @@ const SALIENCE_MODEL_ENV = "KEIKO_MEMORY_SALIENCE_MODEL_ID";
 const SALIENCE_DEFAULT_SEED = 204;
 let pendingSalienceCaptures = 0;
 
+// Azure OpenAI structured outputs reject a request whose json_schema carries no `name` or whose
+// schema root is an array (both 400) — with a bare root-array schema every salience call on a
+// supportsResponseFormat model failed GATEWAY_PROVIDER_ERROR (F-11). The item array is therefore
+// wrapped in a named root OBJECT under "items"; parseSalienceItems in keiko-memory-capture unwraps
+// that shape and still accepts the bare array the prompt-only fallback path produces.
 const SALIENCE_RESPONSE_FORMAT: ResponseFormat = {
   type: "json_schema",
+  name: "salient_memories",
   schema: {
-    type: "array",
-    items: {
-      type: "object",
-      additionalProperties: false,
-      required: ["body", "type", "confidence", "scope", "source", "tags"],
-      properties: {
-        body: { type: "string", minLength: 1 },
-        type: {
-          type: "string",
-          enum: [
-            "identity",
-            "preference",
-            "fact",
-            "decision",
-            "constraint",
-            "goal",
-            "lesson",
-            "procedural",
-          ],
+    type: "object",
+    additionalProperties: false,
+    required: ["items"],
+    properties: {
+      items: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["body", "type", "confidence", "scope", "source", "tags"],
+          properties: {
+            body: { type: "string", minLength: 1 },
+            type: {
+              type: "string",
+              enum: [
+                "identity",
+                "preference",
+                "fact",
+                "decision",
+                "constraint",
+                "goal",
+                "lesson",
+                "procedural",
+              ],
+            },
+            confidence: { type: "number", minimum: 0, maximum: 1 },
+            scope: { type: "string", enum: ["user", "project", "workspace"] },
+            source: { type: "string", enum: ["user"] },
+            tags: { type: "array", items: { type: "string" } },
+          },
         },
-        confidence: { type: "number", minimum: 0, maximum: 1 },
-        scope: { type: "string", enum: ["user", "project", "workspace"] },
-        source: { type: "string", enum: ["user"] },
-        tags: { type: "array", items: { type: "string" } },
       },
     },
   },
