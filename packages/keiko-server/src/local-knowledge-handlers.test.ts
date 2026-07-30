@@ -1132,6 +1132,50 @@ describe("local-knowledge handlers", () => {
     expect(detail.status).toBe(200);
   });
 
+  // Audit regression (0.3.0): capsule-set-compose.tsx documents that "incompatible embedding
+  // identities across members are rejected server-side and surfaced here as a 400 — the UI cannot
+  // pre-validate identity". No such validation existed, so the documented 400 could never happen and
+  // a set mixing embedding spaces was created and offered as a grounding source.
+  it("rejects a capsule set whose members live in different embedding spaces with a 400", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const seeded = seedStore(tmp);
+    createCapsule(seeded.store, {
+      id: capsuleId("cap-other-space"),
+      displayName: "Other Space Capsule",
+      tags: [],
+      retrievalEffort: "default",
+      outputMode: "snippets",
+      answerGroundingPolicy: "require-citations",
+      modelUsePolicy: standardPodModelUsePolicy(),
+      embeddingModelIdentity: {
+        provider: "openai",
+        modelId: "text-embedding-3-large",
+        vectorDimensions: 3072,
+        vectorMetric: "cosine",
+      },
+      lifecycleState: "ready",
+      storageReference: "capsules/cap-other-space",
+    });
+    seeded.store.close();
+
+    const result = await handleCreateLocalKnowledgeCapsuleSet(
+      baseCtx(tmp, "POST", {
+        displayName: "Mixed Spaces",
+        capsuleIds: ["cap-1", "cap-other-space"],
+      }),
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toMatch(/must share one embedding identity/u);
+
+    // The set was never created: the listing still has none.
+    const listed = await handleListLocalKnowledgeCapsuleSets(baseCtx(tmp, "GET"), depsFor(tmp));
+    expect(listed.status).toBe(200);
+    expect((listed.body as { capsuleSets: readonly unknown[] }).capsuleSets).toHaveLength(0);
+  });
+
   it("deletes a capsule set (#1929 audit fix), leaving member capsules unchanged", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);

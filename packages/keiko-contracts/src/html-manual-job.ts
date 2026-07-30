@@ -17,9 +17,15 @@ export const HTML_MANUAL_POD_JOB_SCHEMA_VERSION = "1" as const;
 export const HTML_MANUAL_POD_JOB_OPERATIONS = ["create", "refresh"] as const;
 export type HtmlManualPodJobOperation = (typeof HTML_MANUAL_POD_JOB_OPERATIONS)[number];
 
-// running: crawl/index in flight. succeeded: terminal, pod usable. failed: terminal, prior pod (if
-// any) left intact — never a partial index reported as success.
-export const HTML_MANUAL_POD_JOB_STATES = ["running", "succeeded", "failed"] as const;
+// running: crawl/index in flight. succeeded: terminal, pod usable AND the approved manual is fully
+// covered. partial: terminal, a usable pod exists but pages of the approved manual were skipped or
+// failed — the counts and remediations say which class of gap, and the operator must not read it as a
+// clean import. failed: terminal, prior pod (if any) left intact and nothing usable was produced.
+//
+// `partial` exists because "some vectors landed" is not "the import succeeded": before it, a crawl
+// that dropped pages or an index that failed some documents still settled as `succeeded` and showed a
+// success message (0.3.0 audit).
+export const HTML_MANUAL_POD_JOB_STATES = ["running", "succeeded", "partial", "failed"] as const;
 export type HtmlManualPodJobState = (typeof HTML_MANUAL_POD_JOB_STATES)[number];
 
 // Mirrors the domain `ManualIndexingPhase` projection (manual-pod-progress.ts).

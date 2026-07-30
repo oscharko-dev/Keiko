@@ -58,7 +58,41 @@ describe("HtmlManualPodRefresh", () => {
       expect(screen.getByRole("status")).toHaveTextContent(/Refreshing manual/i);
     });
     expect(startRefreshImpl).toHaveBeenCalledWith(CAP, "src-1");
-    expect(screen.getByRole("status")).toHaveTextContent(/2 pages indexed, 1 links skipped/i);
+    // The crawl line counts pages the crawler FETCHED, not pages that reached the index (0.3.0
+    // audit): calling accepted pages "indexed" claimed work that had not happened yet.
+    expect(screen.getByRole("status")).toHaveTextContent(/2 pages fetched, 1 links skipped/i);
+    expect(screen.getByRole("status")).not.toHaveTextContent(/2 pages indexed/i);
+  });
+
+  it("reports a refresh that left gaps as partial, not as a plain success", async () => {
+    const partial: HtmlManualPodJob = {
+      ...job("partial"),
+      phase: "degraded",
+      indexing: {
+        totalDocuments: 4,
+        processedDocuments: 3,
+        failedDocuments: 1,
+        skippedDocuments: 0,
+        vectorsPersisted: 9,
+      },
+      remediations: [{ reason: "fetch-failed", guidance: "Some pages could not be retrieved." }],
+    };
+    render(
+      <HtmlManualPodRefresh
+        capsuleId={CAP}
+        sourceId="src-1"
+        startRefreshImpl={vi.fn().mockResolvedValue(job("running"))}
+        getJobImpl={vi.fn().mockResolvedValue(partial)}
+        pollIntervalMs={5}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /refresh manual/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^refresh manual$/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent(/refreshed with gaps/i);
+    });
+    expect(screen.getByRole("status")).toHaveTextContent(/1 pages failed, 0 pages skipped/i);
+    expect(screen.getByRole("status")).toHaveTextContent(/Some pages could not be retrieved\./i);
   });
 
   it("polls the job to completion and reports the terminal state", async () => {

@@ -2006,8 +2006,14 @@ export const EN_MESSAGES = {
   "installBanner.regionAria": "Install Keiko",
   "markdown.codeBlock.regionAria": "{language} code block",
   "markdown.codeBlock.languageText": "text",
-  "manualPod.progress.crawl": "{accepted} pages indexed, {denied} links skipped",
-  "manualPod.progress.index": "{processed} of {total} documents processed",
+  "connectorPicker.sets.notReadyNotice":
+    "{count} Knowledge Pod Sets are not ready to ground answers and are not listed.",
+  // "fetched", not "indexed": this count is what the crawler accepted, which is not what landed in
+  // the index — `manualPod.progress.index` owns that (0.3.0 audit).
+  "manualPod.progress.crawl": "{accepted} pages fetched, {denied} links skipped",
+  "manualPod.progress.index": "{processed} of {total} pages indexed",
+  "manualPod.progress.gaps": "{failed} pages failed, {skipped} pages skipped",
+  "manualPod.progress.gapsTitle": "What was left out",
   "manualPodCreate.button": "Add HTML manual",
   "manualPodCreate.form.title": "Add an HTML manual",
   "manualPodCreate.form.nameLabel": "Display name",
@@ -2021,6 +2027,7 @@ export const EN_MESSAGES = {
   "manualPodCreate.form.validation": "Enter a display name and an http(s) site origin.",
   "manualPodCreate.progress.running": "Creating manual pod…",
   "manualPodCreate.state.succeeded": "Manual pod created",
+  "manualPodCreate.state.partial": "Manual pod created with gaps; some pages are missing",
   "manualPodCreate.state.failed": "Create failed; no manual pod was added",
   "manualPodRefresh.button": "Refresh manual",
   "manualPodRefresh.confirm.body": "Re-crawl and re-index this HTML manual?",
@@ -2028,6 +2035,7 @@ export const EN_MESSAGES = {
   "manualPodRefresh.confirm.confirm": "Refresh manual",
   "manualPodRefresh.progress.running": "Refreshing manual…",
   "manualPodRefresh.state.succeeded": "Manual refreshed",
+  "manualPodRefresh.state.partial": "Manual refreshed with gaps; some pages are missing",
   "manualPodRefresh.state.failed": "Refresh failed; the previous manual is unchanged",
 } as const;
 

@@ -18,9 +18,13 @@ type ManualPodMessageKey = Parameters<I18nTranslate>[0];
 type ManualPodJobGetter = (jobId: string) => Promise<HtmlManualPodJob>;
 
 // The per-operation state labels (create vs refresh); crawl/index progress lines are shared.
+// `partial` is a real terminal state, not a flavour of success: a usable pod exists but pages of the
+// approved manual were skipped or failed, and neither the success nor the failure label tells the
+// truth about it (0.3.0 audit).
 export interface ManualPodStateLabelKeys {
   readonly running: ManualPodMessageKey;
   readonly succeeded: ManualPodMessageKey;
+  readonly partial: ManualPodMessageKey;
   readonly failed: ManualPodMessageKey;
 }
 
@@ -31,7 +35,54 @@ function manualPodStateLabel(
 ): string {
   if (job.state === "running") return t(keys.running);
   if (job.state === "succeeded") return t(keys.succeeded);
+  if (job.state === "partial") return t(keys.partial);
   return t(keys.failed);
+}
+
+// The skipped/failed document counts. Rendered only when there is a gap to report, so a clean import
+// stays a two-line progress read.
+function ManualPodGapCounts({
+  indexing,
+  t,
+}: {
+  readonly indexing: HtmlManualPodJob["indexing"];
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (indexing === null || (indexing.failedDocuments === 0 && indexing.skippedDocuments === 0)) {
+    return null;
+  }
+  return (
+    <p>
+      {t("manualPod.progress.gaps", {
+        failed: String(indexing.failedDocuments),
+        skipped: String(indexing.skippedDocuments),
+      })}
+    </p>
+  );
+}
+
+// What was left out, from the server's body-free remediation pairs (a closed reason code plus fixed
+// generic guidance — never a URL, page path, or page body). This is the "see what was skipped"
+// affordance: without it the counts say a gap exists but not which class of gap.
+function ManualPodGapReasons({
+  remediations,
+  t,
+}: {
+  readonly remediations: HtmlManualPodJob["remediations"];
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (remediations.length === 0) return null;
+  return (
+    <>
+      <p className="lkd-action-progress-note">{t("manualPod.progress.gapsTitle")}</p>
+      {/* Existing global reason-list class (#1300: no globals.css edit for new styling). */}
+      <ul className="lkd-stale-reasons">
+        {remediations.map((remediation) => (
+          <li key={remediation.reason}>{remediation.guidance}</li>
+        ))}
+      </ul>
+    </>
+  );
 }
 
 export function ManualPodProgressView({
@@ -47,6 +98,8 @@ export function ManualPodProgressView({
     <div className="lkd-action-progress" role="status" aria-live="polite">
       <p>{manualPodStateLabel(job, t, labelKeys)}</p>
       <p>
+        {/* `accepted` is what the CRAWLER accepted, which is not what landed in the index — the
+            index line below owns that count. */}
         {t("manualPod.progress.crawl", {
           accepted: String(job.crawl.accepted),
           denied: String(job.crawl.deniedCount),
@@ -60,6 +113,10 @@ export function ManualPodProgressView({
           })}
         </p>
       ) : null}
+      <ManualPodGapCounts indexing={job.indexing} t={t} />
+      {job.state === "running" ? null : (
+        <ManualPodGapReasons remediations={job.remediations} t={t} />
+      )}
     </div>
   );
 }

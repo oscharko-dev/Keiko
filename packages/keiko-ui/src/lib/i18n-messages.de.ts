@@ -2068,8 +2068,14 @@ export const DE_MESSAGES = {
   "installBanner.regionAria": "Keiko installieren",
   "markdown.codeBlock.regionAria": "Codeblock: {language}",
   "markdown.codeBlock.languageText": "Text",
-  "manualPod.progress.crawl": "{accepted} Seiten indexiert, {denied} Links übersprungen",
-  "manualPod.progress.index": "{processed} von {total} Dokumenten verarbeitet",
+  "connectorPicker.sets.notReadyNotice":
+    "{count} Knowledge Pod Sets sind nicht bereit für Antwort-Grounding und werden nicht aufgeführt.",
+  // "abgerufen", nicht "indexiert": diese Zahl zählt die vom Crawler akzeptierten Seiten, nicht die
+  // im Index gelandeten — dafür ist `manualPod.progress.index` zuständig (0.3.0-Audit).
+  "manualPod.progress.crawl": "{accepted} Seiten abgerufen, {denied} Links übersprungen",
+  "manualPod.progress.index": "{processed} von {total} Seiten indexiert",
+  "manualPod.progress.gaps": "{failed} Seiten fehlgeschlagen, {skipped} Seiten übersprungen",
+  "manualPod.progress.gapsTitle": "Was ausgelassen wurde",
   "manualPodCreate.button": "HTML-Handbuch hinzufügen",
   "manualPodCreate.form.title": "HTML-Handbuch hinzufügen",
   "manualPodCreate.form.nameLabel": "Anzeigename",
@@ -2083,6 +2089,7 @@ export const DE_MESSAGES = {
   "manualPodCreate.form.validation": "Anzeigename und einen http(s)-Website-Ursprung eingeben.",
   "manualPodCreate.progress.running": "Handbuch-Pod wird erstellt…",
   "manualPodCreate.state.succeeded": "Handbuch-Pod erstellt",
+  "manualPodCreate.state.partial": "Handbuch-Pod mit Lücken erstellt; einige Seiten fehlen",
   "manualPodCreate.state.failed":
     "Erstellung fehlgeschlagen; es wurde kein Handbuch-Pod hinzugefügt",
   "manualPodRefresh.button": "Handbuch aktualisieren",
@@ -2091,6 +2098,7 @@ export const DE_MESSAGES = {
   "manualPodRefresh.confirm.confirm": "Handbuch aktualisieren",
   "manualPodRefresh.progress.running": "Handbuch wird aktualisiert…",
   "manualPodRefresh.state.succeeded": "Handbuch aktualisiert",
+  "manualPodRefresh.state.partial": "Handbuch mit Lücken aktualisiert; einige Seiten fehlen",
   "manualPodRefresh.state.failed":
     "Aktualisierung fehlgeschlagen; das vorherige Handbuch bleibt unverändert",
 } satisfies MessageCatalog;
