@@ -216,6 +216,8 @@ export const EN_MESSAGES = {
   "common.off": "off",
   "common.close": "Close",
   "common.advanced": "advanced",
+  "gatewaySetup.badge.setup": "Model gateway setup",
+  "gatewaySetup.badge.update": "Credential update",
   "gatewaySetup.loading.title": "Preparing model gateway setup",
   "gatewaySetup.loading.description":
     "Loading the local setup controls. No provider request has been started.",

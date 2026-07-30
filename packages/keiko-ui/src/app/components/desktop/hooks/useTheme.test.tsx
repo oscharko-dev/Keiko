@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useTheme } from "./useTheme";
+import { useTheme, type Theme } from "./useTheme";
 
 describe("useTheme", () => {
   beforeEach(() => {
@@ -50,5 +50,47 @@ describe("useTheme", () => {
 
     expect(result.current.theme).toBe("light");
     expect(document.documentElement.dataset.theme).toBe("light");
+
+    const second = renderHook(() => useTheme());
+
+    await waitFor(() => expect(second.result.current.theme).toBe("light"));
+    expect(result.current.theme).toBe("light");
+    expect(document.documentElement.dataset.theme).toBe("light");
+  });
+
+  it("keeps multiple mounted theme controls synchronized", async () => {
+    const first = renderHook(() => useTheme());
+    const second = renderHook(() => useTheme());
+
+    await waitFor(() => expect(first.result.current.theme).toBe("dark"));
+    const synchronizedThemes: Theme[] = [];
+    const captureTheme = (event: Event): void => {
+      if (event instanceof CustomEvent && (event.detail === "light" || event.detail === "dark")) {
+        synchronizedThemes.push(event.detail);
+      }
+    };
+    window.addEventListener("keiko:theme-change", captureTheme);
+
+    act(() => first.result.current.toggle());
+
+    await waitFor(() => expect(second.result.current.theme).toBe("light"));
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(window.localStorage.getItem("keiko.theme")).toBe("light");
+
+    act(() => second.result.current.toggle());
+
+    await waitFor(() => expect(first.result.current.theme).toBe("dark"));
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(window.localStorage.getItem("keiko.theme")).toBe("dark");
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent("keiko:theme-change"));
+      window.dispatchEvent(new CustomEvent("keiko:theme-change", { detail: "sepia" }));
+    });
+
+    expect(first.result.current.theme).toBe("dark");
+    expect(second.result.current.theme).toBe("dark");
+    expect(synchronizedThemes).toEqual(["light", "dark"]);
+    window.removeEventListener("keiko:theme-change", captureTheme);
   });
 });
