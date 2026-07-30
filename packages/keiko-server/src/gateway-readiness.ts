@@ -1055,6 +1055,9 @@ export async function runGatewayReadiness(
 ): Promise<GatewayReadinessReport | RouteResult> {
   const selection = chooseProvider(currentGatewayConfig(deps), request.modelId);
   if ("status" in selection) return selection;
+  // Capture the config generation BEFORE the async probes: the verdict describes this
+  // configuration, and the holder drops it if the config was replaced mid-probe (#2847 review).
+  const observedGeneration = deps.gatewayConfig?.generation();
   const names = requestedProbeNames(request.options);
   const probes: GatewayReadinessProbeResult[] = [];
   const chat = await runProbe("chat", deps, selection, request.options);
@@ -1083,7 +1086,10 @@ export async function runGatewayReadiness(
   // config holder so the surfaces that used to infer readiness from configuration alone (the editor
   // AI-assist badge, the Coding Workbench source projection) report what was actually observed.
   // Content-free: one state word, no probe bodies, no endpoints, no credentials.
-  deps.gatewayConfig?.recordVerification(gatewayVerificationFromProbeOutcome(report.overallStatus));
+  deps.gatewayConfig?.recordVerification(
+    gatewayVerificationFromProbeOutcome(report.overallStatus),
+    observedGeneration,
+  );
   return report;
 }
 

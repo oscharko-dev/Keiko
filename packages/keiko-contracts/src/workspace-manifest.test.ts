@@ -7,10 +7,13 @@ import {
   isWorkspaceTrustBasisDigest,
 } from "./workspace-contract-primitives.js";
 import {
+  parseWorkspaceManifestAccess,
   validateWorkspaceManifest,
   validateWorkspaceRootDispatch,
+  workspaceManifestAccessResponse,
   WORKSPACE_MANIFEST_MAX_ROOTS,
   WORKSPACE_MANIFEST_SCHEMA_VERSION,
+  WORKSPACE_MANIFEST_SESSION_ASSERTIONS,
 } from "./workspace-manifest.js";
 import type { WorkspaceManifest, WorkspaceRootDispatch } from "./workspace-manifest.js";
 
@@ -202,5 +205,68 @@ describe("effectful root dispatch", () => {
     );
     expect(() => validateWorkspaceRootDispatch(hostile)).not.toThrow();
     expect(validateWorkspaceRootDispatch(hostile).ok).toBe(false);
+  });
+});
+
+// PR #2846 — the workspaces read's access envelope, its pairing union, and the fail-closed
+// resolution of an absent marker were declared inside keiko-ui, so the marker the server asserts had
+// no owner the server could see. ADR-0019 makes keiko-contracts the sole owner of a cross-package
+// wire shape: the producer the server route builds its body with and the parser the UI client reads
+// it with are one decision here, so what one side sends is by construction what the other reads.
+describe("workspace manifest access wire shape", () => {
+  function overWire(body: unknown): unknown {
+    return JSON.parse(JSON.stringify(body)) as unknown;
+  }
+
+  it("resolves every marker the server can assert to the same pairing on the client", () => {
+    for (const session of WORKSPACE_MANIFEST_SESSION_ASSERTIONS) {
+      const manifests = session === "paired" ? [validManifest()] : [];
+      const parsed = parseWorkspaceManifestAccess(
+        overWire(workspaceManifestAccessResponse(session, manifests)),
+      );
+      if (!parsed.ok) throw new Error(`client rejected an asserted "${session}" read`);
+      expect(parsed.access).toEqual({ session, manifests });
+    }
+  });
+
+  // Pairing is an authority input (ADR-0141), so it must be ASSERTED, never inferred from silence: a
+  // response with no marker resolves to "unknown" and can therefore never be read as a pairing.
+  // Coercing the absent marker to "paired" let a response the server never marked claim a pairing.
+  it("resolves an absent marker to unknown instead of claiming a pairing", () => {
+    const parsed = parseWorkspaceManifestAccess({ manifests: [validManifest()] });
+    if (!parsed.ok) throw new Error("client rejected a markerless read");
+    expect(parsed.access.session).toBe("unknown");
+    expect(parsed.access.session).not.toBe("paired");
+    expect(parsed.access.manifests).toEqual([validManifest()]);
+  });
+
+  it("rejects a marker that is neither assertion", () => {
+    expect(parseWorkspaceManifestAccess({ session: "maybe", manifests: [] }).ok).toBe(false);
+    expect(parseWorkspaceManifestAccess({ session: null, manifests: [] }).ok).toBe(false);
+    expect(parseWorkspaceManifestAccess({ session: "PAIRED", manifests: [] }).ok).toBe(false);
+  });
+
+  it("rejects a disclosing unpaired read, invalid manifests, and non-object bodies", () => {
+    // An unpaired read discloses nothing, so an `unpaired` assertion can never carry manifests.
+    expect(
+      parseWorkspaceManifestAccess({ session: "unpaired", manifests: [validManifest()] }).ok,
+    ).toBe(false);
+    expect(parseWorkspaceManifestAccess({ session: "paired", manifests: [{}] }).ok).toBe(false);
+    expect(parseWorkspaceManifestAccess({ session: "paired" }).ok).toBe(false);
+    expect(parseWorkspaceManifestAccess([]).ok).toBe(false);
+    expect(parseWorkspaceManifestAccess(null).ok).toBe(false);
+  });
+
+  it("fails closed for a hostile access body", () => {
+    const hostile = new Proxy(
+      {},
+      {
+        get(): never {
+          throw new Error("hostile read");
+        },
+      },
+    );
+    expect(() => parseWorkspaceManifestAccess(hostile)).not.toThrow();
+    expect(parseWorkspaceManifestAccess(hostile).ok).toBe(false);
   });
 });

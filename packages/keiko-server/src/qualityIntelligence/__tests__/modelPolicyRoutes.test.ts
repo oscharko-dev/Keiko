@@ -193,6 +193,7 @@ describe("QI model-policy routes", () => {
         currentConfig = nextConfig;
         configPresent = nextPresent;
       },
+      generation: () => 0,
       verification: () => UNVERIFIED_GATEWAY,
       recordVerification: () => undefined,
     };

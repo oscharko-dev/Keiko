@@ -4037,13 +4037,22 @@ export type {
   WorkspaceManifest,
   WorkspaceRootDispatchOperationClass,
   WorkspaceRootDispatch,
+  WorkspaceManifestSessionAssertion,
+  WorkspaceManifestSessionPairing,
+  WorkspaceManifestAccessResponse,
+  WorkspaceManifestAccess,
+  WorkspaceManifestAccessParsed,
+  WorkspaceManifestAccessParse,
 } from "./workspace-manifest.js";
 export {
   WORKSPACE_MANIFEST_SCHEMA_VERSION,
   WORKSPACE_MANIFEST_MAX_ROOTS,
   WORKSPACE_ROOT_DISPLAY_NAME_MAX_CHARS,
+  WORKSPACE_MANIFEST_SESSION_ASSERTIONS,
   validateWorkspaceManifest,
   validateWorkspaceRootDispatch,
+  workspaceManifestAccessResponse,
+  parseWorkspaceManifestAccess,
 } from "./workspace-manifest.js";
 export type {
   WorkspaceTrustLevel,

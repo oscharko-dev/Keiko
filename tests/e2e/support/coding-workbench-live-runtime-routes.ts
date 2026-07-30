@@ -123,11 +123,11 @@ async function handleFoundationRoute(
   // and an unanswered read is fail-closed to `unknown` — which correctly blocks a run start. This
   // live-runtime fixture models a launcher-paired window, so it must answer like the real paired
   // server does, or the fixture would exercise the blocked path instead of the ready path.
-  // The wire format expresses "paired" by OMITTING `session` — the validator accepts only an
-  // absent field or the literal "unpaired", so sending "paired" is rejected and would leave the
-  // dimension fail-closed at `unknown`, exercising the blocked path instead of the ready one.
+  // The pairing dimension now requires an EXPLICIT assertion (a missing marker fails closed to
+  // `unknown`), so this launcher-paired fixture must answer exactly what the real paired server
+  // sends — otherwise it would exercise the blocked path instead of the ready one.
   if (pathname === "/api/workspaces") {
-    await fulfillJson(route, { manifests: [] });
+    await fulfillJson(route, { session: "paired", manifests: [] });
     return true;
   }
   if (pathname === "/api/task-workspaces/active") {

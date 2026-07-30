@@ -283,6 +283,9 @@ describe("app-session pairing truth (release-audit F-08/RG-12)", () => {
       },
     };
     expect(visibleAlert(state, t, false)).toBe("codingWorkbench.alert.runtimeRefreshFailed");
+  });
+});
+
 // F-09a: the editor-changeset approve/deny used to discard its error in a bare `catch { return
 // false }`, so the review could only say "could not confirm this decision" — no code to act on and
 // no support id to report, on the one decision that blocks the run's file write.

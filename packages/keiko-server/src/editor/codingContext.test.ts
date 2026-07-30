@@ -56,6 +56,7 @@ function rerankingDeps(
       current,
       present: () => true,
       set: () => undefined,
+      generation: () => 0,
       verification: () => UNVERIFIED_GATEWAY,
       recordVerification: () => undefined,
     },

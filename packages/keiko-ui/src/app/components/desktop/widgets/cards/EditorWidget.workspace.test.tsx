@@ -314,6 +314,16 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+
+// The pre-flight ask resolves through a promise chain; flushing microtasks inside act() lets the
+// veto/allow verdict land without wrapping the (already act-wrapped) fireEvent click itself (S8980).
+async function flushPreflight(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 describe("EditorWidget workspace session", () => {
   it("shows the project picker (not the runtime widget) while no workspace root is selected", () => {
     render(<EditorWidget />);
@@ -1168,9 +1178,8 @@ describe("EditorWidget workspace session", () => {
   describe("Files-tree mutations over unsaved buffers", () => {
     async function markDirtyAndTriggerTree(buttonName: string): Promise<void> {
       fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
-      await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: buttonName }));
-      });
+      fireEvent.click(screen.getByRole("button", { name: buttonName }));
+      await flushPreflight();
     }
 
     it("prompts before a tree rename of a dirty file and keeps its recovery snapshot", async () => {
@@ -1241,9 +1250,8 @@ describe("EditorWidget workspace session", () => {
       // Dirty in the split pane while pane-1 stays the intent's nominal pane: a pane-scoped lookup
       // would find nothing here and mutate straight through.
       fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-2" }));
-      await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: "Rename a in tree" }));
-      });
+      fireEvent.click(screen.getByRole("button", { name: "Rename a in tree" }));
+      await flushPreflight();
 
       expect(
         await screen.findByRole("dialog", { name: "Unsaved editor changes" }),
@@ -1308,9 +1316,8 @@ describe("EditorWidget workspace session", () => {
     it("renames a CLEAN file with no prompt at all (happy path)", async () => {
       render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
 
-      await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: "Rename a in tree" }));
-      });
+      fireEvent.click(screen.getByRole("button", { name: "Rename a in tree" }));
+      await flushPreflight();
 
       expect(screen.queryByRole("dialog")).toBeNull();
       expect(filesProbeState.verdicts).toEqual([{ path: "src/a.ts", allowed: true }]);
@@ -1322,9 +1329,8 @@ describe("EditorWidget workspace session", () => {
     it("deletes a CLEAN file with no prompt at all (happy path)", async () => {
       render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
 
-      await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: "Delete a in tree" }));
-      });
+      fireEvent.click(screen.getByRole("button", { name: "Delete a in tree" }));
+      await flushPreflight();
 
       expect(screen.queryByRole("dialog")).toBeNull();
       expect(filesProbeState.verdicts).toEqual([{ path: "src/a.ts", allowed: true }]);

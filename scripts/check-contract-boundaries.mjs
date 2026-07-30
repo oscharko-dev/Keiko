@@ -112,6 +112,40 @@ const checks = [
     ],
   },
   {
+    file: "packages/keiko-ui/src/lib/workspace-manifest-api.ts",
+    rules: [
+      {
+        // PR #2846 — the workspaces read's access envelope and its pairing union are cross-package
+        // wire types, so keiko-contracts owns them (ADR-0019). A local redeclaration here is exactly
+        // how the server's asserted marker and the client's resolution drift apart, which is the
+        // Desktop chat / Managed LSP class this script already catches.
+        pattern:
+          /export\s+(?:interface\s+WorkspaceManifestAccess\b|type\s+WorkspaceManifestSessionPairing\s*=\s*["'])/,
+        message:
+          "Workspace manifest access shapes must alias workspace-manifest.ts from contracts.",
+      },
+      {
+        // The fail-closed resolution of an absent marker is one decision with one owner: a second
+        // copy here could keep coercing silence into a pairing after the contracts one stopped.
+        pattern: /function\s+sessionPairing\s*\(/,
+        message:
+          "Workspace pairing-marker resolution must use parseWorkspaceManifestAccess from contracts.",
+      },
+    ],
+  },
+  {
+    file: "packages/keiko-server/src/workspace-manifest-routes.ts",
+    rules: [
+      {
+        // The marker must be structural, not per-call-site: an inline literal body can ship a paired
+        // list with no assertion at all, which clients cannot distinguish from "not asserted".
+        pattern: /session:\s*["']/,
+        message:
+          "The workspaces read body must be built by workspaceManifestAccessResponse from contracts.",
+      },
+    ],
+  },
+  {
     file: "packages/keiko-server/src/qualityIntelligence/reviewStore.ts",
     rules: [
       {

@@ -22,6 +22,7 @@ import type { ModelCapability, VoiceProviderLocality } from "@/lib/types";
 import { Icons } from "../Icons";
 import KeikoSelect from "../KeikoSelect";
 import { NATIVE_BLOCK_STYLE } from "../native-element-styles";
+import { notifyGatewayConfigUpdated } from "../widgets/shared/gatewaySetupBus";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CubeIcon = Icons.cube;
@@ -2238,6 +2239,10 @@ export function GatewaySetupDialog({
       }
       setBusy(false);
       setSuccess(outcome.message);
+      // The stored configuration is now a different one. Announce it before the reload window opens:
+      // for the ~1s the success message is on screen the Settings panel is still mounted, and every
+      // readiness verdict it remembers describes the gateway that was just replaced.
+      notifyGatewayConfigUpdated();
       reloadTimerRef.current = window.setTimeout(
         () => window.location.reload(),
         outcome.skippedModelCount === 0 ? 800 : 1800,

@@ -426,7 +426,7 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
         {
           modelId: "azure-coding-model",
           baseUrl: "https://azure.example/openai",
-          apiKey: "azure-secret",
+          apiKey: "test-placeholder-key",
           apiKeyHeaderName: "api-key",
           endpointStyle: "azure-openai-deployment",
           apiVersion: "2024-06-01",
@@ -462,7 +462,7 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
         {
           modelId: "azure-coding-model",
           baseUrl: "https://azure.example/openai",
-          apiKey: "azure-secret",
+          apiKey: "test-placeholder-key",
           apiKeyHeaderName: "api-key",
           endpointStyle: "azure-openai-deployment",
           apiVersion: "2024-06-01",

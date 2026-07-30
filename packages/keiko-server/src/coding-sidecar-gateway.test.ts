@@ -1787,6 +1787,7 @@ describe("coding-sidecar gateway", () => {
         current: () => config,
         present: () => true,
         set: () => undefined,
+        generation: () => 0,
         verification: () => "verified",
         recordVerification: () => undefined,
       },

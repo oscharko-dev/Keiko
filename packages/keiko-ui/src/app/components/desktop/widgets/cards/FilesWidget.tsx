@@ -1031,44 +1031,51 @@ export function FilesWidget({
       setOpError(invalid);
       return;
     }
+    const commitRename = async (pending: { path: string; name: string }): Promise<void> => {
+      // Vetoed while the target holds unsaved changes: leave the inline editor open with the typed
+      // name so nothing the user entered is lost, and send no request.
+      if (!(await mayMutateEntry(pending.path))) return;
+      const parent = entryParent(pending.path);
+      const result = await renameFilesEntry({
+        root: mutationRoot,
+        path: pending.path,
+        newPath: joinRelative(parent, name),
+      });
+      setPendingEntry(null);
+      setEntryDraft("");
+      if (selectedPath === pending.path) setSelectedPath(result.path);
+      await loadDirectory(parent ?? "");
+      invalidateGitStatus();
+      onFilesMutatedRef.current?.({ op: "rename", mutation: result });
+    };
+    // Derived from the owning union rather than restated: a literal copy drifted from
+    // PendingEntry's "new-folder" and broke the keiko-ui typecheck.
+    const commitCreate = async (
+      pending: Exclude<PendingEntry, { readonly kind: "rename" }>,
+    ): Promise<void> => {
+      const result = await createFilesEntry({
+        root: mutationRoot,
+        path: joinRelative(pending.parentPath, name),
+        kind: pending.kind === "new-file" ? "file" : "directory",
+      });
+      setPendingEntry(null);
+      setEntryDraft("");
+      await loadDirectory(pending.parentPath ?? "");
+      invalidateGitStatus();
+      if (result.kind === "directory") {
+        setExpanded((current) => new Set(current).add(result.path));
+      } else if (onOpenFile !== undefined) {
+        // Open the freshly created (empty) file so the user can start typing immediately.
+        activeFileChangeRef.current?.(result.path, mutationRoot);
+        onOpenFile(mutationRoot, result.path);
+      }
+      onFilesMutatedRef.current?.({ op: "create", mutation: result });
+    };
     setOpBusy(true);
     setOpError(null);
     try {
-      if (pendingEntry.kind === "rename") {
-        // Vetoed while the target holds unsaved changes: leave the inline editor open with the typed
-        // name so nothing the user entered is lost, and send no request.
-        if (!(await mayMutateEntry(pendingEntry.path))) return;
-        const parent = entryParent(pendingEntry.path);
-        const result = await renameFilesEntry({
-          root: mutationRoot,
-          path: pendingEntry.path,
-          newPath: joinRelative(parent, name),
-        });
-        setPendingEntry(null);
-        setEntryDraft("");
-        if (selectedPath === pendingEntry.path) setSelectedPath(result.path);
-        await loadDirectory(parent ?? "");
-        invalidateGitStatus();
-        onFilesMutatedRef.current?.({ op: "rename", mutation: result });
-      } else {
-        const result = await createFilesEntry({
-          root: mutationRoot,
-          path: joinRelative(pendingEntry.parentPath, name),
-          kind: pendingEntry.kind === "new-file" ? "file" : "directory",
-        });
-        setPendingEntry(null);
-        setEntryDraft("");
-        await loadDirectory(pendingEntry.parentPath ?? "");
-        invalidateGitStatus();
-        if (result.kind === "directory") {
-          setExpanded((current) => new Set(current).add(result.path));
-        } else if (onOpenFile !== undefined) {
-          // Open the freshly created (empty) file so the user can start typing immediately.
-          activeFileChangeRef.current?.(result.path, mutationRoot);
-          onOpenFile(mutationRoot, result.path);
-        }
-        onFilesMutatedRef.current?.({ op: "create", mutation: result });
-      }
+      if (pendingEntry.kind === "rename") await commitRename(pendingEntry);
+      else await commitCreate(pendingEntry);
     } catch (error: unknown) {
       setOpError(errorMessage(error, t));
     } finally {

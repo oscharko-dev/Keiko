@@ -3,8 +3,10 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_SETUP_REQUEST_EVENT,
   consumePendingGatewaySetup,
+  notifyGatewayConfigUpdated,
   requestGatewaySetup,
 } from "./gatewaySetupBus";
 
@@ -33,6 +35,21 @@ describe("gatewaySetupBus", () => {
       expect(handler).toHaveBeenCalledTimes(1);
     } finally {
       window.removeEventListener(GATEWAY_SETUP_REQUEST_EVENT, handler);
+    }
+  });
+
+  // F-02: the configuration-updated announcement is a pure notification — unlike the setup request
+  // it must NOT latch, or a panel mounted long afterwards would discard readiness evidence it
+  // gathered about the configuration that is actually current.
+  it("announces a configuration update without latching it", () => {
+    const handler = vi.fn();
+    window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, handler);
+    try {
+      notifyGatewayConfigUpdated();
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(consumePendingGatewaySetup()).toBe(false);
+    } finally {
+      window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, handler);
     }
   });
 });

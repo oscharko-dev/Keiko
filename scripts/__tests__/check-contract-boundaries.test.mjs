@@ -23,6 +23,8 @@ const CHECKED_FILES = [
   "packages/keiko-ui/src/app/components/desktop/widgets/quality-intelligence/CandidatesPane.tsx",
   "packages/keiko-server/src/qualityIntelligence/reviewStore.ts",
   "packages/keiko-ui/src/lib/memory-api.ts",
+  "packages/keiko-ui/src/lib/workspace-manifest-api.ts",
+  "packages/keiko-server/src/workspace-manifest-routes.ts",
 ];
 
 let fixtureRoot = "";
@@ -99,6 +101,36 @@ describe("editor-agent contract boundary (#2489 Finding 7)", () => {
       cwd: createFixtureRoot(apiFixturePath),
       encoding: "utf8",
     });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(expectedMessage);
+  });
+});
+
+// PR #2846 — the workspaces read's pairing marker had no pin at all: keiko-ui declared the access
+// envelope and the pairing union locally while the server asserted the marker from an inline literal
+// body, so neither side could see the other's shape. Both halves are pinned here.
+describe("workspace manifest access contract boundary (#2846)", () => {
+  it.each([
+    [
+      "packages/keiko-ui/src/lib/workspace-manifest-api.ts",
+      "export interface WorkspaceManifestAccess {\n  readonly session: string;\n}\n",
+      "Workspace manifest access shapes must alias workspace-manifest.ts from contracts.",
+    ],
+    [
+      "packages/keiko-ui/src/lib/workspace-manifest-api.ts",
+      "function sessionPairing(path, marker) {\n  return marker;\n}\n",
+      "Workspace pairing-marker resolution must use parseWorkspaceManifestAccess from contracts.",
+    ],
+    [
+      "packages/keiko-server/src/workspace-manifest-routes.ts",
+      'const body = { session: "paired", manifests: [] };\n',
+      "The workspaces read body must be built by workspaceManifestAccessResponse from contracts.",
+    ],
+  ])("rejects a locally owned wire shape in %s", (checkedFile, source, expectedMessage) => {
+    const root = createFixtureRoot(CLEAN_FIXTURE_PATH);
+    writeFileSync(join(root, checkedFile), source, "utf8");
+    const result = spawnSync(process.execPath, [SCRIPT_PATH], { cwd: root, encoding: "utf8" });
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(expectedMessage);

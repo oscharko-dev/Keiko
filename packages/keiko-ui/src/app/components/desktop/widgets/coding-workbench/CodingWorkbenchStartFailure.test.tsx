@@ -170,7 +170,7 @@ function routeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Respo
   // server anyway (workspace-lifecycle state loss) — the honest workspaces read answers paired
   // (no `session: "unpaired"` marker), so readiness arms and the rejected POST stays reachable.
   if (url.endsWith("/api/workspaces")) {
-    return Promise.resolve(jsonResponse(200, { manifests: [] }));
+    return Promise.resolve(jsonResponse(200, { session: "paired", manifests: [] }));
   }
   return Promise.resolve(jsonResponse(404, { error: { code: "NOT_FOUND", message: url } }));
 }

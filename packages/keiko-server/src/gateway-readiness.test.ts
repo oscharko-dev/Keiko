@@ -372,6 +372,7 @@ describe("gateway readiness route", () => {
         set: (next) => {
           current = next ?? pinned;
         },
+        generation: () => 0,
         verification: () => UNVERIFIED_GATEWAY,
         recordVerification: () => undefined,
       },
@@ -620,6 +621,7 @@ describe("gateway readiness route", () => {
         present: () => true,
         set: () => undefined,
         verification: () => UNVERIFIED_GATEWAY,
+        generation: () => 0,
         recordVerification: (state) => {
           recorded.push(state);
         },
@@ -649,6 +651,7 @@ describe("gateway readiness route", () => {
         present: () => true,
         set: () => undefined,
         verification: () => UNVERIFIED_GATEWAY,
+        generation: () => 0,
         recordVerification: (state) => {
           recorded.push(state);
         },

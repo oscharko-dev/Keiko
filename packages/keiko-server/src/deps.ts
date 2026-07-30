@@ -324,6 +324,8 @@ export interface RuntimeGatewayConfig {
   current(): GatewayConfig | undefined;
   present(): boolean;
   set(config: GatewayConfig | undefined, present: boolean): void;
+  /** Monotonic config generation; bumped by every set(). Probes capture it before running. */
+  generation(): number;
   /**
    * F-01: the last live-probe outcome for the CURRENT configuration generation. Config presence is
    * not reachability, so every surface that would otherwise infer readiness from `present()` reads
@@ -333,7 +335,7 @@ export interface RuntimeGatewayConfig {
    * this fixes.
    */
   verification(): GatewayVerificationState;
-  recordVerification(state: GatewayVerificationState): void;
+  recordVerification(state: GatewayVerificationState, observedGeneration?: number): void;
 }
 
 export interface GatewayDiscoveredModels {
@@ -978,6 +980,10 @@ function createRuntimeGatewayConfig(
   // never seeded from disk: a probe outcome describes a live endpoint at a point in time, not a
   // stored setting, and reloading one would let a surface claim health nobody observed.
   let verification: GatewayVerificationState = UNVERIFIED_GATEWAY;
+  // Bumped on every set(): a probe captures the generation it observed, and a verdict carrying a
+  // stale generation is dropped, so a slow probe of the PREVIOUS config can never stamp the
+  // replacement config with an outcome nobody measured against it (#2847 review).
+  let generation = 0;
   return {
     storagePath,
     current: (): GatewayConfig | undefined => config,
@@ -986,9 +992,12 @@ function createRuntimeGatewayConfig(
       config = next;
       present = nextPresent;
       verification = UNVERIFIED_GATEWAY;
+      generation += 1;
     },
+    generation: (): number => generation,
     verification: (): GatewayVerificationState => verification,
-    recordVerification(state: GatewayVerificationState): void {
+    recordVerification(state: GatewayVerificationState, observedGeneration?: number): void {
+      if (observedGeneration !== undefined && observedGeneration !== generation) return;
       verification = state;
     },
   };

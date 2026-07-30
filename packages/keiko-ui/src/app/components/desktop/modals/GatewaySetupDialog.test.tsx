@@ -5,6 +5,7 @@ import { ApiError, setupGateway } from "@/lib/api";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import type { ModelCapability } from "@/lib/types";
 import { GatewaySetupDialog } from "./GatewaySetupDialog";
+import { GATEWAY_CONFIG_UPDATED_EVENT } from "../widgets/shared/gatewaySetupBus";
 
 vi.mock("@/lib/api", () => ({
   ApiError: class ApiError extends Error {
@@ -305,6 +306,43 @@ describe("GatewaySetupDialog", () => {
 
     // C084: the async test result must be announced — success is a status live region.
     expect(await screen.findByRole("status")).toHaveTextContent(/verified 1 workflow chat model/i);
+  });
+
+  // F-02 (review of #2847): the panels that remember observations about the gateway cannot see a
+  // credential replacement — the safe config projection they read is credential-free, so nothing
+  // about it changes when a key is rotated. The write is therefore announced, and it must be
+  // announced BEFORE the page reload the dialog schedules, because for that second the Settings
+  // panel is still mounted and still holding readiness verdicts about the replaced gateway.
+  it("announces the configuration update as soon as the write succeeded", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "internal-chat",
+      testedModelIds: ["internal-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    const onConfigUpdated = vi.fn();
+    window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
+    try {
+      render(<GatewaySetupDialog />);
+      await userEvent.type(
+        screen.getByLabelText(/base url/i),
+        "https://llm-gateway.example.com/v1",
+      );
+      await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+      await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+      expect(await screen.findByRole("status")).toHaveTextContent(
+        /verified 1 workflow chat model/i,
+      );
+      expect(onConfigUpdated).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
+    }
   });
 
   it("submits an optional gateway request timeout", async () => {

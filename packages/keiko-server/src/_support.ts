@@ -45,6 +45,7 @@ export function probeVerifiedGatewayConfig(config: GatewayConfig): RuntimeGatewa
   let current: GatewayConfig | undefined = config;
   let present = true;
   let verification: GatewayVerificationState = "verified";
+  let generation = 0;
   return {
     storagePath: "/dev/null",
     current: () => current,
@@ -53,9 +54,12 @@ export function probeVerifiedGatewayConfig(config: GatewayConfig): RuntimeGatewa
       current = next;
       present = nextPresent;
       verification = UNVERIFIED_GATEWAY;
+      generation += 1;
     },
+    generation: () => generation,
     verification: () => verification,
-    recordVerification: (state: GatewayVerificationState): void => {
+    recordVerification: (state: GatewayVerificationState, observedGeneration?: number): void => {
+      if (observedGeneration !== undefined && observedGeneration !== generation) return;
       verification = state;
     },
   };
