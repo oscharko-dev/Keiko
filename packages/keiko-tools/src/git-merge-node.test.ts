@@ -59,7 +59,18 @@ function makeAdapter(spawn: ScriptedSpawn): GitMergeAdapter {
   });
 }
 
-const READINESS_REQ = { ownerAndRepo: "oscharko-dev/Keiko", prExternalId: "42" };
+const READINESS_REQ = {
+  ownerAndRepo: "oscharko-dev/Keiko",
+  prExternalId: "42",
+  baseBranchName: "main",
+};
+
+// The reviews + branch-protection reads run unconditionally after the PR + repo-config reads (in that
+// argv order — see readMergeReadiness in git-merge-node.ts), regardless of mergeable_state. Every
+// scripted spawn below supplies these two steps; the "no reviews" / "no required reviews" defaults
+// mirror what an unreviewed PR on an unprotected branch actually returns.
+const NO_REVIEWS = "[]";
+const NO_REQUIRED_REVIEWS = "0";
 
 function execReq(over: Partial<GitMergeExecRequest> = {}): GitMergeExecRequest {
   return {
@@ -86,8 +97,13 @@ const CLEAN_PR = JSON.stringify({
 const REPO_CFG = JSON.stringify({ squash: true, merge: false, rebase: true });
 
 describe("readMergeReadiness", () => {
-  it("maps a clean PR + repo config to neutral facts and capable strategies (no head-status read)", async () => {
-    const spawn = scriptedSpawn([{ stdout: CLEAN_PR }, { stdout: REPO_CFG }]);
+  it("maps a clean PR + repo config to neutral facts and capable strategies (no checks read)", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: CLEAN_PR },
+      { stdout: REPO_CFG },
+      { stdout: NO_REVIEWS },
+      { stdout: NO_REQUIRED_REVIEWS },
+    ]);
     const adapter = makeAdapter(spawn);
     const readiness = await adapter.readMergeReadiness(READINESS_REQ);
     expect(readiness.providerError).toBeUndefined();
@@ -95,15 +111,17 @@ describe("readMergeReadiness", () => {
     expect(readiness.pullRequest?.mergeReadiness.ready).toBe(true);
     expect(readiness.pullRequest?.headBranchName).toBe("feat/x");
     expect(readiness.providerCapableStrategies).toEqual(["squash", "rebase"]);
-    // clean → no third (head-status) read.
-    expect(spawn.calls()).toHaveLength(2);
+    // Surfaced for the execute-time `sha` pin (fixes the previously unpinned merge).
+    expect(readiness.headRefHash).toBe("abcdef1234567");
+    // clean → no fifth (checks) read.
+    expect(spawn.calls()).toHaveLength(4);
     expect(spawn.calls()[0]?.args.slice(0, 2)).toEqual([
       "api",
       "/repos/oscharko-dev/Keiko/pulls/42",
     ]);
   });
 
-  it("reads the head check status for a blocked PR and maps a failing combined status", async () => {
+  it("reads the head checks for a blocked PR via the modern Checks API and maps a failing state", async () => {
     const blockedPr = JSON.stringify({
       state: "open",
       merged: false,
@@ -114,19 +132,71 @@ describe("readMergeReadiness", () => {
       head: "abcdef1234567",
       headRef: "feat/x",
     });
+    const checkRuns = JSON.stringify([
+      { status: "completed", conclusion: "success" },
+      { status: "completed", conclusion: "failure" },
+    ]);
     const spawn = scriptedSpawn([
       { stdout: blockedPr },
       { stdout: REPO_CFG },
-      { stdout: "failure" },
+      { stdout: NO_REVIEWS },
+      { stdout: NO_REQUIRED_REVIEWS },
+      { stdout: checkRuns },
     ]);
     const adapter = makeAdapter(spawn);
     const readiness = await adapter.readMergeReadiness(READINESS_REQ);
     expect(readiness.pullRequest?.mergeReadiness.blockingReason).toBe("branch-protection");
-    expect(readiness.checks?.overallStatus).toBe("failing");
-    expect(spawn.calls()).toHaveLength(3);
-    expect(spawn.calls()[2]?.args[1]).toBe(
-      "/repos/oscharko-dev/Keiko/commits/abcdef1234567/status",
+    expect(readiness.checks).toEqual({
+      total: 2,
+      passing: 1,
+      failing: 1,
+      pending: 0,
+      overallStatus: "failing",
+    });
+    expect(spawn.calls()).toHaveLength(5);
+    // Reads the modern per-run Checks API, NOT the legacy combined-status endpoint this replaces
+    // (the legacy read reported one lossy aggregate "state" string with no pass/fail breakdown).
+    expect(spawn.calls()[4]?.args[1]).toBe(
+      "/repos/oscharko-dev/Keiko/commits/abcdef1234567/check-runs?per_page=100",
     );
+  });
+
+  it("counts a REAL received-approval total from the reviews read (fixes the hardcoded 0)", async () => {
+    // alice approved, then requested changes again (her LATEST review governs); bob approved once.
+    const reviews = JSON.stringify([
+      { user: "alice", state: "APPROVED" },
+      { user: "bob", state: "APPROVED" },
+      { user: "alice", state: "CHANGES_REQUESTED" },
+    ]);
+    const spawn = scriptedSpawn([
+      { stdout: CLEAN_PR },
+      { stdout: REPO_CFG },
+      { stdout: reviews },
+      { stdout: "2" },
+    ]);
+    const adapter = makeAdapter(spawn);
+    const readiness = await adapter.readMergeReadiness(READINESS_REQ);
+    // Only bob's approval still stands; alice's is superseded by her own later review.
+    expect(readiness.pullRequest?.mergeReadiness.receivedApprovalCount).toBe(1);
+    expect(readiness.pullRequest?.mergeReadiness.requiredApprovalCount).toBe(2);
+    expect(spawn.calls()[2]?.args[1]).toBe(
+      "/repos/oscharko-dev/Keiko/pulls/42/reviews?per_page=100",
+    );
+    expect(spawn.calls()[3]?.args[1]).toBe("/repos/oscharko-dev/Keiko/branches/main/protection");
+  });
+
+  it("falls back to 0/0 (not a hard failure) when the reviews and branch-protection reads fail", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: CLEAN_PR },
+      { stdout: REPO_CFG },
+      { stderr: "HTTP 500", exit: 1 },
+      { stderr: "HTTP 404", exit: 1 },
+    ]);
+    const adapter = makeAdapter(spawn);
+    const readiness = await adapter.readMergeReadiness(READINESS_REQ);
+    expect(readiness.providerError).toBeUndefined();
+    expect(readiness.pullRequest?.mergeReadiness.receivedApprovalCount).toBe(0);
+    expect(readiness.pullRequest?.mergeReadiness.requiredApprovalCount).toBe(0);
   });
 
   it("reports providerError when the PR read fails", async () => {
@@ -267,11 +337,13 @@ describe("readMergeReadiness — additional branches", () => {
     });
   }
 
-  it("reads the head check status for an unstable PR and maps a passing combined status", async () => {
+  it("reads the head checks for an unstable PR via the Checks API and maps an all-passing state", async () => {
     const spawn = scriptedSpawn([
       { stdout: prJson({ mergeable_state: "unstable" }) },
       { stdout: JSON.stringify({ squash: true, merge: true, rebase: true }) },
-      { stdout: "success" },
+      { stdout: NO_REVIEWS },
+      { stdout: NO_REQUIRED_REVIEWS },
+      { stdout: JSON.stringify([{ status: "completed", conclusion: "success" }]) },
     ]);
     const adapter = makeAdapter(spawn);
     const readiness = await adapter.readMergeReadiness(READINESS_REQ);
@@ -280,16 +352,18 @@ describe("readMergeReadiness — additional branches", () => {
     expect(readiness.providerCapableStrategies).toEqual(["squash", "rebase", "merge-commit"]);
   });
 
-  it("does not read the head status for a behind PR (no required-check ambiguity)", async () => {
+  it("does not read the head checks for a behind PR (no required-check ambiguity)", async () => {
     const spawn = scriptedSpawn([
       { stdout: prJson({ mergeable: false, mergeable_state: "behind" }) },
       { stdout: JSON.stringify({ squash: true, merge: false, rebase: false }) },
+      { stdout: NO_REVIEWS },
+      { stdout: NO_REQUIRED_REVIEWS },
     ]);
     const adapter = makeAdapter(spawn);
     const readiness = await adapter.readMergeReadiness(READINESS_REQ);
     expect(readiness.pullRequest?.mergeReadiness.blockingReason).toBe("branch-protection");
     expect(readiness.checks).toBeUndefined();
-    expect(spawn.calls()).toHaveLength(2);
+    expect(spawn.calls()).toHaveLength(4);
   });
 
   it("yields no capable strategies when the repo merge-config read fails", async () => {
@@ -300,11 +374,13 @@ describe("readMergeReadiness — additional branches", () => {
     expect(readiness.providerCapableStrategies).toEqual([]);
   });
 
-  it("omits checks when the head-status read returns an empty state", async () => {
+  it("omits checks when the checks read fails", async () => {
     const spawn = scriptedSpawn([
       { stdout: prJson({ mergeable: false, mergeable_state: "blocked" }) },
       { stdout: JSON.stringify({ squash: true, merge: false, rebase: false }) },
-      { stdout: "" },
+      { stdout: NO_REVIEWS },
+      { stdout: NO_REQUIRED_REVIEWS },
+      { stderr: "HTTP 404", exit: 1 },
     ]);
     const adapter = makeAdapter(spawn);
     const readiness = await adapter.readMergeReadiness(READINESS_REQ);
@@ -315,6 +391,8 @@ describe("readMergeReadiness — additional branches", () => {
     const spawn = scriptedSpawn([
       { stdout: prJson({ merged: true, state: "closed", mergeable_state: "clean" }) },
       { stdout: JSON.stringify({ squash: true, merge: false, rebase: false }) },
+      { stdout: NO_REVIEWS },
+      { stdout: NO_REQUIRED_REVIEWS },
     ]);
     const adapter = makeAdapter(spawn);
     const readiness = await adapter.readMergeReadiness(READINESS_REQ);

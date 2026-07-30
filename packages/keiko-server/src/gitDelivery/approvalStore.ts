@@ -145,7 +145,19 @@ export function createInMemoryGitDeliveryApprovalStore(
   };
 }
 
-const DEFAULT_APPROVAL_STORE = createInMemoryGitDeliveryApprovalStore();
+// Exported (not module-private) so the mint route (which calls `.issue()`) and every consume-side
+// caller share the exact SAME in-memory store instance by default. Before the mint route existed,
+// this stayed private because nothing but `resolveGitDeliveryApprovalRequirement` ever touched it; a
+// route that mints an approval must issue into the identical store the execute routes consume from,
+// or every default-store mint would be unredeemable (issued into one Map, looked up in another).
+export const DEFAULT_GIT_DELIVERY_APPROVAL_STORE = createInMemoryGitDeliveryApprovalStore();
+
+// The fixed local principal for this single-user, loopback-bound desktop product. Mirrors the
+// established "local-operator" convention used for other loopback approval/reviewer identities in
+// this codebase (e.g. memory-handlers.ts, memory-conversation-context.ts, deps.ts) — there is no
+// per-request authenticated end user to attribute a mint to, only the one local human at the
+// keyboard, so every git-delivery approval claim this process mints is attributed to this constant.
+export const GIT_DELIVERY_LOCAL_OPERATOR_ID = "local-operator";
 
 export function parseGitDeliveryApprovalRequest(
   raw: unknown,
@@ -168,7 +180,7 @@ export function resolveGitDeliveryApprovalRequirement(
   },
 ): GitDeliveryApprovalRequirement | undefined {
   if (approval.kind === "none") return { required: false };
-  return (input.store ?? DEFAULT_APPROVAL_STORE).consume({
+  return (input.store ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE).consume({
     approval: approval.claim,
     binding: input.binding,
     nowMs: input.nowMs,

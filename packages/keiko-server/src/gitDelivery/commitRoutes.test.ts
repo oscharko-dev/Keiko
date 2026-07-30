@@ -207,6 +207,7 @@ function seams(overrides: Partial<GitDeliveryExecutionSeams> = {}): GitDeliveryE
   return {
     snapshotReader: () => Promise.resolve(SNAPSHOT),
     stagedPathsReader: () => Promise.resolve(["packages/keiko-ui/a.ts", "docs/b.md"]),
+    conflictMarkerReader: () => Promise.resolve(0),
     now: () => 1_700_000_000_000,
     newActionId: () => "action-test-1",
     policyPacks: { repoPack: ALLOW_LOCAL_PACK },
@@ -416,6 +417,49 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
     expect(body.blockReason).toBe("message-policy");
     expect(body.messageViolations).toContain("missing-conventional-prefix");
     expect(adapter.calls()).toEqual([]); // nothing executed
+  });
+
+  it("refuses to commit staged content with an unresolved conflict marker, executing NOTHING (issue #4: silently-committed markers)", async () => {
+    const adapter = recordingAdapter();
+    const handler = createHandleCommitExecute({
+      execution: seams({
+        adapterFactory: () => adapter.adapter,
+        conflictMarkerReader: () => Promise.resolve(1),
+      }),
+    });
+    const res = await handler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add governed flow" }),
+      deps(),
+    );
+    expect(res.status).toBe(200);
+    const body = res.body as {
+      status: string;
+      blockReason?: string;
+      conflictMarkerFileCount?: number;
+    };
+    expect(body.status).toBe("blocked");
+    expect(body.blockReason).toBe("unresolved-conflict-markers");
+    expect(body.conflictMarkerFileCount).toBe(1);
+    // Before this fix, nothing checked staged CONTENT for leftover markers: a valid conventional
+    // message + a mergeable-looking snapshot would have driven the commit adapter unconditionally,
+    // baking the literal marker lines into history. Proves it now executes nothing instead.
+    expect(adapter.calls()).toEqual([]);
+  });
+
+  it("fails closed (409) when the conflict-marker read itself cannot be completed", async () => {
+    const adapter = recordingAdapter();
+    const handler = createHandleCommitExecute({
+      execution: seams({
+        adapterFactory: () => adapter.adapter,
+        conflictMarkerReader: () => Promise.reject(new Error("not a git repository")),
+      }),
+    });
+    const res = await handler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add governed flow" }),
+      deps(),
+    );
+    expect(res.status).toBe(409);
+    expect(adapter.calls()).toEqual([]);
   });
 
   it("executes a valid conventional commit and records evidence (AC4)", async () => {

@@ -29,10 +29,12 @@ import {
   type GitDeliveryMergeStrategyHint,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  buildBranchProtectionRequiredReviewsArgv,
+  buildCheckRunsArgv,
   buildDeleteMergedBranchArgv,
-  buildHeadStatusArgv,
   buildMergeArgv,
   buildMergeReadinessArgv,
+  buildPullRequestReviewsArgv,
   buildRepoMergeConfigArgv,
   classifyGitMergeRejection,
   GIT_MERGE_COMMAND_RULES,
@@ -207,27 +209,57 @@ function capableStrategiesFrom(
   return caps;
 }
 
-const CHECKS_STATUS_BY_STATE: Readonly<Record<string, GitDeliveryChecksState["overallStatus"]>> = {
-  success: "passing",
-  pending: "pending",
-  failure: "failing",
-  error: "failing",
-};
-
-// A best-effort combined check-status read. Only the overallStatus drives the contract readiness
-// derivation; the per-bucket counts are coarse (the combined state attributed to the matching bucket).
-function checksStateFrom(state: string, total: number): GitDeliveryChecksState {
-  const overallStatus = CHECKS_STATUS_BY_STATE[state] ?? "skipped";
-  return {
-    total,
-    passing: overallStatus === "passing" ? total : 0,
-    failing: overallStatus === "failing" ? total : 0,
-    pending: overallStatus === "pending" ? total : 0,
-    overallStatus,
-  };
+function parseJsonArray(stdout: string): readonly Record<string, unknown>[] | undefined {
+  try {
+    const parsed: unknown = JSON.parse(stdout);
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (entry): entry is Record<string, unknown> =>
+            typeof entry === "object" && entry !== null && !Array.isArray(entry),
+        )
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
-function shouldReadHeadStatus(mergeableState: string | undefined): boolean {
+// Conclusions the Checks API reports as a completed run's outcome that count as PASSING for merge
+// readiness purposes ("neutral"/"skipped" are non-blocking by GitHub's own semantics). Every other
+// completed conclusion (failure/cancelled/timed_out/action_required/stale) counts as FAILING; a run
+// still `in_progress`/`queued` (no conclusion yet) counts as PENDING.
+const PASSING_CONCLUSIONS: ReadonlySet<string> = new Set(["success", "neutral", "skipped"]);
+
+interface RawCheckRun {
+  readonly status?: unknown;
+  readonly conclusion?: unknown;
+}
+
+// Derives the REAL aggregate check state from the modern Checks API's per-run status/conclusion list
+// — replaces the previous single combined "state" string read from the legacy Statuses API
+// (`/commits/{sha}/status`), which could report only one aggregate verdict with no total/pass/fail/
+// pending breakdown.
+function checksStateFromCheckRuns(runs: readonly RawCheckRun[]): GitDeliveryChecksState {
+  let passing = 0;
+  let failing = 0;
+  let pending = 0;
+  for (const run of runs) {
+    if (run.status !== "completed") {
+      pending += 1;
+      continue;
+    }
+    if (typeof run.conclusion === "string" && PASSING_CONCLUSIONS.has(run.conclusion)) {
+      passing += 1;
+    } else {
+      failing += 1;
+    }
+  }
+  const total = runs.length;
+  const overallStatus: GitDeliveryChecksState["overallStatus"] =
+    failing > 0 ? "failing" : pending > 0 ? "pending" : total > 0 ? "passing" : "skipped";
+  return { total, passing, failing, pending, overallStatus };
+}
+
+function shouldReadHeadChecks(mergeableState: string | undefined): boolean {
   return (
     mergeableState === "blocked" || mergeableState === "unstable" || mergeableState === "unknown"
   );
@@ -243,7 +275,7 @@ async function readHeadChecks(
   }
   let argv: readonly string[];
   try {
-    argv = buildHeadStatusArgv(ownerAndRepo, headSha);
+    argv = buildCheckRunsArgv(ownerAndRepo, headSha);
   } catch {
     return undefined;
   }
@@ -251,44 +283,132 @@ async function readHeadChecks(
   if (result instanceof Error || result.exitCode !== 0) {
     return undefined;
   }
-  const state = result.stdout.trim();
-  if (state.length === 0) {
+  const runs = parseJsonArray(result.stdout);
+  if (runs === undefined) {
     return undefined;
   }
-  return checksStateFrom(state, 0);
+  return checksStateFromCheckRuns(runs);
+}
+
+interface RawReview {
+  readonly user?: unknown;
+  readonly state?: unknown;
+}
+
+// GitHub does not dedupe a reviewer's review history server-side: a reviewer who requested changes
+// and later approved appears TWICE, and only their LATEST review is their current disposition. This
+// reduces to "latest state per reviewer" (in submission order, which is what the reviews endpoint
+// returns) before counting APPROVED — counting every APPROVED row unconditionally would overcount a
+// reviewer who approved, was asked to re-review, and had not yet done so.
+function approvedReviewCountFrom(reviews: readonly RawReview[]): number {
+  const latestByUser = new Map<string, string>();
+  for (const review of reviews) {
+    if (typeof review.user !== "string" || typeof review.state !== "string") continue;
+    latestByUser.set(review.user, review.state);
+  }
+  let approved = 0;
+  for (const state of latestByUser.values()) {
+    if (state === "APPROVED") approved += 1;
+  }
+  return approved;
+}
+
+// Best-effort read of the PR's received approval count. A read failure (network, permission, or an
+// unparseable body) yields 0 — the same "no known approvals" default the hardcoded value used to
+// report unconditionally, but now only as a fallback rather than the permanent answer.
+async function readReceivedApprovalCount(
+  ctx: RunContext,
+  req: GitMergeReadinessRequest,
+): Promise<number> {
+  let argv: readonly string[];
+  try {
+    argv = buildPullRequestReviewsArgv(req);
+  } catch {
+    return 0;
+  }
+  const result = await runGh(ctx, argv);
+  if (result instanceof Error || result.exitCode !== 0) return 0;
+  const reviews = parseJsonArray(result.stdout);
+  return reviews === undefined ? 0 : approvedReviewCountFrom(reviews);
+}
+
+// Best-effort read of the base branch's required-approving-review-count. 404 (unprotected branch) and
+// 403 (no admin on the target repository) both surface as a non-zero exit here and fall back to 0 —
+// "no known requirement" — never a hard failure: the provider's own merge-time enforcement (ADR-0087
+// Force 2) is the actual authority regardless of what this best-effort UI read could see.
+async function readRequiredApprovalCount(
+  ctx: RunContext,
+  req: GitMergeReadinessRequest,
+): Promise<number> {
+  let argv: readonly string[];
+  try {
+    argv = buildBranchProtectionRequiredReviewsArgv(req);
+  } catch {
+    return 0;
+  }
+  const result = await runGh(ctx, argv);
+  if (result instanceof Error || result.exitCode !== 0) return 0;
+  const n = Number.parseInt(result.stdout.trim(), 10);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+// Reads the PR object (facts only, un-enriched with approval counts). Returns undefined on any
+// argv-construction, transport, or parse failure — the caller maps that to a provider-error readiness.
+async function readPrObject(
+  ctx: RunContext,
+  req: GitMergeReadinessRequest,
+): Promise<Record<string, unknown> | undefined> {
+  let prArgv: readonly string[];
+  try {
+    prArgv = buildMergeReadinessArgv(req);
+  } catch {
+    return undefined;
+  }
+  const prResult = await runGh(ctx, prArgv);
+  if (prResult instanceof Error || prResult.exitCode !== 0) return undefined;
+  return parseJsonObject(prResult.stdout);
+}
+
+// Best-effort read of the repository's allowed merge strategies. A read failure yields an empty set,
+// the same "no capable strategies known" default the caller has always used for this read.
+async function readCapableStrategies(
+  ctx: RunContext,
+  req: GitMergeReadinessRequest,
+): Promise<readonly GitDeliveryMergeStrategyHint[]> {
+  let cfgArgv: readonly string[];
+  try {
+    cfgArgv = buildRepoMergeConfigArgv(req);
+  } catch {
+    return [];
+  }
+  const cfgResult = await runGh(ctx, cfgArgv);
+  if (cfgResult instanceof Error || cfgResult.exitCode !== 0) return [];
+  const cfgObj = parseJsonObject(cfgResult.stdout);
+  return cfgObj !== undefined ? capableStrategiesFrom(cfgObj) : [];
 }
 
 async function readMergeReadiness(
   ctx: RunContext,
   req: GitMergeReadinessRequest,
 ): Promise<GitMergeProviderReadiness> {
-  let prArgv: readonly string[];
-  let cfgArgv: readonly string[];
-  try {
-    prArgv = buildMergeReadinessArgv(req);
-    cfgArgv = buildRepoMergeConfigArgv(req);
-  } catch {
-    return { providerCapableStrategies: [], providerError: true };
-  }
-  const prResult = await runGh(ctx, prArgv);
-  if (prResult instanceof Error || prResult.exitCode !== 0) {
-    return { providerCapableStrategies: [], providerError: true };
-  }
-  const prObj = parseJsonObject(prResult.stdout);
+  const prObj = await readPrObject(ctx, req);
   if (prObj === undefined) {
     return { providerCapableStrategies: [], providerError: true };
   }
-  const raw = rawMergeReadinessFrom(prObj, req);
+  const factsOnly = rawMergeReadinessFrom(prObj, req);
+
+  // The repo-config, reviews, and branch-protection reads are independent of each other and of the
+  // PR object already in hand, so they run concurrently rather than as three sequential round-trips.
+  const [providerCapableStrategies, receivedApprovalCount, requiredApprovalCount] =
+    await Promise.all([
+      readCapableStrategies(ctx, req),
+      readReceivedApprovalCount(ctx, req),
+      readRequiredApprovalCount(ctx, req),
+    ]);
+  const raw: RawMergeReadiness = { ...factsOnly, receivedApprovalCount, requiredApprovalCount };
   const pullRequest = mapRawMergeReadiness(raw);
 
-  const cfgResult = await runGh(ctx, cfgArgv);
-  const cfgObj =
-    cfgResult instanceof Error || cfgResult.exitCode !== 0
-      ? undefined
-      : parseJsonObject(cfgResult.stdout);
-  const providerCapableStrategies = cfgObj !== undefined ? capableStrategiesFrom(cfgObj) : [];
-
-  const checks = shouldReadHeadStatus(raw.mergeableState)
+  const checks = shouldReadHeadChecks(raw.mergeableState)
     ? await readHeadChecks(ctx, req.ownerAndRepo, raw.headSha)
     : undefined;
 
@@ -296,6 +416,7 @@ async function readMergeReadiness(
     pullRequest,
     providerCapableStrategies,
     ...(checks !== undefined ? { checks } : {}),
+    ...(raw.headSha !== undefined ? { headRefHash: raw.headSha } : {}),
   };
 }
 

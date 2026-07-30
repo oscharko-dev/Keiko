@@ -36,7 +36,11 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.j
 import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
-import { createHandleMergeExecute, createHandleMergePreview } from "./mergeRoutes.js";
+import {
+  createHandleMergeApprove,
+  createHandleMergeExecute,
+  createHandleMergePreview,
+} from "./mergeRoutes.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import type {
   GitDeliveryMergeExecuteResponseBody,
@@ -45,6 +49,7 @@ import type {
 } from "./mergeExecution.js";
 
 const PREVIEW = "/api/git-delivery/merge/preview";
+const APPROVE = "/api/git-delivery/merge/approve";
 const EXECUTE = "/api/git-delivery/merge/execute";
 
 const SNAPSHOT: GitWorktreeSnapshot = {
@@ -255,7 +260,7 @@ describe("merge routes — central enforcement", () => {
   it("does not require a deployment enable flag before project validation", async () => {
     await closeServer();
     await startBound({ env: {} });
-    for (const path of [PREVIEW, EXECUTE]) {
+    for (const path of [PREVIEW, APPROVE, EXECUTE]) {
       const res = await fetch(`http://${UI_HOST}:${String(port)}${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
@@ -454,6 +459,69 @@ describe("merge execute (governed)", () => {
     expect(body.mergeRejectionReason).toBe("conflict");
     expect(body.recoveryDisposition).toBe("user-fixable");
     expect(body.recoveryActionHint).toBe("resolve-conflicts");
+  });
+});
+
+describe("merge approve (mints the approval execute consumes)", () => {
+  // Before this route existed, `GitDeliveryApprovalStore.issue()` had no HTTP caller anywhere in the
+  // product: the default merge policy pack is approval-gated (KEIKO_DEFAULT_MERGE_POLICY_PACK) and no
+  // route could ever produce a claim satisfying it, so every merge execute call fell through to
+  // "approval-required" forever — merge was unreachable by construction from any UI path. These tests
+  // prove the mint route closes that gap end-to-end: mint, then redeem via execute.
+  it("mints a claim that execute accepts for the exact same target, letting a previously-unreachable merge proceed", async () => {
+    const adapter = recordingMergeAdapter(READY_PROVIDER);
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approveHandler = createHandleMergeApprove({
+      execution: seams({ approvalStore, mergeAdapterFactory: () => adapter.adapter }),
+    });
+    const approveRes = await approveHandler(ctxFor(APPROVE, mergeBody()), deps());
+    expect(approveRes.status).toBe(200);
+    const approveBody = approveRes.body as {
+      approval: GitDeliveryApprovalClaim;
+      expiresAt: string;
+    };
+    expect(approveBody.approval.approvalId).toBeTruthy();
+    expect(approveBody.approval.approvalToken).toBeTruthy();
+    expect(new Date(approveBody.expiresAt).getTime()).toBeGreaterThan(1_700_000_000_000);
+
+    const executeHandler = createHandleMergeExecute({
+      execution: seams({ approvalStore, mergeAdapterFactory: () => adapter.adapter }),
+    });
+    const executeRes = await executeHandler(
+      ctxFor(EXECUTE, mergeBody({ approval: approveBody.approval })),
+      deps(),
+    );
+    const executeBody = executeRes.body as GitDeliveryMergeExecuteResponseBody;
+    expect(executeBody.status).toBe("succeeded");
+    expect(executeBody.merged).toBe(true);
+    expect(adapter.merges()).toBe(1);
+  });
+
+  it("mints a claim redeemable only for the exact merge target it was issued against", async () => {
+    const adapter = recordingMergeAdapter(READY_PROVIDER);
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approveHandler = createHandleMergeApprove({ execution: seams({ approvalStore }) });
+    const approveRes = await approveHandler(ctxFor(APPROVE, mergeBody()), deps());
+    const approveBody = approveRes.body as { approval: GitDeliveryApprovalClaim };
+
+    const executeHandler = createHandleMergeExecute({
+      execution: seams({ approvalStore, mergeAdapterFactory: () => adapter.adapter }),
+    });
+    const executeRes = await executeHandler(
+      ctxFor(EXECUTE, mergeBody({ prExternalId: "99", approval: approveBody.approval })),
+      deps(),
+    );
+    expect(executeRes.status).toBe(400);
+    expect(adapter.merges()).toBe(0);
+  });
+
+  it("404s for an unknown project instead of minting an approval", async () => {
+    const approveHandler = createHandleMergeApprove({ execution: seams() });
+    const res = await approveHandler(
+      ctxFor(APPROVE, mergeBody({ projectId: "/no/such/project" })),
+      deps(),
+    );
+    expect(res.status).toBe(404);
   });
 });
 

@@ -207,6 +207,7 @@ export {
   GIT_WORKTREE_READ_COMMAND_RULES,
   GitWorktreeReadError,
   readGitWorktreeSnapshot,
+  readStagedConflictMarkerFileCount,
   readStagedPaths,
   type NodeGitWorktreeReaderDeps,
 } from "./git-worktree-snapshot-node.js";

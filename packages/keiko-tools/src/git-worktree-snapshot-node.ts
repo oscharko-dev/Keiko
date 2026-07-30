@@ -233,3 +233,64 @@ export async function readStagedPaths(deps: NodeGitWorktreeReaderDeps): Promise<
   const out = await runRead(ctx, ["diff", "--cached", "--name-only"]);
   return parseLines(out);
 }
+
+// Matches git's own "leftover conflict marker" diagnostic line, e.g.
+// "src/foo.ts:12: leftover conflict marker". Anchored to git's exact phrase so a `--check` line about
+// a DIFFERENT problem (trailing whitespace, space-before-tab) is never mistaken for a conflict marker
+// and does not block a commit that has nothing to do with an unresolved merge.
+const LEFTOVER_CONFLICT_MARKER_LINE = /^(.+):\d+: leftover conflict marker/;
+
+function countConflictMarkerPaths(checkOutput: string): number {
+  const paths = new Set<string>();
+  for (const line of checkOutput.split("\n")) {
+    const match = LEFTOVER_CONFLICT_MARKER_LINE.exec(line);
+    if (match?.[1] !== undefined) paths.add(match[1]);
+  }
+  return paths.size;
+}
+
+/**
+ * Counts staged files that still contain an unresolved `<<<<<<<`/`=======`/`>>>>>>>` merge-conflict
+ * marker, via `git diff --cached --check` (git's OWN conflict-marker + whitespace-error detector —
+ * not a bespoke regex scan of file content, which would either miss git's exact marker-size handling
+ * or trip on legitimate `=======` text unrelated to a conflict). `--check` exits non-zero when it
+ * finds ANY problem (conflict markers OR whitespace errors); this reader distinguishes the two by
+ * matching only git's "leftover conflict marker" line, so a whitespace-only violation never blocks a
+ * commit through this path. Returns the COUNT of distinct affected paths only — never the paths
+ * themselves, never file content — so the content-free invariant holds even for this read.
+ *
+ * A `git diff --check` failure that is NOT itself a "no problems" (exit 0) or a recognizable
+ * conflict-marker/whitespace report (e.g. "not a git repository") is surfaced as a thrown
+ * GitWorktreeReadError — the same fail-closed contract as every other reader in this module — rather
+ * than silently reporting "no markers found".
+ */
+export async function readStagedConflictMarkerFileCount(
+  deps: NodeGitWorktreeReaderDeps,
+): Promise<number> {
+  const ctx = buildReadContext(deps);
+  let result: CommandResult;
+  try {
+    result = await runCommand(
+      {
+        command: "git",
+        args: ["diff", "--cached", "--check"],
+        cwd: undefined,
+        timeoutMs: ctx.timeoutMs,
+        signal: ctx.signal,
+      },
+      ctx.runDeps,
+    );
+  } catch {
+    throw new GitWorktreeReadError("git diff --check failed to run");
+  }
+  if (result.exitCode === 0) return 0;
+  // `--check` exits non-zero both when it reports a problem (its diagnostic lines go to stdout, e.g.
+  // "path:line: leftover conflict marker.") AND on a genuine command/environment failure (e.g. "fatal:
+  // not a git repository", which goes to stderr with EMPTY stdout). Only the former is this reader's
+  // concern; the latter fails closed like every other reader here rather than silently reporting "no
+  // markers found" for a repository this process could not actually inspect.
+  if (result.stdout.trim().length === 0) {
+    throw new GitWorktreeReadError("git diff --check exited non-zero with no diagnostic output");
+  }
+  return countConflictMarkerPaths(result.stdout);
+}
