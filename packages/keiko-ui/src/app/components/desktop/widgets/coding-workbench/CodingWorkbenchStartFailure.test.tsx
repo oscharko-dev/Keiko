@@ -138,6 +138,9 @@ function sidecarProfile(): unknown {
       maxInputMessages: 100,
       maxRequestBytes: 1_000_000,
     },
+    // F-01: this suite drives Start, which requires a source whose last probe did not fail. The BFF
+    // always reports a verification state, so the stub does too.
+    verification: "verified",
   };
 }
 

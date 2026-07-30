@@ -180,7 +180,13 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.codex.detail":
     "Uses a Keiko-owned subscription session. Credentials remain private.",
   "codingWorkbench.source.confirmedLabel": "Server-confirmed source",
-  "codingWorkbench.source.confirmedValue": "{source} · {status}",
+  "codingWorkbench.source.confirmedValue": "{source} · {status} · {verification}",
+  "codingWorkbench.source.verification.verified": "verified by the last gateway check",
+  "codingWorkbench.source.verification.partial": "partly verified by the last gateway check",
+  "codingWorkbench.source.verification.failed": "the last gateway check failed",
+  "codingWorkbench.source.verification.unverified": "configured, not verified",
+  "codingWorkbench.source.verificationHint":
+    "The last gateway readiness check could not reach this source, so runs stay blocked. Re-run the readiness check in Settings.",
   "codingWorkbench.source.retry": "Retry source",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI through Gateway",

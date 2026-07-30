@@ -1795,6 +1795,18 @@ export {
   listVoicePersonas,
 } from "./gateway.js";
 
+// ─── Gateway verification (F-01) ────────────────────────────────────────────────
+// "Configured" is not "reachable": the one vocabulary every surface uses to report whether a live
+// readiness probe has confirmed the configured gateway, with `unverified` as the fail-closed
+// default. See gateway-verification.ts for why it is dependency-free.
+export type { GatewayVerificationState } from "./gateway-verification.js";
+export {
+  UNVERIFIED_GATEWAY,
+  gatewayVerificationContradictsReadiness,
+  gatewayVerificationFromProbeOutcome,
+  isGatewayVerificationState,
+} from "./gateway-verification.js";
+
 // ─── Voice control / media protocol (Issue #496 / Epic #491; ADR-0101) ──────────
 // Versioned, content-free wire-protocol contract for the optional Voice Digital Twin: the WebSocket
 // control / signaling message catalog, the WebRTC media-plane descriptor, the capability-gating and

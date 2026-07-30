@@ -182,6 +182,7 @@ function installBootstrap(initial: CodingWorkbenchRuntimeSnapshot, refreshed = i
       maxInputMessages: 64,
       maxRequestBytes: 64_000,
     },
+    verification: "verified",
   });
   vi.mocked(getCodingWorkbenchRuntimeReadiness).mockResolvedValue({
     schemaVersion: "1",
@@ -452,6 +453,7 @@ describe("useCodingWorkbenchRuntime", () => {
           maxInputMessages: 64,
           maxRequestBytes: 64_000,
         },
+        verification: "verified",
       });
       await managed.promise;
     });

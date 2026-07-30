@@ -188,7 +188,14 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.codex.detail":
     "Verwendet eine von Keiko verwaltete Abonnementsitzung. Zugangsdaten bleiben privat.",
   "codingWorkbench.source.confirmedLabel": "Serverbestätigte Quelle",
-  "codingWorkbench.source.confirmedValue": "{source} · {status}",
+  "codingWorkbench.source.confirmedValue": "{source} · {status} · {verification}",
+  "codingWorkbench.source.verification.verified": "durch die letzte Gateway-Prüfung bestätigt",
+  "codingWorkbench.source.verification.partial":
+    "durch die letzte Gateway-Prüfung teilweise bestätigt",
+  "codingWorkbench.source.verification.failed": "letzte Gateway-Prüfung fehlgeschlagen",
+  "codingWorkbench.source.verification.unverified": "konfiguriert, nicht verifiziert",
+  "codingWorkbench.source.verificationHint":
+    "Die letzte Gateway-Bereitschaftsprüfung hat diese Quelle nicht erreicht, daher bleiben Läufe blockiert. Führe die Bereitschaftsprüfung in den Einstellungen erneut aus.",
   "codingWorkbench.source.retry": "Quelle erneut versuchen",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI über Gateway",

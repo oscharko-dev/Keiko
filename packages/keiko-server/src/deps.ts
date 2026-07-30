@@ -35,6 +35,7 @@ import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
 import {
   DEFAULT_CONTEXT_PROFILE,
   isCodingWorkbenchMode,
+  UNVERIFIED_GATEWAY,
   type CodingWorkbenchMode,
   type CodingWorkbenchModelSource,
   type CodingWorkbenchRuntimeUnavailableReason,
@@ -43,6 +44,7 @@ import {
   type DebugProvisioning,
   deriveContextProfileFromCapability,
   type ContextProfile,
+  type GatewayVerificationState,
   type UpdatePreflightReport,
   type WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
@@ -322,6 +324,16 @@ export interface RuntimeGatewayConfig {
   current(): GatewayConfig | undefined;
   present(): boolean;
   set(config: GatewayConfig | undefined, present: boolean): void;
+  /**
+   * F-01: the last live-probe outcome for the CURRENT configuration generation. Config presence is
+   * not reachability, so every surface that would otherwise infer readiness from `present()` reads
+   * this instead. It lives here, on the owner of the config generation, so that replacing the
+   * config through `set()` structurally invalidates a verification that described the old one — a
+   * separate ledger would have to remember to do that, and forgetting is exactly the class of bug
+   * this fixes.
+   */
+  verification(): GatewayVerificationState;
+  recordVerification(state: GatewayVerificationState): void;
 }
 
 export interface GatewayDiscoveredModels {
@@ -962,6 +974,10 @@ function createRuntimeGatewayConfig(
 ): RuntimeGatewayConfig {
   let config = initial;
   let present = initialPresent;
+  // A freshly loaded config has never been probed by this process, so it starts unverified. It is
+  // never seeded from disk: a probe outcome describes a live endpoint at a point in time, not a
+  // stored setting, and reloading one would let a surface claim health nobody observed.
+  let verification: GatewayVerificationState = UNVERIFIED_GATEWAY;
   return {
     storagePath,
     current: (): GatewayConfig | undefined => config,
@@ -969,12 +985,28 @@ function createRuntimeGatewayConfig(
     set(next: GatewayConfig | undefined, nextPresent: boolean): void {
       config = next;
       present = nextPresent;
+      verification = UNVERIFIED_GATEWAY;
+    },
+    verification: (): GatewayVerificationState => verification,
+    recordVerification(state: GatewayVerificationState): void {
+      verification = state;
     },
   };
 }
 
 export function currentGatewayConfig(deps: UiHandlerDeps): GatewayConfig | undefined {
   return deps.gatewayConfig?.current() ?? deps.config;
+}
+
+/**
+ * F-01: the last live-probe outcome, or `unverified` when this process holds none (including every
+ * deps assembly that carries a plain `config` without the runtime holder). Fail closed: a surface
+ * that cannot name a probe result must never render a healthy state.
+ */
+export function currentGatewayVerification(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+): GatewayVerificationState {
+  return deps.gatewayConfig?.verification() ?? UNVERIFIED_GATEWAY;
 }
 
 function configuredChatContextProfile(
@@ -2526,6 +2558,13 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
         managedLspControl,
         debugActivation: debugActivationControl,
         processEnv: args.options.env,
+        // F-01: the AI-assist badge and the inline-completion / test-generation admission checks
+        // read this snapshot. Read the config holder on every settings read so a probe that runs
+        // after the control was built is reflected without a cache or a poller.
+        gatewayStatus: () => ({
+          configured: args.runtimeConfig.present(),
+          verification: args.runtimeConfig.verification(),
+        }),
       }),
     editorSettingsEvents: args.options.editorSettingsEvents ?? createEditorSettingsEventBus(),
     workspaceWatchService: args.options.workspaceWatchService ?? createWorkspaceWatchService(),

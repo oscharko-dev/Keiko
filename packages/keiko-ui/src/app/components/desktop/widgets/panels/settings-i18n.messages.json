@@ -43,6 +43,18 @@
     "en": "Keiko can use the configured gateway models for chat and agent workflows.",
     "de": "Keiko kann die konfigurierten Gateway-Modelle für Chat- und Agent-Workflows nutzen."
   },
+  "settings.models.probeFailed": {
+    "en": "Gateway check failed",
+    "de": "Gateway-Prüfung fehlgeschlagen"
+  },
+  "settings.models.detailNotVerified": {
+    "en": "Configured, not verified: no readiness check has confirmed that this gateway answers. Run a readiness check below.",
+    "de": "Konfiguriert, nicht verifiziert: Keine Bereitschaftsprüfung hat bestätigt, dass dieses Gateway antwortet. Führe unten eine Bereitschaftsprüfung aus."
+  },
+  "settings.models.detailProbeFailed": {
+    "en": "The last readiness check could not confirm this gateway. Model and agent features that need it stay unavailable until a check succeeds.",
+    "de": "Die letzte Bereitschaftsprüfung konnte dieses Gateway nicht bestätigen. Modell- und Agent-Funktionen, die es benötigen, bleiben bis zu einer erfolgreichen Prüfung nicht verfügbar."
+  },
   "settings.models.modelCount": {
     "en": "{count} models",
     "de": "{count} Modelle"
@@ -58,6 +70,14 @@
   "settings.models.statusSetupRequired": {
     "en": "setup required",
     "de": "Einrichtung erforderlich"
+  },
+  "settings.models.statusNotVerified": {
+    "en": "configured, not verified",
+    "de": "konfiguriert, nicht verifiziert"
+  },
+  "settings.models.statusProbeFailed": {
+    "en": "gateway check failed",
+    "de": "Gateway-Prüfung fehlgeschlagen"
   },
   "settings.models.statusConversationEligible": {
     "en": "conversation-eligible",
@@ -534,6 +554,10 @@
   "settings.editor.aiStatus": {
     "en": "AI status: {state} ({reason})",
     "de": "KI-Status: {state} ({reason})"
+  },
+  "settings.editor.aiStatusUnverified": {
+    "en": "AI status: not verified — no gateway readiness check has confirmed a model for this feature",
+    "de": "KI-Status: nicht verifiziert — keine Gateway-Bereitschaftsprüfung hat ein Modell für diese Funktion bestätigt"
   },
   "settings.editor.confirmInlineCompletion": {
     "en": "Enable inline AI completion for this user? Keiko will route optional ghost-text requests through the governed Model Gateway only when operator policy, model capability, budget, and health allow it. This does not grant patch, execution, delivery, or wider authority.",

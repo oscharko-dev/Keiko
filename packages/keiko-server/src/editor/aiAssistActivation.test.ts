@@ -16,7 +16,15 @@ import {
   editorAiPolicyCeilingLocks,
   editorAiStatusActive,
   resolveEditorAiAssistStatuses,
+  type EditorAiGatewayStatus,
 } from "./aiAssistActivation.js";
+
+// A gateway a live probe has confirmed. Spelled out at every call site that expects an ACTIVE
+// state: these cases exercise the ceiling / opt-in ladder, and each of them now has to say which
+// probe outcome it stands on rather than inheriting a healthy default (F-01).
+function verifiedGateway(): EditorAiGatewayStatus {
+  return { configured: true, verification: "verified" };
+}
 
 type Values = Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>>;
 
@@ -74,6 +82,7 @@ describe("editor AI-assist activation", () => {
     });
     const denied = resolveEditorAiAssistStatuses({
       env: { KEIKO_EDITOR_TEST_GENERATION: "off" },
+      gateway: verifiedGateway(),
       revision: 7,
       settings: settings({ testGeneration: true }),
     }).statuses.find((status) => status.feature === "testGeneration");
@@ -91,6 +100,7 @@ describe("editor AI-assist activation", () => {
         KEIKO_EDITOR_PATCH_APPLY: "on",
         KEIKO_EDITOR_AI_VERIFICATION: "off",
       },
+      gateway: verifiedGateway(),
       revision: 10,
       settings: settings({ patchApply: true }),
     });
@@ -149,6 +159,7 @@ describe("editor AI-assist activation", () => {
     for (const entry of cases) {
       const summary = resolveEditorAiAssistStatuses({
         env: entry.env,
+        gateway: verifiedGateway(),
         revision: 11,
         settings: settings({ patchApply: true }),
       });
@@ -203,7 +214,7 @@ describe("editor AI-assist activation", () => {
           KEIKO_EDITOR_PATCH_APPLY: "on",
           KEIKO_EDITOR_AI_VERIFICATION: entry.ceiling,
         },
-        gatewayConfigured: entry.gatewayConfigured,
+        gateway: { configured: entry.gatewayConfigured, verification: "verified" },
         revision: 12,
         settings: settings({ patchApply: entry.setting }),
       });
@@ -224,6 +235,7 @@ describe("editor AI-assist activation", () => {
   it("requires explicit opt-in even when the operator ceiling permits a feature", () => {
     const statuses = resolveEditorAiAssistStatuses({
       env: { KEIKO_EDITOR_TEST_GENERATION: "on", KEIKO_EDITOR_PATCH_APPLY: "on" },
+      gateway: verifiedGateway(),
       revision: 8,
       settings: settings({ inlineCompletion: false, testGeneration: false, patchApply: true }),
     }).statuses;
@@ -248,7 +260,7 @@ describe("editor AI-assist activation", () => {
   it("marks missing gateway capability as degraded and therefore not active", () => {
     const statuses = resolveEditorAiAssistStatuses({
       env: { KEIKO_EDITOR_TEST_GENERATION: "on", KEIKO_EDITOR_PATCH_APPLY: "on" },
-      gatewayConfigured: false,
+      gateway: { configured: false, verification: "verified" },
       revision: 9,
       settings: settings({ inlineCompletion: true, testGeneration: true, patchApply: true }),
     }).statuses;
@@ -268,6 +280,63 @@ describe("editor AI-assist activation", () => {
     if (inline !== undefined && patch !== undefined) {
       expect(editorAiStatusActive(inline)).toBe(false);
       expect(editorAiStatusActive(patch)).toBe(true);
+    }
+  });
+
+  // F-01: a configured gateway nobody has probed used to resolve to state "active" /
+  // policyResult "allowed" — a green badge and an allowed inline-completion admission backed by a
+  // hardcoded `providerHealth: "healthy"` and a `gatewayConfigured` default of `true`. Opting in is
+  // an operator decision; it is not evidence that the provider answers.
+  it("never reports an active gateway-backed feature without a probe outcome", () => {
+    const summary = resolveEditorAiAssistStatuses({
+      env: {
+        KEIKO_EDITOR_TEST_GENERATION: "on",
+        KEIKO_EDITOR_PATCH_APPLY: "on",
+        KEIKO_EDITOR_AI_VERIFICATION: "on",
+      },
+      gateway: { configured: true, verification: "unverified" },
+      revision: 13,
+      settings: settings({ inlineCompletion: true, testGeneration: true, patchApply: true }),
+    });
+
+    for (const feature of ["inlineCompletion", "testGeneration", "verification"] as const) {
+      const status = featureStatus(summary, feature);
+      expect(status).toMatchObject({
+        state: "degraded",
+        reasonCode: "PROVIDER_UNVERIFIED",
+        policyResult: "denied",
+      });
+      expect(editorAiStatusActive(status)).toBe(false);
+    }
+    // Patch apply issues no gateway request, so an unprobed gateway neither degrades it nor lets it
+    // borrow the gateway's confirmation.
+    expect(featureStatus(summary, "patchApply")).toMatchObject({
+      state: "active",
+      reasonCode: "ACTIVE",
+      policyResult: "allowed",
+    });
+  });
+
+  it("distinguishes an unprobed gateway from a probe that answered", () => {
+    const cases = [
+      { verification: "verified", state: "active", reasonCode: "ACTIVE" },
+      { verification: "partial", state: "degraded", reasonCode: "PROVIDER_UNHEALTHY" },
+      { verification: "failed", state: "degraded", reasonCode: "PROVIDER_UNHEALTHY" },
+      { verification: "unverified", state: "degraded", reasonCode: "PROVIDER_UNVERIFIED" },
+    ] as const;
+
+    for (const entry of cases) {
+      const summary = resolveEditorAiAssistStatuses({
+        gateway: { configured: true, verification: entry.verification },
+        revision: 14,
+        settings: settings({ inlineCompletion: true }),
+      });
+
+      expect(featureStatus(summary, "inlineCompletion")).toMatchObject({
+        state: entry.state,
+        reasonCode: entry.reasonCode,
+        policyResult: entry.state === "active" ? "allowed" : "denied",
+      });
     }
   });
 });

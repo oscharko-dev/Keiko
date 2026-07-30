@@ -17,7 +17,10 @@ import type {
   GatewayReadinessReport,
   GatewayReadinessRequest,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts";
+import {
+  gatewayVerificationFromProbeOutcome,
+  maxUtf8BytesForTokenBudget,
+} from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig } from "./deps.js";
 import { rerankSelection } from "./grounded-rerank-facade.js";
@@ -1069,13 +1072,19 @@ export async function runGatewayReadiness(
       )),
     );
   }
-  return {
+  const report: GatewayReadinessReport = {
     modelId: selection.provider.modelId,
     checkedAt: new Date().toISOString(),
     overallStatus: reportStatus(probes),
     probes,
     verifiedCapabilities: verifiedCapabilities(probes),
   };
+  // F-01: this run is the product's only live evidence about the gateway. Record its outcome on the
+  // config holder so the surfaces that used to infer readiness from configuration alone (the editor
+  // AI-assist badge, the Coding Workbench source projection) report what was actually observed.
+  // Content-free: one state word, no probe bodies, no endpoints, no credentials.
+  deps.gatewayConfig?.recordVerification(gatewayVerificationFromProbeOutcome(report.overallStatus));
+  return report;
 }
 
 export async function handleGatewayReadiness(

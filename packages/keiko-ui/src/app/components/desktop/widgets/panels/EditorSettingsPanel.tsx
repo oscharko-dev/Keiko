@@ -260,10 +260,7 @@ function EditorSettingCard({
           ) : null}
           {aiStatus === undefined ? null : (
             <span className={styles.badge} data-tone={aiStatusTone(aiStatus)}>
-              {t("settings.editor.aiStatus", {
-                state: aiStatus.state,
-                reason: aiStatus.reasonCode,
-              })}
+              {aiStatusLabel(aiStatus, t)}
             </span>
           )}
         </div>
@@ -370,6 +367,19 @@ function aiStatusTone(status: EditorM7AiActivationStatus): "success" | "warning"
   if (status.state === "active") return "success";
   if (status.state === "denied") return "danger";
   return "warning";
+}
+
+/**
+ * F-01: this badge is the operator's readout of whether AI assistance is actually live. The
+ * unverified reason gets a sentence rather than the raw `PROVIDER_UNVERIFIED` code, because "no
+ * readiness check has confirmed the gateway" is an actionable condition and the operator has to be
+ * able to tell it apart from a provider that answered and failed.
+ */
+function aiStatusLabel(status: EditorM7AiActivationStatus, t: I18nTranslate): string {
+  if (status.reasonCode === "PROVIDER_UNVERIFIED") {
+    return t("settings.editor.aiStatusUnverified");
+  }
+  return t("settings.editor.aiStatus", { state: status.state, reason: status.reasonCode });
 }
 
 function requiresAiConfirmation(id: EditorM7SettingId): boolean {
