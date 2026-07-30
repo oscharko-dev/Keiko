@@ -1225,17 +1225,52 @@ function canonicalModifiers(
   return modifiers;
 }
 
+/**
+ * `CtrlOrMeta`, `Ctrl` and `Meta` all name the same physical position in a chord, so no two of them
+ * may appear together. `Ctrl+Meta` was the one pair this used to allow, and it is not a chord a
+ * keyboard can produce as declared: off macOS the workspace matcher resolves `Meta` onto the
+ * Control key, so `Ctrl+Meta+T` fires on a plain Ctrl+T — a doubled physical modifier that carried
+ * a browser-reserved chord past the reservation check below and onto the substrate (0.3.0 release
+ * audit, #2802). `WorkspaceKeyChord` refuses the same pair in `isWorkspaceDispatchableChord`.
+ */
 function modifiersConflict(
   modifier: EditorM7KeybindingModifier,
   seen: ReadonlySet<EditorM7KeybindingModifier>,
 ): boolean {
-  if (modifier === "CtrlOrMeta") return seen.has("Ctrl") || seen.has("Meta");
-  return (modifier === "Ctrl" || modifier === "Meta") && seen.has("CtrlOrMeta");
+  const ctrlOrMetaAliases: readonly EditorM7KeybindingModifier[] = ["CtrlOrMeta", "Ctrl", "Meta"];
+  if (!ctrlOrMetaAliases.includes(modifier)) return false;
+  return ctrlOrMetaAliases.some((alias) => alias !== modifier && seen.has(alias));
+}
+
+/**
+ * The PHYSICAL chord a binding produces, as one comparable key. `CtrlOrMeta+T`, `Meta+T` and
+ * `Ctrl+T` are one keystroke — the browser's reserved Cmd/Ctrl+T — so reservation AND collision are
+ * both decided here rather than on the canonical binding string. Comparing strings let the
+ * explicit-modifier spellings through: a `Meta+P` override read as distinct from `CtrlOrMeta+P` and
+ * silently took Cmd+P away from `quick-access.files` (0.3.0 release audit, #2802), and the
+ * substrate refuses a reserved chord by THROWING in render, so an accepted `Ctrl+T` became a
+ * persisted white screen. `WORKSPACE_RESERVED_CHORDS` in workspace-ui.ts is the chord-level twin of
+ * `RESERVED_BINDINGS`, and this list must stay at least as strict.
+ *
+ * The rewrite collapses three names onto one, so it MUST dedupe — without it `Ctrl+Meta+T` produced
+ * `ctrlormeta+ctrlormeta+t`, a key no reservation can ever equal. `modifiersConflict` now rejects
+ * that pair outright; the dedupe stays because every reservation and collision answer is read off
+ * this key and it must not depend on an earlier guard having run.
+ */
+function physicalChordKey(binding: string): string {
+  const parts = binding
+    .split("+")
+    .map((part) => (part === "Ctrl" || part === "Meta" ? "CtrlOrMeta" : part))
+    .map((part) => part.toLowerCase());
+  return [...new Set(parts)].join("+");
 }
 
 function isReservedBinding(binding: string): boolean {
-  const key = binding.toLowerCase();
-  return RESERVED_BINDINGS.some((reserved) => canonicalBinding(reserved)?.toLowerCase() === key);
+  const key = physicalChordKey(binding);
+  return RESERVED_BINDINGS.some((reserved) => {
+    const canonical = canonicalBinding(reserved);
+    return canonical !== undefined && physicalChordKey(canonical) === key;
+  });
 }
 
 function canonicalModifier(part: string): EditorM7KeybindingModifier | undefined {
@@ -1319,15 +1354,18 @@ export function validateEditorM7Keybinding(args: {
   }
 }
 
+// Collision is decided on the PHYSICAL chord, never on the canonical binding string: dispatch
+// matches keystrokes, so `Meta+P` and `CtrlOrMeta+P` are the same claim even though the two strings
+// differ. Comparing strings here let a persisted `Meta+P` override be accepted alongside
+// `quick-access.files`' own `CtrlOrMeta+P` and take the chord away from it (0.3.0 audit, #2802).
 function collidesWithCommand(
   command: EditorM7CommandDefinition,
   binding: string,
   active: EditorM7ActiveKeybinding,
 ): boolean {
   const activeBinding = canonicalBinding(active.binding);
-  if (active.commandId === command.id || activeBinding?.toLowerCase() !== binding.toLowerCase()) {
-    return false;
-  }
+  if (active.commandId === command.id || activeBinding === undefined) return false;
+  if (physicalChordKey(activeBinding) !== physicalChordKey(binding)) return false;
   const other = commandFor(active.commandId);
   return other !== undefined && commandContextsOverlap(command, other);
 }

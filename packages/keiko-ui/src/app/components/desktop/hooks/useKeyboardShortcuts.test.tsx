@@ -15,6 +15,7 @@ import type { WorkspaceKeyboardShortcutBinding } from "@oscharko-dev/keiko-contr
 import {
   detectReservedBindings,
   detectShortcutConflicts,
+  SHELL_CHORD_BYPASS_ATTRIBUTE,
   useKeyboardShortcuts,
   WorkspaceShortcutConflictError,
   WorkspaceShortcutReservedError,
@@ -81,6 +82,44 @@ describe("useKeyboardShortcuts — pure helpers", () => {
     const reserved = detectReservedBindings([bind("closePanel", "w", ["ctrl"])]);
     expect(reserved).toHaveLength(1);
     expect(reserved[0]?.commandId).toBe("closePanel");
+  });
+
+  // 0.3.0 release audit (#2802) — both guards are STRENGTHENED to compare the physical chord.
+  // `cmd` is the Control key off macOS, so ["ctrl","cmd"] is Ctrl alone at match time and `cmd|p`
+  // and `ctrl|p` are one keystroke. Comparing declarations made the substrate blind to both.
+  it.each([
+    ["t", ["ctrl", "cmd"]],
+    ["r", ["cmd", "ctrl"]],
+    ["w", ["ctrl", "cmd"]],
+    ["n", ["ctrl", "cmd", "shift"]],
+  ])("detectReservedBindings flags the doubled-modifier spelling of %s", (key, mod) => {
+    expect(detectReservedBindings([bind("smuggled", key, mod)])).toHaveLength(1);
+  });
+
+  it("detectShortcutConflicts groups cmd|p and ctrl|p as one keystroke", () => {
+    const conflicts = detectShortcutConflicts([bind("a", "p", ["cmd"]), bind("b", "p", ["ctrl"])]);
+
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]?.commandIds).toEqual(["a", "b"]);
+  });
+
+  it("detectShortcutConflicts still separates chords that differ physically", () => {
+    expect(
+      detectShortcutConflicts([bind("a", "p", ["cmd"]), bind("b", "p", ["cmd", "alt"])]),
+    ).toHaveLength(0);
+  });
+
+  it("detectShortcutConflicts reports the shipped default shell table as conflict-free", () => {
+    expect(
+      detectShortcutConflicts([
+        bind("undo", "z", ["cmd"]),
+        bind("redo", "z", ["cmd", "shift"]),
+        bind("focus-status", "s", ["alt"]),
+        bind("focus-workspace-search", "f", ["cmd", "shift"]),
+        bind("quick-access.files", "p", ["cmd"]),
+        bind("quick-access.commands", "p", ["cmd", "shift"]),
+      ]),
+    ).toEqual([]);
   });
 });
 
@@ -251,5 +290,124 @@ describe("useKeyboardShortcuts — substrate contract", () => {
     expect(result.current.conflicts).toHaveLength(0);
     expect(result.current.reserved).toHaveLength(0);
     expect(result.current.bindings).toHaveLength(2);
+  });
+});
+
+// Audit — the editable-target guard above suppressed EVERY chord inside a text field, which left
+// Cmd/Ctrl+P, Cmd/Ctrl+Shift+P and Cmd/Ctrl+Shift+F dead in the chat composer (the product's primary
+// input). A field that carries SHELL_CHORD_BYPASS_ATTRIBUTE opts into the forwarding rule instead:
+// Cmd/Ctrl chords reach the shell, but the chords the field's own text editing owns
+// (Cmd/Ctrl+Z / +Shift+Z / +Y / +X / +C / +V / +A), Alt-composed chords and plain keys do not.
+describe("useKeyboardShortcuts — opted-in text fields (SHELL_CHORD_BYPASS_ATTRIBUTE)", () => {
+  function optedInField(): HTMLTextAreaElement {
+    const field = document.createElement("textarea");
+    field.setAttribute(SHELL_CHORD_BYPASS_ATTRIBUTE, "");
+    document.body.appendChild(field);
+    return field;
+  }
+
+  function fireFrom(field: HTMLElement, init: KeyboardEventInit): void {
+    field.dispatchEvent(new KeyboardEvent("keydown", { ...init, bubbles: true, cancelable: true }));
+  }
+
+  it("forwards the quick-access and workspace-search chords from an opted-in field", () => {
+    const dispatch = vi.fn();
+    renderHook(() =>
+      useKeyboardShortcuts({
+        bindings: [
+          bind("quick-access.files", "p", ["cmd"]),
+          bind("quick-access.commands", "p", ["cmd", "shift"]),
+          bind("focus-workspace-search", "f", ["cmd", "shift"]),
+        ],
+        dispatch,
+        platform: "mac",
+      }),
+    );
+    const field = optedInField();
+
+    fireFrom(field, { key: "p", metaKey: true });
+    fireFrom(field, { key: "p", metaKey: true, shiftKey: true });
+    fireFrom(field, { key: "f", metaKey: true, shiftKey: true });
+
+    expect(dispatch.mock.calls.map(([id]) => id)).toEqual([
+      "quick-access.files",
+      "quick-access.commands",
+      "focus-workspace-search",
+    ]);
+    field.remove();
+  });
+
+  it("keeps Cmd+Z and Cmd+Shift+Z with the field so they undo the user's typing", () => {
+    const dispatch = vi.fn();
+    renderHook(() =>
+      useKeyboardShortcuts({
+        bindings: [bind("undo", "z", ["cmd"]), bind("redo", "z", ["cmd", "shift"])],
+        dispatch,
+        platform: "mac",
+      }),
+    );
+    const field = optedInField();
+
+    fireFrom(field, { key: "z", metaKey: true });
+    fireFrom(field, { key: "z", metaKey: true, shiftKey: true });
+
+    expect(dispatch).not.toHaveBeenCalled();
+    field.remove();
+  });
+
+  it("keeps an Alt chord with the field (Option composes characters in a text field)", () => {
+    const dispatch = vi.fn();
+    renderHook(() =>
+      useKeyboardShortcuts({
+        bindings: [bind("focus-status", "s", ["alt"])],
+        dispatch,
+        platform: "mac",
+      }),
+    );
+    const field = optedInField();
+
+    fireFrom(field, { key: "ß", code: "KeyS", altKey: true });
+
+    expect(dispatch).not.toHaveBeenCalled();
+    field.remove();
+  });
+
+  it("still suppresses the same chord in a text field that did NOT opt in", () => {
+    const dispatch = vi.fn();
+    renderHook(() =>
+      useKeyboardShortcuts({
+        bindings: [bind("quick-access.files", "p", ["cmd"])],
+        dispatch,
+        platform: "mac",
+      }),
+    );
+    const field = document.createElement("textarea");
+    document.body.appendChild(field);
+
+    fireFrom(field, { key: "p", metaKey: true });
+
+    expect(dispatch).not.toHaveBeenCalled();
+    field.remove();
+  });
+
+  it("honours the marker on an ancestor of the focused field", () => {
+    const dispatch = vi.fn();
+    renderHook(() =>
+      useKeyboardShortcuts({
+        bindings: [bind("quick-access.files", "p", ["cmd"])],
+        dispatch,
+        platform: "mac",
+      }),
+    );
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute(SHELL_CHORD_BYPASS_ATTRIBUTE, "");
+    const field = document.createElement("input");
+    wrapper.appendChild(field);
+    document.body.appendChild(wrapper);
+
+    fireFrom(field, { key: "p", metaKey: true });
+
+    expect(dispatch).toHaveBeenCalledWith("quick-access.files");
+    wrapper.remove();
   });
 });
