@@ -21,6 +21,7 @@ import {
 } from "./coding-workbench-runtime-actions";
 import {
   codingWorkbenchStreamRunId,
+  useCodingWorkbenchPairingEffect,
   useCodingWorkbenchRuntimeRefreshEffects,
   useCodingWorkbenchRuntimeStream,
   useCodingWorkbenchWorkspaceEffect,
@@ -74,6 +75,7 @@ export function useCodingWorkbenchRuntime(
     refreshRun: resources.refreshRun,
     dispatch,
   });
+  useCodingWorkbenchPairingEffect(dispatch);
   useCodingWorkbenchRuntimeRefreshEffects({ state, ...resources });
   useCodingWorkbenchWorkspaceEffect({
     activeBinding,

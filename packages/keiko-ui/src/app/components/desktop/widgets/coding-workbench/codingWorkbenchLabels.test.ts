@@ -249,3 +249,38 @@ describe("visibleAlert mutation failures (F-09a)", () => {
     expect(alert).toContain("ui-correlation-9");
   });
 });
+
+describe("app-session pairing truth (release-audit F-08/RG-12)", () => {
+  function unpairedState(): CodingWorkbenchRuntimeState {
+    return { ...createInitialCodingWorkbenchRuntimeState(), pairing: "unpaired" };
+  }
+
+  // ADR-0141: an unpaired window's run start is guaranteed to fail authority resolution, so the
+  // narration must name pairing as the missing input instead of narrating full readiness.
+  it("names the unpaired window in the lifecycle narration", () => {
+    expect(lifecycleAnnouncement(unpairedState(), t)).toContain("codingWorkbench.pairing.unpaired");
+  });
+
+  it("does not claim pairing truth while it is still unconfirmed", () => {
+    expect(lifecycleAnnouncement(createInitialCodingWorkbenchRuntimeState(), t)).not.toContain(
+      "codingWorkbench.pairing.unpaired",
+    );
+  });
+
+  it("surfaces the unpaired window as a standing visible alert", () => {
+    expect(visibleAlert(unpairedState(), t, false)).toBe("codingWorkbench.pairing.unpaired");
+    expect(visibleAlert(createInitialCodingWorkbenchRuntimeState(), t, false)).toBeNull();
+  });
+
+  it("keeps an actionable refresh failure ahead of the standing pairing condition", () => {
+    const state: CodingWorkbenchRuntimeState = {
+      ...unpairedState(),
+      runtime: {
+        status: "error",
+        value: null,
+        error: { code: "RUNTIME_UNAVAILABLE", message: "redacted", retryable: true },
+      },
+    };
+    expect(visibleAlert(state, t, false)).toBe("codingWorkbench.alert.runtimeRefreshFailed");
+  });
+});

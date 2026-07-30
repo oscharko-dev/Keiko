@@ -444,6 +444,8 @@ export const DE_MESSAGES = {
   "chat.grounding.strategy": "Strategie",
   "chat.grounding.modelOnly": "Nur Modell",
   "chat.grounding.liveFiles": "Live-Dateikontext",
+  "chat.grounding.liveFilesUnavailableHint":
+    "Verbinde ein Files-Fenster mit diesem Chat, um Antworten in deinem Repository zu verankern.",
   "chat.grounding.multiple": "Mehrere Quellen",
   "chat.grounding.disconnectConfirm":
     "Dadurch werden {count} Grounding-{sourceLabel} getrennt. Fortfahren?",

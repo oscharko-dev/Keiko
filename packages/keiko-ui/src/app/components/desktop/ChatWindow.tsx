@@ -3707,6 +3707,9 @@ function LocalKnowledgeScopeControl({
   const value = groundedModeValue(chat);
   const capsuleChoices = capsuleOptions(chat, capsules, t);
   const capsuleSetChoices = capsuleSetOptions(chat, capsuleSets, t);
+  // Audit F-12 — a disabled option must say why: without a connected Files source the reason
+  // for the greyed-out "Live Files context" entry is otherwise undiscoverable.
+  const liveFilesAvailable = hasFolderGroundingScope(chat);
   // C172 — a catalog load failure surfaces here too; an update error wins.
   const displayedError = error ?? loadError;
   // uiux-fix F041 (C178) — classed instead of inline-styled (theme/hover/focus
@@ -3727,7 +3730,10 @@ function LocalKnowledgeScopeControl({
               {
                 value: "files",
                 label: t("chat.grounding.liveFiles"),
-                disabled: !hasFolderGroundingScope(chat),
+                disabled: !liveFilesAvailable,
+                ...(liveFilesAvailable
+                  ? {}
+                  : { description: t("chat.grounding.liveFilesUnavailableHint") }),
               },
               ...(value === "multi"
                 ? [{ value: "multi", label: t("chat.grounding.multiple"), disabled: true }]

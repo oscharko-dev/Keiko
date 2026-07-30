@@ -10,7 +10,7 @@ import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 
 import { useChatSessionContext } from "../context/ChatSessionContext";
 import type { ChatSessionApi } from "../hooks/useChatSession";
-import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
+import { useWorkspaceManifest, type WorkspaceManifestView } from "../hooks/useWorkspaceManifest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
 import {
@@ -51,6 +51,24 @@ const FilesWidget = dynamic(() => import("./cards/FilesWidget").then((mod) => mo
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const value = cfg[key];
   return typeof value === "string" ? value : undefined;
+}
+
+// One predicate for "this window targets the bound managed task-workspace root and the paired
+// read authority is not confirmed" — shared by the editor AND Files hosts (release-audit F-08) so
+// the two surfaces can never disagree about when the managed root is presentable. The managed
+// root lives under the deny-listed state area and is readable only through a launcher-paired app
+// session (ADR-0141); when authority is missing the host renders the paired-session note instead
+// of the raw denials.
+function managedTaskWorkspaceAccess(
+  ctx: WindowRenderContext,
+  targetRoot: string | undefined,
+  workspace: Pick<WorkspaceManifestView, "pathReadAuthority">,
+): ManagedTaskWorkspaceAccess | null {
+  return ctx.activeBinding !== null &&
+    targetRoot === ctx.activeBinding.activeRoot &&
+    workspace.pathReadAuthority !== "available"
+    ? workspace.pathReadAuthority
+    : null;
 }
 
 function num(cfg: Record<string, unknown>, key: string): number | undefined {
@@ -848,12 +866,7 @@ export function EditorWindowSessionHost({
     updateCfg: ctx.updateCfg,
   });
   const effectiveRoot = root ?? configuredRoot;
-  const managedAccess: ManagedTaskWorkspaceAccess | null =
-    ctx.activeBinding !== null &&
-    effectiveRoot === ctx.activeBinding.activeRoot &&
-    workspace.pathReadAuthority !== "available"
-      ? workspace.pathReadAuthority
-      : null;
+  const managedAccess = managedTaskWorkspaceAccess(ctx, effectiveRoot, workspace);
   const buildBaseProps = useCallback(
     (targetRoot: string): EditorSessionBaseProps => ({
       ...editorSessionBaseProps(targetRoot, cfg, ctx),
@@ -1016,6 +1029,20 @@ export function FilesWindowSessionHost({
 }): ReactNode {
   const t = useTranslate();
   const workspace = useWorkspaceManifest(root);
+  // Release-audit F-08: the bound managed task-workspace root is readable only through a
+  // launcher-paired app session (ADR-0141). Without this gate — the same one the editor host
+  // applies — an unpaired window rendered the raw denials ("Git unavailable", "The requested path
+  // is excluded from the read surface.") instead of naming the real, actionable condition. The
+  // deny list and the server's content-free deny reason stay untouched; this only presents them.
+  const managedAccess = managedTaskWorkspaceAccess(ctx, root, workspace);
+  if (managedAccess !== null) {
+    return (
+      <ManagedTaskWorkspaceUnavailable
+        access={managedAccess}
+        onRetry={() => void workspace.refresh()}
+      />
+    );
+  }
   const onActiveFileChange = (
     path: string | null,
     resolvedRoot: string | null,

@@ -119,6 +119,17 @@ async function handleFoundationRoute(
     return true;
   }
   if (route.request().method() !== "GET") return false;
+  // The pairing dimension of readiness (release-audit F-08/RG-12) reads the workspaces endpoint,
+  // and an unanswered read is fail-closed to `unknown` — which correctly blocks a run start. This
+  // live-runtime fixture models a launcher-paired window, so it must answer like the real paired
+  // server does, or the fixture would exercise the blocked path instead of the ready path.
+  // The wire format expresses "paired" by OMITTING `session` — the validator accepts only an
+  // absent field or the literal "unpaired", so sending "paired" is rejected and would leave the
+  // dimension fail-closed at `unknown`, exercising the blocked path instead of the ready one.
+  if (pathname === "/api/workspaces") {
+    await fulfillJson(route, { manifests: [] });
+    return true;
+  }
   if (pathname === "/api/task-workspaces/active") {
     await fulfillJson(route, { active: activeWorkspace() });
     return true;

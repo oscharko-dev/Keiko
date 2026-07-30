@@ -445,7 +445,15 @@ function gitStatusSummary(state: GitStatusState, t: I18nTranslate): string | nul
     ? t("filesWidget.gitStatus.detachedHead")
     : (status.branch ?? t("filesWidget.gitStatus.unknownBranch"));
   if (status.clean) return t("filesWidget.gitStatus.clean", { branch });
-  const count = status.changes.length;
+  // Audit F-12 — this widget fetches status with includeIgnored so the tree can dim ignored
+  // entries, but an ignored entry is not a worktree change. Counting them made the header
+  // contradict `git status` (and the Git window, which fetches without includeIgnored).
+  const count = status.changes.filter((change) => !isIgnoredGitChange(change)).length;
+  // Defensive boundary (#2843 review): the server excludes ignored entries from `clean`, so a
+  // not-clean response normally carries at least one visible change. If filtering still removes
+  // every entry, the tree shows no changed file either — report that instead of a degenerate
+  // "0 changed files".
+  if (count === 0) return t("filesWidget.gitStatus.clean", { branch });
   return count === 1
     ? t("filesWidget.gitStatus.changedOne", { branch, count })
     : t("filesWidget.gitStatus.changedMany", { branch, count });

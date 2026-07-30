@@ -162,6 +162,12 @@ function routeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Respo
   if (url.includes("/api/coding-sidecar/gateway/profile")) {
     return Promise.resolve(jsonResponse(200, sidecarProfile()));
   }
+  // F-08/RG-12 pairing dimension: this scenario is a PAIRED window whose start is rejected by the
+  // server anyway (workspace-lifecycle state loss) — the honest workspaces read answers paired
+  // (no `session: "unpaired"` marker), so readiness arms and the rejected POST stays reachable.
+  if (url.endsWith("/api/workspaces")) {
+    return Promise.resolve(jsonResponse(200, { manifests: [] }));
+  }
   return Promise.resolve(jsonResponse(404, { error: { code: "NOT_FOUND", message: url } }));
 }
 

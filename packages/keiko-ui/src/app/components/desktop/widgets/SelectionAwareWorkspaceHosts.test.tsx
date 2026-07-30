@@ -389,6 +389,74 @@ describe("EditorWindowSessionHost managed task workspace access", () => {
   });
 });
 
+// Release-audit F-08: the Files window shares the editor's managed-access gate. Without it, an
+// unpaired window targeting the bound managed task-workspace root rendered the raw denials
+// ("Git unavailable", "The requested path is excluded from the read surface.") instead of naming
+// the real condition — the browser window is not paired (ADR-0141).
+describe("FilesWindowSessionHost managed task workspace access (F-08)", () => {
+  function filesHost(
+    cfg: Record<string, unknown>,
+    ctx: WindowRenderContext,
+    boundRoot?: string,
+  ): ReactNode {
+    const configuredRoot = typeof cfg["root"] === "string" ? cfg["root"] : undefined;
+    return (
+      <I18nProvider>
+        <FilesWindowSessionHost cfg={cfg} ctx={ctx} root={boundRoot ?? configuredRoot} />
+      </I18nProvider>
+    );
+  }
+
+  function managedContext(activeRoot: string): WindowRenderContext {
+    return context({
+      activeRoot,
+      activeBinding: {
+        schemaVersion: "1",
+        workspaceId: "ws-managed",
+        taskId: "task-managed",
+        activeRoot,
+        boundSurfaces: ["editor"],
+        gitDeliveryRoot: activeRoot,
+        editorProjectRoot: activeRoot,
+      },
+    });
+  }
+
+  it("renders the paired-session note instead of the raw denials while unpaired", () => {
+    const activeRoot = "/managed/task";
+    manifestAccessRef.current = "unpaired";
+
+    render(filesHost({ root: "/repo" }, managedContext(activeRoot), activeRoot));
+
+    expect(
+      screen.getByRole("note", { name: "Task workspace unavailable in this browser" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("files-without-root-bar")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps a normal folder's Files window usable while only managed authority is unpaired", async () => {
+    manifestAccessRef.current = "unpaired";
+
+    render(filesHost({ root: "/repo" }, context()));
+
+    expect(await screen.findByTestId("files-without-root-bar")).toBeInTheDocument();
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
+  it("offers an explicit recheck of managed access without clearing the window", async () => {
+    const activeRoot = "/managed/task";
+    manifestAccessRef.current = "unavailable";
+    const ctx = managedContext(activeRoot);
+
+    render(filesHost({}, ctx, activeRoot));
+    await userEvent.click(screen.getByRole("button", { name: "Check again" }));
+
+    expect(refreshManifest).toHaveBeenCalledOnce();
+    expect(ctx.updateCfg).not.toHaveBeenCalled();
+  });
+});
+
 // Issue #2621 — the removed-root disposal and the reveal both belong to this host, because it is the
 // one layer that is mounted for a single-root AND a multi-root workspace and therefore sees every
 // transition between them.

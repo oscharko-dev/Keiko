@@ -103,6 +103,7 @@ export function lifecycleAnnouncement(
       : "";
   return [
     runAnnouncement(state, t),
+    pairingAnnouncement(state, t),
     readinessAnnouncement("modelSource", state.source.status, sourceAvailable, t),
     authenticationAnnouncement(state, t),
     readinessAnnouncement("workspace", state.workspace.status, workspaceAvailable, t),
@@ -113,6 +114,17 @@ export function lifecycleAnnouncement(
   ]
     .filter((announcement) => announcement.length > 0)
     .join(" ");
+}
+
+// Release-audit F-08/RG-12: an unpaired window's run start is guaranteed to fail authority
+// resolution (ADR-0141), so the narration must name pairing as the missing input instead of
+// narrating "Workspace ready. Runtime ready." over a start that can never succeed. Silent while
+// pairing is unconfirmed — the narration never claims a truth the workspaces read has not answered.
+function pairingAnnouncement(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string {
+  return state.pairing === "unpaired" ? t("codingWorkbench.pairing.unpaired") : "";
 }
 
 type ReadinessAnnouncementState =
@@ -252,11 +264,14 @@ export function visibleAlert(
   ] as const) {
     if (value.status === "error") return t(`codingWorkbench.alert.${resource}RefreshFailed`);
   }
-  // Last, because the surface shows one alert at a time: a refresh failure is actionable (retry),
-  // an unqualified runtime is a standing condition. Reporting the condition first would swallow the
-  // recoverable error. Only while the bootstrap setup section is off screen — it states the same
-  // condition itself, and duplicating it would announce it twice to assistive technology. This
-  // wording is its own: the setup copy invites binding a workspace, which is already done here.
+  // Standing conditions come after actionable refresh failures (one alert at a time — reporting a
+  // standing condition first would swallow the recoverable error). The unpaired window (F-08/
+  // RG-12) precedes the unqualified runtime: without a paired app session no run can start at all.
+  if (state.pairing === "unpaired") return t("codingWorkbench.pairing.unpaired");
+  // Last: the unqualified runtime, and only while the bootstrap setup section is off screen — it
+  // states the same condition itself, and duplicating it would announce it twice to assistive
+  // technology. This wording is its own: the setup copy invites binding a workspace, which is
+  // already done here.
   if (
     !setupVisible &&
     state.runtime.status === "ready" &&

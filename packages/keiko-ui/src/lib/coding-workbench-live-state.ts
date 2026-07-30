@@ -17,6 +17,15 @@ import { retainCodingWorkbenchRuntimeEvents } from "./coding-workbench-event-ret
 export type CodingWorkbenchResourceStatus =
   "idle" | "loading" | "ready" | "empty" | "unavailable" | "error";
 
+/**
+ * Release-audit F-08/RG-12: whether this browser window holds a launcher-paired app session, as
+ * reported by the honest workspaces read (`session: "paired" | "unpaired"`). Never guessed
+ * client-side — an unpaired window's run start is guaranteed to fail authority resolution
+ * (ADR-0141), so readiness must include this dimension. `unknown` (boot, or the read failed)
+ * blocks start fail-closed without claiming the window is unpaired.
+ */
+export type CodingWorkbenchPairingState = "unknown" | "paired" | "unpaired";
+
 export interface CodingWorkbenchClientError {
   readonly code: string;
   readonly message: string;
@@ -103,6 +112,7 @@ export interface CodingWorkbenchRuntimeState {
   readonly stream: CodingWorkbenchResourceState<CodingWorkbenchStreamProjection>;
   readonly mutation: CodingWorkbenchMutationState;
   readonly events: readonly CodingWorkbenchRuntimeSseEvent[];
+  readonly pairing: CodingWorkbenchPairingState;
   readonly canStart: boolean;
   readonly canRetry: boolean;
 }
@@ -142,7 +152,8 @@ export type CodingWorkbenchRuntimeStateAction =
   | { readonly kind: "mutation-complete" }
   | { readonly kind: "mutation-failed"; readonly error: CodingWorkbenchClientError }
   | { readonly kind: "events-received"; readonly events: readonly CodingWorkbenchRuntimeSseEvent[] }
-  | { readonly kind: "events-reset" };
+  | { readonly kind: "events-reset" }
+  | { readonly kind: "pairing-set"; readonly pairing: CodingWorkbenchPairingState };
 
 const emptyResource = <T>(
   status: CodingWorkbenchResourceStatus = "idle",
@@ -171,6 +182,7 @@ export function createInitialCodingWorkbenchRuntimeState(
     stream: emptyResource(),
     mutation: IDLE_MUTATION,
     events: [],
+    pairing: "unknown",
     canStart: false,
     canRetry: false,
   };
@@ -218,13 +230,19 @@ function projectReadiness(state: CodingWorkbenchRuntimeState): CodingWorkbenchRu
   const runReady =
     state.run.status === "ready" && runState !== undefined && STARTABLE_RUN_STATES.has(runState);
   const mutationIdle = state.mutation.status !== "pending";
+  // Release-audit F-08/RG-12: a start (or retry — the same authority resolution) from an unpaired
+  // window is guaranteed to fail with 403 authority-resolution-failed (ADR-0141), so readiness is
+  // honest only once the paired app session is server-confirmed. Fail closed on "unknown".
+  const pairingReady = state.pairing === "paired";
   return {
     ...state,
-    canStart: sourceReady && workspaceReady && authorityReady && runReady && mutationIdle,
+    canStart:
+      sourceReady && workspaceReady && authorityReady && runReady && mutationIdle && pairingReady,
     canRetry:
       sourceReady &&
       workspaceReady &&
       authorityReady &&
+      pairingReady &&
       runState === "recovery-required" &&
       state.run.value?.recoveryAcknowledged === true &&
       mutationIdle,
@@ -388,6 +406,10 @@ const runtimeActionHandlers = {
   "events-received": (state, action): CodingWorkbenchRuntimeState =>
     acceptEvents(state, action.events),
   "events-reset": (state) => ({ ...state, events: [], stream: emptyResource() }),
+  "pairing-set": (state, action) =>
+    state.pairing === action.pairing
+      ? state
+      : projectReadiness({ ...state, pairing: action.pairing }),
 } satisfies RuntimeActionHandlers;
 
 export function codingWorkbenchRuntimeReducer(
