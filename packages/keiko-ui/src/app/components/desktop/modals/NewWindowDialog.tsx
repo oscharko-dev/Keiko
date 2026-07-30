@@ -51,24 +51,6 @@ function initialCfg(fields: readonly LocalizedConfigField[]): Cfg {
   return out;
 }
 
-function localizedNewWindowFields(
-  type: WindowType,
-  fields: readonly ConfigField[],
-  t: I18nTranslate,
-): readonly ConfigField[] {
-  if (type !== "chat") return fields;
-  return fields.map((field) =>
-    field.key === "title"
-      ? {
-          ...field,
-          label: t("newWindow.chat.fieldTitle"),
-          def: t("newWindow.chat.defaultTitle"),
-          placeholder: t("newWindow.chat.placeholder"),
-        }
-      : field,
-  );
-}
-
 // 0.3.0 release audit — the dialog seeds the chat title field with the LOCALIZED default, so that
 // display string must not leave the dialog as data. When the operator accepts it unchanged (or
 // clears the field), the window is confirmed with NO title plus the structural "still untitled"
@@ -77,7 +59,11 @@ function localizedNewWindowFields(
 // the server's canonical stored default, which is what the server's first-turn auto-title keys on
 // — a German chat used to be created as "Neuer Chat" and could therefore never be auto-titled.
 // An operator-chosen title is passed through untouched and carries no marker.
-function withChatUntitledMarker(type: WindowType, fields: readonly ConfigField[], cfg: Cfg): Cfg {
+function withChatUntitledMarker(
+  type: WindowType,
+  fields: readonly LocalizedConfigField[],
+  cfg: Cfg,
+): Cfg {
   if (type !== "chat") return cfg;
   const seededDefault = fields.find((field) => field.key === "title")?.def ?? "";
   const entered = resolveFieldValue(cfg["title"]).trim();

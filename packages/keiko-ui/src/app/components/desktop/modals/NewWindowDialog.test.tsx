@@ -846,7 +846,7 @@ describe("NewWindowDialog chat title (0.3.0 audit: locale-independent untitled m
         <NewWindowDialog type="chat" types={WIN_TYPES} onConfirm={onConfirm} onClose={vi.fn()} />
       </I18nProvider>,
     );
-    await screen.findByDisplayValue(DE_MESSAGES["newWindow.chat.defaultTitle"]);
+    await screen.findByDisplayValue(DE_MESSAGES["window.default.chatTitle"]);
   }
 
   function confirmedCfg(onConfirm: ReturnType<typeof vi.fn>): Record<string, unknown> {
@@ -858,7 +858,14 @@ describe("NewWindowDialog chat title (0.3.0 audit: locale-independent untitled m
     const onConfirm = vi.fn();
     await renderGermanChatDialog(onConfirm);
 
-    fireEvent.click(screen.getByRole("button", { name: DE_MESSAGES["newWindow.chat.open"] }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: DE_MESSAGES["newWindow.open"].replace(
+          "{label}",
+          DE_MESSAGES["window.type.chat.title"],
+        ),
+      }),
+    );
 
     const cfg = confirmedCfg(onConfirm);
     // The consumer decides on the structural marker, not on the display string.
@@ -872,9 +879,16 @@ describe("NewWindowDialog chat title (0.3.0 audit: locale-independent untitled m
     const onConfirm = vi.fn();
     await renderGermanChatDialog(onConfirm);
 
-    const input = screen.getByDisplayValue(DE_MESSAGES["newWindow.chat.defaultTitle"]);
+    const input = screen.getByDisplayValue(DE_MESSAGES["window.default.chatTitle"]);
     fireEvent.change(input, { target: { value: "Freigabeprüfung" } });
-    fireEvent.click(screen.getByRole("button", { name: DE_MESSAGES["newWindow.chat.open"] }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: DE_MESSAGES["newWindow.open"].replace(
+          "{label}",
+          DE_MESSAGES["window.type.chat.title"],
+        ),
+      }),
+    );
 
     const cfg = confirmedCfg(onConfirm);
     expect(cfg["title"]).toBe("Freigabeprüfung");
@@ -887,7 +901,14 @@ describe("NewWindowDialog chat title (0.3.0 audit: locale-independent untitled m
       <NewWindowDialog type="chat" types={WIN_TYPES} onConfirm={onConfirm} onClose={vi.fn()} />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: EN_MESSAGES["newWindow.chat.open"] }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: EN_MESSAGES["newWindow.open"].replace(
+          "{label}",
+          EN_MESSAGES["window.type.chat.title"],
+        ),
+      }),
+    );
 
     const cfg = confirmedCfg(onConfirm);
     expect(subText("chat", cfg)).toBeNull();
@@ -898,9 +919,16 @@ describe("NewWindowDialog chat title (0.3.0 audit: locale-independent untitled m
     const onConfirm = vi.fn();
     await renderGermanChatDialog(onConfirm);
 
-    const input = screen.getByDisplayValue(DE_MESSAGES["newWindow.chat.defaultTitle"]);
+    const input = screen.getByDisplayValue(DE_MESSAGES["window.default.chatTitle"]);
     fireEvent.change(input, { target: { value: "   " } });
-    fireEvent.click(screen.getByRole("button", { name: DE_MESSAGES["newWindow.chat.open"] }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: DE_MESSAGES["newWindow.open"].replace(
+          "{label}",
+          DE_MESSAGES["window.type.chat.title"],
+        ),
+      }),
+    );
 
     const cfg = confirmedCfg(onConfirm);
     expect(subText("chat", cfg)).toBeNull();
