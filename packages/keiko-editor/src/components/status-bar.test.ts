@@ -297,3 +297,63 @@ describe("deriveEditorStatusBar formatting field (ADR-0068 D4)", () => {
     expect(formattingIndex).toBe(languageServiceIndex + 1);
   });
 });
+
+// Regression pin (Editor P1, uniform silent failure): the status bar is where a swallowed bridge
+// failure becomes visible. Without this field a language-provider crash reaches the user only as
+// "nothing found", indistinguishable from a genuinely empty result.
+describe("language-intelligence field", () => {
+  it("is absent when every language operation answered in full", () => {
+    expect(field(deriveEditorStatusBar(input()), "language-intelligence")).toBeUndefined();
+  });
+
+  it("renders a failure in the error tone and announces it politely", () => {
+    const view = deriveEditorStatusBar(
+      input({
+        languageIntelligence: {
+          status: "failed",
+          label: "Quick info unavailable",
+          ariaLabel: "Quick info did not answer.",
+        },
+      }),
+    );
+    const entry = field(view, "language-intelligence");
+
+    expect(entry?.label).toBe("Quick info unavailable");
+    expect(entry?.tone).toBe("error");
+    expect(entry?.live).toBe(true);
+    // A hover failure must not interrupt typing the way a failed save does.
+    expect(entry?.assertive).toBe(false);
+    expect(view.liveSummary).toContain("Quick info did not answer.");
+    expect(view.alertSummary).not.toContain("Quick info");
+  });
+
+  it("renders a capped result in the warn tone, distinct from a failure", () => {
+    const view = deriveEditorStatusBar(
+      input({
+        languageIntelligence: {
+          status: "capped",
+          label: "Find references partial",
+          ariaLabel: "Find references returned a partial result.",
+        },
+      }),
+    );
+    const entry = field(view, "language-intelligence");
+
+    expect(entry?.tone).toBe("warn");
+    expect(view.liveSummary).toContain("Find references returned a partial result.");
+  });
+
+  it("sits between the language-service and formatting fields", () => {
+    const view = deriveEditorStatusBar(
+      input({
+        languageService: { providerId: null, available: true },
+        languageIntelligence: { status: "failed", label: "L", ariaLabel: "L aria" },
+        formatting: { available: true, source: "monaco-builtin" },
+      }),
+    );
+    const ids = view.fields.map((entry) => entry.id);
+
+    expect(ids.indexOf("language-intelligence")).toBe(ids.indexOf("language-service") + 1);
+    expect(ids.indexOf("formatting")).toBe(ids.indexOf("language-intelligence") + 1);
+  });
+});

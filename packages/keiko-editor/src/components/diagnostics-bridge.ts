@@ -33,6 +33,11 @@ import type {
   EditorRequestIdentity,
 } from "../types.js";
 import type { MonacoDisposable } from "./completion-bridge.js";
+import {
+  classifyResultKind,
+  outcomeForError,
+  type EditorLanguageIntelligenceReporter,
+} from "./language-intelligence.js";
 import type { EditorDiagnosticsSummary } from "./status-bar.js";
 
 // ─── Minimal structural Monaco surface (no value import of `monaco-editor`) ─────────────────────
@@ -228,6 +233,13 @@ export interface RegisterKeikoDiagnosticsArgs {
    * `response.diagnostics` directly, so no host needs to depend on Monaco's numeric marker severity.
    */
   readonly onDiagnostics?: ((diagnostics: readonly EditorDiagnostic[]) => void) | undefined;
+  /**
+   * Outcome sink for the shared language-intelligence seam. Diagnostics are the one surface where a
+   * failure is *doubly* silent: the analysis leaves the previous markers in place, so a crashed
+   * provider looks exactly like "the file is clean" — or worse, like stale squiggles that are correct.
+   * Reporting the failure is the only way the surface can say the count is not current.
+   */
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 interface DiagnosticsState {
@@ -309,9 +321,15 @@ function runDiagnostics(rt: DiagnosticsRuntime, model: MonacoDiagnosticsModel): 
       rt.args.onSummary?.(summarizeDiagnostics(response.diagnostics));
       rt.args.onOverviewMarkers?.(markersToOverviewMarkers(markers));
       rt.args.onDiagnostics?.(response.diagnostics);
+      rt.args.report?.({
+        operation: "diagnostics",
+        outcome: { status: classifyResultKind(response.diagnostics.length, response.truncated) },
+      });
     },
-    () => {
-      // A failure (network, abort, host error) leaves existing markers untouched and never throws.
+    (error: unknown) => {
+      // A failure (network, abort, host error) leaves existing markers untouched and never throws —
+      // but it IS reported, so "no problems" cannot silently mean "the analysis never ran".
+      rt.args.report?.({ operation: "diagnostics", outcome: outcomeForError(error) });
     },
   );
 }

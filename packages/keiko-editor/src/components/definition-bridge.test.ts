@@ -11,6 +11,7 @@ import {
   type MonacoUriLike,
 } from "./definition-bridge.js";
 import type { MonacoCancellationToken } from "./completion-bridge.js";
+import type { EditorLanguageIntelligenceEvent } from "./language-intelligence.js";
 import type { EditorDefinitionResolver } from "../types.js";
 
 const URI: MonacoUriLike = { toString: () => "keiko-editor://current" };
@@ -164,5 +165,87 @@ describe("registerKeikoDefinitionProvider", () => {
     expect(fake.registered()).toEqual(["typescript", "javascript"]);
     disposable.dispose();
     expect(fake.disposeCount()).toBe(2);
+  });
+});
+
+// Regression pin (Editor P1, uniform silent failure): the bridge must keep Monaco's contract — an
+// empty location list, never a throw — while making the failure OBSERVABLE. Before the shared outcome
+// seam, a rejected go-to-definition and a symbol with no definition both produced an empty list and
+// reported nothing, so Monaco's "no definition found" notice was shown for an outright outage too.
+describe("createKeikoDefinitionProvider outcome reporting", () => {
+  function reporting(resolve: EditorDefinitionResolver): {
+    readonly provider: MonacoDefinitionProvider;
+    readonly events: EditorLanguageIntelligenceEvent[];
+  } {
+    const events: EditorLanguageIntelligenceEvent[] = [];
+    return {
+      events,
+      provider: createKeikoDefinitionProvider({
+        resolve,
+        isCurrentDocument: (documentUri) => documentUri === URI.toString(),
+        documentLanguage: "typescript",
+        streamId: "stream",
+        newRequestId: () => "req",
+        report: (event) => {
+          events.push(event);
+        },
+      }),
+    };
+  }
+
+  it("reports a rejected definition lookup as a failure, not as an empty result", async () => {
+    const { provider: definitionProvider, events } = reporting(() =>
+      Promise.reject(new Error("language request timed out")),
+    );
+
+    const locations = await definitionProvider.provideDefinition(
+      model(),
+      { lineNumber: 1, column: 10 },
+      token(),
+    );
+
+    expect(locations).toEqual([]);
+    expect(events).toEqual([
+      { operation: "definition", outcome: { status: "failed", failure: "timeout" } },
+    ]);
+  });
+
+  it("still reports a genuinely empty definition result as empty", async () => {
+    const { provider: definitionProvider, events } = reporting((query) =>
+      Promise.resolve({ request: query.request.request, locations: [] }),
+    );
+
+    const locations = await definitionProvider.provideDefinition(
+      model(),
+      { lineNumber: 1, column: 10 },
+      token(),
+    );
+
+    expect(locations).toEqual([]);
+    expect(events).toEqual([{ operation: "definition", outcome: { status: "empty" } }]);
+  });
+
+  it("labels a server-capped location list as capped", async () => {
+    const { provider: definitionProvider, events } = reporting((query) =>
+      Promise.resolve({
+        request: query.request.request,
+        locations: [
+          {
+            path: "src/x.ts",
+            range: { start: { line: 0, column: 0 }, end: { line: 0, column: 1 } },
+          },
+        ],
+        truncated: true,
+      }),
+    );
+
+    const locations = await definitionProvider.provideDefinition(
+      model(),
+      { lineNumber: 1, column: 10 },
+      token(),
+    );
+
+    expect(locations).toHaveLength(1);
+    expect(events).toEqual([{ operation: "definition", outcome: { status: "capped" } }]);
   });
 });

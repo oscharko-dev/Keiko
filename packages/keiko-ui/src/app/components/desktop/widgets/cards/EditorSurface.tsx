@@ -26,6 +26,7 @@ import {
   type EditorHostEditRequest,
   type EditorHoverResolver,
   type EditorInlineCompletionResolver,
+  type EditorLanguageIntelligenceReporter,
   type EditorPosition,
   type EditorRange,
   type EditorReferencesResolver,
@@ -115,6 +116,12 @@ export interface EditorSurfaceProps {
   readonly formatRequestNonce?: number | undefined;
   /** Content-free diagnostic-count observer for the host status bar (Issue #1205). */
   readonly onDiagnosticsSummary?: ((summary: EditorDiagnosticsSummary) => void) | undefined;
+  /**
+   * Content-free outcome observer for every language bridge. Monaco requires an empty value rather
+   * than a throw, so this is the only channel that lets the host tell "no results" apart from "the
+   * provider did not answer" (see the editor package's `language-intelligence` seam).
+   */
+  readonly onLanguageIntelligence?: EditorLanguageIntelligenceReporter | undefined;
   /** Issue #2213 (ADR-0126) — full per-diagnostic list for the workspace Problems panel. */
   readonly onDiagnostics?: KeikoCodeEditorProps["onDiagnostics"] | undefined;
   /** Host handler for the palette/keybinding "Generate Tests" command (Issue #1205). */
@@ -235,6 +242,7 @@ function EditorSurface(props: EditorSurfaceProps): ReactElement {
         formatRequestNonce={props.formatRequestNonce}
         onDiagnosticsSummary={props.onDiagnosticsSummary}
         onDiagnostics={props.onDiagnostics}
+        onLanguageIntelligence={props.onLanguageIntelligence}
         onGenerateTests={props.onGenerateTests}
         onAskKeikoAboutSelection={props.onAskKeikoAboutSelection}
         onRenameSymbol={props.onRenameSymbol}

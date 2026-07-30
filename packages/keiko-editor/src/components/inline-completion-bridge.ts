@@ -5,7 +5,7 @@
  * {@link EditorInlineCompletionResolver}. The bridge is pure wiring: it maps a Monaco inline-completion
  * call to a content-free {@link EditorInlineCompletionRequest}, hands the host the request plus the
  * live buffer text (the host assembles the suffix-aware prompt and routes the governed FIM model
- * server-side), applies cross-boundary stale-response discard ({@link shouldDiscardResponse}, #1192),
+ * server-side), applies cross-boundary stale-response discard ({@link shouldDiscardAgainstLatest}, #1192),
  * maps the returned ghost-text item back to a Monaco inline completion, and records content-free
  * acceptance/rejection telemetry from Monaco's lifecycle callbacks. It computes no completions, calls
  * no model, performs no I/O, and persists no code content (ADR-0042 D5; Acceptance Criteria 5/6).
@@ -21,7 +21,7 @@
  * import-side-effect-free. Geometry mappers and shared structural types are reused from the
  * completion bridge (#1199).
  */
-import { shouldDiscardResponse } from "../completion-identity.js";
+import { shouldDiscardAgainstLatest } from "../completion-identity.js";
 import type { EditorLanguageId } from "../languages.js";
 import type {
   EditorInlineCompletionItem,
@@ -43,6 +43,11 @@ import type {
   InlineCompletionTelemetry,
   InlineCompletionTelemetryEvent,
 } from "./inline-completion-telemetry.js";
+import {
+  classifyResultKind,
+  runLanguageBridgeCall,
+  type EditorLanguageIntelligenceReporter,
+} from "./language-intelligence.js";
 
 // ─── Minimal structural Monaco surface (no value import of `monaco-editor`) ─────────────────────
 
@@ -178,6 +183,8 @@ export interface KeikoInlineCompletionProviderDeps {
   readonly telemetry?: InlineCompletionTelemetry | undefined;
   /** Injectable clock for content-free latency telemetry; defaults to `Date.now`. */
   readonly now?: (() => number) | undefined;
+  /** Outcome sink so "no ghost text here" stays distinguishable from "the FIM call failed". */
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function buildRequest(
@@ -227,9 +234,22 @@ function controllerForToken(token: MonacoCancellationToken): {
   return { controller, cancellationSub };
 }
 
+// Maps a kept response to ghost text, or `undefined` when there is none to offer. Recording
+// "offered" belongs here rather than in the seam: only a rendered suggestion was actually offered.
+function presentInline(
+  deps: KeikoInlineCompletionProviderDeps,
+  response: EditorInlineCompletionResponse,
+): MonacoInlineCompletions | undefined {
+  const mapped = responseToInlineCompletions(response);
+  if (mapped.items.length === 0) {
+    return undefined;
+  }
+  deps.telemetry?.record("offered");
+  return mapped;
+}
+
 // The provider's `provideInlineCompletions` body, extracted so the factory stays a thin assembler.
-// eslint-disable-next-line complexity
-async function provideInline(
+function provideInline(
   deps: KeikoInlineCompletionProviderDeps,
   state: InlineProviderState,
   model: MonacoInlineCompletionModel,
@@ -239,7 +259,7 @@ async function provideInline(
 ): Promise<MonacoInlineCompletions | undefined> {
   const documentUri = model.uri.toString();
   if (!deps.isCurrentDocument(documentUri)) {
-    return undefined;
+    return Promise.resolve(undefined);
   }
   state.sequence += 1;
   const request = buildRequest(deps, model, position, context, state.sequence);
@@ -249,37 +269,31 @@ async function provideInline(
   state.activeController = controller;
   const now = deps.now ?? Date.now;
   const startedAt = now();
-  try {
-    const response = await deps.resolve(
-      { request, documentText: model.getValue() },
-      controller.signal,
-    );
-    // Cross-boundary stale-response discard: a later keystroke may have superseded this request while
-    // it was in flight; `latest` holds the newest identity, so a superseded response renders nothing
-    // (Acceptance Criterion 3).
-    if (shouldDiscardResponse(response.request, state.latest)) {
-      return undefined;
-    }
-    if (!deps.isCurrentDocument(documentUri)) {
-      return undefined;
-    }
-    const mapped = responseToInlineCompletions(response);
-    if (mapped.items.length === 0) {
-      return undefined;
-    }
-    deps.telemetry?.record("offered");
-    return mapped;
-  } catch {
-    // Acceptance Criterion 1: an inline-completion failure (network, abort, host error) must never
-    // break typing — render no ghost text.
-    return undefined;
-  } finally {
+  return runLanguageBridgeCall<EditorInlineCompletionResponse, MonacoInlineCompletions | undefined>(
+    {
+      operation: "inline-completion",
+      resolve: () => deps.resolve({ request, documentText: model.getValue() }, controller.signal),
+      // Cross-boundary stale-response discard: a later keystroke may have superseded this request while
+      // it was in flight; `latest` holds the newest identity, so a superseded response renders nothing
+      // (Acceptance Criterion 3).
+      isDiscarded: (response) =>
+        shouldDiscardAgainstLatest(response.request, state.latest) ||
+        !deps.isCurrentDocument(documentUri),
+      discardedValue: undefined,
+      // Acceptance Criterion 1: an inline-completion failure (network, host error) must never break
+      // typing — render no ghost text, but report it so silence is not mistaken for "nothing to add".
+      failedValue: undefined,
+      classify: (response) => classifyResultKind(response.items.length),
+      present: (response) => presentInline(deps, response),
+      report: deps.report,
+    },
+  ).finally(() => {
     cancellationSub.dispose();
     if (state.activeController === controller) {
       state.activeController = null;
     }
     deps.telemetry?.recordLatency(now() - startedAt);
-  }
+  });
 }
 
 function recordEndOfLife(
@@ -347,6 +361,7 @@ export interface RegisterKeikoInlineCompletionProviderArgs {
   readonly newRequestId: () => string;
   readonly debounceDelayMs: number;
   readonly telemetry?: InlineCompletionTelemetry | undefined;
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
@@ -378,6 +393,7 @@ export function registerKeikoInlineCompletionProvider(
       streamId: `${args.streamId}:${documentLanguage}`,
       newRequestId: args.newRequestId,
       debounceDelayMs: args.debounceDelayMs,
+      report: args.report,
       ...(args.telemetry === undefined ? {} : { telemetry: args.telemetry }),
     });
     return args.languages.registerInlineCompletionsProvider(documentLanguage, provider);

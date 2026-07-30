@@ -4,7 +4,7 @@
  * Bridges Monaco's `languages.registerHoverProvider` to the host-injected {@link EditorHoverResolver}.
  * The bridge is pure wiring: it maps a Monaco hover call to a content-free {@link EditorHoverRequest},
  * hands the host the request plus the live buffer text, applies cross-boundary stale-response discard
- * ({@link shouldDiscardResponse}, #1192), and maps the returned {@link EditorHoverResponse} back to a
+ * ({@link shouldDiscardAgainstLatest}, #1192), and maps the returned {@link EditorHoverResponse} back to a
  * Monaco hover. It computes no quick info, calls no model, and performs no I/O — every result comes
  * from the host resolver, which is backed by the deterministic server language service (ADR-0042 D4).
  *
@@ -19,7 +19,7 @@
  * import-side-effect-free. Geometry mappers and shared structural types are reused from the completion
  * bridge (#1199).
  */
-import { shouldDiscardResponse } from "../completion-identity.js";
+import { shouldDiscardAgainstLatest } from "../completion-identity.js";
 import type { EditorLanguageId } from "../languages.js";
 import type {
   EditorHoverQuery,
@@ -36,6 +36,11 @@ import {
   type MonacoPositionLike,
   type MonacoRange,
 } from "./completion-bridge.js";
+import {
+  classifyResultKind,
+  runLanguageBridgeCall,
+  type EditorLanguageIntelligenceReporter,
+} from "./language-intelligence.js";
 
 // ─── Minimal structural Monaco surface (no value import of `monaco-editor`) ─────────────────────
 
@@ -125,6 +130,8 @@ export interface KeikoHoverProviderDeps {
   readonly streamId: string;
   /** Unique request-id factory. Injected so tests stay deterministic. */
   readonly newRequestId: () => string;
+  /** Outcome sink so a hover failure is distinguishable from "no quick info here". */
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function buildRequest(
@@ -162,32 +169,33 @@ function controllerForToken(token: MonacoCancellationToken): AbortController {
  *  - hands the resolver the request plus the live buffer text and an {@link AbortSignal} wired to
  *    Monaco's cancellation token,
  *  - discards a response that a later hover request has superseded (#1192), and
- *  - returns `undefined` on any failure so a hover error never breaks editing.
+ *  - returns `undefined` on any failure so a hover error never breaks editing — while reporting that
+ *    failure through the shared seam, so "no quick info" and "hover did not answer" stay distinct.
  */
 export function createKeikoHoverProvider(deps: KeikoHoverProviderDeps): MonacoHoverProvider {
   let sequence = 0;
   let latest: EditorRequestIdentity | null = null;
   return {
-    async provideHover(model, position, token): Promise<MonacoHover | undefined> {
+    provideHover(model, position, token): Promise<MonacoHover | undefined> {
       const documentUri = model.uri.toString();
       if (!deps.isCurrentDocument(documentUri)) {
-        return undefined;
+        return Promise.resolve(undefined);
       }
       sequence += 1;
       const request = buildRequest(deps, documentUri, position, sequence);
       latest = request.request;
       const controller = controllerForToken(token);
-      try {
-        const query: EditorHoverQuery = { request, documentText: model.getValue() };
-        const response = await deps.resolve(query, controller.signal);
-        if (shouldDiscardResponse(response.request, latest)) {
-          return undefined;
-        }
-        return hoverResponseToMonaco(response);
-      } catch {
-        // A hover failure (network, abort, host error) must never break editing — show nothing.
-        return undefined;
-      }
+      const query: EditorHoverQuery = { request, documentText: model.getValue() };
+      return runLanguageBridgeCall<EditorHoverResponse, MonacoHover | undefined>({
+        operation: "hover",
+        resolve: () => deps.resolve(query, controller.signal),
+        isDiscarded: (response) => shouldDiscardAgainstLatest(response.request, latest),
+        discardedValue: undefined,
+        failedValue: undefined,
+        classify: (response) => classifyResultKind((response.hover.contents ?? "").length),
+        present: hoverResponseToMonaco,
+        report: deps.report,
+      });
     },
   };
 }
@@ -200,6 +208,7 @@ export interface RegisterKeikoHoverProviderArgs {
   readonly documentLanguages: readonly EditorLanguageId[];
   readonly streamId: string;
   readonly newRequestId: () => string;
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
@@ -224,6 +233,7 @@ export function registerKeikoHoverProvider(args: RegisterKeikoHoverProviderArgs)
       documentLanguage,
       streamId: `${args.streamId}:${documentLanguage}`,
       newRequestId: args.newRequestId,
+      report: args.report,
     });
     return args.languages.registerHoverProvider(documentLanguage, provider);
   });

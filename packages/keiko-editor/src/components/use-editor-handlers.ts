@@ -34,12 +34,14 @@ import {
   type WireEditorBlame,
   type WireEditorConflicts,
   type WireEditorDebug,
+  type WireEditorOnMountArgs,
   type EditorDebugBridge,
 } from "./on-mount.js";
 import type { EditorGitGutterBridge, EditorGitGutterChanges } from "./git-gutter-bridge.js";
 import type { SourceBreakpoint } from "@oscharko-dev/keiko-contracts";
 import type { EditorCallHierarchyResponse } from "./call-hierarchy-bridge.js";
 import type { EditorInlayHintsResponse } from "./inlay-hints-bridge.js";
+import type { EditorLanguageIntelligenceReporter } from "./language-intelligence.js";
 import type { EditorDebugValueSnapshot } from "./debug-value-inlay-resolver.js";
 import type {
   EditorCodeActionsResponse,
@@ -530,6 +532,20 @@ function isCurrentDocument(
   latestProps: RefObject<KeikoCodeEditorProps>,
 ): (documentUri: string) => boolean {
   return (documentUri): boolean => latestProps.current.fileModel.identity.uri === documentUri;
+}
+
+// ONE reporter identity for every bridge, reading the live prop at call time so a host that swaps its
+// observer is honoured without re-registering fourteen Monaco providers. Returns undefined when the
+// host wires no observer, so the bridges skip reporting entirely.
+function buildLanguageIntelligenceReporter(
+  latestProps: RefObject<KeikoCodeEditorProps>,
+): EditorLanguageIntelligenceReporter | undefined {
+  if (latestProps.current.onLanguageIntelligence === undefined) {
+    return undefined;
+  }
+  return (event): void => {
+    latestProps.current.onLanguageIntelligence?.(event);
+  };
 }
 
 // Builds the hover wiring from the live props ref (Issue #1201). Returns undefined when the host
@@ -1089,6 +1105,71 @@ function initializeRuntimeMountRefs(args: MountRuntimeArgs): HTMLElement {
   return args.refs.containerRef.current;
 }
 
+// The authoring half of the language wiring: what the editor offers while the user types.
+function buildAuthoringWiring(
+  args: MountRuntimeArgs,
+): Pick<
+  WireEditorOnMountArgs,
+  | "onLanguageIntelligence"
+  | "completion"
+  | "inlineCompletion"
+  | "diagnostics"
+  | "hover"
+  | "signatureHelp"
+  | "codeActions"
+  | "formatting"
+> {
+  return {
+    // ONE reporter for every provider below and in buildNavigationWiring: the shared outcome seam.
+    onLanguageIntelligence: buildLanguageIntelligenceReporter(args.latestProps),
+    completion: buildCompletionWiring(args.latestProps, args.streamId),
+    inlineCompletion: buildInlineCompletionWiring(
+      args.latestProps,
+      args.inlineStreamId,
+      args.telemetry,
+    ),
+    diagnostics: buildDiagnosticsWiring(
+      args.latestProps,
+      `${args.streamId}:diagnostics`,
+      args.onOverviewMarkers,
+    ),
+    hover: buildHoverWiring(args.latestProps, `${args.streamId}:hover`),
+    signatureHelp: buildSignatureHelpWiring(args.latestProps, `${args.streamId}:signatureHelp`),
+    codeActions: buildCodeActionsWiring(args.latestProps, `${args.streamId}:codeActions`),
+    formatting: buildFormattingWiring(args.latestProps, `${args.streamId}:formatting`),
+  };
+}
+
+// The navigation/projection half: what the editor offers when the user explores the code.
+function buildNavigationWiring(
+  args: MountRuntimeArgs,
+): Pick<
+  WireEditorOnMountArgs,
+  | "definition"
+  | "typeDefinition"
+  | "implementation"
+  | "references"
+  | "callHierarchy"
+  | "symbols"
+  | "inlayHints"
+  | "semanticTokens"
+> {
+  return {
+    definition: buildDefinitionWiring(args.latestProps, `${args.streamId}:definition`),
+    typeDefinition: buildTypeDefinitionWiring(args.latestProps, `${args.streamId}:type-definition`),
+    implementation: buildImplementationWiring(args.latestProps, `${args.streamId}:implementation`),
+    references: buildReferencesWiring(args.latestProps, `${args.streamId}:references`),
+    callHierarchy: buildCallHierarchyWiring(
+      args.latestProps,
+      `${args.streamId}:call-hierarchy`,
+      args.onCallHierarchyResult,
+    ),
+    symbols: buildSymbolsWiring(args.latestProps, `${args.streamId}:symbols`),
+    inlayHints: buildInlayHintsWiring(args.latestProps, `${args.streamId}:inlay-hints`),
+    semanticTokens: args.latestProps.current.semanticTokens,
+  };
+}
+
 function mountEditorRuntime(args: MountRuntimeArgs): void {
   const container = initializeRuntimeMountRefs(args);
   attachModelForRuntimeMount(args);
@@ -1102,33 +1183,8 @@ function mountEditorRuntime(args: MountRuntimeArgs): void {
     onCursorChange: args.onCursorChange,
     onSelectionChange: args.onSelectionChange,
     onThemeError: args.onRuntimeError,
-    completion: buildCompletionWiring(args.latestProps, args.streamId),
-    inlineCompletion: buildInlineCompletionWiring(
-      args.latestProps,
-      args.inlineStreamId,
-      args.telemetry,
-    ),
-    diagnostics: buildDiagnosticsWiring(
-      args.latestProps,
-      `${args.streamId}:diagnostics`,
-      args.onOverviewMarkers,
-    ),
-    hover: buildHoverWiring(args.latestProps, `${args.streamId}:hover`),
-    symbols: buildSymbolsWiring(args.latestProps, `${args.streamId}:symbols`),
-    formatting: buildFormattingWiring(args.latestProps, `${args.streamId}:formatting`),
-    definition: buildDefinitionWiring(args.latestProps, `${args.streamId}:definition`),
-    typeDefinition: buildTypeDefinitionWiring(args.latestProps, `${args.streamId}:type-definition`),
-    implementation: buildImplementationWiring(args.latestProps, `${args.streamId}:implementation`),
-    callHierarchy: buildCallHierarchyWiring(
-      args.latestProps,
-      `${args.streamId}:call-hierarchy`,
-      args.onCallHierarchyResult,
-    ),
-    inlayHints: buildInlayHintsWiring(args.latestProps, `${args.streamId}:inlay-hints`),
-    semanticTokens: args.latestProps.current.semanticTokens,
-    references: buildReferencesWiring(args.latestProps, `${args.streamId}:references`),
-    codeActions: buildCodeActionsWiring(args.latestProps, `${args.streamId}:codeActions`),
-    signatureHelp: buildSignatureHelpWiring(args.latestProps, `${args.streamId}:signatureHelp`),
+    ...buildAuthoringWiring(args),
+    ...buildNavigationWiring(args),
     commands: buildCommandsWiring(args.latestProps),
     gitGutter: buildGitGutterWiring(args.latestProps),
     blame: buildBlameWiring(args.latestProps),

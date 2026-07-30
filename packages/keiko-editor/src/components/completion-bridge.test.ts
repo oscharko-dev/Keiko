@@ -21,6 +21,7 @@ import {
   type MonacoLanguagesRegistrar,
   type MonacoPositionLike,
 } from "./completion-bridge.js";
+import type { EditorLanguageIntelligenceEvent } from "./language-intelligence.js";
 import type {
   EditorCompletionItem,
   EditorCompletionResolver,
@@ -582,5 +583,76 @@ describe("createEditorRequestId", () => {
     expect(typeof a).toBe("string");
     expect(a.length).toBeGreaterThan(0);
     expect(a).not.toBe(b);
+  });
+});
+
+// Regression pin (Editor P1, uniform silent failure): the bridge must keep Monaco's contract — an
+// empty completion list, never a throw — while making the failure OBSERVABLE. Before the shared
+// outcome seam, a rejected completion call and a position with no suggestions both produced an empty
+// list and reported nothing, so "no suggestions" and "completions did not answer" were the same thing.
+describe("createKeikoCompletionProvider outcome reporting", () => {
+  function reporting(resolve: EditorCompletionResolver): {
+    readonly provider: ReturnType<typeof createKeikoCompletionProvider>;
+    readonly events: EditorLanguageIntelligenceEvent[];
+  } {
+    const events: EditorLanguageIntelligenceEvent[] = [];
+    return {
+      events,
+      provider: createKeikoCompletionProvider(
+        providerDeps(resolve, {
+          report: (event) => {
+            events.push(event);
+          },
+        }),
+      ),
+    };
+  }
+
+  it("reports a rejected completion call as a classified failure, not as an empty list", async () => {
+    const { provider, events } = reporting(() => Promise.reject(new TypeError("Failed to fetch")));
+
+    const list = await provider.provideCompletionItems(
+      fakeModel(),
+      position(),
+      triggerContext(),
+      fakeToken(),
+    );
+
+    expect(list.suggestions).toEqual([]);
+    expect(events).toEqual([
+      { operation: "completion", outcome: { status: "failed", failure: "transport" } },
+    ]);
+  });
+
+  it("still reports a genuinely empty suggestion list as empty", async () => {
+    const { provider, events } = reporting((query) =>
+      Promise.resolve(response(query.request.request, [])),
+    );
+
+    const list = await provider.provideCompletionItems(
+      fakeModel(),
+      position(),
+      triggerContext(),
+      fakeToken(),
+    );
+
+    expect(list.suggestions).toEqual([]);
+    expect(events).toEqual([{ operation: "completion", outcome: { status: "empty" } }]);
+  });
+
+  it("labels a server-capped suggestion list as capped rather than as a complete answer", async () => {
+    const { provider, events } = reporting((query) =>
+      Promise.resolve({ ...response(query.request.request, [item()]), truncated: true }),
+    );
+
+    const list = await provider.provideCompletionItems(
+      fakeModel(),
+      position(),
+      triggerContext(),
+      fakeToken(),
+    );
+
+    expect(list.suggestions).toHaveLength(1);
+    expect(events).toEqual([{ operation: "completion", outcome: { status: "capped" } }]);
   });
 });

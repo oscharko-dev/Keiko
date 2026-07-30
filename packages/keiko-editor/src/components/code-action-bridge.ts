@@ -26,6 +26,11 @@ import {
   type MonacoRange,
 } from "./completion-bridge.js";
 import type { MonacoUriLike } from "./definition-bridge.js";
+import {
+  classifyResultKind,
+  runLanguageBridgeCall,
+  type EditorLanguageIntelligenceReporter,
+} from "./language-intelligence.js";
 
 export interface MonacoCodeActionModel {
   getValue(): string;
@@ -197,6 +202,8 @@ export interface KeikoCodeActionProviderDeps {
   readonly documentLanguage: EditorLanguageId;
   readonly streamId: string;
   readonly newRequestId: () => string;
+  /** Outcome sink so an empty lightbulb stays distinguishable from a quick-fix lookup that failed. */
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function buildRequest(
@@ -237,26 +244,25 @@ export function createKeikoCodeActionProvider(
 ): MonacoCodeActionProvider {
   let sequence = 0;
   return {
-    async provideCodeActions(model, range, context, token): Promise<MonacoCodeActionList> {
+    provideCodeActions(model, range, context, token): Promise<MonacoCodeActionList> {
       const documentUri = model.uri.toString();
       if (!deps.isCurrentDocument(documentUri)) {
-        return EMPTY_ACTIONS;
+        return Promise.resolve(EMPTY_ACTIONS);
       }
       sequence += 1;
       const request = buildRequest(deps, documentUri, range, context, sequence);
       const controller = controllerForToken(token);
-      try {
-        const query: EditorCodeActionsQuery = { request, documentText: model.getValue() };
-        const response = await deps.resolve(query, controller.signal);
-        return codeActionsResponseToMonaco(
-          response,
-          model.uri,
-          context.markers,
-          deps.codeActionKinds,
-        );
-      } catch {
-        return EMPTY_ACTIONS;
-      }
+      const query: EditorCodeActionsQuery = { request, documentText: model.getValue() };
+      return runLanguageBridgeCall<EditorCodeActionsResponse, MonacoCodeActionList>({
+        operation: "code-actions",
+        resolve: () => deps.resolve(query, controller.signal),
+        discardedValue: EMPTY_ACTIONS,
+        failedValue: EMPTY_ACTIONS,
+        classify: (response) => classifyResultKind(response.actions.length, response.truncated),
+        present: (response) =>
+          codeActionsResponseToMonaco(response, model.uri, context.markers, deps.codeActionKinds),
+        report: deps.report,
+      });
     },
   };
 }
@@ -268,6 +274,7 @@ export interface RegisterKeikoCodeActionProviderArgs {
   readonly documentLanguages: readonly EditorLanguageId[];
   readonly streamId: string;
   readonly newRequestId: () => string;
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
@@ -299,6 +306,7 @@ export function registerKeikoCodeActionProvider(
       documentLanguage,
       streamId: `${args.streamId}:${documentLanguage}`,
       newRequestId: args.newRequestId,
+      report: args.report,
     });
     return args.languages.registerCodeActionProvider(documentLanguage, provider, metadata);
   });

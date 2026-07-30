@@ -55,13 +55,17 @@ import {
   disposeEditorModelRegistryRoot,
   editorFileModelReducer,
   EditorStatusBar,
+  EMPTY_LANGUAGE_INTELLIGENCE_STATE,
   IDLE_TEST_GENERATION_STATE,
   inferMonacoLanguageId,
   isDocumentDirty,
   isSupportedEditorLanguage,
   isTestGenerationBusy,
   isTestGenerationPreviewing,
+  languageIntelligenceNotice,
+  reduceLanguageIntelligence,
   saveStatusReducer,
+  summarizeLanguageIntelligence,
   testGenerationReducer,
   type EditorBuffer,
   type EditorChangeOrigin,
@@ -95,6 +99,7 @@ import {
   type EditorInlineCompletionQuery,
   type EditorInlayHintsQuery,
   type EditorInlayHintsResolver,
+  type EditorLanguageIntelligenceEvent,
   type EditorLanguageId,
   type EditorLocation,
   type EditorPosition,
@@ -244,6 +249,10 @@ import {
 } from "./editorSemanticTokens";
 import { EditorBreadcrumbBar } from "./EditorBreadcrumbBar";
 import { EditorGitHunkPeek } from "./EditorGitHunkPeek";
+import {
+  editorLanguageIntelligenceStatus,
+  useEditorLanguageIntelligenceTranslate,
+} from "./editor-language-intelligence-i18n";
 import { useEditorSourceControlTranslate } from "./editor-source-control-i18n";
 import {
   GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
@@ -1810,6 +1819,7 @@ function EditorRuntimeWidget({
 }: EditorRuntimeWidgetProps): ReactNode {
   const commonT = useTranslate();
   const sourceControlT = useEditorSourceControlTranslate();
+  const languageIntelligenceT = useEditorLanguageIntelligenceTranslate();
   const locale = useLocale();
   const t = useEditorAgentTranslate();
   const editorSettings = useEditorSettings(root);
@@ -1824,6 +1834,16 @@ function EditorRuntimeWidget({
   // bar live region (status-bar.ts's isExceptionPause); DebugPanel renders the same distinction
   // visually but deliberately never announces it (see its no-duplicate-live-region rationale).
   const [debugPauseIsException, setDebugPauseIsException] = useState(false);
+  // The last non-cancelled outcome of every Monaco language bridge (one shared reducer in the editor
+  // package). Without it, a language-provider crash, a timeout and a genuinely empty result all reach
+  // the user as "nothing found"; the status-bar field below is what makes them distinguishable.
+  const [languageIntelligence, dispatchLanguageIntelligence] = useReducer(
+    reduceLanguageIntelligence,
+    EMPTY_LANGUAGE_INTELLIGENCE_STATE,
+  );
+  const reportLanguageIntelligence = useCallback((event: EditorLanguageIntelligenceEvent): void => {
+    dispatchLanguageIntelligence(event);
+  }, []);
   const workspaceSnippets = useWorkspaceSnippets(root);
   // Applies the effective, policy-aware modelRetentionCount/modelRetentionBytes live to the shared
   // Monaco model registry. Every mounted editor surface renders this component, so the registry
@@ -4408,6 +4428,10 @@ function EditorRuntimeWidget({
         ? undefined
         : { label: testGenStatusLabel, busy: testGenBusy };
     const statusBarRun = verification.statusBarRun ?? fallbackRun;
+    const languageIntelligenceStatus = editorLanguageIntelligenceStatus(
+      languageIntelligenceNotice(summarizeLanguageIntelligence(languageIntelligence)),
+      languageIntelligenceT,
+    );
     const languageService =
       languageProvider === null
         ? { providerId: null, available: false }
@@ -4437,6 +4461,9 @@ function EditorRuntimeWidget({
             },
           }),
       languageService,
+      ...(languageIntelligenceStatus === undefined
+        ? {}
+        : { languageIntelligence: languageIntelligenceStatus }),
       readOnly: largeFileDegraded,
       formatting: { available: formattingEnabled, source: builtinFormatting },
       ...(statusBarRun === undefined ? {} : { run: statusBarRun }),
@@ -5981,6 +6008,7 @@ function EditorRuntimeWidget({
             hostEditRequest={activeHostEditRequest}
             onDiagnosticsSummary={whenEnabled(diagnosticsEnabled, setDiagnosticsSummary)}
             onDiagnostics={whenEnabled(diagnosticsEnabled, onPaneDiagnostics)}
+            onLanguageIntelligence={reportLanguageIntelligence}
             onGenerateTests={whenEnabled(completionEnabled, runTestGeneration)}
             onAskKeikoAboutSelection={whenEnabled(onAskSelection !== undefined, handleAskSelection)}
             onRenameSymbol={whenEnabled(canRename, runRename)}

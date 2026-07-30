@@ -23,6 +23,7 @@ import type {
   EditorSymbolsQuery,
   EditorSymbolsRequest,
   EditorSymbolsResolver,
+  EditorSymbolsResponse,
 } from "../types.js";
 import {
   editorRangeToMonaco,
@@ -30,6 +31,11 @@ import {
   type MonacoDisposable,
   type MonacoRange,
 } from "./completion-bridge.js";
+import {
+  classifyResultKind,
+  runLanguageBridgeCall,
+  type EditorLanguageIntelligenceReporter,
+} from "./language-intelligence.js";
 
 // ─── Minimal structural Monaco surface (no value import of `monaco-editor`) ─────────────────────
 
@@ -157,6 +163,8 @@ export interface KeikoDocumentSymbolProviderDeps {
   readonly streamId: string;
   /** Unique request-id factory. Injected so tests stay deterministic. */
   readonly newRequestId: () => string;
+  /** Outcome sink so an empty outline stays distinguishable from an outline that failed to load. */
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function buildRequest(
@@ -192,28 +200,32 @@ const EMPTY_SYMBOLS: readonly MonacoDocumentSymbol[] = [];
  * Create a Monaco document-symbol provider backed by the host resolver. The provider builds a
  * content-free {@link EditorSymbolsRequest}, hands the resolver the request plus the live buffer text
  * and an {@link AbortSignal} wired to Monaco's cancellation token, and returns an empty list on any
- * failure so a symbol error never breaks the outline or editing.
+ * failure so a symbol error never breaks the outline or editing — reporting that failure through the
+ * shared seam so an empty outline stays distinguishable from one that never loaded.
  */
 export function createKeikoDocumentSymbolProvider(
   deps: KeikoDocumentSymbolProviderDeps,
 ): MonacoDocumentSymbolProvider {
   let sequence = 0;
   return {
-    async provideDocumentSymbols(model, token): Promise<readonly MonacoDocumentSymbol[]> {
+    provideDocumentSymbols(model, token): Promise<readonly MonacoDocumentSymbol[]> {
       const documentUri = model.uri.toString();
       if (!deps.isCurrentDocument(documentUri)) {
-        return EMPTY_SYMBOLS;
+        return Promise.resolve(EMPTY_SYMBOLS);
       }
       sequence += 1;
       const request = buildRequest(deps, documentUri, sequence);
       const controller = controllerForToken(token);
-      try {
-        const query: EditorSymbolsQuery = { request, documentText: model.getValue() };
-        const response = await deps.resolve(query, controller.signal);
-        return symbolsToMonaco(response.symbols, deps.symbolKinds);
-      } catch {
-        return EMPTY_SYMBOLS;
-      }
+      const query: EditorSymbolsQuery = { request, documentText: model.getValue() };
+      return runLanguageBridgeCall<EditorSymbolsResponse, readonly MonacoDocumentSymbol[]>({
+        operation: "symbols",
+        resolve: () => deps.resolve(query, controller.signal),
+        discardedValue: EMPTY_SYMBOLS,
+        failedValue: EMPTY_SYMBOLS,
+        classify: (response) => classifyResultKind(response.symbols.length, response.truncated),
+        present: (response) => symbolsToMonaco(response.symbols, deps.symbolKinds),
+        report: deps.report,
+      });
     },
   };
 }
@@ -225,6 +237,7 @@ export interface RegisterKeikoDocumentSymbolProviderArgs {
   readonly documentLanguages: readonly EditorLanguageId[];
   readonly streamId: string;
   readonly newRequestId: () => string;
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
@@ -252,6 +265,7 @@ export function registerKeikoDocumentSymbolProvider(
       documentLanguage,
       streamId: `${args.streamId}:${documentLanguage}`,
       newRequestId: args.newRequestId,
+      report: args.report,
     });
     return args.languages.registerDocumentSymbolProvider(documentLanguage, provider);
   });

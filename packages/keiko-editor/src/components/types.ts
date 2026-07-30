@@ -36,6 +36,7 @@ import type { InlineCompletionTelemetrySnapshot } from "./inline-completion-tele
 import type { CallHierarchyPanelLabels } from "./CallHierarchyPanel.js";
 import type { EditorCallHierarchyResolver } from "./call-hierarchy-bridge.js";
 import type { EditorInlayHintsResolver } from "./inlay-hints-bridge.js";
+import type { EditorLanguageIntelligenceReporter } from "./language-intelligence.js";
 import type { EditorGitGutterHost } from "./git-gutter-bridge.js";
 import type { EditorDebugBreakpointHost } from "./breakpoint-gutter-bridge.js";
 import type { EditorDebugCommandHandlers } from "./debug-command-actions.js";
@@ -254,6 +255,15 @@ export interface KeikoCodeEditorProps {
    * aggregate diagnostics across open panes. Absent when the host wires no diagnostics.
    */
   readonly onDiagnostics?: ((diagnostics: readonly EditorDiagnostic[]) => void) | undefined;
+  /**
+   * Content-free outcome observer for EVERY language-intelligence bridge (hover, completion,
+   * definition, references, outline, diagnostics, quick fixes, formatting, parameter hints, inlay
+   * hints, call hierarchy). Monaco's provider contract requires an empty value rather than a throw, so
+   * without this observer a provider crash, a timeout, a transport failure and a genuinely empty
+   * result are all indistinguishable to the user. Each event carries the operation and a failure
+   * *class* — never a message, a path or buffer content. Absent when the host surfaces no such state.
+   */
+  readonly onLanguageIntelligence?: EditorLanguageIntelligenceReporter | undefined;
   /**
    * Host handler for the "Generate Tests" command (Issue #1205). When present, the editor registers a
    * Keiko action into Monaco's native command palette (F1), the context menu, and the `Cmd/Ctrl+Alt+T`
