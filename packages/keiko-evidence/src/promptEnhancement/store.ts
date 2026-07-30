@@ -44,7 +44,27 @@ export const PE_SUBDIR = "pe";
 
 const PE_MANIFEST_SUFFIX = ".pe.json";
 const PE_DIR_MODE = 0o700;
-const DEFAULT_INPUT_EXCERPT_MAX_CHARS = 2_000;
+
+// ─── Content-minimisation budget ─────────────────────────────────────────────────────
+// The manifest is redacted evidence, not anonymous telemetry: the redactor scrubs secret-SHAPED
+// substrings, which is not the same as bounding how much of the user's draft is durably persisted
+// (ADR-0044 §5 — operators must be able to keep customer data out of durable evidence). Exactly one
+// budget therefore governs every free-text leaf that can carry raw draft content.
+//
+// The excerpt bound is the tightest because the raw draft is the most sensitive leaf. The enhanced
+// prompt text needs room for the produced artefact, but it EMBEDS the same draft — the renderer
+// fences it into the prompt's Input section, bounded only by the generator's GENERATED_INPUT_MAX_CHARS
+// (16_000) or the workflow's MODEL_RENDERED_PROMPT_MAX_CHARS (24_000) — so leaving it unbounded lets
+// several times the excerpt allowance back into the record through a different field.
+export const PE_EVIDENCE_INPUT_EXCERPT_MAX_CHARS = 2_000;
+// Room for the instruction apparatus itself. The richest deterministic profile renders ~4.1K
+// characters of instructions for a short draft (safety-critical, grounded research task), so this
+// allowance keeps every profile's complete apparatus while still bounding the field.
+const PE_EVIDENCE_INSTRUCTION_ALLOWANCE_CHARS = 6_000;
+export const PE_EVIDENCE_ENHANCED_PROMPT_MAX_CHARS =
+  PE_EVIDENCE_INPUT_EXCERPT_MAX_CHARS + PE_EVIDENCE_INSTRUCTION_ALLOWANCE_CHARS;
+// Appended when the bound bites, so a reader can never mistake a bounded record for the full prompt.
+export const PE_EVIDENCE_TRUNCATION_MARKER = " … [evidence excerpt truncated]";
 
 // ─── Builder input ───────────────────────────────────────────────────────────────────
 export interface PromptEnhancementRecordInput {
@@ -55,10 +75,15 @@ export interface PromptEnhancementRecordInput {
   // The original, untrusted user input. Represented in evidence as a SHA-256 fingerprint plus a
   // redacted, truncated excerpt.
   readonly originalInput: string;
+  // Optional tighter excerpt bound. Clamped to PE_EVIDENCE_INPUT_EXCERPT_MAX_CHARS: a caller may
+  // minimise further, never widen the manifest's content budget.
   readonly inputExcerptMaxChars?: number | undefined;
   readonly enhancedPromptId: string;
-  // The rendered enhanced prompt (redacted before persist).
+  // The rendered enhanced prompt (redacted and bounded before persist).
   readonly enhancedPromptText: string;
+  // Optional tighter bound on the persisted prompt text. Clamped to
+  // PE_EVIDENCE_ENHANCED_PROMPT_MAX_CHARS on the same fail-closed rule.
+  readonly enhancedPromptMaxChars?: number | undefined;
   readonly appliedSafetyRules: readonly string[];
   readonly appliedGroundingDirectives: readonly GroundingDirective[];
   readonly assumptions: readonly string[];
@@ -146,6 +171,21 @@ function truncate(value: string, max: number): string {
   return value.length <= max ? value : value.slice(0, max);
 }
 
+// A caller may only tighten a bound, never widen it past the manifest's declared ceiling.
+function boundedMax(requested: number | undefined, ceiling: number): number {
+  if (requested === undefined || !Number.isFinite(requested)) return ceiling;
+  return Math.max(0, Math.min(Math.trunc(requested), ceiling));
+}
+
+// Bound the produced prompt text and mark it when the bound bites. Unlike `inputExcerptRedacted`,
+// whose field name already declares it partial, this field reads as the complete artefact, so a
+// silent slice would turn a bounded record into a misleading one.
+function boundEnhancedPromptText(value: string, max: number): string {
+  if (value.length <= max) return value;
+  const keep = Math.max(0, max - PE_EVIDENCE_TRUNCATION_MARKER.length);
+  return value.slice(0, keep) + PE_EVIDENCE_TRUNCATION_MARKER;
+}
+
 /**
  * Build a redacted, hashed Prompt Enhancement evidence manifest from a run record. Pure: no IO, no
  * clock, no randomness (the caller supplies `recordedAt` and `runId`). Redacts every free-text leaf,
@@ -200,7 +240,8 @@ export function buildPromptEnhancementEvidenceManifest(
   redaction: PromptEnhancementRedactionOptions = {},
 ): { readonly manifest: PromptEnhancementEvidenceManifest } {
   assertValidRunId(input.runId);
-  const excerptMax = input.inputExcerptMaxChars ?? DEFAULT_INPUT_EXCERPT_MAX_CHARS;
+  const excerptMax = boundedMax(input.inputExcerptMaxChars, PE_EVIDENCE_INPUT_EXCERPT_MAX_CHARS);
+  const promptMax = boundedMax(input.enhancedPromptMaxChars, PE_EVIDENCE_ENHANCED_PROMPT_MAX_CHARS);
   // Redact every free-text leaf BEFORE assembly or hashing (redaction by construction). Ids, enums,
   // and numbers (runId, requestId, candidate ids/profiles, scores, finding codes) carry no free text
   // and stay outside the redactor — matching the QI store's redaction scope.
@@ -215,11 +256,16 @@ export function buildPromptEnhancementEvidenceManifest(
     },
     redaction,
   );
+  // Bound AFTER redaction so a secret straddling the cut is already masked in what survives.
   const inputExcerptRedacted = truncate(redacted.originalInputRedacted, excerptMax);
+  const enhancedPromptTextRedacted = boundEnhancedPromptText(
+    redacted.enhancedPromptTextRedacted,
+    promptMax,
+  );
   const inputRedactedFingerprintSha256 = sha256Hex(redacted.originalInputRedacted);
   const manifest = assembleManifest(
     input,
-    { ...redacted, inputExcerptRedacted },
+    { ...redacted, inputExcerptRedacted, enhancedPromptTextRedacted },
     summary,
     inputRedactedFingerprintSha256,
   );
@@ -265,7 +311,21 @@ function sanitizeManifestForPersistence(
     summary.stringsRedacted > 0
       ? foldRedactionSummary(redacted.redactionSummary, summary)
       : redacted.redactionSummary;
-  const sanitized = withRecomputedIntegrityHashes({ ...redacted, redactionSummary });
+  // Fail-closed backstop: the ceilings hold for every manifest that reaches a store, not only for
+  // one built by `buildPromptEnhancementEvidenceManifest`. Re-applying is idempotent for a manifest
+  // that already respects them, and the integrity hashes are recomputed over the bounded values.
+  const sanitized = withRecomputedIntegrityHashes({
+    ...redacted,
+    inputExcerptRedacted: truncate(
+      redacted.inputExcerptRedacted,
+      PE_EVIDENCE_INPUT_EXCERPT_MAX_CHARS,
+    ),
+    enhancedPromptTextRedacted: boundEnhancedPromptText(
+      redacted.enhancedPromptTextRedacted,
+      PE_EVIDENCE_ENHANCED_PROMPT_MAX_CHARS,
+    ),
+    redactionSummary,
+  });
   assertManifestWriteReady(sanitized);
   return sanitized;
 }

@@ -18,6 +18,9 @@ import {
   createNodePromptEnhancementLocalStore,
   listPromptEnhancementRuns,
   loadPromptEnhancementRun,
+  PE_EVIDENCE_ENHANCED_PROMPT_MAX_CHARS,
+  PE_EVIDENCE_INPUT_EXCERPT_MAX_CHARS,
+  PE_EVIDENCE_TRUNCATION_MARKER,
   PE_SUBDIR,
   recordPromptEnhancementRun,
   type PromptEnhancementRecordInput,
@@ -143,6 +146,81 @@ describe("buildPromptEnhancementEvidenceManifest", () => {
       { additionalSecrets: ["super-secret-literal"] },
     );
     expect(manifest.enhancedPromptTextRedacted).not.toContain("super-secret-literal");
+  });
+
+  // #1307 audit: the manifest deliberately caps the persisted draft at DEFAULT_INPUT_EXCERPT_MAX_CHARS,
+  // but the renderer fences the same draft into the prompt's Input section (bounded only by the
+  // generator's 16_000-character cap, or the model path's 24_000), and `enhancedPromptTextRedacted`
+  // was stored untruncated — so the record persisted several times more raw draft than the excerpt
+  // bound it advertises. Redaction is not content minimisation; the bound has to be enforced.
+  describe("content minimisation", () => {
+    const HUGE_DRAFT = "d".repeat(12_000);
+
+    it("bounds the persisted enhanced prompt text, not just the input excerpt", () => {
+      const { manifest } = buildPromptEnhancementEvidenceManifest(
+        recordInput({
+          originalInput: HUGE_DRAFT,
+          enhancedPromptText: `## Input (untrusted)\n${HUGE_DRAFT}`,
+        }),
+      );
+      expect(manifest.inputExcerptRedacted.length).toBeLessThanOrEqual(
+        PE_EVIDENCE_INPUT_EXCERPT_MAX_CHARS,
+      );
+      expect(manifest.enhancedPromptTextRedacted.length).toBeLessThanOrEqual(
+        PE_EVIDENCE_ENHANCED_PROMPT_MAX_CHARS,
+      );
+    });
+
+    it("marks the truncation so a bounded record cannot be read as the complete prompt", () => {
+      const { manifest } = buildPromptEnhancementEvidenceManifest(
+        recordInput({ enhancedPromptText: HUGE_DRAFT }),
+      );
+      expect(manifest.enhancedPromptTextRedacted.endsWith(PE_EVIDENCE_TRUNCATION_MARKER)).toBe(
+        true,
+      );
+    });
+
+    it("leaves a prompt inside the bound byte-identical and unmarked", () => {
+      const { manifest } = buildPromptEnhancementEvidenceManifest(
+        recordInput({ enhancedPromptText: "## Role\nYou are careful." }),
+      );
+      expect(manifest.enhancedPromptTextRedacted).toBe("## Role\nYou are careful.");
+      expect(manifest.enhancedPromptTextRedacted).not.toContain(PE_EVIDENCE_TRUNCATION_MARKER);
+    });
+
+    it("cannot be widened past the declared ceiling by a caller-supplied cap", () => {
+      const { manifest } = buildPromptEnhancementEvidenceManifest(
+        recordInput({
+          originalInput: HUGE_DRAFT,
+          enhancedPromptText: HUGE_DRAFT,
+          inputExcerptMaxChars: 11_000,
+          enhancedPromptMaxChars: 11_000,
+        }),
+      );
+      expect(manifest.inputExcerptRedacted.length).toBeLessThanOrEqual(
+        PE_EVIDENCE_INPUT_EXCERPT_MAX_CHARS,
+      );
+      expect(manifest.enhancedPromptTextRedacted.length).toBeLessThanOrEqual(
+        PE_EVIDENCE_ENHANCED_PROMPT_MAX_CHARS,
+      );
+    });
+
+    it("honors a caller-supplied cap that tightens the bound", () => {
+      const { manifest } = buildPromptEnhancementEvidenceManifest(
+        recordInput({ enhancedPromptText: HUGE_DRAFT, enhancedPromptMaxChars: 200 }),
+      );
+      expect(manifest.enhancedPromptTextRedacted.length).toBeLessThanOrEqual(200);
+    });
+
+    it("re-applies the ceiling on persist, whatever built the manifest", () => {
+      const store = createInMemoryPromptEnhancementLocalStore();
+      const { manifest } = buildPromptEnhancementEvidenceManifest(recordInput());
+      store.record({ ...manifest, enhancedPromptTextRedacted: HUGE_DRAFT });
+      const loaded = store.load("pe-run-1");
+      expect(loaded?.enhancedPromptTextRedacted.length).toBeLessThanOrEqual(
+        PE_EVIDENCE_ENHANCED_PROMPT_MAX_CHARS,
+      );
+    });
   });
 
   it("hashes full-redaction evidence from a fixed marker", () => {

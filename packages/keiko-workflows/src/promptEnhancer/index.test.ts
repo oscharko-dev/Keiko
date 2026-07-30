@@ -5,9 +5,13 @@ import {
   type GatewayRequest,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
-import type {
-  PromptEnhancementWireRequest,
-  PromptEnhancementWireResponse,
+import {
+  estimateTokens,
+  type EnhancedPrompt,
+  type MissingInformationStrategy,
+  type PromptEnhancementProfileId,
+  type PromptEnhancementWireRequest,
+  type PromptEnhancementWireResponse,
 } from "@oscharko-dev/keiko-contracts";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
@@ -72,6 +76,37 @@ async function run(
 
 function trustedRenderedPrompt(renderedPrompt: string): string {
   return renderedPrompt.replace(/## Input \([\s\S]*?\n\n## Steps/u, "## Steps");
+}
+
+function winnerProfileOf(
+  result: PromptEnhancementWireResponse,
+): PromptEnhancementProfileId | undefined {
+  return result.candidates.scorecards.find(
+    (scorecard) => scorecard.candidateId === result.candidates.winnerCandidateId,
+  )?.profile;
+}
+
+// Re-derive the winning Enhanced Prompt from the production planner + generator for the strategy the
+// caller asked for. A fixture that restated the generator's uncertainty sentences would keep passing
+// if the production formula moved; calling the producer cannot.
+function regeneratePrompt(
+  result: PromptEnhancementWireResponse,
+  text: string,
+  missingInformationStrategy: MissingInformationStrategy,
+): EnhancedPrompt {
+  const profilePreference = winnerProfileOf(result);
+  if (profilePreference === undefined) {
+    throw new Error("response carries no winning scorecard");
+  }
+  return PromptEnhancer.generateEnhancedPrompt({
+    promptId: result.enhancedPrompt.promptId,
+    analysis: result.analysis,
+    plan: PromptEnhancer.planPromptEnhancement(result.analysis, {
+      profilePreference,
+      missingInformationStrategy,
+    }),
+    input: { text },
+  });
 }
 
 function modelResponse(content: string): NormalizedResponse {
@@ -343,11 +378,56 @@ describe("runPromptEnhancement", () => {
       );
       expect(result.renderedPrompt).toContain("repository-level quality");
       expect(result.renderedPrompt).toContain("verification commands");
-      expect(result.promptId).toBe(result.candidates.winnerCandidateId);
-      expect(result.candidates.scorecards[0]?.candidateId).toBe(result.promptId);
+      // The delivered artefact is the model's text, so it gets its own id and is deliberately NOT a
+      // scored candidate; `enhancedPrompt` remains the deterministic baseline it was derived from.
+      expect(result.promptId).not.toBe(result.candidates.winnerCandidateId);
+      expect(result.enhancedPrompt.promptId).toBe(result.candidates.winnerCandidateId);
     });
 
-    it("falls back deterministically when the model still returns JSON", async () => {
+    // #1307 audit: the winning scorecard, the structured sections and the token estimate were all
+    // computed from the DISCARDED deterministic prompt while the displayed/copied prompt was the
+    // model's, so a one-word model reply was presented with a full six-dimension scorecard and a
+    // four-figure token count that described text the user never saw.
+    it("never attributes a candidate scorecard to a model-refined prompt the critic never scored", async () => {
+      const { factory } = recordingModelPort("ok");
+      const result = await run(
+        { text: "Plan a migration.", modelId: CHAT_MODEL },
+        configWithProvider(CHAT_MODEL),
+        factory,
+      );
+
+      expect(result.modelRouting.executionStatus).toBe("model-applied");
+      expect(result.renderedPrompt).toBe("ok");
+      expect(
+        result.candidates.scorecards.some((card) => card.candidateId === result.promptId),
+      ).toBe(false);
+      const winner = result.candidates.scorecards.find(
+        (card) => card.candidateId === result.candidates.winnerCandidateId,
+      );
+      expect(winner).toBeDefined();
+      // Every surviving score must describe the artefact the response says it scored. Derived from
+      // the production critic + renderer, never from a restated formula.
+      expect(winner?.estimatedTokens).toBe(
+        PromptEnhancer.estimatePromptTokens(result.enhancedPrompt),
+      );
+    });
+
+    it("reports a token estimate that describes the prompt the user actually receives", async () => {
+      const { factory } = recordingModelPort("ok");
+      const modelApplied = await run(
+        { text: "Plan a migration.", modelId: CHAT_MODEL },
+        configWithProvider(CHAT_MODEL),
+        factory,
+      );
+      const deterministic = await run({ text: "Plan a migration." });
+
+      expect(modelApplied.renderedPromptEstimatedTokens).toBe(estimateTokens("ok"));
+      expect(deterministic.renderedPromptEstimatedTokens).toBe(
+        estimateTokens(deterministic.renderedPrompt),
+      );
+    });
+
+    it("falls back deterministically when the model returns a JSON object", async () => {
       const { factory } = recordingModelPort(
         JSON.stringify({ role: "You are a JSON patch.", steps: ["Do not use this."] }),
       );
@@ -357,8 +437,39 @@ describe("runPromptEnhancement", () => {
         factory,
       );
       expect(result.modelRouting.executionStatus).toBe("model-fallback");
-      expect(result.modelRouting.fallbackReason).toBe("model-invalid-prompt");
+      expect(result.modelRouting.fallbackReason).toBe("model-invalid-json");
       expect(result.enhancedPrompt.role.length).toBeGreaterThan(0);
+    });
+
+    // #1307 audit: `isJsonObjectResponse` only matched a whole-string JSON OBJECT, so a JSON array
+    // and a fenced JSON block were applied as if they were the Markdown prompt the system message
+    // demands, and the declared "model-invalid-json" fallback reason was produced by nothing.
+    it.each([
+      ["a JSON array", '[{"role":"You are a JSON patch."}]'],
+      ["a fenced JSON block", '```json\n{"role":"You are a JSON patch."}\n```'],
+      ["a fenced JSON array", "```json\n[1, 2, 3]\n```"],
+    ])("falls back deterministically when the model returns %s", async (_label, content) => {
+      const { factory } = recordingModelPort(content);
+      const result = await run(
+        { text: "Plan a migration.", modelId: CHAT_MODEL },
+        configWithProvider(CHAT_MODEL),
+        factory,
+      );
+      expect(result.modelRouting.executionStatus).toBe("model-fallback");
+      expect(result.modelRouting.fallbackReason).toBe("model-invalid-json");
+    });
+
+    it("keeps the wrong-meta-role rejection distinct from the JSON rejection", async () => {
+      const { factory } = recordingModelPort(
+        ["## Role", "You are a prompt engineer.", "", "## Steps", "- Rewrite it."].join("\n"),
+      );
+      const result = await run(
+        { text: "Plan a migration.", modelId: CHAT_MODEL },
+        configWithProvider(CHAT_MODEL),
+        factory,
+      );
+      expect(result.modelRouting.executionStatus).toBe("model-fallback");
+      expect(result.modelRouting.fallbackReason).toBe("model-invalid-prompt");
     });
 
     it("accepts plain Markdown from open chat models", async () => {
@@ -654,17 +765,70 @@ describe("runPromptEnhancement", () => {
     expect(result.groundingReadiness.status).toBe("unavailable");
   });
 
-  it("honors the missing-information strategy by emitting uncertainty handling", async () => {
-    const assume = await run({
-      text: "Build something useful.",
-      missingInformationStrategy: "assume",
+  // #1307 audit: this used to assert only `uncertaintyHandling.length > 0` for BOTH strategies and
+  // passed unchanged while the strategy was dropped on the floor — no production caller forwarded it
+  // to the planner, so `plan.missingInformationStrategy` was pinned to "clarify" and the generator's
+  // "assume" branch was unreachable. The expectation is now DERIVED from the production planner +
+  // generator, so it moves with them and cannot go stale into vacuity again.
+  it("routes the missing-information strategy through the planner into the generated prompt", async () => {
+    const text = "Help me.";
+    const assume = await run({ text, missingInformationStrategy: "assume" });
+    const clarify = await run({ text, missingInformationStrategy: "clarify" });
+
+    expect(regeneratePrompt(assume, text, "assume")).toEqual(assume.enhancedPrompt);
+    expect(regeneratePrompt(clarify, text, "clarify")).toEqual(clarify.enhancedPrompt);
+    expect(assume.enhancedPrompt.uncertaintyHandling).not.toEqual(
+      clarify.enhancedPrompt.uncertaintyHandling,
+    );
+  });
+
+  it("defaults the missing-information strategy to clarify when the caller omits it", async () => {
+    const text = "Help me.";
+    const omitted = await run({ text });
+    expect(regeneratePrompt(omitted, text, "clarify")).toEqual(omitted.enhancedPrompt);
+  });
+
+  // #1307 audit: `profilePreference` only seeded the candidate slate and the winner was then chosen
+  // purely by aggregate score, so fast / research / creative lost to precise every time and the
+  // shipped profile control returned a byte-identical prompt to "auto".
+  describe("profile preference", () => {
+    const DRAFT = "Write a short blog post about our new dashboard feature.";
+
+    it("returns the requested profile's prompt rather than the top-scoring one", async () => {
+      const auto = await run({ text: DRAFT });
+      const fast = await run({ text: DRAFT, profilePreference: "fast" });
+
+      expect(winnerProfileOf(auto)).not.toBe("fast");
+      expect(winnerProfileOf(fast)).toBe("fast");
+      expect(fast.enhancedPrompt.promptId).toBe(fast.candidates.winnerCandidateId);
+      expect(fast.renderedPrompt).not.toBe(auto.renderedPrompt);
+      expect(fast.safety.promptId).toBe(fast.candidates.winnerCandidateId);
     });
-    const clarify = await run({
-      text: "Build something useful.",
-      missingInformationStrategy: "clarify",
+
+    it.each(["fast", "research", "creative"] as const)(
+      "delivers the %s profile when it is requested",
+      async (profilePreference) => {
+        const result = await run({ text: DRAFT, profilePreference });
+        expect(winnerProfileOf(result)).toBe(profilePreference);
+      },
+    );
+
+    it("never lists the delivered candidate as a rejected alternative", async () => {
+      const result = await run({ text: DRAFT, profilePreference: "fast" });
+      expect(
+        result.candidates.rejected.some(
+          (entry) => entry.candidateId === result.candidates.winnerCandidateId,
+        ),
+      ).toBe(false);
     });
-    expect(assume.enhancedPrompt.uncertaintyHandling.length).toBeGreaterThan(0);
-    expect(clarify.enhancedPrompt.uncertaintyHandling.length).toBeGreaterThan(0);
+
+    it("cannot downgrade a criticality-escalated task", async () => {
+      const result = await run({
+        text: "What medication should I take for chest pain before I can see a doctor?",
+        profilePreference: "fast",
+      });
+      expect(winnerProfileOf(result)).toBe("safety-critical");
+    });
   });
 
   it("rejects a draft that is empty after normalization (self-contained guard)", async () => {
@@ -687,13 +851,36 @@ describe("runPromptEnhancement", () => {
     ).rejects.toThrow(PromptEnhancementInputError);
   });
 
-  it("throws when the optimizer produces no ranked prompt", async () => {
+  // Fail-closed pin, relocated (not relaxed) from the workflow's own `rankedPrompts[0]` read to
+  // `resolvePreferredCandidate`, which now owns resolving the delivered candidate. A degenerate
+  // optimizer result must still surface a named, diagnosable error rather than a raw TypeError — and
+  // the desynchronized case below is a tighter pin than the original single-field check.
+  it("throws a named error when the optimizer produces no resolvable candidate", async () => {
     const optimizeSpy = vi.spyOn(PromptEnhancer, "optimizePromptCandidates").mockReturnValueOnce({
+      ranked: [],
       rankedPrompts: [],
+      rankedSafetyAssessments: [],
+      rejected: [],
     } as unknown as ReturnType<typeof PromptEnhancer.optimizePromptCandidates>);
     try {
       await expect(run({ text: "Summarize the issue." })).rejects.toThrow(
-        "Prompt enhancement optimization produced no prompt.",
+        "Prompt candidate selection is missing the resolved candidate.",
+      );
+    } finally {
+      optimizeSpy.mockRestore();
+    }
+  });
+
+  it("throws a named error when ranked scorecards and ranked prompts are desynchronized", async () => {
+    const optimizeSpy = vi.spyOn(PromptEnhancer, "optimizePromptCandidates").mockReturnValueOnce({
+      ranked: [{ candidateId: "cand-1", profile: "precise", aggregateScore: 0.5 }],
+      rankedPrompts: [],
+      rankedSafetyAssessments: [],
+      rejected: [],
+    } as unknown as ReturnType<typeof PromptEnhancer.optimizePromptCandidates>);
+    try {
+      await expect(run({ text: "Summarize the issue." })).rejects.toThrow(
+        "Prompt candidate selection is missing the resolved candidate.",
       );
     } finally {
       optimizeSpy.mockRestore();

@@ -110,6 +110,30 @@ describe("generatePromptCandidates", () => {
     }
   });
 
+  // #1307 audit: the args comment promised "Optional baseline preference / missing-information
+  // strategy, forwarded to the planner", but only the preference was ever forwarded, so
+  // `plan.missingInformationStrategy` was pinned to the planner default for every production
+  // candidate and the generator's "assume" branch was unreachable.
+  it("forwards the missing-information strategy to every candidate plan", () => {
+    const { candidates } = generatePromptCandidates({
+      analysis: makeAnalysis({ recommendedProfile: "technical" }),
+      input: INPUT,
+      candidateCount: 3,
+      missingInformationStrategy: "assume",
+    });
+    expect(candidates.length).toBeGreaterThanOrEqual(3);
+    for (const candidate of candidates) {
+      expect(candidate.plan.missingInformationStrategy).toBe("assume");
+    }
+  });
+
+  it("defaults the missing-information strategy to clarify when the caller omits it", () => {
+    const { candidates } = candidatesFor({ recommendedProfile: "technical" }, 3);
+    for (const candidate of candidates) {
+      expect(candidate.plan.missingInformationStrategy).toBe("clarify");
+    }
+  });
+
   it("produces structurally distinct prompts across candidates", () => {
     const { candidates } = candidatesFor({ recommendedProfile: "technical" }, 3);
     const signatures = candidates.map((candidate) =>
