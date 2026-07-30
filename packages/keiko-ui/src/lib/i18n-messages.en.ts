@@ -1377,6 +1377,78 @@ export const EN_MESSAGES = {
   "relationships.health.show": "Graph health",
   "relationships.create.aria": "Create new relationship",
   "relationships.create.button": "+ New relationship",
+  // Graph health panel (#542). A BOUNDED scan may never certify a clean graph, so the copy
+  // separates "healthy" from "partial — inconclusive", and every count that came out of a
+  // truncated category is worded as a lower bound.
+  "relationships.health.panelTitle": "Graph health",
+  "relationships.health.refresh": "Refresh",
+  "relationships.health.refreshAria": "Re-run the graph health check",
+  "relationships.health.retry": "Retry",
+  "relationships.health.running": "Running health check…",
+  "relationships.health.loadFailed": "Could not load the graph health check.",
+  "relationships.health.checkedAtPrefix": "Checked at",
+  "relationships.health.scopeNote":
+    "Totals and findings cover every relationship in this Keiko installation — not only the current project.",
+  "relationships.health.totalsLabel": "Lifecycle totals (installation-wide)",
+  "relationships.health.healthyTitle": "Healthy",
+  "relationships.health.healthyBody": "No relationship-graph defects were found.",
+  "relationships.health.partial.title": "Partial scan — inconclusive",
+  "relationships.health.partial.body":
+    "The scan hit its bound before it finished, so this is not a clean bill of health. No defects were found in the part of the graph that was scanned.",
+  "relationships.health.partial.note":
+    "This scan hit its bound before it finished — every count below is a lower bound.",
+  "relationships.health.partial.categories": "Bounded categories: {categories}.",
+  "relationships.health.inspectAria":
+    "Inspect {type} relationship from {source} to {target}, lifecycle {lifecycle}",
+  "relationships.health.category.aria": "{label} ({count})",
+  "relationships.health.category.ariaAtLeast": "{label} (at least {count})",
+  "relationships.health.category.showingFirst": "Showing the first {cap} of {count}.",
+  "relationships.health.category.truncated":
+    "More {category} exist than the bounded query returned. Resolve the listed items, then re-run the health check.",
+  "relationships.health.category.boundedEmpty":
+    "This category's scan hit its bound before it finished, so findings here may be missing.",
+  "relationships.health.category.invalid.label": "Invalid references",
+  "relationships.health.category.invalid.help":
+    "An endpoint no longer resolves to a live workspace object.",
+  "relationships.health.category.blocked.label": "Blocked",
+  "relationships.health.category.blocked.help":
+    "A policy or endpoint state is blocking this relationship.",
+  "relationships.health.category.failed.label": "Failed (revoked)",
+  "relationships.health.category.failed.help":
+    "The relationship reached the revoked terminal state.",
+  "relationships.health.category.cycle.label": "Cycle participants",
+  "relationships.health.category.cycle.help":
+    "These relationships take part in a dependency cycle.",
+  "relationships.health.category.stale.label": "Stale",
+  "relationships.health.category.stale.help":
+    "A health check flagged at least one endpoint as not currently live.",
+  "relationships.health.category.orphaned.label": "Orphaned endpoints",
+  "relationships.health.category.orphaned.help":
+    "Endpoints that participate in no live relationship.",
+  // Relationship list recovery (error-and-denial-ux.md §"Bounded-query-exceeded UX": the
+  // rejected-query banner offers a reset, so a poisoned view state is never a dead end).
+  "relationships.list.resetToDefaults": "Reset to defaults",
+  // Bounded impact walk (#542): a failed walk must say so instead of showing an em dash and a
+  // permanent "Loading…", and the impacted set excludes the origin relationship itself.
+  "relationships.impact.unavailableValue": "Unavailable",
+  "relationships.impact.failed": "The impact analysis could not be loaded.",
+  "relationships.impact.retry": "Retry impact",
+  "relationships.impact.cardAria": "Bounded impact analysis",
+  "relationships.impact.loading": "Loading…",
+  "relationships.impact.none": "No further objects are affected in this direction.",
+  "relationships.impact.downstreamTitle": "Downstream impact",
+  "relationships.impact.downstreamHelp":
+    "Objects this relationship's target leads to. Deleting or revoking here may affect them.",
+  "relationships.impact.upstreamTitle": "Upstream impact",
+  "relationships.impact.upstreamHelp": "Objects that depend on this relationship's source.",
+  "relationships.impact.truncated":
+    "The walk hit a bound before the graph was fully traversed; more objects may be affected than shown.",
+  "relationships.impact.showingFirst": "Showing the first {cap} of {count} objects.",
+  "relationships.impact.pathRelationship": "{count} relationship on the path",
+  "relationships.impact.pathRelationships": "{count} relationships on the path",
+  "relationships.impact.inspectAria": "Inspect {type} relationship from {source} to {target}",
+  "relationships.impact.forward": "Forward dependencies",
+  "relationships.impact.reverse": "Reverse dependencies",
   // Epic #2093 source-control copy is intentionally feature-local so the editor remains lazy.
   // Issue #2150: Workspace.tsx/WindowFrame.tsx changed but added no new
   // user-facing strings — check:ui-i18n flags any edit to a file that uses

@@ -10,6 +10,7 @@ import {
   RELATIONSHIP_FORBIDDEN_METADATA_KEY_SUBSTRINGS,
   RELATIONSHIP_LIFECYCLE_STATES,
   RELATIONSHIP_OBJECT_KINDS,
+  RELATIONSHIP_QUERY_BOUNDS,
   RELATIONSHIP_SCHEMA_VERSION,
   RELATIONSHIP_SUPPORTED_OBJECT_KINDS,
   RELATIONSHIP_TYPE_DEFINITIONS,
@@ -227,6 +228,37 @@ describe("RELATIONSHIP_TYPE_DEFINITIONS", () => {
       "evidence-run",
       "workspace-path",
     ]);
+  });
+});
+
+describe("RELATIONSHIP_QUERY_BOUNDS", () => {
+  const BOUND_PAIRS = [
+    ["listLimitDefault", "listLimitMax"],
+    ["impactDepthDefault", "impactDepthMax"],
+    ["impactNodesDefault", "impactNodesMax"],
+    ["impactRelationshipsDefault", "impactRelationshipsMax"],
+  ] as const;
+
+  it("declares every bound as a positive integer", () => {
+    for (const value of Object.values(RELATIONSHIP_QUERY_BOUNDS)) {
+      expect(Number.isSafeInteger(value)).toBe(true);
+      expect(value).toBeGreaterThan(0);
+    }
+  });
+
+  // The point of the table is that a client can build an ACCEPTED request from it. A default
+  // outside its own maximum would hand every caller a query the server refuses — which is
+  // exactly the failure this table replaced (a UI control restating 512 against a 256 cap).
+  it("keeps every applied default inside its own accepted maximum", () => {
+    for (const [defaultKey, maxKey] of BOUND_PAIRS) {
+      expect(RELATIONSHIP_QUERY_BOUNDS[defaultKey]).toBeLessThanOrEqual(
+        RELATIONSHIP_QUERY_BOUNDS[maxKey],
+      );
+    }
+  });
+
+  it("is frozen so one consumer cannot mutate the bounds another one reads", () => {
+    expect(Object.isFrozen(RELATIONSHIP_QUERY_BOUNDS)).toBe(true);
   });
 });
 

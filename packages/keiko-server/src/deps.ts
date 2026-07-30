@@ -1541,6 +1541,13 @@ function buildMemoryVault(
 // returns that workspace identifier from `KEIKO_WORKSPACE_ID` (set), or a stable default
 // otherwise. The constant matches the empty-but-non-zero-length contract of `scope()` so
 // every route resolves a workspaceId instead of returning 403.
+//
+// This scope is PROCESS-WIDE, not per project: every relationship row is written and read under
+// the same identifier, so the graph totals and the health findings are installation-wide. There is
+// no project-scoped read to narrow to — narrowing the read alone would simply hide every existing
+// row. The relationship UI therefore labels those numbers installation-wide instead of letting an
+// operator read them as "this project" (RelationshipHealthPanel `scopeNote`). Real per-project
+// scope needs a scope-carrying write path plus a migration of existing rows, not a read filter.
 const DEFAULT_LOOPBACK_WORKSPACE_ID = "local";
 const DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID = "local-operator" as MemoryReviewerId;
 

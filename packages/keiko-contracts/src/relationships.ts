@@ -344,6 +344,45 @@ export const RELATIONSHIP_TYPE_DEFINITIONS: Readonly<
   },
 } as const;
 
+// ─── Bounded-query limits (api-contract.md §7) ─────────────────────────────────
+// The accepted range of every bounded relationship query, shared by the server that enforces
+// it and by the clients that build requests. A query outside these bounds is rejected with
+// `relationship/bounded-query-exceeded` (HTTP 400) — it is NOT clamped server-side.
+//
+// A shipped control must DERIVE its request from this table, never restate a number: the
+// "Dense" density button restated a 512-edge cap from the UI blueprint against the 256-entry
+// list cap, so every Dense fetch was rejected and the Relationships window went dead until the
+// user guessed to pick a different density. Two copies of one number drift; one copy cannot.
+export interface RelationshipQueryBounds {
+  /** Applied `GET /api/relationships` page size when the caller sends no `limit`. */
+  readonly listLimitDefault: number;
+  /** Largest accepted `GET /api/relationships` `limit`. */
+  readonly listLimitMax: number;
+  /** Applied dependency/impact walk depth when the caller sends no `maxDepth`. */
+  readonly impactDepthDefault: number;
+  /** Largest accepted dependency/impact walk `maxDepth`. */
+  readonly impactDepthMax: number;
+  /** Applied dependency/impact walk node budget when the caller sends no `maxNodes`. */
+  readonly impactNodesDefault: number;
+  /** Largest accepted dependency/impact walk `maxNodes`. */
+  readonly impactNodesMax: number;
+  /** Applied walk relationship budget when the caller sends no `maxRelationships`. */
+  readonly impactRelationshipsDefault: number;
+  /** Largest accepted dependency/impact walk `maxRelationships`. */
+  readonly impactRelationshipsMax: number;
+}
+
+export const RELATIONSHIP_QUERY_BOUNDS: RelationshipQueryBounds = Object.freeze({
+  listLimitDefault: 64,
+  listLimitMax: 256,
+  impactDepthDefault: 1,
+  impactDepthMax: 3,
+  impactNodesDefault: 256,
+  impactNodesMax: 1024,
+  impactRelationshipsDefault: 512,
+  impactRelationshipsMax: 2048,
+});
+
 // ─── Endpoint + record shapes ─────────────────────────────────────────────────
 // An ObjectReference is the opaque triple the relationship engine knows about each
 // endpoint. The engine NEVER owns the underlying id — it references it. Endpoint-content

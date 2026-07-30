@@ -27,6 +27,7 @@ expect.extend(toHaveNoViolations);
 vi.mock("../../../../relationships/api.js", () => ({
   getRelationship: vi.fn(),
   getExplain: vi.fn(),
+  getDependencies: vi.fn(),
   patchRelationship: vi.fn(),
   deleteRelationship: vi.fn(),
   RelationshipApiError: class RelationshipApiError extends Error {
@@ -45,14 +46,17 @@ vi.mock("../../../../relationships/api.js", () => ({
 
 import {
   deleteRelationship,
+  getDependencies,
   getExplain,
   getRelationship,
   patchRelationship,
   RelationshipApiError,
 } from "../../../../relationships/api";
+import { RELATIONSHIP_QUERY_BOUNDS } from "@oscharko-dev/keiko-contracts";
 
 const mockGetRelationship = vi.mocked(getRelationship);
 const mockGetExplain = vi.mocked(getExplain);
+const mockGetDependencies = vi.mocked(getDependencies);
 const mockPatchRelationship = vi.mocked(patchRelationship);
 const mockDeleteRelationship = vi.mocked(deleteRelationship);
 
@@ -96,6 +100,23 @@ function renderInspector(id: string | null = "rel-abc", overrides: Record<string
   );
 }
 
+// The dependency walk as the server actually returns it: the origin relationship and BOTH of its
+// endpoints are always present, so an ISOLATED relationship still yields a two-endpoint report.
+function isolatedWalkReport() {
+  return {
+    rootRelationshipId: BASE_REL.id,
+    depthReached: 1,
+    truncated: false,
+    relationships: [BASE_REL],
+    endpoints: [BASE_REL.target, BASE_REL.source],
+  };
+}
+
+function impactRowValue(label: string): string {
+  const row = screen.getByText(label).closest(".rb-row");
+  return row?.querySelector(".rb-row-v")?.textContent ?? "";
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((res) => {
@@ -109,6 +130,10 @@ function deferred<T>() {
 describe("RelationshipInspectorPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Every loaded-state test renders the impact summary, which fetches the bounded walk in both
+    // directions. Default it to the smallest honest report so only the impact tests below have to
+    // care about it.
+    mockGetDependencies.mockResolvedValue(isolatedWalkReport());
   });
 
   describe("empty state (null id)", () => {
@@ -512,6 +537,91 @@ describe("RelationshipInspectorPanel", () => {
         expect(screen.getByLabelText("Reference id: run-fast")).toBeDefined();
       });
       expect(screen.queryByLabelText("Reference id: run-slow")).toBeNull();
+    });
+  });
+
+  describe("impact summary", () => {
+    beforeEach(() => {
+      mockGetRelationship.mockResolvedValue(BASE_REL);
+      mockGetExplain.mockResolvedValue(BASE_EXPLAIN);
+    });
+
+    // The walk report always includes the origin relationship, so counting
+    // `report.relationships.length` inflated both figures by exactly one and no relationship
+    // could ever report zero dependencies.
+    it("reports a genuine zero for a relationship with no dependencies", async () => {
+      mockGetDependencies.mockResolvedValue(isolatedWalkReport());
+      renderInspector("rel-abc");
+      await waitFor(() => {
+        expect(impactRowValue("Forward dependencies")).toBe("0");
+      });
+      expect(impactRowValue("Reverse dependencies")).toBe("0");
+    });
+
+    it("counts only the dependencies beyond the inspected relationship", async () => {
+      const other = { ...BASE_REL, id: "rel-other" };
+      mockGetDependencies.mockResolvedValue({
+        ...isolatedWalkReport(),
+        relationships: [BASE_REL, other],
+      });
+      renderInspector("rel-abc");
+      await waitFor(() => {
+        expect(impactRowValue("Forward dependencies")).toBe("1");
+      });
+    });
+
+    // The walk used to be wrapped in a bare `catch {}`: the summary showed an em dash and the
+    // expanded card showed "Loading…" forever, with no statement that anything had failed.
+    it("states a failed dependency walk instead of an em dash and a stuck loading row", async () => {
+      mockGetDependencies.mockRejectedValue(
+        new RelationshipApiError("relationship/upstream-walk", "walk backend unavailable", 502),
+      );
+      renderInspector("rel-abc");
+      await waitFor(() => {
+        expect(impactRowValue("Forward dependencies")).toBe("Unavailable");
+      });
+      expect(impactRowValue("Reverse dependencies")).toBe("Unavailable");
+      fireEvent.click(screen.getByTestId("view-impact-btn"));
+      await waitFor(() => {
+        expect(screen.getByTestId("impact-error").textContent).toContain(
+          "walk backend unavailable",
+        );
+      });
+      expect(screen.queryByText(/^Loading…$/)).toBeNull();
+    });
+
+    it("retries only the walk from the impact card", async () => {
+      mockGetDependencies.mockRejectedValue(
+        new RelationshipApiError("relationship/upstream-walk", "walk backend unavailable", 502),
+      );
+      renderInspector("rel-abc");
+      await waitFor(() => {
+        expect(impactRowValue("Forward dependencies")).toBe("Unavailable");
+      });
+      fireEvent.click(screen.getByTestId("view-impact-btn"));
+      await waitFor(() => expect(screen.getByTestId("impact-error")).toBeDefined());
+      mockGetDependencies.mockResolvedValue(isolatedWalkReport());
+      const readsBefore = mockGetRelationship.mock.calls.length;
+      fireEvent.click(screen.getByRole("button", { name: /retry impact/i }));
+      await waitFor(() => {
+        expect(impactRowValue("Forward dependencies")).toBe("0");
+      });
+      // The relationship read is untouched: only the advisory walk is retried.
+      expect(mockGetRelationship.mock.calls.length).toBe(readsBefore);
+    });
+
+    // Drift pin: the walk request must be built FROM the bounded-query contract, never from a
+    // restated number (the class of defect that made the Dense density button unusable).
+    it("requests the walk with contract-derived bounds", async () => {
+      mockGetDependencies.mockResolvedValue(isolatedWalkReport());
+      renderInspector("rel-abc");
+      await waitFor(() => expect(mockGetDependencies).toHaveBeenCalledTimes(2));
+      for (const call of mockGetDependencies.mock.calls) {
+        expect(call[1]?.maxDepth).toBe(RELATIONSHIP_QUERY_BOUNDS.impactDepthMax);
+        expect(call[1]?.maxRelationships).toBe(
+          RELATIONSHIP_QUERY_BOUNDS.impactRelationshipsDefault,
+        );
+      }
     });
   });
 
