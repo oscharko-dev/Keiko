@@ -74,6 +74,9 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "shouldDiscardResponse",
       "applyTextEditsToText",
       "applyTextEditsToTextWithinLimit",
+      // Apply gate for a formatting result: a server-capped reformat is a partial mutation and is
+      // refused, never applied to a buffer or written to disk (0.3.0 release audit).
+      "formattingApplyDecision",
       // IDE-grade layout state and dirty-close/hot-exit contracts (#1375 + #1376).
       "EDITOR_LAYOUT_SCHEMA_VERSION",
       "activeEditorPane",
