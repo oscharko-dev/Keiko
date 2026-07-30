@@ -1237,9 +1237,27 @@ function modifiersConflict(
   return (modifier === "Ctrl" || modifier === "Meta") && seen.has("CtrlOrMeta");
 }
 
+/**
+ * A reservation is a PHYSICAL chord, so the three spellings that produce it are one reservation:
+ * `CtrlOrMeta+T`, `Meta+T` and `Ctrl+T` all reach the browser's reserved Cmd/Ctrl+T. Comparing the
+ * canonical string alone let the explicit-modifier spellings through — and the workspace substrate
+ * refuses a reserved chord by THROWING in render, so an accepted `Ctrl+T` became a persisted white
+ * screen (WORKSPACE_RESERVED_CHORDS in workspace-ui.ts is the chord-level twin of this list).
+ */
+function reservationKey(binding: string): string {
+  return binding
+    .split("+")
+    .map((part) => (part === "Ctrl" || part === "Meta" ? "CtrlOrMeta" : part))
+    .join("+")
+    .toLowerCase();
+}
+
 function isReservedBinding(binding: string): boolean {
-  const key = binding.toLowerCase();
-  return RESERVED_BINDINGS.some((reserved) => canonicalBinding(reserved)?.toLowerCase() === key);
+  const key = reservationKey(binding);
+  return RESERVED_BINDINGS.some((reserved) => {
+    const canonical = canonicalBinding(reserved);
+    return canonical !== undefined && reservationKey(canonical) === key;
+  });
 }
 
 function canonicalModifier(part: string): EditorM7KeybindingModifier | undefined {

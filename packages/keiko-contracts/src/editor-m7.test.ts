@@ -296,6 +296,30 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     ).toMatchObject({ ok: false, reasonCode: "RESERVED_KEYBINDING" });
   });
 
+  // A reservation is a physical chord: `Ctrl+T` and `Meta+T` reach the same browser-reserved chord
+  // as `CtrlOrMeta+T`. Comparing canonical strings alone accepted the explicit spellings, and the
+  // workspace substrate refuses a reserved chord by throwing in render — so an accepted `Ctrl+T`
+  // in a hand-edited or imported `keybindingOverrides` list was a persisted white screen.
+  it.each(["Ctrl+T", "Meta+T", "Ctrl+Shift+N", "meta+w", "Shift+Meta+N"])(
+    "rejects %s as the reserved chord it actually produces",
+    (binding) => {
+      expect(
+        validateEditorM7Keybinding({
+          commandId: "quick-access.files",
+          binding,
+          activeBindings: {},
+        }),
+      ).toMatchObject({ ok: false, reasonCode: "RESERVED_KEYBINDING" });
+    },
+  );
+
+  it("rejects a persisted override list that smuggles a reserved chord past the schema", () => {
+    expect(parseEditorM7KeybindingOverrides(["1|undo|Ctrl+T"])).toMatchObject({
+      ok: false,
+      reasonCode: "RESERVED_KEYBINDING",
+    });
+  });
+
   it("rejects unknown and duplicate modifiers and canonicalizes valid chords", () => {
     for (const binding of [
       "Hyper+O",

@@ -311,6 +311,15 @@ export const DE_MESSAGES = {
   "workspace.zoomReset": "{percent}% - zurücksetzen",
   "workspace.reset": "Zurücksetzen",
   "workspace.newWindow": "Neues Fenster",
+  "shell.error.title": "Keiko konnte den Arbeitsbereich nicht öffnen",
+  "shell.error.body":
+    "Der Desktop ist beim Rendern fehlgeschlagen, daher konnte nichts angezeigt werden. Deine Projekte, Chats und Dateien sind unverändert.",
+  "shell.error.hint":
+    "Meist liegt es an einer gespeicherten Tastenkürzel-Anpassung, die bei jedem Start erneut angewendet wird. Setze die gespeicherten Tastenkürzel zurück, um sie zu entfernen, oder lade neu, wenn der Fehler einmalig war.",
+  "shell.error.resetShortcuts": "Gespeicherte Tastenkürzel zurücksetzen und neu laden",
+  "shell.error.reload": "Keiko neu laden",
+  "shell.error.resetFailed":
+    "Die gespeicherten Tastenkürzel konnten nicht zurückgesetzt werden. Lade neu, um es erneut zu versuchen, oder bearbeite die gespeicherten Einstellungen außerhalb von Keiko.",
   "window.error.title": "Dieses Fenster hat einen Fehler ausgelöst",
   "window.error.body":
     "Der Fensterinhalt ist beim Rendern abgestürzt. Andere Fenster sind nicht betroffen - versuche es erneut oder schließe dieses Fenster.",

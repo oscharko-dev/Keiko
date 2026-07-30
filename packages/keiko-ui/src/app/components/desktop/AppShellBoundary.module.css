@@ -1,0 +1,68 @@
+/* Component-scoped shell-failure surface. globals.css is behind the SHA-pinned visual-proof gate
+   (#1300) and must not grow for this, so the boundary owns its own module styles. Deliberately
+   dependency-free: it has to render when everything below it has already failed. */
+
+.surface {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 24px;
+  background: var(--bg, #12141a);
+  color: var(--fg, #e9ecf2);
+}
+
+.panel {
+  box-sizing: border-box;
+  width: min(560px, 100%);
+  padding: 24px;
+  border: 1px solid var(--border, #333a48);
+  border-radius: 12px;
+  background: var(--surface, #1a1d26);
+}
+
+.title {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.body {
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+
+.hint {
+  margin: 0 0 16px;
+  line-height: 1.5;
+  opacity: 0.8;
+}
+
+.failure {
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.action {
+  padding: 8px 14px;
+  border: 1px solid var(--border, #333a48);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.action:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
