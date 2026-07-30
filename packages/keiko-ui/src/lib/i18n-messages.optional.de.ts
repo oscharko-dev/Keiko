@@ -480,6 +480,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitDelivery.recoveryStrategy.stash-and-reset": "Stash und Reset",
   "gitDelivery.recoveryStrategy.restore-index": "Index wiederherstellen",
   "gitDelivery.constraint.branchPattern": "Branch-Muster: {patterns}",
+  "gitDelivery.constraint.protectedBranch": "Geschützte Branches: {patterns}",
   "gitDelivery.constraint.providerCapability": "Erfordert Provider-Fähigkeit: {capability}",
   "gitDelivery.constraint.riskCeiling": "Risikoklassenobergrenze: {risk}",
   "gitDelivery.error.unexpected": "Ein unerwarteter Fehler ist aufgetreten.",

@@ -14,6 +14,7 @@ import {
   evaluateGitPolicy,
   gitDeliveryRiskClassForInputs,
   type GitDeliveryApprovalRequirement,
+  type GitDeliveryProtectedBranchConstraint,
   type GitDeliveryPushInputs,
   type GitDeliveryRepoPolicyPack,
   type GitDeliveryRiskClass,
@@ -39,12 +40,40 @@ import {
   type GitDeliveryMutationResponseBody,
 } from "./execution.js";
 
-// Default trusted publish policy: PERMIT `push` only to safe, non-protected branch namespaces and only
+// The shared/protected remote branches a governed push may never target directly. This is the
+// enforcement of the "no direct push to dev" hard denial (and its equivalents in a repository that
+// names its integration branch differently). It is a DENY list on purpose: the branches Keiko must
+// protect are a small, well-known, repository-independent set, whereas the branches a user is
+// entitled to push are unbounded and follow whatever convention THEIR repository uses.
+const KEIKO_PROTECTED_REMOTE_BRANCHES: GitDeliveryProtectedBranchConstraint = {
+  kind: "protected-branch",
+  patterns: [
+    { matchKind: "exact", value: "dev" },
+    { matchKind: "exact", value: "develop" },
+    { matchKind: "exact", value: "main" },
+    { matchKind: "exact", value: "master" },
+    { matchKind: "exact", value: "trunk" },
+    { matchKind: "exact", value: "production" },
+    { matchKind: "exact", value: "stable" },
+    { matchKind: "exact", value: "release" },
+    { matchKind: "prefix", value: "release/" },
+    { matchKind: "prefix", value: "releases/" },
+  ],
+};
+
+// Default trusted publish policy: PERMIT `push` to any remote branch that is NOT protected, and only
 // within the `publish` risk ceiling (which fail-closed BLOCKS force pushes, classed recovery-or-rewrite).
-// A push whose REMOTE target is a shared/protected branch (dev, main, release/*, …) falls the branch-
-// pattern constraint and is blocked with `policy-pack-blocked` — stricter than an ordinary user branch
-// (AC2). Every other action kind is denied. Applies only when governed git delivery is ENABLED and no
-// stricter pack is configured; the decision is still EVALUATED for every push, so governance is preserved.
+// A push whose REMOTE target is a shared/protected branch (dev, main, release/*, …) trips the
+// protected-branch constraint and is blocked with `protected-branch` (AC2). Every other action kind is
+// denied. Applies only when governed git delivery is ENABLED and no stricter pack is configured; the
+// decision is still EVALUATED for every push, so governance is preserved.
+//
+// This deliberately does NOT allow-list branch prefixes. An allow-list of `claude/ feat/ fix/ chore/
+// docs/` is Keiko's OWN branch-naming convention; imposing it as the default made the Push control
+// unusable in every repository that names branches any other way — a user branch such as `my-work`
+// or `bugfix-123` was blocked with `policy-pack-blocked` and no configuration path existed to widen
+// it. The hard denial the allow-list was really carrying is the protected-branch one, which is now
+// stated directly and covers more names (master, trunk, production, …) than the prefix list ever did.
 export const KEIKO_DEFAULT_PUBLISH_POLICY_PACK: GitDeliveryRepoPolicyPack = {
   schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   repoId: "keiko-publish-default",
@@ -54,16 +83,7 @@ export const KEIKO_DEFAULT_PUBLISH_POLICY_PACK: GitDeliveryRepoPolicyPack = {
       decision: "constrained",
       constraints: [
         { kind: "risk-class-ceiling", maxRiskClass: "publish" },
-        {
-          kind: "branch-pattern",
-          patterns: [
-            { matchKind: "prefix", value: "claude/" },
-            { matchKind: "prefix", value: "feat/" },
-            { matchKind: "prefix", value: "fix/" },
-            { matchKind: "prefix", value: "chore/" },
-            { matchKind: "prefix", value: "docs/" },
-          ],
-        },
+        KEIKO_PROTECTED_REMOTE_BRANCHES,
       ],
     },
   ],

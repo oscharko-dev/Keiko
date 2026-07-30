@@ -106,6 +106,10 @@ function constraintLabel(constraint: GitDeliveryConstraint, t: OptionalWidgetTra
       return t("gitDelivery.constraint.branchPattern", {
         patterns: constraint.patterns.map((p) => `${p.matchKind} "${p.value}"`).join(", "),
       });
+    case "protected-branch":
+      return t("gitDelivery.constraint.protectedBranch", {
+        patterns: constraint.patterns.map((p) => `${p.matchKind} "${p.value}"`).join(", "),
+      });
     case "provider-capability":
       return t("gitDelivery.constraint.providerCapability", { capability: constraint.capability });
     case "risk-class-ceiling":

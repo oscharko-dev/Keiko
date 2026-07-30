@@ -21,6 +21,7 @@ import type {
 import {
   GIT_DELIVERY_RISK_CLASS_SEVERITY,
   gitDeliveryBranchNameMatchesAny,
+  gitDeliveryTargetIsProtectedBranch,
   isGitDeliveryActionKind,
   isGitDeliveryConstraint,
 } from "./git-delivery.js";
@@ -230,6 +231,15 @@ export function gitDeliveryConstraintBlockReason(
     const target = context.targetBranchName;
     const ok = target !== undefined && gitDeliveryBranchNameMatchesAny(target, constraint.patterns);
     return ok ? undefined : "policy-pack-blocked";
+  }
+  // The protected-branch constraint is deliberately evaluated HERE and not inlined at the four
+  // gateways: it is a governance denial, and four copies of a denial is four places for it to drift
+  // apart. `gitDeliveryTargetIsProtectedBranch` fails closed on an unknown target, so an action that
+  // cannot name its target branch is blocked rather than allowed through (0.3.0 audit, #2802).
+  if (constraint.kind === "protected-branch") {
+    return gitDeliveryTargetIsProtectedBranch(context.targetBranchName, constraint.patterns)
+      ? "protected-branch"
+      : undefined;
   }
   if (constraint.kind === "provider-capability") {
     return context.activeProviderCapabilities.includes(constraint.capability)

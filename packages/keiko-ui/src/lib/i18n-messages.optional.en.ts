@@ -456,6 +456,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gitDelivery.recoveryStrategy.stash-and-reset": "stash and reset",
   "gitDelivery.recoveryStrategy.restore-index": "restore index",
   "gitDelivery.constraint.branchPattern": "Branch pattern: {patterns}",
+  "gitDelivery.constraint.protectedBranch": "Protected branches: {patterns}",
   "gitDelivery.constraint.providerCapability": "Requires provider capability: {capability}",
   "gitDelivery.constraint.riskCeiling": "Risk-class ceiling: {risk}",
   "gitDelivery.error.unexpected": "An unexpected error occurred.",

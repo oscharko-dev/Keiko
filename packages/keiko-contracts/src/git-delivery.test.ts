@@ -15,6 +15,7 @@ import {
   gitDeliveryDefaultRiskClass,
   gitDeliveryRiskClassForInputs,
   gitDeliveryRiskClassWithinCeiling,
+  gitDeliveryTargetIsProtectedBranch,
   isGitDeliveryAbortableOperation,
   isGitDeliveryActionKind,
   isGitDeliveryApprovalRequirement,
@@ -568,5 +569,45 @@ describe("typed branch matchers", () => {
     expect(gitDeliveryBranchNameMatchesAny("release/9", patterns)).toBe(true);
     expect(gitDeliveryBranchNameMatchesAny("feature/x", patterns)).toBe(false);
     expect(gitDeliveryBranchNameMatchesAny("main", [])).toBe(false);
+  });
+});
+
+// The DENY mirror of `branch-pattern`. `branch-pattern` can only say "these namespaces and nothing
+// else", so a pack protecting the shared branches had to enumerate every namespace a user is
+// allowed to push — the pack author's own naming convention imposed on every repository.
+describe("protected-branch constraint", () => {
+  const PROTECTED: GitDeliveryBranchPattern[] = [
+    { matchKind: "exact", value: "dev" },
+    { matchKind: "exact", value: "main" },
+    { matchKind: "prefix", value: "release/" },
+  ];
+
+  it.each(["dev", "main", "release/", "release/0.3.0"])("protects %s", (branch) => {
+    expect(gitDeliveryTargetIsProtectedBranch(branch, PROTECTED)).toBe(true);
+  });
+
+  it.each(["my-work", "bugfix-123", "development", "dev-notes", "release-notes", "feat/x", ""])(
+    "leaves the ordinary branch %s unprotected",
+    (branch) => {
+      expect(gitDeliveryTargetIsProtectedBranch(branch, PROTECTED)).toBe(false);
+    },
+  );
+
+  it("fails closed for an unknown target: a target that cannot be read is treated as protected", () => {
+    expect(gitDeliveryTargetIsProtectedBranch(undefined, PROTECTED)).toBe(true);
+    expect(gitDeliveryTargetIsProtectedBranch(undefined, [])).toBe(true);
+  });
+
+  it("protects nothing when the pattern list is empty and the target is known", () => {
+    expect(gitDeliveryTargetIsProtectedBranch("main", [])).toBe(false);
+  });
+
+  it("is accepted by the constraint guard and rejects a malformed pattern list", () => {
+    expect(isGitDeliveryConstraint({ kind: "protected-branch", patterns: PROTECTED })).toBe(true);
+    expect(isGitDeliveryConstraint({ kind: "protected-branch", patterns: [] })).toBe(true);
+    expect(isGitDeliveryConstraint({ kind: "protected-branch", patterns: [{ value: "x" }] })).toBe(
+      false,
+    );
+    expect(isGitDeliveryConstraint({ kind: "protected-branch" })).toBe(false);
   });
 });

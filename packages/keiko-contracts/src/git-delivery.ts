@@ -279,6 +279,20 @@ export interface GitDeliveryBranchPatternConstraint {
   readonly patterns: readonly GitDeliveryBranchPattern[];
 }
 
+// The DENY mirror of `branch-pattern`: the action is blocked when the policy target MATCHES any
+// pattern, and permitted otherwise. `branch-pattern` can only express "these namespaces and nothing
+// else", which forces a pack that wants to protect the shared integration branches to enumerate every
+// branch namespace the user is allowed to touch — an allow-list of the pack author's own naming
+// convention, imposed on repositories that never adopted it. This constraint states the protection
+// directly, so the shared branches stay denied (blockReason `protected-branch`) while an ordinary
+// branch is unaffected. Both kinds reuse GitDeliveryBranchPattern and gitDeliveryBranchNameMatchesAny,
+// so there is exactly ONE branch-matching implementation. An UNKNOWN target fails closed (blocked):
+// a target that cannot be read cannot be proven unprotected.
+export interface GitDeliveryProtectedBranchConstraint {
+  readonly kind: "protected-branch";
+  readonly patterns: readonly GitDeliveryBranchPattern[];
+}
+
 export interface GitDeliveryProviderCapabilityConstraint {
   readonly kind: "provider-capability";
   readonly capability: GitDeliveryProviderCapability;
@@ -293,6 +307,7 @@ export interface GitDeliveryRiskClassCeilingConstraint {
 
 export type GitDeliveryConstraint =
   | GitDeliveryBranchPatternConstraint
+  | GitDeliveryProtectedBranchConstraint
   | GitDeliveryProviderCapabilityConstraint
   | GitDeliveryRiskClassCeilingConstraint;
 
@@ -548,7 +563,7 @@ export function isGitDeliveryConstraint(value: unknown): value is GitDeliveryCon
   if (!isRecord(value)) {
     return false;
   }
-  if (value.kind === "branch-pattern") {
+  if (value.kind === "branch-pattern" || value.kind === "protected-branch") {
     return Array.isArray(value.patterns) && value.patterns.every(isGitDeliveryBranchPattern);
   }
   if (value.kind === "provider-capability") {
@@ -866,4 +881,16 @@ export function gitDeliveryBranchNameMatchesAny(
   patterns: readonly GitDeliveryBranchPattern[],
 ): boolean {
   return patterns.some((pattern) => gitDeliveryBranchNameMatchesPattern(branchName, pattern));
+}
+
+// Evaluates a `protected-branch` DENY constraint for one policy target. Every gateway calls this
+// instead of re-deriving the deny semantics, so the fail-closed treatment of an unknown target
+// (a target that cannot be read cannot be proven unprotected) exists in exactly one place.
+export function gitDeliveryTargetIsProtectedBranch(
+  targetBranchName: string | undefined,
+  patterns: readonly GitDeliveryBranchPattern[],
+): boolean {
+  return (
+    targetBranchName === undefined || gitDeliveryBranchNameMatchesAny(targetBranchName, patterns)
+  );
 }

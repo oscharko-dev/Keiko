@@ -309,9 +309,17 @@ describe("commit routes — central enforcement (real dispatch)", () => {
     expect(
       (await postExec({ schemaVersion: "1", projectId, message: "feat: x", evil: 1 })).status,
     ).toBe(400);
+    // A commit message carrying a credential is refused at the boundary. The sample is a realistic
+    // token: the guard matches a credential VALUE, not the bare word "Bearer", so that ordinary
+    // messages about authentication stay committable (asserted immediately below).
     expect(
-      (await postExec({ schemaVersion: "1", projectId, message: "Authorization: Bearer abc" }))
-        .status,
+      (
+        await postExec({
+          schemaVersion: "1",
+          projectId,
+          message: "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abcdefghij",
+        })
+      ).status,
     ).toBe(400);
     expect(
       (await postExec({ schemaVersion: "1", projectId: "/no/such", message: "feat: x" })).status,
@@ -319,6 +327,22 @@ describe("commit routes — central enforcement (real dispatch)", () => {
     const big = JSON.stringify({ schemaVersion: "1", projectId, message: "x".repeat(70 * 1024) });
     expect((await postExec(big)).status).toBe(413);
     expect((await postExec("{ not json")).status).toBe(400);
+  });
+
+  // The complement of the credential guard above. A message that merely NAMES an auth mechanism is
+  // ordinary English and must reach the kernel; the fixture project is not a git repository, so
+  // reaching the kernel surfaces as the worktree-unavailable 409 rather than the guard's 400.
+  it.each([
+    "fix(auth): reject a malformed bearer token",
+    "docs: describe the api_key rotation runbook",
+    "feat: add basic retry to the sync worker",
+    "fix(http): drop the set-cookie header on redirect",
+  ])("commits a message that merely mentions auth: %s", async (message) => {
+    const res = await postExec({ schemaVersion: "1", projectId, message });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({
+      error: { code: "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE" },
+    });
   });
 });
 
