@@ -23,6 +23,7 @@ import type {
 } from "@oscharko-dev/keiko-model-gateway";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import {
+  handleArchiveMemory,
   handleEditMemory,
   handleListMemories,
   handleMemoryReviewQueue,
@@ -396,7 +397,11 @@ describe("memory handlers", () => {
     expect(memories.map((memory) => memory.id)).toEqual(["expired-1", "stale-accepted-1"]);
   });
 
-  it("allows conflicted memories to be dismissed through the reject route", async () => {
+  // MEMORY_STATUS_TRANSITIONS forbids `conflicted -> rejected`; `rejected` is reachable only from
+  // `proposed`. The reject route was the ONE governance mutation that wrote the status without
+  // consulting checkStatusTransition, so it produced a record in a state the contract says cannot
+  // exist. The legal way to retire a conflicted record is `archived` (see the next test).
+  it("refuses the contract-forbidden conflicted -> rejected transition", async () => {
     const vault = makeVault();
     vault.insertMemory(makeMemory("conflict-2", "dismiss me", { status: "conflicted" }));
 
@@ -409,12 +414,66 @@ describe("memory handlers", () => {
       makeDeps({ memoryVault: vault }),
     );
 
-    expect(result.status).toBe(200);
-    const body = asJson(result);
-    const memory = body.memory as MemoryRecord;
-    expect(memory.status).toBe("rejected");
-    expect(memory.staleReason).toBe("dismissed from queue");
+    expect(result.status).toBe(409);
+    expect(asJson(result).error).toMatchObject({ code: "CONFLICT" });
+    expect(vault.getMemory("conflict-2" as MemoryId)?.status).toBe("conflicted");
   });
+
+  it("archives a conflicted memory through the transition the contract does allow", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("conflict-3", "retire me", { status: "conflicted" }));
+
+    const result = await handleArchiveMemory(
+      makeCtx(
+        "/api/memory/conflict-3/archive",
+        { reason: "archived conflicting memory from review queue" },
+        { id: "conflict-3" },
+      ),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(200);
+    expect((asJson(result).memory as MemoryRecord).status).toBe("archived");
+  });
+
+  it("still rejects a proposed memory, the one legal source state", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("proposal-9", "reject me", { status: "proposed" }));
+
+    const result = await handleRejectMemoryProposal(
+      makeCtx(
+        "/api/memory/proposals/proposal-9/reject",
+        { reason: "rejected from review queue" },
+        { id: "proposal-9" },
+      ),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(200);
+    const memory = asJson(result).memory as MemoryRecord;
+    expect(memory.status).toBe("rejected");
+    expect(memory.staleReason).toBe("rejected from review queue");
+  });
+
+  it.each(["accepted", "archived", "superseded", "expired"] as const)(
+    "refuses to reject a %s memory (no contract edge to rejected)",
+    async (status) => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory(`from-${status}`, "not rejectable", { status }));
+
+      const result = await handleRejectMemoryProposal(
+        makeCtx(
+          `/api/memory/proposals/from-${status}/reject`,
+          { reason: "nope" },
+          { id: `from-${status}` },
+        ),
+        makeDeps({ memoryVault: vault }),
+      );
+
+      expect(result.status).toBe(409);
+      expect(vault.getMemory(`from-${status}` as MemoryId)?.status).toBe(status);
+    },
+  );
 
   it("sanitises GovernanceError responses so the memory id is not leaked", () => {
     const vault = makeVault();

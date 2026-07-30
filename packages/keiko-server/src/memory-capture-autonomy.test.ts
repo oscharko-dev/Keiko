@@ -136,18 +136,47 @@ function makeVault(): MemoryVaultStore {
   return vault;
 }
 
+// A Map-backed evidence store so a test can read back the audit ledger the capture path wrote —
+// both to prove a decision WAS recorded and to prove no body leaked into it.
+function capturingEvidenceStore(): {
+  readonly store: UiHandlerDeps["evidenceStore"];
+  readonly serialized: () => string;
+} {
+  const runs = new Map<string, string>();
+  return {
+    store: {
+      put: (runId: string, json: string): string => {
+        runs.set(runId, json);
+        return runId;
+      },
+      get: (runId: string): string | undefined => runs.get(runId),
+      list: (): readonly string[] => [...runs.keys()],
+      delete: (runId: string): void => {
+        runs.delete(runId);
+      },
+    },
+    serialized: (): string => JSON.stringify([...runs.values()]),
+  };
+}
+
 interface DepsOptions {
   readonly vault: MemoryVaultStore;
   readonly model: string;
   readonly mode?: CodingWorkbenchMode;
   readonly diagnostics?: UiHandlerDeps["diagnostics"];
+  readonly evidenceStore?: UiHandlerDeps["evidenceStore"];
 }
 
 function makeDeps(options: DepsOptions): UiHandlerDeps {
   return {
     config: undefined,
     configPresent: false,
-    evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+    evidenceStore: options.evidenceStore ?? {
+      put: () => "",
+      list: () => [],
+      get: () => undefined,
+      delete: () => undefined,
+    },
     env: {},
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
@@ -432,18 +461,51 @@ describe("mode-aware memory capture journey", () => {
     },
   );
 
-  it("keeps a proposed fact absent from the next turn's accepted-only retrieval snapshot", async () => {
+  it("holds a proposed fact out of retrieval AND does not re-propose it on the next turn", async () => {
     const vault = makeVault();
     const deps = makeDeps({ vault, model: publicFact(0.7) }); // governed-assist (no ceiling)
     const ctx = context();
     const first = await captureSalientFromTurn(deps, salienceRequest(), ctx, "gpt-test", "ok");
     expect(first).toHaveLength(1);
     expect(readByStatus(vault, ctx, "proposed")).toHaveLength(1);
-    // gatherExistingBodies (the retrieval snapshot) reads accepted-only, so a PROPOSED fact is
-    // absent from it: re-emitting the same fact next turn is NOT deduped and is captured again.
+    // The record stays UNRETRIEVABLE: nothing is accepted in governed-assist, and retrieval reads
+    // accepted-only (keiko-memory-retrieval suppression.ts pins that separately).
+    expect(readByStatus(vault, ctx, "accepted")).toHaveLength(0);
+    // ...but the capture dedup corpus DOES see the proposal, so re-emitting the same fact next turn
+    // reinforces the pending review item instead of queueing the operator a second copy of it.
     const second = await captureSalientFromTurn(deps, salienceRequest(), ctx, "gpt-test", "ok");
-    expect(second).toHaveLength(1);
-    expect(readMemories(vault, ctx)).toHaveLength(2);
+    expect(second).toEqual([]);
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+    expect(readByStatus(vault, ctx, "accepted")).toHaveLength(0);
+    expect(reviewQueueProjection(deps).total).toBe(1);
+  });
+
+  it("does not re-propose a fact the operator rejected, and audits the refusal", async () => {
+    const vault = makeVault();
+    const evidence = capturingEvidenceStore();
+    const deps = makeDeps({ vault, model: publicFact(0.7), evidenceStore: evidence.store });
+    const ctx = context();
+    await captureSalientFromTurn(deps, salienceRequest(), ctx, "gpt-test", "ok");
+    const proposal = readMemories(vault, ctx)[0];
+    if (proposal === undefined) throw new Error("expected one captured proposal");
+    // The operator rejects it in the review queue.
+    vault.updateMemory(
+      proposal.id,
+      { status: "rejected", staleReason: "rejected from review queue" },
+      Date.now(),
+    );
+    expect(reviewQueueProjection(deps).total).toBe(0);
+
+    // The extractor re-derives the identical fact from ordinary conversation on a later turn.
+    const second = await captureSalientFromTurn(deps, salienceRequest(), ctx, "gpt-test", "ok");
+    expect(second).toEqual([{ kind: "rejected", reason: "suppressed-by-rejection" }]);
+    expect(readByStatus(vault, ctx, "proposed")).toHaveLength(0);
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+    expect(reviewQueueProjection(deps).total).toBe(0);
+    // The refusal is auditable, and the audit trail still carries no body.
+    const ledger = evidence.serialized();
+    expect(ledger).toContain("suppressed-by-rejection");
+    expect(ledger).not.toContain("fortnightly cadence");
   });
 
   it("surfaces a supervised-accepted fact in the next turn's retrieval snapshot", async () => {

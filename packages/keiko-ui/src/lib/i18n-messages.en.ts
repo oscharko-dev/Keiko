@@ -534,7 +534,7 @@ export const EN_MESSAGES = {
   "memoria.approving": "Approving...",
   "memoria.reject": "Reject",
   "memoria.rejecting": "Rejecting...",
-  "memoria.rejectConflict": "Reject conflict",
+  "memoria.archiveConflict": "Archive conflict",
   "memoria.archiveStale": "Archive stale",
   "memoria.archiving": "Archiving...",
   "memoria.memoryApproved": "Memory approved",

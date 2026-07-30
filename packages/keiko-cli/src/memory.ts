@@ -39,9 +39,11 @@ const USAGE = `Usage:
                                               Backfill embeddings for accepted memories lacking one.
 
 Opens the local memory vault (default $KEIKO_MEMORY_DIR or the platform state dir; override with
---memory-dir). \`maintain\` promotes strong proposals, archives faded memories, forgets
-expired/very-faint ones, and reports unresolved consolidation review items (memory strength itself
-is derived live at retrieval; this pass never rewrites confidence). \`diagnostics\`
+--memory-dir). \`maintain\` archives faded memories, expires un-reviewed faint proposals, forgets
+memories whose validity window elapsed, and reports unresolved consolidation review items (memory
+strength itself is derived live at retrieval; this pass never rewrites confidence). It never
+promotes a proposal to accepted: the CLI cannot read the MemoriaViva autonomy posture, so it fails
+closed to "Ask for approval" and leaves acceptance to the review queue. \`diagnostics\`
 prints schema version, generated time, scope/status counts, redacted storage path, and a bounded
 audit tail without memory body or payload content. \`reembed\` computes the embedding for each
 accepted memory that has none (bounded by --limit, default 200), so pre-existing memories become
@@ -149,6 +151,7 @@ function renderMaintenanceReport(counts: ReturnType<ServerModule["runMemoryMaint
     "Memory maintenance complete.",
     `  promoted:          ${String(counts.promoted)}`,
     `  archived:          ${String(counts.archived)}`,
+    `  expired:           ${String(counts.expired)}`,
     `  forgotten:         ${String(counts.forgotten)}`,
     `  superseded:        ${String(counts.superseded)}`,
     `  edgesCreated:      ${String(counts.edgesCreated)}`,
@@ -228,6 +231,9 @@ async function runMaintain(
   // "CLI and UI never drift" invariant in this module's header holds when the flag is on.
   const multipliers = memorySemanticizationMultipliers(env);
   try {
+    // No autonomyMode: the CLI opens the memory vault only and cannot read the operator's persisted
+    // MemoriaViva posture, so the pass fails closed to "Ask for approval" (ADR-0124 D2 / ADR-0146
+    // D2) and promotes nothing. Acceptance stays a decision made in the review queue.
     const counts = runMemoryMaintenance(vault, evidenceStore, {
       ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
     });

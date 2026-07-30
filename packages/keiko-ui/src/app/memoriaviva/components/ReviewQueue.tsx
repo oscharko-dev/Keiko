@@ -300,15 +300,17 @@ function ReviewRowActions({
         aria-labelledby={labelId}
         style={REVIEW_ACTION_FIELDSET_STYLE}
       >
-        {/* Honest label: this action permanently sets status=rejected (no UI
-            path back) — "Dismiss" suggested a mere hide (uiux-fix F035). */}
+        {/* Archive, not reject: MEMORY_STATUS_TRANSITIONS gives `rejected` exactly one inbound
+            edge (from `proposed`), so the server refuses conflicted -> rejected. Archive IS a
+            legal exit from `conflicted`, is non-destructive, and keeps the honest-label rule
+            (uiux-fix F035) — the button says what the server will actually do. */}
         <RowActionButton
           variant="ghost"
           busyAction={busyAction}
-          isBusy={busyAction === "reject"}
-          busyLabel={t("memoria.rejecting")}
-          idleLabel={t("memoria.rejectConflict")}
-          onClick={() => onReject(record)}
+          isBusy={busyAction === "archive"}
+          busyLabel={t("memoria.archiving")}
+          idleLabel={t("memoria.archiveConflict")}
+          onClick={() => onArchive(record)}
         />
       </fieldset>
     );
@@ -511,14 +513,14 @@ export function ReviewQueue({
         if (action === "accept") {
           await acceptImpl(id);
         } else if (action === "archive") {
-          await archiveImpl(id, "archived stale memory from review queue");
-        } else {
-          await rejectImpl(
+          await archiveImpl(
             id,
             record.status === "conflicted"
-              ? "rejected conflict from review queue"
-              : "rejected from review queue",
+              ? "archived conflicting memory from review queue"
+              : "archived stale memory from review queue",
           );
+        } else {
+          await rejectImpl(id, "rejected from review queue");
         }
         removeRecord(id);
         setActionStatus(actionStatusMessage(action, t));

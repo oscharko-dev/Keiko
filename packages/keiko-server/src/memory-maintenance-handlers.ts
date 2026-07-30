@@ -22,15 +22,18 @@ import {
   planMemoryMaintenance,
   type MemoryAccessStatLike,
   type MemoryMaintenancePlan,
+  type MemoryMaintenancePolicy,
 } from "@oscharko-dev/keiko-memory-governance";
 import { MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS } from "@oscharko-dev/keiko-contracts";
 import type {
+  CodingWorkbenchMode,
   MemoryAuditEvent,
   MemoryAuditInitiatorSurface,
   MemoryEdge,
   MemoryEdgeId,
   MemoryId,
   MemoryRecord,
+  MemoryScope,
   MemoryType,
 } from "@oscharko-dev/keiko-contracts";
 import { MemoryStorageError, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
@@ -40,10 +43,17 @@ import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import {
+  DEFAULT_MEMORY_AUTONOMY_MODE,
+  memoryUnattendedAcceptanceAllowed,
+  resolveMemoryMaintenanceAutonomyMode,
+} from "./memory-capture-policy.js";
 
 export interface MaintenanceCounts {
   promoted: number;
   archived: number;
+  expired: number;
   forgotten: number;
   superseded: number;
   edgesCreated: number;
@@ -63,6 +73,7 @@ function emptyCounts(): MaintenanceAccumulator {
   return {
     promoted: 0,
     archived: 0,
+    expired: 0,
     forgotten: 0,
     superseded: 0,
     edgesCreated: 0,
@@ -186,6 +197,7 @@ function applyFadeEffects(
   counts: MaintenanceAccumulator,
 ): void {
   applyArchives(vault, evidenceStore, nowMs, plan.archive, byId, counts);
+  applyExpirations(vault, evidenceStore, nowMs, plan.expire, byId, counts);
   applyForgets(vault, evidenceStore, nowMs, plan.forget, byId, counts);
 }
 
@@ -202,11 +214,14 @@ function applyPromotions(
     if (record === undefined) continue;
     vault.updateMemory(id, { status: "accepted" }, nowMs);
     counts.promoted += 1;
+    // `retention`, not `memory-center`: this promotion is the unattended maintenance sweep, not an
+    // operator acting in the Memory Center. The audit envelope must not attribute an autonomous
+    // acceptance to a human surface — it is the only record of WHO accepted the memory.
     emitAudit(
       evidenceStore,
       nowMs,
       "memory:accepted",
-      "memory-center",
+      "retention",
       "Promoted a strong proposed memory.",
       { memoryId: id, scope: record.scope },
     );
@@ -230,6 +245,34 @@ function applyArchives(
       memoryId: id,
       scope: record.scope,
     });
+  }
+}
+
+// Non-destructive fade-out of an un-reviewed proposal (governance `shouldExpire`). The row, its
+// body, and its review-queue membership survive; only the status changes to `expired`, which
+// retrieval suppresses and which the operator can still accept, archive, or forget. The audit event
+// is body-free: id, scope, and the retention reason only.
+function applyExpirations(
+  vault: MemoryVaultStore,
+  evidenceStore: EvidenceStore | undefined,
+  nowMs: number,
+  expirations: readonly { id: MemoryId; reason: string }[],
+  byId: Map<MemoryId, MemoryRecord>,
+  counts: MaintenanceAccumulator,
+): void {
+  for (const expiry of expirations) {
+    const record = byId.get(expiry.id);
+    if (record?.status !== "proposed") continue;
+    vault.updateMemory(expiry.id, { status: "expired", staleReason: expiry.reason }, nowMs);
+    counts.expired += 1;
+    emitAudit(
+      evidenceStore,
+      nowMs,
+      "memory:updated",
+      "retention",
+      `Expired an un-reviewed memory proposal (${expiry.reason}).`,
+      { memoryId: expiry.id, scope: record.scope },
+    );
   }
 }
 
@@ -278,6 +321,13 @@ function applyForgets(
 export interface RunMaintenanceOptions {
   /** Injected clock. Defaults to Date.now(). Pass a fixed value to make the pass replay-stable. */
   readonly nowMs?: number;
+  // The effective product-wide autonomy posture this pass runs under (ADR-0129 D1, ADR-0146 D2).
+  // Promotion (`proposed` -> `accepted`) is unattended acceptance of a memory the local human has
+  // not reviewed, so it runs ONLY when `memoryUnattendedAcceptanceAllowed` admits the mode. An
+  // ABSENT or unrecognised value fails closed to `governed-assist` (ADR-0124 D2 / ADR-0138 D2):
+  // no promotion. Every other effect (consolidate, archive, expire, forget) is mode-independent.
+  // Resolve it from server deps with `resolveMaintenanceAutonomyMode`.
+  readonly autonomyMode?: CodingWorkbenchMode;
   // Type-aware decay multipliers (semanticization). When supplied, episodic memories fade — and so
   // archive/forget — faster than semantic facts / skills / preferences. When ABSENT the pass uses a
   // single flat half-life for every type (byte-identical to the pre-semanticization behaviour), so
@@ -299,6 +349,36 @@ export function memorySemanticizationMultipliers(
     : undefined;
 }
 
+// Phase 1 — promote strong `proposed` memories FIRST. This keeps high-confidence captures visible
+// to consolidation in the same maintenance pass instead of waiting for a second run.
+//
+// GOVERNED: promotion is unattended acceptance, so the caller's autonomy posture decides whether it
+// runs at all (ADR-0146 D2). In `governed-assist` — and whenever the mode is absent or unresolvable
+// — this phase is skipped entirely and every proposal stays in the review queue for the human.
+function runPromotionPhase(
+  vault: MemoryVaultStore,
+  evidenceStore: EvidenceStore | undefined,
+  nowMs: number,
+  planPolicy: Partial<MemoryMaintenancePolicy>,
+  counts: MaintenanceAccumulator,
+  scopes: readonly MemoryScope[],
+): void {
+  const beforePromote = vault.listMemoriesAcrossScopes(scopes, { includeExpired: true });
+  const promoteStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
+  const promotePlan = planMemoryMaintenance(beforePromote, promoteStats, {
+    nowMs,
+    policy: planPolicy,
+  });
+  applyPromotions(
+    vault,
+    evidenceStore,
+    nowMs,
+    promotePlan.promote,
+    recordsById(beforePromote),
+    counts,
+  );
+}
+
 export function runMemoryMaintenance(
   vault: MemoryVaultStore,
   evidenceStore?: EvidenceStore,
@@ -314,22 +394,9 @@ export function runMemoryMaintenance(
       : {};
   const counts = emptyCounts();
   const scopes = vault.listMemoryScopes();
-  // Phase 1 — promote strong `proposed` memories FIRST. This keeps high-confidence captures visible
-  // to consolidation in the same maintenance pass instead of waiting for a second run.
-  const beforePromote = vault.listMemoriesAcrossScopes(scopes, { includeExpired: true });
-  const promoteStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
-  const promotePlan = planMemoryMaintenance(beforePromote, promoteStats, {
-    nowMs,
-    policy: planPolicy,
-  });
-  applyPromotions(
-    vault,
-    evidenceStore,
-    nowMs,
-    promotePlan.promote,
-    recordsById(beforePromote),
-    counts,
-  );
+  if (memoryUnattendedAcceptanceAllowed(options?.autonomyMode)) {
+    runPromotionPhase(vault, evidenceStore, nowMs, planPolicy, counts, scopes);
+  }
   // Phase 2 — consolidate live reviewable records: link safe near-duplicate metadata and surface
   // proposed/conflicted conflicts or merges as explicit review items. Status mutations require a
   // later governed review.
@@ -380,6 +447,9 @@ export interface MaybeRunAutoMaintenanceOptions {
   readonly nowMs: number;
   readonly enabled: boolean;
   readonly minIntervalMs?: number;
+  // Forwarded verbatim to the pass. Absent = no unattended acceptance (fail closed), so an
+  // opportunistic sweep can never promote a proposal the caller did not authorise.
+  readonly autonomyMode?: CodingWorkbenchMode;
   // Optional type-aware decay multipliers (semanticization). Forwarded verbatim to the pass; absent
   // keeps the flat single half-life. Resolve from the env via `memorySemanticizationMultipliers`.
   readonly decayHalfLifeMultiplierByType?: Partial<Record<MemoryType, number>>;
@@ -401,6 +471,7 @@ export function maybeRunAutoMaintenance(
   try {
     return runMemoryMaintenance(vault, evidenceStore, {
       nowMs: options.nowMs,
+      ...(options.autonomyMode !== undefined ? { autonomyMode: options.autonomyMode } : {}),
       ...(options.decayHalfLifeMultiplierByType !== undefined
         ? { decayHalfLifeMultiplierByType: options.decayHalfLifeMultiplierByType }
         : {}),
@@ -410,12 +481,35 @@ export function maybeRunAutoMaintenance(
   }
 }
 
+// The maintenance pass's effective autonomy posture, resolved fail-closed. A UI-store fault must
+// never widen authority and must never break the caller (the chat path runs this pass), so an
+// unreadable policy row degrades to the most restrictive posture — no unattended acceptance — and
+// is reported as a content-free operator diagnostic rather than swallowed.
+export function resolveMaintenanceAutonomyMode(deps: UiHandlerDeps): CodingWorkbenchMode {
+  try {
+    return resolveMemoryMaintenanceAutonomyMode(deps);
+  } catch (error) {
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: randomUUID(),
+        operation: "memory.maintenance.autonomy-mode",
+        source: "memory-maintenance-handlers.resolveMaintenanceAutonomyMode",
+        error,
+        redact: (summary): string => String(deps.redactor(summary)),
+      }),
+    );
+    return DEFAULT_MEMORY_AUTONOMY_MODE;
+  }
+}
+
 export function handleRunMaintenance(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
   try {
     const multipliers = memorySemanticizationMultipliers(deps.env);
     const counts = runMemoryMaintenance(vault, deps.evidenceStore, {
+      autonomyMode: resolveMaintenanceAutonomyMode(deps),
       ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
     });
     return { status: 200, body: counts };

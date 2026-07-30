@@ -53,7 +53,7 @@ import {
 } from "./memory-capture-policy.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
-import { isSuppressedByForgetTombstone } from "./memory-suppression.js";
+import { exactCaptureSuppressionReason } from "./memory-suppression.js";
 import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudits } from "./memory-audit-handler.js";
 
@@ -261,7 +261,9 @@ async function persistRecapOutcomes(
     }
     const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
     const record = buildMemoryRecordFromProposal(proposalId, outcome);
-    if (record === null || isSuppressedByForgetTombstone(vault, record)) {
+    // Recap capture is model-inferred, so it honours BOTH governed refusals: a forgotten body and a
+    // body the operator rejected in the review queue are equally "do not deduce this again".
+    if (record === null || exactCaptureSuppressionReason(vault, record) !== null) {
       rejected += 1;
       continue;
     }
