@@ -8,8 +8,11 @@
 // redaction, and cancellation of the shared boundary apply to the merge operation exactly as to every
 // other tool.
 //
-// `gh` reads its own GitHub token from its keyring or from GH_TOKEN/GITHUB_TOKEN in the inherited
-// process environment; Keiko never reads or handles the token value. The readiness READ maps GitHub's
+// `gh` reads its own GitHub token from its keyring or from GH_TOKEN/GITHUB_TOKEN. Those names reach
+// the child ONLY because this adapter runs on the governed REMOTE env lane
+// (GOVERNED_GIT_REMOTE_SANDBOX_POLICY): the lane forwards the credential NAMES and the real HOME so
+// gh can resolve `~/.config/gh`, and the spawn boundary keeps their VALUES in its output scrub set —
+// Keiko never reads, stores, or logs the token. The readiness READ maps GitHub's
 // content-free PR facts (state / draft / mergeable_state) and repo merge configuration into the
 // provider-neutral contract interfaces; a non-OK merge status is classified into a typed
 // GitMergeRejectionReason. Raw stdout/stderr never leave this module — only the typed facts, the
@@ -51,15 +54,21 @@ import {
   type RunCommandDeps,
   type SpawnFn,
 } from "./exec.js";
-import { DEFAULT_SANDBOX_POLICY, type CommandResult, type SandboxPolicy } from "./types.js";
+import {
+  GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
+  type CommandResult,
+  type SandboxPolicy,
+} from "./types.js";
 
 export interface NodeGitMergeAdapterDeps {
   readonly workspace: WorkspaceInfo;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly now?: (() => number) | undefined;
   readonly spawn?: SpawnFn | undefined;
-  // Defaults to the shared sandbox policy. A merge legitimately egresses to GitHub, so the default
-  // `network: "inherit"` policy is correct here (as for the publish and PR adapters).
+  // Defaults to the governed REMOTE lane (as for the publish and PR adapters): a merge — and the
+  // readiness read that precedes it — legitimately egresses to GitHub and must be able to
+  // authenticate, which the fully isolated default makes impossible (no GH_TOKEN/GITHUB_TOKEN,
+  // empty HOME, so neither the gh keyring nor `~/.config/gh` is reachable).
   readonly policy?: SandboxPolicy | undefined;
   readonly resolveExecutable?: ExecutableResolver | undefined;
   readonly home?: HomeProvider | undefined;
@@ -90,7 +99,7 @@ function buildRunContext(deps: NodeGitMergeAdapterDeps): RunContext {
   return {
     runDeps: {
       workspace: deps.workspace,
-      policy: deps.policy ?? DEFAULT_SANDBOX_POLICY,
+      policy: deps.policy ?? GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
       commandRules: GIT_MERGE_COMMAND_RULES,
       spawn: deps.spawn ?? nodeSpawnFn,
       processEnv: deps.processEnv ?? process.env,

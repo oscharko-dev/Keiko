@@ -1,12 +1,13 @@
 // Integration coverage for the Node governed Git mutation adapter (Issue #472) — AC3/AC5.
 // Exercises the real spawn boundary against a disposable, hermetic git repository: governed local
 // mutations actually run through `git` with the dedicated allowlist, and failures map to structured
-// results without any string parsing. Uses local repo config only, so no global git state is read or
-// written and the run is deterministic.
+// results without any string parsing. The suites that pass no HOME use local repo config only, so no
+// global git state is read or written and the run is deterministic. The final suite drives the
+// identity lane on purpose, against a DISPOSABLE HOME it creates itself — never the developer's.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -41,8 +42,10 @@ function workspaceInfo(rootPath: string): WorkspaceInfo {
 }
 
 function adapter(): GitLocalMutationAdapter {
-  // Only PATH is forwarded; the spawn boundary supplies an empty HOME, so the commit identity comes
-  // from the repository's LOCAL config set in beforeEach — never the developer's global git config.
+  // Only PATH is forwarded — deliberately NO HOME. The identity lane inherits HOME only when the
+  // parent actually carries one, so with none present the spawn boundary falls back to the ephemeral
+  // empty home and the commit identity comes from the repository's LOCAL config set in beforeEach —
+  // never the developer's global git config. That keeps this suite hermetic.
   return createNodeGitMutationAdapter({
     workspace: info,
     processEnv: { PATH: process.env.PATH ?? "" },
@@ -278,5 +281,83 @@ describe("governed lifecycle — idempotent commit through the orchestrator + re
     const second = await runGitMutation(request, orchestratorDeps);
     expect(second).toBe(first); // replayed from the journal, not re-executed
     expect(git(["rev-list", "--count", "HEAD"]).trim()).toBe("1"); // exactly one commit exists
+  });
+});
+
+// ─── The user's git identity and signing configuration must reach the commit ───────────────────
+//
+// The suites above deliberately pass NO HOME, so the identity lane falls back to the ephemeral
+// empty home and the commit identity comes from the repository's LOCAL config — that keeps them
+// hermetic. These two exercise the opposite, production-shaped case: a repository with NO local
+// identity, and a real HOME whose ~/.gitconfig carries the identity and the signing policy. With an
+// empty HOME neither is readable, so a governed commit either cannot run at all or lands UNSIGNED
+// while reporting success in a repository whose configuration demands a signature.
+
+let identityHome: string;
+let identityRepo: string;
+
+function homeGit(args: readonly string[]): string {
+  return execFileSync("git", [...args], { cwd: identityRepo, encoding: "utf8" });
+}
+
+function identityAdapter(): GitLocalMutationAdapter {
+  return createNodeGitMutationAdapter({
+    workspace: workspaceInfo(identityRepo),
+    processEnv: { PATH: process.env.PATH ?? "", HOME: identityHome },
+    now: () => Date.now(),
+  });
+}
+
+function writeGlobalGitConfig(body: string): void {
+  writeFileSync(join(identityHome, ".gitconfig"), body, "utf8");
+}
+
+describe("node git mutation adapter — global identity and signing policy", () => {
+  beforeEach(() => {
+    identityHome = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-home-")));
+    identityRepo = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-identity-")));
+    execFileSync("git", ["init", "-q"], { cwd: identityRepo });
+    // Deliberately NO local user.name / user.email: the only identity is the global one below.
+    writeFileSync(join(identityRepo, "a.txt"), "hello\n", "utf8");
+  });
+
+  afterEach(() => {
+    rmSync(identityRepo, { recursive: true, force: true });
+    rmSync(identityHome, { recursive: true, force: true });
+  });
+
+  it("commits as the identity in the user's global ~/.gitconfig", async () => {
+    writeGlobalGitConfig(
+      "[user]\n\tname = Global Dev\n\temail = global@example.com\n[commit]\n\tgpgsign = false\n",
+    );
+    const ad = identityAdapter();
+
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+    const committed = await ad.commit({ message: "feat: governed commit", allowEmpty: false });
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(homeGit(["log", "-1", "--format=%an <%ae>"]).trim()).toBe(
+      "Global Dev <global@example.com>",
+    );
+  });
+
+  it("FAILS the commit when signing is required and the signer cannot sign", async () => {
+    const failingSigner = join(identityHome, "failing-signer.sh");
+    writeFileSync(failingSigner, "#!/bin/sh\nexit 1\n", "utf8");
+    chmodSync(failingSigner, 0o755);
+    writeGlobalGitConfig(
+      `[user]\n\tname = Global Dev\n\temail = global@example.com\n\tsigningkey = ABCDEF\n` +
+        `[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = ${failingSigner}\n`,
+    );
+    const ad = identityAdapter();
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+
+    const committed = await ad.commit({ message: "feat: governed commit", allowEmpty: false });
+
+    // A commit that cannot carry the required signature must never be reported as succeeded, and
+    // must leave no unsigned commit behind.
+    expect(committed.outcome).toBe("failed");
+    expect(committed.errorCode).toBe("precondition-failed");
+    expect(homeGit(["rev-list", "--count", "--all"]).trim()).toBe("0");
   });
 });

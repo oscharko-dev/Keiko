@@ -38,7 +38,11 @@ import {
   type RunCommandDeps,
   type SpawnFn,
 } from "./exec.js";
-import { DEFAULT_SANDBOX_POLICY, type CommandResult, type SandboxPolicy } from "./types.js";
+import {
+  GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
+  type CommandResult,
+  type SandboxPolicy,
+} from "./types.js";
 
 export interface NodeGitPublishAdapterDeps {
   // The repository root the push runs in. Reused as the spawn-boundary workspace root.
@@ -46,8 +50,11 @@ export interface NodeGitPublishAdapterDeps {
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly now?: (() => number) | undefined;
   readonly spawn?: SpawnFn | undefined;
-  // Defaults to the shared sandbox policy. Unlike the LOCAL mutation adapter, a push legitimately
-  // egresses to the remote, so the default `network: "inherit"` policy is correct here.
+  // Defaults to the governed REMOTE lane. A push legitimately egresses to the remote and must be
+  // able to AUTHENTICATE to it: under the fully isolated default the child gets an empty HOME and no
+  // agent, so there is no `~/.ssh`, no SSH agent socket, no credential helper and no
+  // `~/.git-credentials` — every push to a real remote fails. The remote lane forwards exactly the
+  // account/agent state normal git credentials need and pins every interactive prompt closed.
   readonly policy?: SandboxPolicy | undefined;
   readonly resolveExecutable?: ExecutableResolver | undefined;
   readonly home?: HomeProvider | undefined;
@@ -78,7 +85,7 @@ function buildRunContext(deps: NodeGitPublishAdapterDeps): RunContext {
   return {
     runDeps: {
       workspace: deps.workspace,
-      policy: deps.policy ?? DEFAULT_SANDBOX_POLICY,
+      policy: deps.policy ?? GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
       commandRules: GIT_PUBLISH_COMMAND_RULES,
       spawn: deps.spawn ?? nodeSpawnFn,
       processEnv: deps.processEnv ?? process.env,

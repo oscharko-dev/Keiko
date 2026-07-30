@@ -14,7 +14,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { nodeSpawnFn, runCommand, type HomeProvider, type RunCommandDeps } from "./exec.js";
 import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
 import { PathEscapeError, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import { DEFAULT_COMMAND_RULES, DEFAULT_SANDBOX_POLICY, type CommandRule } from "./types.js";
+import {
+  DEFAULT_COMMAND_RULES,
+  DEFAULT_ENV_ALLOWLIST,
+  DEFAULT_SANDBOX_POLICY,
+  type CommandRule,
+  type SandboxPolicy,
+} from "./types.js";
 import { makeWorkspace, recordingSpawn } from "./_support.js";
 
 let root: string;
@@ -812,5 +818,147 @@ describe("runCommand — enforced network egress (ADR-0043, network:'none')", ()
     const result = await promise;
     expect(spawn.calls()[0]?.command).toBe("/abs/node");
     expect(result.attestation).toBeUndefined();
+  });
+});
+
+// ─── The governed credential lane (homeIsolation "inherit" + credentialEnvAllowlist) ───────────
+// C5 above stays the default and is unchanged. These cover the SECOND, explicitly declared profile
+// the governed git lanes use: without it `git push` / `gh api` cannot authenticate and `git commit`
+// cannot see the user's identity or signing configuration.
+
+const CREDENTIAL_LANE_POLICY: SandboxPolicy = {
+  ...DEFAULT_SANDBOX_POLICY,
+  envAllowlist: [...DEFAULT_ENV_ALLOWLIST, "HOME", "USERPROFILE"],
+  credentialEnvAllowlist: ["GH_TOKEN"],
+  pinnedEnv: { GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" },
+  homeIsolation: "inherit",
+  defaultTimeoutMs: 10_000,
+};
+
+function credentialLaneDeps(
+  processEnv: NodeJS.ProcessEnv,
+  spawnFn: RunCommandDeps["spawn"],
+): RunCommandDeps {
+  return {
+    workspace: info,
+    policy: CREDENTIAL_LANE_POLICY,
+    commandRules: NODE_COMMAND_RULES,
+    spawn: spawnFn,
+    processEnv,
+    now: () => Date.now(),
+  };
+}
+
+describe("runCommand — the governed credential lane", () => {
+  it("inherits the parent HOME and forwards the declared credential, pins beating inherited", async () => {
+    const home = recordingHome();
+    const spawn = recordingSpawn();
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "1"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      {
+        ...credentialLaneDeps(
+          {
+            PATH: process.env.PATH ?? "",
+            HOME: "/Users/parent",
+            LC_ALL: "de_DE.UTF-8",
+            GH_TOKEN: "gho_lane_token_value",
+            AWS_SECRET_ACCESS_KEY: "aws-must-never-be-forwarded",
+          },
+          spawn.fn,
+        ),
+        home: home.provider,
+      },
+    );
+    spawn.child.emit("close", 0, null);
+    await promise;
+    const env = spawn.calls()[0]?.options.env ?? {};
+    expect(env.HOME).toBe("/Users/parent");
+    expect(env.USERPROFILE).toBe("/Users/parent");
+    expect(env.GH_TOKEN).toBe("gho_lane_token_value");
+    expect(env.LC_ALL).toBe("C");
+    expect(env.GIT_TERMINAL_PROMPT).toBe("0");
+    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    // No ephemeral home is created at all when the parent's own home is inherited.
+    expect(home.made()).toHaveLength(0);
+  });
+
+  it("falls back to the ephemeral empty home when the parent carries no usable HOME", async () => {
+    const home = recordingHome();
+    const spawn = recordingSpawn();
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "1"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      {
+        ...credentialLaneDeps({ PATH: process.env.PATH ?? "", HOME: "" }, spawn.fn),
+        home: home.provider,
+      },
+    );
+    spawn.child.emit("close", 0, null);
+    await promise;
+    const env = spawn.calls()[0]?.options.env ?? {};
+    expect(home.made()).toHaveLength(1);
+    expect(env.HOME).toBe(home.made()[0]);
+    expect(env.USERPROFILE).toBe(env.HOME);
+    expect(home.cleaned()).toEqual(home.made());
+  });
+
+  it("inherits USERPROFILE when HOME is present but empty (Windows-shaped parent)", async () => {
+    const home = recordingHome();
+    const spawn = recordingSpawn();
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "1"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      {
+        ...credentialLaneDeps(
+          { PATH: process.env.PATH ?? "", HOME: "", USERPROFILE: "C:\\Users\\dev" },
+          spawn.fn,
+        ),
+        home: home.provider,
+      },
+    );
+    spawn.child.emit("close", 0, null);
+    await promise;
+    const env = spawn.calls()[0]?.options.env ?? {};
+    expect(env.HOME).toBe("C:\\Users\\dev");
+    expect(env.USERPROFILE).toBe("C:\\Users\\dev");
+    expect(home.made()).toHaveLength(0);
+  });
+
+  it("scrubs a FORWARDED credential out of the captured output", async () => {
+    const token = "gho_forwarded_but_never_reported";
+    const result = await runCommand(
+      {
+        command: "node",
+        args: ["-e", "process.stdout.write(process.env.GH_TOKEN ?? 'absent')"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      credentialLaneDeps(
+        { PATH: process.env.PATH ?? "", HOME: realpathSync(tmpdir()), GH_TOKEN: token },
+        nodeSpawnFn,
+      ),
+    );
+    // The child really received it (so gh/git can authenticate) …
+    expect(result.exitCode).toBe(0);
+    // … and it still never crosses the boundary into a classifier, an error, or an evidence record.
+    expect(result.stdout).not.toContain(token);
+    expect(result.stdout).toContain("[REDACTED]");
   });
 });

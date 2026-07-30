@@ -37,7 +37,11 @@ import {
   type RunCommandDeps,
   type SpawnFn,
 } from "./exec.js";
-import { DEFAULT_SANDBOX_POLICY, type CommandResult, type SandboxPolicy } from "./types.js";
+import {
+  GOVERNED_GIT_IDENTITY_SANDBOX_POLICY,
+  type CommandResult,
+  type SandboxPolicy,
+} from "./types.js";
 
 export interface NodeGitMutationAdapterDeps {
   // The repository root the mutations run in. Reused as the spawn-boundary workspace root.
@@ -45,7 +49,12 @@ export interface NodeGitMutationAdapterDeps {
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly now?: (() => number) | undefined;
   readonly spawn?: SpawnFn | undefined;
-  // Defaults to the shared sandbox policy (network inherited — local git mutations never egress).
+  // Defaults to the governed IDENTITY lane, not the fully isolated default: a governed commit must
+  // resolve the local human's own git identity and signing configuration (~/.gitconfig,
+  // ~/.gnupg, an SSH signing agent). Under the isolated default the child's HOME is empty, so
+  // `user.name`/`user.email` and `commit.gpgsign`/`user.signingkey` are unreadable — the commit
+  // then lands under an auto-detected author and UNSIGNED, and a repository that requires a
+  // signature is told the commit succeeded. Network stays inherited; local mutations never egress.
   readonly policy?: SandboxPolicy | undefined;
   readonly resolveExecutable?: ExecutableResolver | undefined;
   readonly home?: HomeProvider | undefined;
@@ -161,7 +170,7 @@ function buildRunContext(deps: NodeGitMutationAdapterDeps): RunContext {
   return {
     runDeps: {
       workspace: deps.workspace,
-      policy: deps.policy ?? DEFAULT_SANDBOX_POLICY,
+      policy: deps.policy ?? GOVERNED_GIT_IDENTITY_SANDBOX_POLICY,
       commandRules: GIT_MUTATION_COMMAND_RULES,
       spawn: deps.spawn ?? nodeSpawnFn,
       processEnv: deps.processEnv ?? process.env,

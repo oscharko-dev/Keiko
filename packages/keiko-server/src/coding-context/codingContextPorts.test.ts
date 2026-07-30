@@ -1,3 +1,5 @@
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -183,5 +185,57 @@ describe("jira code context port", () => {
     await expect(
       port.readJson({ method: "GET", path: "/rest/api/3/issue/K-1", query: {} }),
     ).rejects.toMatchObject({ code: "jira-invalid-json" });
+  });
+});
+
+// The read-only `gh api` port is the same credential lane as governed PR/merge: under the fully
+// isolated default sandbox profile `gh` receives neither GH_TOKEN/GITHUB_TOKEN nor a HOME holding
+// `~/.config/gh`, so every call against a private repository fails to authenticate.
+describe("github code context port — `gh` can authenticate", () => {
+  async function spawnedEnv(): Promise<Record<string, string>> {
+    let captured: Record<string, string> = {};
+    const spawn: SpawnFn = (_command, _args, options): ChildProcess => {
+      captured = options.env;
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        pid: number;
+        kill: () => boolean;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.pid = 5150;
+      child.kill = (): boolean => true;
+      setImmediate(() => {
+        child.stdout.emit("data", Buffer.from("{}"));
+        child.emit("close", 0, null);
+      });
+      return child as unknown as ChildProcess;
+    };
+    const port = createGitHubCodeContextApiPort({
+      workspace: WORKSPACE,
+      processEnv: {
+        PATH: process.env.PATH ?? "",
+        HOME: "/Users/dev",
+        GH_TOKEN: "gho_code_context_token_value",
+        AWS_SECRET_ACCESS_KEY: "aws-must-not-reach-gh",
+      },
+      spawn,
+      resolveExecutable: () => "/test-bin/gh",
+      timeoutMs: 1_000,
+    });
+    await port.readJson(READ_ARGV);
+    return captured;
+  }
+
+  it("forwards the GitHub token and the real HOME so gh resolves its own credentials", async () => {
+    const env = await spawnedEnv();
+    expect(env.GH_TOKEN).toBe("gho_code_context_token_value");
+    expect(env.HOME).toBe("/Users/dev");
+  });
+
+  it("still copies by name only — an unrelated ambient secret never reaches gh", async () => {
+    const env = await spawnedEnv();
+    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
   });
 });

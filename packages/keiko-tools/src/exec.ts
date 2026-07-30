@@ -29,7 +29,12 @@ import {
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
-import { buildSandboxEnv, collectSensitiveEnvValues, isCommandAllowed } from "./sandbox.js";
+import {
+  buildChildEnv,
+  collectCredentialEnvValues,
+  collectSensitiveEnvValues,
+  isCommandAllowed,
+} from "./sandbox.js";
 import type { CommandResult, CommandRule, SandboxAttestation, SandboxPolicy } from "./types.js";
 
 export interface SpawnOptions {
@@ -343,7 +348,13 @@ interface BuildResultOptions {
 
 function buildResult(options: BuildResultOptions): CommandResult {
   const { input, buffers, state, exitCode, termSignal, deps, startedAt, attestation } = options;
-  const secrets = collectSensitiveEnvValues(deps.processEnv, deps.policy.envAllowlist);
+  // A credential the policy deliberately handed to the child is still scrubbed on the way out: a
+  // forwarded token must never survive into stdout/stderr, and from there into a rejection
+  // classifier, an error, an evidence record or a diagnostic.
+  const secrets = [
+    ...collectSensitiveEnvValues(deps.processEnv, deps.policy.envAllowlist),
+    ...collectCredentialEnvValues(deps.processEnv, deps.policy.credentialEnvAllowlist ?? []),
+  ];
   const attest = attestation === undefined ? {} : { attestation };
   if (buffers.truncated) {
     // Real over-cap byte count from the raw arrival counter (ADR-0054 D5). Clamped at 0 so a
@@ -519,7 +530,7 @@ function resolveExecutable(input: RunCommandInput, deps: RunCommandDeps): string
   });
 }
 
-function createRunState(home: HomeProvider, homeDir: string): RunState {
+function createRunState(home: HomeProvider | undefined, homeDir: string | undefined): RunState {
   return {
     settled: false,
     timedOut: false,
@@ -530,6 +541,39 @@ function createRunState(home: HomeProvider, homeDir: string): RunState {
     homeDir,
     homeCleaned: false,
   };
+}
+
+// The home the child would inherit from the (already name-copied) env, or undefined when the
+// parent carries none. Only a NON-EMPTY value counts, and HOME losing to an empty string must not
+// hide a usable USERPROFILE — an empty HOME is not a home directory, it is an absent one.
+function inheritedHome(env: Record<string, string>): string | undefined {
+  for (const candidate of [env.HOME, env.USERPROFILE]) {
+    if (candidate !== undefined && candidate.length > 0) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+// Applies the home-isolation decision LAST, so neither an inherited nor a pinned value can redirect
+// it. Default ("ephemeral", ADR-0006 D2 Dimension 1 / C5): an empty per-run directory, so a
+// home-dir credential lookup resolves to nothing. "inherit" is reserved for the governed git lanes
+// that cannot function without the user's own git/SSH/gh configuration; a lane that asks to inherit
+// while the parent carries no HOME falls back to the ephemeral home rather than running homeless.
+function applyHomeIsolation(env: Record<string, string>, deps: RunCommandDeps): RunState {
+  if (deps.policy.homeIsolation === "inherit") {
+    const inherited = inheritedHome(env);
+    if (inherited !== undefined) {
+      env.HOME = inherited;
+      env.USERPROFILE = inherited;
+      return createRunState(undefined, undefined);
+    }
+  }
+  const home = deps.home ?? nodeHomeProvider;
+  const homeDir = home.make();
+  env.HOME = homeDir;
+  env.USERPROFILE = homeDir;
+  return createRunState(home, homeDir);
 }
 
 function spawnChild(
@@ -566,12 +610,8 @@ export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promis
     const executable = resolveExecutable(input, deps);
     const cwd = resolveCwd(deps, input.cwd);
     const target = resolveSpawnTarget(input, deps, executable, cwd);
-    const env = buildSandboxEnv(deps.processEnv, deps.policy.envAllowlist);
-    const home = deps.home ?? nodeHomeProvider;
-    const homeDir = home.make();
-    env.HOME = homeDir;
-    env.USERPROFILE = homeDir;
-    const state = createRunState(home, homeDir);
+    const env = buildChildEnv(deps.processEnv, deps.policy);
+    const state = applyHomeIsolation(env, deps);
     const child = spawnChild(input, deps, target, cwd, env, state);
     const buffers: Buffers = { out: [], err: [], total: 0, truncated: false, attempted: 0 };
     const ctx: ExecContext = {

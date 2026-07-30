@@ -6,7 +6,7 @@
 
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { makeFakeChild, makeWorkspace } from "./_support.js";
+import { makeFakeChild, makeWorkspace, recordingSpawn } from "./_support.js";
 import { createNodeGitMergeAdapter } from "./git-merge-node.js";
 import type { HomeProvider, SpawnFn } from "./exec.js";
 import type { GitMergeAdapter, GitMergeExecRequest } from "./git-merge-gateway.js";
@@ -319,5 +319,47 @@ describe("readMergeReadiness — additional branches", () => {
     const adapter = makeAdapter(spawn);
     const readiness = await adapter.readMergeReadiness(READINESS_REQ);
     expect(readiness.pullRequest?.status).toBe("merged");
+  });
+});
+
+// ─── Governed remote lane ──────────────────────────────────────────────────────────────────────
+// The merge `gh api` call must run under the GOVERNED REMOTE env profile. Under the fully isolated
+// default profile `gh` has no token and an empty HOME, so every governed merge (and every merge
+// readiness read) fails to authenticate.
+
+const REMOTE_PARENT_ENV: NodeJS.ProcessEnv = {
+  PATH: "/usr/bin",
+  HOME: "/Users/dev",
+  GITHUB_TOKEN: "ghs_merge_lane_token_value",
+  AWS_SECRET_ACCESS_KEY: "aws-merge-lane-must-not-see-this",
+};
+
+async function mergeLaneEnv(): Promise<Record<string, string>> {
+  const rec = recordingSpawn();
+  const { info } = makeWorkspace();
+  const adapter = createNodeGitMergeAdapter({
+    workspace: info,
+    processEnv: REMOTE_PARENT_ENV,
+    now: () => 0,
+    spawn: rec.fn,
+    resolveExecutable: () => "gh",
+  });
+  const pending = adapter.mergePullRequest(execReq());
+  rec.child.stdout.emit("data", Buffer.from("true\n"));
+  rec.child.emit("close", 0, null);
+  await pending;
+  return rec.calls()[0]?.options.env ?? {};
+}
+
+describe("node git merge adapter — `gh` can authenticate", () => {
+  it("forwards the GitHub token and the real HOME so gh resolves its own credentials", async () => {
+    const env = await mergeLaneEnv();
+    expect(env.GITHUB_TOKEN).toBe("ghs_merge_lane_token_value");
+    expect(env.HOME).toBe("/Users/dev");
+  });
+
+  it("still copies by name only — an unrelated ambient secret never reaches gh", async () => {
+    const env = await mergeLaneEnv();
+    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
   });
 });
