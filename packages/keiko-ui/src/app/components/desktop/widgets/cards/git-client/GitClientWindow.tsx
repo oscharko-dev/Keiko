@@ -29,6 +29,7 @@ import type { WindowCfgValue } from "../../../windows/types";
 import type { OpenEditorFileRequest } from "../../../hooks/useWorkspace.types";
 import { DEFAULT_GIT_CLIENT, formatGitError, useGitActions } from "./git-client-seam";
 import type { GitClientSeam } from "./git-client-seam";
+import { MutationOutcome } from "./git-client-ui";
 import { GovernedMergeCard } from "../GovernedMergeCard";
 import { GovernedPullRequestCard } from "../GovernedPullRequestCard";
 import { Icons } from "../../../Icons";
@@ -1220,6 +1221,21 @@ export function GitClientWindow({
         onOpenEditor={onOpenEditor}
         onOpenFiles={onOpenFiles}
       />
+      {/* A rejected branch switch must never render as silent success: the New Branch dialog
+          shows its own copy of this outcome while it is open (the create-then-switch chain runs
+          under the same flow), so this banner is suppressed then to avoid showing the same
+          rejection twice. */}
+      {!newBranchOpen &&
+      (branchActions.flow.error !== null ||
+        (branchOutcome !== null && branchOutcome.status !== "succeeded")) ? (
+        <div style={{ padding: "10px 18px" }}>
+          <MutationOutcome
+            outcome={branchOutcome}
+            error={branchActions.flow.error}
+            testid="git-branch-outcome"
+          />
+        </div>
+      ) : null}
       <div style={BODY_STYLE}>
         {selectedPath === null ? (
           <ConnectPanel
@@ -1336,6 +1352,7 @@ export function GitClientWindow({
             activeStatus?.branch ?? activeBranches.find((branch) => branch.current)?.name ?? ""
           }
           busy={branchActions.flow.busy}
+          outcome={branchOutcome}
           error={branchActions.flow.error}
           onCreate={createBranch}
           onClose={closeNewBranchDialog}
