@@ -241,30 +241,34 @@ function hasCredential(provider: ModelProviderConfig): boolean {
   return provider.baseUrl.trim().length > 0 && provider.apiKey.trim().length > 0;
 }
 
+// Release-audit F-01: the reason is computed over the CHAT capabilities only. Non-chat
+// capabilities (embeddings, speech) never call tools, so quantifying over every configured
+// capability blamed "no-tool-calling" for a config whose chat model plainly has tool calling —
+// contradicting the per-model capability truth other surfaces (Settings → Models) render from
+// the same configuration.
 function unavailableReasonForSidecarConfig(
   config: GatewayConfig,
 ): CodingWorkbenchSidecarGatewayUnavailableReason {
   const capabilities = listConfiguredCapabilities(config);
-  const codingEligibleCapabilities = capabilities.filter(
-    (capability) =>
-      capability.kind === "chat" && capability.toolCalling && capability.workflowEligible,
-  );
-  if (codingEligibleCapabilities.length > 0) {
+  const chatCapabilities = capabilities.filter((capability) => capability.kind === "chat");
+  if (
+    chatCapabilities.some((capability) => capability.toolCalling && capability.workflowEligible)
+  ) {
     return "non-coding-capable";
   }
   if (capabilities.length === 0) {
     return "missing-provider";
   }
-  if (capabilities.every((capability) => capability.kind !== "chat")) {
+  if (chatCapabilities.length === 0) {
     return "non-chat";
   }
-  if (capabilities.some((capability) => !capability.toolCalling)) {
-    return "no-tool-calling";
-  }
-  if (capabilities.some((capability) => !capability.workflowEligible)) {
+  // No chat capability is (toolCalling && workflowEligible) past this point: a chat model that can
+  // call tools is therefore blocked by workflow eligibility, and only a config whose chat models
+  // all lack tool calling reports the tool-calling gap.
+  if (chatCapabilities.some((capability) => capability.toolCalling)) {
     return "non-workflow-eligible";
   }
-  return "non-coding-capable";
+  return "no-tool-calling";
 }
 
 export function resolveCodingSafeSidecarGatewayProfile(

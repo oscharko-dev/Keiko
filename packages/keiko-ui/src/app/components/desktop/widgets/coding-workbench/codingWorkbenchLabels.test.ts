@@ -12,7 +12,12 @@ import {
   type CodingWorkbenchRuntimeState,
 } from "@/lib/coding-workbench-live-state";
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
-import { eventDetail, lifecycleAnnouncement, modelSourceLabel } from "./codingWorkbenchLabels";
+import {
+  eventDetail,
+  lifecycleAnnouncement,
+  modelSourceLabel,
+  visibleAlert,
+} from "./codingWorkbenchLabels";
 
 // Echo translator: announcements are asserted on their catalog keys so the tests pin the
 // branching logic without re-stating locale catalog text.
@@ -205,5 +210,42 @@ describe("lifecycleAnnouncement research grant", () => {
     expect(lifecycleAnnouncement(state, t, null)).not.toContain(
       "codingWorkbench.announcement.researchActive",
     );
+  });
+});
+
+describe("visibleAlert mutation failures (F-09a)", () => {
+  // Values-aware echo translator: pins that the alert carries the machine facts (code,
+  // correlation id) through the catalog placeholders without re-stating locale text.
+  const tv: CodingWorkbenchTranslate = (key, values) =>
+    values === undefined ? key : `${key} ${JSON.stringify(values)}`;
+
+  function failedMutationState(correlationId?: string): CodingWorkbenchRuntimeState {
+    return {
+      ...createInitialCodingWorkbenchRuntimeState(),
+      mutation: {
+        status: "error",
+        kind: "start",
+        requestId: "request-1",
+        error: {
+          code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+          message: "Runtime request was rejected.",
+          retryable: false,
+          ...(correlationId === undefined ? {} : { correlationId }),
+        },
+      },
+    };
+  }
+
+  it("names the machine error code for any failed mutation", () => {
+    const alert = visibleAlert(failedMutationState(), tv, false);
+    expect(alert).toContain("codingWorkbench.alert.actionFailedCode");
+    expect(alert).toContain("CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED");
+    expect(alert).not.toContain("codingWorkbench.alert.actionFailedSupportId");
+  });
+
+  it("appends the correlation id as a copyable support id when the transport carried one", () => {
+    const alert = visibleAlert(failedMutationState("ui-correlation-9"), tv, false);
+    expect(alert).toContain("codingWorkbench.alert.actionFailedSupportId");
+    expect(alert).toContain("ui-correlation-9");
   });
 });

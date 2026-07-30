@@ -453,6 +453,45 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
     expect(JSON.stringify(result)).not.toContain("api-key");
   });
 
+  // Release-audit F-01: the unavailable reason must be computed over the CHAT capabilities only.
+  // Non-chat capabilities (embeddings, speech) never call tools, so quantifying over all
+  // configured capabilities blamed "no-tool-calling" for a config whose chat model plainly has
+  // tool calling — contradicting the per-model "tools yes" the Settings surface truthfully shows.
+  it("never blames tool calling on a non-chat capability that cannot call tools", () => {
+    const configValue = sidecarConfig(
+      [
+        {
+          modelId: "chat-with-tools",
+          baseUrl: "https://provider.example/v1",
+          apiKey: "secret",
+          timeoutMs: 30_000,
+          maxRetries: 3,
+          retryBaseDelayMs: 500,
+        },
+        {
+          modelId: "text-embedding",
+          baseUrl: "https://provider.example/v1",
+          apiKey: "secret",
+          timeoutMs: 30_000,
+          maxRetries: 3,
+          retryBaseDelayMs: 500,
+        },
+      ],
+      [
+        codingSidecarCapability("chat-with-tools", { workflowEligible: false }),
+        {
+          ...codingSidecarCapability("text-embedding", { toolCalling: false }),
+          kind: "embedding",
+        },
+      ],
+    );
+
+    expect(resolveCodingSafeSidecarGatewayProfile(configValue)).toEqual({
+      status: "unavailable",
+      reason: "non-workflow-eligible",
+    });
+  });
+
   it("fails closed when a chat tool-calling workflow-eligible model is not coding-capable", () => {
     const configValue = sidecarConfig(
       [

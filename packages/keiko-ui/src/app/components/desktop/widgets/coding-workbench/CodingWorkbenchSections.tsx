@@ -28,16 +28,21 @@ export function WorkbenchHeader({
   const t = useCodingWorkbenchTranslate();
   const sharedT = useTranslate();
   const snapshotState = state.run.value?.state ?? "idle";
+  // Release-audit F-01: the idle pill's "Ready to start" is a READINESS claim, not a run state.
+  // It consumes the one aggregated, server-confirmed readiness the start action itself gates on
+  // (`canStart` — model source incl. the sidecar gateway profile, workspace, runtime, run), so
+  // the header can never claim ready while any of those resources is unavailable or unconfirmed.
+  const blockedIdle = snapshotState === "idle" && !state.canStart;
   return (
     <header className={styles.header}>
       <h2 className={styles.title} ref={focusRef} tabIndex={-1}>
         {sharedT("rail.coding")}
       </h2>
-      <span className={styles.statePill} data-state={snapshotState}>
+      <span className={styles.statePill} data-state={blockedIdle ? "not-ready" : snapshotState}>
         <span className={styles.statusSymbol} aria-hidden="true">
           {activeRunState(snapshotState) ? "●" : "○"}
         </span>
-        {runStateLabel(snapshotState, t)}
+        {blockedIdle ? t("codingWorkbench.header.notReady") : runStateLabel(snapshotState, t)}
       </span>
     </header>
   );

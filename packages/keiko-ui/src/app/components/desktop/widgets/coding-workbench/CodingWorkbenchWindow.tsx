@@ -336,10 +336,14 @@ function SessionContextBar({
   const confirmedMode = state.runtime.value?.effectiveMode ?? null;
   const repository = activeWorkspace.activeBinding?.activeRoot;
   const workspaceValue = workspaceContextValue(workspace, t);
+  // F-01: an unavailable source (e.g. the sidecar gateway profile reporting no-tool-calling) is
+  // never presented as a plain healthy source name — the unavailability rides the same line.
   const sourceValue =
     source === null
       ? t("codingWorkbench.readiness.modelSource.select")
-      : modelSourceLabel(source.modelSource, t);
+      : source.available
+        ? modelSourceLabel(source.modelSource, t)
+        : `${modelSourceLabel(source.modelSource, t)} — ${t("codingWorkbench.resourceStatus.unavailable")}`;
   return (
     <div className={styles.contextBar} aria-label={t("codingWorkbench.header.summary")}>
       <span className={styles.contextItem} title={repository}>

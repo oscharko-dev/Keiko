@@ -32,6 +32,12 @@ export interface CodingWorkbenchRuntimeApiError {
   readonly code: string;
   readonly message: string;
   readonly retryable: boolean;
+  /**
+   * The request correlation id for this failure when the transport carried one (RB-6). Surfaces on
+   * mutation alerts as the copyable support id tying the visible failure to exactly one redacted
+   * server-side diagnostic record — a rejected start must never be a dead button (F-09a).
+   */
+  readonly correlationId?: string;
 }
 
 export function codingWorkbenchRuntimeApiError(error: unknown): CodingWorkbenchRuntimeApiError {
@@ -41,6 +47,7 @@ export function codingWorkbenchRuntimeApiError(error: unknown): CodingWorkbenchR
       message: error.message,
       retryable:
         error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500,
+      ...(error.correlationId === undefined ? {} : { correlationId: error.correlationId }),
     };
   }
   return {

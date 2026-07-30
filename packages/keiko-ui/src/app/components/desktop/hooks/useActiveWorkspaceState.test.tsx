@@ -68,12 +68,28 @@ interface RouterState {
   instances: readonly WorkspaceInstance[];
 }
 
+// Content-free healthy reconciliation report for the routed active workspace (F-09b: every
+// restored active binding is re-verified through this pass before any surface may claim it).
+function healthyReport(state: RouterState): unknown {
+  return {
+    report: {
+      entries:
+        state.active === null
+          ? []
+          : [{ workspaceId: state.active.instance.workspaceId, status: "healthy" }],
+    },
+  };
+}
+
 // A stateful fetch router so a switch is observable through a subsequent getActive reload.
 function installRouter(state: RouterState): ReturnType<typeof vi.fn> {
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     const method = (init?.method ?? "GET").toUpperCase();
     if (url.startsWith("/api/task-workspaces/active") && method === "GET") {
       return Promise.resolve(json({ active: state.active }));
+    }
+    if (url === "/api/task-workspaces/reconciliation" && method === "POST") {
+      return Promise.resolve(json(healthyReport(state)));
     }
     if (url.startsWith("/api/task-workspaces?") && method === "GET") {
       return Promise.resolve(json({ instances: state.instances }));
@@ -185,6 +201,9 @@ describe("useActiveWorkspaceState", () => {
       if (url.startsWith("/api/task-workspaces/active") && method === "GET") {
         return Promise.resolve(json({ active: state.active }));
       }
+      if (url === "/api/task-workspaces/reconciliation" && method === "POST") {
+        return Promise.resolve(json(healthyReport(state)));
+      }
       if (url.startsWith("/api/task-workspaces?") && method === "GET") {
         return Promise.resolve(json({ instances: state.instances }));
       }
@@ -270,5 +289,119 @@ describe("useActiveWorkspaceState", () => {
       expect(result.current.error).toBe("locked");
     });
     expect(result.current.switching).toBe(false);
+  });
+
+  // Release-audit F-09b: a persisted active pointer restored after a page reload is not runtime
+  // start authority by itself — the server can still fail a coding-run start with
+  // authority-resolution-failed. The restore path must re-verify (and thereby re-stamp) the
+  // binding through the shared reconciliation pass before any surface claims it.
+  describe("restore re-verification (F-09b)", () => {
+    function boundState(): RouterState {
+      const target = instance("ws-1", "/wt/1");
+      return {
+        active: { instance: target, binding: binding("ws-1", "/wt/1"), pointer: {} },
+        instances: [target],
+      };
+    }
+
+    it("re-verifies a restored active binding through the reconciliation pass before claiming it", async () => {
+      const fetchMock = installRouter(boundState());
+      const { result } = renderHook(() => useActiveWorkspaceState());
+      await act(async () => {
+        await result.current.refresh("/repo");
+      });
+      const reconciliations = fetchMock.mock.calls.filter((call: readonly unknown[]) => {
+        const method = (call[1] as RequestInit | undefined)?.method ?? "GET";
+        return call[0] === "/api/task-workspaces/reconciliation" && method.toUpperCase() === "POST";
+      });
+      expect(reconciliations.length).toBeGreaterThanOrEqual(1);
+      expect(result.current.activeRoot).toBe("/wt/1");
+      expect(result.current.error).toBeNull();
+    });
+
+    it("refuses to claim a restored binding the verification pass rejected", async () => {
+      const state = boundState();
+      const fetchMock = installRouter(state);
+      // The pass rejects the workspace while the persisted view still claims healthy — the
+      // contradiction must fail closed instead of rendering a ready-looking workspace.
+      fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (url === "/api/task-workspaces/reconciliation" && method === "POST") {
+          return Promise.resolve(
+            json({ report: { entries: [{ workspaceId: "ws-1", status: "stale-pointer" }] } }),
+          );
+        }
+        if (url.startsWith("/api/task-workspaces/active") && method === "GET") {
+          return Promise.resolve(json({ active: state.active }));
+        }
+        if (url.startsWith("/api/task-workspaces?") && method === "GET") {
+          return Promise.resolve(json({ instances: state.instances }));
+        }
+        return Promise.resolve(json({}, 404));
+      });
+      const { result } = renderHook(() => useActiveWorkspaceState());
+      await act(async () => {
+        await result.current.refresh("/repo");
+      });
+      expect(result.current.activeBinding).toBeNull();
+      expect(result.current.error).toContain("re-verification");
+    });
+
+    it("keeps a reconciled non-healthy binding visible instead of hiding it", async () => {
+      const state = boundState();
+      const drifted = { ...instance("ws-1", "/wt/1"), health: "drifted" as const };
+      const fetchMock = installRouter(state);
+      fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (url === "/api/task-workspaces/reconciliation" && method === "POST") {
+          // The pass persisted its verdict; the re-read below returns the drifted truth.
+          state.active = { instance: drifted, binding: binding("ws-1", "/wt/1"), pointer: {} };
+          return Promise.resolve(
+            json({ report: { entries: [{ workspaceId: "ws-1", status: "drifted" }] } }),
+          );
+        }
+        if (url.startsWith("/api/task-workspaces/active") && method === "GET") {
+          return Promise.resolve(json({ active: state.active }));
+        }
+        if (url.startsWith("/api/task-workspaces?") && method === "GET") {
+          return Promise.resolve(json({ instances: state.instances }));
+        }
+        return Promise.resolve(json({}, 404));
+      });
+      const { result } = renderHook(() => useActiveWorkspaceState());
+      await act(async () => {
+        await result.current.refresh("/repo");
+      });
+      // Drifted worktrees stay visible (#1990) — readiness is blocked by the non-healthy health,
+      // not by hiding the binding.
+      expect(result.current.activeInstance?.health).toBe("drifted");
+      expect(result.current.error).toBeNull();
+    });
+
+    it("surfaces a failed verification pass as an error instead of claiming readiness", async () => {
+      const state = boundState();
+      const fetchMock = installRouter(state);
+      fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (url === "/api/task-workspaces/reconciliation" && method === "POST") {
+          return Promise.resolve(
+            json({ error: { code: "INTERNAL", message: "reconciliation unavailable" } }, 500),
+          );
+        }
+        if (url.startsWith("/api/task-workspaces/active") && method === "GET") {
+          return Promise.resolve(json({ active: state.active }));
+        }
+        if (url.startsWith("/api/task-workspaces?") && method === "GET") {
+          return Promise.resolve(json({ instances: state.instances }));
+        }
+        return Promise.resolve(json({}, 404));
+      });
+      const { result } = renderHook(() => useActiveWorkspaceState());
+      await act(async () => {
+        await result.current.refresh("/repo");
+      });
+      expect(result.current.activeBinding).toBeNull();
+      expect(result.current.error).toBe("reconciliation unavailable");
+    });
   });
 });

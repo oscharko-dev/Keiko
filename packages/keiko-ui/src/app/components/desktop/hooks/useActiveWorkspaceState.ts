@@ -13,7 +13,6 @@ import { useCallback, useMemo, useReducer, useRef } from "react";
 import type { WorkspaceBinding, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import {
   clearActiveTaskWorkspace,
-  getActiveTaskWorkspace,
   listTaskWorkspaces,
   pauseTaskWorkspace,
   prepareHandoffTaskWorkspace,
@@ -21,7 +20,10 @@ import {
   setActiveTaskWorkspace,
   type ActiveWorkspaceView,
 } from "@/lib/task-workspace-api";
-import { bindVerifiedTaskWorkspace } from "@/lib/verified-task-workspace-binding";
+import {
+  bindVerifiedTaskWorkspace,
+  restoreVerifiedActiveTaskWorkspace,
+} from "@/lib/verified-task-workspace-binding";
 import type { ActiveWorkspaceApi } from "../context/ActiveWorkspaceContext";
 
 // The opaque actor identity for this single-operator Studio session. Held constant so lock ownership
@@ -93,10 +95,13 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
 
   // Re-reads the active binding plus (when a repository root is known) the inventory, committing both
   // in one settle. An inventory failure never hides the active binding — the list degrades to empty.
+  // The active view is RE-VERIFIED through the shared reconciliation sequence before it is claimed
+  // (release-audit F-09b): a persisted pointer alone is not runtime start authority, so a restored
+  // binding that fails re-verification surfaces as an error instead of a ready-looking workspace.
   const reload = useCallback(async (operationSeq: number): Promise<void> => {
     const root = rootRef.current;
     const [active, instances] = await Promise.all([
-      getActiveTaskWorkspace(),
+      restoreVerifiedActiveTaskWorkspace(),
       root === null || root.length === 0
         ? Promise.resolve<readonly WorkspaceInstance[]>([])
         : listTaskWorkspaces(root).catch(() => [] as readonly WorkspaceInstance[]),
