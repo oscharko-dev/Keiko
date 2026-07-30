@@ -290,6 +290,7 @@ function WorkbenchColumns({
           runId={state.run.value?.runId}
           changeSignal={latestChangesSignal(state.events)}
           bindingPending={activeWorkspace.loading || activeWorkspace.switching}
+          pairing={state.pairing}
         />
       </div>
       <div className={styles.composerDock}>

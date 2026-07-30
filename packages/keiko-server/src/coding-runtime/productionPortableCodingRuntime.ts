@@ -103,6 +103,13 @@ interface BoundActivation {
   readonly sourceCommitSha: string;
 }
 
+/**
+ * Discovers the packaged portable OpenCode runtime. An absent installation — no install root or
+ * no `.portable/setup-manifest.json` presence marker, the expected state on dev machines — is a
+ * silent "not found" that returns undefined. Only a PRESENT installation that fails verification
+ * (unreadable or malformed manifests, partial tree, attestation errors) emits the redacted
+ * discovery diagnostic (audit finding F-12c).
+ */
 export function discoverQualifiedPortableOpenCode(
   input: PortableOpenCodeDiscoveryInput,
 ): QualifiedPortableOpenCodeRuntime | undefined {
@@ -343,8 +350,22 @@ function trustedResourceRoot(input: PortableOpenCodeDiscoveryInput): string | un
   const candidate =
     input.installRoot ?? (packageRoot === undefined ? undefined : dirname(packageRoot));
   if (candidate === undefined) return undefined;
-  const root = realpathSync(candidate);
-  return statSync(root).isDirectory() ? root : undefined;
+  try {
+    const root = realpathSync(candidate);
+    return statSync(root).isDirectory() ? root : undefined;
+  } catch (error) {
+    if (isAbsentPathError(error)) return undefined;
+    throw error;
+  }
+}
+
+/** fs error codes that signal an expected absence (nothing installed at the path), not corruption. */
+const ABSENT_PATH_CODES = new Set(["ENOENT", "ENOTDIR"]);
+
+function isAbsentPathError(error: unknown): boolean {
+  return (
+    error instanceof Error && ABSENT_PATH_CODES.has((error as NodeJS.ErrnoException).code ?? "")
+  );
 }
 
 function runtimeTarget(platform: NodeJS.Platform, arch: string): UpdatePortableTarget | undefined {
@@ -355,8 +376,24 @@ function runtimeTarget(platform: NodeJS.Platform, arch: string): UpdatePortableT
 }
 
 function setupMatches(root: string, target: UpdatePortableTarget): boolean {
-  const setup = readRecord(join(root, ".portable", "setup-manifest.json"));
+  const setup = readSetupMarker(join(root, ".portable", "setup-manifest.json"));
   return setup?.platformTarget === target && setup.stable === true;
+}
+
+/**
+ * Reads the portable presence marker. An absent marker means no portable installation — the
+ * expected state on dev machines — and reports "not installed" silently; a marker that is
+ * present but unreadable or malformed still throws so discovery emits its corruption diagnostic.
+ */
+function readSetupMarker(path: string): Record<string, unknown> | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (error) {
+    if (isAbsentPathError(error)) return undefined;
+    throw error;
+  }
+  return record(JSON.parse(raw));
 }
 
 function qualifiedSidecar(

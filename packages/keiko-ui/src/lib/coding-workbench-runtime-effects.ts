@@ -3,6 +3,7 @@ import type { CodingWorkbenchRuntimeStateName } from "@oscharko-dev/keiko-contra
 import type { ActiveWorkspaceApi } from "@/app/components/desktop/context/ActiveWorkspaceContext";
 import { codingWorkbenchRuntimeApiError } from "./coding-workbench-runtime-api";
 import { useCodingWorkbenchRuntimeEventStream } from "./coding-workbench-event-retention";
+import { fetchWorkspaceManifestAccess } from "./workspace-manifest-api";
 import type {
   CodingWorkbenchRuntimeState,
   CodingWorkbenchRuntimeStateAction,
@@ -48,6 +49,29 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
   useEffect(() => {
     void refreshRun();
   }, [refreshRun]);
+}
+
+/**
+ * Release-audit F-08/RG-12: resolve the window's pairing dimension once per mount from the honest
+ * workspaces read (which itself orders behind the boot pairing redemption, #2478). The state stays
+ * fail-closed on `unknown` when the read cannot answer — readiness must never claim a paired
+ * session it has not confirmed, because an unpaired start is guaranteed to 403 (ADR-0141).
+ */
+export function useCodingWorkbenchPairingEffect(dispatch: RuntimeDispatch): void {
+  useEffect(() => {
+    let cancelled = false;
+    void fetchWorkspaceManifestAccess().then(
+      (access) => {
+        if (!cancelled) dispatch({ kind: "pairing-set", pairing: access.session });
+      },
+      () => {
+        if (!cancelled) dispatch({ kind: "pairing-set", pairing: "unknown" });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [dispatch]);
 }
 
 export function useCodingWorkbenchWorkspaceEffect({

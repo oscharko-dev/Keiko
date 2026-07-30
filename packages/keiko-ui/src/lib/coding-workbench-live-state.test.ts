@@ -7,6 +7,7 @@ import type {
 import {
   codingWorkbenchRuntimeReducer,
   createInitialCodingWorkbenchRuntimeState,
+  type CodingWorkbenchPairingState,
   type CodingWorkbenchRuntimeState,
 } from "./coding-workbench-live-state";
 
@@ -77,7 +78,12 @@ function readiness(): CodingWorkbenchRuntimeReadiness {
   };
 }
 
-function readyState(switching = false): CodingWorkbenchRuntimeState {
+// `pairing: null` deliberately leaves the boot pairing dimension unconfirmed, mirroring a window
+// whose honest workspaces read has not resolved yet (release-audit F-08/RG-12).
+function readyState(
+  switching = false,
+  pairing: CodingWorkbenchPairingState | null = "paired",
+): CodingWorkbenchRuntimeState {
   let state = createInitialCodingWorkbenchRuntimeState();
   state = codingWorkbenchRuntimeReducer(state, {
     kind: "source-set",
@@ -98,7 +104,9 @@ function readyState(switching = false): CodingWorkbenchRuntimeState {
       switching,
     },
   });
-  return codingWorkbenchRuntimeReducer(state, { kind: "runtime-set", readiness: readiness() });
+  state = codingWorkbenchRuntimeReducer(state, { kind: "runtime-set", readiness: readiness() });
+  if (pairing === null) return state;
+  return codingWorkbenchRuntimeReducer(state, { kind: "pairing-set", pairing });
 }
 
 describe("Coding Workbench live state", () => {
@@ -307,6 +315,49 @@ describe("Coding Workbench live state", () => {
     });
     expect(state.runtime).toMatchObject({ status: "ready", value: { runtimeAvailable: true } });
     expect(state.canStart).toBe(false);
+  });
+});
+
+describe("app-session pairing readiness (release-audit F-08/RG-12)", () => {
+  function startable(pairing: CodingWorkbenchPairingState | null): CodingWorkbenchRuntimeState {
+    return codingWorkbenchRuntimeReducer(readyState(false, pairing), {
+      kind: "run-set",
+      snapshot: snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }),
+    });
+  }
+
+  // ADR-0141: without a launcher-paired app session, a run start is guaranteed to fail authority
+  // resolution (403, serverPrincipal() empty). Before this pin the readiness aggregation ignored
+  // pairing entirely, so an unpaired window narrated "Ready to start" over a start that could
+  // never succeed.
+  it("keeps Start blocked until the paired app session is confirmed", () => {
+    expect(startable(null).canStart).toBe(false);
+    expect(startable("unknown").canStart).toBe(false);
+    expect(startable("unpaired").canStart).toBe(false);
+    expect(startable("paired").canStart).toBe(true);
+  });
+
+  it("keeps recovery Retry blocked in an unpaired window", () => {
+    const recovery = (pairing: CodingWorkbenchPairingState): CodingWorkbenchRuntimeState =>
+      codingWorkbenchRuntimeReducer(readyState(false, pairing), {
+        kind: "run-set",
+        snapshot: snapshot({
+          state: "recovery-required",
+          revision: 7,
+          failureCode: "recovery-required",
+          recoveryAcknowledged: true,
+          pendingPermission: undefined,
+        }),
+      });
+    expect(recovery("unpaired").canRetry).toBe(false);
+    expect(recovery("paired").canRetry).toBe(true);
+  });
+
+  it("keeps the state identity when the pairing dimension does not change", () => {
+    const state = readyState(false, "paired");
+    expect(codingWorkbenchRuntimeReducer(state, { kind: "pairing-set", pairing: "paired" })).toBe(
+      state,
+    );
   });
 });
 

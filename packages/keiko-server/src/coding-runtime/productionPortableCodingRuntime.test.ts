@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -76,6 +76,60 @@ describe("production portable OpenCode discovery", () => {
       }),
     ).toBeUndefined();
   });
+
+  it.each(["missing-portable-marker", "missing-install-root"] as const)(
+    "treats an absent portable installation (%s) as silent not-found without a diagnostic",
+    (scenario) => {
+      const records: unknown[] = [];
+      const empty = mkdtempSync(join(tmpdir(), "keiko-portable-absent-"));
+      const installRoot =
+        scenario === "missing-install-root" ? join(empty, "never-installed") : empty;
+
+      expect(
+        discoverQualifiedPortableOpenCode({
+          env: {},
+          installRoot,
+          platform: "win32",
+          arch: "x64",
+          diagnostics: { record: (record): void => void records.push(record) },
+        }),
+      ).toBeUndefined();
+      expect(records).toEqual([]);
+    },
+  );
+
+  it.each(["activation-missing", "setup-manifest-corrupt", "setup-manifest-unreadable"] as const)(
+    "still emits the corruption diagnostic for a present installation with %s",
+    (scenario) => {
+      const records: unknown[] = [];
+      const root = portableInstall();
+      const marker = join(root, ".portable", "setup-manifest.json");
+      if (scenario === "activation-missing") {
+        rmSync(join(root, ".portable", "runtime-activation.json"));
+      } else if (scenario === "setup-manifest-corrupt") {
+        writeFileSync(marker, "{", "utf8");
+      } else {
+        rmSync(marker);
+        mkdirSync(marker);
+      }
+
+      expect(
+        discoverQualifiedPortableOpenCode({
+          env: {},
+          installRoot: root,
+          platform: "win32",
+          arch: "x64",
+          diagnostics: { record: (record): void => void records.push(record) },
+          attestation: attestation(root),
+        }),
+      ).toBeUndefined();
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        operation: "coding.runtime.discover",
+        source: "coding.runtime.discovery",
+      });
+    },
+  );
 
   it("emits one body-free diagnostic when discovery fails unexpectedly", () => {
     const records: unknown[] = [];

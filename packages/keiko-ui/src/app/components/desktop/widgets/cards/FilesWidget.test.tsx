@@ -867,6 +867,50 @@ describe("FilesWidget", () => {
     expect(onOpenFile).toHaveBeenCalledWith("/repo", "ignored.log");
   });
 
+  // Audit F-12 — the widget requests includeIgnored so it can dim ignored rows, but the header
+  // count must agree with `git status` (and the Git window): ignored entries are not changes.
+  it("excludes ignored entries from the header changed-file count", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue(
+      availableGitStatus([
+        gitChange("modified.ts", "M"),
+        gitChange("untracked.ts", "?"),
+        gitChange("dist/bundle.js", "!", { indexStatus: "!" }),
+        gitChange("node_modules/dep/index.js", "!", { indexStatus: "!" }),
+        gitChange("build.log", "!", { indexStatus: "!" }),
+      ]),
+    );
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [{ ...treeEntryBase, name: "modified.ts", path: "modified.ts", kind: "file" }],
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    expect(await screen.findByText("Git main 2 changed files")).toBeInTheDocument();
+  });
+
+  it("uses the singular changed-file wording when ignored entries hide a lone change", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue(
+      availableGitStatus([
+        gitChange("modified.ts", "M"),
+        gitChange("dist/bundle.js", "!", { indexStatus: "!" }),
+        gitChange("build.log", "!", { indexStatus: "!" }),
+      ]),
+    );
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [{ ...treeEntryBase, name: "modified.ts", path: "modified.ts", kind: "file" }],
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    expect(await screen.findByText("Git main 1 changed file")).toBeInTheDocument();
+  });
+
   it("leaves ordinary rows undecorated when ignored entries are not requested by the response", async () => {
     vi.mocked(fetchGitStatus).mockResolvedValue(availableGitStatus([]));
     vi.mocked(fetchFilesTree).mockResolvedValueOnce({

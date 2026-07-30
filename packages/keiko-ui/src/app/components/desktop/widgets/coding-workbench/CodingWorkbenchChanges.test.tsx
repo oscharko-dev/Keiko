@@ -115,6 +115,7 @@ function renderChanges(
       runId="run-2482"
       changeSignal={null}
       bindingPending={false}
+      pairing="paired"
       client={changesClient}
       {...overrides}
     />,
@@ -193,6 +194,31 @@ describe("CodingWorkbenchChanges", () => {
     expect(screen.queryByText("src/file-000.ts")).not.toBeInTheDocument();
   });
 
+  // Release-audit F-08: the run root always lives under the managed task-workspace area, which is
+  // readable only through a launcher-paired app session (ADR-0141). While the window is confirmed
+  // unpaired, a read denial must name that actionable condition instead of the ambiguous denial.
+  it("names the unpaired window instead of the ambiguous denial when reads are denied (F-08)", async () => {
+    const changesClient = client({
+      getStatus: vi.fn(async () => status([], false)),
+      getHistory: vi.fn(async () => history(false)),
+    });
+    renderChanges(changesClient, { pairing: "unpaired" });
+
+    expect(await screen.findByText(/Browser window not paired/u)).toBeVisible();
+    expect(screen.queryByText(/may need to be paired/u)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Refresh changes" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the paired-session hint for transport errors while the window is unpaired", async () => {
+    const changesClient = client({
+      getStatus: vi.fn(() => Promise.reject(new Error("redacted transport failure"))),
+    });
+    renderChanges(changesClient, { pairing: "unpaired" });
+
+    expect(await screen.findByText(/Browser window not paired/u)).toBeVisible();
+    expect(screen.queryByText(/could not be refreshed/u)).not.toBeInTheDocument();
+  });
+
   it("does not retarget one run to a different workspace root", async () => {
     const changesClient = client();
     const view = renderChanges(changesClient);
@@ -204,6 +230,7 @@ describe("CodingWorkbenchChanges", () => {
         runId="run-2482"
         changeSignal="cursor-other-root"
         bindingPending={false}
+        pairing="paired"
         client={changesClient}
       />,
     );
@@ -241,6 +268,7 @@ describe("CodingWorkbenchChanges", () => {
           runId="run-2482"
           changeSignal={changeSignal}
           bindingPending={false}
+          pairing="paired"
           client={changesClient}
         />,
       );

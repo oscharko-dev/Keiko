@@ -47,6 +47,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.questions.terminal": "Der Coding-Lauf ist beendet.",
   "codingWorkbench.questions.unpaired":
     "Dieses Fenster ist nicht für Frageinhalte gekoppelt. Starten Sie Keiko über den Launcher neu, um eine neue App-Sitzung zu koppeln.",
+  "codingWorkbench.pairing.unpaired":
+    "Browserfenster nicht gekoppelt — öffnen Sie Keiko über den Launcher, um Coding-Läufe zu ermöglichen.",
   "codingWorkbench.questions.retry": "Erneut prüfen",
   "codingWorkbench.questions.requestTitle": "Die Laufzeit benötigt Ihre Eingabe",
   "codingWorkbench.questions.required": "Beantworten Sie jede Frage vor dem Senden.",
@@ -92,6 +94,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Aufgaben-Workspace-Bindung des Laufs ist nicht mehr verfügbar. Es wird kein Diff angezeigt.",
   "codingWorkbench.changes.unavailable":
     "Änderungen sind nicht verfügbar. Die App-Sitzung muss möglicherweise erneut gekoppelt werden; es wird kein veraltetes Diff angezeigt.",
+  "codingWorkbench.changes.unpaired":
+    "Browserfenster nicht gekoppelt — öffnen Sie Keiko über den Launcher, um den Aufgaben-Workspace dieses Laufs zu lesen. Es wird kein Diff angezeigt.",
   "codingWorkbench.changes.error":
     "Änderungen konnten nicht aktualisiert werden. Es wird kein veraltetes Diff angezeigt.",
   "codingWorkbench.changes.retry": "Änderungen aktualisieren",

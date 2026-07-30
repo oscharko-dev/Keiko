@@ -48,6 +48,14 @@ vi.mock("./coding-workbench-runtime-api", async (importOriginal) => {
   };
 });
 
+// Release-audit F-08/RG-12: the boot pairing dimension is fed by the honest workspaces read
+// (`session: "paired" | "unpaired"`), never guessed client-side.
+const manifestAccessMock = vi.hoisted(() => vi.fn());
+vi.mock("./workspace-manifest-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./workspace-manifest-api")>();
+  return { ...actual, fetchWorkspaceManifestAccess: manifestAccessMock };
+});
+
 const UPDATED_AT = "2026-07-13T12:00:00.000Z";
 
 class FakeEventSource {
@@ -193,6 +201,7 @@ describe("useCodingWorkbenchRuntime", () => {
     vi.mocked(createCodingWorkbenchRuntimeEventSource).mockImplementation(
       (): EventSource => new FakeEventSource() as unknown as EventSource,
     );
+    manifestAccessMock.mockResolvedValue({ session: "paired", manifests: [] });
   });
 
   afterEach(() => {
@@ -476,6 +485,42 @@ describe("useCodingWorkbenchRuntime", () => {
       value: { available: true },
     });
     expect(view.result.current.state.run.value).toMatchObject({ runId: "run-1", revision: 4 });
+
+    view.unmount();
+  });
+
+  // Release-audit F-08/RG-12: with every other readiness dimension green, an unpaired window must
+  // still resolve to a blocked start — the run start is guaranteed to 403 (ADR-0141).
+  it("keeps Start blocked when the honest workspaces read reports the window unpaired", async () => {
+    manifestAccessMock.mockResolvedValue({ session: "unpaired", manifests: [] });
+    installBootstrap(snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }));
+    const activeWorkspace = workspace();
+    const view = renderHook(() =>
+      useCodingWorkbenchRuntime({
+        workspace: activeWorkspace,
+        initialRequestedMode: "governed-assist",
+      }),
+    );
+
+    await waitFor(() => expect(view.result.current.state.pairing).toBe("unpaired"));
+    await waitFor(() => expect(view.result.current.state.run.status).toBe("ready"));
+    expect(view.result.current.state.canStart).toBe(false);
+
+    view.unmount();
+  });
+
+  it("confirms the paired window through the same honest read before arming Start", async () => {
+    installBootstrap(snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }));
+    const activeWorkspace = workspace();
+    const view = renderHook(() =>
+      useCodingWorkbenchRuntime({
+        workspace: activeWorkspace,
+        initialRequestedMode: "governed-assist",
+      }),
+    );
+
+    await waitFor(() => expect(view.result.current.state.pairing).toBe("paired"));
+    await waitFor(() => expect(view.result.current.state.canStart).toBe(true));
 
     view.unmount();
   });

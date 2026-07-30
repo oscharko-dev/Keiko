@@ -428,6 +428,8 @@ export const EN_MESSAGES = {
   "chat.grounding.strategy": "Strategy",
   "chat.grounding.modelOnly": "Model only",
   "chat.grounding.liveFiles": "Live Files context",
+  "chat.grounding.liveFilesUnavailableHint":
+    "Connect a Files window to this chat to ground answers in your repository.",
   "chat.grounding.multiple": "Multiple sources",
   "chat.grounding.disconnectConfirm":
     "This will disconnect {count} grounding {sourceLabel}. Continue?",

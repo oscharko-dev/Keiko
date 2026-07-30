@@ -1,11 +1,18 @@
-import { renderHook } from "@testing-library/react";
+import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   codingWorkbenchStreamRunId,
+  useCodingWorkbenchPairingEffect,
   useCodingWorkbenchWorkspaceEffect,
 } from "./coding-workbench-runtime-effects";
 import { STREAMABLE_RUNTIME_STATES } from "./useCodingWorkbenchRuntime";
 import type { CodingWorkbenchRuntimeState } from "./coding-workbench-live-state";
+
+const manifestAccessMock = vi.hoisted(() => vi.fn());
+vi.mock("./workspace-manifest-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./workspace-manifest-api")>();
+  return { ...actual, fetchWorkspaceManifestAccess: manifestAccessMock };
+});
 
 describe("codingWorkbenchStreamRunId", () => {
   // #2386 regression: pausing must NOT tear down the run's event stream. With "paused" missing
@@ -23,6 +30,30 @@ describe("codingWorkbenchStreamRunId", () => {
     expect(
       codingWorkbenchStreamRunId(stateFor("cancelled"), STREAMABLE_RUNTIME_STATES),
     ).toBeUndefined();
+  });
+});
+
+describe("useCodingWorkbenchPairingEffect (release-audit F-08/RG-12)", () => {
+  it("projects the honest workspaces session answer into the pairing dimension", async () => {
+    manifestAccessMock.mockResolvedValue({ session: "unpaired", manifests: [] });
+    const dispatch = vi.fn();
+    renderHook(() => {
+      useCodingWorkbenchPairingEffect(dispatch);
+    });
+    await waitFor(() => {
+      expect(dispatch).toHaveBeenCalledWith({ kind: "pairing-set", pairing: "unpaired" });
+    });
+  });
+
+  it("stays fail-closed on unknown when the workspaces read cannot answer", async () => {
+    manifestAccessMock.mockRejectedValue(new Error("redacted transport failure"));
+    const dispatch = vi.fn();
+    renderHook(() => {
+      useCodingWorkbenchPairingEffect(dispatch);
+    });
+    await waitFor(() => {
+      expect(dispatch).toHaveBeenCalledWith({ kind: "pairing-set", pairing: "unknown" });
+    });
   });
 });
 

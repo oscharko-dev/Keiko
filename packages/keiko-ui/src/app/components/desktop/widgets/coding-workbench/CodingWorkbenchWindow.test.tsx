@@ -361,6 +361,19 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Workspace could not be refreshed.");
   });
 
+  // Release-audit F-08/RG-12: an unpaired browser window cannot start a coding run (ADR-0141 —
+  // authority resolution fails without launcher pairing), so the surface must render the
+  // blocked-idle state and name pairing as the missing input instead of narrating readiness.
+  it("names the unpaired window instead of narrating readiness (F-08/RG-12)", (): void => {
+    renderWorkbench(liveState({ canStart: false, pairing: "unpaired" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Browser window not paired — open Keiko through the launcher to enable coding runs.",
+    );
+    expect(screen.getByText("Not ready to start")).toBeInTheDocument();
+    expect(screen.queryByText("Ready to start")).not.toBeInTheDocument();
+  });
+
   // Release-audit F-01: the idle header pill is a READINESS claim, not a run state. It must
   // consume the same server-confirmed readiness the start action gates on — including the
   // sidecar gateway profile — so it can never say "Ready to start" over an unavailable source.
