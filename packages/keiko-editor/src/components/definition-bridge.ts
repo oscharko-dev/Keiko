@@ -6,7 +6,7 @@
  * maps the returned workspace-relative locations back to Monaco locations. It performs no I/O and
  * imports no Monaco value.
  */
-import { shouldDiscardResponse } from "../completion-identity.js";
+import { shouldDiscardAgainstLatest } from "../completion-identity.js";
 import type { EditorLanguageId } from "../languages.js";
 import type {
   EditorDefinitionQuery,
@@ -24,6 +24,11 @@ import {
   type MonacoPositionLike,
   type MonacoRange,
 } from "./completion-bridge.js";
+import {
+  classifyResultKind,
+  runLanguageBridgeCall,
+  type EditorLanguageIntelligenceReporter,
+} from "./language-intelligence.js";
 
 export interface MonacoUriLike {
   toString(): string;
@@ -84,6 +89,8 @@ export interface KeikoDefinitionProviderDeps {
   readonly streamId: string;
   readonly newRequestId: () => string;
   readonly uriForPath?: MonacoUriForPath | undefined;
+  /** Outcome sink so "no definition found" stays distinguishable from "the lookup failed". */
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function buildRequest(
@@ -124,33 +131,29 @@ export function createKeikoDefinitionProvider(
   let sequence = 0;
   let latest: EditorRequestIdentity | null = null;
   return {
-    async provideDefinition(
-      model,
-      position,
-      token,
-    ): Promise<readonly MonacoLocation[] | undefined> {
+    provideDefinition(model, position, token): Promise<readonly MonacoLocation[] | undefined> {
       const documentUri = model.uri.toString();
       if (!deps.isCurrentDocument(documentUri)) {
-        return undefined;
+        return Promise.resolve(undefined);
       }
       sequence += 1;
       const request = buildRequest(deps, documentUri, position, sequence);
       latest = request.request;
       const controller = controllerForToken(token);
-      try {
-        const query: EditorDefinitionQuery = { request, documentText: model.getValue() };
-        const response = await deps.resolve(query, controller.signal);
-        if (shouldDiscardResponse(response.request, latest)) {
-          return undefined;
-        }
-        return definitionResponseToMonaco(
-          response,
-          model.uri,
-          deps.uriForPath ?? defaultUriForPath,
-        );
-      } catch {
-        return EMPTY_LOCATIONS;
-      }
+      const query: EditorDefinitionQuery = { request, documentText: model.getValue() };
+      return runLanguageBridgeCall<EditorDefinitionResponse, readonly MonacoLocation[] | undefined>(
+        {
+          operation: "definition",
+          resolve: () => deps.resolve(query, controller.signal),
+          isDiscarded: (response) => shouldDiscardAgainstLatest(response.request, latest),
+          discardedValue: undefined,
+          failedValue: EMPTY_LOCATIONS,
+          classify: (response) => classifyResultKind(response.locations.length, response.truncated),
+          present: (response) =>
+            definitionResponseToMonaco(response, model.uri, deps.uriForPath ?? defaultUriForPath),
+          report: deps.report,
+        },
+      );
     },
   };
 }
@@ -163,6 +166,7 @@ export interface RegisterKeikoDefinitionProviderArgs {
   readonly streamId: string;
   readonly newRequestId: () => string;
   readonly uriForPath?: MonacoUriForPath | undefined;
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
@@ -185,6 +189,7 @@ export function registerKeikoDefinitionProvider(
       documentLanguage,
       streamId: `${args.streamId}:${documentLanguage}`,
       newRequestId: args.newRequestId,
+      report: args.report,
       ...(args.uriForPath === undefined ? {} : { uriForPath: args.uriForPath }),
     });
     return args.languages.registerDefinitionProvider(documentLanguage, provider);

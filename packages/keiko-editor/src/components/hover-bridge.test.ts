@@ -12,6 +12,7 @@ import {
   type MonacoHoverRegistrar,
 } from "./hover-bridge.js";
 import type { MonacoCancellationToken } from "./completion-bridge.js";
+import type { EditorLanguageIntelligenceEvent } from "./language-intelligence.js";
 import type { EditorHover, EditorHoverResolver, EditorHoverResponse } from "../types.js";
 
 function model(text = "const x = 1;\n"): MonacoHoverModel {
@@ -187,6 +188,66 @@ describe("createKeikoHoverProvider", () => {
       token(true),
     );
     expect(deferred.calls[0]?.signal.aborted).toBe(true);
+  });
+});
+
+// Regression pin (Editor P1, uniform silent failure): the bridge must keep Monaco's contract — an
+// empty value, never a throw — while making the failure OBSERVABLE. Before the shared outcome seam,
+// a hover crash and a position with no quick info both produced `undefined` and reported nothing, so
+// the user could not tell "no quick info here" from "quick info did not answer".
+describe("createKeikoHoverProvider outcome reporting", () => {
+  function reporting(resolve: EditorHoverResolver): {
+    readonly provider: MonacoHoverProvider;
+    readonly events: EditorLanguageIntelligenceEvent[];
+  } {
+    const events: EditorLanguageIntelligenceEvent[] = [];
+    return {
+      events,
+      provider: createKeikoHoverProvider({
+        resolve,
+        isCurrentDocument: (documentUri) => documentUri === "inmemory://model/1",
+        documentLanguage: "typescript",
+        streamId: "stream",
+        newRequestId: () => "req",
+        report: (event) => {
+          events.push(event);
+        },
+      }),
+    };
+  }
+
+  it("reports a rejected hover as a classified failure, not as an empty result", async () => {
+    const { provider: hoverProvider, events } = reporting(() =>
+      Promise.reject(new Error("language service crashed")),
+    );
+
+    const hover = await hoverProvider.provideHover(model(), { lineNumber: 1, column: 1 }, token());
+
+    expect(hover).toBeUndefined();
+    expect(events).toEqual([
+      { operation: "hover", outcome: { status: "failed", failure: "provider" } },
+    ]);
+  });
+
+  it("still reports a genuinely empty hover as empty", async () => {
+    const { provider: hoverProvider, events } = reporting((query) =>
+      Promise.resolve({ request: query.request.request, hover: { contents: null } }),
+    );
+
+    const hover = await hoverProvider.provideHover(model(), { lineNumber: 1, column: 1 }, token());
+
+    expect(hover).toBeUndefined();
+    expect(events).toEqual([{ operation: "hover", outcome: { status: "empty" } }]);
+  });
+
+  it("reports quick info that was found as ok", async () => {
+    const { provider: hoverProvider, events } = reporting((query) =>
+      Promise.resolve({ request: query.request.request, hover: { contents: "x: number" } }),
+    );
+
+    await hoverProvider.provideHover(model(), { lineNumber: 1, column: 1 }, token());
+
+    expect(events).toEqual([{ operation: "hover", outcome: { status: "ok" } }]);
   });
 });
 

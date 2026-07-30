@@ -1,11 +1,18 @@
-import { shouldDiscardResponse } from "../completion-identity.js";
+import { shouldDiscardAgainstLatest } from "../completion-identity.js";
 import type { EditorLanguageId } from "../languages.js";
 import type {
   EditorDefinitionQuery,
   EditorDefinitionRequest,
   EditorDefinitionResolver,
+  EditorDefinitionResponse,
   EditorRequestIdentity,
 } from "../types.js";
+import {
+  classifyResultKind,
+  runLanguageBridgeCall,
+  type EditorLanguageIntelligenceReporter,
+  type EditorLanguageOperation,
+} from "./language-intelligence.js";
 import {
   definitionResponseToMonaco,
   type MonacoDefinitionModel,
@@ -34,6 +41,14 @@ export interface LocationNavigationProviderDeps {
   readonly streamId: string;
   readonly newRequestId: () => string;
   readonly uriForPath?: MonacoUriForPath | undefined;
+  /**
+   * Which Monaco navigation surface this instance serves. Type-definition and implementation share
+   * this provider, so the reported operation must name the caller rather than being hard-coded —
+   * otherwise a failing "go to implementation" would be surfaced as a definition failure.
+   */
+  readonly operation: EditorLanguageOperation;
+  /** Outcome sink so "no target found" stays distinguishable from "the lookup failed". */
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function requestFor(
@@ -66,24 +81,31 @@ export function createLocationNavigationProvider(
   let sequence = 0;
   let latest: EditorRequestIdentity | null = null;
   return {
-    async provideLocation(model, position, token): Promise<readonly MonacoLocation[] | undefined> {
+    provideLocation(model, position, token): Promise<readonly MonacoLocation[] | undefined> {
       const documentUri = model.uri.toString();
-      if (!deps.isCurrentDocument(documentUri)) return undefined;
+      if (!deps.isCurrentDocument(documentUri)) return Promise.resolve(undefined);
       sequence += 1;
       const request = requestFor(deps, documentUri, position, sequence);
       latest = request.request;
-      try {
-        const query: EditorDefinitionQuery = { request, documentText: model.getValue() };
-        const response = await deps.resolve(query, abortControllerFor(token).signal);
-        if (shouldDiscardResponse(response.request, latest)) return undefined;
-        return definitionResponseToMonaco(
-          response,
-          model.uri,
-          deps.uriForPath ?? ((_path, uri): MonacoUriLike => uri),
-        );
-      } catch {
-        return EMPTY_LOCATIONS;
-      }
+      const query: EditorDefinitionQuery = { request, documentText: model.getValue() };
+      const signal = abortControllerFor(token).signal;
+      return runLanguageBridgeCall<EditorDefinitionResponse, readonly MonacoLocation[] | undefined>(
+        {
+          operation: deps.operation,
+          resolve: () => deps.resolve(query, signal),
+          isDiscarded: (response) => shouldDiscardAgainstLatest(response.request, latest),
+          discardedValue: undefined,
+          failedValue: EMPTY_LOCATIONS,
+          classify: (response) => classifyResultKind(response.locations.length, response.truncated),
+          present: (response) =>
+            definitionResponseToMonaco(
+              response,
+              model.uri,
+              deps.uriForPath ?? ((_path, uri): MonacoUriLike => uri),
+            ),
+          report: deps.report,
+        },
+      );
     },
   };
 }

@@ -21,6 +21,7 @@ import type {
   EditorFormattingQuery,
   EditorFormattingRequest,
   EditorFormattingResolver,
+  EditorFormattingResponse,
   EditorRequestIdentity,
   EditorTextEdit,
 } from "../types.js";
@@ -30,6 +31,11 @@ import {
   type MonacoDisposable,
   type MonacoRange,
 } from "./completion-bridge.js";
+import {
+  classifyResultKind,
+  runLanguageBridgeCall,
+  type EditorLanguageIntelligenceReporter,
+} from "./language-intelligence.js";
 
 // ─── Minimal structural Monaco surface (no value import of `monaco-editor`) ─────────────────────
 
@@ -99,6 +105,8 @@ export interface KeikoFormattingProviderDeps {
   readonly streamId: string;
   /** Unique request-id factory. Injected so tests stay deterministic. */
   readonly newRequestId: () => string;
+  /** Outcome sink so "already formatted" stays distinguishable from "the formatter did not answer". */
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function buildRequest(
@@ -145,35 +153,31 @@ export function createKeikoFormattingProvider(
 ): MonacoDocumentFormattingEditProvider {
   let sequence = 0;
   return {
-    async provideDocumentFormattingEdits(
-      model,
-      options,
-      token,
-    ): Promise<readonly MonacoTextEdit[]> {
+    provideDocumentFormattingEdits(model, options, token): Promise<readonly MonacoTextEdit[]> {
       const documentUri = model.uri.toString();
       if (!deps.isCurrentDocument(documentUri)) {
-        return EMPTY_EDITS;
+        return Promise.resolve(EMPTY_EDITS);
       }
       sequence += 1;
       const versionBefore = model.getVersionId();
       const request = buildRequest(deps, documentUri, options, sequence, versionBefore);
       const controller = controllerForToken(token);
-      try {
-        const query: EditorFormattingQuery = { request, documentText: model.getValue() };
-        const response = await deps.resolve(query, controller.signal);
+      const query: EditorFormattingQuery = { request, documentText: model.getValue() };
+      return runLanguageBridgeCall<EditorFormattingResponse, readonly MonacoTextEdit[]>({
+        operation: "formatting",
+        resolve: () => deps.resolve(query, controller.signal),
         // A request cancelled or superseded by a model change while in flight must not mutate the
         // buffer: drop the now-stale edits instead of applying them to a different document state.
-        if (
+        isDiscarded: () =>
           controller.signal.aborted ||
           !deps.isCurrentDocument(documentUri) ||
-          model.getVersionId() !== versionBefore
-        ) {
-          return EMPTY_EDITS;
-        }
-        return editsToMonaco(response.edits);
-      } catch {
-        return EMPTY_EDITS;
-      }
+          model.getVersionId() !== versionBefore,
+        discardedValue: EMPTY_EDITS,
+        failedValue: EMPTY_EDITS,
+        classify: (response) => classifyResultKind(response.edits.length, response.truncated),
+        present: (response) => editsToMonaco(response.edits),
+        report: deps.report,
+      });
     },
   };
 }
@@ -185,6 +189,7 @@ export interface RegisterKeikoFormattingProviderArgs {
   readonly documentLanguages: readonly EditorLanguageId[];
   readonly streamId: string;
   readonly newRequestId: () => string;
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
@@ -211,6 +216,7 @@ export function registerKeikoFormattingProvider(
       documentLanguage,
       streamId: `${args.streamId}:${documentLanguage}`,
       newRequestId: args.newRequestId,
+      report: args.report,
     });
     return args.languages.registerDocumentFormattingEditProvider(documentLanguage, provider);
   });

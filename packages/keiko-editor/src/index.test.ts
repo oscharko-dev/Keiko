@@ -239,6 +239,18 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "deriveEditorStatusBar",
       "editorLanguageLabel",
       "EditorStatusBar",
+      // Shared language-intelligence outcome seam: one classify/report/present path for every Monaco
+      // bridge, so a provider failure, a timeout, a cap and a genuinely empty result stay distinct.
+      "EDITOR_LANGUAGE_OPERATIONS",
+      "EMPTY_LANGUAGE_INTELLIGENCE_STATE",
+      "classifyLanguageFailure",
+      "classifyResultKind",
+      "isCancellation",
+      "languageIntelligenceNotice",
+      "outcomeForError",
+      "reduceLanguageIntelligence",
+      "runLanguageBridgeCall",
+      "summarizeLanguageIntelligence",
       // Large-file degraded-mode policy (#1207).
       "deriveLargeFileMode",
       "isLargeFileDegraded",

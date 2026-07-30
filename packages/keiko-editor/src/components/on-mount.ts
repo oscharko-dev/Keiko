@@ -163,6 +163,7 @@ import {
   monacoPositionToEditorPosition,
   monacoSelectionToEditorRange,
 } from "./selection-reporting.js";
+import type { EditorLanguageIntelligenceReporter } from "./language-intelligence.js";
 
 /** Minimal `monaco` namespace surface the mount wiring needs (the live `onMount` second arg). */
 export interface MountMonaco {
@@ -504,6 +505,14 @@ export interface WireEditorOnMountArgs {
    * system-boundary edge (DOM token resolution), so it is reported, not swallowed silently.
    */
   readonly onThemeError?: ((message: string) => void) | undefined;
+  /**
+   * ONE outcome sink for every language-intelligence bridge below. Each bridge still returns the
+   * empty value Monaco's provider contract demands, but it now reports what actually happened through
+   * this seam — so a provider crash, a timeout, a transport break and a genuinely empty result are no
+   * longer the same "nothing found" to the user. Absent when the host surfaces no such state; the
+   * bridges then behave exactly as before, only unobserved.
+   */
+  readonly onLanguageIntelligence?: EditorLanguageIntelligenceReporter | undefined;
   /** Completion wiring (Issue #1199); absent when the host supplies no completion resolver. */
   readonly completion?: WireEditorCompletion | undefined;
   /** Inline-completion wiring (Issue #1200); absent when the host supplies no inline resolver. */
@@ -632,6 +641,7 @@ function installCompletionProvider(args: WireEditorOnMountArgs): MonacoDisposabl
     contextBudgetBytes: completion.contextBudgetBytes,
     streamId: completion.streamId,
     newRequestId: completion.newRequestId,
+    report: args.onLanguageIntelligence,
   });
 }
 
@@ -658,6 +668,7 @@ function installInlineCompletionProvider(args: WireEditorOnMountArgs): MonacoDis
     streamId: inlineCompletion.streamId,
     newRequestId: inlineCompletion.newRequestId,
     debounceDelayMs: inlineCompletion.debounceDelayMs,
+    report: args.onLanguageIntelligence,
     ...(inlineCompletion.telemetry === undefined ? {} : { telemetry: inlineCompletion.telemetry }),
   });
 }
@@ -683,6 +694,7 @@ function installHoverProvider(args: WireEditorOnMountArgs): MonacoDisposable | n
     documentLanguages: hover.languages ?? HOVER_ELIGIBLE_LANGUAGES,
     streamId: hover.streamId,
     newRequestId: hover.newRequestId,
+    report: args.onLanguageIntelligence,
   });
 }
 
@@ -704,6 +716,7 @@ function installDocumentSymbolProvider(args: WireEditorOnMountArgs): MonacoDispo
     documentLanguages: symbols.languages ?? SYMBOLS_ELIGIBLE_LANGUAGES,
     streamId: symbols.streamId,
     newRequestId: symbols.newRequestId,
+    report: args.onLanguageIntelligence,
   });
 }
 
@@ -726,6 +739,7 @@ function installFormattingProvider(args: WireEditorOnMountArgs): MonacoDisposabl
     documentLanguages: formatting.languages ?? FORMATTING_ELIGIBLE_LANGUAGES,
     streamId: formatting.streamId,
     newRequestId: formatting.newRequestId,
+    report: args.onLanguageIntelligence,
   });
 }
 
@@ -758,6 +772,7 @@ function installDefinitionProvider(args: WireEditorOnMountArgs): MonacoDisposabl
     documentLanguages: definition.languages ?? DEFINITION_ELIGIBLE_LANGUAGES,
     streamId: definition.streamId,
     newRequestId: definition.newRequestId,
+    report: args.onLanguageIntelligence,
     uriForPath: normalizeUriForPath(args.monaco.Uri, definition.uriForPath),
   });
 }
@@ -775,6 +790,7 @@ function installTypeDefinitionProvider(args: WireEditorOnMountArgs): MonacoDispo
     documentLanguages: wiring.languages ?? TYPE_DEFINITION_ELIGIBLE_LANGUAGES,
     streamId: wiring.streamId,
     newRequestId: wiring.newRequestId,
+    report: args.onLanguageIntelligence,
     uriForPath: normalizeUriForPath(args.monaco.Uri, wiring.uriForPath),
   });
 }
@@ -792,6 +808,7 @@ function installImplementationProvider(args: WireEditorOnMountArgs): MonacoDispo
     documentLanguages: wiring.languages ?? IMPLEMENTATION_ELIGIBLE_LANGUAGES,
     streamId: wiring.streamId,
     newRequestId: wiring.newRequestId,
+    report: args.onLanguageIntelligence,
     uriForPath: normalizeUriForPath(args.monaco.Uri, wiring.uriForPath),
   });
 }
@@ -809,6 +826,7 @@ function installInlayHintsProvider(args: WireEditorOnMountArgs): MonacoDisposabl
     documentLanguages: wiring.languages ?? INLAY_HINTS_ELIGIBLE_LANGUAGES,
     streamId: wiring.streamId,
     newRequestId: wiring.newRequestId,
+    report: args.onLanguageIntelligence,
   });
 }
 
@@ -851,6 +869,7 @@ function installCallHierarchyAction(args: WireEditorOnMountArgs): MonacoDisposab
     newRequestId: wiring.newRequestId,
     labels: wiring.labels,
     onResult: wiring.onResult,
+    report: args.onLanguageIntelligence,
   });
 }
 
@@ -872,6 +891,7 @@ function installReferencesProvider(args: WireEditorOnMountArgs): MonacoDisposabl
     documentLanguages: references.languages ?? REFERENCES_ELIGIBLE_LANGUAGES,
     streamId: references.streamId,
     newRequestId: references.newRequestId,
+    report: args.onLanguageIntelligence,
     uriForPath: normalizeUriForPath(args.monaco.Uri, references.uriForPath),
   });
 }
@@ -893,6 +913,7 @@ function installCodeActionProvider(args: WireEditorOnMountArgs): MonacoDisposabl
     documentLanguages: codeActions.languages ?? CODE_ACTION_ELIGIBLE_LANGUAGES,
     streamId: codeActions.streamId,
     newRequestId: codeActions.newRequestId,
+    report: args.onLanguageIntelligence,
   });
 }
 
@@ -913,6 +934,7 @@ function installSignatureHelpProvider(args: WireEditorOnMountArgs): MonacoDispos
     documentLanguages: signatureHelp.languages ?? SIGNATURE_HELP_ELIGIBLE_LANGUAGES,
     streamId: signatureHelp.streamId,
     newRequestId: signatureHelp.newRequestId,
+    report: args.onLanguageIntelligence,
     triggerCharacters: signatureHelp.triggerCharacters ?? DEFAULT_SIGNATURE_HELP_TRIGGER_CHARACTERS,
     retriggerCharacters:
       signatureHelp.retriggerCharacters ?? DEFAULT_SIGNATURE_HELP_RETRIGGER_CHARACTERS,
@@ -977,6 +999,7 @@ function installDiagnostics(args: WireEditorOnMountArgs): MonacoDisposable | nul
     debounceMs: diagnostics.debounceMs,
     streamId: diagnostics.streamId,
     newRequestId: diagnostics.newRequestId,
+    report: args.onLanguageIntelligence,
     ...(diagnostics.scheduler === undefined ? {} : { scheduler: diagnostics.scheduler }),
     ...(diagnostics.onSummary === undefined ? {} : { onSummary: diagnostics.onSummary }),
     ...(diagnostics.onOverviewMarkers === undefined

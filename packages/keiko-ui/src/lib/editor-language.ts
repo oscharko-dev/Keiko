@@ -8,17 +8,19 @@
 // zero-based `character`, while the editor uses zero-based `column` (both UTF-16 code units).
 //
 // The wire results carry a `truncated` flag (set when the server caps diagnostics/symbols/formatting
-// edits at the configured bounds). It is intentionally NOT threaded into the editor render contracts:
-// like the deterministic completion surface (#1198/#1199), it is a server-side/evidence-only signal,
-// and the caps are defensive ceilings a legitimate document does not reach. Surfacing a truncation
-// notice in the editor is out of scope for #1201; the bounds are enforced and tested server-side.
+// edits/locations/actions at the configured bounds). It IS threaded into the editor render contracts.
+// It used to be dropped here as "server-side evidence only", on the reasoning that the caps are
+// defensive ceilings a legitimate document does not reach — but dropping it makes a capped result
+// pixel-identical to a complete one, so on the day a cap does bind, the editor silently claims the
+// partial list is the whole answer. The editor's shared outcome seam classifies a `truncated` result
+// as `capped` and the status bar labels it; hover has no cap (a single string) and therefore no flag.
 //
-// That reasoning covers RENDER surfaces only, and does not extend to a result the host then applies
-// to a buffer or to disk: a capped mutation silently performs part of an operation the user asked for
-// in full. The rename path therefore carries its own bounding facts through to the review surface and
-// refuses Accept while they are present (`renameChangesetTruncation`, `keiko-editor`), instead of
-// mapping through this seam. Any future mapper here that feeds an apply path needs the same
-// treatment, not this exemption.
+// Labelling is the floor for a RENDER surface, and is deliberately not the whole treatment for a
+// result the host then applies to a buffer or to disk: a capped mutation silently performs part of an
+// operation the user asked for in full, so a label is not enough. The rename path therefore carries
+// its own bounding facts through to the review surface and refuses Accept while they are present
+// (`renameChangesetTruncation`, `keiko-editor`) instead of mapping through this seam. Any future
+// mapper here that feeds an apply path needs that stricter treatment, not just the `capped` label.
 
 import type {
   EditorCodeAction,
@@ -90,7 +92,11 @@ export function mapWireToEditorDiagnosticsResponse(
   request: EditorRequestIdentity,
   wire: LanguageDiagnosticsResult,
 ): EditorDiagnosticsResponse {
-  return { request, diagnostics: wire.diagnostics.map(toEditorDiagnostic) };
+  return {
+    request,
+    diagnostics: wire.diagnostics.map(toEditorDiagnostic),
+    truncated: wire.truncated,
+  };
 }
 
 /** Adapt the hover wire result into the editor hover response. */
@@ -122,7 +128,7 @@ export function mapWireToEditorSymbolsResponse(
   request: EditorRequestIdentity,
   wire: LanguageSymbolResult,
 ): EditorSymbolsResponse {
-  return { request, symbols: wire.symbols.map(toEditorSymbol) };
+  return { request, symbols: wire.symbols.map(toEditorSymbol), truncated: wire.truncated };
 }
 
 function toEditorTextEdit(edit: LanguageTextEdit): EditorTextEdit {
@@ -134,7 +140,7 @@ export function mapWireToEditorFormattingResponse(
   request: EditorRequestIdentity,
   wire: LanguageFormattingResult,
 ): EditorFormattingResponse {
-  return { request, edits: wire.edits.map(toEditorTextEdit) };
+  return { request, edits: wire.edits.map(toEditorTextEdit), truncated: wire.truncated };
 }
 
 function toEditorLocation(location: LanguageLocation): EditorLocation {
@@ -146,7 +152,7 @@ export function mapWireToEditorDefinitionResponse(
   request: EditorRequestIdentity,
   wire: LanguageDefinitionResult,
 ): EditorDefinitionResponse {
-  return { request, locations: wire.locations.map(toEditorLocation) };
+  return { request, locations: wire.locations.map(toEditorLocation), truncated: wire.truncated };
 }
 
 function toEditorCallHierarchyItem(item: LanguageCallHierarchyItem): EditorCallHierarchyItem {
@@ -180,6 +186,7 @@ export function mapWireToEditorCallHierarchyResponse(
       incomingCalls: root.incomingCalls.map(toEditorCallHierarchyCall),
       outgoingCalls: root.outgoingCalls.map(toEditorCallHierarchyCall),
     })),
+    truncated: wire.truncated,
   };
 }
 
@@ -196,6 +203,7 @@ export function mapWireToEditorInlayHintsResponse(
       ...(hint.paddingLeft === undefined ? {} : { paddingLeft: hint.paddingLeft }),
       ...(hint.paddingRight === undefined ? {} : { paddingRight: hint.paddingRight }),
     })),
+    truncated: wire.truncated,
   };
 }
 
@@ -208,6 +216,7 @@ export function mapWireToEditorReferencesResponse(
     request,
     locations: wire.locations.map(toEditorLocation),
     includesDeclaration: wire.includesDeclaration,
+    truncated: wire.truncated,
   };
 }
 
@@ -224,7 +233,7 @@ export function mapWireToEditorCodeActionsResponse(
   request: EditorRequestIdentity,
   wire: LanguageCodeActionsResult,
 ): EditorCodeActionsResponse {
-  return { request, actions: wire.actions.map(toEditorCodeAction) };
+  return { request, actions: wire.actions.map(toEditorCodeAction), truncated: wire.truncated };
 }
 
 function toEditorSignature(signature: LanguageSignatureInformation): EditorSignatureInformation {
@@ -245,5 +254,6 @@ export function mapWireToEditorSignatureHelpResponse(
     signatures: wire.signatures.map(toEditorSignature),
     activeSignature: wire.activeSignature,
     activeParameter: wire.activeParameter,
+    truncated: wire.truncated,
   };
 }

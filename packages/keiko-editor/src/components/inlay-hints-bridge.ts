@@ -1,4 +1,4 @@
-import { shouldDiscardResponse } from "../completion-identity.js";
+import { shouldDiscardAgainstLatest } from "../completion-identity.js";
 import type { EditorLanguageId } from "../languages.js";
 import type { EditorPosition, EditorRange, EditorRequestIdentity } from "../types.js";
 import type {
@@ -8,6 +8,11 @@ import type {
   MonacoRange,
 } from "./completion-bridge.js";
 import type { MonacoUriLike } from "./definition-bridge.js";
+import {
+  classifyResultKind,
+  runLanguageBridgeCall,
+  type EditorLanguageIntelligenceReporter,
+} from "./language-intelligence.js";
 
 export type EditorInlayHintKind = "type" | "parameter" | "enum" | "value";
 export type EditorInlayHintStyle = "standard" | "debug-value";
@@ -40,6 +45,8 @@ export interface EditorInlayHintsQuery {
 export interface EditorInlayHintsResponse {
   readonly request: EditorRequestIdentity;
   readonly hints: readonly EditorInlayHint[];
+  /** True when the host dropped hints to honour a server cap; the overlay is then partial. */
+  readonly truncated?: boolean | undefined;
 }
 
 export type EditorInlayHintsResolver = (
@@ -87,6 +94,8 @@ export interface KeikoInlayHintsProviderDeps {
   readonly documentLanguage: EditorLanguageId;
   readonly streamId: string;
   readonly newRequestId: () => string;
+  /** Outcome sink so a hint-free buffer stays distinguishable from a hint lookup that failed. */
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function editorRange(range: MonacoRange): EditorRange {
@@ -122,9 +131,9 @@ export function createKeikoInlayHintsProvider(
   let sequence = 0;
   let latest: EditorRequestIdentity | null = null;
   return {
-    async provideInlayHints(model, range, token): Promise<MonacoInlayHintList | undefined> {
+    provideInlayHints(model, range, token): Promise<MonacoInlayHintList | undefined> {
       const uri = model.uri.toString();
-      if (!deps.isCurrentDocument(uri)) return undefined;
+      if (!deps.isCurrentDocument(uri)) return Promise.resolve(undefined);
       sequence += 1;
       const identity = { requestId: deps.newRequestId(), streamId: deps.streamId, sequence };
       latest = identity;
@@ -133,16 +142,20 @@ export function createKeikoInlayHintsProvider(
         document: { uri, language: deps.documentLanguage, version: sequence },
         range: editorRange(range),
       };
-      try {
-        const response = await deps.resolve(
-          { request, documentText: model.getValue() },
-          controllerFor(token).signal,
-        );
-        if (shouldDiscardResponse(response.request, latest)) return undefined;
-        return { hints: response.hints.map(toMonacoHint), dispose: (): void => undefined };
-      } catch {
-        return { hints: [], dispose: (): void => undefined };
-      }
+      const signal = controllerFor(token).signal;
+      return runLanguageBridgeCall<EditorInlayHintsResponse, MonacoInlayHintList | undefined>({
+        operation: "inlay-hints",
+        resolve: () => deps.resolve({ request, documentText: model.getValue() }, signal),
+        isDiscarded: (response) => shouldDiscardAgainstLatest(response.request, latest),
+        discardedValue: undefined,
+        failedValue: { hints: [], dispose: (): void => undefined },
+        classify: (response) => classifyResultKind(response.hints.length, response.truncated),
+        present: (response) => ({
+          hints: response.hints.map(toMonacoHint),
+          dispose: (): void => undefined,
+        }),
+        report: deps.report,
+      });
     },
   };
 }
@@ -154,6 +167,7 @@ export interface RegisterKeikoInlayHintsProviderArgs {
   readonly documentLanguages: readonly EditorLanguageId[];
   readonly streamId: string;
   readonly newRequestId: () => string;
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 export function registerKeikoInlayHintsProvider(

@@ -1,5 +1,5 @@
 import type * as monaco from "monaco-editor";
-import { shouldDiscardResponse } from "../completion-identity.js";
+import { shouldDiscardAgainstLatest } from "../completion-identity.js";
 import type { EditorLanguageId } from "../languages.js";
 import type {
   EditorLocation,
@@ -10,6 +10,11 @@ import type {
 } from "../types.js";
 import type { MonacoDisposable } from "./completion-bridge.js";
 import type { MonacoUriLike } from "./definition-bridge.js";
+import {
+  classifyResultKind,
+  runLanguageBridgeCall,
+  type EditorLanguageIntelligenceReporter,
+} from "./language-intelligence.js";
 
 export interface EditorCallHierarchyItem extends EditorLocation {
   readonly name: string;
@@ -47,6 +52,8 @@ export interface EditorCallHierarchyQuery {
 export interface EditorCallHierarchyResponse {
   readonly request: EditorRequestIdentity;
   readonly roots: readonly EditorCallHierarchyRoot[];
+  /** True when the host dropped roots to honour a server cap; the tree is then partial. */
+  readonly truncated?: boolean | undefined;
 }
 
 export type EditorCallHierarchyResolver = (
@@ -78,6 +85,8 @@ export interface RegisterKeikoCallHierarchyActionArgs {
   readonly newRequestId: () => string;
   readonly labels: CallHierarchyActionLabels;
   readonly onResult: (result: EditorCallHierarchyResponse) => void;
+  /** Outcome sink so an empty hierarchy stays distinguishable from a hierarchy that failed to build. */
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 export const EDITOR_CALL_HIERARCHY_ACTION_ID = "keiko.editor.showCallHierarchy";
@@ -116,15 +125,22 @@ export function registerKeikoCallHierarchyAction(
       sequence += 1;
       const request = requestFor(args, model.uri.toString(), position, sequence);
       latest = request.request;
-      try {
-        const response = await args.resolve(
-          { request, documentText: model.getValue() },
-          controller.signal,
-        );
-        if (!shouldDiscardResponse(response.request, latest)) args.onResult(response);
-      } catch {
-        args.onResult({ request: request.request, roots: [] });
-      }
+      const signal = controller.signal;
+      const empty: EditorCallHierarchyResponse = { request: request.request, roots: [] };
+      const result = await runLanguageBridgeCall<
+        EditorCallHierarchyResponse,
+        EditorCallHierarchyResponse | null
+      >({
+        operation: "call-hierarchy",
+        resolve: () => args.resolve({ request, documentText: model.getValue() }, signal),
+        isDiscarded: (response) => shouldDiscardAgainstLatest(response.request, latest),
+        discardedValue: null,
+        failedValue: empty,
+        classify: (response) => classifyResultKind(response.roots.length, response.truncated),
+        present: (response) => response,
+        report: args.report,
+      });
+      if (result !== null) args.onResult(result);
     },
   });
   return {

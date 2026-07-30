@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   completionRequestSupersedes,
   isResponseCurrent,
+  shouldDiscardAgainstLatest,
   shouldDiscardResponse,
 } from "./completion-identity.js";
 import type { EditorRequestIdentity } from "./types.js";
@@ -66,5 +67,21 @@ describe("shouldDiscardResponse", () => {
     expect(shouldDiscardResponse(req("s1", 6), latest)).toBe(true);
     expect(shouldDiscardResponse(req("s1", 5, "foreign-request"), latest)).toBe(true);
     expect(shouldDiscardResponse(req("s2", 5), latest)).toBe(true);
+  });
+});
+
+describe("shouldDiscardAgainstLatest", () => {
+  it("matches shouldDiscardResponse when a request is outstanding", () => {
+    const latest = req("s1", 5);
+
+    expect(shouldDiscardAgainstLatest(latest, latest)).toBe(false);
+    expect(shouldDiscardAgainstLatest(req("s1", 4), latest)).toBe(true);
+    expect(shouldDiscardAgainstLatest(req("s2", 5), latest)).toBe(true);
+  });
+
+  it("discards a response when no request is outstanding", () => {
+    // A provider's latest-request slot is null before the first request and after a reset; a response
+    // arriving then cannot be current for anything, so it must not be presented.
+    expect(shouldDiscardAgainstLatest(req("s1", 5), null)).toBe(true);
   });
 });

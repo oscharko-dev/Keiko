@@ -91,6 +91,21 @@ export interface EditorStatusLanguageService {
   readonly unavailableReason?: string | undefined;
 }
 
+/**
+ * Live per-operation language-intelligence health, distinct from {@link EditorStatusLanguageService}:
+ * that field answers "is a provider configured and reachable at all", this one answers "did the last
+ * hover/completion/diagnostics call actually answer". Without it a language-provider crash, a timeout
+ * and a genuinely empty result all render as "nothing found" (see `language-intelligence.ts`).
+ *
+ * `status` is derived by the editor from reported bridge outcomes; `label`/`ariaLabel` are supplied by
+ * the host so the wording stays localized (the same split as {@link EditorStatusBarInput.mergeConflicts}).
+ */
+export interface EditorStatusLanguageIntelligence {
+  readonly status: "failed" | "capped";
+  readonly label: string;
+  readonly ariaLabel: string;
+}
+
 /** Host-supplied inputs for {@link deriveEditorStatusBar}. Cursor is the 0-based editor contract. */
 export interface EditorStatusBarInput {
   readonly languageId: EditorLanguageId;
@@ -111,6 +126,8 @@ export interface EditorStatusBarInput {
       }
     | undefined;
   readonly languageService?: EditorStatusLanguageService | undefined;
+  /** Live language-intelligence health; omitted when nothing has failed or been capped. */
+  readonly languageIntelligence?: EditorStatusLanguageIntelligence | undefined;
   /**
    * Browser document-formatting reachability for the current language (ADR-0068 D4). Fed the SAME
    * registry-derived value that gates the Format command and its aria, so status and command can
@@ -372,6 +389,23 @@ function languageServiceField(
   };
 }
 
+// A failing or capped language-intelligence operation is announced POLITELY and live: the user needs
+// to learn that "no results" meant "the provider did not answer", but a hover failure must not
+// interrupt typing the way a failed save does, and Monaco retries these surfaces constantly.
+function languageIntelligenceField(
+  state: EditorStatusLanguageIntelligence | undefined,
+): EditorStatusField | null {
+  if (state === undefined) return null;
+  return {
+    id: "language-intelligence",
+    label: state.label,
+    ariaLabel: state.ariaLabel,
+    tone: state.status === "failed" ? "error" : "warn",
+    live: true,
+    assertive: false,
+  };
+}
+
 // Content-free per-operation formatting field (ADR-0068 D4). It mirrors the language-service field's
 // shape: non-live and non-assertive, so it is shown but never announced (a Format-availability change
 // is not a live event the user needs interrupted for). Omitted when the host wires no formatting
@@ -491,6 +525,7 @@ export function deriveEditorStatusBar(input: EditorStatusBarInput): EditorStatus
   pushOptional(fields, diagnosticsField(input.diagnostics));
   pushOptional(fields, mergeConflictsField(input.mergeConflicts));
   pushOptional(fields, languageServiceField(input.languageService));
+  pushOptional(fields, languageIntelligenceField(input.languageIntelligence));
   pushOptional(fields, formattingField(input.formatting));
   pushOptional(fields, runField(input.run));
   pushOptional(fields, debugField(input.debug));

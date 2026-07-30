@@ -31,6 +31,7 @@ function provider(resolve: EditorDefinitionResolver): LocationNavigationProvider
     documentLanguage: "typescript",
     streamId: "stream",
     newRequestId: () => "request",
+    operation: "type-definition",
     uriForPath: (path) => ({ toString: () => `keiko-editor://workspace/${path}` }),
   });
 }
@@ -90,6 +91,7 @@ describe("createLocationNavigationProvider", () => {
       documentLanguage: "typescript",
       streamId: "stream",
       newRequestId: () => "request",
+      operation: "implementation",
     });
 
     const result = await providerWithoutMapper.provideLocation(

@@ -17,6 +17,7 @@ import {
   type MonacoMarkerEditorNamespace,
   type MonacoMarkerSeverities,
 } from "./diagnostics-bridge.js";
+import type { EditorLanguageIntelligenceEvent } from "./language-intelligence.js";
 import type { EditorDiagnostic, EditorDiagnosticsResolver } from "../types.js";
 
 const SEVERITIES: MonacoMarkerSeverities = { Error: 8, Warning: 4, Info: 2, Hint: 1 };
@@ -543,6 +544,74 @@ describe("registerKeikoDiagnostics — degradation and lifecycle", () => {
     // The last write clears the owner's markers.
     const last = harness.markers.calls.at(-1);
     expect(last?.markers).toEqual([]);
+  });
+});
+
+// Regression pin (Editor P1, uniform silent failure). Diagnostics are the WORST case of the class: a
+// failed analysis deliberately leaves the previous markers alone, so a crashed provider looks exactly
+// like "this file is clean" — and the status bar's problem count keeps asserting the stale number.
+// Before the shared outcome seam the failure branch was an empty handler with a comment, so nothing
+// downstream could tell the count was not current.
+describe("registerKeikoDiagnostics — outcome reporting", () => {
+  function reportingHarness(): {
+    readonly harness: Harness;
+    readonly events: EditorLanguageIntelligenceEvent[];
+  } {
+    const events: EditorLanguageIntelligenceEvent[] = [];
+    const model = buildModel();
+    const editor = buildEditor(model.model);
+    return {
+      events,
+      harness: register(editor, {
+        report: (event) => {
+          events.push(event);
+        },
+      }),
+    };
+  }
+
+  it("reports a rejected analysis as a classified failure instead of leaving markers silently stale", async () => {
+    const { harness, events } = reportingHarness();
+    const markersBefore = harness.markers.calls.length;
+
+    harness.resolver.calls[0]?.fail(new Error("language service crashed"));
+    await tick();
+
+    // The marker lifecycle is unchanged — a failure must never wipe or invent squiggles …
+    expect(harness.markers.calls).toHaveLength(markersBefore);
+    // … but it is now observable rather than swallowed.
+    expect(events).toEqual([
+      { operation: "diagnostics", outcome: { status: "failed", failure: "provider" } },
+    ]);
+  });
+
+  it("still reports a genuinely clean file as empty", async () => {
+    const { harness, events } = reportingHarness();
+
+    harness.resolver.calls[0]?.settle([]);
+    await tick();
+
+    expect(events).toEqual([{ operation: "diagnostics", outcome: { status: "empty" } }]);
+  });
+
+  it("reports found diagnostics as ok", async () => {
+    const { harness, events } = reportingHarness();
+
+    harness.resolver.calls[0]?.settle([diagnostic()]);
+    await tick();
+
+    expect(events).toEqual([{ operation: "diagnostics", outcome: { status: "ok" } }]);
+  });
+
+  it("does not report an aborted analysis as a failure", async () => {
+    const { harness, events } = reportingHarness();
+    const aborted = new Error("The operation was aborted.");
+    aborted.name = "AbortError";
+
+    harness.resolver.calls[0]?.fail(aborted);
+    await tick();
+
+    expect(events).toEqual([{ operation: "diagnostics", outcome: { status: "cancelled" } }]);
   });
 });
 

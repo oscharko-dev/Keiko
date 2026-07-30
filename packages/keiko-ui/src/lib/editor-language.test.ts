@@ -212,3 +212,61 @@ describe("mapWireToEditorSignatureHelpResponse", () => {
     expect(response.activeParameter).toBe(0);
   });
 });
+
+// Regression pin (Editor P1, uniform silent failure): this seam used to DROP the wire `truncated`
+// flag on purpose, which made a capped result pixel-identical to a complete one — the editor then
+// presented a partial list as the whole answer. Every capped surface must carry the flag through so
+// the editor's outcome seam can classify it as `capped` and the status bar can label it.
+describe("server result caps reach the editor contract", () => {
+  it("threads truncated for every capped language surface", () => {
+    expect(
+      mapWireToEditorDiagnosticsResponse(REQUEST, { diagnostics: [], truncated: true }).truncated,
+    ).toBe(true);
+    expect(
+      mapWireToEditorSymbolsResponse(REQUEST, { symbols: [], truncated: true }).truncated,
+    ).toBe(true);
+    expect(
+      mapWireToEditorFormattingResponse(REQUEST, { edits: [], truncated: true }).truncated,
+    ).toBe(true);
+    expect(
+      mapWireToEditorDefinitionResponse(REQUEST, { locations: [], truncated: true }).truncated,
+    ).toBe(true);
+    expect(
+      mapWireToEditorReferencesResponse(REQUEST, {
+        locations: [],
+        includesDeclaration: true,
+        truncated: true,
+      }).truncated,
+    ).toBe(true);
+    expect(
+      mapWireToEditorCodeActionsResponse(REQUEST, {
+        actions: [],
+        truncated: true,
+        returnedCount: 0,
+        totalCount: 5,
+      }).truncated,
+    ).toBe(true);
+    expect(
+      mapWireToEditorSignatureHelpResponse(REQUEST, {
+        signatures: [],
+        activeSignature: null,
+        activeParameter: null,
+        truncated: true,
+        returnedCount: 0,
+        totalCount: 3,
+      }).truncated,
+    ).toBe(true);
+    expect(
+      mapWireToEditorInlayHintsResponse(REQUEST, { hints: [], truncated: true }).truncated,
+    ).toBe(true);
+    expect(
+      mapWireToEditorCallHierarchyResponse(REQUEST, { roots: [], truncated: true }).truncated,
+    ).toBe(true);
+  });
+
+  it("reports an uncapped result as not truncated", () => {
+    expect(
+      mapWireToEditorSymbolsResponse(REQUEST, { symbols: [], truncated: false }).truncated,
+    ).toBe(false);
+  });
+});

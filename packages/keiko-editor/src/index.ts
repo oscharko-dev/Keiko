@@ -704,6 +704,7 @@ export type {
 export { deriveEditorStatusBar, editorLanguageLabel } from "./components/status-bar.js";
 export type {
   EditorDiagnosticsSummary,
+  EditorStatusLanguageIntelligence,
   EditorStatusLanguageService,
   EditorStatusTone,
   EditorStatusRun,
@@ -711,6 +712,31 @@ export type {
   EditorStatusField,
   EditorStatusBarViewModel,
 } from "./components/status-bar.js";
+export {
+  EDITOR_LANGUAGE_OPERATIONS,
+  EMPTY_LANGUAGE_INTELLIGENCE_STATE,
+  classifyLanguageFailure,
+  classifyResultKind,
+  isCancellation,
+  languageIntelligenceNotice,
+  outcomeForError,
+  reduceLanguageIntelligence,
+  runLanguageBridgeCall,
+  summarizeLanguageIntelligence,
+} from "./components/language-intelligence.js";
+export type {
+  EditorLanguageFailureKind,
+  EditorLanguageIntelligenceEvent,
+  EditorLanguageIntelligenceNotice,
+  EditorLanguageIntelligenceReporter,
+  EditorLanguageIntelligenceState,
+  EditorLanguageIntelligenceSummary,
+  EditorLanguageOperation,
+  EditorLanguageOutcome,
+  EditorLanguageResultKind,
+  EditorLanguageStatusByOperation,
+  LanguageBridgeCall,
+} from "./components/language-intelligence.js";
 export { EditorStatusBar } from "./components/EditorStatusBar.js";
 export type { EditorStatusBarProps } from "./components/EditorStatusBar.js";
 export {

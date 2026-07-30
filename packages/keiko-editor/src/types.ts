@@ -228,7 +228,18 @@ export interface EditorCompletionProvenance {
   readonly degradeReason?: CompletionDegradeReason | undefined;
 }
 
-export interface EditorCompletionResponse {
+/**
+ * True when the host dropped results to honour a server-side cap, so the list is partial. Every
+ * language-intelligence response carries it because a capped result that renders identically to a
+ * complete one is a silent lie: the editor surface labels it through the shared outcome seam
+ * (`components/language-intelligence.ts`). Optional so a host that cannot know stays honest by
+ * omission rather than by asserting `false`.
+ */
+interface EditorResultCap {
+  readonly truncated?: boolean | undefined;
+}
+
+export interface EditorCompletionResponse extends EditorResultCap {
   readonly request: EditorRequestIdentity;
   readonly items: readonly EditorCompletionItem[];
   readonly isIncomplete: boolean;
@@ -342,7 +353,7 @@ export interface EditorDiagnosticsQuery {
   readonly documentText: string;
 }
 
-export interface EditorDiagnosticsResponse {
+export interface EditorDiagnosticsResponse extends EditorResultCap {
   readonly request: EditorRequestIdentity;
   readonly diagnostics: readonly EditorDiagnostic[];
 }
@@ -427,7 +438,7 @@ export interface EditorSymbolsQuery {
   readonly documentText: string;
 }
 
-export interface EditorSymbolsResponse {
+export interface EditorSymbolsResponse extends EditorResultCap {
   readonly request: EditorRequestIdentity;
   readonly symbols: readonly EditorDocumentSymbol[];
 }
@@ -456,7 +467,7 @@ export interface EditorFormattingQuery {
 }
 
 /** The reviewable reformatting edits the editor applies on an explicit "format document" command. */
-export interface EditorFormattingResponse {
+export interface EditorFormattingResponse extends EditorResultCap {
   readonly request: EditorRequestIdentity;
   readonly edits: readonly EditorTextEdit[];
 }
@@ -484,7 +495,7 @@ export interface EditorDefinitionQuery {
   readonly documentText: string;
 }
 
-export interface EditorDefinitionResponse {
+export interface EditorDefinitionResponse extends EditorResultCap {
   readonly request: EditorRequestIdentity;
   readonly locations: readonly EditorLocation[];
 }
@@ -507,7 +518,7 @@ export interface EditorReferencesQuery {
   readonly documentText: string;
 }
 
-export interface EditorReferencesResponse {
+export interface EditorReferencesResponse extends EditorResultCap {
   readonly request: EditorRequestIdentity;
   readonly locations: readonly EditorLocation[];
   readonly includesDeclaration: boolean;
@@ -540,7 +551,7 @@ export interface EditorCodeActionsQuery {
   readonly documentText: string;
 }
 
-export interface EditorCodeActionsResponse {
+export interface EditorCodeActionsResponse extends EditorResultCap {
   readonly request: EditorRequestIdentity;
   readonly actions: readonly EditorCodeAction[];
 }
@@ -573,7 +584,7 @@ export interface EditorSignatureHelpQuery {
   readonly documentText: string;
 }
 
-export interface EditorSignatureHelpResponse {
+export interface EditorSignatureHelpResponse extends EditorResultCap {
   readonly request: EditorRequestIdentity;
   readonly signatures: readonly EditorSignatureInformation[];
   readonly activeSignature: number | null;
