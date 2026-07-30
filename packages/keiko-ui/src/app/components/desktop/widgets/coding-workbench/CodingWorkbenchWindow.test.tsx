@@ -22,6 +22,7 @@ const questionsHookMock = vi.hoisted(() => vi.fn());
 const activityHookMock = vi.hoisted(() => vi.fn());
 const researchHookMock = vi.hoisted(() => vi.fn());
 const autonomyHookMock = vi.hoisted(() => vi.fn());
+const editorBridgeHookMock = vi.hoisted(() => vi.fn());
 const chatCatalogMock = vi.hoisted(() => ({
   activeProject: undefined as ProjectWithAvailability | undefined,
   projects: [] as ProjectWithAvailability[],
@@ -45,6 +46,10 @@ vi.mock("@/lib/useCodingWorkbenchResearch", () => ({
 
 vi.mock("../../hooks/useAutonomyModePolicy", () => ({
   useAutonomyModePolicy: autonomyHookMock,
+}));
+
+vi.mock("@/lib/useCodingWorkbenchEditorBridge", () => ({
+  useCodingWorkbenchEditorBridge: editorBridgeHookMock,
 }));
 
 vi.mock("../../context/ChatSessionContext", async (importOriginal) => {
@@ -192,6 +197,13 @@ describe("CodingWorkbenchWindow", () => {
     questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
     activityHookMock.mockReturnValue(IDLE_ACTIVITY);
     researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null });
+    editorBridgeHookMock.mockReset();
+    editorBridgeHookMock.mockReturnValue({
+      pendingReview: null,
+      approve: vi.fn(),
+      deny: vi.fn(),
+      retry: vi.fn(),
+    });
     autonomyHookMock.mockReturnValue({
       requestedMode: "supervised-coding",
       effectiveMode: "supervised-coding",
@@ -497,6 +509,53 @@ describe("CodingWorkbenchWindow", () => {
 
     await user.click(screen.getByRole("button", { name: "Acknowledge recovery" }));
     expect(liveActions.acknowledgeRecovery).toHaveBeenCalledOnce();
+  });
+
+  // 0.3.0 release audit: `RuntimeControls` rendered nothing for a paused run, and these two
+  // buttons are the ONLY call sites of `actions.stop` and `actions.takeover` in the whole UI — so
+  // a paused run offered no way to end it at all, while the server admits stop and takeover from
+  // `paused`. Pausing must not remove the operator's exits.
+  it("keeps stop and takeover reachable while a run is paused", async () => {
+    const user = userEvent.setup();
+    const liveActions = renderWorkbench(
+      liveState({
+        canStart: false,
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "paused", runId: "run-1" }),
+        },
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Stop run" }));
+    expect(liveActions.stop).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Take over manually" }));
+    expect(liveActions.takeover).toHaveBeenCalledOnce();
+  });
+
+  // Same root cause, higher consequence. `activeRunState` also drives the headless editor-bridge
+  // lease and the autonomy auto-sync: while paused the bridge must stay leased — a changeset
+  // review already pending when the operator pauses can only be delivered over a live lease, so
+  // tearing it down loses the operator's Approve/Deny — and the requested mode must not be
+  // re-synced under a run whose minted envelope can no longer change.
+  it("keeps the editor bridge leased and the minted mode untouched while a run is paused", () => {
+    const liveActions = renderWorkbench(
+      liveState({
+        requestedMode: "governed-assist",
+        canStart: false,
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "paused", runId: "run-1" }),
+        },
+      }),
+    );
+
+    expect(editorBridgeHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-1", active: true }),
+    );
+    expect(liveActions.setRequestedMode).not.toHaveBeenCalled();
   });
 
   it("announces an unavailable authentication setup plan in the single live status", () => {

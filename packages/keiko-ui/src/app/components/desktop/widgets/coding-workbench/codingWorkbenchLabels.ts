@@ -160,12 +160,23 @@ function authenticationAnnouncement(
   return t("codingWorkbench.announcement.authenticationNotChecked");
 }
 
+/**
+ * True while a run is still live enough for the operator's end controls to reach it — exactly the
+ * states from which the server's transition table still admits `taken-over` or `cancelled`
+ * (pinned against that table in codingWorkbenchLabels.test.ts).
+ *
+ * `paused` belongs here. The server accepts stop and takeover from a paused run, the run keeps the
+ * Authority Envelope minted for it, and its headless editor-bridge session must stay leased: a
+ * changeset review that is already pending when the operator pauses can only be delivered over a
+ * live bridge lease, so dropping `paused` silently discarded the operator's Approve/Deny.
+ */
 export function activeRunState(state: CodingWorkbenchRuntimeStateName | undefined): boolean {
   return (
     state === "starting" ||
     state === "ready" ||
     state === "running" ||
     state === "awaiting-approval" ||
+    state === "paused" ||
     state === "stopping"
   );
 }

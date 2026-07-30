@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  CODING_WORKBENCH_RUNTIME_STATE_NAMES,
   CODING_WORKBENCH_SCHEMA_VERSION,
+  isLegalCodingWorkbenchRuntimeTransition,
   type CodingWorkbenchCodexSubscriptionProfile,
   type CodingWorkbenchRuntimeResearchGrant,
   type CodingWorkbenchRuntimeSnapshot,
@@ -13,6 +15,7 @@ import {
 } from "@/lib/coding-workbench-live-state";
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import {
+  activeRunState,
   eventDetail,
   lifecycleAnnouncement,
   modelSourceLabel,
@@ -247,5 +250,27 @@ describe("visibleAlert mutation failures (F-09a)", () => {
     const alert = visibleAlert(failedMutationState("ui-correlation-9"), tv, false);
     expect(alert).toContain("codingWorkbench.alert.actionFailedSupportId");
     expect(alert).toContain("ui-correlation-9");
+  });
+});
+
+// 0.3.0 release audit: `activeRunState` gates the Stop and Takeover controls, the live-run dot,
+// the mode auto-sync suppression, and — decisively — the headless editor-bridge lease. It excluded
+// `paused`, so pausing a run hid both end controls the server still accepts and tore down the
+// bridge session, leaving an already-pending changeset review undeliverable. The expectation is
+// derived from the SERVER's own transition table, never restated here: a run is active exactly
+// while the state machine still admits an operator-driven end.
+describe("activeRunState", () => {
+  it.each(CODING_WORKBENCH_RUNTIME_STATE_NAMES)(
+    "treats %s as active exactly when the run can still be ended by the operator",
+    (state) => {
+      const endable =
+        isLegalCodingWorkbenchRuntimeTransition(state, "taken-over") ||
+        isLegalCodingWorkbenchRuntimeTransition(state, "cancelled");
+      expect(activeRunState(state)).toBe(endable);
+    },
+  );
+
+  it("treats an absent run state as inactive", () => {
+    expect(activeRunState(undefined)).toBe(false);
   });
 });

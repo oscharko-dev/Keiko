@@ -535,16 +535,23 @@ describe("coding runtime routes", () => {
     ).toBeUndefined();
   });
 
-  // #2386 regression: the server-confirmed effective mode is anchored to the LIVE run through the
-  // mode-change gate. Requesting a wider mode while a supervised run is live must keep confirming
-  // the run's own posture; narrowing is confirmed only from the paused (or idle) state.
-  it("anchors the confirmed effective mode to the live run through the mode-change gate", () => {
-    const liveStatus = (state: "running" | "paused"): unknown => ({
+  // #2386 regression, strengthened by the 0.3.0 release audit: the server-confirmed effective mode
+  // is anchored to the LIVE run. Requesting a wider mode while a supervised run is live must keep
+  // confirming the run's own posture — the original invariant, unchanged.
+  //
+  // The audit found the NARROWING direction lies in exactly the same way. The envelope's
+  // effectiveMode is fixed at mint (runtimeAuthorityService.mintConfirmedStartForRun) and nothing
+  // re-mints it — `resume` only clears the manager's paused flag — so confirming `governed-assist`
+  // for a paused run minted as `supervised-coding` told the operator the run holds LESS authority
+  // than the tool facade actually enforces. Both directions are now pinned for every state in
+  // which a run still holds a minted envelope.
+  it("anchors the confirmed effective mode to the live run's minted envelope", () => {
+    const liveStatus = (state: string): unknown => ({
       ...snapshot,
       state,
       requestedMode: "supervised-coding",
     });
-    const readiness = (state: "running" | "paused", requestedMode: string): unknown => {
+    const readiness = (state: string, requestedMode: string): unknown => {
       const result = handleCodingRuntimeReadiness(
         context("", {}, `/api/coding-workbench/runtime/readiness?requestedMode=${requestedMode}`),
         runtime({
@@ -556,12 +563,22 @@ describe("coding runtime routes", () => {
       return (result.body as { effectiveMode?: string }).effectiveMode;
     };
 
-    // Widening past the live run is never confirmed — not even while paused.
-    expect(readiness("paused", "autonomous-delivery")).toBe("supervised-coding");
-    expect(readiness("running", "autonomous-delivery")).toBe("supervised-coding");
-    // Any change while running is deferred to the run's posture; narrowing is confirmed from paused.
-    expect(readiness("running", "governed-assist")).toBe("supervised-coding");
-    expect(readiness("paused", "governed-assist")).toBe("governed-assist");
+    for (const state of [
+      "starting",
+      "ready",
+      "running",
+      "awaiting-approval",
+      "paused",
+      "stopping",
+    ]) {
+      // Widening past the live run is never confirmed — not even while paused.
+      expect(readiness(state, "autonomous-delivery")).toBe("supervised-coding");
+      // Neither is narrowing: the live envelope still grants supervised-coding.
+      expect(readiness(state, "governed-assist")).toBe("supervised-coding");
+    }
+    // A run holding no envelope confirms what the next mint will actually clamp the request to.
+    expect(readiness("recovery-required", "governed-assist")).toBe("governed-assist");
+    expect(readiness("recovery-required", "autonomous-delivery")).toBe("autonomous-delivery");
   });
 
   it("keeps readiness independently available when the runtime is absent and rejects malformed modes", () => {
