@@ -17,7 +17,10 @@ import {
   validatePortableAssetsRunSnapshot,
   writeGithubOutput,
 } from "../resolve-release-portable-assets.mjs";
-import { portableReleaseAuthorityFailures } from "../check-release-required-workflow-names.mjs";
+import {
+  envValue,
+  portableReleaseAuthorityFailures,
+} from "../check-release-required-workflow-names.mjs";
 import {
   redactedWindowsSigningError,
   validateAzureArtifactSigningConfig,
@@ -694,10 +697,15 @@ describe("Windows Artifact Signing protected configuration", () => {
 
   it("pins portable signing preflight to the exact release workflow authority", () => {
     expect(portableReleaseAuthorityFailures(releaseWorkflow, portableWorkflow)).toEqual([]);
+    // Derive the base branch from the production reader rather than restating it: a literal
+    // `release/0.x` here stops matching at the next release cut, which would turn the drift
+    // mutation below into a no-op and leave this pin green over a real contract drift.
+    const releaseBaseBranch = envValue(releaseWorkflow, "RELEASE_BASE_BRANCH");
+    expect(releaseBaseBranch).toMatch(/^release\/\d+\.\d+$/);
     expect(
       portableReleaseAuthorityFailures(
         releaseWorkflow,
-        portableWorkflow.replace("release/0.2", "release/drift"),
+        portableWorkflow.replace(releaseBaseBranch, "release/drift"),
       ),
     ).toEqual(["RELEASE_BASE_BRANCH"]);
     expect(

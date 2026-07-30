@@ -124,7 +124,11 @@ function allWorkflowJobNames() {
   return names;
 }
 
-function envValue(source, name) {
+// Exported as part of the release-authority seam so a sibling test file can derive the CURRENT
+// base branch instead of restating it as a literal. A hardcoded `release/0.x` in the test rots
+// silently at the next release cut: the drift `replace()` stops matching, the mutation becomes a
+// no-op, and the pin goes green over an undetected contract drift.
+export function envValue(source, name) {
   const match = source.match(new RegExp(String.raw`^\s*${name}:\s*(.+)$`, "m"));
   return match === null ? undefined : unquoteYamlScalar(match[1]);
 }

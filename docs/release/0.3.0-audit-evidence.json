@@ -1,0 +1,744 @@
+{
+  "schemaVersion": 1,
+  "auditIssue": "https://github.com/oscharko-dev/Keiko/issues/2802",
+  "targetVersion": "0.3.0",
+  "decision": "NO-GO",
+  "baseline": {
+    "branch": "dev",
+    "commit": "1c31357052a5d68500b9a3817541d821f197d2c6",
+    "packageVersion": "0.2.15",
+    "uncommittedChange": "active release-contract migration release/0.2 -> release/0.3 (no product code)"
+  },
+  "environment": {
+    "os": "darwin",
+    "osVersion": "26.5.2",
+    "arch": "arm64",
+    "node": "24.18.0",
+    "npm": "11.16.0",
+    "uiClient": "chromium (in-app browser)",
+    "serverOrigin": "loopback port 1986 (1983 occupied; documented fallback engaged)",
+    "codeSigningIdentities": 0,
+    "notaryProfile": false
+  },
+  "method": {
+    "surface": "real shipped UI via npm run dev:start",
+    "apiUse": "supplementary diagnosis only",
+    "modelGateway": {
+      "kind": "hermetic loopback stub, OpenAI-compatible",
+      "location": "session scratchpad, outside the repository",
+      "externalNetwork": false,
+      "realCredentialUsed": false,
+      "configuredVia": "the product's own first-run GUI",
+      "proves": [
+        "transport",
+        "model discovery",
+        "streaming",
+        "history accumulation",
+        "error surfacing",
+        "recovery",
+        "readiness projections",
+        "UI paths"
+      ],
+      "doesNotProve": [
+        "answer quality",
+        "grounding faithfulness",
+        "abstention correctness",
+        "citation correctness",
+        "retrieval ranking",
+        "judge behaviour",
+        "response_format structured output",
+        "real dictation media negotiation",
+        "Realtime / Digital Twin media negotiation",
+        "provider-specific capability negotiation"
+      ]
+    }
+  },
+  "gates": [
+    {
+      "id": "typecheck",
+      "command": "npm run typecheck",
+      "result": "PASS",
+      "scope": "baseline+change",
+      "note": "compiler 7.0.2; API 6.0.3; package-graph aligned"
+    },
+    {
+      "id": "lint",
+      "command": "npm run lint",
+      "result": "PASS",
+      "scope": "baseline+change",
+      "note": "root + keiko-ui, --max-warnings=0"
+    },
+    {
+      "id": "format",
+      "command": "npm run format:check",
+      "result": "PASS",
+      "scope": "baseline+change"
+    },
+    {
+      "id": "arch",
+      "command": "npm run arch:check",
+      "result": "PASS",
+      "scope": "baseline+change",
+      "note": "ADR-0019 import-specifier policies passed"
+    },
+    {
+      "id": "arch-negative",
+      "command": "npm run arch:check:negative",
+      "result": "PASS",
+      "scope": "baseline"
+    },
+    {
+      "id": "version-consistency",
+      "command": "npm run check:version-consistency",
+      "result": "PASS",
+      "scope": "baseline",
+      "note": "all workspaces and KEIKO_*_VERSION report 0.2.15"
+    },
+    {
+      "id": "release-required-workflows",
+      "command": "npm run check:release-required-workflows",
+      "result": "PASS",
+      "scope": "baseline+change",
+      "note": "6 release checks match job names and portable authority"
+    },
+    {
+      "id": "runtime-toolchain",
+      "command": "npm run check:runtime-toolchain",
+      "result": "PASS",
+      "scope": "baseline",
+      "note": "Node 24.18.0; npm 11.16.0; 25 workspaces"
+    },
+    {
+      "id": "portable-approvals",
+      "command": "npm run check:portable-approvals",
+      "result": "PASS",
+      "scope": "baseline",
+      "note": "node 24.18.0; sidecar opencode-compatible 1.17.17"
+    },
+    {
+      "id": "portable-manifest",
+      "command": "npm run check:portable-manifest",
+      "result": "PASS",
+      "scope": "baseline",
+      "note": "1 manifest"
+    },
+    {
+      "id": "portable-manual-review",
+      "command": "npm run portable:manual-review",
+      "result": "PASS",
+      "scope": "baseline",
+      "note": "staged .portable-runtime/manual-review-0.2.15-1c31357; UI static JS ES2019-compatible across 141 files; 42 CSP hashes"
+    },
+    {
+      "id": "native-macos",
+      "command": "npm run check:native:macos",
+      "result": "PASS",
+      "scope": "baseline",
+      "note": "secure-workspace-read protocol PASS; sequential=1000 p95=1.4ms"
+    },
+    {
+      "id": "targeted-release-tests",
+      "command": "vitest run scripts/__tests__/{release-portable-assets-workflow,verify-release-required-checks,portable-runtime-release-docs}.test.mjs",
+      "result": "PASS",
+      "scope": "change",
+      "note": "3 files / 53 tests"
+    },
+    {
+      "id": "gates-sonar",
+      "command": "npm run gates:sonar",
+      "result": "PASS",
+      "scope": "change",
+      "note": "local-sonar: PASS - no unresolved finding on the files you changed. First attempt failed provisioning the local container credential (HTTP 401); the stale token cache and mismatched sonar-data volume were removed per the tool's own documented remediation and the gate re-run to completion"
+    }
+  ],
+  "reachableSurface": {
+    "leftRail": [
+      "New chat",
+      "Chat History",
+      "MemoriaViva",
+      "Quality Intelligence",
+      "Prompt Enhancer",
+      "Coding Workbench",
+      "Git",
+      "Editor",
+      "Local Knowledge",
+      "Figma Snapshot",
+      "Light mode",
+      "Settings"
+    ],
+    "topBar": [
+      "Workspace context",
+      "Open quick access",
+      "Tile all windows",
+      "Split front windows",
+      "Cascade windows"
+    ],
+    "workspaceSurface": [
+      "Open a new window",
+      "Zoom out",
+      "Fit workspace to windows",
+      "100% reset",
+      "Zoom in",
+      "New window"
+    ],
+    "statusBar": ["window count"],
+    "newWindowPalette": [
+      "Chat",
+      "Knowledge Pod",
+      "Files",
+      "Editor",
+      "Agents",
+      "Documentation Browser"
+    ],
+    "settingsTabs": ["Models", "General", "Editor", "Languages", "Debugging", "Security"],
+    "registeredWindowTypes": 45,
+    "typeOrderEntries": 25,
+    "paletteCards": 6,
+    "note": "handoff expected a Workspace Trust settings tab; workspaceTrust is its own window type, not a tab"
+  },
+  "journeys": [
+    {
+      "id": "P1-01",
+      "phase": "1",
+      "title": "First start on fresh state",
+      "result": "PASS",
+      "observed": "blocking aria-modal gateway setup with accessible name and description wired"
+    },
+    {
+      "id": "P1-02",
+      "phase": "1",
+      "title": "Port 1983 occupied fallback",
+      "result": "PASS",
+      "observed": "fell back to 1986 and printed it"
+    },
+    {
+      "id": "P1-03",
+      "phase": "1",
+      "title": "Credential paste with surrounding whitespace",
+      "result": "PASS",
+      "observed": "accepted; re-verifies PR #2834 through the UI"
+    },
+    {
+      "id": "P1-04",
+      "phase": "1",
+      "title": "Gateway configured and reachable",
+      "result": "PASS",
+      "observed": "discovery via authenticated /model/info; Settings: 3 models / 2 chat"
+    },
+    {
+      "id": "P1-05",
+      "phase": "1",
+      "title": "Visible product version",
+      "result": "PASS",
+      "observed": "footer reads 'Keiko | 0.2.15'; must become 0.3.0 in the RC"
+    },
+    {
+      "id": "P1-06",
+      "phase": "1",
+      "title": "Focus containment in first-run modal",
+      "result": "PASS",
+      "observed": "24 real Tab presses, 0 escapes outside the dialog"
+    },
+    {
+      "id": "P1-07",
+      "phase": "1",
+      "title": "First-run modal dismissal",
+      "result": "BY-DESIGN",
+      "observed": "not dismissible by Escape or any control"
+    },
+    {
+      "id": "P1-08",
+      "phase": "1",
+      "title": "Readiness truth Settings vs Chat",
+      "result": "PASS",
+      "observed": "2 chat models in both; embedding model excluded from chat"
+    },
+    {
+      "id": "P1-09",
+      "phase": "1",
+      "title": "Readiness truth Settings vs Coding Workbench",
+      "result": "FAIL",
+      "finding": "F-01"
+    },
+    {
+      "id": "P1-10",
+      "phase": "1",
+      "title": "Unreachable gateway live probe",
+      "result": "PASS",
+      "observed": "'Not verified', timestamped, config explicitly unchanged, Copy report offered"
+    },
+    {
+      "id": "P1-11",
+      "phase": "1",
+      "title": "Unreachable gateway top-level indicator",
+      "result": "FAIL",
+      "finding": "F-02"
+    },
+    {
+      "id": "P1-12",
+      "phase": "1",
+      "title": "Secrets never returned to the browser",
+      "result": "PASS",
+      "observed": "no credential in any response, UI error or DOM"
+    },
+    {
+      "id": "2A-01",
+      "phase": "2A",
+      "title": "Create and name a chat",
+      "result": "PASS"
+    },
+    {
+      "id": "2A-02",
+      "phase": "2A",
+      "title": "Send and receive a streamed answer",
+      "result": "PASS"
+    },
+    {
+      "id": "2A-03",
+      "phase": "2A",
+      "title": "Multi-turn history reaches the model",
+      "result": "PASS",
+      "observed": "model-visible history grew 2/4/6/8 across four turns"
+    },
+    {
+      "id": "2A-04",
+      "phase": "2A",
+      "title": "Exactly one answer per user message",
+      "result": "PASS",
+      "observed": "4 user messages -> 4 assistant articles"
+    },
+    {
+      "id": "2A-05",
+      "phase": "2A",
+      "title": "Model calls per turn",
+      "result": "PASS",
+      "observed": "2 per turn: answer + documented memory-salience capture; cannot throw into the chat path"
+    },
+    {
+      "id": "2A-06",
+      "phase": "2A",
+      "title": "Model selector truth",
+      "result": "PASS"
+    },
+    {
+      "id": "2A-07",
+      "phase": "2A",
+      "title": "Gateway failure surfaces honestly",
+      "result": "PASS",
+      "observed": "role=alert GATEWAY_TRANSPORT; no fake success; no persisted assistant turn"
+    },
+    {
+      "id": "2A-08",
+      "phase": "2A",
+      "title": "Recovery after gateway returns",
+      "result": "PASS",
+      "observed": "next send succeeded; alert cleared; history not poisoned"
+    },
+    {
+      "id": "2A-09",
+      "phase": "2A",
+      "title": "Attachment capability honesty",
+      "result": "PASS"
+    },
+    {
+      "id": "2A-10",
+      "phase": "2A",
+      "title": "Copy and Regenerate affordances",
+      "result": "PASS"
+    }
+  ],
+  "journeyTotals": {
+    "passed": 20,
+    "byDesign": 1,
+    "failed": 2,
+    "notStarted": "phases 2B-2G, 3, 4"
+  },
+  "findings": [
+    {
+      "id": "F-01",
+      "severity": "P0",
+      "title": "Coding Workbench renders green readiness over an unavailable gateway",
+      "evidence": "GET /api/coding-sidecar/gateway/profile => {status:unavailable, reason:no-tool-calling} while Settings reports 'tools yes' for both chat models and the Workbench header reports 'Ready to start' / 'Model source: Keiko Gateway'",
+      "declaredUncertainty": "whether a production gateway also lands on no-tool-calling needs a real credential; the display defect is independent of which projection is correct",
+      "reproduced": "live UI + server projection"
+    },
+    {
+      "id": "F-02",
+      "severity": "P1",
+      "title": "A failed readiness probe never changes the top-level gateway indicator",
+      "evidence": "with the provider stopped, Settings still renders 'Gateway connected / 3 models / 2 chat' with a green dot in the same view where the live probe reports 'Not verified' and Chat fails with GATEWAY_TRANSPORT",
+      "reproduced": "live UI"
+    },
+    {
+      "id": "F-03",
+      "severity": "P0",
+      "title": "release/0.2 protection requires two contexts no workflow can emit",
+      "evidence": "release/0.2 required contexts include 'actionlint' and 'Verify pinned action SHAs'; since ADR-0159 both are step names inside the single 'workflow hygiene' job (.github/workflows/workflow-hygiene.yml:86)",
+      "requiredAction": "set release/0.3 protection to emitted context names; do not clone release/0.2 protection",
+      "needsRepositoryAdmin": true
+    },
+    {
+      "id": "F-04",
+      "severity": "P0",
+      "title": "Release-impact catalog has no 0.3.0 entry",
+      "evidence": "portable:stage and check:release-impact fail closed once the root version becomes 0.3.0; an existing entry uses a non-GitHub approvalReference that check:release-impact:publish rejects",
+      "requiredAction": "append a reviewed 0.3.0 entry (append-only) and repair the approvalReference"
+    },
+    {
+      "id": "F-05",
+      "severity": "P1",
+      "title": "12 of 45 window types have no reachable entry point and TYPE_ORDER is not the shipped palette",
+      "evidence": "45 declared types, 25 in TYPE_ORDER, 6 palette cards; order tests assert against TYPE_ORDER; e2e suites seed unreachable windows into localStorage; governedPullRequest and governedMerge exist both as unreachable types and as panes of the reachable Git window"
+    },
+    {
+      "id": "F-06",
+      "severity": "P1",
+      "title": "Text / dictation / Realtime parity not established",
+      "evidence": "static analysis: Realtime turns drop pending attachments and extracted document context; a spoken turn cannot be stopped and new speech hard-cancels the in-flight answer; voice resolves the target model differently from the typed path",
+      "reproduced": "static only; needs a real media-capable deployment",
+      "note": "handoff 14.2 makes unproven voice/Realtime parity a standalone No-Go"
+    },
+    {
+      "id": "F-07",
+      "severity": "P0",
+      "title": "Release-contract drift pin would have gone green over a real drift",
+      "status": "FIXED IN THIS AUDIT",
+      "evidence": "scripts/__tests__/release-portable-assets-workflow.test.mjs:700 mutated the literal 'release/0.2'; after migrating the workflows that literal no longer occurs, so String.replace returns the input unchanged and the pin asserts drift detection against an unmutated file",
+      "fix": "derive the base branch from the production reader (envValue) per AGENTS.md section 7",
+      "provenBy": "passes pre-migration, passes post-migration, fails when the two workflows genuinely disagree"
+    }
+  ],
+  "releaseContractMigration": {
+    "performed": true,
+    "pushed": false,
+    "files": [
+      {
+        "path": ".github/workflows/release.yml",
+        "line": 51,
+        "change": "RELEASE_BASE_BRANCH: release/0.3",
+        "role": "authority value"
+      },
+      {
+        "path": ".github/workflows/portable-assets.yml",
+        "line": 22,
+        "change": "RELEASE_BASE_BRANCH: release/0.3",
+        "role": "must match authority byte-for-byte"
+      },
+      {
+        "path": "scripts/verify-release-required-checks.mjs",
+        "line": 9,
+        "change": "defaultBaseBranch = \"release/0.3\""
+      },
+      {
+        "path": "scripts/check-release-required-workflow-names.mjs",
+        "change": "export envValue as a documented test seam"
+      },
+      {
+        "path": "scripts/__tests__/release-portable-assets-workflow.test.mjs",
+        "change": "pin derives the base branch from the production reader"
+      },
+      {
+        "path": "docs/release/release-publish-workflow.md",
+        "change": "operator steps and prerelease examples moved to the 0.3 line"
+      }
+    ],
+    "ciYmlChangeRequired": false,
+    "ciYmlReason": "all three AGENTS.md places already allowlist release branches by glob: 'release/**' in push and pull_request triggers, and refs/heads/release/*: plus *:release/* in the protected-branch-gate case at .github/workflows/ci.yml:71. The three-places rule applies to enumerated feat/ branches.",
+    "keikoForQuality": "pull_request restricted to dev (keiko-for-quality-action.yml:18); release/0.2 protection does not require it, so the scoping is consistent and not a release blocker",
+    "residualActiveReferences": 0,
+    "historicalEvidenceUntouched": true
+  },
+  "versionBump": {
+    "performed": false,
+    "reason": "handoff section 10 permits the bump only after a green functional baseline, which cannot be certified on this host (B-1, B-2, B-3, B-4)",
+    "mappedSurface": {
+      "packageJsonVersionFields": 26,
+      "internalDependencyPins": 124,
+      "exportedVersionConstants": 14,
+      "productVersionConstant": "KEIKO_PRODUCT_VERSION",
+      "hardcodedLiteralsInTests": 17,
+      "lockfileVersionLines": 151,
+      "releaseImpactEntryRequired": true,
+      "otherRisks": [
+        "macOS system-extension Info.plist version fixture restates the producer and will fail",
+        "hardcoded product version reported to the Codex sidecar is currently ungated",
+        "bumping the minor resets the SonarCloud leak period, enlarging the new-code set"
+      ]
+    }
+  },
+  "externalBlockers": [
+    {
+      "id": "B-1",
+      "blocker": "no model-gateway credential",
+      "impact": "answer quality, grounding faithfulness, abstention, citations, retrieval ranking, judge behaviour and structured output remain unaudited"
+    },
+    {
+      "id": "B-2",
+      "blocker": "no Windows x64 host",
+      "impact": "keiko-windows-x64.zip cannot be staged, signed, installed or fresh-machine qualified; no MSVC path for the secure-read helper or the Job Object supervisor"
+    },
+    {
+      "id": "B-3",
+      "blocker": "no Developer ID identity and no notary profile",
+      "evidence": "security find-identity -v -p codesigning reported 0 valid identities",
+      "impact": "macOS signing, notarization and stapling cannot be produced"
+    },
+    {
+      "id": "B-4",
+      "blocker": "no Endpoint Security entitlement or activated system extension",
+      "impact": "macOS production qualification is structurally impossible; an honest No-Go, never grounds for an unsigned substitute"
+    },
+    {
+      "id": "B-5",
+      "blocker": "cannot stage macos-x64 on an arm64 host",
+      "evidence": "provision:usearch provisions only the host target key",
+      "impact": "keiko-macos-x64.zip cannot be produced here"
+    },
+    {
+      "id": "B-6",
+      "blocker": "repository admin required",
+      "impact": "release/0.3 does not exist and its required contexts must be set (F-03)"
+    },
+    {
+      "id": "B-7",
+      "blocker": "two entitlement-approved self-hosted Mac runners",
+      "impact": "portable release assembly cannot run; verify the fleet before tagging 0.3.0"
+    }
+  ],
+  "portableArtifacts": {
+    "required": ["keiko-windows-x64.zip", "keiko-macos-arm64.zip", "keiko-macos-x64.zip"],
+    "produced": [],
+    "stagingOnly": ".portable-runtime/manual-review-0.2.15-1c31357",
+    "bundledRuntimePins": {
+      "node": "24.18.0",
+      "opencodeCompatible": "1.17.17",
+      "opencodeTag": "v1.17.17",
+      "opencodeCommit": "474abdd7ee60f4b67476cfcef7e5311beff4a824"
+    },
+    "digestBoundApprovals": "PASS",
+    "freshMachineProof": false,
+    "signingProof": false,
+    "notarizationProof": false
+  },
+  "publication": {
+    "tag": null,
+    "portableRunId": null,
+    "releaseRunId": null,
+    "githubReleaseUrl": null,
+    "npmVersion": null,
+    "npmDistTag": null,
+    "postPublishVerified": false
+  },
+  "redaction": {
+    "secrets": false,
+    "credentials": false,
+    "prompts": false,
+    "modelResponses": false,
+    "repositoryContents": false,
+    "memoryContents": false,
+    "customerData": false
+  },
+  "realGatewayPhase": {
+    "gateway": "operator-supplied Azure AI Foundry via KEIKO_CONFIG_FILE + transient env credentials (documented env path; no secret typed into any UI field)",
+    "models": [
+      "gpt-5.4",
+      "Mistral-Large-3",
+      "text-embedding-3-large",
+      "keiko-stt",
+      "keiko-tts",
+      "keiko-realtime"
+    ],
+    "journeys": [
+      {
+        "id": "RG-01",
+        "title": "Start with existing configuration (env contract)",
+        "result": "PASS"
+      },
+      {
+        "id": "RG-02",
+        "title": "Voice affordances appear only with voice config",
+        "result": "PASS"
+      },
+      {
+        "id": "RG-03",
+        "title": "Chat round trip with real model",
+        "result": "PASS"
+      },
+      {
+        "id": "RG-04",
+        "title": "Coding sidecar profile with tool-calling model",
+        "result": "PASS",
+        "observed": "available, supportsToolCalling true, modelAlias gpt-5.4"
+      },
+      {
+        "id": "RG-05",
+        "title": "Window connection Chat-Files",
+        "result": "PASS"
+      },
+      {
+        "id": "RG-06",
+        "title": "Repository-grounded question",
+        "result": "PASS",
+        "observed": "engines range answered exactly; 12/32 files read; 6 uncertainty markers"
+      },
+      {
+        "id": "RG-07",
+        "title": "Faithfulness flags a mis-citation",
+        "result": "PASS",
+        "observed": "Needs review - 1 unsupported citation; redacted evidence link attached"
+      },
+      {
+        "id": "RG-08",
+        "title": "Citation opens pinned editor",
+        "result": "PASS"
+      },
+      {
+        "id": "RG-09",
+        "title": "Workspace Trust gate + server-confirmed trust",
+        "result": "PASS"
+      },
+      {
+        "id": "RG-10",
+        "title": "Grounding option disabled without folder scope",
+        "result": "PASS-UX-GAP"
+      },
+      {
+        "id": "RG-11",
+        "title": "Bind task workspace (honest stale-branch error, rebind ok)",
+        "result": "PASS"
+      },
+      {
+        "id": "RG-12",
+        "title": "Start coding run",
+        "result": "FAIL",
+        "finding": "F-09a"
+      },
+      {
+        "id": "RG-13",
+        "title": "Task-workspace read surface",
+        "result": "FAIL",
+        "finding": "F-08"
+      },
+      {
+        "id": "RG-14",
+        "title": "Layout restore after reload",
+        "result": "PASS"
+      },
+      {
+        "id": "RG-15",
+        "title": "Server truth after reload",
+        "result": "FAIL",
+        "finding": "F-09b"
+      },
+      {
+        "id": "RG-16",
+        "title": "Editor task-workspace loss; Check again does not recover",
+        "result": "FAIL",
+        "finding": "F-09b"
+      },
+      {
+        "id": "RG-17",
+        "title": "Git connect + status + structured diff",
+        "result": "PASS",
+        "observed": "8 changes correct M/A; diff shows the section-6 hunk"
+      },
+      {
+        "id": "RG-18",
+        "title": "Files header count vs Git truth",
+        "result": "FAIL-MINOR",
+        "finding": "F-12"
+      },
+      {
+        "id": "RG-19",
+        "title": "MemoriaViva surface + product-wide autonomy default",
+        "result": "PASS"
+      },
+      {
+        "id": "RG-20",
+        "title": "Memory health scan + honest rate limit",
+        "result": "PASS",
+        "note": "0 findings; whether provider wiring is in scan scope is an open question"
+      },
+      {
+        "id": "RG-21",
+        "title": "Quality Intelligence real run",
+        "result": "PASS",
+        "observed": "Succeeded; 2 test cases from 2 requirements; coverage 100%; export approved-only; response_format worked"
+      },
+      {
+        "id": "RG-22",
+        "title": "Prompt Enhancer deterministic run",
+        "result": "PASS",
+        "observed": "Enhanced prompt + grounding plan + candidate scorecards"
+      },
+      {
+        "id": "RG-23",
+        "title": "Settings tabs sweep",
+        "result": "PARTIAL",
+        "observed": "Models/General/Security load and are truthful; Editor/Languages/Debugging fail to load status (F-09b family), Debugging fails closed with honest wording"
+      },
+      {
+        "id": "RG-24",
+        "title": "Dictation with denied microphone",
+        "result": "PASS",
+        "observed": "honest actionable denial with Try again / Dismiss"
+      }
+    ],
+    "newFindings": [
+      {
+        "id": "F-08",
+        "severity": "P0",
+        "title": "Managed task workspaces created inside the security deny surface (.keiko); product denies its own workspace; git status reason 'unknown'"
+      },
+      {
+        "id": "F-09a",
+        "severity": "P0",
+        "title": "Start coding run fails 403 authority-resolution-failed with no visible feedback at the point of action; an aria live alert exists but the visible window shows no change"
+      },
+      {
+        "id": "F-09b",
+        "severity": "P1",
+        "title": "Client-persisted binding outlives server authority after reload: Workbench claims bound, Editor 'Task workspace unavailable' with non-working Check again, Git demands manual reconnect, three Settings tabs fail to load status"
+      },
+      {
+        "id": "F-10",
+        "severity": "P0-publish",
+        "title": "check:release-impact:publish requires an APPROVED PR review that ADR-0135 delivery structurally never produces; entry 17 approvalReference issue:#2531 rejected; no approval fabricated; 0.3.0 draft entry left for the release owner"
+      },
+      {
+        "id": "F-11",
+        "severity": "P1",
+        "title": "memory.salience.capture fails GATEWAY_PROVIDER_ERROR on every turn against the real gateway; memory semantic scores disabled reason no-embeddings despite configured embedding model"
+      },
+      {
+        "id": "F-12",
+        "severity": "P2",
+        "title": "Files header change count (45) vs Git truth (8); disabled grounding option unexplained; coding.runtime.discover ENOENT diagnostic at every dev-lane boot"
+      }
+    ],
+    "fixDelegation": "F-01/F-08/F-09a/F-09b with a worktree-isolated agent (regression-test-first, full gates); F-04 investigation complete (see F-10)",
+    "fixVerification": {
+      "fixedBy": "worktree-isolated fix agent; changes ported onto the audit branch and re-verified through the live UI",
+      "verified": [
+        {
+          "finding": "F-01",
+          "uiEvidence": "Workbench header renders 'Not ready to start' while no task workspace is bound; predicate ladder now quantifies over chat capabilities only (was: any configured embedding/speech capability triggered 'no-tool-calling')"
+        },
+        {
+          "finding": "F-09a",
+          "uiEvidence": "failed start now renders a visible alert: 'The requested runtime action failed (CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED). Review the live state and retry. Support id: <uuid>' - machine code plus correlation id"
+        },
+        {
+          "finding": "F-09b",
+          "uiEvidence": "after a fresh page load the persisted binding is re-verified server-side (restoreVerifiedActiveTaskWorkspace) and the workbench shows the task workspace as active again"
+        }
+      ],
+      "reclassified": {
+        "RG-12": "the 403 on run start with an unpaired browser session is CORRECT fail-closed authority per ADR-0141 (coding runs require a launcher-attested paired session; serverPrincipal is empty otherwise). Residual defect: the readiness narration ('Workspace ready. Runtime ready.', header 'Ready to start') omits the pairing dimension - a paired-state readiness input is required (matches the F-08 remediation plan)."
+      },
+      "f08Deepened": "the narrowly-scoped managed-root allow already exists (gitRoutes resolveManagedRepositoryRequest, files.ts managed branch) but requires a live launcher-attested app session; the session registry is process-memory with 30-min idle expiry, so after restart/expiry every managed read fails closed with content-free reason 'unknown' (intentional, ADR-0141 D6). Additionally a repository located under ANY deny-listed segment (e.g. .claude/worktrees/...) cannot be bound at all - observed live.",
+      "f11RootCause": "memory-salience sends response_format with a root ARRAY schema and no json_schema.name; Azure structured outputs require a named root OBJECT - every salience call 400s when supportsResponseFormat is true. 'no-embeddings' is downstream: only the salience path embeds on capture; the regex-intent path inserts without vectors.",
+      "pendingHumanAction": "full paired coding run (real OpenCode execution) requires the launcher-opened paired browser window - deliberately not circumvented"
+    }
+  }
+}
