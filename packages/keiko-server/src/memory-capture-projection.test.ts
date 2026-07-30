@@ -178,6 +178,29 @@ describe("memory capture projection", () => {
     expect(decisions[0]).not.toHaveProperty("memoryId");
     expect(decisions[0]).not.toHaveProperty("body");
     expect(decisions[0]).not.toHaveProperty("bodyExcerpt");
+    expect(decisions[0]).not.toHaveProperty("currentStatus");
+  });
+
+  // The Journal is projected from the capture ledger, but the record keeps living after the
+  // capture decision: it can be accepted from the review queue, the detail view, or the
+  // maintenance sweep. The audit outcome stays what it was; the projection additionally reports
+  // the record's CURRENT status so the Journal cannot present a stale disposition or offer an
+  // action the record no longer admits.
+  it.each([
+    ["accepted" as const, "proposed" as const],
+    ["proposed" as const, "proposed" as const],
+    ["archived" as const, "auto-accepted" as const],
+  ])("reports the live %s status alongside the original %s capture outcome", (status, outcome) => {
+    const decisions = projectMemoryCaptureDecisions([captureEvent("m-1", 100, outcome)], {
+      since: 0,
+      order: "desc",
+      authorizedScopes: [OWN_SCOPE],
+      liveRecords: [{ ...record("m-1"), status }],
+    });
+
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]?.outcome).toBe(outcome);
+    expect(decisions[0]?.currentStatus).toBe(status);
   });
 
   it("filters decisions by since and exact authorized scope coordinates", () => {

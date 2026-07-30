@@ -188,6 +188,42 @@ describe("extractSalientMemories", () => {
     expect(userScoped).toHaveLength(1);
   });
 
+  // Boundary pin: the extraction model's `scope` label is a CLASSIFICATION over the coordinates
+  // this turn already carries, never an authority to reach a coordinate it does not have. It can
+  // pick between the turn's own user and project scope; it cannot mint a foreign project, cannot
+  // resolve a coordinate absent from the context, and cannot reach `global` (write-denied unless
+  // the caller opts in, and no capture policy does). Anything else fails closed by dropping the
+  // candidate rather than downgrading it to a wider scope.
+  it("confines a model-chosen scope to the coordinates the turn already carries", async () => {
+    const label = (scope: string, body: string): Record<string, unknown> => ({
+      body,
+      type: "fact",
+      confidence: 0.7,
+      scope,
+      source: "user",
+      tags: [],
+    });
+    const model = JSON.stringify([
+      label("user", "The user prefers dark mode."),
+      label("project", "Atlas targets Rust."),
+      label("workspace", "The workspace pins Node 24."),
+      label("global", "Everything everywhere is TypeScript."),
+      label("organization", "The organization is Acme."),
+    ]);
+
+    const result = await extractSalientMemories(
+      input({ context: baseContext({ projectId: "proj-atlas" as ProjectId }) }),
+      deps(model),
+    );
+
+    expect(
+      candidatesOnly(result).map((c) => (c.kind === "candidate" ? c.proposal.scope : null)),
+    ).toEqual([
+      { kind: "user", userId: "u-1" },
+      { kind: "project", projectId: "proj-atlas" },
+    ]);
+  });
+
   it("wires the salience captureRationale onto provenance", async () => {
     const result = await extractSalientMemories(input(), deps(ATLAS_FACTS));
     const first = candidatesOnly(result)[0];

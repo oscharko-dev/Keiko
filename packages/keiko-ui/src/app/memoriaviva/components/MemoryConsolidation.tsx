@@ -164,18 +164,17 @@ function SuggestedResolutionNotice({
   );
 }
 
+// Only a `supersede` proposal maps onto POST /api/memory/conflicts/resolve. A `merge` proposal is
+// duplicate-derived (`duplicate-review` / `multi-way-duplicate`), and the route refuses any pair
+// that `detectConflictPair` does not classify as an actual conflict — which a cluster at or above
+// the dedup overlap threshold can never be. Offering the control there produced a guaranteed 400 on
+// every click; the proposal itself still renders, it simply carries no apply action yet. Pinned
+// server-side by "refuses the merge action the consolidation engine emits for a duplicate cluster"
+// (packages/keiko-server/src/memory-handlers.test.ts).
 function conflictResolutionForItem(
   item: MemoryConsolidationReviewItem,
 ): ResolveMemoryConflictInput | null {
-  if (item.proposedAction === undefined) return null;
-  if (item.proposedAction.kind === "merge") {
-    if (item.proposedAction.losers.length === 0) return null;
-    return {
-      winner: item.proposedAction.winner,
-      losers: item.proposedAction.losers,
-      reason: `resolved from consolidation review item ${item.id}`,
-    };
-  }
+  if (item.proposedAction === undefined || item.proposedAction.kind === "merge") return null;
   return {
     winner: item.proposedAction.newer,
     losers: [item.proposedAction.older],
