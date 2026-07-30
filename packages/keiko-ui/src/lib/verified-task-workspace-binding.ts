@@ -6,9 +6,11 @@
 // and the Coding Workbench setup from drifting into different trust postures.
 
 import {
+  getActiveTaskWorkspace,
   provisionTaskWorkspace,
   reconcileTaskWorkspaces,
   setActiveTaskWorkspace,
+  type ActiveWorkspaceView,
 } from "./task-workspace-api";
 import { isWorkspaceFailureClass, type WorkspaceFailureClass } from "@oscharko-dev/keiko-contracts";
 
@@ -53,6 +55,44 @@ function boundedBindFailure(
     reason: "branch-conflict",
     failureClass: candidate.failureClass,
   };
+}
+
+/**
+ * Restore-time counterpart of {@link bindVerifiedTaskWorkspace} (release-audit F-09b).
+ *
+ * A persisted active pointer can outlive the verified state the runtime launch authority requires
+ * (`lastVerifiedHead`, managed-root identity): after a browser reload the server may still expose
+ * the binding while a coding-run start fails `authority-resolution-failed`. Restoring surfaces
+ * therefore never claim a binding as-is — the active view is re-verified through the SAME #447
+ * reconciliation pass the bind sequence gates on (which also re-stamps the verified head, so a
+ * merely-stale binding is repaired rather than just reported).
+ *
+ * Fail-closed contract: when the verification verdict is non-healthy but the re-read view still
+ * claims healthy, this throws instead of returning — a restored binding must never claim more
+ * readiness than the verification pass granted. A view whose own persisted health already shows
+ * the problem is returned so drifted worktrees stay visible in the session context (#1990).
+ */
+export async function restoreVerifiedActiveTaskWorkspace(): Promise<ActiveWorkspaceView | null> {
+  const active = await getActiveTaskWorkspace();
+  if (active === null) return null;
+  const report = await reconcileTaskWorkspaces({ root: active.instance.repositoryRoot });
+  // Re-read after the pass: reconciliation is the repair authority, so the settled view must be
+  // the post-verification truth (fresh health, verified-head stamp, or a self-healed pointer).
+  const reverified = await getActiveTaskWorkspace();
+  if (reverified === null) return null;
+  const entry = report.entries.find((item) => item.workspaceId === reverified.instance.workspaceId);
+  if (entry?.status === "healthy" || reverified.instance.health !== "healthy") return reverified;
+  warnBindStage("restore-verify", entry?.status ?? "missing-report-entry");
+  throw new TaskWorkspaceRestoreVerificationError();
+}
+
+// Typed sentinel so UI surfaces can map the failure to the i18n API instead of rendering this
+// developer-facing fallback text verbatim (the message is a non-localized safety net only).
+export class TaskWorkspaceRestoreVerificationError extends Error {
+  public constructor() {
+    super("The active task workspace failed re-verification. Re-bind it before starting a run.");
+    this.name = "TaskWorkspaceRestoreVerificationError";
+  }
 }
 
 export async function bindVerifiedTaskWorkspace(

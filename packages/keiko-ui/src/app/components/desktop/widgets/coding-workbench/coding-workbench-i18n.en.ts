@@ -251,6 +251,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Keiko will start a fresh run. It will not replay prior mutations.",
   "codingWorkbench.recovery.retry": "Retry as a fresh run",
   "codingWorkbench.recovery.acknowledge": "Acknowledge recovery",
+  "codingWorkbench.header.notReady": "Not ready to start",
   "codingWorkbench.runState.idle": "Ready to start",
   "codingWorkbench.runState.unavailable": "Runtime unavailable",
   "codingWorkbench.runState.starting": "Starting",
@@ -338,8 +339,9 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.research.revokeLabel":
     "Revoke the internet research grant for this run and its child agents",
   "codingWorkbench.announcement.researchActive": "Internet research grant active.",
-  "codingWorkbench.alert.actionFailed":
-    "The requested runtime action failed. Review the live state.",
+  "codingWorkbench.alert.actionFailedCode":
+    "The requested runtime action failed ({code}). Review the live state and retry.",
+  "codingWorkbench.alert.actionFailedSupportId": "Support id: {correlationId}.",
   "codingWorkbench.alert.authenticationRefreshFailed": "Authentication could not be refreshed.",
   "codingWorkbench.alert.authenticationSetupRefreshFailed":
     "Authentication setup could not be refreshed.",

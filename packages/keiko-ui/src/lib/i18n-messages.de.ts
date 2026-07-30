@@ -298,6 +298,8 @@ export const DE_MESSAGES = {
   "mode.manual.label": "Du",
   "mode.autonomous.title": "Keiko steuert Agenten nach deiner Richtlinie",
   "workspace.selection.none": "Keine Arbeitsbereichsfenster ausgewählt",
+  "workspace.binding.restoreVerificationFailed":
+    "Der aktive Task-Workspace hat die erneute Verifizierung nicht bestanden. Binden Sie ihn neu, bevor Sie einen Coding-Lauf starten.",
   "workspace.selection.one": "1 Arbeitsbereichsfenster ausgewählt",
   "workspace.selection.many": "{count} Arbeitsbereichsfenster ausgewählt",
   "workspace.window.selectedLabel": "{label} — ausgewählt",

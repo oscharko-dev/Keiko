@@ -219,12 +219,28 @@ function eventOutcomeDetail(
   });
 }
 
+// F-09a: a rejected runtime mutation (any non-ok start/stop/approval result — never only one
+// status code) must surface as a visible, actionable alert naming the machine error code and,
+// when the transport carried one, the correlation id that ties this exact failure to its redacted
+// server-side diagnostic. A generic sentence alone left the operator with a dead start button.
+function mutationFailureAlert(
+  error: NonNullable<CodingWorkbenchRuntimeState["mutation"]["error"]>,
+  t: CodingWorkbenchTranslate,
+): string {
+  const summary = t("codingWorkbench.alert.actionFailedCode", { code: error.code });
+  return error.correlationId === undefined
+    ? summary
+    : `${summary} ${t("codingWorkbench.alert.actionFailedSupportId", {
+        correlationId: error.correlationId,
+      })}`;
+}
+
 export function visibleAlert(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
   setupVisible: boolean,
 ): string | null {
-  if (state.mutation.error) return t("codingWorkbench.alert.actionFailed");
+  if (state.mutation.error) return mutationFailureAlert(state.mutation.error, t);
   for (const [resource, value] of [
     ["authentication", state.profile],
     ["authenticationSetup", state.codexSetup],

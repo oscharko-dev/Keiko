@@ -21,7 +21,12 @@ import {
   setActiveTaskWorkspace,
   type ActiveWorkspaceView,
 } from "@/lib/task-workspace-api";
-import { bindVerifiedTaskWorkspace } from "@/lib/verified-task-workspace-binding";
+import {
+  bindVerifiedTaskWorkspace,
+  restoreVerifiedActiveTaskWorkspace,
+  TaskWorkspaceRestoreVerificationError,
+} from "@/lib/verified-task-workspace-binding";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { ActiveWorkspaceApi } from "../context/ActiveWorkspaceContext";
 
 // The opaque actor identity for this single-operator Studio session. Held constant so lock ownership
@@ -76,7 +81,12 @@ function reducer(state: State, action: Action): State {
   }
 }
 
-function messageFor(error: unknown): string {
+function messageFor(error: unknown, t: I18nTranslate): string {
+  // The restore-verification sentinel is UI-authored text and must speak the operator's locale;
+  // its Error message is only a non-localized safety net (review finding on #2841).
+  if (error instanceof TaskWorkspaceRestoreVerificationError) {
+    return t("workspace.binding.restoreVerificationFailed");
+  }
   // ApiError extends Error and already carries the redacted server message, so a single Error check
   // covers it. Avoids importing ApiError here so AppShell's import graph does not require the @/lib/api
   // `ApiError` export to exist on every test mock of that module.
@@ -86,17 +96,34 @@ function messageFor(error: unknown): string {
 
 export function useActiveWorkspaceState(): ActiveWorkspaceApi {
   const [state, dispatch] = useReducer(reducer, INITIAL);
+  const t = useTranslate();
   // The repository root the inventory is listed for. Updated by refresh(root); reused by post-mutation
   // refreshes so they re-list the same repository without the caller re-supplying it.
   const rootRef = useRef<string | null>(null);
   const operationSeqRef = useRef(0);
+  // True once a restored binding has passed the reconciliation pass in this session. Restore-time
+  // verification exists for the persisted-pointer case (release-audit F-09b); mutation-triggered
+  // reloads re-read state their own wire calls just settled, so re-running the reconciliation POST
+  // on every reload would add heavy git/filesystem work to routine UI operations (#2841 review).
+  const restoreVerifiedRef = useRef(false);
 
   // Re-reads the active binding plus (when a repository root is known) the inventory, committing both
   // in one settle. An inventory failure never hides the active binding — the list degrades to empty.
+  // On the FIRST load of a session the active view is RE-VERIFIED through the shared reconciliation
+  // sequence before it is claimed (release-audit F-09b): a persisted pointer alone is not runtime
+  // start authority, so a restored binding that fails re-verification surfaces as an error instead
+  // of a ready-looking workspace. Later reloads read the already-verified state without re-running
+  // the pass; a verification failure keeps the flag unset so the next load re-verifies.
   const reload = useCallback(async (operationSeq: number): Promise<void> => {
     const root = rootRef.current;
+    const readActive = async (): Promise<ActiveWorkspaceView | null> => {
+      if (restoreVerifiedRef.current) return getActiveTaskWorkspace();
+      const verified = await restoreVerifiedActiveTaskWorkspace();
+      restoreVerifiedRef.current = true;
+      return verified;
+    };
     const [active, instances] = await Promise.all([
-      getActiveTaskWorkspace(),
+      readActive(),
       root === null || root.length === 0
         ? Promise.resolve<readonly WorkspaceInstance[]>([])
         : listTaskWorkspaces(root).catch(() => [] as readonly WorkspaceInstance[]),
@@ -114,10 +141,10 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
         await reload(operationSeq);
       } catch (error) {
         if (operationSeqRef.current !== operationSeq) return;
-        dispatch({ kind: "fail", error: messageFor(error) });
+        dispatch({ kind: "fail", error: messageFor(error, t) });
       }
     },
-    [reload],
+    [reload, t],
   );
 
   // Shared mutation envelope: guard with `switching`, run the wire call, then reload + commit
@@ -132,10 +159,10 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
         await reload(operationSeq);
       } catch (error) {
         if (operationSeqRef.current !== operationSeq) return;
-        dispatch({ kind: "fail", error: messageFor(error) });
+        dispatch({ kind: "fail", error: messageFor(error, t) });
       }
     },
-    [reload],
+    [reload, t],
   );
 
   const switchTo = useCallback(

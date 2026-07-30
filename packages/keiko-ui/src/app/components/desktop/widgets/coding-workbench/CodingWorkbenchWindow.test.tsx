@@ -361,6 +361,33 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Workspace could not be refreshed.");
   });
 
+  // Release-audit F-01: the idle header pill is a READINESS claim, not a run state. It must
+  // consume the same server-confirmed readiness the start action gates on — including the
+  // sidecar gateway profile — so it can never say "Ready to start" over an unavailable source.
+  it("never claims Ready to start while the sidecar gateway profile is unavailable", (): void => {
+    renderWorkbench(
+      liveState({
+        canStart: false,
+        source: {
+          status: "ready",
+          value: {
+            runtimePreference: "managed-gateway",
+            modelSource: "keiko-model-gateway",
+            runtimeSource: "keiko-sidecar",
+            available: false,
+            unavailableReason: "no-tool-calling",
+          },
+          error: null,
+        },
+      }),
+    );
+
+    expect(screen.queryByText("Ready to start")).not.toBeInTheDocument();
+    expect(screen.getByText("Not ready to start")).toBeInTheDocument();
+    // The model-source context line must not present the unavailable gateway as a healthy source.
+    expect(screen.getByText(/Keiko Gateway — Unavailable/u)).toBeInTheDocument();
+  });
+
   it("keeps a drifted worktree visible in the session context", (): void => {
     renderWorkbench(
       liveState({

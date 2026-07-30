@@ -320,6 +320,18 @@ function workspaceContextValue(
   return `${workspace.taskId} · ${workspace.taskBranch} · ${workspace.health}`;
 }
 
+// F-01 companion (S3358): the source line has three states — unselected, available, unavailable —
+// and the unavailable case must carry the unavailability on the same line as the source name.
+function sessionSourceValue(
+  source: CodingWorkbenchRuntimeState["source"]["value"],
+  t: CodingWorkbenchTranslate,
+): string {
+  if (source === null) return t("codingWorkbench.readiness.modelSource.select");
+  const label = modelSourceLabel(source.modelSource, t);
+  if (source.available) return label;
+  return `${label} — ${t("codingWorkbench.resourceStatus.unavailable")}`;
+}
+
 function SessionContextBar({
   state,
   activeWorkspace,
@@ -336,10 +348,9 @@ function SessionContextBar({
   const confirmedMode = state.runtime.value?.effectiveMode ?? null;
   const repository = activeWorkspace.activeBinding?.activeRoot;
   const workspaceValue = workspaceContextValue(workspace, t);
-  const sourceValue =
-    source === null
-      ? t("codingWorkbench.readiness.modelSource.select")
-      : modelSourceLabel(source.modelSource, t);
+  // F-01: an unavailable source (e.g. the sidecar gateway profile reporting no-tool-calling) is
+  // never presented as a plain healthy source name — the unavailability rides the same line.
+  const sourceValue = sessionSourceValue(source, t);
   return (
     <div className={styles.contextBar} aria-label={t("codingWorkbench.header.summary")}>
       <span className={styles.contextItem} title={repository}>

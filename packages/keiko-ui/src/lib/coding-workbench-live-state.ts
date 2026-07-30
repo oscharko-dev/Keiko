@@ -21,6 +21,8 @@ export interface CodingWorkbenchClientError {
   readonly code: string;
   readonly message: string;
   readonly retryable: boolean;
+  /** Copyable support id tying a surfaced failure to one redacted server diagnostic (RB-6). */
+  readonly correlationId?: string;
 }
 
 export interface CodingWorkbenchResourceState<T> {

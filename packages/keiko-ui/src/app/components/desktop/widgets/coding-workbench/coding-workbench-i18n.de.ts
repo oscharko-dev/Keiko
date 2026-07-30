@@ -260,6 +260,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Keiko startet einen neuen Lauf. Vorherige Änderungen werden nicht wiederholt.",
   "codingWorkbench.recovery.retry": "Als neuen Lauf wiederholen",
   "codingWorkbench.recovery.acknowledge": "Wiederherstellung bestätigen",
+  "codingWorkbench.header.notReady": "Nicht startbereit",
   "codingWorkbench.runState.idle": "Bereit zum Starten",
   "codingWorkbench.runState.unavailable": "Runtime nicht verfügbar",
   "codingWorkbench.runState.starting": "Wird gestartet",
@@ -351,8 +352,9 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.research.revokeLabel":
     "Internet-Recherche-Berechtigung für diesen Lauf und seine Unteragenten widerrufen",
   "codingWorkbench.announcement.researchActive": "Internet-Recherche-Berechtigung aktiv.",
-  "codingWorkbench.alert.actionFailed":
-    "Die angeforderte Runtime-Aktion ist fehlgeschlagen. Prüfe den Live-Zustand.",
+  "codingWorkbench.alert.actionFailedCode":
+    "Die angeforderte Runtime-Aktion ist fehlgeschlagen ({code}). Prüfe den Live-Zustand und versuche es erneut.",
+  "codingWorkbench.alert.actionFailedSupportId": "Support-ID: {correlationId}.",
   "codingWorkbench.alert.authenticationRefreshFailed":
     "Authentifizierung konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.authenticationSetupRefreshFailed":
