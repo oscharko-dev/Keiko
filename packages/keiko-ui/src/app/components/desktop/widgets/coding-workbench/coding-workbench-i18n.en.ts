@@ -45,6 +45,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.questions.terminal": "The coding run has ended.",
   "codingWorkbench.questions.unpaired":
     "This window is not paired for question content. Restart Keiko from its launcher to pair a new app session.",
+  "codingWorkbench.questions.answerFailed":
+    "Your answer was not accepted ({code}). The question is still open — send it again.",
+  "codingWorkbench.questions.rejectFailed":
+    "Rejecting the question was not accepted ({code}). The question is still open — try again.",
   "codingWorkbench.questions.retry": "Check again",
   "codingWorkbench.questions.requestTitle": "Runtime needs your input",
   "codingWorkbench.questions.required": "Answer every question before sending.",
@@ -245,6 +249,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changesetReview.retry": "Try again",
   "codingWorkbench.changesetReview.deliveryFailed":
     "Could not confirm this decision with the run. Try again.",
+  "codingWorkbench.changesetReview.deliveryFailedCode":
+    "Could not confirm this decision with the run ({code}). The change was not written — try again.",
   "codingWorkbench.recovery.eyebrow": "Recovery required",
   "codingWorkbench.recovery.title": "Reconcile before retrying",
   "codingWorkbench.recovery.summary":

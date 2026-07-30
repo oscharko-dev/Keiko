@@ -36,6 +36,7 @@ import { CodingWorkbenchChanges, diffLabels } from "./CodingWorkbenchChanges";
 import { ResearchGrantChip } from "./CodingWorkbenchResearchGrant";
 import {
   activeRunState,
+  changesetDeliveryAlert,
   cx,
   lifecycleAnnouncement,
   modeLabel,
@@ -478,6 +479,7 @@ function ChangesetReviewPanel({
   const t = useCodingWorkbenchTranslate();
   if (review === null) return null;
   const labels = diffLabels(t);
+  const failureCode = review.deliveryFailure?.code;
   return (
     <section
       className={cx(styles.card, styles.permission)}
@@ -491,8 +493,8 @@ function ChangesetReviewPanel({
       </PanelTitle>
       <p className={styles.helpText}>{t("codingWorkbench.changesetReview.help")}</p>
       {review.deliveryFailed ? (
-        <p className={styles.alert} role="alert">
-          <span aria-hidden="true">!</span> {t("codingWorkbench.changesetReview.deliveryFailed")}
+        <p className={styles.alert} role="alert" data-decision-failure-code={failureCode}>
+          <span aria-hidden="true">!</span> {changesetDeliveryAlert(review.deliveryFailure, t)}
         </p>
       ) : null}
       <div className="rv-body">

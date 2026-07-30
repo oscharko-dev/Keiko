@@ -12,6 +12,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { _resetEditorAgentBridgeStateForTests } from "@/app/components/desktop/widgets/cards/editorAgentBridge";
+import { ApiError } from "./api";
 import { useCodingWorkbenchEditorBridge } from "./useCodingWorkbenchEditorBridge";
 
 const postSnapshotSpy = vi.fn();
@@ -19,8 +20,11 @@ const postResultSpy = vi.fn();
 
 // `editorAgentBridge.ts` imports this same file via a different relative specifier
 // (`../../../../../lib/api`); Vitest's mock registry keys by resolved module id, so mocking it
-// once here from this file's own `./api` specifier intercepts both call sites.
-vi.mock("./api", () => ({
+// once here from this file's own `./api` specifier intercepts both call sites. `ApiError` is the
+// REAL class: the hook narrows on it to lift a failed decision's machine error code and correlation
+// id, so a stubbed stand-in would make that narrowing untestable (and `instanceof undefined` throw).
+vi.mock("./api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./api")>()),
   postEditorAgentSessionSnapshot: (snapshot: unknown, capability: string | undefined): unknown =>
     postSnapshotSpy(snapshot, capability),
   postEditorAgentActionResult: (body: unknown): unknown => postResultSpy(body),
@@ -316,6 +320,64 @@ describe("useCodingWorkbenchEditorBridge — applyChangeset", () => {
 
     expect(result.current.pendingReview).not.toBeNull();
     expect(result.current.pendingReview?.deliveryFailed).toBe(true);
+    // F-09a: a rejection that is not an ApiError still gets ONE stable machine code — never an
+    // absent reason. The bare `catch { return false }` this replaces discarded the error entirely.
+    expect(result.current.pendingReview?.deliveryFailure).toEqual({
+      code: "EDITOR_CHANGESET_DECISION_FAILED",
+    });
+  });
+
+  // F-09a: the transport already carries a machine error code and, for a server-issued failure, a
+  // correlation id. Both were thrown away in a bare catch, so the review could only say "could not
+  // confirm this decision" — nothing to act on and nothing to report, on the one decision that
+  // gates the run's file write.
+  it("carries the machine error code and correlation id of an undelivered decision", async () => {
+    const refused = new ApiError("BRIDGE_LEASE_INACTIVE", "Lease inactive.", 409);
+    refused.correlationId = "ui-correlation-7";
+    postResultSpy.mockRejectedValue(refused);
+    const { result } = renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
+    );
+    await flushMicrotasks();
+    const source = latestSource();
+    const sessionId = new URL(source.url, "https://example.test").searchParams.get("sessionId");
+    act(() => {
+      emitApplyChangeset(source, sessionId ?? "");
+    });
+    await flushMicrotasks();
+
+    act(() => {
+      result.current.approve();
+    });
+    await waitFor(
+      () => {
+        expect(result.current.pendingReview?.deliveryFailed).toBe(true);
+      },
+      { timeout: 5_000 },
+    );
+
+    expect(result.current.pendingReview?.deliveryFailure).toEqual({
+      code: "BRIDGE_LEASE_INACTIVE",
+      correlationId: "ui-correlation-7",
+    });
+    // The review stays actionable: the decision is still the operator's to repeat.
+    expect(result.current.pendingReview?.deciding).toBe(false);
+
+    // A request that never reached the BFF at all (bare `fetch` rejects with a TypeError, and
+    // nothing wraps it) is a different operator problem from a BFF that answered and refused, so
+    // it must not borrow the refusal's code.
+    postResultSpy.mockRejectedValue(new TypeError("Failed to fetch"));
+    act(() => {
+      result.current.retry();
+    });
+    await waitFor(
+      () => {
+        expect(result.current.pendingReview?.deliveryFailure).toEqual({
+          code: "EDITOR_CHANGESET_DECISION_UNREACHABLE",
+        });
+      },
+      { timeout: 5_000 },
+    );
   });
 
   it("retry() resubmits the same decision after a deliveryFailed review", async () => {

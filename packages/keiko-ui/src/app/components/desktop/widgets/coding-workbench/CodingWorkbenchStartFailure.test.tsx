@@ -51,6 +51,7 @@ const EMPTY_QUESTIONS: UseCodingWorkbenchQuestionsResult = {
   status: "empty",
   questions: [],
   errorCode: null,
+  mutationFailure: null,
   answer: vi.fn(() => Promise.resolve(true)),
   reject: vi.fn(() => Promise.resolve(true)),
   retry: vi.fn(),

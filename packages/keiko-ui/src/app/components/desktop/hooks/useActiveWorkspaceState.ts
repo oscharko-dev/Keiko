@@ -13,7 +13,6 @@ import { useCallback, useMemo, useReducer, useRef } from "react";
 import type { WorkspaceBinding, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import {
   clearActiveTaskWorkspace,
-  getActiveTaskWorkspace,
   listTaskWorkspaces,
   pauseTaskWorkspace,
   prepareHandoffTaskWorkspace,
@@ -101,25 +100,33 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
   // refreshes so they re-list the same repository without the caller re-supplying it.
   const rootRef = useRef<string | null>(null);
   const operationSeqRef = useRef(0);
-  // True once a restored binding has passed the reconciliation pass in this session. Restore-time
-  // verification exists for the persisted-pointer case (release-audit F-09b); mutation-triggered
-  // reloads re-read state their own wire calls just settled, so re-running the reconciliation POST
-  // on every reload would add heavy git/filesystem work to routine UI operations (#2841 review).
-  const restoreVerifiedRef = useRef(false);
+  // The workspace identity whose restore verification this session holds — NOT a per-session "has
+  // verified once" flag. Restore-time verification exists for the case where a pointer is claimed
+  // without runtime start authority (release-audit F-09b), and `switchTo` routes through the same
+  // `reload`, so a session-wide latch would let every workspace activated after the first claim its
+  // binding unverified (`setActiveTaskWorkspace` does not reconcile). Keying on the identity keeps
+  // repeated reloads of the SAME workspace off the heavy git/filesystem pass (#2841 review) while
+  // every newly activated binding is verified before a surface claims it.
+  const verifiedWorkspaceIdRef = useRef<string | null>(null);
 
   // Re-reads the active binding plus (when a repository root is known) the inventory, committing both
   // in one settle. An inventory failure never hides the active binding — the list degrades to empty.
-  // On the FIRST load of a session the active view is RE-VERIFIED through the shared reconciliation
-  // sequence before it is claimed (release-audit F-09b): a persisted pointer alone is not runtime
-  // start authority, so a restored binding that fails re-verification surfaces as an error instead
-  // of a ready-looking workspace. Later reloads read the already-verified state without re-running
-  // the pass; a verification failure keeps the flag unset so the next load re-verifies.
+  // Every active view whose workspace identity this session has not already verified is RE-VERIFIED
+  // through the shared reconciliation sequence before it is claimed (release-audit F-09b): neither a
+  // persisted nor a freshly activated pointer is runtime start authority by itself, so a binding that
+  // fails re-verification surfaces as an error instead of a ready-looking workspace. Reloads of an
+  // already-verified identity read state without re-running the pass.
   const reload = useCallback(async (operationSeq: number): Promise<void> => {
     const root = rootRef.current;
+    // The held identity is consumed and cleared around every attempt, so only a view the pass has
+    // actually granted is cached: a rejected or failed verification leaves nothing held and the next
+    // load re-verifies whatever is active (fail closed). Switching away and back therefore verifies
+    // again — the earlier workspace may have drifted while another one was bound.
     const readActive = async (): Promise<ActiveWorkspaceView | null> => {
-      if (restoreVerifiedRef.current) return getActiveTaskWorkspace();
-      const verified = await restoreVerifiedActiveTaskWorkspace();
-      restoreVerifiedRef.current = true;
+      const verifiedWorkspaceId = verifiedWorkspaceIdRef.current;
+      verifiedWorkspaceIdRef.current = null;
+      const verified = await restoreVerifiedActiveTaskWorkspace({ verifiedWorkspaceId });
+      verifiedWorkspaceIdRef.current = verified?.instance.workspaceId ?? null;
       return verified;
     };
     const [active, instances] = await Promise.all([
