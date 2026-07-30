@@ -63,6 +63,9 @@ const mocks = vi.hoisted(() => ({
   recordReadsContextRelationship: vi.fn(),
   registerSw: vi.fn(),
   gatewaySetupDialogModuleLoaded: vi.fn(),
+  newWindowDialogModuleLoaded: vi.fn(),
+  paletteModuleLoaded: vi.fn(),
+  updateStartupNoticeModuleLoaded: vi.fn(),
   useKeyboardShortcuts: vi.fn(),
   pushUndo: vi.fn(),
   undo: vi.fn(),
@@ -230,23 +233,35 @@ vi.mock("./modals/GatewaySetupDialog", () => {
   return { GatewaySetupDialog: () => <div role="dialog" aria-label="Gateway setup" /> };
 });
 
-vi.mock("./modals/NewWindowDialog", () => ({
-  NewWindowDialog: ({
-    onConfirm,
-  }: {
-    readonly onConfirm: (cfg: Record<string, string>) => void;
-  }): ReactNode => (
-    <div role="dialog" aria-label="New window">
-      <button type="button" onClick={(): void => onConfirm({ title: "Release grounding review" })}>
-        Confirm new chat
-      </button>
-    </div>
-  ),
-}));
+vi.mock("./modals/NewWindowDialog", () => {
+  mocks.newWindowDialogModuleLoaded();
+  return {
+    NewWindowDialog: ({
+      onConfirm,
+    }: {
+      readonly onConfirm: (cfg: Record<string, string>) => void;
+    }): ReactNode => (
+      <div role="dialog" aria-label="New window">
+        <button
+          type="button"
+          onClick={(): void => onConfirm({ title: "Release grounding review" })}
+        >
+          Confirm new chat
+        </button>
+      </div>
+    ),
+  };
+});
 
-vi.mock("./modals/Palette", () => ({
-  Palette: () => <div role="dialog" aria-label="Palette" />,
-}));
+vi.mock("./modals/Palette", () => {
+  mocks.paletteModuleLoaded();
+  return { Palette: () => <div role="dialog" aria-label="Palette" /> };
+});
+
+vi.mock("./update/UpdateStartupNotice", () => {
+  mocks.updateStartupNoticeModuleLoaded();
+  return { UpdateStartupNotice: () => <div data-testid="update-startup-notice" /> };
+});
 
 vi.mock("./widgets", () => ({}));
 
@@ -260,6 +275,14 @@ import {
 } from "./AppShell";
 
 const gatewaySetupLoadsAtShellImport = mocks.gatewaySetupDialogModuleLoaded.mock.calls.length;
+// Issue #1207 (ADR-0042 D3.6) — first-load isolation for the shell's gesture-only surfaces. Each of
+// these modules is reached through `next/dynamic(..., { ssr: false })`, so importing AppShell must
+// not evaluate any of them; a static import would run the mock factory here and make this non-zero.
+const gestureOnlyShellModuleLoadsAtImport = {
+  newWindowDialog: mocks.newWindowDialogModuleLoaded.mock.calls.length,
+  palette: mocks.paletteModuleLoaded.mock.calls.length,
+  updateStartupNotice: mocks.updateStartupNoticeModuleLoaded.mock.calls.length,
+};
 
 function chat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -458,6 +481,27 @@ describe("AppShell grounding connections", () => {
     expect(screen.queryByRole("dialog", { name: "Gateway setup" })).toBeNull();
   });
 
+  // Issue #1207 (ADR-0042 D3.6) — the static-export first-load gzip ceiling is enforced by
+  // `npm run check:editor-bundle-size -- --require-static-export`, which needs a real production
+  // build. This is the cheap unit-level guard for the same contract: the new-window dialog, the
+  // window-launcher palette and the startup update notice are gesture-only surfaces, so neither
+  // importing AppShell nor an ordinary startup render may evaluate their modules. Restoring a
+  // static import for any of them makes its factory run at import time and fails this test.
+  it("does not load the gesture-only shell surfaces during ordinary shell startup", async () => {
+    expect(gestureOnlyShellModuleLoadsAtImport).toStrictEqual({
+      newWindowDialog: 0,
+      palette: 0,
+      updateStartupNotice: 0,
+    });
+
+    await renderMounted();
+
+    expect(mocks.newWindowDialogModuleLoaded).not.toHaveBeenCalled();
+    expect(mocks.paletteModuleLoaded).not.toHaveBeenCalled();
+    expect(mocks.updateStartupNoticeModuleLoaded).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "New window" })).toBeNull();
+  });
+
   it("opens a deep-linked singleton when the route has trailing slashes", async () => {
     const api = workspaceApi();
     mocks.state.workspaceResult = workspaceResult([], [], api);
@@ -486,7 +530,9 @@ describe("AppShell grounding connections", () => {
     await renderMounted();
 
     await user.click(screen.getByTestId("left-rail"));
-    await user.click(screen.getByRole("button", { name: "Confirm new chat" }));
+    // The dialog resolves through `next/dynamic(..., { ssr: false })` (first-load isolation), so it
+    // arrives on the microtask after the gesture rather than in the same render.
+    await user.click(await screen.findByRole("button", { name: "Confirm new chat" }));
 
     expect(add).toHaveBeenCalledOnce();
     expect(add.mock.calls[0]?.[0]).toBe("chat");
