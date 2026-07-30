@@ -1502,6 +1502,7 @@ export type {
   GitRepositoryAgentParseOk,
   GitRepositoryAgentParseFail,
   GitRepositoryAgentParseResult,
+  GitRepositoryAgentAuthorityClass,
 } from "./git-repository-agent.js";
 export {
   GIT_REPOSITORY_AGENT_SCHEMA_VERSION,
@@ -1510,6 +1511,9 @@ export {
   GIT_REPOSITORY_AGENT_DENIAL_REASONS,
   parseGitRepositoryAgentOperationRequest,
   isGitRepositoryAgentOperationResponse,
+  gitRepositoryAgentAuthorityClassFor,
+  gitRepositoryAgentMinimumMode,
+  gitRepositoryAgentOperationAdmitted,
 } from "./git-repository-agent.js";
 
 // ─── Controlled command executor (Issue #1387, Epic #1491) ────────────────────────
@@ -3515,6 +3519,7 @@ export type {
   GitDeliveryBranchMatchKind,
   GitDeliveryBranchPattern,
   GitDeliveryBranchPatternConstraint,
+  GitDeliveryProtectedBranchConstraint,
   GitDeliveryProviderCapabilityConstraint,
   GitDeliveryRiskClassCeilingConstraint,
   GitDeliveryConstraint,
@@ -3587,6 +3592,7 @@ export {
   gitDeliveryRiskClassWithinCeiling,
   gitDeliveryBranchNameMatchesPattern,
   gitDeliveryBranchNameMatchesAny,
+  gitDeliveryTargetIsProtectedBranch,
 } from "./git-delivery.js";
 
 // git-delivery-policy.ts

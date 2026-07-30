@@ -2,6 +2,9 @@
 // Pure wire types and validators only. The facade grants no shell, process, provider, credential, or
 // model authority; server handlers must delegate to existing Git read and Git delivery routes.
 
+import type { CodingWorkbenchMode } from "./coding-workbench.js";
+import { compareCodingWorkbenchModeAuthority } from "./coding-workbench.js";
+
 export const GIT_REPOSITORY_AGENT_SCHEMA_VERSION = "1" as const;
 
 export type GitRepositoryAgentOperationMode = "read" | "preview" | "execute";
@@ -44,13 +47,20 @@ export const GIT_REPOSITORY_AGENT_OPERATION_KINDS: readonly GitRepositoryAgentOp
 ] as const;
 
 export type GitRepositoryAgentDenialReason =
-  "unsupported-direct-shell" | "unsupported-operation" | "idempotency-conflict" | "bad-request";
+  | "unsupported-direct-shell"
+  | "unsupported-operation"
+  | "idempotency-conflict"
+  | "bad-request"
+  // The effective product-wide autonomy mode does not admit this operation without a per-action
+  // human approval (ADR-0129 / ADR-0138). Mode-independent hard denials keep their own reasons.
+  | "autonomy-mode-denied";
 
 export const GIT_REPOSITORY_AGENT_DENIAL_REASONS: readonly GitRepositoryAgentDenialReason[] = [
   "unsupported-direct-shell",
   "unsupported-operation",
   "idempotency-conflict",
   "bad-request",
+  "autonomy-mode-denied",
 ] as const;
 
 export interface GitRepositoryAgentOperationRequest {
@@ -276,6 +286,83 @@ export function parseGitRepositoryAgentOperationRequest(
       ...(payload === undefined ? {} : { payload }),
     },
   };
+}
+
+// ─── Autonomy admission (ADR-0129 product-wide authority model, ADR-0138 monotonic semantics) ─────
+//
+// The facade is the door an AGENT walks through to write to the user's repository, so the product's
+// three modes have to mean something here. They did not: admission was the closed operation envelope
+// plus the delegated route's own policy pack, and nothing anywhere asked which autonomy mode the
+// local human had accepted. A read is admitted in every mode ("allows reads and planning"); a
+// preview is read-only planning and likewise always admitted; an EXECUTE is admitted only at or
+// above the mode that grants its authority class without a per-action approval.
+//
+// Pure and total: a rule table plus the shared authority ordering. It never widens anything — the
+// delegated route still runs preflight, policy packs, approval and the mode-independent hard denials.
+
+export type GitRepositoryAgentAuthorityClass =
+  // Inspection of the repository. No mutation, no network.
+  | "repository-read"
+  // A workspace-contained write: index, branch pointer, local commit.
+  | "workspace-write"
+  // Leaves the machine or lets the network into it: fetch, pull, push, pull request, merge.
+  | "repository-delivery";
+
+const AUTHORITY_CLASS_BY_OPERATION: Readonly<
+  Record<GitRepositoryAgentOperationKind, GitRepositoryAgentAuthorityClass>
+> = {
+  status: "repository-read",
+  diff: "repository-read",
+  "branch-list": "repository-read",
+  "branch-create": "workspace-write",
+  "branch-switch": "workspace-write",
+  stage: "workspace-write",
+  unstage: "workspace-write",
+  commit: "workspace-write",
+  fetch: "repository-delivery",
+  pull: "repository-delivery",
+  push: "repository-delivery",
+  "pull-request": "repository-delivery",
+  merge: "repository-delivery",
+};
+
+// The lowest mode that performs each class WITHOUT asking first. `governed-assist` asks before every
+// workspace edit and every delivery action, so it admits no execute at all through this facade —
+// there is no channel here to ask on, and an unaskable "ask" fails closed.
+const MINIMUM_MODE_BY_CLASS: Readonly<
+  Record<GitRepositoryAgentAuthorityClass, CodingWorkbenchMode>
+> = {
+  "repository-read": "governed-assist",
+  "workspace-write": "supervised-coding",
+  "repository-delivery": "autonomous-delivery",
+};
+
+export function gitRepositoryAgentAuthorityClassFor(
+  operation: GitRepositoryAgentOperationKind,
+): GitRepositoryAgentAuthorityClass {
+  return AUTHORITY_CLASS_BY_OPERATION[operation];
+}
+
+export function gitRepositoryAgentMinimumMode(
+  operation: GitRepositoryAgentOperationKind,
+): CodingWorkbenchMode {
+  return MINIMUM_MODE_BY_CLASS[AUTHORITY_CLASS_BY_OPERATION[operation]];
+}
+
+/**
+ * True when `effectiveMode` admits this operation in this mode without a separate per-action
+ * approval. Reads and previews are always admitted; an execute needs its class's minimum mode.
+ */
+export function gitRepositoryAgentOperationAdmitted(
+  operation: GitRepositoryAgentOperationKind,
+  mode: GitRepositoryAgentOperationMode,
+  effectiveMode: CodingWorkbenchMode,
+): boolean {
+  if (mode !== "execute") return true;
+  return (
+    compareCodingWorkbenchModeAuthority(effectiveMode, gitRepositoryAgentMinimumMode(operation)) >=
+    0
+  );
 }
 
 export function isGitRepositoryAgentOperationResponse(

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  containsCredentialShape,
   createAuditRedactor,
   deepRedactStrings,
   isCredentialKeyName,
@@ -466,5 +467,64 @@ describe("deepRedactStrings", () => {
     expect(result.remotes[0]?.fetchUrl).not.toContain("opaque-pat-value");
     // SSH login name preserved (not a credential), matching the redactor's existing intent.
     expect(result.remotes[1]?.fetchUrl).toBe("ssh://git@github.com/o/r.git");
+  });
+});
+
+// A detector for free text a HUMAN typed. Both directions matter and are pinned here: it must not
+// reject ordinary prose that merely names an auth mechanism, and it must still catch a real
+// credential. Loosening only the first direction would silently weaken a trust boundary.
+describe("containsCredentialShape", () => {
+  const JWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.abcdefghijklmnop";
+
+  it.each([
+    `Authorization: Bearer ${JWT}`,
+    `authorization:${JWT}`,
+    "Proxy-Authorization: Basic ZGV2OnN1cGVyLXNlY3JldC1wYXNzd29yZA==",
+    `bearer ${JWT}`,
+    "X-Api-Key: 9f8e7d6c5b4a39281706",
+    "api_key=9f8e7d6c5b4a39281706",
+    'apiKey: "9f8e7d6c5b4a39281706"',
+    "Set-Cookie: session=9f8e7d6c5b4a39281706",
+    "client_secret: 9f8e7d6c5b4a39281706",
+    "db_password=hunter2-9f8e7d6c5b4a",
+    "AKIAIOSFODNN7EXAMPLE",
+    "AKIAIOSFODNN7EXAMPLE1",
+    "url=AKIAIOSFODNN7EXAMPLE",
+    ["ghp_", "A".repeat(36)].join(""),
+    ["key=ghp_", "A".repeat(36)].join(""),
+    ["github", "_pat_", "AbCdEfGhIj_KlMnOpQrStUv"].join(""),
+    ["xox", "b-1234567890-abcdefghij"].join(""),
+    ["sk-", "abc123DEF456ghi789jkl012"].join(""),
+    ["AIza", "SyA1234567890abcdefghijklmnopqrst"].join(""),
+    ["sk_", "live_1234567890abcdefghij"].join(""),
+    "-----BEGIN RSA PRIVATE KEY-----",
+    "https://user:hunter2@example.com/repo.git",
+  ])("detects the credential in %s", (value) => {
+    expect(containsCredentialShape(value)).toBe(true);
+  });
+
+  it.each([
+    "fix(auth): reject a malformed bearer token",
+    "docs: describe the api_key rotation runbook",
+    "feat: add basic retry to the sync worker",
+    "chore: rename apikey to credentialId",
+    "fix(http): drop the set-cookie header on redirect",
+    "refactor: move the Authorization header builder into the client",
+    "docs: authorization: implementation notes for the reviewer",
+    "test: cover basic internationalization of the login copy",
+    "chore: bump token rotation interval to 24h",
+    "fix: pin the action to 1c313570abcdef1234567890abcdef1234567890",
+    "chore: close task-1234567890abcdef",
+    "feat: support copy-on-write snapshots",
+    "",
+  ])("passes ordinary text: %s", (value) => {
+    expect(containsCredentialShape(value)).toBe(false);
+  });
+
+  it("is stateless across repeated calls on the same pattern", () => {
+    const secret = ["ghp_", "A".repeat(36)].join("");
+    expect(containsCredentialShape(secret)).toBe(true);
+    expect(containsCredentialShape(secret)).toBe(true);
+    expect(containsCredentialShape(secret)).toBe(true);
   });
 });

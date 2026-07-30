@@ -9,6 +9,7 @@
 // here — these guards run AFTER that central gate.
 
 import type { IncomingMessage } from "node:http";
+import { containsCredentialShape } from "@oscharko-dev/keiko-security";
 import { containsForbiddenSecretShape } from "../qualityIntelligence/connectorErrors.js";
 
 export const GIT_DELIVERY_MAX_BODY_BYTES = 64 * 1024;
@@ -86,17 +87,48 @@ export const hasOnlyAllowedKeys = (
   return true;
 };
 
-export const scanForbiddenStrings = (value: unknown): boolean => {
-  if (typeof value === "string") return containsForbiddenSecretShape(value);
-  if (Array.isArray(value)) return value.some(scanForbiddenStrings);
+// The HUMAN-AUTHORED free-text fields of the governed git-delivery envelopes: a commit message and
+// a pull-request title / body / description. Every other leaf is a structural operand — a branch
+// name, remote alias, pathspec, owner/repo slug, project id, opaque approval token — which has no
+// legitimate reason to contain a header word at all, so those keep the strict connector-payload scan
+// (`containsForbiddenSecretShape`, whose case-variant coverage is pinned by Issue #281).
+//
+// Applying that strict scan to prose is what made ordinary commit messages unfilable: it is a
+// case-insensitive substring test for "bearer ", "basic ", "apikey", "api_key", "cookie:",
+// "set-cookie", "authorization:" and "x-api-key", so "feat: add basic retry to the sync worker" and
+// "docs: describe the api_key rotation runbook" were both rejected as carrying credentials. Free
+// text is instead scanned for an actual credential SHAPE (`containsCredentialShape`) — a scheme or
+// key followed by a credential-length value, or a self-identifying issuer-prefixed token — which
+// still detects every real secret the substring list detected, plus Google / Stripe / URL-userinfo
+// credentials that it never did.
+export const GIT_DELIVERY_FREE_TEXT_KEYS: ReadonlySet<string> = new Set([
+  "body",
+  "description",
+  "message",
+  "messageDraft",
+  "title",
+]);
+
+// Free-text treatment applies ONLY to a string leaf sitting DIRECTLY under a free-text key. It is
+// never inherited into a nested object or array, so a structural operand can never be smuggled past
+// the strict scan by nesting it under a key named `message`.
+const scanNode = (value: unknown, freeText: boolean): boolean => {
+  if (typeof value === "string") {
+    return freeText ? containsCredentialShape(value) : containsForbiddenSecretShape(value);
+  }
+  if (Array.isArray(value)) return value.some((entry) => scanNode(entry, false));
   if (isPlainObject(value)) {
-    for (const v of Object.values(value)) {
-      if (scanForbiddenStrings(v)) return true;
+    for (const [key, entry] of Object.entries(value)) {
+      if (scanNode(entry, typeof entry === "string" && GIT_DELIVERY_FREE_TEXT_KEYS.has(key))) {
+        return true;
+      }
     }
     return false;
   }
   return false;
 };
+
+export const scanForbiddenStrings = (value: unknown): boolean => scanNode(value, false);
 
 // Zero-width, bidi-control, and BOM format characters. Branch names / refs / pathspecs in these
 // content-free requests never legitimately contain them; a U+202E override or zero-width char would

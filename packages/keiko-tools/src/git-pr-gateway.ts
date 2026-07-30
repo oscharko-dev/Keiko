@@ -42,6 +42,7 @@ import {
   GIT_DELIVERY_SCHEMA_VERSION,
   gitDeliveryBranchNameMatchesAny,
   gitDeliveryRiskClassWithinCeiling,
+  gitDeliveryTargetIsProtectedBranch,
   gitPrRejectionToDisposition,
 } from "@oscharko-dev/keiko-contracts";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
@@ -413,6 +414,11 @@ function constraintBlock(
   if (constraint.kind === "branch-pattern") {
     const ok = target !== undefined && gitDeliveryBranchNameMatchesAny(target, constraint.patterns);
     return ok ? undefined : "policy-pack-blocked";
+  }
+  if (constraint.kind === "protected-branch") {
+    return gitDeliveryTargetIsProtectedBranch(target, constraint.patterns)
+      ? "protected-branch"
+      : undefined;
   }
   if (constraint.kind === "provider-capability") {
     return capabilities.includes(constraint.capability) ? undefined : "provider-capability-absent";

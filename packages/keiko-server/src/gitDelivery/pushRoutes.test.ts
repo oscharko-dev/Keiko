@@ -218,13 +218,44 @@ describe("push preview — read-only risk context (AC1/AC2)", () => {
     expect(body.policyOutcome).toBe("allowed"); // effective: feat/ passes the default pack's constraints
   });
 
-  it("shows a protected/shared target as policy-blocked in the preview (AC2)", async () => {
-    const handler = createHandlePushPreview({ execution: seams() });
-    const res = await handler(ctxFor(PREVIEW, pushBody({ remoteBranchName: "dev" })), deps());
-    const body = res.body as GitDeliveryPushPreviewBody;
-    expect(body.policyOutcome).toBe("blocked");
-    expect(body.policyBlockReason).toBe("policy-pack-blocked");
-  });
+  // The invariant this pins — a shared/protected remote target is blocked by the DEFAULT pack — is
+  // unchanged and now covers more names. The reason is the precise `protected-branch` rather than the
+  // generic `policy-pack-blocked` because the default pack states the protection directly instead of
+  // deriving it from an allow-list of Keiko's own branch prefixes; both map to the same evidence
+  // category (`policy-forbidden`) and the same remediation (`adjust-policy-target`).
+  it.each([
+    "dev",
+    "develop",
+    "main",
+    "master",
+    "trunk",
+    "production",
+    "release/0.3.0",
+    "releases/x",
+  ])(
+    "shows the protected/shared target %s as policy-blocked in the preview (AC2)",
+    async (remoteBranchName) => {
+      const handler = createHandlePushPreview({ execution: seams() });
+      const res = await handler(ctxFor(PREVIEW, pushBody({ remoteBranchName })), deps());
+      const body = res.body as GitDeliveryPushPreviewBody;
+      expect(body.policyOutcome).toBe("blocked");
+      expect(body.policyBlockReason).toBe("protected-branch");
+    },
+  );
+
+  // The other half of the same rule: the default pack must not impose Keiko's own branch-naming
+  // convention on the user's repository. Before this, a push to any branch outside
+  // claude|feat|fix|chore|docs was blocked with no configuration path, so the Push control was
+  // unusable in a repository that names branches any other way.
+  it.each(["my-work", "bugfix-123", "wip", "oscharko/experiment", "release-notes"])(
+    "shows the ordinary user branch %s as allowed in the preview",
+    async (remoteBranchName) => {
+      const handler = createHandlePushPreview({ execution: seams() });
+      const res = await handler(ctxFor(PREVIEW, pushBody({ remoteBranchName })), deps());
+      const body = res.body as GitDeliveryPushPreviewBody;
+      expect(body.policyOutcome).toBe("allowed");
+    },
+  );
 
   it("400s a refspec-injection in a ref operand", async () => {
     const handler = createHandlePushPreview({ execution: seams() });
@@ -267,9 +298,39 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
     );
     const body = res.body as GitDeliveryPushExecuteResponseBody;
     expect(body.status).toBe("blocked");
-    expect(body.blockReason).toBe("policy-pack-blocked");
+    expect(body.blockReason).toBe("protected-branch");
     expect(adapter.calls()).toBe(0);
     expect(cap.count()).toBe(1);
+  });
+
+  // The no-direct-push-to-dev denial is the load-bearing half of the default pack; it must hold for
+  // every protected name, with the remote adapter never invoked.
+  it.each(["dev", "main", "master", "release/0.3.0"])(
+    "never invokes the remote adapter for the protected target %s",
+    async (remoteBranchName) => {
+      const adapter = recordingPublishAdapter();
+      const handler = createHandlePushExecute({
+        execution: seams({ publishAdapterFactory: () => adapter.adapter }),
+      });
+      const res = await handler(ctxFor(EXECUTE, pushBody({ remoteBranchName })), deps());
+      const body = res.body as GitDeliveryPushExecuteResponseBody;
+      expect(body.status).toBe("blocked");
+      expect(body.blockReason).toBe("protected-branch");
+      expect(adapter.calls()).toBe(0);
+    },
+  );
+
+  it("executes a push to an ordinary user branch that follows no Keiko naming convention", async () => {
+    const adapter = recordingPublishAdapter();
+    const handler = createHandlePushExecute({
+      execution: seams({ publishAdapterFactory: () => adapter.adapter }),
+    });
+    const res = await handler(
+      ctxFor(EXECUTE, pushBody({ remoteBranchName: "my-work", sourceBranchName: "my-work" })),
+      deps(),
+    );
+    expect((res.body as GitDeliveryPushExecuteResponseBody).status).toBe("succeeded");
+    expect(adapter.calls()).toBe(1);
   });
 
   it("blocks a force push and never invokes the remote adapter (AC4)", async () => {

@@ -5,9 +5,12 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  CodingWorkbenchMode,
+  GitRepositoryAgentOperationKind,
   GitRepositoryAgentOperationRequest,
   GitRepositoryAgentOperationResponse,
 } from "@oscharko-dev/keiko-contracts";
+import { gitRepositoryAgentMinimumMode } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import type { GitProcessRunner } from "../gitRoutes.js";
 import { matchRoute, type RouteContext } from "../routes.js";
@@ -25,7 +28,19 @@ function ok(stdout: string): Awaited<ReturnType<GitProcessRunner>> {
   return { exitCode: 0, signal: null, stdout, stderr: "", truncated: false };
 }
 
-function deps(runner: GitProcessRunner = vi.fn(() => Promise.resolve(ok("")))): UiHandlerDeps {
+// An explicit "the operator configured nothing" marker. A bare `undefined` cannot express it here:
+// a default parameter value is applied when `undefined` is passed, so the unconfigured case needs a
+// distinct token to reach the deps object.
+const NO_CEILING = "unconfigured" as const;
+
+// The facade's autonomy gate resolves the product-wide deployment ceiling from deps and fails closed
+// to `governed-assist`. These cases exercise delegation, idempotency and payload hardening rather
+// than the gate itself, so they run at the ceiling that admits every operation; the gate has its own
+// describe block below, which pins each rung of the ladder explicitly.
+function deps(
+  runner: GitProcessRunner = vi.fn(() => Promise.resolve(ok(""))),
+  ceiling: CodingWorkbenchMode | typeof NO_CEILING = "autonomous-delivery",
+): UiHandlerDeps {
   return {
     config: undefined,
     configPresent: false,
@@ -36,6 +51,7 @@ function deps(runner: GitProcessRunner = vi.fn(() => Promise.resolve(ok("")))): 
     modelPortFactory: () => undefined,
     store,
     gitRouteOptions: { runner, maxDiffBytes: 64, maxStatusBytes: 4096, maxChanges: 10 },
+    ...(ceiling === NO_CEILING ? {} : { codingRuntimeDeploymentCeiling: ceiling }),
   };
 }
 
@@ -319,6 +335,147 @@ describe("IdempotencyCache eviction", () => {
     expect(cache.size).toBe(2);
     expect(cache.get("p1")?.fingerprint).toBe("f1");
     expect(cache.get("p2")?.fingerprint).toBe("f2");
+  });
+});
+
+// Every write the facade admits, with a payload its allowed-key set accepts. Keyed by operation so a
+// new agent write kind is a compile error here rather than an untested one.
+const EXECUTE_PAYLOADS: Readonly<
+  Record<
+    Exclude<GitRepositoryAgentOperationKind, "status" | "diff" | "branch-list">,
+    Record<string, unknown>
+  >
+> = {
+  "branch-create": { branchName: "feat/x", baseBranchName: "main", startPointRefHash: "abcdef1" },
+  "branch-switch": { branchName: "main" },
+  stage: { pathspecs: ["a.ts"], includeUntracked: false },
+  unstage: { pathspecs: ["a.ts"] },
+  commit: { message: "feat: add a thing" },
+  fetch: { remote: "origin" },
+  pull: { remote: "origin" },
+  push: { remoteAlias: "origin", remoteBranchName: "feat/x", sourceBranchName: "feat/x" },
+  "pull-request": {
+    kind: "pr-create",
+    ownerAndRepo: "owner/repo",
+    headBranchName: "feat/x",
+    baseBranchName: "main",
+    title: "A title",
+    description: "",
+  },
+  merge: {
+    kind: "merge",
+    ownerAndRepo: "owner/repo",
+    prExternalId: "1",
+    baseBranchName: "main",
+    headBranchName: "feat/x",
+    mergeStrategy: "squash",
+  },
+};
+
+const WRITE_OPERATIONS = Object.keys(
+  EXECUTE_PAYLOADS,
+) as readonly (keyof typeof EXECUTE_PAYLOADS)[];
+
+function executeRequest(
+  operation: keyof typeof EXECUTE_PAYLOADS,
+  idempotencyKey = `${operation}-1`,
+): Record<string, unknown> {
+  return request({
+    operation,
+    mode: "execute",
+    idempotencyKey,
+    payload: EXECUTE_PAYLOADS[operation],
+  });
+}
+
+// The facade is the door an AGENT walks through to write to the user's repository. Before this gate
+// the only server-level admission for a state-changing POST was the loopback CSRF header: no autonomy
+// mode and no Authority Envelope was consulted anywhere on the git-delivery routes or on this facade,
+// so an agent could stage, commit, push, open a pull request and merge with no accepted authority at
+// all. The gate resolves the SERVER-OWNED product-wide ceiling and fails closed when none is
+// configured (ADR-0129 modes, ADR-0138 monotonic semantics).
+describe("agent facade — autonomy admission (fail-closed)", () => {
+  it.each(WRITE_OPERATIONS)(
+    "denies %s execute when no deployment ceiling is configured, without delegating",
+    async (operation) => {
+      const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+      const result = await handleGitAgentOperation(
+        ctx(executeRequest(operation)),
+        deps(runner, NO_CEILING),
+      );
+
+      expect(result.status).toBe(403);
+      expect(result.body).toMatchObject({
+        status: "denied",
+        denialReason: "autonomy-mode-denied",
+        operation,
+      });
+      expect(runner).not.toHaveBeenCalled();
+    },
+  );
+
+  // The expectation is DERIVED from the production rule table: whichever operations that table puts
+  // above supervised-coding must be denied there, and whichever it puts at or below must be admitted.
+  it.each(WRITE_OPERATIONS)("honours the ladder for %s at supervised-coding", async (operation) => {
+    const admitted = gitRepositoryAgentMinimumMode(operation) !== "autonomous-delivery";
+    const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
+    const result = await handleGitAgentOperation(
+      ctx(executeRequest(operation, `${operation}-supervised`)),
+      deps(runner, "supervised-coding"),
+    );
+
+    expect(result.body).toMatchObject({ status: admitted ? "delegated" : "denied" });
+    if (!admitted) {
+      expect(result.status).toBe(403);
+      expect(runner).not.toHaveBeenCalled();
+    }
+  });
+
+  it("admits a delivery execute once the ceiling is autonomous-delivery", async () => {
+    const result = await handleGitAgentOperation(
+      ctx(executeRequest("push", "push-autonomous")),
+      deps(undefined, "autonomous-delivery"),
+    );
+
+    expect(result.body).toMatchObject({ status: "delegated", operation: "push" });
+  });
+
+  it.each(["read", "preview"] as const)(
+    "always admits %s mode at the fail-closed default ceiling",
+    async (mode) => {
+      const runner = vi
+        .fn<GitProcessRunner>()
+        .mockResolvedValueOnce(ok(`${root}\n`))
+        .mockResolvedValueOnce(ok("## main\0"));
+      const body =
+        mode === "read"
+          ? request()
+          : request({ operation: "commit", mode: "preview", payload: { messageDraft: "feat: x" } });
+      const result = await handleGitAgentOperation(ctx(body), deps(runner, NO_CEILING));
+
+      expect(result.body).toMatchObject({ status: "delegated" });
+    },
+  );
+
+  it("does not consume the idempotency slot when the gate denies", async () => {
+    const body = executeRequest("branch-switch", "gate-then-admit");
+    const blocked = await handleGitAgentOperation(ctx(body), deps(undefined, NO_CEILING));
+    const admitted = await handleGitAgentOperation(ctx(body), deps(undefined, "supervised-coding"));
+
+    expect(blocked.body).toMatchObject({ status: "denied", denialReason: "autonomy-mode-denied" });
+    expect(admitted.body).toMatchObject({ status: "delegated" });
+    expect(admitted.body).not.toMatchObject({ replay: true });
+  });
+
+  it("keeps the denial content-free", async () => {
+    const result = await handleGitAgentOperation(
+      ctx(executeRequest("commit", "content-free")),
+      deps(undefined, NO_CEILING),
+    );
+    const body = result.body as { readonly message: string };
+
+    expect(body.message).not.toContain("add a thing");
+    expect(body.message).not.toContain(root);
   });
 });
 
