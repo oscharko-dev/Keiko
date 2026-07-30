@@ -296,7 +296,7 @@ describe("planMemoryMaintenance — confidence is immutable (O-V2)", () => {
     const plan = planFor([r], s);
     // The plan surface carries ONLY status-changing decisions; confidence (provenance) is never a
     // target. Reuse strengthens memories live in retrieval ranking, not by patching confidence here.
-    expect(Object.keys(plan).sort()).toEqual(["archive", "forget", "promote"]);
+    expect(Object.keys(plan).sort()).toEqual(["archive", "expire", "forget", "promote"]);
   });
 
   it("leaves an aged, unaccessed, mid-strength accepted memory untouched (was a decay candidate)", () => {
@@ -364,15 +364,83 @@ describe("planMemoryMaintenance — forget", () => {
     expect(planFor([r], emptyStats()).forget).toEqual([]);
   });
 
-  it("forgets a very faint, old, unaccessed proposed memory", () => {
+  it("EXPIRES rather than forgets a very faint, old, unaccessed proposed memory", () => {
     const r = makeRecord({
       id: "m",
       status: "proposed",
       confidence: 0.1,
       createdAt: NOW - 20 * DAY,
     });
-    // strength = 0.1 * 0.5^(20/45) ≈ 0.0735 < 0.1, age > 14d, no access
-    expect(planFor([r], emptyStats()).forget.map((f) => f.id)).toEqual(["m"]);
+    // strength = 0.1 * 0.5^(20/45) ≈ 0.0735 < 0.1, age > 14d, no access. A proposal is an item
+    // awaiting a HUMAN decision, so the unattended pass fades it out of the live set
+    // (proposed -> expired, a legal MEMORY_STATUS_TRANSITIONS edge) instead of destroying it.
+    const plan = planFor([r], emptyStats());
+    expect(plan.forget).toEqual([]);
+    expect(plan.expire.map((e) => e.id)).toEqual(["m"]);
+    expect(plan.expire[0]?.reason).toBe("proposed-faint-aged-out");
+  });
+
+  it("never expires a record that is not awaiting review", () => {
+    const accepted = makeRecord({
+      id: "a",
+      status: "accepted",
+      confidence: 0.01,
+      createdAt: NOW - 400 * DAY,
+    });
+    const archived = makeRecord({
+      id: "b",
+      status: "archived",
+      confidence: 0.01,
+      createdAt: NOW - 400 * DAY,
+    });
+    const conflicted = makeRecord({
+      id: "c",
+      status: "conflicted",
+      confidence: 0.01,
+      createdAt: NOW - 400 * DAY,
+    });
+    expect(planFor([accepted, archived, conflicted], emptyStats()).expire).toEqual([]);
+  });
+
+  it("does not expire a proposal that has already been recalled", () => {
+    const r = makeRecord({
+      id: "m",
+      status: "proposed",
+      confidence: 0.1,
+      createdAt: NOW - 20 * DAY,
+    });
+    const plan = planFor([r], stats([["m", { lastAccessedAt: NOW - DAY, accessCount: 1 }]]));
+    expect(plan.expire).toEqual([]);
+    expect(plan.forget).toEqual([]);
+  });
+
+  it("does not expire a pinned proposal", () => {
+    const r = makeRecord({
+      id: "m",
+      status: "proposed",
+      confidence: 0.01,
+      createdAt: NOW - 400 * DAY,
+      pinned: true,
+    });
+    expect(planFor([r], emptyStats()).expire).toEqual([]);
+  });
+
+  it("bounds expire to 25 per run in strength-ascending order", () => {
+    const records: MemoryRecord[] = [];
+    for (let i = 0; i < 40; i += 1) {
+      records.push(
+        makeRecord({
+          id: `a${String(i).padStart(2, "0")}`,
+          status: "proposed",
+          confidence: 0.01,
+          createdAt: NOW - 20 * DAY,
+        }),
+      );
+    }
+    const plan = planFor(records, emptyStats());
+    expect(plan.expire).toHaveLength(25);
+    expect(plan.expire[0]?.id).toBe("a00");
+    expect(plan.expire[24]?.id).toBe("a24");
   });
 
   it("does not hard-delete an accepted validity-expired memory", () => {
@@ -406,6 +474,7 @@ describe("planMemoryMaintenance — forget", () => {
           status: "proposed",
           confidence: 0.01,
           createdAt: NOW - 20 * DAY,
+          validUntil: NOW - 1,
         }),
       );
     }
@@ -442,6 +511,7 @@ describe("planMemoryMaintenance — pinned protection & determinism", () => {
     const appearances =
       plan.promote.filter((x) => x === "m").length +
       plan.archive.filter((x) => x === "m").length +
+      plan.expire.filter((x) => x.id === "m").length +
       plan.forget.filter((x) => x.id === "m").length;
     expect(appearances).toBe(1);
   });

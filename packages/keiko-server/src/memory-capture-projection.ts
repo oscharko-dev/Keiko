@@ -50,6 +50,7 @@ const CAPTURE_REJECTION_REASONS = [
   "restricted-sensitivity",
   "sensitive-memory-requires-approval",
   "suppressed-by-forget",
+  "suppressed-by-rejection",
   "scope-not-resolvable",
 ] as const satisfies readonly RejectionReason[];
 

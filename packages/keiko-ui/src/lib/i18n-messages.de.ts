@@ -751,7 +751,7 @@ export const DE_MESSAGES = {
   "memoria.approving": "Akzeptiere…",
   "memoria.reject": "Ablehnen",
   "memoria.rejecting": "Lehne ab…",
-  "memoria.rejectConflict": "Konflikt ablehnen",
+  "memoria.archiveConflict": "Konflikt archivieren",
   "memoria.archiveStale": "Veraltete archivieren",
   "memoria.archiving": "Archiviere…",
   "memoria.memoryApproved": "Erinnerung akzeptiert",

@@ -47,6 +47,7 @@ import {
   maybeRunAutoMaintenance,
   memoryMaintenanceAuditSink,
   memorySemanticizationMultipliers,
+  resolveMaintenanceAutonomyMode,
   type AutoMaintenanceState,
 } from "./memory-maintenance-handlers.js";
 import {
@@ -981,11 +982,17 @@ const memoryMaintenanceCursor: AutoMaintenanceState = {};
 
 // Opportunistic, bounded, rate-limited (#204, O-V4) maintenance fired once memory is in use. The
 // pass short-circuits on the cursor almost every turn and never throws into the chat path.
+//
+// GOVERNED (ADR-0146 D2): this sweep shares the promotion lever with at-capture promotion, so it is
+// handed the SAME effective posture — the operator's persisted memory mode clamped by the
+// deployment ceiling. In "Ask for approval" it promotes nothing; an unresolvable posture fails
+// closed to exactly that.
 function maybeRunChatAutoMaintenance(deps: UiHandlerDeps, vault: MemoryVaultStore): void {
   const multipliers = memorySemanticizationMultipliers(deps.env);
   maybeRunAutoMaintenance(vault, memoryMaintenanceAuditSink(deps), memoryMaintenanceCursor, {
     nowMs: Date.now(),
     enabled: deps.env.KEIKO_MEMORY_AUTO_MAINTAIN !== "0",
+    autonomyMode: resolveMaintenanceAutonomyMode(deps),
     ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
   });
 }

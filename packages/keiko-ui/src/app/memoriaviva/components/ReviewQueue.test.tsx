@@ -168,22 +168,50 @@ describe("ReviewQueue — populated state", () => {
     expect(screen.getByText("Sensitivität: Öffentlich")).toBeInTheDocument();
   });
 
-  it("renders conflicted memory with Reject conflict button (no Approve)", async () => {
+  it("renders conflicted memory with Archive conflict (never Reject, which the contract forbids)", async () => {
     const record = makeConflicted(makeId(3), "Conflicting preference");
     render(
       <ReviewQueue
         fetchQueueImpl={queueWith([record])}
         acceptImpl={acceptOk()}
         rejectImpl={rejectOk()}
+        archiveImpl={archiveOk()}
       />,
     );
     await waitFor(() => {
       expect(screen.getByText("Conflicting preference")).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
-    // Honest label (uiux-fix F035): the action permanently rejects the
-    // conflicted memory — it is not a mere queue dismissal.
-    expect(screen.getByRole("button", { name: "Reject conflict" })).toBeInTheDocument();
+    // MEMORY_STATUS_TRANSITIONS has no conflicted -> rejected edge, so the server refuses it. The
+    // queue must not offer an action that always fails; archive IS a legal exit from conflicted.
+    expect(screen.queryByRole("button", { name: /reject/i })).toBeNull();
+    expect(screen.getByRole("button", { name: "Archive conflict" })).toBeInTheDocument();
+  });
+
+  it("archives — never rejects — a conflicted memory when its action is invoked", async () => {
+    const record = makeConflicted(makeId(4), "Conflicting preference");
+    const archive = archiveOk();
+    const reject = rejectOk();
+    const user = userEvent.setup();
+    render(
+      <ReviewQueue
+        fetchQueueImpl={queueWith([record])}
+        acceptImpl={acceptOk()}
+        rejectImpl={reject}
+        archiveImpl={archive}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Conflicting preference")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Archive conflict" }));
+    await waitFor(() => {
+      expect(archive).toHaveBeenCalledWith(
+        makeId(4),
+        "archived conflicting memory from review queue",
+      );
+    });
+    expect(reject).not.toHaveBeenCalled();
   });
 
   it("renders stale accepted memory with its stale reason and archive action", async () => {

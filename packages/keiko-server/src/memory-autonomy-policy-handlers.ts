@@ -4,12 +4,14 @@ import {
   type MemoryAutonomyPolicyWire,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
-import { resolveMemoryCaptureAutonomyMode } from "./memory-capture-policy.js";
+import {
+  DEFAULT_MEMORY_AUTONOMY_MODE,
+  resolveMemoryCaptureAutonomyMode,
+} from "./memory-capture-policy.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import type { MemoryAutonomyPolicyRecord } from "./store/index.js";
 
 const MAX_POLICY_BODY_BYTES = 1_024;
-const DEFAULT_MEMORY_AUTONOMY_MODE = "governed-assist" as const;
 
 function policyProjection(
   deps: UiHandlerDeps,

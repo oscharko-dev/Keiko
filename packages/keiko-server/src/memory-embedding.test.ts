@@ -28,6 +28,7 @@ import {
   findSemanticDuplicate,
   insertSalienceMemoryWithNoveltyGate,
   memoryEmbeddingCalibrationFor,
+  type NoveltyInsertOutcome,
   memoryEmbeddingProviderIdentity,
   RELATED_LINK_COSINE_THRESHOLD,
   selectMemoryEmbeddingModelId,
@@ -485,14 +486,21 @@ describe("findSemanticDuplicate (#204, O-F1)", () => {
   });
 });
 
+// Narrows the discriminated outcome instead of matching a partial object, so the assertion stays
+// fully typed (expect.objectContaining widens to `any`).
+function expectInserted(outcome: NoveltyInsertOutcome, id: MemoryId): void {
+  expect(outcome.kind).toBe("inserted");
+  if (outcome.kind !== "inserted") return;
+  expect(outcome.record.id).toBe(id);
+}
+
 describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
   it("inserts a genuinely new memory and stores its embedding", async () => {
     const deps = makeDeps();
     const vault = makeVault();
     const rec = makeRecord("the user prefers tabs over spaces");
-    const { inserted, mergedInto } = await insertSalienceMemoryWithNoveltyGate(deps, vault, rec);
-    expect(mergedInto).toBeNull();
-    expect(inserted?.id).toBe(rec.id);
+    const outcome = await insertSalienceMemoryWithNoveltyGate(deps, vault, rec);
+    expectInserted(outcome, rec.id);
     expect(vault.getEmbedding(rec.id)).toBeDefined();
   });
 
@@ -506,8 +514,7 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
 
     const dup = makeRecord("the user's database is postgresql", "id-dup");
     const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, dup);
-    expect(result.inserted).toBeNull();
-    expect(result.mergedInto).toBe(canonical.id);
+    expect(result).toEqual({ kind: "merged", mergedInto: canonical.id });
     expect(vault.getMemory(dup.id)).toBeUndefined();
     const after = vault.getAccessStats([canonical.id]).get(canonical.id)?.accessCount ?? 0;
     expect(after).toBe(before + 1);
@@ -546,14 +553,62 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     // Prove the exact-hash forget check does NOT catch it (different normalized body).
     expect(vault.hasForgetTombstoneForBody(paraphrase.scope, paraphrase.body)).toBe(false);
     const suppressed = await insertSalienceMemoryWithNoveltyGate(deps, vault, paraphrase);
-    expect(suppressed.inserted).toBeNull();
-    expect(suppressed.mergedInto).toBeNull();
+    // A refusal is NOT a merge: nothing was stored and nothing was reinforced, and the outcome says
+    // so in its own right instead of being inferred from a null `inserted`.
+    expect(suppressed).toEqual({ kind: "suppressed", reason: "suppressed-by-forget" });
     expect(vault.getMemory(paraphrase.id)).toBeUndefined();
 
     // 3. An UNRELATED capture (orthogonal embedding) is NOT suppressed.
     const unrelated = makeRecord("the build uses webpack", "id-unrelated");
     const kept = await insertSalienceMemoryWithNoveltyGate(deps, vault, unrelated);
-    expect(kept.inserted?.id).toBe(unrelated.id);
+    expectInserted(kept, unrelated.id);
+  });
+
+  it("suppresses a PARAPHRASE of a memory the operator REJECTED in the review queue", async () => {
+    const vDark = Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]);
+    const vOther = Float32Array.from([0, 1, 0, 0, 0, 0, 0, 0]);
+    const keyed = vi.fn((request: OpenAIEmbeddingRequest) =>
+      Promise.resolve({
+        ok: true as const,
+        value: {
+          vector: request.input.toLowerCase().includes("dark") ? vDark : vOther,
+          modelId: EMBEDDING_MODEL,
+        },
+      }),
+    );
+    const deps = makeDeps({ embeddingRequest: keyed });
+    const vault = makeVault();
+
+    const original = makeRecord("the user prefers dark mode", "id-original");
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, original);
+    vault.updateMemory(original.id, { status: "rejected", staleReason: "no" }, Date.now());
+
+    const paraphrase = makeRecord("a dark interface is what the user likes", "id-paraphrase");
+    const suppressed = await insertSalienceMemoryWithNoveltyGate(deps, vault, paraphrase);
+    expect(suppressed).toEqual({ kind: "suppressed", reason: "suppressed-by-rejection" });
+    expect(vault.getMemory(paraphrase.id)).toBeUndefined();
+
+    const unrelated = makeRecord("the build uses webpack", "id-unrelated");
+    const kept = await insertSalienceMemoryWithNoveltyGate(deps, vault, unrelated);
+    expect(kept.kind).toBe("inserted");
+  });
+
+  it("merges into a live PROPOSED near-duplicate instead of queueing a second review item", async () => {
+    // The dedup corpus is live records, not accepted-only: a proposal already occupies the review
+    // queue, so a re-capture of the same fact reinforces it rather than asking the operator twice.
+    const deps = makeDeps();
+    const vault = makeVault();
+    const canonical: MemoryRecord = {
+      ...makeRecord("the user prefers postgres", "id-canonical"),
+      status: "proposed",
+    };
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, canonical);
+
+    const dup = makeRecord("the user's database is postgresql", "id-dup");
+    const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, dup);
+    expect(result).toEqual({ kind: "merged", mergedInto: canonical.id });
+    expect(vault.getMemory(dup.id)).toBeUndefined();
+    expect(vault.getMemory(canonical.id)?.status).toBe("proposed");
   });
 
   it("does not merge into superseded memories during the semantic novelty check", async () => {
@@ -565,8 +620,7 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
 
     const dup = makeRecord("the user's database is postgresql", "id-dup");
     const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, dup);
-    expect(result.mergedInto).toBeNull();
-    expect(result.inserted?.id).toBe(dup.id);
+    expectInserted(result, dup.id);
   });
 
   it("does NOT merge across scopes even with an identical vector (isolation)", async () => {
@@ -576,17 +630,15 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     await insertSalienceMemoryWithNoveltyGate(deps, vault, alice);
     const bob = makeRecord("shared body text", "id-bob", "bob");
     const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, bob);
-    expect(result.mergedInto).toBeNull();
-    expect(result.inserted?.id).toBe(bob.id);
+    expectInserted(result, bob.id);
   });
 
   it("inserts plainly when no embedding model is configured (graceful)", async () => {
     const deps = makeDeps({ modelId: CHAT_MODEL });
     const vault = makeVault();
     const rec = makeRecord("anything at all");
-    const { inserted, mergedInto } = await insertSalienceMemoryWithNoveltyGate(deps, vault, rec);
-    expect(mergedInto).toBeNull();
-    expect(inserted?.id).toBe(rec.id);
+    const outcome = await insertSalienceMemoryWithNoveltyGate(deps, vault, rec);
+    expectInserted(outcome, rec.id);
     expect(vault.getEmbedding(rec.id)).toBeUndefined();
   });
 });
@@ -671,8 +723,8 @@ describe("insertSalienceMemoryWithNoveltyGate auto-linking (#204, O-P4)", () => 
       vault,
       makeRecord("beta note", "id-beta"),
     );
-    expect(a.inserted?.id).toBe(memoryId("id-alpha"));
-    expect(b.inserted?.id).toBe(memoryId("id-beta"));
+    expect(a.kind).toBe("inserted");
+    expect(b.kind).toBe("inserted");
     const edges = vault.listOutgoingEdges(memoryId("id-beta"));
     expect(edges).toHaveLength(1);
     expect(edges[0]?.kind).toBe("related");

@@ -5,9 +5,15 @@
 // compute a plan, and applies the plan back to the vault + audit ledger. The split mirrors the
 // consolidation engine: planning is a pure function, application is the impure caller's job.
 //
-// Each record receives AT MOST ONE decision. Priority (highest first): forget > archive > promote.
-// A pinned record is never decayed, archived, or forgotten (its strength is pinned to 1); it may
-// still be promoted since that only strengthens it.
+// Each record receives AT MOST ONE decision. Priority (highest first):
+// forget > expire > archive > promote. A pinned record is never decayed, expired, archived, or
+// forgotten (its strength is pinned to 1); it may still be promoted since that only strengthens it.
+//
+// DESTRUCTION IS NEVER THE ANSWER TO AN UNANSWERED REVIEW. A `proposed` record exists because the
+// product told the human they would decide it (ADR-0146 D2), so the unattended pass fades it to
+// `expired` (a legal MEMORY_STATUS_TRANSITIONS edge that keeps the row, the review-queue row, and
+// the accepted/archived/forgotten exits) instead of hard-deleting it. Only an author-declared
+// validity window that has elapsed still forgets a non-accepted record.
 //
 // Strength model (human-memory analogue):
 //   base         = provenance.confidence                       (calibrated [0,1])
@@ -91,6 +97,12 @@ export const MEMORY_MAINTENANCE_DEFAULTS: MemoryMaintenancePolicy = {
 export interface MemoryMaintenancePlan {
   readonly promote: MemoryId[];
   readonly archive: MemoryId[];
+  // Non-destructive fade-out for records that exist to be DECIDED BY A HUMAN. A `proposed` record
+  // sitting in the review queue must never be hard-deleted by an unattended pass, so an aged-out
+  // faint proposal moves to `expired` — the contract's own documented terminus for "capture window
+  // elapsed before review" (MEMORY_STATUS_TRANSITIONS: `proposed -> expired`, and `expired` remains
+  // rehabilitable to accepted/archived/forgotten). Same shape and bound as `forget`.
+  readonly expire: { id: MemoryId; reason: MemoryForgetReason }[];
   readonly forget: { id: MemoryId; reason: MemoryForgetReason }[];
 }
 
@@ -167,6 +179,7 @@ interface RecordContext {
 
 type Decision =
   | { readonly kind: "forget"; readonly reason: MemoryForgetReason }
+  | { readonly kind: "expire"; readonly reason: MemoryForgetReason }
   | { readonly kind: "archive" }
   | { readonly kind: "promote" }
   | { readonly kind: "none" };
@@ -186,9 +199,20 @@ function shouldForget(
     c.record.status !== "accepted" &&
     c.record.status !== "archived"
   ) {
+    // An author-declared end date on the belief itself, not an un-answered review item.
     return "validity-expired";
   }
-  // Archive is an explicit retention state, not consent to hard-delete later.
+  // Archive is an explicit retention state, not consent to hard-delete later — and neither is
+  // `proposed`, which is an item explicitly AWAITING A HUMAN DECISION. A faint aged-out proposal is
+  // therefore expired (shouldExpire), never forgotten, by this unattended pass.
+  return null;
+}
+
+// A `proposed` record is the review queue's own backlog: it exists because the product promised the
+// local human would decide it (ADR-0146 D2). An unattended pass may fade it out of the live set
+// once it is faint, unrecalled, and old — but destroying it would answer the question on the
+// human's behalf, so the decision is a NON-DESTRUCTIVE status change to `expired`.
+function shouldExpire(c: RecordContext, p: MemoryMaintenancePolicy): MemoryForgetReason | null {
   if (
     c.record.status === "proposed" &&
     c.strength < p.forgetProposedMaxStrength &&
@@ -220,6 +244,8 @@ function decideForLive(c: RecordContext, p: MemoryMaintenancePolicy, nowMs: numb
   if (!c.record.pinned) {
     const forgetReason = shouldForget(c, p, nowMs);
     if (forgetReason !== null) return { kind: "forget", reason: forgetReason };
+    const expireReason = shouldExpire(c, p);
+    if (expireReason !== null) return { kind: "expire", reason: expireReason };
     if (shouldArchive(c, p)) return { kind: "archive" };
   }
   if (shouldPromote(c, p)) return { kind: "promote" };
@@ -247,7 +273,7 @@ function buildContext(
   };
 }
 
-interface ForgetCandidate {
+interface FadeCandidate {
   readonly id: MemoryId;
   readonly reason: MemoryForgetReason;
   readonly strength: number;
@@ -256,18 +282,18 @@ interface ForgetCandidate {
 interface Accumulator {
   readonly promote: MemoryId[];
   readonly archive: MemoryId[];
-  readonly forgetCandidates: ForgetCandidate[];
+  readonly expireCandidates: FadeCandidate[];
+  readonly forgetCandidates: FadeCandidate[];
 }
 
 function applyDecision(acc: Accumulator, c: RecordContext, decision: Decision): void {
   const id = c.record.id;
   switch (decision.kind) {
     case "forget":
-      acc.forgetCandidates.push({
-        id,
-        reason: decision.reason,
-        strength: c.strength,
-      });
+      acc.forgetCandidates.push({ id, reason: decision.reason, strength: c.strength });
+      return;
+    case "expire":
+      acc.expireCandidates.push({ id, reason: decision.reason, strength: c.strength });
       return;
     case "archive":
       acc.archive.push(id);
@@ -280,17 +306,18 @@ function applyDecision(acc: Accumulator, c: RecordContext, decision: Decision): 
   }
 }
 
-// Forget is bounded per run and ordered by ascending strength so the faintest memories go first.
-// Ties break on id for determinism.
-function boundForget(
-  candidates: readonly ForgetCandidate[],
-  maxForgetPerRun: number,
+// Fade-out effects are bounded per run and ordered by ascending strength so the faintest memories
+// go first. Ties break on id for determinism. Expire and forget share the bound so one pass can
+// never fan out past `maxForgetPerRun` writes per effect.
+function boundFade(
+  candidates: readonly FadeCandidate[],
+  maxPerRun: number,
 ): { id: MemoryId; reason: MemoryForgetReason }[] {
   return [...candidates]
     .sort((a, b) =>
       a.strength !== b.strength ? a.strength - b.strength : a.id.localeCompare(b.id),
     )
-    .slice(0, maxForgetPerRun)
+    .slice(0, maxPerRun)
     .map((c) => ({ id: c.id, reason: c.reason }));
 }
 
@@ -303,6 +330,7 @@ export function planMemoryMaintenance(
   const acc: Accumulator = {
     promote: [],
     archive: [],
+    expireCandidates: [],
     forgetCandidates: [],
   };
   for (const record of records) {
@@ -313,6 +341,7 @@ export function planMemoryMaintenance(
   return {
     promote: acc.promote,
     archive: acc.archive,
-    forget: boundForget(acc.forgetCandidates, policy.maxForgetPerRun),
+    expire: boundFade(acc.expireCandidates, policy.maxForgetPerRun),
+    forget: boundFade(acc.forgetCandidates, policy.maxForgetPerRun),
   };
 }
