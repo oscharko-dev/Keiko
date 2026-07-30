@@ -3,6 +3,10 @@
 // realpath gate + size cap + redaction). The Node-backed `nodeWorkspaceFs` adapter is kept on
 // the package's internal subpath so the public barrel exposes safe operations and injectable port
 // types, not a parallel raw read path.
+//
+// The editor lane's UNREDACTED read of the same guard chain lives behind the separate
+// `./internal/editor-read` subpath (see `editorRead.ts`) precisely so it cannot be picked up from
+// here by accident: every consumer of this barrel gets redacted bytes.
 
 export type {
   AuditEntry,

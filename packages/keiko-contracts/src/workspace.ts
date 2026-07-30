@@ -84,7 +84,13 @@ export const DEFAULT_READ_OPTIONS: ReadOptions = {
 export interface FileContent {
   readonly relativePath: string;
   readonly sizeBytes: number;
-  // Already redacted via redact() at the IO boundary; never raw secret content.
+  // Already redacted via redact() at the IO boundary; never raw secret content. Because redaction
+  // rewrites the bytes (it can change a line's width and collapse a multi-line PEM block into one
+  // token), the line and column numbers of this text do NOT necessarily address the same positions
+  // in the file. A surface that needs coordinates it will WRITE back — the editor's search &
+  // replace — must not derive them from here: it reads raw bytes through
+  // `@oscharko-dev/keiko-workspace/internal/editor-read` instead. Everything that feeds evidence,
+  // manifests, or grounded answers keeps using this redacted read.
   readonly text: string;
   readonly truncated: boolean;
 }

@@ -19,7 +19,11 @@ import {
   validateRetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { redact } from "@oscharko-dev/keiko-security";
-import { readWorkspaceFile } from "./discovery.js";
+import {
+  readWorkspaceFile,
+  readWorkspaceFileForEditing,
+  type WorkspaceContentLane,
+} from "./discovery.js";
 import {
   FileTooLargeError,
   RepoSearchInvalidQueryError,
@@ -154,6 +158,10 @@ interface FacadeDeps {
   readonly signal?: AbortSignal;
   readonly workspaceIndex?: WorkspaceIndex | undefined;
   readonly semanticSearchProvider?: SemanticSearchProvider | undefined;
+  // Defaults to "evidence" (redacted bytes) for every caller that does not say otherwise. Only the
+  // editor's own search/replace surface passes "editor" — see `SearchTextRunner.contentLane` and
+  // `@oscharko-dev/keiko-workspace/internal/editor-read`.
+  readonly contentLane?: WorkspaceContentLane | undefined;
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -420,12 +428,17 @@ function effectiveScanCandidateLimit(runner: SearchTextRunner, candidateCount: n
   );
 }
 
+type SearchTextRunnerDeps = Required<Pick<FacadeDeps, "fs" | "nowMs">> &
+  Pick<
+    FacadeDeps,
+    "candidatePathGlobs" | "searchHints" | "signal" | "semanticSearchProvider" | "contentLane"
+  >;
+
 function buildSearchTextRunner(
   scope: SearchScope,
   query: RetrievalQuery,
   limits: SearchLimits,
-  deps: Required<Pick<FacadeDeps, "fs" | "nowMs">> &
-    Pick<FacadeDeps, "candidatePathGlobs" | "searchHints" | "signal" | "semanticSearchProvider">,
+  deps: SearchTextRunnerDeps,
 ): SearchTextRunner {
   const candidatePathPredicate = buildCandidatePathPredicate(deps.candidatePathGlobs);
   return {
@@ -442,8 +455,15 @@ function buildSearchTextRunner(
     fingerprint: fingerprintFor(query),
     policy: resolveSearchPolicy(scope.relativePaths.length > 0, deps.searchHints),
     query,
+    contentLane: deps.contentLane ?? "evidence",
     ...(candidatePathPredicate === undefined ? {} : { candidatePathPredicate }),
-    semantic: createSemanticSearchSession(deps.semanticSearchProvider, query),
+    // A semantic session ships file text to an embedding provider — an evidence-lane egress path.
+    // The editor lane reads RAW bytes and is lexical only, so it never opens one: fail closed here so
+    // a future caller cannot combine the raw lane with a provider and turn a read into an egress.
+    semantic:
+      deps.contentLane === "editor"
+        ? undefined
+        : createSemanticSearchSession(deps.semanticSearchProvider, query),
   };
 }
 
@@ -669,7 +689,14 @@ function workspaceIndexPolicyShape(runner: SearchTextRunner): {
   };
 }
 
-function workspaceIndexCompatiblePolicy(runner: SearchTextRunner): boolean {
+function workspaceIndexCompatibleRun(runner: SearchTextRunner): boolean {
+  // The index persists lexical records built from REDACTED text. The editor lane matches RAW bytes,
+  // so sharing one index across both lanes would either poison a persisted evidence artifact with
+  // secret-shaped tokens or hand the editor lane back the very redacted text it was fixed to stop
+  // matching on. The editor lane therefore always runs uncached.
+  if (runner.contentLane === "editor") {
+    return false;
+  }
   return runner.policy.lowValuePathAllowlist.length === 0 && runner.policy.recentPaths.length === 0;
 }
 
@@ -1449,10 +1476,7 @@ function completedSearchResult(inputs: CompletedSearchResultInputs): SearchResul
   };
 }
 
-function buildSearchTextDeps(
-  deps: FacadeDeps,
-): Required<Pick<FacadeDeps, "fs" | "nowMs">> &
-  Pick<FacadeDeps, "candidatePathGlobs" | "searchHints" | "signal" | "semanticSearchProvider"> {
+function buildSearchTextDeps(deps: FacadeDeps): SearchTextRunnerDeps {
   return {
     fs: deps.fs ?? nodeWorkspaceFs,
     nowMs: deps.nowMs ?? Date.now,
@@ -1464,6 +1488,7 @@ function buildSearchTextDeps(
     ...(deps.semanticSearchProvider !== undefined
       ? { semanticSearchProvider: deps.semanticSearchProvider }
       : {}),
+    ...(deps.contentLane !== undefined ? { contentLane: deps.contentLane } : {}),
   };
 }
 
@@ -1603,7 +1628,7 @@ async function executeSearchText(
   runner: SearchTextRunner,
 ): Promise<SearchResult> {
   const workspaceIndexSession =
-    deps.workspaceIndex === undefined || !workspaceIndexCompatiblePolicy(runner)
+    deps.workspaceIndex === undefined || !workspaceIndexCompatibleRun(runner)
       ? undefined
       : await buildSearchWorkspaceIndexSession(scope, query, runner, limits, deps.workspaceIndex);
   const searchRunner = indexedSearchRunner(runner, workspaceIndexSession);
@@ -2152,19 +2177,35 @@ async function assertExcerptNotBinary(
   }
 }
 
+// Line numbering has to agree with whatever lane produced the coordinates being read. `redact()`
+// collapses a multi-line PEM block into a single token, so an excerpt taken from redacted text
+// addresses different lines than the raw file: an editor-lane match at raw line N would be shown
+// with the wrong source lines. The editor lane therefore splits RAW lines here and leaves masking to
+// the surface that emits the excerpt (the BFF applies the live-payload redactor to the response).
+function excerptFileLines(
+  scope: SearchScope,
+  request: ReadExcerptRequest,
+  fs: WorkspaceFs,
+  lane: WorkspaceContentLane,
+): readonly string[] {
+  const opts = { maxBytes: MAX_EXCERPT_FILE_BYTES };
+  if (lane === "editor") {
+    return readWorkspaceFileForEditing(scope.workspace, request.scopePath, opts, fs).rawText.split(
+      "\n",
+    );
+  }
+  return readWorkspaceFile(scope.workspace, request.scopePath, opts, fs).text.split("\n");
+}
+
 async function readExcerptLines(
   scope: SearchScope,
   request: ReadExcerptRequest,
   fs: WorkspaceFs,
   targetPath: string,
+  lane: WorkspaceContentLane,
 ): Promise<readonly string[]> {
   try {
-    return readWorkspaceFile(
-      scope.workspace,
-      request.scopePath,
-      { maxBytes: MAX_EXCERPT_FILE_BYTES },
-      fs,
-    ).text.split("\n");
+    return excerptFileLines(scope, request, fs, lane);
   } catch (err) {
     if (!(err instanceof FileTooLargeError)) {
       throw err;
@@ -2185,7 +2226,8 @@ async function readExcerptLines(
       }
       throw readErr;
     }
-    const lines = redact(decodeUtf8Prefix(bytes)).split("\n");
+    const prefix = decodeUtf8Prefix(bytes);
+    const lines = (lane === "editor" ? prefix : redact(prefix)).split("\n");
     if (request.startLine > lines.length) {
       throw err;
     }
@@ -2203,6 +2245,25 @@ function assertExcerptStartWithinLines(
       "outside-range",
     );
   }
+}
+
+// Slices the requested line window out of `allLines`, clamps it to the caller's byte budget, and
+// reports the end line the clamped content actually reaches.
+function excerptWindow(
+  request: ReadExcerptRequest,
+  allLines: readonly string[],
+): { readonly content: string; readonly truncated: boolean; readonly endLine: number } {
+  const sourceEndLine = Math.min(request.endLine, allLines.length);
+  const slice = allLines.slice(request.startLine - 1, request.endLine).join("\n");
+  const clamped = clampToBytes(slice, request.maxBytes);
+  const returnedLineCount = clamped.excerpt.split("\n").length;
+  return {
+    content: clamped.excerpt,
+    truncated: clamped.truncated,
+    endLine: clamped.truncated
+      ? Math.min(sourceEndLine, request.startLine + returnedLineCount - 1)
+      : sourceEndLine,
+  };
 }
 
 export async function readExcerpt(
@@ -2235,24 +2296,24 @@ export async function readExcerpt(
   // Read enough of the file to reach the requested line window (bounded by MAX_EXCERPT_FILE_BYTES),
   // then clamp the returned content to the caller's request.maxBytes budget. For files larger than
   // the read cap, the optional raw-byte port can still serve early windows from the bounded prefix.
-  const allLines = await readExcerptLines(scope, request, fs, target.path);
+  const allLines = await readExcerptLines(
+    scope,
+    request,
+    fs,
+    target.path,
+    deps.contentLane ?? "evidence",
+  );
   assertExcerptStartWithinLines(request, allLines);
-  const sourceEndLine = Math.min(request.endLine, allLines.length);
-  const slice = allLines.slice(request.startLine - 1, request.endLine).join("\n");
-  const clamped = clampToBytes(slice, request.maxBytes);
-  const returnedLineCount = clamped.excerpt.split("\n").length;
-  const returnedEndLine = clamped.truncated
-    ? Math.min(sourceEndLine, request.startLine + returnedLineCount - 1)
-    : sourceEndLine;
+  const window = excerptWindow(request, allLines);
   const atom = buildAtom({
     scopeId: scope.scopeId,
     scopePath: request.scopePath,
-    lineRange: { startLine: request.startLine, endLine: returnedEndLine },
+    lineRange: { startLine: request.startLine, endLine: window.endLine },
     provenanceKind: "excerpt-read",
     tool: "repo.readExcerpt",
     queryFingerprint: buildExcerptFingerprint(request),
     score: 1,
     emittedAtMs: nowMs(),
   });
-  return { atom, content: clamped.excerpt, truncated: clamped.truncated };
+  return { atom, content: window.content, truncated: window.truncated };
 }

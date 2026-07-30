@@ -81,6 +81,7 @@ function buildRunner(
     fingerprint: fingerprintFor(query),
     policy,
     query,
+    contentLane: "evidence",
   };
 }
 
