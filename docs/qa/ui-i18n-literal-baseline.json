@@ -1,0 +1,538 @@
+{
+  "$comment": "Ratcheted ledger of pre-existing untranslated user-facing literals in the Keiko UI, one entry per file (see scripts/check-ui-i18n-guard.mjs). A literal listed here is known debt the check:ui-i18n gate tolerates; ANY literal not listed fails the gate. The ledger only shrinks - regenerate it with `npm run check:ui-i18n -- --write-baseline` after removing literals, and never add an entry to silence a new one. For a literal that is genuinely not user-facing, mark the source line `// i18n-exempt: <reason>` instead, so the claim is visible in the diff.",
+  "files": {
+    "packages/keiko-ui/src/app/atlassian-connectors/page.tsx": [
+      "Keiko | Atlassian connectors"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/AppShell.tsx": [
+      "Connected",
+      "Connecting",
+      "Disconnected",
+      "Dismiss source connection notice",
+      "No branch selected",
+      "Setup required"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/ConnectedScopePill.tsx": [
+      "Last grounded run: ${formatTokenCount(totalTokens)} tokens, ${String(usage.filesRead)} files"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/context/TwinContext.tsx": [
+      "deploy · rm · db",
+      "feature branches",
+      "prod/** · infra/**",
+      "src/** · docs/**",
+      "test · build · lint"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/GroundedAnswer.tsx": [
+      "(opens in new tab)",
+      "a malformed document",
+      "a password-protected document",
+      "a scanned document with no text layer",
+      "an unsupported document format",
+      "binary or an unsupported format",
+      "Context inspection summary",
+      "document evidence extracted text",
+      "Evidence",
+      "Evidence citations",
+      "Grounding evidence",
+      "Hybrid source summary",
+      "Knowledge citations",
+      "Knowledge evidence",
+      "Knowledge Pod activity",
+      "Knowledge Pod activity details",
+      "Knowledge Pod retrieval activity",
+      "Knowledge scope summary",
+      "larger than 2 MB",
+      "Needs review",
+      "Partial coverage",
+      "Why these files were selected",
+      "Why these files?"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/Header.tsx": [
+      "Keiko"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/hooks/voice-dialogue-evaluation/index.ts": [
+      "Deprecated STT+TTS fallback deployment (full-realtime without browser WebRTC media)",
+      "No-voice deployment (no voice model configured)",
+      "Realtime-capable deployment (full-realtime capability with browser WebRTC media)",
+      "Speech-output-only deployment (spoken answer, no capture)",
+      "Speech-to-text-only deployment (dictation, no spoken answer)"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/LeftRail.tsx": [
+      "Git"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/modals/GatewaySetupDialog.tsx": [
+      "API key header",
+      "API token",
+      "Configured models",
+      "Customer-hosted",
+      "Deployment names for Microsoft Foundry",
+      "Figma Snapshot",
+      "Gateway URL",
+      "leave blank to keep",
+      "Local-only",
+      "Microsoft Foundry",
+      "Model gateway",
+      "Optional connector credential.",
+      "Paste deployment names, one per line",
+      "Paste image-capable model names, one per line",
+      "Replace model gateway settings",
+      "Stored",
+      "Stored model gateway credentials",
+      "Voice models"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/modals/PermControl.tsx": [
+      "Keiko-Mode",
+      "Legacy access mode",
+      "Zero standing rights · Keiko governs"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/modals/RelationshipCreateDialog.tsx": [
+      "Close",
+      "endpoint id",
+      "Relationship summary",
+      "Source endpoint ID",
+      "Source endpoint kind",
+      "Target endpoint ID",
+      "Target endpoint kind"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/repositoryReferences.tsx": [
+      "Select repository source"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/SafeMarkdown.tsx": [
+      "(opens in new tab)"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/VoiceDialogMode.tsx": [
+      "Interrupt",
+      "Interrupt the assistant",
+      "Stop voice dialogue"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/AgentGateCard.tsx": [
+      "Grant applies only to this queued action.",
+      "Permission scope"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/ConnectorPickerWidget.tsx": [
+      "— choose a Knowledge Pod source —",
+      "${set.displayName} (${String(set.capsuleCount)} pods)",
+      "Knowledge Pod Sets",
+      "Knowledge Pods",
+      "Local Knowledge Pod",
+      "Select Knowledge Pod source"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorBreadcrumbBar.tsx": [
+      "Editor breadcrumbs"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/editorCommands.ts": [
+      "Cancel Verification",
+      "Close Editor Split",
+      "Close Tab",
+      "Next Tab",
+      "Open Debug",
+      "Open File History",
+      "Open Problems",
+      "Previous Tab",
+      "Reopen Closed Editor",
+      "Revoke Workspace Script Trust",
+      "Run Build",
+      "Run Lint",
+      "Run Tests for File",
+      "Run Typecheck",
+      "Save All",
+      "Split Editor Down",
+      "Split Editor Right",
+      "Trust Workspace Scripts"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorOutlinePanel.tsx": [
+      "Current file symbols"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorRuntimeWidget.tsx": [
+      "Accept agent patch and apply changes",
+      "Agent changeset review",
+      "Discard unsaved changes?",
+      "Editor",
+      "Hidden open documents",
+      "Loading file…",
+      "Open documents",
+      "Reject agent patch and discard changes",
+      "Reload external changes"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorWidget.tsx": [
+      "Choose how to handle these files before continuing.",
+      "Editor files",
+      "Editor split controls",
+      "Hide project tree",
+      "Resize editor split",
+      "Resize project tree",
+      "Show project tree",
+      "Unsaved editor changes"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/AddRepositoryDialog.tsx": [
+      "Add mode",
+      "Add repository",
+      "Clone to folder",
+      "Close",
+      "Local repository path",
+      "Repository URL"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/BranchSelector.tsx": [
+      "Branches",
+      "New branch",
+      "No matching branches.",
+      "Search branches"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/ChangesPane.tsx": [
+      "Changed files",
+      "Changes",
+      "Changes and history",
+      "History",
+      "No changes",
+      "Select a repository to view its changes."
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/ConnectPanel.tsx": [
+      "No repository connected",
+      "Recent"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/DiffPane.tsx": [
+      "Diff",
+      "Diff scope",
+      "Select a change to view its diff.",
+      "Staged",
+      "Worktree"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/GitClientWindow.tsx": [
+      "Diff",
+      "Git"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/HistoryPane.tsx": [
+      "Changed files",
+      "Commit",
+      "Commit history",
+      "Commit history appears after selecting a repository.",
+      "History is unavailable for this repository.",
+      "No commits yet. Make a commit to start history.",
+      "Parents",
+      "Refs",
+      "Short SHA"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/NewBranchDialog.tsx": [
+      "Branch name",
+      "New branch"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/RepositoryToolbar.tsx": [
+      "No branch",
+      "Repository toolbar",
+      "Select a repository"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/SyncControl.tsx": [
+      "${summary.ahead.toString()} ahead of ${summary.upstream.ref}. Push local commits.",
+      "${summary.behind.toString()} behind ${summary.upstream.ref}. Pull fast-forward changes.",
+      "Add a Git remote before fetching, pulling, or pushing.",
+      "Checking repository sync state.",
+      "Create or switch to a branch before syncing.",
+      "Detached HEAD",
+      "Diverged: ${summary.ahead.toString()} ahead, ${summary.behind.toString()} behind. Fetch latest, then use Merge to reconcile.",
+      "Fetch",
+      "No branch",
+      "No remote",
+      "Open a Git repository before syncing.",
+      "Publish ${branch} to ${remote.name} and set upstream tracking.",
+      "Publish upstream",
+      "Pull",
+      "Push",
+      "Resolve conflicted files in Changes before syncing.",
+      "Resolve conflicts",
+      "Select a repository to sync.",
+      "Switch to a branch or create a branch before syncing.",
+      "Sync",
+      "Sync unavailable",
+      "Up to date with ${summary.upstream.ref}. Fetch checks for remote updates."
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/GovernedMergeCard.tsx": [
+      "Base branch",
+      "Delete head branch after merge",
+      "Head branch",
+      "High-risk merge confirmation",
+      "I confirm this high-risk merge",
+      "Merge strategy",
+      "Merge target",
+      "Pull Request number",
+      "Readiness",
+      "Run preview to load eligible strategies"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/GovernedPullRequestCard.tsx": [
+      "Action",
+      "Base branch",
+      "Convert to draft",
+      "Draft state",
+      "Head branch",
+      "Mark ready",
+      "No change",
+      "Open as draft",
+      "Pull Request body",
+      "Pull Request metadata",
+      "Pull Request number",
+      "Pull Request title",
+      "Readiness"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/IntegrationsWidget.tsx": [
+      "Catch up on threads",
+      "Error tracking",
+      "Integrations",
+      "Not connected — coming soon",
+      "PRs, code & CI",
+      "Team channels",
+      "Track issues"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/pdf-citation-preview-session.ts": [
+      "Preview changed",
+      "Preview not ready",
+      "Preview recovery required",
+      "Preview source needs rebind",
+      "Preview source unavailable",
+      "Preview temporarily unavailable",
+      "Preview too large",
+      "Preview unavailable"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/RuntimeHubWidget.tsx": [
+      "Commands",
+      "Containers",
+      "Files & Git diff",
+      "Git",
+      "Merge",
+      "policy / approval / evidence ledger",
+      "Project path",
+      "Pull Request",
+      "runId / taskId / engine / exit status",
+      "runId / taskId / exit status",
+      "Runtime actions",
+      "Tasks"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/useEditorVerificationRun.ts": [
+      "Verification: ${event.report.overallStatus}",
+      "Verification: ${event.stepKind} ${event.status}",
+      "Verification: ${event.stepKind}…",
+      "Verification: cancel failed",
+      "Verification: cancelled",
+      "Verification: cancelling…",
+      "Verification: failed",
+      "Verification: starting…",
+      "Verification: status unknown"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/figma/FigmaJsonSourceWindow.tsx": [
+      "Figma JSON",
+      "QI source"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/index.tsx": [
+      "Open a run from the Quality Intelligence hub."
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/ChatHistoryPanel.tsx": [
+      "Chat History",
+      "Conversation state",
+      "Conversations",
+      "No conversations",
+      "Search",
+      "Search chat history"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/InspectorPanel.tsx": [
+      "Authority",
+      "Configuration",
+      "Governance",
+      "Lifecycle",
+      "No window focused",
+      "Open windows",
+      "Persistence",
+      "Position",
+      "Size",
+      "State",
+      "Trust",
+      "Workspace"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/KeikoTwinPanel.tsx": [
+      "Digital twin sections",
+      "Email the customer",
+      "Keiko — Digital Twin",
+      "Keiko adapts behaviour &amp; tools to who is at the wheel.",
+      "Mock scenarios against your policy before going autonomous.",
+      "Open pull request #142",
+      "Overwrite prod/secrets.env",
+      "Run `kubectl apply` → prod",
+      "Run `npm test`",
+      "What your twin can reach on your behalf.",
+      "Write src/windows.jsx"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/MobilePanel.tsx": [
+      "Keiko Mobile",
+      "Scan to continue this workspace on your phone."
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/NotificationsPanel.tsx": [
+      "Notifications"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/PluginsPanel.tsx": [
+      "Browser automation",
+      "Connectors",
+      "Knowledge graph",
+      "Local file access",
+      "MCP Servers",
+      "Repos · PRs · issues",
+      "Step-by-step reasoning",
+      "Up-to-date library docs",
+      "Web search"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/ProjectPanel.tsx": [
+      "No registered projects",
+      "Projects"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/RelationshipEdgeBadge.tsx": [
+      "Active",
+      "Blocked",
+      "Completed",
+      "Degraded",
+      "Failed",
+      "High throughput",
+      "Inactive",
+      "Processing",
+      "Queued"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/RelationshipHealthPanel.tsx": [
+      "Blocked",
+      "Cycle participants",
+      "Failed (revoked)",
+      "Healthy",
+      "Invalid references",
+      "No relationship-graph defects were found.",
+      "Re-run the graph health check",
+      "Stale"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/RelationshipImpactCard.tsx": [
+      "Bounded impact analysis",
+      "Downstream impact",
+      "Loading…",
+      "Upstream impact"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/RelationshipInspectorPanel.tsx": [
+      "Activity",
+      "Archive — only available for active relationships",
+      "Audit history",
+      "Authority status",
+      "Cardinality",
+      "Current state",
+      "Denial reason",
+      "Evidence references",
+      "Evidence run",
+      "Forward dependencies",
+      "Impact summary",
+      "Jump to the evidence references section",
+      "Kind",
+      "Lifecycle status",
+      "Load more audit events",
+      "Reconnect — only available for blocked relationships",
+      "Reference",
+      "Relationship",
+      "Reverse dependencies",
+      "Revoke relationship",
+      "Semantics",
+      "Source",
+      "State",
+      "View evidence references",
+      "View impact analysis"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/RelationshipListPanel.tsx": [
+      "e.g. reads-context",
+      "Relationship density",
+      "Relationships",
+      "Toggle focus mode (F)"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/SearchResultList.tsx": [
+      "Workspace search results"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/TimelinePanel.tsx": [
+      "Activity timeline"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/quality-intelligence/ExportBar.tsx": [
+      "Jira (preview)",
+      "Markdown",
+      "Plain text",
+      "Polarion (preview)",
+      "qTest (preview)",
+      "Quality Center (preview)",
+      "Spreadsheet-safe CSV",
+      "Traceability matrix (CSV)",
+      "Traceability matrix (Markdown)",
+      "Xray (preview)",
+      "ZIP bundle (all formats)"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/quality-intelligence/RunLauncher.tsx": [
+      "Banking",
+      "Browse local",
+      "File",
+      "Folder",
+      "Insurance",
+      "Knowledge Pod",
+      "Knowledge Pod Set",
+      "Local Knowledge",
+      "Paste text",
+      "Regression (default)",
+      "Requirements"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.tsx": [
+      "Close",
+      "Minimize",
+      "Reset content zoom to 100%",
+      "Zoom content in",
+      "Zoom content out"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/WorkflowHandoff.tsx": [
+      "Workflow result actions"
+    ],
+    "packages/keiko-ui/src/app/layout.tsx": [
+      "Keiko — a governed agentic workspace for knowledge work.",
+      "Keiko | Ex experientia disco"
+    ],
+    "packages/keiko-ui/src/app/local-knowledge/capsule/page.tsx": [
+      "Knowledge Pod Detail — Keiko"
+    ],
+    "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": [
+      "MemoriaViva"
+    ],
+    "packages/keiko-ui/src/app/memoriaviva/consolidation/page.tsx": [
+      "Keiko"
+    ],
+    "packages/keiko-ui/src/app/memoriaviva/detail/MemoryDetailClient.tsx": [
+      "No memory selected"
+    ],
+    "packages/keiko-ui/src/app/memoriaviva/detail/page.tsx": [
+      "Keiko"
+    ],
+    "packages/keiko-ui/src/app/memoriaviva/health-scan/page.tsx": [
+      "Keiko"
+    ],
+    "packages/keiko-ui/src/app/memoriaviva/journal/page.tsx": [
+      "Keiko"
+    ],
+    "packages/keiko-ui/src/app/memoriaviva/page.tsx": [
+      "Keiko"
+    ],
+    "packages/keiko-ui/src/app/memoriaviva/review-queue/page.tsx": [
+      "Keiko"
+    ],
+    "packages/keiko-ui/src/lib/local-knowledge-api.ts": [
+      "Embedding mismatch",
+      "Embedding opaque",
+      "Embedding readiness warning",
+      "Embedding unavailable",
+      "Future member placeholder",
+      "HTML manual",
+      "Manual degraded",
+      "Manual indexing",
+      "Manual retrieval is ${summary.readiness}; it cannot contribute silently as empty evidence.",
+      "Manual retrieval is ${summary.readiness}; it is not yet ready to contribute evidence.",
+      "Manual retrieval is degraded; answers may use only available evidence. ${manualCountSummary(summary.counts)}.",
+      "Manual unavailable",
+      "Members not ready",
+      "Members unavailable",
+      "Policy denied",
+      "Ready for chat retrieval through Local Knowledge. ${manualCountSummary(summary.counts)}.",
+      "Reindex recommended",
+      "Retrieval degraded",
+      "Sealed local policy"
+    ]
+  }
+}

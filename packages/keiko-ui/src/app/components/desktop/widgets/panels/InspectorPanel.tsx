@@ -3,15 +3,17 @@
 import { useContext } from "react";
 import type { ReactNode } from "react";
 import { WsContext } from "../../context/WsContext";
-import { WIN_TYPES } from "../../windows/WindowsRegistry";
+import { localizedWindowTitle, WIN_TYPES } from "../../windows/WindowsRegistry";
+import { useTranslate } from "@/lib/i18n";
 import { WIN_META } from "../../windows/descriptor-meta";
 import { Icons } from "../../Icons";
 import type { IconName } from "../../Icons";
 
 export function InspectorPanel(): ReactNode {
   const { active, winCount } = useContext(WsContext);
+  const translate = useTranslate();
 
-  const t = active !== null ? WIN_TYPES[active.type] : null;
+  const def = active !== null ? WIN_TYPES[active.type] : null;
   const cfgRows =
     active !== null
       ? Object.entries(active.cfg).filter(([, v]) => v !== "" && v !== undefined && v !== null)
@@ -22,16 +24,16 @@ export function InspectorPanel(): ReactNode {
       <div className="rb-section-label" style={{ marginTop: 0 }}>
         Active window
       </div>
-      {active !== null && t !== null ? (
+      {active !== null && def !== null ? (
         <>
           <div className="insp-top">
             <span
               className="insp-ico"
-              style={{ color: t.accent === true ? "var(--accent)" : "var(--fg-muted)" }}
+              style={{ color: def.accent === true ? "var(--accent)" : "var(--fg-muted)" }}
             >
-              {renderIcon(t.icon, 16)}
+              {renderIcon(def.icon, 16)}
             </span>
-            <span className="insp-title">{t.title}</span>
+            <span className="insp-title">{localizedWindowTitle(translate, active.type)}</span>
           </div>
           <div className="rb-rows">
             <div className="rb-row">

@@ -7,12 +7,17 @@ import { expect, test } from "vitest";
 import {
   DE_CATALOG,
   EN_CATALOG,
+  I18N_EXEMPT_MIN_REASON,
+  LITERAL_BASELINE,
   changedFilesFromGit,
   changedFilesFromInput,
   checkUiI18nGuard,
   hasI18nRelevantAddedLine,
   hasUserFacingTextLine,
+  isTranslatableCopy,
   isUiProductionSource,
+  untranslatedLiteralsInLine,
+  untranslatedLiteralsInSource,
 } from "../check-ui-i18n-guard.mjs";
 
 const UI_FILE = "packages/keiko-ui/src/app/components/NewFeature.tsx";
@@ -27,7 +32,11 @@ async function withFixture(files, callback) {
   const repoRoot = await mkdtemp(join(tmpdir(), "keiko-i18n-guard-"));
 
   try {
-    for (const [file, contents] of Object.entries(files)) {
+    // The literal ledger is a required repository artifact (the guard fails loudly without it rather
+    // than defaulting to "no known debt"), so every fixture repo carries one. A test that needs
+    // pre-existing debt supplies its own via `baselineFixture`.
+    const withBaseline = { [LITERAL_BASELINE]: '{ "files": {} }\n', ...files };
+    for (const [file, contents] of Object.entries(withBaseline)) {
       await writeRepoFile(repoRoot, file, contents);
     }
 
@@ -35,6 +44,10 @@ async function withFixture(files, callback) {
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
+}
+
+function baselineFixture(entries) {
+  return { [LITERAL_BASELINE]: `${JSON.stringify({ files: entries }, null, 2)}\n` };
 }
 
 const matchingCatalogs = {
@@ -48,8 +61,22 @@ test("recognizes production UI source under the Keiko UI app tree", () => {
   expect(isUiProductionSource("packages/keiko-ui/src/app/components/NewFeature.test.tsx")).toBe(
     false,
   );
-  expect(isUiProductionSource("packages/keiko-ui/src/app/components/copy.ts")).toBe(false);
+  // Strengthened, not relaxed: a `.ts` file under the UI tree IS production UI source. The previous
+  // expectation (`false`) encoded the structural blind spot that let the whole window-type registry —
+  // every window title, description and launcher-field label the three window-launching surfaces
+  // render — ship as English literals with this gate reporting OK on every change to it.
+  expect(isUiProductionSource("packages/keiko-ui/src/app/components/copy.ts")).toBe(true);
+  expect(isUiProductionSource("packages/keiko-ui/src/lib/run-summary.ts")).toBe(true);
+  expect(isUiProductionSource("packages/keiko-ui/src/app/components/copy.d.ts")).toBe(false);
+  // The i18n layer itself is never a subject: catalogs, the provider, and `*-i18n.ts` helpers.
   expect(isUiProductionSource(EN_CATALOG)).toBe(false);
+  expect(isUiProductionSource("packages/keiko-ui/src/lib/i18n-messages.optional.en.ts")).toBe(
+    false,
+  );
+  expect(isUiProductionSource("packages/keiko-ui/src/lib/optional-widget-i18n.ts")).toBe(false);
+  expect(
+    isUiProductionSource("packages/keiko-ui/src/app/components/desktop/widgets/feature-i18n.ts"),
+  ).toBe(false);
   expect(isUiProductionSource("src/server.ts")).toBe(false);
 });
 
@@ -441,6 +468,13 @@ test("a key helper does not satisfy the catalog-update requirement by itself", a
   );
 });
 
+// The invariant this pins is "a UI file that touches the i18n module and STILL hardcodes text must
+// fail". It is unchanged; the reason reported for it is now stronger. `I18nTranslate` is a real i18n
+// seam (a non-component module receives the translate function as a parameter — how the window-type
+// registry localizes), so the file-level "does not use the i18n API" heuristic no longer fires on it.
+// The per-literal rule catches the same file and names the exact untranslated string instead, which is
+// the failure the author can act on. The file-level heuristic keeps its own coverage below, in the
+// case where the file has no i18n seam at all.
 test("fails UI source changes that only import the i18n module", async () => {
   await withFixture(
     {
@@ -455,7 +489,8 @@ test("fails UI source changes that only import the i18n module", async () => {
       });
 
       expect(result.ok).toBe(false);
-      expect(result.problems.join("\n")).toMatch(/do not use the i18n API/);
+      expect(result.problems.join("\n")).toMatch(/untranslated user-facing literal/);
+      expect(result.problems.join("\n")).toMatch(/"Hard-coded text"/);
     },
   );
 });
@@ -555,7 +590,10 @@ async function withGitFixture(callback) {
     run(["init", "-q"]);
     run(["config", "user.email", "test@example.com"]);
     run(["config", "user.name", "Test"]);
-    for (const [file, contents] of Object.entries(matchingCatalogs)) {
+    for (const [file, contents] of Object.entries({
+      [LITERAL_BASELINE]: '{ "files": {} }\n',
+      ...matchingCatalogs,
+    })) {
       await writeRepoFile(repoRoot, file, contents);
     }
     await writeRepoFile(
@@ -763,4 +801,149 @@ test("rejects a one-sided optional-widget catalog change and names the missing h
       expect(result.problems.join("\n")).toContain("i18n-messages.optional.de.ts");
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// Untranslated user-facing literal detection.
+//
+// The guard's original question — "does this changed .tsx mention an i18n API anywhere in the file?" —
+// cannot fail on the case it exists to prevent. These tests pin the per-literal rule that can.
+
+const REGISTRY_FILE = "packages/keiko-ui/src/app/components/desktop/windows/Registry.ts";
+const REGISTRY_SOURCE =
+  'export const WINDOWS = [\n  { id: "files", label: "Files", desc: "Browse a folder" },\n];\n';
+
+test("flags a user-facing literal in each of the three positions a user reads it", () => {
+  expect(untranslatedLiteralsInLine('      <span className="pal-name">New window</span>')).toEqual([
+    "New window",
+  ]);
+  expect(untranslatedLiteralsInLine('        aria-label="Browse source file"')).toEqual([
+    "Browse source file",
+  ]);
+  expect(untranslatedLiteralsInLine('  { id: "unit", label: "Unit Test Agent" },')).toEqual([
+    "Unit Test Agent",
+  ]);
+  expect(untranslatedLiteralsInLine('  descKey: "window.type.files.desc",')).toEqual([]);
+  expect(untranslatedLiteralsInLine('      <span>{t("workspace.newWindow")}</span>')).toEqual([]);
+  expect(untranslatedLiteralsInLine('  // label: "Commented out copy"')).toEqual([]);
+});
+
+test("separates human copy from the machine tokens that share those positions", () => {
+  for (const copy of ["Close", "New window", "Toggle light / dark theme", "Source file"]) {
+    expect(isTranslatableCopy(copy)).toBe(true);
+  }
+  for (const token of [
+    "governed-assist",
+    "open-directory",
+    "chat",
+    "editor.command.runLint",
+    "https://intranet/handbook",
+    "/absolute/folder/path",
+    "src/file.ts",
+    "OK",
+    "0 B",
+    "100%",
+    "${title} — ${subtitle}",
+    '${f.prefix ?? ""}${option}',
+  ]) {
+    expect(isTranslatableCopy(token)).toBe(false);
+  }
+});
+
+test("fails a changed .ts registry that carries an English label literal", async () => {
+  await withFixture({ ...matchingCatalogs, [REGISTRY_FILE]: REGISTRY_SOURCE }, (repoRoot) => {
+    const result = checkUiI18nGuard({ repoRoot, changedFiles: [REGISTRY_FILE] });
+
+    expect(result.ok).toBe(false);
+    const joined = result.problems.join("\n");
+    expect(joined).toContain("untranslated user-facing literal");
+    expect(joined).toContain('"Files"');
+    expect(joined).toContain('"Browse a folder"');
+  });
+});
+
+test("tolerates a literal already recorded in the ratcheted ledger", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      ...baselineFixture({ [REGISTRY_FILE]: ["Browse a folder", "Files"] }),
+      [REGISTRY_FILE]: REGISTRY_SOURCE,
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({ repoRoot, changedFiles: [REGISTRY_FILE] });
+
+      expect(result.problems.join("\n")).toBe("");
+      expect(result.ok).toBe(true);
+    },
+  );
+});
+
+test("still fails when a NEW literal joins a file that already carries known debt", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      ...baselineFixture({ [REGISTRY_FILE]: ["Files"] }),
+      [REGISTRY_FILE]: REGISTRY_SOURCE,
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({ repoRoot, changedFiles: [REGISTRY_FILE] });
+
+      expect(result.ok).toBe(false);
+      const joined = result.problems.join("\n");
+      expect(joined).toContain('"Browse a folder"');
+      expect(joined).not.toContain('2: "Files"');
+    },
+  );
+});
+
+test("requires the ledger to shrink when a literal is translated away", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      ...baselineFixture({ [REGISTRY_FILE]: ["Files"] }),
+      [REGISTRY_FILE]: 'export const WINDOWS = [{ id: "files", labelKey: "window.files" }];\n',
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({ repoRoot, changedFiles: [REGISTRY_FILE] });
+
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toContain("The ledger only shrinks");
+    },
+  );
+});
+
+test("honours a documented opt-out and rejects a wordless one", () => {
+  const documented = untranslatedLiteralsInSource(
+    '  const glyph = { label: "Item separator glyph" }; // i18n-exempt: internal join token, never rendered\n',
+  );
+  expect(documented.findings).toEqual([]);
+  expect(documented.weakExemptions).toEqual([]);
+
+  const wordless = untranslatedLiteralsInSource(
+    "  <span>Raw copy</span> {/* i18n-exempt: n/a */}\n",
+  );
+  expect(wordless.findings).toEqual([]);
+  expect(wordless.weakExemptions).toEqual([{ line: 1, reason: "n/a" }]);
+  expect("n/a".length).toBeLessThan(I18N_EXEMPT_MIN_REASON);
+});
+
+test("reports a wordless opt-out as a gate failure with the offending line", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [REGISTRY_FILE]: 'export const T = { title: "Open windows" }; // i18n-exempt: no\n',
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({ repoRoot, changedFiles: [REGISTRY_FILE] });
+
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toContain('claims `// i18n-exempt:` with reason "no"');
+    },
+  );
+});
+
+test("treats a registry label literal as an i18n-relevant added line", () => {
+  expect(hasI18nRelevantAddedLine('  { id: "files", label: "Files" },')).toBe(true);
+  expect(hasI18nRelevantAddedLine('  label: t("window.field.folder"),')).toBe(true);
+  expect(hasI18nRelevantAddedLine("  const total = left + right;")).toBe(false);
 });

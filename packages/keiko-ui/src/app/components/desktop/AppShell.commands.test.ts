@@ -23,6 +23,12 @@ import {
 } from "./AppShell";
 import type { AppWindow, Connection } from "./windows/types";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
+import { translate, type I18nTranslate } from "@/lib/i18n";
+
+// The command labels are English here because "en" is the locale under test, not because the builder
+// hardcodes English: `buildAppShellCommands` now REQUIRES a translate function, so a caller that
+// forgets the locale no longer compiles.
+const enTranslate: I18nTranslate = (key, values) => translate("en", key, values);
 
 function fakeApi(): WorkspaceApi {
   return {
@@ -100,6 +106,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "dark",
       vi.fn(),
       fakeUndoStack(),
+      enTranslate,
     );
     const newCommands = commands.filter((c) => c.id.startsWith("new-"));
     expect(newCommands.map((c) => c.id)).toEqual([
@@ -122,6 +129,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "dark",
       vi.fn(),
       fakeUndoStack(),
+      enTranslate,
     );
     const ids = new Set(commands.map((c) => c.id));
     expect(ids.has("tile")).toBe(true);
@@ -138,6 +146,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "dark",
       vi.fn(),
       fakeUndoStack(),
+      enTranslate,
     );
     expect(commands.find((c) => c.id === "undo")).toBeDefined();
     expect(commands.find((c) => c.id === "redo")).toBeDefined();
@@ -151,6 +160,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "dark",
       vi.fn(),
       fakeUndoStack(),
+      enTranslate,
     );
     const undo = commands.find((c) => c.id === "undo");
     expect(undo?.label).toBe("Undo (window and panel changes only)");
@@ -166,6 +176,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "dark",
       vi.fn(),
       fakeUndoStack({ canUndo: true, undoLabel: "Toggle project panel" }),
+      enTranslate,
     );
     const undo = commands.find((c) => c.id === "undo");
     expect(undo?.label).toBe("Undo: Toggle project panel");
@@ -179,6 +190,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "dark",
       vi.fn(),
       fakeUndoStack({ canRedo: true, redoLabel: "Restore quality panel" }),
+      enTranslate,
     );
     const redo = commands.find((c) => c.id === "redo");
     expect(redo?.label).toBe("Redo: Restore quality panel");
@@ -186,7 +198,15 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
 
   it("running the Undo command delegates to the undo stack", () => {
     const stack = fakeUndoStack();
-    const commands = buildAppShellCommands(fakeApi(), vi.fn(), vi.fn(), "dark", vi.fn(), stack);
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      stack,
+      enTranslate,
+    );
     const undo = commands.find((c) => c.id === "undo");
     undo?.run();
     expect(stack.undo).toHaveBeenCalledTimes(1);
@@ -194,7 +214,15 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
 
   it("running the Redo command delegates to the undo stack", () => {
     const stack = fakeUndoStack();
-    const commands = buildAppShellCommands(fakeApi(), vi.fn(), vi.fn(), "dark", vi.fn(), stack);
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      stack,
+      enTranslate,
+    );
     const redo = commands.find((c) => c.id === "redo");
     redo?.run();
     expect(stack.redo).toHaveBeenCalledTimes(1);
@@ -202,7 +230,15 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
 
   it("running layout commands delegates to the workspace API", () => {
     const api = fakeApi();
-    const commands = buildAppShellCommands(api, vi.fn(), vi.fn(), "dark", vi.fn(), fakeUndoStack());
+    const commands = buildAppShellCommands(
+      api,
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+      enTranslate,
+    );
 
     commands.find((c) => c.id === "tile")?.run();
     commands.find((c) => c.id === "split")?.run();
@@ -222,6 +258,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "dark",
       toggleTheme,
       fakeUndoStack(),
+      enTranslate,
     );
 
     commands.find((c) => c.id === "theme")?.run();
@@ -237,6 +274,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "light",
       vi.fn(),
       fakeUndoStack(),
+      enTranslate,
     );
 
     expect(commands.find((c) => c.id === "theme")?.icon).toBe("moon");
@@ -250,6 +288,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "dark",
       vi.fn(),
       fakeUndoStack(),
+      enTranslate,
     );
 
     expect(commands.find((c) => c.id === "theme")?.icon).toBe("sun");
@@ -264,6 +303,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "dark",
       vi.fn(),
       fakeUndoStack(),
+      enTranslate,
     );
 
     commands.find((c) => c.id === "new-chat")?.run();
@@ -281,6 +321,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "dark",
       vi.fn(),
       fakeUndoStack(),
+      enTranslate,
     );
     const undo = commands.find((c) => c.id === "undo");
     const redo = commands.find((c) => c.id === "redo");
@@ -297,6 +338,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "dark",
       vi.fn(),
       fakeUndoStack(),
+      enTranslate,
     );
     const settings = commands.find((c) => c.id === "open-settings");
     settings?.run();
@@ -313,6 +355,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "dark",
       vi.fn(),
       fakeUndoStack(),
+      enTranslate,
     );
     const settings = commands.find((c) => c.id === "open-editor-settings");
     settings?.run();
@@ -334,6 +377,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "dark",
       vi.fn(),
       fakeUndoStack(),
+      enTranslate,
     );
     const ids = new Set(commands.map((c) => c.id));
     expect(ids.has("open-memoria")).toBe(true);
@@ -386,6 +430,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "dark",
       vi.fn(),
       fakeUndoStack(),
+      enTranslate,
     );
     expect(commands.find((c) => c.id === commandId)).toBeUndefined();
   });
@@ -398,6 +443,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "dark",
       vi.fn(),
       fakeUndoStack(),
+      enTranslate,
     );
     expect(commands.find((c) => c.id === "open-updates")).toBeUndefined();
     expect(commands.find((c) => c.id === "new-updates")).toBeUndefined();
@@ -411,6 +457,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "dark",
       vi.fn(),
       fakeUndoStack(),
+      enTranslate,
     );
     expect(commands.find((c) => c.id === "new-agents")).toMatchObject({
       label: "New Agents",
@@ -427,6 +474,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "dark",
       vi.fn(),
       fakeUndoStack(),
+      enTranslate,
     );
     expect(commands.find((c) => c.id === "undo")?.shortcut).toBe("⌘Z");
     expect(commands.find((c) => c.id === "redo")?.shortcut).toBe("⇧⌘Z");

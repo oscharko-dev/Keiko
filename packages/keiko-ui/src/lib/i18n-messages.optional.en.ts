@@ -16,6 +16,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "quickAccess.result.truncatedSuffix": " Results were capped; refine the query.",
   "quickAccess.result.truncatedPerRootSuffix":
     " Results are capped per root and merged fairly; refine the query.",
+  "quickAccess.searchUnavailable": "Search unavailable for {roots}.",
   "browserWidget.error.unexpected": "Unexpected error.",
   "browserWidget.error.streamDisconnected":
     "Live browser events disconnected. Reopen the session to resume the feed.",

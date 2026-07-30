@@ -42,7 +42,7 @@ import {
 } from "./hooks/workspaceActions";
 import { fetchConfig, updateChatConnectedScopes, updateChatLocalKnowledgeScopes } from "@/lib/api";
 import { newClientCorrelationId } from "@/lib/http";
-import { I18nProvider, useTranslate } from "@/lib/i18n";
+import { I18nProvider, useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type {
   Chat,
@@ -72,7 +72,7 @@ import {
   type Command,
 } from "./quickAccessRegistry";
 import "./widgets";
-import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
+import { localizedWindowTitle, WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow, Connection } from "./windows/types";
 import { registerSw } from "./install/registerSw";
 import { UpdateStartupNotice } from "./update/UpdateStartupNotice";
@@ -584,82 +584,53 @@ function focusCreatedWindow(id: string): void {
   });
 }
 
-export function buildAppShellCommands(
+function layoutAndViewCommands(
   api: WorkspaceApi,
-  toggleTool: (type: WindowType) => void,
-  openPalettePick: (type: WindowType) => void,
   theme: "light" | "dark",
   toggleTheme: () => void,
-  undoStack: WorkspaceUndoStackApi,
+  t: I18nTranslate,
 ): readonly Command[] {
-  const createCommands = CARD_TYPES.map((tp): Command => {
-    const t = WIN_TYPES[tp];
-    return {
-      id: `new-${tp}`,
-      label: `New ${t.title}`,
-      group: "Create",
-      icon: t.icon,
-      run: () => openPalettePick(tp),
-    };
-  });
-  const toolCommands = TOOL_TYPES.map((tp): Command => {
-    const t = WIN_TYPES[tp];
-    return {
-      id: `open-${tp}`,
-      label: `Open ${t.title}`,
-      group: "Tools",
-      icon: t.icon,
-      run: () => toggleTool(tp),
-    };
-  });
-  const openEditorSettingsCommand: Command = {
-    id: "open-editor-settings",
-    label: "Open Editor settings",
-    group: "Tools",
-    icon: "settings",
-    run: () => {
-      toggleTool("settings");
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent(OPEN_EDITOR_SETTINGS_EVENT));
-      }
-    },
-  };
-  const staticCommands: readonly Command[] = [
+  return [
     {
       id: "tile",
-      label: "Tile all windows",
-      group: "Layout",
+      label: t("header.tileAll"),
+      group: t("command.group.layout"),
       icon: "tile",
       run: api.tileAll,
     },
     {
       id: "split",
-      label: "Split front windows",
-      group: "Layout",
+      label: t("header.splitFront"),
+      group: t("command.group.layout"),
       icon: "split",
       run: api.splitFront,
     },
     {
       id: "cascade",
-      label: "Cascade windows",
-      group: "Layout",
+      label: t("header.cascade"),
+      group: t("command.group.layout"),
       icon: "cascade",
       run: api.cascade,
     },
     {
       id: "theme",
-      label: "Toggle light / dark theme",
-      group: "View",
+      label: t("command.toggleTheme"),
+      group: t("command.group.view"),
       icon: theme === "light" ? "moon" : "sun",
       run: toggleTheme,
     },
+  ];
+}
+
+function undoRedoCommands(undoStack: WorkspaceUndoStackApi, t: I18nTranslate): readonly Command[] {
+  return [
     {
       id: "undo",
       label:
         undoStack.undoLabel !== null
-          ? `Undo: ${undoStack.undoLabel}`
-          : "Undo (window and panel changes only)",
-      group: "Edit",
+          ? t("command.undoLabelled", { label: undoStack.undoLabel })
+          : t("command.undo"),
+      group: t("command.group.edit"),
       icon: "back",
       shortcut: "⌘Z",
       run: undoStack.undo,
@@ -668,15 +639,61 @@ export function buildAppShellCommands(
       id: "redo",
       label:
         undoStack.redoLabel !== null
-          ? `Redo: ${undoStack.redoLabel}`
-          : "Redo (window and panel changes only)",
-      group: "Edit",
+          ? t("command.redoLabelled", { label: undoStack.redoLabel })
+          : t("command.redo"),
+      group: t("command.group.edit"),
       icon: "fwd",
       shortcut: "⇧⌘Z",
       run: undoStack.redo,
     },
   ];
-  return [...createCommands, ...toolCommands, openEditorSettingsCommand, ...staticCommands];
+}
+
+// `t` is a required argument, not an optional convenience: every label and group name below reaches
+// the quick-access command list, which used to render English template literals (`New ${title}`,
+// "Layout", "Edit") no matter which locale the user selected.
+export function buildAppShellCommands(
+  api: WorkspaceApi,
+  toggleTool: (type: WindowType) => void,
+  openPalettePick: (type: WindowType) => void,
+  theme: "light" | "dark",
+  toggleTheme: () => void,
+  undoStack: WorkspaceUndoStackApi,
+  t: I18nTranslate,
+): readonly Command[] {
+  const createCommands = CARD_TYPES.map((tp): Command => ({
+    id: `new-${tp}`,
+    label: t("command.new", { label: localizedWindowTitle(t, tp) }),
+    group: t("command.group.create"),
+    icon: WIN_TYPES[tp].icon,
+    run: () => openPalettePick(tp),
+  }));
+  const toolCommands = TOOL_TYPES.map((tp): Command => ({
+    id: `open-${tp}`,
+    label: t("command.open", { label: localizedWindowTitle(t, tp) }),
+    group: t("command.group.tools"),
+    icon: WIN_TYPES[tp].icon,
+    run: () => toggleTool(tp),
+  }));
+  const openEditorSettingsCommand: Command = {
+    id: "open-editor-settings",
+    label: t("command.openEditorSettings"),
+    group: t("command.group.tools"),
+    icon: "settings",
+    run: () => {
+      toggleTool("settings");
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent(OPEN_EDITOR_SETTINGS_EVENT));
+      }
+    },
+  };
+  return [
+    ...createCommands,
+    ...toolCommands,
+    openEditorSettingsCommand,
+    ...layoutAndViewCommands(api, theme, toggleTheme, t),
+    ...undoRedoCommands(undoStack, t),
+  ];
 }
 
 // S3358 — the two deep-linked tool routes each map to a fixed singleton window type.
@@ -1358,8 +1375,8 @@ function AppShellInner(): ReactNode {
   }, []);
 
   const commands = useMemo(
-    () => buildAppShellCommands(ws.api, onTool, pick, theme, toggleTheme, undoStack),
-    [ws.api, onTool, pick, theme, toggleTheme, undoStack],
+    () => buildAppShellCommands(ws.api, onTool, pick, theme, toggleTheme, undoStack, t),
+    [ws.api, onTool, pick, theme, toggleTheme, undoStack, t],
   );
   const activeEditorHost =
     active?.type === "editor" && active.id.length > 0 ? (editorHosts.get(active.id) ?? null) : null;

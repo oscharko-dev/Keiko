@@ -6,7 +6,7 @@ import { fetchHealth } from "@/lib/api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { Icons } from "./Icons";
 import type { TwinMode } from "./hooks/useTwinMode";
-import { WIN_TYPES } from "./windows/WindowsRegistry";
+import { localizedWindowTitle, WIN_TYPES } from "./windows/WindowsRegistry";
 import { subText } from "./windows/connectionUtils";
 import type { AppWindow } from "./windows/types";
 
@@ -163,6 +163,7 @@ function FooterImpl({
             <div className="ft-window-list">
               {sortedWindows.map((win) => {
                 const def = WIN_TYPES[win.type];
+                const windowTitle = localizedWindowTitle(t, win.type);
                 const Icon = Icons[def.icon];
                 const sub = subText(win.type, win.cfg);
                 const stateLabel = windowStateLabel(win, t);
@@ -177,7 +178,7 @@ function FooterImpl({
                     data-minimized={win.minimized === true ? "true" : "false"}
                     aria-label={t("footer.windowAction", {
                       action: actionLabel,
-                      title: def.title,
+                      title: windowTitle,
                       suffix: actionSuffix,
                     })}
                     onClick={() => onSelectWindow(win.id)}
@@ -189,7 +190,7 @@ function FooterImpl({
                       <Icon size={14} />
                     </span>
                     <span className="ft-window-copy">
-                      <span className="ft-window-title">{def.title}</span>
+                      <span className="ft-window-title">{windowTitle}</span>
                       <span className="ft-window-sub" title={sub ?? stateLabel}>
                         {sub ?? stateLabel}
                       </span>
