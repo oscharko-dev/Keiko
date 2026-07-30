@@ -605,9 +605,8 @@ function buildModelRefinement(options: {
   readonly routing: PromptEnhancementModelRouting;
   readonly prepared: PreparedEnhancement;
   readonly deterministicPrompt: EnhancedPrompt;
-  readonly selection: WorkflowPromptCandidateSelection;
 }): MaybeModelRefinementOutcome {
-  const { content, routing, prepared, deterministicPrompt, selection } = options;
+  const { content, routing, prepared, deterministicPrompt } = options;
   const renderedPrompt = modelRenderedPrompt(content);
   if (renderedPrompt === undefined) {
     return { applied: false, routing: fallbackRouting(routing, "model-empty-response") };
@@ -678,9 +677,11 @@ async function tryModelRefinement(options: {
   readonly resolvedModel: ResolvedEnhancementModel;
   readonly prepared: PreparedEnhancement;
   readonly deterministicPrompt: EnhancedPrompt;
+  // Threaded through by `refineUnlessRejected`'s own decision, not read in this function — kept on
+  // the type so `Parameters<typeof tryModelRefinement>[0]` still describes the whole options bag.
   readonly selection: WorkflowPromptCandidateSelection;
 }): Promise<MaybeModelRefinementOutcome> {
-  const { request, deps, resolvedModel, prepared, deterministicPrompt, selection } = options;
+  const { request, deps, resolvedModel, prepared, deterministicPrompt } = options;
   const execution = resolveModelExecution(resolvedModel, deps);
   if (!execution.ok) return { applied: false, routing: execution.routing };
   const content = await callModelForText({
@@ -691,12 +692,13 @@ async function tryModelRefinement(options: {
     deterministicPrompt,
   });
   if (!content.ok) return { applied: false, routing: content.routing };
+  // No `selection`: the model refinement's verdict is computed on the text it actually returns, so
+  // the winner candidate's assessment is deliberately out of reach here (0.3.0 audit P0, #2802).
   return buildModelRefinement({
     content: content.content,
     routing: execution.context.routing,
     prepared,
     deterministicPrompt,
-    selection,
   });
 }
 
