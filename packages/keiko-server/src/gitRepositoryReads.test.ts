@@ -1,9 +1,10 @@
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GitHistoryResponse } from "@oscharko-dev/keiko-contracts";
 import {
   buildRedactor,
   createInMemoryUiStore,
@@ -21,8 +22,10 @@ import {
 } from "./gitRepositoryReads.js";
 import {
   defaultGitNetworkProcessRunner,
+  defaultGitProcessRunner,
   gitEnv,
   networkGitEnv,
+  selectedRootPathspecArgs,
   type GitProcessRunner,
 } from "./gitRoutes.js";
 import { writeNodeExecutableFixture } from "./editor/lsp/testing/executableFixture.js";
@@ -72,6 +75,15 @@ const fail = (stderr: string, exitCode = 128): Awaited<ReturnType<GitProcessRunn
 // Porcelain v2 NUL-separated payload helper (matches `status --porcelain=v2 --branch -z`).
 function porcelain(records: readonly string[]): string {
   return records.join("\0") + "\0";
+}
+
+async function runRealGit(args: readonly string[]): Promise<void> {
+  const result = await defaultGitProcessRunner(args, {
+    cwd: root,
+    maxBytes: 8192,
+    timeoutMs: 10_000,
+  });
+  expect(result.exitCode, result.stderr).toBe(0);
 }
 
 beforeEach(async () => {
@@ -583,6 +595,141 @@ describe("GET /api/git/history", () => {
     );
 
     expect(result.body).toMatchObject({ truncated: true });
+  });
+});
+
+// The selected root is the unit of scope for every other Git read (status filters change records by
+// `selectedRootPrefix`, diff pathspecs the same prefix). History used to be the one exception: it
+// ran `git log` with `-C <repositoryRoot>` and no pathspec, so a user who selected a subfolder was
+// shown commits that never touched it — and the "showing the most recent N commits" truncation
+// label was computed over that repository-wide page. These exercise the real `git` binary so the
+// proof is the observed commit set, not an argument shape.
+describe("GET /api/git/history — selected-root scoping", () => {
+  async function commitFile(relativePaths: readonly string[], subject: string): Promise<void> {
+    for (const relativePath of relativePaths) {
+      const target = join(root, relativePath);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, `${subject}\n`, "utf8");
+    }
+    await runRealGit(["add", "--all"]);
+    await runRealGit(["commit", "--quiet", "-m", subject]);
+  }
+
+  // Four commits: two that never touch `sub/`, one that only touches it, and one that spans both.
+  async function initMixedHistory(): Promise<void> {
+    await runRealGit(["init", "--quiet"]);
+    await runRealGit(["config", "user.email", "fixture@example.invalid"]);
+    await runRealGit(["config", "user.name", "Keiko Fixture"]);
+    await commitFile(["outside/first.txt"], "outside first");
+    await commitFile(["sub/inside.txt"], "inside only");
+    await commitFile(["outside/second.txt"], "outside second");
+    await commitFile(["sub/spanning.txt", "outside/spanning.txt"], "spans both");
+  }
+
+  async function readHistory(selectedRoot: string, query = ""): Promise<GitHistoryResponse> {
+    const result = await handleGitHistory(
+      ctx(`/api/git/history?root=${encodeURIComponent(selectedRoot)}${query}`),
+      deps(defaultGitProcessRunner, (value) => value),
+    );
+    expect(result.status).toBe(200);
+    return result.body as GitHistoryResponse;
+  }
+
+  it("returns only the commits that touched the selected subfolder", async () => {
+    await initMixedHistory();
+
+    const history = await readHistory(join(root, "sub"));
+
+    expect(history.available).toBe(true);
+    expect(history.entries.map((entry) => entry.subject)).toEqual(["spans both", "inside only"]);
+  });
+
+  it("keeps a selected root that IS the repository root unscoped", async () => {
+    await initMixedHistory();
+
+    const history = await readHistory(root);
+
+    expect(history.entries.map((entry) => entry.subject)).toEqual([
+      "spans both",
+      "outside second",
+      "inside only",
+      "outside first",
+    ]);
+  });
+
+  it("reports an available, empty history for a subfolder no commit has touched", async () => {
+    await initMixedHistory();
+    // A folder that exists on disk but was never committed: git exits 0 with no records, which must
+    // stay "available with nothing to show" rather than borrowing the empty-repository or the
+    // unavailable envelope.
+    await mkdir(join(root, "untouched"), { recursive: true });
+
+    const history = await readHistory(join(root, "untouched"));
+
+    expect(history.available).toBe(true);
+    expect(history.reason).toBeUndefined();
+    expect(history.entries).toHaveLength(0);
+    expect(history.truncated).toBe(false);
+  });
+
+  it("counts only the files a commit changed inside the selected subfolder", async () => {
+    await initMixedHistory();
+
+    const spanning = (await readHistory(join(root, "sub"))).entries.find(
+      (entry) => entry.subject === "spans both",
+    );
+
+    expect(spanning?.changedFileCount).toBe(1);
+  });
+
+  it("reports the truncation label against the scoped page, not the repository", async () => {
+    await initMixedHistory();
+
+    // Three requested, two in scope: the page is complete, so it must NOT claim truncation even
+    // though the repository holds four commits (which is what the unscoped read returned).
+    const complete = await readHistory(join(root, "sub"), "&limit=3");
+    expect(complete.entries).toHaveLength(2);
+    expect(complete.truncated).toBe(false);
+
+    // One requested, two in scope: a full page still means "there may be more".
+    const partial = await readHistory(join(root, "sub"), "&limit=1");
+    expect(partial.entries).toHaveLength(1);
+    expect(partial.truncated).toBe(true);
+  });
+
+  it("passes the derived selected-root pathspec to git as the argument tail", async () => {
+    const prefix = basename(root);
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${dirname(root)}\n${prefix}\n`))
+      .mockResolvedValueOnce(ok(""));
+
+    await handleGitHistory(
+      ctx(`/api/git/history?root=${encodeURIComponent(root)}`),
+      deps(runner, (value) => value),
+    );
+
+    // Derived from the production translator so a change to the pathspec form cannot leave this
+    // fixture asserting a shape the route no longer emits.
+    const pathspec = selectedRootPathspecArgs(prefix);
+    expect(pathspec).toHaveLength(2);
+    const args = runner.mock.calls[1]?.[0] ?? [];
+    expect(args.slice(-pathspec.length)).toEqual([...pathspec]);
+  });
+
+  it("emits no pathspec separator at the repository root", async () => {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(ok(""));
+
+    await handleGitHistory(
+      ctx(`/api/git/history?root=${encodeURIComponent(root)}`),
+      deps(runner, (value) => value),
+    );
+
+    expect(selectedRootPathspecArgs("")).toHaveLength(0);
+    expect(runner.mock.calls[1]?.[0]).not.toContain("--");
   });
 });
 

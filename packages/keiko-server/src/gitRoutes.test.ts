@@ -32,6 +32,7 @@ import {
   readBoundedSnapshotBytes,
   rethrowSnapshotPathError,
   rethrowSnapshotRaceError,
+  selectedRootPathspecArgs,
   type GitProcessRunner,
 } from "./gitRoutes.js";
 
@@ -632,6 +633,33 @@ describe("GET /api/git/branches", () => {
     expect(runner.mock.calls[1]?.[0]).toEqual(
       expect.arrayContaining(["for-each-ref", "refs/heads"]),
     );
+  });
+});
+
+// The one translation from a selected-root prefix to git arguments. Both branches matter: an empty
+// prefix (the selected root IS the repository root) must add nothing, and a non-empty one must
+// arrive as a LITERAL path after `--`, so a directory whose name begins with `-` or looks like a
+// pathspec magic signature can never be re-read by git as an option or as magic.
+describe("selectedRootPathspecArgs", () => {
+  it("adds nothing when the selected root is the repository root", (): void => {
+    expect(selectedRootPathspecArgs("")).toEqual([]);
+    // `.` is git's other spelling of "no prefix"; it must not become a pathspec of its own.
+    expect(selectedRootPathspecArgs(".")).toEqual([]);
+  });
+
+  it("confines an ordinary subfolder behind the pathspec separator", (): void => {
+    expect(selectedRootPathspecArgs("packages/app")).toEqual(["--", ":(literal)packages/app"]);
+  });
+
+  it("keeps option-shaped and magic-shaped directory names literal", (): void => {
+    expect(selectedRootPathspecArgs("-upload-pack=evil")).toEqual([
+      "--",
+      ":(literal)-upload-pack=evil",
+    ]);
+    expect(selectedRootPathspecArgs(":(icase)secrets")).toEqual([
+      "--",
+      ":(literal):(icase)secrets",
+    ]);
   });
 });
 

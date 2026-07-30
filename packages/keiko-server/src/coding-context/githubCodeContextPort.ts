@@ -15,13 +15,17 @@ import {
   type SpawnFn,
 } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
-import type { CommandRule, WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import type { CommandResult, CommandRule, WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 
 import { GITHUB_CODE_CONTEXT_ALLOWED_SUBCOMMANDS } from "./githubCodeContextConnector.js";
 import type { GitHubCodeContextApiPort } from "./githubCodeContextConnector.js";
 
 const GH_API_TIMEOUT_MS = 30_000;
-const GH_API_MAX_STDOUT_BYTES = 4 * 1024 * 1024;
+// DERIVED, never restated. The spawn boundary this port runs under caps stdout+stderr at
+// `policy.maxOutputBytes` (see runDepsFor below) and REPLACES the buffer with a marker once the cap
+// trips, so a second, larger number here could never bound anything — it only made an over-cap read
+// look like a syntax problem when the marker reached `JSON.parse`.
+const GH_API_MAX_STDOUT_BYTES = DEFAULT_SANDBOX_POLICY.maxOutputBytes;
 
 // Flags that turn `gh api` into a mutation or redirect it to another host. Presence
 // anywhere in the argument vector rejects the invocation (deny-by-default posture).
@@ -45,10 +49,21 @@ const GH_CODE_CONTEXT_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   },
 ]);
 
-export class GitHubCodeContextPortError extends Error {
-  readonly code: "gh-denied" | "gh-failed" | "gh-invalid-json";
+/**
+ * Content-free outcome vocabulary for one governed `gh api` read. `gh-output-truncated` reuses the
+ * `output-truncated` term the git remote-failure classifier already owns: Keiko's own byte cap cut
+ * the response and killed the child. It is deliberately a distinct member from `gh-failed` (the
+ * command itself did not succeed) and `gh-invalid-json` (the command succeeded and returned a
+ * complete body that is not JSON) — a truncated read is neither, and reporting it as either one
+ * sends the operator after a defect that does not exist.
+ */
+export type GitHubCodeContextPortErrorCode =
+  "gh-denied" | "gh-failed" | "gh-output-truncated" | "gh-invalid-json";
 
-  constructor(code: "gh-denied" | "gh-failed" | "gh-invalid-json") {
+export class GitHubCodeContextPortError extends Error {
+  readonly code: GitHubCodeContextPortErrorCode;
+
+  constructor(code: GitHubCodeContextPortErrorCode) {
     super(`github code context port: ${code}`);
     this.code = code;
   }
@@ -87,14 +102,40 @@ function runDepsFor(options: GitHubCodeContextPortOptions): RunCommandDeps {
   };
 }
 
+// Defence in depth only: the spawn boundary already refuses to hand back more than
+// GH_API_MAX_STDOUT_BYTES. Over-cap bytes here still mean the read was cut short, not malformed.
 function parseBoundedJson(stdout: string): unknown {
   if (Buffer.byteLength(stdout, "utf8") > GH_API_MAX_STDOUT_BYTES) {
-    throw new GitHubCodeContextPortError("gh-invalid-json");
+    throw new GitHubCodeContextPortError("gh-output-truncated");
   }
   try {
     return JSON.parse(stdout);
   } catch {
     throw new GitHubCodeContextPortError("gh-invalid-json");
+  }
+}
+
+async function runGhApi(
+  argv: readonly string[],
+  runDeps: RunCommandDeps,
+  timeoutMs: number,
+): Promise<CommandResult> {
+  try {
+    return await runCommand(
+      {
+        command: "gh",
+        args: argv,
+        cwd: undefined,
+        timeoutMs,
+        signal: new AbortController().signal,
+      },
+      runDeps,
+    );
+  } catch {
+    // Timeout, cancellation, or spawn failure: surface a content-free code only. Every one of these
+    // REJECTS in the spawn boundary, so a resolved result can never be a disguised timeout — which
+    // is what lets the truncation check below mean the byte cap and nothing else.
+    throw new GitHubCodeContextPortError("gh-failed");
   }
 }
 
@@ -106,27 +147,15 @@ export function createGitHubCodeContextApiPort(
   return {
     readJson: async (argv: readonly string[]): Promise<unknown> => {
       assertReadOnlyGhApiArgv(argv);
-      let exitCode: number | null;
-      let stdout: string;
-      try {
-        const result = await runCommand(
-          {
-            command: "gh",
-            args: argv,
-            cwd: undefined,
-            timeoutMs,
-            signal: new AbortController().signal,
-          },
-          runDeps,
-        );
-        exitCode = result.exitCode;
-        stdout = result.stdout;
-      } catch {
-        // Timeout, cancellation, or spawn failure: surface a content-free code only.
-        throw new GitHubCodeContextPortError("gh-failed");
-      }
-      if (exitCode !== 0) throw new GitHubCodeContextPortError("gh-failed");
-      return parseBoundedJson(stdout);
+      const result = await runGhApi(argv, runDeps, timeoutMs);
+      // Truncation is classified FIRST, and it outranks both later branches for the same reason:
+      // hitting the cap kills the child and replaces stdout with a marker, so the very same run
+      // also presents as a non-zero exit (the kill) or as unparsable output (the marker). Reading
+      // either of those first turns "the response did not fit" into "gh failed" or "GitHub sent
+      // invalid JSON" — two defects that are not there.
+      if (result.truncated) throw new GitHubCodeContextPortError("gh-output-truncated");
+      if (result.exitCode !== 0) throw new GitHubCodeContextPortError("gh-failed");
+      return parseBoundedJson(result.stdout);
     },
   };
 }
