@@ -12,6 +12,13 @@
 // like the deterministic completion surface (#1198/#1199), it is a server-side/evidence-only signal,
 // and the caps are defensive ceilings a legitimate document does not reach. Surfacing a truncation
 // notice in the editor is out of scope for #1201; the bounds are enforced and tested server-side.
+//
+// That reasoning covers RENDER surfaces only, and does not extend to a result the host then applies
+// to a buffer or to disk: a capped mutation silently performs part of an operation the user asked for
+// in full. The rename path therefore carries its own bounding facts through to the review surface and
+// refuses Accept while they are present (`renameChangesetTruncation`, `keiko-editor`), instead of
+// mapping through this seam. Any future mapper here that feeds an apply path needs the same
+// treatment, not this exemption.
 
 import type {
   EditorCodeAction,

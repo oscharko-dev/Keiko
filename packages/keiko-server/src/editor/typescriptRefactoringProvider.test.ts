@@ -420,6 +420,9 @@ describe("typescript refactoring provider", () => {
         totalFileCount: 4,
         returnedEditCount: 2,
         totalEditCount: 4,
+        // The unreadable reference is counted in `totalFileCount` but carries no edits; reporting it
+        // separately is what lets the client say WHY the rename is partial.
+        unreadableFileCount: 1,
       });
     }
     expect(sourceText.mock.calls.map(([fileName]) => fileName)).toEqual([
@@ -465,6 +468,7 @@ describe("typescript refactoring provider", () => {
         totalFileCount: locationCount,
         returnedEditCount: 2,
         totalEditCount: locationCount,
+        unreadableFileCount: 0,
       });
     }
     expect(sourceText).toHaveBeenCalledTimes(2);

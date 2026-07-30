@@ -51,6 +51,9 @@ interface RenameSelection {
   readonly selectedFiles: readonly SelectedRenameFile[];
   readonly totalFileCount: number;
   readonly totalEditCount: number;
+  // Reference files counted in `totalFileCount` whose text could not be read, so they carry no
+  // edits. Tracked separately from the caps so the client can name why the rename is partial.
+  readonly unreadableFileCount: number;
 }
 
 interface CodeActionCandidate {
@@ -200,6 +203,7 @@ function selectRenameLocations(
     selectedFiles: [...selectedByPath.values()],
     totalFileCount: allPaths.size,
     totalEditCount,
+    unreadableFileCount: unreadablePaths.size,
   };
 }
 
@@ -243,6 +247,7 @@ function renameResult(
     totalFileCount: selection.totalFileCount,
     returnedEditCount,
     totalEditCount: selection.totalEditCount,
+    unreadableFileCount: selection.unreadableFileCount,
   };
 }
 

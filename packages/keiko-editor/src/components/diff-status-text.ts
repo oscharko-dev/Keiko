@@ -7,7 +7,12 @@
  * summary explains the changed-file state without exposing secret material (AC4). Keeping the wording
  * and role here makes the a11y contract node-testable and the component shell thin.
  */
-import type { PatchPreviewFileStatus, PatchPreviewModel } from "../patch-preview.js";
+import {
+  isPatchSourceTruncated,
+  type PatchPreviewFileStatus,
+  type PatchPreviewModel,
+  type PatchPreviewSourceTruncation,
+} from "../patch-preview.js";
 import type { KeikoEditorLoadState } from "./types.js";
 
 export type DiffStatusRole = "status" | "alert";
@@ -83,14 +88,45 @@ export function deriveDiffSummary(args: DiffSummaryArgs): DiffStatusViewModel {
 }
 
 /**
+ * The producer-side half of the notice: the patch itself is not the whole operation, so applying it
+ * changes only part of what was asked for. Deliberately worded apart from the display-cap sentences
+ * below — those hide changes the host still applies, these changes do not exist in the patch.
+ */
+function sourceTruncationSentences(source: PatchPreviewSourceTruncation): readonly string[] {
+  const parts: string[] = [];
+  if (source.returnedFileCount < source.totalFileCount) {
+    parts.push(
+      `Only ${String(source.returnedFileCount)} of ${String(source.totalFileCount)} file(s) are included.`,
+    );
+  }
+  if (source.returnedEditCount < source.totalEditCount) {
+    parts.push(
+      `Only ${String(source.returnedEditCount)} of ${String(source.totalEditCount)} change(s) are included.`,
+    );
+  }
+  if (source.unreadableFileCount > 0) {
+    parts.push(
+      `${String(source.unreadableFileCount)} file(s) could not be read and carry no changes.`,
+    );
+  }
+  if (parts.length === 0) {
+    parts.push("The provider reported an incomplete result.");
+  }
+  parts.push("Applying this performs part of the change only.");
+  return parts;
+}
+
+/**
  * Derive the persistent truncation notice, or null when nothing was bounded (AC5). Reports omitted
- * files and clamped content explicitly so a large patch never appears complete when it is not.
+ * files, clamped content, and a producer that already dropped changes explicitly, so a bounded patch
+ * never appears complete when it is not.
  */
 export function deriveDiffTruncationNote(model: PatchPreviewModel): string | null {
-  if (!model.truncated) {
-    return null;
-  }
   const parts: string[] = [];
+  const source = model.sourceTruncation;
+  if (source !== undefined && isPatchSourceTruncated(source)) {
+    parts.push(...sourceTruncationSentences(source));
+  }
   if (model.omittedFileCount > 0) {
     parts.push(
       `${String(model.omittedFileCount)} file(s) not shown because the patch exceeds the review limit.`,

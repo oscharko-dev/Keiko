@@ -142,4 +142,78 @@ describe("deriveDiffTruncationNote", () => {
     expect(note).toContain("not shown");
     expect(note).toContain("truncated");
   });
+
+  // A producer-side cap is not a display cap: the missing changes are absent from the patch, so
+  // applying it performs part of the operation only. The note must say so and name the counts.
+  it("reports a producer-capped patch with both count pairs", () => {
+    const note = deriveDiffTruncationNote(
+      model({
+        truncated: true,
+        fileCount: 2,
+        totalFileCount: 2,
+        sourceTruncation: {
+          truncated: true,
+          returnedFileCount: 2,
+          totalFileCount: 400,
+          returnedEditCount: 2,
+          totalEditCount: 1_200,
+          unreadableFileCount: 0,
+        },
+      }),
+    );
+    expect(note).toContain("2 of 400 file(s)");
+    expect(note).toContain("2 of 1200 change(s)");
+    expect(note).toContain("part of the change");
+  });
+
+  it("names files excluded because their content could not be read", () => {
+    const note = deriveDiffTruncationNote(
+      model({
+        truncated: true,
+        sourceTruncation: {
+          truncated: false,
+          returnedFileCount: 2,
+          totalFileCount: 3,
+          returnedEditCount: 2,
+          totalEditCount: 3,
+          unreadableFileCount: 1,
+        },
+      }),
+    );
+    expect(note).toContain("1 file(s) could not be read");
+  });
+
+  it("reports a producer that flagged truncation without a count gap", () => {
+    const note = deriveDiffTruncationNote(
+      model({
+        truncated: true,
+        sourceTruncation: {
+          truncated: true,
+          returnedFileCount: 2,
+          totalFileCount: 2,
+          returnedEditCount: 2,
+          totalEditCount: 2,
+          unreadableFileCount: 0,
+        },
+      }),
+    );
+    expect(note).toContain("incomplete");
+  });
+
+  it("stays silent for a source-truncation record that reports nothing missing", () => {
+    expect(
+      deriveDiffTruncationNote(
+        model({
+          sourceTruncation: {
+            truncated: false,
+            returnedFileCount: 2,
+            totalFileCount: 2,
+            returnedEditCount: 2,
+            totalEditCount: 2,
+            unreadableFileCount: 0,
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
 });
