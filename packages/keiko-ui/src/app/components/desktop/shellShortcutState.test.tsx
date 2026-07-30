@@ -30,6 +30,11 @@ import {
 } from "./hooks/useKeyboardShortcuts";
 import { buildUnifiedQuickAccessCommands, type Command } from "./quickAccessRegistry";
 import { EDITOR_PALETTE_COMMANDS, type EditorPaletteHost } from "./widgets/cards/editorCommands";
+import { translate } from "@/lib/i18n";
+
+// The palette builder requires a translator (a caller that forgets the locale must not compile),
+// and "en" is simply the locale under test here.
+const enTranslate = (key: Parameters<typeof translate>[1]): string => translate("en", key);
 
 // The six commands the shell itself dispatches. The label map is deliberately WIDER than this (it
 // covers every bound editor command too, see the palette suite below), so these are asserted as a
@@ -282,7 +287,7 @@ describe("shellShortcutState — palette chord labels", () => {
     const row = buildUnifiedQuickAccessCommands(
       [appCommand("theme")],
       paletteHost(),
-      undefined,
+      enTranslate,
       state.labels,
     ).find((command) => command.id === "tab.next");
 
