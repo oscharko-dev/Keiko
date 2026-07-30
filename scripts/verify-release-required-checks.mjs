@@ -6,7 +6,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const githubApiVersion = "2022-11-28";
-const defaultBaseBranch = "release/0.2";
+const defaultBaseBranch = "release/0.3";
 const defaultPollSeconds = 15;
 const defaultTimeoutSeconds = 30 * 60;
 

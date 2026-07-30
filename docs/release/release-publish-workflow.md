@@ -7,7 +7,7 @@ This repository now has a dedicated automated release workflow at [`.github/work
 When a maintainer says "ship a new release", the release operator must run the scripted path
 below. Do not publish packages and then manually remember the rest of the cleanup.
 
-1. Land the release PR into the active release branch (`release/0.2`).
+1. Land the release PR into the active release branch (`release/0.3`).
 2. Tag the reviewed merge commit as `v<package.json version>` and push the tag.
 3. Check out the tag locally or dispatch the Release workflow on that tag.
 4. Run:
@@ -168,17 +168,17 @@ still requires an operator dispatch with `portable_assets_run_id` pointing at th
 
 The release stabilization flow uses a dedicated branch for release-only hardening:
 
-- Freeze features for `0.2` on `dev` and cut or update `release/0.2` from that point.
+- Freeze features for `0.3` on `dev` and cut or update `release/0.3` from that point.
 - Keep feature development open on `dev`.
-- Land all beta/RC fixes through pull requests targeting `release/0.2`; direct commits to the
+- Land all beta/RC fixes through pull requests targeting `release/0.3`; direct commits to the
   release branch are blocked by branch protection.
 - Require the same protected-branch quality gates as `dev` before release PRs can merge: strict
   status checks, CodeQL, dependency review, pinned-action verification, UI/build/smoke gates, signed
   commits, conversation resolution, and linear history.
-- Run beta and RC validation from that branch and tag prereleases as `v0.2.0-beta.N`.
-- When final verification is complete, merge `release/0.2` to the appropriate stable branch and
+- Run beta and RC validation from that branch and tag prereleases as `v0.3.0-beta.N`.
+- When final verification is complete, merge `release/0.3` to the appropriate stable branch and
   tag `v<version>`.
-- Immediately back-merge `release/0.2` into `dev` so next-cycle work can continue with stable
+- Immediately back-merge `release/0.3` into `dev` so next-cycle work can continue with stable
   fixes included.
 
 ## Gates
@@ -205,7 +205,7 @@ Publish is intentionally off by default. To publish, a maintainer must:
 - run the workflow manually,
 - select a tag ref that starts with `v`,
 - set `publish` to `true`,
-- keep `npm_dist_tag` at `beta` for prereleases such as `0.2.0-beta.0`,
+- keep `npm_dist_tag` at `beta` for prereleases such as `0.3.0-beta.0`,
 - provide `portable_assets_run_id` and `portable_assets_artifact_name` for the reviewed portable
   asset bundle when publishing the stable `latest` release,
 - provide the exact `portable_assets_run_attempt` recorded by that successful tag-push run,
