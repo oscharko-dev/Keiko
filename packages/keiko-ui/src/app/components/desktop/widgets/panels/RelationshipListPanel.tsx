@@ -5,6 +5,8 @@
 //   Minimal:  visible edges = focused window only, animated badges ≤ 5
 //   Standard: visible edges ≤ 25, animated badges ≤ 25
 //   Dense:    visible edges ≤ 512, animated badges ≤ 25
+// Those are RENDER caps. The request limit is `densityRequestLimit`, which clamps them into the
+// range RELATIONSHIP_QUERY_BOUNDS says the server accepts — see that function's comment.
 //
 // URL state: ?relType=, ?relLifecycle=, ?relActivity=, ?relSrcKind=, ?relTgtKind=
 //   (visual-density-rules.md §"URL-state model")
@@ -29,6 +31,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   RELATIONSHIP_LIFECYCLE_STATES,
+  RELATIONSHIP_QUERY_BOUNDS,
   RELATIONSHIP_TYPES,
   RELATIONSHIP_OBJECT_KINDS,
 } from "@oscharko-dev/keiko-contracts";
@@ -40,12 +43,14 @@ import {
 import type { ApiRelationship } from "../../../../relationships/api";
 import { RelationshipEdgeBadge, ACTIVITY_VISUALS } from "./RelationshipEdgeBadge";
 import { NATIVE_BLOCK_STYLE, NATIVE_LIST_STYLE } from "../../native-element-styles";
+import { useTranslate } from "@/lib/i18n";
 
 // ─── Density mode helpers ──────────────────────────────────────────────────────
 
 export type DensityMode = "minimal" | "standard" | "dense";
 
 const DENSITY_STORAGE_KEY = "keiko.relationships.density";
+const DEFAULT_DENSITY: DensityMode = "minimal";
 
 // Per-density visible-edge cap (visual-density-rules.md §"Per-density rendering caps")
 const DENSITY_EDGE_CAP: Record<DensityMode, number> = {
@@ -54,24 +59,46 @@ const DENSITY_EDGE_CAP: Record<DensityMode, number> = {
   dense: 512,
 };
 
+// The REQUEST limit is the render cap clamped into the range the server accepts, read from
+// RELATIONSHIP_QUERY_BOUNDS rather than restated here. `dense` used to send the blueprint's 512
+// straight at a 256-entry hard cap: the server answered 400 relationship/bounded-query-exceeded
+// on every fetch, and because the density choice is persisted, the Relationships window came back
+// broken after every reopen. Deriving from the contract means no shipped control can leave the
+// accepted range again, whatever the blueprint's rendering caps say.
+function densityRequestLimit(mode: DensityMode): number {
+  return Math.min(DENSITY_EDGE_CAP[mode], RELATIONSHIP_QUERY_BOUNDS.listLimitMax);
+}
+
 // Concurrent animated-badge cap is 25 in ALL modes (visual-density-rules.md §"Why N_VISIBLE = 25")
 const ANIMATION_CAP = 25;
 
 function readDensityFromStorage(): DensityMode {
-  if (typeof window === "undefined") return "minimal";
+  if (typeof window === "undefined") return DEFAULT_DENSITY;
   try {
     const v = window.localStorage.getItem(DENSITY_STORAGE_KEY);
     if (v === "minimal" || v === "standard" || v === "dense") return v;
   } catch {
     // localStorage unavailable — use default
   }
-  return "minimal";
+  return DEFAULT_DENSITY;
 }
 
 function writeDensityToStorage(mode: DensityMode): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(DENSITY_STORAGE_KEY, mode);
+  } catch {
+    // localStorage unavailable
+  }
+}
+
+// A persisted view preference is what turned one rejected request into a permanently broken
+// window, so the recovery action has to drop the persisted override too — not just the in-memory
+// state (error-and-denial-ux.md §"Bounded-query-exceeded UX": "Reset to defaults").
+function clearDensityStorage(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(DENSITY_STORAGE_KEY);
   } catch {
     // localStorage unavailable
   }
@@ -249,6 +276,7 @@ export function RelationshipListPanel({
   animateBadges = true,
   highContrast = false,
 }: RelationshipListPanelProps): ReactNode {
+  const t = useTranslate();
   // Density from localStorage; URL param ?relDensity= overrides for this session only
   const [density, setDensity] = useState<DensityMode>(() => {
     const urlOverride = filters.relDensity;
@@ -295,6 +323,24 @@ export function RelationshipListPanel({
     [onFilterChange],
   );
 
+  // Recovery from a rejected request (error-and-denial-ux.md §"Bounded-query-exceeded UX"). The
+  // banner's Retry repeats the request that was just refused; when the view state itself is what
+  // the server refuses, repeating it can never succeed. This drops the persisted density override
+  // and every filter back to the shipped defaults, so no view state is a dead end.
+  const resetToDefaults = useCallback(() => {
+    clearDensityStorage();
+    setDensity(DEFAULT_DENSITY);
+    setTypeFilter("");
+    onFilterChange({
+      relDensity: undefined,
+      relType: undefined,
+      relActivity: undefined,
+      relLifecycle: undefined,
+      relSrcKind: undefined,
+      relTgtKind: undefined,
+    });
+  }, [onFilterChange]);
+
   useEffect(() => {
     const urlOverride = filters.relDensity;
     if (urlOverride === "minimal" || urlOverride === "standard" || urlOverride === "dense") {
@@ -329,7 +375,7 @@ export function RelationshipListPanel({
         type,
         sourceKind: srcKind,
         targetKind: tgtKind,
-        limit: DENSITY_EDGE_CAP[density],
+        limit: densityRequestLimit(density),
       });
       setItems(result.entries);
       setTruncated(result.truncated);
@@ -604,12 +650,18 @@ export function RelationshipListPanel({
         </div>
       )}
 
-      {/* Error banner */}
+      {/* Error banner. Two actions on purpose: Retry for a transient failure, and a reset for a
+          view state the server refuses — where Retry alone would loop forever. */}
       {error !== null && (
         <div className="lk-alert" role="alert" aria-live="assertive">
           <span>{error}</span>
           <button type="button" className="lk-alert-retry" onClick={() => void fetchItems()}>
             Retry
+          </button>
+          {/* No aria-label: the visible text is the accessible name (Label-in-Name, WCAG 2.5.3,
+              GEN-UI-A11Y-023) — an aria-label would override it. */}
+          <button type="button" className="lk-alert-retry" onClick={resetToDefaults}>
+            {t("relationships.list.resetToDefaults")}
           </button>
         </div>
       )}

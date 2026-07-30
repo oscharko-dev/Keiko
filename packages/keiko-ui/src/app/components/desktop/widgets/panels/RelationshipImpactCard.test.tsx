@@ -45,12 +45,79 @@ function report(opts: {
   };
 }
 
+// The wire report ALWAYS carries the origin relationship and BOTH of its endpoints (the store's
+// runWalkFromOrigin appends whichever the seed did not cover). Fixtures below mirror that shape
+// instead of the sanitised "endpoints[0] is the origin" shape the card used to assume.
+const ORIGIN = {
+  relationshipId: "rel-root",
+  source: { kind: "capsule" as const, id: "cap-src" },
+  target: { kind: "capsule" as const, id: "cap-tgt" },
+};
+
+function originRel(): ApiRelationship {
+  return { ...rel("rel-root"), source: ORIGIN.source, target: ORIGIN.target };
+}
+
+// The smallest honest report: the origin relationship and its two endpoints, nothing else.
+const ORIGIN_ONLY_REPORT = report({
+  endpoints: ["cap-tgt", "cap-src"],
+  relationships: [originRel()],
+});
+
+describe("RelationshipImpactCard impacted-set arithmetic", () => {
+  it("excludes the origin relationship and BOTH origin endpoints from the impacted set", () => {
+    render(
+      <RelationshipImpactCard
+        // Downstream walk: seeded from cap-tgt, reaches cap-x, then appends cap-src.
+        outgoing={report({
+          endpoints: ["cap-tgt", "cap-x", "cap-src"],
+          relationships: [originRel(), rel("rel-x")],
+        })}
+        // Upstream walk: nothing beyond the origin's own endpoints — a genuine zero.
+        incoming={report({ endpoints: ["cap-src", "cap-tgt"], relationships: [originRel()] })}
+        origin={ORIGIN}
+        error={null}
+        onSelectRelationship={vi.fn()}
+      />,
+    );
+    const downstream = within(screen.getByTestId("impact-downstream"));
+    expect(downstream.getByText("capsule: cap-x")).toBeInTheDocument();
+    expect(downstream.queryByText("capsule: cap-src")).toBeNull();
+    expect(downstream.queryByText("capsule: cap-tgt")).toBeNull();
+    // One relationship on the path — the origin itself is not on its own path.
+    expect(downstream.getByText(/1 relationship on the path/i)).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("impact-upstream")).getByText(/No further objects are affected/i),
+    ).toBeInTheDocument();
+  });
+
+  it("states that the walk failed instead of showing a permanent loading row", async () => {
+    const onRetry = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <RelationshipImpactCard
+        outgoing={null}
+        incoming={null}
+        origin={ORIGIN}
+        error="Server error: walk unavailable"
+        onRetryImpact={onRetry}
+        onSelectRelationship={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/walk unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Loading…/i)).toBeNull();
+    await user.click(screen.getByRole("button", { name: /retry/i }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("RelationshipImpactCard", () => {
   it("renders both walk directions", () => {
     render(
       <RelationshipImpactCard
-        outgoing={report({ endpoints: ["origin"] })}
-        incoming={report({ endpoints: ["origin"] })}
+        outgoing={ORIGIN_ONLY_REPORT}
+        incoming={ORIGIN_ONLY_REPORT}
+        origin={ORIGIN}
         onSelectRelationship={vi.fn()}
       />,
     );
@@ -58,11 +125,12 @@ describe("RelationshipImpactCard", () => {
     expect(screen.getByRole("heading", { name: /Upstream impact/i })).toBeInTheDocument();
   });
 
-  it("shows the empty-direction message when only the origin endpoint is present", () => {
+  it("shows the empty-direction message when only the origin endpoints are present", () => {
     render(
       <RelationshipImpactCard
-        outgoing={report({ endpoints: ["origin"] })}
-        incoming={report({ endpoints: ["origin"] })}
+        outgoing={ORIGIN_ONLY_REPORT}
+        incoming={ORIGIN_ONLY_REPORT}
+        origin={ORIGIN}
         onSelectRelationship={vi.fn()}
       />,
     );
@@ -72,8 +140,9 @@ describe("RelationshipImpactCard", () => {
   it("lists impacted endpoints beyond the origin", () => {
     render(
       <RelationshipImpactCard
-        outgoing={report({ endpoints: ["origin", "cap-x", "cap-y"] })}
-        incoming={report({ endpoints: ["origin"] })}
+        outgoing={report({ endpoints: ["cap-tgt", "cap-x", "cap-y", "cap-src"] })}
+        incoming={ORIGIN_ONLY_REPORT}
+        origin={ORIGIN}
         onSelectRelationship={vi.fn()}
       />,
     );
@@ -84,8 +153,9 @@ describe("RelationshipImpactCard", () => {
   it("states truncation when the walk hit a bound", () => {
     render(
       <RelationshipImpactCard
-        outgoing={report({ endpoints: ["origin", "cap-x"], truncated: true })}
-        incoming={report({ endpoints: ["origin"] })}
+        outgoing={report({ endpoints: ["cap-tgt", "cap-x", "cap-src"], truncated: true })}
+        incoming={ORIGIN_ONLY_REPORT}
+        origin={ORIGIN}
         onSelectRelationship={vi.fn()}
       />,
     );
@@ -95,11 +165,16 @@ describe("RelationshipImpactCard", () => {
   });
 
   it("caps endpoint rendering at 50 and states the cap", () => {
-    const endpoints = ["origin", ...Array.from({ length: 70 }, (_, i) => `cap-${String(i)}`)];
+    const endpoints = [
+      "cap-tgt",
+      ...Array.from({ length: 70 }, (_, i) => `cap-${String(i)}`),
+      "cap-src",
+    ];
     render(
       <RelationshipImpactCard
         outgoing={report({ endpoints })}
-        incoming={report({ endpoints: ["origin"] })}
+        incoming={ORIGIN_ONLY_REPORT}
+        origin={ORIGIN}
         onSelectRelationship={vi.fn()}
       />,
     );
@@ -111,8 +186,12 @@ describe("RelationshipImpactCard", () => {
     const user = userEvent.setup();
     render(
       <RelationshipImpactCard
-        outgoing={report({ endpoints: ["origin", "cap-x"], relationships: [rel("rel-path-1")] })}
-        incoming={report({ endpoints: ["origin"] })}
+        outgoing={report({
+          endpoints: ["cap-tgt", "cap-x", "cap-src"],
+          relationships: [originRel(), rel("rel-path-1")],
+        })}
+        incoming={ORIGIN_ONLY_REPORT}
+        origin={ORIGIN}
         onSelectRelationship={onSelect}
       />,
     );
@@ -133,7 +212,12 @@ describe("RelationshipImpactCard", () => {
 
   it("renders a loading state when a report is not yet available", () => {
     render(
-      <RelationshipImpactCard outgoing={null} incoming={null} onSelectRelationship={vi.fn()} />,
+      <RelationshipImpactCard
+        outgoing={null}
+        incoming={null}
+        origin={ORIGIN}
+        onSelectRelationship={vi.fn()}
+      />,
     );
     expect(screen.getAllByText(/Loading…/i)).toHaveLength(2);
   });
@@ -142,10 +226,11 @@ describe("RelationshipImpactCard", () => {
     const { container } = render(
       <RelationshipImpactCard
         outgoing={report({
-          endpoints: ["origin", "cap-x", "cap-y"],
-          relationships: [rel("rel-a")],
+          endpoints: ["cap-tgt", "cap-x", "cap-y", "cap-src"],
+          relationships: [originRel(), rel("rel-a")],
         })}
-        incoming={report({ endpoints: ["origin", "cap-z"] })}
+        incoming={report({ endpoints: ["cap-src", "cap-z", "cap-tgt"] })}
+        origin={ORIGIN}
         onSelectRelationship={vi.fn()}
       />,
     );

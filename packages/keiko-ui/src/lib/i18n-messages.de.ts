@@ -1215,6 +1215,79 @@ export const DE_MESSAGES = {
   "relationships.health.show": "Graph Health",
   "relationships.create.aria": "Neue Relationship erstellen",
   "relationships.create.button": "+ Neue Relationship",
+  // Graph-Health-Panel (#542): Ein begrenzter Scan darf niemals Fehlerfreiheit bescheinigen —
+  // deshalb trennt der Text „fehlerfrei“ von „unvollständig – nicht aussagekräftig“, und jede
+  // Zahl aus einer abgeschnittenen Kategorie ist als Untergrenze formuliert.
+  "relationships.health.panelTitle": "Graph Health",
+  "relationships.health.refresh": "Aktualisieren",
+  "relationships.health.refreshAria": "Graph-Health-Prüfung erneut ausführen",
+  "relationships.health.retry": "Erneut versuchen",
+  "relationships.health.running": "Health-Prüfung läuft…",
+  "relationships.health.loadFailed": "Die Graph-Health-Prüfung konnte nicht geladen werden.",
+  "relationships.health.checkedAtPrefix": "Geprüft am",
+  "relationships.health.scopeNote":
+    "Summen und Befunde umfassen alle Relationships dieser Keiko-Installation — nicht nur das aktuelle Projekt.",
+  "relationships.health.totalsLabel": "Lifecycle-Summen (installationsweit)",
+  "relationships.health.healthyTitle": "Fehlerfrei",
+  "relationships.health.healthyBody": "Es wurden keine Defekte im Relationship-Graph gefunden.",
+  "relationships.health.partial.title": "Unvollständiger Scan – nicht aussagekräftig",
+  "relationships.health.partial.body":
+    "Der Scan hat seine Grenze erreicht, bevor er fertig war. Das ist deshalb kein Nachweis für Fehlerfreiheit. Im geprüften Teil des Graphen wurden keine Defekte gefunden.",
+  "relationships.health.partial.note":
+    "Dieser Scan hat seine Grenze erreicht, bevor er fertig war — jede Zahl unten ist eine Untergrenze.",
+  "relationships.health.partial.categories": "Begrenzte Kategorien: {categories}.",
+  "relationships.health.inspectAria":
+    "{type}-Relationship von {source} nach {target} prüfen, Lifecycle {lifecycle}",
+  "relationships.health.category.aria": "{label} ({count})",
+  "relationships.health.category.ariaAtLeast": "{label} (mindestens {count})",
+  "relationships.health.category.showingFirst": "Es werden die ersten {cap} von {count} gezeigt.",
+  "relationships.health.category.truncated":
+    "Es existieren mehr {category}, als die begrenzte Abfrage geliefert hat. Behebe die aufgeführten Einträge und führe die Health-Prüfung erneut aus.",
+  "relationships.health.category.boundedEmpty":
+    "Der Scan dieser Kategorie hat seine Grenze erreicht, bevor er fertig war — hier können Befunde fehlen.",
+  "relationships.health.category.invalid.label": "Ungültige Referenzen",
+  "relationships.health.category.invalid.help":
+    "Ein Endpunkt verweist nicht mehr auf ein lebendes Objekt im Arbeitsbereich.",
+  "relationships.health.category.blocked.label": "Blockiert",
+  "relationships.health.category.blocked.help":
+    "Eine Richtlinie oder ein Endpunktzustand blockiert diese Relationship.",
+  "relationships.health.category.failed.label": "Fehlgeschlagen (widerrufen)",
+  "relationships.health.category.failed.help":
+    "Die Relationship hat den Endzustand „widerrufen“ erreicht.",
+  "relationships.health.category.cycle.label": "Zyklus-Beteiligte",
+  "relationships.health.category.cycle.help":
+    "Diese Relationships sind Teil eines Abhängigkeitszyklus.",
+  "relationships.health.category.stale.label": "Veraltet",
+  "relationships.health.category.stale.help":
+    "Eine Health-Prüfung hat mindestens einen Endpunkt als derzeit nicht lebend eingestuft.",
+  "relationships.health.category.orphaned.label": "Verwaiste Endpunkte",
+  "relationships.health.category.orphaned.help":
+    "Endpunkte, die an keiner lebenden Relationship beteiligt sind.",
+  // Wiederherstellung der Relationship-Liste (error-and-denial-ux.md §„Bounded-query-exceeded UX“:
+  // Das Banner einer abgelehnten Abfrage bietet einen Reset, damit ein vergifteter Ansichtszustand
+  // keine Sackgasse ist).
+  "relationships.list.resetToDefaults": "Auf Standard zurücksetzen",
+  // Begrenzte Impact-Analyse (#542): Ein fehlgeschlagener Walk muss das sagen, statt einen
+  // Gedankenstrich und ein dauerhaftes „Loading…“ zu zeigen.
+  "relationships.impact.unavailableValue": "Nicht verfügbar",
+  "relationships.impact.failed": "Die Impact-Analyse konnte nicht geladen werden.",
+  "relationships.impact.retry": "Impact erneut laden",
+  "relationships.impact.cardAria": "Begrenzte Impact-Analyse",
+  "relationships.impact.loading": "Loading…",
+  "relationships.impact.none": "In dieser Richtung sind keine weiteren Objekte betroffen.",
+  "relationships.impact.downstreamTitle": "Auswirkung nach unten",
+  "relationships.impact.downstreamHelp":
+    "Objekte, zu denen das Ziel dieser Relationship führt. Löschen oder Widerrufen kann sie betreffen.",
+  "relationships.impact.upstreamTitle": "Auswirkung nach oben",
+  "relationships.impact.upstreamHelp": "Objekte, die von der Quelle dieser Relationship abhängen.",
+  "relationships.impact.truncated":
+    "Der Walk hat eine Grenze erreicht, bevor der Graph vollständig durchlaufen war; es können mehr Objekte betroffen sein als gezeigt.",
+  "relationships.impact.showingFirst": "Es werden die ersten {cap} von {count} Objekten gezeigt.",
+  "relationships.impact.pathRelationship": "{count} Relationship auf dem Pfad",
+  "relationships.impact.pathRelationships": "{count} Relationships auf dem Pfad",
+  "relationships.impact.inspectAria": "{type}-Relationship von {source} nach {target} prüfen",
+  "relationships.impact.forward": "Abhängigkeiten vorwärts",
+  "relationships.impact.reverse": "Abhängigkeiten rückwärts",
   // Epic #2093 source-control copy is intentionally feature-local so the editor remains lazy.
   // Issue #2150: Workspace.tsx/WindowFrame.tsx changed but added no new
   // user-facing strings — check:ui-i18n flags any edit to a file that uses

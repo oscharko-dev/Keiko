@@ -20,6 +20,9 @@ import {
   relationshipCardinalitySnapshot,
   listRelationshipLifecycleHistory,
   MAX_LIST_LIMIT,
+  MAX_IMPACT_DEPTH,
+  MAX_IMPACT_NODES,
+  MAX_IMPACT_RELATIONSHIPS,
   type NewRelationship,
   type RelationshipScope,
 } from "./relationships.js";
@@ -535,6 +538,42 @@ describe("dependency walk truncation flags (issue #542 AC1 + AC3)", () => {
       maxNodes: 16,
       maxRelationships: 1,
     });
+    expect(result.truncated).toBe(true);
+    expect(result.truncationReason).toBe("max-relationships");
+  });
+
+  // The per-node neighbour query is bounded by MAX_LIST_LIMIT. Before this pin the walk
+  // dropped every edge past that cap WITHOUT setting a truncation flag, so a high-degree
+  // node reported a complete-looking partial graph — the exact silent-loss class the
+  // truncation contract exists to prevent (performance-and-no-dep.md).
+  it("flags truncation when one node's fan-out exceeds the per-node neighbour cap", () => {
+    const db = openMem();
+    const fanOut = MAX_LIST_LIMIT + 1;
+    for (let i = 0; i < fanOut; i++) {
+      insertRelationship(
+        db,
+        makeRel({
+          id: `rel-fan-${String(i)}`,
+          etag: `etag-fan-${String(i)}`,
+          source: { kind: "capsule", id: "cap-hub", workspaceId: workspaceA },
+          target: { kind: "capsule", id: `cap-leaf-${String(i)}`, workspaceId: workspaceA },
+        }),
+      );
+    }
+    const result = computeImpact(db, {
+      workspaceId: workspaceA,
+      endpoint: { kind: "capsule", id: "cap-hub" },
+      direction: "outgoing",
+      // Depth 2 completes on its own (the leaves have no outgoing edges), and both budgets
+      // leave room for the full fan-out — so the ONLY bound this walk can hit is the
+      // per-node neighbour cap. Without that flag the report claims a complete graph.
+      maxDepth: MAX_IMPACT_DEPTH,
+      maxNodes: MAX_IMPACT_NODES,
+      maxRelationships: MAX_IMPACT_RELATIONSHIPS,
+    });
+    expect(fanOut).toBeLessThan(MAX_IMPACT_NODES);
+    expect(fanOut).toBeLessThan(MAX_IMPACT_RELATIONSHIPS);
+    expect(result.relationships.length).toBeLessThan(fanOut);
     expect(result.truncated).toBe(true);
     expect(result.truncationReason).toBe("max-relationships");
   });
