@@ -16,7 +16,7 @@
     "node": "24.18.0",
     "npm": "11.16.0",
     "uiClient": "chromium (in-app browser)",
-    "serverOrigin": "loopback port 1986 (1983 occupied; documented fallback engaged)",
+    "serverOrigin": "loopback dev server (documented port-fallback engaged)",
     "codeSigningIdentities": 0,
     "notaryProfile": false
   },
@@ -348,7 +348,7 @@
     }
   ],
   "journeyTotals": {
-    "passed": 20,
+    "passed": 19,
     "byDesign": 1,
     "failed": 2,
     "notStarted": "phases 2B-2G, 3, 4"
@@ -358,9 +358,10 @@
       "id": "F-01",
       "severity": "P0",
       "title": "Coding Workbench renders green readiness over an unavailable gateway",
-      "evidence": "GET /api/coding-sidecar/gateway/profile => {status:unavailable, reason:no-tool-calling} while Settings reports 'tools yes' for both chat models and the Workbench header reports 'Ready to start' / 'Model source: Keiko Gateway'",
+      "evidence": "the sidecar gateway profile projection reported status unavailable (reason no-tool-calling) while Settings showed 'tools yes' for both chat models and the Workbench header showed 'Ready to start' with the gateway as model source",
       "declaredUncertainty": "whether a production gateway also lands on no-tool-calling needs a real credential; the display defect is independent of which projection is correct",
-      "reproduced": "live UI + server projection"
+      "reproduced": "live UI + server projection",
+      "status": "FIXED AND VERIFIED (see realGatewayPhase.fixVerification)"
     },
     {
       "id": "F-02",
@@ -469,8 +470,8 @@
   "externalBlockers": [
     {
       "id": "B-1",
-      "blocker": "no model-gateway credential",
-      "impact": "answer quality, grounding faithfulness, abstention, citations, retrieval ranking, judge behaviour and structured output remain unaudited"
+      "blocker": "residual model-dependent gaps after the real-gateway phase",
+      "impact": "still unproven: abstention depth, retrieval ranking quality, dictation/Realtime media parity with a live microphone, and the paired coding-run happy path"
     },
     {
       "id": "B-2",
@@ -568,7 +569,7 @@
         "id": "RG-04",
         "title": "Coding sidecar profile with tool-calling model",
         "result": "PASS",
-        "observed": "available, supportsToolCalling true, modelAlias gpt-5.4"
+        "observed": "sidecar gateway profile projection reports available with tool-calling supported"
       },
       {
         "id": "RG-05",

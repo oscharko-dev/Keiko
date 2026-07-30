@@ -129,7 +129,10 @@ function allWorkflowJobNames() {
 // silently at the next release cut: the drift `replace()` stops matching, the mutation becomes a
 // no-op, and the pin goes green over an undetected contract drift.
 export function envValue(source, name) {
-  const match = source.match(new RegExp(String.raw`^\s*${name}:\s*(.+)$`, "m"));
+  // The key is caller-provided through the exported seam: escape regex metacharacters so an
+  // unusual env name can never silently match the wrong line and weaken a drift pin.
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
+  const match = source.match(new RegExp(String.raw`^\s*${escaped}:\s*(.+)$`, "m"));
   return match === null ? undefined : unquoteYamlScalar(match[1]);
 }
 
