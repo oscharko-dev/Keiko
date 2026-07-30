@@ -21,6 +21,7 @@ export {
   buildAtomCoverageStatuses,
   buildCoverageMap,
   classifyAtomCoverage,
+  classifyCoverageMapping,
   COVERAGE_THRESHOLD_COVERED,
   COVERAGE_THRESHOLD_WEAKLY_COVERED,
   runCoveragePercentage,
@@ -28,6 +29,7 @@ export {
 export type {
   AtomCoverageStatus,
   BuildCoverageMapInput,
+  CoverageClassification,
   CoverageStatus,
 } from "./domain/coverageRelevance.js";
 

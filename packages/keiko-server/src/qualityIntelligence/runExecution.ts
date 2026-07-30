@@ -38,7 +38,7 @@ import { makeCapsuleResolver } from "./capsuleAdapter.js";
 import { extractQiDocumentText } from "./documentTextExtractor.js";
 import { makeFigmaSnapshotLoader, makeFigmaVisionHintProvider } from "./figmaSnapshotAdapter.js";
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
-import { createQiJudgePort, QiJudgeError } from "./judgePort.js";
+import { tryCreateQiJudgePort, withQiJudgeStageFailure, type QiJudgePort } from "./judgePort.js";
 import { resolveQiModelPolicy } from "./modelSelection.js";
 
 // Mirrors the stages the model-routed workflow actually emits (descriptors.ts stageNames), so the
@@ -246,14 +246,16 @@ export async function executeQiRun(
   }
 }
 
-async function runResolvedQi(
+/**
+ * Ingest the request's sources, counting the model-gateway calls the ingestion itself made (figma
+ * vision hints) so the run's audited call total starts from the true figure.
+ */
+async function ingestForRun(
   input: ExecuteQiRunInput,
-  evidenceDir: string,
   capsuleResolver: ReturnType<typeof makeCapsuleResolver>,
-): Promise<QualityIntelligenceRunSummary> {
+): Promise<{ readonly ingestion: QiIngestion; readonly gatewayCallCount: number }> {
   const { deps, runId, request } = input;
-  const modelRouting = buildExecutionRouting(input);
-  let ingestionModelGatewayCallCount = 0;
+  let gatewayCallCount = 0;
   const ingestion = await ingestInlineSourcesAsync({
     request,
     runId,
@@ -262,14 +264,32 @@ async function runResolvedQi(
     figmaSnapshotLoader: makeFigmaSnapshotLoader(deps),
     figmaVision: makeFigmaVisionHintProvider(deps, undefined, {
       onGatewayCallAttempt: () => {
-        ingestionModelGatewayCallCount += 1;
+        gatewayCallCount += 1;
       },
     }),
     documentTextExtractor: extractQiDocumentText,
     signal: input.signal,
   });
-  const { modelId, generate } = resolveExecutionStrategy(deps, request, modelRouting);
-  const judge = buildJudgePortForModelRun(deps, modelRouting.resolved.judgeModelId, request.seed);
+  return { ingestion, gatewayCallCount };
+}
+
+async function runResolvedQi(
+  input: ExecuteQiRunInput,
+  evidenceDir: string,
+  capsuleResolver: ReturnType<typeof makeCapsuleResolver>,
+): Promise<QualityIntelligenceRunSummary> {
+  const { deps, runId, request } = input;
+  const requestedRouting = buildExecutionRouting(input);
+  const { ingestion, gatewayCallCount } = await ingestForRun(input, capsuleResolver);
+  const { modelId, generate } = resolveExecutionStrategy(deps, request, requestedRouting);
+  const resolvedJudge = resolveJudgeForModelRun(
+    deps,
+    requestedRouting.resolved.judgeModelId,
+    request.seed,
+  );
+  // The routing the run actually executes under carries the judge degradation, so `onAccepted`,
+  // the persisted manifest, and the terminal `done` frame all report the same classified failure.
+  const modelRouting = withQiJudgeStageFailure(requestedRouting, resolvedJudge.stageFailureReason);
   const profile = resolveProfile(request.profileId);
 
   input.onAccepted(buildAccepted(input, ingestion, modelId, modelRouting));
@@ -288,9 +308,9 @@ async function runResolvedQi(
       evidenceDir,
       modelId,
       modelRouting,
-      initialModelGatewayCallCount: ingestionModelGatewayCallCount,
+      initialModelGatewayCallCount: gatewayCallCount,
       generate,
-      judge,
+      judge: resolvedJudge.judge,
       onEvent: input.onEvent,
       signal: input.signal,
     }),
@@ -305,25 +325,37 @@ interface WorkflowDepsInput {
   readonly modelRouting?: QualityIntelligenceModelRouting | undefined;
   readonly initialModelGatewayCallCount?: number | undefined;
   readonly generate: ReturnType<typeof createQiGenerationPort>;
-  readonly judge?: ReturnType<typeof createQiJudgePort> | undefined;
+  readonly judge?: QiJudgePort | undefined;
   readonly onEvent: (event: QI.QualityIntelligenceRunEvent) => void;
   readonly signal: AbortSignal;
 }
 
-function buildJudgePortForModelRun(
+interface ResolvedJudge {
+  readonly judge?: QiJudgePort | undefined;
+  /** Redaction-safe reason the judge stage degraded; absent when a judge port was built. */
+  readonly stageFailureReason?: string | undefined;
+}
+
+/**
+ * Resolve the judge port for a model-backed run.
+ *
+ * The judge AUGMENTS generation and must never fail an otherwise successful run (the resilience
+ * contract on `runJudgeStage` in keiko-workflows). This used to rethrow a `QiJudgeError` as a
+ * `QiGenerationError`, which terminated the run over an OPTIONAL stage — and mislabelled a judge
+ * fault as a generation fault. Now the failure is classified and returned so the caller records it
+ * on the routing; the workflow's `judge === undefined` path then completes the run with an empty
+ * judge result, exactly as it does when no judge model is configured at all.
+ */
+function resolveJudgeForModelRun(
   deps: UiHandlerDeps,
   judgeModelId: string | undefined,
   requestedSeed: number | undefined,
-): ReturnType<typeof createQiJudgePort> | undefined {
-  if (judgeModelId === undefined) return undefined;
-  try {
-    return createQiJudgePort(deps, judgeModelId, { requestedSeed });
-  } catch (error) {
-    if (error instanceof QiJudgeError) {
-      throw new QiGenerationError(error.code, error.message);
-    }
-    throw error;
-  }
+): ResolvedJudge {
+  if (judgeModelId === undefined) return {};
+  const outcome = tryCreateQiJudgePort(deps, judgeModelId, { requestedSeed });
+  return outcome.available
+    ? { judge: outcome.port }
+    : { stageFailureReason: outcome.reasonSummary };
 }
 
 function buildWorkflowDeps(args: WorkflowDepsInput): QualityIntelligenceModelRoutedTestDesignDeps {

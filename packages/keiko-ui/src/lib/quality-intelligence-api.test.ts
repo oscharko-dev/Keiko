@@ -376,7 +376,9 @@ describe("quality intelligence JSON BFF helpers", () => {
       "/api/quality-intelligence/runs/run%201/traceability",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ format: "csv" }),
+        // The traceability matrix carries the same deliverable-safe default scope as the generic
+        // export: the export bar shows the approved-only notice for it too (0.3.0 release audit).
+        body: JSON.stringify({ format: "csv", approvedOnly: true }),
       }),
     );
   });
@@ -403,6 +405,34 @@ describe("quality intelligence JSON BFF helpers", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ adapter: "csv", dryRun: false, approvedOnly: true }),
+      }),
+    );
+  });
+
+  // 0.3.0 release audit: the traceability route used to receive no scope at all while the export
+  // bar promised an approved-only download, so an explicitly WIDENED scope must reach it too —
+  // otherwise the flag is decoration in one direction and a false promise in the other.
+  it("sends the caller's explicit traceability scope instead of the default", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          format: "markdown",
+          filename: "run-1-traceability.md",
+          contentType: "text/markdown",
+          byteLen: 12,
+          body: "# matrix",
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await exportQiRunTraceability("run 1", "markdown", { approvedOnly: false });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/quality-intelligence/runs/run%201/traceability",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ format: "markdown", approvedOnly: false }),
       }),
     );
   });

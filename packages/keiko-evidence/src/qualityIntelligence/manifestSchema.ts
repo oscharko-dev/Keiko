@@ -143,6 +143,14 @@ export interface QualityIntelligenceExportRow {
    * only top-level keys, so no schema-version bump is required.
    */
   readonly dryRun?: boolean;
+  /**
+   * Whether this export was scoped to APPROVED test cases only (0.3.0 release audit). Without it an
+   * auditor reading the manifest cannot tell an approved-only compliance download apart from a
+   * full diagnostic one, because both record the same `targetAdapter`. Additive and optional in the
+   * same way `dryRun` is: rows written before this field carry no scope claim at all, and the
+   * strict-schema gate validates only top-level manifest keys, so no schema-version bump is needed.
+   */
+  readonly approvedOnly?: boolean;
 }
 
 export interface QualityIntelligenceEvidenceRefRow {

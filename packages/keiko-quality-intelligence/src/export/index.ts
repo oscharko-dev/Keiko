@@ -42,6 +42,7 @@ export {
   XRAY_CSV_HEADERS,
   adaptToTraceabilityCsv,
   adaptToTraceabilityMarkdown,
+  scopeTraceabilityRowsToTests,
   TRACEABILITY_CSV_HEADERS,
   TRACEABILITY_HEADERS,
   TRACEABILITY_REVERSE_HEADERS,

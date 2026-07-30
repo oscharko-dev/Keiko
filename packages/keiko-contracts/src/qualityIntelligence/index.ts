@@ -213,6 +213,7 @@ export type {
   QualityIntelligenceUiRunTotals,
   QualityIntelligenceUiRunSummary,
   QualityIntelligenceUiRunListResponse,
+  QualityIntelligenceUiRetentionNotice,
   QualityIntelligenceUiFindingSummary,
   QualityIntelligenceUiEvidenceRef,
   QualityIntelligenceUiRunDetail,
