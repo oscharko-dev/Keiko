@@ -16,6 +16,7 @@ import { useTranslate } from "@/lib/i18n";
 import styles from "./ManagedLanguageSettings.module.css";
 import { managedLanguageTranslate, type ManagedLanguageTranslate } from "./managed-language-i18n";
 import { useManagedLanguageSettings } from "./useManagedLanguageSettings";
+import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import { useWorkspaceTrust } from "../../workspace-trust/useWorkspaceTrust";
 import { WorkspaceTrustBanner } from "../../workspace-trust/WorkspaceTrustSurfaces";
 
@@ -43,6 +44,11 @@ export function ManagedLanguageSettings({
   const restoreFocusRef = useRef<HTMLButtonElement | undefined>(undefined);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const pendingRestoreTargetRef = useRef<HTMLButtonElement | undefined>(undefined);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  // GEN-UI-FOCUS-002: the restart/deactivate confirm is `aria-modal="true"`, so Tab must not reach
+  // the language cards behind it. Shared containment seam, identical to the DebuggingSettings
+  // confirm in this same panel family; it is inert while the dialog is unmounted (ref is null).
+  useDialogTabTrap(dialogRef);
 
   useEffect(() => {
     if (confirmation !== undefined) {
@@ -71,6 +77,24 @@ export function ManagedLanguageSettings({
       titleRef.current?.focus();
     }
   }, [view.data]);
+
+  // WCAG 2.1.2 — an aria-modal dialog must be dismissible from the keyboard. Escape cancels and
+  // hands focus back to the opener through the same restore path the Cancel button uses. Inlined
+  // (rather than calling closeConfirmation) so the listener is bound once per open dialog instead of
+  // being torn down and re-added on every render, matching the DebuggingSettings confirm.
+  useEffect(() => {
+    if (confirmation === undefined) return;
+    const { opener } = confirmation;
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      restoreFocusRef.current = opener;
+      setConfirmation(undefined);
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [confirmation]);
 
   const closeConfirmation = (): void => {
     restoreFocusRef.current = confirmation?.opener;
@@ -187,11 +211,15 @@ export function ManagedLanguageSettings({
       {confirmation !== undefined ? (
         <div className={styles.dialogBackdrop}>
           <div
+            ref={dialogRef}
             className={styles.dialog}
             role="alertdialog"
             aria-modal="true"
             aria-labelledby="managed-language-confirm-title"
             aria-describedby="managed-language-confirm-description"
+            // The shared tab trap re-enters the dialog on the container when focus has escaped and
+            // no control is focusable; that fallback needs the container to be focusable at all.
+            tabIndex={-1}
           >
             <div className={styles.dialogTitle} id="managed-language-confirm-title">
               {t("confirmTitle")}

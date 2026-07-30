@@ -215,6 +215,7 @@ import type {
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/useWorkspace.types";
 import { Icons } from "../../Icons";
 
+import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
 import {
   useRegisterWorkspaceReplaceBuffer,
@@ -2721,6 +2722,13 @@ function EditorRuntimeWidget({
   }, []);
 
   const reloadConfirmRef = useRef<HTMLDivElement>(null);
+  // GEN-UI-FOCUS-002: this destructive confirm declares `aria-modal="true"`, which promises assistive
+  // technology that the rest of the shell is unavailable. Without containment a keyboard or
+  // screen-reader user could Tab straight out of "Discard unsaved changes?" into the editor and the
+  // window chrome behind it. Reuse the shared containment seam (the same one the gateway, editor
+  // settings, and debugging confirms use) instead of re-deriving the wrap here; it is a no-op while
+  // the dialog is unmounted because the ref is then null.
+  useDialogTabTrap(reloadConfirmRef);
   useEffect(() => {
     if (!reloadConfirm) return;
     // GEN-UI-FOCUS-006: capture the opener (the Reload button) before moving focus into the dialog,
