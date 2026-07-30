@@ -56,6 +56,7 @@ import {
   editorFileModelReducer,
   EditorStatusBar,
   EMPTY_LANGUAGE_INTELLIGENCE_STATE,
+  formattingApplyDecision,
   IDLE_TEST_GENERATION_STATE,
   inferMonacoLanguageId,
   isDocumentDirty,
@@ -535,6 +536,15 @@ const SESSION_CACHE_CAPACITY = 16;
 const HOT_EXIT_WRITE_DEBOUNCE_MS = 400;
 const CONTENT_HASH_DEBOUNCE_MS = 150;
 const FORMAT_ON_SAVE_DEADLINE_MS = 5_000;
+/**
+ * Stated in full because the user asked for a formatted file and is getting neither the reformat nor
+ * the write: what stopped it, that nothing reached disk, and how to proceed. Applying the surviving
+ * edits instead would persist a half-formatted file under a clean "saved" — the same silent partial
+ * application the rename changeset refuses (0.3.0 release audit).
+ */
+const FORMAT_ON_SAVE_CAPPED_MESSAGE =
+  "Format-on-save stopped because the formatter hit a result limit and returned only part of the " +
+  "reformat. Nothing was written. Turn format-on-save off to save this file unformatted.";
 const UTF8_ENCODER = new TextEncoder();
 /**
  * #2347 replaces this consumption seam with its server-resolved, minimum-wins capability result.
@@ -2747,59 +2757,76 @@ function EditorRuntimeWidget({
     };
   }, [reloadConfirm, cancelReloadDiscard]);
 
-  const prepareFormatOnSave = useCallback(async (text: string): Promise<string | null> => {
-    const state = formatOnSaveStateRef.current;
-    if (!state.enabled) return text;
-    if (
-      !state.canFormat ||
-      state.document === null ||
-      state.root === undefined ||
-      state.file === undefined
-    ) {
-      return text;
-    }
-    const baseVersion = versionRef.current;
-    const request = {
-      request: {
-        requestId: createEditorRequestId(),
-        streamId: "editor-format-on-save",
-        sequence: Date.now(),
-      },
-      document: state.document,
-      options: { tabSize: state.tabSize, insertSpaces: state.insertSpaces },
-    };
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), FORMAT_ON_SAVE_DEADLINE_MS);
-    try {
-      const wire = await requestEditorFormatting(
-        {
-          root: state.root,
-          path: state.file,
-          languageId: state.document.language,
-          text,
-          options: request.options,
-        },
-        controller.signal,
-      );
-      if (contentRef.current !== text || versionRef.current !== baseVersion) {
-        setSaveError("Format-on-save stopped because the file changed while formatting.");
-        setSaveStatus((status) => saveStatusReducer(status, { type: "failed" }));
-        return null;
-      }
-      const response = mapWireToEditorFormattingResponse(request.request, wire);
-      return response.edits.length === 0 ? text : applyTextEditsToText(text, response.edits);
-    } catch (error: unknown) {
-      setSaveError(
-        error instanceof DOMException && error.name === "AbortError"
-          ? "Format-on-save timed out. Save again after formatting is available."
-          : `Format-on-save failed: ${errorMessage(error)}`,
-      );
-      setSaveStatus((status) => saveStatusReducer(status, { type: "failed" }));
-      return null;
-    } finally {
-      window.clearTimeout(timeout);
-    }
+  /** Abandon the save and state why. `null` is `persist`'s "nothing was written" signal. */
+  const failFormatOnSave = useCallback((message: string): null => {
+    setSaveError(message);
+    setSaveStatus((status) => saveStatusReducer(status, { type: "failed" }));
+    return null;
   }, []);
+
+  const prepareFormatOnSave = useCallback(
+    async (text: string): Promise<string | null> => {
+      const state = formatOnSaveStateRef.current;
+      if (!state.enabled) return text;
+      if (
+        !state.canFormat ||
+        state.document === null ||
+        state.root === undefined ||
+        state.file === undefined
+      ) {
+        return text;
+      }
+      const baseVersion = versionRef.current;
+      const request = {
+        request: {
+          requestId: createEditorRequestId(),
+          streamId: "editor-format-on-save",
+          sequence: Date.now(),
+        },
+        document: state.document,
+        options: { tabSize: state.tabSize, insertSpaces: state.insertSpaces },
+      };
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), FORMAT_ON_SAVE_DEADLINE_MS);
+      try {
+        const wire = await requestEditorFormatting(
+          {
+            root: state.root,
+            path: state.file,
+            languageId: state.document.language,
+            text,
+            options: request.options,
+          },
+          controller.signal,
+        );
+        if (contentRef.current !== text || versionRef.current !== baseVersion) {
+          return failFormatOnSave(
+            "Format-on-save stopped because the file changed while formatting.",
+          );
+        }
+        // This path WRITES the result to disk, so the shared apply gate decides — a capped reformat
+        // is refused rather than persisted as a finished format. The empty-edit case is inside the
+        // gate's `apply` branch on purpose: an empty edit list is "already formatted" only when the
+        // result also reports itself uncapped.
+        const decision = formattingApplyDecision(
+          mapWireToEditorFormattingResponse(request.request, wire),
+        );
+        if (decision.status === "refused") {
+          return failFormatOnSave(FORMAT_ON_SAVE_CAPPED_MESSAGE);
+        }
+        return decision.edits.length === 0 ? text : applyTextEditsToText(text, decision.edits);
+      } catch (error: unknown) {
+        return failFormatOnSave(
+          error instanceof DOMException && error.name === "AbortError"
+            ? "Format-on-save timed out. Save again after formatting is available."
+            : `Format-on-save failed: ${errorMessage(error)}`,
+        );
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    },
+    [failFormatOnSave],
+  );
 
   const markBufferEdited = useCallback((text: string): void => {
     contentRef.current = text;

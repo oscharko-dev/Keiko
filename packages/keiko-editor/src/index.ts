@@ -173,6 +173,12 @@ export type {
 export { applyTextEditsToText, applyTextEditsToTextWithinLimit } from "./apply-text-edits.js";
 export type { BoundedTextEditResult } from "./apply-text-edits.js";
 
+// `formattingApplyDecision` is the apply gate for a formatting result: a server-capped reformat is a
+// PARTIAL mutation and must never reach a buffer or disk as if it were the finished format. It is the
+// mutation-path counterpart to the `capped` label the outcome seam renders (0.3.0 release audit).
+export { formattingApplyDecision } from "./formatting-apply.js";
+export type { FormattingApplyDecision } from "./formatting-apply.js";
+
 // ─── Runtime: range mapping ──────────────────────────────────────────────────────
 export {
   comparePositions,
