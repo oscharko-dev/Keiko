@@ -64,7 +64,11 @@ import type {
 import { isConversationEligibleModel } from "@/lib/types";
 import { formatUserError } from "../format-error";
 import { canonicalVoiceSha256Hex } from "./canonical-voice-hasher";
-import { extractDocumentContext, type PendingDocument } from "./documentContext";
+import {
+  extractDocumentContext,
+  undeliverableAttachmentNotices,
+  type PendingDocument,
+} from "./documentContext";
 import {
   currentConversationMemoryModeRevision,
   useConversationMemorySettings,
@@ -289,6 +293,16 @@ function errorMessage(error: unknown): string {
 
 function sortChats(chats: readonly Chat[]): Chat[] {
   return [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+// 0.3.0 release audit — the chat list deliberately carries trashed conversations (status
+// "closed") so Chat History's Deleted tab can restore them, and the panel filters them out of the
+// visible list. The resume paths did not filter: taking `sorted[0]` could land the session on a
+// conversation the user had just trashed — invisible in Chat History, and refused by the server
+// on every send with 409 CHAT_CLOSED. One helper, used by every path that resumes a conversation,
+// so a future resume path cannot reintroduce the omission.
+function pickResumableChat(sortedChats: readonly Chat[]): Chat | undefined {
+  return sortedChats.find((chat) => chat.status !== "closed");
 }
 
 // Sonar S2004 — the upsert/remove/replace/rollback list transforms below are extracted to
@@ -1472,34 +1486,38 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   const projects = sortProjects(projectPayload.projects);
   const project = projects.find((item) => item.available) ?? projects[0];
 
-  if (project !== undefined) {
-    const chatPayload = await sharedFetchChats(project.path).catch(() => ({ chats: [] }));
-    const sortedChats = sortChats(chatPayload.chats);
-    const latestChat = sortedChats[0];
-    if (latestChat !== undefined) {
-      const messagePayload = await sharedFetchChatMessages(latestChat.id, project.path);
-      const selectedModel = resolveSelectedModelId(latestChat.selectedModel, chatModels);
-      return {
-        models: chatModels,
-        selectedModel,
-        projects: Array.from(projects),
-        activeProject: project,
-        chats: sortedChats,
-        activeChat: latestChat,
-        messages: Array.from(messagePayload.messages),
-      };
-    }
+  const chatPayload =
+    project === undefined
+      ? { chats: [] as readonly Chat[] }
+      : await sharedFetchChats(project.path).catch(() => ({ chats: [] as readonly Chat[] }));
+  const sortedChats = sortChats(chatPayload.chats);
+  const latestChat = pickResumableChat(sortedChats);
+  if (project !== undefined && latestChat !== undefined) {
+    const messagePayload = await sharedFetchChatMessages(latestChat.id, project.path);
+    const selectedModel = resolveSelectedModelId(latestChat.selectedModel, chatModels);
+    return {
+      models: chatModels,
+      selectedModel,
+      projects: Array.from(projects),
+      activeProject: project,
+      chats: sortedChats,
+      activeChat: latestChat,
+      messages: Array.from(messagePayload.messages),
+    };
   }
 
   // AC #1: when no eligible model exists, set selectedModel to undefined so
   // downstream surfaces show a clear error instead of a placeholder id.
+  //
+  // 0.3.0 release audit — the trashed conversations stay in `chats` even though none of them may
+  // be resumed: Chat History's Deleted tab is the surface that restores them.
   if (defaultModel === undefined || !autoCreate) {
     return {
       models: chatModels,
       selectedModel: defaultModel,
       projects: Array.from(projects),
       activeProject: project,
-      chats: [],
+      chats: sortedChats,
       activeChat: undefined,
       messages: [],
     };
@@ -1972,12 +1990,31 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     });
   }, []);
 
+  // 0.3.0 release audit — the composer (draft text + staged attachment queue) is ONE app-wide
+  // slot because the chat window is a singleton (ADR-0114). Switching the active conversation
+  // reset the stream bubble, the grounded answer, the latest memory and the document note, but
+  // never the composer — so a document staged in chat A was extracted and sent into chat B, under
+  // whatever model and provider chat B had selected. Content a user staged for one conversation
+  // must never ride along into another: every path that changes the active conversation clears it
+  // fail-closed. Placed here, on the state that owns the composer, so a new switch path cannot
+  // forget to call it.
+  const resetComposerForConversationSwitch = useCallback((): void => {
+    setDraft("");
+    clearPendingAttachments();
+  }, [clearPendingAttachments]);
+
   // Issue #148 — extract bounded text from the staged DOCUMENT attachments for the send body.
   // Images are excluded here (they stay on the metadata-only attachments path). A document with
   // no retained File (synthetic fixture) is skipped. Read failures surface a fixed, path-safe
   // alert and never abort the send. Returns the wire entries to attach plus a disclosure list.
   // #2843 — the staged set is an argument, not closed-over state: a canonical Voice turn passes the
   // snapshot captured at handoff, so a turn is never built from a composer the user has since changed.
+  //
+  // 0.3.0 release audit — the metadata-only path is exactly why an image cannot reach the model,
+  // so every staged image is disclosed by name through the same pre-send alert channel the
+  // document skips already use. The notice is emitted whether or not any document is attached,
+  // and it is derived from the SAME staged snapshot as the extraction, so a spoken turn discloses
+  // what that turn actually carries rather than what the composer happens to hold now.
   const buildDocumentContext = useCallback(
     async (
       staged: readonly PendingAttachment[],
@@ -1985,6 +2022,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       readonly entries: readonly ConversationDocumentContextWire[];
       readonly disclosures: readonly SentDocumentDisclosure[];
     }> => {
+      const undeliverable = undeliverableAttachmentNotices(staged);
       const documents: PendingDocument[] = staged
         .filter((a) => a.kind === "document" && a.file !== undefined)
         .map((a) => ({
@@ -1994,15 +2032,18 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           sizeBytes: a.sizeBytes,
           file: a.file as File,
         }));
-      if (documents.length === 0) return { entries: [], disclosures: [] };
-      const { entries, failures } = await extractDocumentContext(documents);
-      if (failures.length > 0) setError(failures.join(" "));
-      const disclosures = entries.map((e) => ({
+      const extracted =
+        documents.length === 0
+          ? { entries: [] as readonly ConversationDocumentContextWire[], failures: [] }
+          : await extractDocumentContext(documents);
+      const notices = [...extracted.failures, ...undeliverable];
+      if (notices.length > 0) setError(notices.join(" "));
+      const disclosures = extracted.entries.map((e) => ({
         id: e.id,
         displayName: e.displayName,
         truncated: e.truncated,
       }));
-      return { entries, disclosures };
+      return { entries: extracted.entries, disclosures };
     },
     [],
   );
@@ -2465,6 +2506,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       }
       setError(undefined);
       setStreamingAssistantMessage(undefined);
+      // 0.3.0 release audit — a new conversation is a different conversation: whatever was staged
+      // for the previous one must not be carried into it.
+      resetComposerForConversationSwitch();
       try {
         const trimmedTitle = title?.trim();
         const input: { modelId: string; title: string; projectPath?: string } = {
@@ -2498,20 +2542,23 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return undefined;
       }
     },
-    [state.selectedModel, state.activeProject, state.models],
+    [resetComposerForConversationSwitch, state.selectedModel, state.activeProject, state.models],
   );
 
   const openProject = useCallback(
     async (project: ProjectWithAvailability): Promise<void> => {
       setError(undefined);
       setStreamingAssistantMessage(undefined);
+      // 0.3.0 release audit — a project switch changes the active conversation, so the one
+      // app-wide composer must not carry the previous project's draft or staged files into it.
+      resetComposerForConversationSwitch();
       activeProjectPathRef.current = project.path;
       setState((previous) => ({ ...previous, activeProject: project }));
       try {
         const chatPayload = await sharedFetchChats(project.path);
         if (activeProjectPathRef.current !== project.path) return;
         const sorted = sortChats(chatPayload.chats);
-        const latest = sorted[0];
+        const latest = pickResumableChat(sorted);
         if (latest === undefined) {
           if (activeProjectPathRef.current !== project.path) return;
           await openNewChat(project);
@@ -2538,7 +2585,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setError(errorMessage(error_));
       }
     },
-    [canonicalVoiceProjectionRef, openNewChat, state.models],
+    [canonicalVoiceProjectionRef, openNewChat, resetComposerForConversationSwitch, state.models],
   );
 
   const openChat = useCallback(
@@ -2560,6 +2607,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setLatestMemory(undefined);
       // Issue #148 — clear the document-disclosure note so it never bleeds across chats.
       setLastSentDocuments([]);
+      // 0.3.0 release audit — and neither may the draft or the staged attachments.
+      resetComposerForConversationSwitch();
       try {
         const messagePayload = await sharedFetchChatMessages(chat.id, chat.projectPath);
         if (!isStillActiveChat(chat.id)) return;
@@ -2583,7 +2632,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setError(errorMessage(error_));
       }
     },
-    [canonicalVoiceProjectionRef, state.activeChat?.id, state.models],
+    [
+      canonicalVoiceProjectionRef,
+      resetComposerForConversationSwitch,
+      state.activeChat?.id,
+      state.models,
+    ],
   );
 
   const addProject = useCallback(

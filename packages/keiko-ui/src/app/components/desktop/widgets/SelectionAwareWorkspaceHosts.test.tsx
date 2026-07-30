@@ -1281,6 +1281,53 @@ describe("ChatWindowSessionHost target missing", () => {
       screen.getByText("This conversation was deleted or is no longer available."),
     ).toBeInTheDocument();
   });
+
+  // 0.3.0 release audit — the chat window is a singleton and its bound chat is resolved only
+  // inside the CURRENT project's list. After a project switch that list is replaced wholesale, so
+  // a window still carrying the previous project's chatId claimed the conversation had been
+  // deleted. It had not: the session had simply moved on. The window must follow the session's
+  // active conversation instead of accusing the product of losing data.
+  it("retargets to the active conversation instead of claiming a project-switched chat was deleted", async (): Promise<void> => {
+    const switched = chatFixture("chat-other-project", "Other project chat", 7);
+    chatSessionState.activeChat = switched;
+    chatSessionState.chats = [switched];
+    chatSessionState.loading = false;
+    const ctx = context();
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "chat-previous-project" }} ctx={ctx} />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void => {
+      expect(ctx.updateCfg).toHaveBeenCalledWith({
+        chatId: switched.id,
+        title: switched.title,
+      });
+    });
+    expect(screen.queryByText("Chat not found")).not.toBeInTheDocument();
+  });
+
+  // The honest case stays honest: a conversation trashed from Chat History remains in the list
+  // with status "closed", which is the only proof the window has that it really is gone.
+  it("still reports a trashed conversation as deleted rather than retargeting", async (): Promise<void> => {
+    const trashed: Chat = { ...chatFixture("chat-trashed", "Trashed", 3), status: "closed" };
+    const other = chatFixture("chat-live", "Live", 9);
+    chatSessionState.activeChat = other;
+    chatSessionState.chats = [trashed, other];
+    chatSessionState.loading = false;
+    const ctx = context();
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: trashed.id }} ctx={ctx} />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByText("Chat not found")).toBeInTheDocument();
+    expect(ctx.updateCfg).not.toHaveBeenCalled();
+  });
 });
 
 describe("FilesWindowSessionHost", () => {

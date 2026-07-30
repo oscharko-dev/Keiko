@@ -31,6 +31,7 @@ import {
   type SendMessageOutcome,
   useChatSession,
 } from "./useChatSession";
+import { undeliverableAttachmentNotices } from "./documentContext";
 import {
   resetConversationMemorySettingsForTests,
   useConversationMemorySettings,
@@ -528,6 +529,169 @@ describe("useChatSession bootstrap", () => {
     await waitFor(() =>
       expect(result.current.chats.some((item) => item.id === "chat-new")).toBe(false),
     );
+  });
+
+  // 0.3.0 release audit — the chat list carries trashed (status "closed") conversations so the
+  // Chat History "Deleted" tab can offer Restore, but the resume path took `sorted[0]` with no
+  // status filter. A user who trashed their most recent conversation was dropped back into it:
+  // it is hidden from the list, and every send is refused by the server with CHAT_CLOSED.
+  it("resumes the newest OPEN conversation and never a trashed one", async () => {
+    const trashed = chat({ id: "chat-trashed", selectedModel: "chat-live", updatedAt: 30 });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({
+      chats: [
+        chat({ id: "chat-open", selectedModel: "chat-live", updatedAt: 20 }),
+        { ...trashed, status: "closed" } as Chat,
+      ],
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.activeChat?.id).toBe("chat-open");
+    expect(fetchChatMessages).toHaveBeenCalledWith("chat-open", "/repo");
+    // The trashed chat stays in the list — the Deleted tab still has something to restore.
+    expect(result.current.chats.map((item) => item.id)).toEqual(["chat-trashed", "chat-open"]);
+  });
+
+  it("resumes nothing when every conversation is trashed, but keeps the list", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({
+      chats: [
+        { ...chat({ id: "chat-a", selectedModel: "chat-live", updatedAt: 20 }), status: "closed" },
+        { ...chat({ id: "chat-b", selectedModel: "chat-live", updatedAt: 30 }), status: "closed" },
+      ] as Chat[],
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.activeChat).toBeUndefined();
+    expect(fetchChatMessages).not.toHaveBeenCalled();
+    expect(result.current.chats.map((item) => item.id)).toEqual(["chat-b", "chat-a"]);
+  });
+
+  it("opens the newest OPEN conversation when a project is selected", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({
+      chats: [chat({ id: "chat-boot", selectedModel: "chat-live", updatedAt: 5 })],
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    vi.mocked(fetchChats).mockResolvedValue({
+      chats: [
+        chat({ id: "other-open", projectPath: "/other", selectedModel: "chat-live", updatedAt: 1 }),
+        {
+          ...chat({
+            id: "other-trashed",
+            projectPath: "/other",
+            selectedModel: "chat-live",
+            updatedAt: 99,
+          }),
+          status: "closed",
+        } as Chat,
+      ],
+    });
+    await act(async () => {
+      await result.current.openProject(project("/other"));
+    });
+
+    expect(result.current.activeChat?.id).toBe("other-open");
+    expect(result.current.chats.map((item) => item.id)).toEqual(["other-trashed", "other-open"]);
+  });
+});
+
+// 0.3.0 release audit — the composer draft and the staged attachment queue are one app-wide
+// slot (the chat window is a singleton). Switching conversations reset the stream bubble, the
+// grounded answer and the document note, but never the composer: a document attached in chat A
+// was extracted and sent into chat B, possibly under a different model and provider. Content a
+// user staged in one conversation must never ride along into another.
+describe("useChatSession conversation switch — composer isolation", () => {
+  async function setupTwoChatSession(): Promise<
+    ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>
+  > {
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [model({ id: "chat-a", supportsImageInput: true, supportsDocumentInput: true })],
+    });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({
+      chats: [
+        chat({ id: "chat-1", updatedAt: 20 }),
+        chat({ id: "chat-2", title: "Second", updatedAt: 10 }),
+      ],
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+    return rendered;
+  }
+
+  it("drops the draft and the staged attachments when another chat is opened", async () => {
+    const { result } = await setupTwoChatSession();
+    expect(result.current.activeChat?.id).toBe("chat-1");
+
+    await act(async () => {
+      expect(
+        await result.current.addPendingAttachment(
+          new File(["confidential"], "salaries.txt", { type: "text/plain" }),
+        ),
+      ).toEqual({ ok: true });
+    });
+    act(() => {
+      result.current.setDraft("only meant for chat one");
+    });
+    expect(result.current.pendingAttachments).toHaveLength(1);
+
+    await act(async () => {
+      await result.current.openChat(chat({ id: "chat-2", title: "Second", updatedAt: 10 }));
+    });
+
+    expect(result.current.activeChat?.id).toBe("chat-2");
+    expect(result.current.draft).toBe("");
+    expect(result.current.pendingAttachments).toEqual([]);
+  });
+
+  it("keeps the composer when the same chat is re-opened", async () => {
+    const { result } = await setupTwoChatSession();
+    act(() => {
+      result.current.setDraft("still typing");
+    });
+
+    await act(async () => {
+      await result.current.openChat(chat({ id: "chat-1", updatedAt: 20 }));
+    });
+
+    expect(result.current.draft).toBe("still typing");
+  });
+
+  it("drops the draft and the staged attachments when the project changes", async () => {
+    const { result } = await setupTwoChatSession();
+    await act(async () => {
+      await result.current.addPendingAttachment(
+        new File(["confidential"], "salaries.txt", { type: "text/plain" }),
+      );
+    });
+    act(() => {
+      result.current.setDraft("only meant for the first project");
+    });
+
+    vi.mocked(fetchChats).mockResolvedValue({
+      chats: [chat({ id: "chat-other", projectPath: "/other", updatedAt: 3 })],
+    });
+    await act(async () => {
+      await result.current.openProject(project("/other"));
+    });
+
+    expect(result.current.activeChat?.id).toBe("chat-other");
+    expect(result.current.draft).toBe("");
+    expect(result.current.pendingAttachments).toEqual([]);
   });
 });
 
@@ -1449,6 +1613,63 @@ describe("useChatSession sendMessage — ungrounded attachment descriptors", () 
       memory: { mode: "autonomous-delivery" },
     });
     expect(result.current.pendingAttachments).toHaveLength(0);
+  });
+
+  // 0.3.0 release audit — an image is accepted, previewed and modality-validated, and then the
+  // send carries only its {kind, name, mimeType, sizeBytes}. Nothing on the wire can reach the
+  // model, so the turn must say so instead of dropping it in silence.
+  it("discloses by name that a staged image never reaches the model", async (): Promise<void> => {
+    const { result } = await setupUngroundedAttachmentSession();
+
+    await act(async (): Promise<void> => {
+      expect(
+        await result.current.addPendingAttachment(
+          new File(["image"], "screen.png", { type: "image/png" }),
+        ),
+      ).toEqual({ ok: true });
+    });
+    act((): void => {
+      result.current.setDraft("What is in this picture?");
+    });
+
+    await act(async (): Promise<void> => {
+      await result.current.sendMessage();
+    });
+
+    expect(sendDesktopChat).toHaveBeenCalledTimes(1);
+    // Proof the image contributes nothing: the request carries its metadata and no prompt-bearing
+    // content at all, so the model cannot see it.
+    const request = vi.mocked(sendDesktopChat).mock.calls[0]?.[0];
+    expect(request).toMatchObject({
+      attachments: [{ kind: "image", name: "screen.png", mimeType: "image/png", sizeBytes: 5 }],
+    });
+    expect(request).not.toHaveProperty("documentContext");
+    expect(result.current.error).toBe(
+      undeliverableAttachmentNotices([{ kind: "image", name: "screen.png" }]).join(" "),
+    );
+  });
+
+  it("keeps disclosing the image alongside an extracted document's own notices", async (): Promise<void> => {
+    const { result } = await setupUngroundedAttachmentSession();
+
+    await act(async (): Promise<void> => {
+      await result.current.addPendingAttachment(
+        new File(["image"], "screen.png", { type: "image/png" }),
+      );
+      await result.current.addPendingAttachment(
+        new File(["hello"], "notes.txt", { type: "text/plain" }),
+      );
+    });
+    act((): void => {
+      result.current.setDraft("Use the attached context.");
+    });
+
+    await act(async (): Promise<void> => {
+      await result.current.sendMessage();
+    });
+
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]?.documentContext).toHaveLength(1);
+    expect(result.current.error).toContain('"screen.png"');
   });
 
   it("clears attachments after reconciliation proves a lost response completed", async (): Promise<void> => {
