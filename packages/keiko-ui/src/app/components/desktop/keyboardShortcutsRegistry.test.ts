@@ -1,14 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import { isWorkspaceReservedChord, workspaceChordKey } from "@oscharko-dev/keiko-contracts";
+import {
+  EDITOR_M7_COMMAND_REGISTRY,
+  isWorkspaceDispatchableChord,
+  isWorkspaceReservedChord,
+  workspaceChordClaimKeys,
+  workspaceChordKey,
+  type EditorM7CommandDefinition,
+} from "@oscharko-dev/keiko-contracts";
 import {
   bindingFromKeyboardEvent,
   bindingToWorkspaceChord,
   dispatchableWorkspaceShortcutsForContext,
+  projectDispatchableWorkspaceShortcuts,
   removeKeyboardShortcutOverride,
   resolveEffectiveKeyboardShortcuts,
   shortcutLabel,
   updateKeyboardShortcutOverride,
+  type EffectiveKeyboardShortcut,
 } from "./keyboardShortcutsRegistry";
 
 describe("keyboardShortcutsRegistry", () => {
@@ -128,6 +137,25 @@ describe("keyboardShortcutsRegistry", () => {
     expect(bindingToWorkspaceChord("Alt+Alt+ArrowLeft")).toBeNull();
     expect(bindingToWorkspaceChord("CtrlOrMeta+Ctrl+ArrowLeft")).toBeNull();
   });
+
+  // 0.3.0 release audit (#2802): `CtrlOrMeta`, `Ctrl` and `Meta` collapse into the same two-value
+  // chord vocabulary, so ANY two of them produce a chord the matcher cannot express. Only the
+  // `CtrlOrMeta`+X pairs were refused; `Ctrl+Meta` produced mod ["ctrl","cmd"] and dispatched as
+  // plain Ctrl off macOS.
+  it.each([
+    "Ctrl+Meta+T",
+    "Meta+Ctrl+T",
+    "ctrl+meta+t",
+    "Ctrl+Meta+Alt+ArrowLeft",
+    "CtrlOrMeta+Meta+O",
+  ])("refuses the inexpressible ctrl+cmd chord %s", (binding) => {
+    expect(bindingToWorkspaceChord(binding)).toBeNull();
+  });
+
+  it("keeps every single-side spelling projectable", () => {
+    expect(bindingToWorkspaceChord("Ctrl+T")).toEqual({ key: "t", mod: ["ctrl"] });
+    expect(bindingToWorkspaceChord("Meta+T")).toEqual({ key: "t", mod: ["cmd"] });
+  });
 });
 
 // The dispatch-safe projection is the one place that decides which persisted binding reaches
@@ -190,11 +218,101 @@ describe("dispatchableWorkspaceShortcutsForContext", () => {
       const registry = resolveEffectiveKeyboardShortcuts(overrides);
       for (const context of ["global", "editor", "settings", "explorer"] as const) {
         const shortcuts = dispatchableWorkspaceShortcutsForContext(registry, context);
-        const chordKeys = shortcuts.map((entry) => workspaceChordKey(entry.chord));
+        const chordKeys = shortcuts.flatMap((entry) => workspaceChordClaimKeys(entry.chord));
 
         expect(shortcuts.filter((entry) => isWorkspaceReservedChord(entry.chord))).toEqual([]);
+        expect(shortcuts.filter((entry) => !isWorkspaceDispatchableChord(entry.chord))).toEqual([]);
         expect(new Set(chordKeys).size).toBe(chordKeys.length);
       }
     }
+  });
+});
+
+// The projection is the ONE fail-closed point for persisted data (ADR-0028 §4 amendment), and the
+// refusal it reports is what keeps a drop from being a silent failure. The M7 parser in front of it
+// is all-or-nothing and strictly stricter today, so these cases drive the projection directly — it
+// is a public entry point that must hold on its own, and it is what a per-record parser would meet.
+describe("projectDispatchableWorkspaceShortcuts — a refusal is reported, never silent", () => {
+  function commandDefinition(id: string): EditorM7CommandDefinition {
+    const command = EDITOR_M7_COMMAND_REGISTRY.find((entry) => entry.id === id);
+    if (command === undefined) throw new TypeError(`unknown command ${id}`);
+    return command;
+  }
+
+  function shortcut(args: {
+    readonly id: string;
+    readonly binding: string | null;
+    readonly modified: boolean;
+  }): EffectiveKeyboardShortcut {
+    const command = commandDefinition(args.id);
+    return {
+      command,
+      binding: args.binding,
+      defaultBinding: command.defaultBindings[0] ?? null,
+      source: args.modified ? "user" : "default",
+      modified: args.modified,
+      conflictCommandIds: [],
+    };
+  }
+
+  function project(
+    commands: readonly EffectiveKeyboardShortcut[],
+  ): ReturnType<typeof projectDispatchableWorkspaceShortcuts> {
+    return projectDispatchableWorkspaceShortcuts(
+      { commands, activeBindings: [], status: { kind: "ready" } },
+      "global",
+    );
+  }
+
+  it.each([
+    ["CtrlOrMeta+T", "RESERVED_KEYBINDING"],
+    ["Ctrl+T", "RESERVED_KEYBINDING"],
+    ["Ctrl+Meta+T", "INVALID_INPUT"],
+    ["CtrlOrMeta", "INVALID_INPUT"],
+  ])("refuses the override %s as %s and keeps the command's own default", (binding, reasonCode) => {
+    const result = project([shortcut({ id: "undo", binding, modified: true })]);
+
+    expect(result.refusals).toEqual([{ commandId: "undo", reasonCode }]);
+    expect(result.shortcuts.map((entry) => workspaceChordKey(entry.chord))).toEqual(["cmd|z"]);
+  });
+
+  it("refuses an override that collides on the platform-collapsed chord", () => {
+    const result = project([
+      shortcut({ id: "undo", binding: "CtrlOrMeta+Z", modified: false }),
+      shortcut({ id: "focus-status", binding: "Ctrl+Z", modified: true }),
+    ]);
+    const byId = new Map(
+      result.shortcuts.map((entry) => [entry.commandId, workspaceChordKey(entry.chord)]),
+    );
+
+    expect(result.refusals).toEqual([
+      { commandId: "focus-status", reasonCode: "KEYBINDING_COLLISION" },
+    ]);
+    expect(byId.get("undo")).toBe("cmd|z");
+    expect(byId.get("focus-status")).toBe("alt|s");
+  });
+
+  it("reports no refusal when an override applies cleanly", () => {
+    const result = project([
+      shortcut({ id: "undo", binding: "CtrlOrMeta+Z", modified: false }),
+      shortcut({ id: "quick-access.files", binding: "CtrlOrMeta+Shift+O", modified: true }),
+    ]);
+
+    expect(result.refusals).toEqual([]);
+    expect(result.shortcuts).toHaveLength(2);
+  });
+
+  it("frees the default a command vacates so another command may still claim it", () => {
+    const result = project([
+      shortcut({ id: "quick-access.files", binding: "CtrlOrMeta+Shift+O", modified: true }),
+      shortcut({ id: "undo", binding: "CtrlOrMeta+P", modified: true }),
+    ]);
+    const byId = new Map(
+      result.shortcuts.map((entry) => [entry.commandId, workspaceChordKey(entry.chord)]),
+    );
+
+    expect(result.refusals).toEqual([]);
+    expect(byId.get("quick-access.files")).toBe("cmd+shift|o");
+    expect(byId.get("undo")).toBe("cmd|p");
   });
 });

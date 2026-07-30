@@ -15,14 +15,19 @@
 
 import type { ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   EDITOR_VERIFICATION_SCHEMA_VERSION,
   WORKSPACE_TRUST_SCHEMA_VERSION,
   workspaceChordKey,
 } from "@oscharko-dev/keiko-contracts";
 
-import { resolveShellShortcutState } from "./shellShortcutState";
+import {
+  readShellShortcutRefusalCount,
+  resetShellShortcutRefusalSurface,
+  resolveShellShortcutState,
+  shellShortcutRefusalDiagnostic,
+} from "./shellShortcutState";
 import {
   detectReservedBindings,
   detectShortcutConflicts,
@@ -238,6 +243,296 @@ describe("shellShortcutState — persisted override validation", () => {
     render(<ShellShortcutHost overrides={["1|quick-access.files|CtrlOrMeta+Shift+O"]} />);
 
     expect(screen.getByText("shell rendered")).toBeTruthy();
+  });
+});
+
+// ─── 0.3.0 release audit (#2802) — the SUBSTRATE OUTCOME is the pin ───────────────────────────
+//
+// Two bypasses of the reserved-chord guard survived the projection fix above, and BOTH of them
+// fooled `isWorkspaceReservedChord`, so that predicate cannot be what a regression test asks. What
+// is pinned below is what the user experiences: whether the browser keeps its own chord
+// (`defaultPrevented`) and which command id the shell dispatches. Every hostile case is compared
+// against the SAME measurement taken with no overrides at all, so the expectation is derived from
+// the shipped product rather than restated here.
+//
+// Both platforms are covered deliberately. Finding 1 is invisible on macOS — `["ctrl","cmd"]`
+// only collapses onto a single physical modifier OFF macOS, where `normalizeModifiers` maps
+// cmd → ctrlKey — so a mac-only assertion would have passed over the defect.
+
+type SubstrateOutcome = {
+  readonly defaultPrevented: boolean;
+  readonly dispatched: readonly string[];
+};
+
+function SubstrateHost(props: {
+  readonly overrides: readonly string[];
+  readonly platform: "mac" | "other";
+  readonly onDispatch: (commandId: string) => void;
+}): ReactNode {
+  const state = resolveShellShortcutState(props.overrides);
+  useKeyboardShortcuts({
+    bindings: state.bindings,
+    dispatch: props.onDispatch,
+    platform: props.platform,
+  });
+  return <div>shell rendered</div>;
+}
+
+function pressThroughShell(args: {
+  readonly overrides: readonly string[];
+  readonly platform: "mac" | "other";
+  readonly chord: KeyboardEventInit;
+}): SubstrateOutcome {
+  const dispatched: string[] = [];
+  const view = render(
+    <SubstrateHost
+      overrides={args.overrides}
+      platform={args.platform}
+      onDispatch={(commandId) => dispatched.push(commandId)}
+    />,
+  );
+  const event = new KeyboardEvent("keydown", { ...args.chord, bubbles: true, cancelable: true });
+  window.dispatchEvent(event);
+  view.unmount();
+  return { defaultPrevented: event.defaultPrevented, dispatched };
+}
+
+// The physical chord the browser owns, spelled with the modifier key the platform really uses.
+function browserChord(platform: "mac" | "other", key: string, shift: boolean): KeyboardEventInit {
+  return platform === "mac"
+    ? { key, metaKey: true, shiftKey: shift }
+    : { key, ctrlKey: true, shiftKey: shift };
+}
+
+const DOUBLED_MODIFIER_SPELLINGS = [
+  "Ctrl+Meta+T",
+  "Meta+Ctrl+T",
+  "ctrl+meta+t",
+  " Ctrl + Meta + T ",
+] as const;
+
+const DOUBLED_MODIFIER_RESERVED_KEYS: readonly (readonly [string, string, boolean])[] = [
+  ["Ctrl+Meta+R", "r", false],
+  ["Ctrl+Meta+W", "w", false],
+  ["Ctrl+Meta+Q", "q", false],
+  ["Meta+Ctrl+Shift+N", "n", true],
+];
+
+describe.each(["other", "mac"] as const)(
+  "shellShortcutState — a persisted override can never smuggle a reserved chord (%s)",
+  (platform) => {
+    it.each(DOUBLED_MODIFIER_SPELLINGS)(
+      "leaves Cmd/Ctrl+T with the browser when an override spells it %s",
+      (binding) => {
+        const chord = browserChord(platform, "t", false);
+        const stock = pressThroughShell({ overrides: [], platform, chord });
+        const smuggled = pressThroughShell({ overrides: [`1|undo|${binding}`], platform, chord });
+
+        expect(stock).toEqual({ defaultPrevented: false, dispatched: [] });
+        expect(smuggled).toEqual(stock);
+      },
+    );
+
+    it.each(DOUBLED_MODIFIER_RESERVED_KEYS)(
+      "leaves the browser's own chord alone when an override spells it %s",
+      (binding, key, shift) => {
+        const chord = browserChord(platform, key, shift);
+        const stock = pressThroughShell({ overrides: [], platform, chord });
+        const smuggled = pressThroughShell({ overrides: [`1|undo|${binding}`], platform, chord });
+
+        expect(stock).toEqual({ defaultPrevented: false, dispatched: [] });
+        expect(smuggled).toEqual(stock);
+      },
+    );
+  },
+);
+
+describe("shellShortcutState — the chord vocabulary the matcher can express", () => {
+  // `WorkspaceKeyChord.mod` could carry ["ctrl","cmd"], a state `normalizeModifiers` collapses to
+  // {ctrl} off macOS and that neither the reservation key nor `isWorkspaceReservedChord` can name.
+  // No table the shell dispatches may contain one — that is the whole class, not one input.
+  it.each([
+    "1|undo|Ctrl+Meta+T",
+    "1|undo|Ctrl+Meta+Alt+T",
+    "1|undo|Ctrl+Meta+P",
+    "1|quick-access.files|Meta+Ctrl+O",
+    "1|focus-status|ctrl+meta+j",
+  ])("never dispatches a chord carrying both ctrl and cmd (%s)", (override) => {
+    const ambiguous = resolveShellShortcutState([override]).bindings.filter(
+      (binding) => binding.chord.mod.includes("ctrl") && binding.chord.mod.includes("cmd"),
+    );
+
+    expect(ambiguous).toEqual([]);
+  });
+});
+
+describe("shellShortcutState — a refused override never disarms its victim", () => {
+  function stockChords(): ReadonlyMap<string, unknown> {
+    return new Map(
+      resolveShellShortcutState([]).bindings.map((binding) => [binding.commandId, binding.chord]),
+    );
+  }
+
+  it("keeps quick-access.files on Cmd/Ctrl+P when a colliding override claims it", () => {
+    const chord = { key: "p", ctrlKey: true };
+    const stock = pressThroughShell({ overrides: [], platform: "other", chord });
+    const attacked = pressThroughShell({
+      overrides: ["1|undo|Meta+P", "1|quick-access.files|Meta+Shift+F"],
+      platform: "other",
+      chord,
+    });
+
+    expect(stock.dispatched).toEqual(["quick-access.files"]);
+    expect(attacked).toEqual(stock);
+  });
+
+  it("falls a colliding override back to its command's own default, never to no binding", () => {
+    const stock = stockChords();
+    const attacked = new Map(
+      resolveShellShortcutState([
+        "1|undo|Meta+P",
+        "1|quick-access.files|Meta+Shift+F",
+      ]).bindings.map((binding) => [binding.commandId, binding.chord]),
+    );
+
+    expect(attacked.get("quick-access.files")).toEqual(stock.get("quick-access.files"));
+    expect(attacked.get("undo")).toEqual(stock.get("undo"));
+  });
+
+  it.each(["1|undo|Ctrl+Meta+P", "1|undo|Ctrl+P"])(
+    "never advertises a chord the command can no longer receive (%s)",
+    (override) => {
+      const state = resolveShellShortcutState([override]);
+      const outcome = pressThroughShell({
+        overrides: [override],
+        platform: "other",
+        chord: { key: "p", ctrlKey: true },
+      });
+
+      expect(outcome.dispatched).toEqual(["quick-access.files"]);
+      expect(state.labels.get("quick-access.files")).toBe(
+        resolveShellShortcutState([]).labels.get("quick-access.files"),
+      );
+    },
+  );
+
+  // The reporter's own regression case for the reserved-chord refusal.
+  it("falls quick-access.files back to Cmd+P when its override is browser-reserved", () => {
+    const state = resolveShellShortcutState(["1|quick-access.files|CtrlOrMeta+W"]);
+
+    expect(state.bindings).toContainEqual({
+      commandId: "quick-access.files",
+      chord: { key: "p", mod: ["cmd"] },
+    });
+  });
+
+  it("mounts the shell with that reserved-override table without throwing", () => {
+    expect(() =>
+      render(<ShellShortcutHost overrides={["1|quick-access.files|CtrlOrMeta+W"]} />),
+    ).not.toThrow();
+  });
+});
+
+// A refused override must not be a silent failure (AGENTS.md §7) — but `resolveShellShortcutState`
+// runs on every shell mount AND every settings change, so an unbounded warn would be its own defect.
+describe("shellShortcutState — a refusal is reported, not swallowed", () => {
+  const RESERVED_OVERRIDE = "1|quick-access.files|CtrlOrMeta+W";
+
+  function warnSpy(): MockInstance<typeof console.warn> {
+    return vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  }
+
+  function warnedMessages(spy: MockInstance<typeof console.warn>): readonly string[] {
+    return spy.mock.calls.map((call) => String(call[0]));
+  }
+
+  beforeEach(() => {
+    resetShellShortcutRefusalSurface();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetShellShortcutRefusalSurface();
+  });
+
+  it("surfaces a refused persisted override instead of dropping it silently", () => {
+    const warn = warnSpy();
+
+    resolveShellShortcutState([RESERVED_OVERRIDE]);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits exactly once for three re-resolves of the same refused override", () => {
+    const warn = warnSpy();
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      resolveShellShortcutState([RESERVED_OVERRIDE]);
+    }
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(readShellShortcutRefusalCount()).toBe(3);
+  });
+
+  it("emits nothing for a clean resolve", () => {
+    const warn = warnSpy();
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      resolveShellShortcutState([]);
+      resolveShellShortcutState(["1|quick-access.files|CtrlOrMeta+Shift+O"]);
+    }
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(readShellShortcutRefusalCount()).toBe(0);
+  });
+
+  it("re-arms when the refusal signature changes, and again after it clears", () => {
+    const warn = warnSpy();
+
+    resolveShellShortcutState([RESERVED_OVERRIDE]);
+    resolveShellShortcutState(["1|keiko.unknown|CtrlOrMeta+K"]);
+    resolveShellShortcutState([]);
+    resolveShellShortcutState([RESERVED_OVERRIDE]);
+
+    expect(warn).toHaveBeenCalledTimes(3);
+  });
+
+  it("carries no raw binding text, no rejected record, and no unknown command id", () => {
+    const warn = warnSpy();
+
+    resolveShellShortcutState(["1|keiko.unknown|Ctrl+Meta+T"]);
+
+    const message = warnedMessages(warn).join("\n");
+    expect(message).toContain("UNKNOWN_COMMAND");
+    for (const secret of ["keiko.unknown", "Ctrl+Meta+T", "CtrlOrMeta", "1|"]) {
+      expect(message).not.toContain(secret);
+    }
+  });
+
+  it("reports an out-of-registry command id as a count, never as an id", () => {
+    const message = shellShortcutRefusalDiagnostic(
+      [
+        { commandId: "undo", reasonCode: "KEYBINDING_COLLISION" },
+        { commandId: "attacker.injected", reasonCode: "RESERVED_KEYBINDING" },
+      ],
+      null,
+    );
+
+    expect(message).toContain("undo=KEYBINDING_COLLISION");
+    expect(message).toContain("unknown-commands=1");
+    expect(message).not.toContain("attacker.injected");
+  });
+
+  // A whole-setting refusal names no command: the record that caused it is never echoed back, so
+  // the reason code is all the operator gets — and all they may be given.
+  it("reports a whole-setting refusal by reason code alone", () => {
+    const warn = warnSpy();
+
+    resolveShellShortcutState([RESERVED_OVERRIDE]);
+
+    const message = warnedMessages(warn).join("\n");
+    expect(message).toContain("setting=RESERVED_KEYBINDING");
+    expect(message).not.toContain("quick-access.files");
   });
 });
 

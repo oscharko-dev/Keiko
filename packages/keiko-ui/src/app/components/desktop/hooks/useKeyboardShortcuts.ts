@@ -17,10 +17,14 @@ import { useEffect, useMemo, useRef } from "react";
 import {
   type WorkspaceKeyChord,
   type WorkspaceKeyChordModifier,
+  type WorkspaceKeyChordPlatform,
+  type WorkspacePhysicalModifier,
   type WorkspaceKeyboardShortcutBinding,
   type WorkspaceKeyboardShortcutConflict,
   isWorkspaceReservedChord,
+  workspaceChordClaimKeys,
   workspaceChordKey,
+  workspacePlatformModifiers,
 } from "@oscharko-dev/keiko-contracts";
 
 export interface UseKeyboardShortcutsResult {
@@ -32,35 +36,25 @@ export interface UseKeyboardShortcutsResult {
 export interface UseKeyboardShortcutsOptions {
   readonly bindings: ReadonlyArray<WorkspaceKeyboardShortcutBinding>;
   readonly dispatch: (commandId: string) => void;
-  readonly platform?: "mac" | "other";
+  readonly platform?: WorkspaceKeyChordPlatform;
 }
 
-function detectPlatform(): "mac" | "other" {
+function detectPlatform(): WorkspaceKeyChordPlatform {
   if (typeof navigator === "undefined") return "other";
   const ua = navigator.platform || "";
   return /Mac|iPhone|iPad|iPod/i.test(ua) ? "mac" : "other";
 }
 
-// Normalize "cmd" → metaKey on macOS, ctrlKey elsewhere. Other modifiers
-// pass through unchanged. The returned set lists the modifier names a
-// KeyboardEvent must have asserted to be considered a match.
+// Normalize "cmd" → metaKey on macOS, ctrlKey elsewhere. Other modifiers pass through unchanged.
+// The returned set lists the modifier names a KeyboardEvent must have asserted to be considered a
+// match. The collapse itself lives in @oscharko-dev/keiko-contracts so the matcher, the claim keys
+// the projection reserves, and the conflict detector below can never disagree about what a chord
+// physically is — the disagreement that let ["ctrl","cmd"] reach dispatch as plain Ctrl (#2802).
 function normalizeModifiers(
   mods: ReadonlyArray<WorkspaceKeyChordModifier>,
-  platform: "mac" | "other",
-): ReadonlySet<"meta" | "ctrl" | "alt" | "shift"> {
-  const out = new Set<"meta" | "ctrl" | "alt" | "shift">();
-  for (const m of mods) {
-    if (m === "cmd") {
-      out.add(platform === "mac" ? "meta" : "ctrl");
-    } else if (m === "ctrl") {
-      out.add("ctrl");
-    } else if (m === "alt") {
-      out.add("alt");
-    } else if (m === "shift") {
-      out.add("shift");
-    }
-  }
-  return out;
+  platform: WorkspaceKeyChordPlatform,
+): ReadonlySet<WorkspacePhysicalModifier> {
+  return workspacePlatformModifiers(mods, platform);
 }
 
 // On macOS the Option key composes characters: Option+S yields event.key "ß"
@@ -79,7 +73,7 @@ function chordKeyMatches(event: KeyboardEvent, chord: WorkspaceKeyChord): boolea
 function eventMatchesChord(
   event: KeyboardEvent,
   chord: WorkspaceKeyChord,
-  platform: "mac" | "other",
+  platform: WorkspaceKeyChordPlatform,
 ): boolean {
   if (!chordKeyMatches(event, chord)) return false;
   const required = normalizeModifiers(chord.mod, platform);
@@ -141,29 +135,41 @@ function suppressedByEditableTarget(event: KeyboardEvent): boolean {
   return !forwardableFromOptedInField(event);
 }
 
+interface ChordClaimGroup {
+  readonly chord: WorkspaceKeyChord;
+  readonly keys: Set<string>;
+  readonly commandIds: string[];
+}
+
+// A chord occupies one keystroke per platform, so two declarations belong to the same group as soon
+// as ANY of their keystrokes coincide — which is how `cmd|p` and `ctrl|p` become one group.
+function chordClaimGroups(
+  bindings: ReadonlyArray<WorkspaceKeyboardShortcutBinding>,
+): readonly ChordClaimGroup[] {
+  const groups: ChordClaimGroup[] = [];
+  for (const binding of bindings) {
+    const claims = workspaceChordClaimKeys(binding.chord);
+    const group = groups.find((entry) => claims.some((key) => entry.keys.has(key)));
+    if (group === undefined) {
+      groups.push({ chord: binding.chord, keys: new Set(claims), commandIds: [binding.commandId] });
+      continue;
+    }
+    for (const key of claims) group.keys.add(key);
+    group.commandIds.push(binding.commandId);
+  }
+  return groups;
+}
+
+// Grouped on the PHYSICAL chord, not on the declaration: `cmd|p` and `ctrl|p` are the same
+// keystroke off macOS, so a table declaring both is a collision the user experiences even though
+// the two declarations differ. Strictly stronger than the declaration grouping it replaces — every
+// pair that conflicted before still does (0.3.0 release audit, #2802).
 export function detectShortcutConflicts(
   bindings: ReadonlyArray<WorkspaceKeyboardShortcutBinding>,
 ): ReadonlyArray<WorkspaceKeyboardShortcutConflict> {
-  const seen = new Map<string, string[]>();
-  for (const binding of bindings) {
-    const key = workspaceChordKey(binding.chord);
-    const existing = seen.get(key);
-    if (existing !== undefined) {
-      existing.push(binding.commandId);
-    } else {
-      seen.set(key, [binding.commandId]);
-    }
-  }
-  const conflicts: WorkspaceKeyboardShortcutConflict[] = [];
-  for (const [, commandIds] of seen) {
-    if (commandIds.length > 1) {
-      const first = bindings.find((b) => commandIds.includes(b.commandId));
-      if (first !== undefined) {
-        conflicts.push({ chord: first.chord, commandIds });
-      }
-    }
-  }
-  return conflicts;
+  return chordClaimGroups(bindings)
+    .filter((group) => group.commandIds.length > 1)
+    .map((group) => ({ chord: group.chord, commandIds: group.commandIds }));
 }
 
 export function detectReservedBindings(

@@ -83,6 +83,44 @@ describe("useKeyboardShortcuts — pure helpers", () => {
     expect(reserved).toHaveLength(1);
     expect(reserved[0]?.commandId).toBe("closePanel");
   });
+
+  // 0.3.0 release audit (#2802) — both guards are STRENGTHENED to compare the physical chord.
+  // `cmd` is the Control key off macOS, so ["ctrl","cmd"] is Ctrl alone at match time and `cmd|p`
+  // and `ctrl|p` are one keystroke. Comparing declarations made the substrate blind to both.
+  it.each([
+    ["t", ["ctrl", "cmd"]],
+    ["r", ["cmd", "ctrl"]],
+    ["w", ["ctrl", "cmd"]],
+    ["n", ["ctrl", "cmd", "shift"]],
+  ])("detectReservedBindings flags the doubled-modifier spelling of %s", (key, mod) => {
+    expect(detectReservedBindings([bind("smuggled", key, mod)])).toHaveLength(1);
+  });
+
+  it("detectShortcutConflicts groups cmd|p and ctrl|p as one keystroke", () => {
+    const conflicts = detectShortcutConflicts([bind("a", "p", ["cmd"]), bind("b", "p", ["ctrl"])]);
+
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]?.commandIds).toEqual(["a", "b"]);
+  });
+
+  it("detectShortcutConflicts still separates chords that differ physically", () => {
+    expect(
+      detectShortcutConflicts([bind("a", "p", ["cmd"]), bind("b", "p", ["cmd", "alt"])]),
+    ).toHaveLength(0);
+  });
+
+  it("detectShortcutConflicts reports the shipped default shell table as conflict-free", () => {
+    expect(
+      detectShortcutConflicts([
+        bind("undo", "z", ["cmd"]),
+        bind("redo", "z", ["cmd", "shift"]),
+        bind("focus-status", "s", ["alt"]),
+        bind("focus-workspace-search", "f", ["cmd", "shift"]),
+        bind("quick-access.files", "p", ["cmd"]),
+        bind("quick-access.commands", "p", ["cmd", "shift"]),
+      ]),
+    ).toEqual([]);
+  });
 });
 
 describe("useKeyboardShortcuts — substrate contract", () => {

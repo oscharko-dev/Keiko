@@ -237,9 +237,96 @@ export function workspaceChordsEqual(a: WorkspaceKeyChord, b: WorkspaceKeyChord)
   return workspaceChordKey(a) === workspaceChordKey(b);
 }
 
+// ─── The physical chord vocabulary (0.3.0 release audit, #2802) ───────────────────────────────
+//
+// `workspaceChordKey` above names a DECLARATION: it keeps `cmd` and `ctrl` apart because that is
+// how a binding is written. The keyboard does not. `cmd` is the Meta key on macOS and the Control
+// key everywhere else, so two different declarations can be the same physical keystroke — `cmd|p`
+// and `ctrl|p` are both plain Ctrl+P on Windows and Linux. Claiming, collision detection and
+// reservation must therefore compare the PHYSICAL key the matcher receives, never the declaration.
+// Comparing declarations is what let a persisted `Ctrl+Meta+T` past every guard and onto the
+// substrate, where it fired on a plain Ctrl+T and took the browser's own chord away from the user.
+
+export type WorkspaceKeyChordPlatform = "mac" | "other";
+
+export type WorkspacePhysicalModifier = "meta" | "ctrl" | "alt" | "shift";
+
+const WORKSPACE_KEY_CHORD_PLATFORMS: readonly WorkspaceKeyChordPlatform[] = ["mac", "other"];
+
+/**
+ * The modifier names a `KeyboardEvent` must have asserted for `mod` to match on `platform`. This is
+ * the ONE place `cmd` is resolved to a real key; every matcher, claim and conflict check derives
+ * from it so no consumer can grow a second, disagreeing collapse.
+ */
+export function workspacePlatformModifiers(
+  mod: readonly WorkspaceKeyChordModifier[],
+  platform: WorkspaceKeyChordPlatform,
+): ReadonlySet<WorkspacePhysicalModifier> {
+  const physical = new Set<WorkspacePhysicalModifier>();
+  for (const modifier of mod) {
+    physical.add(physicalModifier(modifier, platform));
+  }
+  return physical;
+}
+
+function physicalModifier(
+  modifier: WorkspaceKeyChordModifier,
+  platform: WorkspaceKeyChordPlatform,
+): WorkspacePhysicalModifier {
+  if (modifier !== "cmd") return modifier;
+  return platform === "mac" ? "meta" : "ctrl";
+}
+
+/** The keystroke `chord` occupies on `platform`. */
+export function workspaceChordKeyForPlatform(
+  chord: WorkspaceKeyChord,
+  platform: WorkspaceKeyChordPlatform,
+): string {
+  const sorted = [...workspacePlatformModifiers(chord.mod, platform)].sort((a, b) =>
+    a.localeCompare(b),
+  );
+  return `${sorted.join("+")}|${chord.key.toLowerCase()}`;
+}
+
+/**
+ * Every keystroke `chord` can occupy on any supported platform. A dispatch table claims all of
+ * them at once, so one persisted settings file cannot be safe on macOS and ambiguous on Windows.
+ */
+export function workspaceChordClaimKeys(chord: WorkspaceKeyChord): readonly string[] {
+  return [
+    ...new Set(
+      WORKSPACE_KEY_CHORD_PLATFORMS.map((platform) =>
+        workspaceChordKeyForPlatform(chord, platform),
+      ),
+    ),
+  ];
+}
+
+/** True when the two chords are the same keystroke on at least one supported platform. */
+export function workspaceChordsCollide(a: WorkspaceKeyChord, b: WorkspaceKeyChord): boolean {
+  const keys = new Set(workspaceChordClaimKeys(a));
+  return workspaceChordClaimKeys(b).some((key) => keys.has(key));
+}
+
+/**
+ * A chord carrying BOTH `cmd` and `ctrl` is not expressible. Off macOS `cmd` collapses onto the
+ * Control key, so `["ctrl","cmd"]` becomes indistinguishable from `["ctrl"]` at match time — a
+ * state no reservation and no conflict check can name, and the exact hole a persisted
+ * `Ctrl+Meta+T` used to reach the substrate and fire on a plain Ctrl+T. The vocabulary is refused
+ * here rather than taught to every consumer, so there is one answer for every surface.
+ */
+export function isWorkspaceDispatchableChord(chord: WorkspaceKeyChord): boolean {
+  return !(chord.mod.includes("cmd") && chord.mod.includes("ctrl"));
+}
+
+/**
+ * Reservation is decided on the PHYSICAL chord: a declaration is reserved when it lands on a
+ * reserved keystroke on any supported platform. Strictly stronger than the declaration comparison
+ * it replaces — every chord that was reserved before still is.
+ */
 export function isWorkspaceReservedChord(chord: WorkspaceKeyChord): boolean {
   for (const reserved of WORKSPACE_RESERVED_CHORDS) {
-    if (workspaceChordsEqual(chord, reserved)) return true;
+    if (workspaceChordsCollide(chord, reserved)) return true;
   }
   return false;
 }

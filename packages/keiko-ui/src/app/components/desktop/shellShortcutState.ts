@@ -28,15 +28,19 @@
 // claims the "settings" context, so `open-editor-settings` (`CtrlOrMeta+,`) stays out until one
 // exists. Advertising a chord nobody dispatches is the same defect one command later.
 
-import type {
-  EditorM7CommandContext,
-  WorkspaceKeyboardShortcutBinding,
+import {
+  EDITOR_M7_COMMAND_REGISTRY,
+  type EditorM7CommandContext,
+  type EditorM7ReasonCode,
+  type WorkspaceKeyboardShortcutBinding,
 } from "@oscharko-dev/keiko-contracts";
 import {
   detectKeyboardShortcutPlatform,
   dispatchableWorkspaceShortcutsForContext,
+  projectDispatchableWorkspaceShortcuts,
   resolveEffectiveKeyboardShortcuts,
   shortcutLabel,
+  type DispatchableShortcutRefusal,
   type EffectiveKeyboardShortcutRegistry,
 } from "./keyboardShortcutsRegistry";
 import { subscribeEditorShortcutOverrides } from "./useEditorShortcutOverrides";
@@ -70,6 +74,10 @@ function labelledBindings(
 export function resolveShellShortcutState(overrides: readonly string[]): ShellShortcutState {
   const registry = resolveEffectiveKeyboardShortcuts(overrides);
   const platform = detectKeyboardShortcutPlatform();
+  const projection = projectDispatchableWorkspaceShortcuts(registry, "global");
+  const settingRefusalReasonCode =
+    registry.status.kind === "fallback" ? (registry.status.reasonCode ?? "INVALID_INPUT") : null;
+  surfaceShellShortcutRefusals(projection.refusals, settingRefusalReasonCode);
   return {
     labels: new Map(
       [...labelledBindings(registry)].map(([commandId, binding]) => [
@@ -77,11 +85,77 @@ export function resolveShellShortcutState(overrides: readonly string[]): ShellSh
         shortcutLabel(binding, platform),
       ]),
     ),
-    bindings: dispatchableWorkspaceShortcutsForContext(registry, "global").map((entry) => ({
+    bindings: projection.shortcuts.map((entry) => ({
       commandId: entry.commandId,
       chord: entry.chord,
     })),
   };
+}
+
+// ─── Refusal diagnostic (ADR-0028 §4 amendment; AGENTS.md §7 "no silent failures") ────────────
+//
+// The projection drops hostile persisted input on purpose, but a drop the operator never sees is a
+// silent failure: a rebind simply "does nothing" and nothing says why. This is the same bounded
+// surface `useWorkspace` already uses for a failed workspace sync — a module-local surfaced flag, a
+// process-local counter, and an exported read/reset for tests — deliberately reusing that idiom
+// instead of growing a second logging path (AGENTS.md §5).
+//
+// `resolveShellShortcutState` runs on every shell mount AND every settings change, so the emission
+// is keyed on the refusal SIGNATURE: the same refused table warns once per session and re-arms only
+// when the signature changes or clears.
+//
+// REDACTION: the message carries closed-registry command ids and closed reason codes and nothing
+// else. A keybinding is user-authored data — the rejected record, its raw binding text, a scope path
+// and any command id outside the registry never appear; an id that is not in the closed registry is
+// reported only as a count.
+let shellShortcutRefusalCount = 0;
+let shellShortcutRefusalSignature: string | null = null;
+
+export function readShellShortcutRefusalCount(): number {
+  return shellShortcutRefusalCount;
+}
+
+// Reset the refusal surface (tests only).
+export function resetShellShortcutRefusalSurface(): void {
+  shellShortcutRefusalCount = 0;
+  shellShortcutRefusalSignature = null;
+}
+
+function isRegistryCommandId(commandId: string): boolean {
+  return EDITOR_M7_COMMAND_REGISTRY.some((command) => command.id === commandId);
+}
+
+export function shellShortcutRefusalDiagnostic(
+  refusals: readonly DispatchableShortcutRefusal[],
+  settingRefusalReasonCode: EditorM7ReasonCode | null,
+): string | null {
+  if (refusals.length === 0 && settingRefusalReasonCode === null) return null;
+  const named = refusals.filter((refusal) => isRegistryCommandId(refusal.commandId));
+  const parts = named
+    .map((refusal) => `${refusal.commandId}=${refusal.reasonCode}`)
+    .sort((left, right) => left.localeCompare(right));
+  if (named.length < refusals.length) {
+    parts.push(`unknown-commands=${String(refusals.length - named.length)}`);
+  }
+  if (settingRefusalReasonCode !== null) parts.push(`setting=${settingRefusalReasonCode}`);
+  return `shell-shortcuts: refused persisted keybinding overrides (${parts.join(", ")}); affected commands keep their default binding`;
+}
+
+function surfaceShellShortcutRefusals(
+  refusals: readonly DispatchableShortcutRefusal[],
+  settingRefusalReasonCode: EditorM7ReasonCode | null,
+): void {
+  const message = shellShortcutRefusalDiagnostic(refusals, settingRefusalReasonCode);
+  if (message === null) {
+    shellShortcutRefusalSignature = null;
+    return;
+  }
+  shellShortcutRefusalCount += 1;
+  if (shellShortcutRefusalSignature === message) return;
+  shellShortcutRefusalSignature = message;
+  if (typeof console !== "undefined" && typeof console.warn === "function") {
+    console.warn(message);
+  }
 }
 
 export function subscribeShellShortcutState(
