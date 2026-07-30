@@ -223,6 +223,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "promptEnhancer.safety.humanReview": "Menschliche Prüfung:",
   "promptEnhancer.safety.reviewWarning":
     "Dieser Prompt muss vor jeder nachgelagerten Verwendung durch einen Menschen geprüft werden.",
+  "promptEnhancer.safety.rejectedWarning":
+    "Dieser Prompt wurde von der Sicherheitsprüfung abgelehnt und darf nicht verwendet werden.",
   "promptEnhancer.safety.findings": "Sicherheitsbefunde",
   "promptEnhancer.safety.leastPrivilege": "Least-Privilege-Einschränkungen",
   "promptEnhancer.common.required": "erforderlich",

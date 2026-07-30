@@ -212,6 +212,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "promptEnhancer.safety.humanReview": "Human review:",
   "promptEnhancer.safety.reviewWarning":
     "This prompt requires human review before any downstream use.",
+  "promptEnhancer.safety.rejectedWarning":
+    "This prompt was rejected by the safety review and must not be used.",
   "promptEnhancer.safety.findings": "Safety findings",
   "promptEnhancer.safety.leastPrivilege": "Least-privilege constraints",
   "promptEnhancer.common.required": "required",
