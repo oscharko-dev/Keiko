@@ -202,5 +202,7 @@ function unavailableManager(): CodingRuntimeManager {
     takeover: stopped,
     reconcile: stopped,
     health: () => ({ status: "stopped" }),
+    // No qualified runtime host means no run and therefore nothing to review; fail closed.
+    pendingApprovalReview: () => undefined,
   };
 }

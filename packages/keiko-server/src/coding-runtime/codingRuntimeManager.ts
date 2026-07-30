@@ -4,9 +4,11 @@ import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { Readable } from "node:stream";
 
 import {
+  CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
   CODING_WORKBENCH_SCHEMA_VERSION,
   decideCodingWorkbenchActionForMode,
   validateCodingWorkbenchPermissionRequest,
+  validateCodingWorkbenchRuntimeApprovalReviewChannelPayload,
   validateCodingWorkbenchRuntimeEvent,
 } from "@oscharko-dev/keiko-contracts";
 import type {
@@ -15,6 +17,7 @@ import type {
   CodingWorkbenchModelSource,
   CodingWorkbenchPermissionRequest,
   CodingWorkbenchRuntimeEvent,
+  CodingWorkbenchRuntimePendingApprovalReview,
   CodingWorkbenchRuntimeSource,
   CodingWorkbenchSupervisedActionKind,
   CodingWorkbenchSupervisedPolicyReason,
@@ -370,6 +373,15 @@ export interface CodingRuntimeManager {
   takeover(runId: string): Promise<CodingRuntimeStopResult>;
   reconcile(runId: string): Promise<CodingRuntimeStopResult>;
   health(): CodingRuntimeHealthReport;
+  /**
+   * The reviewable changeset facts of the ask the operator is deciding about (#2853). Bound to both
+   * the active run and the exact pending request id, so a stale panel or a foreign run can never
+   * read a review, and it is served only over the authenticated app-session channel.
+   */
+  pendingApprovalReview(
+    runId: string,
+    requestId: string,
+  ): CodingWorkbenchRuntimePendingApprovalReview | undefined;
 }
 
 interface PreflightOk {
@@ -409,6 +421,12 @@ interface ActiveRuntime {
   codexDetach: (() => boolean | Promise<boolean>) | undefined;
   stdoutParser: CodingRuntimeLineParser | undefined;
   stderrDrainer: CodingRuntimeStderrDrainer | undefined;
+  /**
+   * The reviewable changeset facts of the ask currently awaiting an operator decision (#2853).
+   * Transient and run-local: it never enters a runtime event, a snapshot, the SSE projection or
+   * evidence, because the paths are model-selected content (#2644).
+   */
+  pendingApprovalReview: CodingWorkbenchRuntimePendingApprovalReview | undefined;
   shutdownBarrierComplete: boolean;
   stopRequested: boolean;
   paused: boolean;
@@ -706,6 +724,16 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       approvalDigest: issued.approvalDigest,
       expiresAtMs: issued.expiresAtMs,
     };
+  }
+
+  public pendingApprovalReview(
+    runId: string,
+    requestId: string,
+  ): CodingWorkbenchRuntimePendingApprovalReview | undefined {
+    const active = this.active;
+    if (active?.context.runId !== runId) return undefined;
+    const review = active.pendingApprovalReview;
+    return review?.requestId === requestId ? review : undefined;
   }
 
   public health(): CodingRuntimeHealthReport {
@@ -1621,6 +1649,7 @@ function createActiveRuntime(
     codexDetach: undefined,
     stdoutParser: undefined,
     stderrDrainer: undefined,
+    pendingApprovalReview: undefined,
     shutdownBarrierComplete: false,
     stopRequested: false,
     paused: false,
@@ -1649,6 +1678,7 @@ function createInactiveRuntime(
     codexDetach: undefined,
     stdoutParser: undefined,
     stderrDrainer: undefined,
+    pendingApprovalReview: undefined,
     shutdownBarrierComplete: false,
     stopRequested: false,
     paused: false,
@@ -2088,9 +2118,42 @@ function sidecarRuntimeEvent(
       retryable: false,
     });
   }
+  active.pendingApprovalReview = approvalReviewFacts(event);
   return runtimeEvent(active, sequence, "permission-requested", {
     permissionRequest: request,
   });
+}
+
+/**
+ * Projects the reviewable changeset facts of a governed `file-edit` ask (#2853). The admission
+ * projection has already fail-closed on every escaping, duplicated or oversized path shape, and the
+ * shared public contract re-validates here: a review is retained only when the whole payload is
+ * admissible, so an operator surface can never render a path the runtime itself would refuse.
+ *
+ * Deliberately NOT attached to the runtime event: the paths are model-selected content and ride
+ * only the authenticated app-session channel, never a snapshot, the SSE projection, or evidence
+ * (#2644). Only the path, the file count and the line counts travel — never a byte of the patch.
+ */
+function approvalReviewFacts(
+  event: SidecarPermissionEvent,
+): CodingWorkbenchRuntimePendingApprovalReview | undefined {
+  if (event.actionKind !== "file-edit") return undefined;
+  const declared = event.allowedRelativePaths ?? [];
+  const paths = declared.slice(0, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS);
+  const pending: CodingWorkbenchRuntimePendingApprovalReview = {
+    requestId: event.requestId,
+    paths,
+    pathsTruncated: paths.length < declared.length,
+    fileCount: event.fileCount ?? declared.length,
+    addedLines: event.addedLines ?? 0,
+    deletedLines: event.deletedLines ?? 0,
+  };
+  return validateCodingWorkbenchRuntimeApprovalReviewChannelPayload({
+    session: "active",
+    pending,
+  }).ok
+    ? pending
+    : undefined;
 }
 
 function autonomousDeliveryRuntimeEvent(
@@ -2115,6 +2178,16 @@ function autonomousDeliveryRuntimeEvent(
   });
 }
 
+/**
+ * Reachability, stated plainly so this is not mistaken for the live containment gate: the bundled
+ * OpenCode child asks for a governed permission ONLY when `KEIKO_CODING_MODE === "governed-assist"`
+ * (the generated tool source in opencodeRuntimeAdapter returns early otherwise). For that runtime
+ * this whole `supervised-coding` branch — including `decideSupervisedFileEdit`'s realpath
+ * containment — is therefore not on the edit path; it stays live for sidecar-stream runtimes that
+ * do announce supervised asks. Workspace containment for the OpenCode edit path is enforced by the
+ * tool-IPC parse boundary (`codingToolIpc`, pinned in codingToolIpc.test.ts) and by the
+ * `keiko-tools` contained writer at the effect edge — not here.
+ */
 function supervisedCodingRuntimeEvent(
   active: ActiveRuntime,
   sequence: number,

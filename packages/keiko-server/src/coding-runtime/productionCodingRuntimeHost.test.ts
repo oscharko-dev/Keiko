@@ -20,6 +20,7 @@ function qualifiedRuntime(): QualifiedProductionCodingRuntime {
       takeover: () => Promise.resolve({ ok: true, status: "stopped" }),
       reconcile: () => Promise.resolve({ ok: true, status: "stopped" }),
       health: () => ({ status: "stopped" }),
+      pendingApprovalReview: () => undefined,
     }),
     mintLaunch: {
       resolve: () => ({

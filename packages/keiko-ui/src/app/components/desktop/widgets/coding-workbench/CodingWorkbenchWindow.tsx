@@ -25,6 +25,10 @@ import {
   type CodingWorkbenchResearchState,
 } from "@/lib/useCodingWorkbenchResearch";
 import {
+  useCodingWorkbenchApprovalReview,
+  type CodingWorkbenchApprovalReviewState,
+} from "@/lib/useCodingWorkbenchApprovalReview";
+import {
   useCodingWorkbenchEditorBridge,
   type CodingWorkbenchChangesetReview,
 } from "@/lib/useCodingWorkbenchEditorBridge";
@@ -426,6 +430,11 @@ function PermissionPrompt({
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const request = state.run.value?.pendingPermission;
+  // Called before the early return so the hook order is stable; an absent request scopes it to idle.
+  const approvalReview = useCodingWorkbenchApprovalReview({
+    runId: state.run.value?.runId,
+    permissionRequestId: request?.actionKind === "file-edit" ? request.requestId : undefined,
+  });
   if (request === undefined) return null;
   const busy = state.mutation.status === "pending";
   return (
@@ -434,6 +443,7 @@ function PermissionPrompt({
         {t("codingWorkbench.approval.title")}
       </PanelTitle>
       <ApprovalFacts request={request} t={t} />
+      <ApprovalChangedFiles state={approvalReview} t={t} />
       {request.kind === "network-egress" ? <ResearchDestination state={research} t={t} /> : null}
       <p className={styles.helpText}>{t("codingWorkbench.approval.help")}</p>
       <div className={styles.controls}>
@@ -545,6 +555,73 @@ function ChangesetReviewPanel({
  * an ask can never itself navigate anywhere. While the read is in flight, or when the window is not
  * paired, the panel says so rather than implying there is no destination.
  */
+/**
+ * The reviewable body of a `file-edit` approval (#2853): the workspace-relative files the change
+ * would write and its magnitude. Without this the card carries only vocabulary — kind, class, risk
+ * — and a human cannot exercise control over a change they are not shown (ADR-0129 D1).
+ *
+ * The paths arrive over the authenticated approval-review channel and are model-selected: they are
+ * rendered as plain text, never as markup or a link, and no patch byte reaches this component.
+ */
+function ApprovalChangedFiles({
+  state,
+  t,
+}: {
+  readonly state: CodingWorkbenchApprovalReviewState;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (state.status === "idle") return null;
+  const review = state.review;
+  return (
+    <fieldset
+      className={styles.approvalResearch}
+      aria-label={t("codingWorkbench.approval.changes.title")}
+    >
+      <p className={styles.approvalResearchTitle}>{t("codingWorkbench.approval.changes.title")}</p>
+      {review === null ? (
+        <p className={styles.approvalResearchDetail}>
+          {t(
+            state.status === "loading"
+              ? "codingWorkbench.approval.changes.loading"
+              : "codingWorkbench.approval.changes.unavailable",
+          )}
+        </p>
+      ) : (
+        <>
+          <dl className={styles.approvalFacts}>
+            <ApprovalFact
+              label={t("codingWorkbench.approval.changes.files")}
+              value={String(review.fileCount)}
+            />
+            <ApprovalFact
+              label={t("codingWorkbench.approval.changes.lines")}
+              value={t("codingWorkbench.approval.changes.lineCounts", {
+                added: review.addedLines,
+                deleted: review.deletedLines,
+              })}
+            />
+          </dl>
+          <ul className={styles.approvalChangedFiles}>
+            {review.paths.map((path) => (
+              <li className={styles.approvalChangedFile} key={path}>
+                {path}
+              </li>
+            ))}
+          </ul>
+          {review.pathsTruncated ? (
+            <p className={styles.approvalResearchDetail}>
+              {t("codingWorkbench.approval.changes.truncated", {
+                shown: review.paths.length,
+                total: review.fileCount,
+              })}
+            </p>
+          ) : null}
+        </>
+      )}
+    </fieldset>
+  );
+}
+
 function ResearchDestination({
   state,
   t,

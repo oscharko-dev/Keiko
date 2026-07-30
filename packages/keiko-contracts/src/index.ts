@@ -1259,6 +1259,19 @@ export {
   validateCodingWorkbenchRuntimeQuestionsResponse,
 } from "./coding-workbench-runtime-questions.js";
 export type {
+  CodingWorkbenchRuntimeApprovalReviewChannelPayload,
+  CodingWorkbenchRuntimeApprovalReviewSession,
+  CodingWorkbenchRuntimePendingApprovalReview,
+} from "./coding-workbench-runtime-approval-review.js";
+export {
+  CODING_WORKBENCH_APPROVAL_REVIEW_MAX_COUNT,
+  CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
+  CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS,
+  CODING_WORKBENCH_RUNTIME_APPROVAL_REVIEW_SESSION_STATES,
+  unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload,
+  validateCodingWorkbenchRuntimeApprovalReviewChannelPayload,
+} from "./coding-workbench-runtime-approval-review.js";
+export type {
   CodingWorkbenchRuntimePendingResearch,
   CodingWorkbenchRuntimeResearchChannelPayload,
   CodingWorkbenchRuntimeResearchGrant,

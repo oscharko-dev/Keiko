@@ -240,6 +240,15 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.research.loading": "Ziel wird geladen …",
   "codingWorkbench.approval.research.unavailable":
     "Ziel nicht abrufbar. Fenster erneut koppeln, um es vor der Entscheidung zu sehen.",
+  "codingWorkbench.approval.changes.title": "Dateien, die diese Änderung schreiben würde",
+  "codingWorkbench.approval.changes.files": "Dateien",
+  "codingWorkbench.approval.changes.lines": "Zeilen",
+  "codingWorkbench.approval.changes.lineCounts": "+{added} / -{deleted}",
+  "codingWorkbench.approval.changes.truncated":
+    "Es werden nur die ersten {shown} von {total} Dateien aufgeführt.",
+  "codingWorkbench.approval.changes.loading": "Geänderte Dateien werden geladen …",
+  "codingWorkbench.approval.changes.unavailable":
+    "Geänderte Dateien nicht abrufbar. Fenster erneut koppeln, um sie vor der Entscheidung zu sehen.",
   "codingWorkbench.approval.help":
     "Unverarbeitete Befehle, Prompts, Diffs und Dateiinhalte bleiben verborgen.",
   "codingWorkbench.approval.approve": "Einmal genehmigen",

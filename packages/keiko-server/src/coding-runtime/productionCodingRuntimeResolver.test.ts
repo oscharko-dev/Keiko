@@ -356,6 +356,7 @@ function runtimeManager(runId: string) {
     takeover: () => Promise.resolve({ ok: true as const, status: "stopped" as const }),
     reconcile: () => Promise.resolve({ ok: true as const, status: "stopped" as const }),
     health: () => ({ status: "stopped" as const }),
+    pendingApprovalReview: () => undefined,
   };
 }
 
