@@ -437,6 +437,11 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       createdPrExternalId: "1577",
     })),
     mergePreview: vi.fn<GitClientSeam["mergePreview"]>(async () => makeMergePreview()),
+    mergeApprove: vi.fn<GitClientSeam["mergeApprove"]>(async () => ({
+      schemaVersion: "1",
+      approval: { schemaVersion: "1", approvalId: "gda_gcw", approvalToken: "token-gcw" },
+      expiresAt: "2026-01-01T00:00:00.000Z",
+    })),
     mergeExecute: vi.fn<GitClientSeam["mergeExecute"]>(async () => ({
       schemaVersion: "1",
       status: "succeeded",

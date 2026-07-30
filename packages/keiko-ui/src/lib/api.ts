@@ -2971,6 +2971,17 @@ export interface GitDeliveryMergePreviewResponse {
   readonly requiresApproval: boolean;
   readonly readiness: GitDeliveryMergeReadiness;
   readonly recommendation: string;
+  // The provider's current head commit SHA for this PR, when the readiness read reported one. The
+  // execute call should forward it back as `expectedHeadRefHash` so the merge is pinned to the exact
+  // head the readiness/approval decision was made against (the GitHub `sha` guard) — never an unpinned
+  // "merge whatever the head is right now" call.
+  readonly headRefHash?: string;
+}
+
+export interface GitDeliveryMergeApproveResponse {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
 }
 
 export interface GitDeliveryMergeExecuteResponse extends GitDeliveryMutationResponse {
@@ -3006,6 +3017,21 @@ export async function fetchGitDeliveryMergePreview(
   signal?: AbortSignal,
 ): Promise<GitDeliveryMergePreviewResponse> {
   return fetchJson("/api/git-delivery/merge/preview", {
+    method: "POST",
+    body: gitDeliveryMergeBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// Mints the server-issued approval claim the default approval-gated merge policy pack requires. The
+// caller must pass the EXACT SAME input (target + strategy + delete flag + expectedHeadRefHash) it
+// will subsequently pass to `fetchGitDeliveryMergeExecute` — the server binds the mint to that exact
+// typed command, and a mismatched execute call is rejected (see mergeRoutes.ts `createHandleMergeApprove`).
+export async function fetchGitDeliveryMergeApprove(
+  input: GitDeliveryMergeInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMergeApproveResponse> {
+  return fetchJson("/api/git-delivery/merge/approve", {
     method: "POST",
     body: gitDeliveryMergeBody(input),
     ...(signal === undefined ? {} : { signal }),

@@ -7,7 +7,11 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { GovernedMergeCard, type GovernedMergeClient } from "./GovernedMergeCard";
-import type { GitDeliveryMergeExecuteResponse, GitDeliveryMergePreviewResponse } from "@/lib/api";
+import type {
+  GitDeliveryMergeApproveResponse,
+  GitDeliveryMergeExecuteResponse,
+  GitDeliveryMergePreviewResponse,
+} from "@/lib/api";
 
 const PREVIEW: GitDeliveryMergePreviewResponse = {
   schemaVersion: "1",
@@ -44,9 +48,16 @@ const OUTCOME: GitDeliveryMergeExecuteResponse = {
   blockReason: "policy-pack-blocked",
 };
 
+const APPROVE_RESULT: GitDeliveryMergeApproveResponse = {
+  schemaVersion: "1",
+  approval: { schemaVersion: "1", approvalId: "gda_a11y", approvalToken: "token-a11y" },
+  expiresAt: "2026-01-01T00:00:00.000Z",
+};
+
 function makeClient(): GovernedMergeClient {
   return {
     mergePreview: vi.fn(async () => PREVIEW),
+    mergeApprove: vi.fn(async () => APPROVE_RESULT),
     mergeExecute: vi.fn(async () => OUTCOME),
   };
 }

@@ -378,6 +378,7 @@ describe("useGitActions", () => {
       prPreview: vi.fn<GitClientSeam["prPreview"]>(),
       prExecute: vi.fn<GitClientSeam["prExecute"]>(),
       mergePreview: vi.fn<GitClientSeam["mergePreview"]>(),
+      mergeApprove: vi.fn<GitClientSeam["mergeApprove"]>(),
       mergeExecute: vi.fn<GitClientSeam["mergeExecute"]>(),
       ...overrides,
     };

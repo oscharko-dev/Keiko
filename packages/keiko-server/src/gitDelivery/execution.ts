@@ -27,6 +27,7 @@ import {
 import {
   createNodeGitMutationAdapter,
   readGitWorktreeSnapshot,
+  readStagedConflictMarkerFileCount,
   readStagedPaths,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
@@ -55,6 +56,8 @@ export interface GitDeliveryExecutionSeams {
     ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>) | undefined;
   readonly stagedPathsReader?:
     ((workspace: WorkspaceInfo) => Promise<readonly string[]>) | undefined;
+  // Injectable seam for the staged-conflict-marker guard (see readStagedConflictMarkerFileCountFor).
+  readonly conflictMarkerReader?: ((workspace: WorkspaceInfo) => Promise<number>) | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
   readonly now?: (() => number) | undefined;
@@ -87,6 +90,22 @@ export function readStagedPathsFor(
 ): Promise<readonly string[]> {
   if (seams.stagedPathsReader !== undefined) return seams.stagedPathsReader(workspace);
   return readStagedPaths({ workspace, processEnv: process.env, now });
+}
+
+// Counts staged files that still contain an unresolved merge-conflict marker (`git diff --cached
+// --check`, git's own detector — see readStagedConflictMarkerFileCount). Consumed by the commit
+// execute route as a fail-closed guard BEFORE the kernel runs: `git add` clears git's own "unmerged
+// path" state for a file the moment it is staged, so a conflicted file whose markers were staged
+// without being resolved is otherwise indistinguishable from an ordinary clean staged change — nothing
+// downstream (the worktree snapshot, the kernel's preflight, the commit adapter) would ever notice,
+// and the commit would silently bake the literal marker lines into history.
+export function readStagedConflictMarkerFileCountFor(
+  workspace: WorkspaceInfo,
+  seams: GitDeliveryExecutionSeams,
+  now: () => number,
+): Promise<number> {
+  if (seams.conflictMarkerReader !== undefined) return seams.conflictMarkerReader(workspace);
+  return readStagedConflictMarkerFileCount({ workspace, processEnv: process.env, now });
 }
 
 function adapterFor(
