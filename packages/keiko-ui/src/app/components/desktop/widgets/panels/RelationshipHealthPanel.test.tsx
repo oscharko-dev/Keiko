@@ -209,7 +209,7 @@ describe("RelationshipHealthPanel", () => {
       expect(screen.getByRole("heading", { name: /Invalid references/i })).toBeInTheDocument();
     });
     expect(screen.getByRole("heading", { name: /Orphaned endpoints/i })).toBeInTheDocument();
-    expect(screen.getAllByTestId("health-category-bounded-empty").length).toBe(2);
+    expect(screen.getAllByTestId("health-category-bounded-empty")).toHaveLength(2);
   });
 
   it("labels the totals as installation-wide rather than project-scoped", async () => {

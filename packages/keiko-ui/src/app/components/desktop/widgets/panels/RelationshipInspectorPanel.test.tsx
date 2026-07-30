@@ -607,7 +607,7 @@ describe("RelationshipInspectorPanel", () => {
         expect(impactRowValue("Forward dependencies")).toBe("0");
       });
       // The relationship read is untouched: only the advisory walk is retried.
-      expect(mockGetRelationship.mock.calls.length).toBe(readsBefore);
+      expect(mockGetRelationship.mock.calls).toHaveLength(readsBefore);
     });
 
     // Drift pin: the walk request must be built FROM the bounded-query contract, never from a

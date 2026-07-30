@@ -496,12 +496,12 @@ describe("gitDeliveryConstraintBlockReason", () => {
     expect(
       gitDeliveryConstraintBlockReason(ceiling, { ...base, riskClass: "recovery-or-rewrite" }),
     ).toBe("risk-class-ceiling");
-    expect(gitDeliveryConstraintBlockReason(ceiling, { ...base, riskClass: "publish" })).toBe(
-      undefined,
-    );
+    expect(
+      gitDeliveryConstraintBlockReason(ceiling, { ...base, riskClass: "publish" }),
+    ).toBeUndefined();
     expect(
       gitDeliveryConstraintBlockReason(ceiling, { ...base, riskClass: "local-mutation" }),
-    ).toBe(undefined);
+    ).toBeUndefined();
   });
 });
 

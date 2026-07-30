@@ -94,7 +94,7 @@ describe("a11y smoke spec wiring", () => {
     const entries = specSource.match(/\{\s*id: "[^"]+",[\s\S]*?owner: "[^"]+",\s*\},/gu) ?? [];
     const declaredIds = specSource.match(/^ {4}id: "[^"]+",$/gmu) ?? [];
     // Every `id:` inside the ledger literal must belong to a fully-formed entry.
-    expect(entries.length).toBe(declaredIds.length);
+    expect(entries).toHaveLength(declaredIds.length);
     for (const entry of entries) {
       expect(entry, "known-issue entry has no selector — it would mute the rule globally").toMatch(
         /selector: "[^"]+"/u,
