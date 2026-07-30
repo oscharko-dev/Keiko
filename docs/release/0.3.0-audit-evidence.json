@@ -801,5 +801,88 @@
       "f11RootCause": "memory-salience sends response_format with a root ARRAY schema and no json_schema.name; Azure structured outputs require a named root OBJECT - every salience call 400s when supportsResponseFormat is true. 'no-embeddings' is downstream: only the salience path embeds on capture; the regex-intent path inserts without vectors.",
       "pendingHumanAction": "full paired coding run (real OpenCode execution) requires the launcher-opened paired browser window - deliberately not circumvented"
     }
+  },
+  "deepSurfacePhase": {
+    "ledgerSection": 11,
+    "surfacesAudited": [
+      "editor",
+      "git-delivery",
+      "opencode-coding-runtime",
+      "prompt-enhancer",
+      "chat-history-and-attachments",
+      "memoriaviva",
+      "voice",
+      "shell-and-accessibility"
+    ],
+    "findingCounts": {
+      "total": 73,
+      "byArea": {
+        "gitDelivery": {
+          "total": 18,
+          "p0": 3,
+          "p1": 11,
+          "p2": 3,
+          "confirmedSound": 1
+        },
+        "openCodeRuntime": {
+          "total": 15,
+          "p0": 1,
+          "p1": 5,
+          "p2": 8,
+          "confirmedSound": 1
+        },
+        "promptEnhancer": {
+          "total": 13,
+          "p0": 2,
+          "p1": 4,
+          "p2": 4,
+          "confirmedSound": 3
+        },
+        "chatDepth": {
+          "total": 14,
+          "p0": 0,
+          "p1": 3,
+          "p2": 8,
+          "confirmedSound": 3
+        },
+        "memoriaViva": {
+          "total": 13,
+          "p0": 1,
+          "p1": 3,
+          "p2": 6,
+          "confirmedSound": 3
+        }
+      },
+      "p0Total": 7,
+      "p1Total": 26,
+      "p2Total": 29,
+      "confirmedSoundTotal": 11
+    },
+    "p0Summary": [
+      "git-delivery: pull request, merge and push cannot authenticate on the governed path",
+      "git-delivery: governed commit is structurally unsigned and cannot see the user git identity",
+      "git-delivery: the signed-commit requirement is enforced nowhere",
+      "opencode: state-changing routes are not bound to the authenticated app session and an unauthenticated status route publishes the challenge binding",
+      "prompt-enhancer: model-assisted output bypasses the validate stage and is reported as accepted",
+      "prompt-enhancer: the evidence manifest records a governance claim the persisted prompt text does not support",
+      "memoriaviva: mode-blind auto-maintenance accepts proposed memories in the ask-for-approval mode"
+    ],
+    "refutedWithProof": [
+      "retrieval cannot leak across unselected knowledge pods; isolation holds at every layer",
+      "voice acoustic-profile documentation drift: the referenced block is explicitly marked superseded",
+      "voice digital-twin language indication omission: mandated by the governing ADR"
+    ],
+    "fixesLandedAndPinned": [
+      "voice: spoken turns carry staged attachments and document context, snapshotted at handoff",
+      "voice: barge-in cancels only the generation voice owns; outbox suspension is chat-scoped",
+      "editor: search and replace compute coordinates on raw bytes behind an explicit read-lane boundary",
+      "editor: rename and refactor outcomes are reported truthfully; a capped changeset refuses accept",
+      "editor: language intelligence classifies and labels capped results instead of failing silently",
+      "shell: one keybinding parser plus an error boundary above the shell with a recovery action",
+      "shell: palette chord labels derive from the binding that actually dispatches",
+      "ui: german locale completed and the i18n literal gate given a baseline it can fail on",
+      "a11y: destructive confirmations trap focus; axe coverage widened with a static membership check"
+    ],
+    "p0RemediationStatus": "in progress at the time of writing; per-defect outcomes recorded in ledger section 11.4"
   }
 }
