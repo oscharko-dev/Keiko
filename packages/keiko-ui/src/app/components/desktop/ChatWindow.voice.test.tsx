@@ -732,6 +732,51 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     expect(voiceLayer).not.toHaveAttribute("inert");
   });
 
+  // #2843 — the chip strip lives in the normal composer layer, which becomes `inert` + `aria-hidden`
+  // during dialogue. Since a spoken turn carries the staged attachments exactly like a typed one
+  // (ADR-0154 D1/D5), the chips must stay visible and removable in the layer that is interactive —
+  // before this pin the user could neither see nor remove an attachment their next spoken turn sent.
+  it("keeps a staged attachment visible and removable while dialogue holds the composer", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    const removePendingAttachment = vi.fn();
+    renderWindow(
+      makeSession({
+        pendingAttachments: [
+          {
+            id: "att-spoken-1",
+            kind: "document",
+            name: "spec.txt",
+            mimeType: "text/plain",
+            sizeBytes: 11,
+          },
+        ],
+        removePendingAttachment,
+      }),
+    );
+
+    const dialogSwitch = await screen.findByRole("switch", { name: "Voice dialogue mode" });
+    // The typed composer owns the chip before dialogue starts.
+    expect(screen.getByRole("button", { name: "Remove attachment spec.txt" })).toBeInTheDocument();
+
+    await userEvent.click(dialogSwitch);
+
+    const box = getComposerBox();
+    expect(box.querySelector('[data-composer-layer="normal"]')).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    // Exactly one reachable chip: the inert normal-layer copy is out of the accessibility tree.
+    const removeButtons = within(box).getAllByRole("button", {
+      name: "Remove attachment spec.txt",
+    });
+    expect(removeButtons).toHaveLength(1);
+    expect(within(box).getByText("Sent with your next spoken turn")).toBeInTheDocument();
+
+    await userEvent.click(removeButtons[0] as HTMLElement);
+    expect(removePendingAttachment).toHaveBeenCalledWith("att-spoken-1");
+  });
+
   it("entering dialogue mode sets aria-checked=true on the switch without opening a control panel", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
     stubRealtimeBrowser(async () => ({}) as MediaStream);

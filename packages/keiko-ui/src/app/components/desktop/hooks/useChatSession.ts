@@ -532,9 +532,15 @@ function hasGroundingScope(chat: Chat): boolean {
 export type ChatSessionApi = UseChatSessionResult;
 
 // Issue #1561 — options for an explicit-text send. The voice dialogue session (Epic #1556) commits a
-// spoken transcript and must send it through THIS chat path so the spoken turn carries the identical
-// context (attachments → documentContext, repository/local-knowledge grounding scope, memory) a typed
-// turn would. It cannot rely on `setDraft(text)` + `sendMessage()` in the same tick: `sendMessage`
+// spoken transcript and must send it through THIS chat path so the spoken turn carries the same
+// context a typed turn would: the staged attachments (→ documentContext + descriptors),
+// repository/local-knowledge grounding scope, and memory. ADR-0154 D1/D5 make that parity the
+// contract — one canonical pipeline, no Voice-specific substitute, and equal final text plus equal
+// chat context must make the same retrieval decisions. The staged attachments are captured into
+// `canonicalVoiceTarget.attachments` at handoff rather than read live at drain time (see that field),
+// and a grounded chat carries scope instead of attachments for spoken and typed turns alike — with
+// GROUNDED_ATTACHMENT_NOTICE surfaced either way, never a silent drop (#2843).
+// It cannot rely on `setDraft(text)` + `sendMessage()` in the same tick: `sendMessage`
 // reads `draft` from React state captured in its closure, so the just-set draft is invisible until the
 // next render and the send would early-return on an empty draft. Passing the committed text directly
 // decouples the send from the async draft state. The field is content-only (the committed transcript,
@@ -567,6 +573,13 @@ interface CanonicalVoiceSendTarget {
   readonly project: CanonicalChatProjectTarget;
   readonly modelId: string;
   readonly memory: ConversationMemoryRequestWire;
+  // #2843 — the composer's staged attachments, snapshotted with the rest of the immutable target
+  // during the synchronous handoff (ADR-0154 D1). The FIFO can drain after the user switched chats or
+  // staged different files, so reading live composer state at drain time would attach the wrong files
+  // to this turn; the snapshot binds exactly what was staged when the transcript settled. Nothing
+  // here reaches the Realtime session — descriptors and extracted text ride the canonical BFF
+  // request, which is the only path that ever carried them (ADR-0154 D2/D5).
+  readonly attachments: readonly PendingAttachment[];
 }
 
 interface CanonicalChatProjectTarget {
@@ -601,6 +614,10 @@ interface SendAttemptRequest {
 interface SendAttemptExecution {
   readonly terminal: SendAttemptOutcome;
   readonly disclosures: readonly SentDocumentDisclosure[];
+  // #2843 — the staged attachments this attempt actually put on the wire. A settled send releases
+  // exactly these, so files staged while the send was in flight (the composer stays editable, F041,
+  // and a queued Voice turn can settle much later) are never dropped unsent.
+  readonly consumedAttachmentIds: readonly string[];
 }
 
 interface CompletedSendOutcome {
@@ -1825,8 +1842,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     });
   }, []);
 
-  // Clears all pending attachments (called after successful sendMessage).
-  // GEN-PERF-MEMORY-001 — revoke every removed attachment's object-URL preview.
+  // Clears all pending attachments (exposed on the session API for surfaces that discard the whole
+  // staging area). GEN-PERF-MEMORY-001 — revoke every removed attachment's object-URL preview.
   const clearPendingAttachments = useCallback(() => {
     setPendingAttachments((previous) => {
       for (const attachment of previous) revokeAttachmentPreview(attachment);
@@ -1834,44 +1851,68 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     });
   }, []);
 
-  // Issue #148 — extract bounded text from the pending DOCUMENT attachments for the send body.
+  // #2843 — releases exactly the attachments a settled send consumed, rather than clearing the whole
+  // staging area. The composer stays editable during a send (uiux-fix F041) and a queued canonical
+  // Voice turn can settle turns later still, so anything staged AFTER the consumed set must survive
+  // to be sent by its own turn. GEN-PERF-MEMORY-001 — revoke the released previews.
+  const releasePendingAttachments = useCallback((ids: readonly string[]): void => {
+    if (ids.length === 0) return;
+    const consumed = new Set(ids);
+    setPendingAttachments((previous) => {
+      const retained = previous.filter((attachment) => !consumed.has(attachment.id));
+      if (retained.length === previous.length) return previous;
+      for (const attachment of previous) {
+        if (consumed.has(attachment.id)) revokeAttachmentPreview(attachment);
+      }
+      return retained;
+    });
+  }, []);
+
+  // Issue #148 — extract bounded text from the staged DOCUMENT attachments for the send body.
   // Images are excluded here (they stay on the metadata-only attachments path). A document with
   // no retained File (synthetic fixture) is skipped. Read failures surface a fixed, path-safe
   // alert and never abort the send. Returns the wire entries to attach plus a disclosure list.
-  const buildDocumentContext = useCallback(async (): Promise<{
-    readonly entries: readonly ConversationDocumentContextWire[];
-    readonly disclosures: readonly SentDocumentDisclosure[];
-  }> => {
-    const documents: PendingDocument[] = pendingAttachments
-      .filter((a) => a.kind === "document" && a.file !== undefined)
-      .map((a) => ({
-        id: a.id,
-        name: a.name,
-        mimeType: a.mimeType,
-        sizeBytes: a.sizeBytes,
-        file: a.file as File,
+  // #2843 — the staged set is an argument, not closed-over state: a canonical Voice turn passes the
+  // snapshot captured at handoff, so a turn is never built from a composer the user has since changed.
+  const buildDocumentContext = useCallback(
+    async (
+      staged: readonly PendingAttachment[],
+    ): Promise<{
+      readonly entries: readonly ConversationDocumentContextWire[];
+      readonly disclosures: readonly SentDocumentDisclosure[];
+    }> => {
+      const documents: PendingDocument[] = staged
+        .filter((a) => a.kind === "document" && a.file !== undefined)
+        .map((a) => ({
+          id: a.id,
+          name: a.name,
+          mimeType: a.mimeType,
+          sizeBytes: a.sizeBytes,
+          file: a.file as File,
+        }));
+      if (documents.length === 0) return { entries: [], disclosures: [] };
+      const { entries, failures } = await extractDocumentContext(documents);
+      if (failures.length > 0) setError(failures.join(" "));
+      const disclosures = entries.map((e) => ({
+        id: e.id,
+        displayName: e.displayName,
+        truncated: e.truncated,
       }));
-    if (documents.length === 0) return { entries: [], disclosures: [] };
-    const { entries, failures } = await extractDocumentContext(documents);
-    if (failures.length > 0) setError(failures.join(" "));
-    const disclosures = entries.map((e) => ({
-      id: e.id,
-      displayName: e.displayName,
-      truncated: e.truncated,
-    }));
-    return { entries, disclosures };
-  }, [pendingAttachments]);
+      return { entries, disclosures };
+    },
+    [],
+  );
 
   const buildAttachmentDescriptors = useCallback(
-    (): readonly ConversationAttachmentDescriptorWire[] =>
-      pendingAttachments.map((attachment) => ({
+    (staged: readonly PendingAttachment[]): readonly ConversationAttachmentDescriptorWire[] =>
+      staged.map((attachment) => ({
         id: attachment.id,
         kind: attachment.kind,
         name: attachment.name,
         mimeType: attachment.mimeType,
         sizeBytes: attachment.sizeBytes,
       })),
-    [pendingAttachments],
+    [],
   );
 
   const clearLatestMemory = useCallback(() => {
@@ -2830,15 +2871,26 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     async (request: SendAttemptRequest): Promise<SendAttemptExecution> => {
       const { chat, canonicalTarget, signal } = request;
       const grounded = hasGroundingScope(chat);
-      const skipSupplementalContext = grounded || canonicalTarget !== undefined;
-      const documentBundle = skipSupplementalContext
+      // #2843 — the ONLY route without an attachment channel is the grounded one: it derives context
+      // from the repository / Knowledge Pod scope instead. A spoken turn is not a second reason to
+      // drop supplemental context; ADR-0154 D1/D5 require it to carry the same context a typed turn
+      // would, and the queue-captured snapshot binds exactly the files staged at handoff.
+      const staged = canonicalTarget?.attachments ?? pendingAttachments;
+      const documentBundle = grounded
         ? { entries: [] as readonly ConversationDocumentContextWire[], disclosures: [] }
-        : await buildDocumentContext();
-      const attachments: readonly ConversationAttachmentDescriptorWire[] = skipSupplementalContext
+        : await buildDocumentContext(staged);
+      const attachments: readonly ConversationAttachmentDescriptorWire[] = grounded
         ? []
-        : buildAttachmentDescriptors();
+        : buildAttachmentDescriptors(staged);
+      const consumedAttachmentIds = grounded ? [] : staged.map((attachment) => attachment.id);
       const memory = canonicalTarget?.memory ?? buildMemoryRequest(chat, request.project);
       if (grounded) {
+        // A typed send in this state is rejected before admission (resolveSendMessageAdmission), so
+        // only a spoken turn can reach here with files staged. A settled final transcript must never
+        // be discarded (ADR-0154 D1), so the turn proceeds on the grounded route and the SAME notice
+        // states that the staged attachments were not part of it. Unconditional on purpose: whichever
+        // caller arrives here with staged files, the user is told rather than silently ignored.
+        if (staged.length > 0) setError(GROUNDED_ATTACHMENT_NOTICE);
         const terminal = await sendGrounded(
           chat,
           request.content,
@@ -2848,7 +2900,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           memory,
           request.clientTurnId,
         );
-        return { terminal, disclosures: documentBundle.disclosures };
+        return { terminal, disclosures: documentBundle.disclosures, consumedAttachmentIds };
       }
       const ungroundedRequest: UngroundedSendRequest = {
         chat,
@@ -2865,12 +2917,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       const terminal = request.forceBuffered
         ? await sendUngroundedBuffered(ungroundedRequest)
         : await sendUngrounded(ungroundedRequest);
-      return { terminal, disclosures: documentBundle.disclosures };
+      return { terminal, disclosures: documentBundle.disclosures, consumedAttachmentIds };
     },
     [
       buildAttachmentDescriptors,
       buildDocumentContext,
       buildMemoryRequest,
+      pendingAttachments,
       sendGrounded,
       sendUngrounded,
       sendUngroundedBuffered,
@@ -2916,26 +2969,33 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     [reconcileCanonicalUserPersistence],
   );
 
+  // #2843 — a spoken turn settles here too. It used to return early for a canonical target, which
+  // left the staged chips claiming to be unsent and left `lastSentDocuments` holding the PREVIOUS
+  // turn's disclosure list, so a "documents included as context" note could sit on screen next to a
+  // spoken answer that carried different documents (or none). Typed and spoken turns now settle
+  // identically here; only the visible chat's own latest settled turn may rewrite the disclosure note.
   const presentCompletedSend = useCallback(
     (input: {
       readonly settled: SendAttemptOutcome;
-      readonly canonicalTarget: CanonicalVoiceSendTarget | undefined;
       readonly chatId: string;
       readonly signal: AbortSignal;
       readonly disclosures: readonly SentDocumentDisclosure[];
+      readonly consumedAttachmentIds: readonly string[];
     }): void => {
-      if (input.settled.status !== "completed" || input.canonicalTarget !== undefined) return;
+      if (input.settled.status !== "completed" || !mountedRef.current) return;
+      // The consumed files are on the wire, so they are released whichever chat is visible now:
+      // leaving a chip staged after its turn sent it claims the opposite and would re-send the same
+      // document on the next turn. Only the disclosure note is chat- and supersession-scoped.
+      releasePendingAttachments(input.consumedAttachmentIds);
       if (
-        !mountedRef.current ||
         activeChatIdRef.current !== input.chatId ||
         latestSendSignalRef.current !== input.signal
       ) {
         return;
       }
-      clearPendingAttachments();
       setLastSentDocuments(input.disclosures);
     },
-    [clearPendingAttachments],
+    [releasePendingAttachments],
   );
 
   // Issue #152 — unified cancel that aborts any in-flight send (grounded OR
@@ -3005,7 +3065,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       latestSendSignalRef.current = controller.signal;
       setLatestMemory(undefined);
       try {
-        const { terminal, disclosures } = await executeSendAttempt({
+        const { terminal, disclosures, consumedAttachmentIds } = await executeSendAttempt({
           chat,
           project,
           content,
@@ -3031,10 +3091,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         updateOwnedSendStatus(controller.signal, settled.status);
         presentCompletedSend({
           settled,
-          canonicalTarget,
           chatId: chat.id,
           signal: controller.signal,
           disclosures,
+          consumedAttachmentIds,
         });
         return settledSendMessageOutcome({ settled, terminal, persistence, canonicalTarget });
       } finally {
@@ -3299,7 +3359,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         content,
         contentDigest,
         clientTurnId,
-        target: { chat, project, modelId, memory: buildMemoryRequest(chat, project, "voice") },
+        target: {
+          chat,
+          project,
+          modelId,
+          memory: buildMemoryRequest(chat, project, "voice"),
+          // #2843 — snapshot the staged attachments with the rest of the immutable target so the
+          // spoken turn carries the files the user had staged when the transcript settled, not
+          // whatever the composer happens to hold whenever the FIFO drains.
+          attachments: pendingAttachmentsRef.current,
+        },
         optimistic,
         byteLength,
         promise,

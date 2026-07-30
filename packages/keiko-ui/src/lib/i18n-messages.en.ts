@@ -781,6 +781,7 @@ export const EN_MESSAGES = {
   "attachment.rejection.empty": "Empty file. Add a file with content to attach.",
   "attachment.remove": "Remove attachment {name}",
   "attachment.pending": "Pending attachments",
+  "attachment.voiceStaged": "Sent with your next spoken turn",
   "attachment.drop": "Drop files here to attach",
   "attachment.disabledDifferentModel":
     "The selected model does not support image or document input. Choose a different model to attach files.",

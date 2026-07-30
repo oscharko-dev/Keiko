@@ -77,6 +77,7 @@ import { FileIcon } from "./widgets/shared/projectTree";
 import type {
   AttachmentRejectionReason,
   ChatSessionApi,
+  PendingAttachment,
   SendMessageOutcome,
   SendStatus,
   SentDocumentDisclosure,
@@ -2545,6 +2546,28 @@ function ComposerStatusRow({
 // Extracted from ComposerCoreImpl (SonarCloud S3776) — the voice-dialogue overlay: the announced
 // headline live region (only while the aura is active) and the Voice Dialogue control layer
 // (only while available), each independently gated.
+// #2843 — the composer's chip strip lives in the normal layer, which becomes `inert` + `aria-hidden`
+// while dialogue is active. A spoken turn carries the staged attachments exactly like a typed one
+// (useChatSession `executeSendAttempt`), so the user must be able to see and remove them in the layer
+// that is actually interactive — previously the chips were silently unreachable for the whole
+// dialogue. Rendered only while dialogue is active so the accessible chip set is never duplicated.
+function VoiceDialogAttachments({
+  attachments,
+  onRemove,
+}: {
+  readonly attachments: readonly PendingAttachment[];
+  readonly onRemove: (id: string) => void;
+}): ReactNode {
+  const t = useTranslate();
+  if (attachments.length === 0) return null;
+  return (
+    <div className={styles["cmp-voice-attachments"]}>
+      <p className={styles["cmp-voice-attachments-label"]}>{t("attachment.voiceStaged")}</p>
+      <AttachmentStrip attachments={attachments} onRemove={onRemove} />
+    </div>
+  );
+}
+
 function ComposerVoiceOverlay({
   voiceAuraActive,
   announcedVoiceHeadline,
@@ -2560,6 +2583,8 @@ function ComposerVoiceOverlay({
   onDismissVoiceError,
   voiceDialogButtonRef,
   compact,
+  pendingAttachments,
+  onRemoveAttachment,
 }: {
   readonly voiceAuraActive: boolean;
   readonly announcedVoiceHeadline: string;
@@ -2575,6 +2600,8 @@ function ComposerVoiceOverlay({
   readonly onDismissVoiceError: () => void;
   readonly voiceDialogButtonRef: Ref<HTMLButtonElement>;
   readonly compact: boolean;
+  readonly pendingAttachments: readonly PendingAttachment[];
+  readonly onRemoveAttachment: (id: string) => void;
 }): ReactNode {
   return (
     <>
@@ -2600,6 +2627,12 @@ function ComposerVoiceOverlay({
               <VoiceRealtimeStatusFromController
                 controller={realtimeVoiceController}
                 onAfterDismiss={onDismissVoiceError}
+              />
+            ) : null}
+            {voiceDialogActive ? (
+              <VoiceDialogAttachments
+                attachments={pendingAttachments}
+                onRemove={onRemoveAttachment}
               />
             ) : null}
             <VoiceDialogComposerControls
@@ -3264,6 +3297,8 @@ function ComposerCoreImpl({
         onDismissVoiceError={leaveVoiceDialog}
         voiceDialogButtonRef={voiceDialogButtonRef}
         compact={controlsNarrow}
+        pendingAttachments={pendingAttachments}
+        onRemoveAttachment={removePendingAttachment}
       />
     </div>
   );

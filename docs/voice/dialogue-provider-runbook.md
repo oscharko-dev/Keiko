@@ -164,9 +164,20 @@ Then walk the colleague-like conversation. Each step maps to an Epic #1556 accep
 2. **Listen** — the final user transcript is sent through the normal chat request. The visible canonical
    assistant answer is synthesized through the configured speech-output role; the Realtime provider creates
    no competing answer. Raw audio remains transient and is not stored (AC2).
-3. **Ground in files / context** — attach a file or Knowledge Pod and ask about it. Verify the spoken user
-   message, grounded answer, and sources appear in the same chat, and that MemoriaViva processes the turn
-   exactly as it does for typed input (AC2).
+3. **Ground in files / context** — run this step twice, because the two context sources are separate
+   routes and only one of them can carry a turn:
+   - **Knowledge Pod / repository scope** — connect the scope, then speak. Verify the spoken user
+     message, grounded answer, and sources appear in the same chat, and that MemoriaViva processes the
+     turn exactly as it does for typed input (AC2).
+   - **Staged attachment** — in a chat with NO connected scope, attach a document, then speak. The chips
+     stay visible and removable in the dialogue composer, and the spoken turn carries the same
+     attachment descriptors plus extracted document context a typed turn would; the post-send
+     "documents included as context" note names exactly the documents that turn carried, and the chips
+     clear once it settles (ADR-0154 D1/D5).
+     Attachments and a grounding scope cannot be combined: the grounded route has no attachment channel,
+     so a typed send is rejected and a spoken turn proceeds without the attachments while surfacing the
+     same "Attachments are not supported for grounded chats" notice. Verify that notice rather than
+     expecting a grounded answer that also reads the attachment (#2843).
 4. **Switch voices** — open the **Voice profile** selector and choose **Male**, **Female**, then
    **Neutral**. The visible active-voice label updates; the next spoken turn uses the chosen persona.
    The selection persists across reload (stored content-free as the persona enum in `localStorage` key
