@@ -31,6 +31,7 @@ import type {
   GitRepositoryStatusResponse,
 } from "../../../../../lib/types";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import { Icons } from "../../Icons";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import { FileIcon } from "../shared/projectTree";
@@ -384,36 +385,6 @@ function handleTreeNavKey(rows: readonly HTMLElement[], index: number, key: stri
   }
 }
 
-// GEN-UI-FOCUS-002 — keep Tab focus cycling within a modal dialog (WCAG 2.1.2/2.4.3). Returns
-// true when it handled the key (caller should not do more). jsdom does not enforce inert, so an
-// explicit wrap is required for keyboard users to stay inside the dialog.
-function trapDialogTab(container: HTMLElement, event: ReactKeyboardEvent): boolean {
-  if (event.key !== "Tab") return false;
-  const focusables = Array.from(
-    container.querySelectorAll<HTMLElement>(
-      "button:not([disabled]),input:not([disabled]),[tabindex]:not([tabindex='-1'])",
-    ),
-  );
-  if (focusables.length === 0) {
-    event.preventDefault();
-    return true;
-  }
-  const first = focusables[0];
-  const last = focusables.at(-1);
-  const active = document.activeElement;
-  if (event.shiftKey && (active === first || !container.contains(active))) {
-    event.preventDefault();
-    last?.focus();
-    return true;
-  }
-  if (!event.shiftKey && active === last) {
-    event.preventDefault();
-    first?.focus();
-    return true;
-  }
-  return false;
-}
-
 // GEN-UI-KEYBOARD-003 — arrow/Home/End roving among role="menuitem" buttons in the context menu
 // (APG menu pattern). Enter/Space activate natively on the focused button.
 function handleMenuNavKey(container: HTMLElement, event: ReactKeyboardEvent): void {
@@ -649,6 +620,12 @@ export function FilesWidget({
   // still-mounted tree, so the row that opened them keeps existing; remember it and put focus back
   // there on close (WCAG 2.4.3). `deleteDialogRef` / `menuRef` scope the focus trap and roving.
   const deleteDialogRef = useRef<HTMLDivElement | null>(null);
+  // GEN-UI-FOCUS-002 — containment comes from the shared seam rather than a local copy of the wrap.
+  // The dialog disables BOTH of its buttons while the delete is in flight, which drops focus to
+  // <body>; a React onKeyDown on the dialog can no longer see the next Tab from there, so the old
+  // per-dialog handler let focus escape exactly while the destructive action ran. The shared hook
+  // listens on the document and re-enters the dialog instead (Issue #2617).
+  useDialogTabTrap(deleteDialogRef);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const confirmDeleteReturnFocusRef = useRef<HTMLElement | null>(null);
   const menuReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -1189,8 +1166,8 @@ export function FilesWidget({
   }, [menu, confirmDelete]);
 
   // GEN-UI-FOCUS-002 — focus the delete dialog on open (the Delete button) and restore focus to
-  // the originating tree row on close (WCAG 2.4.3). The Tab trap and Escape live on the dialog's
-  // onKeyDown handler below; here we only manage entering/leaving the dialog.
+  // the originating tree row on close (WCAG 2.4.3). Tab containment comes from useDialogTabTrap
+  // above; here we only manage entering/leaving the dialog.
   useEffect(() => {
     if (confirmDelete === null) {
       const opener = confirmDeleteReturnFocusRef.current;
@@ -1205,6 +1182,23 @@ export function FilesWidget({
     const primary = dialog?.querySelector<HTMLButtonElement>("button.ed-reload");
     (primary ?? dialog?.querySelector<HTMLButtonElement>("button"))?.focus({ preventScroll: true });
   }, [confirmDelete]);
+
+  // WCAG 2.1.2 — Escape cancels the destructive confirm. A document listener rather than a JSX
+  // onKeyDown for the same reason the Tab trap moved: while the delete is in flight both buttons are
+  // disabled and focus sits on <body>, where no handler bound to the dialog subtree can ever run.
+  useEffect(() => {
+    if (confirmDelete === null) return;
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== "Escape" || opBusy) return;
+      event.preventDefault();
+      setConfirmDelete(null);
+      setOpError(null);
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [confirmDelete, opBusy]);
 
   const goUp = useCallback((): void => {
     if (currentDirectoryPath !== null) {
@@ -2134,9 +2128,9 @@ export function FilesWidget({
       ) : null}
       {confirmDelete !== null ? (
         <div className="ed-dialog-backdrop" role="presentation">
-          {/* GEN-UI-FOCUS-002 — Escape cancels; Tab/Shift+Tab stay trapped inside the dialog
-              (WCAG 2.1.2 — jsdom does not enforce inert, so the wrap is explicit). */}
-          {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- WCAG 2.1.2 modal focus trap + Escape */}
+          {/* GEN-UI-FOCUS-002 — Escape cancels and Tab/Shift+Tab stay inside the dialog (WCAG
+              2.1.2). Both live in document-level effects above, not on this element, so they still
+              work while every control is disabled and focus has dropped to <body>. */}
           <div
             ref={deleteDialogRef}
             className="ed-dirty-dialog"
@@ -2145,17 +2139,6 @@ export function FilesWidget({
             aria-labelledby="files-delete-title"
             aria-describedby="files-delete-body"
             tabIndex={-1}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.preventDefault();
-                if (!opBusy) {
-                  setConfirmDelete(null);
-                  setOpError(null);
-                }
-                return;
-              }
-              trapDialogTab(event.currentTarget, event);
-            }}
           >
             <h2 id="files-delete-title">
               {confirmDelete.kind === "directory"

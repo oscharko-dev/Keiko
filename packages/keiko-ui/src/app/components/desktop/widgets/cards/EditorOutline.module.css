@@ -116,7 +116,12 @@
 
 .outlineKind {
   overflow: hidden;
-  color: var(--ed-gutter-fg);
+  /* WCAG 1.4.3 — this is real, screen-reader-exposed text ("CLASS", "FUNCTION", …), not gutter
+     furniture. `--ed-gutter-fg` is `--fg` at 38% alpha, which cannot reach 4.5:1 against any
+     editor surface and measured as a serious color-contrast violation in a real browser in BOTH
+     themes (0.3.0 release audit, a11y smoke). Text uses the muted TEXT token; the decorative
+     38%-alpha token stays where it belongs — the gutter and the aria-hidden breadcrumb separator. */
+  color: var(--ed-gutter-fg-active);
   font-size: 10px;
   text-overflow: ellipsis;
   text-transform: uppercase;

@@ -16,7 +16,12 @@ import {
   renameFilesEntry,
   updateChatConnectedScopes,
 } from "../../../../../lib/api";
-import type { Chat, GitChangedFile, GitRepositoryStatusResponse } from "../../../../../lib/types";
+import type {
+  Chat,
+  FilesMutationResponse,
+  GitChangedFile,
+  GitRepositoryStatusResponse,
+} from "../../../../../lib/types";
 import { ChatSessionProvider } from "../../context/ChatSessionContext";
 import type { ChatSessionApi } from "../../hooks/useChatSession";
 import { FilePreview } from "./FilePreview";
@@ -1964,6 +1969,40 @@ describe("FilesWidget file operations", () => {
     await waitFor(() => {
       expect(screen.getByRole("treeitem", { name: /app\.ts/i })).toHaveFocus();
     });
+  });
+
+  // GEN-UI-FOCUS-002 — the aria-modal promise has to hold for the WHOLE time the dialog is open,
+  // including while the delete is in flight. Confirming disables both buttons, and a real browser
+  // then drops focus out of the dialog (a disabled control cannot hold focus, so it lands on
+  // <body>). jsdom does not blur on disable, so the escaped state is set up explicitly here — the
+  // invariant under test is "focus is outside an open aria-modal dialog", however it got there.
+  // A Tab handler bound to the dialog subtree can never see the next keystroke from outside it, so
+  // Tab used to walk into the still-live tree behind the modal. Containment now lives on the
+  // document (shared useDialogTabTrap seam) and pulls focus back in.
+  it("re-enters the delete dialog when the in-flight delete has dropped focus outside it", async () => {
+    const pending = deferred<FilesMutationResponse>();
+    vi.mocked(deleteFilesEntry).mockReturnValue(pending.promise);
+    render(<FilesWidget root="/repo" />);
+
+    const row = await screen.findByRole("treeitem", { name: /app\.ts/i });
+    row.focus();
+    fireEvent.keyDown(row, { key: "Delete" });
+    const dialog = await screen.findByRole("dialog", { name: /delete file\?/i });
+    const deleteBtn = screen.getByRole("button", { name: "Delete" });
+    await waitFor(() => expect(deleteBtn).toHaveFocus());
+
+    // Confirm without resolving the delete: every control in the dialog is now disabled.
+    fireEvent.click(deleteBtn);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled());
+    row.focus();
+    expect(dialog.contains(document.activeElement)).toBe(false);
+
+    // Tab must NOT move on through the tree behind the modal; it re-enters the dialog.
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    pending.resolve({ root: "/repo", path: "app.ts", kind: "file" });
+    await waitFor(() => expect(deleteFilesEntry).toHaveBeenCalledTimes(1));
   });
 
   // GEN-UI-KEYBOARD-003 — the context menu moves focus to its first item on open and supports
