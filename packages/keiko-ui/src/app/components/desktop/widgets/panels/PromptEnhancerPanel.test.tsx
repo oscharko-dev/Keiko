@@ -660,6 +660,83 @@ describe("PromptEnhancerPanel", () => {
     });
   });
 
+  // #1307 audit: the summary labelled `analysis.recommendedProfile` "Profile", so a run whose winning
+  // candidate came from a different profile advertised a profile that did not produce the prompt.
+  it("labels the profile that produced the prompt, not the analyzer's recommendation", async () => {
+    const base = makeResponse();
+    const response = makeResponse({
+      analysis: { ...base.analysis, recommendedProfile: "fast" },
+    });
+    render(
+      <PromptEnhancerPanel
+        enhanceImpl={vi.fn().mockResolvedValue(response)}
+        fetchModelsImpl={noModels}
+      />,
+    );
+    typeDraft("Summarize the report.");
+    fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+    await screen.findByTestId("pe-result");
+    const summary = screen.getByLabelText("Prompt enhancement analysis");
+    expect(summary).toHaveTextContent("precise");
+    expect(summary).not.toHaveTextContent("fast");
+  });
+
+  // #1307 audit: the only token figure on screen came from a candidate scorecard, which on the
+  // model-assisted path described the discarded deterministic prompt rather than the rendered text.
+  it("shows a token estimate for the prompt that is actually displayed", async () => {
+    render(
+      <PromptEnhancerPanel
+        enhanceImpl={vi
+          .fn()
+          .mockResolvedValue(makeResponse({ renderedPromptEstimatedTokens: 917 }))}
+        fetchModelsImpl={noModels}
+      />,
+    );
+    typeDraft("Summarize the report.");
+    fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+    await screen.findByTestId("pe-result");
+    expect(screen.getByLabelText("Prompt enhancement analysis")).toHaveTextContent("~917 tokens");
+  });
+
+  // #1307 audit: on the model-assisted path the structured sections and scorecards describe the
+  // deterministic baseline while the rendered prompt is the model's text. Presenting them
+  // identically to a deterministic run is the fabrication; the surface has to say which is which.
+  it("marks the structured review as the baseline when the model rewrote the prompt", async () => {
+    render(
+      <PromptEnhancerPanel
+        enhanceImpl={vi.fn().mockResolvedValue(
+          makeResponse({
+            modelRouting: {
+              availability: "available",
+              reason: "model-available",
+              requestedModelId: "m1",
+              resolvedModelId: "m1",
+              executionStatus: "model-applied",
+            },
+          }),
+        )}
+        fetchModelsImpl={noModels}
+      />,
+    );
+    typeDraft("Summarize the report.");
+    fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+    await screen.findByTestId("pe-result");
+    expect(screen.getByTestId("pe-baseline-note")).toHaveTextContent(/deterministic baseline/i);
+  });
+
+  it("does not claim a baseline mismatch on a deterministic run", async () => {
+    render(
+      <PromptEnhancerPanel
+        enhanceImpl={vi.fn().mockResolvedValue(makeResponse())}
+        fetchModelsImpl={noModels}
+      />,
+    );
+    typeDraft("Summarize the report.");
+    fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+    await screen.findByTestId("pe-result");
+    expect(screen.queryByTestId("pe-baseline-note")).not.toBeInTheDocument();
+  });
+
   it("renders a grounding plan that has no explicit source priority", async () => {
     const base = makeResponse();
     const response = makeResponse({

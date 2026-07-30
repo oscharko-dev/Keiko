@@ -211,6 +211,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "promptEnhancer.analysis.profile": "Profil",
   "promptEnhancer.analysis.input": "Eingabe",
   "promptEnhancer.analysis.chars": "{count} Zeichen",
+  "promptEnhancer.analysis.promptTokens": "Prompt-Tokens",
+  "promptEnhancer.analysis.tokenEstimate": "~{count} Tokens",
   "promptEnhancer.analysis.ariaLabel": "Analyse der Prompt-Verbesserung",
   "promptEnhancer.routing.deterministic": "Deterministische Verbesserung",
   "promptEnhancer.routing.modelEnhanced": "Durch Modell verbessert: {model}",
@@ -293,6 +295,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "promptEnhancer.action.clear": "Leeren",
   "promptEnhancer.result.eyebrow": "Prüfarbeitsprodukt",
   "promptEnhancer.result.title": "Verbesserter Prompt",
+  "promptEnhancer.result.baselineNote":
+    "Das Modell hat diesen Prompt neu geschrieben. Profil, strukturierte Abschnitte und Kandidaten-Scorecards unten beschreiben die deterministische Basis, aus der er verfeinert wurde, nicht den oben gerenderten Prompt.",
   "promptEnhancer.rendered.title": "Gerenderter Prompt",
   "promptEnhancer.rendered.ariaLabel": "Text des gerenderten Prompts",
   "promptEnhancer.action.copying": "Wird kopiert...",

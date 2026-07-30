@@ -87,7 +87,12 @@ export type PromptCandidateRejectionReason =
   // candidate is dropped before scoring — candidate generation never relaxes safety, AC5).
   | "safety-floor-not-preserved"
   // The validate-stage safety screen rejected the generated candidate before scoring.
-  | "safety-validation-failed";
+  | "safety-validation-failed"
+  // The caller requested an explicit profile preference and this candidate is not that profile. Only
+  // emitted for a candidate that would otherwise have won on score: an honored preference is the
+  // documented planner semantics ("preference-honored" unless criticality-escalated), so the score
+  // ranking, not the preference, is what this candidate lost to when it scores below the winner.
+  | "profile-preference-not-matched";
 
 export const PROMPT_CANDIDATE_REJECTION_REASONS: readonly PromptCandidateRejectionReason[] = [
   "lower-aggregate-score",
@@ -96,6 +101,7 @@ export const PROMPT_CANDIDATE_REJECTION_REASONS: readonly PromptCandidateRejecti
   "duplicate-candidate",
   "safety-floor-not-preserved",
   "safety-validation-failed",
+  "profile-preference-not-matched",
 ] as const;
 
 export const isPromptCandidateRejectionReason = (

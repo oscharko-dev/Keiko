@@ -125,9 +125,13 @@ export interface PromptEnhancementModelRouting {
 // winning candidate's full Enhanced Prompt is surfaced as the response `enhancedPrompt`; this section
 // lets the surface render the scorecard comparison (AC2 "candidate scorecards").
 export interface PromptEnhancementCandidateComparison {
-  // The `candidateId` of the winning scorecard (== response `enhancedPrompt`'s candidate). Content-free.
+  // The `candidateId` of the winning scorecard. Always equals `enhancedPrompt.promptId`, including on
+  // the model-assisted path, where `enhancedPrompt` is the deterministic candidate the model refined
+  // and the response-level `promptId` identifies the delivered model artefact instead. Content-free.
   readonly winnerCandidateId: string;
-  // Every scored candidate in deterministic rank order, winner first.
+  // Every scored candidate in deterministic rank order (top score first). A model-refined prompt is
+  // never listed here: the critic scores structured Enhanced Prompt candidates, and free model text
+  // is not one, so publishing a scorecard for it would report numbers about a different artefact.
   readonly scorecards: readonly PromptCandidateScorecard[];
   // Candidates dropped before or during scoring, each with its content-free reason.
   readonly rejected: readonly PromptCandidateRejection[];
@@ -167,15 +171,25 @@ export interface PromptEnhancementEvidenceReference {
 }
 
 // ─── Response ─────────────────────────────────────────────────────────────────────────
-// The full governed enhancement result. `renderedPrompt` is the deterministic text projection of
-// `enhancedPrompt` for copy / export; the selected prompt still contains the user's draft in the
-// untrusted input section so boundary callers must redact before exposing or persisting it.
-// `inputFingerprintSha256` is a stable, content-derived audit anchor (a hash of the normalized draft),
-// not the draft itself and not an anonymous identifier for low-entropy inputs. The result is data for
-// review, never an execution trigger (AC5).
+// The full governed enhancement result. `renderedPrompt` is the text the surface displays and copies;
+// it still contains the user's draft in the untrusted input section, so boundary callers must redact
+// before exposing or persisting it. `inputFingerprintSha256` is a stable, content-derived audit anchor
+// (a hash of the normalized draft), not the draft itself and not an anonymous identifier for
+// low-entropy inputs. The result is data for review, never an execution trigger (AC5).
+//
+// Two artefacts, one response (`modelRouting.executionStatus` discriminates):
+//   - "deterministic" / "model-fallback": `renderedPrompt` IS the rendering of `enhancedPrompt`, and
+//     every scorecard, section and score in this response describes that one artefact.
+//   - "model-applied": `renderedPrompt` is the model's refined text and is the delivered artefact;
+//     `enhancedPrompt`, `candidates` and `analysis` describe the deterministic baseline it was
+//     derived from. A surface MUST NOT present the baseline's structure or scores as a description of
+//     the model text. `renderedPromptEstimatedTokens` is the one number that always describes
+//     `renderedPrompt` on both paths.
 export interface PromptEnhancementWireResponse {
   readonly schemaVersion: typeof PROMPT_ENHANCER_SCHEMA_VERSION;
-  // The branded EnhancedPromptId of the winning prompt, as a plain wire string.
+  // The branded EnhancedPromptId of the delivered prompt, as a plain wire string. Equals
+  // `enhancedPrompt.promptId` on the deterministic paths; on the model-assisted path it is a distinct
+  // id minted for the model artefact, so the two runs never collide in evidence.
   readonly promptId: string;
   // Content-free SHA-256 fingerprint of the normalized input draft; a stable audit anchor.
   readonly inputFingerprintSha256: string;
@@ -183,10 +197,16 @@ export interface PromptEnhancementWireResponse {
   // risk flags, recommended profile, and the detectors that fired).
   readonly analysis: PromptTaskAnalysis;
   // The winning structured Enhanced Prompt: role, goal, context, input, steps, constraints, grounding
-  // rules + plan, output schema, quality criteria, uncertainty handling, and safety rules.
+  // rules + plan, output schema, quality criteria, uncertainty handling, and safety rules. On the
+  // model-assisted path this is the deterministic baseline the model refined, not the delivered text.
   readonly enhancedPrompt: EnhancedPrompt;
-  // Deterministic single-string rendering of `enhancedPrompt` for copy / export.
+  // The prompt to display, copy, and export: the deterministic rendering of `enhancedPrompt`, or the
+  // model's refined text when `modelRouting.executionStatus` is "model-applied".
   readonly renderedPrompt: string;
+  // Deterministic token estimate for `renderedPrompt` itself, in the canonical `estimateTokens`
+  // currency. Always describes the delivered text, so a surface can show a cost figure for what the
+  // user is about to copy without borrowing a candidate scorecard's number for a different artefact.
+  readonly renderedPromptEstimatedTokens: number;
   // Ranked candidate scorecards + rejections for the candidate-comparison view.
   readonly candidates: PromptEnhancementCandidateComparison;
   // The deterministic safety assessment: decision, human-review flag, verification status, findings,

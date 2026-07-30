@@ -258,7 +258,8 @@ function renderHuman(result: PromptEnhancementWireResponse, io: CliIo): void {
   );
   io.out(`Enhanced prompt (profile: ${winner?.profile ?? "n/a"}, id: ${result.promptId})\n`);
   io.out(
-    `Task class: ${result.analysis.taskClass} · domain: ${result.analysis.domain} · criticality: ${result.analysis.criticality}\n`,
+    `Task class: ${result.analysis.taskClass} · domain: ${result.analysis.domain} · criticality: ${result.analysis.criticality}` +
+      ` · ~${String(result.renderedPromptEstimatedTokens)} rendered tokens\n`,
   );
   io.out(
     `Model routing: ${result.modelRouting.availability} (${result.modelRouting.reason})` +
@@ -277,15 +278,26 @@ function renderHuman(result: PromptEnhancementWireResponse, io: CliIo): void {
   if (result.safety.findings.length > 0) {
     io.out(`Safety findings: ${result.safety.findings.map((f) => f.code).join(", ")}\n`);
   }
-  io.out("\nCandidate scorecards (winner first):\n");
+  renderScorecards(result, io);
+  io.out("\n--- Enhanced prompt (review before any downstream use) ---\n");
+  io.out(`${result.renderedPrompt}\n`);
+}
+
+// The critic only scores structured Enhanced Prompt candidates. When a model rewrote the prompt,
+// these scores and the profile in the header describe the deterministic baseline it was refined
+// from, so say that instead of letting the reader attribute them to the text printed below.
+function renderScorecards(result: PromptEnhancementWireResponse, io: CliIo): void {
+  io.out(
+    result.modelRouting.executionStatus === "model-applied"
+      ? "\nCandidate scorecards (deterministic baseline the model refined; winner first):\n"
+      : "\nCandidate scorecards (winner first):\n",
+  );
   for (const scorecard of result.candidates.scorecards) {
     const marker = scorecard.candidateId === result.candidates.winnerCandidateId ? "*" : " ";
     io.out(
       `  ${marker} ${scorecard.profile.padEnd(16)} score ${scorecard.aggregateScore.toFixed(3)} · ~${String(scorecard.estimatedTokens)} tokens\n`,
     );
   }
-  io.out("\n--- Enhanced prompt (review before any downstream use) ---\n");
-  io.out(`${result.renderedPrompt}\n`);
 }
 
 type PromptEnhancerCliPreparation =

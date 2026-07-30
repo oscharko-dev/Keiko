@@ -201,6 +201,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "promptEnhancer.analysis.profile": "Profile",
   "promptEnhancer.analysis.input": "Input",
   "promptEnhancer.analysis.chars": "{count} chars",
+  "promptEnhancer.analysis.promptTokens": "Prompt tokens",
+  "promptEnhancer.analysis.tokenEstimate": "~{count} tokens",
   "promptEnhancer.analysis.ariaLabel": "Prompt enhancement analysis",
   "promptEnhancer.routing.deterministic": "Deterministic enhancement",
   "promptEnhancer.routing.modelEnhanced": "Model enhanced: {model}",
@@ -280,6 +282,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "promptEnhancer.action.clear": "Clear",
   "promptEnhancer.result.eyebrow": "Review artifact",
   "promptEnhancer.result.title": "Enhanced prompt",
+  "promptEnhancer.result.baselineNote":
+    "The model rewrote this prompt. The profile, structured sections and candidate scorecards below describe the deterministic baseline it was refined from, not the rendered prompt above.",
   "promptEnhancer.rendered.title": "Rendered prompt",
   "promptEnhancer.rendered.ariaLabel": "Rendered prompt text",
   "promptEnhancer.action.copying": "Copying...",

@@ -16,6 +16,7 @@ import {
   optimizePromptCandidates,
   rankCandidates,
   rankedLoserReason,
+  resolvePreferredCandidate,
 } from "../optimize.js";
 import { makeAnalysis, type AnalysisOverrides } from "./_support.js";
 
@@ -226,6 +227,114 @@ describe("optimizePromptCandidates", () => {
     expect(reasons.has("exceeded-token-budget")).toBe(true);
     expect(selection.candidatesConsidered).toBeGreaterThanOrEqual(2);
     expect(selection.tokensConsumed).toBeLessThanOrEqual(2_000);
+  });
+});
+
+// #1307 audit: `profilePreference` only seeded the generation slate; the delivered prompt was then
+// taken from the pure score ranking, so `fast`, `research` and `creative` never won and the shipped
+// profile control returned byte-identical output to `auto`. The planner documents the preference as
+// "honored unless criticality-escalated"; `resolvePreferredCandidate` is where that is applied to the
+// selection, leaving `PromptCandidateSelection.ranked` contract-bound to the score order.
+describe("resolvePreferredCandidate", () => {
+  const FULL_SLATE = { candidateCount: 7, maxIterations: 7 } as const;
+
+  function selectionFor(
+    profilePreference: PromptEnhancementProfileId | undefined,
+    overrides: AnalysisOverrides = { recommendedProfile: "precise" },
+  ): ReturnType<typeof optimizePromptCandidates> {
+    return optimizePromptCandidates({
+      analysis: makeAnalysis(overrides),
+      input: INPUT,
+      bounds: FULL_SLATE,
+      ...(profilePreference === undefined ? {} : { profilePreference }),
+    });
+  }
+
+  it("delivers the requested profile even when another candidate scores higher", () => {
+    const selection = selectionFor("fast");
+    const resolved = resolvePreferredCandidate(selection, "fast");
+
+    expect(resolved.winner.profile).toBe("fast");
+    // The preference only means something when it costs the candidate the score ranking; assert the
+    // fixture actually exercises that, so the test cannot pass by accident on a tie.
+    expect(selection.winner.profile).not.toBe("fast");
+    expect(selection.winner.aggregateScore).toBeGreaterThan(resolved.winner.aggregateScore);
+  });
+
+  it("returns the scored artefacts that belong to the resolved candidate", () => {
+    const selection = selectionFor("creative");
+    const resolved = resolvePreferredCandidate(selection, "creative");
+    expect(resolved.winner.profile).toBe("creative");
+    expect(resolved.prompt.promptId).toBe(resolved.winner.candidateId);
+    expect(resolved.safetyAssessment.promptId).toBe(resolved.winner.candidateId);
+  });
+
+  it("leaves the optimizer selection contract-valid and score-ordered", () => {
+    const selection = selectionFor("creative");
+    expect(validatePromptCandidateSelection(selection).ok).toBe(true);
+    expect(isSortedDescending(selection.ranked.map((card) => card.aggregateScore))).toBe(true);
+  });
+
+  it("records a higher-scoring loser with an honest reason instead of a tie-break claim", () => {
+    const resolved = resolvePreferredCandidate(selectionFor("fast"), "fast");
+    const outranked = resolved.rejected.filter(
+      (entry) => (entry.aggregateScore ?? -1) > resolved.winner.aggregateScore,
+    );
+    expect(outranked.length).toBeGreaterThan(0);
+    for (const entry of outranked) {
+      expect(entry.reason).toBe("profile-preference-not-matched");
+    }
+  });
+
+  it("never lists the delivered candidate among the rejected alternatives", () => {
+    const resolved = resolvePreferredCandidate(selectionFor("fast"), "fast");
+    expect(
+      resolved.rejected.some((entry) => entry.candidateId === resolved.winner.candidateId),
+    ).toBe(false);
+  });
+
+  it("carries unscored rejections through untouched", () => {
+    const selection = selectionFor("fast");
+    const resolved = resolvePreferredCandidate(selection, "fast");
+    const unscored = selection.rejected.filter((entry) => entry.aggregateScore === null);
+    for (const entry of unscored) {
+      expect(resolved.rejected).toContainEqual(entry);
+    }
+  });
+
+  it("falls back to the top-scoring candidate when no preference is supplied", () => {
+    const selection = selectionFor(undefined);
+    const resolved = resolvePreferredCandidate(selection, undefined);
+    expect(resolved.winner).toEqual(selection.winner);
+    expect(resolved.rejected).toEqual(selection.rejected);
+  });
+
+  it("falls back to the top-scoring candidate when the preferred profile was never scored", () => {
+    // An agentic baseline safety-floor-rejects every leaner profile, so no `fast` candidate is ever
+    // scored; the score ranking must stand rather than throw, and the rejection trail already says
+    // why the preference is not represented.
+    const selection = selectionFor(undefined, { recommendedProfile: "agentic" });
+    expect(selection.ranked.map((card) => card.profile)).not.toContain("fast");
+    const resolved = resolvePreferredCandidate(selection, "fast");
+    expect(resolved.winner).toEqual(selection.winner);
+    expect(selection.rejected.some((entry) => entry.reason === "safety-floor-not-preserved")).toBe(
+      true,
+    );
+  });
+
+  it("does not label losers as preference rejections when the preference also wins on score", () => {
+    const selection = selectionFor(undefined);
+    const resolved = resolvePreferredCandidate(selection, selection.winner.profile);
+    expect(resolved.winner.profile).toBe(selection.winner.profile);
+    expect(
+      resolved.rejected.every((entry) => entry.reason !== "profile-preference-not-matched"),
+    ).toBe(true);
+  });
+
+  it("is deterministic", () => {
+    expect(resolvePreferredCandidate(selectionFor("research"), "research")).toEqual(
+      resolvePreferredCandidate(selectionFor("research"), "research"),
+    );
   });
 });
 
