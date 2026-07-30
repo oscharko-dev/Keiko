@@ -23,6 +23,7 @@ import {
 } from "./AppShell";
 import type { AppWindow, Connection } from "./windows/types";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
+import { DEFAULT_LOCALE, translate } from "@/lib/i18n";
 
 function fakeApi(): WorkspaceApi {
   return {
@@ -143,7 +144,10 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     expect(commands.find((c) => c.id === "redo")).toBeDefined();
   });
 
-  it("falls back to the boundary tooltip when the undo stack is empty", () => {
+  // Audit — the empty-stack labels used to advertise "window and panel changes" while `onTool`'s
+  // ui.panel.toggle is the ONLY action the shell ever pushes. The boundary tooltip must name the
+  // scope the stack can actually reverse, and both halves come from the i18n catalog.
+  it("names only the recorded scope in the boundary tooltip when the undo stack is empty", () => {
     const commands = buildAppShellCommands(
       fakeApi(),
       vi.fn(),
@@ -153,9 +157,30 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       fakeUndoStack(),
     );
     const undo = commands.find((c) => c.id === "undo");
-    expect(undo?.label).toBe("Undo (window and panel changes only)");
+    expect(undo?.label).toBe(translate(DEFAULT_LOCALE, "shell.command.undo.panelOnly"));
+    expect(undo?.label).toBe("Undo (panel changes only)");
+    expect(undo?.label).not.toContain("window");
     const redo = commands.find((c) => c.id === "redo");
-    expect(redo?.label).toBe("Redo (window and panel changes only)");
+    expect(redo?.label).toBe(translate(DEFAULT_LOCALE, "shell.command.redo.panelOnly"));
+    expect(redo?.label).toBe("Redo (panel changes only)");
+    expect(redo?.label).not.toContain("window");
+  });
+
+  it("routes the undo/redo labels through the supplied translator", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack({ canUndo: true, undoLabel: "Toggle project panel" }),
+      (key, values) => `de:${key}:${String(values?.target ?? "")}`,
+    );
+
+    expect(commands.find((c) => c.id === "undo")?.label).toBe(
+      "de:shell.command.undo.target:Toggle project panel",
+    );
+    expect(commands.find((c) => c.id === "redo")?.label).toBe("de:shell.command.redo.panelOnly:");
   });
 
   it("renders the typed action label when the undo stack has an entry", () => {

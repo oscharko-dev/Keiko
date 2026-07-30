@@ -1,21 +1,26 @@
-// Epic #518 / Issue #527 — shell-level undo apply dispatcher + shortcut
-// binding integration tests.
+// Epic #518 / Issue #527 — shell-level undo apply dispatcher tests.
 //
 // These pin the AppShell wiring:
-//   - applyShellUndoAction delegates a ui.panel.toggle action to
-//     api.toggleTool with the recorded panel id.
+//   - applyShellUndoAction moves a ui.panel.toggle panel INTO the recorded
+//     state, and is a no-op when the panel already holds it (audit: the old
+//     state-dependent toggle diverged from the record).
+//   - A Search open replays with its recorded workspace root.
 //   - applyShellUndoAction is a no-op for action kinds not yet wired.
-//   - The shell-level shortcut binding table claims exactly two chords
-//     (Cmd/Ctrl+Z = undo, Cmd/Ctrl+Shift+Z = redo) and neither collides
-//     with the existing Cmd+K palette toggle.
-//   - The binding table contains no browser-reserved chords (verified by
-//     re-running detectReservedBindings from the keyboard substrate).
-//   - The binding table contains no internal conflict.
+//   - shellPanelIsOpen is the single openness rule both sides of undo read.
+//
+// The shell's keyboard binding table is NOT pinned here: it lives in
+// shellShortcutState.ts (the table AppShell actually dispatches), and its
+// reserved/conflict pins live in shellShortcutState.test.ts next to it. The
+// hardcoded copy that used to sit in shell-undo-bindings.ts was read by nothing.
 
 import { describe, expect, it, vi } from "vitest";
-import { workspaceChordKey, type WorkspaceUiAction } from "@oscharko-dev/keiko-contracts";
-import { applyShellUndoAction, SHELL_SHORTCUT_BINDINGS } from "./shell-undo-bindings";
-import { detectReservedBindings, detectShortcutConflicts } from "./hooks/useKeyboardShortcuts";
+import type { WorkspaceUiAction } from "@oscharko-dev/keiko-contracts";
+import {
+  applyShellUndoAction,
+  shellPanelIsOpen,
+  type ShellUndoTarget,
+} from "./shell-undo-bindings";
+import type { AppWindow } from "./windows/types";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 
 function fakeApi(overrides: Partial<WorkspaceApi> = {}): WorkspaceApi {
@@ -64,6 +69,15 @@ function fakeApi(overrides: Partial<WorkspaceApi> = {}): WorkspaceApi {
   };
 }
 
+// `open` is the LIVE panel state the dispatcher compares the recorded state against.
+function target(open: boolean, api: WorkspaceApi = fakeApi()): ShellUndoTarget {
+  return { api, isPanelOpen: () => open };
+}
+
+function panelWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
+  return { x: 0, y: 0, w: 400, h: 300, z: 1, cfg: {}, max: false, ...patch };
+}
+
 describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-0028)", () => {
   it("delegates ui.panel.toggle to api.toggleTool with the recorded panel id", () => {
     const api = fakeApi();
@@ -73,7 +87,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
       before: false,
       after: true,
     };
-    applyShellUndoAction(api, action);
+    applyShellUndoAction(target(false, api), action);
     expect(api.toggleTool).toHaveBeenCalledTimes(1);
     expect(api.toggleTool).toHaveBeenCalledWith("project");
   });
@@ -88,7 +102,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
       searchRoot: "/repo/a",
     };
 
-    applyShellUndoAction(api, action);
+    applyShellUndoAction(target(false, api), action);
 
     expect(api.add).toHaveBeenCalledWith("search", { root: "/repo/a" });
     expect(api.toggleTool).not.toHaveBeenCalled();
@@ -103,7 +117,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
       after: true,
     };
 
-    applyShellUndoAction(api, action);
+    applyShellUndoAction(target(false, api), action);
 
     expect(api.toggleTool).toHaveBeenCalledWith("search");
     expect(api.add).not.toHaveBeenCalled();
@@ -119,10 +133,76 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
       searchRoot: "/repo/a",
     };
 
-    applyShellUndoAction(api, action);
+    applyShellUndoAction(target(true, api), action);
 
     expect(api.toggleTool).toHaveBeenCalledWith("search");
     expect(api.add).not.toHaveBeenCalled();
+  });
+
+  // Audit — the regression the state-dependent toggle produced. Open the panel through the tool
+  // seam (records before:false/after:true), then close it by hand: undo's inverse action records
+  // "closed", the live panel is already closed, and the old unconditional toggleTool RE-OPENED it.
+  it("is a no-op when the panel already holds the recorded CLOSED state", () => {
+    const api = fakeApi();
+    const inverseOfOpen: WorkspaceUiAction = {
+      kind: "ui.panel.toggle",
+      panel: "project",
+      before: true,
+      after: false,
+    };
+
+    applyShellUndoAction(target(false, api), inverseOfOpen);
+
+    expect(api.toggleTool).not.toHaveBeenCalled();
+    expect(api.add).not.toHaveBeenCalled();
+  });
+
+  // Mirror case on the redo side: undo closed the panel, the user re-opened it by hand, redo
+  // records "open" — the old toggle CLOSED the panel the user had just opened.
+  it("is a no-op when the panel already holds the recorded OPEN state", () => {
+    const api = fakeApi();
+    const redoOfOpen: WorkspaceUiAction = {
+      kind: "ui.panel.toggle",
+      panel: "project",
+      before: false,
+      after: true,
+    };
+
+    applyShellUndoAction(target(true, api), redoOfOpen);
+
+    expect(api.toggleTool).not.toHaveBeenCalled();
+    expect(api.add).not.toHaveBeenCalled();
+  });
+
+  it("does not re-add a rooted Search that is already open", () => {
+    const api = fakeApi();
+    const action: WorkspaceUiAction = {
+      kind: "ui.panel.toggle",
+      panel: "search",
+      before: false,
+      after: true,
+      searchRoot: "/repo/a",
+    };
+
+    applyShellUndoAction(target(true, api), action);
+
+    expect(api.add).not.toHaveBeenCalled();
+    expect(api.toggleTool).not.toHaveBeenCalled();
+  });
+
+  it("closes a panel that is open while the record says closed", () => {
+    const api = fakeApi();
+    const action: WorkspaceUiAction = {
+      kind: "ui.panel.toggle",
+      panel: "project",
+      before: true,
+      after: false,
+    };
+
+    applyShellUndoAction(target(true, api), action);
+
+    expect(api.toggleTool).toHaveBeenCalledTimes(1);
+    expect(api.toggleTool).toHaveBeenCalledWith("project");
   });
 
   it("ignores ui.panel.toggle actions for unknown panel ids", () => {
@@ -133,7 +213,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
       before: false,
       after: true,
     };
-    applyShellUndoAction(api, action);
+    applyShellUndoAction(target(false, api), action);
     expect(api.toggleTool).not.toHaveBeenCalled();
   });
 
@@ -144,47 +224,30 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
       before: { zoom: 1, x: 0, y: 0 },
       after: { zoom: 1, x: 10, y: 20 },
     };
-    applyShellUndoAction(api, action);
+    applyShellUndoAction(target(false, api), action);
     expect(api.toggleTool).not.toHaveBeenCalled();
     expect(api.panBy).not.toHaveBeenCalled();
   });
 });
 
-describe("SHELL_SHORTCUT_BINDINGS — keyboard binding table", () => {
-  it("claims undo, redo, footer-status, workspace search, and quick-access chords", () => {
-    expect(SHELL_SHORTCUT_BINDINGS).toHaveLength(6);
-    const ids = SHELL_SHORTCUT_BINDINGS.map((b) => b.commandId);
-    expect(ids).toEqual([
-      "undo",
-      "redo",
-      "focus-status",
-      "focus-workspace-search",
-      "quick-access.files",
-      "quick-access.commands",
-    ]);
+describe("shellPanelIsOpen — the one openness rule both sides of undo read", () => {
+  it("reports open for a present, non-minimized panel window", () => {
+    expect(shellPanelIsOpen([panelWindow({ id: "project", type: "project" })], "project")).toBe(
+      true,
+    );
   });
 
-  it("uses the governed shell chords", () => {
-    const map = new Map(SHELL_SHORTCUT_BINDINGS.map((b) => [b.commandId, b.chord]));
-    expect(map.get("undo")).toEqual({ key: "z", mod: ["cmd"] });
-    expect(map.get("redo")).toEqual({ key: "z", mod: ["cmd", "shift"] });
-    expect(map.get("focus-status")).toEqual({ key: "s", mod: ["alt"] });
-    expect(map.get("focus-workspace-search")).toEqual({ key: "f", mod: ["cmd", "shift"] });
-    expect(map.get("quick-access.files")).toEqual({ key: "p", mod: ["cmd"] });
-    expect(map.get("quick-access.commands")).toEqual({ key: "p", mod: ["cmd", "shift"] });
+  it("reports closed for a minimized panel window (the tool seam restores it)", () => {
+    expect(
+      shellPanelIsOpen(
+        [panelWindow({ id: "project", type: "project", minimized: true })],
+        "project",
+      ),
+    ).toBe(false);
   });
 
-  it("does NOT claim the Cmd+K chord that the inline palette handler owns", () => {
-    const cmdK = workspaceChordKey({ key: "k", mod: ["cmd"] });
-    const claimed = SHELL_SHORTCUT_BINDINGS.map((b) => workspaceChordKey(b.chord));
-    expect(claimed).not.toContain(cmdK);
-  });
-
-  it("contains no browser-reserved chord", () => {
-    expect(detectReservedBindings(SHELL_SHORTCUT_BINDINGS)).toEqual([]);
-  });
-
-  it("contains no internal chord conflict", () => {
-    expect(detectShortcutConflicts(SHELL_SHORTCUT_BINDINGS)).toEqual([]);
+  it("reports closed when no window of that type exists, and for an unhydrated workspace", () => {
+    expect(shellPanelIsOpen([panelWindow({ id: "chat-1", type: "chat" })], "project")).toBe(false);
+    expect(shellPanelIsOpen(null, "project")).toBe(false);
   });
 });

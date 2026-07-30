@@ -297,6 +297,12 @@ export const DE_MESSAGES = {
   "mode.manual.title": "Du bestätigst jede privilegierte Aktion",
   "mode.manual.label": "Du",
   "mode.autonomous.title": "Keiko steuert Agenten nach deiner Richtlinie",
+  // Der Undo-Stapel der Shell zeichnet ausschließlich Panel-Umschaltungen auf — kein Verschieben,
+  // Skalieren, Maximieren oder Schließen von Fenstern erreicht ihn.
+  "shell.command.undo.target": "Rückgängig: {target}",
+  "shell.command.undo.panelOnly": "Rückgängig (nur Panel-Änderungen)",
+  "shell.command.redo.target": "Wiederherstellen: {target}",
+  "shell.command.redo.panelOnly": "Wiederherstellen (nur Panel-Änderungen)",
   "workspace.selection.none": "Keine Arbeitsbereichsfenster ausgewählt",
   "workspace.binding.restoreVerificationFailed":
     "Der aktive Task-Workspace hat die erneute Verifizierung nicht bestanden. Binden Sie ihn neu, bevor Sie einen Coding-Lauf starten.",

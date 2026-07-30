@@ -1427,6 +1427,15 @@ function useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef }: UseKeybo
         cancelConnectRef.current();
         return;
       }
+      // Audit — the window geometry chords share Alt+Arrow with the editor tab strip's
+      // reorder/move-to-pane handler (`handleAltArrowTabKey` in EditorWidget.tsx), so ONE Alt+Left
+      // press both reordered the tab AND resized the editor window a step — and persisted the new
+      // geometry. This window-level listener is the LAST stop in the bubble path, which makes it
+      // the layer that owns the collision: a surface that has already consumed the chord marks the
+      // event handled via preventDefault, and a geometry chord must never act on a key the focused
+      // surface owns. Honouring `defaultPrevented` fixes the whole class (the Files/Project tree
+      // arrow navigation had the same double-action), not just the editor tab strip.
+      if (e.defaultPrevented) return;
       if (isFormField(document.activeElement)) return;
       // GEN-UI-KEYBOARD-006 — every geometry/content chord now acts on the window
       // that currently holds focus, not the topmost window regardless of focus.

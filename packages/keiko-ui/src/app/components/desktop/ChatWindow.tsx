@@ -3211,6 +3211,12 @@ function ComposerCoreImpl({
               value={draft}
               aria-label={t("chat.messageLabel")}
               placeholder={placeholder}
+              // The composer opts into shell chord dispatch (SHELL_CHORD_BYPASS_ATTRIBUTE in
+              // hooks/useKeyboardShortcuts.ts). Without it the substrate's editable-target guard
+              // left Cmd/Ctrl+P, Cmd/Ctrl+Shift+P and Cmd/Ctrl+Shift+F dead in the product's
+              // primary input. The rule the substrate then applies keeps the field's own
+              // text-editing chords (Cmd/Ctrl+Z undoes typing, not a workspace panel toggle).
+              data-shell-chord-bypass=""
               // aria-autocomplete + aria-activedescendant are valid on the textbox
               // and communicate the autocomplete behavior and highlighted option
               // without moving DOM focus off the textarea.

@@ -127,7 +127,9 @@ interface UndoStackApi {
 }
 ```
 
-The `Cmd/Ctrl+Z` and `Cmd/Ctrl+Shift+Z` commands map directly to `undo()` / `redo()`. The command tooltip reads "Undoes window and panel changes only. Evidence, review decisions, verification records, and applied patches cannot be undone."
+The `Cmd/Ctrl+Z` and `Cmd/Ctrl+Shift+Z` commands map directly to `undo()` / `redo()`. The command tooltip names the scope that is actually instrumented, never the scope the union could carry: "Evidence, review decisions, verification records, and applied patches cannot be undone" always holds, and the reversible half tracks §6 "Current wiring". Today only `ui.panel.toggle` is pushed, so the empty-stack labels read "Undo (panel changes only)" / "Redo (panel changes only)" (`shell.command.{undo,redo}.panelOnly`). The earlier "window and panel changes only" wording promised a scope no call site records — a window move/resize/maximize/close never reaches the stack — and is corrected here rather than in the product: whichever mutation kinds §6 lists as pushed is what the label may claim, so instrumenting the window kinds widens the label in the same change.
+
+Applying a recorded action is state-setting, not toggling: `applyShellUndoAction` compares the action's recorded target state against the live panel state (through the one `shellPanelIsOpen` rule that `AppShell` also records with) and performs the transition only when the two differ. A state-dependent flip diverges from the record as soon as the user moves the panel by hand between the original action and the undo.
 
 When an authority moment that is _not_ reversible completes (a patch is applied, a verification record is written), a transient toast in `NotificationsPanel` reads "Recorded as evidence; cannot be undone." This is informational only; it does not push an Action.
 
