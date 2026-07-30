@@ -10,6 +10,7 @@ import {
   EDITOR_SIDEBAR_MIN_WIDTH,
   EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
 } from "../editorSidebarSizing";
+import { subText } from "../windows/connectionUtils";
 
 function win(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -93,6 +94,33 @@ describe("workspace-persistence", () => {
 
     expect(persisted).toHaveLength(1);
     expect(persisted[0]?.cfg).toEqual({});
+  });
+
+  // 0.3.0 release audit — the chat window's "still untitled" state is a structural cfg marker, not
+  // a comparison against display copy. A marker that the persistence allowlist drops would be
+  // silently reconstructed from the title text on the next reload, which is exactly the
+  // locale-dependent behaviour it replaced, so the round trip is pinned here.
+  it("persists the structural untitled-chat marker across a reload", () => {
+    // Only the front-most chat window survives the snapshot, so each state is sanitized on its own.
+    const untitled = sanitizePersistedWindows([
+      win({
+        id: "chat-untitled",
+        type: "chat",
+        cfg: { title: "Neuer Chat", titleIsDefault: true },
+      }),
+    ]);
+    const named = sanitizePersistedWindows([
+      win({
+        id: "chat-named",
+        type: "chat",
+        cfg: { title: "Sprint triage", titleIsDefault: false },
+      }),
+    ]);
+
+    expect(untitled[0]?.cfg).toEqual({ title: "Neuer Chat", titleIsDefault: true });
+    expect(named[0]?.cfg).toEqual({ title: "Sprint triage", titleIsDefault: false });
+    expect(subText("chat", untitled[0]?.cfg)).toBeNull();
+    expect(subText("chat", named[0]?.cfg)).toBe("Sprint triage");
   });
 
   it("preserves allowed non-secret config references in the browser-local snapshot", () => {

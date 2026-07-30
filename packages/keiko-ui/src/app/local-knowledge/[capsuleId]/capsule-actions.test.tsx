@@ -101,7 +101,7 @@ function progressDetail(overrides: Partial<CapsuleDetail> = {}): CapsuleDetail {
       failedDocuments: 0,
       skippedDocuments: 0,
       unsupportedDocuments: 0,
-      unsupportedGuidance: [],
+      unsupportedGuidanceCodes: [],
       staleReasons: [],
     },
     sources: [],

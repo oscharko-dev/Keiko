@@ -2762,6 +2762,7 @@ export type {
   CapsuleContextualRetrievalHealth,
   CapsuleHealth,
   CapsuleDeleteRequest,
+  UnsupportedDocumentGuidanceCode,
 } from "./local-knowledge-records.js";
 export {
   DOCUMENT_STATUSES,
@@ -2769,6 +2770,7 @@ export {
   PARSER_DIAGNOSTIC_SEVERITIES,
   INDEXING_JOB_STATUSES,
   CAPSULE_REINDEX_MODES,
+  UNSUPPORTED_DOCUMENT_GUIDANCE_CODES,
 } from "./local-knowledge-records.js";
 export { isSafeScopePath, isSafeStorageReference } from "./local-knowledge-paths.js";
 export type {

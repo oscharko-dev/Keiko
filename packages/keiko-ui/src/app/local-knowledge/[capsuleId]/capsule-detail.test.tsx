@@ -17,12 +17,18 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeCapsule,
   CapsuleHealth,
+  UnsupportedDocumentGuidanceCode,
 } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
 } from "@oscharko-dev/keiko-contracts";
-import { translateLocalKnowledge, type I18nTranslate } from "../local-knowledge-i18n";
+import {
+  translateLocalKnowledge,
+  unsupportedGuidanceText,
+  type I18nTranslate,
+} from "../local-knowledge-i18n";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 
 // ---------------------------------------------------------------------------
 // Mock next/navigation so useSearchParams() resolves synchronously in jsdom
@@ -52,6 +58,7 @@ vi.mock("next/navigation", () => ({
 afterEach(() => {
   mockSearchParams = new URLSearchParams("capsuleId=cap-test-1");
   vi.unstubAllGlobals();
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
 });
 
 // ---------------------------------------------------------------------------
@@ -108,7 +115,7 @@ const BASE_HEALTH: CapsuleHealth = {
   failedDocuments: 0,
   skippedDocuments: 0,
   unsupportedDocuments: 0,
-  unsupportedGuidance: [],
+  unsupportedGuidanceCodes: [],
   staleReasons: [],
   contextualRetrieval: {
     enabled: false,
@@ -287,28 +294,65 @@ describe("CapsuleDetail — overview section", () => {
     });
   });
 
+  // 0.3.0 release audit — the server used to ship this remediation as English prose that rendered
+  // verbatim under a translated heading. It now sends the reason code and the UI owns the copy, so
+  // the expectations below are resolved through the production catalog for the locale under test.
+  function unsupportedDetail(codes: readonly UnsupportedDocumentGuidanceCode[]): CapsuleDetailData {
+    return {
+      ...FULL_DETAIL,
+      health: { ...BASE_HEALTH, unsupportedDocuments: 2, unsupportedGuidanceCodes: codes },
+    };
+  }
+
   it("renders unsupported-document count and guidance when present", async () => {
     const user = userEvent.setup();
-    const detail: CapsuleDetailData = {
-      ...FULL_DETAIL,
-      health: {
-        ...BASE_HEALTH,
-        unsupportedDocuments: 2,
-        unsupportedGuidance: [
-          "Scanned PDFs need an OCR-capable extraction path. Configure a verified OCR or vision adapter, or provide a text-layer PDF.",
-        ],
-      },
-    };
-    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(unsupportedDetail(["pdf-needs-ocr"]))} />);
     await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getByText("2")).toBeInTheDocument();
     });
 
+    const englishT: I18nTranslate = (key, values) => translateLocalKnowledge("en", key, values);
     expect(
-      screen.getByText(/Scanned PDFs need an OCR-capable extraction path/i),
+      screen.getByText(unsupportedGuidanceText("pdf-needs-ocr", englishT)),
     ).toBeInTheDocument();
+  });
+
+  it("renders the unsupported-document guidance in German", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    render(
+      <I18nProvider>
+        <CapsuleDetail
+          fetchDetailImpl={resolveDetail(unsupportedDetail(["image-needs-ocr", "ocr-failed"]))}
+        />
+      </I18nProvider>,
+    );
+    await openAdvanced(user);
+
+    const germanT: I18nTranslate = (key, values) => translateLocalKnowledge("de", key, values);
+    for (const code of ["image-needs-ocr", "ocr-failed"] as const) {
+      expect(await screen.findByText(unsupportedGuidanceText(code, germanT))).toBeInTheDocument();
+      // The English copy must be gone, not merely accompanied by German.
+      const englishT: I18nTranslate = (key, values) => translateLocalKnowledge("en", key, values);
+      expect(screen.queryByText(unsupportedGuidanceText(code, englishT))).toBeNull();
+    }
+  });
+
+  it("falls back to the generic remediation for a code this build does not know", async () => {
+    const user = userEvent.setup();
+    // A newer server may add a code before this UI knows it; the operator must still get a next
+    // step instead of a raw wire token or an empty row.
+    const forwardCode = "quantum-format" as UnsupportedDocumentGuidanceCode;
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(unsupportedDetail([forwardCode]))} />);
+    await openAdvanced(user);
+
+    const englishT: I18nTranslate = (key, values) => translateLocalKnowledge("en", key, values);
+    expect(
+      await screen.findByText(unsupportedGuidanceText("unsupported-format", englishT)),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(forwardCode)).toBeNull();
   });
 
   it("renders privacy and deletion disclosure copy", async () => {

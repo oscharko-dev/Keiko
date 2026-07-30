@@ -4,6 +4,7 @@ import { looksLikeSecretShape } from "@oscharko-dev/keiko-contracts";
 import { sanitizeEditorRootSessionsJson } from "@/lib/editor-root-sessions";
 import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import { WIN_META } from "../windows/descriptor-meta";
+import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { AppWindow, Connection } from "../windows/types";
 import {
   EDITOR_SIDEBAR_DEFAULT_WIDTH,
@@ -85,7 +86,11 @@ const ENV_CREDENTIAL_FILENAMES = [
 ] as const;
 
 const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>> = {
-  chat: ["chatId"],
+  // 0.3.0 release audit — `titleIsDefault` is the structural, locale-independent record of "this
+  // chat has not been named yet". It must survive the snapshot: a dropped marker would be
+  // re-derived from the title TEXT on the next reload, which is the display-string dependency it
+  // was introduced to remove.
+  chat: ["chatId", CHAT_TITLE_IS_DEFAULT_CFG_KEY],
   editor: ["openFiles", "layoutJson", "rootSessionsJson"],
   files: ["activeFilePath", "activeDirectoryPath", "resolvedRoot"],
   figma: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],

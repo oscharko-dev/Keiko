@@ -194,6 +194,11 @@ describe("connectionUtils — general workspace contracts", () => {
     expect(subText("agents", { role: "reviewer" })).toBeNull();
     expect(subText("chat", { title: "Release QA" })).toBe("Release QA");
     expect(subText("chat", { title: "New chat" })).toBeNull();
+    // 0.3.0 release audit — relocated and strengthened: the "still untitled" question is answered
+    // by the structural cfg marker, so it holds for a German default title too. The English
+    // literal above stays pinned as the legacy classifier for windows persisted before the marker.
+    expect(subText("chat", { title: "Neuer Chat", titleIsDefault: true })).toBeNull();
+    expect(subText("chat", { title: "New chat", titleIsDefault: true })).toBeNull();
     expect(subText("connector", { provider: "github" })).toBeNull();
     expect(subText("figma", { snapshotRunId: "fs-hidden" })).toBeNull();
     expect(subText("figma", { selectedScreenName: "Checkout" })).toBe("Checkout");
@@ -210,6 +215,59 @@ describe("connectionUtils — general workspace contracts", () => {
       const value = subText(type, {});
       expect(value === null || typeof value === "string").toBe(true);
     }
+  });
+});
+
+// ─── 0.3.0 release audit — the untitled-chat sentinel must not be a display string ───────────────
+// Before this, subText compared the chat title against the English literal "New chat". The German
+// locale seeds the same field with "Neuer Chat", so under `de` the sentinel never matched and every
+// freshly created chat window repeated its own default title as a subtitle. The answer is now the
+// structural cfg marker `titleIsDefault`, which no locale can move.
+describe("subText — chat untitled marker (locale-independent)", () => {
+  it("hides the default title in any locale when the marker is set", () => {
+    expect(subText("chat", { title: "Neuer Chat", titleIsDefault: true })).toBeNull();
+    expect(subText("chat", { title: "New chat", titleIsDefault: true })).toBeNull();
+    expect(subText("chat", { title: "Nueva conversación", titleIsDefault: true })).toBeNull();
+  });
+
+  it("shows a real title once the marker is cleared, even if the chat was created untitled", () => {
+    expect(subText("chat", { title: "Release QA", titleIsDefault: false })).toBe("Release QA");
+    // The chat record was auto-titled from the first turn; the sync that adopted the new title
+    // cleared the marker, so the subtitle must surface it.
+    expect(subText("chat", { title: "Wie baue ich …", titleIsDefault: false })).toBe(
+      "Wie baue ich …",
+    );
+    // An operator who deliberately names a chat after the legacy default still gets their title:
+    // an explicit marker always beats the legacy text classifier below.
+    expect(subText("chat", { title: "New chat", titleIsDefault: false })).toBe("New chat");
+  });
+
+  it("treats a non-boolean or absent marker as 'named' (fail closed to showing the title)", () => {
+    // Migration decision: a window persisted before the marker existed carries no marker, and a
+    // window opened for an existing chat from the history panel carries the chat's stored title.
+    // Both fail closed to "named" — showing the real title is never a lie, hiding it withholds
+    // information. Only the historical English default (below) is still classified as untitled, so
+    // no pre-existing English workspace regresses.
+    expect(subText("chat", { title: "Release QA" })).toBe("Release QA");
+    expect(subText("chat", { title: "Neuer Chat" })).toBe("Neuer Chat");
+    expect(subText("chat", { title: "New chat" })).toBeNull();
+    expect(subText("chat", { title: "Release QA", titleIsDefault: "true" })).toBe("Release QA");
+    expect(subText("chat", { title: "Release QA", titleIsDefault: 1 })).toBe("Release QA");
+    expect(subText("chat", { title: "Release QA", titleIsDefault: null })).toBe("Release QA");
+  });
+
+  it("stays null for an empty, blank or missing title regardless of the marker", () => {
+    expect(subText("chat", {})).toBeNull();
+    expect(subText("chat", { titleIsDefault: true })).toBeNull();
+    expect(subText("chat", { title: "" })).toBeNull();
+    expect(subText("chat", { title: "", titleIsDefault: true })).toBeNull();
+    expect(subText("chat", { title: 42, titleIsDefault: true })).toBeNull();
+    expect(subText("chat", undefined)).toBeNull();
+  });
+
+  it("leaves every other window type untouched by the marker", () => {
+    expect(subText("files", { root: "/repo", titleIsDefault: true })).toBe("/repo");
+    expect(subText("terminal", { cwd: "/repo", titleIsDefault: true })).toBe("/repo");
   });
 });
 

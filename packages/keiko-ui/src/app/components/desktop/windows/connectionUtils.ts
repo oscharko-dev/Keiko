@@ -327,6 +327,41 @@ export function defaultLayout(W: number, H: number): DefaultLayoutWindow[] {
   ];
 }
 
+// 0.3.0 release audit — the locale-independent answer to "has this chat been named yet?".
+//
+// The chat window's subtitle must repeat a title only when the operator (or the server's
+// first-turn auto-title) actually chose one. That question used to be answered by comparing the
+// title against the English literal "New chat", which the German locale ("Neuer Chat") never
+// matches — so every freshly created German chat window echoed its own default title back as a
+// subtitle. Behaviour must never hang off display copy, so the answer is now a structural cfg
+// marker written by the creation dialog and cleared by the one place that re-synchronises
+// `cfg.title` from the chat record.
+//
+// The marker is only ever written as `true` (untitled) or `false` (named). ABSENT means named:
+// windows persisted before the marker existed, and windows opened for an existing chat from the
+// history panel, carry no marker and fail closed to showing their real title — surfacing a title
+// is never a lie, hiding one withholds information.
+export const CHAT_TITLE_IS_DEFAULT_CFG_KEY = "titleIsDefault";
+
+// The pre-marker English default. Retained ONLY to classify windows persisted (or opened from the
+// chat history) with the server's canonical stored title, so no existing English workspace
+// regresses to a noisier subtitle. It is NOT the sentinel any more: never add behaviour that keys
+// on it, and never add a localized variant here — that is the bug this marker replaced.
+const LEGACY_UNTITLED_CHAT_TITLE = "New chat";
+
+/** True when `cfg` structurally declares its chat as still carrying the untitled default title. */
+function chatTitleIsDefault(cfg: Record<string, unknown>): boolean {
+  return cfg[CHAT_TITLE_IS_DEFAULT_CFG_KEY] === true;
+}
+
+function chatSubText(cfg: Record<string, unknown>, title: string | null): string | null {
+  if (title === null || chatTitleIsDefault(cfg)) return null;
+  if (cfg[CHAT_TITLE_IS_DEFAULT_CFG_KEY] === undefined && title === LEGACY_UNTITLED_CHAT_TITLE) {
+    return null;
+  }
+  return title;
+}
+
 export function subText(type: WindowType, cfg: Record<string, unknown> | undefined): string | null {
   if (cfg === undefined) return null;
   const cfgString = (key: string): string | null => {
@@ -348,10 +383,8 @@ export function subText(type: WindowType, cfg: Record<string, unknown> | undefin
     case "commands":
     case "runtime":
       return cfgString("projectPath");
-    case "chat": {
-      const title = cfgString("title");
-      return title !== null && title !== "New chat" ? title : null;
-    }
+    case "chat":
+      return chatSubText(cfg, cfgString("title"));
     case "figma":
       return cfgString("selectedScreenName");
     case "figmaView":
