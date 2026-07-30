@@ -22,6 +22,10 @@ import { dirname, join } from "node:path";
 
 const TAG = "@formatting-1380";
 const tempProjects: string[] = [];
+// Inserted as ONE undo unit by AC4 so its "buffer untouched" comparison is made against a live,
+// dirty buffer instead of one that could have been silently re-read from disk. Absent from every
+// fixture body, so finding it can only mean this test put it there.
+const FORMAT_NOOP_WITNESS = "ZZ";
 
 // One representative file per ADR-0068 formatting source, each in its own folder so the tree
 // navigation is deterministic. `language` is the EXACT status-bar `[data-field="language"]` label
@@ -143,6 +147,16 @@ function createFormattingFixture(): string {
 }
 
 async function seedFilesWindow(page: Page, projectPath: string): Promise<void> {
+  // Register the fixture root as a project before seeding the window. Without it the root carries no
+  // server-validated trust grant, the Files tree lists nothing, and every scenario below fails at
+  // "select the fixture file" on a window that never loaded. This mirrors the registration the
+  // CI-covered editor suites already do (editor-debugging-2348); no lane runs this suite, so the
+  // drift went unnoticed.
+  const created = await page.request.post("/api/projects", {
+    data: { name: "Issue 1380 formatting", path: projectPath },
+    headers: { "x-keiko-csrf": "1" },
+  });
+  expect(created.ok(), await created.text()).toBe(true);
   await page.addInitScript((root) => {
     window.localStorage.setItem(
       "keiko.workspace.v4",
@@ -170,7 +184,10 @@ async function selectTreeFile(
   filesWindow: ReturnType<Page["getByRole"]>,
   relativePath: string,
 ): Promise<void> {
-  const row = filesWindow.locator(`button.tr-file[data-path="${relativePath}"]`);
+  // Match on the row class only: file rows are rendered as a `div[role="treeitem"]`, not a button
+  // (a button owned by role="tree" is an invalid owned child — the aria-required-children fix).
+  // The old `button.tr-file` selector matched nothing, so every scenario here failed at file select.
+  const row = filesWindow.locator(`.tr-file[data-path="${relativePath}"]`);
   await expect(row).toBeVisible();
   await row.click();
 }
@@ -206,10 +223,12 @@ function statusBar(editorWindow: ReturnType<Page["getByRole"]>): ReturnType<Page
 }
 
 function formatButton(editorWindow: ReturnType<Page["getByRole"]>): ReturnType<Page["getByRole"]> {
-  // The explicit Format Document action button in the editor toolbar (EditorRuntimeWidget.tsx):
-  // a `.ed-save` button labelled "Format" with `data-tip="Format document"`, carrying a dynamic
-  // `aria-disabled` driven by the registry-derived `formattingAvailable` value (ADR-0068 D3/D4).
-  return editorWindow.locator('button[data-tip="Format document"]');
+  // The explicit Format Document action button in the editor toolbar (EditorRuntimeWidget.tsx),
+  // carrying a dynamic `aria-disabled` driven by the registry-derived `formattingAvailable` value
+  // (ADR-0068 D3/D4). Resolved by accessible name — the same locator the CI-covered editor suites
+  // use. The former `data-tip="Format document"` attribute no longer exists, so that selector
+  // matched nothing and every Format assertion here failed on a missing element.
+  return editorWindow.getByRole("button", { name: "Format", exact: true });
 }
 
 // The current Monaco editor buffer text, read from the rendered `.view-line`s. Two correctness
@@ -461,8 +480,34 @@ test(`AC4 a "none"-source file has no reachable formatter and its buffer is unto
   // it is a no-op, so the buffer must remain byte-identical (the browser-observable failure-safe path).
   await editorWindow.locator(".monaco-editor .view-lines").first().click();
   await page.keyboard.press("Shift+Alt+KeyF");
-  await page.waitForTimeout(2_000);
-  expect(await readEditorBuffer(editorWindow)).toBe(before);
+
+  // "The buffer did not change" holds the instant the key goes down, so it says nothing until the
+  // formatting opportunity has demonstrably passed. Bound it on observable editor state rather than
+  // on a fixed wait.
+  const saveField = statusBar(editorWindow).locator('[data-field="save"]');
+
+  // WITNESS — a one-shot edit this test owns, inserted as a single undo unit. It makes the buffer
+  // differ from what is on disk, so the comparison at the end cannot be satisfied by a buffer that
+  // was quietly re-read from disk rather than kept live: that is the failure mode which would turn
+  // this whole assertion into a tautology.
+  await page.keyboard.insertText(FORMAT_NOOP_WITNESS);
+  await expect(saveField).toHaveText("Unsaved");
+
+  // WINDOW — one complete editor → BFF → editor round trip on this very document: persist the
+  // witness and wait for the editor's own save status to settle back to "Saved". Keiko's formatting
+  // bridge answers over that same BFF hop (ADR-0068), so a formatter that was going to resolve for
+  // this buffer had at least as long as this round trip took. The document is never left, so nothing
+  // cancels work already in flight for it — which a tab switch would.
+  await editorWindow.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(saveField).toHaveText("Saved");
+
+  const after = await readEditorBuffer(editorWindow);
+  // The witness is present, so this is the live buffer and not a fresh read of the file …
+  expect(after).toContain(FORMAT_NOOP_WITNESS);
+  // … and taking the witness back out must leave the pre-Format buffer byte for byte: the ONLY
+  // change to this document across the whole window was the one the test made itself. A formatter
+  // that had reflowed the markdown would leave its own edits behind here.
+  expect(after.replace(FORMAT_NOOP_WITNESS, "")).toBe(before);
 
   assertNoPageErrors();
 });
