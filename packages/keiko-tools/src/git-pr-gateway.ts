@@ -40,8 +40,9 @@ import type {
 import {
   evaluateGitPolicy,
   GIT_DELIVERY_SCHEMA_VERSION,
-  gitDeliveryBranchNameMatchesAny,
-  gitDeliveryRiskClassWithinCeiling,
+  gitDeliveryConstraintBlockReason,
+  gitDeliveryDefaultRiskClass,
+  gitDeliveryPolicyTargetBranchName,
   gitPrRejectionToDisposition,
 } from "@oscharko-dev/keiko-contracts";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
@@ -404,22 +405,19 @@ export interface GitPullRequestEffectivePolicy {
   readonly blockReason?: GitDeliveryBlockReason | undefined;
 }
 
+// Delegates to the contract-owned resolver so this gate and every preview surface resolve a
+// `constrained` decision identically.
 function constraintBlock(
   constraint: GitDeliveryConstraint,
   target: string | undefined,
   capabilities: readonly GitDeliveryProviderCapability[],
   actionKind: "pr-create" | "pr-update",
 ): GitDeliveryBlockReason | undefined {
-  if (constraint.kind === "branch-pattern") {
-    const ok = target !== undefined && gitDeliveryBranchNameMatchesAny(target, constraint.patterns);
-    return ok ? undefined : "policy-pack-blocked";
-  }
-  if (constraint.kind === "provider-capability") {
-    return capabilities.includes(constraint.capability) ? undefined : "provider-capability-absent";
-  }
-  return gitDeliveryRiskClassWithinCeiling(actionKind, constraint.maxRiskClass)
-    ? undefined
-    : "risk-class-ceiling";
+  return gitDeliveryConstraintBlockReason(constraint, {
+    riskClass: gitDeliveryDefaultRiskClass(actionKind),
+    targetBranchName: target,
+    activeProviderCapabilities: capabilities,
+  });
 }
 
 // The EFFECTIVE policy outcome for a specific PR base target: a `constrained` decision is resolved
@@ -611,7 +609,8 @@ function preparePr(request: GitPullRequestRequest, deps: GitPullRequestOrchestra
   const capabilities = deps.activeProviderCapabilities ?? [];
   const context: GitDeliveryPolicyContext = {
     actionKind: request.command.kind,
-    targetBranchName: request.command.baseBranchName,
+    // ONE derivation, shared with every preview surface (contracts): a PR targets its BASE branch.
+    targetBranchName: gitDeliveryPolicyTargetBranchName(inputs),
     activeProviderCapabilities: capabilities,
   };
   return {

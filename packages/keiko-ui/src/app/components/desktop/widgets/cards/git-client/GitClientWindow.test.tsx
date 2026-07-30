@@ -1356,6 +1356,78 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     });
   });
 
+  // A settled-but-FAILED sync used to render in the neutral success pill (role=status,
+  // --fg-muted) as the untranslated machine token, e.g. "Pull: auth-failed".
+  it("renders a failed fetch/pull outcome as an alert in human language", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getSummary: vi.fn(async () => makeSummary({ behind: 2 })),
+      syncPreview: vi.fn<GitClientSeam["syncPreview"]>(async (input) =>
+        makeSyncPreview(input.operation, { behind: 2 }),
+      ),
+      syncExecute: vi.fn<GitClientSeam["syncExecute"]>(async (input) => ({
+        schemaVersion: "1",
+        operation: input.operation,
+        status: "remote-unavailable",
+        available: true,
+        truncated: false,
+      })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("button", { name: "Run sync: Pull" }));
+    await waitFor(() => expect(client.syncExecute).toHaveBeenCalled());
+
+    const pill = await screen.findByRole("alert");
+    expect(pill).toHaveTextContent(/remote/i);
+    expect(pill).not.toHaveTextContent("remote-unavailable");
+    expect(screen.queryByRole("status", { name: /Pull:/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps a successful sync outcome in the neutral status pill", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getSummary: vi.fn(async () => makeSummary({ behind: 2 })),
+      syncPreview: vi.fn<GitClientSeam["syncPreview"]>(async (input) =>
+        makeSyncPreview(input.operation, { behind: 2 }),
+      ),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("button", { name: "Run sync: Pull" }));
+    await waitFor(() => expect(client.syncExecute).toHaveBeenCalled());
+
+    expect(await screen.findByRole("status", { name: /Pull: succeeded/ })).toBeInTheDocument();
+  });
+
+  // The server computes publishRejectionReason / recoveryActionHint for a rejected push; the Git
+  // window's sync path never rendered either, so a rejected push read as a neutral "Push: failed".
+  it("surfaces the push rejection reason and the recovery hint", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getSummary: vi.fn(async () => makeSummary({ ahead: 2 })),
+      pushExecute: vi.fn<GitClientSeam["pushExecute"]>(async () => ({
+        schemaVersion: "1",
+        status: "failed",
+        actionKind: "push",
+        executionErrorCode: "precondition-failed",
+        publishRejectionReason: "non-fast-forward",
+        recoveryDisposition: "user-fixable",
+        recoveryActionHint: "resolve-conflicts",
+      })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("button", { name: "Run sync: Push" }));
+    await waitFor(() => expect(client.pushExecute).toHaveBeenCalled());
+
+    const pill = await screen.findByRole("alert");
+    expect(pill).toHaveTextContent(/newer commits/i);
+    expect(pill).toHaveTextContent(/resolve/i);
+    expect(pill).not.toHaveTextContent("non-fast-forward");
+    expect(pill).not.toHaveTextContent("resolve-conflicts");
+  });
+
   it("shows diverged branches as an explicit safe fetch state with merge guidance", async () => {
     const client = makeClient({
       getSummary: vi.fn(async () => makeSummary({ ahead: 2, behind: 3 })),
@@ -1421,6 +1493,31 @@ describe("GitClientWindow — Changes/History tabs", () => {
       "aria-selected",
       "false",
     );
+  });
+
+  // The server already reports `truncated` for a capped history read (and the Changes and Diff panes
+  // both label their own truncation); History dropped the label, so the list silently claimed to be
+  // the whole history.
+  it("labels a truncated commit history instead of presenting it as complete", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({ getHistory: vi.fn(async () => makeHistory({ truncated: true })) });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("tab", { name: "History" }));
+    await waitFor(() => expect(client.getHistory).toHaveBeenCalled());
+
+    expect(await screen.findByText(/truncated/i)).toBeInTheDocument();
+  });
+
+  it("does not label an untruncated commit history", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({ getHistory: vi.fn(async () => makeHistory()) });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("tab", { name: "History" }));
+    await waitFor(() => expect(client.getHistory).toHaveBeenCalled());
+
+    expect(screen.queryByText(/truncated/i)).not.toBeInTheDocument();
   });
 
   it("ArrowRight on Changes tab moves focus and selection to History", async () => {

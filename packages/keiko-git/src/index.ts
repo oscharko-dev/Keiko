@@ -20,4 +20,10 @@ export {
   type GitMembershipSuccess,
   type GitRepositoryMembership,
 } from "./resolve.js";
-export { classifyGitFailure, type GitFailureReason } from "./classify.js";
+export {
+  GIT_REMOTE_FAILURE_REASONS,
+  classifyGitFailure,
+  classifyGitRemoteFailure,
+  type GitFailureReason,
+  type GitRemoteFailureReason,
+} from "./classify.js";

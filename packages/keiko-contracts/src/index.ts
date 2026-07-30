@@ -3611,12 +3611,18 @@ export type {
   GitDeliveryRepoPolicyPack,
   GitDeliveryOrgPolicyPack,
   GitDeliveryPolicyContext,
+  GitDeliveryPolicyBranchOperands,
+  GitDeliveryEffectivePolicy,
+  GitDeliveryEffectivePolicyContext,
 } from "./git-delivery-policy.js";
 export {
   GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   GIT_DELIVERY_RULE_DECISIONS,
   isGitDeliveryPolicyRule,
   evaluateGitPolicy,
+  evaluateGitDeliveryEffectivePolicy,
+  gitDeliveryConstraintBlockReason,
+  gitDeliveryPolicyTargetBranchName,
   parseGitPolicyPack,
   parseGitRepoPolicyPack,
   parseGitOrgPolicyPack,
