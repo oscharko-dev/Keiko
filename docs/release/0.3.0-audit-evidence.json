@@ -903,6 +903,16 @@
       "findingId": "F-15",
       "severity": "P0"
     },
-    "p0TotalIncludingAdversarial": 8
+    "p0TotalIncludingAdversarial": 8,
+    "reconciliation": {
+      "method": "Every finding from the 5 subsystem briefs plus F-15 was matched individually against fix-agent final reports by an independent reconciliation pass, not recalled from memory.",
+      "handoffGapsFound": [
+        "git: a failed governed branch switch was silently swallowed (the outcome-truth fix did not extend from sync to branch-switch)",
+        "prompt-enhancer: PromptEnhancerPanel gated role=alert on requiresHumanReview instead of decision, so a rejected+requiresHumanReview:false verdict showed no warning"
+      ],
+      "renderThrowSweepFindings": 6,
+      "gapFixWorkflow": "wsdjgkacd",
+      "capabilityGapIssues": [2856, 2857, 2858, 2859, 2860, 2861, 2862, 2863]
+    }
   }
 }
