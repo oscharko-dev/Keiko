@@ -419,6 +419,7 @@ export const EN_MESSAGES = {
   "chat.voice.pendingTurn":
     "Your spoken turn is still waiting for a confirmed answer. Retry it before sending another message.",
   "chat.voice.retryPendingTurn": "Retry spoken turn",
+  "chat.voice.discardPendingTurn": "Discard spoken turn",
   "chat.error.send": "Could not send message.",
   "chat.error.load": "Could not load chat.",
   "chat.error.scopeUpdate": "Unable to update knowledge scope.",

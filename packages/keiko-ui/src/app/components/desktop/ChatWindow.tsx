@@ -2641,7 +2641,7 @@ function ComposerCoreImpl({
     sendMessage,
     enqueueCanonicalVoiceTurn,
     canonicalVoiceCaptureMustPause,
-    cancelSend,
+    interruptCanonicalVoiceDelivery,
     models,
     selectedModel,
     pendingAttachments,
@@ -2836,12 +2836,17 @@ function ComposerCoreImpl({
       sendMessage,
     ],
   );
+  // ADR-0154 D4 — barge-in stops local playback and returns the floor to capture. It must NOT reach
+  // for the blanket cancelSend: that aborted whatever happened to be in flight, including a typed
+  // composer send Voice does not own, and left the interrupted turn to be re-sent by the Chat-owned
+  // queue (#2842). The session's owner-scoped interrupt cancels only a canonical Voice delivery and
+  // makes that cancellation terminal for the utterance the user just talked over.
   const interruptCanonicalVoiceTurn = useCallback((): void => {
     voiceDialogGenerationRef.current += 1;
     playback.interrupt();
-    cancelSend();
+    interruptCanonicalVoiceDelivery?.();
     setPendingVoiceAnswer(null);
-  }, [cancelSend, playback]);
+  }, [interruptCanonicalVoiceDelivery, playback]);
   const canStartCanonicalVoiceCapture = useCallback(
     (): boolean => canonicalVoiceCaptureMustPause?.() !== true,
     [canonicalVoiceCaptureMustPause],
@@ -4678,16 +4683,21 @@ function ChatWindowLog({
 function ComposerSendNotice({
   canonicalVoiceTurnRequiresRetry,
   retryPendingCanonicalVoiceTurn,
+  discardPendingCanonicalVoiceTurn,
   error,
   clearError,
 }: {
   readonly canonicalVoiceTurnRequiresRetry: boolean;
   readonly retryPendingCanonicalVoiceTurn: (() => void) | undefined;
+  readonly discardPendingCanonicalVoiceTurn: (() => void) | undefined;
   readonly error: string | undefined;
   readonly clearError: (() => void) | undefined;
 }): ReactNode {
   const t = useTranslate();
   if (canonicalVoiceTurnRequiresRetry) {
+    // #2842 — retry alone is not an exit: a delivery that keeps failing would leave this chat's
+    // composer disabled indefinitely. Discard drops the queued transcript and hands the composer
+    // back, so the wedge is always the user's decision to end.
     return (
       <div className={styles.pendingVoiceTurnNotice} role="alert">
         <span>{t("chat.voice.pendingTurn")}</span>
@@ -4697,6 +4707,9 @@ function ComposerSendNotice({
           onClick={retryPendingCanonicalVoiceTurn}
         >
           {t("chat.voice.retryPendingTurn")}
+        </button>
+        <button type="button" className="cmp-voice-btn" onClick={discardPendingCanonicalVoiceTurn}>
+          {t("chat.voice.discardPendingTurn")}
         </button>
       </div>
     );
@@ -4721,6 +4734,7 @@ function ChatWindowComposerFooter({
   clearError,
   canonicalVoiceTurnRequiresRetry,
   retryPendingCanonicalVoiceTurn,
+  discardPendingCanonicalVoiceTurn,
 }: {
   readonly visible: readonly ChatMessage[];
   readonly activeChat: Chat | undefined;
@@ -4735,6 +4749,7 @@ function ChatWindowComposerFooter({
   readonly clearError: (() => void) | undefined;
   readonly canonicalVoiceTurnRequiresRetry: boolean;
   readonly retryPendingCanonicalVoiceTurn: (() => void) | undefined;
+  readonly discardPendingCanonicalVoiceTurn: (() => void) | undefined;
 }): ReactNode {
   const t = useTranslate();
   return (
@@ -4759,6 +4774,7 @@ function ChatWindowComposerFooter({
             <ComposerSendNotice
               canonicalVoiceTurnRequiresRetry={canonicalVoiceTurnRequiresRetry}
               retryPendingCanonicalVoiceTurn={retryPendingCanonicalVoiceTurn}
+              discardPendingCanonicalVoiceTurn={discardPendingCanonicalVoiceTurn}
               error={error}
               clearError={clearError}
             />
@@ -4812,6 +4828,7 @@ export function ChatWindow({
     activeChat,
     canonicalVoiceTurnRequiresRetry,
     retryPendingCanonicalVoiceTurn,
+    discardPendingCanonicalVoiceTurn,
     replaceChat,
     latestMemory,
     lastSentDocuments,
@@ -5042,6 +5059,7 @@ export function ChatWindow({
         clearError={session.clearError}
         canonicalVoiceTurnRequiresRetry={canonicalVoiceTurnRequiresRetry === true}
         retryPendingCanonicalVoiceTurn={retryPendingCanonicalVoiceTurn}
+        discardPendingCanonicalVoiceTurn={discardPendingCanonicalVoiceTurn}
       />
     </div>
   );

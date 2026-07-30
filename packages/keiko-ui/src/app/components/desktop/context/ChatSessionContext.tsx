@@ -16,6 +16,8 @@ type ChatSessionActionKeys =
   | "enqueueCanonicalVoiceTurn"
   | "canonicalVoiceCaptureMustPause"
   | "retryPendingCanonicalVoiceTurn"
+  | "discardPendingCanonicalVoiceTurn"
+  | "interruptCanonicalVoiceDelivery"
   | "regenerateMessage"
   | "cancelSend"
   | "replaceChat"
@@ -87,6 +89,12 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       ...(value.retryPendingCanonicalVoiceTurn === undefined
         ? {}
         : { retryPendingCanonicalVoiceTurn: value.retryPendingCanonicalVoiceTurn }),
+      ...(value.discardPendingCanonicalVoiceTurn === undefined
+        ? {}
+        : { discardPendingCanonicalVoiceTurn: value.discardPendingCanonicalVoiceTurn }),
+      ...(value.interruptCanonicalVoiceDelivery === undefined
+        ? {}
+        : { interruptCanonicalVoiceDelivery: value.interruptCanonicalVoiceDelivery }),
       regenerateMessage: value.regenerateMessage,
       cancelSend: value.cancelSend,
       replaceChat: value.replaceChat,
@@ -114,6 +122,8 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       value.enqueueCanonicalVoiceTurn,
       value.canonicalVoiceCaptureMustPause,
       value.retryPendingCanonicalVoiceTurn,
+      value.discardPendingCanonicalVoiceTurn,
+      value.interruptCanonicalVoiceDelivery,
       value.regenerateMessage,
       value.cancelSend,
       value.replaceChat,

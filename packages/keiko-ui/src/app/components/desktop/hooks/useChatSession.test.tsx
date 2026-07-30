@@ -3141,6 +3141,266 @@ describe("useChatSession canonical Voice FIFO", () => {
     expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[1]?.aborted).toBe(true);
   });
 
+  // #2842 / ADR-0154 D4 — barge-in returns the floor to capture and advances the dialog generation,
+  // so the interrupted turn can never speak. Re-sending it produces an answer nobody hears and, on
+  // exhaustion, suspends the outbox. The interruption must be terminal for that utterance.
+  it("keeps a barged-in spoken turn terminal and never resends it", async () => {
+    const rendered = await setupVoiceQueueSession();
+    const requestIds: Array<string | undefined> = [];
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(sendDesktopChat).mockImplementation((request, signal) => {
+      requestIds.push(request.clientTurnId);
+      if (request.clientTurnId !== "barge-in-turn") {
+        return Promise.resolve(completedTurn(request.content, "typed-assistant"));
+      }
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            reject(new DOMException("cancelled", "AbortError"));
+          },
+          { once: true },
+        );
+      });
+    });
+    vi.useFakeTimers();
+    try {
+      let delivery: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("interrupted transcript", "barge-in-turn"),
+        );
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(requestIds).toEqual(["barge-in-turn"]);
+
+      const interrupt = rendered.result.current.interruptCanonicalVoiceDelivery;
+      expect(interrupt).toBeTypeOf("function");
+      act(() => {
+        interrupt?.();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+
+      await expect(delivery).resolves.toEqual({
+        status: "cancelled",
+        userPersisted: false,
+        interrupted: true,
+      });
+      expect(requestIds).toEqual(["barge-in-turn"]);
+      expect(rendered.result.current.canonicalVoiceTurnRequiresRetry).toBe(false);
+
+      let typed: SendMessageOutcome | undefined;
+      await act(async () => {
+        typed = await rendered.result.current.sendMessage({
+          text: "typed after barge-in",
+          reportOutcome: true,
+        });
+      });
+      expect(typed).toEqual({ status: "completed", assistantMessageId: "typed-assistant" });
+      expect(requestIds.filter((id) => id === "barge-in-turn")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #2842 — the interrupt is scoped by send owner exactly like openChat's abort: a typed composer
+  // send is a separate user intent and must survive a barge-in untouched.
+  it("leaves a typed composer send untouched when Voice barges in", async () => {
+    const composer = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    vi.mocked(sendDesktopChat).mockReturnValueOnce(composer.promise);
+    const rendered = await setupVoiceQueueSession();
+
+    let typed: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      typed = rendered.result.current.sendMessage({
+        text: "typed while listening",
+        reportOutcome: true,
+      });
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+
+    const interrupt = rendered.result.current.interruptCanonicalVoiceDelivery;
+    expect(interrupt).toBeTypeOf("function");
+    act(() => {
+      interrupt?.();
+    });
+    composer.resolve(completedTurn("typed while listening", "typed-assistant"));
+    let outcome: SendMessageOutcome | undefined;
+    await act(async () => {
+      outcome = await typed;
+    });
+
+    expect(outcome).toEqual({ status: "completed", assistantMessageId: "typed-assistant" });
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[1]?.aborted).toBe(false);
+    expect(rendered.result.current.sendStatus).toBe("completed");
+  });
+
+  // #2842 — the outbox is module-global, but its suspension must not be. One chat's wedged spoken
+  // turn cannot disable typed sending in every other chat on the page.
+  it("keeps typed sending alive in another chat while one chat's spoken turn is wedged", async () => {
+    const chatA = chat({ id: "chat-a", updatedAt: 2 });
+    const chatB = chat({ id: "chat-b", updatedAt: 1 });
+    const rendered = await setupVoiceQueueSession([chatA, chatB]);
+    const requestIds: Array<string | undefined> = [];
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(sendDesktopChat).mockImplementation((request) => {
+      requestIds.push(request.clientTurnId);
+      if (request.clientTurnId === "wedged-a") {
+        return Promise.reject(new TypeError("network unavailable"));
+      }
+      return Promise.resolve(completedTurn(request.content, "typed-b-assistant", request.chatId));
+    });
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        void rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("wedged spoken turn", "wedged-a", chatA),
+        );
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(requestIds).toEqual(["wedged-a", "wedged-a", "wedged-a"]);
+      expect(rendered.result.current.canonicalVoiceTurnRequiresRetry).toBe(true);
+
+      await act(async () => {
+        await rendered.result.current.openChat(chatB);
+      });
+      expect(rendered.result.current.activeChat?.id).toBe("chat-b");
+      expect(rendered.result.current.canonicalVoiceTurnRequiresRetry).toBe(false);
+
+      let typed: SendMessageOutcome | undefined;
+      await act(async () => {
+        typed = await rendered.result.current.sendMessage({
+          text: "typed in B",
+          reportOutcome: true,
+        });
+      });
+      expect(typed).toEqual({ status: "completed", assistantMessageId: "typed-b-assistant" });
+      expect(requestIds.at(-1)).not.toBe("wedged-a");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #2842 — a wedged turn needs an actionable escape hatch next to the retry, otherwise the owning
+  // chat's composer stays dead for as long as the delivery keeps failing.
+  it("discards a wedged spoken turn so its own chat can send typed messages again", async () => {
+    const rendered = await setupVoiceQueueSession();
+    const sentinel = "wedged spoken sentinel 6f1c9a";
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(sendDesktopChat).mockImplementation((request) => {
+      if (request.clientTurnId === "wedged-discard") {
+        return Promise.reject(new TypeError("network unavailable"));
+      }
+      return Promise.resolve(completedTurn(request.content, "typed-assistant"));
+    });
+    vi.useFakeTimers();
+    try {
+      let delivery: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn(sentinel, "wedged-discard"),
+        );
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(rendered.result.current.canonicalVoiceTurnRequiresRetry).toBe(true);
+
+      let blocked: SendMessageOutcome | undefined;
+      await act(async () => {
+        blocked = await rendered.result.current.sendMessage({
+          text: "typed while wedged",
+          reportOutcome: true,
+        });
+      });
+      expect(blocked).toEqual({ status: "not-sent" });
+      expect(rendered.result.current.error).toContain("spoken turn is still pending");
+
+      const discard = rendered.result.current.discardPendingCanonicalVoiceTurn;
+      expect(discard).toBeTypeOf("function");
+      act(() => {
+        discard?.();
+      });
+
+      await expect(delivery).resolves.toEqual({
+        status: "cancelled",
+        userPersisted: false,
+        interrupted: true,
+      });
+      expect(rendered.result.current.canonicalVoiceTurnRequiresRetry).toBe(false);
+      expect(rendered.result.current.error).toBeUndefined();
+      expect(canonicalVoicePageOutboxRetainsPlaintextForTests(sentinel)).toBe(false);
+
+      let typed: SendMessageOutcome | undefined;
+      await act(async () => {
+        typed = await rendered.result.current.sendMessage({
+          text: "typed after discard",
+          reportOutcome: true,
+        });
+      });
+      expect(typed).toEqual({ status: "completed", assistantMessageId: "typed-assistant" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #2842 — discarding the turn whose request is already on the wire must stop that request too;
+  // paying for an answer the user has just thrown away is the same waste barge-in produces.
+  it("stops the request when the discarded spoken turn owns the active delivery", async () => {
+    const rendered = await setupVoiceQueueSession();
+    const requestIds: Array<string | undefined> = [];
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(sendDesktopChat).mockImplementation((request, signal) => {
+      requestIds.push(request.clientTurnId);
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            reject(new DOMException("cancelled", "AbortError"));
+          },
+          { once: true },
+        );
+      });
+    });
+    vi.useFakeTimers();
+    try {
+      let delivery: Promise<SendMessageOutcome> | undefined;
+      act(() => {
+        delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+          canonicalVoiceTurn("discard while in flight", "discard-in-flight"),
+        );
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(requestIds).toEqual(["discard-in-flight"]);
+
+      act(() => {
+        rendered.result.current.discardPendingCanonicalVoiceTurn?.();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+
+      expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[1]?.aborted).toBe(true);
+      await expect(delivery).resolves.toEqual({
+        status: "cancelled",
+        userPersisted: false,
+        interrupted: true,
+      });
+      expect(requestIds).toEqual(["discard-in-flight"]);
+      expect(rendered.result.current.canonicalVoiceTurnRequiresRetry).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects ownership without a server-issued scope identity before any canonical request", async () => {
     const unprojected = chat({ groundingScopeIdentity: undefined });
     const rendered = await setupVoiceQueueSession([unprojected]);
