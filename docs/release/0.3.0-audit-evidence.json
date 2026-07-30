@@ -195,9 +195,11 @@
     "typeOrderEntries": 25,
     "paletteCards": 6,
     "note": "handoff expected a Workspace Trust settings tab; workspaceTrust is its own window type, not a tab",
-    "unreachableWindowTypes": 9,
-    "correction": "earlier entries said 45 types / 12 unreachable; editor-settings is a Quick Access pseudo-command not a WindowType, and search/problems/debug are reachable (keyboard- and editor-command-only) while integ and keiko are unreachable. Per-type evidence: docs/release/0.3.0-unreachable-surface-decisions.md",
-    "unreachableNotInert": "the persistence layer restores ANY declared WindowType from localStorage and AGENTS.md section 7 treats workspace input as hostile, so an unreachable window still renders from a tampered or older persisted layout"
+    "unreachableWindowTypes": 12,
+    "correction": "earlier entries said 45 types / 12 unreachable, then 44 / 9; both were wrong. Correct: 44 declared types (editor-settings is a Quick Access pseudo-command, not a WindowType) and 12 unreachable — 8 with no entry point at all plus 4 reachable only through the unreachable runtime window. search/problems/debug ARE reachable (keyboard- and editor-command-only); integ and keiko were missing from the earlier suspect list. Per-type evidence ships with the F-05 matrix in PR #2843 (docs/release/0.3.0-unreachable-surface-decisions.md).",
+    "unreachableNotInert": "the persistence layer restores ANY declared WindowType from localStorage and AGENTS.md section 7 treats workspace input as hostile, so an unreachable window still renders from a tampered or older persisted layout",
+    "unreachableWindowTypesDirect": 8,
+    "unreachableWindowTypesTransitive": 4
   },
   "journeys": [
     {
@@ -649,8 +651,9 @@
       {
         "id": "RG-18",
         "title": "Files header count vs Git truth",
-        "result": "FAIL-MINOR",
-        "finding": "F-12"
+        "result": "FAIL-PRE-FIX",
+        "finding": "F-12",
+        "observed": "pre-fix observation: the Files header claimed 45 changed files for a root where git and the Git window truthfully reported 8, because the header counted ignored porcelain entries. FIXED in PR #2843; the header now counts the same worktree truth, with regression tests and a clean-worktree boundary case. No post-fix live re-check was run from this session — the fix is covered by those tests."
       },
       {
         "id": "RG-19",
@@ -761,12 +764,12 @@
         "id": "F-12",
         "severity": "P2",
         "title": "Files header change count (45) vs Git truth (8); disabled grounding option unexplained; coding.runtime.discover ENOENT diagnostic at every dev-lane boot",
-        "status": "FIXED (a: header counts worktree truth; b: disabled grounding option carries a translated hint; c: absent portable install no longer emits an error-class diagnostic)"
+        "status": "FIXED in PR #2843 (a: header counts worktree truth plus a clean-worktree boundary case; b: the disabled grounding option carries a translated hint; c: an absent portable install no longer emits an error-class diagnostic while a present-but-corrupt one still does)"
       },
       {
         "id": "F-13",
         "severity": "P2",
-        "title": "check:editor-release-evidence is not reproducible on macOS: it fails at clean dev on a macOS host with a measurement-fingerprint mismatch while the required ci context running the same gate is green on that exact SHA. Committed evidence carries CI/Linux lineage and was deliberately not regenerated from macOS. Document the platform sensitivity or exclude platform-variable inputs from the fingerprint."
+        "title": "check:editor-release-evidence is not reproducible ACROSS PLATFORMS: it fails on a macOS host at clean dev with a measurement-fingerprint mismatch while the required ci context, which runs the same gate in three places, is green on that exact SHA. The committed evidence carries CI/Linux lineage and was deliberately not regenerated from macOS. Document the platform sensitivity or exclude platform-variable inputs (gzip byte counts) from the fingerprint."
       },
       {
         "id": "F-14",
