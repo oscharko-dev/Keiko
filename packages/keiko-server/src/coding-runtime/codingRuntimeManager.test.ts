@@ -3441,3 +3441,96 @@ describe("run-bound stop authority", () => {
     await expect(manager.stop("run-1988")).resolves.toEqual({ ok: true, status: "stopped" });
   });
 });
+
+/**
+ * Regression: a governed-assist approval card that shows no path and no magnitude is not
+ * reviewable, and a human cannot exercise control over a change they are not shown (ADR-0129 D1).
+ * The runtime admission boundary already receives `targetPath`, `allowedRelativePaths`,
+ * `fileCount`, `addedLines` and `deletedLines` for a `file-edit` ask; before this pin the manager
+ * dropped every one of them and no operator surface could recover them.
+ */
+describe("governed-assist approval reviewability", () => {
+  it("retains the reviewable changeset facts of the pending file-edit approval", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    await manager.start(
+      governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-2853-edit",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        actionKind: "file-edit",
+        scopeLabel: "workspace-scope",
+        risk: "medium",
+        policyReason: "approval-required",
+        targetPath: "src/a.ts",
+        allowedRelativePaths: ["src/a.ts", "src/b.ts"],
+        fileCount: 2,
+        addedLines: 7,
+        deletedLines: 3,
+      }),
+    );
+    await settle();
+
+    expect(events.find((event) => event.kind === "permission-requested")).toMatchObject({
+      permissionRequest: { requestId: "perm-2853-edit", actionKind: "file-edit" },
+    });
+    expect(manager.pendingApprovalReview("run-1991", "perm-2853-edit")).toEqual({
+      requestId: "perm-2853-edit",
+      paths: ["src/a.ts", "src/b.ts"],
+      pathsTruncated: false,
+      fileCount: 2,
+      addedLines: 7,
+      deletedLines: 3,
+    });
+  });
+
+  it("refuses a review for a stale request id, a foreign run, and an escaping path", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    await manager.start(
+      governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-2853-escape",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        actionKind: "file-edit",
+        scopeLabel: "workspace-scope",
+        risk: "medium",
+        policyReason: "approval-required",
+        targetPath: "../escape.ts",
+        allowedRelativePaths: ["../escape.ts"],
+        fileCount: 1,
+        addedLines: 1,
+        deletedLines: 0,
+      }),
+    );
+    await settle();
+
+    expect(manager.pendingApprovalReview("run-1991", "perm-2853-escape")).toBeUndefined();
+    expect(manager.pendingApprovalReview("run-1991", "perm-2853-other")).toBeUndefined();
+    expect(manager.pendingApprovalReview("run-2088", "perm-2853-escape")).toBeUndefined();
+  });
+});

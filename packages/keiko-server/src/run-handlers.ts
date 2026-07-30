@@ -10,7 +10,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { parseRunRequest } from "./run-request.js";
 import type { RunRequest, RunVoiceOrigin } from "./run-request.js";
 import { startRun, applyRun, type EngineContext } from "./run-engine.js";
-import { ActiveRunLimitError, type RunRecord } from "./runs.js";
+import { ActiveRunLimitError, type AppliableSnapshot, type RunRecord } from "./runs.js";
 import { SSE_HEADERS, writeMessageEvent, readyMessage, startSseHeartbeat } from "./sse.js";
 import type { SseWriter, StreamEvent } from "./sink.js";
 import type { RouteContext, RouteResult, HandlerOutcome } from "./routes.js";
@@ -94,6 +94,26 @@ function rejectUnregisteredWorkspace(parsed: RunRequest, deps: UiHandlerDeps): R
           "The workspaceRoot is not a registered project.",
         ),
       };
+}
+
+/**
+ * The apply-time half of `rejectUnregisteredWorkspace`: the same registered-or-managed root
+ * authorization, re-asked at the only route that writes to the working tree. A payload with no
+ * string `workspaceRoot` fails closed — an unnameable root can never be an authorized one.
+ */
+function rejectUnauthorizedApplyWorkspace(
+  snapshot: AppliableSnapshot,
+  deps: UiHandlerDeps,
+): RouteResult | null {
+  const payload = isRecord(snapshot.payload) ? snapshot.payload : {};
+  const root = typeof payload.workspaceRoot === "string" ? payload.workspaceRoot : "";
+  if (root.length > 0 && resolveRegisteredOrManagedWorkspaceRoot(deps, root) !== undefined) {
+    return null;
+  }
+  return {
+    status: 403,
+    body: errorBody("WORKSPACE_NOT_REGISTERED", "The workspaceRoot is not a registered project."),
+  };
 }
 
 function resolveRunModel(parsed: RunRequest, deps: UiHandlerDeps): ModelPort | undefined {
@@ -421,6 +441,14 @@ export async function handleApplyRun(ctx: RouteContext, deps: UiHandlerDeps): Pr
       body: errorBody("NOT_APPLIABLE", "The run is not in an appliable state."),
     };
   }
+  // Re-prove the workspace authorization AT the write boundary. `handleCreateRun` authorizes the
+  // root so a CSRF-equipped local client cannot drive workflows in an arbitrary directory; the
+  // decision is not durable authority, and this route — not the dry run — is what mutates the
+  // working tree. Checking here closes the window in which a root is de-registered after the run
+  // started, and refuses any appliable record whose payload cannot name an authorized root at all.
+  // The refusal precedes the atomic claim of `record.appliable`, so a denied write consumes nothing.
+  const unauthorized = rejectUnauthorizedApplyWorkspace(snapshot, deps);
+  if (unauthorized !== null) return unauthorized;
   const model = deps.modelPortFactory(record.modelId);
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };

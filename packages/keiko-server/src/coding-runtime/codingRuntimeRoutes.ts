@@ -6,9 +6,11 @@ import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   parseCodingWorkbenchRuntimeReadinessRequest,
   resolveEffectiveCodingWorkbenchMode,
+  unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload,
   unpairedCodingWorkbenchRuntimeQuestionsChannelPayload,
   unpairedCodingWorkbenchRuntimeResearchChannelPayload,
   type CodingWorkbenchMode,
+  type CodingWorkbenchRuntimeApprovalReviewChannelPayload,
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimeQuestionsChannelPayload,
   type CodingWorkbenchRuntimeResearchChannelPayload,
@@ -464,6 +466,34 @@ export function handleCodingRuntimeResearch(ctx: RouteContext, deps: UiHandlerDe
   return { status: 200, body: payload };
 }
 
+/**
+ * The authenticated approval-review projection (#2853): which workspace files the pending edit
+ * approval would write and how large the change is. A human cannot exercise control over a change
+ * they are not shown (ADR-0129 D1) — and the paths are model-selected, so like the research ask
+ * they may not ride the general runtime snapshot or the SSE projection (#2644). An unpaired caller
+ * receives the one constant content-free payload BEFORE any run resolution, so this route is never
+ * an existence oracle (ADR-0141 D6). Patch bytes, file bodies and model prose are not carried.
+ */
+export function handleCodingRuntimeApprovalReview(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): RouteResult {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    return { status: 200, body: unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload() };
+  }
+  const runId = ctx.params.runId;
+  if (runId === undefined) return notFound();
+  const required = requireRuntime(deps);
+  if (isRouteResult(required)) return required;
+  if (!required.orchestrator.getSnapshot(runId)) return notFound();
+  const pending = required.orchestrator.pendingApprovalReview(runId);
+  const payload: CodingWorkbenchRuntimeApprovalReviewChannelPayload = {
+    session: "active",
+    ...(pending === undefined ? {} : { pending }),
+  };
+  return { status: 200, body: payload };
+}
+
 function frame(event: CodingWorkbenchRuntimeSseEvent): string {
   return `id: ${event.cursor}\nevent: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`;
 }
@@ -542,6 +572,11 @@ export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/coding-workbench/runtime/runs/:runId/research",
     handler: handleCodingRuntimeResearch,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/approval-review",
+    handler: handleCodingRuntimeApprovalReview,
   },
   {
     method: "POST",

@@ -25,6 +25,7 @@ import {
 import {
   CODING_RUNTIME_ROUTE_GROUP,
   handleCodingRuntimeApproval,
+  handleCodingRuntimeApprovalReview,
   handleCodingRuntimeEvents,
   handleCodingRuntimeFollowUp,
   handleCodingRuntimePause,
@@ -157,6 +158,17 @@ function runtime(
           }
         : undefined,
     researchGrant: (runId: string) => (runId === "run-1" ? researchGrant : undefined),
+    pendingApprovalReview: (runId: string) =>
+      runId === "run-1"
+        ? {
+            requestId: "permission-7",
+            paths: ["src/alpha.ts", "src/beta.ts"],
+            pathsTruncated: false,
+            fileCount: 2,
+            addedLines: 12,
+            deletedLines: 4,
+          }
+        : undefined,
   };
   const eventHub = {
     subscribe: (
@@ -208,6 +220,7 @@ describe("coding runtime routes", () => {
         "GET /api/coding-workbench/runtime/status",
         "GET /api/coding-workbench/runtime/runs/:runId/events",
         "GET /api/coding-workbench/runtime/runs/:runId/research",
+        "GET /api/coding-workbench/runtime/runs/:runId/approval-review",
         "POST /api/coding-workbench/runtime/runs/:runId/approvals",
         "POST /api/coding-workbench/runtime/runs/:runId/stop",
         "POST /api/coding-workbench/runtime/runs/:runId/takeover",
@@ -375,6 +388,91 @@ describe("coding runtime routes", () => {
 
     expect(result.status).toBe(404);
     expect(JSON.stringify(result.body)).not.toContain("nodejs.org");
+  });
+
+  it("#2853: the paired approval-review route shows the operator the files the change would write", () => {
+    const session = pairedAppSession();
+
+    const reviewed = handleCodingRuntimeApprovalReview(
+      context(
+        "",
+        { runId: "run-1" },
+        "/api/coding-workbench/runtime/runs/run-1/approval-review",
+        session.cookie,
+      ),
+      runtime({ codingAppSessionChannel: session.channel }),
+    );
+
+    expect(reviewed).toEqual({
+      status: 200,
+      body: {
+        session: "active",
+        pending: {
+          requestId: "permission-7",
+          paths: ["src/alpha.ts", "src/beta.ts"],
+          pathsTruncated: false,
+          fileCount: 2,
+          addedLines: 12,
+          deletedLines: 4,
+        },
+      },
+    });
+  });
+
+  it("#2853: an unpaired approval-review read yields the constant projection, never a path", () => {
+    const session = pairedAppSession();
+    const unpairedProjection = { status: 200, body: { session: "unpaired" } };
+    // Same constant shape for a live run, an unknown run, a missing runId, and a server composed
+    // without the runtime, so the response is not an existence oracle (ADR-0141 D6).
+    const cases: readonly [Record<string, string>, UiHandlerDeps][] = [
+      [{ runId: "run-1" }, runtime({ codingAppSessionChannel: session.channel })],
+      [{ runId: "run-9" }, runtime({ codingAppSessionChannel: session.channel })],
+      [{}, runtime({ codingAppSessionChannel: session.channel })],
+      [
+        { runId: "run-1" },
+        runtime({ codingAppSessionChannel: session.channel, codingRuntimeOrchestrator: undefined }),
+      ],
+      [{ runId: "run-1" }, runtime()],
+    ];
+    for (const [params, deps] of cases) {
+      const result = handleCodingRuntimeApprovalReview(context("", params), deps);
+      expect(result).toEqual(unpairedProjection);
+      expect(JSON.stringify(result.body)).not.toContain("src/alpha.ts");
+    }
+  });
+
+  it("#2853: a paired review of an unknown run conceals existence instead of reporting no review", () => {
+    const session = pairedAppSession();
+
+    const result = handleCodingRuntimeApprovalReview(
+      context(
+        "",
+        { runId: "run-9" },
+        "/api/coding-workbench/runtime/runs/run-9/approval-review",
+        session.cookie,
+      ),
+      runtime({ codingAppSessionChannel: session.channel }),
+    );
+
+    expect(result.status).toBe(404);
+    expect(JSON.stringify(result.body)).not.toContain("src/alpha.ts");
+  });
+
+  it("#2853: the content-free status and run projections never carry a reviewable path", () => {
+    const session = pairedAppSession();
+    const status = handleCodingRuntimeStatus(
+      context("", {}, "/api/coding-workbench/runtime/status", session.cookie),
+      runtime({ codingAppSessionChannel: session.channel }),
+    );
+    const run = handleGetCodingRuntimeRun(
+      context("", { runId: "run-1" }, "/api/coding-workbench/runtime/runs/run-1", session.cookie),
+      runtime({ codingAppSessionChannel: session.channel }),
+    );
+
+    for (const body of [status.body, run.body]) {
+      expect(JSON.stringify(body)).not.toContain("src/alpha.ts");
+      expect(JSON.stringify(body)).not.toContain("src/beta.ts");
+    }
   });
 
   it("#2387: the content-free status projection never carries the pending research destination", () => {

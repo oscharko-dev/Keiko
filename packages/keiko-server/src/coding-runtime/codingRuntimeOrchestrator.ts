@@ -10,6 +10,7 @@ import {
   parseCodingWorkbenchRuntimeTakeoverRequest,
   type CodingWorkbenchRuntimeApprovalDecisionRequest,
   type CodingWorkbenchRuntimeEvent,
+  type CodingWorkbenchRuntimePendingApprovalReview,
   type CodingWorkbenchRuntimePendingPermission,
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimePendingResearch,
@@ -268,6 +269,26 @@ export class CodingRuntimeOrchestrator {
       requestLine: reviewable.requestLine,
       expiresAt: new Date(pending.expiresAtMs).toISOString(),
     };
+  }
+
+  /**
+   * The reviewable changeset facts of the approval the operator is being asked to decide, for the
+   * AUTHENTICATED approval-review channel only (#2853). A human cannot exercise control over a
+   * change they are not shown (ADR-0129 D1), so the path list and the change magnitude reach the
+   * card — but never through the unauthenticated status or SSE projection, which stay content-free
+   * (#2644), and never a byte of the patch.
+   *
+   * Fails closed in every stale shape: a run that is not the current one, a run that is no longer
+   * awaiting a decision, a challenge that was already consumed or has expired, and a review the
+   * manager no longer binds to the live request id.
+   */
+  pendingApprovalReview(runId: string): CodingWorkbenchRuntimePendingApprovalReview | undefined {
+    const current = this.current();
+    if (current?.runId !== runId || current.state !== "awaiting-approval") return undefined;
+    const challenge = this.approvals.get(runId);
+    if (challenge === undefined || challenge.used) return undefined;
+    if (challenge.expiresAt <= this.now().getTime()) return undefined;
+    return this.deps.manager.pendingApprovalReview(runId, challenge.permission.requestId);
   }
 
   /**

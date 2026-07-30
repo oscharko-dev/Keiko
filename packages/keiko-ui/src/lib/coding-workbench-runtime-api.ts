@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  validateCodingWorkbenchRuntimeApprovalReviewChannelPayload,
   validateCodingWorkbenchRuntimeQuestionsChannelPayload,
   validateCodingWorkbenchRuntimeReadiness,
   validateCodingWorkbenchRuntimeResearchChannelPayload,
@@ -8,6 +9,7 @@ import {
   validateCodingWorkbenchRuntimeSseEvent,
   type CodingWorkbenchMode,
   type CodingWorkbenchRuntimeApprovalDecisionRequest,
+  type CodingWorkbenchRuntimeApprovalReviewChannelPayload,
   type CodingWorkbenchRuntimeQuestionsChannelPayload,
   type CodingWorkbenchRuntimeReadiness,
   type CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
@@ -105,6 +107,13 @@ function researchChannelValidator(
   value: unknown,
 ): CodingWorkbenchRuntimeResearchChannelPayload {
   return validated(path, value, validateCodingWorkbenchRuntimeResearchChannelPayload);
+}
+
+function approvalReviewChannelValidator(
+  path: string,
+  value: unknown,
+): CodingWorkbenchRuntimeApprovalReviewChannelPayload {
+  return validated(path, value, validateCodingWorkbenchRuntimeApprovalReviewChannelPayload);
 }
 
 function runPath(runId: string, suffix = ""): string {
@@ -267,6 +276,24 @@ export function getCodingWorkbenchRuntimeResearch(
     runPath(runId, "/research"),
     { cache: "no-store", ...(signal ? { signal } : {}) },
     { validator: researchChannelValidator },
+  );
+}
+
+/**
+ * Read the reviewable facts of the pending edit approval over the authenticated app-session channel
+ * (#2853): which workspace-relative files it would write and how large the change is. The paths are
+ * model-selected content and therefore never ride the general runtime snapshot (#2644); no patch
+ * bytes and no model prose cross this boundary. An unpaired window receives the constant
+ * `{ session: "unpaired" }` projection instead of an error.
+ */
+export function getCodingWorkbenchRuntimeApprovalReview(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<CodingWorkbenchRuntimeApprovalReviewChannelPayload> {
+  return bffFetchJson(
+    runPath(runId, "/approval-review"),
+    { cache: "no-store", ...(signal ? { signal } : {}) },
+    { validator: approvalReviewChannelValidator },
   );
 }
 

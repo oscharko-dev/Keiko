@@ -99,6 +99,7 @@ function fixture(activityProjection?: CodingSafeActivityProjection, clock?: () =
       }),
     ),
     health: vi.fn<CodingRuntimeManager["health"]>(() => ({ status: "stopped" })),
+    pendingApprovalReview: vi.fn<CodingRuntimeManager["pendingApprovalReview"]>(() => undefined),
     issueApproval: vi.fn<CodingRuntimeManager["issueApproval"]>(() => ({
       ok: true,
       approval: {} as never,
@@ -560,6 +561,59 @@ describe("CodingRuntimeOrchestrator", () => {
       requestId: "permission-1",
       decision: "approved",
     });
+  });
+
+  it("#2853: serves the approval review only for the live, unconsumed challenge", async () => {
+    const f = fixture();
+    const review = {
+      requestId: "permission-1",
+      paths: ["src/a.ts"],
+      pathsTruncated: false,
+      fileCount: 1,
+      addedLines: 4,
+      deletedLines: 2,
+    } as const;
+    f.manager.pendingApprovalReview.mockImplementation((runId, requestId) =>
+      runId === "run-1" && requestId === "permission-1" ? review : undefined,
+    );
+    await f.orchestrator.start(start);
+    // Before the ask lands there is no decision to review, so there is nothing to project.
+    expect(f.orchestrator.pendingApprovalReview("run-1")).toBeUndefined();
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-0",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "task-submitted",
+    });
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-1",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-1",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        actionKind: "file-edit",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+
+    expect(f.orchestrator.pendingApprovalReview("run-1")).toEqual(review);
+    // A foreign run id can never read the live run's review.
+    expect(f.orchestrator.pendingApprovalReview("run-9")).toBeUndefined();
+
+    await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-1",
+      decision: "approved",
+      expectedRevision: 4,
+    });
+
+    // Once the decision is taken the run is no longer awaiting approval: the review closes with it.
+    expect(f.orchestrator.pendingApprovalReview("run-1")).toBeUndefined();
   });
 
   it("fails closed and stops when the managed runtime cannot settle the exact permission", async () => {

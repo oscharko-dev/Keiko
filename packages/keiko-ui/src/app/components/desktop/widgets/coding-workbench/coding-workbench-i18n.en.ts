@@ -246,6 +246,15 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.research.loading": "Loading the destination…",
   "codingWorkbench.approval.research.unavailable":
     "Destination unavailable. Re-pair this window to see it before deciding.",
+  "codingWorkbench.approval.changes.title": "Files this change would write",
+  "codingWorkbench.approval.changes.files": "Files",
+  "codingWorkbench.approval.changes.lines": "Lines",
+  "codingWorkbench.approval.changes.lineCounts": "+{added} / -{deleted}",
+  "codingWorkbench.approval.changes.truncated":
+    "Only the first {shown} of {total} files are listed.",
+  "codingWorkbench.approval.changes.loading": "Loading the changed files…",
+  "codingWorkbench.approval.changes.unavailable":
+    "Changed files unavailable. Re-pair this window to see them before deciding.",
   "codingWorkbench.approval.help": "Raw commands, prompts, diffs, and file contents remain hidden.",
   "codingWorkbench.approval.approve": "Approve once",
   "codingWorkbench.approval.deny": "Deny",

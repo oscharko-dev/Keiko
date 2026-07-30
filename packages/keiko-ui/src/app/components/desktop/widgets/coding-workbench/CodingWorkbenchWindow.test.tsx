@@ -22,6 +22,7 @@ const runtimeHookMock = vi.hoisted(() => vi.fn());
 const questionsHookMock = vi.hoisted(() => vi.fn());
 const activityHookMock = vi.hoisted(() => vi.fn());
 const researchHookMock = vi.hoisted(() => vi.fn());
+const approvalReviewHookMock = vi.hoisted(() => vi.fn());
 const autonomyHookMock = vi.hoisted(() => vi.fn());
 const editorBridgeHookMock = vi.hoisted(() => vi.fn());
 const chatCatalogMock = vi.hoisted(() => ({
@@ -43,6 +44,10 @@ vi.mock("@/lib/useCodingWorkbenchSafeActivity", () => ({
 
 vi.mock("@/lib/useCodingWorkbenchResearch", () => ({
   useCodingWorkbenchResearch: researchHookMock,
+}));
+
+vi.mock("@/lib/useCodingWorkbenchApprovalReview", () => ({
+  useCodingWorkbenchApprovalReview: approvalReviewHookMock,
 }));
 
 vi.mock("../../hooks/useAutonomyModePolicy", () => ({
@@ -199,6 +204,7 @@ describe("CodingWorkbenchWindow", () => {
     chatCatalogMock.projects = [];
     questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
     activityHookMock.mockReturnValue(IDLE_ACTIVITY);
+    approvalReviewHookMock.mockReturnValue({ status: "idle", review: null });
     researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null });
     editorBridgeHookMock.mockReset();
     editorBridgeHookMock.mockReturnValue({
@@ -254,6 +260,30 @@ describe("CodingWorkbenchWindow", () => {
             actionKind: "research",
             risk: "medium",
             expiresAt: "2026-07-13T12:02:00.000Z",
+          },
+        }),
+      },
+    });
+  }
+
+  function editApprovalState(): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "awaiting-approval",
+          runId: "run-1",
+          pendingPermission: {
+            requestId: "permission-7",
+            kind: "workspace-write",
+            actionClass: "workspace-write",
+            reasonCode: "approval-required",
+            actionKind: "file-edit",
+            scopeLabel: "workspace-scope",
+            risk: "medium",
+            policyReason: "approval-required",
+            expiresAt: "2026-07-13T12:05:00.000Z",
           },
         }),
       },
@@ -504,6 +534,66 @@ describe("CodingWorkbenchWindow", () => {
     renderWorkbench(egressApprovalState("delivery-substrate"));
 
     expect(screen.queryByText("Research destination")).not.toBeInTheDocument();
+  });
+
+  it("#2853: shows the files and magnitude of the edit the operator is approving", async () => {
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-7",
+        paths: ["src/alpha.ts", "src/beta.ts"],
+        pathsTruncated: false,
+        fileCount: 2,
+        addedLines: 12,
+        deletedLines: 4,
+      },
+    });
+    renderWorkbench(editApprovalState());
+
+    const changes = screen.getByRole("group", { name: "Files this change would write" });
+    expect(changes).toHaveTextContent("src/alpha.ts");
+    expect(changes).toHaveTextContent("src/beta.ts");
+    expect(changes).toHaveTextContent("+12 / -4");
+    // Reviewable text only: never a live link, and never a byte of the patch.
+    expect(changes.querySelector("a")).toBeNull();
+    expect(screen.queryByText(/diff --git/u)).not.toBeInTheDocument();
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it("#2853: marks a truncated file list instead of understating the blast radius", () => {
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-7",
+        paths: ["src/alpha.ts"],
+        pathsTruncated: true,
+        fileCount: 9,
+        addedLines: 30,
+        deletedLines: 0,
+      },
+    });
+    renderWorkbench(editApprovalState());
+
+    const changes = screen.getByRole("group", { name: "Files this change would write" });
+    expect(changes).toHaveTextContent("Only the first 1 of 9 files are listed.");
+    expect(changes).toHaveTextContent("9");
+  });
+
+  it("#2853: says the changed files are unavailable rather than implying there are none", () => {
+    approvalReviewHookMock.mockReturnValue({ status: "unavailable", review: null });
+    renderWorkbench(editApprovalState());
+
+    expect(
+      screen.getByText(/Changed files unavailable\. Re-pair this window/u),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeInTheDocument();
+  });
+
+  it("#2853: shows no changed-file block for an approval that writes no file", () => {
+    approvalReviewHookMock.mockReturnValue({ status: "idle", review: null });
+    renderWorkbench(egressApprovalState());
+
+    expect(screen.queryByText("Files this change would write")).not.toBeInTheDocument();
   });
 
   it("renders recovery acknowledgement before allowing a fresh retry", async () => {
