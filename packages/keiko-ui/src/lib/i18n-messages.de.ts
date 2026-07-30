@@ -802,6 +802,7 @@ export const DE_MESSAGES = {
   "attachment.rejection.empty": "Leere Datei. Füge eine Datei mit Inhalt hinzu.",
   "attachment.remove": "Anhang {name} entfernen",
   "attachment.pending": "Ausstehende Anhänge",
+  "attachment.voiceStaged": "Wird mit deinem nächsten gesprochenen Beitrag gesendet",
   "attachment.drop": "Dateien hier ablegen, um sie anzufügen",
   "attachment.disabledDifferentModel":
     "Das ausgewählte Modell unterstützt keine Bild- oder Dokumenteingabe. Wähle ein anderes Modell, um Dateien anzufügen.",

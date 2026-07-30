@@ -104,6 +104,27 @@
   -webkit-line-clamp: 2;
 }
 
+/* #2843 — staged attachments stay visible and removable while dialogue holds the composer. Absolutely
+   positioned below the centred controls for the same reason .cmp-partial-transcript sits above them:
+   .cmp-voice-content is a single centred grid cell, so an in-flow child would shift the controls. */
+.cmp-voice-attachments {
+  position: absolute;
+  inset-inline: 0;
+  top: calc(50% + 34px);
+  display: grid;
+  justify-items: center;
+  max-width: 100%;
+  gap: 2px;
+}
+
+.cmp-voice-attachments-label {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  text-align: center;
+}
+
 .voiceLayer :global(.cmp-bar-main-voice-dialog) {
   flex: 0 0 auto;
   gap: 12px;

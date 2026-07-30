@@ -1095,6 +1095,60 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     );
   });
 
+  // #2843 — the grounded route has no attachment channel, so a grounded chat drops staged attachments
+  // for typed AND spoken turns. A typed send is rejected before admission; a settled final transcript
+  // must never be discarded (ADR-0154 D1), so the spoken turn proceeds and the SAME notice states that
+  // the staged attachments were not part of it. Before this pin the spoken turn was silent: the user
+  // saw an answer with no indication their attachment had been ignored.
+  it("surfaces the grounded attachment notice for a spoken turn instead of dropping it silently", async (): Promise<void> => {
+    const { result } = await setupGroundedSession();
+    vi.mocked(fetchChatMessages).mockResolvedValue({
+      messages: [
+        message({ id: "grounded-user", chatId: "chat-grounded", role: "user" }),
+        message({ id: "grounded-assistant", chatId: "chat-grounded", role: "assistant" }),
+      ],
+    });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat({ id: "chat-grounded" })] });
+    vi.mocked(askGrounded).mockResolvedValue({
+      assistantMessageId: "grounded-assistant",
+      content: "Grounded answer",
+      citations: [],
+    } as unknown as Awaited<ReturnType<typeof askGrounded>>);
+    await act(async (): Promise<void> => {
+      expect(
+        await result.current.addPendingAttachment(
+          new File(["hello"], "notes.txt", { type: "text/plain" }),
+        ),
+      ).toEqual({ ok: true });
+    });
+
+    let outcome: SendMessageOutcome | undefined;
+    await act(async (): Promise<void> => {
+      outcome = await result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn(
+          "summarise the connected repository",
+          "grounded-voice-attachment",
+          chat({
+            id: "chat-grounded",
+            selectedModel: "chat-doc",
+            connectedScopes: [
+              { kind: "files" as const, relativePaths: ["README.md"], connectedAtMs: 1 },
+            ],
+          }),
+          "chat-doc",
+        ),
+      );
+    });
+
+    expect(outcome).toEqual({ status: "completed", assistantMessageId: "grounded-assistant" });
+    expect(askGrounded).toHaveBeenCalledTimes(1);
+    expect(result.current.error).toBe(GROUNDED_ATTACHMENT_NOTICE);
+    // Nothing was consumed, so the file stays staged and the user can remove it or move it to a
+    // non-grounded chat rather than silently losing it.
+    expect(result.current.pendingAttachments).toHaveLength(1);
+    expect(result.current.lastSentDocuments).toEqual([]);
+  });
+
   it("does not mistake a stale identical server message for this failed admission", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
     try {
@@ -1450,6 +1504,155 @@ describe("useChatSession sendMessage — ungrounded attachment descriptors", () 
         displayName: "release.txt",
         truncated: false,
       }),
+    ]);
+  });
+
+  // #2843 — a spoken turn used to send `attachments: []` and no `documentContext` while the contract
+  // comment above SendMessageOptions promised the identical context a typed turn carries, and the
+  // operator runbook told the reviewer to attach a file and ask about it. ADR-0154 D1/D5 make the
+  // parity the contract: one canonical pipeline, no Voice-specific substitute, and equal final text
+  // plus equal chat context must make the same retrieval decisions typed or spoken. Nothing here
+  // reaches the Realtime session — this is the canonical BFF request the composer already used.
+  it("carries the staged attachments and document context on a spoken turn", async (): Promise<void> => {
+    const { result } = await setupUngroundedAttachmentSession();
+    await act(async (): Promise<void> => {
+      expect(
+        await result.current.addPendingAttachment(
+          new File(["spoken spec"], "spec.txt", { type: "text/plain" }),
+        ),
+      ).toEqual({ ok: true });
+    });
+
+    let outcome: SendMessageOutcome | undefined;
+    await act(async (): Promise<void> => {
+      outcome = await result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn(
+          "what does the attached spec say?",
+          "voice-attachment-turn",
+          chat({ selectedModel: "chat-attachments" }),
+          "chat-attachments",
+        ),
+      );
+    });
+
+    expect(outcome).toEqual({ status: "completed", assistantMessageId: "attachment-assistant" });
+    expect(sendDesktopChat).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]).toMatchObject({
+      content: "what does the attached spec say?",
+      attachments: [{ kind: "document", name: "spec.txt", mimeType: "text/plain", sizeBytes: 11 }],
+      documentContext: [{ displayName: "spec.txt", mimeType: "text/plain", text: "spoken spec" }],
+    });
+    // The turn consumed the staged file, so the chips clear and the disclosure names that document.
+    expect(result.current.pendingAttachments).toHaveLength(0);
+    expect(result.current.lastSentDocuments).toEqual([
+      expect.objectContaining({ displayName: "spec.txt", truncated: false }),
+    ]);
+  });
+
+  // #2843 — presentCompletedSend returned early for a canonical target, so a completed spoken turn
+  // left `lastSentDocuments` holding the PREVIOUS turn's list: a "documents included as context" note
+  // stayed on screen asserting documents for a turn that carried none.
+  it("replaces the previous turn's document disclosure when a spoken turn carries none", async (): Promise<void> => {
+    const { result } = await setupUngroundedAttachmentSession();
+    await act(async (): Promise<void> => {
+      expect(
+        await result.current.addPendingAttachment(
+          new File(["typed context"], "typed.txt", { type: "text/plain" }),
+        ),
+      ).toEqual({ ok: true });
+    });
+    act((): void => {
+      result.current.setDraft("Use the attached file.");
+    });
+    await act(async (): Promise<void> => {
+      await result.current.sendMessage();
+    });
+    expect(result.current.lastSentDocuments).toEqual([
+      expect.objectContaining({ displayName: "typed.txt" }),
+    ]);
+
+    await act(async (): Promise<void> => {
+      await result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn(
+          "and now a spoken follow-up with nothing staged",
+          "voice-no-attachment-turn",
+          chat({ selectedModel: "chat-attachments" }),
+          "chat-attachments",
+        ),
+      );
+    });
+
+    const spokenRequest = vi.mocked(sendDesktopChat).mock.calls[1]?.[0];
+    expect(spokenRequest?.attachments).toBeUndefined();
+    expect(spokenRequest?.documentContext).toBeUndefined();
+    expect(result.current.lastSentDocuments).toEqual([]);
+  });
+
+  // #2843 — the queue-owned target is captured at handoff (ADR-0154 D1), so the turn must carry the
+  // files staged when the transcript settled. Reading live composer state at drain time instead would
+  // attach a file the user staged for a later turn (or another chat) to this one, and would clear a
+  // chip that was never sent.
+  it("sends the files staged at handoff and keeps a later staged file for its own turn", async (): Promise<void> => {
+    const { result } = await setupUngroundedAttachmentSession();
+    const gate = deferred<{
+      readonly chat: Chat;
+      readonly messages: readonly ChatMessage[];
+      readonly memory: undefined;
+    }>();
+    vi.mocked(sendDesktopChat).mockImplementationOnce(async () => gate.promise as never);
+    await act(async (): Promise<void> => {
+      expect(
+        await result.current.addPendingAttachment(
+          new File(["first spec"], "first.txt", { type: "text/plain" }),
+        ),
+      ).toEqual({ ok: true });
+    });
+
+    let delivery: Promise<SendMessageOutcome> | undefined;
+    await act(async (): Promise<void> => {
+      delivery = result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn(
+          "what does the first spec say?",
+          "voice-snapshot-turn",
+          chat({ selectedModel: "chat-attachments" }),
+          "chat-attachments",
+        ),
+      );
+    });
+    await waitFor((): void => {
+      expect(sendDesktopChat).toHaveBeenCalledTimes(1);
+    });
+    // Staged AFTER the handoff: it belongs to the next turn, not this in-flight one.
+    await act(async (): Promise<void> => {
+      expect(
+        await result.current.addPendingAttachment(
+          new File(["second spec"], "second.txt", { type: "text/plain" }),
+        ),
+      ).toEqual({ ok: true });
+    });
+    gate.resolve({
+      chat: chat({ selectedModel: "chat-attachments" }),
+      messages: [
+        message({ id: "attachment-user", chatId: "chat-1", role: "user" }),
+        message({ id: "attachment-assistant", chatId: "chat-1", role: "assistant" }),
+      ],
+      memory: undefined,
+    });
+    let outcome: SendMessageOutcome | undefined;
+    await act(async (): Promise<void> => {
+      outcome = await delivery;
+    });
+
+    expect(outcome).toEqual({ status: "completed", assistantMessageId: "attachment-assistant" });
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]).toMatchObject({
+      attachments: [{ name: "first.txt" }],
+      documentContext: [{ displayName: "first.txt", text: "first spec" }],
+    });
+    expect(result.current.pendingAttachments.map((attachment) => attachment.name)).toEqual([
+      "second.txt",
+    ]);
+    expect(result.current.lastSentDocuments).toEqual([
+      expect.objectContaining({ displayName: "first.txt" }),
     ]);
   });
 });
