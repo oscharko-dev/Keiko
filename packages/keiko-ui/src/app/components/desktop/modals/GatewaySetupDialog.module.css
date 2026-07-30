@@ -1,11 +1,11 @@
-.headControls {
+.cmp-head-controls {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
 }
 
-.themeToggle {
+.cmp-theme-toggle {
   display: inline-flex;
   min-height: 36px;
   align-items: center;
@@ -19,19 +19,19 @@
   font-weight: var(--weight-semibold);
 }
 
-.themeToggle:hover {
+.cmp-theme-toggle:hover {
   border-color: var(--border-default);
   color: var(--text-primary);
   background: var(--surface-overlay);
 }
 
-.themeToggle:focus-visible {
+.cmp-theme-toggle:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
 @media (forced-colors: active) {
-  .themeToggle {
+  .cmp-theme-toggle {
     border-color: ButtonText;
     color: ButtonText;
     background: ButtonFace;

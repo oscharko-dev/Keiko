@@ -2375,14 +2375,14 @@ export function GatewaySetupDialog({
       >
         <form className="gw-form" onSubmit={(event) => void submit(event)}>
           <div className="gw-head">
-            <div className={styles.headControls}>
+            <div className={styles["cmp-head-controls"]}>
               <div className="gw-setup-badge">
                 <CubeIcon size={18} />
-                {preserveExisting ? "Credential update" : "Model gateway setup"}
+                {preserveExisting ? t("gatewaySetup.badge.update") : t("gatewaySetup.badge.setup")}
               </div>
               <button
                 type="button"
-                className={styles.themeToggle}
+                className={styles["cmp-theme-toggle"]}
                 aria-label={theme === "light" ? t("rail.darkMode") : t("rail.lightMode")}
                 onClick={toggleTheme}
               >
