@@ -8,8 +8,12 @@
 // deny-by-default allowlist, env isolation, redaction, and cancellation of the shared boundary apply to
 // the PR operation exactly as to every other tool.
 //
-// `gh` reads its own GitHub token from its keyring or from GH_TOKEN/GITHUB_TOKEN in the inherited
-// process environment; Keiko never reads or handles the token value. A non-OK HTTP status / non-zero
+// `gh` reads its own GitHub token from its keyring or from GH_TOKEN/GITHUB_TOKEN. Those names reach
+// the child ONLY because this adapter runs on the governed REMOTE env lane
+// (GOVERNED_GIT_REMOTE_SANDBOX_POLICY): the lane forwards the credential NAMES and the real HOME so
+// gh can resolve `~/.config/gh`, and the spawn boundary keeps their VALUES in its output scrub set —
+// Keiko never reads, stores, or logs the token, and a token echoed back by gh is redacted before it
+// leaves this layer. A non-OK HTTP status / non-zero
 // exit is classified into a typed GitPullRequestRejectionReason by matching GitHub's own error tokens in
 // the (already secret-redacted) output. Raw stdout/stderr never leave this module — only the typed
 // reason, the content-free contract error code, and the opaque provider-assigned PR number cross out.
@@ -44,7 +48,11 @@ import {
   type RunCommandDeps,
   type SpawnFn,
 } from "./exec.js";
-import { DEFAULT_SANDBOX_POLICY, type CommandResult, type SandboxPolicy } from "./types.js";
+import {
+  GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
+  type CommandResult,
+  type SandboxPolicy,
+} from "./types.js";
 
 export interface NodeGitPullRequestAdapterDeps {
   // The repository root the operation runs in. Reused as the spawn-boundary workspace root.
@@ -52,8 +60,10 @@ export interface NodeGitPullRequestAdapterDeps {
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly now?: (() => number) | undefined;
   readonly spawn?: SpawnFn | undefined;
-  // Defaults to the shared sandbox policy. A PR operation legitimately egresses to GitHub, so the
-  // default `network: "inherit"` policy is correct here (as for the publish adapter).
+  // Defaults to the governed REMOTE lane (as for the publish and merge adapters): a PR operation
+  // legitimately egresses to GitHub and must be able to authenticate, which the fully isolated
+  // default makes impossible — it forwards no GH_TOKEN/GITHUB_TOKEN and gives the child an empty
+  // HOME, so `gh` reaches neither its keyring nor `~/.config/gh`.
   readonly policy?: SandboxPolicy | undefined;
   readonly resolveExecutable?: ExecutableResolver | undefined;
   readonly home?: HomeProvider | undefined;
@@ -84,7 +94,7 @@ function buildRunContext(deps: NodeGitPullRequestAdapterDeps): RunContext {
   return {
     runDeps: {
       workspace: deps.workspace,
-      policy: deps.policy ?? DEFAULT_SANDBOX_POLICY,
+      policy: deps.policy ?? GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
       commandRules: GIT_PULL_REQUEST_COMMAND_RULES,
       spawn: deps.spawn ?? nodeSpawnFn,
       processEnv: deps.processEnv ?? process.env,

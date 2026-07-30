@@ -60,6 +60,10 @@ function workspaceInfo(rootPath: string): WorkspaceInfo {
 }
 
 function publishAdapter(): ReturnType<typeof createNodeGitPublishAdapter> {
+  // Only PATH is forwarded — deliberately no HOME and no credential, so the governed remote lane
+  // falls back to the ephemeral empty home and this suite stays hermetic against a local-filesystem
+  // remote. The credential lane itself is pinned by the unit suite in git-publish-node.test.ts,
+  // which asserts the env the push is actually spawned with.
   return createNodeGitPublishAdapter({
     workspace: info,
     processEnv: { PATH: process.env.PATH ?? "" },

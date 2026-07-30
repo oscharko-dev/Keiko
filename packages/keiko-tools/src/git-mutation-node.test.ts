@@ -83,3 +83,68 @@ describe("node git mutation adapter — failure-classification branches", () => 
     expect(rec.calls()).toHaveLength(0); // never reached the spawn boundary
   });
 });
+
+// ─── Governed identity lane (#2843) ────────────────────────────────────────────────────────────
+// The local mutation adapter must run under the GOVERNED IDENTITY env profile, not the fully
+// isolated default. With the default profile the child gets an EMPTY HOME, so `git commit` cannot
+// see the user's ~/.gitconfig identity or `commit.gpgsign`/`user.signingkey` — a governed commit is
+// then structurally unsigned, and in a repository with no local identity it cannot run at all.
+
+const IDENTITY_PARENT_ENV: NodeJS.ProcessEnv = {
+  PATH: "/usr/bin",
+  HOME: "/Users/dev",
+  GNUPGHOME: "/Users/dev/.gnupg",
+  SSH_AUTH_SOCK: "/tmp/ssh-agent.sock",
+  EMAIL: "dev@example.com",
+  GITHUB_TOKEN: "ghp_identity_lane_must_not_see_this",
+  AWS_SECRET_ACCESS_KEY: "aws-identity-lane-must-not-see-this",
+};
+
+function identityLaneAdapter(rec: SpawnRecorder): GitLocalMutationAdapter {
+  const { info } = makeWorkspace();
+  return createNodeGitMutationAdapter({
+    workspace: info,
+    processEnv: IDENTITY_PARENT_ENV,
+    now: () => 0,
+    spawn: rec.fn,
+    resolveExecutable: () => "git",
+  });
+}
+
+async function identityLaneEnv(): Promise<Record<string, string>> {
+  const rec = recordingSpawn();
+  const ad = identityLaneAdapter(rec);
+  const pending = ad.commit({ message: "feat: governed commit", allowEmpty: false });
+  rec.child.emit("close", 0, null);
+  await pending;
+  return rec.calls()[0]?.options.env ?? {};
+}
+
+describe("node git mutation adapter — the user's git identity reaches the commit", () => {
+  it("forwards the real HOME so ~/.gitconfig identity and signing configuration are readable", async () => {
+    const env = await identityLaneEnv();
+    expect(env.HOME).toBe("/Users/dev");
+    expect(env.USERPROFILE).toBe("/Users/dev");
+  });
+
+  it("forwards the signing-agent state a signed commit needs", async () => {
+    const env = await identityLaneEnv();
+    expect(env.GNUPGHOME).toBe("/Users/dev/.gnupg");
+    expect(env.SSH_AUTH_SOCK).toBe("/tmp/ssh-agent.sock");
+    expect(env.EMAIL).toBe("dev@example.com");
+  });
+
+  it("pins the fail-closed, deterministic values instead of inheriting them", async () => {
+    const env = await identityLaneEnv();
+    expect(env.GIT_TERMINAL_PROMPT).toBe("0");
+    expect(env.GIT_PAGER).toBe("cat");
+    expect(env.LC_ALL).toBe("C");
+  });
+
+  it("still forwards NO credential: the local lane never egresses", async () => {
+    const env = await identityLaneEnv();
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.GH_TOKEN).toBeUndefined();
+    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+  });
+});

@@ -2,13 +2,15 @@
 //
 // Executes read-only `gh api` calls through the SINGLE governed spawn boundary,
 // keiko-tools `runCommand`, exactly like the governed git delivery layer
-// (git-pr-node.ts). No provider SDK, no raw token handling: `gh` resolves its own
-// credentials and the exec boundary scrubs the child environment. The rule set and
-// the pre-validation below make the port structurally read-only — mutating `gh api`
-// invocations (method overrides or field payloads) are rejected before spawn.
+// (git-pr-node.ts) — and, like it, on the governed REMOTE env lane. No provider SDK,
+// no raw token handling: the lane forwards the credential NAMES and the real HOME so
+// `gh` resolves its own credentials, and the boundary keeps their VALUES in its output
+// scrub set. The rule set and the pre-validation below make the port structurally
+// read-only — mutating `gh api` invocations (method overrides or field payloads) are
+// rejected before spawn.
 
 import {
-  DEFAULT_SANDBOX_POLICY,
+  GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
   runCommand,
   type RunCommandDeps,
   type ExecutableResolver,
@@ -78,7 +80,7 @@ function assertReadOnlyGhApiArgv(argv: readonly string[]): void {
 function runDepsFor(options: GitHubCodeContextPortOptions): RunCommandDeps {
   return {
     workspace: options.workspace,
-    policy: DEFAULT_SANDBOX_POLICY,
+    policy: GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
     commandRules: GH_CODE_CONTEXT_COMMAND_RULES,
     spawn: options.spawn ?? nodeSpawnFn,
     resolveExecutable: options.resolveExecutable,

@@ -12,6 +12,7 @@ import {
 export type {
   NetworkPolicy,
   FilesystemPolicy,
+  HomeIsolation,
   SandboxPolicy,
   SandboxBackend,
   SandboxAttestation,
@@ -36,6 +37,10 @@ export {
   DEFAULT_COMMAND_RULES,
   DEFAULT_PATCH_LIMITS,
   DEFAULT_TOOL_HOST_CONFIG,
+  GOVERNED_GIT_IDENTITY_SANDBOX_POLICY,
+  GOVERNED_GIT_REMOTE_CREDENTIAL_ENV_ALLOWLIST,
+  GOVERNED_GIT_REMOTE_ENV_ALLOWLIST,
+  GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
 } from "@oscharko-dev/keiko-contracts";
 
 // Deep-merges a caller override over the defaults: the nested sandbox/patchLimits objects merge

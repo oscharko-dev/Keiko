@@ -16,6 +16,17 @@ import type { ContextToolObservation } from "./context-observations.js";
 export type NetworkPolicy = "inherit" | "none";
 export type FilesystemPolicy = "inherit" | "execution-root";
 
+// How the spawn boundary supplies HOME/USERPROFILE to the child.
+//   "ephemeral" — the default (ADR-0006 D2 Dimension 1 / C5): an empty per-run directory, so a
+//                 home-dir credential lookup (~/.npmrc, ~/.aws, ~/.git-credentials) resolves to
+//                 nothing.
+//   "inherit"   — the parent's own HOME, and ONLY for the two governed git lanes that cannot
+//                 function without it (commit identity + signing configuration; remote
+//                 authentication). Both lanes must also list HOME on `envAllowlist`; a lane that
+//                 asks to inherit an absent/empty HOME falls back to "ephemeral" so the child is
+//                 never left without a home directory.
+export type HomeIsolation = "ephemeral" | "inherit";
+
 export interface SandboxPolicy {
   // Names (never values) of parent env vars allowed to reach the child. No credential-bearing
   // var is ever listed here; the child env is built by name-copy, never `...process.env`.
@@ -26,6 +37,19 @@ export interface SandboxPolicy {
   // path leaves filesystem behaviour unchanged; assured execution sets this to "execution-root" and
   // requires an attested backend before surfacing apply-ready generated tests.
   readonly filesystem?: FilesystemPolicy | undefined;
+  // Names (never values) of CREDENTIAL-bearing parent env vars the child may inherit. Deliberately a
+  // SECOND list rather than more entries on `envAllowlist`: the spawn boundary derives its output
+  // scrub set from "everything not on envAllowlist", so a credential listed here is forwarded to the
+  // child AND still scrubbed from the captured stdout/stderr. Absent means "no credential reaches
+  // the child" — the default for every lane except governed remote delivery.
+  readonly credentialEnvAllowlist?: readonly string[] | undefined;
+  // Fixed name→value pairs the boundary sets on the child AFTER the name-copy, so a lane can pin
+  // fail-closed, deterministic behaviour (no interactive credential prompt, no pager, C locale)
+  // instead of inheriting whatever the parent happened to carry. Never a way to reach HOME: the
+  // home-isolation decision below is applied last and always wins.
+  readonly pinnedEnv?: Readonly<Record<string, string>> | undefined;
+  // Defaults to "ephemeral" when absent.
+  readonly homeIsolation?: HomeIsolation | undefined;
   // Hard cap on combined stdout+stderr bytes buffered before the child is killed (flood guard).
   readonly maxOutputBytes: number;
   // Default per-command wall-time before SIGTERM/SIGKILL.
@@ -68,6 +92,122 @@ export const DEFAULT_SANDBOX_POLICY: SandboxPolicy = {
   maxOutputBytes: 262_144,
   defaultTimeoutMs: 30_000,
   terminationGraceMs: 2_000,
+} as const;
+
+// ─── Governed git lanes: the two credential-capable env profiles ─────────────────
+//
+// The fully isolated default above is correct for every tool that runs ON the workspace. It is NOT
+// correct for the two governed git lanes that must act AS the local human against their own
+// machine and their own remote: with an empty HOME, `git commit` cannot see the user's identity or
+// signing configuration, and `git push` / `gh api` have no SSH agent, no ~/.ssh, no credential
+// helper and no gh configuration — so governed delivery cannot authenticate at all.
+//
+// These profiles are the SANCTIONED lane for that, and they deliberately mirror the credential
+// grant the product already ships for clone/fetch/pull (keiko-git `networkGitEnv`): the account and
+// agent state normal git credentials need, and nothing else. They do NOT spread the parent
+// environment, they never widen the command allowlists, and they leave every hard denial (no direct
+// push to a protected branch, no force push, no admin bypass, no finding dismissal) untouched —
+// those are enforced by policy packs and argv builders, not by the child's environment.
+
+// Account/agent state shared by both governed git lanes. `EMAIL` and the GIT_AUTHOR_/GIT_COMMITTER_
+// name+email pairs are how a user configures identity through the environment instead of a config
+// file. The matching *_DATE names are deliberately ABSENT: a commit timestamp is evidence, and an
+// ambient env var must not be able to backdate it.
+const GOVERNED_GIT_ACCOUNT_ENV: readonly string[] = Object.freeze([
+  "HOME",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
+  "XDG_RUNTIME_DIR",
+  "GNUPGHOME",
+  "SSH_AUTH_SOCK",
+  "SSH_AGENT_PID",
+  "USER",
+  "USERNAME",
+  "LOGNAME",
+  "EMAIL",
+  "GIT_AUTHOR_NAME",
+  "GIT_AUTHOR_EMAIL",
+  "GIT_COMMITTER_NAME",
+  "GIT_COMMITTER_EMAIL",
+]);
+
+// Lane 1 — governed LOCAL mutations (branch/stage/unstage/commit/recovery). Needs the user's git
+// identity and signing configuration (~/.gitconfig, ~/.gnupg, an SSH signing agent) so that a
+// repository configured for signed commits actually produces one, and a commit that cannot be
+// signed FAILS instead of silently landing unsigned. No credential token: this lane never egresses.
+const GOVERNED_GIT_IDENTITY_ENV_ALLOWLIST: readonly string[] = Object.freeze([
+  ...DEFAULT_ENV_ALLOWLIST,
+  ...GOVERNED_GIT_ACCOUNT_ENV,
+]);
+
+// Lane 2 — governed REMOTE delivery (`git push`, `gh api` for pull request + merge). Adds gh's own
+// non-secret host/config selectors on top of the account state.
+export const GOVERNED_GIT_REMOTE_ENV_ALLOWLIST: readonly string[] = Object.freeze([
+  ...GOVERNED_GIT_IDENTITY_ENV_ALLOWLIST,
+  "GH_HOST",
+  "GH_CONFIG_DIR",
+]);
+
+// Credential-bearing names for lane 2 ONLY. Kept off `envAllowlist` on purpose so the spawn
+// boundary keeps their values in its output scrub set: `gh` may print a token back in an error, and
+// that string must never reach a classifier, an error, an evidence record or a diagnostic. Keiko
+// forwards the NAME and never reads, stores, or logs the value.
+export const GOVERNED_GIT_REMOTE_CREDENTIAL_ENV_ALLOWLIST: readonly string[] = Object.freeze([
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GH_ENTERPRISE_TOKEN",
+  "GITHUB_ENTERPRISE_TOKEN",
+]);
+
+// Pins shared by both governed git lanes: never page (a pager blocks the bounded spawn), never open
+// an interactive terminal prompt (a missing credential must FAIL CLOSED, not hang), and pin the C
+// locale so the outcome classifiers keep matching git's/gh's English status phrases on a localized
+// host.
+const GOVERNED_GIT_PINNED_ENV: Readonly<Record<string, string>> = Object.freeze({
+  GIT_TERMINAL_PROMPT: "0",
+  GIT_PAGER: "cat",
+  PAGER: "cat",
+  LC_ALL: "C",
+});
+
+// Additional lane-2 pins, mirroring keiko-git `networkGitEnv`: every askpass/GUI credential prompt
+// is disabled (`/dev/null` is a non-executable path on POSIX and a non-existent one on Windows, so
+// the helper fails; GIT_ASKPASS also outranks a `core.askPass` from any config scope, and git then
+// falls back to the already-disabled terminal prompt), and SSH runs in batch mode with no
+// first-use host-key trust, so an unknown or changed host key fails closed.
+//
+// `networkGitEnv` additionally sets GIT_CONFIG_NOSYSTEM; this lane deliberately does NOT. On several
+// platforms the SYSTEM git config is where the platform credential helper is declared (macOS ships
+// `credential.helper = osxkeychain` there), so suppressing that scope would disable exactly the
+// credentials this lane exists to use. Nothing fail-closed depends on it: the prompt pins above
+// outrank every config scope.
+const GOVERNED_GIT_REMOTE_PINNED_ENV: Readonly<Record<string, string>> = Object.freeze({
+  ...GOVERNED_GIT_PINNED_ENV,
+  GIT_ASKPASS: "/dev/null",
+  SSH_ASKPASS: "/dev/null",
+  SSH_ASKPASS_REQUIRE: "never",
+  GCM_INTERACTIVE: "never",
+  GIT_SSH_COMMAND:
+    "ssh -oBatchMode=yes -oStrictHostKeyChecking=yes -oNumberOfPasswordPrompts=0 -oKbdInteractiveAuthentication=no -oPasswordAuthentication=no",
+});
+
+export const GOVERNED_GIT_IDENTITY_SANDBOX_POLICY: SandboxPolicy = {
+  ...DEFAULT_SANDBOX_POLICY,
+  envAllowlist: GOVERNED_GIT_IDENTITY_ENV_ALLOWLIST,
+  pinnedEnv: GOVERNED_GIT_PINNED_ENV,
+  homeIsolation: "inherit",
+} as const;
+
+export const GOVERNED_GIT_REMOTE_SANDBOX_POLICY: SandboxPolicy = {
+  ...DEFAULT_SANDBOX_POLICY,
+  envAllowlist: GOVERNED_GIT_REMOTE_ENV_ALLOWLIST,
+  credentialEnvAllowlist: GOVERNED_GIT_REMOTE_CREDENTIAL_ENV_ALLOWLIST,
+  pinnedEnv: GOVERNED_GIT_REMOTE_PINNED_ENV,
+  homeIsolation: "inherit",
 } as const;
 
 // ─── Sandbox enforcement attestation (ADR-0043, keiko-sandbox) ───────────────────

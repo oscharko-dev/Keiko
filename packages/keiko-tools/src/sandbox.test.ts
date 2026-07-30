@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { buildSandboxEnv, collectSensitiveEnvValues, isCommandAllowed } from "./sandbox.js";
-import { DEFAULT_COMMAND_RULES, DEFAULT_ENV_ALLOWLIST, type CommandRule } from "./types.js";
+import {
+  buildChildEnv,
+  buildSandboxEnv,
+  collectCredentialEnvValues,
+  collectSensitiveEnvValues,
+  isCommandAllowed,
+} from "./sandbox.js";
+import {
+  DEFAULT_COMMAND_RULES,
+  DEFAULT_ENV_ALLOWLIST,
+  DEFAULT_SANDBOX_POLICY,
+  GOVERNED_GIT_REMOTE_CREDENTIAL_ENV_ALLOWLIST,
+  GOVERNED_GIT_REMOTE_ENV_ALLOWLIST,
+  GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
+  type CommandRule,
+} from "./types.js";
 
 const NODE_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   { executable: "node" },
@@ -241,5 +255,96 @@ describe("isCommandAllowed — git external-command injection (diff.external RCE
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["-C", "sub", "status"]).allowed).toBe(
       true,
     );
+  });
+});
+
+// ─── The governed git env lanes: buildChildEnv + credential scrubbing ──────────────────────────
+
+const GOVERNED_PARENT_ENV: NodeJS.ProcessEnv = {
+  PATH: "/usr/bin",
+  HOME: "/Users/dev",
+  SSH_AUTH_SOCK: "/tmp/agent.sock",
+  LC_ALL: "de_DE.UTF-8",
+  GH_TOKEN: "gho_governed_lane_token",
+  AWS_SECRET_ACCESS_KEY: "aws-must-never-be-forwarded",
+};
+
+describe("buildChildEnv — the three ordered layers", () => {
+  it("is exactly the name-copy for a policy that declares neither credentials nor pins", () => {
+    expect(buildChildEnv(GOVERNED_PARENT_ENV, DEFAULT_SANDBOX_POLICY)).toEqual(
+      buildSandboxEnv(GOVERNED_PARENT_ENV, DEFAULT_ENV_ALLOWLIST),
+    );
+  });
+
+  it("forwards a declared credential name that the parent carries", () => {
+    const env = buildChildEnv(GOVERNED_PARENT_ENV, GOVERNED_GIT_REMOTE_SANDBOX_POLICY);
+    expect(env.GH_TOKEN).toBe("gho_governed_lane_token");
+    expect(env.HOME).toBe("/Users/dev");
+    expect(env.SSH_AUTH_SOCK).toBe("/tmp/agent.sock");
+  });
+
+  it("skips a declared credential the parent does not carry, and an empty one", () => {
+    const env = buildChildEnv(
+      { PATH: "/usr/bin", GITHUB_TOKEN: "" },
+      GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
+    );
+    expect("GH_TOKEN" in env).toBe(false);
+    expect("GITHUB_TOKEN" in env).toBe(false);
+  });
+
+  it("refuses to forward a credential too short to scrub out of captured output", () => {
+    // Fail closed: the boundary never hands the child a secret it could not redact on the way back.
+    const env = buildChildEnv(
+      { PATH: "/usr/bin", GH_TOKEN: "abcde" },
+      {
+        ...GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
+      },
+    );
+    expect("GH_TOKEN" in env).toBe(false);
+    expect(collectCredentialEnvValues({ GH_TOKEN: "abcde" }, ["GH_TOKEN"])).toEqual([]);
+  });
+
+  it("never forwards an ambient secret that is on neither list", () => {
+    const env = buildChildEnv(GOVERNED_PARENT_ENV, GOVERNED_GIT_REMOTE_SANDBOX_POLICY);
+    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+  });
+
+  it("pins override an inherited value under the same name", () => {
+    const env = buildChildEnv(GOVERNED_PARENT_ENV, GOVERNED_GIT_REMOTE_SANDBOX_POLICY);
+    expect(env.LC_ALL).toBe("C"); // the inherited de_DE.UTF-8 must not defeat the classifiers
+    expect(env.GIT_TERMINAL_PROMPT).toBe("0");
+  });
+
+  it("keeps every credential name OFF envAllowlist so the scrub set still covers it", () => {
+    const allowlisted = new Set(GOVERNED_GIT_REMOTE_ENV_ALLOWLIST);
+    for (const name of GOVERNED_GIT_REMOTE_CREDENTIAL_ENV_ALLOWLIST) {
+      expect(allowlisted.has(name)).toBe(false);
+    }
+    const scrubbed = collectSensitiveEnvValues(
+      GOVERNED_PARENT_ENV,
+      GOVERNED_GIT_REMOTE_ENV_ALLOWLIST,
+    );
+    expect(scrubbed).toContain("gho_governed_lane_token");
+  });
+});
+
+describe("collectCredentialEnvValues — the fail-closed scrub set", () => {
+  it("returns the value of every declared credential the parent carries", () => {
+    expect(
+      collectCredentialEnvValues(GOVERNED_PARENT_ENV, GOVERNED_GIT_REMOTE_CREDENTIAL_ENV_ALLOWLIST),
+    ).toEqual(["gho_governed_lane_token"]);
+  });
+
+  it("skips absent, empty, and too-short values so output is never over-redacted", () => {
+    expect(
+      collectCredentialEnvValues({ GH_TOKEN: "", GITHUB_TOKEN: "ab" }, [
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("returns nothing for a lane that declares no credentials", () => {
+    expect(collectCredentialEnvValues(GOVERNED_PARENT_ENV, [])).toEqual([]);
   });
 });

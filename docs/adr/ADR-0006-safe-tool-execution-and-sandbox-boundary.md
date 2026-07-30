@@ -6,6 +6,31 @@ Accepted
 
 Accepted; module location superseded by ADR-0019 (monorepo split — code now under `packages/keiko-tools/src/**`). Dimension 4 (network isolation) is further superseded by ADR-0043, which enforces `network:"none"` via `keiko-sandbox` at the OS level rather than relying on convention alone.
 
+> **Amended by the 0.3.0 release audit — governed git env lanes (2026-07-30).** D2 Dimension 1
+> below describes `DEFAULT_SANDBOX_POLICY`, which is unchanged and remains the profile for every
+> tool that runs ON the workspace. Two additional, explicitly declared profiles now exist for the
+> governed git surfaces, which do not run on the workspace but act AS the local human against their
+> own machine and their own remote (`GOVERNED_GIT_IDENTITY_SANDBOX_POLICY`,
+> `GOVERNED_GIT_REMOTE_SANDBOX_POLICY`, `packages/keiko-contracts/src/tools.ts`). Under the default
+> profile a governed `git commit` cannot read the user's identity or `commit.gpgsign`/
+> `user.signingkey` — it lands under an auto-detected author, unsigned, and reports success — and
+> `git push` / `gh api` have no SSH agent, no `~/.ssh`, no credential helper and no gh
+> configuration, so governed push, pull request and merge cannot authenticate at all. The two lanes
+> forward the account and agent state normal git credentials need, mirroring the grant
+> `networkGitEnv` (keiko-git) has always made for clone/fetch/pull, and the remote lane additionally
+> forwards the `GH_TOKEN`/`GITHUB_TOKEN` NAMES. Three properties bound the exception, all pinned by
+> tests: (1) the credential names are declared on a separate `credentialEnvAllowlist`, never on
+> `envAllowlist`, so their VALUES stay in the boundary's output scrub set and a token echoed by
+> `gh` is redacted before it can reach a classifier, an error, an evidence record or a diagnostic;
+> (2) a value too short to scrub safely is not forwarded at all; (3) the lanes pin every interactive
+> credential path closed, so a missing credential fails rather than hangs. Nothing else changes: the
+> same single spawn path, the same deny-by-default command allowlists, no-shell, cwd containment,
+> byte cap, timeout, cancellation and redaction apply, and the four hard denials (no direct push to
+> a protected branch, no force push, no admin bypass, no finding dismissal) are enforced by policy
+> packs and argv builders, not by the child's environment. The "no credential-bearing variable is
+> ever forwarded" and "no credential is available for exfiltration" statements below are therefore
+> to be read as scoped to the default profile and every lane except governed remote delivery.
+
 ## Context
 
 Issue #6 delivers the layer that lets a language model touch a developer's repository through a
