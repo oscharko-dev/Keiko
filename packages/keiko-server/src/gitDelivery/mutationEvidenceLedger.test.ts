@@ -13,6 +13,7 @@ import {
   recordGitDeliveryMutationEvidence,
   type GitDeliveryEvidenceLedgerDoc,
 } from "./mutationEvidenceLedger.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 
 const DAY1 = Date.UTC(2026, 5, 20, 9, 0, 0);
 const DAY2 = Date.UTC(2026, 5, 21, 9, 0, 0);
@@ -158,5 +159,46 @@ describe("recordGitDeliveryMutationEvidence — fail-closed + never throws", () 
       );
     }).not.toThrow();
     expect(onPersistError).toHaveBeenCalledTimes(1);
+  });
+
+  // 0.3.0 audit: with NO explicit observer the default was `console.error("…", error)` — the raw error
+  // object on a channel no production assembly overrode. A failed governed-mutation evidence write was
+  // therefore invisible in production AND able to carry the content this ledger redacts.
+  it("routes a persistence failure to the redacted diagnostic sink instead of console", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const throwingStore: EvidenceStore = {
+      put: (): string => {
+        throw Object.assign(new Error(`ledger write failed for ${SK_FAKE}`), { code: "ENOSPC" });
+      },
+      get: (): string | undefined => undefined,
+      list: (): readonly string[] => [],
+      delete: (): void => {
+        /* no-op */
+      },
+    };
+
+    expect(() => {
+      recordGitDeliveryMutationEvidence(
+        { evidenceStore: throwingStore, redactString, diagnostics },
+        record(),
+      );
+    }).not.toThrow();
+
+    try {
+      expect(records).toHaveLength(1);
+      expect(records[0]?.source).toBe("gitDelivery.mutationEvidenceLedger");
+      expect(records[0]?.code).toBe("ENOSPC");
+      expect(records[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+      expect(JSON.stringify(records)).not.toContain(SK_FAKE);
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });

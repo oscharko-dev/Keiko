@@ -44,7 +44,7 @@ import type {
   MemoryType,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
-import type { UiHandlerDeps } from "./deps.js";
+import { currentAuditRedactString, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
@@ -349,7 +349,14 @@ export async function handleMemoryRetrieveContext(
       scopes,
       matchedMemoryIds: result.included.map((item) => item.memoryId),
     };
-    recordMemoryAudit({ evidenceStore: deps.evidenceStore }, event);
+    recordMemoryAudit(
+      {
+        evidenceStore: deps.evidenceStore,
+        redactString: currentAuditRedactString(deps),
+        ...(deps.diagnostics === undefined ? {} : { diagnostics: deps.diagnostics }),
+      },
+      event,
+    );
   }
   // Redact the entire envelope (contextBlock.text, memory excerpts, inclusion reasons).
   // We deliberately do NOT echo `result.request` back: it carries no fresh info beyond what

@@ -25,6 +25,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { UiStore } from "../store/index.js";
 import { handleEditorCompletion, type CompletionChatFactory } from "./completionRoutes.js";
 import {
@@ -60,6 +61,7 @@ function deps(
     env?: Record<string, string | undefined>;
     evidenceStore?: EvidenceStore;
     aiSettings?: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> | undefined;
+    diagnostics?: ServerDiagnosticSink | undefined;
   } = {},
 ): UiHandlerDeps {
   const aiSettings = input.aiSettings ?? { inlineCompletion: true };
@@ -69,8 +71,25 @@ function deps(
     evidenceStore: input.evidenceStore ?? createInMemoryEvidenceStore(),
     env: input.env ?? {},
     editorSettingsControl: editorSettingsControl(aiSettings),
+    ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
     ...(input.config === undefined ? {} : { config: input.config }),
   } as unknown as UiHandlerDeps;
+}
+
+// Capturing operator-diagnostic sink (never the default stderr sink) for the observability pins.
+function capturingDiagnostics(): {
+  readonly sink: ServerDiagnosticSink;
+  readonly records: ServerDiagnosticRecord[];
+} {
+  const records: ServerDiagnosticRecord[] = [];
+  return {
+    records,
+    sink: {
+      record: (entry: ServerDiagnosticRecord): void => {
+        records.push(entry);
+      },
+    },
+  };
 }
 
 function editorSettingsSnapshot(
@@ -568,6 +587,53 @@ describe("POST /api/editor/inline-completion — model tier (fast FIM, as-you-ty
     );
     expect(result.status).toBe(200);
     expect(body(result).items).toEqual([]);
+  });
+
+  // 0.3.0 audit: a model failure and "the model had nothing to suggest" produce the IDENTICAL
+  // zero-item wire response, so before this the two were indistinguishable to an operator — the cause
+  // was swallowed by a bare `catch {}` with nothing recorded anywhere.
+  it("emits a redacted, correlation-keyed diagnostic when the model tier fails", async () => {
+    const captured = capturingDiagnostics();
+    const failing: InlineCompletionChatFactory = () => () =>
+      Promise.reject(
+        Object.assign(new Error("provider rejected key sk-ABCDEFGHIJKLMNOPQRSTUV"), {
+          code: "GATEWAY_AUTHENTICATION",
+        }),
+      );
+    const ctx: RouteContext = {
+      ...postContext(inlineBody()),
+      correlationId: "inline-correlation-0001",
+    };
+    const result = await handleEditorInlineCompletion(
+      ctx,
+      deps({ config: fimConfig("fast"), diagnostics: captured.sink }),
+      permissiveOptions(failing),
+    );
+
+    expect(result.status).toBe(200);
+    expect(body(result).items).toEqual([]);
+    expect(captured.records).toHaveLength(1);
+    const record = captured.records[0];
+    expect(record?.correlationId).toBe("inline-correlation-0001");
+    expect(record?.source).toBe("editor.inlineCompletionRoutes");
+    expect(record?.operation).toBe("editor.inlineCompletion");
+    expect(record?.errorClass).toBe("Error");
+    expect(record?.code).toBe("GATEWAY_AUTHENTICATION");
+    // Body-free: the provider's message (and the key inside it) never enters the record.
+    expect(JSON.stringify(record)).not.toContain("sk-ABCDEFGHIJKLMNOPQRSTUV");
+    expect(JSON.stringify(record)).not.toContain("provider rejected");
+  });
+
+  it("still records a correlation id when the request carried none", async () => {
+    const captured = capturingDiagnostics();
+    const failing: InlineCompletionChatFactory = () => () => Promise.reject(new Error("boom"));
+    await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: fimConfig("fast"), diagnostics: captured.sink }),
+      permissiveOptions(failing),
+    );
+    expect(captured.records).toHaveLength(1);
+    expect(captured.records[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
   });
 
   it("self-cancels as-you-type model calls after the latency budget", async () => {

@@ -10,8 +10,10 @@ import { persistCompactionEvidence } from "@oscharko-dev/keiko-evidence";
 import { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { ContextCompactionRecord } from "@oscharko-dev/keiko-contracts";
+import { randomUUID } from "node:crypto";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentRedactionSecrets } from "./deps.js";
+import { currentAuditRedactString, currentRedactionSecrets } from "./deps.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 
 export interface ChatCompactionEvidenceInput {
   // The optional record returned by deriveCompactionOutcome; undefined on the fast path.
@@ -62,10 +64,19 @@ export function persistChatCompactionEvidence(
       },
     );
   } catch (error) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      "chat-compaction-evidence: persistence failed (best-effort, send unaffected)",
-      error,
+    // Best-effort stays best-effort — the send is unaffected — but the failure is no longer a
+    // `console.warn` carrying the raw error object on a channel production never overrode. It goes to
+    // the server's single redacted diagnostic sink so a compaction-evidence gap is observable.
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: randomUUID(),
+        operation: "chat.compaction.evidence",
+        source: "chat-compaction-evidence",
+        error,
+        summary: "Audit or evidence persistence failed.",
+        redact: currentAuditRedactString(deps),
+      }),
     );
   }
 }

@@ -9,6 +9,7 @@ import {
   createAuditRedactor,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
+import { MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS } from "@oscharko-dev/keiko-contracts";
 import type {
   MemoryAuditEvent,
   MemoryId,
@@ -25,7 +26,9 @@ import {
   recordMemoryAudits,
   createMemoryAuditDeleteCommitHandler,
   verifyMemoryAuditHashChain,
+  type RecordMemoryAuditOptions,
 } from "./memory-audit-handler.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -43,6 +46,12 @@ function brandedMemoryWorkspaceId(value: string): MemoryWorkspaceId {
   const u: unknown = value;
   return u as MemoryWorkspaceId;
 }
+
+// The real security-layer redactor with no extra literals. Tests must never stand in an identity
+// function here: `recordMemoryAudit(s)` requires a redactor precisely because an identity default was
+// a fail-open on the evidence-redaction boundary, and a fixture that reinstates one would stop
+// exercising the production shape.
+const TEST_AUDIT_REDACT: (input: string) => string = createAuditRedactor({}, {});
 
 function makeRecord(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
   const id = brandedMemoryId("mem-test-1");
@@ -504,7 +513,10 @@ describe("recordMemoryAudit", () => {
       scopes: [{ kind: "user", userId: brandedMemoryUserId("u-1") }],
       matchedMemoryIds: [brandedMemoryId("mem-test-1")],
     };
-    recordMemoryAudit({ evidenceStore: store, now: () => FIXED_NOW }, event);
+    recordMemoryAudit(
+      { evidenceStore: store, redactString: TEST_AUDIT_REDACT, now: () => FIXED_NOW },
+      event,
+    );
     const events = readEvents(store, FIXED_NOW);
     expect(events).toHaveLength(1);
     expect(events[0]?.kind).toBe("memory:retrieved");
@@ -524,7 +536,10 @@ describe("recordMemoryAudit", () => {
       scopes: [{ kind: "user", userId: brandedMemoryUserId("u-1") }],
       matchedMemoryIds: [brandedMemoryId("mem-test-1")],
     };
-    recordMemoryAudit({ evidenceStore: store, now: () => afterMidnight }, event);
+    recordMemoryAudit(
+      { evidenceStore: store, redactString: TEST_AUDIT_REDACT, now: () => afterMidnight },
+      event,
+    );
     const events = readEvents(store, beforeMidnight);
     expect(events).toHaveLength(1);
     expect(store.get(auditRunIdFor(afterMidnight))).toBeUndefined();
@@ -551,7 +566,10 @@ describe("recordMemoryAudit", () => {
     };
 
     expect(() => {
-      recordMemoryAudit({ evidenceStore: store, required: true }, event);
+      recordMemoryAudit(
+        { evidenceStore: store, redactString: TEST_AUDIT_REDACT, required: true },
+        event,
+      );
     }).toThrow("audit store unavailable");
   });
 });
@@ -630,14 +648,132 @@ describe("recordMemoryAudits", () => {
       reason: "below-threshold",
     });
 
-    recordMemoryAudits({ evidenceStore: store, now: () => FIXED_NOW }, [
-      event("evt-1", "mem-1"),
-      event("evt-2", "mem-2"),
-    ]);
+    recordMemoryAudits(
+      { evidenceStore: store, redactString: TEST_AUDIT_REDACT, now: () => FIXED_NOW },
+      [event("evt-1", "mem-1"), event("evt-2", "mem-2")],
+    );
 
     expect(updateCount).toBe(1);
     const events = readEvents(store, FIXED_NOW);
     expect(events.map((entry) => entry.eventId)).toEqual(["evt-1", "evt-2"]);
+  });
+
+  // ── 0.3.0 audit item 5: the evidence-redaction boundary fails CLOSED ──────────
+  //
+  // `redactString` used to be optional with `?? (input) => input`. Every caller that forgot it — and
+  // `{ evidenceStore: deps.evidenceStore }` was the common shape in production — persisted UNREDACTED
+  // summaries into the on-disk audit ledger with nothing failing. The pin is a compile-time one on
+  // purpose: the fix is that a redactor-less caller cannot exist, which no runtime assertion can show.
+  //
+  // Before the fix the call below type-checks, so the `@ts-expect-error` is UNUSED and
+  // `npm run typecheck` fails with TS2578. After the fix the call is the error the directive expects.
+  it("rejects a redactor-less caller at the type level", () => {
+    const store = createInMemoryEvidenceStore();
+    const event: MemoryAuditEvent = {
+      schemaVersion: "1",
+      kind: "memory:retrieved",
+      eventId: "evt-no-redactor",
+      occurredAt: FIXED_NOW,
+      initiatorSurface: "workflow",
+      summary: "retrieval returned 1 record",
+      scopes: [{ kind: "user", userId: brandedMemoryUserId("u-1") }],
+      matchedMemoryIds: [brandedMemoryId("mem-test-1")],
+    };
+    // @ts-expect-error redactString is REQUIRED: no redactor must mean no unredacted write.
+    const optionsWithoutRedactor: RecordMemoryAuditOptions = { evidenceStore: store };
+    expect(optionsWithoutRedactor.evidenceStore).toBe(store);
+    recordMemoryAudits({ ...optionsWithoutRedactor, redactString: TEST_AUDIT_REDACT }, [event]);
+    expect(readEvents(store, FIXED_NOW)).toHaveLength(1);
+  });
+
+  // ── 0.3.0 audit item 4: a failed evidence write is visible in production ──────
+  //
+  // The default sink was `console.error("…", error)`: the RAW error object (message + stack) on a
+  // channel no production assembly overrode. That made a failed audit write both invisible to
+  // operators and capable of carrying the content this module exists to redact.
+  it("reports a persistence failure to the diagnostic sink instead of console", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const throwingStore: EvidenceStore = {
+      put: () => {
+        throw Object.assign(new Error("evidence dir unwritable: /Users/op/.keiko/evidence"), {
+          code: "EACCES",
+        });
+      },
+      get: () => undefined,
+      list: () => [],
+      delete: () => undefined,
+    };
+    const event: MemoryAuditEvent = {
+      schemaVersion: "1",
+      kind: "memory:retrieved",
+      eventId: "evt-persist-failure",
+      occurredAt: FIXED_NOW,
+      initiatorSurface: "workflow",
+      summary: "retrieval returned 1 record",
+      scopes: [{ kind: "user", userId: brandedMemoryUserId("u-1") }],
+      matchedMemoryIds: [brandedMemoryId("mem-test-1")],
+    };
+
+    expect(() => {
+      recordMemoryAudits(
+        { evidenceStore: throwingStore, redactString: TEST_AUDIT_REDACT, diagnostics },
+        [event],
+      );
+    }).not.toThrow();
+
+    try {
+      expect(records).toHaveLength(1);
+      expect(records[0]?.source).toBe("memory-audit-handler.direct");
+      expect(records[0]?.operation).toBe("memory.audit.persist");
+      expect(records[0]?.code).toBe("EACCES");
+      expect(records[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+      // Body-free: the store's path never enters the record.
+      expect(JSON.stringify(records)).not.toContain("/Users/op/.keiko/evidence");
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("keeps a hostile summary out of the persisted record and caps its length", () => {
+    const store = createInMemoryEvidenceStore();
+    // Fragmented so this source file contains no contiguous credential pattern.
+    const secret = ["sk-", "proj", "_", "AbCDef0123456789", "GhIjKl"].join("");
+    const longTail = "A".repeat(4_000);
+    const event: MemoryAuditEvent = {
+      schemaVersion: "1",
+      kind: "memory:workflow-omitted",
+      eventId: "evt-hostile",
+      occurredAt: FIXED_NOW,
+      initiatorSurface: "workflow",
+      summary: `Workflow omitted memory using ${secret} ${longTail}`,
+      workflowRunId: "wr-hostile",
+      scopes: [{ kind: "user", userId: brandedMemoryUserId(secret) }],
+      omittedMemoryId: brandedMemoryId("mem-hostile"),
+      reason: `below-threshold ${secret}`,
+    };
+
+    recordMemoryAudits(
+      {
+        evidenceStore: store,
+        redactString: createAuditRedactor({ additionalSecrets: [secret] }, {}),
+        now: () => FIXED_NOW,
+      },
+      [event],
+    );
+
+    const persisted = store.get(auditRunIdFor(FIXED_NOW)) ?? "";
+    expect(persisted).not.toContain(secret);
+    expect(persisted).toContain("[REDACTED]");
+    const [written] = readEvents(store, FIXED_NOW);
+    expect(written?.summary.length).toBeLessThanOrEqual(MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS);
+    expect(written?.summary).not.toContain(secret);
   });
 });
 

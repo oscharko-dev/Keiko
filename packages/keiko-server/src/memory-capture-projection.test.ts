@@ -6,7 +6,7 @@ import type {
   MemoryScope,
 } from "@oscharko-dev/keiko-contracts";
 import type { UserId } from "@oscharko-dev/keiko-contracts/memory";
-import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { createAuditRedactor, createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   buildMemoryCaptureDecisionAuditEvent,
   MemoryCaptureProjectionReadError,
@@ -20,6 +20,10 @@ function userId(value: string): UserId {
 }
 
 const OWN_SCOPE: MemoryScope = { kind: "user", userId: userId("operator-a") };
+
+// Real security-layer redactor: `recordMemoryAudit` requires one by name, so a fixture must not
+// reinstate the identity default that made the evidence-redaction boundary fail open.
+const TEST_AUDIT_REDACT: (input: string) => string = createAuditRedactor({}, {});
 
 function memoryId(value: string): MemoryId {
   return value as MemoryId;
@@ -202,7 +206,7 @@ describe("memory capture projection", () => {
   it("replays the existing hash-chained evidence manifests", () => {
     const store = createInMemoryEvidenceStore();
     const event = captureEvent("chained", 100);
-    recordMemoryAudit({ evidenceStore: store }, event);
+    recordMemoryAudit({ evidenceStore: store, redactString: TEST_AUDIT_REDACT }, event);
 
     const replayed = replayMemoryCaptureAuditLedger(store, 0);
     expect(replayed).toHaveLength(1);
@@ -220,7 +224,10 @@ describe("memory capture projection", () => {
 
   it("fails closed when a relevant audit manifest is tampered", () => {
     const store = createInMemoryEvidenceStore();
-    recordMemoryAudit({ evidenceStore: store }, captureEvent("tampered", 100));
+    recordMemoryAudit(
+      { evidenceStore: store, redactString: TEST_AUDIT_REDACT },
+      captureEvent("tampered", 100),
+    );
     const [runId] = store.list();
     expect(runId).toBeDefined();
     const original = store.get(runId ?? "") ?? "";

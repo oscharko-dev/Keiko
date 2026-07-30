@@ -110,7 +110,7 @@ function redactStringFor(deps: Pick<UiHandlerDeps, "redactor">): (input: string)
 }
 
 export function persistGitDeliveryEvidence(
-  deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
+  deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor" | "diagnostics">,
   result: GitMutationLifecycleResult,
   snapshot: GitWorktreeSnapshot,
   repoId: string,
@@ -134,7 +134,11 @@ export function persistGitDeliveryEvidence(
     { now },
   );
   recordGitDeliveryMutationEvidence(
-    { evidenceStore: deps.evidenceStore, redactString: redactStringFor(deps) },
+    {
+      evidenceStore: deps.evidenceStore,
+      redactString: redactStringFor(deps),
+      ...(deps.diagnostics === undefined ? {} : { diagnostics: deps.diagnostics }),
+    },
     record,
   );
 }

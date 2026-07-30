@@ -9,6 +9,8 @@
 //
 // This module MUST NOT import node:fs or node:sqlite — it operates purely over unknown/Error inputs.
 
+import { redact } from "./redaction.js";
+
 // The subset of fields SQLite-family errors expose that we classify on. Copied verbatim from the
 // per-store private copies.
 export interface SqliteErrorLike {
@@ -64,6 +66,79 @@ export function isSqliteCorruptionError(
   );
 }
 
+// ─── Persisted quarantine diagnostic ──────────────────────────────────────────
+//
+// `errorRecord` output is written VERBATIM to an on-disk `<db>.corrupt.<ts>.diagnostic.json` by all
+// three stores (keiko-server/store/db, keiko-memory-vault/db, keiko-local-knowledge/store), so it is a
+// persistence boundary, not a log line. It used to emit the raw `cause.message`, a wholesale
+// `String(cause)` for non-Errors, and an unhardened `cause.name`:
+//
+//   * a SQLite/domain message legitimately embeds filesystem paths, SQL fragments and DSNs (a
+//     connection string carries credentials), none of which belonged in a persisted artifact;
+//   * `String(cause)` invokes a hostile value's own `toString`, which can return anything at all — or
+//     throw, taking the quarantine write down with it;
+//   * `Error.name` is a plain mutable own property, so request-derived text (or an oversized string)
+//     could ride into the record as the "class".
+//
+// Every text field now passes through this package's `redact()` and a hard length cap, `.name` is
+// admitted only in an identifier shape, and no foreign `toString` is ever called.
+const MAX_ERROR_RECORD_TEXT_CHARS = 512;
+const MAX_ERROR_CLASS_CHARS = 64;
+const ERROR_CLASS_SHAPE = /^[A-Za-z][A-Za-z0-9_$]*$/;
+
+// Truncation happens AFTER redaction: cutting first could split a secret so that no pattern matches
+// the remaining prefix, and the point of the cap is size, not concealment.
+function boundedRedactedText(value: string): string {
+  const redacted = redact(value);
+  return redacted.length <= MAX_ERROR_RECORD_TEXT_CHARS
+    ? redacted
+    : `${redacted.slice(0, MAX_ERROR_RECORD_TEXT_CHARS)}…`;
+}
+
+// Reflective reads over a thrown value are hostile-input reads: a getter or proxy trap may throw.
+function safeName(value: object): string | undefined {
+  try {
+    const name: unknown = Reflect.get(value, "name");
+    return typeof name === "string" ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// The class label comes from code (a class declaration), never from request data — but only once it is
+// shape- and length-checked, because `name` is writable. Anything else degrades to "Error".
+function hardenedErrorClass(cause: unknown): string {
+  if (!(cause instanceof Error)) return typeof cause;
+  const name = safeName(cause);
+  if (name === undefined || name.length > MAX_ERROR_CLASS_CHARS || !ERROR_CLASS_SHAPE.test(name)) {
+    return "Error";
+  }
+  return name;
+}
+
+// Text for the persisted `message` field. An Error's own message is redacted and capped; a primitive
+// is rendered without consulting any foreign method; an object/function is NOT stringified at all
+// (`String(value)` would run its `toString`), so it degrades to its `typeof`.
+function hardenedMessage(cause: unknown): string {
+  if (cause instanceof Error) return boundedRedactedText(cause.message);
+  switch (typeof cause) {
+    case "string":
+      return boundedRedactedText(cause);
+    case "number":
+    case "boolean":
+    case "bigint":
+      return String(cause);
+    case "undefined":
+      return "undefined";
+    default:
+      return cause === null ? "null" : `[${typeof cause}]`;
+  }
+}
+
+function boundedField(value: unknown): string | undefined {
+  return typeof value === "string" ? boundedRedactedText(value) : undefined;
+}
+
 export function errorRecord(
   error: unknown,
   unwrap: SqliteErrorUnwrap = IDENTITY_UNWRAP,
@@ -71,10 +146,10 @@ export function errorRecord(
   const cause = unwrap(error);
   const e = sqliteErrorLike(cause);
   return {
-    errorClass: cause instanceof Error ? cause.name : typeof cause,
-    code: typeof e.code === "string" ? e.code : undefined,
+    errorClass: hardenedErrorClass(cause),
+    code: boundedField(e.code),
     errcode: typeof e.errcode === "number" ? e.errcode : undefined,
-    errstr: typeof e.errstr === "string" ? e.errstr : undefined,
-    message: cause instanceof Error ? cause.message : String(cause),
+    errstr: boundedField(e.errstr),
+    message: hardenedMessage(cause),
   };
 }

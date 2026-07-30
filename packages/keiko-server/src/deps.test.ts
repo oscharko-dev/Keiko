@@ -48,6 +48,7 @@ import {
   reconcileTaskWorkspacesAtStartup,
   type UiHandlerDeps,
 } from "./deps.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import type { WorkspaceReconciliationService } from "./task-workspace/types.js";
 import {
   TASK_WORKSPACE_SCHEMA_VERSION,
@@ -547,6 +548,75 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
         uiDbPath: join(stateDir, "keiko-ui.db"),
       }),
     ).toThrow("Managed task-workspace boundary initialization failed.");
+  });
+
+  // 0.3.0 audit item 7: `materializedManagedRoot` swallowed the mkdir error entirely. One caller then
+  // threw a cause-less Error and the other silently returned `runtime-unqualified`, so a permission or
+  // read-only-volume problem on the one directory the Coding runtime cannot work without had no
+  // observable reason anywhere.
+  it("diagnoses why the managed workspace boundary could not be materialized", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+    const stateDir = tmp("managed-root-diagnostic-");
+    writeFileSync(join(stateDir, "task-workspaces"), "occupied");
+
+    expect(() =>
+      buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: tmp("managed-root-diagnostic-evidence-"),
+        env: {},
+        uiDbPath: join(stateDir, "keiko-ui.db"),
+        diagnostics,
+      }),
+    ).toThrow("Managed task-workspace boundary initialization failed.");
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.source).toBe("deps.managedTaskWorkspaceRoot");
+    expect(records[0]?.operation).toBe("server.composition");
+    expect(records[0]?.message).toBe("Managed task-workspace boundary materialization failed.");
+    expect(records[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+    // Content-free: the state directory path never enters the record.
+    expect(JSON.stringify(records)).not.toContain(stateDir);
+  });
+
+  it("diagnoses a DAP production composition failure instead of only marking it unavailable", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+    // The provisioning seam is the only injectable input to `createDapProductionService`; a throwing
+    // accessor reproduces a composition fault without depending on a specific internal validator.
+    const hostileProvisioning = {
+      get backendQualification(): never {
+        throw new Error("backend qualification exploded for /Users/op/.keiko/debug");
+      },
+    } as unknown as NonNullable<
+      Parameters<typeof buildUiHandlerDeps>[0]["dapProductionProvisioning"]
+    >;
+
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("dap-composition-diagnostic-evidence-"),
+      env: {},
+      store: createInMemoryUiStore(),
+      uiDbPath: join(tmp("dap-composition-diagnostic-state-"), "keiko-ui.db"),
+      dapProductionProvisioning: hostileProvisioning,
+      diagnostics,
+    });
+
+    expect(deps.dapDebug).toBeUndefined();
+    const composition = records.filter((entry) => entry.source === "deps.dapProduction");
+    expect(composition).toHaveLength(1);
+    expect(composition[0]?.operation).toBe("server.composition");
+    expect(composition[0]?.message).toBe("Debug production service composition failed.");
+    expect(composition[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+    expect(JSON.stringify(composition)).not.toContain("/Users/op/.keiko/debug");
   });
 
   it("constructs and composes the real fail-closed debug activation control (#2347)", async () => {

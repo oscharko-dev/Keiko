@@ -46,6 +46,8 @@ import { Gateway, selectCompletionModel } from "@oscharko-dev/keiko-model-gatewa
 import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
+import { newCorrelationId } from "../correlation.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
 import { assembleCodingContext } from "./codingContext.js";
 import { recordCodingContextEvidence } from "./codingContextEvidence.js";
@@ -440,6 +442,29 @@ function inlineModelTierRateBlocked(
   return !limiter.tryAcquire(realRoot, nowMs);
 }
 
+// A model/retrieval failure still renders zero ghost-text items (ADR-0042 D5 / AC1), but the CAUSE is
+// no longer discarded: "the model call failed" and "the model had nothing to suggest" produce the
+// identical wire response, so without this record an operator cannot tell an outage from a quiet
+// buffer. Content-free by construction — the error class, a machine code, and the correlation id
+// only; never the prompt, the buffer, the provider endpoint, or a credential.
+function reportInlineModelFailure(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: correlationId ?? newCorrelationId(),
+      operation: "editor.inlineCompletion",
+      source: "editor.inlineCompletionRoutes",
+      error,
+      summary: "The editor inline-completion model tier failed.",
+      redact: (message): string => String(deps.redactor(message)),
+    }),
+  );
+}
+
 // Decides whether the gated model tier runs and, if so, runs it. Order: policy → model decision →
 // per-root request and token ceilings → run (a model/retrieval failure degrades to zero items).
 async function runInlineModelTier(
@@ -448,6 +473,7 @@ async function runInlineModelTier(
   signal: AbortSignal,
   deps: UiHandlerDeps,
   options: EditorInlineCompletionRouteOptions,
+  correlationId: string | undefined,
 ): Promise<InlineModelOutcome> {
   const now = options.now ?? Date.now;
   if (!isInlineCompletionEnabledByPolicy(deps.env)) {
@@ -482,8 +508,9 @@ async function runInlineModelTier(
       tokenBudget,
     });
     return outcome;
-  } catch {
+  } catch (error) {
     // ADR-0042 D5 / AC1: a model or retrieval failure renders no ghost text; it never breaks the route.
+    reportInlineModelFailure(deps, correlationId, error);
     return noItemOutcome(selection.mode, selection.degradeReason, modelId, selection.latencyClass);
   }
 }
@@ -630,6 +657,7 @@ export async function handleEditorInlineCompletion(
       signal,
       deps,
       options,
+      ctx.correlationId,
     );
     if (!(await activationStillActive(deps, root.realRoot))) {
       return noItemsRouteResult(deps);

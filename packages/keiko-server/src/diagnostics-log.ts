@@ -74,6 +74,13 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "The bounded blame read was unavailable.",
   "The server-resolved editor operation failed.",
   "Local knowledge vector-index search failed.",
+  "The editor inline-completion model tier failed.",
+  "Editor test generation failed.",
+  "A gateway readiness probe could not be completed.",
+  "The coding sidecar gateway stream failed mid-response.",
+  "Audit or evidence persistence failed.",
+  "Debug production service composition failed.",
+  "Managed task-workspace boundary materialization failed.",
 ] as const;
 
 export type ServerDiagnosticSummary = (typeof SERVER_DIAGNOSTIC_SUMMARIES)[number];
