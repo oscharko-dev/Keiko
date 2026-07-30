@@ -454,11 +454,21 @@ function collectHiddenAssumptionFindings(
     : [];
 }
 
-function collectProhibitedTrustedFindings(
-  prompt: EnhancedPrompt,
-  analysis: PromptTaskAnalysis,
-): PromptSafetyFinding[] {
-  const trusted = [...trustedEntries(prompt)].join(" \n ").toLowerCase();
+/**
+ * Collect the prohibited-claim findings carried by one TRUSTED-channel prompt text. Pure. Every
+ * finding is `blocking`: a prompt Keiko hands back must never grant itself tool, file, network, or
+ * secret authority, instruct the reader to ignore the trusted instructions, or ask for system-prompt
+ * disclosure (ADR-0044 §5 — "the validate stage rejects prompts that make such claims").
+ *
+ * The cue vocabulary lives in this module, so the check lives here too. It takes a flat text
+ * projection rather than an `EnhancedPrompt` so the SAME rule set covers both a structured candidate
+ * (whose trusted sections `assessEnhancedPromptStructuralSafety` joins below) and a model-refined
+ * prompt, which has no section structure to walk. Never echoes the matched text.
+ */
+export function collectProhibitedPromptTextFindings(
+  trustedText: string,
+): readonly PromptSafetyFinding[] {
+  const trusted = trustedText.toLowerCase();
   const findings: PromptSafetyFinding[] = [];
   if (containsAny(trusted, TRUSTED_AUTHORITY_GRANT_CUES)) {
     findings.push(finding("capability-grant-claim", "no-authority-grant", "blocking"));
@@ -477,8 +487,17 @@ function collectProhibitedTrustedFindings(
       finding("system-prompt-disclosure", "no-secret-or-system-prompt-disclosure", "blocking"),
     );
   }
-  findings.push(...collectHiddenAssumptionFindings(prompt, analysis));
   return findings;
+}
+
+function collectProhibitedTrustedFindings(
+  prompt: EnhancedPrompt,
+  analysis: PromptTaskAnalysis,
+): PromptSafetyFinding[] {
+  return [
+    ...collectProhibitedPromptTextFindings([...trustedEntries(prompt)].join(" \n ")),
+    ...collectHiddenAssumptionFindings(prompt, analysis),
+  ];
 }
 
 /**

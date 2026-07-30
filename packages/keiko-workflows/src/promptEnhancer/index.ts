@@ -6,6 +6,11 @@
 // configured chat model for a bounded model-assisted refinement. Deterministic-only remains the
 // fail-safe path: model unavailability, invalid JSON, unsafe model output, and cancellations are all
 // surfaced through browser-safe routing metadata without leaking provider details.
+//
+// The validate stage runs on the artefact that is RETURNED (ADR-0044 §5), not on a candidate a later
+// stage supersedes: a refined prompt is re-assessed as a prompt in its own right, and a prompt the
+// stage already rejected is never handed onward for refinement. Both failures fall closed onto the
+// validated deterministic prompt.
 
 import {
   analyzePrompt,
@@ -342,6 +347,10 @@ type MaybeModelRefinementOutcome =
   | { readonly applied: false; readonly routing: PromptEnhancementModelRouting };
 
 const MODEL_RENDERED_PROMPT_MAX_CHARS = 24_000;
+// Mirrors `GENERATED_INPUT_MAX_CHARS` / `INPUT_TRUNCATION_MARKER` on the deterministic input path: a
+// bounded artefact says so. Without it the tail of a long model answer is dropped with nothing to
+// distinguish the result from a prompt the model chose to end there.
+const MODEL_RENDERED_PROMPT_TRUNCATION_MARKER = "\n… [model output truncated]";
 
 const MODEL_SYSTEM_PROMPT = [
   "You are Keiko Prompt Enhancer.",
@@ -436,9 +445,11 @@ function stripOuterMarkdownFence(text: string): string {
 function modelRenderedPrompt(content: string): string | undefined {
   const sanitized = stripOuterMarkdownFence(stripUnsafeFormatChars(content).normalize("NFKC"));
   if (sanitized.length === 0) return undefined;
-  return sanitized.length > MODEL_RENDERED_PROMPT_MAX_CHARS
-    ? sanitized.slice(0, MODEL_RENDERED_PROMPT_MAX_CHARS).trim()
-    : sanitized;
+  if (sanitized.length <= MODEL_RENDERED_PROMPT_MAX_CHARS) return sanitized;
+  const kept = sanitized
+    .slice(0, MODEL_RENDERED_PROMPT_MAX_CHARS - MODEL_RENDERED_PROMPT_TRUNCATION_MARKER.length)
+    .trim();
+  return `${kept}${MODEL_RENDERED_PROMPT_TRUNCATION_MARKER}`;
 }
 
 function isJsonObjectResponse(text: string): boolean {
@@ -599,24 +610,65 @@ function buildModelRefinement(options: {
   if (renderedPrompt === PromptEnhancer.renderEnhancedPromptText(deterministicPrompt)) {
     return { applied: false, routing: fallbackRouting(routing, "model-no-change") };
   }
+  // ADR-0044 §5: the validate stage runs on the text that is actually returned. The deterministic
+  // candidate's assessment describes an artefact this text supersedes, so reusing it would report a
+  // verdict about something the user never sees. A rejected verdict fails closed onto the deterministic
+  // prompt rather than shipping unvalidated model text.
+  const safety = PromptEnhancer.assessPromptTextSafety({
+    promptId: prompt.promptId,
+    promptText: renderedPrompt,
+    analysis: prepared.analysis,
+    input: prepared.input,
+  });
+  if (safety.decision === "rejected") {
+    return { applied: false, routing: fallbackRouting(routing, "model-unsafe-prompt") };
+  }
   return appliedModelRefinement({
     prompt,
     renderedPrompt,
-    safety: selection.winnerSafetyAssessment,
+    safety,
     selection,
     analysis: prepared.analysis,
     routing,
   });
 }
 
-async function tryModelRefinement(options: {
+interface ModelRefinementRequest {
   readonly request: PromptEnhancementWireRequest;
   readonly deps: RunPromptEnhancementDeps;
   readonly resolvedModel: ResolvedEnhancementModel;
   readonly prepared: PreparedEnhancement;
   readonly deterministicPrompt: EnhancedPrompt;
   readonly selection: WorkflowPromptCandidateSelection;
-}): Promise<MaybeModelRefinementOutcome> {
+}
+
+/**
+ * Run model refinement unless the validate stage already rejected the prompt being refined.
+ *
+ * A rejected verdict is the fail-safe result the pipeline exists to produce (`buildRejectedFailSafeSelection`);
+ * handing that prompt to a model replaces it with an artefact carrying neither the rejection nor the
+ * safeguard the rejection is about — for a safety-critical draft, the professional-advice disclaimer.
+ * The rejection is what the user must see, so refinement is not attempted and the routing says why.
+ */
+async function refineUnlessRejected(
+  options: ModelRefinementRequest,
+): Promise<MaybeModelRefinementOutcome> {
+  const { resolvedModel, selection } = options;
+  if (selection.winnerSafetyAssessment.decision !== "rejected") {
+    return tryModelRefinement(options);
+  }
+  if (resolvedModel.routing.availability !== "available") {
+    return { applied: false, routing: resolvedModel.routing };
+  }
+  return {
+    applied: false,
+    routing: fallbackRouting(resolvedModel.routing, "prompt-rejected-by-validation"),
+  };
+}
+
+async function tryModelRefinement(
+  options: ModelRefinementRequest,
+): Promise<MaybeModelRefinementOutcome> {
   const { request, deps, resolvedModel, prepared, deterministicPrompt, selection } = options;
   const execution = resolveModelExecution(resolvedModel, deps);
   if (!execution.ok) return { applied: false, routing: execution.routing };
@@ -713,7 +765,7 @@ export async function runPromptEnhancement(
     throw new Error("Prompt enhancement optimization produced no prompt.");
   }
   const resolvedModel = resolveModelRouting(request, deps.gatewayRoutingConfig);
-  const modelRefinement = await tryModelRefinement({
+  const modelRefinement = await refineUnlessRejected({
     request,
     deps,
     resolvedModel,
@@ -762,6 +814,36 @@ function evidenceModelMetadata(
   };
 }
 
+interface RecordedAppliedRules {
+  readonly safetyRules: PromptEnhancementRecordInput["appliedSafetyRules"];
+  readonly groundingDirectives: PromptEnhancementRecordInput["appliedGroundingDirectives"];
+}
+
+/**
+ * The applied-rules group of the manifest, derived from the text the manifest actually persists.
+ *
+ * `appliedSafetyRules` / `appliedGroundingDirectives` are governance claims ABOUT
+ * `enhancedPromptText`, and the record is integrity-hashed and schema-validated, so a false claim is
+ * sealed and passes every on-read assertion. Whether the claim holds is decided here by asking the
+ * production renderer whether the recorded text still IS the rendering of the artefact — never by a
+ * routing flag that a later change could desynchronise. When it is not (a model-refined run), a
+ * deterministic safety rule may be claimed only where the recorded text demonstrably still carries it,
+ * and no grounding plan is bound to that text at all.
+ */
+function appliedRulesForRecordedText(result: PromptEnhancementWireResponse): RecordedAppliedRules {
+  const prompt = result.enhancedPrompt;
+  if (result.renderedPrompt === PromptEnhancer.renderEnhancedPromptText(prompt)) {
+    return {
+      safetyRules: prompt.safetyRules,
+      groundingDirectives: prompt.groundingPlan.directives,
+    };
+  }
+  return {
+    safetyRules: prompt.safetyRules.filter((rule) => result.renderedPrompt.includes(rule)),
+    groundingDirectives: [],
+  };
+}
+
 function runIdForEvidence(result: PromptEnhancementWireResponse, recordedAt: string): string {
   return `pe-run-${sha256Hex(
     [result.analysis.requestId, result.promptId, result.inputFingerprintSha256, recordedAt].join(
@@ -779,6 +861,7 @@ export function buildPromptEnhancementRecordInput(options: {
   const winnerProfile = result.candidates.scorecards.find(
     (scorecard) => scorecard.candidateId === result.candidates.winnerCandidateId,
   )?.profile;
+  const applied = appliedRulesForRecordedText(result);
   return {
     runId: runIdForEvidence(result, recordedAt),
     recordedAt,
@@ -787,8 +870,8 @@ export function buildPromptEnhancementRecordInput(options: {
     originalInput: rawInput,
     enhancedPromptId: result.promptId,
     enhancedPromptText: result.renderedPrompt,
-    appliedSafetyRules: result.enhancedPrompt.safetyRules,
-    appliedGroundingDirectives: result.enhancedPrompt.groundingPlan.directives,
+    appliedSafetyRules: applied.safetyRules,
+    appliedGroundingDirectives: applied.groundingDirectives,
     assumptions: result.analysis.missingContext.flatMap((item) =>
       item.kind === "assumption" ? [item.statement] : [],
     ),
