@@ -34,6 +34,24 @@ function job(state: HtmlManualPodJob["state"]): HtmlManualPodJob {
   };
 }
 
+// A settled import that produced a usable pod but did NOT cover the whole manual: one page failed to
+// index, two were skipped, and the crawl could not retrieve some pages.
+function partialJob(): HtmlManualPodJob {
+  return {
+    ...job("partial"),
+    phase: "degraded",
+    crawl: { discovered: 9, accepted: 6, deniedCount: 3, bytesFetched: 900 },
+    indexing: {
+      totalDocuments: 6,
+      processedDocuments: 3,
+      failedDocuments: 1,
+      skippedDocuments: 2,
+      vectorsPersisted: 7,
+    },
+    remediations: [{ reason: "fetch-failed", guidance: "Some pages could not be retrieved." }],
+  };
+}
+
 interface Deferred<T> {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
@@ -117,7 +135,10 @@ describe("HtmlManualPodCreate", () => {
       origin: "https://docs.example.com",
       pathPrefix: null,
     });
-    expect(screen.getByRole("status")).toHaveTextContent(/2 pages indexed, 1 links skipped/i);
+    // The crawl line reports pages the crawler FETCHED. Calling them "indexed" was the audit's
+    // mislabel: acceptance by the crawler and landing in the index are two different events.
+    expect(screen.getByRole("status")).toHaveTextContent(/2 pages fetched, 1 links skipped/i);
+    expect(screen.getByRole("status")).not.toHaveTextContent(/2 pages indexed/i);
   });
 
   it("passes a provided path prefix through", async () => {
@@ -223,6 +244,31 @@ describe("HtmlManualPodCreate", () => {
     await waitFor(() => {
       expect(screen.getByRole("status")).toHaveTextContent(/Create failed/i);
     });
+  });
+
+  // Audit regression (0.3.0): this exact job — vectors persisted, pages skipped and failed — settled
+  // as `succeeded` and rendered "Manual pod created". A partial import must say partial, show the
+  // accepted / skipped / failed counts, and let the operator see what was left out.
+  it("reports a partial import as partial with its counts and what was left out", async () => {
+    const startCreateImpl = vi.fn().mockResolvedValue(job("running"));
+    const getJobImpl = vi.fn().mockResolvedValue(partialJob());
+    render(
+      <HtmlManualPodCreate
+        startCreateImpl={startCreateImpl}
+        getJobImpl={getJobImpl}
+        pollIntervalMs={5}
+      />,
+    );
+    startFilledCreate();
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent(/with gaps/i);
+    });
+    const status = screen.getByRole("status");
+    expect(status).not.toHaveTextContent(/^Manual pod created$/);
+    expect(status).toHaveTextContent(/6 pages fetched, 3 links skipped/i);
+    expect(status).toHaveTextContent(/3 of 6 pages indexed/i);
+    expect(status).toHaveTextContent(/1 pages failed, 2 pages skipped/i);
+    expect(status).toHaveTextContent(/Some pages could not be retrieved\./i);
   });
 
   it("surfaces a start failure without crashing", async () => {

@@ -24,6 +24,7 @@ import {
   type KnowledgePodUiGuidance,
 } from "@/lib/local-knowledge-api";
 import { ApiError } from "@/lib/api";
+import { useTranslate } from "@/lib/i18n";
 import { Icons } from "../../Icons";
 import KeikoSelect from "../../KeikoSelect";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
@@ -64,6 +65,33 @@ function lifecycleLabel(state: CapsuleListEntry["lifecycleState"]): string {
     default:
       return state;
   }
+}
+
+// ─── Grounding readiness (0.3.0 audit) ────────────────────────────────────────
+//
+// ONE rule, applied to both kinds of grounding source. A Knowledge Pod is offered only when its own
+// lifecycle is `ready`: a draft, indexing, stale, or failed pod cannot ground an answer. A Knowledge
+// Pod Set is offered only when the SAME rule holds for its members — the pod-set readiness projection
+// (keiko-local-knowledge `setReadiness`) is `ready`/`degraded` exactly when every member is itself
+// ready, and `draft`/`indexing`/`stale`/`error`/`unavailable` otherwise, with a member-less set
+// projecting `unavailable`.
+//
+// Sets used to be passed through unfiltered, so a failed set — or one whose members had all been
+// deleted — was offered in the picker as a usable grounding source.
+const SELECTABLE_SET_READINESS: ReadonlySet<string> = new Set(["ready", "degraded"]);
+
+function isSelectableKnowledgePod(capsule: CapsuleListEntry): boolean {
+  return capsule.lifecycleState === "ready";
+}
+
+function isSelectableKnowledgePodSet(set: CapsuleSetListEntry): boolean {
+  if (set.capsuleCount <= 0) return false;
+  const readiness = set.knowledgePod?.readiness;
+  // No Knowledge Pod summary echoed by the server: the member count above is the only readiness
+  // signal available, and withholding every set on a missing-metadata response would hide sets that
+  // are in fact usable. The zero-member case — the one unusable state visible without a summary — is
+  // already excluded.
+  return readiness === undefined || SELECTABLE_SET_READINESS.has(readiness);
 }
 
 function formatLoadError(error: unknown): string {
@@ -267,10 +295,14 @@ export function ConnectorPickerWidget({
   onSelect,
   onManageConnectors = () => undefined,
 }: ConnectorPickerWidgetProps): ReactNode {
+  const t = useTranslate();
   const [capsules, setCapsules] = useState<readonly CapsuleListEntry[]>([]);
   const [capsuleSets, setCapsuleSets] = useState<readonly CapsuleSetListEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Sets that loaded fine but cannot ground an answer. Counted rather than silently dropped: a set
+  // the user just composed must not simply disappear from the picker with no explanation.
+  const [withheldSetCount, setWithheldSetCount] = useState(0);
   // C263 — a failed capsule-set fetch must not be swallowed silently: surface it
   // as a non-blocking notice while the capsule picker keeps working.
   const [setsFailed, setSetsFailed] = useState(false);
@@ -289,6 +321,7 @@ export function ConnectorPickerWidget({
       setLoading(true);
       setError(null);
       setSetsFailed(false);
+      setWithheldSetCount(0);
       try {
         const [capsuleResult, capsuleSetResult] = await Promise.allSettled([
           fetchCapsules({ includeKnowledgePods: true }),
@@ -297,15 +330,16 @@ export function ConnectorPickerWidget({
         if (cancelled) return;
         if (capsuleResult.status === "fulfilled") {
           setCapsules(
-            capsulesForKnowledgePodUi(capsuleResult.value).filter(
-              (capsule) => capsule.lifecycleState === "ready",
-            ),
+            capsulesForKnowledgePodUi(capsuleResult.value).filter(isSelectableKnowledgePod),
           );
         } else {
           setError(formatLoadError(capsuleResult.reason));
         }
         if (capsuleSetResult.status === "fulfilled") {
-          setCapsuleSets(capsuleSetsForKnowledgePodUi(capsuleSetResult.value));
+          const loaded = capsuleSetsForKnowledgePodUi(capsuleSetResult.value);
+          const selectable = loaded.filter(isSelectableKnowledgePodSet);
+          setCapsuleSets(selectable);
+          setWithheldSetCount(loaded.length - selectable.length);
         } else {
           setSetsFailed(true);
         }
@@ -412,6 +446,12 @@ export function ConnectorPickerWidget({
       {setsFailed ? (
         <output className="connector-picker-notice" style={NATIVE_BLOCK_STYLE}>
           Knowledge Pod Sets could not be loaded.
+        </output>
+      ) : null}
+
+      {withheldSetCount > 0 ? (
+        <output className="connector-picker-notice" style={NATIVE_BLOCK_STYLE}>
+          {t("connectorPicker.sets.notReadyNotice", { count: String(withheldSetCount) })}
         </output>
       ) : null}
 

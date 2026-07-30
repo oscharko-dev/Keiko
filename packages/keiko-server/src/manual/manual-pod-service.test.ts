@@ -223,26 +223,53 @@ describe("executeJob", () => {
 });
 
 describe("refreshTerminalState", () => {
-  it("is succeeded only for an applied refresh whose index-apply did not fail", () => {
-    expect(refreshTerminalState(true, "updated")).toBe("succeeded");
-    expect(refreshTerminalState(true, "unchanged")).toBe("succeeded");
-    expect(refreshTerminalState(true, "partial")).toBe("succeeded");
-    expect(refreshTerminalState(true, "failed")).toBe("failed");
+  it("is succeeded only for an applied refresh whose index-apply did not fail and covered the manual", () => {
+    expect(refreshTerminalState(true, "updated", PROGRESS)).toBe("succeeded");
+    expect(refreshTerminalState(true, "unchanged", PROGRESS)).toBe("succeeded");
+    expect(refreshTerminalState(true, "partial", PROGRESS)).toBe("succeeded");
+    expect(refreshTerminalState(true, "failed", PROGRESS)).toBe("failed");
+  });
+
+  it("is partial for an applied refresh that left gaps (same honesty rule as create)", () => {
+    const degraded: HtmlManualIndexingProgress = { ...PROGRESS, phase: "degraded" };
+    expect(refreshTerminalState(true, "updated", degraded)).toBe("partial");
+    expect(refreshTerminalState(true, "unchanged", degraded)).toBe("partial");
   });
 
   it("is failed for every not-applied refresh (prior pod intact), whatever the outcome", () => {
     // The regression: a limit-reached crawl reports outcome "partial" but never applied, so the
     // prior pod is intact — it must read as failed, not as a successful refresh.
-    expect(refreshTerminalState(false, "partial")).toBe("failed");
-    expect(refreshTerminalState(false, "failed")).toBe("failed");
-    expect(refreshTerminalState(false, "cancelled")).toBe("failed");
-    expect(refreshTerminalState(false, "unchanged")).toBe("failed");
+    expect(refreshTerminalState(false, "partial", PROGRESS)).toBe("failed");
+    expect(refreshTerminalState(false, "failed", PROGRESS)).toBe("failed");
+    expect(refreshTerminalState(false, "cancelled", PROGRESS)).toBe("failed");
+    expect(refreshTerminalState(false, "unchanged", PROGRESS)).toBe("failed");
   });
 });
 
 describe("createTerminalState", () => {
   it("is succeeded only when at least one document's vectors were persisted", () => {
     expect(createTerminalState(PROGRESS)).toBe("succeeded");
+  });
+
+  // Audit regression (0.3.0): a partially crawled / partially indexed import persisted SOME vectors,
+  // so the terminal state was "succeeded" and the UI showed its success message — while pages of the
+  // approved manual had been skipped or had failed to index. A usable-but-incomplete pod is neither a
+  // success nor a failure; it is `partial`, and the operator has to be told so.
+  it("is partial when a usable pod exists but the import did not cover the whole manual", () => {
+    expect(
+      createTerminalState({
+        ...PROGRESS,
+        phase: "degraded",
+        indexing: {
+          status: "succeeded",
+          totalDocuments: 4,
+          processedDocuments: 3,
+          failedDocuments: 1,
+          skippedDocuments: 0,
+          vectorsPersisted: 6,
+        },
+      }),
+    ).toBe("partial");
   });
 
   it("is failed when nothing was indexed or the index persisted no vectors", () => {

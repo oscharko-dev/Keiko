@@ -24,6 +24,7 @@ const POLL_INTERVAL_MS = 1500;
 const CREATE_LABEL_KEYS: ManualPodStateLabelKeys = {
   running: "manualPodCreate.progress.running",
   succeeded: "manualPodCreate.state.succeeded",
+  partial: "manualPodCreate.state.partial",
   failed: "manualPodCreate.state.failed",
 };
 

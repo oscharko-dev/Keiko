@@ -77,3 +77,31 @@ add network behavior.
 - Linux CI remains authoritative for platform-specific editor release evidence. The macOS
   `npm run check:editor-release-evidence` still reports the known local fingerprint difference;
   Linux `node:22-bookworm` verification passes with the committed evidence JSON.
+
+## 0.3.0 Audit Corrections
+
+Two honesty gaps in this surface were closed rather than documented away.
+
+**Member embedding-identity validation now exists.** `capsule-set-compose.tsx` documented that
+"incompatible embedding identities across members are rejected server-side and surfaced here as a
+400 — the UI cannot pre-validate identity", but no such validation existed at any layer: a set could
+be composed from pods living in different embedding spaces, and it then presented itself as a usable
+grounding source while every member's dense lane failed closed under the other's query identity.
+`composeCapsules` (`packages/keiko-local-knowledge/src/composition.ts`) now compares members
+pairwise through the single canonical `compareEmbeddingProfiles` contract and refuses a GENUINE
+incompatibility with `CompositionError` code `incompatible-embedding-identity`, which the
+`POST /api/local-knowledge/capsule-sets` route already maps to a 400. `unknown` (an unverified legacy
+profile) and `opaque` stay composable — the summary layer already reports those as
+reindex-recommended guidance, and refusing them would make every pre-hardening pod uncomposable.
+Policy posture is deliberately excluded from the compared profile, so two sealed pods in the same
+space remain composable.
+
+**Set readiness now gates the connector picker.** The picker filtered Knowledge Pods to
+`lifecycleState === "ready"` but passed Knowledge Pod Sets through unfiltered, so a failed set — or
+one whose members had all been deleted — was offered as a grounding source. It now applies the same
+rule to sets via the `setReadiness` projection (`ready`/`degraded` only, plus a non-zero member
+count) and states how many sets it withheld instead of letting them disappear silently.
+
+Verification anchors added: `packages/keiko-local-knowledge/src/composition.test.ts`,
+`packages/keiko-server/src/local-knowledge-handlers.test.ts`,
+`packages/keiko-ui/src/app/components/desktop/widgets/cards/ConnectorPickerWidget.test.tsx`.

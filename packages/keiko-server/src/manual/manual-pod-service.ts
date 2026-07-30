@@ -177,25 +177,40 @@ export interface ManualPodRunOutcome {
   readonly state: HtmlManualPodJobState;
 }
 
-// The terminal state for a refresh: `succeeded` ONLY when the index-apply path ran (`applied`: a
+// The one coverage rule both operations settle by, so a create and a refresh can never disagree about
+// what "succeeded" means: a usable pod plus a fully covered manual is `succeeded`; a usable pod with
+// gaps is `partial` (the domain phase already knows the difference — `ready` vs `degraded`); anything
+// that produced nothing usable is `failed`.
+function usableTerminalState(
+  progress: HtmlManualIndexingProgress,
+  usable: boolean,
+): HtmlManualPodJobState {
+  if (!usable) return "failed";
+  return progress.phase === "ready" ? "succeeded" : "partial";
+}
+
+// The terminal state for a refresh: nothing usable unless the index-apply path ran (`applied`: a
 // completed, non-empty crawl) AND the apply itself did not fail. A not-applied refresh (limit-reached
 // / empty / cancelled crawl) leaves the prior pod intact, and an apply that failed outright changed
-// nothing — both are `failed`, so the poller never reports a non-applied refresh as a success.
+// nothing — both are `failed`, so the poller never reports a non-applied refresh as a success. An
+// applied refresh that left gaps settles `partial`, not `succeeded`.
 export function refreshTerminalState(
   applied: boolean,
   outcome: ManualRefreshOutcome,
+  progress: HtmlManualIndexingProgress,
 ): HtmlManualPodJobState {
-  if (!applied) return "failed";
-  return outcome === "failed" ? "failed" : "succeeded";
+  return usableTerminalState(progress, applied && outcome !== "failed");
 }
 
-// The terminal state for a create: `succeeded` ONLY when at least one document's vectors were
-// persisted (a searchable pod exists). An empty or cancelled crawl (no indexing) or an all-failed
-// index persists nothing, so there is no usable pod → `failed`.
+// The terminal state for a create: a usable pod requires at least one document's vectors to have been
+// persisted (something is searchable). An empty or cancelled crawl (no indexing) or an all-failed
+// index persists nothing → `failed`. Vectors persisted but pages of the approved manual skipped or
+// failed → `partial`; only a fully covered manual is `succeeded`.
 export function createTerminalState(progress: HtmlManualIndexingProgress): HtmlManualPodJobState {
-  return progress.indexing !== null && progress.indexing.vectorsPersisted > 0
-    ? "succeeded"
-    : "failed";
+  return usableTerminalState(
+    progress,
+    progress.indexing !== null && progress.indexing.vectorsPersisted > 0,
+  );
 }
 
 // A run failure is a body-free failure: the error is dropped and the job goes to state=failed. The
@@ -289,7 +304,7 @@ function refreshRun(
     })
       .then((result) => ({
         progress: result.progress,
-        state: refreshTerminalState(result.applied, result.changeSummary.outcome),
+        state: refreshTerminalState(result.applied, result.changeSummary.outcome, result.progress),
       }))
       .finally(() => {
         ctx.env.close();

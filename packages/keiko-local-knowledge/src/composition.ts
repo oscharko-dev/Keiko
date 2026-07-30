@@ -20,6 +20,8 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  compareEmbeddingProfiles,
+  embeddingProfileFromModelIdentity,
   validateKnowledgeSourceScope,
   type CapsuleSet,
   type CapsuleSetId,
@@ -49,7 +51,8 @@ export type CompositionErrorCode =
   | "duplicate-source-in-batch"
   | "source-already-linked"
   | "empty-capsule-list"
-  | "duplicate-capsule-in-batch";
+  | "duplicate-capsule-in-batch"
+  | "incompatible-embedding-identity";
 
 export class CompositionError extends Error {
   readonly code: CompositionErrorCode;
@@ -369,13 +372,58 @@ export function composeCapsules(store: KnowledgeStore, opts: ComposeCapsulesOpti
   // Verify EVERY capsule id resolves BEFORE we open the CapsuleSet transaction. The
   // create+audit pair must be atomic; failing partway through with the set already on
   // disk would leave a dangling reference.
+  const members: KnowledgeCapsule[] = [];
   for (const id of opts.capsuleIds) {
     const exists = getCapsule(store, id);
     if (exists === undefined) {
       throw new KnowledgeNotFoundError(`Capsule not found: ${String(id)}`);
     }
+    members.push(exists);
   }
+  assertCompatibleMemberEmbeddingIdentities(members);
   return runComposeTransaction(store, opts);
+}
+
+// Reuses the ONE embedding-space comparison the retrieval and summary layers already key off
+// (`compareEmbeddingProfiles`, keiko-contracts) rather than re-deriving an identity tuple here — a
+// second comparison that drifts is a silent fail-open, since vectors from different spaces would be
+// treated as comparable.
+//
+// Policy posture is deliberately NOT part of this profile: a sealed pod that denies external
+// embeddings would compare `unavailable` against every other member and make composition impossible
+// for a reason that has nothing to do with the embedding space. Locality and query-embedding
+// capability are therefore fixed here, leaving only the space itself under comparison.
+function memberEmbeddingProfile(
+  capsule: KnowledgeCapsule,
+): ReturnType<typeof embeddingProfileFromModelIdentity> {
+  return embeddingProfileFromModelIdentity(capsule.embeddingModelIdentity, {
+    locality: "provider",
+    policyCapabilities: ["query-embedding"],
+  });
+}
+
+// A Knowledge Pod Set answers by expanding into its members and fusing their evidence. Members in
+// different embedding spaces cannot do that coherently: each member's dense lane fails closed under
+// the other's query identity, so the set degrades to lexical-only grounding while still presenting
+// itself as a usable grounding source. Refuse at composition time.
+//
+// Only a GENUINE incompatibility refuses. `unknown` (an unverified legacy profile) and `opaque` stay
+// composable — the pod summary already surfaces them as reindex-recommended guidance, and escalating
+// them here would make every pre-hardening pod uncomposable.
+function assertCompatibleMemberEmbeddingIdentities(members: readonly KnowledgeCapsule[]): void {
+  const profiles = members.map((capsule) => memberEmbeddingProfile(capsule));
+  for (let left = 0; left < profiles.length; left += 1) {
+    for (let right = left + 1; right < profiles.length; right += 1) {
+      const decision = compareEmbeddingProfiles(profiles[left], profiles[right]);
+      if (decision.status !== "incompatible") continue;
+      throw new CompositionError(
+        "incompatible-embedding-identity",
+        `Knowledge Pod Set members must share one embedding identity: ${String(
+          members[left]?.id,
+        )} and ${String(members[right]?.id)} differ (${decision.reason}). Reindex one of them into the other's embedding space, or compose them as separate sets.`,
+      );
+    }
+  }
 }
 
 function assertNoDuplicateCapsuleIds(ids: readonly KnowledgeCapsuleId[]): void {

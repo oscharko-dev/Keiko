@@ -9,6 +9,7 @@
 
 import type {
   ManualCrawlDeniedTally,
+  ManualCrawlDenyReason,
   ManualCrawlResult,
   ManualCrawlStatus,
 } from "./crawl/index.js";
@@ -71,6 +72,31 @@ const REMEDIATION_GUIDANCE: Readonly<Record<string, string>> = {
   PERSISTENCE_FAILED: "The index could not be written to local storage.",
 };
 
+// Deny reasons that mean a page OF THE APPROVED MANUAL did not make it into the index, as opposed to
+// a link that was never part of the manual in the first place. Only this class reduces coverage, so
+// only this class may keep a finished import out of the "ready" phase.
+//
+// The complement — cross-origin, outside-path-prefix, unsupported-scheme, credentialed-url,
+// path-traversal, action-link, non-html — is the scope guard doing exactly what the approved scope
+// asked for. Treating those as gaps would mark every real manual partial and make the signal
+// worthless, which is the opposite of the honesty this projection exists for.
+const MANUAL_COVERAGE_REDUCING_DENY_REASONS: ReadonlySet<ManualCrawlDenyReason> =
+  new Set<ManualCrawlDenyReason>([
+    "fetch-failed",
+    "oversized-page",
+    "empty-page",
+    "redirect",
+    "page-limit",
+    "depth-limit",
+    "byte-budget",
+    "time-limit",
+  ]);
+
+// True when the crawl dropped at least one page of the approved manual.
+function crawlDroppedPages(crawl: ManualCrawlResult): boolean {
+  return crawl.denied.some((tally) => MANUAL_COVERAGE_REDUCING_DENY_REASONS.has(tally.reason));
+}
+
 function crawlProgress(crawl: ManualCrawlResult): ManualCrawlProgress {
   return {
     status: crawl.status,
@@ -106,8 +132,17 @@ function resolvePhase(
   // finished, failed-closed refresh from being misreported as still "crawling".
   if (crawl.status === "limit-reached") return "degraded";
   if (indexing === undefined) return crawl.status === "empty" ? "empty" : "crawling";
-  if (indexing.status === "succeeded" && indexing.failedDocuments === 0) return "ready";
-  return "degraded";
+  if (indexing.status !== "succeeded" || indexing.failedDocuments > 0) return "degraded";
+  // A crawl can complete inside every budget and still have dropped pages of the approved manual
+  // (a fetch that failed, a page over the per-page cap, a page with no indexable content, a page
+  // that redirected). Indexing then succeeds over the pages that DID arrive with zero failures, so
+  // every signal above this line reads clean while the pod is demonstrably incomplete. `ready` must
+  // mean "the approved manual is fully indexed", not "everything we happened to receive indexed".
+  //
+  // `skippedDocuments` deliberately does NOT gate the phase: on the incremental refresh path an
+  // unchanged page is reported as a skip, so counting skips as gaps would mark every no-op refresh
+  // degraded. The count is still projected below so a surface can show it.
+  return crawlDroppedPages(crawl) ? "degraded" : "ready";
 }
 
 function remediationReasons(

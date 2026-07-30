@@ -7,6 +7,7 @@
 
 import type {
   CapsuleSetId,
+  EmbeddingModelIdentity,
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
@@ -25,7 +26,12 @@ import {
 import { KnowledgeNotFoundError } from "./errors.js";
 import { addSourceToCapsule, listCapsuleSources } from "./source-lifecycle.js";
 import { SourceRoutingValidationError } from "./source-routing-validation.js";
-import { freshStore, sampleCapsuleInput, sampleSourceInput } from "./_support.js";
+import {
+  DEFAULT_EMBEDDING,
+  freshStore,
+  sampleCapsuleInput,
+  sampleSourceInput,
+} from "./_support.js";
 import type { KnowledgeStore } from "./store.js";
 
 let store: KnowledgeStore;
@@ -344,6 +350,89 @@ describe("composeCapsules", () => {
     expect(
       listCapsuleMembershipChanges(store, aId).filter((r) => r.changeKind === "compose-set"),
     ).toHaveLength(0);
+  });
+
+  // Audit regression (0.3.0): the compose dialog documented that "incompatible embedding identities
+  // across members are rejected server-side and surfaced here as a 400 — the UI cannot pre-validate
+  // identity", but no such validation existed anywhere. A set whose members live in different
+  // embedding spaces cannot answer coherently: its dense lane fails closed per member, so the set
+  // silently degrades to lexical-only grounding while presenting itself as a usable source.
+  it("rejects members whose embedding identities are genuinely incompatible", () => {
+    const aId = createCapsule(store, sampleCapsuleInput({ id: "cap-a" as KnowledgeCapsuleId })).id;
+    const bId = createCapsule(
+      store,
+      sampleCapsuleInput({
+        id: "cap-b" as KnowledgeCapsuleId,
+        storageReference: "b/cap",
+        embeddingModelIdentity: {
+          ...DEFAULT_EMBEDDING,
+          modelId: "text-embedding-3-large",
+          vectorDimensions: 3072,
+        },
+      }),
+    ).id;
+    let caught: unknown;
+    try {
+      composeCapsules(store, { displayName: "Mixed spaces", capsuleIds: [aId, bId] });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(CompositionError);
+    expect((caught as CompositionError).code).toBe("incompatible-embedding-identity");
+    // Fails BEFORE the transaction: no set row, no audit row for either member.
+    const sets = store._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM schema_meta WHERE key LIKE 'capsule_set:%'")
+      .get() as unknown as { readonly n: number };
+    expect(sets.n).toBe(0);
+    for (const capsuleId of [aId, bId]) {
+      expect(
+        listCapsuleMembershipChanges(store, capsuleId).filter(
+          (r) => r.changeKind === "compose-set",
+        ),
+      ).toHaveLength(0);
+    }
+  });
+
+  it("names the members and the closed mismatch reason without leaking provider detail", () => {
+    const aId = createCapsule(store, sampleCapsuleInput({ id: "cap-a" as KnowledgeCapsuleId })).id;
+    const bId = createCapsule(
+      store,
+      sampleCapsuleInput({
+        id: "cap-b" as KnowledgeCapsuleId,
+        storageReference: "b/cap",
+        embeddingModelIdentity: { ...DEFAULT_EMBEDDING, provider: "other-provider" },
+      }),
+    ).id;
+    expect(() =>
+      composeCapsules(store, { displayName: "Mixed spaces", capsuleIds: [aId, bId] }),
+    ).toThrow(/cap-a.*cap-b.*provider-mismatch/u);
+  });
+
+  it("allows members that share one embedding identity", () => {
+    const { aId, bId } = seedTwoCapsulesWithSources();
+    expect(
+      composeCapsules(store, { displayName: "Same space", capsuleIds: [aId, bId] }).capsuleIds,
+    ).toHaveLength(2);
+  });
+
+  // An unverified legacy profile is `unknown`, not `incompatible`: the existing summary layer already
+  // recommends a reindex for it. Composition must not escalate that soft signal into a hard refusal,
+  // or every pre-hardening pod becomes uncomposable.
+  it("allows a member whose profile is merely unverified (unknown, not incompatible)", () => {
+    const aId = createCapsule(store, sampleCapsuleInput({ id: "cap-a" as KnowledgeCapsuleId })).id;
+    const legacy: Record<string, unknown> = { ...DEFAULT_EMBEDDING };
+    delete legacy.embeddingSpaceFingerprint;
+    const bId = createCapsule(
+      store,
+      sampleCapsuleInput({
+        id: "cap-b" as KnowledgeCapsuleId,
+        storageReference: "b/cap",
+        embeddingModelIdentity: legacy as unknown as EmbeddingModelIdentity,
+      }),
+    ).id;
+    expect(
+      composeCapsules(store, { displayName: "Legacy member", capsuleIds: [aId, bId] }).capsuleIds,
+    ).toHaveLength(2);
   });
 
   it("rejects duplicate capsule ids in one composition request", () => {
