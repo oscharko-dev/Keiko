@@ -285,6 +285,8 @@ export const EN_MESSAGES = {
   "mode.manual.label": "You",
   "mode.autonomous.title": "Keiko governs agents per your policy",
   "workspace.selection.none": "No workspace windows selected",
+  "workspace.binding.restoreVerificationFailed":
+    "The active task workspace failed re-verification. Re-bind it before starting a coding run.",
   "workspace.selection.one": "1 workspace window selected",
   "workspace.selection.many": "{count} workspace windows selected",
   "workspace.window.selectedLabel": "{label} — selected",

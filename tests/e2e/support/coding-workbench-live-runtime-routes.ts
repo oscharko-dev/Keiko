@@ -107,6 +107,17 @@ async function handleFoundationRoute(
   pathname: string,
   authStatus: FixtureAuthStatus,
 ): Promise<boolean> {
+  // Restore-time re-verification (release-audit F-09b): restoring surfaces run the #447
+  // reconciliation pass before claiming a persisted binding, so the fixture must answer it the
+  // way the real server does for a healthy workspace — a report entry re-stamping the binding.
+  if (route.request().method() === "POST" && pathname === "/api/task-workspaces/reconciliation") {
+    await fulfillJson(route, {
+      report: {
+        entries: [{ workspaceId: activeWorkspace().instance.workspaceId, status: "healthy" }],
+      },
+    });
+    return true;
+  }
   if (route.request().method() !== "GET") return false;
   if (pathname === "/api/task-workspaces/active") {
     await fulfillJson(route, { active: activeWorkspace() });

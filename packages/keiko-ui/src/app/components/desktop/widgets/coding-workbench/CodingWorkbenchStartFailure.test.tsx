@@ -165,8 +165,8 @@ function routeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Respo
   return Promise.resolve(jsonResponse(404, { error: { code: "NOT_FOUND", message: url } }));
 }
 
-describe("CodingWorkbenchWindow start failure surfacing (F-09a)", () => {
-  beforeEach(() => {
+describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
+  beforeEach((): void => {
     vi.stubGlobal("fetch", vi.fn(routeFetch));
     questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
     activityHookMock.mockReturnValue(IDLE_ACTIVITY);
@@ -188,12 +188,12 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", () => {
     activeWorkspaceHookMock.mockReturnValue(boundActiveWorkspace());
   });
 
-  afterEach(() => {
+  afterEach((): void => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
 
-  it("surfaces a rejected start as a visible alert carrying the error code and correlation id", async () => {
+  it("surfaces a rejected start as a visible alert carrying the error code and correlation id", async (): Promise<void> => {
     const user = userEvent.setup();
     render(<CodingWorkbenchWindow />);
 

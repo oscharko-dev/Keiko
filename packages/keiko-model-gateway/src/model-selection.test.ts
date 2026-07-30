@@ -457,7 +457,7 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
   // Non-chat capabilities (embeddings, speech) never call tools, so quantifying over all
   // configured capabilities blamed "no-tool-calling" for a config whose chat model plainly has
   // tool calling — contradicting the per-model "tools yes" the Settings surface truthfully shows.
-  it("never blames tool calling on a non-chat capability that cannot call tools", () => {
+  it("never blames tool calling on a non-chat capability that cannot call tools", (): void => {
     const configValue = sidecarConfig(
       [
         {

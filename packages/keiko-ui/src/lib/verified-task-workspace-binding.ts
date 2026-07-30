@@ -83,9 +83,16 @@ export async function restoreVerifiedActiveTaskWorkspace(): Promise<ActiveWorksp
   const entry = report.entries.find((item) => item.workspaceId === reverified.instance.workspaceId);
   if (entry?.status === "healthy" || reverified.instance.health !== "healthy") return reverified;
   warnBindStage("restore-verify", entry?.status ?? "missing-report-entry");
-  throw new Error(
-    "The active task workspace failed re-verification. Re-bind it before starting a coding run.",
-  );
+  throw new TaskWorkspaceRestoreVerificationError();
+}
+
+// Typed sentinel so UI surfaces can map the failure to the i18n API instead of rendering this
+// developer-facing fallback text verbatim (the message is a non-localized safety net only).
+export class TaskWorkspaceRestoreVerificationError extends Error {
+  public constructor() {
+    super("The active task workspace failed re-verification. Re-bind it before starting a run.");
+    this.name = "TaskWorkspaceRestoreVerificationError";
+  }
 }
 
 export async function bindVerifiedTaskWorkspace(
