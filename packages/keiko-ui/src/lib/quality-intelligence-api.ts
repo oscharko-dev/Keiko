@@ -362,19 +362,29 @@ export interface QiTraceabilityResult {
   readonly body: string;
 }
 
+export interface QiTraceabilityOptions {
+  /** Restrict the exported matrix to approved test cases. Defaults to the deliverable-safe `true`. */
+  readonly approvedOnly?: boolean;
+}
+
 /**
  * Export the persisted requirement<->test traceability matrix (CSV or Markdown). The body is plain
  * text (no base64), suitable for a same-origin Blob download.
+ *
+ * `approvedOnly` mirrors `exportQiRun`: the export bar renders the same scope notice and the same
+ * "Approved only" checkbox for the traceability formats, so the flag the user sees MUST reach the
+ * server — the matrix used to be serialised unscoped while the UI asserted an approved-only export.
  */
 export async function exportQiRunTraceability(
   runId: string,
   format: QiTraceabilityFormat,
+  options?: QiTraceabilityOptions,
 ): Promise<QiTraceabilityResult> {
   return fetchJson<QiTraceabilityResult>(
     `/api/quality-intelligence/runs/${encodeURIComponent(runId)}/traceability`,
     {
       method: "POST",
-      body: JSON.stringify({ format }),
+      body: JSON.stringify({ format, approvedOnly: options?.approvedOnly ?? true }),
     },
   );
 }

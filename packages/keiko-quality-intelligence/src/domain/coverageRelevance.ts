@@ -34,6 +34,38 @@ export interface AtomCoverageStatus {
   readonly coveringCandidateIds: readonly QualityIntelligence.QualityIntelligenceTestCaseId[];
 }
 
+/** A coverage verdict without the atom identity it belongs to. */
+export interface CoverageClassification<TCandidateId extends string> {
+  readonly status: CoverageStatus;
+  readonly confidence: number;
+  readonly coveringCandidateIds: readonly TCandidateId[];
+}
+
+/**
+ * The atom-independent core of coverage classification: turn a coverage mapping (or its absence)
+ * into a status/confidence/covering-tests verdict.
+ *
+ * Exported so any consumer that must re-state a coverage verdict over a NARROWED set of covering
+ * tests — for example an approved-only traceability export — derives it from this single
+ * classifier instead of restating the thresholds. `undefined` means "no candidate cites this
+ * atom at all" and is the only input that yields the zero-confidence uncovered verdict.
+ */
+export function classifyCoverageMapping<TCandidateId extends string>(
+  mapping:
+    { readonly confidence: number; readonly candidateIds: readonly TCandidateId[] } | undefined,
+): CoverageClassification<TCandidateId> {
+  if (mapping === undefined || mapping.confidence < COVERAGE_THRESHOLD_WEAKLY_COVERED) {
+    return {
+      status: "uncovered",
+      confidence: mapping?.confidence ?? 0,
+      coveringCandidateIds: Object.freeze([]),
+    };
+  }
+  const status: CoverageStatus =
+    mapping.confidence >= COVERAGE_THRESHOLD_COVERED ? "covered" : "weakly-covered";
+  return { status, confidence: mapping.confidence, coveringCandidateIds: mapping.candidateIds };
+}
+
 /**
  * Classify a single atom given its coverage-map mapping (undefined when the atom has
  * no mapping entry — i.e. no candidate cited it at all).
@@ -42,22 +74,7 @@ export function classifyAtomCoverage(
   atom: QualityIntelligence.QualityIntelligenceEvidenceAtom,
   mapping: QualityIntelligence.QualityIntelligenceCoverageMapping | undefined,
 ): AtomCoverageStatus {
-  if (mapping === undefined || mapping.confidence < COVERAGE_THRESHOLD_WEAKLY_COVERED) {
-    return {
-      atomId: atom.id,
-      status: "uncovered",
-      confidence: mapping?.confidence ?? 0,
-      coveringCandidateIds: Object.freeze([]),
-    };
-  }
-  const status: CoverageStatus =
-    mapping.confidence >= COVERAGE_THRESHOLD_COVERED ? "covered" : "weakly-covered";
-  return {
-    atomId: atom.id,
-    status,
-    confidence: mapping.confidence,
-    coveringCandidateIds: mapping.candidateIds,
-  };
+  return { atomId: atom.id, ...classifyCoverageMapping(mapping) };
 }
 
 const compareString = (left: string, right: string): number => {

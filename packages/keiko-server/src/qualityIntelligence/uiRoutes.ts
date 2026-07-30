@@ -13,13 +13,16 @@
 //     keiko-evidence UNCHANGED (ADR-0023 D8).
 
 import {
+  getQualityIntelligenceRetentionProfile,
   listQualityIntelligenceRuns,
   loadQualityIntelligenceRun,
   loadQualityIntelligenceCandidates,
+  QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID,
   type QualityIntelligenceCandidateRow,
 } from "@oscharko-dev/keiko-evidence";
 import type {
   QualityIntelligenceUiRunSummary,
+  QualityIntelligenceUiRetentionNotice,
   QualityIntelligenceUiRunListResponse,
   QualityIntelligenceUiRunDetail,
   QualityIntelligenceUiFindingSummary,
@@ -337,6 +340,28 @@ function parseLimitParam(ctx: RouteContext): LimitOutcome {
   return { ok: true, limit: Math.min(value, QI_RUN_LIST_MAX_LIMIT) };
 }
 
+/**
+ * The automatic-deletion disclosure for the run list (0.3.0 release audit).
+ *
+ * `enforceQiRetentionAtStartup` purges runs on every server start under the profile every run is
+ * recorded with — `persistRun` in keiko-workflows writes exactly
+ * `QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID`. Reading the same constant and the same
+ * profile table the purge reads means the disclosed numbers cannot drift away from the enforced
+ * ones; restating "30 days / 100 runs" here would silently lie the moment the profile moved.
+ * Returns undefined only if the default id ever stops resolving — better no claim than a wrong one.
+ */
+function retentionNotice(): QualityIntelligenceUiRetentionNotice | undefined {
+  const profile = getQualityIntelligenceRetentionProfile(
+    QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID,
+  );
+  if (profile === undefined) return undefined;
+  return {
+    policyId: profile.id,
+    retainedDays: profile.retainedDays,
+    maxRunArtifacts: profile.maxRunArtifacts,
+  };
+}
+
 export function handleListQiRuns(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const limitOutcome = parseLimitParam(ctx);
   if (!limitOutcome.ok) return limitOutcome.response;
@@ -373,7 +398,14 @@ export function handleListQiRuns(ctx: RouteContext, deps: UiHandlerDeps): RouteR
         // (Issue #274 follow-up).
       }
     }
-    const body: QualityIntelligenceUiRunListResponse = { runs, limit, totalRunIds, truncated };
+    const retention = retentionNotice();
+    const body: QualityIntelligenceUiRunListResponse = {
+      runs,
+      limit,
+      totalRunIds,
+      truncated,
+      ...(retention !== undefined ? { retention } : {}),
+    };
     return { status: 200, body };
     // Static codes only — never echo OS fs error text (CWE-209).
   } catch {

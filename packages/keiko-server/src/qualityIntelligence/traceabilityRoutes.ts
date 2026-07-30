@@ -23,6 +23,12 @@ import {
 import { QualityIntelligenceExport } from "@oscharko-dev/keiko-quality-intelligence";
 import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import {
+  candidateReviewStateOf,
+  loadRunReviewState,
+  QualityIntelligenceReviewIntegrityError,
+  runReviewStateOf,
+} from "./reviewStore.js";
 
 const MAX_BODY_BYTES = 4 * 1024;
 
@@ -65,13 +71,38 @@ const readBody = (req: IncomingMessage): Promise<string> =>
     req.on("error", reject);
   });
 
-type FormatOutcome =
-  | { readonly ok: true; readonly format: Format }
+interface TraceabilityRequest {
+  readonly format: Format;
+  /** Restrict the exported matrix to APPROVED test cases (mirrors the generic export route). */
+  readonly approvedOnly: boolean;
+}
+
+type RequestOutcome =
+  | { readonly ok: true; readonly request: TraceabilityRequest }
   | { readonly ok: false; readonly result: RouteResult };
 
-// Parse the requested format from the optional JSON body; empty/no body defaults to CSV, but
-// malformed, oversized, or unknown format payloads fail explicitly so callers can fix bad requests.
-async function parseFormat(req: IncomingMessage): Promise<FormatOutcome> {
+// `approvedOnly` is a scope claim the user acts on, so an ill-typed value must NOT be coerced to
+// "export everything": a caller that meant to narrow the scope and mistyped the flag would silently
+// receive unapproved test cases. Absent is the documented full-matrix default; present-but-not-boolean
+// is a client bug and fails closed with a 400.
+function parseApprovedOnly(value: unknown): boolean | undefined {
+  if (value === undefined) return false;
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function parseFormatField(value: unknown): Format | undefined {
+  if (value === undefined) return "csv";
+  return value === "csv" || value === "markdown" ? value : undefined;
+}
+
+type BodyOutcome =
+  // `fields: undefined` = no body at all; the caller applies the documented defaults.
+  | { readonly ok: true; readonly fields: Record<string, unknown> | undefined }
+  | { readonly ok: false; readonly result: RouteResult };
+
+// Read the optional JSON body into a plain object. Oversized and malformed payloads fail explicitly
+// so a caller can fix a bad request rather than silently receiving default scope and format.
+async function readTraceabilityBody(req: IncomingMessage): Promise<BodyOutcome> {
   let raw: string;
   try {
     raw = await readBody(req);
@@ -81,7 +112,7 @@ async function parseFormat(req: IncomingMessage): Promise<FormatOutcome> {
       result: errorResult(413, "QI_BODY_TOO_LARGE", "Traceability export body is too large."),
     };
   }
-  if (raw.trim().length === 0) return { ok: true, format: "csv" };
+  if (raw.trim().length === 0) return { ok: true, fields: undefined };
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -97,17 +128,40 @@ async function parseFormat(req: IncomingMessage): Promise<FormatOutcome> {
       result: errorResult(400, "QI_BAD_REQUEST", "Traceability export body must be an object."),
     };
   }
-  const fmt = parsed.format;
-  if (fmt === undefined) return { ok: true, format: "csv" };
-  if (fmt === "csv" || fmt === "markdown") return { ok: true, format: fmt };
-  return {
-    ok: false,
-    result: errorResult(
-      400,
-      "QI_BAD_FORMAT",
-      "Traceability export format must be csv or markdown.",
-    ),
-  };
+  return { ok: true, fields: parsed };
+}
+
+// Validate the parsed body; empty/no body defaults to an unscoped CSV export.
+async function parseTraceabilityRequest(req: IncomingMessage): Promise<RequestOutcome> {
+  const body = await readTraceabilityBody(req);
+  if (!body.ok) return { ok: false, result: body.result };
+  if (body.fields === undefined) {
+    return { ok: true, request: { format: "csv", approvedOnly: false } };
+  }
+  const parsed = body.fields;
+  const format = parseFormatField(parsed.format);
+  if (format === undefined) {
+    return {
+      ok: false,
+      result: errorResult(
+        400,
+        "QI_BAD_FORMAT",
+        "Traceability export format must be csv or markdown.",
+      ),
+    };
+  }
+  const approvedOnly = parseApprovedOnly(parsed.approvedOnly);
+  if (approvedOnly === undefined) {
+    return {
+      ok: false,
+      result: errorResult(
+        400,
+        "QI_BAD_REQUEST",
+        "Traceability export approvedOnly must be a boolean.",
+      ),
+    };
+  }
+  return { ok: true, request: { format, approvedOnly } };
 }
 
 type TraceabilityRows = Parameters<typeof QualityIntelligenceExport.adaptToTraceabilityCsv>[0];
@@ -126,6 +180,33 @@ function toTraceabilityRows(
       ? { requirementExcerptRedacted: r.requirementExcerptRedacted }
       : {}),
   }));
+}
+
+/**
+ * The set of test ids an approved-only traceability export may contain (0.3.0 release audit).
+ *
+ * Mirrors `selectRows` in exportRoutes.ts so both export surfaces answer "is this test approved?"
+ * identically: a run-level approval is an explicit approval of every test, otherwise each test must
+ * carry its own `approved` state. NOT best-effort — `loadRunReviewState` throws on a tampered review
+ * audit log and that must propagate, because falling back to "everything is approved" is exactly the
+ * failure this scope exists to prevent.
+ */
+function approvedTestIdsFor(
+  id: string,
+  evidenceDir: string,
+  rows: TraceabilityRows,
+): ReadonlySet<string> {
+  const review = loadRunReviewState(id, evidenceDir);
+  const cited = new Set<string>();
+  for (const row of rows) {
+    for (const candidateId of row.coveringCandidateIds) cited.add(candidateId);
+  }
+  if (runReviewStateOf(review) === "approved") return cited;
+  const approved = new Set<string>();
+  for (const candidateId of cited) {
+    if (candidateReviewStateOf(review, candidateId) === "approved") approved.add(candidateId);
+  }
+  return approved;
 }
 
 // Candidate id -> redacted title for the tests->requirements direction (#790). Best-effort: a
@@ -185,6 +266,7 @@ function recordTraceabilityExportEvidence(
   body: string,
   manifest: QualityIntelligenceEvidenceManifest,
   evidenceDir: string,
+  approvedOnly: boolean,
 ): readonly string[] {
   const createdAt = new Date().toISOString();
   const integrityHash = sha256Hex(body);
@@ -199,6 +281,9 @@ function recordTraceabilityExportEvidence(
     createdAt,
     modelProvenance: buildModelProvenance(manifest),
     dryRun: false,
+    // The scope is part of what this artifact claims: without it the audit trail cannot tell an
+    // approved-only compliance download from a full diagnostic one.
+    approvedOnly,
   };
   try {
     appendQualityIntelligenceExportRow({ runId: id, export: row }, { evidenceDir });
@@ -206,6 +291,41 @@ function recordTraceabilityExportEvidence(
   } catch {
     return ["export:evidence-write-failed"];
   }
+}
+
+type ScopedRowsOutcome =
+  | { readonly ok: true; readonly rows: TraceabilityRows }
+  | { readonly ok: false; readonly result: RouteResult };
+
+// Apply the requested review scope to the matrix. A tampered review artifact fails closed with the
+// same 409 the generic export route returns — never a silent fall-back to the unscoped matrix.
+function scopedRows(
+  id: string,
+  evidenceDir: string,
+  rows: TraceabilityRows,
+  approvedOnly: boolean,
+): ScopedRowsOutcome {
+  if (!approvedOnly) return { ok: true, rows };
+  let approved: ReadonlySet<string>;
+  try {
+    approved = approvedTestIdsFor(id, evidenceDir, rows);
+  } catch (error) {
+    if (error instanceof QualityIntelligenceReviewIntegrityError) {
+      return {
+        ok: false,
+        result: errorResult(
+          409,
+          "QI_REVIEW_TAMPERED",
+          "The review artifact failed integrity validation.",
+        ),
+      };
+    }
+    return {
+      ok: false,
+      result: errorResult(500, "QI_LOAD_FAILED", "Failed to load the Quality Intelligence run."),
+    };
+  }
+  return { ok: true, rows: QualityIntelligenceExport.scopeTraceabilityRowsToTests(rows, approved) };
 }
 
 function resultWarnings(warnings: readonly string[]): { readonly warnings?: readonly string[] } {
@@ -225,9 +345,9 @@ export async function handleQiTraceabilityExport(
   if (evidenceDir === undefined) {
     return errorResult(500, "QI_NO_EVIDENCE_DIR", "The evidence directory is not configured.");
   }
-  const parsed = await parseFormat(ctx.req);
+  const parsed = await parseTraceabilityRequest(ctx.req);
   if (!parsed.ok) return parsed.result;
-  const format = parsed.format;
+  const { format, approvedOnly } = parsed.request;
   let manifest: ReturnType<typeof loadQualityIntelligenceRun>;
   try {
     manifest = loadQualityIntelligenceRun(id, { evidenceDir });
@@ -243,7 +363,9 @@ export async function handleQiTraceabilityExport(
   if (matrix.length === 0) {
     return errorResult(409, "QI_NO_COVERAGE", "This run has no coverage matrix to export.");
   }
-  const rows = toTraceabilityRows(matrix);
+  const scoped = scopedRows(id, evidenceDir, toTraceabilityRows(matrix), approvedOnly);
+  if (!scoped.ok) return scoped.result;
+  const rows = scoped.rows;
   const display = { candidateTitleById: candidateTitlesFor(id, evidenceDir) };
   const adapterBody =
     format === "markdown"
@@ -255,7 +377,14 @@ export async function handleQiTraceabilityExport(
     format === "markdown" ? "traceability-markdown" : "traceability-csv";
   // Emit audit evidence for the materialised download (Epic #734, Issue #740). Best-effort: see
   // recordTraceabilityExportEvidence for the warning-on-failure rationale.
-  const warnings = recordTraceabilityExportEvidence(id, target, body, manifest, evidenceDir);
+  const warnings = recordTraceabilityExportEvidence(
+    id,
+    target,
+    body,
+    manifest,
+    evidenceDir,
+    approvedOnly,
+  );
   const meta = FORMAT_META[format];
   return {
     status: 200,

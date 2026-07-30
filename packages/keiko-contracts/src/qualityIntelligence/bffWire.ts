@@ -75,6 +75,23 @@ export interface QualityIntelligenceUiRunSummary {
  * a second pass. Producers MUST cap the `runs` array at `limit` and set `truncated = true` when
  * `totalRunIds > limit`. Additive on the wire: legacy clients reading `runs` continue to work.
  */
+/**
+ * The local retention policy that governs the listed runs (0.3.0 release audit).
+ *
+ * QI runs are purged automatically — by age and by count — when the server starts. That destruction
+ * used to be invisible: the run list simply had fewer entries than the session before. Producers
+ * MUST derive these numbers from the enforced retention profile so the disclosure and the purge can
+ * never drift apart. Counts and an id only; nothing about a run's contents.
+ */
+export interface QualityIntelligenceUiRetentionNotice {
+  /** Id of the enforced retention profile, e.g. `qi:short-30d`. */
+  readonly policyId: string;
+  /** Runs older than this many days are deleted automatically. */
+  readonly retainedDays: number;
+  /** Only the newest this many runs are kept; older ones are deleted automatically. */
+  readonly maxRunArtifacts: number;
+}
+
 export interface QualityIntelligenceUiRunListResponse {
   readonly runs: readonly QualityIntelligenceUiRunSummary[];
   /** Effective limit applied for this response (default or explicit, capped at the route max). */
@@ -83,6 +100,11 @@ export interface QualityIntelligenceUiRunListResponse {
   readonly totalRunIds: number;
   /** True when totalRunIds > limit; the response omits the tail of the run list. */
   readonly truncated: boolean;
+  /**
+   * Automatic-deletion disclosure for the listed runs. Optional on the wire so a client reading a
+   * response from an older server still parses; producers on this version always send it.
+   */
+  readonly retention?: QualityIntelligenceUiRetentionNotice;
 }
 
 /**

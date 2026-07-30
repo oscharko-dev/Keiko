@@ -3177,6 +3177,7 @@ export type {
   QualityIntelligenceUiRunDetail,
   QualityIntelligenceUiAtomCoverage,
   QualityIntelligenceUiRunListResponse,
+  QualityIntelligenceUiRetentionNotice,
   QualityIntelligenceUiRunSummary,
   QualityIntelligenceUiRunTotals,
   QualityIntelligenceUiCandidate,

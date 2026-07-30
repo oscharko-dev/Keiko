@@ -56,7 +56,7 @@ import { makeCapsuleResolver } from "./capsuleAdapter.js";
 import { extractQiDocumentText } from "./documentTextExtractor.js";
 import { makeFigmaSnapshotLoader, makeFigmaVisionHintProvider } from "./figmaSnapshotAdapter.js";
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
-import { createQiJudgePort } from "./judgePort.js";
+import { createQiJudgePort, tryCreateQiJudgePort } from "./judgePort.js";
 import { resolveQiTestDesignSelection } from "./modelSelection.js";
 import { ingestInlineSourcesAsync, QiIngestionError } from "./runIngestion.js";
 import { parseFigmaSnapshotScreenIds } from "./figmaSnapshotScreenIds.js";
@@ -306,15 +306,16 @@ async function parseSources(req: IncomingMessage): Promise<ParseSourcesOutcome> 
   return { ok: true, sources };
 }
 
+// Same judge-availability seam the initial run uses (`tryCreateQiJudgePort`): a judge that cannot be
+// built degrades the regeneration's judgement instead of failing it. Routed through the shared
+// classifier rather than a bare `catch {}` so a NON-judge fault still propagates instead of being
+// silently absorbed as "no judge".
 function buildJudgePortIfAvailable(
   deps: UiHandlerDeps,
   modelId: string,
 ): ReturnType<typeof createQiJudgePort> | undefined {
-  try {
-    return createQiJudgePort(deps, modelId);
-  } catch {
-    return undefined;
-  }
+  const outcome = tryCreateQiJudgePort(deps, modelId);
+  return outcome.available ? outcome.port : undefined;
 }
 
 function resolveProfile(profileId: string | undefined): PolicyProfile {
