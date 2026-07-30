@@ -34,12 +34,11 @@ import type {
   MemoryType,
 } from "@oscharko-dev/keiko-contracts";
 import { MemoryStorageError, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
-import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import type { UiHandlerDeps } from "./deps.js";
+import { currentAuditRedactString, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
-import { recordMemoryAudit } from "./memory-audit-handler.js";
+import { recordMemoryAudit, type MemoryAuditSink } from "./memory-audit-handler.js";
 
 export interface MaintenanceCounts {
   promoted: number;
@@ -88,15 +87,19 @@ function resolveVault(deps: UiHandlerDeps): MemoryVaultStore | RouteResult {
   return deps.memoryVault;
 }
 
+// The pass threads a store-plus-redactor sink rather than a bare EvidenceStore: this call used to
+// be `recordMemoryAudit({ evidenceStore }, event)`, which silently took the identity redactor and
+// wrote unredacted summaries and scope coordinates into the audit ledger. There is now no signature
+// on the way down here that can carry a store without its redactor.
 function emitAudit(
-  evidenceStore: EvidenceStore | undefined,
+  auditSink: MemoryAuditSink | undefined,
   nowMs: number,
   kind: MemoryAuditEvent["kind"],
   surface: MemoryAuditInitiatorSurface,
   summary: string,
   extra: Record<string, unknown>,
 ): void {
-  if (evidenceStore === undefined) return;
+  if (auditSink === undefined) return;
   const event = {
     schemaVersion: "1",
     kind,
@@ -106,7 +109,7 @@ function emitAudit(
     summary,
     ...extra,
   } as MemoryAuditEvent;
-  recordMemoryAudit({ evidenceStore }, event);
+  recordMemoryAudit(auditSink, event);
 }
 
 function recordsById(records: readonly MemoryRecord[]): Map<MemoryId, MemoryRecord> {
@@ -179,19 +182,19 @@ function runConsolidationPass(
 // gates archive/forget — so provenance stays intact and every run is idempotent.
 function applyFadeEffects(
   vault: MemoryVaultStore,
-  evidenceStore: EvidenceStore | undefined,
+  auditSink: MemoryAuditSink | undefined,
   nowMs: number,
   plan: MemoryMaintenancePlan,
   byId: Map<MemoryId, MemoryRecord>,
   counts: MaintenanceAccumulator,
 ): void {
-  applyArchives(vault, evidenceStore, nowMs, plan.archive, byId, counts);
-  applyForgets(vault, evidenceStore, nowMs, plan.forget, byId, counts);
+  applyArchives(vault, auditSink, nowMs, plan.archive, byId, counts);
+  applyForgets(vault, auditSink, nowMs, plan.forget, byId, counts);
 }
 
 function applyPromotions(
   vault: MemoryVaultStore,
-  evidenceStore: EvidenceStore | undefined,
+  auditSink: MemoryAuditSink | undefined,
   nowMs: number,
   ids: readonly MemoryId[],
   byId: Map<MemoryId, MemoryRecord>,
@@ -203,7 +206,7 @@ function applyPromotions(
     vault.updateMemory(id, { status: "accepted" }, nowMs);
     counts.promoted += 1;
     emitAudit(
-      evidenceStore,
+      auditSink,
       nowMs,
       "memory:accepted",
       "memory-center",
@@ -215,7 +218,7 @@ function applyPromotions(
 
 function applyArchives(
   vault: MemoryVaultStore,
-  evidenceStore: EvidenceStore | undefined,
+  auditSink: MemoryAuditSink | undefined,
   nowMs: number,
   ids: readonly MemoryId[],
   byId: Map<MemoryId, MemoryRecord>,
@@ -226,7 +229,7 @@ function applyArchives(
     if (record === undefined) continue;
     vault.updateMemory(id, { status: "archived" }, nowMs);
     counts.archived += 1;
-    emitAudit(evidenceStore, nowMs, "memory:archived", "retention", "Archived a faded memory.", {
+    emitAudit(auditSink, nowMs, "memory:archived", "retention", "Archived a faded memory.", {
       memoryId: id,
       scope: record.scope,
     });
@@ -235,7 +238,7 @@ function applyArchives(
 
 function applyForgets(
   vault: MemoryVaultStore,
-  evidenceStore: EvidenceStore | undefined,
+  auditSink: MemoryAuditSink | undefined,
   nowMs: number,
   forgets: readonly { id: MemoryId; reason: string }[],
   byId: Map<MemoryId, MemoryRecord>,
@@ -258,7 +261,7 @@ function applyForgets(
     }
     counts.forgotten += 1;
     emitAudit(
-      evidenceStore,
+      auditSink,
       nowMs,
       "memory:forgotten",
       "retention",
@@ -301,7 +304,7 @@ export function memorySemanticizationMultipliers(
 
 export function runMemoryMaintenance(
   vault: MemoryVaultStore,
-  evidenceStore?: EvidenceStore,
+  auditSink?: MemoryAuditSink,
   options?: RunMaintenanceOptions,
 ): MaintenanceResult {
   // ONE clock for the whole pass: both plan phases and every vault write / audit timestamp use the
@@ -322,14 +325,7 @@ export function runMemoryMaintenance(
     nowMs,
     policy: planPolicy,
   });
-  applyPromotions(
-    vault,
-    evidenceStore,
-    nowMs,
-    promotePlan.promote,
-    recordsById(beforePromote),
-    counts,
-  );
+  applyPromotions(vault, auditSink, nowMs, promotePlan.promote, recordsById(beforePromote), counts);
   // Phase 2 — consolidate live reviewable records: link safe near-duplicate metadata and surface
   // proposed/conflicted conflicts or merges as explicit review items. Status mutations require a
   // later governed review.
@@ -347,7 +343,7 @@ export function runMemoryMaintenance(
   const all = vault.listMemoriesAcrossScopes(scopes, { includeExpired: true });
   const accessStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
   const plan = planMemoryMaintenance(all, accessStats, { nowMs, policy: planPolicy });
-  applyFadeEffects(vault, evidenceStore, nowMs, plan, recordsById(all), counts);
+  applyFadeEffects(vault, auditSink, nowMs, plan, recordsById(all), counts);
   return counts;
 }
 
@@ -391,7 +387,7 @@ export interface MaybeRunAutoMaintenanceOptions {
 // after advancing the cursor so a persistently-failing pass cannot hot-loop.
 export function maybeRunAutoMaintenance(
   vault: MemoryVaultStore,
-  evidenceStore: EvidenceStore | undefined,
+  auditSink: MemoryAuditSink | undefined,
   state: AutoMaintenanceState,
   options: MaybeRunAutoMaintenanceOptions,
 ): MaintenanceResult | null {
@@ -399,7 +395,7 @@ export function maybeRunAutoMaintenance(
   if (!isMaintenanceDue(state.lastRunAtMs, options.nowMs, options.minIntervalMs)) return null;
   state.lastRunAtMs = options.nowMs;
   try {
-    return runMemoryMaintenance(vault, evidenceStore, {
+    return runMemoryMaintenance(vault, auditSink, {
       nowMs: options.nowMs,
       ...(options.decayHalfLifeMultiplierByType !== undefined
         ? { decayHalfLifeMultiplierByType: options.decayHalfLifeMultiplierByType }
@@ -410,12 +406,26 @@ export function maybeRunAutoMaintenance(
   }
 }
 
+/**
+ * Resolves the maintenance pass's audit sink from a request's deps — the store, the LIVE
+ * gateway-aware string redactor, and the operator diagnostic sink for a failed evidence write.
+ * Exported so the chat-path auto-run (`maybeRunAutoMaintenance`) and this route resolve it the same
+ * way instead of each assembling a partial one.
+ */
+export function memoryMaintenanceAuditSink(deps: UiHandlerDeps): MemoryAuditSink {
+  return {
+    evidenceStore: deps.evidenceStore,
+    redactString: currentAuditRedactString(deps),
+    ...(deps.diagnostics === undefined ? {} : { diagnostics: deps.diagnostics }),
+  };
+}
+
 export function handleRunMaintenance(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
   try {
     const multipliers = memorySemanticizationMultipliers(deps.env);
-    const counts = runMemoryMaintenance(vault, deps.evidenceStore, {
+    const counts = runMemoryMaintenance(vault, memoryMaintenanceAuditSink(deps), {
       ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
     });
     return { status: 200, body: counts };

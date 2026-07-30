@@ -22,6 +22,7 @@ import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { probeVerifiedGatewayConfig } from "../_support.js";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { UiStore } from "../store/index.js";
 import {
   handleEditorTestGeneration,
@@ -81,6 +82,7 @@ function deps(
     evidenceStore?: EvidenceStore;
     aiSettings?: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> | undefined;
     gatewayVerification?: GatewayVerificationState;
+    diagnostics?: ServerDiagnosticSink | undefined;
   } = {},
 ): UiHandlerDeps {
   const aiSettings = input.aiSettings ?? { testGeneration: true };
@@ -97,7 +99,24 @@ function deps(
     editorSettingsControl: editorSettingsControl(aiSettings),
     config,
     gatewayConfig,
+    ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
   } as unknown as UiHandlerDeps;
+}
+
+// Capturing operator-diagnostic sink (never the default stderr sink) for the observability pin below.
+function capturingDiagnostics(): {
+  readonly sink: ServerDiagnosticSink;
+  readonly records: ServerDiagnosticRecord[];
+} {
+  const records: ServerDiagnosticRecord[] = [];
+  return {
+    records,
+    sink: {
+      record: (entry: ServerDiagnosticRecord): void => {
+        records.push(entry);
+      },
+    },
+  };
 }
 
 function editorSettingsSnapshot(
@@ -522,5 +541,37 @@ describe("POST /api/editor/test-generation — execution enabled (wave-2 seam)",
     const body = wire(result);
     expect(body.status).toBe("failed");
     expect(JSON.stringify(body)).not.toContain("/secret/path");
+  });
+
+  // 0.3.0 audit: `failed` is also what an unproducible candidate yields, so a swallowed runner error
+  // left an operator with no way to tell an outage from a decline. The wire body stays content-free;
+  // only the redacted cause is added.
+  it("emits a redacted, correlation-keyed diagnostic when the runner throws", async () => {
+    const captured = capturingDiagnostics();
+    const ctx: RouteContext = {
+      ...postContext(fileBody()),
+      correlationId: "testgen-correlation-0001",
+    };
+    const result = await handleEditorTestGeneration(
+      ctx,
+      deps({ env: EXECUTION, diagnostics: captured.sink }),
+      execOptions(() =>
+        Promise.reject(
+          Object.assign(new Error("/secret/path leaked sk-ABCDEFGHIJKLMNOPQRSTUV"), {
+            code: "RUNNER_UNAVAILABLE",
+          }),
+        ),
+      ),
+    );
+
+    expect(wire(result).status).toBe("failed");
+    expect(captured.records).toHaveLength(1);
+    const record = captured.records[0];
+    expect(record?.correlationId).toBe("testgen-correlation-0001");
+    expect(record?.operation).toBe("editor.testGeneration");
+    expect(record?.source).toBe("editor.testGenerationRoutes");
+    expect(record?.code).toBe("RUNNER_UNAVAILABLE");
+    expect(JSON.stringify(record)).not.toContain("/secret/path");
+    expect(JSON.stringify(record)).not.toContain("sk-ABCDEFGHIJKLMNOPQRSTUV");
   });
 });

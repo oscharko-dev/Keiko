@@ -644,6 +644,33 @@ function emitGatewayFailureDiagnostic(
   );
 }
 
+/**
+ * A mid-stream failure aborts an in-flight coding turn. Before this the cause went into a bare
+ * `catch {}` — the pattern AGENTS.md §7 forbids — leaving `settleGatewayStreamError` to emit the SSE
+ * error frame with nothing recorded anywhere, on the coding path. The frame and the run outcome are
+ * unchanged; only the redacted cause is added, keyed by the request correlation id and separated from
+ * the pre-stream failure by `source` so an operator can tell "the stream never opened" from "the
+ * stream died after N deltas". `partialUsage` rides along through `serverDiagnosticFromError`, so an
+ * interrupted turn's accumulated token counts stay visible instead of vanishing with the error.
+ */
+function emitGatewayStreamFailureDiagnostic(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: ctx.correlationId ?? "unknown",
+      operation: CODING_SIDECAR_GATEWAY_ROUTE,
+      source: "coding-sidecar-gateway.stream",
+      error,
+      summary: "The coding sidecar gateway stream failed mid-response.",
+      redact: (message) => String(deps.redactor(message)),
+    }),
+  );
+}
+
 interface RuntimeCapabilityAuthenticator {
   readonly authenticate: (capability: string, audience: "model-gateway" | "tool-facade") => unknown;
 }
@@ -951,7 +978,8 @@ async function streamGatewayChat(
   cancellationSignal.addEventListener("abort", cancelIterator, { once: true });
   try {
     await pumpGatewayStream(session);
-  } catch {
+  } catch (error) {
+    emitGatewayStreamFailureDiagnostic(ctx, deps, error);
     settleGatewayStreamError(session);
   } finally {
     cancellationSignal.removeEventListener("abort", cancelIterator);

@@ -212,7 +212,11 @@ export const createHandleSyncExecute = (
       now(),
     );
     recordGitSyncEvidence(
-      { evidenceStore: deps.evidenceStore, redactString: redactStringFor(deps) },
+      {
+        evidenceStore: deps.evidenceStore,
+        redactString: redactStringFor(deps),
+        ...(deps.diagnostics === undefined ? {} : { diagnostics: deps.diagnostics }),
+      },
       record,
     );
     return { status: 200, body: deps.redactor(executeResponse(operation, remote, result)) };

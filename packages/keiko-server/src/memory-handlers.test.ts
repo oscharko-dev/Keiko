@@ -5,7 +5,11 @@ import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import {
+  createAuditRedactor,
+  createInMemoryEvidenceStore,
+  type EvidenceStore,
+} from "@oscharko-dev/keiko-evidence";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type {
   MemoryAuditEvent,
@@ -39,6 +43,10 @@ import { createInMemoryUiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { buildMemoryCaptureDecisionAuditEvent } from "./memory-capture-projection.js";
+
+// Real security-layer redactor: `recordMemoryAudit` requires one by name, so a fixture must not
+// reinstate the identity default that made the evidence-redaction boundary fail open.
+const TEST_AUDIT_REDACT: (input: string) => string = createAuditRedactor({}, {});
 
 function makeReq(payload: unknown): IncomingMessage {
   return Readable.from([Buffer.from(JSON.stringify(payload))]) as unknown as IncomingMessage;
@@ -287,7 +295,7 @@ describe("memory handlers", () => {
       [foreign, 300],
     ] as const) {
       recordMemoryAudit(
-        { evidenceStore },
+        { evidenceStore, redactString: TEST_AUDIT_REDACT },
         buildMemoryCaptureDecisionAuditEvent({
           eventId: `capture-${String(record.id)}`,
           occurredAt,

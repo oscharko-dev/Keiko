@@ -22,6 +22,12 @@ import type { GitDeliveryEvidenceRecord } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { randomUUID } from "node:crypto";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 
 export const GIT_DELIVERY_EVIDENCE_RUNID_PREFIX = "git-delivery-evidence-" as const;
 
@@ -46,13 +52,33 @@ export interface RecordGitDeliveryEvidenceOptions {
   // builder's by-construction hashing.
   readonly redactString: (input: string) => string;
   readonly maxRecordsPerBucket?: number | undefined;
-  // Persistence-error sink; defaults to console.error. An audit-write failure never throws here.
+  // Operator diagnostic sink for a failed evidence write. When absent the shared default stderr sink
+  // in diagnostics-log.ts is used.
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  // Explicit persistence-error observer; overrides the diagnostic sink. An audit-write failure never
+  // throws here either way.
   readonly onPersistError?: ((error: unknown) => void) | undefined;
 }
 
-function defaultOnPersistError(error: unknown): void {
-  // eslint-disable-next-line no-console
-  console.error("git-delivery evidence ledger: persistence failed", error);
+// The previous default was `console.error("…", error)` — the raw error object on a channel no
+// production assembly overrode, so a failed governed-mutation evidence write was invisible AND could
+// carry the very content this ledger redacts. Routed through the single redacted diagnostic sink.
+function reportPersistFailure(options: RecordGitDeliveryEvidenceOptions, error: unknown): void {
+  if (options.onPersistError !== undefined) {
+    options.onPersistError(error);
+    return;
+  }
+  emitServerDiagnostic(
+    options.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: randomUUID(),
+      operation: "gitDelivery.mutationEvidence.persist",
+      source: "gitDelivery.mutationEvidenceLedger",
+      error,
+      summary: "Audit or evidence persistence failed.",
+      redact: options.redactString,
+    }),
+  );
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -118,13 +144,12 @@ export function recordGitDeliveryMutationEvidence(
   options: RecordGitDeliveryEvidenceOptions,
   record: GitDeliveryEvidenceRecord,
 ): void {
-  const onPersistError = options.onPersistError ?? defaultOnPersistError;
   const cap = options.maxRecordsPerBucket ?? GIT_DELIVERY_EVIDENCE_DEFAULT_BUCKET_CAP;
   const safe = deepRedactStrings(record, options.redactString) as GitDeliveryEvidenceRecord;
   const runId = gitDeliveryEvidenceRunIdFor(record.recordedAtMs);
   try {
     appendRecord(options.evidenceStore, runId, safe, cap);
   } catch (error) {
-    onPersistError(error);
+    reportPersistFailure(options, error);
   }
 }

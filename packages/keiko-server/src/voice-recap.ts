@@ -41,7 +41,7 @@ import {
 } from "@oscharko-dev/keiko-memory-capture";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import { validateProjectPath } from "./store/validation.js";
-import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
+import { currentAuditRedactString, currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import { isVoiceDisabledByPolicy } from "./read-handlers.js";
 import { desktopChatErrorResult } from "./chat-handlers.js";
@@ -281,7 +281,14 @@ function recordRecapAudits(
 ): void {
   const events = persisted.proposed.map(({ id, scope }) => proposedAuditEvent(id, scope));
   if (events.length > 0) {
-    recordMemoryAudits({ evidenceStore: deps.evidenceStore }, events);
+    recordMemoryAudits(
+      {
+        evidenceStore: deps.evidenceStore,
+        redactString: currentAuditRedactString(deps),
+        ...(deps.diagnostics === undefined ? {} : { diagnostics: deps.diagnostics }),
+      },
+      events,
+    );
   }
   // Content-free recap roll-up (ADR-0109 D1). Validated so a malformed record (e.g. an accidental
   // non-user-triggered flag) fails loud instead of persisting a spec-violating audit artifact.

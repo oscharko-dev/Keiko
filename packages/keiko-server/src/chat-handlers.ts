@@ -45,6 +45,7 @@ import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
   maybeRunAutoMaintenance,
+  memoryMaintenanceAuditSink,
   memorySemanticizationMultipliers,
   type AutoMaintenanceState,
 } from "./memory-maintenance-handlers.js";
@@ -77,6 +78,7 @@ import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-i
 import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
 import {
+  currentAuditRedactString,
   currentContextProfileForModel,
   currentGatewayConfig,
   currentRedactionSecrets,
@@ -933,7 +935,14 @@ function recordConversationMemoryRetrieval(
     scopes: conversationMemoryScopes(context),
     matchedMemoryIds: memories.map((memory) => memory.memoryId as MemoryId),
   };
-  recordMemoryAudit({ evidenceStore: deps.evidenceStore }, event);
+  recordMemoryAudit(
+    {
+      evidenceStore: deps.evidenceStore,
+      redactString: currentAuditRedactString(deps),
+      ...(deps.diagnostics === undefined ? {} : { diagnostics: deps.diagnostics }),
+    },
+    event,
+  );
 }
 
 // The candidate-id gathering, semantic scoring, and strength projection that both this chat path and
@@ -974,7 +983,7 @@ const memoryMaintenanceCursor: AutoMaintenanceState = {};
 // pass short-circuits on the cursor almost every turn and never throws into the chat path.
 function maybeRunChatAutoMaintenance(deps: UiHandlerDeps, vault: MemoryVaultStore): void {
   const multipliers = memorySemanticizationMultipliers(deps.env);
-  maybeRunAutoMaintenance(vault, deps.evidenceStore, memoryMaintenanceCursor, {
+  maybeRunAutoMaintenance(vault, memoryMaintenanceAuditSink(deps), memoryMaintenanceCursor, {
     nowMs: Date.now(),
     enabled: deps.env.KEIKO_MEMORY_AUTO_MAINTAIN !== "0",
     ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),

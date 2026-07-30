@@ -4,7 +4,7 @@
 // `update ?? get+put`, leaf-level redaction, fail-closed on corruption, never throws into the caller,
 // and a content-free repository identifier (hash, never the path).
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
@@ -16,6 +16,7 @@ import {
   type GitSyncEvidenceLedgerDoc,
   type GitSyncEvidenceRecord,
 } from "./syncEvidence.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 
 const AT = Date.UTC(2026, 5, 27, 9, 30, 0); // 2026-06-27T09:30:00Z
 
@@ -214,5 +215,45 @@ describe("recordGitSyncEvidence — best-effort and fail-closed", () => {
     expect(captured).toBeInstanceOf(Error);
     const preserved = JSON.parse(docs.get(runId) ?? "{}") as { records?: unknown };
     expect(preserved.records).toBe("nope");
+  });
+
+  // 0.3.0 audit: with NO explicit observer the default was `console.error("…", error)` — the raw error
+  // object on a channel no production assembly overrode, so a failed sync-evidence write was invisible
+  // in production and able to carry the content this ledger redacts.
+  it("routes a persistence failure to the redacted diagnostic sink instead of console", () => {
+    const secret = ["sk", "-live-", "ABCDEFGHIJKLMNOP1234567890"].join("");
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const store: EvidenceStore = {
+      put: () => {
+        throw Object.assign(new Error(`disk full while writing ${secret}`), { code: "ENOSPC" });
+      },
+      list: () => [],
+      get: () => undefined,
+      delete: () => undefined,
+    };
+
+    expect(() => {
+      recordGitSyncEvidence(
+        { evidenceStore: store, redactString: identityRedact, diagnostics },
+        record(),
+      );
+    }).not.toThrow();
+
+    try {
+      expect(records).toHaveLength(1);
+      expect(records[0]?.source).toBe("gitDelivery.syncEvidence");
+      expect(records[0]?.code).toBe("ENOSPC");
+      expect(records[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+      expect(JSON.stringify(records)).not.toContain(secret);
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });

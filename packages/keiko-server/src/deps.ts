@@ -31,7 +31,7 @@ import {
   createNodeEvidenceStore,
   resolveEvidenceDir,
 } from "@oscharko-dev/keiko-evidence";
-import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
+import { keikoApiKeySecretValues, redact } from "@oscharko-dev/keiko-security";
 import {
   DEFAULT_CONTEXT_PROFILE,
   isCodingWorkbenchMode,
@@ -62,6 +62,7 @@ import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
   type ServerDiagnosticSink,
+  type ServerDiagnosticSummary,
 } from "./diagnostics-log.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
@@ -1309,6 +1310,20 @@ export function currentRedactionSecrets(deps: UiHandlerDeps): readonly string[] 
   return redactionSecrets(deps.env, currentGatewayConfig(deps), currentGatewayEgressConfig(deps));
 }
 
+/**
+ * The string redactor a route hands to the evidence/audit layer: built-in secret SHAPES plus the LIVE
+ * gateway-derived literals (a key added through PATCH /api/gateway/config after process start is
+ * scrubbed too, which the frozen `deps.redactionSecrets` snapshot would miss).
+ *
+ * `recordMemoryAudit`/`recordMemoryAudits` require a redactor — the identity default that used to
+ * stand in for a forgotten one was a fail-open on the evidence-redaction boundary — so this is the one
+ * place a route resolves it from. Do not hand those APIs `(input) => input` or `deps.redactor` cast to
+ * a string function; both defeat the boundary.
+ */
+export function currentAuditRedactString(deps: UiHandlerDeps): (input: string) => string {
+  return (input: string): string => redact(input, currentRedactionSecrets(deps));
+}
+
 export function currentEvidenceTopologyRedactionSecrets(deps: UiHandlerDeps): readonly string[] {
   return Array.from(
     new Set([
@@ -1640,13 +1655,14 @@ function resolveManagedWorktreeRoot(uiDbPath: string): string {
 function composedManagedWorktreeRoot(
   provisioning: WorkspaceProvisioningService | undefined,
   resolvedUiDbPath: string,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): string | undefined {
   if (provisioning === undefined) return undefined;
   const managedRoot = resolveManagedWorktreeRoot(resolvedUiDbPath);
   // Canonical managed-root classification is a shared Files/Git trust boundary even before the
   // first Coding run. Materialize the directory with the persistence services so an idle/fresh
   // installation can classify ordinary roots without treating an absent boundary as authority.
-  if (!materializedManagedRoot(managedRoot)) {
+  if (!materializedManagedRoot(managedRoot, diagnostics)) {
     throw new Error("Managed task-workspace boundary initialization failed.");
   }
   return managedRoot;
@@ -2826,6 +2842,7 @@ function buildPersistenceBundle(
     const managedTaskWorkspaceRoot = composedManagedWorktreeRoot(
       services.workspaceProvisioning,
       resolvedUiDbPath,
+      options.diagnostics,
     );
     return {
       uiStore: store,
@@ -3046,6 +3063,35 @@ function dapWorkspaceContext(
   }
 }
 
+/**
+ * Redacted operator diagnostic for a startup/composition boundary in this module.
+ *
+ * A composition failure here silently downgrades a capability for the whole process lifetime — the
+ * caller only ever sees `undefined`/`false` — so discarding the cause outright left an operator with a
+ * missing feature and no reason for it. Content-free: the error class and a machine code only; startup
+ * has no request, so a fresh correlation id ties the record together.
+ */
+function emitCompositionDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  source: string,
+  summary: ServerDiagnosticSummary,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    diagnostics,
+    serverDiagnosticFromError({
+      correlationId: randomUUID(),
+      operation: "server.composition",
+      source,
+      error,
+      summary,
+      // Startup has no live gateway config yet; the fixed allowlisted summary is what is emitted, so
+      // this callback only has to be total.
+      redact: (message): string => message,
+    }),
+  );
+}
+
 function recordDapCompositionFailure(evidenceStore: EvidenceStore): void {
   try {
     evidenceStore.put(
@@ -3092,7 +3138,16 @@ function createQualifiedDapProductionService(
         );
       },
     });
-  } catch {
+  } catch (error) {
+    // The evidence record below is a fixed content-free marker with no error shape at all, and it is
+    // itself best-effort. Name the cause on the operator channel too, or "debug never became
+    // available" has no diagnosable reason anywhere.
+    emitCompositionDiagnostic(
+      args.options.diagnostics,
+      "deps.dapProduction",
+      "Debug production service composition failed.",
+      error,
+    );
     recordDapCompositionFailure(args.evidenceStore);
     return undefined;
   }
@@ -3589,12 +3644,26 @@ function resolveProductionRuntimePorts(
  * On a fresh installation the server-owned managed worktree root does not exist until the first
  * task workspace is provisioned; the resolver's trusted-root check would then keep an otherwise
  * fully activated runtime unqualified. Materialize it at composition time (#2475).
+ *
+ * The failure is diagnosed, not just returned: both callers turn `false` into a silent capability
+ * downgrade (`runtime-unqualified`) or a cause-less `throw new Error(...)`, so a permission or
+ * read-only-volume problem on the one directory the Coding runtime cannot work without had no
+ * observable reason anywhere. Content-free: the error class only — never the path.
  */
-function materializedManagedRoot(managedTaskWorkspaceRoot: string): boolean {
+function materializedManagedRoot(
+  managedTaskWorkspaceRoot: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+): boolean {
   try {
     mkdirSync(managedTaskWorkspaceRoot, { recursive: true, mode: 0o700 });
     return true;
-  } catch {
+  } catch (error) {
+    emitCompositionDiagnostic(
+      diagnostics,
+      "deps.managedTaskWorkspaceRoot",
+      "Managed task-workspace boundary materialization failed.",
+      error,
+    );
     return false;
   }
 }
@@ -3645,7 +3714,7 @@ function productionRuntimeResolver(
   if (resolution.ports === undefined) {
     return unqualifiedComposition(resolution.unavailableReason ?? "runtime-unqualified");
   }
-  if (!materializedManagedRoot(managedTaskWorkspaceRoot)) {
+  if (!materializedManagedRoot(managedTaskWorkspaceRoot, args.options.diagnostics)) {
     return unqualifiedComposition("runtime-unqualified");
   }
   const confirmationConsumer = runtimeStartConfirmationConsumer(args, resolution.activated);

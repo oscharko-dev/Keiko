@@ -18,6 +18,7 @@ import {
   type MemoryVaultStore,
 } from "@oscharko-dev/keiko-memory-vault";
 import type { MemoryEmbedder } from "@oscharko-dev/keiko-server";
+import { redact } from "@oscharko-dev/keiko-security";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts";
@@ -228,9 +229,15 @@ async function runMaintain(
   // "CLI and UI never drift" invariant in this module's header holds when the flag is on.
   const multipliers = memorySemanticizationMultipliers(env);
   try {
-    const counts = runMemoryMaintenance(vault, evidenceStore, {
-      ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
-    });
+    // The pass writes audit evidence, so it needs the security layer's redactor by name — the API no
+    // longer accepts a bare store and silently falls back to identity redaction.
+    const counts = runMemoryMaintenance(
+      vault,
+      { evidenceStore, redactString: (input: string): string => redact(input) },
+      {
+        ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
+      },
+    );
     io.out(renderMaintenanceReport(counts));
     return 0;
   } finally {
