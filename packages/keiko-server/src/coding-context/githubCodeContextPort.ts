@@ -27,7 +27,7 @@ const GH_API_TIMEOUT_MS = 30_000;
 // `policy.maxOutputBytes` (see runDepsFor below) and REPLACES the buffer with a marker once the cap
 // trips, so a second, larger number here could never bound anything — it only made an over-cap read
 // look like a syntax problem when the marker reached `JSON.parse`.
-const GH_API_MAX_STDOUT_BYTES = DEFAULT_SANDBOX_POLICY.maxOutputBytes;
+const GH_API_MAX_STDOUT_BYTES = GOVERNED_GIT_REMOTE_SANDBOX_POLICY.maxOutputBytes;
 
 // Flags that turn `gh api` into a mutation or redirect it to another host. Presence
 // anywhere in the argument vector rejects the invocation (deny-by-default posture).

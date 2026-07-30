@@ -403,6 +403,61 @@ test("accepts a single-file feature catalog carrying both language maps", async 
   );
 });
 
+// A keyed lookup declared AFTER the two catalogs — e.g. a closed Record mapping a server reason code
+// onto a catalog key — is not catalog content. The parity slice used to run to end of file, so those
+// code names read as German-only entries and broke parity in a file whose catalogs are identical.
+const TRAILING_LOOKUP =
+  "\nconst GUIDANCE_KEYS: Readonly<Record<string, string>> = {\n" +
+  '  "pdf-needs-ocr": "feature.title",\n' +
+  '  "unsupported-format": "feature.title",\n' +
+  "};\n";
+
+test("ignores a non-catalog keyed lookup declared after the two language maps", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [SINGLE_FILE_CATALOG]:
+        singleFileCatalog({ "feature.title": "Title" }, { "feature.title": "Titel" }) +
+        TRAILING_LOOKUP,
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [SINGLE_FILE_UI, SINGLE_FILE_CATALOG],
+      });
+
+      expect(result.problems).toEqual([]);
+      expect(result.ok).toBe(true);
+    },
+  );
+});
+
+// The counterpart: bounding the slice must not stop the guard from seeing a REAL parity break in the
+// same file shape. A German half missing a key still fails even with a trailing lookup present.
+test("still fails a real parity break when a non-catalog lookup follows the maps", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [SINGLE_FILE_UI]: SINGLE_FILE_SOURCE,
+      [SINGLE_FILE_CATALOG]:
+        singleFileCatalog(
+          { "feature.title": "Title", "feature.subtitle": "Subtitle" },
+          { "feature.title": "Titel" },
+        ) + TRAILING_LOOKUP,
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [SINGLE_FILE_UI, SINGLE_FILE_CATALOG],
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/feature\.subtitle/);
+    },
+  );
+});
+
 test("fails a single-file feature catalog whose German half is missing a key", async () => {
   await withFixture(
     {

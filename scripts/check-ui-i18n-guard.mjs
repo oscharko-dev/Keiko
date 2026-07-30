@@ -271,6 +271,33 @@ function catalogUpdateProblems(changedFileSet, repoRoot) {
 // guarantee needs the maps sliced apart before their key sets are compared. Without this, a
 // single-file catalog would satisfy the update requirement while carrying English-only additions —
 // which would make this guard weaker for the convention most of the package actually uses.
+// The SECOND catalog map's body, bounded by its own braces rather than running to end of file.
+//
+// The first map is naturally bounded by the second map's declaration, but the second had nothing
+// after it, so every quoted key in the rest of the file counted as one of its entries. That held
+// only while the trailing code was plain functions. A module that declares a keyed lookup AFTER its
+// catalogs — e.g. a closed `Record<ReasonCode, MessageKey>` mapping a server reason code onto a
+// catalog key — had those code names read as catalog entries present in one language and missing
+// from the other, reporting a parity break in a file whose two catalogs are actually identical
+// (0.3.0 audit, #2802). Bounding to the matching brace is strictly more precise: the whole catalog
+// is still compared, and only non-catalog text stops being counted as part of it.
+function catalogMapBody(source, markerIndex) {
+  const open = source.indexOf("{", markerIndex);
+  if (open < 0) return source.slice(markerIndex);
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "{") depth += 1;
+    else if (character === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(open, index + 1);
+    }
+  }
+  // Unbalanced braces: fall back to the old end-of-file behaviour rather than silently comparing
+  // an empty catalog, which would turn a malformed file into a PASS.
+  return source.slice(markerIndex);
+}
+
 function singleFileCatalogParityProblems(repoRoot, singleFileCatalogs) {
   const problems = [];
   for (const file of singleFileCatalogs) {
@@ -288,7 +315,7 @@ function singleFileCatalogParityProblems(repoRoot, singleFileCatalogs) {
       english.index < german.index ? [english.index, german.index] : [german.index, english.index];
     const mismatches = symmetricDifference(
       extractCatalogKeys(source.slice(first, second)),
-      extractCatalogKeys(source.slice(second)),
+      extractCatalogKeys(catalogMapBody(source, second)),
     );
     if (mismatches.length > 0) {
       problems.push(
