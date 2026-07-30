@@ -187,16 +187,16 @@ test("requires catalog review only for i18n-relevant added lines", () => {
 // full source, so an "or the line above" lookup is not reliably available).
 test("an i18n-exempt marker suppresses relevance for a diagnostic-only string return", () => {
   const line =
-    'return `shell-shortcuts: refused override (${id})`; // i18n-exempt: console-only operator diagnostic, never rendered';
+    "return `shell-shortcuts: refused override (${id})`; // i18n-exempt: console-only operator diagnostic, never rendered";
   expect(hasI18nRelevantAddedLine(line)).toBe(false);
 });
 
 // The counterpart: recognising the marker must not become a way to smuggle real UI copy past the
 // gate. An identically-shaped return with no marker is still caught.
 test("still requires review for the same shape with no i18n-exempt marker", () => {
-  expect(
-    hasI18nRelevantAddedLine('return `shell-shortcuts: refused override (${id})`;'),
-  ).toBe(true);
+  expect(hasI18nRelevantAddedLine("return `shell-shortcuts: refused override (${id})`;")).toBe(
+    true,
+  );
 });
 
 // And the marker cannot be used wordlessly here either — the ledger scan's own invariant, which this
@@ -204,7 +204,7 @@ test("still requires review for the same shape with no i18n-exempt marker", () =
 test("a wordless i18n-exempt does not suppress relevance for a string return", () => {
   expect(
     hasI18nRelevantAddedLine(
-      'return `shell-shortcuts: refused override (${id})`; // i18n-exempt: x',
+      "return `shell-shortcuts: refused override (${id})`; // i18n-exempt: x",
     ),
   ).toBe(true);
 });
@@ -539,7 +539,7 @@ const DIAGNOSTIC_ONLY_FILE = "packages/keiko-ui/src/app/feature/feature-diagnost
 const DIAGNOSTIC_ONLY_SOURCE =
   "export function featureRefusalDiagnostic(id) {\n" +
   "  // i18n-exempt: console-only operator diagnostic, never rendered to the end user\n" +
-  '  return `feature: refused override (${id})`;\n' +
+  "  return `feature: refused override (${id})`;\n" +
   "}\n\n" +
   "export function surfaceFeatureRefusal(id) {\n" +
   "  const message = featureRefusalDiagnostic(id);\n" +
