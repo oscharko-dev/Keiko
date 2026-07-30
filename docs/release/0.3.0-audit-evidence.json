@@ -856,7 +856,8 @@
       "p0Total": 7,
       "p1Total": 26,
       "p2Total": 29,
-      "confirmedSoundTotal": 11
+      "confirmedSoundTotal": 11,
+      "note": "counts cover the five subsystem audits only; F-15 (shell reserved-chord bypass) was found separately by adversarial verification and is counted in p0TotalIncludingAdversarial"
     },
     "p0Summary": [
       "git-delivery: pull request, merge and push cannot authenticate on the governed path",
@@ -883,6 +884,25 @@
       "ui: german locale completed and the i18n literal gate given a baseline it can fail on",
       "a11y: destructive confirmations trap focus; axe coverage widened with a static membership check"
     ],
-    "p0RemediationStatus": "in progress at the time of writing; per-defect outcomes recorded in ledger section 11.4"
+    "p0RemediationStatus": "in progress at the time of writing; per-defect outcomes recorded in ledger section 11.4",
+    "adrDecisions": [
+      {
+        "adr": "ADR-0028",
+        "question": "is the substrate render-time throw the intended fail-closed behaviour for a PERSISTED keybinding override, or only for compile-time declarations",
+        "decision": "only for declarations; a persisted override is untrusted runtime input, refused at the single dispatch-safe projection and dropped back to the command default",
+        "basis": "ADR-0028 section 4 has no persisted-override vocabulary at all; the setting arrives later via ADR-0133 D5, and the Consequences scope the guard to a contributor shipping a collision with the build failing first",
+        "amendment": "appended to ADR-0028 section 4; the throw is not softened and the refusal is reported as a body-free commandId plus reasonCode",
+        "correctionRecorded": "ADR-0028 claims the conflict guard crashes the build at module-evaluation; the shipped hook checks a prop during render, and the real build-time enforcement is the default-table test pin"
+      }
+    ],
+    "adversarialVerification": {
+      "claimTested": "no persisted keybinding override can put a browser-reserved or colliding chord into the dispatched table",
+      "verdict": "REFUTED",
+      "holes": 2,
+      "note": "the refuted claim had been stated to the operator before verification; corrected in this document and to the operator",
+      "findingId": "F-15",
+      "severity": "P0"
+    },
+    "p0TotalIncludingAdversarial": 8
   }
 }
