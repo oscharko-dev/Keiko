@@ -21,8 +21,6 @@ import {
   readWorkspaceCameraSmoothness,
   WORKSPACE_CAMERA_SMOOTHNESS_EVENT,
 } from "./workspace-appearance";
-import { NewWindowDialog } from "./modals/NewWindowDialog";
-import { Palette } from "./modals/Palette";
 import { type Cfg } from "./modals/PermControl";
 import { useChatSession } from "./hooks/useChatSession";
 import { useTheme } from "./hooks/useTheme";
@@ -77,7 +75,6 @@ import "./widgets";
 import { localizedWindowTitle, WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow, Connection } from "./windows/types";
 import { registerSw } from "./install/registerSw";
-import { UpdateStartupNotice } from "./update/UpdateStartupNotice";
 import { workspaceRootTargets } from "./workspaceRootTargets";
 import styles from "./AppShell.module.css";
 
@@ -181,6 +178,32 @@ const TaskWorkspaceSwitcher = dynamic(
 
 const UnifiedQuickAccessPalette = dynamic(
   () => import("./modals/UnifiedQuickAccessPalette").then((mod) => mod.UnifiedQuickAccessPalette),
+  { ssr: false, loading: () => null },
+);
+
+// Issue #1207 (ADR-0042 D3.6) — the new-window dialog is reached only by an explicit gesture
+// (`pending !== null`), exactly like the quick-access palette and the gateway setup dialog above, so
+// it must not sit in the first-load chunk. Its subtree (KeikoSelect, the native file-dialog client,
+// the workflow-eligibility predicate) is the largest gesture-only surface the shell still pulled in
+// eagerly; loading it behind the same `next/dynamic(..., { ssr: false })` boundary keeps the initial
+// desktop paint under the committed initialPageChunkGzipBytesCeiling.
+const NewWindowDialog = dynamic(
+  () => import("./modals/NewWindowDialog").then((mod) => mod.NewWindowDialog),
+  { ssr: false, loading: () => null },
+);
+
+// Issue #1207 (ADR-0042 D3.6) — same reasoning for the window-launcher palette: it renders only
+// while `palOpen` is true, so its card grid and roving-focus keyboard model are gesture-only code.
+const Palette = dynamic(() => import("./modals/Palette").then((mod) => mod.Palette), {
+  ssr: false,
+  loading: () => null,
+});
+
+// Issue #1207 (ADR-0042 D3.6) — the startup update notice renders nothing until its own preflight
+// resolves, and it is gated on a workspace that has already loaded, so neither it nor the release
+// copy catalog it carries belongs in the initial desktop paint.
+const UpdateStartupNotice = dynamic(
+  () => import("./update/UpdateStartupNotice").then((mod) => mod.UpdateStartupNotice),
   { ssr: false, loading: () => null },
 );
 
