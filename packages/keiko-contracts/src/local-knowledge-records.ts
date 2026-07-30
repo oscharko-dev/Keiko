@@ -316,6 +316,26 @@ export interface CapsuleContextualRetrievalHealth {
   readonly message: string;
 }
 
+// ─── Unsupported-document remediation codes ───────────────────────────────────
+// 0.3.0 release audit — the server decides WHY a document could not be extracted; it must never
+// decide which language the operator reads that in. These stable codes are the wire form of the
+// "next steps" the capsule health surface renders, and the UI owns the localized copy for each one
+// (English and German land together). The server previously shipped English prose here, which a
+// German operator saw verbatim under a translated heading.
+//
+// - `pdf-needs-ocr`      — a PDF with no usable text layer (or no PDF extraction in this build)
+// - `image-needs-ocr`    — an image-only document
+// - `ocr-failed`         — the OCR path ran and failed for at least one document
+// - `unsupported-format` — any other format this build cannot extract
+export const UNSUPPORTED_DOCUMENT_GUIDANCE_CODES = [
+  "pdf-needs-ocr",
+  "image-needs-ocr",
+  "ocr-failed",
+  "unsupported-format",
+] as const;
+
+export type UnsupportedDocumentGuidanceCode = (typeof UNSUPPORTED_DOCUMENT_GUIDANCE_CODES)[number];
+
 // ─── Capsule health + delete ──────────────────────────────────────────────────
 export interface CapsuleHealth {
   readonly capsuleId: KnowledgeCapsuleId;
@@ -335,7 +355,8 @@ export interface CapsuleHealth {
   readonly failedDocuments: number;
   readonly skippedDocuments: number;
   readonly unsupportedDocuments: number;
-  readonly unsupportedGuidance: readonly string[];
+  // Reason codes only — never operator-facing prose (see UNSUPPORTED_DOCUMENT_GUIDANCE_CODES).
+  readonly unsupportedGuidanceCodes: readonly UnsupportedDocumentGuidanceCode[];
   readonly staleReasons: readonly string[];
   readonly contextualRetrieval?: CapsuleContextualRetrievalHealth;
   // Bounded large-document ingestion (Epic #1160, Issue #1286). Optional and content-free.

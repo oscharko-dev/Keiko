@@ -39,6 +39,7 @@ import {
   toSafeIsoString,
 } from "@/lib/format";
 import {
+  unsupportedGuidanceText,
   useLocalKnowledgeTranslate as useTranslate,
   type I18nTranslate,
 } from "../local-knowledge-i18n";
@@ -677,7 +678,7 @@ function OverviewSection({ data }: { readonly data: CapsuleDetailData }): ReactN
             }
           />
         ) : null}
-        {health.unsupportedGuidance.length > 0 ? (
+        {health.unsupportedGuidanceCodes.length > 0 ? (
           <OverviewRow
             label={t("localKnowledge.detail.overview.nextSteps")}
             help={t("localKnowledge.detail.help.overviewNextSteps")}
@@ -686,8 +687,9 @@ function OverviewSection({ data }: { readonly data: CapsuleDetailData }): ReactN
                 className="lkd-stale-reasons"
                 aria-label={t("localKnowledge.detail.overview.unsupportedGuidance")}
               >
-                {health.unsupportedGuidance.map((guidance) => (
-                  <li key={guidance}>{guidance}</li>
+                {/* The server sends reason codes; the operator reads them in their own locale. */}
+                {health.unsupportedGuidanceCodes.map((code) => (
+                  <li key={code}>{unsupportedGuidanceText(code, t)}</li>
                 ))}
               </ul>
             }

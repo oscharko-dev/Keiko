@@ -24,6 +24,7 @@ import {
   type WIN_TYPES as WinTypes,
   type WindowType,
 } from "../windows/WindowsRegistry";
+import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import KeikoSelect from "../KeikoSelect";
 import { PermControl, type Cfg, type CfgValue } from "./PermControl";
 import { isWorkflowEligibleModel } from "../../../../lib/workflow-eligibility";
@@ -48,6 +49,41 @@ function initialCfg(fields: readonly LocalizedConfigField[]): Cfg {
     out[f.key] = f.def;
   }
   return out;
+}
+
+function localizedNewWindowFields(
+  type: WindowType,
+  fields: readonly ConfigField[],
+  t: I18nTranslate,
+): readonly ConfigField[] {
+  if (type !== "chat") return fields;
+  return fields.map((field) =>
+    field.key === "title"
+      ? {
+          ...field,
+          label: t("newWindow.chat.fieldTitle"),
+          def: t("newWindow.chat.defaultTitle"),
+          placeholder: t("newWindow.chat.placeholder"),
+        }
+      : field,
+  );
+}
+
+// 0.3.0 release audit — the dialog seeds the chat title field with the LOCALIZED default, so that
+// display string must not leave the dialog as data. When the operator accepts it unchanged (or
+// clears the field), the window is confirmed with NO title plus the structural "still untitled"
+// marker the workspace reads (`CHAT_TITLE_IS_DEFAULT_CFG_KEY`). Two things then hold in every
+// locale: the workspace never repeats the default title as a subtitle, and the chat record keeps
+// the server's canonical stored default, which is what the server's first-turn auto-title keys on
+// — a German chat used to be created as "Neuer Chat" and could therefore never be auto-titled.
+// An operator-chosen title is passed through untouched and carries no marker.
+function withChatUntitledMarker(type: WindowType, fields: readonly ConfigField[], cfg: Cfg): Cfg {
+  if (type !== "chat") return cfg;
+  const seededDefault = fields.find((field) => field.key === "title")?.def ?? "";
+  const entered = resolveFieldValue(cfg["title"]).trim();
+  if (entered.length > 0 && entered !== seededDefault.trim()) return cfg;
+  const { title, ...rest } = cfg;
+  return { ...rest, [CHAT_TITLE_IS_DEFAULT_CFG_KEY]: true };
 }
 
 function focusableInside(root: HTMLElement): readonly HTMLElement[] {
@@ -1094,7 +1130,7 @@ export function NewWindowDialog({
     },
   };
   const submit = (): void => {
-    if (type !== "agents") onConfirm(cfg);
+    if (type !== "agents") onConfirm(withChatUntitledMarker(type, fields, cfg));
   };
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>): void => {

@@ -12,6 +12,7 @@ import { useChatSessionContext } from "../context/ChatSessionContext";
 import type { ChatSessionApi } from "../hooks/useChatSession";
 import { useWorkspaceManifest, type WorkspaceManifestView } from "../hooks/useWorkspaceManifest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
+import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
 import {
   ManagedTaskWorkspaceUnavailable,
@@ -699,9 +700,21 @@ export function ChatWindowSessionHost({
     if (target !== undefined) void openChat(target);
   }, [chatId, activeTarget?.id, chats, loading, openChat, selectionHandoffId]);
 
+  // `cfg.title` mirrors the chat record. 0.3.0 release audit — this is the ONE place a bound chat
+  // window's title changes after creation, so it also owns the structural "still untitled" marker
+  // the workspace reads instead of comparing the title against display copy. Materialising the
+  // record's title for the first time (the window was created without one) leaves the window
+  // untitled; any LATER change is a real name — an operator rename, or the server's first-turn
+  // auto-title — and clears the marker so the subtitle surfaces it.
   useEffect(() => {
     if (loading || chatId === undefined || activeTarget?.id !== chatId) return;
-    if (activeTarget.title !== title) updateCfg({ title: activeTarget.title });
+    if (activeTarget.title === title) return;
+    const materializesInitialTitle = normalizedChatTitle(title) === undefined;
+    updateCfg(
+      materializesInitialTitle
+        ? { title: activeTarget.title }
+        : { title: activeTarget.title, [CHAT_TITLE_IS_DEFAULT_CFG_KEY]: false },
+    );
   }, [activeTarget?.id, activeTarget?.title, chatId, loading, title, updateCfg]);
 
   // 0.3.0 release audit — `chats` is the CURRENT project's list, so a window still bound to the

@@ -19,6 +19,7 @@ import {
   FilesWindowSessionHost,
   normalizedChatTitle,
 } from "./SelectionAwareWorkspaceHosts";
+import { subText } from "../windows/connectionUtils";
 
 const addRoot = vi.hoisted(() => vi.fn());
 const disposeRoot = vi.hoisted(() => vi.fn());
@@ -1327,6 +1328,64 @@ describe("ChatWindowSessionHost target missing", () => {
 
     expect(await screen.findByText("Chat not found")).toBeInTheDocument();
     expect(ctx.updateCfg).not.toHaveBeenCalled();
+  });
+
+  // ─── 0.3.0 release audit — the structural "still untitled" marker ─────────────────────────────
+  // The workspace decides whether to repeat a chat's title as a subtitle from a cfg marker rather
+  // than from a comparison against display copy (which missed under `de`). This host owns the only
+  // post-creation write of `cfg.title`, so it also owns keeping that marker honest.
+  describe("untitled marker upkeep", () => {
+    function renderBoundChat(cfg: Record<string, unknown>, ctx: WindowRenderContext): void {
+      render(
+        <I18nProvider>
+          <ChatWindowSessionHost cfg={cfg} ctx={ctx} />
+        </I18nProvider>,
+      );
+    }
+
+    it("keeps the marker while materialising the record's title for the first time", async () => {
+      const chat = chatFixture("chat-untitled", "New chat", 1);
+      chatSessionState.activeChat = chat;
+      chatSessionState.chats = [chat];
+      chatSessionState.loading = false;
+      const ctx = context();
+
+      renderBoundChat({ chatId: chat.id, titleIsDefault: true }, ctx);
+
+      await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledOnce());
+      expect(lastCfgPatch(ctx)).toEqual({ title: chat.title });
+      expect(
+        subText("chat", { chatId: chat.id, titleIsDefault: true, ...lastCfgPatch(ctx) }),
+      ).toBeNull();
+    });
+
+    it("clears the marker when the record is renamed or auto-titled from the first turn", async () => {
+      const chat = chatFixture("chat-titled", "Wie richte ich das Gateway ein?", 2);
+      chatSessionState.activeChat = chat;
+      chatSessionState.chats = [chat];
+      chatSessionState.loading = false;
+      const ctx = context();
+
+      renderBoundChat({ chatId: chat.id, title: "Neuer Chat", titleIsDefault: true }, ctx);
+
+      await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledOnce());
+      const patch = lastCfgPatch(ctx);
+      expect(patch).toEqual({ title: chat.title, titleIsDefault: false });
+      expect(subText("chat", { chatId: chat.id, ...patch })).toBe(chat.title);
+    });
+
+    it("leaves a window whose title already matches the record untouched", async () => {
+      const chat = chatFixture("chat-stable", "Release QA", 3);
+      chatSessionState.activeChat = chat;
+      chatSessionState.chats = [chat];
+      chatSessionState.loading = false;
+      const ctx = context();
+
+      renderBoundChat({ chatId: chat.id, title: chat.title }, ctx);
+
+      await waitFor((): void => expect(chatSessionState.openChat).not.toHaveBeenCalled());
+      expect(ctx.updateCfg).not.toHaveBeenCalled();
+    });
   });
 });
 
