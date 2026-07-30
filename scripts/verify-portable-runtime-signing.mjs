@@ -207,8 +207,8 @@ function syncReviewedSidecars(manifest) {
     delete manifest.releaseImpact.reviewedBinding.sidecarRuntimes;
     return;
   }
-  manifest.releaseImpact.reviewedBinding.sidecarRuntimes = JSON.parse(
-    JSON.stringify(manifest.sidecarRuntimes),
+  manifest.releaseImpact.reviewedBinding.sidecarRuntimes = structuredClone(
+    manifest.sidecarRuntimes,
   );
 }
 

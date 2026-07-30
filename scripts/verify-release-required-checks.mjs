@@ -32,7 +32,9 @@ export function parseRequiredChecks(value) {
   }
 
   if (!Array.isArray(parsed)) {
-    throw new Error("RELEASE_REQUIRED_CHECKS must be a JSON array, comma list, or newline list.");
+    throw new TypeError(
+      "RELEASE_REQUIRED_CHECKS must be a JSON array, comma list, or newline list.",
+    );
   }
 
   const checks = [];
@@ -381,7 +383,9 @@ const invokedDirectly =
   process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (invokedDirectly) {
-  verifyRequiredChecks().catch((error) => {
+  try {
+    await verifyRequiredChecks();
+  } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
-  });
+  }
 }

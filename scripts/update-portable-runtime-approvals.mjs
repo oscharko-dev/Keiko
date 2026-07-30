@@ -198,15 +198,13 @@ export async function updatePortableRuntimeApprovals(
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  updatePortableRuntimeApprovals(process.argv.slice(2)).then(
-    (summary) => {
-      console.log(
-        `portable-approvals updated: node ${summary.nodeVersion}, opencode ${summary.opencodeVersion}. Review and commit ${PORTABLE_RUNTIME_APPROVALS_FILE}.`,
-      );
-    },
-    (error) => {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
-    },
-  );
+  try {
+    const summary = await updatePortableRuntimeApprovals(process.argv.slice(2));
+    console.log(
+      `portable-approvals updated: node ${summary.nodeVersion}, opencode ${summary.opencodeVersion}. Review and commit ${PORTABLE_RUNTIME_APPROVALS_FILE}.`,
+    );
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
 }
