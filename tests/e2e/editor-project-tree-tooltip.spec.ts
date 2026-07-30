@@ -5,6 +5,12 @@ const PROJECT_ROOT = process.cwd();
 const LONG_FILE = ".dependency-cruiser.cjs";
 const SHORT_FILE = "NOTICE";
 const ACTIVE_FILE = LONG_FILE;
+// Virtual-time budgets for the tooltip window. `TOOLTIP_BELOW_DELAY_MS` must stay UNDER the
+// FilesWidget hover delay (it is the point at which a correctly delayed tooltip is still absent)
+// and `TOOLTIP_DRAIN_MS` comfortably over it, so a drain leaves no tooltip timer pending. Both are
+// virtual milliseconds, so neither costs wall-clock time nor depends on machine load.
+const TOOLTIP_BELOW_DELAY_MS = 500;
+const TOOLTIP_DRAIN_MS = 2_000;
 
 function collectPageErrors(page: Page): () => void {
   const errors: string[] = [];
@@ -78,6 +84,14 @@ test("editor project-tree filenames use delayed Keiko tooltip only when truncate
   await ensureProject(page, projectPath);
   await seedEditorWindow(page, projectPath);
 
+  // Both tooltip claims below are about a DELAYED affordance: one row must never produce a
+  // tooltip, the other must not produce one YET. A wall-clock sleep can only ever assume the
+  // schedule window elapsed; the virtual clock lets the test DRAIN it. With time frozen at
+  // install, `runFor` executes exactly the timers that come due in the window it advances, so
+  // "no tooltip after the drain" means the row's timer demonstrably ran or was never scheduled —
+  // not merely that a hard-coded number of milliseconds went by on a possibly-loaded machine.
+  await page.clock.install();
+
   await page.goto("/");
   const editorWindow = page
     .locator(".window[data-window-id]")
@@ -101,16 +115,26 @@ test("editor project-tree filenames use delayed Keiko tooltip only when truncate
   });
   expect(longRowState).toEqual({ dataTip: null, title: null, truncated: true });
 
-  await shortRow.hover();
-  await page.waitForTimeout(800);
-  await expect(page.locator(".files-tree-tooltip")).toHaveCount(0);
+  const tooltip = page.locator(".files-tree-tooltip");
 
+  // A NON-truncated row must never schedule a tooltip at all. Draining far past the row's delay
+  // is what closes the window: had pointer-enter armed a timer, `runFor` would have fired it and
+  // the tooltip would be mounted here.
+  await shortRow.hover();
+  await page.clock.runFor(TOOLTIP_DRAIN_MS);
+  await expect(tooltip).toHaveCount(0);
+
+  // A truncated row does schedule one, behind a delay. Advancing less than that delay and finding
+  // nothing is an exact statement rather than a race: no other virtual time has passed since
+  // pointer-enter, so a tooltip present at this point would mean the delay had been dropped and
+  // the tooltip now fires on hover. Draining the rest then proves it does still arrive.
   await longRow.hover();
-  await page.waitForTimeout(500);
-  await expect(page.locator(".files-tree-tooltip")).toHaveCount(0);
-  await expect(page.locator(".files-tree-tooltip")).toHaveText(LONG_FILE, { timeout: 500 });
+  await page.clock.runFor(TOOLTIP_BELOW_DELAY_MS);
+  await expect(tooltip).toHaveCount(0);
+  await page.clock.runFor(TOOLTIP_DRAIN_MS);
+  await expect(tooltip).toHaveText(LONG_FILE);
 
   await page.mouse.move(20, 20);
-  await expect(page.locator(".files-tree-tooltip")).toHaveCount(0);
+  await expect(tooltip).toHaveCount(0);
   assertNoPageErrors();
 });

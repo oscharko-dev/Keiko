@@ -15,6 +15,13 @@ const TS_FILE = "app.ts";
 const PY_FILE = "tool.py";
 const LARGE_FILE = "large.ts";
 const MAX_BROWSER_DIAGNOSTICS = 512;
+// Virtual milliseconds advanced to close the language client's request window. Comfortably over the
+// editor's diagnostics debounce, and free: virtual time costs no wall-clock time.
+const LANGUAGE_REQUEST_DRAIN_MS = 5_000;
+// Belongs to no fixture file, so the ordering barrier it drives never lands in a ledger under test.
+const DRAIN_SENTINEL_PATH = "__request-window-drain__";
+// Headroom so the pause target is still in the page clock's future when the pause is applied.
+const CLOCK_PAUSE_CUSHION_MS = 1_000;
 
 const CAPABILITIES = {
   schemaVersion: "1",
@@ -174,12 +181,61 @@ function callCount(
   ).length;
 }
 
+/**
+ * Close the language client's request window on the CURRENT document, so the "no call was made"
+ * assertions below rule something out instead of merely being read too early.
+ *
+ * The editor dispatches diagnostics (and the other bridged operations) behind a debounce timer, so
+ * "no call yet" is trivially true the instant after an edit. The window has to be closed before the
+ * ledger is read — and it has to be closed WITHOUT leaving the document: the app cancels pending
+ * language work as soon as the active document changes, so any bound built out of "open the file
+ * whose provider IS available and wait for a fresh call" would swallow the very request these
+ * assertions exist to forbid. (Measured: edit the TypeScript buffer, switch away inside the
+ * debounce, and no diagnostics call is ever recorded for it.)
+ *
+ * Pausing the page clock and running it forward fires every timer that comes due in the window,
+ * which is exactly the observable condition wanted: when this returns, a request this document was
+ * going to make has been DISPATCHED rather than still pending. The sentinel round trip afterwards
+ * is an ordering barrier — it travels the same intercepted route as any dispatched request, so once
+ * its response is back, every earlier request has already been recorded. It carries a path that
+ * belongs to no fixture file, so it never perturbs a `callsFor` ledger under test.
+ */
+async function drainLanguageRequestWindow(page: Page): Promise<void> {
+  // Pause slightly AHEAD of the page's own clock: a target read a moment ago is already in the
+  // past by the time the pause lands, and the clock refuses to travel backwards.
+  const pauseTarget = (await page.evaluate(() => Date.now())) + CLOCK_PAUSE_CUSHION_MS;
+  await page.clock.pauseAt(pauseTarget);
+  await page.clock.runFor(LANGUAGE_REQUEST_DRAIN_MS);
+  await page.clock.resume();
+  await page.evaluate(async (sentinelPath) => {
+    await fetch("/api/editor/language", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-keiko-csrf": "1" },
+      body: JSON.stringify({ operation: "diagnostics", document: { path: sentinelPath } }),
+    });
+  }, DRAIN_SENTINEL_PATH);
+}
+
 async function openMatrixWorkspace(page: Page): Promise<Locator> {
   const { root } = createEditorWorkspace([
     { path: TS_FILE, content: "const greeting: string = 42;\ngreeting;\n" },
     { path: PY_FILE, content: "value = 1\n" },
     { path: LARGE_FILE, content: largeBuffer() },
   ]);
+  // Register the fixture root as a project before seeding the window. Without it the editor has no
+  // server-validated trust grant for this root, falls back to the preferred project, and reports
+  // "The requested path was not found" — every status assertion below then fails on an editor that
+  // never opened the fixture. This mirrors the registration the CI-covered editor suites already do
+  // (editor-debugging-2348), and no lane runs this suite, so the drift went unnoticed.
+  // Freeze-capable clock for the request-window drains below; time flows normally until a drain
+  // pauses it, so nothing else in this suite changes behaviour.
+  await page.clock.install();
+  await page.clock.resume();
+  const created = await page.request.post("/api/projects", {
+    data: { name: "Issue 1383 language intelligence", path: root },
+    headers: { "x-keiko-csrf": "1" },
+  });
+  expect(created.ok(), await created.text()).toBe(true);
   await seedEditorWindow(page, { root, openFiles: [TS_FILE], active: TS_FILE });
   await page.goto("/");
   return openEditorWorkspace(page);
@@ -318,7 +374,7 @@ async function assertUnavailableProvider(
   await triggerFormat(workspace, true);
   await replaceMonacoText(page, workspace, "value = 2\n");
   await expect(statusField(workspace, "save")).toHaveText("Unsaved");
-  await page.waitForTimeout(500);
+  await drainLanguageRequestWindow(page);
   expect(callsFor(routed, PY_FILE)).toEqual([]);
   await expect(statusBar(workspace)).toHaveScreenshot("issue-1383-unavailable-provider.png", {
     maxDiffPixelRatio: 0.001,
@@ -350,7 +406,7 @@ async function assertDegradedProvider(
   await triggerFormat(workspace, true);
   await triggerSymbols(page, workspace);
   await expect(workspace.locator(".squiggly-error, .squiggly-warning")).toHaveCount(0);
-  await page.waitForTimeout(500);
+  await drainLanguageRequestWindow(page);
   expect(callsFor(routed, LARGE_FILE)).toEqual([]);
   await expect(statusBar(workspace)).toHaveScreenshot("issue-1383-degraded-large-file.png", {
     maxDiffPixelRatio: 0.001,

@@ -783,8 +783,14 @@ async function uiCombineCapsules(
 }
 
 async function uiAddAndDragPayload(page: Page, capsuleName: string): Promise<void> {
+  // "Add to workspace" dispatches a connector drop that the desktop turns into a workspace
+  // connector window. Requiring the connector-window count to GROW is the click's own completion
+  // signal — a condition that becomes true rather than one that already holds, so it cannot pass
+  // before the click has landed, and it fails loudly if the add ever stops adding.
+  const connectorWindows = page.locator('.window[data-window-id^="connector-"]');
+  const connectorWindowsBefore = await connectorWindows.count();
   await page.getByRole("button", { name: `Add Knowledge Pod ${capsuleName} to workspace` }).click();
-  await page.waitForTimeout(250);
+  await expect(connectorWindows).toHaveCount(connectorWindowsBefore + 1);
   const payload = await page
     .getByRole("button", { name: `Drag Knowledge Pod ${capsuleName} to the workspace` })
     .evaluate((node) => {
