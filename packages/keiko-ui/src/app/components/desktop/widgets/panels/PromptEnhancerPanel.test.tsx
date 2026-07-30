@@ -408,6 +408,93 @@ describe("PromptEnhancerPanel", () => {
     expect(screen.getByTestId("pe-safety-findings")).toBeInTheDocument();
   });
 
+  // Sibling-handoff gap (0.3.0 audit): the safety pipeline's validate stage can produce a
+  // `rejected` decision whose `requiresHumanReview` flag is independently derived from the task's
+  // risk profile (see `requiresHumanReviewForAnalysis` / `summarizePromptSafety` in
+  // keiko-contracts). A non-agentic, non-critical draft that trips a blocking structural finding is
+  // rejected with `requiresHumanReview: false` — the SafetyPanel must not stay silent then.
+  it("surfaces an alert for a rejected decision even when human review is not required", async () => {
+    const response = makeResponse({
+      safety: {
+        schemaVersion: "1",
+        promptId: "pe-prompt-1",
+        decision: "rejected",
+        requiresHumanReview: false,
+        verificationStatus: "failed",
+        findings: [
+          {
+            code: "capability-grant-claim",
+            ruleId: "no-authority-grant",
+            severity: "blocking",
+            detail:
+              "A trusted section appears to grant the model tool, file, network, or secret authority.",
+          },
+        ],
+        leastPrivilege: ["no-tool-execution", "no-secret-access"],
+      },
+    });
+    render(
+      <PromptEnhancerPanel
+        enhanceImpl={vi.fn().mockResolvedValue(response)}
+        fetchModelsImpl={noModels}
+      />,
+    );
+    typeDraft("x");
+    fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+    await screen.findByTestId("pe-result");
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
+  // The two safety signals are orthogonal ("unsafe" vs. "needs a human look at this specific
+  // case") and neither should silence the other. Covers all four combinations so the fix does not
+  // invert into over-alerting a genuinely accepted result.
+  it.each([
+    { decision: "rejected", requiresHumanReview: true, expectAlert: true },
+    { decision: "rejected", requiresHumanReview: false, expectAlert: true },
+    { decision: "accepted", requiresHumanReview: true, expectAlert: true },
+    { decision: "accepted", requiresHumanReview: false, expectAlert: false },
+  ] as const)(
+    "decision=$decision requiresHumanReview=$requiresHumanReview -> alert present: $expectAlert",
+    async ({ decision, requiresHumanReview, expectAlert }) => {
+      const response = makeResponse({
+        safety: {
+          schemaVersion: "1",
+          promptId: "pe-prompt-1",
+          decision,
+          requiresHumanReview,
+          verificationStatus: decision === "rejected" ? "failed" : "passed",
+          findings:
+            decision === "rejected"
+              ? [
+                  {
+                    code: "capability-grant-claim",
+                    ruleId: "no-authority-grant",
+                    severity: "blocking",
+                    detail:
+                      "A trusted section appears to grant the model tool, file, network, or secret authority.",
+                  },
+                ]
+              : [],
+          leastPrivilege: ["no-tool-execution", "no-secret-access"],
+        },
+      });
+      render(
+        <PromptEnhancerPanel
+          enhanceImpl={vi.fn().mockResolvedValue(response)}
+          fetchModelsImpl={noModels}
+        />,
+      );
+      typeDraft("x");
+      fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+      await screen.findByTestId("pe-result");
+      if (expectAlert) {
+        expect(screen.getAllByRole("alert").length).toBeGreaterThan(0);
+      } else {
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      }
+    },
+  );
+
   it("surfaces a redacted, safe error when the request fails", async () => {
     const enhanceImpl = vi
       .fn()

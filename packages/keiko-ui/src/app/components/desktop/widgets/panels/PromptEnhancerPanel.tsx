@@ -256,6 +256,17 @@ function SafetyPanel({
   readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   const reviewing = safety.requiresHumanReview;
+  // `decision` and `requiresHumanReview` are orthogonal safety signals (ADR-0044 §5): the first is
+  // the validate-stage verdict on the artefact itself ("is this prompt safe to use"), the second is
+  // a risk-profile flag on the underlying task ("does this specific case need a human look").
+  // `requiresHumanReviewForAnalysis` derives the latter from criticality/task-class/risk-flags
+  // independently of any blocking finding, so a `rejected` decision (a blocking structural finding —
+  // e.g. an authority-grant or override cue) can and does arrive with `requiresHumanReview: false`
+  // for a non-agentic, non-critical draft. Gating the alert on `reviewing` alone left that
+  // rejected-but-not-flagged-for-review result rendering with NO visual warning at all (0.3.0
+  // audit sibling-handoff gap). Each condition renders its own alert so neither can silence the
+  // other, and both together render both.
+  const rejected = safety.decision === "rejected";
   return (
     <Section title={t("promptEnhancer.safety.title")}>
       <dl className="pe-safety-summary" data-testid="pe-safety-decision">
@@ -276,6 +287,11 @@ function SafetyPanel({
           </dd>
         </div>
       </dl>
+      {rejected ? (
+        <p className="pe-safety-warning pe-safety-rejected" role="alert">
+          {t("promptEnhancer.safety.rejectedWarning")}
+        </p>
+      ) : null}
       {reviewing ? (
         <p className="pe-safety-warning" role="alert">
           {t("promptEnhancer.safety.reviewWarning")}
