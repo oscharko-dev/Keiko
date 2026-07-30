@@ -911,6 +911,32 @@ describe("FilesWidget", () => {
     expect(await screen.findByText("Git main 1 changed file")).toBeInTheDocument();
   });
 
+  it("reports a clean worktree when filtering removes every reported change", async () => {
+    // Boundary: a not-clean response whose only entries are ignored. The server excludes ignored
+    // entries from `clean`, so this shape is defensive — the header must not read "0 changed
+    // files", and it must agree with a tree that shows no changed file.
+    vi.mocked(fetchGitStatus).mockResolvedValue(
+      availableGitStatus(
+        [
+          gitChange("dist/bundle.js", "!", { indexStatus: "!" }),
+          gitChange("build.log", "!", { indexStatus: "!" }),
+        ],
+        { clean: false },
+      ),
+    );
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [{ ...treeEntryBase, name: "ordinary.ts", path: "ordinary.ts", kind: "file" }],
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    expect(await screen.findByText("Git main clean")).toBeInTheDocument();
+    expect(screen.queryByText(/0 changed files/iu)).not.toBeInTheDocument();
+  });
+
   it("leaves ordinary rows undecorated when ignored entries are not requested by the response", async () => {
     vi.mocked(fetchGitStatus).mockResolvedValue(availableGitStatus([]));
     vi.mocked(fetchFilesTree).mockResolvedValueOnce({

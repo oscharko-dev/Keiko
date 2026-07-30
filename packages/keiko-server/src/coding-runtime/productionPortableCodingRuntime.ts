@@ -359,13 +359,11 @@ function trustedResourceRoot(input: PortableOpenCodeDiscoveryInput): string | un
   }
 }
 
-/** fs error codes that signal an expected absence (nothing installed at the path), not corruption. */
-const ABSENT_PATH_CODES = new Set(["ENOENT", "ENOTDIR"]);
-
+// ONLY a genuinely missing path is an expected absence. ENOTDIR deliberately does NOT belong here:
+// it means a path component exists but is the wrong kind (e.g. `.portable` is a regular file), which
+// is a malformed installation and must keep reaching the corruption diagnostic (#2843 review).
 function isAbsentPathError(error: unknown): boolean {
-  return (
-    error instanceof Error && ABSENT_PATH_CODES.has((error as NodeJS.ErrnoException).code ?? "")
-  );
+  return error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
 function runtimeTarget(platform: NodeJS.Platform, arch: string): UpdatePortableTarget | undefined {
@@ -383,7 +381,8 @@ function setupMatches(root: string, target: UpdatePortableTarget): boolean {
 /**
  * Reads the portable presence marker. An absent marker means no portable installation — the
  * expected state on dev machines — and reports "not installed" silently; a marker that is
- * present but unreadable or malformed still throws so discovery emits its corruption diagnostic.
+ * present but unreadable or malformed (including valid JSON that is not an object, such as `null`
+ * or `[]`) still throws so discovery emits its corruption diagnostic (#2843 review).
  */
 function readSetupMarker(path: string): Record<string, unknown> | undefined {
   let raw: string;
@@ -393,7 +392,11 @@ function readSetupMarker(path: string): Record<string, unknown> | undefined {
     if (isAbsentPathError(error)) return undefined;
     throw error;
   }
-  return record(JSON.parse(raw));
+  const parsed = record(JSON.parse(raw));
+  if (parsed === undefined) {
+    throw new Error("portable setup marker is present but is not a JSON object");
+  }
+  return parsed;
 }
 
 function qualifiedSidecar(

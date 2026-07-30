@@ -47,6 +47,7 @@ describe("useCodingWorkbenchPairingEffect (release-audit F-08/RG-12)", () => {
 
   it("stays fail-closed on unknown when the workspaces read cannot answer", async () => {
     manifestAccessMock.mockRejectedValue(new Error("redacted transport failure"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const dispatch = vi.fn();
     renderHook(() => {
       useCodingWorkbenchPairingEffect(dispatch);
@@ -54,7 +55,41 @@ describe("useCodingWorkbenchPairingEffect (release-audit F-08/RG-12)", () => {
     await waitFor(() => {
       expect(dispatch).toHaveBeenCalledWith({ kind: "pairing-set", pairing: "unknown" });
     });
+    // A BFF or validation outage must stay diagnosable rather than look like an initial boot.
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
+
+  // #2843 review: both cleanup guards. A settled read after unmount must dispatch nothing, or a
+  // late answer would revive the pairing dimension of a destroyed workbench.
+  it.each(["resolve", "reject"] as const)(
+    "dispatches nothing when the workspaces read %ss after unmount",
+    async (settle) => {
+      let settleRead: () => void = () => undefined;
+      manifestAccessMock.mockImplementation(
+        () =>
+          new Promise((resolve, reject) => {
+            settleRead =
+              settle === "resolve"
+                ? (): void => resolve({ session: "paired", manifests: [] })
+                : (): void => reject(new Error("redacted transport failure"));
+          }),
+      );
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const dispatch = vi.fn();
+      const { unmount } = renderHook(() => {
+        useCodingWorkbenchPairingEffect(dispatch);
+      });
+
+      unmount();
+      settleRead();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(dispatch).not.toHaveBeenCalled();
+      warn.mockRestore();
+    },
+  );
 });
 
 describe("useCodingWorkbenchWorkspaceEffect", () => {

@@ -98,7 +98,16 @@ describe("production portable OpenCode discovery", () => {
     },
   );
 
-  it.each(["activation-missing", "setup-manifest-corrupt", "setup-manifest-unreadable"] as const)(
+  it.each([
+    "activation-missing",
+    "setup-manifest-corrupt",
+    "setup-manifest-unreadable",
+    // #2843 review: a marker holding valid JSON that is not an object, and a `.portable` path that
+    // exists but is a regular file (ENOTDIR), are MALFORMED installations — not absences.
+    "setup-manifest-null",
+    "setup-manifest-array",
+    "portable-dir-is-a-file",
+  ] as const)(
     "still emits the corruption diagnostic for a present installation with %s",
     (scenario) => {
       const records: unknown[] = [];
@@ -108,9 +117,16 @@ describe("production portable OpenCode discovery", () => {
         rmSync(join(root, ".portable", "runtime-activation.json"));
       } else if (scenario === "setup-manifest-corrupt") {
         writeFileSync(marker, "{", "utf8");
-      } else {
+      } else if (scenario === "setup-manifest-unreadable") {
         rmSync(marker);
         mkdirSync(marker);
+      } else if (scenario === "setup-manifest-null") {
+        writeFileSync(marker, "null", "utf8");
+      } else if (scenario === "setup-manifest-array") {
+        writeFileSync(marker, "[]", "utf8");
+      } else {
+        rmSync(join(root, ".portable"), { recursive: true, force: true });
+        writeFileSync(join(root, ".portable"), "not a directory", "utf8");
       }
 
       expect(

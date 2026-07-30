@@ -209,14 +209,20 @@ describe("CodingWorkbenchChanges", () => {
     expect(screen.queryByRole("button", { name: "Refresh changes" })).not.toBeInTheDocument();
   });
 
-  it("keeps the paired-session hint for transport errors while the window is unpaired", async () => {
+  // #2843 review corrected this expectation: the pairing hint belongs to an UNAVAILABLE read (the
+  // managed root is genuinely unreadable without a paired session, so retry cannot help). A
+  // transport/validation ERROR can recover on its own, so it must keep the retry control even
+  // while the window is unpaired — otherwise a recoverable failure is presented as one that
+  // requires re-opening Keiko through the launcher.
+  it("keeps a transport error retryable while the window is unpaired", async () => {
     const changesClient = client({
       getStatus: vi.fn(() => Promise.reject(new Error("redacted transport failure"))),
     });
     renderChanges(changesClient, { pairing: "unpaired" });
 
-    expect(await screen.findByText(/Browser window not paired/u)).toBeVisible();
-    expect(screen.queryByText(/could not be refreshed/u)).not.toBeInTheDocument();
+    expect(await screen.findByText(/could not be refreshed/u)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Refresh changes" })).toBeVisible();
+    expect(screen.queryByText(/Browser window not paired/u)).not.toBeInTheDocument();
   });
 
   it("does not retarget one run to a different workspace root", async () => {

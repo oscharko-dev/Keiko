@@ -70,13 +70,15 @@ function ChangesContent({
   if (changes.status === "binding-lost") {
     return <ChangesMessage role="alert" text={t("codingWorkbench.changes.bindingLost")} />;
   }
+  // F-08: an UNAVAILABLE read while the window is confirmed unpaired has one real cause — the
+  // missing paired session — so name it instead of the ambiguous denial; retry cannot help until
+  // the window is re-opened through the launcher. The deny decision itself stays server-side and
+  // content-free (ADR-0141 D6). An ERROR result is a transport/validation failure that CAN recover
+  // on its own, so it keeps the retry control even while unpaired (#2843 review).
+  if (changes.status === "unavailable" && pairing === "unpaired") {
+    return <ChangesMessage role="status" text={t("codingWorkbench.changes.unpaired")} />;
+  }
   if (changes.status === "unavailable" || changes.status === "error") {
-    // F-08: while the window is confirmed unpaired, the denial's real cause is the missing paired
-    // session — name it (retry cannot help until the window is re-opened through the launcher).
-    // The deny decision itself stays server-side and content-free (ADR-0141 D6).
-    if (pairing === "unpaired") {
-      return <ChangesMessage role="status" text={t("codingWorkbench.changes.unpaired")} />;
-    }
     const text = t(
       changes.status === "unavailable"
         ? "codingWorkbench.changes.unavailable"
