@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createInMemoryUiStore, createNodeUiStore, UiStoreError, type UiStore } from "./index.js";
+import { MAX_CHAT_TITLE_LEN } from "./chats.js";
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "./types.js";
 
 let tmp: string;
@@ -88,6 +89,50 @@ describe("createChat", () => {
   });
 });
 
+// 0.3.0 release audit — every production reader of the chat list passes a limit (the sidebar
+// route, the Chat History route, and the create/send envelope). The limited page therefore
+// decides which conversations a user can see and which one the session resumes: it must be the
+// most RECENTLY updated page, never the oldest one.
+describe("listChats — limited page window", () => {
+  it("returns the most recently updated chats, not the oldest", () => {
+    const oldest = store.createChat(proj, "oldest", "m1");
+    store.createChat(proj, "middle", "m1");
+    store.createChat(proj, "newest", "m1");
+
+    expect(store.listChats(proj, 2).map((c) => c.title)).toEqual(["newest", "middle"]);
+
+    // Touching the oldest chat must pull it back into the page — recency, not creation order.
+    store.updateChat(oldest.id, { title: "oldest-renamed" });
+    expect(store.listChats(proj, 2).map((c) => c.title)).toEqual(["oldest-renamed", "newest"]);
+  });
+
+  it("breaks an equal-updatedAt tie by insertion order, newest first", () => {
+    const fixed = createInMemoryUiStore({ now: () => 42 });
+    try {
+      fixed.createProject(proj);
+      fixed.createChat(proj, "a", "m1");
+      fixed.createChat(proj, "b", "m1");
+      fixed.createChat(proj, "c", "m1");
+      expect(fixed.listChats(proj, 2).map((chat) => chat.title)).toEqual(["c", "b"]);
+    } finally {
+      fixed.close();
+    }
+  });
+
+  it("rejects a non-positive or non-integer limit", () => {
+    store.createChat(proj, "a", "m1");
+    expect(() => store.listChats(proj, 0)).toThrow(UiStoreError);
+    expect(() => store.listChats(proj, -1)).toThrow(UiStoreError);
+    expect(() => store.listChats(proj, 1.5)).toThrow(UiStoreError);
+  });
+
+  it("returns every chat when the limit exceeds the row count", () => {
+    store.createChat(proj, "a", "m1");
+    store.createChat(proj, "b", "m1");
+    expect(store.listChats(proj, 10).map((c) => c.title)).toEqual(["b", "a"]);
+  });
+});
+
 // Epic #177 audit: grounded-ask and chat PATCH paths used a project-scan + chat-scan helper
 // that fired O(projects × chats) row fetches per request. `findChatById` is the single-row
 // SELECT replacement; these tests pin its three semantic boundaries.
@@ -132,6 +177,41 @@ describe("updateChat", () => {
     expect(() =>
       store.updateChat(c.id, { selectedModel: '{"apiKey":"secret","modelId":"m"}' }),
     ).toThrow(UiStoreError);
+  });
+});
+
+// 0.3.0 release audit — the title guard lived only in insertChat, so PATCH could persist an
+// empty title (COALESCE('', title) keeps '') and any title the 256 KB body cap admitted. The
+// guard belongs to the store layer that owns the column, so create, update, and any future
+// writer are held to the same bound.
+describe("chat title validation (create and update)", () => {
+  const overLong = "x".repeat(MAX_CHAT_TITLE_LEN + 1);
+
+  it("rejects an empty title on update and leaves the stored title untouched", () => {
+    const c = store.createChat(proj, "keep me", "m1");
+    expect(() => store.updateChat(c.id, { title: "" })).toThrow(UiStoreError);
+    expect(store.findChatById(c.id)?.title).toBe("keep me");
+  });
+
+  it("rejects an over-long title on create and on update", () => {
+    expect(() => store.createChat(proj, overLong, "m1")).toThrow(UiStoreError);
+    const c = store.createChat(proj, "keep me", "m1");
+    expect(() => store.updateChat(c.id, { title: overLong })).toThrow(UiStoreError);
+    expect(store.findChatById(c.id)?.title).toBe("keep me");
+  });
+
+  it("accepts a title exactly at the bound on both paths", () => {
+    const atBound = "y".repeat(MAX_CHAT_TITLE_LEN);
+    const created = store.createChat(proj, atBound, "m1");
+    expect(created.title).toBe(atBound);
+    const renamed = store.updateChat(created.id, { title: atBound });
+    expect(renamed.title).toBe(atBound);
+  });
+
+  it("leaves the title untouched when the patch omits it", () => {
+    const c = store.createChat(proj, "keep me", "m1");
+    const updated = store.updateChat(c.id, { status: "closed" });
+    expect(updated.title).toBe("keep me");
   });
 });
 

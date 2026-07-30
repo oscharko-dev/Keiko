@@ -96,8 +96,41 @@ function countSkipMessage(displayName: string): string {
   return `"${displayName}" won't be sent — only the first ${String(MAX_DOCUMENT_CONTEXT_ENTRIES)} documents are included.`;
 }
 
+// 0.3.0 release audit — the old wording ("it will be sent without document text") read as if the
+// file itself still travelled. It does not: the send wire carries a metadata descriptor only, so a
+// binary document contributes nothing at all to the prompt. Say that.
 function nonTextDocumentMessage(displayName: string): string {
-  return `Couldn't extract text from "${displayName}" — it will be sent without document text.`;
+  return `Couldn't extract text from "${displayName}" — your message will be sent without document text and the model won't receive the file itself.`;
+}
+
+/**
+ * A staged composer attachment, reduced to what decides whether the model can see it.
+ * Structural on purpose: this module must not depend on the session hook that consumes it.
+ */
+export interface StagedAttachmentDescriptor {
+  readonly kind: "image" | "document";
+  readonly name: string;
+}
+
+// 0.3.0 release audit — the conversation send wire is METADATA-ONLY for attachments
+// (`ConversationAttachmentDescriptorWire` = id/kind/name/mimeType/sizeBytes) and the server's
+// gateway message type is `{ role, content: string }`. The only attachment content that can reach
+// a model on this path is text this module extracts from a text-decodable DOCUMENT. An image
+// therefore contributes nothing whatsoever — it was accepted, thumbnailed, modality-validated
+// against the selected model, and then dropped without a word. Silence is the defect: the send
+// must state, by name and before the turn leaves, which staged attachments the model will not
+// receive. Documents are deliberately NOT reported here — extractDocumentContext sees every one
+// of them and already discloses its own skips, so adding them would double-report.
+function undeliverableImageNotice(displayName: string): string {
+  return `"${displayName}" won't be sent — the model does not receive image attachments in this conversation. Describe what matters about it in your message instead.`;
+}
+
+export function undeliverableAttachmentNotices(
+  attachments: readonly StagedAttachmentDescriptor[],
+): readonly string[] {
+  return attachments
+    .filter((attachment) => attachment.kind === "image")
+    .map((attachment) => undeliverableImageNotice(basename(attachment.name)));
 }
 
 interface ExtractionState {

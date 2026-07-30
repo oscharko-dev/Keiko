@@ -12,6 +12,7 @@ import {
   MAX_DOCUMENT_CONTEXT_TEXT_BYTES,
   extractDocumentContext,
   isTextExtractableMime,
+  undeliverableAttachmentNotices,
   type PendingDocument,
 } from "./documentContext";
 
@@ -74,6 +75,29 @@ describe("isTextExtractableMime", () => {
   it("rejects binary documents like PDF", () => {
     expect(isTextExtractableMime("application/pdf")).toBe(false);
     expect(isTextExtractableMime("image/png")).toBe(false);
+  });
+});
+
+// 0.3.0 release audit — the conversation send wire carries attachment METADATA only, so a staged
+// image contributes nothing to the prompt. It used to be accepted, previewed, modality-validated
+// and then dropped without a word. These pin the disclosure that replaces the silence.
+describe("undeliverableAttachmentNotices", () => {
+  it("names every staged image, says the model will not receive it, and leaks no path", () => {
+    const notices = undeliverableAttachmentNotices([
+      { kind: "image", name: "/Users/secret/screen.png" },
+      { kind: "document", name: "notes.txt" },
+      { kind: "image", name: "chart.webp" },
+    ]);
+    expect(notices).toHaveLength(2);
+    expect(notices[0]).toContain('"screen.png"');
+    expect(notices[0]).not.toContain("/Users/");
+    expect(notices[0]).toMatch(/model/i);
+    expect(notices[1]).toContain('"chart.webp"');
+  });
+
+  it("stays silent for an empty queue and for documents, which extraction already reports", () => {
+    expect(undeliverableAttachmentNotices([])).toEqual([]);
+    expect(undeliverableAttachmentNotices([{ kind: "document", name: "spec.pdf" }])).toEqual([]);
   });
 });
 

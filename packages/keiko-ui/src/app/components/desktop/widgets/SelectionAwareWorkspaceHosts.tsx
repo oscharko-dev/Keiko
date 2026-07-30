@@ -686,11 +686,33 @@ export function ChatWindowSessionHost({
     if (activeTarget.title !== title) updateCfg({ title: activeTarget.title });
   }, [activeTarget?.id, activeTarget?.title, chatId, loading, title, updateCfg]);
 
+  // 0.3.0 release audit — `chats` is the CURRENT project's list, so a window still bound to the
+  // previous project's conversation resolved nothing and was told the conversation "was deleted".
+  // It was not: the singleton chat window simply lagged behind a project switch. The two cases are
+  // distinguishable — a conversation trashed from Chat History stays in the list with status
+  // "closed", while one that belongs to another project is absent entirely — so only the absent
+  // case retargets the window onto the session's active conversation, and the honest deletion
+  // message is left to the case that can actually prove a deletion.
+  const boundChatKnownHere = chatId !== undefined && chats.some((chat) => chat.id === chatId);
+  const retargetChat =
+    chatId !== undefined &&
+    !boundChatKnownHere &&
+    activeTarget !== undefined &&
+    activeTarget.id !== chatId
+      ? activeTarget
+      : undefined;
+
+  useEffect((): void => {
+    if (loading || selectionHandoffId !== undefined || retargetChat === undefined) return;
+    updateCfg({ chatId: retargetChat.id, title: retargetChat.title });
+  }, [loading, retargetChat, selectionHandoffId, updateCfg]);
+
   const targetMissing =
     selectionHandoffId === undefined &&
     chatId !== undefined &&
     !session.loading &&
     activeTarget?.id !== chatId &&
+    retargetChat === undefined &&
     !session.chats.some((chat) => chat.id === chatId && chat.status !== "closed");
   const waitingForTarget =
     session.loading ||
