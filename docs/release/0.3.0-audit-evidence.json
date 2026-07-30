@@ -191,10 +191,15 @@
       "Documentation Browser"
     ],
     "settingsTabs": ["Models", "General", "Editor", "Languages", "Debugging", "Security"],
-    "registeredWindowTypes": 45,
+    "registeredWindowTypes": 44,
     "typeOrderEntries": 25,
     "paletteCards": 6,
-    "note": "handoff expected a Workspace Trust settings tab; workspaceTrust is its own window type, not a tab"
+    "note": "handoff expected a Workspace Trust settings tab; workspaceTrust is its own window type, not a tab",
+    "unreachableWindowTypes": 12,
+    "correction": "earlier entries said 45 types / 12 unreachable, then 44 / 9; both were wrong. Correct: 44 declared types (editor-settings is a Quick Access pseudo-command, not a WindowType) and 12 unreachable — 8 with no entry point at all plus 4 reachable only through the unreachable runtime window. search/problems/debug ARE reachable (keyboard- and editor-command-only); integ and keiko were missing from the earlier suspect list. Per-type evidence ships with the F-05 matrix in PR #2843 (docs/release/0.3.0-unreachable-surface-decisions.md).",
+    "unreachableNotInert": "the persistence layer restores ANY declared WindowType from localStorage and AGENTS.md section 7 treats workspace input as hostile, so an unreachable window still renders from a tampered or older persisted layout",
+    "unreachableWindowTypesDirect": 8,
+    "unreachableWindowTypesTransitive": 4
   },
   "journeys": [
     {
@@ -646,8 +651,9 @@
       {
         "id": "RG-18",
         "title": "Files header count vs Git truth",
-        "result": "FAIL-MINOR",
-        "finding": "F-12"
+        "result": "FAIL-PRE-FIX",
+        "finding": "F-12",
+        "observed": "pre-fix observation: the Files header claimed 45 changed files for a root where git and the Git window truthfully reported 8, because the header counted ignored porcelain entries. FIXED in PR #2843; the header now counts the same worktree truth, with regression tests and a clean-worktree boundary case. No post-fix live re-check was run from this session — the fix is covered by those tests."
       },
       {
         "id": "RG-19",
@@ -683,13 +689,55 @@
         "title": "Dictation with denied microphone",
         "result": "PASS",
         "observed": "honest actionable denial with Try again / Dismiss"
+      },
+      {
+        "id": "RG-25",
+        "title": "Create a Knowledge Pod",
+        "result": "PASS",
+        "observed": "honest Draft state; compatibility disclosed as unverified with lexical fallback before a source existed"
+      },
+      {
+        "id": "RG-26",
+        "title": "Connect a folder source",
+        "result": "PASS",
+        "observed": "real embedding identity reported (text-embedding-3-large, 3072d, cosine, l2, space fingerprint); Vector compatible: Compatible; precise privacy disclosure"
+      },
+      {
+        "id": "RG-27",
+        "title": "Index the pod",
+        "result": "PASS",
+        "observed": "150 documents, 4796 chunks, 4796 vectors, lifecycleState ready; Index correctly aria-disabled while no source was connected"
+      },
+      {
+        "id": "RG-28",
+        "title": "Pod offered as a chat grounding source",
+        "result": "PASS"
+      },
+      {
+        "id": "RG-29",
+        "title": "Pod-grounded question",
+        "result": "PASS",
+        "observed": "hybrid retrieval 588 vector / 124 lexical / 100 fused; 16 references, 2 citations; correct file cited"
+      },
+      {
+        "id": "RG-30",
+        "title": "Abstention on a fact absent from the evidence",
+        "result": "PASS",
+        "observed": "named the governing ADR from the pod and refused the version pin (which genuinely is not in the indexed corpus) rather than guessing"
+      },
+      {
+        "id": "RG-31",
+        "title": "Knowledge activity accounting",
+        "result": "PASS",
+        "observed": "per-pod searched/skipped/degraded/denied/unavailable/not-selected plus retrieval modes and context budget"
       }
     ],
     "newFindings": [
       {
         "id": "F-08",
         "severity": "P0",
-        "title": "Managed task workspaces created inside the security deny surface (.keiko); product denies its own workspace; git status reason 'unknown'"
+        "title": "Managed task workspaces created inside the security deny surface (.keiko); product denies its own workspace; git status reason 'unknown'",
+        "status": "server boundary unchanged by design; the UI-side residual (pairing dimension in readiness and on managed-root surfaces) is FIXED"
       },
       {
         "id": "F-09a",
@@ -709,12 +757,24 @@
       {
         "id": "F-11",
         "severity": "P1",
-        "title": "memory.salience.capture fails GATEWAY_PROVIDER_ERROR on every turn against the real gateway; memory semantic scores disabled reason no-embeddings despite configured embedding model"
+        "title": "memory.salience.capture fails GATEWAY_PROVIDER_ERROR on every turn against the real gateway; memory semantic scores disabled reason no-embeddings despite configured embedding model",
+        "status": "FIXED (named root object schema + aligned prompt)"
       },
       {
         "id": "F-12",
         "severity": "P2",
-        "title": "Files header change count (45) vs Git truth (8); disabled grounding option unexplained; coding.runtime.discover ENOENT diagnostic at every dev-lane boot"
+        "title": "Files header change count (45) vs Git truth (8); disabled grounding option unexplained; coding.runtime.discover ENOENT diagnostic at every dev-lane boot",
+        "status": "FIXED in PR #2843 (a: header counts worktree truth plus a clean-worktree boundary case; b: the disabled grounding option carries a translated hint; c: an absent portable install no longer emits an error-class diagnostic while a present-but-corrupt one still does)"
+      },
+      {
+        "id": "F-13",
+        "severity": "P2",
+        "title": "check:editor-release-evidence is not reproducible ACROSS PLATFORMS: it fails on a macOS host at clean dev with a measurement-fingerprint mismatch while the required ci context, which runs the same gate in three places, is green on that exact SHA. The committed evidence carries CI/Linux lineage and was deliberately not regenerated from macOS. Document the platform sensitivity or exclude platform-variable inputs (gzip byte counts) from the fingerprint."
+      },
+      {
+        "id": "F-14",
+        "severity": "P2",
+        "title": "Retrieval relevance scores shown to the operator are uninformative (0.02 on both citations of a correctly targeted answer) even though ranking surfaced the right document."
       }
     ],
     "fixDelegation": "F-01/F-08/F-09a/F-09b with a worktree-isolated agent (regression-test-first, full gates); F-04 investigation complete (see F-10)",
