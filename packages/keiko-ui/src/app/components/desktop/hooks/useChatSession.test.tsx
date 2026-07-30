@@ -41,6 +41,11 @@ import {
   clearCanonicalVoiceHasherForTests,
   prepareCanonicalVoiceHasher,
 } from "./canonical-voice-hasher";
+import { DEFAULT_LOCALE, translate, type I18nTranslate } from "@/lib/i18n";
+
+// The notices are localized; "en" is the locale under test, and resolving through the shipped
+// catalog keeps this assertion exact without restating the copy in the test.
+const t: I18nTranslate = (key, values) => translate(DEFAULT_LOCALE, key, values);
 
 beforeAll(async () => {
   await prepareCanonicalVoiceHasher();
@@ -1645,7 +1650,7 @@ describe("useChatSession sendMessage — ungrounded attachment descriptors", () 
     });
     expect(request).not.toHaveProperty("documentContext");
     expect(result.current.error).toBe(
-      undeliverableAttachmentNotices([{ kind: "image", name: "screen.png" }]).join(" "),
+      undeliverableAttachmentNotices([{ kind: "image", name: "screen.png" }], t).join(" "),
     );
   });
 

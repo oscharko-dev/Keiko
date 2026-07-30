@@ -10,6 +10,7 @@ import {
   type SetStateAction,
 } from "react";
 import { classifyAttachmentMime, MAX_ATTACHMENT_BYTES } from "@oscharko-dev/keiko-contracts";
+import { useTranslate } from "@/lib/i18n";
 import type { ConversationAttachmentDescriptorWire, MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
@@ -1777,6 +1778,11 @@ export interface UseChatSessionOptions {
 }
 
 export function useChatSession(options: UseChatSessionOptions = {}): UseChatSessionResult {
+  // 0.3.0 release audit — the pre-send attachment notices are user-facing text and were hardcoded
+  // English. `documentContext` is not a component and cannot call a hook, so the session hook
+  // resolves the translator once and passes it down. Outside an I18nProvider this falls back to the
+  // shipped English catalog rather than throwing, which keeps the pure-function tests provider-free.
+  const t = useTranslate();
   const autoCreate = options.autoCreate ?? true;
   const loadMemoryAutonomyModeImpl = options.loadMemoryAutonomyModeImpl ?? loadMemoryAutonomyMode;
   const [state, setState] = useState<SessionState>(INITIAL_STATE);
@@ -2022,7 +2028,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       readonly entries: readonly ConversationDocumentContextWire[];
       readonly disclosures: readonly SentDocumentDisclosure[];
     }> => {
-      const undeliverable = undeliverableAttachmentNotices(staged);
+      const undeliverable = undeliverableAttachmentNotices(staged, t);
       const documents: PendingDocument[] = staged
         .filter((a) => a.kind === "document" && a.file !== undefined)
         .map((a) => ({
@@ -2035,7 +2041,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       const extracted =
         documents.length === 0
           ? { entries: [] as readonly ConversationDocumentContextWire[], failures: [] }
-          : await extractDocumentContext(documents);
+          : await extractDocumentContext(documents, t);
       const notices = [...extracted.failures, ...undeliverable];
       if (notices.length > 0) setError(notices.join(" "));
       const disclosures = extracted.entries.map((e) => ({
@@ -2045,7 +2051,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       }));
       return { entries: extracted.entries, disclosures };
     },
-    [],
+    [t],
   );
 
   const buildAttachmentDescriptors = useCallback(

@@ -383,22 +383,6 @@
       "Processing",
       "Queued"
     ],
-    "packages/keiko-ui/src/app/components/desktop/widgets/panels/RelationshipHealthPanel.tsx": [
-      "Blocked",
-      "Cycle participants",
-      "Failed (revoked)",
-      "Healthy",
-      "Invalid references",
-      "No relationship-graph defects were found.",
-      "Re-run the graph health check",
-      "Stale"
-    ],
-    "packages/keiko-ui/src/app/components/desktop/widgets/panels/RelationshipImpactCard.tsx": [
-      "Bounded impact analysis",
-      "Downstream impact",
-      "Loading…",
-      "Upstream impact"
-    ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/RelationshipInspectorPanel.tsx": [
       "Activity",
       "Archive — only available for active relationships",

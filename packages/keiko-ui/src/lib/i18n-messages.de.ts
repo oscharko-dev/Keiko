@@ -1001,6 +1001,16 @@ export const DE_MESSAGES = {
   "attachment.remove": "Anhang {name} entfernen",
   "attachment.pending": "Ausstehende Anhänge",
   "attachment.voiceStaged": "Wird mit deinem nächsten gesprochenen Beitrag gesendet",
+  "attachment.notice.readFailed":
+    "„{name}“ konnte nicht gelesen werden — die Datei wird übersprungen. Deine Nachricht wird ohne sie gesendet.",
+  "attachment.notice.budgetExhausted":
+    "„{name}“ wird nicht gesendet — das Anhang-Limit von {limit} war bereits durch frühere Dateien aufgebraucht.",
+  "attachment.notice.countExceeded":
+    "„{name}“ wird nicht gesendet — nur die ersten {max} Dokumente werden übernommen.",
+  "attachment.notice.nonTextDocument":
+    "Aus „{name}“ konnte kein Text extrahiert werden — deine Nachricht wird ohne Dokumenttext gesendet, und das Modell erhält die Datei selbst nicht.",
+  "attachment.notice.imageUndeliverable":
+    "„{name}“ wird nicht gesendet — das Modell erhält in dieser Unterhaltung keine Bildanhänge. Beschreibe stattdessen in deiner Nachricht, worauf es ankommt.",
   "attachment.drop": "Dateien hier ablegen, um sie anzufügen",
   "attachment.disabledDifferentModel":
     "Das ausgewählte Modell unterstützt keine Bild- oder Dokumenteingabe. Wähle ein anderes Modell, um Dateien anzufügen.",

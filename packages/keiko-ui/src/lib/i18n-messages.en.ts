@@ -976,6 +976,16 @@ export const EN_MESSAGES = {
   "attachment.remove": "Remove attachment {name}",
   "attachment.pending": "Pending attachments",
   "attachment.voiceStaged": "Sent with your next spoken turn",
+  "attachment.notice.readFailed":
+    'Couldn\'t read "{name}" — it will be skipped. Your message will be sent without it.',
+  "attachment.notice.budgetExhausted":
+    '"{name}" won\'t be sent — the {limit} attachment limit was already used by earlier files.',
+  "attachment.notice.countExceeded":
+    '"{name}" won\'t be sent — only the first {max} documents are included.',
+  "attachment.notice.nonTextDocument":
+    "Couldn't extract text from \"{name}\" — your message will be sent without document text and the model won't receive the file itself.",
+  "attachment.notice.imageUndeliverable":
+    '"{name}" won\'t be sent — the model does not receive image attachments in this conversation. Describe what matters about it in your message instead.',
   "attachment.drop": "Drop files here to attach",
   "attachment.disabledDifferentModel":
     "The selected model does not support image or document input. Choose a different model to attach files.",

@@ -10,6 +10,7 @@
 // filesystem path NEVER crosses this wire nor reaches the UI. No new runtime dependencies.
 
 import type { ConversationDocumentContextWire } from "@/lib/types";
+import type { I18nTranslate } from "@/lib/i18n";
 
 // Mirror the server constants EXACTLY. A divergence here would let the client ship context the
 // server silently drops (or vice versa), so these are intentionally duplicated, not approximated.
@@ -76,31 +77,42 @@ function basename(name: string): string {
   return lastSlash >= 0 ? name.slice(lastSlash + 1) : name;
 }
 
-// All three message builders run BEFORE the actual send, so they speak in the future tense
+// Every message builder runs BEFORE the actual send, so they speak in the future tense
 // (audit C317 — the old copy claimed "the other attachments were still sent" even for a single
 // attachment and before any send happened). displayName is always basename-only (AC #4 #147).
-function failureMessage(displayName: string): string {
-  return `Couldn't read "${displayName}" — it will be skipped. Your message will be sent without it.`;
+//
+// 0.3.0 release audit — these notices are user-facing text and used to be hardcoded English, so a
+// German user got English mid-conversation. This module is not a component and cannot call a hook,
+// so it takes the translate function as a parameter (the `I18nTranslate` seam other non-hook
+// modules use). The file name is interpolated as a value, never concatenated into a key.
+function failureMessage(displayName: string, t: I18nTranslate): string {
+  return t("attachment.notice.readFailed", { name: displayName });
 }
 
 const AGGREGATE_LIMIT_LABEL = `${String(MAX_AGGREGATE_DOCUMENT_BYTES / 1024)} KB`;
 
 // Audit C075 — a document dropped because earlier files exhausted the aggregate byte budget used
 // to vanish silently; the model then replied "I can't see the document" with zero user feedback.
-function budgetSkipMessage(displayName: string): string {
-  return `"${displayName}" won't be sent — the ${AGGREGATE_LIMIT_LABEL} attachment limit was already used by earlier files.`;
+function budgetSkipMessage(displayName: string, t: I18nTranslate): string {
+  return t("attachment.notice.budgetExhausted", {
+    name: displayName,
+    limit: AGGREGATE_LIMIT_LABEL,
+  });
 }
 
 // Audit C075 — same silence for documents beyond the 16-entry cap.
-function countSkipMessage(displayName: string): string {
-  return `"${displayName}" won't be sent — only the first ${String(MAX_DOCUMENT_CONTEXT_ENTRIES)} documents are included.`;
+function countSkipMessage(displayName: string, t: I18nTranslate): string {
+  return t("attachment.notice.countExceeded", {
+    name: displayName,
+    max: String(MAX_DOCUMENT_CONTEXT_ENTRIES),
+  });
 }
 
 // 0.3.0 release audit — the old wording ("it will be sent without document text") read as if the
 // file itself still travelled. It does not: the send wire carries a metadata descriptor only, so a
 // binary document contributes nothing at all to the prompt. Say that.
-function nonTextDocumentMessage(displayName: string): string {
-  return `Couldn't extract text from "${displayName}" — your message will be sent without document text and the model won't receive the file itself.`;
+function nonTextDocumentMessage(displayName: string, t: I18nTranslate): string {
+  return t("attachment.notice.nonTextDocument", { name: displayName });
 }
 
 /**
@@ -121,16 +133,17 @@ export interface StagedAttachmentDescriptor {
 // must state, by name and before the turn leaves, which staged attachments the model will not
 // receive. Documents are deliberately NOT reported here — extractDocumentContext sees every one
 // of them and already discloses its own skips, so adding them would double-report.
-function undeliverableImageNotice(displayName: string): string {
-  return `"${displayName}" won't be sent — the model does not receive image attachments in this conversation. Describe what matters about it in your message instead.`;
+function undeliverableImageNotice(displayName: string, t: I18nTranslate): string {
+  return t("attachment.notice.imageUndeliverable", { name: displayName });
 }
 
 export function undeliverableAttachmentNotices(
   attachments: readonly StagedAttachmentDescriptor[],
+  t: I18nTranslate,
 ): readonly string[] {
   return attachments
     .filter((attachment) => attachment.kind === "image")
-    .map((attachment) => undeliverableImageNotice(basename(attachment.name)));
+    .map((attachment) => undeliverableImageNotice(basename(attachment.name), t));
 }
 
 interface ExtractionState {
@@ -166,11 +179,12 @@ function buildEntry(
 async function readDocumentInto(
   state: ExtractionState,
   doc: PendingDocument,
+  t: I18nTranslate,
 ): Promise<string | undefined> {
   // Audit C075 — every complete drop must surface a message; only genuinely empty files stay
   // silent (nothing was lost). The returned failure flows into the same setError pipeline as
   // read failures (useChatSession.buildDocumentContext).
-  if (state.remainingAggregate <= 0) return budgetSkipMessage(basename(doc.name));
+  if (state.remainingAggregate <= 0) return budgetSkipMessage(basename(doc.name), t);
   let raw: string;
   try {
     // GEN-PERF-CHAT-013 — read only the budgeted prefix instead of the whole file. The per-entry
@@ -184,16 +198,16 @@ async function readDocumentInto(
     raw = await doc.file.slice(0, prefixBudget).text();
   } catch {
     // Never throw — surface a fixed, path-safe failure so the send proceeds without this doc.
-    return failureMessage(basename(doc.name));
+    return failureMessage(basename(doc.name), t);
   }
   // The per-entry budget is the smaller of the fixed cap and what the aggregate has left, minus
   // the marker cost so a truncated entry's text + marker still fits the remaining aggregate.
   const aggregateRoom = state.remainingAggregate - utf8ByteLength(DOCUMENT_TRUNCATION_MARKER);
   const perEntryBudget = Math.min(MAX_DOCUMENT_CONTEXT_TEXT_BYTES, Math.max(aggregateRoom, 0));
-  if (perEntryBudget <= 0) return budgetSkipMessage(basename(doc.name));
+  if (perEntryBudget <= 0) return budgetSkipMessage(basename(doc.name), t);
   const { entry, consumed } = buildEntry(doc, raw, perEntryBudget);
   if (entry.text.length === 0) {
-    return raw.length === 0 ? undefined : budgetSkipMessage(basename(doc.name));
+    return raw.length === 0 ? undefined : budgetSkipMessage(basename(doc.name), t);
   }
   state.entries.push(entry);
   state.remainingAggregate -= consumed;
@@ -205,6 +219,7 @@ async function readDocumentInto(
 // aggregate budget; later ones are truncated or dropped. Never throws.
 export async function extractDocumentContext(
   documents: readonly PendingDocument[],
+  t: I18nTranslate,
 ): Promise<DocumentExtractionResult> {
   const failures: string[] = [];
   const extractable: PendingDocument[] = [];
@@ -212,20 +227,20 @@ export async function extractDocumentContext(
     if (isTextExtractableMime(doc.mimeType)) {
       extractable.push(doc);
     } else {
-      failures.push(nonTextDocumentMessage(basename(doc.name)));
+      failures.push(nonTextDocumentMessage(basename(doc.name), t));
     }
   }
   const included = extractable.slice(0, MAX_DOCUMENT_CONTEXT_ENTRIES);
   const state: ExtractionState = { entries: [], remainingAggregate: MAX_AGGREGATE_DOCUMENT_BYTES };
   for (const doc of included) {
-    const failure = await readDocumentInto(state, doc);
+    const failure = await readDocumentInto(state, doc, t);
     if (failure !== undefined) failures.push(failure);
   }
   // Audit C075 — documents beyond the 16-entry cap were sliced away without any hint. Binary
   // documents (PDF) are reported above because metadata-only attachment routing still needs
   // user-visible disclosure that no document text was extracted.
   for (const doc of extractable.slice(MAX_DOCUMENT_CONTEXT_ENTRIES)) {
-    failures.push(countSkipMessage(basename(doc.name)));
+    failures.push(countSkipMessage(basename(doc.name), t));
   }
   return { entries: state.entries, failures };
 }
