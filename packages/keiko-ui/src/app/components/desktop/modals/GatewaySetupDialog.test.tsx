@@ -26,6 +26,8 @@ describe("GatewaySetupDialog", () => {
     delete document.documentElement.dataset.keikoGatewaySetupOpenCount;
     document.documentElement.removeAttribute("data-keiko-gateway-setup-open");
     window.localStorage.removeItem(I18N_STORAGE_KEY);
+    window.localStorage.removeItem("keiko.theme");
+    document.documentElement.removeAttribute("data-theme");
   });
 
   it("announces dialog semantics, focuses the first field, traps tab focus, and closes on Escape", async () => {
@@ -41,13 +43,39 @@ describe("GatewaySetupDialog", () => {
     await waitFor(() => expect(baseUrl).toHaveFocus());
 
     await user.tab({ shift: true });
-    expect(screen.getByRole("button", { name: /cancel/i })).toHaveFocus();
+    expect(screen.getByRole("button", { name: /light mode/i })).toHaveFocus();
 
     await user.tab();
     expect(baseUrl).toHaveFocus();
 
     await user.keyboard("{Escape}");
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("switches the global theme without clearing or submitting credentials", async () => {
+    const user = userEvent.setup();
+    render(<GatewaySetupDialog />);
+
+    const baseUrl = screen.getByLabelText(/base url/i);
+    const apiToken = screen.getByLabelText(/api token/i);
+    await user.type(baseUrl, "https://llm-gateway.example.com/v1");
+    await user.type(apiToken, "example-token");
+
+    await user.click(screen.getByRole("button", { name: /light mode/i }));
+
+    await waitFor(() => expect(document.documentElement).toHaveAttribute("data-theme", "light"));
+    const darkModeButton = screen.getByRole("button", { name: /dark mode/i });
+    expect(darkModeButton).not.toHaveAttribute("aria-pressed");
+    expect(window.localStorage.getItem("keiko.theme")).toBe("light");
+
+    await user.click(darkModeButton);
+
+    await waitFor(() => expect(document.documentElement).toHaveAttribute("data-theme", "dark"));
+    expect(screen.getByRole("button", { name: /light mode/i })).not.toHaveAttribute("aria-pressed");
+    expect(window.localStorage.getItem("keiko.theme")).toBe("dark");
+    expect(baseUrl).toHaveValue("https://llm-gateway.example.com/v1");
+    expect(apiToken).toHaveValue("example-token");
+    expect(setupGateway).not.toHaveBeenCalled();
   });
 
   // GEN-UI-FOCUS-015: the Tab trap must skip fields hidden inside a collapsed
@@ -77,20 +105,18 @@ describe("GatewaySetupDialog", () => {
     const gatewayDetails = hiddenBaseUrl.closest("details");
     expect(gatewayDetails?.open).toBe(false);
 
-    // The kept focusables (in DOM order) are: the two <summary> toggles and the
-    // Figma token input. first = "Replace model gateway settings" summary,
-    // last = Figma token. Both boundaries are visible, never a hidden field.
-    const replaceSummary = screen.getByText("Replace model gateway settings");
+    // The kept focusables begin with the visible theme toggle, followed by the
+    // two <summary> toggles and the Figma token input. The boundaries never
+    // resolve to a hidden field.
+    const themeToggle = screen.getByRole("button", { name: "Light mode" });
     const figmaToken = screen.getByLabelText(/figma access token optional/i);
     await waitFor(() => expect(figmaToken).toHaveFocus());
 
-    // Tab from the last boundary (Figma token) wraps to the first boundary,
-    // which is the visible <summary> toggle — NOT a hidden field inside the
-    // collapsed <details>. (The summary lives inside <details> and stays
-    // reachable so the section can be opened by keyboard.)
+    // Tab from the last boundary (Figma token) wraps to the visible theme
+    // toggle, not a hidden field inside the collapsed <details>.
     fireEvent.keyDown(dialog, { key: "Tab" });
-    expect(replaceSummary).toHaveFocus();
-    expect(document.activeElement?.tagName).toBe("SUMMARY");
+    expect(themeToggle).toHaveFocus();
+    expect(document.activeElement?.tagName).toBe("BUTTON");
     expect(document.activeElement).not.toBe(hiddenBaseUrl);
 
     // Shift+Tab from the first boundary wraps to the last (Figma token) — a

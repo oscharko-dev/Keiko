@@ -21,10 +21,14 @@ import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { ModelCapability, VoiceProviderLocality } from "@/lib/types";
 import { Icons } from "../Icons";
 import KeikoSelect from "../KeikoSelect";
+import { useTheme } from "../hooks/useTheme";
 import { NATIVE_BLOCK_STYLE } from "../native-element-styles";
+import styles from "./GatewaySetupDialog.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CubeIcon = Icons.cube;
+const MoonIcon = Icons.moon;
+const SunIcon = Icons.sun;
 
 type FormSubmitEvent = { preventDefault: () => void };
 
@@ -1958,6 +1962,7 @@ export function GatewaySetupDialog({
   readonly storedModels?: readonly ModelCapability[] | undefined;
 }): ReactNode {
   const t = useTranslate();
+  const { theme, toggle: toggleTheme } = useTheme();
   const dialogRef = useRef<HTMLDivElement>(null);
   const voiceProviderLocalityLabelId = useId();
   const baseUrlRef = useRef<HTMLInputElement>(null);
@@ -2370,9 +2375,20 @@ export function GatewaySetupDialog({
       >
         <form className="gw-form" onSubmit={(event) => void submit(event)}>
           <div className="gw-head">
-            <div className="gw-setup-badge">
-              <CubeIcon size={18} />
-              {preserveExisting ? "Credential update" : "Model gateway setup"}
+            <div className={styles["cmp-head-controls"]}>
+              <div className="gw-setup-badge">
+                <CubeIcon size={18} />
+                {preserveExisting ? t("gatewaySetup.badge.update") : t("gatewaySetup.badge.setup")}
+              </div>
+              <button
+                type="button"
+                className={styles["cmp-theme-toggle"]}
+                aria-label={theme === "light" ? t("rail.darkMode") : t("rail.lightMode")}
+                onClick={toggleTheme}
+              >
+                {theme === "light" ? <MoonIcon size={16} /> : <SunIcon size={16} />}
+                <span>{theme === "light" ? t("rail.darkMode") : t("rail.lightMode")}</span>
+              </button>
             </div>
             <h1 id="gw-setup-title">{dialogCopy.title}</h1>
             <p id="gw-setup-desc">{dialogCopy.description}</p>

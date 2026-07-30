@@ -1,0 +1,39 @@
+.cmp-head-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.cmp-theme-toggle {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-secondary);
+  background: var(--surface-elevated);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+}
+
+.cmp-theme-toggle:hover {
+  border-color: var(--border-default);
+  color: var(--text-primary);
+  background: var(--surface-overlay);
+}
+
+.cmp-theme-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@media (forced-colors: active) {
+  .cmp-theme-toggle {
+    border-color: ButtonText;
+    color: ButtonText;
+    background: ButtonFace;
+  }
+}

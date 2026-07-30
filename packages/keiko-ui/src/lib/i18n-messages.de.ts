@@ -225,6 +225,8 @@ export const DE_MESSAGES = {
   "common.on": "an",
   "common.off": "aus",
   "common.advanced": "erweitert",
+  "gatewaySetup.badge.setup": "Modell-Gateway-Einrichtung",
+  "gatewaySetup.badge.update": "Zugangsdaten aktualisieren",
   "gatewaySetup.loading.title": "Modell-Gateway-Einrichtung wird vorbereitet",
   "gatewaySetup.loading.description":
     "Die lokalen Einrichtungsfelder werden geladen. Es wurde noch keine Anbieteranfrage gestartet.",
