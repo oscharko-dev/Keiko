@@ -1200,6 +1200,10 @@ export const EN_MESSAGES = {
   "atlassianConnectors.list.added": "Added",
   "atlassianConnectors.list.health": "Health",
   "atlassianConnectors.list.healthUnknown": "Not verified yet",
+  "atlassianConnectors.routeError.title": "Atlassian connectors hit an error",
+  "atlassianConnectors.routeError.body":
+    "This page failed to render. Your connectors and their settings are unaffected.",
+  "atlassianConnectors.routeError.retry": "Try again",
   "atlassianConnectors.list.manage": "Manage",
   "atlassianConnectors.list.delete": "Delete",
   "atlassianConnectors.delete.confirm": "Delete this connector? Its stored credential is removed.",

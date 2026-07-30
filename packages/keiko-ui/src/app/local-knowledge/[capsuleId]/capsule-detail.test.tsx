@@ -14,6 +14,7 @@ import type {
   CapsuleContextualRetrievalHealth,
   CapsuleLargeDocumentHealth,
   DocumentId,
+  IndexingJobRecord,
   KnowledgeCapsuleId,
   KnowledgeCapsule,
   CapsuleHealth,
@@ -808,6 +809,44 @@ describe("CapsuleDetail — indexing jobs section", () => {
 
     await user.click(screen.getByRole("button", { name: /show 3 more jobs/i }));
     expect(screen.getAllByText("Succeeded")).toHaveLength(29);
+  });
+
+  // F4 — JobRow rendered `new Date(job.startedAt).toISOString()`/`new Date(job.finishedAt)
+  // .toISOString()` directly against unvalidated job timestamps. `<details>` always mounts its
+  // children in the React tree regardless of open/closed state, so this throws on the very first
+  // render — no `openAdvanced()` interaction needed to reach it — and `/local-knowledge/capsule`
+  // has no error.tsx and no boundary above it (`<Suspense>` does not catch thrown errors), so the
+  // whole page goes blank. These fail on the pre-fix component because `render()` itself throws.
+  it("does not crash the page when an indexing job's startedAt is not a valid timestamp", async () => {
+    const hostileJob: IndexingJobRecord = {
+      ...FULL_DETAIL.indexingJobs[0]!,
+      startedAt: Number.NaN,
+    };
+    const detail: CapsuleDetailData = { ...FULL_DETAIL, indexingJobs: [hostileJob] };
+
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { level: 1, name: "My Test Capsule" }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("does not crash the page when an indexing job's finishedAt is not a valid timestamp", async () => {
+    const hostileJob: IndexingJobRecord = {
+      ...FULL_DETAIL.indexingJobs[0]!,
+      finishedAt: Number.NaN,
+    };
+    const detail: CapsuleDetailData = { ...FULL_DETAIL, indexingJobs: [hostileJob] };
+
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { level: 1, name: "My Test Capsule" }),
+      ).toBeInTheDocument();
+    });
   });
 });
 

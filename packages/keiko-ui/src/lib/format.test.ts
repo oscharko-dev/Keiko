@@ -10,6 +10,7 @@ import {
   outcomeLabel,
   runStatusLabel,
   toDateString,
+  toSafeIsoString,
   verificationStatusLabel,
 } from "./format";
 
@@ -86,6 +87,17 @@ describe("format presenters", () => {
     expect(formatDate(value)).toContain("2026");
     expect(toDateString(value)).toBe("2026-06-15");
     expect(toDateString("2026-06-16T01:00:00+02:00")).toBe("2026-06-15");
+  });
+
+  it("converts valid epoch-ms/ISO values to an ISO string and fails closed on invalid ones", () => {
+    // F3/F4 — new Date(x).toISOString() THROWS RangeError on an Invalid Date; toSafeIsoString
+    // must never do that regardless of how malformed the input is.
+    expect(toSafeIsoString(Date.parse("2026-06-15T23:30:00Z"))).toBe("2026-06-15T23:30:00.000Z");
+    expect(toSafeIsoString("2026-06-15T23:30:00Z")).toBe("2026-06-15T23:30:00.000Z");
+    expect(toSafeIsoString(Number.NaN)).toBeUndefined();
+    expect(toSafeIsoString("not-a-date")).toBeUndefined();
+    expect(() => toSafeIsoString(Number.NaN)).not.toThrow();
+    expect(() => toSafeIsoString("not-a-date")).not.toThrow();
   });
 
   it("maps known outcomes and keeps unknown outcomes readable", () => {

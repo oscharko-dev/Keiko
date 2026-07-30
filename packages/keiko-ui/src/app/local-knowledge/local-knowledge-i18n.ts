@@ -90,6 +90,10 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
     "This Knowledge Pod no longer exists. Return to the Local Knowledge overview.",
   "localKnowledge.detail.loadFailed": "Failed to load Knowledge Pod.",
   "localKnowledge.detail.retryLoad": "Retry loading Knowledge Pod detail",
+  "localKnowledge.detail.routeError.title": "This Knowledge Pod page hit an error",
+  "localKnowledge.detail.routeError.body":
+    "The page failed to render. Your Knowledge Pod and its data are unaffected.",
+  "localKnowledge.detail.routeError.retry": "Try again",
   "localKnowledge.detail.backToLocalKnowledge": "Back to Local Knowledge",
   "localKnowledge.detail.tools": "Knowledge Pod tools",
   "localKnowledge.detail.advanced.summary": "Status, sources, and diagnostics",
@@ -558,6 +562,11 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
     "Dieser Knowledge Pod existiert nicht mehr. Kehre zur Übersicht für lokales Wissen zurück.",
   "localKnowledge.detail.loadFailed": "Knowledge Pod konnte nicht geladen werden.",
   "localKnowledge.detail.retryLoad": "Knowledge Pod erneut laden",
+  "localKnowledge.detail.routeError.title":
+    "Bei dieser Knowledge-Pod-Seite ist ein Fehler aufgetreten",
+  "localKnowledge.detail.routeError.body":
+    "Die Seite konnte nicht dargestellt werden. Ihr Knowledge Pod und dessen Daten sind davon nicht betroffen.",
+  "localKnowledge.detail.routeError.retry": "Erneut versuchen",
   "localKnowledge.detail.backToLocalKnowledge": "Zurück zu lokalem Wissen",
   "localKnowledge.detail.tools": "Werkzeuge für diesen Knowledge Pod",
   "localKnowledge.detail.advanced.summary": "Status, Quellen und Diagnose",
