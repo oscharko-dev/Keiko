@@ -32,7 +32,10 @@ import {
   type GitDeliveryRecoveryHint,
   type GitDeliveryRepoPolicyPack,
   type GitDeliveryResolvedInputs,
+  evaluateGitDeliveryEffectivePolicy,
   evaluateGitPolicy,
+  gitDeliveryPolicyTargetBranchName,
+  gitDeliveryRiskClassForInputs,
 } from "@oscharko-dev/keiko-contracts";
 import {
   evaluateGitPreflight,
@@ -83,22 +86,38 @@ function effectiveApproval(
   return approval;
 }
 
-// ─── Target-branch derivation (for policy evaluation) ───────────────────────────────
-// The affected branch name the policy evaluator matches branch-pattern rules against. Mirrors the
-// contract's affectedBranchOf but is local so this module owns its own policy-context derivation.
+// ─── Policy decision (target branch + constraint resolution owned by the contract) ──
+//
+// This module used to derive its own policy target branch (`sourceBranchName` for a push,
+// `headBranchName` for a pull request) and to stop at the `constrained` outcome. Both made the sheet
+// disagree with the gate that actually runs: the publish gate matches branch patterns against the
+// REMOTE branch and the PR gate against the BASE, and both then RESOLVE the constraints into
+// allowed/blocked. A push from `feat/x` to `dev` therefore previewed as constrained-and-executable
+// while the gate blocked it. Both halves now come from `keiko-contracts`, so preview and execute
+// cannot answer differently.
 
-function targetBranchName(inputs: GitDeliveryResolvedInputs): string | undefined {
-  switch (inputs.kind) {
-    case "branch-create":
-      return inputs.branchName;
-    case "push":
-      return inputs.sourceBranchName;
-    case "pr-create":
-    case "pr-update":
-      return inputs.headBranchName;
-    default:
-      return undefined;
-  }
+function effectivePolicyDecision(
+  inputs: GitDeliveryResolvedInputs,
+  packs: GitDeliveryTrustedPolicyPacks,
+  capabilities: readonly GitDeliveryProviderCapability[],
+): GitDeliveryPolicyDecision {
+  const targetBranchName = gitDeliveryPolicyTargetBranchName(inputs);
+  const decision = evaluateGitPolicy(packs.orgPack, packs.repoPack, {
+    actionKind: inputs.kind,
+    targetBranchName,
+    activeProviderCapabilities: capabilities,
+  });
+  if (decision.outcome !== "constrained") return decision;
+  const effective = evaluateGitDeliveryEffectivePolicy(decision, {
+    riskClass: gitDeliveryRiskClassForInputs(inputs),
+    targetBranchName,
+    activeProviderCapabilities: capabilities,
+  });
+  // A constrained decision whose constraints all pass is genuinely allowed; one that fails is blocked
+  // with the gate's own reason. Reporting the raw "constrained" here is what let the sheet look ready.
+  return effective.outcome === "blocked"
+    ? { outcome: "blocked", reason: effective.blockReason ?? "policy-pack-blocked" }
+    : decision;
 }
 
 // ─── Expected-blocker mapping (AC2/AC3) ─────────────────────────────────────────────
@@ -301,11 +320,11 @@ function definedProviderState(state: GitDeliveryProviderStateFacts): MutableProv
 export function buildActionSheetFromFacts(facts: BuildActionSheetFacts): GitDeliveryActionSheet {
   const { resolvedInputs, worktreeSnapshot, providerState } = facts;
   const preflight = evaluateGitPreflight(resolvedInputs, worktreeSnapshot);
-  const policyDecision = evaluateGitPolicy(facts.policyPacks.orgPack, facts.policyPacks.repoPack, {
-    actionKind: resolvedInputs.kind,
-    targetBranchName: targetBranchName(resolvedInputs),
-    activeProviderCapabilities: facts.activeProviderCapabilities,
-  });
+  const policyDecision = effectivePolicyDecision(
+    resolvedInputs,
+    facts.policyPacks,
+    facts.activeProviderCapabilities,
+  );
   const expectedBlockers = collectExpectedBlockers(
     preflight.findings,
     policyDecision,

@@ -7,6 +7,7 @@ import { Icons } from "../../../Icons";
 import KeikoSelect from "../../../KeikoSelect";
 import { BranchSelector } from "./BranchSelector";
 import { SyncControl, type GitSyncView } from "./SyncControl";
+import type { SyncOutcomeView } from "./sync-outcome";
 import {
   SECONDARY_BTN,
   TOOLBAR_ACTIONS_STYLE,
@@ -32,7 +33,7 @@ interface RepositoryToolbarProps {
   readonly branchBusy: boolean;
   readonly syncView: GitSyncView;
   readonly syncBusy: boolean;
-  readonly syncOutcome: string | null;
+  readonly syncOutcome: SyncOutcomeView | null;
   readonly syncError: string | null;
   readonly onSelectRepository: (path: string) => void;
   readonly onSwitchBranch: (branchName: string) => void;

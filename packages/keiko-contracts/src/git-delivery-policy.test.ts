@@ -7,7 +7,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+  evaluateGitDeliveryEffectivePolicy,
   evaluateGitPolicy,
+  gitDeliveryConstraintBlockReason,
+  gitDeliveryPolicyTargetBranchName,
   isGitDeliveryPolicyRule,
   parseGitOrgPolicyPack,
   parseGitPolicyPack,
@@ -18,6 +21,7 @@ import type {
   GitDeliveryOrgPolicyPack,
   GitDeliveryPolicyContext,
   GitDeliveryRepoPolicyPack,
+  GitDeliveryResolvedInputs,
 } from "./index.js";
 
 const CTX: GitDeliveryPolicyContext = {
@@ -367,5 +371,195 @@ describe("policy-pack parsers", () => {
       expect(neither.errors.some((e) => e.includes("repoId or orgId"))).toBe(true);
     }
     expect(parseGitPolicyPack("x").ok).toBe(false);
+  });
+});
+
+// ─── Policy target branch + constraint resolution ────────────────────────────────────────────────
+
+const PUSH_INPUTS: GitDeliveryResolvedInputs = {
+  kind: "push",
+  sourceBranchName: "feat/x",
+  remoteAlias: "origin",
+  remoteBranchName: "dev",
+  forcePush: false,
+  setUpstreamTracking: false,
+};
+
+describe("gitDeliveryPolicyTargetBranchName", () => {
+  it("targets the branch the action WRITES, not the branch it reads from", () => {
+    // A push from feat/x to dev must be judged against dev — this is the "no direct push to dev"
+    // denial. Judging the SOURCE branch would allow it.
+    expect(gitDeliveryPolicyTargetBranchName(PUSH_INPUTS)).toBe("dev");
+    expect(
+      gitDeliveryPolicyTargetBranchName({
+        kind: "pr-create",
+        headBranchName: "feat/x",
+        baseBranchName: "dev",
+        titleByteLength: 1,
+        bodyByteLength: 1,
+        isDraft: false,
+      }),
+    ).toBe("dev");
+    expect(
+      gitDeliveryPolicyTargetBranchName({
+        kind: "pr-update",
+        prExternalId: "7",
+        headBranchName: "feat/x",
+        baseBranchName: "main",
+        titleByteLength: 1,
+        bodyByteLength: 1,
+        convertToDraft: false,
+        convertFromDraft: false,
+      }),
+    ).toBe("main");
+    expect(
+      gitDeliveryPolicyTargetBranchName({
+        kind: "branch-create",
+        branchName: "feat/y",
+        baseBranchName: "dev",
+        startPointRefHash: "abc",
+      }),
+    ).toBe("feat/y");
+    expect(gitDeliveryPolicyTargetBranchName({ kind: "branch-switch", branchName: "dev" })).toBe(
+      "dev",
+    );
+  });
+
+  it("takes the merge base from the operands because the merge inputs cannot carry it", () => {
+    const merge: GitDeliveryResolvedInputs = {
+      kind: "merge",
+      prExternalId: "7",
+      mergeStrategyHint: "squash",
+      deleteBranchAfterMerge: false,
+    };
+    expect(gitDeliveryPolicyTargetBranchName(merge)).toBeUndefined();
+    expect(gitDeliveryPolicyTargetBranchName(merge, { mergeBaseBranchName: "dev" })).toBe("dev");
+  });
+
+  it("has no branch target for actions that touch no ref by name", () => {
+    expect(
+      gitDeliveryPolicyTargetBranchName({
+        kind: "commit",
+        messageByteLength: 10,
+        stagedPathCount: 1,
+        allowEmptyCommit: false,
+      }),
+    ).toBeUndefined();
+  });
+});
+
+describe("gitDeliveryConstraintBlockReason", () => {
+  const base = { targetBranchName: "dev", activeProviderCapabilities: [] } as const;
+
+  it("blocks a branch-pattern constraint the target does not match, including an absent target", () => {
+    const constraint: GitDeliveryConstraint = {
+      kind: "branch-pattern",
+      patterns: [{ matchKind: "prefix", value: "feat/" }],
+    };
+    expect(gitDeliveryConstraintBlockReason(constraint, { ...base, riskClass: "publish" })).toBe(
+      "policy-pack-blocked",
+    );
+    expect(
+      gitDeliveryConstraintBlockReason(constraint, {
+        riskClass: "publish",
+        activeProviderCapabilities: [],
+      }),
+    ).toBe("policy-pack-blocked");
+    expect(
+      gitDeliveryConstraintBlockReason(constraint, {
+        ...base,
+        targetBranchName: "feat/x",
+        riskClass: "publish",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("blocks a missing provider capability", () => {
+    const constraint: GitDeliveryConstraint = {
+      kind: "provider-capability",
+      capability: "merge-queue",
+    };
+    expect(
+      gitDeliveryConstraintBlockReason(constraint, { ...base, riskClass: "protected-or-merge" }),
+    ).toBe("provider-capability-absent");
+    expect(
+      gitDeliveryConstraintBlockReason(constraint, {
+        ...base,
+        riskClass: "protected-or-merge",
+        activeProviderCapabilities: ["merge-queue"],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("blocks a risk class above the ceiling and admits one at or below it", () => {
+    const ceiling: GitDeliveryConstraint = { kind: "risk-class-ceiling", maxRiskClass: "publish" };
+    expect(
+      gitDeliveryConstraintBlockReason(ceiling, { ...base, riskClass: "recovery-or-rewrite" }),
+    ).toBe("risk-class-ceiling");
+    expect(gitDeliveryConstraintBlockReason(ceiling, { ...base, riskClass: "publish" })).toBe(
+      undefined,
+    );
+    expect(
+      gitDeliveryConstraintBlockReason(ceiling, { ...base, riskClass: "local-mutation" }),
+    ).toBe(undefined);
+  });
+});
+
+describe("evaluateGitDeliveryEffectivePolicy", () => {
+  const context = {
+    riskClass: "publish",
+    targetBranchName: "dev",
+    activeProviderCapabilities: [],
+  } as const;
+
+  it("passes allowed / blocked / approval-gated decisions through unchanged", () => {
+    expect(evaluateGitDeliveryEffectivePolicy({ outcome: "allowed" }, context)).toEqual({
+      outcome: "allowed",
+    });
+    expect(
+      evaluateGitDeliveryEffectivePolicy(
+        { outcome: "blocked", reason: "no-applicable-rule" },
+        context,
+      ),
+    ).toEqual({ outcome: "blocked", blockReason: "no-applicable-rule" });
+    expect(
+      evaluateGitDeliveryEffectivePolicy(
+        { outcome: "approval-gated", requiredApprovers: [] },
+        context,
+      ),
+    ).toEqual({ outcome: "approval-gated" });
+  });
+
+  it("resolves a constrained decision into allowed or blocked against the concrete target", () => {
+    const decision = {
+      outcome: "constrained",
+      constraints: [
+        { kind: "branch-pattern", patterns: [{ matchKind: "prefix", value: "feat/" }] },
+      ],
+    } as const;
+    expect(evaluateGitDeliveryEffectivePolicy(decision, context)).toEqual({
+      outcome: "blocked",
+      blockReason: "policy-pack-blocked",
+    });
+    expect(
+      evaluateGitDeliveryEffectivePolicy(decision, { ...context, targetBranchName: "feat/x" }),
+    ).toEqual({ outcome: "allowed" });
+  });
+
+  it("reports the FIRST failing constraint and admits a decision with no constraints", () => {
+    const decision = {
+      outcome: "constrained",
+      constraints: [
+        { kind: "risk-class-ceiling", maxRiskClass: "local-mutation" },
+        { kind: "branch-pattern", patterns: [{ matchKind: "prefix", value: "feat/" }] },
+      ],
+    } as const;
+    expect(evaluateGitDeliveryEffectivePolicy(decision, context)).toEqual({
+      outcome: "blocked",
+      blockReason: "risk-class-ceiling",
+    });
+    expect(
+      evaluateGitDeliveryEffectivePolicy({ outcome: "constrained", constraints: [] }, context),
+    ).toEqual({ outcome: "allowed" });
   });
 });

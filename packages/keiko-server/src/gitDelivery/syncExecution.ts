@@ -23,6 +23,7 @@ import {
   type GitSyncPreview,
   type GitUpstreamSummary,
 } from "@oscharko-dev/keiko-contracts";
+import { classifyGitRemoteFailure, type GitRemoteFailureReason } from "@oscharko-dev/keiko-git";
 import {
   defaultGitNetworkProcessRunner,
   defaultGitProcessRunner,
@@ -191,42 +192,38 @@ function syncArgs(operation: GitSyncOperation, remote: string | undefined): read
     : ["pull", "--ff-only", "--no-edit", ...remoteArgs];
 }
 
-// Classifies the most-specific failure the stderr surfaces. Order matters: ownership, host trust, and
-// auth checks precede generic remote/repository checks so trust and credential failures stay precise.
-function isUnsafeRepositoryStderr(text: string): boolean {
-  return text.includes("dubious ownership") || text.includes("safe.directory");
-}
+// The remote-access half of the taxonomy is NOT re-derived here. `classifyGitRemoteFailure`
+// (keiko-git) owns the single phrase table and the single precedence order shared with clone and any
+// other remote-facing surface, and it is the one place that keeps the runner's two self-imposed stops
+// apart: `timedOut` (the wall clock fired) versus `truncated` (the byte cap fired). This module only
+// projects that reason onto the sync wire vocabulary. The Record is TOTAL: a new remote reason is a
+// compile error here rather than a silent fall-through into "succeeded" or "timeout".
+const SYNC_OUTCOME_FOR_REMOTE_FAILURE: Readonly<
+  Record<GitRemoteFailureReason, GitSyncOutcome | undefined>
+> = {
+  // `undefined` = not a remote-access verdict; the operation-level classifier below decides.
+  none: undefined,
+  "git-error": undefined,
+  "output-truncated": undefined,
+  "git-missing": "git-missing",
+  timeout: "timeout",
+  "unsafe-repository": "unsafe-repository",
+  "untrusted-host-key": "untrusted-host-key",
+  "auth-failed": "auth-failed",
+  // Sync has no separate authorization member; an authorization denial is still a credential problem
+  // the user must fix, and this preserves the pre-existing mapping for "permission denied".
+  "permission-denied": "auth-failed",
+  // A remote alias that resolves to nothing and a URL that is not a repository are the same thing to
+  // fetch/pull: there is no remote to sync with.
+  "repository-not-found": "no-remote",
+  "not-a-repository": "no-remote",
+  "remote-unavailable": "remote-unavailable",
+};
 
-function isUntrustedHostKeyStderr(text: string): boolean {
-  return (
-    text.includes("host key verification failed") ||
-    text.includes("remote host identification has changed") ||
-    text.includes("strict host key checking") ||
-    text.includes("offending key")
-  );
-}
-
-function isAuthFailedStderr(text: string): boolean {
-  return (
-    text.includes("could not read username") ||
-    text.includes("authentication failed") ||
-    text.includes("permission denied") ||
-    text.includes("could not read from remote") ||
-    text.includes("terminal prompts disabled")
-  );
-}
-
-function isNoRemoteStderr(text: string): boolean {
-  return text.includes("no such remote") || text.includes("does not appear to be a git repository");
-}
-
-function classifyStderr(stderr: string): GitSyncOutcome | undefined {
-  const text = stderr.toLowerCase();
-  if (isUnsafeRepositoryStderr(text)) return "unsafe-repository";
-  if (isUntrustedHostKeyStderr(text)) return "untrusted-host-key";
-  if (isAuthFailedStderr(text)) return "auth-failed";
-  if (isNoRemoteStderr(text)) return "no-remote";
-  return undefined;
+// The stop the byte cap imposes is a real, distinct outcome — it must never be reported as a timeout
+// and must never be reported as success.
+function unresolvedRemoteOutcome(reason: GitRemoteFailureReason): GitSyncOutcome {
+  return reason === "output-truncated" ? "output-truncated" : "git-error";
 }
 
 // Pull-only refusal reasons layered on top of the shared classifier.
@@ -253,10 +250,9 @@ function isAlreadyUpToDate(stdout: string): boolean {
 }
 
 function classifyOutcome(operation: GitSyncOperation, result: GitProcessResult): GitSyncOutcome {
-  if (result.truncated) return "timeout";
-  if (result.exitCode === 127) return "git-missing";
-  const shared = classifyStderr(result.stderr);
-  if (shared !== undefined) return shared;
+  const remote = classifyGitRemoteFailure(result);
+  const remoteOutcome = SYNC_OUTCOME_FOR_REMOTE_FAILURE[remote];
+  if (remoteOutcome !== undefined) return remoteOutcome;
   if (operation === "pull") {
     const pullReason = classifyPullStderr(result.stderr);
     if (pullReason !== undefined) return pullReason;
@@ -265,7 +261,7 @@ function classifyOutcome(operation: GitSyncOperation, result: GitProcessResult):
     if (operation === "pull" && isAlreadyUpToDate(result.stdout)) return "up-to-date";
     return "succeeded";
   }
-  return "git-error";
+  return unresolvedRemoteOutcome(remote);
 }
 
 function isSettledOk(outcome: GitSyncOutcome): boolean {

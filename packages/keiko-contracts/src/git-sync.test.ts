@@ -6,6 +6,7 @@ import {
   isGitSyncOutcome,
   validateGitSyncExecuteResponse,
   validateGitSyncPreview,
+  type GitSyncOutcome,
 } from "./git-sync.js";
 
 function validPreview(): Record<string, unknown> {
@@ -59,8 +60,31 @@ describe("isGitSyncOutcome", () => {
     }
   });
 
-  it("has exactly thirteen outcomes", () => {
-    expect(GIT_SYNC_OUTCOMES).toHaveLength(13);
+  // Strengthened from a magic-number length check, which a rename or a duplicated entry passes. The
+  // total Record makes a member added to GitSyncOutcome but omitted from GIT_SYNC_OUTCOMES a COMPILE
+  // error, and the set comparison catches the reverse; the union and the runtime list cannot drift.
+  it("lists every member of the union exactly once", () => {
+    const declared: Readonly<Record<GitSyncOutcome, true>> = {
+      succeeded: true,
+      "up-to-date": true,
+      "no-remote": true,
+      "no-upstream": true,
+      "detached-head": true,
+      "dirty-worktree": true,
+      "not-fast-forward": true,
+      "auth-failed": true,
+      "untrusted-host-key": true,
+      "remote-unavailable": true,
+      timeout: true,
+      "output-truncated": true,
+      "git-missing": true,
+      "unsafe-repository": true,
+      "git-error": true,
+    };
+    expect(new Set(GIT_SYNC_OUTCOMES).size).toBe(GIT_SYNC_OUTCOMES.length);
+    expect([...GIT_SYNC_OUTCOMES].sort((a, b) => a.localeCompare(b))).toEqual(
+      Object.keys(declared).sort((a, b) => a.localeCompare(b)),
+    );
   });
 
   it.each(["ok", "failed", "", 0, null, undefined])("rejects %s", (value) => {

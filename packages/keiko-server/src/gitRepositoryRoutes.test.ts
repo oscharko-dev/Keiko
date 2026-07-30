@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCloneRepositoryHandler } from "./gitRepositoryRoutes.js";
+import type { GitProcessResult } from "@oscharko-dev/keiko-git";
+import { classifyCloneOutcome, createCloneRepositoryHandler } from "./gitRepositoryRoutes.js";
 import type { RouteContext } from "./routes.js";
 import { createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -255,5 +256,88 @@ describe("git repository routes", () => {
       error: { code: "BAD_REQUEST" },
     });
     expect(cloneRunner).not.toHaveBeenCalled();
+  });
+});
+
+// The clone outcome projection is exercised directly: it is the only place that decides what a user
+// is told about a failed clone, and the runner's two self-imposed stops (wall clock vs byte cap) plus
+// the remote-cause vocabulary must never collapse into one opaque "check the URL and credentials".
+function cloneResult(overrides: Partial<GitProcessResult>): GitProcessResult {
+  return {
+    exitCode: 128,
+    signal: null,
+    stdout: "",
+    stderr: "",
+    truncated: false,
+    timedOut: false,
+    ...overrides,
+  };
+}
+
+function cloneCode(result: GitProcessResult): string | undefined {
+  const outcome = classifyCloneOutcome(result);
+  if (outcome === null) return undefined;
+  const body = outcome.body as { readonly error?: { readonly code?: string } };
+  return body.error?.code;
+}
+
+describe("classifyCloneOutcome", () => {
+  it("returns no failure for a clean clone", () => {
+    expect(classifyCloneOutcome(cloneResult({ exitCode: 0 }))).toBeNull();
+  });
+
+  it("separates the wall-clock timeout from the output byte cap", () => {
+    const timedOut = classifyCloneOutcome(cloneResult({ truncated: true, timedOut: true }));
+    expect(timedOut?.status).toBe(504);
+    expect(cloneCode(cloneResult({ truncated: true, timedOut: true }))).toBe("GIT_CLONE_TIMEOUT");
+    expect(cloneCode(cloneResult({ truncated: true, timedOut: false }))).toBe(
+      "GIT_CLONE_OUTPUT_TRUNCATED",
+    );
+  });
+
+  it("keeps git-missing on its own status", () => {
+    const outcome = classifyCloneOutcome(
+      cloneResult({ exitCode: 127, stderr: "git executable unavailable" }),
+    );
+    expect(outcome?.status).toBe(503);
+    expect(cloneCode(cloneResult({ exitCode: 127 }))).toBe("GIT_UNAVAILABLE");
+  });
+
+  it("distinguishes credentials, a missing repository, and an unreachable host", () => {
+    expect(
+      cloneCode(cloneResult({ stderr: "fatal: Authentication failed for 'https://x/'" })),
+    ).toBe("GIT_CLONE_AUTH_FAILED");
+    expect(
+      cloneCode(cloneResult({ stderr: "remote: Permission to acme/app.git denied to user." })),
+    ).toBe("GIT_CLONE_PERMISSION_DENIED");
+    expect(cloneCode(cloneResult({ stderr: "ERROR: Repository not found." }))).toBe(
+      "GIT_CLONE_NOT_FOUND",
+    );
+    expect(
+      cloneCode(
+        cloneResult({
+          stderr: "fatal: unable to access 'https://x/': Could not resolve host: x",
+        }),
+      ),
+    ).toBe("GIT_CLONE_REMOTE_UNAVAILABLE");
+    expect(cloneCode(cloneResult({ stderr: "Host key verification failed." }))).toBe(
+      "GIT_CLONE_HOST_KEY_UNTRUSTED",
+    );
+  });
+
+  it("still falls back to the generic failure for an unrecognized non-zero exit", () => {
+    const outcome = classifyCloneOutcome(
+      cloneResult({ stderr: "fatal: something else", exitCode: 1 }),
+    );
+    expect(outcome?.status).toBe(409);
+    expect(cloneCode(cloneResult({ stderr: "fatal: something else", exitCode: 1 }))).toBe(
+      "GIT_CLONE_FAILED",
+    );
+  });
+
+  it("never echoes the raw git output into the user-visible message", () => {
+    const secretish = "fatal: unable to access 'https://user:hunter2@example.com/x.git/'";
+    const outcome = classifyCloneOutcome(cloneResult({ stderr: secretish }));
+    expect(JSON.stringify(outcome?.body)).not.toContain("hunter2");
   });
 });

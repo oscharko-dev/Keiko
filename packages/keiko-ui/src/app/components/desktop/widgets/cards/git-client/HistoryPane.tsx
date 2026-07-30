@@ -51,6 +51,7 @@ export function HistoryPane({
   selectedSha,
   onSelect,
 }: HistoryPaneProps): ReactNode {
+  const t = useTranslate();
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
   const entries = history?.entries ?? [];
 
@@ -115,65 +116,77 @@ export function HistoryPane({
   }
 
   return (
-    <div role="listbox" aria-label="Commit history" style={HISTORY_LIST_STYLE}>
-      {entries.map((entry, index) => {
-        const selected = entry.sha === selectedSha;
-        const head = isHeadCommit(entry);
-        return (
-          <button
-            key={entry.sha}
-            ref={(node) => {
-              refs.current[index] = node;
-            }}
-            type="button"
-            role="option"
-            aria-selected={selected}
-            style={commitRowStyle(selected)}
-            onClick={() => onSelect(entry)}
-            onKeyDown={(event) => onKeyDown(event, index)}
-          >
-            <span aria-hidden="true" style={{ ...avatarStyle(28), fontSize: 10.5 }}>
-              {authorInitials(entry.author)}
-            </span>
-            <span
-              style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0, flex: 1 }}
+    <>
+      {/* The server reports when it capped the read. Without this the list silently claims to be the
+          whole history — the same truncation the Changes and Diff panes already label. */}
+      {history.truncated ? (
+        <output
+          className="rv-truncated"
+          style={{ ...SUBTLE_TEXT_STYLE, display: "block", padding: "8px 14px 0", fontSize: 12 }}
+        >
+          {t("gitClientWindow.history.truncated", { count: history.limit })}
+        </output>
+      ) : null}
+      <div role="listbox" aria-label="Commit history" style={HISTORY_LIST_STYLE}>
+        {entries.map((entry, index) => {
+          const selected = entry.sha === selectedSha;
+          const head = isHeadCommit(entry);
+          return (
+            <button
+              key={entry.sha}
+              ref={(node) => {
+                refs.current[index] = node;
+              }}
+              type="button"
+              role="option"
+              aria-selected={selected}
+              style={commitRowStyle(selected)}
+              onClick={() => onSelect(entry)}
+              onKeyDown={(event) => onKeyDown(event, index)}
             >
-              <span
-                style={{
-                  fontSize: 13,
-                  fontWeight: 500,
-                  color: "var(--fg)",
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  lineHeight: 1.3,
-                }}
-              >
-                {entry.subject}
+              <span aria-hidden="true" style={{ ...avatarStyle(28), fontSize: 10.5 }}>
+                {authorInitials(entry.author)}
               </span>
               <span
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 7,
-                  fontSize: 11,
-                  color: "var(--fg-faint)",
-                }}
+                style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0, flex: 1 }}
               >
-                <span className="mono" style={{ color: "var(--fg-muted)" }}>
-                  {entry.shortSha}
+                <span
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 500,
+                    color: "var(--fg)",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    lineHeight: 1.3,
+                  }}
+                >
+                  {entry.subject}
                 </span>
-                <span aria-hidden="true">·</span>
-                <span>{entry.author}</span>
-                <span aria-hidden="true">·</span>
-                <span>{formatDate(entry.date)}</span>
-                {head ? <span style={HEAD_PILL_STYLE}>HEAD</span> : null}
+                <span
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 7,
+                    fontSize: 11,
+                    color: "var(--fg-faint)",
+                  }}
+                >
+                  <span className="mono" style={{ color: "var(--fg-muted)" }}>
+                    {entry.shortSha}
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span>{entry.author}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>{formatDate(entry.date)}</span>
+                  {head ? <span style={HEAD_PILL_STYLE}>HEAD</span> : null}
+                </span>
               </span>
-            </span>
-          </button>
-        );
-      })}
-    </div>
+            </button>
+          );
+        })}
+      </div>
+    </>
   );
 }
 

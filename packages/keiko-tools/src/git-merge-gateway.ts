@@ -49,8 +49,9 @@ import {
   evaluateGitPolicy,
   GIT_DELIVERY_MERGE_STRATEGY_HINTS,
   GIT_DELIVERY_SCHEMA_VERSION,
-  gitDeliveryBranchNameMatchesAny,
-  gitDeliveryRiskClassWithinCeiling,
+  gitDeliveryConstraintBlockReason,
+  gitDeliveryDefaultRiskClass,
+  gitDeliveryPolicyTargetBranchName,
   gitMergeReadinessFor,
   gitMergeRejectionFor,
 } from "@oscharko-dev/keiko-contracts";
@@ -416,21 +417,18 @@ export interface GitMergeEffectivePolicy {
   readonly blockReason?: GitDeliveryBlockReason | undefined;
 }
 
+// Delegates to the contract-owned resolver so this gate and every preview surface resolve a
+// `constrained` decision identically.
 function constraintBlock(
   constraint: GitDeliveryConstraint,
   target: string | undefined,
   capabilities: readonly GitDeliveryProviderCapability[],
 ): GitDeliveryBlockReason | undefined {
-  if (constraint.kind === "branch-pattern") {
-    const ok = target !== undefined && gitDeliveryBranchNameMatchesAny(target, constraint.patterns);
-    return ok ? undefined : "policy-pack-blocked";
-  }
-  if (constraint.kind === "provider-capability") {
-    return capabilities.includes(constraint.capability) ? undefined : "provider-capability-absent";
-  }
-  return gitDeliveryRiskClassWithinCeiling("merge", constraint.maxRiskClass)
-    ? undefined
-    : "risk-class-ceiling";
+  return gitDeliveryConstraintBlockReason(constraint, {
+    riskClass: gitDeliveryDefaultRiskClass("merge"),
+    targetBranchName: target,
+    activeProviderCapabilities: capabilities,
+  });
 }
 
 export function evaluateGitMergeEffectivePolicy(
@@ -608,7 +606,11 @@ function prepareMerge(request: GitMergeRequest, deps: GitMergeOrchestratorDeps):
   const capabilities = deps.activeProviderCapabilities ?? [];
   const context: GitDeliveryPolicyContext = {
     actionKind: "merge",
-    targetBranchName: request.command.baseBranchName,
+    // ONE derivation, shared with every preview surface (contracts). GitDeliveryMergeInputs carries
+    // only the provider PR id, so the base branch is supplied here from the command.
+    targetBranchName: gitDeliveryPolicyTargetBranchName(inputs, {
+      mergeBaseBranchName: request.command.baseBranchName,
+    }),
     activeProviderCapabilities: capabilities,
   };
   return {
