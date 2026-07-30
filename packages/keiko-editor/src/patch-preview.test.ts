@@ -464,3 +464,44 @@ describe("buildPatchPreview — bounding and truncation (AC5)", () => {
     expect(model.truncated).toBe(true);
   });
 });
+
+describe("buildPatchPreview — producer-side truncation", () => {
+  const complete = {
+    truncated: false,
+    returnedFileCount: 1,
+    totalFileCount: 1,
+    returnedEditCount: 1,
+    totalEditCount: 1,
+    unreadableFileCount: 0,
+  } as const;
+
+  function onePatch(): EditorPreviewedPatch {
+    return patch([
+      change({ uri: "keiko://doc/a.ts", isNewFile: true, edits: replaceWholeFile("a\n") }),
+    ]);
+  }
+
+  it("marks a patch whose producer already dropped changes as truncated", () => {
+    const model = buildPatchPreview({
+      patch: onePatch(),
+      sourceTruncation: { ...complete, totalFileCount: 400, totalEditCount: 1_200 },
+    });
+    // Every returned file rendered, nothing clamped — yet the patch is NOT the whole change.
+    expect(model.omittedFileCount).toBe(0);
+    expect(model.files.every((file) => !file.truncated)).toBe(true);
+    expect(model.truncated).toBe(true);
+    expect(model.sourceTruncation?.totalFileCount).toBe(400);
+  });
+
+  it("keeps a patch whose producer reported nothing missing untruncated", () => {
+    const model = buildPatchPreview({ patch: onePatch(), sourceTruncation: complete });
+    expect(model.truncated).toBe(false);
+    expect(model.sourceTruncation).toEqual(complete);
+  });
+
+  it("leaves the model unchanged when no producer record is supplied", () => {
+    const model = buildPatchPreview({ patch: onePatch() });
+    expect(model.sourceTruncation).toBeUndefined();
+    expect(model.truncated).toBe(false);
+  });
+});

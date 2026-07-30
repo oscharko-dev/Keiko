@@ -315,6 +315,13 @@ export interface LanguageRenameChangeset {
   readonly totalFileCount: number;
   readonly returnedEditCount: number;
   readonly totalEditCount: number;
+  // Files counted in `totalFileCount` whose current content could not be read, so the provider had
+  // no baseline to compute their edits against and left them out of `files` entirely. Reported
+  // separately from the result caps because the two have different operator remedies (a cap means
+  // "narrow the rename", an unreadable reference means "the file is gone or unreadable") — without
+  // it, a dropped reference is indistinguishable from a capped one and the whole rename silently
+  // becomes partial.
+  readonly unreadableFileCount: number;
 }
 
 export type LanguageRenameApplyResult = LanguageRenameChangeset;

@@ -343,6 +343,7 @@ export function sanitizeRenameApply(
     totalFileCount: raw.totalFileCount,
     returnedEditCount,
     totalEditCount: raw.totalEditCount,
+    unreadableFileCount: raw.unreadableFileCount,
   };
 }
 

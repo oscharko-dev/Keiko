@@ -61,6 +61,7 @@ import {
   isSupportedEditorLanguage,
   isTestGenerationBusy,
   isTestGenerationPreviewing,
+  renameChangesetTruncation,
   saveStatusReducer,
   testGenerationReducer,
   type EditorBuffer,
@@ -115,6 +116,7 @@ import {
   type KeikoEditorLoadState,
   type PatchPreviewModel,
   type PatchPreviewSource,
+  type PatchPreviewSourceTruncation,
   type TestGenerationFlowAction,
   type TestGenerationFlowState,
   type TestGenerationPreview,
@@ -316,6 +318,18 @@ const EDITOR_REVIEW_DIFF_GROUP_STYLE: CSSProperties = {
   width: "100%",
   minWidth: 0,
   minHeight: 0,
+};
+
+// Blocking notice above a rename review the language service could not complete. Styled inline with
+// design tokens like the other review-surface chrome in this file, so no global stylesheet changes
+// are needed (the editor globals are behind a byte-exact visual-proof gate).
+const EDITOR_RENAME_INCOMPLETE_STYLE: CSSProperties = {
+  flex: "0 0 auto",
+  padding: "6px 12px",
+  color: "var(--text-primary)",
+  background: "var(--feedback-warning-surface)",
+  borderBottom: "1px solid color-mix(in oklch, var(--feedback-warning) 40%, transparent)",
+  fontSize: "var(--text-body-sm)",
 };
 
 function hunksForPath(response: GitEditorDiffResponse, path: string): readonly GitEditorDiffHunk[] {
@@ -869,6 +883,29 @@ function renameEditsToEditor(fileChange: LanguageRenameChangesetFile): readonly 
     },
     newText: edit.newText,
   }));
+}
+
+/**
+ * The localized, count-naming notice for a rename the language service could not complete (result
+ * caps reached, a reference file it could not read, a bounded project graph). Applying such a
+ * changeset renames some occurrences and leaves the rest pointing at the old name, so this text is
+ * shown before Accept is offered and Accept is refused while it is present.
+ */
+function renameIncompleteNotice(
+  t: EditorAgentTranslate,
+  truncation: PatchPreviewSourceTruncation,
+): string {
+  const notice = t("editor.rename.incomplete", {
+    files: truncation.returnedFileCount,
+    totalFiles: truncation.totalFileCount,
+    edits: truncation.returnedEditCount,
+    totalEdits: truncation.totalEditCount,
+  });
+  if (truncation.unreadableFileCount === 0) return notice;
+  const unreadable = t("editor.rename.incompleteUnreadable", {
+    count: truncation.unreadableFileCount,
+  });
+  return `${notice} ${unreadable}`;
 }
 
 function promptRenameSymbol(placeholder: string): string | null {
@@ -2182,6 +2219,9 @@ function EditorRuntimeWidget({
     // on the bounded LRU session cache surviving (a wide rename can touch far more files than the
     // cache capacity, so relying on the cache produced spurious "not loaded" conflicts — Issue #2105).
     readonly snapshots: Readonly<Record<string, EditorFileSessionSnapshot>>;
+    // What the language service left out, or null when the changeset is the whole rename. Non-null
+    // blocks Accept: renaming 2 of 400 files leaves every other reference on the old name.
+    readonly truncation: PatchPreviewSourceTruncation | null;
   } | null>(null);
   // Issue #2212 fix-up — one scoped "Run Verification" callback per review surface, each resolving its
   // OWN reviewed file(s) rather than the pane's active file (see runScopedVerification above).
@@ -4294,6 +4334,7 @@ function EditorRuntimeWidget({
             patchId: `rename-symbol:${newName}`,
           }),
           snapshots: sources.snapshots,
+          truncation: renameChangesetTruncation(changeset),
         });
       } catch (error) {
         announceToolbarNotice(error instanceof Error ? error.message : "Rename failed.");
@@ -5542,6 +5583,13 @@ function EditorRuntimeWidget({
 
   const handleRenameAccept = useCallback((): void => {
     if (renameReview === null || root === undefined) return;
+    // Fail closed on a rename the language service could not finish. The Apply control is already
+    // disabled for it, but this path is also reachable programmatically, and applying a partial
+    // rename would leave the un-renamed references pointing at a symbol that no longer exists.
+    if (renameReview.truncation !== null) {
+      announceToolbarNotice(t("editor.rename.incompleteRefused"));
+      return;
+    }
     const plans: RenameApplyPlan[] = [];
     for (const change of renameReview.changeset.files) {
       const plan = buildRenamePlan(
@@ -5584,7 +5632,7 @@ function EditorRuntimeWidget({
       }
     }
     setRenameReview(null);
-  }, [onDirtyChange, renameReview, renameTargetForPath, root]);
+  }, [announceToolbarNotice, onDirtyChange, renameReview, renameTargetForPath, root, t]);
 
   const handleRenameReject = useCallback((): void => {
     setRenameReview(null);
@@ -5879,20 +5927,37 @@ function EditorRuntimeWidget({
         </div>
       );
     } else if (renameReview !== null) {
+      // A rename the language service could not finish is stated in full and cannot be applied: the
+      // counts come from the changeset's own report, so the reviewer sees how much of the rename is
+      // missing before deciding (a preview built from the returned files alone looks complete).
       panel = (
-        <EditorDiffSurface
-          model={renameReview.model}
-          loadState={{ status: "ready" }}
-          themeVariant={themeVariant}
-          actions={{
-            canApply: true,
-            canReject: true,
-            canRunVerification: !verification.verificationRunning,
-          }}
-          onApply={handleRenameAccept}
-          onReject={handleRenameReject}
-          onRunVerification={runRenameVerification}
-        />
+        <div style={EDITOR_REVIEW_SURFACE_STYLE}>
+          {renameReview.truncation === null ? null : (
+            <div
+              role="note"
+              aria-live="polite"
+              data-testid="editor-rename-incomplete"
+              style={EDITOR_RENAME_INCOMPLETE_STYLE}
+            >
+              {renameIncompleteNotice(t, renameReview.truncation)}
+            </div>
+          )}
+          <div style={EDITOR_REVIEW_DIFF_GROUP_STYLE}>
+            <EditorDiffSurface
+              model={renameReview.model}
+              loadState={{ status: "ready" }}
+              themeVariant={themeVariant}
+              actions={{
+                canApply: renameReview.truncation === null,
+                canReject: true,
+                canRunVerification: !verification.verificationRunning,
+              }}
+              onApply={handleRenameAccept}
+              onReject={handleRenameReject}
+              onRunVerification={runRenameVerification}
+            />
+          </div>
+        </div>
       );
     } else if (testGenerationPreview !== null) {
       panel = (

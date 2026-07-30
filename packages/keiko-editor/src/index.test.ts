@@ -117,6 +117,7 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "buildPatchPreview",
       "DEFAULT_PATCH_PREVIEW_LIMITS",
       "buildRenamePreview",
+      "renameChangesetTruncation",
       "KeikoDiffEditor",
       // Monaco completion-provider bridge (#1199).
       "createKeikoCompletionProvider",

@@ -626,8 +626,11 @@ export type {
   PatchPreviewLimits,
   PatchPreviewModel,
   PatchPreviewSource,
+  PatchPreviewSourceTruncation,
 } from "./patch-preview.js";
-export { buildRenamePreview } from "./rename-preview.js";
+// `renameChangesetTruncation` is the host's Accept gate: a capped rename changeset must never be
+// applied as if it were the whole rename (#2105 follow-up).
+export { buildRenamePreview, renameChangesetTruncation } from "./rename-preview.js";
 export type { BuildRenamePreviewInput } from "./rename-preview.js";
 
 // ─── Runtime: KeikoDiffEditor React component (#1195) ───

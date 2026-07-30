@@ -67,11 +67,49 @@ export const DEFAULT_PATCH_PREVIEW_LIMITS: PatchPreviewLimits = {
   maxTotalBytes: 524_288,
 };
 
+/**
+ * Truncation applied by whatever PRODUCED the patch, before this adapter ever saw it — a language
+ * service that stopped selecting rename references at its result cap, or a provider that only
+ * reports edits for the active document.
+ *
+ * This is NOT {@link PatchPreviewLimits}. The display caps hide changes the host will still apply,
+ * whereas the changes counted here are absent from the patch entirely, so applying it performs only
+ * part of the requested operation. Carrying the producer's counts into the model is what stops a
+ * capped result from rendering as a whole one: a preview derived only from the RETURNED changes is
+ * internally consistent, and therefore indistinguishable from a complete patch.
+ */
+export interface PatchPreviewSourceTruncation {
+  /** The producer's own verdict, honoured even when the counts below happen to agree. */
+  readonly truncated: boolean;
+  /** Changed files present in the patch. */
+  readonly returnedFileCount: number;
+  /** Changed files the producer found for the requested operation. */
+  readonly totalFileCount: number;
+  /** Edits present in the patch. */
+  readonly returnedEditCount: number;
+  /** Edits the producer found for the requested operation. */
+  readonly totalEditCount: number;
+  /** Files counted in `totalFileCount` whose content could not be read, so they carry no edits. */
+  readonly unreadableFileCount: number;
+}
+
+/** True when the producer did not return the whole operation. Fails closed: any signal counts. */
+export function isPatchSourceTruncated(source: PatchPreviewSourceTruncation): boolean {
+  return (
+    source.truncated ||
+    source.unreadableFileCount > 0 ||
+    source.returnedFileCount < source.totalFileCount ||
+    source.returnedEditCount < source.totalEditCount
+  );
+}
+
 export interface BuildPatchPreviewInput {
   readonly patch: EditorPreviewedPatch | EditorGeneratedPatch;
   /** Original content keyed by {@link EditorPatchFileChange.uri}; required for modified/deleted files. */
   readonly sources?: Readonly<Record<string, PatchPreviewSource>> | undefined;
   readonly limits?: Partial<PatchPreviewLimits> | undefined;
+  /** What the patch's producer already dropped; omit when the producer reports no bounding. */
+  readonly sourceTruncation?: PatchPreviewSourceTruncation | undefined;
 }
 
 export interface PatchPreviewFile {
@@ -114,7 +152,13 @@ export interface PatchPreviewModel {
   readonly deletedCount: number;
   readonly binaryCount: number;
   readonly unsupportedCount: number;
-  /** True when any file was clamped or any file was omitted. */
+  /**
+   * What the patch's producer dropped before this model was built, as supplied by the host. Present
+   * whenever the host reported it, truncated or not; ask {@link isPatchSourceTruncated} whether it
+   * describes a missing change.
+   */
+  readonly sourceTruncation?: PatchPreviewSourceTruncation | undefined;
+  /** True when any file was clamped, any file was omitted, or the producer's patch is incomplete. */
   readonly truncated: boolean;
 }
 
@@ -371,6 +415,8 @@ export function buildPatchPreview(input: BuildPatchPreviewInput): PatchPreviewMo
   }
 
   const omittedFileCount = totalFileCount - acc.files.length;
+  const sourceIncomplete =
+    input.sourceTruncation !== undefined && isPatchSourceTruncated(input.sourceTruncation);
   return {
     patchId: input.patch.patchId,
     status: input.patch.status,
@@ -385,6 +431,7 @@ export function buildPatchPreview(input: BuildPatchPreviewInput): PatchPreviewMo
     deletedCount: countStatus(acc.files, "deleted"),
     binaryCount: countStatus(acc.files, "binary"),
     unsupportedCount: countStatus(acc.files, "unsupported"),
-    truncated: omittedFileCount > 0 || acc.files.some((file) => file.truncated),
+    sourceTruncation: input.sourceTruncation,
+    truncated: sourceIncomplete || omittedFileCount > 0 || acc.files.some((file) => file.truncated),
   };
 }

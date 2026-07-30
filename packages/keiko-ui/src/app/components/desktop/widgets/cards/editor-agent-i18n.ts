@@ -30,6 +30,13 @@ const EN_EDITOR_AGENT_MESSAGES = {
     "The review decision was not accepted. No local changes were applied.",
   "editor.agentReview.awaitingResult":
     "The review result is unknown. Waiting for authoritative editor status.",
+  // A rename changeset the language service capped or could not complete. Applying part of a rename
+  // leaves the remaining references pointing at the old name, so the counts are stated and Apply is
+  // refused rather than presenting the capped result as the finished rename.
+  "editor.rename.incomplete":
+    "Incomplete rename: only {files} of {totalFiles} file(s) and {edits} of {totalEdits} reference(s) were returned. Applying it would rename part of the symbol and leave the rest pointing at the old name, so Apply is disabled. Rename the symbol in a narrower scope and try again.",
+  "editor.rename.incompleteUnreadable": "{count} file(s) could not be read and carry no changes.",
+  "editor.rename.incompleteRefused": "This rename is incomplete and was not applied.",
   "conflict.title.dirty": "Unsaved changes conflict",
   "conflict.title.versionMismatch": "File version mismatch",
   "conflict.title.contentHashMismatch": "File content mismatch",
@@ -116,6 +123,12 @@ const DE_EDITOR_AGENT_MESSAGES = {
     "Die Prüfentscheidung wurde nicht akzeptiert. Es wurden keine lokalen Änderungen angewendet.",
   "editor.agentReview.awaitingResult":
     "Das Prüfungsergebnis ist unbekannt. Der Editor wartet auf einen verbindlichen Status.",
+  "editor.rename.incomplete":
+    "Unvollständige Umbenennung: Es wurden nur {files} von {totalFiles} Datei(en) und {edits} von {totalEdits} Verweis(en) zurückgegeben. Beim Anwenden würde nur ein Teil des Symbols umbenannt, der Rest würde weiter auf den alten Namen verweisen. Anwenden ist deshalb deaktiviert. Benenne das Symbol in einem kleineren Bereich um.",
+  "editor.rename.incompleteUnreadable":
+    "{count} Datei(en) konnten nicht gelesen werden und enthalten keine Änderungen.",
+  "editor.rename.incompleteRefused":
+    "Diese Umbenennung ist unvollständig und wurde nicht angewendet.",
   "conflict.title.dirty": "Konflikt mit ungespeicherten Änderungen",
   "conflict.title.versionMismatch": "Abweichende Dateiversion",
   "conflict.title.contentHashMismatch": "Abweichender Dateiinhalt",

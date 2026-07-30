@@ -2652,6 +2652,7 @@ describe("EditorWidget language intelligence (Issue #1201 / #2104)", () => {
       totalFileCount: 1,
       returnedEditCount: 1,
       totalEditCount: 1,
+      unreadableFileCount: 0,
     });
 
     try {
@@ -2732,6 +2733,7 @@ describe("EditorWidget language intelligence (Issue #1201 / #2104)", () => {
       totalFileCount: 1,
       returnedEditCount: 1,
       totalEditCount: 1,
+      unreadableFileCount: 0,
     });
 
     try {
@@ -2818,6 +2820,7 @@ describe("EditorWidget language intelligence (Issue #1201 / #2104)", () => {
       totalFileCount: closedPaths.length,
       returnedEditCount: closedPaths.length,
       totalEditCount: closedPaths.length,
+      unreadableFileCount: 0,
     });
 
     try {
@@ -2886,6 +2889,7 @@ describe("EditorWidget language intelligence (Issue #1201 / #2104)", () => {
       totalFileCount: 1,
       returnedEditCount: 1,
       totalEditCount: 1,
+      unreadableFileCount: 0,
     });
 
     try {
@@ -2906,6 +2910,128 @@ describe("EditorWidget language intelligence (Issue #1201 / #2104)", () => {
       });
       await screen.findByText(/changed since the rename was computed/u);
       expect(surface.props?.buffer.content.text).toBe("const value = 1;\n");
+    } finally {
+      window.prompt = originalPrompt;
+    }
+  });
+
+  // A capped rename changeset renames a fraction of the references and leaves the rest pointing at
+  // the old name. It must never be presented as the finished rename: state the counts and refuse
+  // Apply, rather than silently renaming 1 of 400 files.
+  it("refuses to apply a truncated rename changeset and states the missing counts", async () => {
+    const originalPrompt = window.prompt;
+    window.prompt = vi.fn(() => "renamed");
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    vi.mocked(requestEditorRenamePrepare).mockResolvedValueOnce({
+      range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
+      placeholder: "value",
+    });
+    vi.mocked(requestEditorRenameApply).mockResolvedValueOnce({
+      schemaVersion: "1",
+      files: [
+        {
+          path: "src/app.ts",
+          expectedContentHash: BASE_VERSION.contentHash,
+          edits: [
+            {
+              range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
+              newText: "renamed",
+            },
+          ],
+        },
+      ],
+      truncated: true,
+      filesTruncated: true,
+      returnedFileCount: 1,
+      totalFileCount: 400,
+      returnedEditCount: 1,
+      totalEditCount: 1_200,
+      unreadableFileCount: 2,
+    });
+
+    try {
+      render(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
+      await screen.findByTestId("editor-surface");
+      act(() => {
+        surface.props?.onCursorChange?.({ line: 0, column: 6 });
+      });
+      await waitFor(() => {
+        expect(surface.props?.onRenameSymbol).toBeDefined();
+      });
+      await act(async () => {
+        surface.props?.onRenameSymbol?.();
+        await Promise.resolve();
+      });
+
+      const notice = await screen.findByTestId("editor-rename-incomplete");
+      expect(notice).toHaveTextContent("1 of 400 file(s)");
+      expect(notice).toHaveTextContent("1 of 1200 reference(s)");
+      expect(notice).toHaveTextContent("2 file(s) could not be read");
+      expect(diffSurface.props?.actions?.canApply).toBe(false);
+      expect(diffSurface.props?.actions?.canReject).toBe(true);
+
+      // Even invoked directly (the control itself is disabled), Accept must not touch the buffer.
+      act(() => {
+        diffSurface.props?.onApply?.();
+      });
+      await screen.findByText(/incomplete and was not applied/u);
+      expect(surface.props?.hostEditRequest).toBeUndefined();
+      expect(surface.props?.buffer.content.text).toBe("const value = 1;\n");
+    } finally {
+      window.prompt = originalPrompt;
+    }
+  });
+
+  it("shows no truncation notice for a complete rename changeset", async () => {
+    const originalPrompt = window.prompt;
+    window.prompt = vi.fn(() => "renamed");
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    vi.mocked(requestEditorRenamePrepare).mockResolvedValueOnce({
+      range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
+      placeholder: "value",
+    });
+    vi.mocked(requestEditorRenameApply).mockResolvedValueOnce({
+      schemaVersion: "1",
+      files: [
+        {
+          path: "src/app.ts",
+          expectedContentHash: BASE_VERSION.contentHash,
+          edits: [
+            {
+              range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
+              newText: "renamed",
+            },
+          ],
+        },
+      ],
+      truncated: false,
+      filesTruncated: false,
+      returnedFileCount: 1,
+      totalFileCount: 1,
+      returnedEditCount: 1,
+      totalEditCount: 1,
+      unreadableFileCount: 0,
+    });
+
+    try {
+      render(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
+      await screen.findByTestId("editor-surface");
+      act(() => {
+        surface.props?.onCursorChange?.({ line: 0, column: 6 });
+      });
+      await waitFor(() => {
+        expect(surface.props?.onRenameSymbol).toBeDefined();
+      });
+      await act(async () => {
+        surface.props?.onRenameSymbol?.();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(diffSurface.props?.model.files[0]?.modified).toContain("renamed");
+      });
+      expect(screen.queryByTestId("editor-rename-incomplete")).toBeNull();
+      expect(diffSurface.props?.actions?.canApply).toBe(true);
     } finally {
       window.prompt = originalPrompt;
     }
