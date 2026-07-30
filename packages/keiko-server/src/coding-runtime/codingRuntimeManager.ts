@@ -10,10 +10,12 @@ import {
   validateCodingWorkbenchRuntimeEvent,
 } from "@oscharko-dev/keiko-contracts";
 import type {
+  CodingWorkbenchActionClass,
   CodingWorkbenchConnectorScope,
   CodingWorkbenchMode,
   CodingWorkbenchModelSource,
   CodingWorkbenchPermissionRequest,
+  CodingWorkbenchPolicyResourceScope,
   CodingWorkbenchRuntimeEvent,
   CodingWorkbenchRuntimeSource,
   CodingWorkbenchSupervisedActionKind,
@@ -1058,6 +1060,11 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     active.stopRequested = true;
     active.status = "stopping";
     active.startupOutput?.close();
+    // The lifecycle projection collapses the exit to a terminal run state and stderr is drained
+    // count-only, so without this record the numeric exit status exists nowhere: an operator sees
+    // an opaque `runtime-failed` and has nothing to diagnose it with. The code is a bounded number,
+    // never content, and rides the redacted channel keyed by the run's correlation id.
+    emitRuntimeExitDiagnostic(this.deps.diagnostics, active.context.runId, code, this.deps.now);
     void this.finalizeUnexpectedExit(active, code);
   }
 
@@ -1261,6 +1268,22 @@ function emitInvalidRuntimeEventDiagnostic(
     source: "coding-runtime-manager.emit",
     errorClass: "InvalidRuntimeEvent",
     message: `runtime-event-invalid:${event.kind}`,
+  });
+}
+
+function emitRuntimeExitDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  code: number | null,
+  now: () => number,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date(now()).toISOString(),
+    operation: "coding-runtime.exit",
+    source: "coding-runtime-manager.exit",
+    errorClass: "RuntimeUnexpectedExit",
+    message: `runtime-exit-code:${code === null ? "signal" : String(code)}`,
   });
 }
 
@@ -2093,6 +2116,35 @@ function sidecarRuntimeEvent(
   });
 }
 
+/**
+ * The ADR-0138 D2 resource scope each action class belongs to. Total over the closed action-class
+ * union so a new class cannot silently inherit a scope it was never assigned.
+ */
+const ACTION_CLASS_RESOURCE_SCOPE: Readonly<
+  Record<CodingWorkbenchActionClass, CodingWorkbenchPolicyResourceScope>
+> = Object.freeze({
+  "workspace-read": "workspace-contained",
+  "workspace-write": "workspace-contained",
+  "command-execution": "workspace-contained",
+  verification: "workspace-contained",
+  "connector-access": "internet",
+  "network-egress": "internet",
+  "delivery-substrate": "delivery",
+} as const satisfies Readonly<
+  Record<CodingWorkbenchActionClass, CodingWorkbenchPolicyResourceScope>
+>);
+
+/**
+ * ADR-0138 D2 fixes a NORMATIVE monotonicity invariant: for a fixed (resource scope, risk) the
+ * effect never becomes stricter as the mode rises. This branch previously hard-denied every action
+ * whose class was not `workspace-read` with `delivery-denied` — which the orchestrator turns into a
+ * terminal failed run — so a scoped file edit and an allowlisted verification command that
+ * Supervised workspace admits outright killed the run under the WIDER Full access. Workspace-
+ * contained actions therefore run the exact same dispatcher Supervised workspace runs, keeping the
+ * independent containment and verifier-allowlist gates in force. Delivery and internet mutations
+ * stay denied here: the server delivery executor is the only delivery authority and no connector
+ * executor is mounted, mode-invariant gates composed stricter-wins (ADR-0125 D1).
+ */
 function autonomousDeliveryRuntimeEvent(
   active: ActiveRuntime,
   sequence: number,
@@ -2107,12 +2159,15 @@ function autonomousDeliveryRuntimeEvent(
       retryable: false,
     });
   }
+  if (ACTION_CLASS_RESOURCE_SCOPE[request.actionClass] !== "workspace-contained") {
+    return runtimeEvent(active, sequence, "failure-redacted", {
+      failureCode: "delivery-denied",
+      failureSummary: "delivery-denied",
+      retryable: false,
+    });
+  }
   if (request.actionClass === "workspace-read") return undefined;
-  return runtimeEvent(active, sequence, "failure-redacted", {
-    failureCode: "delivery-denied",
-    failureSummary: "delivery-denied",
-    retryable: false,
-  });
+  return governedActionRuntimeEvent(active, sequence, event, request);
 }
 
 function supervisedCodingRuntimeEvent(
@@ -2121,9 +2176,21 @@ function supervisedCodingRuntimeEvent(
   event: SidecarPermissionEvent,
   request: CodingWorkbenchPermissionRequest,
 ): CodingWorkbenchRuntimeEvent | undefined {
-  if (active.context.effectiveMode !== "supervised-coding" || request.actionKind === undefined) {
-    return undefined;
-  }
+  if (active.context.effectiveMode !== "supervised-coding") return undefined;
+  return governedActionRuntimeEvent(active, sequence, event, request);
+}
+
+/**
+ * The one action dispatcher both governed modes share, so Full access is structurally incapable of
+ * being stricter than Supervised workspace for the same action.
+ */
+function governedActionRuntimeEvent(
+  active: ActiveRuntime,
+  sequence: number,
+  event: SidecarPermissionEvent,
+  request: CodingWorkbenchPermissionRequest,
+): CodingWorkbenchRuntimeEvent | undefined {
+  if (request.actionKind === undefined) return undefined;
   if (request.actionKind === "file-edit") return supervisedFileEditEvent(active, sequence, event);
   if (request.actionKind === "verification-command") {
     return supervisedVerificationEvent(active, sequence, event);

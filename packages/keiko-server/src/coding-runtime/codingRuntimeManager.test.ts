@@ -1645,6 +1645,46 @@ describe("coding runtime manager", () => {
     expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(fixture.workspaceRoot);
   });
 
+  // 0.3.0 release audit: an unexpected runtime exit collapsed the exit status to zero/non-zero and
+  // discarded the numeric code. The run surfaces only the opaque `runtime-failed` failure code and
+  // stderr is drained count-only, so nothing anywhere told an operator WHY the runtime died. The
+  // code is a bounded number, not content, and belongs on the redacted diagnostic channel keyed by
+  // the run's correlation id.
+  it.each([
+    [9, "runtime-exit-code:9"],
+    [0, "runtime-exit-code:0"],
+    [null, "runtime-exit-code:signal"],
+  ] as const)("records runtime exit code %s in an operator diagnostic", async (code, message) => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      diagnostics,
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.exit(code);
+    await settle();
+
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        correlationId: "run-1988",
+        timestamp: "2026-07-07T13:00:00.000Z",
+        operation: "coding-runtime.exit",
+        source: "coding-runtime-manager.exit",
+        errorClass: "RuntimeUnexpectedExit",
+        message,
+      }),
+    );
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(fixture.workspaceRoot);
+  });
+
   it("actively drains high-volume runtime stderr without emitting it or blocking reap", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
@@ -2576,6 +2616,104 @@ describe("coding runtime manager", () => {
       retryable: false,
     });
     expect(events.some((event) => event.kind === "permission-requested")).toBe(false);
+  });
+
+  // ADR-0138 D2 monotonicity invariant (normative): for a fixed (resource scope, risk) the effect
+  // never becomes stricter as the mode rises. Full access used to hard-deny every action whose
+  // action class was not `workspace-read` with `delivery-denied`, which the orchestrator turns into
+  // a terminal failed run — so a scoped file edit and an allowlisted verification command that
+  // Supervised workspace admits outright killed the run under the WIDER mode. Delivery and
+  // connector mutations stay denied (the test above): the server delivery executor remains the
+  // only delivery authority, an independent mode-invariant gate composed stricter-wins.
+  it("never denies in Full access a workspace-contained action Supervised workspace admits", async () => {
+    const fixture = createManagedFixture();
+    mkdirSync(join(fixture.workspaceRoot, "src"), { recursive: true });
+    writeFileSync(join(fixture.workspaceRoot, "src", "allowed.ts"), "export const ok = true;\n");
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    await manager.start(
+      autonomousDeliveryRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-1993-file-accepted",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "scoped-file-edit",
+        actionKind: "file-edit",
+        scopeLabel: "workspace-scope",
+        risk: "medium",
+        policyReason: "scoped-file-edit",
+        targetPath: "src/allowed.ts",
+        allowedRelativePaths: ["src"],
+        fileCount: 1,
+        addedLines: 2,
+        deletedLines: 0,
+      }),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-1993-file-denied",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "scoped-file-edit",
+        actionKind: "file-edit",
+        scopeLabel: "workspace-scope",
+        risk: "medium",
+        policyReason: "scoped-file-edit",
+        targetPath: "../escape.ts",
+        allowedRelativePaths: ["src"],
+        fileCount: 1,
+        addedLines: 2,
+        deletedLines: 0,
+      }),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-1993-verification-accepted",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "allowlisted-verification-command",
+        actionKind: "verification-command",
+        scopeLabel: "workspace-scope",
+        risk: "low",
+        policyReason: "allowlisted-verification-command",
+        commandLabel: "verification-command",
+        executable: "npm",
+        args: ["run", "typecheck"],
+        passedCount: 12,
+        failedCount: 0,
+        skippedCount: 0,
+      }),
+    );
+    await settle();
+
+    expect(events.find((event) => event.kind === "diff-summarized")).toMatchObject({
+      fileCount: 1,
+      addedLines: 2,
+      deletedLines: 0,
+    });
+    expect(events.find((event) => event.kind === "verification-summarized")).toMatchObject({
+      verificationKind: "verification-command",
+      verificationStatus: "passed",
+      passedCount: 12,
+    });
+    expect(events.some((event) => event.failureCode === "delivery-denied")).toBe(false);
+    // Workspace containment is an independent gate and still decides, exactly as under Supervised.
+    expect(events.find((event) => event.failureCode === "out-of-scope-file-edit")).toMatchObject({
+      kind: "failure-redacted",
+      retryable: false,
+    });
+    expect(JSON.stringify(events)).not.toContain(fixture.workspaceRoot);
   });
 
   it("escalates stop to SIGKILL when the sidecar misses the shutdown deadline", async () => {

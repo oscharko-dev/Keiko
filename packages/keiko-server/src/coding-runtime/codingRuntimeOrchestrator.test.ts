@@ -688,6 +688,87 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(f.rows.get("run-2")?.predecessorRunId).toBe("run-1");
   });
 
+  // 0.3.0 release audit: a retry used to settle the acknowledged recovery row and clear the active
+  // slot BEFORE the fresh start was admitted. A start that never reached the ledger (the authority
+  // mint still refuses while the predecessor's process tree is unreaped) therefore left the
+  // orchestrator with no active run at all, so `snapshot()` fell back to the unbound idle
+  // projection and the workbench offered "Ready to start" for a runtime whose every start is 403.
+  it("keeps the recovery slot when a retry never reaches the ledger", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    await f.orchestrator.startupReconcile();
+    await f.orchestrator.acknowledgeRecovery("run-1", { requestId: "run-1", acknowledged: true });
+    f.launchResolver.resolve.mockImplementationOnce(() => {
+      throw new Error("active-run-conflict");
+    });
+
+    expect(await f.orchestrator.retry("run-1", { ...start, requestId: "request-2" })).toEqual({
+      ok: false,
+      failureCode: "authority-resolution-failed",
+    });
+
+    expect(f.orchestrator.snapshot()).toMatchObject({
+      runId: "run-1",
+      state: "recovery-required",
+      recoveryAcknowledged: true,
+    });
+    expect(f.rows.get("run-1")?.terminalAt).toBeUndefined();
+    expect(f.safeActivityProjection.purge).not.toHaveBeenCalledWith("run-1", "stop");
+    // The slot stays retryable: once the tree is reaped the very next retry is admitted.
+    expect(
+      successfulSnapshot(await f.orchestrator.retry("run-1", { ...start, requestId: "request-3" }))
+        .runId,
+    ).toBe("run-2");
+    expect(f.rows.get("run-1")?.terminalAt).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  // 0.3.0 release audit: `cancelled` is legal only from `starting`/`stopping`, so an ingested
+  // runtime-stopped event from a LIVE state was rejected with `invalid-intent` and produced no
+  // transition, no evidence, and no SSE frame. A dead runtime kept presenting as `running` until
+  // the separate 30-minute task-settlement wait expired.
+  it.each(["ready", "running", "awaiting-approval", "paused"] as const)(
+    "terminates a run whose runtime exits while it is %s",
+    async (state) => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      f.rows.set("run-1", { ...rowFor(f.rows, "run-1"), state });
+
+      const stopped = await f.orchestrator.ingest({
+        schemaVersion: "1",
+        eventId: "event-exit",
+        runId: "run-1",
+        occurredAt: "2026-01-01T00:00:00.000Z",
+        kind: "runtime-stopped",
+      });
+
+      expect(successfulSnapshot(stopped)).toMatchObject({
+        state: "failed",
+        failureCode: "runtime-failed",
+      });
+      expect(f.evidence.settle).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: "run-1", state: "failed", failureCode: "runtime-failed" }),
+      );
+    },
+  );
+
+  it("still cancels a run whose runtime exits during an operator-initiated stop", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    f.rows.set("run-1", { ...rowFor(f.rows, "run-1"), state: "stopping" });
+
+    expect(
+      successfulSnapshot(
+        await f.orchestrator.ingest({
+          schemaVersion: "1",
+          eventId: "event-exit-stopping",
+          runId: "run-1",
+          occurredAt: "2026-01-01T00:00:00.000Z",
+          kind: "runtime-stopped",
+        }),
+      ).state,
+    ).toBe("cancelled");
+  });
+
   it("recovers startup state without replay and supports stop/takeover settlement", async () => {
     const f = fixture();
     await f.orchestrator.start(start);

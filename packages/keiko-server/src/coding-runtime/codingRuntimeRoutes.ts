@@ -13,6 +13,7 @@ import {
   type CodingWorkbenchRuntimeQuestionsChannelPayload,
   type CodingWorkbenchRuntimeResearchChannelPayload,
   type CodingWorkbenchRuntimeSseEvent,
+  type CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -26,7 +27,6 @@ import {
 } from "../routes.js";
 import { SSE_HEADERS } from "../sse.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
-import { decideCodingRuntimeModeChange } from "./codingRuntimeModeChangeGate.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -238,10 +238,28 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
 }
 
 /**
- * The server-confirmed effective mode is anchored to the live run (#2386): a requested change is
- * confirmed only when the mode-change gate admits it — while the run is idle or paused, and
- * widening only from idle. A rejected request keeps confirming the run's own effective posture,
- * so the browser can never display a widened authority the server did not grant.
+ * States in which a run still holds the Authority Envelope minted for it. `effectiveMode` is fixed
+ * at mint (`CodingRuntimeAuthorityService.mintConfirmedStartForRun`) and nothing re-mints it —
+ * `resume` only clears the manager's paused flag — so for these states the run's own posture is
+ * the only truthful answer to "what authority does this run actually hold".
+ */
+const RUN_STATES_HOLDING_MINTED_AUTHORITY: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
+  "starting",
+  "ready",
+  "running",
+  "awaiting-approval",
+  "paused",
+  "stopping",
+]);
+
+/**
+ * The server-confirmed effective mode is anchored to the live run (#2386), so the browser can
+ * never display an authority the server did not grant — in EITHER direction. While a run holds a
+ * minted envelope the answer is that run's ceiling-clamped posture: a widening request is not
+ * granted, and a narrowing one is not applied either (0.3.0 release audit — the mode-change gate
+ * admits a narrowing selection from `paused`, but no code path re-mints the live envelope, so
+ * confirming it understated the authority the tool facade actually enforces). Once no envelope is
+ * held, the next start or retry mints from the request, so the clamped request is the truth.
  */
 function confirmedEffectiveMode(
   deps: UiHandlerDeps,
@@ -249,18 +267,13 @@ function confirmedEffectiveMode(
   deploymentCeiling: CodingWorkbenchMode,
 ): CodingWorkbenchMode {
   const current = deps.codingRuntimeOrchestrator?.status();
-  if (current?.runId === undefined || current.requestedMode === undefined) {
+  if (
+    current?.requestedMode === undefined ||
+    !RUN_STATES_HOLDING_MINTED_AUTHORITY.has(current.state)
+  ) {
     return resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling);
   }
-  const decision = decideCodingRuntimeModeChange({
-    currentState: current.state,
-    currentRequestedMode: current.requestedMode,
-    requestedMode,
-    deploymentCeiling,
-  });
-  return decision.ok
-    ? decision.effectiveMode
-    : resolveEffectiveCodingWorkbenchMode(current.requestedMode, deploymentCeiling);
+  return resolveEffectiveCodingWorkbenchMode(current.requestedMode, deploymentCeiling);
 }
 
 export function handleGetCodingRuntimeRun(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
