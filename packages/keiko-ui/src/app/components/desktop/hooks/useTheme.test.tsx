@@ -62,5 +62,19 @@ describe("useTheme", () => {
     await waitFor(() => expect(second.result.current.theme).toBe("light"));
     expect(document.documentElement.dataset.theme).toBe("light");
     expect(window.localStorage.getItem("keiko.theme")).toBe("light");
+
+    act(() => second.result.current.toggle());
+
+    await waitFor(() => expect(first.result.current.theme).toBe("dark"));
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(window.localStorage.getItem("keiko.theme")).toBe("dark");
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent("keiko:theme-change"));
+      window.dispatchEvent(new CustomEvent("keiko:theme-change", { detail: "sepia" }));
+    });
+
+    expect(first.result.current.theme).toBe("dark");
+    expect(second.result.current.theme).toBe("dark");
   });
 });

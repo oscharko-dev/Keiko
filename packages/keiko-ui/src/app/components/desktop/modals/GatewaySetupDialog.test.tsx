@@ -64,11 +64,15 @@ describe("GatewaySetupDialog", () => {
     await user.click(screen.getByRole("button", { name: /light mode/i }));
 
     await waitFor(() => expect(document.documentElement).toHaveAttribute("data-theme", "light"));
-    expect(screen.getByRole("button", { name: /dark mode/i })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    const darkModeButton = screen.getByRole("button", { name: /dark mode/i });
+    expect(darkModeButton).not.toHaveAttribute("aria-pressed");
     expect(window.localStorage.getItem("keiko.theme")).toBe("light");
+
+    await user.click(darkModeButton);
+
+    await waitFor(() => expect(document.documentElement).toHaveAttribute("data-theme", "dark"));
+    expect(screen.getByRole("button", { name: /light mode/i })).not.toHaveAttribute("aria-pressed");
+    expect(window.localStorage.getItem("keiko.theme")).toBe("dark");
     expect(baseUrl).toHaveValue("https://llm-gateway.example.com/v1");
     expect(apiToken).toHaveValue("example-token");
     expect(setupGateway).not.toHaveBeenCalled();

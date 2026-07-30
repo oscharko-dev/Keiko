@@ -2384,7 +2384,6 @@ export function GatewaySetupDialog({
                 type="button"
                 className={styles.themeToggle}
                 aria-label={theme === "light" ? t("rail.darkMode") : t("rail.lightMode")}
-                aria-pressed={theme === "light"}
                 onClick={toggleTheme}
               >
                 {theme === "light" ? <MoonIcon size={16} /> : <SunIcon size={16} />}
