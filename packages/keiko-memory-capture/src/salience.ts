@@ -204,10 +204,35 @@ function isRawSalienceItem(value: unknown): value is RawSalienceItem {
   );
 }
 
-// Parse the model output into validated raw items. ANY failure (no array, bad JSON, wrong element
-// shapes) yields [] — capture must never throw into the chat path.
+// Structured-output callers wrap the item array in a root object under "items" — Azure OpenAI
+// rejects a root array schema, so the server's SALIENCE_RESPONSE_FORMAT mandates that object shape
+// (F-11) — while the prompt-only fallback path emits the bare array. Returns the wrapped array
+// when the whole payload parses as that object shape, or null to fall back to the balanced-array
+// scan. Defensive: any parse failure yields null, never a throw.
+function unwrapWrappedItems(text: string): readonly unknown[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return null;
+  }
+  const items = (parsed as Record<string, unknown>).items;
+  return Array.isArray(items) ? items : null;
+}
+
+// Parse the model output into validated raw items. Accepts the structured-output root object
+// ({ "items": [...] }) and the bare-array fallback shape. ANY failure (no array, bad JSON, wrong
+// element shapes) yields [] — capture must never throw into the chat path.
 export function parseSalienceItems(raw: string): readonly RawSalienceItem[] {
-  const arrayText = firstBalancedArray(stripCodeFences(raw));
+  const text = stripCodeFences(raw);
+  const wrapped = unwrapWrappedItems(text);
+  if (wrapped !== null) {
+    return wrapped.filter(isRawSalienceItem);
+  }
+  const arrayText = firstBalancedArray(text);
   if (arrayText === null) {
     return [];
   }

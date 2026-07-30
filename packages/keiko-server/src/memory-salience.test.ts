@@ -217,6 +217,50 @@ function salienceConfig(
   };
 }
 
+// Fake port that records every gateway request and answers with a per-request reply, so a test can
+// assert the PRODUCTION wire shape (responseFormat, seed, …) and reply in the shape it mandates.
+function capturingModel(
+  seen: GatewayRequest[],
+  reply: (request: GatewayRequest) => string,
+): ModelPort {
+  return {
+    call(request): Promise<NormalizedResponse> {
+      seen.push(request);
+      return Promise.resolve({
+        modelId: request.modelId,
+        content: reply(request),
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: {
+          requestId: "salience-test",
+          promptTokens: 7,
+          completionTokens: 3,
+          latencyMs: 11,
+          costClass: "high",
+        },
+      });
+    },
+  };
+}
+
+// Derives the structured-output wrapper key from the production response-format schema captured on
+// the request (never restated here) and returns the exact payload shape that schema mandates —
+// what an Azure-style gateway enforcing the schema would make the model emit.
+function wrapUnderSchemaRequiredKey(
+  format: GatewayRequest["responseFormat"],
+  itemsJson: string,
+): string {
+  if (format?.type !== "json_schema") {
+    throw new TypeError("expected the production json_schema response format on the request");
+  }
+  const required = format.schema.required;
+  if (!Array.isArray(required) || typeof required[0] !== "string") {
+    throw new TypeError("expected a root object schema with a required wrapper key");
+  }
+  return JSON.stringify({ [required[0]]: JSON.parse(itemsJson) as unknown });
+}
+
 function countMemories(vault: MemoryVaultStore, ctx: ConversationMemoryRuntimeContext): number {
   return readMemories(vault, ctx).length;
 }
@@ -430,6 +474,80 @@ describe("captureSalientFromTurn", () => {
     expect(seen[0]?.type).toBe("json_schema");
     expect(seen[1]).toBeUndefined();
     expect(seenSeeds).toEqual([undefined, undefined]);
+  });
+
+  it("sends a named root-object json_schema an Azure-style structured-output gateway accepts (F-11)", async () => {
+    // Azure OpenAI structured outputs return 400 when json_schema.name is absent or the schema
+    // root is an array, which failed EVERY salience call on supportsResponseFormat models.
+    const vault = makeVault();
+    const seen: GatewayRequest[] = [];
+    const deps = makeDeps({
+      memoryVault: vault,
+      config: salienceConfig("gpt-json", true),
+      configPresent: true,
+      modelPortFactory: () => capturingModel(seen, () => ATLAS_FACTS),
+    });
+    await captureSalientFromTurn(
+      deps,
+      { content: USER_TEXT, memory: { enabled: true } },
+      context(),
+      "gpt-json",
+      "ok",
+    );
+    const format = seen[0]?.responseFormat;
+    expect(format?.type).toBe("json_schema");
+    if (format?.type !== "json_schema") {
+      throw new TypeError("expected the production json_schema response format on the request");
+    }
+    expect(typeof format.name).toBe("string");
+    expect((format.name ?? "").length).toBeGreaterThan(0);
+    expect(format.schema.type).toBe("object");
+  });
+
+  it("persists candidates from the schema-mandated wrapped payload (structured-output round trip)", async () => {
+    // The reply is wrapped under whatever key the PRODUCTION schema requires, so this fails if
+    // the schema and the extractor's unwrapping ever drift apart.
+    const vault = makeVault();
+    const seen: GatewayRequest[] = [];
+    const deps = makeDeps({
+      memoryVault: vault,
+      config: salienceConfig("gpt-json", true),
+      configPresent: true,
+      modelPortFactory: () =>
+        capturingModel(seen, (request) =>
+          wrapUnderSchemaRequiredKey(request.responseFormat, ATLAS_FACTS),
+        ),
+    });
+    const ctx = context();
+    const actions = await captureSalientFromTurn(
+      deps,
+      { content: USER_TEXT, memory: { enabled: true } },
+      ctx,
+      "gpt-json",
+      "ok",
+    );
+    expect(actions).toHaveLength(3);
+    expect(countMemories(vault, ctx)).toBe(3);
+  });
+
+  it("still accepts the bare-array reply on the prompt-only fallback path", async () => {
+    // Pin: models WITHOUT supportsResponseFormat keep the legacy array shape untouched.
+    const vault = makeVault();
+    const deps = makeDeps({
+      memoryVault: vault,
+      config: salienceConfig("gpt-plain", false),
+      configPresent: true,
+    });
+    const ctx = context();
+    const actions = await captureSalientFromTurn(
+      deps,
+      { content: USER_TEXT, memory: { enabled: true } },
+      ctx,
+      "gpt-plain",
+      "ok",
+    );
+    expect(actions).toHaveLength(3);
+    expect(countMemories(vault, ctx)).toBe(3);
   });
 
   it("uses the configured salience model alias and deterministic seed when supported", async () => {

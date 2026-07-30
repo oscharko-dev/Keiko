@@ -657,6 +657,34 @@ describe("parseSalienceItems", () => {
   ])("filters an item missing the required '$field' field", ({ raw }) => {
     expect(parseSalienceItems(raw)).toEqual([]);
   });
+
+  // Structured-output callers wrap the item array in a root object under "items" (Azure OpenAI
+  // rejects a root array schema — F-11); the prompt-only fallback path still emits the bare
+  // array, so BOTH shapes must parse.
+  it.each([
+    {
+      title: "unwraps the structured-output root object payload",
+      raw: '{"items":[{"body":"x","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}]}',
+    },
+    {
+      title: "filters invalid entries inside a wrapped payload",
+      raw: '{"items":[{"body":"ok","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]},{"body":123}]}',
+    },
+    {
+      title: "unwraps a wrapped payload wrapped in markdown code fences",
+      raw: '```json\n{"items":[{"body":"x","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}]}\n```',
+    },
+    {
+      title: "unwraps despite a decoy string property containing an array bracket",
+      raw: '{"note":"see arr[0]","items":[{"body":"x","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}]}',
+    },
+  ])("$title", ({ raw }) => {
+    expect(parseSalienceItems(raw)).toHaveLength(1);
+  });
+
+  it("returns [] when the wrapped items value is not an array", () => {
+    expect(parseSalienceItems('{"items":{"body":"x"}}')).toEqual([]);
+  });
 });
 
 // `trimDashes` replaced the former `/^-+|-+$/gu` in normalizeTag (S8786): that alternation of two
