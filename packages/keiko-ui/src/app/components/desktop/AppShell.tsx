@@ -43,7 +43,7 @@ import {
 } from "./hooks/workspaceActions";
 import { fetchConfig, updateChatConnectedScopes, updateChatLocalKnowledgeScopes } from "@/lib/api";
 import { newClientCorrelationId } from "@/lib/http";
-import { DEFAULT_LOCALE, I18nProvider, translate, useTranslate } from "@/lib/i18n";
+import { I18nProvider, useTranslate } from "@/lib/i18n";
 import type { I18nTranslate } from "@/lib/i18n";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type {
@@ -74,7 +74,7 @@ import {
   type Command,
 } from "./quickAccessRegistry";
 import "./widgets";
-import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
+import { localizedWindowTitle, WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow, Connection } from "./windows/types";
 import { registerSw } from "./install/registerSw";
 import { UpdateStartupNotice } from "./update/UpdateStartupNotice";
@@ -586,94 +586,60 @@ function focusCreatedWindow(id: string): void {
   });
 }
 
-// Default translator for callers that do not sit under an I18nProvider (the pure-function unit
-// tests): resolves the shipped English catalog rather than restating the strings inline.
-const defaultCommandTranslate: I18nTranslate = (key, values) =>
-  translate(DEFAULT_LOCALE, key, values);
-
-export function buildAppShellCommands(
+function layoutAndViewCommands(
   api: WorkspaceApi,
-  toggleTool: (type: WindowType) => void,
-  openPalettePick: (type: WindowType) => void,
   theme: "light" | "dark",
   toggleTheme: () => void,
-  undoStack: WorkspaceUndoStackApi,
-  translateCommand: I18nTranslate = defaultCommandTranslate,
+  t: I18nTranslate,
 ): readonly Command[] {
-  const createCommands = CARD_TYPES.map((tp): Command => {
-    const t = WIN_TYPES[tp];
-    return {
-      id: `new-${tp}`,
-      label: `New ${t.title}`,
-      group: "Create",
-      icon: t.icon,
-      run: () => openPalettePick(tp),
-    };
-  });
-  const toolCommands = TOOL_TYPES.map((tp): Command => {
-    const t = WIN_TYPES[tp];
-    return {
-      id: `open-${tp}`,
-      label: `Open ${t.title}`,
-      group: "Tools",
-      icon: t.icon,
-      run: () => toggleTool(tp),
-    };
-  });
-  const openEditorSettingsCommand: Command = {
-    id: "open-editor-settings",
-    label: "Open Editor settings",
-    group: "Tools",
-    icon: "settings",
-    run: () => {
-      toggleTool("settings");
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent(OPEN_EDITOR_SETTINGS_EVENT));
-      }
-    },
-  };
-  const staticCommands: readonly Command[] = [
+  return [
     {
       id: "tile",
-      label: "Tile all windows",
-      group: "Layout",
+      label: t("header.tileAll"),
+      group: t("command.group.layout"),
       icon: "tile",
       run: api.tileAll,
     },
     {
       id: "split",
-      label: "Split front windows",
-      group: "Layout",
+      label: t("header.splitFront"),
+      group: t("command.group.layout"),
       icon: "split",
       run: api.splitFront,
     },
     {
       id: "cascade",
-      label: "Cascade windows",
-      group: "Layout",
+      label: t("header.cascade"),
+      group: t("command.group.layout"),
       icon: "cascade",
       run: api.cascade,
     },
     {
       id: "theme",
-      label: "Toggle light / dark theme",
-      group: "View",
+      label: t("command.toggleTheme"),
+      group: t("command.group.view"),
       icon: theme === "light" ? "moon" : "sun",
       run: toggleTheme,
     },
-    // Audit — the empty-stack labels used to advertise "window and panel changes", but the shell
-    // instruments exactly ONE action kind: the `ui.panel.toggle` pushed by `onTool`. No window
-    // move/resize/maximize/close reaches the stack (the geometry chords and WindowFrame gestures
-    // never push), so the label promised a scope the stack could not deliver. Recording window
-    // geometry would mean instrumenting every drag/resize/snap frame — a behaviour change well
-    // beyond a truth fix — so the label is narrowed to what is actually recorded instead.
+  ];
+}
+
+// Audit — the empty-stack labels used to advertise "window and panel changes", but the shell
+// instruments exactly ONE action kind: the `ui.panel.toggle` pushed by `onTool`. No window
+// move/resize/maximize/close reaches the stack (the geometry chords and WindowFrame gestures
+// never push), so the label promised a scope the stack could not deliver. Recording window
+// geometry would mean instrumenting every drag/resize/snap frame — a behaviour change well
+// beyond a truth fix — so the label is narrowed to what is actually recorded instead. The wider
+// `command.undo`/`command.undoLabelled` wording is deliberately not used here.
+function undoRedoCommands(undoStack: WorkspaceUndoStackApi, t: I18nTranslate): readonly Command[] {
+  return [
     {
       id: "undo",
       label:
         undoStack.undoLabel !== null
-          ? translateCommand("shell.command.undo.target", { target: undoStack.undoLabel })
-          : translateCommand("shell.command.undo.panelOnly"),
-      group: "Edit",
+          ? t("shell.command.undo.target", { target: undoStack.undoLabel })
+          : t("shell.command.undo.panelOnly"),
+      group: t("command.group.edit"),
       icon: "back",
       shortcut: "⌘Z",
       run: undoStack.undo,
@@ -682,15 +648,61 @@ export function buildAppShellCommands(
       id: "redo",
       label:
         undoStack.redoLabel !== null
-          ? translateCommand("shell.command.redo.target", { target: undoStack.redoLabel })
-          : translateCommand("shell.command.redo.panelOnly"),
-      group: "Edit",
+          ? t("shell.command.redo.target", { target: undoStack.redoLabel })
+          : t("shell.command.redo.panelOnly"),
+      group: t("command.group.edit"),
       icon: "fwd",
       shortcut: "⇧⌘Z",
       run: undoStack.redo,
     },
   ];
-  return [...createCommands, ...toolCommands, openEditorSettingsCommand, ...staticCommands];
+}
+
+// `t` is a required argument, not an optional convenience: every label and group name below reaches
+// the quick-access command list, which used to render English template literals (`New ${title}`,
+// "Layout", "Edit") no matter which locale the user selected.
+export function buildAppShellCommands(
+  api: WorkspaceApi,
+  toggleTool: (type: WindowType) => void,
+  openPalettePick: (type: WindowType) => void,
+  theme: "light" | "dark",
+  toggleTheme: () => void,
+  undoStack: WorkspaceUndoStackApi,
+  t: I18nTranslate,
+): readonly Command[] {
+  const createCommands = CARD_TYPES.map((tp): Command => ({
+    id: `new-${tp}`,
+    label: t("command.new", { label: localizedWindowTitle(t, tp) }),
+    group: t("command.group.create"),
+    icon: WIN_TYPES[tp].icon,
+    run: () => openPalettePick(tp),
+  }));
+  const toolCommands = TOOL_TYPES.map((tp): Command => ({
+    id: `open-${tp}`,
+    label: t("command.open", { label: localizedWindowTitle(t, tp) }),
+    group: t("command.group.tools"),
+    icon: WIN_TYPES[tp].icon,
+    run: () => toggleTool(tp),
+  }));
+  const openEditorSettingsCommand: Command = {
+    id: "open-editor-settings",
+    label: t("command.openEditorSettings"),
+    group: t("command.group.tools"),
+    icon: "settings",
+    run: () => {
+      toggleTool("settings");
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent(OPEN_EDITOR_SETTINGS_EVENT));
+      }
+    },
+  };
+  return [
+    ...createCommands,
+    ...toolCommands,
+    openEditorSettingsCommand,
+    ...layoutAndViewCommands(api, theme, toggleTheme, t),
+    ...undoRedoCommands(undoStack, t),
+  ];
 }
 
 // S3358 — the two deep-linked tool routes each map to a fixed singleton window type.

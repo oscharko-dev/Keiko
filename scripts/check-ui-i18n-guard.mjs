@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -22,7 +22,7 @@ export const DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.de.ts";
 export const OPTIONAL_WIDGET_EN_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts";
 export const OPTIONAL_WIDGET_DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts";
 
-const UI_SOURCE_PREFIXES = ["packages/keiko-ui/src/app/"];
+const UI_SOURCE_PREFIXES = ["packages/keiko-ui/src/app/", "packages/keiko-ui/src/lib/"];
 const I18N_USAGE_PATTERNS = [
   /\buseTranslate\s*\(/,
   /\buseOptionalWidgetTranslate\s*\(/,
@@ -31,6 +31,14 @@ const I18N_USAGE_PATTERNS = [
   /\buseI18n\s*\(/,
   /<\s*I18nTranslate\b/,
   /\bOptionalWidgetTranslate\b/,
+  // Non-hook seams. A module that is not a component cannot call a hook, so it takes the translate
+  // function as a parameter (`I18nTranslate`) or calls the pure `translate`/`translateOptionalWidget`
+  // entry points. Before these three patterns existed, the guard classified exactly those modules —
+  // the window-type registry among them — as "does not use the i18n API", which is one half of why
+  // hardcoded English in a `.ts` registry was invisible to it.
+  /\bI18nTranslate\b/,
+  /\btranslateOptionalWidget\s*\(/,
+  /\blocalizedWindow[A-Za-z]*\s*\(/,
 ];
 // Each quoted alternative used to open with an unbounded [^"]* that overlaps the required
 // [A-Za-z] pivot and the unbounded [^"]* that follows it, so a quote-less run of letters made
@@ -46,8 +54,10 @@ const I18N_USAGE_PATTERNS = [
 // USER_FACING_ATTRIBUTE_VALUE_RE against the text immediately following it — is behaviourally
 // identical to the single combined pattern's `.test()`: both return true iff some position in the
 // line has one of the 6 attribute names followed by one of the 3 quoted-letter value shapes.
+// `data-tip` joined the list with the per-literal rule below: it is the design system's tooltip
+// attribute, so its value is copy the user reads, exactly like `title`.
 const USER_FACING_ATTRIBUTE_NAME_RE =
-  /\b(?:aria-label|aria-description|aria-placeholder|alt|placeholder|title)\s*=\s*/gu;
+  /\b(?:aria-label|aria-description|aria-placeholder|alt|placeholder|title|data-tip)\s*=\s*/gu;
 // Split from one 3-branch alternation into 3 separate patterns tried via `.some()`
 // (typescript:S5843 — the combined form was still over the complexity threshold even after the
 // name/value split above). Only ever used via `.test()` with no group captures, so trying the
@@ -73,6 +83,34 @@ function hasUserFacingAttribute(line) {
   }
   return false;
 }
+
+// The single-quote span between `quote` and its next occurrence, or null when `text` does not start
+// with a quote at all (an expression such as `aria-label={t("…")}` — already translated, and not a
+// literal this guard has anything to say about).
+function quotedValueAt(text) {
+  const quote = text[0];
+  if (quote !== '"' && quote !== "'" && quote !== "`") return null;
+  const end = text.indexOf(quote, 1);
+  return end < 0 ? null : text.slice(1, end);
+}
+
+function quotedValuesAfter(line, nameRe) {
+  nameRe.lastIndex = 0;
+  const values = [];
+  let nameMatch;
+  while ((nameMatch = nameRe.exec(line)) !== null) {
+    const value = quotedValueAt(line.slice(nameMatch.index + nameMatch[0].length));
+    if (value !== null) values.push(value);
+  }
+  return values;
+}
+
+// The option/command registries. Keiko's launcher grid, quick-access command list, KeikoSelect
+// menus and agent picker are all driven by object literals whose `label`/`description`/`title`/
+// `scope`/`cta` fields render verbatim, which is how a whole German-locale surface can be English
+// without a single JSX literal in sight (issue: `AGENT_WORKFLOWS`, `WIN_TYPES`).
+const LABEL_FIELD_NAME_RE =
+  /\b(?:label|labelText|description|desc|title|cta|scope|group|menuTitle|ariaLabel|tip|hint|placeholder|summary)\s*:\s*/gu;
 // This used to be a single alternation of `"[^"]*\s[A-Za-z][^"]*"`-shaped branches (and similarly
 // for '...' and `...`). Unlike USER_FACING_ATTRIBUTE_PATTERN's pivot (a single [A-Za-z] class),
 // this pivot is the two-character sequence `\s[A-Za-z]`, so excluding letters alone from the
@@ -276,11 +314,25 @@ function normalizePath(file) {
   return file.replaceAll("\\", "/").replace(/^\.\//, "");
 }
 
+// A catalog or a catalog-shaped helper is the i18n layer itself; every string in it is by definition
+// already translated, so it is never a subject of these checks. Recognised by name so the set cannot
+// drift with a directory move.
+function isI18nInfrastructure(normalized) {
+  const name = basename(normalized);
+  if (normalized === EN_CATALOG || normalized === DE_CATALOG) return true;
+  if (name === "i18n.tsx" || name === "optional-widget-i18n.ts") return true;
+  if (name.startsWith("i18n-messages.")) return true;
+  return /-i18n(?:\.(?:en|de))?\.tsx?$/u.test(name);
+}
+
 export function isUiProductionSource(file) {
   const normalized = normalizePath(file);
-  const name = basename(normalized);
 
-  if (!normalized.endsWith(".tsx")) {
+  // Issue: German locale coverage. `.ts` used to be excluded outright, which is why the window-type
+  // registry — the single table every window-launching surface renders its copy from — was never
+  // examined by this gate. TypeScript files hold registries, command tables and message builders;
+  // "user-facing text only lives in .tsx" was never true.
+  if (!normalized.endsWith(".tsx") && !normalized.endsWith(".ts")) {
     return false;
   }
 
@@ -292,7 +344,7 @@ export function isUiProductionSource(file) {
     return false;
   }
 
-  if (normalized === EN_CATALOG || normalized === DE_CATALOG || name === "i18n.tsx") {
+  if (isI18nInfrastructure(normalized)) {
     return false;
   }
 
@@ -376,11 +428,12 @@ function isDirectUserFacingText(text) {
   return Array.from(text).some(isAsciiLetter);
 }
 
-function hasUserFacingJsxText(line) {
+function userFacingJsxTexts(line) {
   let cursor = 0;
+  const texts = [];
   while (cursor < line.length) {
     const openingStart = line.indexOf("<", cursor);
-    if (openingStart < 0) return false;
+    if (openingStart < 0) return texts;
     const openingTag = readJsxTag(line, openingStart);
     cursor = openingStart + 1;
     if (openingTag === null || openingTag.closing) continue;
@@ -394,10 +447,14 @@ function hasUserFacingJsxText(line) {
       closingTag.name === openingTag.name &&
       isDirectUserFacingText(text)
     ) {
-      return true;
+      texts.push(text);
     }
   }
-  return false;
+  return texts;
+}
+
+function hasUserFacingJsxText(line) {
+  return userFacingJsxTexts(line).length > 0;
 }
 
 export function hasUserFacingTextLine(line) {
@@ -407,9 +464,124 @@ export function hasUserFacingTextLine(line) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Untranslated user-facing literal detection.
+//
+// Everything above answers "does this CHANGED .tsx mention an i18n API SOMEWHERE in the file?". That
+// question cannot fail on the case it exists to prevent: a component may route ten strings through
+// `useTranslate` and hardcode the eleventh and still pass, and a `.ts` file was not examined at all.
+// The whole window-type table — every window title, description, launcher-field label and CTA the
+// window launcher, the New Window dialog and the quick-access command list render — shipped as
+// English literals in a `.ts` registry while this gate reported OK on every change to it.
+//
+// The rule below is per LITERAL and per POSITION, in the three positions a string literal is read by
+// a user: JSX text, a user-facing attribute value, and a label/description field of an option or
+// command registry. It is evaluated against a committed baseline ledger, the same ratchet idiom the
+// coverage gate uses (ADR-0158 / docs/qa/coverage-truth-model.md): a literal already in the ledger is
+// pre-existing debt that may only shrink, and any literal NOT in it fails the gate.
+//
+// Opt-out for a genuinely non-user-facing literal: put `// i18n-exempt: <reason>` at the end of the
+// line, or on the line immediately above it. The marker lives in the source, so the claim and its
+// reason appear in the diff a reviewer reads — unlike a silent allowlist. A reason shorter than
+// I18N_EXEMPT_MIN_REASON characters is itself a gate failure, so the escape hatch cannot be used
+// wordlessly.
+//
+// Full contract, scope and known limits: docs/qa/ui-i18n-literal-gate.md
+// Both comment forms, because JSX children cannot carry a `//` comment: `// i18n-exempt: reason` in
+// TypeScript positions, `{/* i18n-exempt: reason */}` next to JSX text. The reason capture stops at
+// the first `*` (the start of `*/`) or the end of the line.
+const I18N_EXEMPT_MARKER = /\/[/*]\s*i18n-exempt:([^*\n]*)/u;
+export const I18N_EXEMPT_MIN_REASON = 12;
+
+export function i18nExemptReason(line) {
+  const match = I18N_EXEMPT_MARKER.exec(line);
+  return match === null ? null : (match[1] ?? "").trim();
+}
+
+const COPY_URL_LIKE = /^(?:https?:|file:|mailto:|data:|tel:|\/|\.{1,2}\/|[A-Za-z]:[\\/])/u;
+// A lowercase slug/dotted key/identifier is a machine token (`governed-assist`, `open-directory`,
+// `chat`, `a.b.c`), never copy. Rejecting it also rejects lowercase single-word copy such as
+// "optional"; that is a deliberate precision-over-recall trade so the gate cannot cry wolf on the
+// hundreds of enum members, modes and CSS-ish tokens that sit in these same positions.
+const COPY_LOWER_TOKEN = /^[a-z0-9]+(?:[-_.:][a-z0-9]+)*$/u;
+const COPY_UPPER_CONST = /^[A-Z][A-Z0-9_]*$/u;
+const COPY_NUMERIC_UNIT = /^[0-9]+(?:[.,][0-9]+)?\s*[A-Za-z%]{0,6}$/u;
+const COPY_SENTENCE_START = /^[A-Z][a-z]/u;
+
+function letterCount(text) {
+  let count = 0;
+  for (const character of text) {
+    if (isAsciiLetter(character)) count += 1;
+  }
+  return count;
+}
+
+// `${…}` segments are code, not copy. A template literal that is NOTHING but interpolations plus
+// punctuation (`${title} — ${subtitle}`, `${f.prefix ?? ""}${option}`) composes strings the user reads
+// but contributes no words of its own, so its parts are translated where they are produced; judging it
+// on the letters inside the expressions would report the composer instead.
+const INTERPOLATION_RE = /\$\{[^}]*\}/gu;
+
+export function isTranslatableCopy(value) {
+  const text = value.replaceAll(INTERPOLATION_RE, "").trim();
+  if (letterCount(text) < 2) return false;
+  if (COPY_URL_LIKE.test(text)) return false;
+  if (COPY_LOWER_TOKEN.test(text)) return false;
+  if (COPY_UPPER_CONST.test(text)) return false;
+  if (COPY_NUMERIC_UNIT.test(text)) return false;
+  const spaced = /\s/u.test(text);
+  // A slash inside a single token is a path or a mime type; inside a phrase it is prose
+  // ("Toggle light / dark theme"), so only the unspaced form is rejected.
+  if (!spaced && /[\\/]/u.test(text)) return false;
+  return spaced || COPY_SENTENCE_START.test(text);
+}
+
+export function untranslatedLiteralsInLine(line) {
+  if (isCommentLine(line)) return [];
+  return [
+    ...userFacingJsxTexts(line),
+    ...quotedValuesAfter(line, USER_FACING_ATTRIBUTE_NAME_RE),
+    ...quotedValuesAfter(line, LABEL_FIELD_NAME_RE),
+  ]
+    .map((value) => value.trim())
+    .filter(isTranslatableCopy);
+}
+
+function exemptReasonFor(lines, index) {
+  const own = i18nExemptReason(lines[index] ?? "");
+  if (own !== null) return own;
+  return index > 0 ? i18nExemptReason(lines[index - 1] ?? "") : null;
+}
+
+/**
+ * Whole-file scan. Returns the untranslated literals with their 1-based line numbers, plus the
+ * opt-out markers that claimed an exemption without a usable reason.
+ */
+export function untranslatedLiteralsInSource(source) {
+  const lines = source.split(/\r?\n/);
+  const findings = [];
+  const weakExemptions = [];
+  lines.forEach((line, index) => {
+    const literals = untranslatedLiteralsInLine(line);
+    if (literals.length === 0) return;
+    const reason = exemptReasonFor(lines, index);
+    if (reason === null) {
+      for (const text of literals) findings.push({ line: index + 1, text });
+      return;
+    }
+    if (reason.length < I18N_EXEMPT_MIN_REASON) {
+      weakExemptions.push({ line: index + 1, reason });
+    }
+  });
+  return { findings, weakExemptions };
+}
+
 export function hasI18nRelevantAddedLine(line) {
   return (
     hasUserFacingTextLine(line) ||
+    // A registry `label:`/`description:` literal is user-facing text that no JSX/attribute/return
+    // pattern above can see — the shape the whole window-type table was written in.
+    untranslatedLiteralsInLine(line).length > 0 ||
     I18N_KEY_REFERENCE_PATTERN.test(line) ||
     I18N_USAGE_PATTERNS.some((pattern) => pattern.test(line))
   );
@@ -635,9 +807,105 @@ function symmetricDifference(left, right) {
   ].sort((a, b) => a.localeCompare(b));
 }
 
+export const LITERAL_BASELINE = "docs/qa/ui-i18n-literal-baseline.json";
+
+// Fails LOUDLY when the ledger is missing or unreadable rather than defaulting to an empty object:
+// an empty baseline silently turns every pre-existing literal into a fresh failure, which is the kind
+// of noise that gets a gate switched off.
+export function readLiteralBaseline(repoRoot) {
+  const parsed = JSON.parse(readText(repoRoot, LITERAL_BASELINE));
+  const files = parsed.files;
+  if (files === null || typeof files !== "object") {
+    throw new Error(`${LITERAL_BASELINE} must contain a "files" object.`);
+  }
+  return files;
+}
+
+function readTextOrNull(repoRoot, file) {
+  try {
+    return readText(repoRoot, file);
+  } catch {
+    return null;
+  }
+}
+
+export function literalScanForFile(repoRoot, file) {
+  const source = readTextOrNull(repoRoot, file);
+  return source === null ? null : untranslatedLiteralsInSource(source);
+}
+
+function weakExemptionProblems(file, weakExemptions) {
+  return weakExemptions.map(
+    ({ line, reason }) =>
+      `${file}:${String(line)} claims \`// i18n-exempt:\` with reason ${JSON.stringify(reason)}. An opt-out must state why the literal is not user-facing in at least ${String(I18N_EXEMPT_MIN_REASON)} characters.`,
+  );
+}
+
+function introducedLiteralProblem(file, findings, allowed) {
+  const introduced = findings.filter((finding) => !allowed.has(finding.text));
+  if (introduced.length === 0) return null;
+  const detail = introduced
+    .map((finding) => `${String(finding.line)}: ${JSON.stringify(finding.text)}`)
+    .join("; ");
+  return `${file} contains untranslated user-facing literal(s) at line ${detail}. Route the text through the i18n API with English AND German catalog entries, or mark the line \`// i18n-exempt: <why it is not user-facing>\`.`;
+}
+
+function staleBaselineProblem(file, findings, allowed) {
+  const present = new Set(findings.map((finding) => finding.text));
+  const stale = Array.from(allowed).filter((text) => !present.has(text));
+  if (stale.length === 0) return null;
+  return `${LITERAL_BASELINE} still lists ${String(stale.length)} literal(s) for ${file} that no longer exist (${stale.map((text) => JSON.stringify(text)).join(", ")}). The ledger only shrinks: regenerate it with \`npm run check:ui-i18n -- --write-baseline\`.`;
+}
+
+export function untranslatedLiteralProblems(repoRoot, uiFiles, baseline) {
+  const problems = [];
+  for (const file of uiFiles) {
+    const scan = literalScanForFile(repoRoot, file);
+    if (scan === null) continue;
+    const allowed = new Set(baseline[file] ?? []);
+    problems.push(...weakExemptionProblems(file, scan.weakExemptions));
+    const introduced = introducedLiteralProblem(file, scan.findings, allowed);
+    if (introduced !== null) problems.push(introduced);
+    const stale = staleBaselineProblem(file, scan.findings, allowed);
+    if (stale !== null) problems.push(stale);
+  }
+  return problems;
+}
+
+function trackedFiles(repoRoot) {
+  const result = spawnSync(resolveHostExecutable("git"), ["ls-files"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status !== 0) {
+    throw new Error("check:ui-i18n could not list tracked files with git ls-files.");
+  }
+  return result.stdout.split(/\r?\n/).map(normalizePath).filter(Boolean);
+}
+
+export function allUiProductionSources(repoRoot) {
+  return trackedFiles(repoRoot)
+    .filter(isUiProductionSource)
+    .sort((left, right) => left.localeCompare(right));
+}
+
+export function buildLiteralBaseline(repoRoot) {
+  const files = {};
+  for (const file of allUiProductionSources(repoRoot)) {
+    const scan = literalScanForFile(repoRoot, file);
+    if (scan === null || scan.findings.length === 0) continue;
+    files[file] = Array.from(new Set(scan.findings.map((finding) => finding.text))).sort((a, b) =>
+      a.localeCompare(b),
+    );
+  }
+  return files;
+}
+
 export function checkUiI18nGuard({
   repoRoot = process.cwd(),
   changedFiles = changedFilesFromInput(repoRoot),
+  literalBaseline = undefined,
 } = {}) {
   const normalizedChangedFiles = changedFiles
     .map((file) => normalizePath(file.trim()))
@@ -647,9 +915,17 @@ export function checkUiI18nGuard({
   const i18nRelevantFiles = uiFiles.filter((file) => hasI18nRelevantChange(repoRoot, file));
   const problems = [];
 
+  // The literal ledger is evaluated for EVERY changed UI source, not only the ones the relevance
+  // heuristic flags: whether a diff "looks i18n-relevant" is a heuristic, whether a file currently
+  // holds an untranslated user-facing literal is a fact.
+  if (uiFiles.length > 0) {
+    const baseline = literalBaseline ?? readLiteralBaseline(repoRoot);
+    problems.push(...untranslatedLiteralProblems(repoRoot, uiFiles, baseline));
+  }
+
   if (uiFiles.length === 0 || i18nRelevantFiles.length === 0) {
     return {
-      ok: true,
+      ok: problems.length === 0,
       problems,
       uiFiles,
       i18nRelevantFiles,
@@ -657,9 +933,22 @@ export function checkUiI18nGuard({
     };
   }
 
-  const catalogRequirement = catalogUpdateProblems(changedFileSet, repoRoot);
-  problems.push(...catalogRequirement.problems);
+  problems.push(...catalogRequirementProblems(repoRoot, changedFileSet, i18nRelevantFiles));
 
+  return {
+    ok: problems.length === 0,
+    problems,
+    uiFiles,
+    i18nRelevantFiles,
+    changedFiles: normalizedChangedFiles,
+  };
+}
+
+// The pre-existing checks, unchanged in behaviour: catalogs must be updated together, a changed UI
+// file must reach the i18n API somehow, and both catalogs must expose the same keys.
+function catalogRequirementProblems(repoRoot, changedFileSet, i18nRelevantFiles) {
+  const catalogRequirement = catalogUpdateProblems(changedFileSet, repoRoot);
+  const problems = [...catalogRequirement.problems];
   const nonCompliantFiles = nonCompliantUiFiles(repoRoot, i18nRelevantFiles);
 
   if (nonCompliantFiles.length > 0) {
@@ -668,9 +957,10 @@ export function checkUiI18nGuard({
     );
   }
 
-  const enKeys = extractCatalogKeys(readText(repoRoot, EN_CATALOG));
-  const deKeys = extractCatalogKeys(readText(repoRoot, DE_CATALOG));
-  const keyMismatches = symmetricDifference(enKeys, deKeys);
+  const keyMismatches = symmetricDifference(
+    extractCatalogKeys(readText(repoRoot, EN_CATALOG)),
+    extractCatalogKeys(readText(repoRoot, DE_CATALOG)),
+  );
 
   if (keyMismatches.length > 0) {
     problems.push(
@@ -682,20 +972,71 @@ export function checkUiI18nGuard({
     ...featureCatalogParityProblems(repoRoot, catalogRequirement.featureCatalogPairs),
     ...singleFileCatalogParityProblems(repoRoot, catalogRequirement.singleFileCatalogs ?? []),
   );
+  return problems;
+}
 
-  return {
-    ok: problems.length === 0,
-    problems,
-    uiFiles,
-    i18nRelevantFiles,
-    changedFiles: normalizedChangedFiles,
-  };
+const LITERAL_BASELINE_COMMENT =
+  "Ratcheted ledger of pre-existing untranslated user-facing literals in the Keiko UI, one entry per " +
+  "file (see scripts/check-ui-i18n-guard.mjs). A literal listed here is known debt the check:ui-i18n " +
+  "gate tolerates; ANY literal not listed fails the gate. The ledger only shrinks - regenerate it with " +
+  "`npm run check:ui-i18n -- --write-baseline` after removing literals, and never add an entry to " +
+  "silence a new one. For a literal that is genuinely not user-facing, mark the source line " +
+  "`// i18n-exempt: <reason>` instead, so the claim is visible in the diff.";
+
+function writeBaselineMode(repoRoot) {
+  const files = buildLiteralBaseline(repoRoot);
+  const literalCount = Object.values(files).reduce((total, list) => total + list.length, 0);
+  writeFileSync(
+    resolve(repoRoot, LITERAL_BASELINE),
+    `${JSON.stringify({ $comment: LITERAL_BASELINE_COMMENT, files }, null, 2)}\n`,
+    "utf8",
+  );
+  console.log(
+    `check:ui-i18n baseline written - ${String(Object.keys(files).length)} file(s), ${String(literalCount)} literal(s).`,
+  );
+}
+
+// The whole-repository evaluation: every tracked UI production source measured against the ledger.
+// This is what proves the gate is in sync with the tree, and what a `--write-baseline` run must leave
+// clean.
+function allScopeChangedFiles(repoRoot) {
+  return [...allUiProductionSources(repoRoot), EN_CATALOG, DE_CATALOG];
+}
+
+// The scanned-file list is context for a PR-sized diff; in `--all` mode it is the whole UI tree and
+// would bury the findings, so it is elided past a readable size.
+const REPORTED_FILE_LIMIT = 25;
+
+function reportFailure(result) {
+  console.error("check:ui-i18n FAIL");
+  console.error("");
+  if (result.uiFiles.length <= REPORTED_FILE_LIMIT) {
+    console.error("Changed UI source files:");
+    for (const file of result.uiFiles) {
+      console.error(`- ${file}`);
+    }
+  } else {
+    console.error(`Scanned ${String(result.uiFiles.length)} UI source files.`);
+  }
+  console.error("");
+  console.error("Required fixes:");
+  for (const problem of result.problems) {
+    console.error(`- ${problem}`);
+  }
 }
 
 function main() {
+  const repoRoot = process.cwd();
+  const argv = process.argv.slice(2);
   let result;
   try {
-    result = checkUiI18nGuard();
+    if (argv.includes("--write-baseline")) {
+      writeBaselineMode(repoRoot);
+      return;
+    }
+    result = argv.includes("--all")
+      ? checkUiI18nGuard({ repoRoot, changedFiles: allScopeChangedFiles(repoRoot) })
+      : checkUiI18nGuard();
   } catch (error) {
     console.error("check:ui-i18n FAIL");
     console.error("");
@@ -711,17 +1052,7 @@ function main() {
     return;
   }
 
-  console.error("check:ui-i18n FAIL");
-  console.error("");
-  console.error("Changed UI source files:");
-  for (const file of result.uiFiles) {
-    console.error(`- ${file}`);
-  }
-  console.error("");
-  console.error("Required fixes:");
-  for (const problem of result.problems) {
-    console.error(`- ${problem}`);
-  }
+  reportFailure(result);
   process.exitCode = 1;
 }
 

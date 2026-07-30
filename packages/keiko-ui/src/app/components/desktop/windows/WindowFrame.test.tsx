@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 import { WindowFrame } from "./WindowFrame";
 import type { AppWindow } from "./types";
-import { registerWindowRender, WIN_TYPES } from "./WindowsRegistry";
+import { localizedWindowTitle, registerWindowRender, WIN_TYPES } from "./WindowsRegistry";
+import { translate, type I18nTranslate } from "@/lib/i18n";
 
 const originalPlatform = window.navigator.platform;
 
@@ -100,8 +101,12 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
   };
 }
 
+// The expected labels are DERIVED from the production producers (the shared catalog plus
+// `localizedWindowTitle`), never restated here: a fixture that re-spelled "Minimize X window" would
+// keep passing after the label moved into the i18n catalog and stopped being localized at all.
+const enTranslate: I18nTranslate = (key, values) => translate("en", key, values);
 const windowControlCases = (Object.keys(WIN_TYPES) as AppWindow["type"][]).map(
-  (type) => [type, WIN_TYPES[type]] as const,
+  (type) => [type, localizedWindowTitle(enTranslate, type)] as const,
 );
 
 function domRect(patch: Partial<DOMRect> = {}): DOMRect {
@@ -249,7 +254,7 @@ function setBodyMetrics(
 describe("WindowFrame content zoom controls", () => {
   it.each(windowControlCases)(
     "orders %s window controls as minimize, maximize, close",
-    (type, def) => {
+    (type, title) => {
       const { unmount } = render(
         <WindowFrame
           win={appWindow({ type })}
@@ -261,13 +266,15 @@ describe("WindowFrame content zoom controls", () => {
         />,
       );
 
-      const controls = screen.getByRole("group", { name: `${def.title} window controls` });
+      const controls = screen.getByRole("group", {
+        name: enTranslate("window.controls", { label: title }),
+      });
       const buttons = Array.from(controls.querySelectorAll("button"));
 
       expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
-        `Minimize ${def.title} window`,
-        `Full screen ${def.title} window`,
-        `Close ${def.title} window`,
+        enTranslate("window.minimize", { label: title }),
+        enTranslate("window.fullscreen", { label: title }),
+        enTranslate("window.close", { label: title }),
       ]);
 
       unmount();

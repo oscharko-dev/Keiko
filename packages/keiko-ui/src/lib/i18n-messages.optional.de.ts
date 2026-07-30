@@ -18,6 +18,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "quickAccess.result.truncatedSuffix": " Die Ergebnisse wurden begrenzt; Suchbegriff eingrenzen.",
   "quickAccess.result.truncatedPerRootSuffix":
     " Ergebnisse werden pro Root begrenzt und fair zusammengeführt; Suchbegriff eingrenzen.",
+  "quickAccess.searchUnavailable": "Suche für {roots} nicht verfügbar.",
   "browserWidget.error.unexpected": "Unerwarteter Fehler.",
   "browserWidget.error.streamDisconnected":
     "Die Live-Browserereignisse wurden getrennt. Öffnen Sie die Sitzung erneut, um den Feed fortzusetzen.",

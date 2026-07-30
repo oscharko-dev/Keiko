@@ -24,7 +24,7 @@ import {
 } from "./interactionGuards";
 import { ConnectionsLayer } from "./windows/ConnectionsLayer";
 import { WindowFrame } from "./windows/WindowFrame";
-import { WIN_TYPES } from "./windows/WindowsRegistry";
+import { localizedWindowTitle } from "./windows/WindowsRegistry";
 import { canConnect, relLabel } from "./windows/connectionUtils";
 import type { AppWindow, ConnState, ConnectingState, Connection, SnapPrev } from "./windows/types";
 import { MAX_ZOOM, MIN_ZOOM } from "./hooks/useWorkspace";
@@ -238,22 +238,27 @@ interface ConnectAnnouncerProps {
 function describeConnectStart(
   wins: readonly AppWindow[] | null,
   connecting: ConnectingState,
+  t: I18nTranslate,
 ): string {
   const from = wins?.find((w) => w.id === connecting.from);
-  const title = from !== undefined ? WIN_TYPES[from.type].title : "window";
-  return `Connecting from ${title}. Tab to a highlighted window and press Enter on it or one of its connection ports to connect. Press Escape to cancel.`;
+  const title =
+    from === undefined ? t("workspace.connect.fallbackTitle") : localizedWindowTitle(t, from.type);
+  return t("workspace.connect.start", { title });
 }
 
 function describeConnectEnd(
   wins: readonly AppWindow[] | null,
   conns: readonly Connection[],
   wasConnCount: number,
+  t: I18nTranslate,
 ): string {
-  if (conns.length <= wasConnCount) return "Connection cancelled";
+  if (conns.length <= wasConnCount) return t("workspace.connect.cancelled");
   const added = conns[conns.length - 1];
   const a = added !== undefined ? wins?.find((w) => w.id === added.a) : undefined;
   const b = added !== undefined ? wins?.find((w) => w.id === added.b) : undefined;
-  return a !== undefined && b !== undefined ? `Connected: ${relLabel(a, b)}` : "Connected";
+  return a !== undefined && b !== undefined
+    ? t("workspace.connect.connectedWith", { label: relLabel(a, b) })
+    : t("workspace.connect.connected");
 }
 
 // The click-to-connect state machine is otherwise purely visual (crosshair
@@ -261,6 +266,7 @@ function describeConnectEnd(
 // live region announces start, completion and cancellation of a connect flow
 // for screen-reader users (audit C298/C004).
 function ConnectAnnouncer({ wins, connecting, conns }: ConnectAnnouncerProps): ReactNode {
+  const t = useTranslate();
   const [message, setMessage] = useState("");
   const prevConnecting = useRef<ConnectingState | null>(null);
   const prevConnsLen = useRef(conns.length);
@@ -271,13 +277,13 @@ function ConnectAnnouncer({ wins, connecting, conns }: ConnectAnnouncerProps): R
     const wasLen = prevConnsLen.current;
     prevConnsLen.current = conns.length;
     if (was === null && connecting !== null) {
-      setMessage(describeConnectStart(wins, connecting));
+      setMessage(describeConnectStart(wins, connecting, t));
       return;
     }
     if (was !== null && connecting === null) {
-      setMessage(describeConnectEnd(wins, conns, wasLen));
+      setMessage(describeConnectEnd(wins, conns, wasLen, t));
     }
-  }, [connecting, conns, wins]);
+  }, [connecting, conns, wins, t]);
 
   return (
     <div className="sr-only" aria-live="polite">

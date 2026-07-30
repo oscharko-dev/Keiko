@@ -492,7 +492,7 @@ export function UnifiedQuickAccessPalette({
         </output>
         {failedRoots.length > 0 ? (
           <div className="cmdk-empty" role="alert">
-            Search unavailable for {failedRoots.join(", ")}.
+            {t("quickAccess.searchUnavailable", { roots: failedRoots.join(", ") })}
           </div>
         ) : null}
         <div id={listId} role="listbox" className="cmdk-list">

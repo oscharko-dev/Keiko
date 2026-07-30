@@ -143,6 +143,8 @@
     "check:git-delivery-evidence": "node scripts/check-git-delivery-evidence.mjs",
     "check:git-client-evidence": "node scripts/check-git-client-evidence.mjs",
     "check:ui-i18n": "node scripts/check-ui-i18n-guard.mjs",
+    "check:ui-i18n:all": "node scripts/check-ui-i18n-guard.mjs --all",
+    "check:ui-i18n:baseline": "node scripts/check-ui-i18n-guard.mjs --write-baseline",
     "check:editor-doc-links": "node scripts/check-editor-doc-links.mjs",
     "check:e2e-suite-wiring": "node scripts/check-e2e-suite-wiring.mjs",
     "check:adr-index": "node scripts/check-adr-index.mjs",

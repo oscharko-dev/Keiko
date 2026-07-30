@@ -36,7 +36,13 @@ import {
   receivesFocusedFileContext,
   subText,
 } from "./connectionUtils";
-import { CHAT_MINI_W, WIN_TYPES, type WindowCfgByType, type WindowType } from "./WindowsRegistry";
+import {
+  CHAT_MINI_W,
+  localizedWindowTitle,
+  WIN_TYPES,
+  type WindowCfgByType,
+  type WindowType,
+} from "./WindowsRegistry";
 import { WindowBodyBoundary } from "./WindowBodyBoundary";
 import type { AppWindow, ConnState, View } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
@@ -228,7 +234,7 @@ function selectBody({
       node: (
         <TooSmall
           icon={def.icon}
-          title={t("window.tooSmall.title", { label: def.title })}
+          title={t("window.tooSmall.title", { label: localizedWindowTitle(t, type) })}
           body={t("window.tooSmall.body")}
         />
       ),
@@ -1148,7 +1154,8 @@ function WindowFrameImpl({
   );
 
   const sub = bodyMode === "full" ? subText(win.type, win.cfg) : null;
-  const windowLabel = accessibleWindowLabel(def.title, sub, selected, t);
+  const windowTitle = localizedWindowTitle(t, win.type);
+  const windowLabel = accessibleWindowLabel(windowTitle, sub, selected, t);
   const showHeaderZoom = bodyMode === "full" && ew >= HEADER_ZOOM_MIN_WIDTH_PX;
   // Issue #1580 — bound per-window layout/style recalc (item 8: `contain`) so a
   // scene-zoom relayout or an intra-window reflow does not cascade across all N
@@ -1258,7 +1265,7 @@ function WindowFrameImpl({
             >
               <Icon size={14} />
             </span>
-            <span className="win-title">{def.title}</span>
+            <span className="win-title">{windowTitle}</span>
             {/* Audit C159 — the badge ellipsizes at 150px; title= keeps the full
               path/URL reachable for mouse users. */}
             {sub !== null ? (
@@ -1270,14 +1277,14 @@ function WindowFrameImpl({
             {/* Audit C297 — every window carried word-identical control labels; with
               several windows open, screen-reader and voice-control users could not
               tell WHICH window a Close/Zoom/Connect control acts on (WCAG 2.4.6).
-              def.title scopes each label; the visible chrome is unchanged. */}
+              the localized window title scopes each label; the visible chrome is unchanged. */}
             {showHeaderZoom ? (
               <div className="win-zoom">
                 <button
                   type="button"
                   className="win-zbtn ui-tip"
                   data-tip="Zoom content out"
-                  aria-label={`Zoom ${def.title} content out`}
+                  aria-label={t("window.zoomOut", { label: windowTitle })}
                   disabled={zoom <= CONTENT_MIN_ZOOM}
                   onPointerDown={(e) => e.stopPropagation()}
                   onDoubleClick={(e) => {
@@ -1291,7 +1298,10 @@ function WindowFrameImpl({
                   type="button"
                   className="win-zpct ui-tip"
                   data-tip="Reset content zoom to 100%"
-                  aria-label={`${String(Math.round(zoom * 100))}% — reset ${def.title} content zoom`}
+                  aria-label={t("window.zoomReset", {
+                    percent: Math.round(zoom * 100),
+                    label: windowTitle,
+                  })}
                   onPointerDown={(e) => e.stopPropagation()}
                   onDoubleClick={(e) => {
                     e.stopPropagation();
@@ -1304,7 +1314,7 @@ function WindowFrameImpl({
                   type="button"
                   className="win-zbtn ui-tip"
                   data-tip="Zoom content in"
-                  aria-label={`Zoom ${def.title} content in`}
+                  aria-label={t("window.zoomIn", { label: windowTitle })}
                   disabled={zoom >= CONTENT_MAX_ZOOM}
                   onPointerDown={(e) => e.stopPropagation()}
                   onDoubleClick={(e) => {
@@ -1316,12 +1326,16 @@ function WindowFrameImpl({
                 </button>
               </div>
             ) : null}
-            <div className="win-traffic" role="group" aria-label={`${def.title} window controls`}>
+            <div
+              className="win-traffic"
+              role="group"
+              aria-label={t("window.controls", { label: windowTitle })}
+            >
               <button
                 type="button"
                 className="win-traffic-btn win-traffic-minimize ui-tip"
                 data-tip="Minimize"
-                aria-label={`Minimize ${def.title} window`}
+                aria-label={t("window.minimize", { label: windowTitle })}
                 onPointerDown={(e) => e.stopPropagation()}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
@@ -1335,7 +1349,9 @@ function WindowFrameImpl({
                 className="win-traffic-btn win-traffic-maximize ui-tip"
                 data-tip={win.max ? "Restore" : "Full screen"}
                 aria-label={
-                  win.max ? `Restore ${def.title} window` : `Full screen ${def.title} window`
+                  win.max
+                    ? t("window.restore", { label: windowTitle })
+                    : t("window.fullscreen", { label: windowTitle })
                 }
                 onPointerDown={(e) => e.stopPropagation()}
                 onDoubleClick={(e) => {
@@ -1349,7 +1365,7 @@ function WindowFrameImpl({
                 type="button"
                 className="win-traffic-btn win-traffic-close ui-tip"
                 data-tip="Close"
-                aria-label={`Close ${def.title} window`}
+                aria-label={t("window.close", { label: windowTitle })}
                 onPointerDown={(e) => e.stopPropagation()}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
@@ -1387,7 +1403,7 @@ function WindowFrameImpl({
               className={`win-port wp-${d}`}
               title={t("window.connectPort.title")}
               aria-label={t("window.connectPort.aria", {
-                title: def.title,
+                title: windowTitle,
                 edge: portEdgeLabel(d, t),
               })}
               onPointerDown={onPortPointerDown}
