@@ -142,7 +142,7 @@ describe("production OpenCode backend functional pipeline", () => {
     disposers.push(() => scripted.closeAll());
     const portable = scriptedFunctionalPortable(fixture.root);
     const pipeline = await bootPipeline(fixture, portable, scripted.createSupervisor);
-    const cookie = await pairAppSession(pipeline.baseUrl);
+    const cookie = await pipelineSessionCookie(pipeline.baseUrl);
     const started = await post(
       pipeline.baseUrl,
       "/api/coding-workbench/runtime/runs",
@@ -432,7 +432,7 @@ async function runProductiveScenario(
   fixture: FunctionalWorkspaceFixture,
   pipeline: FunctionalPipeline,
 ): Promise<void> {
-  const sessionCookie = await pairAppSession(pipeline.baseUrl);
+  const sessionCookie = await pipelineSessionCookie(pipeline.baseUrl);
   const started = await post(
     pipeline.baseUrl,
     "/api/coding-workbench/runtime/runs",
@@ -520,11 +520,7 @@ async function runProductiveScenario(
 }
 
 async function pairAppSession(baseUrl: string): Promise<string> {
-  const response = await post(
-    baseUrl,
-    "/api/coding-workbench/app-session/pair",
-    fakePairingRequestBody(),
-  );
+  const response = await post(baseUrl, PAIR_PATH, fakePairingRequestBody());
   expect(response.status).toBe(200);
   const cookie = response.headers.get("set-cookie")?.split(";", 1)[0];
   if (cookie === undefined) throw new Error("functional-app-session-pairing-failed");
@@ -837,10 +833,31 @@ function startBody(requestId: string): {
   return { requestId, taskIntent: SECRET, requestedMode: "autonomous-delivery" };
 }
 
+// Every state-changing coding-runtime route binds to the launcher-attested app session
+// (ADR-0141 D1/D2), so the functional transport behaves like the paired browser: one session per
+// booted pipeline, redeemed lazily and presented on every subsequent POST. The pair endpoint itself
+// is the one path that must not present a cookie — it is what mints one.
+const PAIR_PATH = "/api/coding-workbench/app-session/pair";
+const pipelineSessions = new Map<string, Promise<string>>();
+
+function pipelineSessionCookie(base: string): Promise<string> {
+  const existing = pipelineSessions.get(base);
+  if (existing !== undefined) return existing;
+  const minted = pairAppSession(base);
+  pipelineSessions.set(base, minted);
+  return minted;
+}
+
 async function post(base: string, path: string, body: unknown): Promise<Response> {
+  const cookie = path === PAIR_PATH ? undefined : await pipelineSessionCookie(base);
   const response = await fetch(`${base}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1", Origin: base },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Keiko-CSRF": "1",
+      Origin: base,
+      ...(cookie === undefined ? {} : { Cookie: cookie }),
+    },
     body: JSON.stringify(body),
   });
   assertResponseMetadata(response);

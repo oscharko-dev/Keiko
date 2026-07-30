@@ -16,6 +16,7 @@ import type {
 } from "./productionCodingRuntimeHost.js";
 import {
   createCodingRuntimeOrchestrator,
+  MAX_APPROVAL_CHALLENGE_TTL_MS,
   type CodingRuntimeOrchestratorResult,
 } from "./codingRuntimeOrchestrator.js";
 import { createPendingResearchApprovals } from "./researchApprovalIssuance.js";
@@ -36,7 +37,7 @@ function rowFor(
   return row;
 }
 
-function fixture(activityProjection?: CodingSafeActivityProjection) {
+function fixture(activityProjection?: CodingSafeActivityProjection, clock?: () => Date) {
   const rows = new Map<string, CodingRuntimeSnapshot>();
   const listPrunableSettled = vi.fn((): readonly string[] => []);
   const deletePruned = vi.fn();
@@ -173,7 +174,7 @@ function fixture(activityProjection?: CodingSafeActivityProjection) {
     serverPrincipal: () => "server",
     researchGrants,
     pendingResearchApprovals,
-    now: () => new Date("2026-01-01T00:00:00.000Z"),
+    now: clock ?? ((): Date => new Date("2026-01-01T00:00:00.000Z")),
     newRunId: () => `run-${String(rows.size + 1)}`,
   });
   return {
@@ -1150,5 +1151,114 @@ describe("auxiliary event facts reach the SSE frame", () => {
     expect(f.eventHub.publish).toHaveBeenLastCalledWith(
       expect.not.objectContaining({ contentTrust: "untrusted" }),
     );
+  });
+});
+
+// Release-audit P0 (second half): the approval challenge lifetime arrived from the runtime CHILD as
+// `permissionRequest.expiresAt`, was accepted for any future instant, and was handed straight to the
+// authority mint as `ttlMs`. A child process must never choose its own security lifetime, so the
+// orchestrator — the trust boundary between the untrusted child event and the server-owned authority
+// — clamps it. One clamped instant feeds the challenge expiry, the operator-visible deadline, and
+// the minted TTL, so the approval card can never show a deadline the server does not enforce. The
+// expectations import the production ceiling instead of restating it.
+describe("approval challenge lifetime ceiling", () => {
+  const CHILD_REQUESTED_LIFETIME_MS = 24 * 60 * 60 * 1_000;
+
+  async function awaitingApproval(clock?: () => Date, expiresAt = "2026-01-02T00:00:00.000Z") {
+    const f = fixture(undefined, clock);
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "task",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "task-submitted",
+    });
+    const ingested = await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "permission",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-1",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        actionKind: "file-edit",
+        expiresAt,
+      },
+    });
+    return { f, ingested };
+  }
+
+  it("clamps a child-supplied lifetime in the operator-visible deadline and the minted TTL alike", async () => {
+    const { f, ingested } = await awaitingApproval();
+    const ceiling = new Date(FIXTURE_NOW_MS + MAX_APPROVAL_CHALLENGE_TTL_MS).toISOString();
+
+    expect(successfulSnapshot(ingested)).toMatchObject({
+      state: "awaiting-approval",
+      pendingPermission: { requestId: "permission-1", expiresAt: ceiling },
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.pendingPermission?.expiresAt).toBe(ceiling);
+
+    expect(
+      (
+        await f.orchestrator.decideApproval("run-1", {
+          requestId: "permission-1",
+          decision: "approved",
+          expectedRevision: 4,
+        })
+      ).ok,
+    ).toBe(true);
+    expect(f.approvalAuthority.issue).toHaveBeenCalledWith(
+      expect.objectContaining({ ttlMs: MAX_APPROVAL_CHALLENGE_TTL_MS }),
+    );
+    // The child asked for a whole day; no issued authority carries that lifetime anywhere.
+    expect(MAX_APPROVAL_CHALLENGE_TTL_MS).toBeLessThan(CHILD_REQUESTED_LIFETIME_MS);
+  });
+
+  it("expires the clamped challenge at the server ceiling even though the child asked for longer", async () => {
+    let nowMs = FIXTURE_NOW_MS;
+    const { f } = await awaitingApproval(() => new Date(nowMs));
+
+    nowMs = FIXTURE_NOW_MS + MAX_APPROVAL_CHALLENGE_TTL_MS + 1;
+
+    expect(
+      await f.orchestrator.decideApproval("run-1", {
+        requestId: "permission-1",
+        decision: "approved",
+        expectedRevision: 4,
+      }),
+    ).toEqual({ ok: false, failureCode: "invalid-intent" });
+    expect(f.approvalAuthority.issue).not.toHaveBeenCalled();
+  });
+
+  it("leaves a child lifetime below the ceiling exactly as asked", async () => {
+    const { f, ingested } = await awaitingApproval(undefined, "2026-01-01T00:01:00.000Z");
+
+    expect(successfulSnapshot(ingested)).toMatchObject({
+      pendingPermission: { expiresAt: "2026-01-01T00:01:00.000Z" },
+    });
+    await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-1",
+      decision: "approved",
+      expectedRevision: 4,
+    });
+    expect(f.approvalAuthority.issue).toHaveBeenCalledWith(
+      expect.objectContaining({ ttlMs: 60_000 }),
+    );
+  });
+
+  it.each([
+    ["a non-numeric instant", "not-a-date"],
+    ["an empty instant", ""],
+    ["an already elapsed instant", "2025-12-31T23:59:59.000Z"],
+    ["the current instant", "2026-01-01T00:00:00.000Z"],
+  ])("refuses %s as an approval challenge lifetime", async (_label, expiresAt) => {
+    const { f, ingested } = await awaitingApproval(undefined, expiresAt);
+
+    expect(ingested).toEqual({ ok: false, failureCode: "invalid-intent" });
+    expect(f.orchestrator.getSnapshot("run-1")?.state).not.toBe("awaiting-approval");
   });
 });

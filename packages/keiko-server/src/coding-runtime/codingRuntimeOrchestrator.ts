@@ -54,6 +54,20 @@ interface ApprovalChallenge {
   used: boolean;
 }
 
+/**
+ * Server-side ceiling on how long one approval challenge may live.
+ *
+ * The lifetime arrives on the runtime child's `permission-requested` event as
+ * `permissionRequest.expiresAt`. The child is on the untrusted side of the boundary — it is the
+ * process the approval is being asked ABOUT — so it must not choose its own security lifetime. This
+ * ceiling is the trusted counterpart of the 5-minute value the generated child-side tool source
+ * happens to send today: a child that asks for longer (or a tampered one that asks for a year) is
+ * clamped here, before the instant becomes the challenge expiry, the operator-visible deadline on
+ * the approval card, and the TTL of the minted approval authority. All three derive from this one
+ * clamped instant, so the card can never display a deadline the server does not enforce.
+ */
+export const MAX_APPROVAL_CHALLENGE_TTL_MS = 5 * 60 * 1_000;
+
 const DIGEST = (value: string): string => createHash("sha256").update(value).digest("hex");
 const terminal = new Set<CodingWorkbenchRuntimeStateName>([
   "succeeded",
@@ -448,13 +462,17 @@ export class CodingRuntimeOrchestrator {
     event: CodingWorkbenchRuntimeEvent,
   ): CodingRuntimeOrchestratorResult {
     if (!event.permissionRequest?.actionKind) return this.fail("invalid-intent");
-    const expiresAt = Date.parse(event.permissionRequest.expiresAt);
-    if (!Number.isFinite(expiresAt) || expiresAt <= this.now().getTime())
-      return this.fail("invalid-intent");
+    const requested = Date.parse(event.permissionRequest.expiresAt);
+    const nowMs = this.now().getTime();
+    if (!Number.isFinite(requested) || requested <= nowMs) return this.fail("invalid-intent");
+    // Clamp the child-declared lifetime to the server ceiling and re-publish the clamped instant on
+    // the permission itself, so the challenge expiry, the operator-visible deadline, and the minted
+    // approval TTL are one value the server owns (MAX_APPROVAL_CHALLENGE_TTL_MS).
+    const expiresAt = Math.min(requested, nowMs + MAX_APPROVAL_CHALLENGE_TTL_MS);
     this.approvals.set(current.runId, {
       revision: current.revision + 1,
       expiresAt,
-      permission: event.permissionRequest,
+      permission: { ...event.permissionRequest, expiresAt: new Date(expiresAt).toISOString() },
       used: false,
     });
     const next = this.transition(current, "awaiting-approval");
