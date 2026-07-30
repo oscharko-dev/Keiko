@@ -284,6 +284,12 @@ export const EN_MESSAGES = {
   "mode.manual.title": "You approve every privileged action",
   "mode.manual.label": "You",
   "mode.autonomous.title": "Keiko governs agents per your policy",
+  // The shell undo stack records panel toggles only — no window move/resize/maximize/close reaches
+  // it — so the empty-stack labels name that scope instead of promising window changes.
+  "shell.command.undo.target": "Undo: {target}",
+  "shell.command.undo.panelOnly": "Undo (panel changes only)",
+  "shell.command.redo.target": "Redo: {target}",
+  "shell.command.redo.panelOnly": "Redo (panel changes only)",
   "workspace.selection.none": "No workspace windows selected",
   "workspace.binding.restoreVerificationFailed":
     "The active task workspace failed re-verification. Re-bind it before starting a coding run.",

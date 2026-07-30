@@ -97,6 +97,50 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
+/**
+ * Opt-in marker for a text field that must NOT swallow the shell chords. Put it on (or on an
+ * ancestor of) the field; `useKeyboardShortcuts` then applies the forwarding rule below instead of
+ * suppressing every chord.
+ *
+ * The chat composer is the case this exists for: `isEditableTarget` above suppresses the whole
+ * shell chord set inside any text field, which left Cmd/Ctrl+P, Cmd/Ctrl+Shift+P and
+ * Cmd/Ctrl+Shift+F dead in the product's primary input. The editor already had an explicit bypass
+ * for exactly this shape (`EditorQuickAccessTriggerContext`, a capturing listener on the editor
+ * container); this is the same seam declared on the element, so the decision stays in the ONE place
+ * that owns chord dispatch instead of growing a second per-surface listener.
+ */
+export const SHELL_CHORD_BYPASS_ATTRIBUTE = "data-shell-chord-bypass";
+
+// The chords a focused text field owns itself — undo/redo of the user's own typing plus the
+// clipboard/select-all set.
+const TEXT_FIELD_OWNED_KEYS: ReadonlySet<string> = new Set(["z", "y", "x", "c", "v", "a"]);
+
+// THE RULE for a field that opted in via SHELL_CHORD_BYPASS_ATTRIBUTE: forward the keydown to the
+// shell only when it carries Cmd/Ctrl, carries no Alt, and its key is not one of the chords the
+// field's own text editing owns. Everything else stays with the caret:
+//   - a plain or Shift-only key is literal typing;
+//   - Alt is a character-composition modifier inside a text field (on macOS Option+S types "ß"),
+//     so an Alt chord must never be taken away from the field;
+//   - Cmd/Ctrl+Z / +Shift+Z / +Y inside a text field mean "undo my typing", NOT "undo a workspace
+//     panel toggle" — routing them to the shell undo stack would silently reverse an unrelated
+//     workspace action while the user was editing text;
+//   - Cmd/Ctrl+X / +C / +V / +A are the field's clipboard and select-all.
+function forwardableFromOptedInField(event: KeyboardEvent): boolean {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey) return false;
+  return !TEXT_FIELD_OWNED_KEYS.has(event.key.toLowerCase());
+}
+
+function optsIntoShellChords(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return target.closest(`[${SHELL_CHORD_BYPASS_ATTRIBUTE}]`) !== null;
+}
+
+function suppressedByEditableTarget(event: KeyboardEvent): boolean {
+  if (!isEditableTarget(event.target)) return false;
+  if (!optsIntoShellChords(event.target)) return true;
+  return !forwardableFromOptedInField(event);
+}
+
 export function detectShortcutConflicts(
   bindings: ReadonlyArray<WorkspaceKeyboardShortcutBinding>,
 ): ReadonlyArray<WorkspaceKeyboardShortcutConflict> {
@@ -175,7 +219,7 @@ export function useKeyboardShortcuts(
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
-      if (isEditableTarget(event.target)) return;
+      if (suppressedByEditableTarget(event)) return;
       for (const binding of bindings) {
         if (eventMatchesChord(event, binding.chord, platform)) {
           event.preventDefault();

@@ -42,7 +42,8 @@ import {
 } from "./hooks/workspaceActions";
 import { fetchConfig, updateChatConnectedScopes, updateChatLocalKnowledgeScopes } from "@/lib/api";
 import { newClientCorrelationId } from "@/lib/http";
-import { I18nProvider, useTranslate } from "@/lib/i18n";
+import { DEFAULT_LOCALE, I18nProvider, translate, useTranslate } from "@/lib/i18n";
+import type { I18nTranslate } from "@/lib/i18n";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type {
   Chat,
@@ -56,7 +57,7 @@ import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import type { WorkspaceUiAction, WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
 import { resolveWorkspaceFileIdentifier } from "@oscharko-dev/keiko-contracts";
-import { applyShellUndoAction } from "./shell-undo-bindings";
+import { applyShellUndoAction, shellPanelIsOpen } from "./shell-undo-bindings";
 import type { ShellShortcutState } from "./shellShortcutState";
 import { WORKSPACE_SEARCH_FOCUS_EVENT } from "./widgets/panels/searchPanelEvents";
 import { EditorPaletteHostRegistryProvider } from "./EditorPaletteHostRegistryContext";
@@ -584,6 +585,11 @@ function focusCreatedWindow(id: string): void {
   });
 }
 
+// Default translator for callers that do not sit under an I18nProvider (the pure-function unit
+// tests): resolves the shipped English catalog rather than restating the strings inline.
+const defaultCommandTranslate: I18nTranslate = (key, values) =>
+  translate(DEFAULT_LOCALE, key, values);
+
 export function buildAppShellCommands(
   api: WorkspaceApi,
   toggleTool: (type: WindowType) => void,
@@ -591,6 +597,7 @@ export function buildAppShellCommands(
   theme: "light" | "dark",
   toggleTheme: () => void,
   undoStack: WorkspaceUndoStackApi,
+  translateCommand: I18nTranslate = defaultCommandTranslate,
 ): readonly Command[] {
   const createCommands = CARD_TYPES.map((tp): Command => {
     const t = WIN_TYPES[tp];
@@ -653,12 +660,18 @@ export function buildAppShellCommands(
       icon: theme === "light" ? "moon" : "sun",
       run: toggleTheme,
     },
+    // Audit — the empty-stack labels used to advertise "window and panel changes", but the shell
+    // instruments exactly ONE action kind: the `ui.panel.toggle` pushed by `onTool`. No window
+    // move/resize/maximize/close reaches the stack (the geometry chords and WindowFrame gestures
+    // never push), so the label promised a scope the stack could not deliver. Recording window
+    // geometry would mean instrumenting every drag/resize/snap frame — a behaviour change well
+    // beyond a truth fix — so the label is narrowed to what is actually recorded instead.
     {
       id: "undo",
       label:
         undoStack.undoLabel !== null
-          ? `Undo: ${undoStack.undoLabel}`
-          : "Undo (window and panel changes only)",
+          ? translateCommand("shell.command.undo.target", { target: undoStack.undoLabel })
+          : translateCommand("shell.command.undo.panelOnly"),
       group: "Edit",
       icon: "back",
       shortcut: "⌘Z",
@@ -668,8 +681,8 @@ export function buildAppShellCommands(
       id: "redo",
       label:
         undoStack.redoLabel !== null
-          ? `Redo: ${undoStack.redoLabel}`
-          : "Redo (window and panel changes only)",
+          ? translateCommand("shell.command.redo.target", { target: undoStack.redoLabel })
+          : translateCommand("shell.command.redo.panelOnly"),
       group: "Edit",
       icon: "fwd",
       shortcut: "⇧⌘Z",
@@ -1262,9 +1275,17 @@ function AppShellInner(): ReactNode {
   // Epic #518 / ADR-0028 — undo stack wired at the shell. The apply
   // dispatcher lives in shell-undo-bindings.ts so the integration is
   // unit-testable without mounting the whole AppShell tree.
+  //
+  // The openness read goes through the wins ref, not the render-time `ws.wins`: undo applies the
+  // RECORDED state, so it must compare against the panel state at APPLY time (the user may have
+  // moved the panel by hand since the action was pushed), and the ref is refreshed every render.
+  const isPanelOpen = useCallback(
+    (panel: WindowType): boolean => shellPanelIsOpen(wsWinsForBindingRef.current, panel),
+    [],
+  );
   const applyUndoAction = useCallback(
-    (action: WorkspaceUiAction): void => applyShellUndoAction(ws.api, action),
-    [ws.api],
+    (action: WorkspaceUiAction): void => applyShellUndoAction({ api: ws.api, isPanelOpen }, action),
+    [isPanelOpen, ws.api],
   );
   const undoStack = useUndoStack({ apply: applyUndoAction });
 
@@ -1272,10 +1293,10 @@ function AppShellInner(): ReactNode {
     (id: string): void => {
       if (!(id in WIN_TYPES)) return;
       const panel = id as WindowType;
-      const existing = ws.wins?.find((win): boolean => win.type === panel);
-      const before = existing !== undefined && existing.minimized !== true;
-      const opensSearch =
-        panel === "search" && (existing === undefined || existing.minimized === true);
+      // Same predicate the apply dispatcher compares against, so the recorded state and the applied
+      // state are one rule (shellPanelIsOpen) rather than two copies that can drift.
+      const before = shellPanelIsOpen(ws.wins, panel);
+      const opensSearch = panel === "search" && !before;
       const searchRoot = opensSearch
         ? resolveSearchRoot(activeWorkspace.activeRoot, searchOwner)
         : undefined;
@@ -1358,8 +1379,8 @@ function AppShellInner(): ReactNode {
   }, []);
 
   const commands = useMemo(
-    () => buildAppShellCommands(ws.api, onTool, pick, theme, toggleTheme, undoStack),
-    [ws.api, onTool, pick, theme, toggleTheme, undoStack],
+    () => buildAppShellCommands(ws.api, onTool, pick, theme, toggleTheme, undoStack, t),
+    [ws.api, onTool, pick, t, theme, toggleTheme, undoStack],
   );
   const activeEditorHost =
     active?.type === "editor" && active.id.length > 0 ? (editorHosts.get(active.id) ?? null) : null;
