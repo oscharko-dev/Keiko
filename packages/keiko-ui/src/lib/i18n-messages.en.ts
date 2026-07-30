@@ -298,6 +298,15 @@ export const EN_MESSAGES = {
   "workspace.zoomReset": "{percent}% - reset",
   "workspace.reset": "Reset",
   "workspace.newWindow": "New window",
+  "shell.error.title": "Keiko could not open the workspace",
+  "shell.error.body":
+    "The desktop failed while rendering, so nothing could be shown. Your projects, chats and files are untouched.",
+  "shell.error.hint":
+    "A saved keyboard shortcut override is the usual cause, and it is reapplied on every start. Reset the saved shortcuts to clear it, or reload if you think the failure was one-off.",
+  "shell.error.resetShortcuts": "Reset saved shortcuts and reload",
+  "shell.error.reload": "Reload Keiko",
+  "shell.error.resetFailed":
+    "The saved shortcuts could not be reset. Reload to try again, or edit the saved settings outside Keiko.",
   "window.error.title": "This window hit an error",
   "window.error.body": "Window content crashed. Other windows are unaffected; retry or close it.",
   "window.tooSmall.title": "Too small to show {label}",

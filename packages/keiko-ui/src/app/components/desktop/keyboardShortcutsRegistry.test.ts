@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import { isWorkspaceReservedChord, workspaceChordKey } from "@oscharko-dev/keiko-contracts";
 import {
-  activeWorkspaceBindingsForContext,
   bindingFromKeyboardEvent,
   bindingToWorkspaceChord,
+  dispatchableWorkspaceShortcutsForContext,
   removeKeyboardShortcutOverride,
   resolveEffectiveKeyboardShortcuts,
   shortcutLabel,
@@ -29,9 +30,10 @@ describe("keyboardShortcutsRegistry", () => {
       source: "user",
       modified: true,
     });
-    expect(activeWorkspaceBindingsForContext(registry, "global")).toContainEqual({
+    expect(dispatchableWorkspaceShortcutsForContext(registry, "global")).toContainEqual({
       commandId: "quick-access.files",
       chord: { key: "o", mod: ["cmd", "shift"] },
+      binding: "CtrlOrMeta+Shift+O",
     });
   });
 
@@ -125,5 +127,74 @@ describe("keyboardShortcutsRegistry", () => {
     expect(bindingToWorkspaceChord("Foo+ArrowLeft")).toBeNull();
     expect(bindingToWorkspaceChord("Alt+Alt+ArrowLeft")).toBeNull();
     expect(bindingToWorkspaceChord("CtrlOrMeta+Ctrl+ArrowLeft")).toBeNull();
+  });
+});
+
+// The dispatch-safe projection is the one place that decides which persisted binding reaches
+// `useKeyboardShortcuts`, which fails closed by THROWING in render on a reserved or duplicated
+// chord. Every case below is a persisted-settings shape that used to reach it.
+describe("dispatchableWorkspaceShortcutsForContext", () => {
+  function globalShortcuts(
+    overrides: readonly string[],
+  ): ReadonlyMap<string, { readonly chord: string; readonly binding: string }> {
+    const registry = resolveEffectiveKeyboardShortcuts(overrides);
+    return new Map(
+      dispatchableWorkspaceShortcutsForContext(registry, "global").map((entry) => [
+        entry.commandId,
+        { chord: workspaceChordKey(entry.chord), binding: entry.binding },
+      ]),
+    );
+  }
+
+  it("keeps every default global binding and reports the binding it dispatches", () => {
+    const shortcuts = globalShortcuts([]);
+
+    expect(shortcuts.get("undo")).toEqual({ chord: "cmd|z", binding: "CtrlOrMeta+Z" });
+    expect(shortcuts.get("focus-status")).toEqual({ chord: "alt|s", binding: "Alt+S" });
+  });
+
+  it("applies a validated override and reports its binding for labelling", () => {
+    const shortcuts = globalShortcuts(["1|quick-access.files|CtrlOrMeta+Shift+O"]);
+
+    expect(shortcuts.get("quick-access.files")).toEqual({
+      chord: "cmd+shift|o",
+      binding: "CtrlOrMeta+Shift+O",
+    });
+  });
+
+  it.each([
+    ["1|undo|CtrlOrMeta+T", "undo", "cmd|z"],
+    ["1|focus-status|Ctrl+T", "focus-status", "alt|s"],
+    ["1|focus-status|Meta+Z", "focus-status", "alt|s"],
+    ["not-a-record", "undo", "cmd|z"],
+  ])("ignores the refused override %s and falls back to the default", (override, id, chord) => {
+    expect(globalShortcuts([override]).get(id)?.chord).toBe(chord);
+  });
+
+  it("never lets an override take a chord away from a command that did not ask for one", () => {
+    const shortcuts = globalShortcuts(["1|focus-status|Meta+Z"]);
+
+    expect(shortcuts.get("undo")?.chord).toBe("cmd|z");
+    expect(shortcuts.size).toBe(6);
+  });
+
+  it("emits no reserved and no duplicated chord for any persisted input", () => {
+    for (const overrides of [
+      [],
+      ["1|undo|CtrlOrMeta+T"],
+      ["1|focus-status|Ctrl+T"],
+      ["1|focus-status|Meta+Z"],
+      ["1|undo|Meta+W", "1|redo|Ctrl+R"],
+      ["", "1|", "1|undo|", "1|undo|CtrlOrMeta"],
+    ]) {
+      const registry = resolveEffectiveKeyboardShortcuts(overrides);
+      for (const context of ["global", "editor", "settings", "explorer"] as const) {
+        const shortcuts = dispatchableWorkspaceShortcutsForContext(registry, context);
+        const chordKeys = shortcuts.map((entry) => workspaceChordKey(entry.chord));
+
+        expect(shortcuts.filter((entry) => isWorkspaceReservedChord(entry.chord))).toEqual([]);
+        expect(new Set(chordKeys).size).toBe(chordKeys.length);
+      }
+    }
   });
 });

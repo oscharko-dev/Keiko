@@ -2,9 +2,11 @@
 
 import {
   EDITOR_M7_COMMAND_REGISTRY,
+  isWorkspaceReservedChord,
   parseEditorM7KeybindingOverrides,
   serializeEditorM7KeybindingOverride,
   validateEditorM7Keybinding,
+  workspaceChordKey,
   type EditorM7ActiveKeybinding,
   type EditorM7CommandContext,
   type EditorM7CommandDefinition,
@@ -202,15 +204,94 @@ function keyForWorkspace(key: string): string {
   return key.length === 1 ? key.toLowerCase() : key;
 }
 
-export function activeWorkspaceBindingsForContext(
+/**
+ * A binding that is safe to hand to `useKeyboardShortcuts`, together with the binding string it was
+ * actually resolved from — so a surface that LABELS a shortcut shows the chord that really fires.
+ */
+export interface DispatchableWorkspaceShortcut {
+  readonly commandId: string;
+  readonly chord: WorkspaceKeyChord;
+  readonly binding: string;
+}
+
+interface ShortcutChordOption {
+  readonly chord: WorkspaceKeyChord;
+  readonly binding: string;
+}
+
+interface ShortcutChordCandidate {
+  readonly commandId: string;
+  readonly overridden: boolean;
+  // Preference order: the effective (possibly user-overridden) binding first, the command's own
+  // default second. A candidate whose every option is refused dispatches nothing.
+  readonly options: readonly ShortcutChordOption[];
+}
+
+function dispatchableInContext(
+  entry: EffectiveKeyboardShortcut,
+  context: EditorM7CommandContext,
+): boolean {
+  return entry.command.contexts.includes(context) && entry.command.dispatchOwner === "keiko";
+}
+
+// Persisted overrides are hostile input (AGENTS.md §7): a browser-reserved chord is dropped here
+// rather than carried into render, where the substrate fails closed by THROWING.
+function chordOption(binding: string | null): ShortcutChordOption | null {
+  if (binding === null) return null;
+  const chord = bindingToWorkspaceChord(binding);
+  if (chord === null || isWorkspaceReservedChord(chord)) return null;
+  return { chord, binding };
+}
+
+function chordCandidate(entry: EffectiveKeyboardShortcut): ShortcutChordCandidate {
+  const options: ShortcutChordOption[] = [];
+  for (const option of [chordOption(entry.binding), chordOption(entry.defaultBinding)]) {
+    if (option === null || options.some((existing) => existing.binding === option.binding))
+      continue;
+    options.push(option);
+  }
+  return { commandId: entry.command.id, overridden: entry.modified, options };
+}
+
+// First claim wins, and unoverridden commands claim first: a persisted override can never take a
+// chord away from a stock binding, it can only fail to apply and fall back to its own default.
+function claimedChords(
+  candidates: readonly ShortcutChordCandidate[],
+): ReadonlyMap<string, ShortcutChordOption> {
+  const claimed = new Set<string>();
+  const accepted = new Map<string, ShortcutChordOption>();
+  const ordered = [
+    ...candidates.filter((candidate) => !candidate.overridden),
+    ...candidates.filter((candidate) => candidate.overridden),
+  ];
+  for (const candidate of ordered) {
+    const option = candidate.options.find((entry) => !claimed.has(workspaceChordKey(entry.chord)));
+    if (option === undefined) continue;
+    claimed.add(workspaceChordKey(option.chord));
+    accepted.set(candidate.commandId, option);
+  }
+  return accepted;
+}
+
+/**
+ * The single dispatch-safe projection of the effective registry: every returned chord is unique
+ * within the context and none is browser-reserved, so `useKeyboardShortcuts` can never be handed a
+ * set it refuses. A malformed, reserved or colliding persisted override is IGNORED and the command
+ * falls back to its default binding; a command with nothing usable dispatches nothing.
+ */
+export function dispatchableWorkspaceShortcutsForContext(
   registry: EffectiveKeyboardShortcutRegistry,
   context: EditorM7CommandContext,
-): readonly { readonly commandId: string; readonly chord: WorkspaceKeyChord }[] {
-  return registry.commands.flatMap((entry) => {
-    if (entry.binding === null || !entry.command.contexts.includes(context)) return [];
-    if (entry.command.dispatchOwner !== "keiko") return [];
-    const chord = bindingToWorkspaceChord(entry.binding);
-    return chord === null ? [] : [{ commandId: entry.command.id, chord }];
+): readonly DispatchableWorkspaceShortcut[] {
+  const candidates = registry.commands
+    .filter((entry) => dispatchableInContext(entry, context))
+    .map(chordCandidate);
+  const accepted = claimedChords(candidates);
+  return candidates.flatMap((candidate) => {
+    const option = accepted.get(candidate.commandId);
+    return option === undefined
+      ? []
+      : [{ commandId: candidate.commandId, chord: option.chord, binding: option.binding }];
   });
 }
 

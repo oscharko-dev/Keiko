@@ -3,6 +3,7 @@
 import dynamic, { type DynamicOptionsLoadingProps } from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, SyntheticEvent } from "react";
+import { AppShellBoundary } from "./AppShellBoundary";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { ActiveWorkspaceProvider } from "./context/ActiveWorkspaceContext";
 import { AnnouncerProvider } from "./context/AnnouncerContext";
@@ -1579,10 +1580,25 @@ export function AppShell(): ReactNode {
     );
   }
   return (
+    <AppShellFrame>
+      <AppShellInner />
+    </AppShellFrame>
+  );
+}
+
+/**
+ * The mounted shell's provider frame. The error boundary sits INSIDE `I18nProvider` (so the recovery
+ * surface is still translated) and ABOVE everything else: before it existed, any render-time throw
+ * in the shell — including the fail-closed throw the keyboard-shortcut substrate raises for a
+ * refused persisted binding — unmounted the desktop to a blank page with no way back. Exported so
+ * the boundary's position in this exact tree is asserted rather than assumed.
+ */
+export function AppShellFrame({ children }: { readonly children: ReactNode }): ReactNode {
+  return (
     <I18nProvider>
-      <TwinProvider>
-        <AppShellInner />
-      </TwinProvider>
+      <AppShellBoundary>
+        <TwinProvider>{children}</TwinProvider>
+      </AppShellBoundary>
     </I18nProvider>
   );
 }
