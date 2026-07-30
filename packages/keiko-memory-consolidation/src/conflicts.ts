@@ -17,6 +17,11 @@
 // orchestrator emits a `derived-from` edge instead.
 
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  MEMORY_NEGATION_TIERS,
+  hasMemoryNegationToken,
+  memoryNegationTokens,
+} from "@oscharko-dev/keiko-contracts/memory";
 
 import { compareRecordsByAge, compareReviewItems, scopeCoordinateKey } from "./_ordering.js";
 import type { DuplicateCluster } from "./dedupe.js";
@@ -36,47 +41,18 @@ export interface ConflictsOptions {
   readonly cancellationSignal?: () => boolean;
 }
 
-const NEGATION_TOKENS = new Set([
-  "not",
-  "no",
-  "never",
-  "none",
-  "without",
-  "cannot",
-  "dont",
-  "doesnt",
-  "didnt",
-  "cant",
-  "wont",
-  "isnt",
-  "arent",
-  "wasnt",
-  "werent",
-  "havent",
-  "hasnt",
-  "hadnt",
-  "shouldnt",
-  "wouldnt",
-  "couldnt",
-  "mustnt",
-  "neednt",
-  "nicht",
-  "kein",
-  "keine",
-  "keinen",
-  "keinem",
-  "keiner",
-  "keines",
-  "nie",
-  "niemals",
-  "ohne",
-]);
+// This layer has ONE fused conflict reason, so it matches the whole shared vocabulary: the English
+// particles, the negative quantifiers, and the German particles. The word list itself is owned by
+// keiko-contracts (MEMORY_NEGATION_VOCABULARY) and is shared with the governance layer (#209
+// conflict.ts), which reads only the "english-particle" tier because it reports a "no"/"false" flip
+// under its own `polarity-mismatch` reason. Neither layer keeps a private copy any more.
+const NEGATION_TOKENS = memoryNegationTokens(MEMORY_NEGATION_TIERS);
 
 export function hasNegation(body: string): boolean {
   const tokens = normalizeBody(body)
     .split(" ")
     .filter((token) => token.length > 0);
-  return tokens.some((token) => NEGATION_TOKENS.has(token));
+  return hasMemoryNegationToken(tokens, NEGATION_TOKENS);
 }
 
 interface ValueFact {
