@@ -44,6 +44,7 @@ import {
   type EffectiveKeyboardShortcutRegistry,
 } from "./keyboardShortcutsRegistry";
 import { subscribeEditorShortcutOverrides } from "./useEditorShortcutOverrides";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 export type ShellShortcutState = {
   readonly labels: ReadonlyMap<string, string>;
@@ -153,9 +154,7 @@ function surfaceShellShortcutRefusals(
   shellShortcutRefusalCount += 1;
   if (shellShortcutRefusalSignature === message) return;
   shellShortcutRefusalSignature = message;
-  if (typeof console !== "undefined" && typeof console.warn === "function") {
-    console.warn(message);
-  }
+  reportClientDiagnostic(message);
 }
 
 export function subscribeShellShortcutState(

@@ -12,6 +12,7 @@
 import { useEffect, type ReactNode } from "react";
 import { useLocalKnowledgeTranslate as useTranslate } from "../local-knowledge-i18n";
 import { clientErrorSummary } from "@/lib/client-error-summary";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 export default function CapsuleDetailRouteError({
   error,
@@ -25,7 +26,9 @@ export default function CapsuleDetailRouteError({
   useEffect(() => {
     // Same observable-not-silent idiom as WindowBodyBoundary/AppShellBoundary: the crash must
     // stay diagnosable from the console even though the UI only shows the recovery surface.
-    console.warn(`[keiko] local-knowledge capsule route crashed: ${clientErrorSummary(error)}`);
+    reportClientDiagnostic(
+      `[keiko] local-knowledge capsule route crashed: ${clientErrorSummary(error)}`,
+    );
   }, [error]);
 
   return (
