@@ -161,14 +161,14 @@ describe("translate", () => {
         translateOptionalWidget("en", key, values),
       ),
     ).toBe(
-      "The image was delivered. Its encrypted local copy could not be removed now and will expire automatically.",
+      "The encrypted local image copy could not be removed now and will expire automatically.",
     );
     expect(
       presentChatSessionError(ATTACHMENT_CLEANUP_DEFERRED_ERROR, (key, values) =>
         translateOptionalWidget("de", key, values),
       ),
     ).toBe(
-      "Das Bild wurde übertragen. Die verschlüsselte lokale Kopie konnte jetzt nicht entfernt werden und läuft automatisch ab.",
+      "Die verschlüsselte lokale Bildkopie konnte jetzt nicht entfernt werden und läuft automatisch ab.",
     );
     expect(
       presentChatSessionError("opaque-session-error", (key, values) =>

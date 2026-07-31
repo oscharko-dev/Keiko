@@ -337,9 +337,14 @@ function deleteChatAttachments(
   const refsToDelete: string[] = [];
   for (const ref of vault.list()) {
     const verified = readStoredForScan(vault, ref);
-    // A malformed record has no trustworthy chat binding. Abort before deleting any valid record:
-    // the caller must keep the chat intact until custody can be verified and the purge retried.
-    if (verified === undefined) throw new ConversationAttachmentStoreError();
+    // This dedicated vault contains only attachment custody. A malformed record has no binding
+    // that can be trusted or recovered, so include it in the same two-phase purge used for the
+    // selected chat. Collection finishes before deletion, preserving fail-closed behavior for
+    // genuine vault failures while ensuring corrupt custody cannot block a hard purge forever.
+    if (verified === undefined) {
+      refsToDelete.push(ref);
+      continue;
+    }
     const { stored } = verified;
     if (stored.projectPath === projectPath && stored.chatId === chatId) refsToDelete.push(ref);
   }

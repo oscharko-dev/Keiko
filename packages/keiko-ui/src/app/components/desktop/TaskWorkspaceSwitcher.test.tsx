@@ -370,7 +370,7 @@ describe("TaskWorkspaceSwitcher", () => {
 
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent(
-      "The image was delivered. Its encrypted local copy could not be removed now and will expire automatically.",
+      "The encrypted local image copy could not be removed now and will expire automatically.",
     );
     expect(alert).not.toHaveTextContent(ATTACHMENT_CLEANUP_DEFERRED_ERROR);
   });

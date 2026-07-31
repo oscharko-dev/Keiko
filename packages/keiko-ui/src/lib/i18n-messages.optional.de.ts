@@ -21,7 +21,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Das Bild konnte nicht sicher gespeichert oder für die Übertragung autorisiert werden. Füge es erneut hinzu und versuche es noch einmal.",
   "attachment.imagesDelivered": "Bilder an das ausgewählte Modell übertragen",
   "attachment.cleanupDeferred":
-    "Das Bild wurde übertragen. Die verschlüsselte lokale Kopie konnte jetzt nicht entfernt werden und läuft automatisch ab.",
+    "Die verschlüsselte lokale Bildkopie konnte jetzt nicht entfernt werden und läuft automatisch ab.",
   "agentRunWidget.workflow.verify": "Verifizieren",
   "agentRunWidget.workflow.explainPlan": "Plan erklären",
   "agentRunWidget.workflow.unitTestGeneration": "Unit-Tests generieren",

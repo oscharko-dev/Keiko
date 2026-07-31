@@ -917,6 +917,7 @@ describe("classifyAttachmentMime (GEN-DUP-SEMANTIC-013 / -014)", () => {
 
   it("normalizes safe base MIME types and rejects malformed media types", () => {
     expect(normalizeAttachmentMime(" IMAGE/PNG ; charset=binary ")).toBe("image/png");
+    expect(normalizeAttachmentMime("image/svg+xml")).toBeUndefined();
     expect(classifyAttachmentMime("IMAGE/PNG; charset=binary")).toBe("image");
     expect(classifyAttachmentMime("image/webp; profile=safe")).toBe("image");
     expect(classifyAttachmentMime("image/avif; codecs=av01")).toBe("image");

@@ -461,7 +461,7 @@ describe("conversation attachment store", () => {
     expect(store.resolve(uploaded.ref, binding())).toEqual(BYTES);
   });
 
-  it("fails closed without partial deletion when chat-scoped custody cannot be verified", () => {
+  it("purges corrupt custody with the target chat without deleting another valid chat", () => {
     const { vault } = memoryVault();
     const refs = [`chat-attachment:${"d".repeat(64)}`, `chat-attachment:${"e".repeat(64)}`];
     const store = createConversationAttachmentStore({
@@ -478,15 +478,26 @@ describe("conversation attachment store", () => {
 
     expect(() => {
       store.deleteForChat(binding().projectPath, binding().chatId);
-    }).toThrow(ConversationAttachmentStoreError);
+    }).not.toThrow();
 
-    expect(store.resolve(selected.ref, binding())).toEqual(BYTES);
+    expect(() => store.resolve(selected.ref, binding())).toThrow(ConversationAttachmentStoreError);
     expect(store.resolve(other.ref, otherBinding)).toEqual(BYTES);
-    expect(vault.has(CORRUPT_REF)).toBe(true);
+    expect(vault.has(CORRUPT_REF)).toBe(false);
   });
 
-  it("propagates non-domain vault failures from quota and chat-deletion scans", () => {
+  it("propagates non-domain vault failures before chat deletion mutates custody", () => {
     const { vault } = memoryVault();
+    const refs = [`chat-attachment:${"f".repeat(64)}`, `chat-attachment:${"1".repeat(64)}`];
+    const seedStore = createConversationAttachmentStore({
+      runtimeStateDir: "/unused",
+      env: {},
+      vault,
+      now: () => 1_000,
+      mintRef: () => refs.shift() ?? "missing-ref",
+    });
+    const selected = seedStore.put({ ...binding(), bytes: BYTES });
+    const otherBinding = { ...binding(), chatId: "chat-2" };
+    const other = seedStore.put({ ...otherBinding, bytes: BYTES });
     vault.set(CORRUPT_REF, "opaque");
     const failingVault: LocalSecretVault = {
       ...vault,
@@ -507,5 +518,8 @@ describe("conversation attachment store", () => {
     expect(() => {
       store.deleteForChat(binding().projectPath, binding().chatId);
     }).toThrow(InjectedVaultError);
+    expect(seedStore.resolve(selected.ref, binding())).toEqual(BYTES);
+    expect(seedStore.resolve(other.ref, otherBinding)).toEqual(BYTES);
+    expect(vault.has(CORRUPT_REF)).toBe(true);
   });
 });

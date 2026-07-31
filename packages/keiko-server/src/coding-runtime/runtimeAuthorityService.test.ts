@@ -351,6 +351,36 @@ describe("CodingRuntimeAuthorityService", () => {
     ]);
   });
 
+  it("fails retained prompt and pause or resume operations closed after runtime exhaustion", () => {
+    const afterRuntimeBudget = "2026-07-11T12:01:00.001Z";
+    const promptAuthority = promptBudgetService();
+    const promptMint = mint(promptAuthority);
+    if (!promptMint.ok) throw new Error("expected prompt-authority mint");
+
+    expect(
+      promptAuthority.reservePromptTokens(
+        promptMint.modelGatewayCapability,
+        1,
+        Date.parse(afterRuntimeBudget),
+      ),
+    ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
+
+    const pauseAuthority = service();
+    expect(mint(pauseAuthority)).toMatchObject({ ok: true });
+    expect(pauseAuthority.pause("run-1", afterRuntimeBudget)).toEqual({
+      ok: false,
+      reason: "authority-budget-exceeded",
+    });
+
+    const resumeAuthority = service();
+    expect(mint(resumeAuthority)).toMatchObject({ ok: true });
+    expect(resumeAuthority.pause("run-1", NOW)).toMatchObject({ ok: true });
+    expect(resumeAuthority.resume("run-1", "supervised-coding", afterRuntimeBudget)).toEqual({
+      ok: false,
+      reason: "authority-budget-exceeded",
+    });
+  });
+
   it("revalidates expiry and permits only idempotent or monotonically narrower resume", () => {
     const authority = service();
     const minted = mint(authority);

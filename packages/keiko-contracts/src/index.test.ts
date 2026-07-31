@@ -63,6 +63,8 @@ import {
   assertValidGatewaySamplingParameters,
   isValidGatewaySamplingParameters,
   validateGatewaySamplingParameters,
+  MAX_ATTACHMENT_MIME_BYTES,
+  normalizeAttachmentMime,
 } from "./index.js";
 import type {
   ConnectedContextPack,
@@ -182,6 +184,11 @@ import {
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
+  it("exports governed attachment MIME normalization through the package entrypoint", () => {
+    expect(MAX_ATTACHMENT_MIME_BYTES).toBe(255);
+    expect(normalizeAttachmentMime(" IMAGE/PNG ; charset=binary ")).toBe("image/png");
+  });
+
   it("exposes the version constant pinned at 0.2.15", () => {
     expect(KEIKO_CONTRACTS_VERSION).toBe("0.2.15");
   });

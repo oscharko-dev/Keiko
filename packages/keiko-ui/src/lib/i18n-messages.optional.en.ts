@@ -19,7 +19,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The image could not be stored or authorized for delivery. Add it again and retry.",
   "attachment.imagesDelivered": "Images delivered to the selected model",
   "attachment.cleanupDeferred":
-    "The image was delivered. Its encrypted local copy could not be removed now and will expire automatically.",
+    "The encrypted local image copy could not be removed now and will expire automatically.",
   "agentRunWidget.workflow.verify": "Verify",
   "agentRunWidget.workflow.explainPlan": "Explain plan",
   "agentRunWidget.workflow.unitTestGeneration": "Generate unit tests",

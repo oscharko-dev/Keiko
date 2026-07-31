@@ -668,9 +668,9 @@ export const ALLOWED_DOCUMENT_MIME_LITERALS: ReadonlySet<string> = new Set([
   "application/pdf",
 ]);
 
-// Only URI-unreserved characters may survive into a transport media type. MIME's wider `token`
-// grammar also permits URI delimiters such as `#`, `%`, and `+`; retaining those in a data URL
-// would let caller-controlled syntax escape the media-type component.
+// Keiko intentionally accepts a strict URI-unreserved subset of MIME's wider `token` grammar.
+// Structured suffixes and other reserved characters remain unsupported until product policy
+// explicitly admits them; broadening syntax here would also broaden the image/* allowlist.
 const MIME_COMPONENT_PATTERN = /^[a-z0-9][a-z0-9._~-]*$/u;
 
 /**
@@ -699,8 +699,9 @@ export function normalizeAttachmentMime(mimeType: string): string | undefined {
 export function classifyAttachmentMime(mimeType: string): "image" | "document" | "unsupported" {
   const normalized = normalizeAttachmentMime(mimeType);
   if (normalized === undefined) return "unsupported";
-  // SVG is denied (script-carrying vector) even though it is image/*
-  if (normalized === "image/svg+xml" || normalized === "image/svg") return "unsupported";
+  // SVG is denied (script-carrying vector) even though it is image/*. The structured-suffix form
+  // is already refused by the intentionally narrower normalizer above.
+  if (normalized === "image/svg") return "unsupported";
   if (ALLOWED_IMAGE_MIME_PREFIXES.some((prefix) => normalized.startsWith(prefix))) return "image";
   if (ALLOWED_DOCUMENT_MIME_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
     return "document";

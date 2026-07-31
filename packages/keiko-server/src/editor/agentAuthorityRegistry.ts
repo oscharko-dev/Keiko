@@ -302,6 +302,9 @@ export class EditorAgentAuthorityRegistry {
       this.records.delete(recordKey(reference));
       return { ok: false, reason: "authority-expired" };
     }
+    if (runtimeBudgetExceeded(record, nowIso)) {
+      return { ok: false, reason: "authority-budget-exceeded" };
+    }
     return { ok: true, record };
   }
 
