@@ -77,6 +77,16 @@ const AUTO_GROW_EPSILON_PX = 8;
 // .window uses border-box geometry; content zoom must fit its bordered inner frame.
 const WINDOW_FRAME_BORDER_PX = 2;
 
+// The traffic-light cluster is a native <fieldset> (implicit role="group") rather than a div with
+// role="group" (S6819). `.win-traffic` already sets display/gap/padding, but not the UA fieldset
+// border, margin-inline and min-inline-size — those are neutralised here rather than in
+// globals.css, which is behind a byte-exact visual-proof gate (#1300).
+const WINDOW_TRAFFIC_GROUP_STYLE: CSSProperties = {
+  border: 0,
+  margin: 0,
+  minInlineSize: 0,
+};
+
 interface WindowFrameProps {
   readonly win: AppWindow;
   readonly top: boolean;
@@ -1326,9 +1336,9 @@ function WindowFrameImpl({
                 </button>
               </div>
             ) : null}
-            <div
+            <fieldset
               className="win-traffic"
-              role="group"
+              style={WINDOW_TRAFFIC_GROUP_STYLE}
               aria-label={t("window.controls", { label: windowTitle })}
             >
               <button
@@ -1374,7 +1384,7 @@ function WindowFrameImpl({
               >
                 <CloseIcon size={17} />
               </button>
-            </div>
+            </fieldset>
           </header>
           <div ref={bodyRef} className="win-body" data-mode={bodyMode} style={bodyStyle}>
             {/* GEN-STAB-WINDOW-001 — a widget render throw degrades THIS body, not the canvas. */}

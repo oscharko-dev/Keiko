@@ -1090,6 +1090,27 @@ function admitRelationship(state: WalkState, rel: StoredRelationship): boolean {
   return true;
 }
 
+/**
+ * Admit one node's neighbour edges and both of their endpoints into the walk.
+ *
+ * Returns `false` the moment a per-walk cap (`max-nodes` / `max-relationships`) refuses an
+ * admission. `state.truncationReason` already carries the reason at that point, so the caller
+ * must stop expanding the frontier entirely rather than move on to the next node — the walk is
+ * already incomplete and any further edge would be dropped by the same cap.
+ */
+function admitNeighbourhood(
+  state: WalkState,
+  neighbours: readonly StoredRelationship[],
+  nextFrontier: WalkNode[],
+): boolean {
+  for (const rel of neighbours) {
+    if (!admitRelationship(state, rel)) return false;
+    if (!admitEndpoint(state, rel.source, nextFrontier)) return false;
+    if (!admitEndpoint(state, rel.target, nextFrontier)) return false;
+  }
+  return true;
+}
+
 function expandFrontier(
   outgoingStatement: StatementSync | undefined,
   incomingStatement: StatementSync | undefined,
@@ -1099,7 +1120,7 @@ function expandFrontier(
   state: WalkState,
 ): WalkNode[] {
   const nextFrontier: WalkNode[] = [];
-  outer: for (const node of frontier) {
+  for (const node of frontier) {
     const { relationships: neighbours, capped } = expandNeighbours(
       outgoingStatement,
       incomingStatement,
@@ -1107,12 +1128,10 @@ function expandFrontier(
       node,
       direction,
     );
+    // A per-node neighbour cap does NOT abort the walk (see `WalkState.neighbourCapHit`); only a
+    // refused admission does.
     if (capped) state.neighbourCapHit = true;
-    for (const rel of neighbours) {
-      if (!admitRelationship(state, rel)) break outer;
-      if (!admitEndpoint(state, rel.source, nextFrontier)) break outer;
-      if (!admitEndpoint(state, rel.target, nextFrontier)) break outer;
-    }
+    if (!admitNeighbourhood(state, neighbours, nextFrontier)) break;
   }
   return nextFrontier;
 }
