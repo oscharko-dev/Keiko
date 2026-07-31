@@ -14,10 +14,12 @@ expect.extend(toHaveNoViolations);
 // state). Ordered after `cleanup()` so an unmounting provider cannot write the key back afterwards.
 afterEach(() => {
   cleanup();
-  try {
+  // A precondition check, not a swallowed failure: a suite may run without a window or replace
+  // storage wholesale, and there is nothing to reset in that case. If storage IS present and the
+  // removal throws, the teardown fails loudly — a broken Storage is a real defect and hiding it
+  // behind an empty catch is what turns one bad suite into an unexplained cascade elsewhere.
+  if (typeof window !== "undefined" && typeof window.localStorage?.removeItem === "function") {
     window.localStorage.removeItem("keiko.locale");
-  } catch {
-    /* a suite may have replaced or removed storage; nothing to reset then */
   }
   if (typeof document !== "undefined") {
     document.documentElement.removeAttribute("lang");
