@@ -1,8 +1,8 @@
 import { mkdtempSync, realpathSync } from "node:fs";
-import { type IncomingMessage, ServerResponse } from "node:http";
+import { IncomingMessage, ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { buildRedactor } from "./index.js";
 import { createRunRegistry } from "./runs.js";
@@ -38,24 +38,32 @@ const UNAVAILABLE_RESPONSE = {
   },
 } satisfies RouteResult;
 
+class FailingIncomingMessage extends IncomingMessage {
+  private failed = false;
+
+  public override _read(_size: number): void {
+    if (this.failed) return;
+    this.failed = true;
+    this.emit("error", new Error("transport read failed"));
+  }
+}
+
+function setCookie(req: IncomingMessage, cookie?: string): void {
+  if (cookie !== undefined) req.headers.cookie = cookie;
+}
+
 function failingRequest(cookie?: string): IncomingMessage {
-  const stream = new Readable({
-    read(): void {
-      this.destroy(new Error("transport read failed"));
-    },
-  });
-  Object.defineProperty(stream, "headers", {
-    value: cookie === undefined ? {} : { cookie },
-  });
-  return stream as IncomingMessage;
+  const req = new FailingIncomingMessage(new Socket());
+  setCookie(req, cookie);
+  return req;
 }
 
 function request(rawBody: string, cookie?: string): IncomingMessage {
-  const stream = Readable.from([rawBody]);
-  Object.defineProperty(stream, "headers", {
-    value: cookie === undefined ? {} : { cookie },
-  });
-  return stream as IncomingMessage;
+  const req = new IncomingMessage(new Socket());
+  setCookie(req, cookie);
+  req.push(rawBody);
+  req.push(null);
+  return req;
 }
 
 function context(req: IncomingMessage): RouteContext {

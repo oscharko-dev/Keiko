@@ -376,6 +376,9 @@ export function createConversationAttachmentStore(
   const now = options.now ?? Date.now;
   const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
   const totalContentBytes = options.totalContentBytes ?? DEFAULT_TOTAL_CONTENT_BYTES;
+  if (!isPositiveSafeInteger(totalContentBytes)) {
+    throw new ConversationAttachmentStoreError();
+  }
   const mintRef =
     options.mintRef ?? ((): string => `chat-attachment:${randomBytes(32).toString("hex")}`);
   const runtime: AttachmentStoreRuntime = { getVault, now, ttlMs, totalContentBytes, mintRef };

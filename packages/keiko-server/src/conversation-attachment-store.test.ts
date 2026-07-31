@@ -189,6 +189,40 @@ describe("conversation attachment store", () => {
     expect(vault.list()).toEqual([]);
   });
 
+  it.each([
+    { label: "NaN", totalContentBytes: Number.NaN },
+    { label: "positive infinity", totalContentBytes: Number.POSITIVE_INFINITY },
+    { label: "negative infinity", totalContentBytes: Number.NEGATIVE_INFINITY },
+    { label: "zero", totalContentBytes: 0 },
+    { label: "a negative value", totalContentBytes: -1 },
+    { label: "a fractional byte count", totalContentBytes: 1.5 },
+    { label: "an unsafe integer", totalContentBytes: Number.MAX_SAFE_INTEGER + 1 },
+  ])("refuses a $label content-byte quota at construction", ({ totalContentBytes }) => {
+    expect(() =>
+      createConversationAttachmentStore({
+        runtimeStateDir: "/unused",
+        env: {},
+        vault: memoryVault().vault,
+        totalContentBytes,
+      }),
+    ).toThrow(ConversationAttachmentStoreError);
+  });
+
+  it("accepts an exact positive content-byte quota boundary", () => {
+    const store = createConversationAttachmentStore({
+      runtimeStateDir: "/unused",
+      env: {},
+      vault: memoryVault().vault,
+      now: () => 1_000,
+      totalContentBytes: BYTES.length,
+      mintRef: () => attachmentRef(30),
+    });
+
+    const uploaded = store.put({ ...binding(), bytes: BYTES });
+
+    expect(store.resolve(uploaded.ref, binding())).toEqual(BYTES);
+  });
+
   it("stores safe image MIME canonically and refuses parameterized SVG", () => {
     const { vault } = memoryVault();
     const store = createConversationAttachmentStore({
