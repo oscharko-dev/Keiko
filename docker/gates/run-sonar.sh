@@ -45,8 +45,9 @@ process.stdin.on("data", (d) => (s += d)).on("end", () => {
   process.stdout.write(createHash("sha256").update(s).digest("hex").slice(0, 12));
 });')"
 project="keiko-local-${checkout_id}"
-analysis_scope="changed"
-report_scope="changed"
+readonly changed_scope="changed"
+analysis_scope="${changed_scope}"
+report_scope="${changed_scope}"
 base="origin/dev"
 action="scan"
 
@@ -165,7 +166,7 @@ fi
 inclusions=""
 changed_json="[]"
 changed_count="0"
-if [[ "${report_scope}" == "changed" ]]; then
+if [[ "${report_scope}" == "${changed_scope}" ]]; then
   # The scan sees the working tree, so its scope must include all three sources of change: commits
   # against the selected base, staged/unstaged tracked changes against HEAD, and untracked files.
   # Keep Git's NUL framing until Node has decoded and deduplicated the union; a newline in a path
@@ -239,7 +240,7 @@ say "Analysing"
 # An array, not an unquoted expansion: a changed path containing a space would otherwise split into
 # two arguments and silently scan the wrong scope.
 scanner_args=()
-if [[ "${analysis_scope}" == "changed" && -n "${inclusions}" ]]; then
+if [[ "${analysis_scope}" == "${changed_scope}" && -n "${inclusions}" ]]; then
   # Sonar classifies tests separately and does not apply `sonar.inclusions` to them. Bind both
   # domains to the same exact union or a 100-file diff silently expands into every test in the
   # monorepo, defeating the local gate's bounded-runtime contract.
@@ -259,7 +260,7 @@ KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm scanner \
 # `shelldre:*` rules do not exist there — while SonarCloud runs them. A clean scan here therefore
 # says nothing about a changed shell script, which is exactly the kind of silent gap this lane exists
 # to remove. shellcheck is the closest locally available substitute and covers most of that class.
-if [[ "${report_scope}" == "changed" && "${changed_count}" != "0" ]]; then
+if [[ "${report_scope}" == "${changed_scope}" && "${changed_count}" != "0" ]]; then
   shell_files=()
   while IFS= read -r -d "" file; do
     [[ "${file}" == *.sh && -f "${repo_root}/${file}" ]] && shell_files+=("${repo_root}/${file}")

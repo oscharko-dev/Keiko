@@ -136,15 +136,16 @@ describe("dev quality workflows", () => {
       /elif \[\[ "\$\{unsafe_path\}" == "yes" \]\]; then[\s\S]*?\n {2}else/u,
     )?.[0];
 
-    expect(localSonar).toContain('analysis_scope="changed"');
-    expect(localSonar).toContain('report_scope="changed"');
+    expect(localSonar).toContain('readonly changed_scope="changed"');
+    expect(localSonar).toContain('analysis_scope="${changed_scope}"');
+    expect(localSonar).toContain('report_scope="${changed_scope}"');
     expect(localSonar).toContain('analysis_scope="all"');
     expect(localSonar).toContain(
       'KEIKO_SONAR_SCOPE="${report_scope}" KEIKO_SONAR_CHANGED_JSON="${changed_json}"',
     );
     expect(localSonar).toContain("analysis covers the whole project; verdict remains filtered to");
     expect(localSonar).toContain(
-      'if [[ "${report_scope}" == "changed" && "${changed_count}" != "0" ]]',
+      'if [[ "${report_scope}" == "${changed_scope}" && "${changed_count}" != "0" ]]',
     );
     expect(localSonar).toContain('while IFS= read -r -d "" file');
     expect(unsafePathFallback).toContain('analysis_scope="all"');
