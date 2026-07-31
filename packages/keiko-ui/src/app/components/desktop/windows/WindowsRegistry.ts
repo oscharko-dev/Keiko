@@ -179,7 +179,10 @@ type ConfigFieldType = "text" | "select" | "textarea" | "perm" | "directory";
  * member such as `"empty"`, a provider name); `defKey` is for the one case where the default is
  * user-visible COPY that gets typed into the created window (the chat title).
  */
-export interface ConfigField {
+// Not exported: the only cross-module consumer was a new-window field localizer that became
+// redundant once the registry resolved its own message keys. `LocalizedConfigField` below is the
+// shape callers actually receive.
+interface ConfigField {
   readonly key: string;
   readonly labelKey: MessageKey;
   readonly type: ConfigFieldType;
