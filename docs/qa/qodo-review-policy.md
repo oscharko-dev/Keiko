@@ -14,10 +14,13 @@ file inventory has been established.
 Qodo is comment-only: it posts and updates a single summary review comment and never emits a
 check-run. The summary comment must come from bot user ID `151058649` and carry
 `performed_via_github_app.id = 484649`; those identities make advisory evidence attributable and
-anti-spoofed. Because Qodo posts no check-run, evidence currency is bound to the head SHA embedded in
-the comment body (Qodo's blob permalinks reference the reviewed commit), not to a check timestamp.
-Missing, wrong-head, wrong-producer, or unparseable review evidence is treated as absent; it does not
-turn missing vendor output into a merge-blocking product failure.
+anti-spoofed. A current-head SHA embedded in the body is necessary but not sufficient evidence of a
+new analysis: Qodo can rewrite commit references without regenerating the review. The app-bound
+`Keiko for Quality` (KFQ) check therefore records a SHA-normalized, body-free SHA-256 digest of the
+review and compares it with the digest on the last accepted evidence head. An unchanged digest
+across a head move remains pending. Missing, wrong-head, wrong-producer, unparseable, unchanged, or
+unsettled review evidence is treated as absent; it does not turn missing vendor output into a
+merge-blocking product failure.
 
 ## Effective repository and organization settings
 
@@ -100,9 +103,10 @@ without notice. The posture if it does:
    supersedes the previous review, whose comment then references a stale head.
 4. Inspect the summary comment, its Bugs / Rule violations / Requirement gaps counts, and the inline
    threads together. A processed comment alone is insufficient.
-5. Require the summary comment to reference the current head SHA and to report zero blocking findings
-   (Bugs + Rule violations + Requirement gaps). Skill insights do not block. A comment bound to a
-   superseded head does not settle the current head.
+5. Require the summary comment to reference the current head SHA, carry a KFQ digest that changed
+   from the last accepted evidence head, and report zero blocking findings (Bugs + Rule violations +
+   Requirement gaps). Skill insights do not block. A comment bound to a superseded head or whose
+   normalized body merely rewrites commit SHAs does not settle the current head.
 6. Review all changed production files that implement critical behavior and every trust boundary. A
    clean summary is not proof that every high-value file was inspected.
 7. The delivery agent fixes confirmed findings at the owning layer, adds a failure-first regression
@@ -125,8 +129,8 @@ Escalate the Qodo integration when any of these conditions occurs:
   published;
 - the comment is not produced by App ID `484649` / bot user `151058649`, or does not reference the
   current head SHA;
-- the comment is stale, unparseable, or reports unresolved Bugs, Rule violations, or Requirement
-  gaps;
+- the comment is stale, unparseable, has an unchanged normalized digest across a head move, or
+  reports unresolved Bugs, Rule violations, or Requirement gaps;
 - Qodo issues a clean verdict despite an unreviewed executable or trust-boundary file;
 - a risk-based independent review finds a material defect class that Qodo did not inspect;
 - automatic processing is paused by a plan, seat, or configuration problem.

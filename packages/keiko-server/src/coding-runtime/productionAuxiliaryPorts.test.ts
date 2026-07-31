@@ -102,6 +102,7 @@ function ports(
         runId: "run-2387",
       }),
     },
+    reservePromptTokens: () => true,
     taskId: "task-2387",
     runId: "run-2387",
     workspaceId: () => "workspace-2387",

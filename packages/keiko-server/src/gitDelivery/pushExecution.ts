@@ -32,6 +32,10 @@ import { createNodeGitPublishAdapter } from "@oscharko-dev/keiko-tools/internal/
 import type { UiHandlerDeps } from "../deps.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
+import type {
+  GitDeliveryBranchProtectionReader,
+  GitDeliverySignatureRequirement,
+} from "./branchProtectionPreflight.js";
 import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
@@ -95,6 +99,7 @@ export interface GitDeliveryPublishSeams {
     ((workspace: WorkspaceInfo) => GitRemotePublishAdapter) | undefined;
   readonly snapshotReader?:
     ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>) | undefined;
+  readonly branchProtectionReader?: GitDeliveryBranchProtectionReader | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
   readonly now?: (() => number) | undefined;
@@ -168,10 +173,16 @@ export interface GitDeliveryPushPreviewBody {
   // Force is blocked by default (AC4); the preview states it explicitly so the surface can warn before
   // the user even submits.
   readonly forceBlocked: boolean;
+  readonly signatureRequirement: GitDeliverySignatureRequirement;
   readonly preflightBlockingCodes: readonly string[];
   readonly preflightAdvisoryCodes: readonly string[];
   readonly policyOutcome: string;
   readonly policyBlockReason?: string;
+}
+
+function signatureAdvisoryCodes(requirement: GitDeliverySignatureRequirement): readonly string[] {
+  if (requirement === "required") return ["signed-commits-required"];
+  return requirement === "unavailable" ? ["branch-protection-unavailable"] : [];
 }
 
 // Builds the read-only push preview from a live snapshot: the remote target, the risk summary, the
@@ -181,6 +192,7 @@ export function buildGitDeliveryPushPreview(
   command: GitPushCommand,
   snapshot: GitWorktreeSnapshot,
   packs: GitDeliveryTrustedPolicyPacks,
+  signatureRequirement: GitDeliverySignatureRequirement = "unavailable",
 ): GitDeliveryPushPreviewBody {
   const inputs = pushInputsOf(command);
   const preflight = evaluateGitPreflight(inputs, snapshot);
@@ -206,8 +218,12 @@ export function buildGitDeliveryPushPreview(
     wouldCreateRemoteBranch: command.setUpstreamTracking && !snapshot.hasUpstream,
     wouldTriggerChecks: true,
     forceBlocked: command.forcePush,
+    signatureRequirement,
     preflightBlockingCodes: preflight.blocking.map((f) => f.code),
-    preflightAdvisoryCodes: preflight.advisory.map((f) => f.code),
+    preflightAdvisoryCodes: [
+      ...preflight.advisory.map((f) => f.code),
+      ...signatureAdvisoryCodes(signatureRequirement),
+    ],
     policyOutcome: effective.outcome,
     ...(effective.blockReason !== undefined ? { policyBlockReason: effective.blockReason } : {}),
   };

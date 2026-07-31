@@ -2,6 +2,7 @@ import { useCallback, useRef, type Dispatch, type RefObject } from "react";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchCodexAuthMethod,
+  CodingWorkbenchMode,
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeResearchGrant,
 } from "@oscharko-dev/keiko-contracts";
@@ -63,7 +64,7 @@ export interface RuntimeMutationActions {
   readonly retry: (taskIntent: string) => Promise<void>;
   readonly acknowledgeRecovery: () => Promise<void>;
   readonly pause: () => Promise<void>;
-  readonly resume: () => Promise<void>;
+  readonly resume: (requestedMode: CodingWorkbenchMode) => Promise<void>;
   readonly submitFollowUp: (taskIntent: string) => Promise<void>;
   readonly revokeResearchGrant: (grant: CodingWorkbenchRuntimeResearchGrant) => Promise<void>;
 }
@@ -356,8 +357,10 @@ export function useCodingWorkbenchRuntimeMutations(
     [enqueueMutation],
   );
   const resume = useCallback(
-    (): Promise<void> =>
-      enqueueMutation("resume", (current) => createLifecycleMutation("resume", current)),
+    (requestedMode: CodingWorkbenchMode): Promise<void> =>
+      enqueueMutation("resume", (current) =>
+        createLifecycleMutation("resume", current, requestedMode),
+      ),
     [enqueueMutation],
   );
   const submitFollowUp = useCallback(

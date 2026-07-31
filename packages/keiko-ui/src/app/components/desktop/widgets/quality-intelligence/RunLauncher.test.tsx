@@ -877,6 +877,24 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
       label: "Sprint-42",
     });
     expect(calledRequest.seed).toBeUndefined();
+    expect(calledRequest.retentionPolicyId).toBe("qi:short-30d");
+  });
+
+  it("binds the persisted retention selection to the new run", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(<RunLauncher startImpl={startImpl} retentionPolicyId="qi:long-365d" />);
+
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Keep this evidence");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [calledRequest] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(calledRequest.retentionPolicyId).toBe("qi:long-365d");
   });
 
   it("calls startImpl with a workspace source when the workspace source type is selected", async () => {

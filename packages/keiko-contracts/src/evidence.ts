@@ -17,6 +17,7 @@ import type {
 import type { AuditSummary } from "./workspace.js";
 import type { VerificationAuditSummary } from "./verification-summary.js";
 import type { SpokenActionAuditRecord } from "./voice-action-intent.js";
+import type { CodingWorkbenchMode } from "./coding-workbench.js";
 
 // The schema discriminant — distinct from the harness event `schemaVersion`. A breaking change
 // produces "2" as a NEW union member rather than mutating "1" (ADR-0010 D2).
@@ -321,6 +322,12 @@ export interface EvidenceGovernedWorkflowHandoff {
   readonly voiceAction?: SpokenActionAuditRecord | undefined;
 }
 
+export interface EvidenceAutonomyProjection {
+  readonly requestedMode: CodingWorkbenchMode;
+  readonly effectiveMode: CodingWorkbenchMode;
+  readonly deploymentCeiling: CodingWorkbenchMode;
+}
+
 export interface EvidenceManifest {
   readonly evidenceSchemaVersion: "1";
   readonly run: EvidenceRunIdentity;
@@ -339,6 +346,9 @@ export interface EvidenceManifest {
   readonly browser?: EvidenceBrowserCapture | undefined;
   readonly connectedContext?: EvidenceConnectedContextAudit | undefined;
   readonly governedHandoff?: EvidenceGovernedWorkflowHandoff | undefined;
+  // Additive (#2857): content-free authority posture for manifest-producing agent workflows.
+  // Session ids, Authority references, prompts, and paths never enter this projection.
+  readonly autonomy?: EvidenceAutonomyProjection | undefined;
   // Context-assembly diagnostics produced by the grounded or harness context observer (PR4/PR5).
   // Absent on legacy manifests and on manifests where no ContextProfile was threaded.
   readonly contextAssembly?: ContextAssemblyDiagnostics | undefined;

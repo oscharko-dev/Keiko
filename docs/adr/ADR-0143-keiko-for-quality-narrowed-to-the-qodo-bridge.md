@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (Issue #2508, Epic #2504, 2026-07-18).
+Accepted (Issue #2508, Epic #2504, 2026-07-18; evidence-currency amendment for Issue #2870,
+2026-07-31).
 
 ## Amends
 
@@ -44,9 +45,17 @@ review (ADR-0135 D5) into a gateable, head-SHA-current check.
 `evaluateKeikoForQuality` judges exactly two failure groups: the Qodo review (a current-head or
 fresh merge-parent-bound, app-id-verified, parseable summary must exist and report zero blocking
 findings) and the stability window over that same review evidence. Unresolved findings publish a
-`failure` conclusion; missing, stale, unparseable, or still-settling evidence keeps the check
-`in_progress` — never a false success, never a terminal failure for absent inputs. The merge-parent
-currency rules (PR #2497, hardened for Issue #2503) are unchanged.
+`failure` conclusion; missing, stale, unparseable, unchanged, or still-settling evidence keeps the
+check `in_progress` — never a false success, never a terminal failure for absent inputs. The
+merge-parent currency rules (PR #2497, hardened for Issue #2503) are unchanged.
+
+The Issue #2870 amendment makes an embedded current-head SHA necessary but insufficient. The
+canonical Action normalizes all 40-hex commit IDs in the selected Qodo body, records only its SHA-256
+digest in the exact-head, app-bound KFQ check output, and compares it with the digest referenced by
+the app-bound KFQ dashboard's last accepted evidence head. A head move with an unchanged digest is
+stale. A missing or malformed expected predecessor check is pending, and the dashboard baseline does
+not advance. A first-seen or legacy baseline is recorded as pending and becomes accepted only after
+a subsequent Qodo production changes that digest. The existing stability window remains unchanged.
 
 ### D2 — No re-checking of directly required contexts, not even a lightweight sanity pass
 
@@ -62,11 +71,13 @@ Socket comments or check outputs. The lockfile-bound acceptance record
 (`docs/qa/supply-chain-risk-acceptances.json`) and its repository test remain — they document and
 pin accepted risks independently of KFQ.
 
-### D4 — Fewer API calls per evaluation
+### D4 — Direct-check listings stay removed; digest evidence is read narrowly
 
 Evidence collection fetches only the pull request's issue-comment stream plus the lazy head-commit
-read for merge-commit heads. The per-evaluation check-runs listing is gone from both execution
-shells; the publish path still lists check runs once to locate the existing aggregate run to update.
+read for merge-commit heads. The canonical Action additionally reads check runs only for the single
+full head named by its own app-bound digest-baseline marker; it selects only the exact KFQ check name,
+head, and App id. It never lists or re-evaluates direct required contexts. The publish path still
+lists current-head check runs once to locate the existing aggregate run to update.
 
 ### D5 — Trigger surface is unchanged; check names remain event filters only
 
@@ -92,8 +103,9 @@ stays valid, validated against the closed profile set; it no longer selects a re
 - **Accepted trade-off:** less defense-in-depth. KFQ no longer independently verifies producer
   identity or head currency of the other products' checks; GitHub branch protection natively pins
   producers and heads for every required context, and that is now the only layer doing so.
-- Each evaluation saves a paginated check-runs listing, and the evaluator drops the required-check
-  profiles, the Socket parsing/acceptance logic, and their configuration surface.
+- The evaluator drops the required-check profiles, Socket parsing/acceptance logic, and their
+  configuration surface. Digest-chain evaluation adds one narrowly bound predecessor-head check
+  listing after a baseline exists.
 - The dashboard comment reports the narrowed scope (Qodo review, stability window, auto-merge
   state); direct-check status is read where it is enforced — the pull request's checks UI.
 - The negative-probe set for ever making KFQ required narrows accordingly (stale head, wrong
@@ -108,5 +120,6 @@ stays valid, validated against the closed profile set; it no longer selects a re
   boundary with the 60-second default.
 - `scripts/__tests__/keiko-for-quality-worker.test.mjs` and
   `scripts/__tests__/keiko-for-quality-action.test.mjs` prove both shells publish the same
-  success/failure/pending check contracts from comment-only evidence and that the comments listing
-  is the only per-evaluation evidence fetch.
+  success/failure/pending check contracts. The Action tests additionally pin unchanged normalized
+  bodies across heads, missing and malformed predecessor evidence, spoofed dashboard markers,
+  pending-baseline recovery, and repeated stale evaluations.

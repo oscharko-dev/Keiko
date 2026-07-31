@@ -40,6 +40,13 @@ export interface GitCommitMessagePolicy {
   readonly subjectMaxLength: number;
 }
 
+export type GitCommitMessagePolicyMode = "keiko-conventional" | "repository-native";
+
+export const GIT_COMMIT_MESSAGE_POLICY_MODES: readonly GitCommitMessagePolicyMode[] = [
+  "keiko-conventional",
+  "repository-native",
+] as const;
+
 // ─── Violation vocabulary (AC2) ─────────────────────────────────────────────────────────────────
 
 export type GitCommitMessageViolationCode =
@@ -88,6 +95,28 @@ export const KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY: GitCommitMessagePolicy = {
   requireSignoff: false,
   subjectMaxLength: 72,
 };
+
+// Repository Native disables only Keiko's opinionated formatting checks. The route boundary still
+// rejects an empty message and credential-shaped input, while repository hooks remain authoritative.
+// It is intentionally a closed mode rather than a browser-authorable regex/rule surface.
+export const REPOSITORY_NATIVE_COMMIT_MESSAGE_POLICY: GitCommitMessagePolicy = {
+  conventionalCommit: { enabled: false, allowedTypes: [] },
+  requireIssueKey: { enabled: false, pattern: "" },
+  requireSignoff: false,
+  subjectMaxLength: Number.MAX_SAFE_INTEGER,
+};
+
+export function resolveGitCommitMessagePolicyMode(value: unknown): GitCommitMessagePolicyMode {
+  return value === "repository-native" ? "repository-native" : "keiko-conventional";
+}
+
+export function gitCommitMessagePolicyForMode(
+  mode: GitCommitMessagePolicyMode,
+): GitCommitMessagePolicy {
+  return mode === "repository-native"
+    ? REPOSITORY_NATIVE_COMMIT_MESSAGE_POLICY
+    : KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY;
+}
 
 // ─── Private predicate helpers ────────────────────────────────────────────────────────────────────
 

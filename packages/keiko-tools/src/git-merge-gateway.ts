@@ -91,6 +91,11 @@ export interface GitMergeReadinessRequest {
   readonly baseBranchName: string;
 }
 
+export type GitBranchProtectionRequest = Pick<
+  GitMergeReadinessRequest,
+  "ownerAndRepo" | "baseBranchName"
+>;
+
 export interface GitMergeExecRequest {
   readonly ownerAndRepo: string;
   readonly prExternalId: string;
@@ -278,7 +283,7 @@ export function buildCheckRunsArgv(repoSlug: string, headSha: string): readonly 
     "api",
     `/repos/${repo}/commits/${sha}/check-runs?per_page=100`,
     "--jq",
-    "[.check_runs[] | {status:.status, conclusion:.conclusion}]",
+    "[.check_runs[] | {id:.id,name:.name,providerId:.app.id,status:.status,conclusion:.conclusion}]",
   ];
 }
 
@@ -305,7 +310,7 @@ export function buildPullRequestReviewsArgv(req: GitMergeReadinessRequest): read
 // requirement" (0), never as a hard error — the provider's own merge-time enforcement remains the
 // ultimate authority (Force 2 / ADR-0087) regardless of what this best-effort read could see.
 export function buildBranchProtectionRequiredReviewsArgv(
-  req: GitMergeReadinessRequest,
+  req: GitBranchProtectionRequest,
 ): readonly string[] {
   const repo = assertOwnerAndRepo(req.ownerAndRepo);
   const branch = assertRef(req.baseBranchName, "baseBranchName");
@@ -315,6 +320,18 @@ export function buildBranchProtectionRequiredReviewsArgv(
     "--jq",
     ".required_pull_request_reviews.required_approving_review_count // 0",
   ];
+}
+
+const BRANCH_PROTECTION_JQ =
+  "{deletionAllowed:(.allow_deletions.enabled // false),forcePushAllowed:(.allow_force_pushes.enabled // false),linearHistoryRequired:(.required_linear_history.enabled // false),signaturesRequired:(.required_signatures.enabled // false),requiredReviewCount:(.required_pull_request_reviews.required_approving_review_count // 0),requiredChecks:[(.required_status_checks.checks // [])[] | {name:.context,providerId:.app_id}]}";
+
+// Reads only the content-free branch rules needed to classify required checks. Provider-specific
+// names and application identifiers are consumed inside the GitHub adapter and never cross the
+// provider-neutral contract boundary.
+export function buildBranchProtectionArgv(req: GitBranchProtectionRequest): readonly string[] {
+  const repo = assertOwnerAndRepo(req.ownerAndRepo);
+  const branch = assertRef(req.baseBranchName, "baseBranchName");
+  return ["api", `/repos/${repo}/branches/${branch}/protection`, "--jq", BRANCH_PROTECTION_JQ];
 }
 
 // `gh api --method DELETE /repos/{owner}/{repo}/git/refs/heads/{branch}`. The guarded branch deletion

@@ -313,6 +313,9 @@ async function runResolvedQi(
       judge: resolvedJudge.judge,
       onEvent: input.onEvent,
       signal: input.signal,
+      retentionPolicyId: QualityIntelligence.resolveQualityIntelligenceRetentionPolicyId(
+        request.retentionPolicyId,
+      ),
     }),
   );
 }
@@ -328,6 +331,7 @@ interface WorkflowDepsInput {
   readonly judge?: QiJudgePort | undefined;
   readonly onEvent: (event: QI.QualityIntelligenceRunEvent) => void;
   readonly signal: AbortSignal;
+  readonly retentionPolicyId: QI.QualityIntelligenceRetentionPolicyId;
 }
 
 interface ResolvedJudge {
@@ -366,6 +370,7 @@ function buildWorkflowDeps(args: WorkflowDepsInput): QualityIntelligenceModelRou
     evidenceStore: createNodeQualityIntelligenceLocalStore(evidenceDir),
     initialModelGatewayCallCount: args.initialModelGatewayCallCount,
     modelRouting: args.modelRouting,
+    retentionPolicyId: args.retentionPolicyId,
     candidatesSink: {
       record: (candidates, generatedAt): void => {
         recordQualityIntelligenceCandidates({

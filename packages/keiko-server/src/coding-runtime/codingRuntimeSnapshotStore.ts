@@ -5,6 +5,7 @@ import type {
   CodingWorkbenchModelSource,
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeResult,
   CodingWorkbenchRuntimeSource,
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
@@ -59,6 +60,7 @@ export interface CodingRuntimeSnapshot {
   readonly patchByteCount: number;
   readonly modelRequestCount: number;
   readonly recoveryHandle?: string | undefined;
+  readonly result?: CodingWorkbenchRuntimeResult | undefined;
 }
 
 export interface CodingRuntimeSnapshotTransition {
@@ -71,6 +73,7 @@ export interface CodingRuntimeSnapshotTransition {
   readonly patchByteCount?: number | undefined;
   readonly modelRequestCount?: number | undefined;
   readonly recoveryHandle?: string | undefined;
+  readonly result?: CodingWorkbenchRuntimeResult | undefined;
 }
 
 export interface CodingRuntimeSnapshotStore {
@@ -119,10 +122,20 @@ interface Row {
   readonly patch_byte_count: number;
   readonly model_request_count: number;
   readonly recovery_handle: string | null;
+  readonly result_status: CodingWorkbenchRuntimeResult["status"] | null;
+  readonly exit_code: number | null;
+  readonly stdout_byte_count: number | null;
+  readonly stdout_line_count: number | null;
+  readonly stdout_sha256: string | null;
+  readonly stdout_truncated: number | null;
+  readonly stderr_byte_count: number | null;
+  readonly stderr_line_count: number | null;
+  readonly stderr_sha256: string | null;
+  readonly stderr_truncated: number | null;
 }
 
 const COLUMNS =
-  "run_id, schema_version, state, revision, requested_mode, runtime_source, model_source, failure_code, created_at, updated_at, terminal_at, recovery_acknowledged_at, predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest, binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count, recovery_handle";
+  "run_id, schema_version, state, revision, requested_mode, runtime_source, model_source, failure_code, created_at, updated_at, terminal_at, recovery_acknowledged_at, predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest, binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count, recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count, stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256, stderr_truncated";
 
 // Prepared statements must remain co-located with the closed store operations they support.
 // eslint-disable-next-line max-lines-per-function
@@ -135,10 +148,10 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
     `SELECT ${COLUMNS} FROM coding_runtime_snapshots ORDER BY updated_at DESC, run_id LIMIT ?`,
   );
   const insert = db.prepare(
-    `INSERT INTO coding_runtime_snapshots (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO coding_runtime_snapshots (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const update = db.prepare(
-    `UPDATE coding_runtime_snapshots SET state=?, revision=?, updated_at=?, failure_code=?, terminal_at=?, tool_call_count=?, patch_byte_count=?, model_request_count=?, recovery_handle=? WHERE run_id=?`,
+    `UPDATE coding_runtime_snapshots SET state=?, revision=?, updated_at=?, failure_code=?, terminal_at=?, tool_call_count=?, patch_byte_count=?, model_request_count=?, recovery_handle=?, result_status=?, exit_code=?, stdout_byte_count=?, stdout_line_count=?, stdout_sha256=?, stdout_truncated=?, stderr_byte_count=?, stderr_line_count=?, stderr_sha256=?, stderr_truncated=? WHERE run_id=?`,
   );
   const acknowledge = db.prepare(
     "UPDATE coding_runtime_snapshots SET recovery_acknowledged_at = ? WHERE run_id = ? AND state = 'recovery-required'",
@@ -176,6 +189,7 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
         patchByteCount: transition.patchByteCount ?? current.patchByteCount,
         modelRequestCount: transition.modelRequestCount ?? current.modelRequestCount,
         recoveryHandle: transition.recoveryHandle ?? current.recoveryHandle,
+        result: transition.result ?? current.result,
       };
       assertSnapshot(next);
       update.run(
@@ -188,6 +202,16 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
         next.patchByteCount,
         next.modelRequestCount,
         next.recoveryHandle ?? null,
+        next.result?.status ?? null,
+        next.result?.exitCode ?? null,
+        next.result?.output.byteCount ?? null,
+        next.result?.output.lineCount ?? null,
+        next.result?.output.sha256 ?? null,
+        next.result === undefined ? null : Number(next.result.output.truncated),
+        next.result?.error.byteCount ?? null,
+        next.result?.error.lineCount ?? null,
+        next.result?.error.sha256 ?? null,
+        next.result === undefined ? null : Number(next.result.error.truncated),
         runId,
       );
       return next;
@@ -301,6 +325,7 @@ function map(row: Row | undefined): CodingRuntimeSnapshot | undefined {
       : {}),
     ...(row.predecessor_run_id ? { predecessorRunId: row.predecessor_run_id } : {}),
     ...(row.recovery_handle ? { recoveryHandle: row.recovery_handle } : {}),
+    ...(runtimeResult(row) === undefined ? {} : { result: runtimeResult(row) }),
   };
   assertSnapshot(value);
   return value;
@@ -338,6 +363,25 @@ function values(v: CodingRuntimeSnapshot): readonly (string | number | null)[] {
     v.patchByteCount,
     v.modelRequestCount,
     v.recoveryHandle ?? null,
+    ...runtimeResultValues(v.result),
+  ];
+}
+
+function runtimeResultValues(
+  result: CodingWorkbenchRuntimeResult | undefined,
+): readonly (string | number | null)[] {
+  if (result === undefined) return [null, null, null, null, null, null, null, null, null, null];
+  return [
+    result.status,
+    result.exitCode,
+    result.output.byteCount,
+    result.output.lineCount,
+    result.output.sha256,
+    Number(result.output.truncated),
+    result.error.byteCount,
+    result.error.lineCount,
+    result.error.sha256,
+    Number(result.error.truncated),
   ];
 }
 function assertSnapshot(v: CodingRuntimeSnapshot): void {
@@ -353,6 +397,68 @@ function assertSnapshot(v: CodingRuntimeSnapshot): void {
   if (v.recoveryHandle) assertId(v.recoveryHandle, "recoveryHandle");
   assertSnapshotDigests(v);
   assertSnapshotCounts(v);
+  if (v.result !== undefined) assertRuntimeResult(v.result);
+}
+
+function runtimeResult(row: Row): CodingWorkbenchRuntimeResult | undefined {
+  if (
+    row.result_status === null ||
+    row.stdout_byte_count === null ||
+    row.stdout_line_count === null ||
+    row.stdout_sha256 === null ||
+    row.stdout_truncated === null ||
+    row.stderr_byte_count === null ||
+    row.stderr_line_count === null ||
+    row.stderr_sha256 === null ||
+    row.stderr_truncated === null
+  )
+    return undefined;
+  return {
+    status: row.result_status,
+    exitCode: row.exit_code,
+    output: {
+      byteCount: row.stdout_byte_count,
+      lineCount: row.stdout_line_count,
+      sha256: row.stdout_sha256,
+      truncated: row.stdout_truncated === 1,
+    },
+    error: {
+      byteCount: row.stderr_byte_count,
+      lineCount: row.stderr_line_count,
+      sha256: row.stderr_sha256,
+      truncated: row.stderr_truncated === 1,
+    },
+  };
+}
+
+function assertRuntimeResult(result: CodingWorkbenchRuntimeResult): void {
+  if (!["cancelled", "failed", "signalled", "succeeded"].includes(result.status)) {
+    throw new Error("invalid runtime result status");
+  }
+  if (
+    result.exitCode !== null &&
+    (!Number.isSafeInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255)
+  ) {
+    throw new Error("invalid runtime exit code");
+  }
+  assertProcessSummary(result.output);
+  assertProcessSummary(result.error);
+}
+
+function assertProcessSummary(summary: CodingWorkbenchRuntimeResult["output"]): void {
+  if (!DIGEST.test(summary.sha256) || typeof summary.truncated !== "boolean") {
+    throw new Error("invalid runtime process summary");
+  }
+  if (!validSnapshotCount(summary.byteCount, 1_073_741_824)) {
+    throw new Error("invalid runtime process byte count");
+  }
+  if (!validSnapshotCount(summary.lineCount, 1_000_000)) {
+    throw new Error("invalid runtime process line count");
+  }
+}
+
+function validSnapshotCount(value: number, maximum: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0 && value <= maximum;
 }
 
 function hasSchemaVersion(value: string): boolean {

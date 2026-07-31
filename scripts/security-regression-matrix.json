@@ -6,7 +6,7 @@
   },
   {
     "id": "AUDIT-FS-001",
-    "verification": ["npx vitest run packages/keiko-evidence/src/promptEnhancement/__tests__/store.test.ts packages/keiko-evidence/src/qualityIntelligence/__tests__/candidatesArtifact.test.ts packages/keiko-evidence/src/qualityIntelligence/figmaSnapshot/__tests__/store.test.ts"],
+    "verification": ["npx vitest run packages/keiko-evidence/src/promptEnhancement/store.test.ts packages/keiko-evidence/src/qualityIntelligence/__tests__/candidatesArtifact.test.ts packages/keiko-evidence/src/qualityIntelligence/figmaSnapshot/__tests__/store.test.ts"],
     "notes": "Evidence companion sub-store symlink refusal before side-file writes."
   },
   {

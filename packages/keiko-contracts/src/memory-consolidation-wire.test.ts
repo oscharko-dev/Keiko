@@ -24,6 +24,7 @@ describe("memory consolidation BFF wire contracts", () => {
           id: "review-1",
           reason: "potential-conflict",
           relatedMemoryIds: memoryIds,
+          memoryExcerpts: [],
           evidence: [
             {
               kind: "negation-polarity",

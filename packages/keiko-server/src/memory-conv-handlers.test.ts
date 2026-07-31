@@ -894,7 +894,7 @@ describe("handleMemoryCaptureFromConversation", () => {
       if (proposalId === undefined) {
         throw new Error("expected capture to emit a candidate proposalId");
       }
-      const accepted = handleAcceptMemoryProposal(acceptCtx(proposalId), deps);
+      const accepted = await handleAcceptMemoryProposal(acceptCtx(proposalId), deps);
       expect(accepted.status).toBe(200);
       const reloaded = vault.getMemory(proposalId as unknown as MemoryId);
       expect(reloaded?.status).toBe("accepted");

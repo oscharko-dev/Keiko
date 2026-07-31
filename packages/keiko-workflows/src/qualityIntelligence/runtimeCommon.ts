@@ -23,7 +23,6 @@ import {
   type AtomCoverageStatus,
   type PolicyProfile,
 } from "@oscharko-dev/keiko-quality-intelligence";
-import { QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID } from "@oscharko-dev/keiko-evidence";
 import type {
   QualityIntelligenceWorkflowDescriptor,
   QualityIntelligenceWorkflowLimits,
@@ -76,6 +75,7 @@ export interface RunContext {
   readonly clock: QualityIntelligenceClock;
   readonly limits: QualityIntelligenceWorkflowLimits;
   readonly profile: PolicyProfile;
+  readonly retentionPolicyId: QI.QualityIntelligenceRetentionPolicyId;
   readonly signal: AbortSignal | undefined;
   sequence: number;
   modelGatewayCallCount: number;
@@ -88,6 +88,7 @@ export interface RunContextInit {
   readonly clock?: QualityIntelligenceClock | undefined;
   readonly limits?: QualityIntelligenceWorkflowLimits | undefined;
   readonly policyProfile?: PolicyProfile | undefined;
+  readonly retentionPolicyId?: QI.QualityIntelligenceRetentionPolicyId | undefined;
   readonly signal?: AbortSignal | undefined;
 }
 
@@ -99,6 +100,7 @@ export function makeContext(init: RunContextInit): RunContext {
     clock: init.clock ?? DEFAULT_CLOCK,
     limits: init.limits ?? init.descriptor.defaultLimits,
     profile: init.policyProfile ?? regressionDefault,
+    retentionPolicyId: QI.resolveQualityIntelligenceRetentionPolicyId(init.retentionPolicyId),
     signal: init.signal,
     sequence: 0,
     modelGatewayCallCount: 0,
@@ -387,7 +389,7 @@ export function persistRun(args: PersistArgs): QualityIntelligenceRecordResult {
     completedAt: args.completedAt,
     status: args.status,
     policyProfileIds: Object.freeze([args.ctx.profile.id]),
-    retentionPolicyId: QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID,
+    retentionPolicyId: args.ctx.retentionPolicyId,
     modelGatewayCallCount: args.ctx.modelGatewayCallCount,
     totals: Object.freeze({
       candidates: args.candidatesCount,

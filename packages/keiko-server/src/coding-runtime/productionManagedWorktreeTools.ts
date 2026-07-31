@@ -52,6 +52,8 @@ export interface ProductionManagedWorktreeToolInput {
   readonly workspaceRoot: string;
   readonly authorityExpiresAt: string;
   readonly effectiveMode: CodingWorkbenchMode;
+  readonly effectiveModeNow?: (() => CodingWorkbenchMode | undefined) | undefined;
+  readonly reservePromptTokens?: ((promptTokens: number) => boolean) | undefined;
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly liveFacts: () => CodingWorkbenchRuntimeAuthorityFacts;
   readonly secureWorkspaceTextRead: SecureWorkspaceTextReadPort;
@@ -122,8 +124,11 @@ function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingT
     }),
     resolveWorkspaceRoot: () => input.workspaceRoot,
     requiresEditorReview: () =>
-      codingWorkbenchPolicyEffectFor(input.effectiveMode, "workspace-contained", "high") !==
-      "allowed",
+      codingWorkbenchPolicyEffectFor(
+        input.effectiveModeNow?.() ?? input.effectiveMode,
+        "workspace-contained",
+        "high",
+      ) !== "allowed",
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     ...(input.mutationLeaseCoordinator
       ? { mutationLeaseCoordinator: input.mutationLeaseCoordinator }
@@ -167,6 +172,7 @@ function auxiliaryPorts(
           runId: input.authorityRef.runId,
         },
     },
+    reservePromptTokens: input.reservePromptTokens ?? ((): boolean => false),
     taskId: input.taskId ?? input.authorityRef.runId,
     runId: input.authorityRef.runId,
     workspaceId: () => input.liveFacts().binding.workspaceId,

@@ -128,8 +128,8 @@ describe("AgentRunWidget", () => {
     expect((await screen.findAllByText("Applied")).length).toBeGreaterThan(0);
   });
 
-  it("exposes the dry-run, diff, and run-input <pre> blocks as keyboard-focusable named regions", async () => {
-    // GEN-UI-KEYBOARD-005 (test-plan #31) — every overflow:auto output <pre> must be a
+  it("exposes the dry-run, diff, and run-input blocks as keyboard-focusable named regions", async () => {
+    // GEN-UI-KEYBOARD-005 (test-plan #31) — every overflow:auto output block must be a
     // focusable region with an accessible name so keyboard-only users can scroll it.
     vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
     vi.mocked(fetchModels).mockResolvedValue({ models: [] });
@@ -157,15 +157,15 @@ describe("AgentRunWidget", () => {
     );
 
     const diff = await screen.findByRole("region", { name: /proposed diff/i });
-    expect(diff.tagName).toBe("PRE");
+    expect(diff.tagName).toBe("SECTION");
     expect(diff).toHaveAttribute("tabindex", "0");
 
     const dryRun = screen.getByRole("region", { name: /dry-run preview/i });
-    expect(dryRun.tagName).toBe("PRE");
+    expect(dryRun.tagName).toBe("SECTION");
     expect(dryRun).toHaveAttribute("tabindex", "0");
 
     const runInput = screen.getByRole("region", { name: /run input/i });
-    expect(runInput.tagName).toBe("PRE");
+    expect(runInput.tagName).toBe("SECTION");
     expect(runInput).toHaveAttribute("tabindex", "0");
   });
 

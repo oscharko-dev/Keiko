@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useId, useMemo, useState } from "reac
 import type { ChangeEvent, ReactNode, WheelEvent } from "react";
 import Link from "next/link";
 import {
+  applyMemoryConsolidationReviewItem,
   cancelMemoryConsolidationJob,
   fetchMemoryConsolidationJob,
   resolveMemoryConflict,
@@ -223,6 +224,75 @@ function ConflictResolutionControl({
   );
 }
 
+function applyPreconditionsForItem(
+  item: MemoryConsolidationReviewItem,
+): MemoryConsolidationReviewItem["memoryExcerpts"] | null {
+  const action = item.proposedAction;
+  if (action === undefined || item.memoryExcerpts.length !== item.relatedMemoryIds.length)
+    return null;
+  const losers = action.kind === "merge" ? action.losers : [action.older];
+  const byId = new Map(item.memoryExcerpts.map((excerpt) => [excerpt.memoryId, excerpt]));
+  return losers.some((id) => byId.get(id)?.status !== "proposed") ? null : item.memoryExcerpts;
+}
+
+function GovernedApplyControl({
+  item,
+  busy,
+  disabled,
+  error,
+  onApply,
+  t,
+}: {
+  readonly item: MemoryConsolidationReviewItem;
+  readonly busy: boolean;
+  readonly disabled: boolean;
+  readonly error: string | null;
+  readonly onApply: (item: MemoryConsolidationReviewItem) => void;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (applyPreconditionsForItem(item) === null) return null;
+  return (
+    <div style={{ display: "grid", gap: "var(--space-2)", justifyItems: "start" }}>
+      <button
+        type="button"
+        className="lk-btn lk-btn-ghost"
+        aria-disabled={disabled}
+        aria-busy={busy}
+        onClick={() => {
+          if (!disabled) onApply(item);
+        }}
+      >
+        {busy ? t("memoria.consolidation.applying") : t("memoria.consolidation.applyProposal")}
+      </button>
+      {error !== null ? (
+        <p role="alert" className="mc-action-error">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function ReviewExcerpts({
+  item,
+  t,
+}: {
+  readonly item: MemoryConsolidationReviewItem;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (item.memoryExcerpts.length === 0) return null;
+  return (
+    <ul aria-label={t("memoria.consolidation.localExcerpts")}>
+      {item.memoryExcerpts.map((excerpt) => (
+        <li key={excerpt.memoryId}>
+          <code>{excerpt.memoryId}</code>: {excerpt.bodyExcerpt}
+          {excerpt.truncated ? t("memoria.consolidation.excerptTruncated") : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function StaleFlagEntry({
   flag,
   onOpenDetail,
@@ -391,6 +461,7 @@ interface MemoryConsolidationProps {
   readonly fetchJobImpl?: typeof fetchMemoryConsolidationJob;
   readonly cancelJobImpl?: typeof cancelMemoryConsolidationJob;
   readonly resolveConflictImpl?: typeof resolveMemoryConflict;
+  readonly applyReviewItemImpl?: typeof applyMemoryConsolidationReviewItem;
   readonly pollIntervalMs?: number;
   readonly onBack?: (() => void) | undefined;
   readonly onOpenDetail?: ((id: string) => void) | undefined;
@@ -806,6 +877,7 @@ interface ReviewItemsPanelProps {
   readonly resolveErrorsById: Partial<Record<string, string>>;
   readonly onOpenDetail?: ((id: string) => void) | undefined;
   readonly onResolveConflict: (item: MemoryConsolidationReviewItem) => void;
+  readonly onApplyReview: (item: MemoryConsolidationReviewItem) => void;
   readonly t: I18nTranslate;
 }
 
@@ -815,6 +887,7 @@ function ReviewItemsPanel({
   resolveErrorsById,
   onOpenDetail,
   onResolveConflict,
+  onApplyReview,
   t,
 }: ReviewItemsPanelProps): ReactNode {
   return (
@@ -859,14 +932,26 @@ function ReviewItemsPanel({
                 <ReviewAction item={item} onOpenDetail={onOpenDetail} t={t} />
               </span>
               <SuggestedResolutionNotice item={item} onOpenDetail={onOpenDetail} t={t} />
-              <ConflictResolutionControl
-                item={item}
-                busy={resolvingConflictId === item.id}
-                disabled={resolvingConflictId !== null}
-                error={resolveErrorsById[item.id] ?? null}
-                onResolve={onResolveConflict}
-                t={t}
-              />
+              <ReviewExcerpts item={item} t={t} />
+              {applyPreconditionsForItem(item) === null ? (
+                <ConflictResolutionControl
+                  item={item}
+                  busy={resolvingConflictId === item.id}
+                  disabled={resolvingConflictId !== null}
+                  error={resolveErrorsById[item.id] ?? null}
+                  onResolve={onResolveConflict}
+                  t={t}
+                />
+              ) : (
+                <GovernedApplyControl
+                  item={item}
+                  busy={resolvingConflictId === item.id}
+                  disabled={resolvingConflictId !== null}
+                  error={resolveErrorsById[item.id] ?? null}
+                  onApply={onApplyReview}
+                  t={t}
+                />
+              )}
             </li>
           ))}
         </ul>
@@ -983,6 +1068,7 @@ interface ConsolidationResultsProps {
   readonly resolveErrorsById: Partial<Record<string, string>>;
   readonly onOpenDetail?: ((id: string) => void) | undefined;
   readonly onResolveConflict: (item: MemoryConsolidationReviewItem) => void;
+  readonly onApplyReview: (item: MemoryConsolidationReviewItem) => void;
   readonly t: I18nTranslate;
 }
 
@@ -993,6 +1079,7 @@ function ConsolidationResults({
   resolveErrorsById,
   onOpenDetail,
   onResolveConflict,
+  onApplyReview,
   t,
 }: ConsolidationResultsProps): ReactNode {
   if (result === undefined) return null;
@@ -1013,6 +1100,7 @@ function ConsolidationResults({
         resolveErrorsById={resolveErrorsById}
         onOpenDetail={onOpenDetail}
         onResolveConflict={onResolveConflict}
+        onApplyReview={onApplyReview}
         t={t}
       />
       <StaleFlagsPanel staleFlags={result.staleFlags} onOpenDetail={onOpenDetail} t={t} />
@@ -1026,6 +1114,7 @@ export function MemoryConsolidation({
   fetchJobImpl = fetchMemoryConsolidationJob,
   cancelJobImpl = cancelMemoryConsolidationJob,
   resolveConflictImpl = resolveMemoryConflict,
+  applyReviewItemImpl = applyMemoryConsolidationReviewItem,
   pollIntervalMs = 2_000,
   onBack,
   onOpenDetail,
@@ -1149,6 +1238,36 @@ export function MemoryConsolidation({
     [resolveConflictImpl, resolvingConflictId, t],
   );
 
+  const handleApplyReview = useCallback(
+    async (item: MemoryConsolidationReviewItem): Promise<void> => {
+      const excerpts = applyPreconditionsForItem(item);
+      if (activeJob === null || excerpts === null || resolvingConflictId !== null) return;
+      setResolvingConflictId(item.id);
+      setResolveErrorsById((prev) => {
+        const next = { ...prev };
+        delete next[item.id];
+        return next;
+      });
+      try {
+        await applyReviewItemImpl(
+          activeJob.id,
+          item.id,
+          excerpts.map(({ memoryId, expectedUpdatedAt }) => ({
+            memoryId,
+            expectedUpdatedAt,
+          })),
+        );
+        setResolvedReviewIds((prev) => new Set(prev).add(item.id));
+        setActionStatus(t("memoria.consolidation.proposalApplied"));
+      } catch (err) {
+        setResolveErrorsById((prev) => ({ ...prev, [item.id]: formatError(err) }));
+      } finally {
+        setResolvingConflictId(null);
+      }
+    },
+    [activeJob, applyReviewItemImpl, resolvingConflictId, t],
+  );
+
   const handleCancel = useCallback(async (): Promise<void> => {
     if (activeJob === null || canceling) return;
     setCanceling(true);
@@ -1221,6 +1340,9 @@ export function MemoryConsolidation({
           onOpenDetail={onOpenDetail}
           onResolveConflict={(target) => {
             void handleResolveConflict(target);
+          }}
+          onApplyReview={(target) => {
+            void handleApplyReview(target);
           }}
           t={t}
         />

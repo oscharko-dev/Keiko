@@ -471,6 +471,15 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
   "localKnowledge.detail.large.resuming": "Resuming…",
   "localKnowledge.detail.large.resume.one": "Resume 1 document",
   "localKnowledge.detail.large.resume.many": "Resume {count} documents",
+  "localKnowledge.detail.recovery.title": "Interrupted indexing",
+  "localKnowledge.detail.recovery.active":
+    "Indexing is still active ({processed} processed across {sources} sources).",
+  "localKnowledge.detail.recovery.resumable":
+    "An interrupted run can resume ({processed} processed across {sources} sources).",
+  "localKnowledge.detail.recovery.resume": "Resume indexing",
+  "localKnowledge.detail.recovery.resuming": "Resuming…",
+  "localKnowledge.detail.recovery.resumeAria": "Resume interrupted indexing",
+  "localKnowledge.detail.recovery.failed": "Resume failed.",
   "localKnowledge.detail.large.phase.preflight": "Preflight",
   "localKnowledge.detail.large.phase.extracting": "Extracting",
   "localKnowledge.detail.large.phase.extracted": "Extracted",
@@ -961,6 +970,15 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
   "localKnowledge.detail.large.resuming": "Setze fort…",
   "localKnowledge.detail.large.resume.one": "1 Dokument fortsetzen",
   "localKnowledge.detail.large.resume.many": "{count} Dokumente fortsetzen",
+  "localKnowledge.detail.recovery.title": "Unterbrochene Indexierung",
+  "localKnowledge.detail.recovery.active":
+    "Die Indexierung ist noch aktiv ({processed} verarbeitet über {sources} Quellen).",
+  "localKnowledge.detail.recovery.resumable":
+    "Ein unterbrochener Lauf kann fortgesetzt werden ({processed} verarbeitet über {sources} Quellen).",
+  "localKnowledge.detail.recovery.resume": "Indexierung fortsetzen",
+  "localKnowledge.detail.recovery.resuming": "Wird fortgesetzt…",
+  "localKnowledge.detail.recovery.resumeAria": "Unterbrochene Indexierung fortsetzen",
+  "localKnowledge.detail.recovery.failed": "Fortsetzen fehlgeschlagen.",
   "localKnowledge.detail.large.phase.preflight": "Vorprüfung",
   "localKnowledge.detail.large.phase.extracting": "Extraktion",
   "localKnowledge.detail.large.phase.extracted": "Extrahiert",

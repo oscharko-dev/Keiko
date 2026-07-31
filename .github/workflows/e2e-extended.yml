@@ -38,6 +38,11 @@ jobs:
           - test:e2e:editor-baseline-1377
           - test:e2e:editor-layout-1375
           - test:e2e:editor-run-verification-2215
+          # Issues #2852/#2867: these release-evidence journeys had silently rotted while present
+          # only as npm scripts. Keep their current Workbench and editor contracts exercised.
+          - test:e2e:coding-workbench-2253
+          - test:e2e:formatting-1380
+          - test:e2e:language-intelligence-1383
           - test:e2e:git-changes-1575
           - test:e2e:local-knowledge
           # Epic #2285 (Editor M11). Only the #2533 closeout journey runs per pull request; these

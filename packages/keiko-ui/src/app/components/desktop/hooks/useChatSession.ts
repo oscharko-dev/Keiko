@@ -11,6 +11,7 @@ import {
 } from "react";
 import { classifyAttachmentMime, MAX_ATTACHMENT_BYTES } from "@oscharko-dev/keiko-contracts";
 import { useTranslate } from "@/lib/i18n";
+import { ATTACHMENT_CLEANUP_DEFERRED_ERROR } from "@/lib/chat-session-error";
 import type { ConversationAttachmentDescriptorWire, MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
@@ -35,6 +36,8 @@ import {
   regenerateDesktopChat,
   sendDesktopChat,
   sendDesktopChatStream,
+  uploadConversationAttachment,
+  deleteConversationAttachment,
   updateChat,
 } from "@/lib/api";
 import type { SseDonePayload } from "@/lib/api";
@@ -65,11 +68,7 @@ import type {
 import { isConversationEligibleModel } from "@/lib/types";
 import { formatUserError } from "../format-error";
 import { canonicalVoiceSha256Hex } from "./canonical-voice-hasher";
-import {
-  extractDocumentContext,
-  undeliverableAttachmentNotices,
-  type PendingDocument,
-} from "./documentContext";
+import { extractDocumentContext, type PendingDocument } from "./documentContext";
 import {
   currentConversationMemoryModeRevision,
   useConversationMemorySettings,
@@ -88,7 +87,8 @@ export type AttachmentRejectionReason =
   | "text-only-model" // model capability forbids this attachment kind
   | "unsupported-type" // MIME not in the image/* / document allowlist
   | "oversized" // exceeds MAX_ATTACHMENT_BYTES (8 MiB)
-  | "empty"; // file.size === 0
+  | "empty" // file.size === 0
+  | "delivery-refused";
 
 export interface PendingAttachment {
   readonly id: string;
@@ -108,6 +108,11 @@ export interface PendingAttachment {
   // chip UI (no path/bytes are surfaced from it). Undefined only in synthetic
   // test fixtures that construct a PendingAttachment without a source File.
   readonly file?: File | undefined;
+  readonly attachmentRef?: string | undefined;
+  readonly sha256?: string | undefined;
+  readonly expiresAt?: number | undefined;
+  readonly projectPath?: string | undefined;
+  readonly chatId?: string | undefined;
 }
 
 // Issue #148 — disclosure projection for documents that contributed extracted text to the most
@@ -117,6 +122,11 @@ export interface SentDocumentDisclosure {
   readonly id: string;
   readonly displayName: string;
   readonly truncated: boolean;
+}
+
+export interface SentImageDisclosure {
+  readonly id: string;
+  readonly displayName: string;
 }
 
 // Hard 8 MiB byte limit + the MIME allowlist/classifier are the canonical policy from
@@ -154,6 +164,128 @@ function revokeAttachmentPreview(attachment: PendingAttachment): void {
   if (attachment.previewUrl !== undefined && typeof URL.revokeObjectURL === "function") {
     URL.revokeObjectURL(attachment.previewUrl);
   }
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  const chunkSize = 32_768;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCodePoint(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function imageUploadProjection(file: File): Promise<{
+  readonly sha256: string;
+  readonly contentBase64: string;
+}> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return { sha256: bytesToHex(digest), contentBase64: bytesToBase64(bytes) };
+}
+
+type PendingAttachmentValidation =
+  | { readonly ok: true; readonly kind: PendingAttachmentKind }
+  | { readonly ok: false; readonly reason: AttachmentRejectionReason };
+
+interface PendingImageUpload {
+  readonly attachmentRef: string;
+  readonly expiresAt: number;
+  readonly sha256: string;
+  readonly projectPath: string;
+  readonly chatId: string;
+}
+
+type PendingAttachmentPreparation =
+  | {
+      readonly ok: true;
+      readonly previewUrl?: string;
+      readonly upload?: PendingImageUpload;
+    }
+  | { readonly ok: false; readonly reason: AttachmentRejectionReason };
+
+function validatePendingAttachment(
+  file: File,
+  selectedModel: ModelCapability | undefined,
+): PendingAttachmentValidation {
+  if (file.size === 0) return { ok: false, reason: "empty" };
+  if (file.size > MAX_ATTACHMENT_BYTES) return { ok: false, reason: "oversized" };
+  const kind = classifyMime(file.type);
+  if (kind === "unsupported-type") return { ok: false, reason: kind };
+  if (kind === "image" && selectedModel?.supportsImageInput === false) {
+    return { ok: false, reason: "text-only-model" };
+  }
+  if (kind === "document" && selectedModel?.supportsDocumentInput === false) {
+    return { ok: false, reason: "text-only-model" };
+  }
+  return { ok: true, kind };
+}
+
+async function preparePendingAttachment(
+  file: File,
+  kind: PendingAttachmentKind,
+  activeChat: Chat | undefined,
+): Promise<PendingAttachmentPreparation> {
+  if (kind === "document") return { ok: true };
+  let previewUrl: string;
+  try {
+    previewUrl = URL.createObjectURL(file);
+  } catch {
+    return { ok: false, reason: "unsupported-type" };
+  }
+  if (activeChat === undefined) {
+    URL.revokeObjectURL(previewUrl);
+    return { ok: false, reason: "delivery-refused" };
+  }
+  try {
+    const projection = await imageUploadProjection(file);
+    const uploaded = await uploadConversationAttachment({
+      projectPath: activeChat.projectPath,
+      chatId: activeChat.id,
+      mimeType: file.type,
+      sizeBytes: file.size,
+      sha256: projection.sha256,
+      contentBase64: projection.contentBase64,
+    });
+    return {
+      ok: true,
+      previewUrl,
+      upload: {
+        attachmentRef: uploaded.attachmentRef,
+        expiresAt: uploaded.expiresAt,
+        sha256: projection.sha256,
+        projectPath: activeChat.projectPath,
+        chatId: activeChat.id,
+      },
+    };
+  } catch {
+    URL.revokeObjectURL(previewUrl);
+    return { ok: false, reason: "delivery-refused" };
+  }
+}
+
+async function deletePendingImage(attachment: PendingAttachment): Promise<void> {
+  if (
+    attachment.kind !== "image" ||
+    attachment.attachmentRef === undefined ||
+    attachment.sha256 === undefined ||
+    attachment.projectPath === undefined ||
+    attachment.chatId === undefined
+  ) {
+    return;
+  }
+  await deleteConversationAttachment({
+    attachmentRef: attachment.attachmentRef,
+    projectPath: attachment.projectPath,
+    chatId: attachment.chatId,
+    mimeType: attachment.mimeType,
+    sizeBytes: attachment.sizeBytes,
+    sha256: attachment.sha256,
+  });
 }
 
 const DEFAULT_CHAT_TITLE = "New chat";
@@ -614,6 +746,29 @@ interface UngroundedSendRequest {
   readonly clientTurnId: string | undefined;
 }
 
+function desktopChatInputForUngrounded(
+  request: UngroundedSendRequest,
+): Parameters<typeof sendDesktopChat>[0] {
+  const { chat, project, content, modelId, documentContext, attachments, memory, clientTurnId } =
+    request;
+  return {
+    chatId: chat.id,
+    projectPath: project.path,
+    content,
+    modelId,
+    memory,
+    ...(documentContext.length > 0 ? { documentContext } : {}),
+    ...(attachments.length > 0 ? { attachments } : {}),
+    ...(attachments.some((attachment) => attachment.kind === "image")
+      ? { attachmentIntent: "deliver-images-to-selected-model" as const }
+      : {}),
+    ...(clientTurnId === undefined ? {} : { clientTurnId }),
+    ...(clientTurnId === undefined || chat.groundingScopeIdentity === undefined
+      ? {}
+      : { expectedGroundingScopeIdentity: chat.groundingScopeIdentity }),
+  };
+}
+
 interface SendAttemptRequest {
   readonly chat: Chat;
   readonly project: CanonicalChatProjectTarget;
@@ -638,6 +793,7 @@ interface SendAttemptExecution {
 interface CompletedSendOutcome {
   readonly status: "completed";
   readonly assistantMessageId: string;
+  readonly deliveredImageIds?: readonly string[] | undefined;
 }
 
 interface FailedSendOutcome {
@@ -961,12 +1117,21 @@ function canonicalVoicePageOutboxHasPendingTurn(chatId: string): boolean {
   return canonicalVoicePageOutbox.queueRef.current.some((item) => item.target.chat.id === chatId);
 }
 
-function completedSendOutcome(messages: readonly ChatMessage[]): SendAttemptOutcome {
+function completedSendOutcome(
+  messages: readonly ChatMessage[],
+  attachmentDeliveries?: readonly { readonly id: string; readonly status: "delivered" }[],
+): SendAttemptOutcome {
   const assistantMessages = messages.filter((message) => message.role === "assistant");
   const assistantMessage = assistantMessages.length === 1 ? assistantMessages[0] : undefined;
   return assistantMessage === undefined
     ? { status: "failed" }
-    : { status: "completed", assistantMessageId: assistantMessage.id };
+    : {
+        status: "completed",
+        assistantMessageId: assistantMessage.id,
+        ...(attachmentDeliveries === undefined || attachmentDeliveries.length === 0
+          ? {}
+          : { deliveredImageIds: attachmentDeliveries.map((delivery) => delivery.id) }),
+      };
 }
 
 interface SendMessage {
@@ -1168,6 +1333,7 @@ export interface UseChatSessionResult {
   // Issue #148 — documents that contributed extracted text to the most recent send, for the
   // post-send disclosure note. Empty until a send includes at least one readable document.
   readonly lastSentDocuments: readonly SentDocumentDisclosure[];
+  readonly lastSentImages?: readonly SentImageDisclosure[] | undefined;
   readonly memoryEnabled: boolean;
   readonly setMemoryEnabled: (next: boolean) => void;
   readonly memoryBudgetTokens: number;
@@ -1904,6 +2070,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // Issue #148 — documents that contributed extracted context to the most recent send. Drives
   // the post-send disclosure note (which docs were included + whether any was truncated).
   const [lastSentDocuments, setLastSentDocuments] = useState<readonly SentDocumentDisclosure[]>([]);
+  const [lastSentImages, setLastSentImages] = useState<readonly SentImageDisclosure[]>([]);
 
   // addPendingAttachment validates MIME type, model capability, and byte limit before
   // adding the attachment to state. Returns ok:false + reason on rejection (AC #1/#2).
@@ -1913,70 +2080,51 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     async (
       file: File,
     ): Promise<{ ok: true } | { ok: false; reason: AttachmentRejectionReason }> => {
-      if (file.size === 0) return { ok: false, reason: "empty" };
-      if (file.size > MAX_ATTACHMENT_BYTES) return { ok: false, reason: "oversized" };
-
-      const kind = classifyMime(file.type);
-      if (kind === "unsupported-type") return { ok: false, reason: "unsupported-type" };
-
-      // AC #1: validate against the selected model's capabilities. Read state.models
-      // and state.selectedModel inline so no stale closure issues.
       const selectedModelCapability = state.models.find((m) => m.id === state.selectedModel);
-      if (selectedModelCapability !== undefined) {
-        if (kind === "image" && !selectedModelCapability.supportsImageInput) {
-          return { ok: false, reason: "text-only-model" };
-        }
-        if (kind === "document" && !selectedModelCapability.supportsDocumentInput) {
-          return { ok: false, reason: "text-only-model" };
-        }
-      }
-
-      // AC #4: generate a preview for images only; never store file.path.
-      // GEN-PERF-MEMORY-001 — an object URL replaces the old base64 data-URL. It is synchronous
-      // (no FileReader, no main-thread base64 encode / full-file copy) and carries no path, so the
-      // path-safety guarantee is unchanged. It is revoked on every removal path (below + unmount).
-      let previewUrl: string | undefined;
-      if (kind === "image") {
-        try {
-          previewUrl = URL.createObjectURL(file);
-        } catch {
-          return { ok: false, reason: "unsupported-type" };
-        }
-      }
-
+      const validation = validatePendingAttachment(file, selectedModelCapability);
+      if (!validation.ok) return validation;
+      const prepared = await preparePendingAttachment(file, validation.kind, state.activeChat);
+      if (!prepared.ok) return prepared;
       const attachment: PendingAttachment = {
         id: crypto.randomUUID(),
-        kind,
-        name: file.name, // file.name is basename only — no path component (AC #4)
+        kind: validation.kind,
+        name: file.name,
         mimeType: file.type,
         sizeBytes: file.size,
-        previewUrl,
-        // Issue #148 — retain the File so the send path can extract document text.
-        file,
+        previewUrl: prepared.previewUrl,
+        ...(validation.kind === "document" ? { file } : {}),
+        ...prepared.upload,
       };
       setPendingAttachments((previous) => [...previous, attachment]);
       return { ok: true };
     },
-    [state.models, state.selectedModel],
+    [state.activeChat, state.models, state.selectedModel],
   );
 
   // AC #3: remove a single pending attachment by id.
   // GEN-PERF-MEMORY-001 — revoke the removed attachment's object-URL preview so no blob is retained.
   const removePendingAttachment = useCallback((id: string) => {
-    setPendingAttachments((previous) => {
-      const removed = previous.find((a) => a.id === id);
-      if (removed !== undefined) revokeAttachmentPreview(removed);
-      return previous.filter((a) => a.id !== id);
-    });
+    const removed = pendingAttachmentsRef.current.find((attachment) => attachment.id === id);
+    if (removed !== undefined) {
+      revokeAttachmentPreview(removed);
+      void deletePendingImage(removed).catch(() => {
+        setError(ATTACHMENT_CLEANUP_DEFERRED_ERROR);
+      });
+    }
+    setPendingAttachments((previous) => previous.filter((attachment) => attachment.id !== id));
   }, []);
 
   // Clears all pending attachments (exposed on the session API for surfaces that discard the whole
   // staging area). GEN-PERF-MEMORY-001 — revoke every removed attachment's object-URL preview.
   const clearPendingAttachments = useCallback(() => {
-    setPendingAttachments((previous) => {
-      for (const attachment of previous) revokeAttachmentPreview(attachment);
-      return previous.length === 0 ? previous : [];
-    });
+    const removed = pendingAttachmentsRef.current;
+    for (const attachment of removed) {
+      revokeAttachmentPreview(attachment);
+      void deletePendingImage(attachment).catch(() => {
+        setError(ATTACHMENT_CLEANUP_DEFERRED_ERROR);
+      });
+    }
+    setPendingAttachments((previous) => (previous.length === 0 ? previous : []));
   }, []);
 
   // #2843 — releases exactly the attachments a settled send consumed, rather than clearing the whole
@@ -1986,12 +2134,18 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const releasePendingAttachments = useCallback((ids: readonly string[]): void => {
     if (ids.length === 0) return;
     const consumed = new Set(ids);
+    const removed = pendingAttachmentsRef.current.filter((attachment) =>
+      consumed.has(attachment.id),
+    );
+    for (const attachment of removed) {
+      revokeAttachmentPreview(attachment);
+      void deletePendingImage(attachment).catch(() => {
+        setError(ATTACHMENT_CLEANUP_DEFERRED_ERROR);
+      });
+    }
     setPendingAttachments((previous) => {
       const retained = previous.filter((attachment) => !consumed.has(attachment.id));
       if (retained.length === previous.length) return previous;
-      for (const attachment of previous) {
-        if (consumed.has(attachment.id)) revokeAttachmentPreview(attachment);
-      }
       return retained;
     });
   }, []);
@@ -2028,7 +2182,6 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       readonly entries: readonly ConversationDocumentContextWire[];
       readonly disclosures: readonly SentDocumentDisclosure[];
     }> => {
-      const undeliverable = undeliverableAttachmentNotices(staged, t);
       const documents: PendingDocument[] = staged
         .filter((a) => a.kind === "document" && a.file !== undefined)
         .map((a) => ({
@@ -2042,7 +2195,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         documents.length === 0
           ? { entries: [] as readonly ConversationDocumentContextWire[], failures: [] }
           : await extractDocumentContext(documents, t);
-      const notices = [...extracted.failures, ...undeliverable];
+      const notices = extracted.failures;
       if (notices.length > 0) setError(notices.join(" "));
       const disclosures = extracted.entries.map((e) => ({
         id: e.id,
@@ -2062,6 +2215,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         name: attachment.name,
         mimeType: attachment.mimeType,
         sizeBytes: attachment.sizeBytes,
+        ...(attachment.attachmentRef === undefined
+          ? {}
+          : { attachmentRef: attachment.attachmentRef }),
+        ...(attachment.sha256 === undefined ? {} : { sha256: attachment.sha256 }),
       })),
     [],
   );
@@ -2613,6 +2770,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setLatestMemory(undefined);
       // Issue #148 — clear the document-disclosure note so it never bleeds across chats.
       setLastSentDocuments([]);
+      setLastSentImages([]);
       // 0.3.0 release audit — and neither may the draft or the staged attachments.
       resetComposerForConversationSwitch();
       try {
@@ -2750,7 +2908,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           }));
           notifyChatUpsert(payload.chat);
           if (payload.memory !== undefined) setLatestMemory(payload.memory);
-          const outcome = completedSendOutcome(payload.messages);
+          const outcome = completedSendOutcome(payload.messages, payload.attachmentDeliveries);
           if (outcome.status === "failed") setError(EMPTY_MODEL_RESPONSE_USER_MESSAGE);
           resolve(outcome);
         },
@@ -2865,39 +3023,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // stays within the 50-line function limit.
   const sendUngroundedBuffered = useCallback(
     async (request: UngroundedSendRequest): Promise<SendAttemptOutcome> => {
-      const {
-        chat,
-        project,
-        content,
-        optimisticId,
-        modelId,
-        signal,
-        documentContext,
-        attachments,
-        memory,
-        clientTurnId,
-      } = request;
+      const { chat, optimisticId, signal } = request;
       try {
         updateOwnedSendStatus(signal, "contacting");
         // Issue #148 — byte-bounded document context on the request body.
-        const result = await sendDesktopChat(
-          {
-            chatId: chat.id,
-            projectPath: project.path,
-            content,
-            modelId,
-            memory,
-            ...(documentContext.length > 0 ? { documentContext } : {}),
-            ...(attachments.length > 0 ? { attachments } : {}),
-            ...(clientTurnId === undefined ? {} : { clientTurnId }),
-            ...(clientTurnId === undefined || chat.groundingScopeIdentity === undefined
-              ? {}
-              : { expectedGroundingScopeIdentity: chat.groundingScopeIdentity }),
-          },
-          signal,
-        );
+        const result = await sendDesktopChat(desktopChatInputForUngrounded(request), signal);
         if (signal.aborted) return { status: "cancelled" };
-        const outcome = completedSendOutcome(result.messages);
+        const outcome = completedSendOutcome(result.messages, result.attachmentDeliveries);
         if (!isStillActiveChat(chat.id)) return outcome;
         setState((previous) => ({
           ...previous,
@@ -3078,9 +3210,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         memory,
         clientTurnId: request.clientTurnId,
       };
-      const terminal = request.forceBuffered
-        ? await sendUngroundedBuffered(ungroundedRequest)
-        : await sendUngrounded(ungroundedRequest);
+      const terminal =
+        request.forceBuffered || staged.some((attachment) => attachment.kind === "image")
+          ? await sendUngroundedBuffered(ungroundedRequest)
+          : await sendUngrounded(ungroundedRequest);
       return { terminal, disclosures: documentBundle.disclosures, consumedAttachmentIds };
     },
     [
@@ -3158,6 +3291,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return;
       }
       setLastSentDocuments(input.disclosures);
+      const delivered = new Set(input.settled.deliveredImageIds ?? []);
+      setLastSentImages(
+        pendingAttachmentsRef.current
+          .filter((attachment) => delivered.has(attachment.id))
+          .map((attachment) => ({ id: attachment.id, displayName: attachment.name })),
+      );
     },
     [releasePendingAttachments],
   );
@@ -3769,6 +3908,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       removePendingAttachment,
       clearPendingAttachments,
       lastSentDocuments,
+      lastSentImages,
       memoryEnabled,
       setMemoryEnabled,
       memoryBudgetTokens,
@@ -3818,6 +3958,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       removePendingAttachment,
       clearPendingAttachments,
       lastSentDocuments,
+      lastSentImages,
       memoryEnabled,
       setMemoryEnabled,
       memoryBudgetTokens,

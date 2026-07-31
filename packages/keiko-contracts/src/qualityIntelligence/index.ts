@@ -6,6 +6,15 @@
 
 export const QUALITY_INTELLIGENCE_SCHEMA_VERSION = "1" as const;
 
+// ─── Retention policy selection ─────────────────────────────────────────────
+export type { QualityIntelligenceRetentionPolicyId } from "./retentionPolicy.js";
+export {
+  QUALITY_INTELLIGENCE_DEFAULT_RETENTION_POLICY_ID,
+  QUALITY_INTELLIGENCE_RETENTION_POLICY_IDS,
+  isQualityIntelligenceRetentionPolicyId,
+  resolveQualityIntelligenceRetentionPolicyId,
+} from "./retentionPolicy.js";
+
 // ─── Branded IDs ───────────────────────────────────────────────────────────────
 export type {
   QualityIntelligenceRunId,

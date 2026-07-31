@@ -1373,6 +1373,63 @@ function coverageTone(coverage: CoverageQuality): StatusTone {
   return "warn";
 }
 
+interface IndexingRecoverySectionProps {
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly recovery: NonNullable<CapsuleHealth["indexingRecovery"]>;
+  readonly onActionComplete: () => void;
+  readonly resumeImpl?: typeof resumeCapsuleLargeDocuments;
+}
+
+function IndexingRecoverySection({
+  capsuleId,
+  recovery,
+  onActionComplete,
+  resumeImpl,
+}: IndexingRecoverySectionProps): ReactNode {
+  const t = useTranslate();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleResume(): Promise<void> {
+    setBusy(true);
+    setError(null);
+    try {
+      await (resumeImpl ?? resumeCapsuleLargeDocuments)(capsuleId, recovery.jobId);
+      onActionComplete();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("localKnowledge.detail.recovery.failed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="lkd-status-section" aria-labelledby="lkd-indexing-recovery-heading">
+      <h2 id="lkd-indexing-recovery-heading">{t("localKnowledge.detail.recovery.title")}</h2>
+      <p role="status" aria-live="polite">
+        {t(`localKnowledge.detail.recovery.${recovery.state}`, {
+          sources: recovery.sourceCount,
+          processed: recovery.processedDocuments,
+        })}
+      </p>
+      {recovery.state === "resumable" ? (
+        <button
+          type="button"
+          className="lk-action-button"
+          disabled={busy}
+          aria-label={t("localKnowledge.detail.recovery.resumeAria")}
+          onClick={() => void handleResume()}
+        >
+          {busy
+            ? t("localKnowledge.detail.recovery.resuming")
+            : t("localKnowledge.detail.recovery.resume")}
+        </button>
+      ) : null}
+      {error !== null ? <div role="alert">{error}</div> : null}
+    </section>
+  );
+}
+
 function LargeDocumentRow({
   progress,
   t,
@@ -1524,6 +1581,13 @@ export interface CapsuleDetailProps {
   readonly updateContextualRetrievalImpl?: typeof updateCapsuleContextualRetrieval;
 }
 
+function optionalResumeImplementation(resumeImpl: typeof resumeCapsuleLargeDocuments | undefined): {
+  readonly resumeImpl?: typeof resumeCapsuleLargeDocuments;
+} {
+  if (resumeImpl === undefined) return {};
+  return { resumeImpl };
+}
+
 export function CapsuleDetail({
   capsuleId: providedCapsuleId,
   onDeleted,
@@ -1541,6 +1605,7 @@ export function CapsuleDetail({
     capsuleId,
     fetchDetailImpl,
   );
+  const resumeImplementation = optionalResumeImplementation(resumeImpl);
 
   function handleDeleted(response: CapsuleActionResponse): void {
     if (onDeleted !== undefined) {
@@ -1631,6 +1696,14 @@ export function CapsuleDetail({
       {renderHtmlManualRefresh(capsuleId, data, reload)}
 
       <IndexingStatusSection data={data} />
+      {data.health.indexingRecovery !== undefined ? (
+        <IndexingRecoverySection
+          capsuleId={capsuleId}
+          recovery={data.health.indexingRecovery}
+          onActionComplete={reload}
+          {...resumeImplementation}
+        />
+      ) : null}
       <details className={detailStyles.advancedDisclosure}>
         <summary className={detailStyles.disclosureSummary}>
           <span>
@@ -1660,7 +1733,7 @@ export function CapsuleDetail({
                 latestJob(data)?.status === "running" ||
                 latestJob(data)?.status === "queued"
               }
-              {...(resumeImpl !== undefined ? { resumeImpl } : {})}
+              {...resumeImplementation}
             />
           ) : null}
           <SourcesSection capsuleId={capsuleId} sources={data.sources} onActionComplete={reload} />

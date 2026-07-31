@@ -7,6 +7,7 @@
 // directly; no guard is reimplemented; no secret reaches any response (live payloads are redacted).
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
 import { parseRunRequest } from "./run-request.js";
 import type { RunRequest, RunVoiceOrigin } from "./run-request.js";
 import { startRun, applyRun, type EngineContext } from "./run-engine.js";
@@ -30,9 +31,19 @@ import { approvalTokenInputFor, createApprovalToken } from "./governed-workflow.
 import { isVoiceDictationCapable, isVoiceRealtimeCapable } from "./read-handlers.js";
 import { evaluateSpokenActionGovernance } from "./voice-action-governance.js";
 import { resolveRegisteredOrManagedWorkspaceRoot } from "./task-workspace/authorization.js";
+import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
+import {
+  agentRunSessionMatches,
+  authorizeAgentRunMutation,
+  createAgentRunGovernance,
+  reserveAgentRunBudget,
+  revokeAgentRunGovernance,
+  type AgentRunGovernanceBinding,
+} from "./agent-run-governance.js";
 
 const MAX_BODY_BYTES = 1_000_000;
 const AGGREGATE_RUN_EVENTS_SNAPSHOT_LIMIT = 128;
+const AGENT_RUN_DEFAULT_PATCH_BUDGET_BYTES = 65_536;
 
 const VERIFY_NOOP_MODEL: ModelPort = {
   call: () => Promise.reject(new Error("verify runs must not call the model")),
@@ -214,11 +225,13 @@ function buildEngineContext(
   request: RunRequest,
   model: ModelPort,
   deps: UiHandlerDeps,
+  governance?: AgentRunGovernanceBinding,
 ): EngineContext {
   return {
     request,
     model,
     registry: deps.registry,
+    ...(governance === undefined ? {} : { governance }),
     evidence: {
       store: deps.evidenceStore,
       env: deps.env,
@@ -228,6 +241,96 @@ function buildEngineContext(
       ? {}
       : { toolArtifacts: createNodeToolResultArtifactStore(deps.evidenceDir) }),
   };
+}
+
+function isGovernedAgentRun(request: RunRequest): boolean {
+  return request.kind === "unit-tests" || request.kind === "bug-investigation";
+}
+
+function workspaceRootFor(request: RunRequest): string {
+  const workspaceRoot = request.input.workspaceRoot;
+  return typeof workspaceRoot === "string" ? workspaceRoot : "";
+}
+
+type AgentRunGovernancePreparation =
+  | { readonly ok: true; readonly binding: AgentRunGovernanceBinding }
+  | { readonly ok: false; readonly response: RouteResult };
+
+function prepareAgentRunGovernance(
+  ctx: RouteContext,
+  request: RunRequest,
+  deps: UiHandlerDeps,
+  runId: string,
+): AgentRunGovernancePreparation {
+  const session = resolveAppSessionReadAuthority(deps, ctx.req);
+  if (session === undefined) {
+    return {
+      ok: false,
+      response: {
+        status: 403,
+        body: errorBody("AGENT_RUN_AUTHORITY_REQUIRED", "The local app session is not paired."),
+      },
+    };
+  }
+  const created = createAgentRunGovernance({
+    runId,
+    workflow: request.kind === "unit-tests" ? "unit-tests" : "bug-investigation",
+    workspaceRoot: workspaceRootFor(request),
+    modelId: request.modelId,
+    requestedMode: request.requestedMode ?? "governed-assist",
+    deploymentCeiling: deps.codingRuntimeDeploymentCeiling ?? "governed-assist",
+    session,
+    nowIso: new Date().toISOString(),
+  });
+  return created.ok
+    ? { ok: true, binding: created.binding }
+    : {
+        ok: false,
+        response: {
+          status: 403,
+          body: errorBody("AGENT_RUN_AUTHORITY_INVALID", "Agent run authority was rejected."),
+        },
+      };
+}
+
+function agentRunGovernanceProjection(binding: AgentRunGovernanceBinding): Record<string, unknown> {
+  return {
+    requestedMode: binding.requestedMode,
+    effectiveMode: binding.effectiveMode,
+    deploymentCeiling: binding.deploymentCeiling,
+    connectorExecution: binding.connectorExecution,
+    deliveryExecution: binding.deliveryExecution,
+  };
+}
+
+function launchRun(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  request: RunRequest,
+  model: ModelPort,
+): RouteResult {
+  const runId = randomUUID();
+  const governance = isGovernedAgentRun(request)
+    ? prepareAgentRunGovernance(ctx, request, deps, runId)
+    : undefined;
+  if (governance !== undefined && !governance.ok) return governance.response;
+  const binding = governance?.binding;
+  try {
+    const started = startRun(buildEngineContext(request, model, deps, binding), deps.redactor, {
+      runId,
+    });
+    return {
+      status: 202,
+      body: {
+        runId: started.runId,
+        fingerprint: started.fingerprint,
+        ...(binding === undefined ? {} : { governance: agentRunGovernanceProjection(binding) }),
+      },
+    };
+  } catch (error) {
+    if (binding !== undefined) revokeAgentRunGovernance(binding);
+    return mapRunStartError(error);
+  }
 }
 
 // Route 5 — POST /api/runs. Validates the body, resolves the ModelPort, starts the run, returns 202.
@@ -263,11 +366,20 @@ export async function handleCreateRun(
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
+  return launchRun(ctx, deps, governed, model);
+}
+
+async function hasExplicitApplyConfirmation(ctx: RouteContext): Promise<boolean> {
   try {
-    const started = startRun(buildEngineContext(governed, model, deps), deps.redactor);
-    return { status: 202, body: { runId: started.runId, fingerprint: started.fingerprint } };
-  } catch (error) {
-    return mapRunStartError(error);
+    const raw = await readBody(ctx.req);
+    const parsed: unknown = JSON.parse(raw);
+    return (
+      isRecord(parsed) &&
+      parsed.confirm === true &&
+      Object.keys(parsed).every((key) => key === "confirm")
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -287,6 +399,9 @@ function lastEventId(req: IncomingMessage): number {
 export function handleRunEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
   const record = deps.registry.get(ctx.params.runId ?? "");
   if (record === undefined) {
+    return { status: 404, body: errorBody("NOT_FOUND", "Unknown run.") };
+  }
+  if (!agentRecordSessionMatches(record, ctx, deps)) {
     return { status: 404, body: errorBody("NOT_FOUND", "Unknown run.") };
   }
   openSseStream(ctx.res, record, lastEventId(ctx.req), deps.redactor);
@@ -314,19 +429,8 @@ export function handleAllRunEvents(ctx: RouteContext, deps: UiHandlerDeps): Hand
 
   const attachRun = (record: RunRecord): void => {
     if (closed || detachByRunId.has(record.runId)) return;
-    const writer: SseWriter = {
-      write: (event: StreamEvent): boolean => {
-        const accepted = writeMessageEvent(ctx.res, event, deps.redactor);
-        if (!accepted) {
-          ctx.res.destroy();
-        }
-        return accepted;
-      },
-      // A single run reaching terminal must not close the aggregate desktop stream.
-      close: (): void => {
-        detachRun(record.runId);
-      },
-    };
+    if (!agentRecordSessionMatches(record, ctx, deps)) return;
+    const writer = aggregateRunWriter(record, ctx, deps, detachRun);
     const detach = record.sink.attach(writer, -1);
     detachByRunId.set(record.runId, detach);
     if (record.sink.isTerminated()) {
@@ -352,6 +456,36 @@ export function handleAllRunEvents(ctx: RouteContext, deps: UiHandlerDeps): Hand
   ctx.req.on("close", close);
   ctx.res.on("close", close);
   return STREAMING;
+}
+
+function aggregateRunWriter(
+  record: RunRecord,
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  detachRun: (runId: string) => void,
+): SseWriter {
+  return {
+    write: (event: StreamEvent): boolean => {
+      if (!agentRecordSessionMatches(record, ctx, deps)) return false;
+      const accepted = writeMessageEvent(ctx.res, event, deps.redactor);
+      if (!accepted) ctx.res.destroy();
+      return accepted;
+    },
+    // A single run reaching terminal must not close the aggregate desktop stream.
+    close: (): void => {
+      detachRun(record.runId);
+    },
+  };
+}
+
+function agentRecordSessionMatches(
+  record: RunRecord,
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): boolean {
+  if (record.governance === undefined) return true;
+  const session = resolveAppSessionReadAuthority(deps, ctx.req);
+  return session !== undefined && agentRunSessionMatches(record.governance, session);
 }
 
 function openSseStream(
@@ -389,6 +523,9 @@ export function handleCancelRun(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
   if (record === undefined) {
     return { status: 404, body: errorBody("NOT_FOUND", "Unknown run.") };
   }
+  if (!agentRecordSessionMatches(record, ctx, deps)) {
+    return { status: 404, body: errorBody("NOT_FOUND", "Unknown run.") };
+  }
   record.cancel("cancelled via UI");
   return { status: 200, body: { ok: true } };
 }
@@ -397,6 +534,9 @@ export function handleCancelRun(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
 export function handleGetRun(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const record = deps.registry.get(ctx.params.runId ?? "");
   if (record === undefined) {
+    return { status: 404, body: errorBody("NOT_FOUND", "Unknown run.") };
+  }
+  if (!agentRecordSessionMatches(record, ctx, deps)) {
     return { status: 404, body: errorBody("NOT_FOUND", "Unknown run.") };
   }
   if (record.status === "running") {
@@ -422,6 +562,79 @@ function reportWithApply(
   return { ...report, applyReport, appliedAt };
 }
 
+function invalidAgentRunAuthorityResult(): RouteResult {
+  return {
+    status: 403,
+    body: errorBody(
+      "AGENT_RUN_AUTHORITY_INVALID",
+      "Agent run authority is missing, invalid, or expired.",
+    ),
+  };
+}
+
+async function rejectUnauthorizedAgentApply(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  record: RunRecord,
+  snapshot: AppliableSnapshot,
+): Promise<RouteResult | null> {
+  if (record.governance === undefined) return null;
+  if (!(await hasExplicitApplyConfirmation(ctx))) {
+    return {
+      status: 403,
+      body: errorBody("APPROVAL_REQUIRED", "Explicit apply confirmation is required."),
+    };
+  }
+  const session = resolveAppSessionReadAuthority(deps, ctx.req);
+  if (session === undefined) return invalidAgentRunAuthorityResult();
+  const payload = isRecord(snapshot.payload) ? snapshot.payload : {};
+  const workspaceRoot = typeof payload.workspaceRoot === "string" ? payload.workspaceRoot : "";
+  const authorized = authorizeAgentRunMutation({
+    binding: record.governance,
+    workspaceRoot,
+    session,
+    nowIso: new Date().toISOString(),
+  });
+  if (!authorized.ok) return invalidAgentRunAuthorityResult();
+  return authorized.effect === "denied"
+    ? { status: 403, body: errorBody("POLICY_DENIED", "Agent run apply is denied by policy.") }
+    : null;
+}
+
+function agentRunApplyPatchBudget(snapshot: AppliableSnapshot): number {
+  if (snapshot.kind !== "bug-investigation") return AGENT_RUN_DEFAULT_PATCH_BUDGET_BYTES;
+  const configured = snapshot.limits?.maxPatchBytes;
+  return typeof configured === "number" && Number.isSafeInteger(configured) && configured >= 0
+    ? configured
+    : AGENT_RUN_DEFAULT_PATCH_BUDGET_BYTES;
+}
+
+function reserveAgentRunApplyBudget(
+  record: RunRecord,
+  snapshot: AppliableSnapshot,
+): RouteResult | null {
+  if (record.governance === undefined) return null;
+  const payload = isRecord(snapshot.payload) ? snapshot.payload : {};
+  const workspaceRoot = typeof payload.workspaceRoot === "string" ? payload.workspaceRoot : "";
+  const reserved = reserveAgentRunBudget({
+    binding: record.governance,
+    workspaceRoot,
+    usage: {
+      toolCalls: 0,
+      patchBytes: agentRunApplyPatchBudget(snapshot),
+      promptTokens: 0,
+    },
+    nowIso: new Date().toISOString(),
+  });
+  if (reserved.ok) return null;
+  return reserved.reason === "budget-exceeded"
+    ? {
+        status: 403,
+        body: errorBody("AGENT_RUN_BUDGET_EXCEEDED", "Agent run budget is exhausted."),
+      }
+    : invalidAgentRunAuthorityResult();
+}
+
 // Route 9 — POST /api/runs/:runId/apply. The ONLY write path. 404 unknown; 409 when not in an
 // appliable (dry-run-success) state; otherwise re-invokes the gated workflow with apply:true.
 //
@@ -441,6 +654,8 @@ export async function handleApplyRun(ctx: RouteContext, deps: UiHandlerDeps): Pr
       body: errorBody("NOT_APPLIABLE", "The run is not in an appliable state."),
     };
   }
+  const agentApplyRejection = await rejectUnauthorizedAgentApply(ctx, deps, record, snapshot);
+  if (agentApplyRejection !== null) return agentApplyRejection;
   // Re-prove the workspace authorization AT the write boundary. `handleCreateRun` authorizes the
   // root so a CSRF-equipped local client cannot drive workflows in an arbitrary directory; the
   // decision is not durable authority, and this route — not the dry run — is what mutates the
@@ -453,8 +668,10 @@ export async function handleApplyRun(ctx: RouteContext, deps: UiHandlerDeps): Pr
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
+  const budgetRejection = reserveAgentRunApplyBudget(record, snapshot);
+  if (budgetRejection !== null) return budgetRejection;
   record.appliable = undefined;
-  const report = await applyRun(snapshot, model, record.modelId, deps.redactor);
+  const report = await applyRun(snapshot, model, record.modelId, deps.redactor, record.governance);
   record.applyReport = report;
   record.appliedAt = Date.now();
   return {

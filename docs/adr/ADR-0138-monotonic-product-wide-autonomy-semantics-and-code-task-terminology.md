@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (Issue #2385, Epic #2384, 2026-07-16).
+Accepted (Issue #2385, Epic #2384, 2026-07-16); capability-availability semantics clarified by
+Issue #2857 (2026-07-31).
 
 ## Amends
 
@@ -119,6 +120,19 @@ governed delivery path (ADR-0129 D4, ADR-0135): stricter-wins composition means 
 `approval-required` or `allowed` cell can always be tightened, never loosened, by an independent
 gate.
 
+**Capability-availability clarification (Issue #2857):** a matrix disposition is the maximum
+policy posture for an action that an implementing surface can already execute through a governed
+capability. `allowed` does not create that capability, mount an executor, supply connector
+credentials, or make a delivery substrate available. A missing or unsupported governed execution
+path remains a mode-independent, fail-closed denial. In particular, the Unit-test, Bugfix-agent,
+and managed OpenCode surfaces keep connector and delivery execution unavailable until they can
+reuse an existing governed execution substrate with the same Authority Envelope validation,
+policy composition, credential custody, confinement, cancellation, budgets, and body-free
+evidence. They must not introduce a raw or parallel executor as a shortcut. This clarification
+does not widen authority: D1 describes the maximum unattended posture inside a validated,
+available capability, while independent availability and governance gates still compose
+stricter-wins under D2.
+
 ### D3 — Product-wide impact of the corrected matrix
 
 Because ADR-0129 D1 makes the matrix product-wide, this correction lands once, at the shared
@@ -212,6 +226,9 @@ remain in force as enumerated in the Amends section above.
   envelope, or evidence record migrates.
 - Future records inherit one precise runtime vocabulary; "sidecar" survives only in historical
   records behind amendment banners.
+- Policy disposition and capability availability remain separate: a surface without an existing
+  governed connector or delivery execution path reports the capability unavailable and denies the
+  effect, even when the shared matrix cell is `allowed`.
 
 ## Alternatives considered
 

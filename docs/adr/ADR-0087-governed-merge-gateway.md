@@ -40,6 +40,12 @@ In scope: a new contracts leaf `git-merge.ts` (merge-readiness model + neutral b
 
 Out of scope: autonomous or background auto-merge scheduling; merge-queue *submission* (queue *position* is read and surfaced as a blocker, but the gateway does not enqueue); general history-rewrite tooling; non-GitHub provider rollout (provider-neutral seams preserved, not implemented for a second provider); merge-conflict *resolution* tooling (conflicts are surfaced as a blocker with recovery advice, not resolved).
 
+**Clarification (Issue #2865, 2026-07-31).** ADR-0135's GitHub native auto-merge rule governs
+Keiko's own contribution workflow for pull requests targeting this repository's `dev` branch. It
+does not amend this product-feature boundary. The Governed Merge Gateway continues to execute only
+an explicit, approval-gated merge request after visible readiness evaluation; it does not arm,
+schedule, or background-monitor provider auto-merge.
+
 ### Cross-branch ADR numbering
 
 The governed-git feat branch uses ADR numbers 0058–0065. An independent voice-digital-twin / editor feat branch independently reused some of these numbers. These are non-conflicting while the branches are un-merged to `dev`; numbers are per-branch-local until a feat-to-dev PR is opened. The merge coordinator must verify global ADR sequencing on `dev` before merging.

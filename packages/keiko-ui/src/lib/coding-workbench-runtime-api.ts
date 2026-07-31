@@ -15,6 +15,7 @@ import {
   type CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
   type CodingWorkbenchRuntimeResearchChannelPayload,
   type CodingWorkbenchRuntimeResearchRevokeRequest,
+  type CodingWorkbenchRuntimeResumeRequest,
   type CodingWorkbenchRuntimeRetryRequest,
   type CodingWorkbenchRuntimeSnapshot,
   type CodingWorkbenchRuntimeSseEvent,
@@ -156,7 +157,7 @@ export interface CodingWorkbenchRuntimeFollowUpBody extends CodingWorkbenchRunti
   readonly taskIntent: string;
 }
 
-/** Pause and resume bind to the run by id only; the server owns the transition guard. */
+/** Pause binds to the run by id only; the server owns the transition guard. */
 export interface CodingWorkbenchRuntimeLifecycleBody {
   readonly requestId: string;
 }
@@ -240,7 +241,7 @@ export function pauseCodingWorkbenchRuntime(
 
 export function resumeCodingWorkbenchRuntime(
   runId: string,
-  input: CodingWorkbenchRuntimeLifecycleBody,
+  input: CodingWorkbenchRuntimeResumeRequest,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
   return postSnapshot(runPath(runId, "/resume"), input);
 }

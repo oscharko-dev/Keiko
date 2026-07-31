@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
   acceptMemoryProposal,
+  applyMemoryConsolidationReviewItem,
   archiveMemory,
   cancelMemoryConsolidationJob,
   correctMemory,
@@ -67,6 +68,37 @@ describe("memory consolidation API helpers", () => {
           "Content-Type": "application/json",
           "X-Keiko-CSRF": "1",
         }),
+      }),
+    );
+  });
+
+  it("posts the reviewed consolidation preconditions and proposal body override", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve(jsonResponse({ application: { outcome: "applied" } })),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await applyMemoryConsolidationReviewItem("job 1", "item/2", [
+      { memoryId: "mem-1" as MemoryId, expectedUpdatedAt: 42 },
+    ]);
+    await acceptMemoryProposal("proposal 1", { bodyOverride: "Reviewed body" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/memory/consolidation/jobs/job%201/review-items/item%2F2/apply",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          preconditions: [{ memoryId: "mem-1", expectedUpdatedAt: 42 }],
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/memory/proposals/proposal%201/accept",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ bodyOverride: "Reviewed body" }),
       }),
     );
   });

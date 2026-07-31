@@ -194,7 +194,8 @@ function assertQualifiedCodexLaunch(input: {
   expect(input.spawnedEnv.HTTPS_PROXY).toBeUndefined();
   expect(input.spawnedEnv.SSL_CERT_FILE).toBeUndefined();
   expect(existsSync(join(input.managedRoot, "coding-runtime", "codex"))).toBe(false);
-  expect(input.child.stdout.listenerCount("data")).toBe(1);
+  // Exactly one protocol listener plus the manager-owned body-free summary tee.
+  expect(input.child.stdout.listenerCount("data")).toBe(2);
 }
 
 function assertCodexStateEnvironment(env: Record<string, string>, stateRoot: string): void {
@@ -385,6 +386,8 @@ interface FakeChild {
   readonly stderr: PassThrough;
   readonly kills: NodeJS.Signals[];
   exit(code?: number | null): void;
+  notifyExit(code?: number | null): void;
+  endStreams(): void;
   error(error: Error): void;
 }
 
@@ -412,8 +415,14 @@ function fakeChild(): FakeChild {
         onError = callback;
       },
     },
-    exit: (code = 0): void => {
+    exit(code = 0): void {
+      this.notifyExit(code);
+      this.endStreams();
+    },
+    notifyExit: (code = 0): void => {
       onExit?.(code);
+    },
+    endStreams: (): void => {
       stdout.end();
       stderr.end();
     },
@@ -1685,6 +1694,162 @@ describe("coding runtime manager", () => {
     expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(fixture.workspaceRoot);
   });
 
+  it("projects bounded body-free summaries for hostile stdout, stderr and non-zero exit", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      diagnostics,
+    });
+    const stdout = "hostile-stdout-secret\n";
+    const stderr = "hostile-stderr-secret\n";
+
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.stdout.write(stdout);
+    harness.children[0]?.stderr.write(stderr);
+    harness.children[0]?.exit(9);
+    await settle();
+
+    const result = manager.result("run-1988");
+    expect(result).toEqual({
+      status: "failed",
+      exitCode: 9,
+      output: {
+        byteCount: Buffer.byteLength(stdout),
+        lineCount: 1,
+        sha256: createHash("sha256").update(stdout).digest("hex"),
+        truncated: false,
+      },
+      error: {
+        byteCount: Buffer.byteLength(stderr),
+        lineCount: 1,
+        sha256: createHash("sha256").update(stderr).digest("hex"),
+        truncated: false,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("hostile-");
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("hostile-");
+    expect(manager.result("run-other")).toBeUndefined();
+  });
+
+  it("summarizes raw Codex app-server stdout without retaining its protocol body", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const manager = createCodexTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      diagnostics,
+      codexLifecycleAdapter: qualifiedCodexAdapter(),
+    });
+    const stdout = '{"id":"private-codex-frame","result":{"status":"failed"}}\n';
+
+    await manager.start(
+      codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.stdout.write(stdout);
+    harness.children[0]?.exit(9);
+    await settle();
+
+    expect(manager.result("run-1988")?.output).toEqual({
+      byteCount: Buffer.byteLength(stdout),
+      lineCount: 1,
+      sha256: createHash("sha256").update(stdout).digest("hex"),
+      truncated: false,
+    });
+    expect(JSON.stringify(manager.result("run-1988"))).not.toContain("private-codex-frame");
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("private-codex-frame");
+  });
+
+  it("finalizes a result only after reaping and draining stdout and stderr", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+    });
+    const stdout = "last-stdout-chunk\n";
+    const stderr = "last-stderr-chunk\n";
+
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.notifyExit(9);
+    expect(manager.result("run-1988")).toBeUndefined();
+    harness.children[0]?.stdout.write(stdout);
+    harness.children[0]?.stderr.write(stderr);
+    harness.children[0]?.endStreams();
+
+    await vi.waitFor(() => {
+      expect(manager.result("run-1988")).toEqual({
+        status: "failed",
+        exitCode: 9,
+        output: {
+          byteCount: Buffer.byteLength(stdout),
+          lineCount: 1,
+          sha256: createHash("sha256").update(stdout).digest("hex"),
+          truncated: false,
+        },
+        error: {
+          byteCount: Buffer.byteLength(stderr),
+          lineCount: 1,
+          sha256: createHash("sha256").update(stderr).digest("hex"),
+          truncated: false,
+        },
+      });
+    });
+  });
+
+  it("diagnoses stream errors once without releasing or retaining their bodies", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const privateStdoutErrorBody = "private-stdout-drain-body";
+    const privateStderrErrorBody = "private-stderr-drain-body";
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(() => child.handle),
+      processEnv: {},
+      diagnostics,
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+    });
+
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    child.stdout.emit("error", new Error(privateStdoutErrorBody));
+    child.stderr.emit("error", new Error(privateStderrErrorBody));
+    child.notifyExit(9);
+    child.endStreams();
+
+    await vi.waitFor(() => {
+      expect(manager.health()).toMatchObject({
+        status: "recovery-required",
+        failureCode: "runtime-reap-unproven",
+      });
+    });
+    expect(manager.result("run-1988")).toBeUndefined();
+    const streamDrainDiagnostics = diagnostics.record.mock.calls
+      .map(([record]) => record)
+      .filter((record) => record.operation === "coding-runtime.stream-drain");
+    expect(streamDrainDiagnostics).toEqual([
+      {
+        correlationId: "run-1988",
+        timestamp: "2026-07-07T13:00:00.000Z",
+        operation: "coding-runtime.stream-drain",
+        source: "coding-runtime-manager.stream-drain",
+        errorClass: "Error",
+        message: "runtime-stream-drain-failed",
+      },
+    ]);
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(privateStdoutErrorBody);
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(privateStderrErrorBody);
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(fixture.workspaceRoot);
+  });
+
   it("actively drains high-volume runtime stderr without emitting it or blocking reap", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
@@ -1973,7 +2138,7 @@ describe("coding runtime manager", () => {
     expect(JSON.stringify(permissionEvent)).not.toContain(fixture.workspaceRoot);
   });
 
-  it("carries Supervised Coding prompt metadata through permission events", async () => {
+  it("rejects delivery requests before projecting approval metadata", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
@@ -2004,18 +2169,15 @@ describe("coding runtime manager", () => {
     );
     await settle();
 
-    const permissionEvent = events.find((event) => event.kind === "permission-requested");
-    expect(permissionEvent).toMatchObject({
-      permissionRequest: {
-        requestId: "perm-1992-push",
-        actionKind: "push",
-        scopeLabel: "workspace-scope",
-        risk: "high",
-        policyReason: "approval-required",
-      },
+    const failureEvent = events.find((event) => event.failureCode === "delivery-denied");
+    expect(failureEvent).toMatchObject({
+      kind: "failure-redacted",
+      failureSummary: "delivery-denied",
+      retryable: false,
     });
-    expect(validateCodingWorkbenchRuntimeEvent(permissionEvent).ok).toBe(true);
-    expect(JSON.stringify(permissionEvent)).not.toMatch(/diff --git|stdout|stderr|\/tmp/u);
+    expect(events.some((event) => event.kind === "permission-requested")).toBe(false);
+    expect(validateCodingWorkbenchRuntimeEvent(failureEvent).ok).toBe(true);
+    expect(JSON.stringify(failureEvent)).not.toMatch(/diff --git|stdout|stderr|\/tmp/u);
   });
 
   it("enforces supervised file-edit scope before emitting a runtime event", async () => {
@@ -2199,7 +2361,59 @@ describe("coding runtime manager", () => {
     await manager.stop("run-1988");
   });
 
-  it("enforces supervised delivery approval provenance before allowing mutations", async () => {
+  it("applies a resumed narrower mode to subsequent live permission decisions", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      onRuntimeEvent: (event): void => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+    await manager.start(
+      autonomousDeliveryRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    expect(manager.pause("run-1993")).toEqual({ ok: true, paused: true });
+    expect(manager.resume("run-1993", "governed-assist")).toEqual({
+      ok: true,
+      paused: false,
+      effectiveMode: "governed-assist",
+    });
+    const narrowedPermission = permissionLine({
+      requestId: "perm-1991-policy",
+      kind: "workspace-write",
+      actionClass: "workspace-write",
+      reasonCode: "approval-required",
+      actionKind: "file-edit",
+      scopeLabel: "workspace-scope",
+      risk: "medium",
+      policyReason: "approval-required",
+      targetPath: "src/a.ts",
+      allowedRelativePaths: ["src/a.ts", "src/b.ts"],
+      fileCount: 2,
+      addedLines: 7,
+      deletedLines: 3,
+    });
+    harness.children[0]?.stdout.write(narrowedPermission);
+    await settle();
+
+    expect(events.find((event) => event.kind === "permission-requested")).toMatchObject({
+      permissionRequest: { requestId: "perm-1991-policy" },
+    });
+    expect(events.some((event) => event.kind === "diff-summarized")).toBe(false);
+    expect(manager.pause("run-1993")).toEqual({ ok: true, paused: true });
+    expect(manager.resume("run-1993", "supervised-coding")).toEqual({
+      ok: false,
+      failureCode: "authority-resolution-failed",
+      retryable: false,
+    });
+  });
+
+  it("keeps supervised delivery unavailable without consuming approval proofs", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
@@ -2242,26 +2456,14 @@ describe("coding runtime manager", () => {
     );
     await settle();
 
-    expect(events.find((event) => event.kind === "permission-requested")).toMatchObject({
-      permissionRequest: {
-        requestId: "perm-1992-push-missing",
-        actionKind: "push",
-        policyReason: "approval-required",
-      },
-    });
-    const staleFailures = events.filter((event) => event.failureCode === "approval-proof-stale");
-    expect(staleFailures).toHaveLength(2);
+    expect(events.filter((event) => event.failureCode === "delivery-denied")).toHaveLength(4);
     expect(events.find((event) => event.failureCode === "operator-stopped")).toMatchObject({
       kind: "failure-redacted",
       failureSummary: "operator-stopped",
       retryable: false,
     });
-    expect(events.find((event) => event.kind === "artifact-produced")).toMatchObject({
-      artifactKind: "approval",
-      artifactLabel: "approval-proof-accepted",
-      artifactDigest: issued.approvalDigest,
-      artifactBytes: 0,
-    });
+    expect(events.some((event) => event.kind === "permission-requested")).toBe(false);
+    expect(events.some((event) => event.kind === "artifact-produced")).toBe(false);
     expect(JSON.stringify(events)).not.toContain(issued.approval.approvalToken);
   });
 
@@ -2330,8 +2532,10 @@ describe("coding runtime manager", () => {
     );
     await settle();
 
-    const staleFailures = events.filter((event) => event.failureCode === "approval-proof-stale");
-    expect(staleFailures).toHaveLength(2);
+    expect(events.filter((event) => event.failureCode === "delivery-denied")).toHaveLength(1);
+    expect(events.filter((event) => event.failureCode === "connector-access-denied")).toHaveLength(
+      1,
+    );
     expect(events.some((event) => event.kind === "artifact-produced")).toBe(false);
     expect(JSON.stringify(events)).not.toContain(pushApproval.approval.approvalToken);
     expect(JSON.stringify(events)).not.toContain(externalApproval.approval.approvalToken);
@@ -2457,10 +2661,6 @@ describe("coding runtime manager", () => {
       kind: "network-egress",
       actionClass: "network-egress",
     },
-    {
-      kind: "delivery-substrate",
-      actionClass: "delivery-substrate",
-    },
   ] as const)(
     "surfaces governed-assist $actionClass sidecar approval requests without blanket denial",
     async ({ kind, actionClass, commandLabel }) => {
@@ -2507,7 +2707,7 @@ describe("coding runtime manager", () => {
     },
   );
 
-  it("keeps valid governed-assist connector scopes approvable but rejects malformed scopes", async () => {
+  it("keeps connector execution unavailable in governed assist and rejects malformed scopes", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
@@ -2555,17 +2755,10 @@ describe("coding runtime manager", () => {
     await settle();
 
     const permissionEvents = events.filter((event) => event.kind === "permission-requested");
-    expect(permissionEvents).toHaveLength(2);
-    expect(permissionEvents.map((event) => event.permissionRequest)).toEqual([
-      expect.objectContaining({
-        requestId: "perm-1991-connector-read",
-        connectorScopes: ["issue-tracker.read"],
-      }),
-      expect.objectContaining({
-        requestId: "perm-1991-connector-write",
-        connectorScopes: ["source-control.write"],
-      }),
-    ]);
+    expect(permissionEvents).toHaveLength(0);
+    expect(events.filter((event) => event.failureCode === "connector-access-denied")).toHaveLength(
+      2,
+    );
     expect(events.find((event) => event.failureSummary === "sidecar-event-denied")).toMatchObject({
       kind: "failure-redacted",
       failureCode: "failure-redacted",
@@ -2573,7 +2766,7 @@ describe("coding runtime manager", () => {
     });
   });
 
-  it("fails closed for autonomous sidecar mutations outside the server delivery executor", async () => {
+  it("fails closed when governed connector and delivery executors are unavailable", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
@@ -2609,7 +2802,10 @@ describe("coding runtime manager", () => {
     );
     await settle();
 
-    expect(events.filter((event) => event.failureCode === "delivery-denied")).toHaveLength(2);
+    expect(events.filter((event) => event.failureCode === "delivery-denied")).toHaveLength(1);
+    expect(events.filter((event) => event.failureCode === "connector-access-denied")).toHaveLength(
+      1,
+    );
     expect(events.find((event) => event.failureCode === "operator-stopped")).toMatchObject({
       kind: "failure-redacted",
       failureSummary: "operator-stopped",
@@ -2623,8 +2819,10 @@ describe("coding runtime manager", () => {
   // action class was not `workspace-read` with `delivery-denied`, which the orchestrator turns into
   // a terminal failed run — so a scoped file edit and an allowlisted verification command that
   // Supervised workspace admits outright killed the run under the WIDER mode. Delivery and
-  // connector mutations stay denied (the test above): the server delivery executor remains the
-  // only delivery authority, an independent mode-invariant gate composed stricter-wins.
+  // connector mutations stay denied (the test above): an `allowed` policy posture does not create
+  // a capability or executor. The existing governed delivery substrate remains the only delivery
+  // authority, an independent mode-invariant gate composed stricter-wins; this runtime must not
+  // add a raw parallel executor (ADR-0138 D2, Issue #2857).
   it("never denies in Full access a workspace-contained action Supervised workspace admits", async () => {
     const fixture = createManagedFixture();
     mkdirSync(join(fixture.workspaceRoot, "src"), { recursive: true });

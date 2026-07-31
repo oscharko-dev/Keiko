@@ -1,4 +1,8 @@
+import { createHash, type Hash } from "node:crypto";
+
 export const CODING_RUNTIME_MAX_LINE_BYTES = 8 * 1024;
+const CODING_RUNTIME_MAX_SUMMARY_BYTES = 1_073_741_824;
+const CODING_RUNTIME_MAX_SUMMARY_LINES = 1_000_000;
 
 export type CodingRuntimeProcessIoFailure = "callback-failed" | "line-oversized" | "utf8-invalid";
 export type CodingRuntimeProcessIoResult =
@@ -31,6 +35,44 @@ export interface CodingRuntimeStderrDrainerOptions {
   readonly maxLines?: number | undefined;
   readonly summaryIntervalBytes?: number | undefined;
   readonly onSummary?: ((summary: CodingRuntimeStderrSummary) => void) | undefined;
+}
+
+export interface CodingRuntimeProcessSummary {
+  readonly byteCount: number;
+  readonly lineCount: number;
+  readonly sha256: string;
+  readonly truncated: boolean;
+}
+
+export interface CodingRuntimeProcessSummaryAccumulator {
+  readonly push: (chunk: Buffer | string) => void;
+  readonly snapshot: () => CodingRuntimeProcessSummary;
+}
+
+/** Retains no process body: only saturating counts and an incremental SHA-256 digest. */
+export function createCodingRuntimeProcessSummaryAccumulator(): CodingRuntimeProcessSummaryAccumulator {
+  let byteCount = 0;
+  let lineCount = 0;
+  let truncated = false;
+  const hash: Hash = createHash("sha256");
+  return {
+    push(chunk): void {
+      const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf8");
+      hash.update(value);
+      const bytes = saturatingCount(byteCount, value.length, CODING_RUNTIME_MAX_SUMMARY_BYTES);
+      const lines = saturatingCount(
+        lineCount,
+        countNewlines(value),
+        CODING_RUNTIME_MAX_SUMMARY_LINES,
+      );
+      byteCount = bytes.value;
+      lineCount = lines.value;
+      truncated ||= bytes.truncated || lines.truncated;
+    },
+    snapshot(): CodingRuntimeProcessSummary {
+      return { byteCount, lineCount, sha256: hash.copy().digest("hex"), truncated };
+    },
+  };
 }
 
 const DEFAULT_STDERR_MAX_BYTES = 1024 * 1024;
@@ -182,4 +224,15 @@ function countNewlines(chunk: Buffer | string): number {
   let count = 0;
   for (const value of chunk) if (value === 0x0a || value === "\n") count += 1;
   return count;
+}
+
+function saturatingCount(
+  current: number,
+  increment: number,
+  maximum: number,
+): { readonly value: number; readonly truncated: boolean } {
+  const available = maximum - current;
+  return increment > available
+    ? { value: maximum, truncated: true }
+    : { value: current + increment, truncated: false };
 }

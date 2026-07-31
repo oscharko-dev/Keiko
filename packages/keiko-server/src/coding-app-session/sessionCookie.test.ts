@@ -7,7 +7,9 @@ import {
   APP_SESSION_GIT_COOKIE_PATH,
   APP_SESSION_COOKIE_NAME,
   APP_SESSION_RUNTIME_COOKIE_PATH,
+  APP_SESSION_RUNS_COOKIE_PATH,
   APP_SESSION_WORKSPACES_COOKIE_PATH,
+  APP_SESSION_DESKTOP_COOKIE_PATH,
   clearSessionCookie,
   clearSessionCookies,
   readSessionCookie,
@@ -44,20 +46,22 @@ describe("serializeSessionCookie", () => {
   it("issues the bearer only on protected coding-session route families", () => {
     const cookies = serializeSessionCookies("t", { secure: false, maxAgeSeconds: 10 });
 
-    expect(cookies).toHaveLength(8);
+    expect(cookies).toHaveLength(10);
     expect(cookies[0]).toContain("Path=/api/coding-workbench;");
     expect(cookies[1]).toContain(`Path=${APP_SESSION_GIT_COOKIE_PATH};`);
     expect(cookies[2]).toContain(`Path=${APP_SESSION_FILES_COOKIE_PATH};`);
     expect(cookies[3]).toContain(`Path=${APP_SESSION_EDITOR_COOKIE_PATH};`);
     expect(cookies[4]).toContain(`Path=${APP_SESSION_RUNTIME_COOKIE_PATH};`);
-    expect(cookies[5]).toContain(`Path=${APP_SESSION_WORKSPACES_COOKIE_PATH};`);
+    expect(cookies[5]).toContain(`Path=${APP_SESSION_RUNS_COOKIE_PATH};`);
+    expect(cookies[6]).toContain(`Path=${APP_SESSION_WORKSPACES_COOKIE_PATH};`);
+    expect(cookies[7]).toContain(`Path=${APP_SESSION_DESKTOP_COOKIE_PATH};`);
     // The predecessor broad-path bearer is expired on issuance: a browser that paired before the
     // narrowing holds the SAME cookie name at Path=/api and would keep sending it to unrelated
     // /api routes until it lapsed on its own.
-    expect(cookies[6]).toContain("Path=/api/editor/local-history;");
-    expect(cookies[6]).toContain("Max-Age=0");
-    expect(cookies[7]).toContain("Path=/api;");
-    expect(cookies[7]).toContain("Max-Age=0");
+    expect(cookies[8]).toContain("Path=/api/editor/local-history;");
+    expect(cookies[8]).toContain("Max-Age=0");
+    expect(cookies[9]).toContain("Path=/api;");
+    expect(cookies[9]).toContain("Max-Age=0");
     // Only the final expiring projection may carry the broad path; no live bearer does.
     expect(cookies.slice(0, -1).every((cookie) => !cookie.includes("Path=/api;"))).toBe(true);
   });
@@ -114,16 +118,18 @@ describe("clearSessionCookie", () => {
   it("expires every route-family projection", () => {
     const cookies = clearSessionCookies(false);
 
-    expect(cookies).toHaveLength(8);
+    expect(cookies).toHaveLength(10);
     expect(cookies.every((cookie) => cookie.includes("Max-Age=0"))).toBe(true);
     expect(cookies[1]).toContain(`Path=${APP_SESSION_GIT_COOKIE_PATH};`);
     expect(cookies[2]).toContain(`Path=${APP_SESSION_FILES_COOKIE_PATH};`);
     expect(cookies[3]).toContain(`Path=${APP_SESSION_EDITOR_COOKIE_PATH};`);
     expect(cookies[4]).toContain(`Path=${APP_SESSION_RUNTIME_COOKIE_PATH};`);
-    expect(cookies[5]).toContain(`Path=${APP_SESSION_WORKSPACES_COOKIE_PATH};`);
-    expect(cookies[6]).toContain("Path=/api/editor/local-history;");
+    expect(cookies[5]).toContain(`Path=${APP_SESSION_RUNS_COOKIE_PATH};`);
+    expect(cookies[6]).toContain(`Path=${APP_SESSION_WORKSPACES_COOKIE_PATH};`);
+    expect(cookies[7]).toContain(`Path=${APP_SESSION_DESKTOP_COOKIE_PATH};`);
+    expect(cookies[8]).toContain("Path=/api/editor/local-history;");
     // Sign-out must also remove the predecessor broad-path bearer, not just the narrow ones.
-    expect(cookies[7]).toContain("Path=/api;");
+    expect(cookies[9]).toContain("Path=/api;");
   });
 });
 

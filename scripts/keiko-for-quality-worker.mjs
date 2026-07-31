@@ -245,12 +245,16 @@ export async function publishCheck(
 }
 
 export function checkBody(result, name = checkName) {
+  const digestMarker =
+    isValidHeadSha(result.reviewHeadSha) && /^[0-9a-f]{64}$/u.test(result.reviewDigest)
+      ? `\n<!-- keiko-for-quality-review-digest:v1 head=${result.reviewHeadSha} sha256=${result.reviewDigest} -->`
+      : "";
   if (result.passed) {
     return {
       conclusion: "success",
       name,
       output: {
-        summary: "All current-head Keiko for Quality evidence is valid.",
+        summary: `All current-head Keiko for Quality evidence is valid.${digestMarker}`,
         title: name,
       },
       status: "completed",
@@ -258,7 +262,7 @@ export function checkBody(result, name = checkName) {
   }
   const body = {
     name,
-    output: { summary: result.failures.join("\n"), title: name },
+    output: { summary: `${result.failures.join("\n")}${digestMarker}`, title: name },
     status: "in_progress",
   };
   return hardFailure(result.failures)
@@ -337,7 +341,14 @@ function evidenceAgeLabel(result) {
   return age === undefined ? "unavailable (invalid)" : `\`${age}\``;
 }
 
+function reviewBaselineCommentMarker(headSha, state) {
+  if (!isValidHeadSha(headSha) || (state !== "accepted" && state !== "pending")) return [];
+  return [`<!-- keiko-for-quality-review-baseline:v1 head=${headSha} state=${state} -->`];
+}
+
 export function dashboardComment({
+  baselineHeadSha,
+  baselineState,
   headSha,
   marker = dashboardMarker,
   name = checkName,
@@ -354,6 +365,7 @@ export function dashboardComment({
     : `${incompleteEvidenceLabel} evidence (${String(result.failures.length)})`;
   return [
     marker,
+    ...reviewBaselineCommentMarker(baselineHeadSha, baselineState),
     `## ${name}`,
     "",
     `${state.icon} **${state.label}**`,
@@ -385,6 +397,8 @@ export function dashboardComment({
 }
 
 export async function publishDashboardComment({
+  baselineHeadSha,
+  baselineState,
   owner,
   repository,
   pullNumber,
@@ -397,6 +411,8 @@ export async function publishDashboardComment({
   env,
 }) {
   const body = dashboardComment({
+    baselineHeadSha,
+    baselineState,
     headSha: pull.head.sha,
     marker,
     name,

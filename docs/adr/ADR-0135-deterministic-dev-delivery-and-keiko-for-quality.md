@@ -17,6 +17,11 @@ For Keiko repository work targeting `dev`, this record supersedes the requiremen
 human review and per-merge approval after a maintainer has accepted the task or epic and bounded its
 delivery scope.
 
+This amendment is limited to Keiko's own contribution workflow: agents act on the assigned branch
+and pull request, and GitHub branch protection performs repository integration. It does not amend
+ADR-0087 or add native auto-merge scheduling to the Governed Merge Gateway that Keiko exposes to
+end users for their target repositories.
+
 ## Context
 
 Keiko epics are implemented by autonomous agents as large integration pull requests. Requiring a

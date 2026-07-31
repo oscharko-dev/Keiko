@@ -7,8 +7,10 @@ export { KEIKO_MEMORY_VAULT_VERSION } from "./version.js";
 export { createMemoryVault } from "./vault.js";
 export {
   MemoryStorageError,
+  MemoryStoragePreconditionError,
   MemoryStorageValidationError,
   type MemoryStorageErrorCode,
+  type MemoryStoragePreconditionField,
   type MemoryStorageValidationFailure,
 } from "./errors.js";
 export {
@@ -31,6 +33,9 @@ export type {
   MemoryEmbeddingMetric,
   MemoryEmbeddingRow,
   MemoryEvent,
+  MemoryGraphMutation,
+  MemoryGraphPrecondition,
+  MemoryGraphMutationResult,
   MemoryMetadata,
   MemoryTombstone,
   MemoryUpdatePatch,

@@ -28,6 +28,7 @@ import type {
   QualityIntelligenceModelPolicy,
   QualityIntelligenceModelPolicyResponse,
   QualityIntelligenceModelPreflightSummary,
+  QualityIntelligenceRetentionPolicyId,
   ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
 import { pickWithNativeDialog } from "@/lib/native-file-dialog";
@@ -303,6 +304,8 @@ export interface RunLauncherProps {
     readonly QualityIntelligenceFigmaSnapshotSource[] | undefined;
   /** Image-only sources from connected Figma Image windows. */
   readonly connectedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
+  /** Persisted retention setting applied to the evidence manifest produced by this run. */
+  readonly retentionPolicyId?: QualityIntelligenceRetentionPolicyId | undefined;
 }
 
 // Human-readable kind name for a connected source, used in the accessible connected-source list.
@@ -590,6 +593,7 @@ export function RunLauncher({
   connectedFigmaSnapshotRunIds,
   connectedFigmaSnapshotSources,
   connectedImageSources,
+  retentionPolicyId = "qi:short-30d",
 }: RunLauncherProps): ReactNode {
   const t = useTranslate();
   const [label, setLabel] = useState("");
@@ -966,6 +970,7 @@ export function RunLauncher({
     const request: QualityIntelligenceStartRunRequest = {
       sources,
       profileId,
+      retentionPolicyId,
       ...(modelPolicyResponse !== null ? { modelPolicy } : {}),
       ...(parsedSeed !== undefined ? { seed: parsedSeed } : {}),
     };
@@ -998,6 +1003,7 @@ export function RunLauncher({
   }, [
     ready,
     profileId,
+    retentionPolicyId,
     modelPolicy,
     modelPolicyResponse,
     running,

@@ -1,4 +1,4 @@
-import { webcrypto } from "node:crypto";
+import { createHash, webcrypto } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +15,7 @@ import {
 } from "../keiko-for-quality-action.mjs";
 
 const evaluatedAt = Date.parse("2026-07-12T00:00:00.000Z");
+const establishedBaselineHead = "9".repeat(40);
 let signingKey;
 
 beforeAll(async () => {
@@ -91,6 +92,48 @@ function qodoComment(headSha, bugs = 0) {
   };
 }
 
+function normalizedQodoDigest(comment) {
+  const normalized = comment.body.replaceAll(/[0-9a-f]{40}/giu, "<sha>");
+  return createHash("sha256").update(normalized, "utf8").digest("hex");
+}
+
+function dashboardWithReviewBaseline(headSha, options = {}) {
+  return {
+    author_association: "NONE",
+    body:
+      options.body ??
+      "<!-- keiko-for-quality-action-dashboard:v1 -->\n" +
+        `<!-- keiko-for-quality-review-baseline:v1 head=${headSha} state=${options.state ?? "accepted"} -->`,
+    id: 11,
+    performed_via_github_app: { id: options.appId ?? 4290143 },
+    updated_at: "2026-07-11T09:00:00.000Z",
+    user: {
+      id: options.authorId ?? 304621804,
+      login: options.author ?? "keiko-for-quality[bot]",
+      type: options.authorType ?? "Bot",
+    },
+  };
+}
+
+function checkWithReviewDigest(headSha, digest) {
+  return {
+    app: { id: 4290143 },
+    completed_at: "2026-07-11T09:00:01.000Z",
+    conclusion: "success",
+    head_sha: headSha,
+    id: 2,
+    name: "Keiko for Quality (Action)",
+    output: {
+      summary:
+        "All current-head Keiko for Quality evidence is valid.\n" +
+        `<!-- keiko-for-quality-review-digest:v1 head=${headSha} sha256=${digest} -->`,
+      title: "Keiko for Quality (Action)",
+    },
+    started_at: "2026-07-11T09:00:00.000Z",
+    status: "completed",
+  };
+}
+
 function pullFor(headSha, options = {}) {
   return {
     auto_merge: null,
@@ -108,15 +151,38 @@ function readAuthRouter(path) {
   return undefined;
 }
 
+function defaultEvidenceComments(headSha) {
+  return [qodoComment(headSha), dashboardWithReviewBaseline(establishedBaselineHead)];
+}
+
+function configuredCheckRuns(path, options) {
+  const checkHead = /\/commits\/([0-9a-f]{40})\/check-runs/u.exec(path)?.[1];
+  if (checkHead === undefined) return undefined;
+  if (options.checkRunsByHead?.[checkHead] !== undefined) {
+    return options.checkRunsByHead[checkHead];
+  }
+  return checkHead === establishedBaselineHead
+    ? [checkWithReviewDigest(establishedBaselineHead, "0".repeat(64))]
+    : undefined;
+}
+
+function checkRunsResponse(path, headSha, options) {
+  const priorChecks = configuredCheckRuns(path, options);
+  if (priorChecks !== undefined) {
+    return response({ check_runs: priorChecks, total_count: priorChecks.length });
+  }
+  if (!path.includes(`/commits/${headSha}/check-runs`)) return undefined;
+  const runs = options.checkRuns ?? checkRunsFor(headSha);
+  return response({ check_runs: runs, total_count: runs.length });
+}
+
 function readEvidenceRouter(path, method, headSha, options) {
   if (/\/pulls\/\d+$/u.test(path)) return response(options.pull ?? pullFor(headSha, options));
   if (path.endsWith("/comments") && (method === undefined || method === "GET")) {
-    return response(options.comments ?? [qodoComment(headSha)]);
+    return response(options.comments ?? defaultEvidenceComments(headSha));
   }
-  if (path.includes(`/commits/${headSha}/check-runs`)) {
-    const runs = options.checkRuns ?? checkRunsFor(headSha);
-    return response({ check_runs: runs, total_count: runs.length });
-  }
+  const checks = checkRunsResponse(path, headSha, options);
+  if (checks !== undefined) return checks;
   if (path.endsWith(`/commits/${headSha}`)) {
     return response({
       commit: { committer: { date: "2026-07-11T08:59:00.000Z" } },
@@ -153,7 +219,9 @@ function githubMock(headSha, options = {}) {
 function baseEnv(overrides = {}) {
   return {
     GITHUB_REPOSITORY: "oscharko-dev/Keiko",
-    GITHUB_TOKEN: "token",
+    GITHUB_TOKEN: undefined,
+    KFQ_APP_ID: "4290143",
+    KFQ_PRIVATE_KEY_PKCS8: signingKey,
     STABILITY_WINDOW_MS: "0",
     TARGET_REPOSITORIES_JSON:
       '[{"repository":"oscharko-dev/Keiko","baseBranch":"dev","profile":"keiko"}]',
@@ -163,7 +231,9 @@ function baseEnv(overrides = {}) {
 
 function checkPost(fetchMock) {
   const call = fetchMock.mock.calls.find(
-    ([url, init]) => String(url).endsWith("/check-runs") && init?.method === "POST",
+    ([url, init]) =>
+      /\/check-runs(?:\/\d+)?$/u.test(new URL(String(url)).pathname) &&
+      (init?.method === "POST" || init?.method === "PATCH"),
   );
   return call === undefined ? undefined : JSON.parse(call[1].body);
 }
@@ -171,7 +241,8 @@ function checkPost(fetchMock) {
 function dashboardPost(fetchMock) {
   const call = fetchMock.mock.calls.find(
     ([url, init]) =>
-      /\/issues\/\d+\/comments$/u.test(new URL(String(url)).pathname) && init?.method === "POST",
+      /\/issues(?:\/\d+)?\/comments\/?\d*$/u.test(new URL(String(url)).pathname) &&
+      (init?.method === "POST" || init?.method === "PATCH"),
   );
   return call === undefined ? undefined : JSON.parse(call[1].body).body;
 }
@@ -182,7 +253,9 @@ function requestPaths(fetchMock) {
 
 function hasWrite(fetchMock) {
   return fetchMock.mock.calls.some(
-    ([, init]) => init?.method === "POST" || init?.method === "PATCH",
+    ([url, init]) =>
+      !String(url).endsWith("/access_tokens") &&
+      (init?.method === "POST" || init?.method === "PATCH"),
   );
 }
 
@@ -191,21 +264,19 @@ describe("Keiko for Quality Action execution shell", () => {
     const headSha = "a".repeat(40);
     const fetchMock = githubMock(headSha);
     await run(baseEnv({ KFQ_PR: "2329" }), { now: evaluatedAt });
-    expect(checkPost(fetchMock)).toMatchObject({
+    const body = checkPost(fetchMock);
+    expect(body).toMatchObject({
       conclusion: "success",
       head_sha: headSha,
       name: "Keiko for Quality (Action)",
       output: {
-        summary: "All current-head Keiko for Quality evidence is valid.",
         title: "Keiko for Quality (Action)",
       },
       status: "completed",
     });
-    const commentCall = fetchMock.mock.calls.find(
-      ([url, init]) =>
-        /\/issues\/\d+\/comments$/u.test(new URL(String(url)).pathname) && init?.method === "POST",
-    );
-    const commentBody = JSON.parse(commentCall[1].body).body;
+    expect(body.output.summary).toContain("All current-head Keiko for Quality evidence is valid.");
+    expect(body.output.summary).toContain("keiko-for-quality-review-digest:v1");
+    const commentBody = dashboardPost(fetchMock);
     expect(commentBody).toContain("<!-- keiko-for-quality-action-dashboard:v1 -->");
     expect(commentBody).toContain("## Keiko for Quality (Action)");
     // The distinct marker keeps this comment independent from the live Worker's dashboard comment.
@@ -262,6 +333,133 @@ describe("Keiko for Quality Action execution shell", () => {
     const body = checkPost(fetchMock);
     expect(body.status).toBe("in_progress");
     expect(body.output.summary).toContain("Qodo finding evidence is missing");
+  });
+
+  it("keeps a new head pending when Qodo only rewrites embedded SHAs", async () => {
+    const previousHead = "a".repeat(40);
+    const headSha = "b".repeat(40);
+    const previousReview = qodoComment(previousHead);
+    const currentReview = qodoComment(headSha);
+    const digest = normalizedQodoDigest(previousReview);
+    const fetchMock = githubMock(headSha, {
+      checkRunsByHead: {
+        [previousHead]: [checkWithReviewDigest(previousHead, digest)],
+      },
+      comments: [currentReview, dashboardWithReviewBaseline(previousHead)],
+    });
+
+    await run(
+      baseEnv({
+        GITHUB_TOKEN: undefined,
+        KFQ_APP_ID: "4290143",
+        KFQ_PR: "2329",
+        KFQ_PRIVATE_KEY_PKCS8: signingKey,
+      }),
+      { now: evaluatedAt },
+    );
+
+    const body = checkPost(fetchMock);
+    expect(body.status).toBe("in_progress");
+    expect(body).not.toHaveProperty("conclusion");
+    expect(body.output.summary).toContain("unchanged from the previously evaluated head");
+    expect(dashboardPost(fetchMock)).toContain(
+      `keiko-for-quality-review-baseline:v1 head=${previousHead} state=accepted`,
+    );
+
+    fetchMock.mockRestore();
+    const secondFetch = githubMock(headSha, {
+      checkRunsByHead: {
+        [previousHead]: [checkWithReviewDigest(previousHead, digest)],
+      },
+      comments: [currentReview, dashboardWithReviewBaseline(previousHead)],
+    });
+    await run(
+      baseEnv({
+        KFQ_PR: "2329",
+      }),
+      { now: evaluatedAt + 1_000 },
+    );
+    expect(checkPost(secondFetch).status).toBe("in_progress");
+    expect(checkPost(secondFetch).output.summary).toContain(
+      "unchanged from the previously evaluated head",
+    );
+  });
+
+  it("keeps first-observed digest evidence pending until the body changes", async () => {
+    const headSha = "b".repeat(40);
+    const fetchMock = githubMock(headSha, { comments: [qodoComment(headSha)] });
+
+    await run(baseEnv({ KFQ_PR: "2329" }), { now: evaluatedAt });
+
+    const body = checkPost(fetchMock);
+    expect(body.status).toBe("in_progress");
+    expect(body.output.summary).toContain("has not been established");
+    expect(dashboardPost(fetchMock)).toContain(
+      `keiko-for-quality-review-baseline:v1 head=${headSha} state=pending`,
+    );
+  });
+
+  it("fails closed when an expected predecessor check has no digest evidence", async () => {
+    const previousHead = "a".repeat(40);
+    const headSha = "b".repeat(40);
+    const fetchMock = githubMock(headSha, {
+      checkRunsByHead: { [previousHead]: [] },
+      comments: [qodoComment(headSha), dashboardWithReviewBaseline(previousHead)],
+    });
+
+    await run(baseEnv({ KFQ_PR: "2329" }), { now: evaluatedAt });
+
+    const body = checkPost(fetchMock);
+    expect(body.status).toBe("in_progress");
+    expect(body.output.summary).toContain("prior Qodo digest evidence is missing");
+  });
+
+  it("rejects a malformed app-bound predecessor marker before publishing", async () => {
+    const headSha = "b".repeat(40);
+    const malformed = dashboardWithReviewBaseline(headSha, {
+      body:
+        "<!-- keiko-for-quality-action-dashboard:v1 -->\n" +
+        "<!-- keiko-for-quality-review-baseline:v1 head=short state=accepted -->",
+    });
+    const fetchMock = githubMock(headSha, { comments: [qodoComment(headSha), malformed] });
+
+    await expect(run(baseEnv({ KFQ_PR: "2329" }), { now: evaluatedAt })).rejects.toThrow(
+      "baseline marker is invalid",
+    );
+    expect(hasWrite(fetchMock)).toBe(false);
+  });
+
+  it("does not trust a predecessor marker from a spoofed dashboard author", async () => {
+    const previousHead = "a".repeat(40);
+    const headSha = "b".repeat(40);
+    const spoofed = dashboardWithReviewBaseline(previousHead, { authorId: 1 });
+    const fetchMock = githubMock(headSha, { comments: [qodoComment(headSha), spoofed] });
+
+    await run(baseEnv({ KFQ_PR: "2329" }), { now: evaluatedAt });
+
+    const body = checkPost(fetchMock);
+    expect(body.status).toBe("in_progress");
+    expect(body.output.summary).toContain("has not been established");
+    expect(requestPaths(fetchMock)).not.toContain(
+      `/repos/oscharko-dev/Keiko/commits/${previousHead}/check-runs`,
+    );
+  });
+
+  it("accepts a pending same-head baseline only after its digest changes", async () => {
+    const headSha = "b".repeat(40);
+    const fetchMock = githubMock(headSha, {
+      checkRunsByHead: {
+        [headSha]: [checkWithReviewDigest(headSha, "0".repeat(64))],
+      },
+      comments: [qodoComment(headSha), dashboardWithReviewBaseline(headSha, { state: "pending" })],
+    });
+
+    await run(baseEnv({ KFQ_PR: "2329" }), { now: evaluatedAt });
+
+    expect(checkPost(fetchMock)).toMatchObject({ conclusion: "success", status: "completed" });
+    expect(dashboardPost(fetchMock)).toContain(
+      `keiko-for-quality-review-baseline:v1 head=${headSha} state=accepted`,
+    );
   });
 
   it("performs no writes in dry-run mode", async () => {

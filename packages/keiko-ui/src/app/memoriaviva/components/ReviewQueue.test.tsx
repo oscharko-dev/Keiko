@@ -286,6 +286,31 @@ describe("ReviewQueue — populated state", () => {
     });
   });
 
+  it("lets a reviewer edit a proposal before accepting it", async () => {
+    const record = makeProposed(makeId(24), "Original proposal");
+    const accept = acceptOk();
+    const user = userEvent.setup();
+    const { container } = render(
+      <ReviewQueue
+        fetchQueueImpl={queueWith([record])}
+        acceptImpl={accept}
+        rejectImpl={rejectOk()}
+      />,
+    );
+    await screen.findByText("Original proposal");
+
+    await user.click(screen.getByRole("button", { name: "Edit proposal" }));
+    const editor = screen.getByRole("textbox", { name: "Proposal text" });
+    await user.clear(editor);
+    await user.type(editor, "Reviewed proposal");
+    expect(await axe(container)).toHaveNoViolations();
+    await user.click(screen.getByRole("button", { name: "Approve edited proposal" }));
+
+    await waitFor(() => {
+      expect(accept).toHaveBeenCalledWith(makeId(24), { bodyOverride: "Reviewed proposal" });
+    });
+  });
+
   it("removes row from queue after Reject", async () => {
     const record = makeProposed(makeId(5), "Memory to reject");
     const user = userEvent.setup();

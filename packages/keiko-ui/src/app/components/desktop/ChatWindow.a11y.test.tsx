@@ -7,7 +7,7 @@
 // The harness (mocks + factories) mirrors ChatWindow.test.tsx because those
 // helpers are not exported; keep the two in sync when the render contract moves.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { useState, type ComponentProps } from "react";
@@ -224,9 +224,38 @@ describe("ChatWindow a11y", () => {
     expect(results).toHaveNoViolations();
   });
 
-  // GEN-UI-A11Y-001 — combobox relationships survive an axe run even with the
-  // @-mention picker open (aria-controls / aria-activedescendant idrefs resolve).
-  it("jest-axe: open @-mention combobox has no violations and wires idrefs", async () => {
+  it("jest-axe: response-version selector has no violations", async () => {
+    const { container } = renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          makeMessage({
+            content: "Current answer",
+            timestamp: 20,
+            responseVersion: 2,
+            supersedesResponseVersion: 1,
+            responseVersions: [
+              { version: 1, content: "Original answer", timestamp: 10 },
+              {
+                version: 2,
+                content: "Current answer",
+                timestamp: 20,
+                supersedesVersion: 1,
+              },
+            ],
+          }),
+        ],
+      }),
+    );
+
+    expect(screen.getByRole("combobox", { name: "Response version" })).toBeInTheDocument();
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  // GEN-UI-A11Y-001 — the native textbox, controlled semantic list, and named result buttons
+  // survive an axe run with every idref resolvable.
+  it("jest-axe: open @-mention result list has no violations and wires idrefs", async () => {
     const user = userEvent.setup();
     fetchFilesSearchMock.mockResolvedValue({
       root: "/repo",
@@ -268,16 +297,13 @@ describe("ChatWindow a11y", () => {
     const textbox = screen.getByRole("textbox", { name: "Chat message" });
     await user.type(textbox, "@coding");
 
-    const combobox = await screen.findByRole("combobox", { name: "Chat message" });
-    const listbox = await screen.findByRole("listbox", { name: "Repository file results" });
-    await waitFor(() => {
-      expect(combobox).toHaveAttribute("aria-controls", listbox.id);
-    });
-    const option = screen.getByRole("option", {
-      name: "Reference src/context/coding-context.ts",
-    });
-    // The listbox idrefs must resolve so axe's aria-valid-attr-value passes.
-    expect(textbox).toHaveAttribute("aria-activedescendant", option.id);
+    const resultList = await screen.findByRole("list", { name: "Repository file results" });
+    expect(textbox).toHaveAttribute("aria-controls", resultList.id);
+    expect(
+      within(resultList).getByRole("button", {
+        name: "Reference src/context/coding-context.ts",
+      }),
+    ).toBeVisible();
 
     const results = await axe(container);
     expect(results).toHaveNoViolations();

@@ -59,8 +59,21 @@ describe("M7 editor setting registry", () => {
     expect(defaults.inlineCompletion).toBe(false);
     expect(defaults.keybindingOverrides).toEqual([]);
     expect(defaults.debuggingEnabled).toBe(false);
+    expect(defaults.gitCommitMessagePolicy).toBe("keiko-conventional");
     expect(EDITOR_M7_SETTING_REGISTRY.every((entry) => entry.description.length > 0)).toBe(true);
     expect(EDITOR_M7_SETTING_REGISTRY.every((entry) => entry.scopes.length > 0)).toBe(true);
+  });
+
+  it("accepts only the two governed commit-message policy modes", () => {
+    expect(
+      parseEditorM7SettingPatch("user", { gitCommitMessagePolicy: "repository-native" }),
+    ).toMatchObject({ ok: true });
+    expect(
+      parseEditorM7SettingPatch("workspace", { gitCommitMessagePolicy: "keiko-conventional" }),
+    ).toMatchObject({ ok: true });
+    expect(
+      parseEditorM7SettingPatch("user", { gitCommitMessagePolicy: "arbitrary-rules" }),
+    ).toEqual({ ok: false, reasonCode: "VALUE_OUT_OF_BOUNDS" });
   });
 
   it("resolves default < user < permitted workspace and carries source/provenance", () => {

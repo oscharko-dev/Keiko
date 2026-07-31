@@ -43,6 +43,8 @@ export interface CodingRuntimeHost {
           capability: string,
           audience: "model-gateway" | "tool-facade",
         ) => unknown;
+        readonly reservePromptTokens?:
+          ((capability: string, promptTokens: number) => unknown) | undefined;
       }
     | undefined;
   readonly openCodeGatewayReadinessRegistry?:
@@ -204,5 +206,6 @@ function unavailableManager(): CodingRuntimeManager {
     health: () => ({ status: "stopped" }),
     // No qualified runtime host means no run and therefore nothing to review; fail closed.
     pendingApprovalReview: () => undefined,
+    result: () => undefined,
   };
 }

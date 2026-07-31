@@ -60,6 +60,7 @@ export function TaskStartSection({
   onTaskIntentChange,
   actions,
   canStart,
+  canResume,
   runState,
   mutationPending,
   startBusy,
@@ -68,6 +69,7 @@ export function TaskStartSection({
   readonly onTaskIntentChange: (value: string) => void;
   readonly actions: TaskComposerActions;
   readonly canStart: boolean;
+  readonly canResume: boolean;
   readonly runState: CodingWorkbenchRuntimeStateName | undefined;
   readonly mutationPending: boolean;
   readonly startBusy: boolean;
@@ -136,6 +138,7 @@ export function TaskStartSection({
               submitBlocked={submitBlocked}
               busy={mutationPending}
               startBusy={startBusy}
+              canResume={canResume}
               t={t}
             />
           </div>
@@ -161,6 +164,7 @@ function ComposerControls({
   submitBlocked,
   busy,
   startBusy,
+  canResume,
   t,
 }: {
   readonly actions: TaskComposerActions;
@@ -168,6 +172,7 @@ function ComposerControls({
   readonly submitBlocked: boolean;
   readonly busy: boolean;
   readonly startBusy: boolean;
+  readonly canResume: boolean;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   if (runState === "running") {
@@ -194,7 +199,7 @@ function ComposerControls({
           type="button"
           data-tip={t("codingWorkbench.composer.resume")}
           aria-label={t("codingWorkbench.composer.resume")}
-          disabled={busy}
+          disabled={busy || !canResume}
           onClick={actions.onResume}
         >
           <FwdIcon size={16} />

@@ -697,6 +697,7 @@ describe("unknown API routes", () => {
           capability === "runtime-gateway-capability" && audience === "model-gateway"
             ? { ok: true, binding: { runId: "run-server-test" } }
             : { ok: false },
+        reservePromptTokens: () => ({ ok: true, runId: "run-server-test" }),
       },
       store,
     };
@@ -797,6 +798,7 @@ describe("unknown API routes", () => {
           capability === "runtime-gateway-capability" && audience === "model-gateway"
             ? { ok: true, binding: { runId: "run-server-test" } }
             : { ok: false },
+        reservePromptTokens: () => ({ ok: true, runId: "run-server-test" }),
       },
       store,
     };

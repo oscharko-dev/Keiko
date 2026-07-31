@@ -98,6 +98,10 @@ describe("handleQiTraceabilityExport — export audit (CSV)", () => {
     const row = exportRows[0];
     expect(row?.targetAdapter).toBe("traceability-csv");
     expect(row?.redactionAttested).toBe(true);
+    expect(row?.policyProvenance).toEqual({
+      retentionPolicyId: "default",
+      policyProfileIds: [],
+    });
     // dryRun absent or falsy — this is a materialised download, not a preview
     expect(row?.dryRun).toBeFalsy();
     // integrityHash must bind to the exact body returned by the handler

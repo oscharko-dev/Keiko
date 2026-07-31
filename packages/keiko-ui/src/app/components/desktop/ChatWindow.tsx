@@ -45,7 +45,11 @@ import { GroundedAnswer } from "./GroundedAnswer";
 import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
 import KeikoSelect from "./KeikoSelect";
-import { NATIVE_LIST_KEEP_PADDING_STYLE } from "./native-element-styles";
+import {
+  NATIVE_BLOCK_STYLE,
+  NATIVE_LIST_KEEP_PADDING_STYLE,
+  NATIVE_LIST_STYLE,
+} from "./native-element-styles";
 import {
   SafeMarkdownBoundary,
   type AssistantCodeBlockApply,
@@ -71,16 +75,18 @@ import {
   AttachmentStrip,
   AttachRejectionAlert,
   SentDocumentsNote,
+  SentImagesNote,
 } from "./AttachmentStrip";
 import { isRunSummaryMessage, RunSummaryCard } from "./WorkflowHandoff";
 import { FileIcon } from "./widgets/shared/projectTree";
-import type {
-  AttachmentRejectionReason,
-  ChatSessionApi,
-  PendingAttachment,
-  SendMessageOutcome,
-  SendStatus,
-  SentDocumentDisclosure,
+import {
+  type AttachmentRejectionReason,
+  type ChatSessionApi,
+  type PendingAttachment,
+  type SendMessageOutcome,
+  type SendStatus,
+  type SentDocumentDisclosure,
+  type SentImageDisclosure,
 } from "./hooks/useChatSession";
 import {
   supportsDictation,
@@ -119,6 +125,7 @@ import { fetchFilesSearch, updateChat } from "@/lib/api";
 import type { ChatEditorApplyOutcome } from "@/lib/chat-editor-apply";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { presentChatSessionError, useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { formatUserError } from "./format-error";
 import {
   capsulesForKnowledgePodUi,
@@ -178,18 +185,17 @@ const SEND_HINT_ID = "cmp-send-hint";
 // Stable id for the loading status so blocked actions can reference it.
 const LOADING_STATUS_ID = "cmp-loading-status";
 
-// Stable ids wiring the composer textarea (role="combobox") to the repository
-// @-mention results (role="listbox"). aria-controls references the listbox and
-// aria-activedescendant references the highlighted option while the picker is
-// open, so the combobox keeps DOM focus on the textarea (WCAG combobox pattern).
-const REPO_FILE_PICKER_LISTBOX_ID = "repo-file-picker-listbox";
-function repositoryFilePickerOptionId(index: number): string {
-  return `repo-file-picker-option-${index}`;
-}
+// Stable id wiring the composer textarea to the visible repository result list. The popup is a
+// semantic list of buttons rather than an ARIA listbox: Arrow keys move the visual highlight while
+// DOM focus remains in the textarea, and each result stays directly reachable as a named button.
+const REPO_FILE_PICKER_RESULTS_ID = "repo-file-picker-results";
+const REPOSITORY_RESULT_ITEM_STYLE: CSSProperties = { display: "block" };
+const REPOSITORY_RESULT_BUTTON_STYLE: CSSProperties = { width: "100%" };
 
 const CHAT_TURN_WINDOW_THRESHOLD = 120;
 const CHAT_TURN_WINDOW_SIZE = 80;
 const CHAT_TURN_WINDOW_OVERSCAN = 8;
+const CHAT_CONTEXT_COMPACTION_BOUNDARY_TURNS = 48;
 // Debounce for the spoken-dialogue status live region: rapid aura transitions in a fast turn exchange
 // settle before a screen reader announces, so it hears the meaningful state, not every flicker.
 const DIALOG_ANNOUNCE_DEBOUNCE_MS = 400;
@@ -632,6 +638,83 @@ function ChatBubbleContentArea({
   );
 }
 
+/**
+ * Builds the visible projection for one selected assistant-response version. Historical versions
+ * intentionally omit the current answer's grounding metadata: citations and context summaries are
+ * response-body-bound and must never be displayed against a superseded body.
+ */
+export function messageForSelectedResponseVersion(
+  message: ChatMessage,
+  selectedVersion: number | undefined,
+): ChatMessage {
+  const versions = message.responseVersions;
+  const currentVersion = message.responseVersion ?? versions?.at(-1)?.version;
+  if (
+    versions === undefined ||
+    selectedVersion === undefined ||
+    selectedVersion === currentVersion
+  ) {
+    return message;
+  }
+  const selected = versions.find((version) => version.version === selectedVersion);
+  if (selected === undefined) return message;
+  return {
+    ...message,
+    content: selected.content,
+    timestamp: selected.timestamp,
+    responseVersion: selected.version,
+    supersedesResponseVersion: selected.supersedesVersion,
+    groundedAnswer: undefined,
+  };
+}
+
+function ResponseVersionSelector({
+  message,
+  selectedVersion,
+  onSelect,
+}: {
+  readonly message: ChatMessage;
+  readonly selectedVersion: number | undefined;
+  readonly onSelect: (version: number) => void;
+}): ReactNode {
+  const t = useOptionalWidgetTranslate();
+  const versions = message.responseVersions;
+  const currentVersion = message.responseVersion ?? versions?.at(-1)?.version;
+  const activeVersion = selectedVersion ?? currentVersion;
+  if (versions === undefined || versions.length < 2 || activeVersion === undefined) return null;
+  return (
+    <div className={styles.responseVersionControl}>
+      <label className={styles.responseVersionLabel}>
+        <span>{t("chat.regenerate.versionSelector")}</span>
+        <select
+          className={styles.responseVersionSelect}
+          value={String(activeVersion)}
+          onChange={(event) => {
+            onSelect(Number(event.target.value));
+          }}
+        >
+          {versions.map((version) => (
+            <option key={version.version} value={String(version.version)}>
+              {t(
+                version.version === currentVersion
+                  ? "chat.regenerate.versionCurrent"
+                  : "chat.regenerate.version",
+                { version: version.version },
+              )}
+            </option>
+          ))}
+        </select>
+      </label>
+      <span className={styles.responseVersionSummary} aria-live="polite">
+        {t("chat.regenerate.versionSummary", {
+          version: activeVersion,
+          count: versions.length,
+        })}
+      </span>
+    </div>
+  );
+}
+
 // Extracted from ChatBubbleImpl (SonarCloud S3776) — the assistant-only action row (regenerate,
 // copy, collapse). Returns null for user messages, mirroring the original `isUser ? null : (…)`.
 function ChatBubbleFooterActions({
@@ -752,6 +835,7 @@ function ChatBubbleImpl({
   readonly layout?: "stack" | "turn";
 }): ReactNode {
   const t = useTranslate();
+  const optionalT = useOptionalWidgetTranslate();
   // GEN-PERF-CHAT-002 — settled bubbles only need activeChat (a low-frequency field). Reading it
   // from the catalog context (whose useMemo excludes draft/streamingAssistantMessage/sendStatus)
   // instead of the full-state context stops every settled bubble from re-rendering on each
@@ -760,10 +844,19 @@ function ChatBubbleImpl({
   const contentId = useId();
   const bubbleRef = useRef<HTMLElement | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [responseSelection, setResponseSelection] = useState<{
+    readonly currentVersion: number | undefined;
+    readonly selectedVersion: number | undefined;
+  }>({ currentVersion: message.responseVersion, selectedVersion: undefined });
+  const selectedResponseVersion =
+    responseSelection.currentVersion === message.responseVersion
+      ? responseSelection.selectedVersion
+      : undefined;
+  const displayedMessage = messageForSelectedResponseVersion(message, selectedResponseVersion);
   const isRunSummary = isRunSummaryMessage(message);
   const isUser = message.role === "user";
   const citationPreview = usePdfCitationPreviewController({
-    answer: message.groundedAnswer,
+    answer: displayedMessage.groundedAnswer,
     chatId: activeChat?.id,
     windowId,
     windows: previewWindows,
@@ -775,9 +868,19 @@ function ChatBubbleImpl({
     (target: string): boolean => resolveDocumentationTarget(previewWindows, target),
     [previewWindows],
   );
-  const canCollapse = canCollapseAssistantAnswer(streaming, isUser, isRunSummary, message.content);
+  const canCollapse = canCollapseAssistantAnswer(
+    streaming,
+    isUser,
+    isRunSummary,
+    displayedMessage.content,
+  );
+  let terminalTurnLabel: string | undefined;
+  if (message.turnState === "failed") terminalTurnLabel = optionalT("chat.turn.failed");
+  else if (message.turnState === "cancelled") {
+    terminalTurnLabel = optionalT("chat.turn.cancelled");
+  }
 
-  useRegisterPdfCitationPreviewTarget(message, activeChat?.id, windowId, bubbleRef);
+  useRegisterPdfCitationPreviewTarget(displayedMessage, activeChat?.id, windowId, bubbleRef);
 
   // Issue #153 — system messages carrying a workflow runId render as a structural run-summary
   // card rather than a conversation bubble. AC#3: this keeps the run visible in the chat
@@ -796,8 +899,13 @@ function ChatBubbleImpl({
     >
       <div className="chat-msg-bubble">
         {isUser ? <div className="chat-msg-role">{t("chat.role.user")}</div> : <KeikoMessageMark />}
+        {terminalTurnLabel === undefined ? null : (
+          <output className={styles.turnEndState} style={NATIVE_BLOCK_STYLE}>
+            {terminalTurnLabel}
+          </output>
+        )}
         <ChatBubbleContentArea
-          message={message}
+          message={displayedMessage}
           isUser={isUser}
           streaming={streaming}
           contentId={contentId}
@@ -808,15 +916,28 @@ function ChatBubbleImpl({
           citationPreview={citationPreview}
           onApplyCodeBlock={onApplyCodeBlock}
         />
+        <ResponseVersionSelector
+          message={message}
+          selectedVersion={selectedResponseVersion}
+          onSelect={(version) => {
+            setResponseSelection({
+              currentVersion: message.responseVersion,
+              selectedVersion: version,
+            });
+          }}
+        />
         {/* uiux-fix F041 (C176) — full date+time stays reachable via title.
             uiux-fix F042 (C208) — footer row: timestamp left, assistant-only actions right. */}
         <div className="chat-msg-foot">
-          <div className="chat-msg-time" title={new Date(message.timestamp).toLocaleString()}>
-            {timeLabel(message.timestamp)}
+          <div
+            className="chat-msg-time"
+            title={new Date(displayedMessage.timestamp).toLocaleString()}
+          >
+            {timeLabel(displayedMessage.timestamp)}
           </div>
           <ChatBubbleFooterActions
             isUser={isUser}
-            message={message}
+            message={displayedMessage}
             showRegenerate={showRegenerate}
             regenerating={regenerating}
             onRegenerate={onRegenerate}
@@ -830,7 +951,7 @@ function ChatBubbleImpl({
           />
         </div>
         <ChatBubbleGroundedSection
-          message={message}
+          message={displayedMessage}
           isUser={isUser}
           repositoryRoots={repositoryRoots}
           openRepositoryReference={openRepositoryReference}
@@ -924,6 +1045,7 @@ function ConversationThreadImpl({
   focusedMessageId,
 }: ConversationThreadProps): ReactNode {
   const t = useTranslate();
+  const optionalT = useOptionalWidgetTranslate();
   const turns = useMemo(() => conversationTurns(messages), [messages]);
   const turnWindow = useMemo(
     () => conversationTurnWindow(turns, focusedMessageId),
@@ -946,6 +1068,15 @@ function ConversationThreadImpl({
       className="chatw-thread"
       data-windowed={turnWindow.beforeCount > 0 || turnWindow.afterCount > 0 ? "true" : "false"}
     >
+      {turns.length > CHAT_CONTEXT_COMPACTION_BOUNDARY_TURNS ? (
+        <output
+          className={styles.contextWindowNotice}
+          aria-label={optionalT("chat.contextWindow.label")}
+          style={NATIVE_BLOCK_STYLE}
+        >
+          {optionalT("chat.contextWindow.notice", { count: turns.length })}
+        </output>
+      ) : null}
       {turnWindow.beforeCount > 0 ? (
         <div
           className="chat-turn-spacer"
@@ -1322,7 +1453,7 @@ function syntheticRepositoryReferenceFromPath(
   const root = selectedRoot.length > 0 ? selectedRoot : (roots[0]?.root ?? "");
   if (root.length === 0) return null;
   const segments = normalized.split("/").filter((segment) => segment.length > 0);
-  const name = segments[segments.length - 1] ?? normalized;
+  const name = segments.at(-1) ?? normalized;
   const directory = segments.length > 1 ? segments.slice(0, -1).join("/") : "";
   return {
     id: repositoryReferenceId(root, normalized),
@@ -1577,10 +1708,10 @@ function useRepositoryFileSearch(
             );
           }
         })
-        .catch((caught: unknown) => {
-          if (cancelled || isAbortError(caught)) return;
+        .catch((error: unknown) => {
+          if (cancelled || isAbortError(error)) return;
           setResults([]);
-          setError(formatRepositoryFocusError(caught, t));
+          setError(formatRepositoryFocusError(error, t));
           setMessage(t("chat.repository.searchFailed"));
         })
         .finally(() => {
@@ -1623,7 +1754,7 @@ function RepositoryFilePickerPanel({
   const t = useTranslate();
   const activeRoot = roots.find((root) => root.root === selectedRoot) ?? roots[0];
   const displayedError = pickError ?? search.error;
-  const resultsRef = useRef<HTMLDivElement | null>(null);
+  const resultsRef = useRef<HTMLUListElement | null>(null);
   const stopPickerPointer = (event: SyntheticEvent): void => {
     event.stopPropagation();
   };
@@ -1638,9 +1769,7 @@ function RepositoryFilePickerPanel({
   useEffect(() => {
     const list = resultsRef.current;
     if (list === null) return;
-    const option = list.querySelector<HTMLElement>(
-      `#${repositoryFilePickerOptionId(highlightedIndex)}`,
-    );
+    const option = list.querySelector<HTMLElement>('[data-highlighted="true"]');
     option?.scrollIntoView({ block: "nearest" });
   }, [highlightedIndex, search.results]);
   return (
@@ -1692,50 +1821,49 @@ function RepositoryFilePickerPanel({
         {displayedError ?? (search.searching ? t("chat.repository.searching") : search.message)}
       </div>
       {search.results.length > 0 ? (
-        <div
+        <ul
           className="repo-focus-results"
-          id={REPO_FILE_PICKER_LISTBOX_ID}
-          role="listbox"
+          id={REPO_FILE_PICKER_RESULTS_ID}
           aria-label={t("chat.repository.results")}
           ref={resultsRef}
+          style={NATIVE_LIST_STYLE}
         >
           {search.results.map((result, index) => (
-            <button
-              key={`${result.root}:${result.path}`}
-              id={repositoryFilePickerOptionId(index)}
-              type="button"
-              className={fileSearchResultClassName(result)}
-              role="option"
-              aria-selected={index === highlightedIndex ? "true" : "false"}
-              data-highlighted={index === highlightedIndex ? "true" : "false"}
-              aria-label={t("chat.repository.reference", { path: result.path })}
-              disabled={pickingPath !== null}
-              onPointerDown={(event) => pickFromPointer(event, result)}
-              onClick={(event) => {
-                event.stopPropagation();
-                if (event.detail === 0 && pickingPath === null) onPick(result);
-              }}
-            >
-              <span className="repo-focus-result-main">
-                <span className="repo-focus-result-name">{result.name}</span>
-                <span className="repo-focus-result-badges" aria-hidden="true">
-                  <span className={fileRoleClassName(result.fileRole)}>
-                    {fileRoleLabel(result.fileRole, t)}
-                  </span>
-                  {result.rootKind === "nested-git-root" ? (
-                    <span className="repo-focus-badge repo-focus-badge-root">
-                      {t("chat.repository.nestedRepo")}
+            <li key={`${result.root}:${result.path}`} style={REPOSITORY_RESULT_ITEM_STYLE}>
+              <button
+                type="button"
+                className={fileSearchResultClassName(result)}
+                data-highlighted={index === highlightedIndex ? "true" : "false"}
+                aria-label={t("chat.repository.reference", { path: result.path })}
+                disabled={pickingPath !== null}
+                style={REPOSITORY_RESULT_BUTTON_STYLE}
+                onPointerDown={(event) => pickFromPointer(event, result)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (event.detail === 0 && pickingPath === null) onPick(result);
+                }}
+              >
+                <span className="repo-focus-result-main">
+                  <span className="repo-focus-result-name">{result.name}</span>
+                  <span className="repo-focus-result-badges" aria-hidden="true">
+                    <span className={fileRoleClassName(result.fileRole)}>
+                      {fileRoleLabel(result.fileRole, t)}
                     </span>
-                  ) : null}
+                    {result.rootKind === "nested-git-root" ? (
+                      <span className="repo-focus-badge repo-focus-badge-root">
+                        {t("chat.repository.nestedRepo")}
+                      </span>
+                    ) : null}
+                  </span>
                 </span>
-              </span>
-              <span className="repo-focus-result-path">{resultDirectoryLabel(result, t)}</span>
-              <span className="sr-only">
-                {`${fileRoleLabel(result.fileRole, t)}; ${matchQualityLabel(result.matchQuality, t)}${nestedRootSuffixLabel(result, t)}.`}
-              </span>
-            </button>
+                <span className="repo-focus-result-path">{resultDirectoryLabel(result, t)}</span>
+                <span className="sr-only">
+                  {`${fileRoleLabel(result.fileRole, t)}; ${matchQualityLabel(result.matchQuality, t)}${nestedRootSuffixLabel(result, t)}.`}
+                </span>
+              </button>
+            </li>
           ))}
-        </div>
+        </ul>
       ) : null}
     </div>
   );
@@ -2400,52 +2528,13 @@ function composerBoxClassNameFor(compact: boolean, voiceDialogActive: boolean): 
     .join(" ");
 }
 
-interface ComposerRepositoryComboboxAria {
-  readonly role: "combobox" | undefined;
-  readonly ariaLabel: string | undefined;
-  readonly ariaExpanded: true | undefined;
-  readonly ariaHaspopup: "listbox" | undefined;
-  readonly ariaControls: string | undefined;
-}
-
-// Extracted from ComposerCoreImpl (SonarCloud S3776) — the @-mention combobox wrapper's ARIA
-// attributes, active only while the repository file picker is open (aria-controls further
-// guarded on results existing, so the idref stays resolvable — aria-valid-attr-value).
-function composerRepositoryComboboxAria(
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — aria-controls is present only while the
+// repository result list exists, so the textarea never carries a dangling idref.
+function composerRepositoryResultsId(
   repositoryPickerOpen: boolean,
   resultsCount: number,
-  t: I18nTranslate,
-): ComposerRepositoryComboboxAria {
-  return {
-    role: repositoryPickerOpen ? "combobox" : undefined,
-    ariaLabel: repositoryPickerOpen ? t("chat.messageLabel") : undefined,
-    ariaExpanded: repositoryPickerOpen ? true : undefined,
-    ariaHaspopup: repositoryPickerOpen ? "listbox" : undefined,
-    ariaControls:
-      repositoryPickerOpen && resultsCount > 0 ? REPO_FILE_PICKER_LISTBOX_ID : undefined,
-  };
-}
-
-interface ComposerTextareaAutocompleteAria {
-  readonly ariaAutocomplete: "list" | undefined;
-  readonly ariaActivedescendant: string | undefined;
-}
-
-// Extracted from ComposerCoreImpl (SonarCloud S3776) — the textarea's autocomplete ARIA pair:
-// only present while the repository picker is open, with the active-descendant further guarded
-// on results existing.
-function composerTextareaAutocompleteAria(
-  repositoryPickerOpen: boolean,
-  resultsCount: number,
-  highlightedIndex: number,
-): ComposerTextareaAutocompleteAria {
-  return {
-    ariaAutocomplete: repositoryPickerOpen ? "list" : undefined,
-    ariaActivedescendant:
-      repositoryPickerOpen && resultsCount > 0
-        ? repositoryFilePickerOptionId(highlightedIndex)
-        : undefined,
-  };
+): string | undefined {
+  return repositoryPickerOpen && resultsCount > 0 ? REPO_FILE_PICKER_RESULTS_ID : undefined;
 }
 
 interface ComposerVoiceAuraDataAttributes {
@@ -3073,8 +3162,8 @@ function ComposerCoreImpl({
           taRef.current?.focus();
           taRef.current?.setSelectionRange(next.cursor, next.cursor);
         });
-      } catch (caught) {
-        setRepositoryPickError(formatRepositoryFocusError(caught, t));
+      } catch (error) {
+        setRepositoryPickError(formatRepositoryFocusError(error, t));
       } finally {
         setRepositoryPickingPath(null);
       }
@@ -3159,15 +3248,9 @@ function ComposerCoreImpl({
   );
 
   const voiceAuraDataAttributes = composerVoiceAuraDataAttributes(voiceAura);
-  const comboboxAria = composerRepositoryComboboxAria(
+  const repositoryResultsId = composerRepositoryResultsId(
     repositoryPickerOpen,
     repositorySearch.results.length,
-    t,
-  );
-  const textareaAutocompleteAria = composerTextareaAutocompleteAria(
-    repositoryPickerOpen,
-    repositorySearch.results.length,
-    repositoryHighlightedIndex,
   );
 
   return (
@@ -3186,24 +3269,11 @@ function ComposerCoreImpl({
         <div className="cmp-input-stack">
           {/* Drop zone above the textarea (Part 2 — shown when attachment is supported) */}
           <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
-          {/* ARIA combobox wrapper: while the @-mention repository picker is open
-            this container exposes role="combobox" and owns the results listbox
-            (aria-expanded / aria-controls). A multi-line <textarea> may not carry
-            role="combobox" itself (ARIA 1.2), so the wrapper holds the combobox
-            role while the textarea keeps DOM focus and conveys the highlighted
-            option via aria-activedescendant (WAI-ARIA 1.1 combobox pattern). When
-            the picker is closed the wrapper is an inert container and the
-            textarea is a plain textbox. */}
-          <div
-            className="cmp-input-combobox"
-            role={comboboxAria.role}
-            aria-label={comboboxAria.ariaLabel}
-            aria-expanded={comboboxAria.ariaExpanded}
-            aria-haspopup={comboboxAria.ariaHaspopup}
-            // aria-controls references the listbox, which only exists once results
-            // have loaded — guarding keeps the idref resolvable (aria-valid-attr-value).
-            aria-controls={comboboxAria.ariaControls}
-          >
+          {/* The textarea remains a native textbox. When repository suggestions exist,
+            aria-controls points to their visible semantic list; the adjacent polite status
+            announces result-count changes. Arrow keys update the visible highlight and Enter
+            activates it without claiming a listbox/combobox relationship that is not present. */}
+          <div className="cmp-input-combobox">
             <textarea
               className="cmp-input"
               ref={taRef}
@@ -3217,11 +3287,7 @@ function ComposerCoreImpl({
               // primary input. The rule the substrate then applies keeps the field's own
               // text-editing chords (Cmd/Ctrl+Z undoes typing, not a workspace panel toggle).
               data-shell-chord-bypass=""
-              // aria-autocomplete + aria-activedescendant are valid on the textbox
-              // and communicate the autocomplete behavior and highlighted option
-              // without moving DOM focus off the textarea.
-              aria-autocomplete={textareaAutocompleteAria.ariaAutocomplete}
-              aria-activedescendant={textareaAutocompleteAria.ariaActivedescendant}
+              aria-controls={repositoryResultsId}
               onChange={handleDraftChange}
               onSelect={handleDraftSelect}
               onKeyDown={handleDraftKeyDown}
@@ -4195,8 +4261,8 @@ function MemoryActionCard({
         .then(() => {
           onActionSettled(successMessage);
         })
-        .catch((caught) => {
-          setError(caught instanceof Error ? caught.message : errorMessage);
+        .catch((error) => {
+          setError(error instanceof Error ? error.message : errorMessage);
         })
         .finally(() => setBusy(false));
     },
@@ -4638,6 +4704,7 @@ function ChatWindowLog({
   cancelSend,
   registerQuestionAnchor,
   lastSentDocuments,
+  lastSentImages,
 }: {
   readonly scrollRef: RefObject<HTMLDivElement | null>;
   readonly stickRef: CurrentRef<boolean>;
@@ -4666,6 +4733,7 @@ function ChatWindowLog({
   readonly cancelSend: () => void;
   readonly registerQuestionAnchor: (messageId: string, node: HTMLDivElement | null) => void;
   readonly lastSentDocuments: readonly SentDocumentDisclosure[];
+  readonly lastSentImages: readonly SentImageDisclosure[];
 }): ReactNode {
   const t = useTranslate();
   return (
@@ -4717,6 +4785,7 @@ function ChatWindowLog({
             <GroundedAnswerPanel chat={activeChat} busy={sending} />
             {/* Issue #148 — disclose which attached documents contributed extracted context. */}
             <SentDocumentsNote documents={lastSentDocuments} />
+            <SentImagesNote images={lastSentImages} />
           </div>
         </div>
       )}
@@ -4857,6 +4926,7 @@ export function ChatWindow({
   onOpenRunResult,
 }: ChatWindowProps): ReactNode {
   const session = useChatSessionContext();
+  const optionalT = useOptionalWidgetTranslate();
   const {
     messages,
     streamingAssistantMessage,
@@ -4879,10 +4949,12 @@ export function ChatWindow({
     replaceChat,
     latestMemory,
     lastSentDocuments,
+    lastSentImages = [],
     acceptMemoryCandidate,
     rejectMemoryCandidate,
     forgetMemoryAction,
   } = session;
+  const displayedError = presentChatSessionError(error, optionalT);
   const activeProjectRoot = activeProject?.path;
   const activeChatRoot = activeChat?.projectPath;
   const codeApplyWorkspaceRoot = codeApplyWorkspaceRootFor(activeChatRoot, activeProjectRoot);
@@ -5080,6 +5152,7 @@ export function ChatWindow({
         cancelSend={cancelSend}
         registerQuestionAnchor={registerQuestionAnchor}
         lastSentDocuments={lastSentDocuments}
+        lastSentImages={lastSentImages}
       />
 
       {/* Issue #1560 — ONE composer render site across the empty→populated transition. The composer was
@@ -5102,7 +5175,7 @@ export function ChatWindow({
         ready={ready}
         loading={loading}
         sendMessage={sendMessage}
-        error={error}
+        error={displayedError}
         clearError={session.clearError}
         canonicalVoiceTurnRequiresRetry={canonicalVoiceTurnRequiresRetry === true}
         retryPendingCanonicalVoiceTurn={retryPendingCanonicalVoiceTurn}

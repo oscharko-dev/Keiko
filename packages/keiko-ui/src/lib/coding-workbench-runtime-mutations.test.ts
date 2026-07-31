@@ -214,7 +214,11 @@ describe("createLifecycleMutation", () => {
       createLifecycleMutation("pause", stateWithRun(snapshot({ state: "paused" }))),
     ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
     expect(() =>
-      createLifecycleMutation("resume", stateWithRun(snapshot({ state: "running" }))),
+      createLifecycleMutation(
+        "resume",
+        stateWithRun(snapshot({ state: "running" })),
+        "governed-assist",
+      ),
     ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
   });
 
@@ -224,10 +228,34 @@ describe("createLifecycleMutation", () => {
       requestId: "run-1",
     });
 
-    await createLifecycleMutation("resume", stateWithRun(snapshot({ state: "paused" }))).run();
+    await createLifecycleMutation(
+      "resume",
+      stateWithRun(
+        snapshot({
+          state: "paused",
+          requestedMode: "autonomous-delivery",
+          effectiveMode: "autonomous-delivery",
+        }),
+      ),
+      "supervised-coding",
+    ).run();
     expect(apiMocks.resumeCodingWorkbenchRuntime).toHaveBeenCalledWith("run-1", {
       requestId: "run-1",
+      requestedMode: "supervised-coding",
     });
+  });
+
+  it("fails closed when resume would widen the server-confirmed effective mode", () => {
+    const paused = stateWithRun(
+      snapshot({
+        state: "paused",
+        requestedMode: "autonomous-delivery",
+        effectiveMode: "supervised-coding",
+      }),
+    );
+    expect(() => createLifecycleMutation("resume", paused, "autonomous-delivery")).toThrowError(
+      expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }),
+    );
   });
 });
 

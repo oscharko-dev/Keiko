@@ -13,6 +13,7 @@ import type {
   Project,
   Chat,
   ChatMessage,
+  ChatTurnState,
   CreateChatOptions,
   GroundedAnswer,
   UpdateProjectPatch,
@@ -29,6 +30,7 @@ export type {
   Project,
   Chat,
   ChatMessage,
+  ChatTurnState,
   CreateChatOptions,
   GroundedAnswer,
   UpdateProjectPatch,
@@ -37,6 +39,7 @@ export type {
   UpdateChatMessagePatch,
   StoredPdfCitationPreviewCitation,
 };
+export type { ChatAssistantResponseVersion } from "@oscharko-dev/keiko-contracts/bff-wire";
 export type {
   ChatConnectedScope,
   ChatLocalKnowledgeScope,
@@ -127,7 +130,11 @@ export interface UiStore {
     userContent: string,
     assistantMessageId: string,
   ) => ChatTurnCompletion;
-  readonly failChatTurn: (chatId: string, clientTurnId: string) => void;
+  readonly failChatTurn: (
+    chatId: string,
+    clientTurnId: string,
+    terminalState?: Extract<ChatTurnState, "failed" | "cancelled">,
+  ) => void;
   readonly updateMessage: (id: string, patch: UpdateChatMessagePatch) => ChatMessage;
   readonly attachGroundedAnswer: (
     id: string,
@@ -137,7 +144,7 @@ export interface UiStore {
   readonly findGroundedPreviewCitations: (
     id: string,
   ) => readonly StoredPdfCitationPreviewCitation[] | undefined;
-  readonly replaceAssistantMessageContent: (
+  readonly createAssistantResponseVersion: (
     id: string,
     content: string,
     timestamp: number,

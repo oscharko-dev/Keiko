@@ -4,6 +4,8 @@
 // instead of throwing or preserving untrusted fields.
 
 import type { DebugActivationSummary } from "./debug-activation.js";
+import { GIT_COMMIT_MESSAGE_POLICY_MODES } from "./git-commit-policy.js";
+import type { GitCommitMessagePolicyMode } from "./git-commit-policy.js";
 
 export const EDITOR_M7_SCHEMA_VERSION = "1" as const;
 
@@ -62,7 +64,8 @@ export type EditorM7SettingId =
   | "modelRetentionCount"
   | "modelRetentionBytes"
   | "keybindingOverrides"
-  | "debuggingEnabled";
+  | "debuggingEnabled"
+  | "gitCommitMessagePolicy";
 
 export type EditorM7WordWrap = "off" | "on" | "wordWrapColumn" | "bounded";
 export type EditorM7WhitespaceRendering = "none" | "selection" | "boundary" | "all";
@@ -75,6 +78,7 @@ export type EditorM7SettingValue =
   | EditorM7WhitespaceRendering
   | EditorM7ExternalReloadPolicy
   | EditorM7LargeFileMode
+  | GitCommitMessagePolicyMode
   | readonly string[];
 
 export interface EditorM7SettingDefinition {
@@ -191,12 +195,16 @@ export interface EditorM7SettingsEvent {
 }
 
 const ENUM_VALUES: Readonly<
-  Record<"wordWrap" | "renderWhitespace" | "externalReload" | "largeFileMode", readonly string[]>
+  Record<
+    "wordWrap" | "renderWhitespace" | "externalReload" | "largeFileMode" | "gitCommitMessagePolicy",
+    readonly string[]
+  >
 > = Object.freeze({
   wordWrap: Object.freeze(["off", "on", "wordWrapColumn", "bounded"] as const),
   renderWhitespace: Object.freeze(["none", "selection", "boundary", "all"] as const),
   externalReload: Object.freeze(["prompt", "autoClean", "manual"] as const),
   largeFileMode: Object.freeze(["default", "degraded", "readonly"] as const),
+  gitCommitMessagePolicy: GIT_COMMIT_MESSAGE_POLICY_MODES,
 });
 
 export const EDITOR_M7_SETTING_REGISTRY: readonly EditorM7SettingDefinition[] = Object.freeze([
@@ -370,6 +378,17 @@ export const EDITOR_M7_SETTING_REGISTRY: readonly EditorM7SettingDefinition[] = 
     effect: "live",
     security: "policyCeiling",
     description: "Explicit workspace opt-in for governed Node.js/TypeScript debugging.",
+  },
+  {
+    id: "gitCommitMessagePolicy",
+    type: "enum",
+    defaultValue: "keiko-conventional",
+    scopes: Object.freeze(["user", "workspace"] as const),
+    effect: "live",
+    security: "safe",
+    enumValues: ENUM_VALUES.gitCommitMessagePolicy,
+    description:
+      "Governed commit-message validation: Keiko Conventional or Repository Native formatting.",
   },
 ] as const satisfies readonly EditorM7SettingDefinition[]);
 

@@ -16,6 +16,7 @@ import {
   updateKeyboardShortcutOverride,
   type EffectiveKeyboardShortcut,
 } from "../../keyboardShortcutsRegistry";
+import { projectShellShortcutRefusals } from "../../shellShortcutState";
 import {
   settingById,
   type EditorSettingsEditScope,
@@ -47,6 +48,10 @@ export function KeyboardShortcutsPanel({
   const raw = resolvedOverrideSetting(view);
   const layer = scopeOverrideSetting(view, scope);
   const registry = useMemo(() => resolveEffectiveKeyboardShortcuts(raw), [raw]);
+  const refusalByCommand = useMemo(
+    () => shortcutRefusalByCommand(projectShellShortcutRefusals(registry)),
+    [registry],
+  );
   const layerOverrides = useMemo((): ReadonlySet<string> => overriddenCommandIds(layer), [layer]);
   const rows = useMemo(
     () => filteredShortcutRows(registry.commands, query, modifiedOnly, t),
@@ -86,6 +91,7 @@ export function KeyboardShortcutsPanel({
             key={entry.command.id}
             disabled={disabled}
             entry={entry}
+            refusalReason={refusalByCommand.get(entry.command.id)}
             recording={recordingId === entry.command.id}
             removable={layerOverrides.has(entry.command.id)}
             setButtonRef={(node) => setButtonRef(buttonRefs.current, entry.command.id, node)}
@@ -230,6 +236,7 @@ function ShortcutToolbar({
 function ShortcutRow({
   disabled,
   entry,
+  refusalReason,
   recording,
   removable,
   setButtonRef,
@@ -241,6 +248,7 @@ function ShortcutRow({
 }: {
   readonly disabled: boolean;
   readonly entry: EffectiveKeyboardShortcut;
+  readonly refusalReason: EditorM7ReasonCode | undefined;
   readonly recording: boolean;
   readonly removable: boolean;
   readonly setButtonRef: (node: HTMLButtonElement | null) => void;
@@ -251,8 +259,14 @@ function ShortcutRow({
   readonly onRemove: () => void;
 }): ReactNode {
   const platform = detectKeyboardShortcutPlatform();
+  const refusalId =
+    refusalReason === undefined ? undefined : `shortcut-${entry.command.id}-refusal`;
   return (
-    <article className={styles.card} aria-labelledby={`shortcut-${entry.command.id}`}>
+    <article
+      className={styles.card}
+      aria-labelledby={`shortcut-${entry.command.id}`}
+      aria-describedby={refusalId}
+    >
       <div className={styles.cardHeader}>
         <ShortcutSummary entry={entry} platform={platform} t={t} />
         <ShortcutActions
@@ -268,7 +282,12 @@ function ShortcutRow({
           onRemove={onRemove}
         />
       </div>
-      <ShortcutDiagnostics entry={entry} t={t} />
+      <ShortcutDiagnostics
+        entry={entry}
+        refusalId={refusalId}
+        refusalReason={refusalReason}
+        t={t}
+      />
     </article>
   );
 }
@@ -363,24 +382,46 @@ function ShortcutActions({
 
 function ShortcutDiagnostics({
   entry,
+  refusalId,
+  refusalReason,
   t,
 }: {
   readonly entry: EffectiveKeyboardShortcut;
+  readonly refusalId: string | undefined;
+  readonly refusalReason: EditorM7ReasonCode | undefined;
   readonly t: I18nTranslate;
 }): ReactNode {
-  if (entry.conflictCommandIds.length === 0) {
-    return (
-      <div className={styles.badges}>
-        <span className={styles.badge}>{entry.command.dispatchOwner}</span>
-        <span className={styles.badge}>{entry.command.contexts.join(", ")}</span>
-      </div>
-    );
-  }
   return (
-    <output className={styles.alert}>
-      {t("settings.keyboard.conflict", { commands: entry.conflictCommandIds.join(", ") })}
-    </output>
+    <>
+      {refusalReason === undefined ? null : (
+        <output className={styles.alert} id={refusalId}>
+          {shortcutRefusalLabel(refusalReason, t)}
+        </output>
+      )}
+      {entry.conflictCommandIds.length === 0 ? (
+        <div className={styles.badges}>
+          <span className={styles.badge}>{entry.command.dispatchOwner}</span>
+          <span className={styles.badge}>{entry.command.contexts.join(", ")}</span>
+        </div>
+      ) : (
+        <output className={styles.alert}>
+          {t("settings.keyboard.conflict", { commands: entry.conflictCommandIds.join(", ") })}
+        </output>
+      )}
+    </>
   );
+}
+
+function shortcutRefusalByCommand(
+  refusals: ReturnType<typeof projectShellShortcutRefusals>,
+): ReadonlyMap<string, EditorM7ReasonCode> {
+  return new Map(refusals.map((refusal) => [refusal.commandId, refusal.reasonCode]));
+}
+
+function shortcutRefusalLabel(reason: EditorM7ReasonCode, t: I18nTranslate): string {
+  if (reason === "RESERVED_KEYBINDING") return t("settings.keyboard.refusal.reserved");
+  if (reason === "KEYBINDING_COLLISION") return t("settings.keyboard.refusal.collision");
+  return t("settings.keyboard.refusal.invalid");
 }
 
 function handleCapture(args: {

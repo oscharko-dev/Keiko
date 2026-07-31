@@ -7,7 +7,11 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { makeFakeChild, makeWorkspace, recordingSpawn } from "./_support.js";
-import { createNodeGitMergeAdapter } from "./git-merge-node.js";
+import {
+  createNodeGitMergeAdapter,
+  readNodeGitBranchProtection,
+  type GitBranchProtectionReadResult,
+} from "./git-merge-node.js";
 import type { HomeProvider, SpawnFn } from "./exec.js";
 import type { GitMergeAdapter, GitMergeExecRequest } from "./git-merge-gateway.js";
 
@@ -59,6 +63,21 @@ function makeAdapter(spawn: ScriptedSpawn): GitMergeAdapter {
   });
 }
 
+function readProtection(spawn: ScriptedSpawn): Promise<GitBranchProtectionReadResult> {
+  const { info } = makeWorkspace();
+  return readNodeGitBranchProtection(
+    {
+      workspace: info,
+      processEnv: { PATH: "/usr/bin" },
+      now: () => 0,
+      spawn: spawn.fn,
+      home: FAKE_HOME,
+      resolveExecutable: () => "gh",
+    },
+    { ownerAndRepo: "oscharko-dev/Keiko", baseBranchName: "main" },
+  );
+}
+
 const READINESS_REQ = {
   ownerAndRepo: "oscharko-dev/Keiko",
   prExternalId: "42",
@@ -70,7 +89,14 @@ const READINESS_REQ = {
 // scripted spawn below supplies these two steps; the "no reviews" / "no required reviews" defaults
 // mirror what an unreviewed PR on an unprotected branch actually returns.
 const NO_REVIEWS = "[]";
-const NO_REQUIRED_REVIEWS = "0";
+const NO_REQUIRED_REVIEWS = JSON.stringify({
+  deletionAllowed: false,
+  forcePushAllowed: false,
+  linearHistoryRequired: false,
+  signaturesRequired: false,
+  requiredReviewCount: 0,
+  requiredChecks: [],
+});
 
 function execReq(over: Partial<GitMergeExecRequest> = {}): GitMergeExecRequest {
   return {
@@ -95,6 +121,35 @@ const CLEAN_PR = JSON.stringify({
 });
 
 const REPO_CFG = JSON.stringify({ squash: true, merge: false, rebase: true });
+
+describe("readNodeGitBranchProtection", () => {
+  it("projects the signed-commit requirement through the governed gh read", async () => {
+    const spawn = scriptedSpawn([{ stdout: NO_REQUIRED_REVIEWS }]);
+    const result = await readProtection(spawn);
+    expect(result).toMatchObject({
+      outcome: "protected",
+      protection: { signaturesRequired: false },
+    });
+    expect(spawn.calls()[0]?.args).toContain("/repos/oscharko-dev/Keiko/branches/main/protection");
+  });
+
+  it("distinguishes an unprotected branch from an unavailable provider read", async () => {
+    await expect(
+      readProtection(scriptedSpawn([{ exit: 1, stderr: "HTTP 404: Not Found" }])),
+    ).resolves.toEqual({ outcome: "unprotected" });
+    await expect(
+      readProtection(scriptedSpawn([{ exit: 1, stderr: "provider unavailable" }])),
+    ).resolves.toEqual({ outcome: "unavailable" });
+  });
+
+  it("does not treat a 404 path segment in a different HTTP failure as not found", async () => {
+    const stderr = "gh: API request failed for /repos/acme/404/branches/main/protection (HTTP 500)";
+
+    await expect(readProtection(scriptedSpawn([{ exit: 1, stderr }]))).resolves.toEqual({
+      outcome: "unavailable",
+    });
+  });
+});
 
 describe("readMergeReadiness", () => {
   it("maps a clean PR + repo config to neutral facts and capable strategies (no checks read)", async () => {
@@ -133,8 +188,8 @@ describe("readMergeReadiness", () => {
       headRef: "feat/x",
     });
     const checkRuns = JSON.stringify([
-      { status: "completed", conclusion: "success" },
-      { status: "completed", conclusion: "failure" },
+      { id: 1, name: "ci", providerId: 15368, status: "completed", conclusion: "success" },
+      { id: 2, name: "nightly", providerId: 15368, status: "completed", conclusion: "failure" },
     ]);
     const spawn = scriptedSpawn([
       { stdout: blockedPr },
@@ -147,11 +202,18 @@ describe("readMergeReadiness", () => {
     const readiness = await adapter.readMergeReadiness(READINESS_REQ);
     expect(readiness.pullRequest?.mergeReadiness.blockingReason).toBe("branch-protection");
     expect(readiness.checks).toEqual({
-      total: 2,
-      passing: 1,
-      failing: 1,
+      total: 0,
+      passing: 0,
+      failing: 0,
       pending: 0,
-      overallStatus: "failing",
+      overallStatus: "skipped",
+      informational: {
+        total: 2,
+        passing: 1,
+        failing: 1,
+        pending: 0,
+        overallStatus: "failing",
+      },
     });
     expect(spawn.calls()).toHaveLength(5);
     // Reads the modern per-run Checks API, NOT the legacy combined-status endpoint this replaces
@@ -172,7 +234,16 @@ describe("readMergeReadiness", () => {
       { stdout: CLEAN_PR },
       { stdout: REPO_CFG },
       { stdout: reviews },
-      { stdout: "2" },
+      {
+        stdout: JSON.stringify({
+          deletionAllowed: false,
+          forcePushAllowed: false,
+          linearHistoryRequired: true,
+          signaturesRequired: true,
+          requiredReviewCount: 2,
+          requiredChecks: [],
+        }),
+      },
     ]);
     const adapter = makeAdapter(spawn);
     const readiness = await adapter.readMergeReadiness(READINESS_REQ);
@@ -197,6 +268,7 @@ describe("readMergeReadiness", () => {
     expect(readiness.providerError).toBeUndefined();
     expect(readiness.pullRequest?.mergeReadiness.receivedApprovalCount).toBe(0);
     expect(readiness.pullRequest?.mergeReadiness.requiredApprovalCount).toBe(0);
+    expect(readiness.branchProtection).toBeUndefined();
   });
 
   it("reports providerError when the PR read fails", async () => {
@@ -342,8 +414,27 @@ describe("readMergeReadiness — additional branches", () => {
       { stdout: prJson({ mergeable_state: "unstable" }) },
       { stdout: JSON.stringify({ squash: true, merge: true, rebase: true }) },
       { stdout: NO_REVIEWS },
-      { stdout: NO_REQUIRED_REVIEWS },
-      { stdout: JSON.stringify([{ status: "completed", conclusion: "success" }]) },
+      {
+        stdout: JSON.stringify({
+          deletionAllowed: false,
+          forcePushAllowed: false,
+          linearHistoryRequired: true,
+          signaturesRequired: false,
+          requiredReviewCount: 0,
+          requiredChecks: [{ name: "ci", providerId: 15368 }],
+        }),
+      },
+      {
+        stdout: JSON.stringify([
+          {
+            id: 1,
+            name: "ci",
+            providerId: 15368,
+            status: "completed",
+            conclusion: "success",
+          },
+        ]),
+      },
     ]);
     const adapter = makeAdapter(spawn);
     const readiness = await adapter.readMergeReadiness(READINESS_REQ);
@@ -367,14 +458,19 @@ describe("readMergeReadiness — additional branches", () => {
   });
 
   it("yields no capable strategies when the repo merge-config read fails", async () => {
-    const spawn = scriptedSpawn([{ stdout: prJson({}) }, { stderr: "HTTP 500", exit: 1 }]);
+    const spawn = scriptedSpawn([
+      { stdout: prJson({}) },
+      { stderr: "HTTP 500", exit: 1 },
+      { stdout: NO_REVIEWS },
+      { stdout: NO_REQUIRED_REVIEWS },
+    ]);
     const adapter = makeAdapter(spawn);
     const readiness = await adapter.readMergeReadiness(READINESS_REQ);
     expect(readiness.providerError).toBeUndefined();
     expect(readiness.providerCapableStrategies).toEqual([]);
   });
 
-  it("omits checks when the checks read fails", async () => {
+  it("fails closed when the checks read fails", async () => {
     const spawn = scriptedSpawn([
       { stdout: prJson({ mergeable: false, mergeable_state: "blocked" }) },
       { stdout: JSON.stringify({ squash: true, merge: false, rebase: false }) },
@@ -385,6 +481,7 @@ describe("readMergeReadiness — additional branches", () => {
     const adapter = makeAdapter(spawn);
     const readiness = await adapter.readMergeReadiness(READINESS_REQ);
     expect(readiness.checks).toBeUndefined();
+    expect(readiness.providerError).toBe(true);
   });
 
   it("maps a merged PR to merged status", async () => {
@@ -397,6 +494,185 @@ describe("readMergeReadiness — additional branches", () => {
     const adapter = makeAdapter(spawn);
     const readiness = await adapter.readMergeReadiness(READINESS_REQ);
     expect(readiness.pullRequest?.status).toBe("merged");
+  });
+});
+
+describe("readMergeReadiness — required and informational checks", () => {
+  function prJson(): string {
+    return JSON.stringify({
+      state: "open",
+      merged: false,
+      draft: false,
+      mergeable: true,
+      mergeable_state: "unstable",
+      base: "main",
+      head: "abcdef1234567",
+      headRef: "feat/x",
+    });
+  }
+
+  function protection(requiredChecks: readonly Record<string, unknown>[]): string {
+    return JSON.stringify({
+      deletionAllowed: false,
+      forcePushAllowed: false,
+      linearHistoryRequired: true,
+      signaturesRequired: true,
+      requiredReviewCount: 0,
+      requiredChecks,
+    });
+  }
+
+  function requiredCheck(
+    name: string,
+    over: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return { name, providerId: 15368, ...over };
+  }
+
+  function run(
+    name: string,
+    status: string,
+    conclusion: string | null,
+    over: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return { id: 1, name, providerId: 15368, status, conclusion, ...over };
+  }
+
+  async function readinessFor(
+    requiredChecks: readonly Record<string, unknown>[],
+    runs: readonly Record<string, unknown>[],
+    protectionStep: SpawnStep = { stdout: protection(requiredChecks) },
+  ): Promise<Awaited<ReturnType<GitMergeAdapter["readMergeReadiness"]>>> {
+    const spawn = scriptedSpawn([
+      { stdout: prJson() },
+      { stdout: REPO_CFG },
+      { stdout: NO_REVIEWS },
+      protectionStep,
+      { stdout: JSON.stringify(runs) },
+    ]);
+    return makeAdapter(spawn).readMergeReadiness(READINESS_REQ);
+  }
+
+  it("represents a missing required check as pending and reports its required count", async () => {
+    const readiness = await readinessFor(
+      [requiredCheck("ci"), requiredCheck("ui")],
+      [run("ci", "completed", "success")],
+    );
+
+    expect(readiness.branchProtection?.requiredStatusCheckCount).toBe(2);
+    expect(readiness.branchProtection?.signaturesRequired).toBe(true);
+    expect(readiness.checks).toMatchObject({
+      total: 2,
+      passing: 1,
+      failing: 0,
+      pending: 1,
+      overallStatus: "pending",
+    });
+  });
+
+  it("projects both signed-commit requirement states and rejects a missing state", async () => {
+    const unsignedAllowed = await readinessFor([], [], {
+      stdout: JSON.stringify({
+        deletionAllowed: false,
+        forcePushAllowed: false,
+        linearHistoryRequired: true,
+        signaturesRequired: false,
+        requiredReviewCount: 0,
+        requiredChecks: [],
+      }),
+    });
+    expect(unsignedAllowed.branchProtection?.signaturesRequired).toBe(false);
+
+    const missing = await readinessFor([], [], {
+      stdout: JSON.stringify({
+        deletionAllowed: false,
+        forcePushAllowed: false,
+        linearHistoryRequired: true,
+        requiredReviewCount: 0,
+        requiredChecks: [],
+      }),
+    });
+    expect(missing.providerError).toBe(true);
+    expect(missing.branchProtection).toBeUndefined();
+  });
+
+  it("keeps an in-progress required check pending", async () => {
+    const readiness = await readinessFor([requiredCheck("ci")], [run("ci", "in_progress", null)]);
+
+    expect(readiness.checks?.overallStatus).toBe("pending");
+    expect(readiness.checks?.pending).toBe(1);
+  });
+
+  it("keeps a failed required check blocking", async () => {
+    const readiness = await readinessFor(
+      [requiredCheck("ci")],
+      [run("ci", "completed", "failure")],
+    );
+
+    expect(readiness.checks?.overallStatus).toBe("failing");
+    expect(readiness.checks?.failing).toBe(1);
+  });
+
+  it("keeps an informational failure visible without failing required checks", async () => {
+    const readiness = await readinessFor(
+      [requiredCheck("ci")],
+      [run("ci", "completed", "success"), run("nightly", "completed", "failure", { id: 2 })],
+    );
+
+    expect(readiness.checks?.overallStatus).toBe("passing");
+    expect(readiness.checks?.informational).toEqual({
+      total: 1,
+      passing: 0,
+      failing: 1,
+      pending: 0,
+      overallStatus: "failing",
+    });
+  });
+
+  it("deduplicates check names by provider and uses the newest run", async () => {
+    const readiness = await readinessFor(
+      [requiredCheck("ci")],
+      [run("ci", "completed", "failure", { id: 1 }), run("ci", "completed", "success", { id: 2 })],
+    );
+
+    expect(readiness.checks).toMatchObject({
+      total: 1,
+      passing: 1,
+      failing: 0,
+      pending: 0,
+      overallStatus: "passing",
+      informational: { total: 0 },
+    });
+  });
+
+  it("does not satisfy an app-bound requirement with a same-name run from another provider", async () => {
+    const readiness = await readinessFor(
+      [requiredCheck("ci")],
+      [run("ci", "completed", "success", { providerId: 99 })],
+    );
+
+    expect(readiness.checks).toMatchObject({
+      total: 1,
+      passing: 0,
+      failing: 0,
+      pending: 1,
+      overallStatus: "pending",
+      informational: { total: 1, passing: 1 },
+    });
+  });
+
+  it("fails closed when branch-protection requirements cannot be read", async () => {
+    const spawn = scriptedSpawn([
+      { stdout: prJson() },
+      { stdout: REPO_CFG },
+      { stdout: NO_REVIEWS },
+      { stderr: "HTTP 403", exit: 1 },
+    ]);
+
+    const readiness = await makeAdapter(spawn).readMergeReadiness(READINESS_REQ);
+
+    expect(readiness.providerError).toBe(true);
+    expect(readiness.checks).toBeUndefined();
   });
 });
 

@@ -19,6 +19,7 @@ import {
   memoryBodySuppressionHash,
   MEMORY_DB_FILENAME,
   MemoryStorageError,
+  MemoryStoragePreconditionError,
   MemoryStorageValidationError,
   type MemoryEvent,
   type MemoryVaultStore,
@@ -408,6 +409,183 @@ describe("validator gate fires BEFORE any SQL touches", () => {
     v.close();
   });
 });
+
+describe("atomic graph mutations", () => {
+  it("applies bound updates and edges atomically, then emits only committed events", () => {
+    const dir = freshDir();
+    const events: MemoryEvent[] = [];
+    const vault = openVault(dir, events);
+    const proposed = makeMemory({ id: "m-proposed" as MemoryId, status: "proposed" });
+    const accepted = makeMemory({ id: "m-accepted" as MemoryId });
+    vault.insertMemory(proposed);
+    vault.insertMemory(accepted);
+    events.length = 0;
+
+    const edge: MemoryEdge = {
+      id: "e-superseded" as MemoryEdgeId,
+      schemaVersion: "1",
+      fromMemoryId: proposed.id,
+      toMemoryId: accepted.id,
+      kind: "supersedes",
+      createdAt: proposed.updatedAt + 1,
+    };
+    const result = vault.applyGraphMutation({
+      preconditions: [
+        {
+          id: proposed.id,
+          expectedStatus: proposed.status,
+          expectedUpdatedAt: proposed.updatedAt,
+        },
+      ],
+      updates: [
+        {
+          id: proposed.id,
+          patch: { status: "superseded" },
+          nowMs: proposed.updatedAt + 1,
+          expectedStatus: proposed.status,
+          expectedUpdatedAt: proposed.updatedAt,
+        },
+      ],
+      edges: [edge],
+    });
+
+    expect(result.memories).toMatchObject([{ id: proposed.id, status: "superseded" }]);
+    expect(result.edges).toEqual([edge]);
+    expect(vault.getMemory(proposed.id)?.status).toBe("superseded");
+    expect(vault.listOutgoingEdges(proposed.id)).toEqual([edge]);
+    expect(events.map((event) => event.kind)).toEqual(["memory:updated", "edge:inserted"]);
+    vault.close();
+  });
+
+  it("rejects a stale graph status precondition before mutation", () => {
+    const dir = freshDir();
+    const events: MemoryEvent[] = [];
+    const vault = openVault(dir, events);
+    const memory = makeMemory({ id: "m-status" as MemoryId });
+    vault.insertMemory(memory);
+    events.length = 0;
+
+    expectPreconditionFailure(
+      () =>
+        vault.applyGraphMutation({
+          preconditions: [
+            { id: memory.id, expectedStatus: "proposed", expectedUpdatedAt: memory.updatedAt },
+          ],
+          updates: [{ id: memory.id, patch: { body: "changed" }, nowMs: memory.updatedAt + 1 }],
+          edges: [],
+        }),
+      "status",
+    );
+
+    expect(vault.getMemory(memory.id)?.body).toBe(memory.body);
+    expect(events).toEqual([]);
+    vault.close();
+  });
+
+  it("rejects a stale graph version precondition before mutation", () => {
+    const dir = freshDir();
+    const events: MemoryEvent[] = [];
+    const vault = openVault(dir, events);
+    const memory = makeMemory({ id: "m-version" as MemoryId });
+    vault.insertMemory(memory);
+    events.length = 0;
+
+    expectPreconditionFailure(
+      () =>
+        vault.applyGraphMutation({
+          preconditions: [
+            {
+              id: memory.id,
+              expectedStatus: memory.status,
+              expectedUpdatedAt: memory.updatedAt + 1,
+            },
+          ],
+          updates: [{ id: memory.id, patch: { body: "changed" }, nowMs: memory.updatedAt + 1 }],
+          edges: [],
+        }),
+      "updatedAt",
+    );
+
+    expect(vault.getMemory(memory.id)?.body).toBe(memory.body);
+    expect(events).toEqual([]);
+    vault.close();
+  });
+
+  it("rolls back earlier updates when a later update has a stale status", () => {
+    const dir = freshDir();
+    const events: MemoryEvent[] = [];
+    const vault = openVault(dir, events);
+    const first = makeMemory({ id: "m-first" as MemoryId, body: "first before" });
+    const stale = makeMemory({ id: "m-stale-status" as MemoryId, body: "stale before" });
+    vault.insertMemory(first);
+    vault.insertMemory(stale);
+    events.length = 0;
+
+    expectPreconditionFailure(
+      () =>
+        vault.applyGraphMutation({
+          updates: [
+            { id: first.id, patch: { body: "first after" }, nowMs: first.updatedAt + 1 },
+            {
+              id: stale.id,
+              patch: { body: "stale after" },
+              nowMs: stale.updatedAt + 1,
+              expectedStatus: "proposed",
+            },
+          ],
+          edges: [],
+        }),
+      "status",
+    );
+
+    expect(vault.getMemory(first.id)?.body).toBe(first.body);
+    expect(vault.getMemory(stale.id)?.body).toBe(stale.body);
+    expect(events).toEqual([]);
+    vault.close();
+  });
+
+  it("rejects an update whose expected version is stale", () => {
+    const dir = freshDir();
+    const events: MemoryEvent[] = [];
+    const vault = openVault(dir, events);
+    const memory = makeMemory({ id: "m-stale-version" as MemoryId });
+    vault.insertMemory(memory);
+    events.length = 0;
+
+    expectPreconditionFailure(
+      () =>
+        vault.applyGraphMutation({
+          updates: [
+            {
+              id: memory.id,
+              patch: { body: "changed" },
+              nowMs: memory.updatedAt + 1,
+              expectedUpdatedAt: memory.updatedAt + 1,
+            },
+          ],
+          edges: [],
+        }),
+      "updatedAt",
+    );
+
+    expect(vault.getMemory(memory.id)?.body).toBe(memory.body);
+    expect(events).toEqual([]);
+    vault.close();
+  });
+});
+
+function expectPreconditionFailure(
+  action: () => unknown,
+  field: MemoryStoragePreconditionError["field"],
+): void {
+  try {
+    action();
+    expect.fail("Expected a memory storage precondition failure.");
+  } catch (error) {
+    expect(error).toBeInstanceOf(MemoryStoragePreconditionError);
+    expect((error as MemoryStoragePreconditionError).field).toBe(field);
+  }
+}
 
 describe("close() releases the file lock", () => {
   it("lets a second factory open the same DB after the first closes", () => {

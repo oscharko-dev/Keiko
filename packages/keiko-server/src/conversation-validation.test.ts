@@ -4,7 +4,7 @@
 // byte counts back into a response the browser will render.
 
 import { describe, expect, it } from "vitest";
-import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
+import { MAX_ATTACHMENT_MIME_BYTES, type ModelCapability } from "@oscharko-dev/keiko-contracts";
 import {
   MAX_AGGREGATE_DOCUMENT_BYTES,
   validateConversationPayload,
@@ -120,6 +120,14 @@ describe("validateConversationPayload", () => {
       title:
         "rejects image/svg with CONVERSATION_UNSUPPORTED_FILE_TYPE even when the model is image-capable",
       mimeType: "image/svg",
+    },
+    {
+      title: "rejects parameterized mixed-case SVG even when the model is image-capable",
+      mimeType: "IMAGE/SVG+XML; charset=UTF-8",
+    },
+    {
+      title: "rejects an overlong otherwise-safe image MIME",
+      mimeType: `image/${"a".repeat(MAX_ATTACHMENT_MIME_BYTES - "image/".length + 1)}`,
     },
     {
       title:

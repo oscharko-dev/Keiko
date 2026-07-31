@@ -3,6 +3,11 @@ import type {
   ConsolidationResult,
 } from "@oscharko-dev/keiko-memory-consolidation";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type {
+  MemoryConsolidationApplicationWire,
+  MemoryId,
+  MemoryStatus,
+} from "@oscharko-dev/keiko-contracts";
 
 export interface ConsolidationJobSettings {
   readonly jaccardThreshold: number;
@@ -26,6 +31,19 @@ export interface ConsolidationJobRecord {
   readonly settings: ConsolidationJobSettings;
   readonly memoryCount: number;
   readonly cancelRequested: boolean;
+  readonly reviewSnapshots?: readonly ConsolidationReviewSnapshot[];
+  readonly applications?: readonly MemoryConsolidationApplicationWire[];
+}
+
+export interface ConsolidationReviewMemorySnapshot {
+  readonly memoryId: MemoryId;
+  readonly status: MemoryStatus;
+  readonly updatedAt: number;
+}
+
+export interface ConsolidationReviewSnapshot {
+  readonly itemId: string;
+  readonly memories: readonly ConsolidationReviewMemorySnapshot[];
 }
 
 export interface RegisterConsolidationJobInput {
@@ -148,11 +166,63 @@ function sortedRecords(state: RegistryState): readonly ConsolidationJobRecord[] 
   });
 }
 
+function bodyFreeEvidence(
+  evidence: ConsolidationResult["reviewItems"][number]["evidence"],
+): ConsolidationResult["reviewItems"][number]["evidence"] {
+  return evidence?.map(({ detail: _detail, ...safe }) => safe);
+}
+
+function bodyFreeReviewItem(
+  item: ConsolidationResult["reviewItems"][number],
+): ConsolidationResult["reviewItems"][number] {
+  const evidence = bodyFreeEvidence(item.evidence);
+  return {
+    id: item.id,
+    reason: item.reason,
+    relatedMemoryIds: item.relatedMemoryIds,
+    ...(item.sourceMemoryIds !== undefined ? { sourceMemoryIds: item.sourceMemoryIds } : {}),
+    ...(item.proposedAction !== undefined ? { proposedAction: item.proposedAction } : {}),
+    ...(evidence !== undefined ? { evidence } : {}),
+    ...(item.proposedEdges !== undefined
+      ? {
+          proposedEdges: item.proposedEdges.map(({ provenanceSummary: _summary, ...edge }) => edge),
+        }
+      : {}),
+    detectedAt: item.detectedAt,
+  };
+}
+
+function bodyFreeResult(result: ConsolidationResult): ConsolidationResult {
+  return {
+    ...result,
+    edgesProposed: result.edgesProposed.map(({ provenanceSummary: _summary, ...edge }) => edge),
+    // MemoryUpdate carries bodyPatch/reviewerNote. The operative in-memory record retains those
+    // proposals; the evidence snapshot retains their count in summaryStatus only.
+    updatesProposed: [],
+    reviewItems: result.reviewItems.map(bodyFreeReviewItem),
+  };
+}
+
+function bodyFreePersistedRecord(record: ConsolidationJobRecord): ConsolidationJobRecord {
+  return {
+    ...record,
+    // Snapshots are the optimistic-concurrency authority for Apply. An evidence projection cannot
+    // restore that operative authority after restart, so restored review items are deliberately
+    // non-applicable even though their body-free audit facts remain inspectable.
+    reviewSnapshots: [],
+    job: {
+      ...record.job,
+      ...(record.job.result === undefined ? {} : { result: bodyFreeResult(record.job.result) }),
+      ...(record.job.error === undefined ? {} : { error: "Consolidation run failed." }),
+    },
+  };
+}
+
 function persistState(state: RegistryState): void {
   if (state.evidenceStore === undefined) return;
   const snapshot: PersistedRegistrySnapshot = {
     schemaVersion: "1",
-    records: sortedRecords(state),
+    records: sortedRecords(state).map(bodyFreePersistedRecord),
   };
   state.evidenceStore.put(state.evidenceRunId, JSON.stringify(snapshot));
 }
@@ -160,7 +230,12 @@ function persistState(state: RegistryState): void {
 function updateRecord(
   state: RegistryState,
   jobId: string,
-  patch: Partial<Pick<ConsolidationJobRecord, "job" | "memoryCount" | "cancelRequested">>,
+  patch: Partial<
+    Pick<
+      ConsolidationJobRecord,
+      "job" | "memoryCount" | "cancelRequested" | "reviewSnapshots" | "applications"
+    >
+  >,
 ): ConsolidationJobRecord | undefined {
   const record = state.records.get(jobId);
   if (record === undefined) return undefined;
@@ -214,6 +289,7 @@ export interface ConsolidationJobRegistry {
     jobId: string,
     job: ConsolidationJob,
     memoryCount: number,
+    reviewSnapshots?: readonly ConsolidationReviewSnapshot[],
   ) => ConsolidationJobRecord | undefined;
   readonly fail: (
     jobId: string,
@@ -222,7 +298,81 @@ export interface ConsolidationJobRegistry {
     memoryCount: number,
   ) => ConsolidationJobRecord | undefined;
   readonly requestCancel: (jobId: string) => ConsolidationJobRecord | undefined;
+  readonly recordApplication: (
+    jobId: string,
+    application: MemoryConsolidationApplicationWire,
+  ) => ConsolidationJobRecord | undefined;
   readonly size: () => number;
+}
+
+function registerJob(
+  state: RegistryState,
+  input: RegisterConsolidationJobInput,
+): ConsolidationJobRecord {
+  enforceCapacity(state);
+  const record: ConsolidationJobRecord = {
+    job: input.job,
+    createdAt: input.createdAt,
+    selection: input.selection,
+    settings: input.settings,
+    memoryCount: input.memoryCount,
+    cancelRequested: false,
+    reviewSnapshots: [],
+    applications: [],
+  };
+  state.records.set(input.job.id, record);
+  persistState(state);
+  return record;
+}
+
+function completeJob(
+  state: RegistryState,
+  jobId: string,
+  job: ConsolidationJob,
+  memoryCount: number,
+  reviewSnapshots?: readonly ConsolidationReviewSnapshot[],
+): ConsolidationJobRecord | undefined {
+  const startedAt = job.startedAt ?? state.now();
+  const completedAt = job.completedAt ?? state.now();
+  const finalJob = finalizeJob(job, startedAt, completedAt);
+  return updateRecord(state, jobId, {
+    job: finalJob,
+    memoryCount,
+    ...(reviewSnapshots === undefined ? {} : { reviewSnapshots }),
+  });
+}
+
+function failJob(
+  state: RegistryState,
+  jobId: string,
+  job: ConsolidationJob,
+  error: string,
+  memoryCount: number,
+): ConsolidationJobRecord | undefined {
+  const startedAt = job.startedAt ?? state.now();
+  const completedAt = job.completedAt ?? state.now();
+  return updateRecord(state, jobId, {
+    job: finalizeJob(job, startedAt, completedAt, error),
+    memoryCount,
+  });
+}
+
+function requestJobCancel(state: RegistryState, jobId: string): ConsolidationJobRecord | undefined {
+  const record = state.records.get(jobId);
+  if (record === undefined || record.cancelRequested) return record;
+  return updateRecord(state, jobId, { cancelRequested: true });
+}
+
+function recordJobApplication(
+  state: RegistryState,
+  jobId: string,
+  application: MemoryConsolidationApplicationWire,
+): ConsolidationJobRecord | undefined {
+  const record = state.records.get(jobId);
+  if (record === undefined) return undefined;
+  const applications = record.applications ?? [];
+  if (applications.some((existing) => existing.itemId === application.itemId)) return record;
+  return updateRecord(state, jobId, { applications: [...applications, application] });
 }
 
 export function createConsolidationJobRegistry(
@@ -230,41 +380,17 @@ export function createConsolidationJobRegistry(
 ): ConsolidationJobRegistry {
   const state = createRegistryState(options);
   return {
-    register: (input): ConsolidationJobRecord => {
-      enforceCapacity(state);
-      const record: ConsolidationJobRecord = {
-        job: input.job,
-        createdAt: input.createdAt,
-        selection: input.selection,
-        settings: input.settings,
-        memoryCount: input.memoryCount,
-        cancelRequested: false,
-      };
-      state.records.set(input.job.id, record);
-      persistState(state);
-      return record;
-    },
+    register: (input): ConsolidationJobRecord => registerJob(state, input),
     get: (jobId): ConsolidationJobRecord | undefined => state.records.get(jobId),
     setRunning: (jobId, job): ConsolidationJobRecord | undefined =>
       updateRecord(state, jobId, { job }),
-    complete: (jobId, job, memoryCount): ConsolidationJobRecord | undefined => {
-      const startedAt = job.startedAt ?? state.now();
-      const completedAt = job.completedAt ?? state.now();
-      const finalJob = finalizeJob(job, startedAt, completedAt);
-      return updateRecord(state, jobId, { job: finalJob, memoryCount });
-    },
-    fail: (jobId, job, error, memoryCount): ConsolidationJobRecord | undefined => {
-      const startedAt = job.startedAt ?? state.now();
-      const completedAt = job.completedAt ?? state.now();
-      const finalJob = finalizeJob(job, startedAt, completedAt, error);
-      return updateRecord(state, jobId, { job: finalJob, memoryCount });
-    },
-    requestCancel: (jobId): ConsolidationJobRecord | undefined => {
-      const record = state.records.get(jobId);
-      if (record === undefined) return undefined;
-      if (record.cancelRequested) return record;
-      return updateRecord(state, jobId, { cancelRequested: true });
-    },
+    complete: (jobId, job, memoryCount, snapshots): ConsolidationJobRecord | undefined =>
+      completeJob(state, jobId, job, memoryCount, snapshots),
+    fail: (jobId, job, error, memoryCount): ConsolidationJobRecord | undefined =>
+      failJob(state, jobId, job, error, memoryCount),
+    requestCancel: (jobId): ConsolidationJobRecord | undefined => requestJobCancel(state, jobId),
+    recordApplication: (jobId, application): ConsolidationJobRecord | undefined =>
+      recordJobApplication(state, jobId, application),
     size: (): number => state.records.size,
   };
 }

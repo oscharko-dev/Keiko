@@ -29,6 +29,8 @@ import type {
   MemoryConsolidationJobSettingsWire,
   MemoryConsolidationJobEnvelopeWire,
   MemoryConsolidationJobResponseWire,
+  MemoryConsolidationApplyPreconditionWire,
+  MemoryConsolidationApplyResponseWire,
   MemoryHealthScanResultWire,
   MemoryAutonomyPolicyWire,
 } from "@oscharko-dev/keiko-contracts";
@@ -72,6 +74,8 @@ export type MemoryConsolidationJobSelection = MemoryConsolidationJobSelectionWir
 export type MemoryConsolidationJobSettings = MemoryConsolidationJobSettingsWire;
 export type MemoryConsolidationJobEnvelope = MemoryConsolidationJobEnvelopeWire;
 export type MemoryConsolidationJobResponse = MemoryConsolidationJobResponseWire;
+export type MemoryConsolidationApplyPrecondition = MemoryConsolidationApplyPreconditionWire;
+export type MemoryConsolidationApplyResponse = MemoryConsolidationApplyResponseWire;
 
 export interface MemoryForgetResponse {
   readonly forgotten: true;
@@ -307,6 +311,21 @@ export async function cancelMemoryConsolidationJob(
   });
 }
 
+export async function applyMemoryConsolidationReviewItem(
+  jobId: string,
+  itemId: string,
+  preconditions: readonly MemoryConsolidationApplyPrecondition[],
+  fetchImpl = fetchJson<MemoryConsolidationApplyResponse>,
+): Promise<MemoryConsolidationApplyResponse> {
+  return fetchImpl(
+    `/api/memory/consolidation/jobs/${encodeURIComponent(jobId)}/review-items/${encodeURIComponent(itemId)}/apply`,
+    {
+      method: "POST",
+      body: JSON.stringify({ preconditions }),
+    },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Detail
 // ---------------------------------------------------------------------------
@@ -447,13 +466,22 @@ export async function resolveMemoryConflict(
 // `id` is the proposal/record identifier the route encodes into the path. It is typed as a
 // plain string because both call sites supply a branded id (chat: MemoryProposalId, review
 // queue: MemoryId) and this HTTP boundary only needs the URL path segment, not the brand.
+export interface AcceptMemoryProposalOptions {
+  readonly bodyOverride?: string;
+}
+
+type MemoryActionFetch = (path: string, init?: RequestInit) => Promise<MemoryActionResponse>;
+
 export async function acceptMemoryProposal(
   id: string,
-  fetchImpl = fetchJson<MemoryActionResponse>,
+  optionsOrFetch: AcceptMemoryProposalOptions | MemoryActionFetch = {},
+  fetchOverride: MemoryActionFetch = fetchJson<MemoryActionResponse>,
 ): Promise<MemoryActionResponse> {
+  const options = typeof optionsOrFetch === "function" ? {} : optionsOrFetch;
+  const fetchImpl = typeof optionsOrFetch === "function" ? optionsOrFetch : fetchOverride;
   return fetchImpl(`/api/memory/proposals/${encodeURIComponent(id)}/accept`, {
     method: "POST",
-    body: "{}",
+    body: JSON.stringify(options),
   });
 }
 

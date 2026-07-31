@@ -100,6 +100,9 @@ interface ChangesPaneProps {
   readonly history: GitHistoryResponse | null;
   readonly historyLoading: boolean;
   readonly historyError: string | null;
+  readonly historyLoadingMore: boolean;
+  readonly historyLoadMoreError: string | null;
+  readonly onLoadMoreHistory: () => void;
   readonly selectedCommitSha: string | null;
   readonly onSelectCommit: (entry: GitHistoryEntry) => void;
   /** Commit composer, pinned beneath the changed-file list on the Changes tab. */
@@ -129,6 +132,9 @@ export function ChangesPane({
   history,
   historyLoading,
   historyError,
+  historyLoadingMore,
+  historyLoadMoreError,
+  onLoadMoreHistory,
   selectedCommitSha,
   onSelectCommit,
   commitComposer,
@@ -234,6 +240,9 @@ export function ChangesPane({
           history={history}
           loading={historyLoading}
           error={historyError}
+          loadingMore={historyLoadingMore}
+          loadMoreError={historyLoadMoreError}
+          onLoadMore={onLoadMoreHistory}
           selectedSha={selectedCommitSha}
           onSelect={onSelectCommit}
         />

@@ -32,13 +32,11 @@ export function parseQodoFindings(body) {
   return counts.reduce((total, count) => total + (count ?? 0), 0);
 }
 
-// A Qodo review is current when its body embeds the exact head SHA (present even for a clean review
-// via Qodo's footer commit marker, not only via finding permalinks). For a merge-commit head (e.g.
-// "Merge dev into <branch>") Qodo pins its review to the feature parent, not the merge SHA, so a
-// parent-bound review also counts — but only when it was (re)posted at/after the merge commit was
-// created. That freshness gate stops a pre-merge feature-branch review from being reused for the
-// merged result, preserving the strict head currency established in PR #2497.
-function qodoReviewIsCurrent(comment, headSha, validParents, mergeCommitTime) {
+// Head binding is necessary but not sufficient currency: Qodo can rewrite these embedded SHAs
+// without regenerating its analysis, so the canonical Action separately enforces the app-bound
+// normalized-digest chain from Issue #2870. For a merge-commit head (e.g. "Merge dev into <branch>")
+// Qodo pins its review to the feature parent, so that binding also requires a post-merge update.
+function qodoReviewBindsHead(comment, headSha, validParents, mergeCommitTime) {
   if (comment.body.includes(headSha)) return true;
   if (typeof mergeCommitTime !== "number") return false;
   const bindsParent = validParents.some((sha) => comment.body.includes(sha));
@@ -58,7 +56,7 @@ export function latestQodoReview(
   return comments
     .filter((comment) => isBotEvidence(comment, qodoIdentity, true))
     .filter((comment) => parseQodoFindings(comment.body) !== undefined)
-    .filter((comment) => qodoReviewIsCurrent(comment, headSha, validParents, mergeCommitTime))
+    .filter((comment) => qodoReviewBindsHead(comment, headSha, validParents, mergeCommitTime))
     .toSorted((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
 }
 

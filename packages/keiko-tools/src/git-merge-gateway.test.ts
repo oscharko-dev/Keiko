@@ -7,6 +7,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildBranchProtectionArgv,
   buildBranchProtectionRequiredReviewsArgv,
   buildCheckRunsArgv,
   buildDeleteMergedBranchArgv,
@@ -210,6 +211,13 @@ describe("merge argv builders", () => {
       "--jq",
       expect.stringContaining("required_approving_review_count"),
     ]);
+    expect(buildBranchProtectionArgv(readinessReq)).toEqual([
+      "api",
+      "/repos/o/r/branches/main/protection",
+      "--jq",
+      expect.stringContaining("requiredChecks"),
+    ]);
+    expect(buildBranchProtectionArgv(readinessReq).at(-1)).toContain("required_signatures");
   });
 
   it("rejects a flag-injection base branch name in the branch-protection builder", () => {

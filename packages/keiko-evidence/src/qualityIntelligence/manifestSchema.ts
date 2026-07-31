@@ -135,6 +135,8 @@ export interface QualityIntelligenceExportRow {
   readonly createdAt?: string;
   /** Redaction-safe model provenance copied from the export bundle when available. */
   readonly modelProvenance?: QualityIntelligence.QualityIntelligenceExportModelProvenance;
+  /** Body-free policy provenance governing the source run at export time. */
+  readonly policyProvenance?: QualityIntelligenceExportPolicyProvenance;
   /**
    * Whether this row records a dry-run preview rather than a materialised export (Issue #283, AC4).
    * Absent/`false` means the export produced a downloadable artifact (local serialisation or a
@@ -151,6 +153,11 @@ export interface QualityIntelligenceExportRow {
    * strict-schema gate validates only top-level manifest keys, so no schema-version bump is needed.
    */
   readonly approvedOnly?: boolean;
+}
+
+export interface QualityIntelligenceExportPolicyProvenance {
+  readonly retentionPolicyId: string;
+  readonly policyProfileIds: readonly string[];
 }
 
 export interface QualityIntelligenceEvidenceRefRow {

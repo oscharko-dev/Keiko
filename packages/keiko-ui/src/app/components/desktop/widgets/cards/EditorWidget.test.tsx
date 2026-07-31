@@ -61,6 +61,7 @@ import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
+import { requestEditorBufferReconciliation } from "./editor-buffer-reconciliation-events";
 import { _resetEditorAgentBridgeStateForTests } from "./editorAgentBridge";
 import { getEditorProblems, resetEditorProblemsStoreForTests } from "./editorProblemsStore";
 import { resetSharedEventSourcesForTests } from "./sharedEventSource";
@@ -1001,6 +1002,52 @@ describe("EditorWidget — edit and save", () => {
     // Issue #1205: the dirty state is communicated by the status bar save field (and the tab dot).
     const statusBar = screen.getByTestId("editor-status-bar");
     expect(statusBar.querySelector('[data-field="save"]')).toHaveTextContent("Unsaved");
+  });
+
+  it("reloads a clean open buffer when Git requests reconciliation", async () => {
+    await renderLoaded();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({
+        content: "const value = 2;\n",
+        sizeBytes: 17,
+        modifiedAt: 2,
+        session: {
+          schemaVersion: "1",
+          version: { sizeBytes: 17, modifiedAt: 2, contentHash: "b".repeat(64) },
+        },
+      }),
+    );
+
+    await act(async () => requestEditorBufferReconciliation("/repo"));
+
+    expect(surface.props?.buffer.content.text).toBe("const value = 2;\n");
+    expect(surface.props?.fileModel.dirty).toBe(false);
+  });
+
+  it("preserves a dirty buffer and surfaces the disk change during Git reconciliation", async () => {
+    await renderLoaded();
+    act(() => {
+      surface.props?.onContentChange({ text: "unsaved local edit\n", sizeBytes: 19 }, "human");
+    });
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({
+        content: "changed by Git\n",
+        sizeBytes: 15,
+        modifiedAt: 2,
+        session: {
+          schemaVersion: "1",
+          version: { sizeBytes: 15, modifiedAt: 2, contentHash: "b".repeat(64) },
+        },
+      }),
+    );
+
+    await act(async () => requestEditorBufferReconciliation("/repo"));
+
+    expect(surface.props?.buffer.content.text).toBe("unsaved local edit\n");
+    expect(surface.props?.fileModel.dirty).toBe(true);
+    expect(screen.getByTestId("editor-external-change-banner")).toHaveTextContent(
+      "changed on disk while you have unsaved edits",
+    );
   });
 
   it("contains rejected background hot-exit writes without breaking editing", async () => {

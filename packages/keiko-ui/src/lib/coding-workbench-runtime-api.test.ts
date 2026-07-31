@@ -14,6 +14,7 @@ import {
   newCodingWorkbenchRuntimeRequestId,
   parseCodingWorkbenchRuntimeEvent,
   retryCodingWorkbenchRuntime,
+  resumeCodingWorkbenchRuntime,
   startCodingWorkbenchRuntime,
   stopCodingWorkbenchRuntime,
   takeOverCodingWorkbenchRuntime,
@@ -237,6 +238,21 @@ describe("Coding Workbench runtime API endpoints", () => {
     expect(fetchMock).toHaveBeenLastCalledWith(
       "/api/coding-workbench/runtime/runs/run-1/stop",
       expect.objectContaining({ method: "POST" }),
+    );
+
+    await resumeCodingWorkbenchRuntime("run-1", {
+      requestId: "run-1",
+      requestedMode: "supervised-coding",
+    });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/coding-workbench/runtime/runs/run-1/resume",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          requestId: "run-1",
+          requestedMode: "supervised-coding",
+        }),
+      }),
     );
 
     await takeOverCodingWorkbenchRuntime("run-1", { requestId: "run-1" });

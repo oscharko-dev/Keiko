@@ -228,6 +228,7 @@ describe("workspace watch service", () => {
     const manager = service(adapter);
     const events: EditorM7WatchEvent[] = [];
     manager.subscribe({ root, onEvent: (event) => events.push(event) });
+    await drainInitialBaseline(manager, adapter);
 
     await writeFile(join(outside, "secret.txt"), "secret", "utf8");
     await symlink(join(outside, "secret.txt"), join(root, "linked-secret.txt"));

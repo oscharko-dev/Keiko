@@ -7,6 +7,7 @@ import {
   askGrounded,
   createDesktopChat,
   createProject,
+  deleteConversationAttachment,
   fetchChatMessages,
   fetchChats,
   fetchRunReport,
@@ -14,6 +15,7 @@ import {
   fetchProjects,
   regenerateDesktopChat,
   sendDesktopChat,
+  uploadConversationAttachment,
 } from "@/lib/api";
 import {
   CONTEXT_OVERSIZED_USER_MESSAGE,
@@ -31,7 +33,6 @@ import {
   type SendMessageOutcome,
   useChatSession,
 } from "./useChatSession";
-import { undeliverableAttachmentNotices } from "./documentContext";
 import {
   resetConversationMemorySettingsForTests,
   useConversationMemorySettings,
@@ -41,11 +42,6 @@ import {
   clearCanonicalVoiceHasherForTests,
   prepareCanonicalVoiceHasher,
 } from "./canonical-voice-hasher";
-import { DEFAULT_LOCALE, translate, type I18nTranslate } from "@/lib/i18n";
-
-// The notices are localized; "en" is the locale under test, and resolving through the shipped
-// catalog keeps this assertion exact without restating the copy in the test.
-const t: I18nTranslate = (key, values) => translate(DEFAULT_LOCALE, key, values);
 
 beforeAll(async () => {
   await prepareCanonicalVoiceHasher();
@@ -82,6 +78,11 @@ vi.mock("@/lib/api", () => ({
   regenerateDesktopChat: vi.fn(),
   sendDesktopChat: vi.fn(),
   sendDesktopChatStream: vi.fn(),
+  uploadConversationAttachment: vi.fn().mockResolvedValue({
+    attachmentRef: `chat-attachment:${"a".repeat(64)}`,
+    expiresAt: 60_000,
+  }),
+  deleteConversationAttachment: vi.fn().mockResolvedValue(undefined),
   updateChat: vi.fn(),
 }));
 
@@ -1553,11 +1554,17 @@ describe("useChatSession sendMessage — ungrounded attachment descriptors", () 
       role: "assistant",
       content: "Attachment answer.",
     });
-    vi.mocked(sendDesktopChat).mockResolvedValue({
+    vi.mocked(uploadConversationAttachment).mockResolvedValue({
+      attachmentRef: `chat-attachment:${"a".repeat(64)}`,
+      expiresAt: 60_000,
+    });
+    vi.mocked(sendDesktopChat).mockImplementation(async (request) => ({
       chat: chat({ selectedModel: "chat-attachments" }),
       messages: [canonicalUser, canonicalAssistant],
-      memory: undefined,
-    } as never);
+      attachmentDeliveries: (request.attachments ?? [])
+        .filter((attachment) => attachment.kind === "image")
+        .map((attachment) => ({ id: attachment.id, status: "delivered" as const })),
+    }));
 
     const rendered = renderHook(() => useChatSession({ autoCreate: false }));
     await waitFor(() => expect(rendered.result.current.loading).toBe(false));
@@ -1599,6 +1606,8 @@ describe("useChatSession sendMessage — ungrounded attachment descriptors", () 
           name: "screen.png",
           mimeType: "image/png",
           sizeBytes: 5,
+          attachmentRef: `chat-attachment:${"a".repeat(64)}`,
+          sha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
         },
         {
           kind: "document",
@@ -1618,43 +1627,31 @@ describe("useChatSession sendMessage — ungrounded attachment descriptors", () 
       memory: { mode: "autonomous-delivery" },
     });
     expect(result.current.pendingAttachments).toHaveLength(0);
+    expect(result.current.lastSentImages).toEqual([
+      expect.objectContaining({ displayName: "screen.png" }),
+    ]);
+    expect(deleteConversationAttachment).toHaveBeenCalledTimes(1);
   });
 
-  // 0.3.0 release audit — an image is accepted, previewed and modality-validated, and then the
-  // send carries only its {kind, name, mimeType, sizeBytes}. Nothing on the wire can reach the
-  // model, so the turn must say so instead of dropping it in silence.
-  it("discloses by name that a staged image never reaches the model", async (): Promise<void> => {
+  it("refuses an image when governed local upload is unavailable", async (): Promise<void> => {
     const { result } = await setupUngroundedAttachmentSession();
+    vi.mocked(uploadConversationAttachment).mockRejectedValueOnce(
+      new ApiError("NOT_FOUND", "Conversation attachment is unavailable.", 404),
+    );
 
     await act(async (): Promise<void> => {
       expect(
         await result.current.addPendingAttachment(
           new File(["image"], "screen.png", { type: "image/png" }),
         ),
-      ).toEqual({ ok: true });
-    });
-    act((): void => {
-      result.current.setDraft("What is in this picture?");
+      ).toEqual({ ok: false, reason: "delivery-refused" });
     });
 
-    await act(async (): Promise<void> => {
-      await result.current.sendMessage();
-    });
-
-    expect(sendDesktopChat).toHaveBeenCalledTimes(1);
-    // Proof the image contributes nothing: the request carries its metadata and no prompt-bearing
-    // content at all, so the model cannot see it.
-    const request = vi.mocked(sendDesktopChat).mock.calls[0]?.[0];
-    expect(request).toMatchObject({
-      attachments: [{ kind: "image", name: "screen.png", mimeType: "image/png", sizeBytes: 5 }],
-    });
-    expect(request).not.toHaveProperty("documentContext");
-    expect(result.current.error).toBe(
-      undeliverableAttachmentNotices([{ kind: "image", name: "screen.png" }], t).join(" "),
-    );
+    expect(result.current.pendingAttachments).toEqual([]);
+    expect(sendDesktopChat).not.toHaveBeenCalled();
   });
 
-  it("keeps disclosing the image alongside an extracted document's own notices", async (): Promise<void> => {
+  it("delivers an image alongside extracted document context", async (): Promise<void> => {
     const { result } = await setupUngroundedAttachmentSession();
 
     await act(async (): Promise<void> => {
@@ -1674,7 +1671,7 @@ describe("useChatSession sendMessage — ungrounded attachment descriptors", () 
     });
 
     expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]?.documentContext).toHaveLength(1);
-    expect(result.current.error).toContain('"screen.png"');
+    expect(result.current.error).toBeUndefined();
   });
 
   it("clears attachments after reconciliation proves a lost response completed", async (): Promise<void> => {

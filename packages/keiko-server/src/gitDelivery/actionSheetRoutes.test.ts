@@ -2,8 +2,7 @@
 //
 // Two harnesses:
 //   * The real `createUiServer` dispatch — exercises the CENTRAL CSRF + 415 + body-cap enforcement,
-//     request validation, the default (no-pack → fail-closed) policy path, and the redaction
-//     guarantee. The default route uses NO trusted packs.
+//     request validation, the trusted default-pack policy path, and the redaction guarantee.
 //   * A direct handler call with an injected `policyPacks` seam — exercises the policy-dependent
 //     states (ready / waiting / blocked-policy) that need configured TRUSTED packs. Packs are a
 //     server-side seam, never a request field (AUTHORITY RULE / AC1).
@@ -30,6 +29,11 @@ import {
   createHandleGitDeliveryActionSheet,
   type GitDeliveryActionSheetErrorBody,
 } from "./actionSheetRoutes.js";
+import { defaultGitDeliveryPolicyPacksForAction } from "./defaultPolicyPacks.js";
+import { KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK } from "./execution.js";
+import { KEIKO_DEFAULT_MERGE_POLICY_PACK } from "./mergeExecution.js";
+import { KEIKO_DEFAULT_PR_POLICY_PACK } from "./prExecution.js";
+import { KEIKO_DEFAULT_PUBLISH_POLICY_PACK } from "./pushExecution.js";
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const PATH = "/api/git-delivery/action-sheet";
@@ -57,6 +61,7 @@ const COMMIT_INPUTS: GitDeliveryResolvedInputs = {
 function validRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     schemaVersion: "1",
+    projectId: staticRoot,
     resolvedInputs: COMMIT_INPUTS,
     worktreeSnapshot: CLEAN_SNAPSHOT,
     ...overrides,
@@ -147,6 +152,7 @@ const APPROVAL_GATED_ORG: GitDeliveryOrgPolicyPack = {
 beforeEach(async () => {
   staticRoot = mkdtempSync(join(tmpdir(), "keiko-gd-static-"));
   store = createInMemoryUiStore();
+  store.createProject(staticRoot);
   await startBound();
 });
 
@@ -157,14 +163,15 @@ afterEach(async () => {
 });
 
 describe("POST /api/git-delivery/action-sheet — central enforcement + validation", () => {
-  it("returns 200 and blocks fail-closed (no-applicable-rule) when no packs are configured", async () => {
+  it("hydrates the same trusted default pack as commit execution", async () => {
     const res = await post(validRequest());
     expect(res.status).toBe(200);
     const sheet = (await res.json()) as GitDeliveryActionSheet;
     expect(sheet.schemaVersion).toBe("1");
     expect(sheet.state).toBe("blocked");
-    expect(sheet.blocked?.cause).toBe("policy");
-    expect(sheet.policyExplanation.blockReason).toBe("no-applicable-rule");
+    expect(sheet.blocked?.cause).toBe("provider-not-ready");
+    expect(sheet.policyExplanation.decision).toBe("constrained");
+    expect(sheet.policyExplanation.blockReason).toBeUndefined();
   });
 
   it("does not require a deployment enable flag before policy evaluation", async () => {
@@ -174,8 +181,36 @@ describe("POST /api/git-delivery/action-sheet — central enforcement + validati
     expect(res.status).toBe(200);
     const sheet = (await res.json()) as GitDeliveryActionSheet;
     expect(sheet.state).toBe("blocked");
-    expect(sheet.blocked?.cause).toBe("policy");
-    expect(sheet.policyExplanation.blockReason).toBe("no-applicable-rule");
+    expect(sheet.blocked?.cause).toBe("provider-not-ready");
+    expect(sheet.policyExplanation.decision).toBe("constrained");
+  });
+
+  it("uses the exact executing-route pack objects for every action kind", () => {
+    for (const kind of [
+      "branch-create",
+      "branch-switch",
+      "stage",
+      "unstage",
+      "commit",
+      "abort",
+      "recovery",
+    ] as const) {
+      expect(defaultGitDeliveryPolicyPacksForAction(kind).repoPack).toBe(
+        KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK,
+      );
+    }
+    expect(defaultGitDeliveryPolicyPacksForAction("push").repoPack).toBe(
+      KEIKO_DEFAULT_PUBLISH_POLICY_PACK,
+    );
+    expect(defaultGitDeliveryPolicyPacksForAction("pr-create").repoPack).toBe(
+      KEIKO_DEFAULT_PR_POLICY_PACK,
+    );
+    expect(defaultGitDeliveryPolicyPacksForAction("pr-update").repoPack).toBe(
+      KEIKO_DEFAULT_PR_POLICY_PACK,
+    );
+    expect(defaultGitDeliveryPolicyPacksForAction("merge").repoPack).toBe(
+      KEIKO_DEFAULT_MERGE_POLICY_PACK,
+    );
   });
 
   it("returns 413 for an oversized body", async () => {
@@ -208,6 +243,26 @@ describe("POST /api/git-delivery/action-sheet — central enforcement + validati
           approvalTokenHash: "a".repeat(64),
           approvedByUserId: "u-1",
           approvedAtMs: 1_700_000_000_000,
+        },
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as GitDeliveryActionSheetErrorBody;
+    expect(body.error.code).toBe("GIT_DELIVERY_ACTION_SHEET_BAD_REQUEST");
+  });
+
+  it("rejects browser-supplied provider state at the action-sheet boundary", async () => {
+    const res = await post(
+      validRequest({
+        providerState: {
+          branchProtection: {
+            deletionAllowed: true,
+            forcePushAllowed: true,
+            linearHistoryRequired: false,
+            signaturesRequired: false,
+            requiredReviewCount: 0,
+            requiredStatusCheckCount: 0,
+          },
         },
       }),
     );
@@ -277,12 +332,31 @@ describe("POST /api/git-delivery/action-sheet — central enforcement + validati
     expect(text).not.toContain("/Users/");
     expect(text).not.toContain("apiKey");
   });
+
+  it("projects policy outcome without exposing trusted pack identifiers or rule bodies", async () => {
+    const handler = createHandleGitDeliveryActionSheet({
+      policyPacks: () => ({
+        repoPack: {
+          schemaVersion: "1",
+          repoId: "sensitive-repository-identity",
+          rules: [{ actionKind: "commit", decision: "allowed" }],
+        },
+      }),
+    });
+    const result = await handler(ctxFor(validRequest()), deps());
+    const serialized = JSON.stringify(result.body);
+    expect(serialized).toContain('"decision":"allowed"');
+    expect(serialized).not.toContain("sensitive-repository-identity");
+    expect(serialized).not.toContain("repoId");
+    expect(serialized).not.toContain('"rules"');
+  });
 });
 
 describe("POST /api/git-delivery/action-sheet — policy-dependent states (trusted-pack seam)", () => {
   it("ready-to-execute for an allowed policy over a clean snapshot", async () => {
     const handler = createHandleGitDeliveryActionSheet({
       policyPacks: () => ({ orgPack: ALLOW_COMMIT_ORG }),
+      branchProtectionReader: () => Promise.resolve({ outcome: "unprotected" }),
     });
     const result = await handler(ctxFor(validRequest()), deps());
     expect(result.status).toBe(200);
@@ -295,6 +369,7 @@ describe("POST /api/git-delivery/action-sheet — policy-dependent states (trust
   it("waiting-for-approval for an approval-gated policy with no approval attached", async () => {
     const handler = createHandleGitDeliveryActionSheet({
       policyPacks: () => ({ orgPack: APPROVAL_GATED_ORG }),
+      branchProtectionReader: () => Promise.resolve({ outcome: "unprotected" }),
     });
     const result = await handler(ctxFor(validRequest()), deps());
     const sheet = result.body as GitDeliveryActionSheet;
@@ -307,6 +382,7 @@ describe("POST /api/git-delivery/action-sheet — policy-dependent states (trust
   it("blocked preflight with recovery hints for a commit with nothing staged", async () => {
     const handler = createHandleGitDeliveryActionSheet({
       policyPacks: () => ({ orgPack: ALLOW_COMMIT_ORG }),
+      branchProtectionReader: () => Promise.resolve({ outcome: "unprotected" }),
     });
     const result = await handler(
       ctxFor(validRequest({ worktreeSnapshot: { ...CLEAN_SNAPSHOT, stagedFileCount: 0 } })),
@@ -328,5 +404,42 @@ describe("POST /api/git-delivery/action-sheet — policy-dependent states (trust
     });
     const result = await handler(ctxFor(validRequest()), deps());
     expect((result.body as GitDeliveryActionSheet).actionId).toBe("fixed-id");
+  });
+
+  it("loads provider facts through the trusted server-side branch-protection reader", async () => {
+    const handler = createHandleGitDeliveryActionSheet({
+      policyPacks: () => ({ orgPack: ALLOW_COMMIT_ORG }),
+      branchProtectionReader: (workspace, remoteAlias, branchName) => {
+        expect(workspace.root).toBe(staticRoot);
+        expect(remoteAlias).toBe("origin");
+        expect(branchName).toBe("feature/x");
+        return Promise.resolve({
+          outcome: "protected",
+          protection: {
+            deletionAllowed: false,
+            forcePushAllowed: false,
+            linearHistoryRequired: true,
+            signaturesRequired: true,
+            requiredReviewCount: 1,
+            requiredStatusCheckCount: 2,
+          },
+        });
+      },
+    });
+    const result = await handler(ctxFor(validRequest()), deps());
+    const sheet = result.body as GitDeliveryActionSheet;
+    expect(sheet.preview.branchProtection?.signaturesRequired).toBe(true);
+  });
+
+  it("fails closed when trusted provider state is unavailable", async () => {
+    const handler = createHandleGitDeliveryActionSheet({
+      policyPacks: () => ({ orgPack: ALLOW_COMMIT_ORG }),
+      branchProtectionReader: () => Promise.resolve({ outcome: "unavailable" }),
+    });
+    const result = await handler(ctxFor(validRequest()), deps());
+    const sheet = result.body as GitDeliveryActionSheet;
+    expect(sheet.state).toBe("blocked");
+    expect(sheet.preview.branchProtection).toBeUndefined();
+    expect(sheet.recovery.some((hint) => hint.actionHint === "wait-for-provider")).toBe(true);
   });
 });

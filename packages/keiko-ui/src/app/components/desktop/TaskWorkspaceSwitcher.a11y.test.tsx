@@ -4,12 +4,14 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectWithAvailability } from "@/lib/types";
+import { ATTACHMENT_CLEANUP_DEFERRED_ERROR } from "@/lib/chat-session-error";
 import { ActiveWorkspaceProvider, type ActiveWorkspaceApi } from "./context/ActiveWorkspaceContext";
 import { TaskWorkspaceSwitcher } from "./TaskWorkspaceSwitcher";
 
 const catalogState = vi.hoisted(() => ({
   activeProject: undefined as ProjectWithAvailability | undefined,
   projects: [] as ProjectWithAvailability[],
+  error: undefined as string | undefined,
 }));
 const chatActions = vi.hoisted(() => ({
   addProject: vi.fn<(path: string) => Promise<ProjectWithAvailability | undefined>>(() =>
@@ -26,6 +28,7 @@ vi.mock("./context/ChatSessionContext", async (importOriginal) => {
     useOptionalChatSessionCatalog: () => ({
       activeProject: catalogState.activeProject,
       projects: catalogState.projects,
+      error: catalogState.error,
     }),
   };
 });
@@ -84,6 +87,7 @@ describe("TaskWorkspaceSwitcher a11y", () => {
   beforeEach(() => {
     catalogState.activeProject = undefined;
     catalogState.projects = [];
+    catalogState.error = undefined;
     chatActions.addProject.mockClear();
     chatActions.openProject.mockClear();
   });
@@ -105,6 +109,16 @@ describe("TaskWorkspaceSwitcher a11y", () => {
     fireEvent.click(screen.getByRole("button", { name: "Workspace context: client-portal" }));
 
     expect(screen.getByRole("dialog", { name: "Folder or repository" })).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("expanded with a localized cleanup warning has no violations", async () => {
+    catalogState.error = ATTACHMENT_CLEANUP_DEFERRED_ERROR;
+    const container = renderSwitcher(api());
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspace context: choose a folder" }));
+
+    expect(screen.getByRole("alert")).not.toHaveTextContent(ATTACHMENT_CLEANUP_DEFERRED_ERROR);
     expect(await axe(container)).toHaveNoViolations();
   });
 });

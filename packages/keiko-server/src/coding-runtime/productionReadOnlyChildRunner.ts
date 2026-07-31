@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { estimateTokensForSegments } from "@oscharko-dev/keiko-contracts";
 import {
   createSession,
   type EventSink,
@@ -8,7 +9,11 @@ import {
   type ToolCallResult,
   type ToolPort,
 } from "@oscharko-dev/keiko-harness";
-import type { ToolDefinition } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  GatewayRequest,
+  GatewayStreamChunk,
+  ToolDefinition,
+} from "@oscharko-dev/keiko-model-gateway";
 
 import type { ReadOnlyChildRunner, ReadOnlyChildRunnerInput } from "./readOnlyChildOrchestrator.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
@@ -16,6 +21,7 @@ import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 export interface ProductionReadOnlyChildRunnerDeps {
   readonly modelPortFactory: (modelId: string) => ModelPort | undefined;
   readonly secureWorkspaceTextRead: SecureWorkspaceTextReadPort;
+  readonly reservePromptTokens: (promptTokens: number) => boolean;
 }
 
 const READ_FILE_TOOL: ToolDefinition = {
@@ -122,7 +128,11 @@ async function runChildSession(
       dryRun: true,
       limits: childLimits(input.maxToolCalls),
     },
-    { model, tools: readOnlyTools(deps, input, state), sink: TRANSIENT_SINK },
+    {
+      model: budgetedChildModel(model, deps.reservePromptTokens),
+      tools: readOnlyTools(deps, input, state),
+      sink: TRANSIENT_SINK,
+    },
   );
   bindSessionCancellation(state, session);
   const abort = (): void => {
@@ -144,6 +154,60 @@ async function runChildSession(
   } finally {
     input.signal.removeEventListener("abort", abort);
   }
+}
+
+function budgetedChildModel(
+  model: ModelPort,
+  reservePromptTokens: (promptTokens: number) => boolean,
+): ModelPort {
+  const stream = model.callStream;
+  return {
+    call: (request, signal): Promise<Awaited<ReturnType<ModelPort["call"]>>> => {
+      reserveChildPrompt(request, reservePromptTokens);
+      return model.call(request, signal);
+    },
+    ...(stream === undefined
+      ? {}
+      : {
+          callStream: (request: GatewayRequest, signal: AbortSignal) =>
+            budgetedChildStream(stream, request, signal, reservePromptTokens),
+        }),
+  };
+}
+
+async function* budgetedChildStream(
+  stream: NonNullable<ModelPort["callStream"]>,
+  request: GatewayRequest,
+  signal: AbortSignal,
+  reservePromptTokens: (promptTokens: number) => boolean,
+): AsyncIterable<GatewayStreamChunk> {
+  reserveChildPrompt(request, reservePromptTokens);
+  yield* stream(request, signal);
+}
+
+function reserveChildPrompt(
+  request: GatewayRequest,
+  reservePromptTokens: (promptTokens: number) => boolean,
+): void {
+  if (!reservePromptTokens(childPromptTokenEstimate(request))) {
+    throw new Error("child-prompt-budget-exhausted");
+  }
+}
+
+function childPromptTokenEstimate(request: GatewayRequest): number {
+  const messages = request.messages.map((message) =>
+    JSON.stringify({
+      role: message.role,
+      content: message.content,
+      contentParts: message.contentParts,
+      toolCallId: message.toolCallId,
+      toolCalls: message.toolCalls,
+    }),
+  );
+  const tools = request.tools === undefined ? [] : [JSON.stringify(request.tools)];
+  const responseFormat =
+    request.responseFormat === undefined ? [] : [JSON.stringify(request.responseFormat)];
+  return Math.max(1, estimateTokensForSegments([...messages, ...tools, ...responseFormat]));
 }
 
 function readOnlyTools(

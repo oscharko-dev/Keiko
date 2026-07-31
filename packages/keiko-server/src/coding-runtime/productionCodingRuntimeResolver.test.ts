@@ -357,6 +357,7 @@ function runtimeManager(runId: string) {
     reconcile: () => Promise.resolve({ ok: true as const, status: "stopped" as const }),
     health: () => ({ status: "stopped" as const }),
     pendingApprovalReview: () => undefined,
+    result: () => undefined,
   };
 }
 

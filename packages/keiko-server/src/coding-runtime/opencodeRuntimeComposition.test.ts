@@ -544,7 +544,10 @@ async function startBridgeFixture(
         };
       },
       signalTree: (): void => undefined,
-      waitForCompleteTreeExit: (): Promise<true> => Promise.resolve(true),
+      waitForCompleteTreeExit: (): Promise<true> => {
+        stderr.end();
+        return Promise.resolve(true);
+      },
       reconcileTreeExit: (): Promise<false> => Promise.resolve(false),
     },
     qualifications: [
@@ -879,6 +882,7 @@ describe("unmounted OpenCode runtime composition", () => {
       waitForCompleteTreeExit: (): Promise<boolean> =>
         new Promise((resolve) => {
           releaseReap = (): void => {
+            stderr.end();
             for (const callback of exits) callback(0);
             resolve(true);
           };

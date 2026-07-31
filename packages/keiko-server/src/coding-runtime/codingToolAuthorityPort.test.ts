@@ -38,6 +38,7 @@ const liveFacts: CodingWorkbenchRuntimeAuthorityFacts = {
 
 const fullyAuthorizedEnvelope = {
   authority: {
+    effectiveMode: "supervised-coding",
     actionClasses: [
       "workspace-read",
       "workspace-write",
@@ -484,6 +485,11 @@ describe("CodingToolAuthorityPort", () => {
       "verification",
       { action: "verification", actionId: "a", idempotencyKey: "k", verifierId: "unit" },
       { actionClasses: ["workspace-read"] },
+    ],
+    [
+      "verification after live mode narrowing",
+      { action: "verification", actionId: "a", idempotencyKey: "k", verifierId: "unit" },
+      { effectiveMode: "governed-assist" },
     ],
     [
       "deny-listed command",

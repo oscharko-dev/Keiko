@@ -15,6 +15,7 @@ export type {
   QualityIntelligenceEvidenceManifest,
   QualityIntelligenceEvidenceRefRow,
   QualityIntelligenceExportRow,
+  QualityIntelligenceExportPolicyProvenance,
   QualityIntelligenceExportTarget,
   QualityIntelligenceFindingRow,
   QualityIntelligenceIntegrityHashes,

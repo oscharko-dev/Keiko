@@ -1951,6 +1951,7 @@ describe("local-knowledge handlers", () => {
         },
       ],
     });
+    expect(JSON.stringify(result.body)).not.toContain("doc-1#u0#c3");
   });
 
   it("redacts legacy capsule-set display names in opt-in pod-set list responses", async () => {
@@ -3320,7 +3321,7 @@ describe("local-knowledge handlers", () => {
     expect(JSON.stringify(result.body)).not.toContain("scope_json");
   });
 
-  it("recovers an orphaned running job to a terminal state after restart", async () => {
+  it("projects an abandoned resumable job without finalizing its durable cursor", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
     const { store, capId } = seedStore(tmp);
@@ -3329,7 +3330,7 @@ describe("local-knowledge handlers", () => {
       .run({ c: capId });
     store._internal.db
       .prepare(
-        "INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, finished_at, status, total_documents, processed_documents, failed_documents, skipped_documents, last_error_code, last_error_message, resume_token, cancellation_requested) VALUES ('job-running', :c, '[]', 10, NULL, 'running', 3, 1, 0, 1, NULL, NULL, 'doc-1#u0#c3', 0)",
+        "INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, finished_at, status, total_documents, processed_documents, failed_documents, skipped_documents, last_error_code, last_error_message, resume_token, cancellation_requested) VALUES ('job-running', :c, '[\"src-1\"]', 10, NULL, 'running', 3, 1, 0, 1, NULL, NULL, 'doc-1#u0#c3', 0)",
       )
       .run({ c: capId });
     store.close();
@@ -3341,55 +3342,181 @@ describe("local-knowledge handlers", () => {
 
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
-      health: { lifecycleState: "error" },
+      health: {
+        indexingRecovery: {
+          jobId: "job-running",
+          state: "resumable",
+          sourceCount: 1,
+          processedDocuments: 1,
+        },
+      },
       indexingJobs: [
         {
           id: "job-running",
-          status: "failed",
+          status: "running",
           totalDocuments: 3,
           processedDocuments: 1,
           skippedDocuments: 1,
-          lastError: {
-            code: "INDEXING_INTERRUPTED",
-          },
         },
       ],
     });
   });
 
-  it("leaves a stranded running job untouched on the no-recover read path but flips it when recovering", () => {
+  it("distinguishes an active in-process job from an abandoned resumable job", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
     const { store, capId } = seedStore(tmp);
     store._internal.db
       .prepare(
-        "INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, finished_at, status, total_documents, processed_documents, failed_documents, skipped_documents, last_error_code, last_error_message, resume_token, cancellation_requested) VALUES ('job-stranded', :c, '[]', 10, NULL, 'running', 3, 1, 0, 1, NULL, NULL, NULL, 0)",
+        "INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, finished_at, status, total_documents, processed_documents, failed_documents, skipped_documents, last_error_code, last_error_message, resume_token, cancellation_requested) VALUES ('job-active', :c, '[\"src-1\"]', 10, NULL, 'running', 3, 1, 0, 1, NULL, NULL, 'doc-1#u0#c3', 0)",
+      )
+      .run({ c: capId });
+    store.close();
+    localKnowledgeIndexingRegistry.start(String(capId));
+    localKnowledgeIndexingRegistry.attachJobId(String(capId), "job-active");
+
+    const result = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+
+    expect(result.body).toMatchObject({
+      health: { indexingRecovery: { jobId: "job-active", state: "active" } },
+    });
+  });
+
+  it.each([
+    { label: "missing", token: null },
+    { label: "malformed", token: "bad\ntoken" },
+  ])("fails closed for a $label resume token", ({ token }) => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    store._internal.db
+      .prepare(
+        "INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, finished_at, status, total_documents, processed_documents, failed_documents, skipped_documents, last_error_code, last_error_message, resume_token, cancellation_requested) VALUES ('job-stranded', :c, '[\"src-1\"]', 10, NULL, 'running', 3, 1, 0, 1, NULL, NULL, :token, 0)",
+      )
+      .run({ c: capId, token });
+    store.close();
+
+    const recoverEnv = openKnowledgeStoreForDeps(depsFor(tmp), { recover: true });
+    try {
+      const job = recoverEnv.store._internal.db
+        .prepare("SELECT status, resume_token FROM indexing_jobs WHERE id = 'job-stranded'")
+        .get() as { readonly status: string; readonly resume_token: string | null };
+      expect(job).toEqual({ status: "failed", resume_token: token });
+    } finally {
+      recoverEnv.close();
+    }
+  });
+
+  it("keeps resumable metadata stable across repeated restart recovery", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    store._internal.db
+      .prepare(
+        "INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, finished_at, status, total_documents, processed_documents, failed_documents, skipped_documents, last_error_code, last_error_message, resume_token, cancellation_requested) VALUES ('job-stable', :c, '[\"src-1\"]', 10, NULL, 'running', 3, 1, 0, 1, NULL, NULL, 'doc-1#u0#c3', 0)",
       )
       .run({ c: capId });
     store.close();
 
-    const statusOf = (env: { readonly store: ReturnType<typeof openKnowledgeStore> }): string =>
-      (
-        env.store._internal.db
-          .prepare("SELECT status FROM indexing_jobs WHERE id = 'job-stranded'")
-          .get() as { readonly status: string }
-      ).status;
-
-    // Read path (recover: false) must NOT finalize the orphan — an actively-running job in another
-    // process would otherwise be misread as abandoned and flipped to `failed` on every read.
-    const readEnv = openKnowledgeStoreForDeps(depsFor(tmp), { recover: false });
-    try {
-      expect(statusOf(readEnv)).toBe("running");
-    } finally {
-      readEnv.close();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      openKnowledgeStoreForDeps(depsFor(tmp), { recover: true }).close();
     }
-
-    // Management/remediation path (recover: true) DOES finalize the orphan to a terminal state.
-    const recoverEnv = openKnowledgeStoreForDeps(depsFor(tmp), { recover: true });
+    const inspect = openKnowledgeStoreForDeps(depsFor(tmp), { recover: false });
     try {
-      expect(statusOf(recoverEnv)).toBe("failed");
+      const row = inspect.store._internal.db
+        .prepare(
+          "SELECT status, source_ids_json, resume_token FROM indexing_jobs WHERE id = 'job-stable'",
+        )
+        .get();
+      expect(row).toEqual({
+        status: "running",
+        source_ids_json: '["src-1"]',
+        resume_token: "doc-1#u0#c3",
+      });
     } finally {
-      recoverEnv.close();
+      inspect.close();
+    }
+  });
+
+  it("refuses a requested job resume when its durable token is missing", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "resume-source");
+    mkdirSync(docsRoot, { recursive: true });
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as KnowledgeSourceId,
+      displayName: "Resume Source",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store._internal.db
+      .prepare(
+        "INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, finished_at, status, total_documents, processed_documents, failed_documents, skipped_documents, last_error_code, last_error_message, resume_token, cancellation_requested) VALUES ('job-no-token', :c, '[\"src-1\"]', 10, NULL, 'running', 3, 1, 0, 1, NULL, NULL, NULL, 0)",
+      )
+      .run({ c: capId });
+    store.close();
+
+    const result = await handleReindexLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "POST", { mode: "resume", resumeJobId: "job-no-token" }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(409);
+    expect(JSON.stringify(result.body)).toContain("resumable indexing job is no longer available");
+  });
+
+  it("resumes the exact abandoned job through the existing resume mode and source scope", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "resume-source");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(join(docsRoot, "resume.md"), "# Resume\n\nContinue safely.\n", "utf8");
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as KnowledgeSourceId,
+      displayName: "Resume Source",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store._internal.db
+      .prepare(
+        "INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, finished_at, status, total_documents, processed_documents, failed_documents, skipped_documents, last_error_code, last_error_message, resume_token, cancellation_requested) VALUES ('job-resumable', :c, '[\"src-1\"]', 10, NULL, 'running', 3, 1, 0, 1, NULL, NULL, 'doc-1#u0#c3', 0)",
+      )
+      .run({ c: capId });
+    store.close();
+
+    const result = await handleReindexLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "POST", { mode: "resume", resumeJobId: "job-resumable" }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const inspect = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    try {
+      const prior = inspect._internal.db
+        .prepare("SELECT status, last_error_code FROM indexing_jobs WHERE id = 'job-resumable'")
+        .get();
+      const replacement = inspect._internal.db
+        .prepare(
+          "SELECT status, source_ids_json FROM indexing_jobs WHERE id <> 'job-resumable' ORDER BY started_at DESC LIMIT 1",
+        )
+        .get();
+      expect(prior).toEqual({ status: "failed", last_error_code: "INDEXING_RESUMED" });
+      expect(replacement).toEqual({ status: "succeeded", source_ids_json: '["src-1"]' });
+    } finally {
+      inspect.close();
     }
   });
 

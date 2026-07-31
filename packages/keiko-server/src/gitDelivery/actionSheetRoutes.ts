@@ -26,12 +26,9 @@
 import type { IncomingMessage } from "node:http";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
-  isGitDeliveryBranchProtection,
-  isGitDeliveryChecksState,
-  isGitDeliveryMergeReadiness,
   isGitDeliveryProviderCapability,
-  isGitDeliveryPullRequestState,
   parseGitDeliveryResolvedInputs,
+  type GitDeliveryActionKind,
   type GitDeliveryApprovalRequirement,
   type GitDeliveryProviderCapability,
   type GitDeliveryResolvedInputs,
@@ -45,6 +42,12 @@ import {
   type GitDeliveryProviderStateFacts,
   type GitDeliveryTrustedPolicyPacks,
 } from "./actionSheetProjection.js";
+import { defaultGitDeliveryPolicyPacksForAction } from "./defaultPolicyPacks.js";
+import { resolveProjectWorkspace } from "./execution.js";
+import {
+  readTrustedGitDeliveryBranchProtection,
+  type GitDeliveryBranchProtectionReader,
+} from "./branchProtectionPreflight.js";
 
 // ─── Error envelope (typed, content-free) ────────────────────────────────────────────
 
@@ -126,17 +129,10 @@ const hasOnlyAllowedKeys = (
 
 const ALLOWED_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "schemaVersion",
+  "projectId",
   "resolvedInputs",
   "worktreeSnapshot",
-  "providerState",
   "activeProviderCapabilities",
-]);
-
-const ALLOWED_PROVIDER_STATE_KEYS: ReadonlySet<string> = new Set([
-  "pullRequest",
-  "mergeReadiness",
-  "branchProtection",
-  "checks",
 ]);
 
 const scanForbiddenStrings = (value: unknown): boolean => {
@@ -217,26 +213,6 @@ function isGitWorktreeSnapshot(value: unknown): value is GitWorktreeSnapshot {
   );
 }
 
-// ─── Provider-state validation ───────────────────────────────────────────────────────
-
-function validateProviderState(
-  raw: unknown,
-): { readonly ok: true; readonly value: GitDeliveryProviderStateFacts } | { readonly ok: false } {
-  if (raw === undefined) return { ok: true, value: {} };
-  if (!isPlainObject(raw) || !hasOnlyAllowedKeys(raw, ALLOWED_PROVIDER_STATE_KEYS)) {
-    return { ok: false };
-  }
-  if (
-    !isOptional(isGitDeliveryPullRequestState, raw.pullRequest) ||
-    !isOptional(isGitDeliveryMergeReadiness, raw.mergeReadiness) ||
-    !isOptional(isGitDeliveryBranchProtection, raw.branchProtection) ||
-    !isOptional(isGitDeliveryChecksState, raw.checks)
-  ) {
-    return { ok: false };
-  }
-  return { ok: true, value: raw };
-}
-
 function validateProviderCapabilities(
   raw: unknown,
 ):
@@ -252,10 +228,10 @@ function validateProviderCapabilities(
 // ─── Validated request ─────────────────────────────────────────────────────────────
 
 interface ValidatedRequest {
+  readonly projectId: string;
   readonly resolvedInputs: GitDeliveryResolvedInputs;
   readonly worktreeSnapshot: GitWorktreeSnapshot;
   readonly approvalRequirement: GitDeliveryApprovalRequirement;
-  readonly providerState: GitDeliveryProviderStateFacts;
   readonly activeProviderCapabilities: readonly GitDeliveryProviderCapability[];
 }
 
@@ -294,20 +270,19 @@ function validateRequest(parsed: unknown): Validation {
   const envelope = preValidateEnvelope(parsed);
   if (!envelope.ok) return { kind: "err", result: envelope.result };
   const obj = envelope.obj;
+  if (typeof obj.projectId !== "string" || obj.projectId.length === 0) return badRequest();
   const inputs = parseGitDeliveryResolvedInputs(obj.resolvedInputs);
   if (!inputs.ok) return badRequest();
   if (!isGitWorktreeSnapshot(obj.worktreeSnapshot)) return badRequest();
-  const providerState = validateProviderState(obj.providerState);
-  if (!providerState.ok) return badRequest();
   const capabilities = validateProviderCapabilities(obj.activeProviderCapabilities);
   if (!capabilities.ok) return badRequest();
   return {
     kind: "ok",
     request: {
+      projectId: obj.projectId,
       resolvedInputs: inputs.value,
       worktreeSnapshot: obj.worktreeSnapshot,
       approvalRequirement: { required: false },
-      providerState: providerState.value,
       activeProviderCapabilities: capabilities.value,
     },
   };
@@ -319,6 +294,7 @@ function validateRequest(parsed: unknown): Validation {
 
 function defaultActionId(request: ValidatedRequest): string {
   const seed = JSON.stringify({
+    projectId: request.projectId,
     inputs: request.resolvedInputs,
     snapshot: request.worktreeSnapshot,
     capabilities: request.activeProviderCapabilities,
@@ -329,27 +305,93 @@ function defaultActionId(request: ValidatedRequest): string {
 // ─── Handler ───────────────────────────────────────────────────────────────────────
 //
 // The org/repo policy packs come from a TRUSTED server-side SEAM ONLY — never from the request body,
-// preserving the AUTHORITY RULE (AC1). No gateway-config field carries them today, so the default
-// resolver returns no packs; evaluateGitPolicy then fail-closes to blocked/no-applicable-rule, the
-// correct secure default. The injectable `policyPacks` option lets a future slice (#476) hydrate packs
-// from storage — and lets tests configure trusted packs deterministically — without touching the
-// request shape.
+// preserving the AUTHORITY RULE (AC1). Production resolves the exact shipped pack used by the
+// executing route for the action kind. Deployment composition may inject a stricter trusted resolver
+// without touching the request shape.
 
 export interface GitDeliveryActionSheetRouteOptions {
   readonly idGenerator?: (request: ValidatedRequest) => string;
-  // Resolves the trusted org/repo policy packs for this deployment. Default: none configured.
-  readonly policyPacks?: (deps: UiHandlerDeps) => GitDeliveryTrustedPolicyPacks;
+  readonly policyPacks?: (
+    deps: UiHandlerDeps,
+    actionKind: GitDeliveryActionKind,
+  ) => GitDeliveryTrustedPolicyPacks;
+  readonly providerState?: (
+    deps: UiHandlerDeps,
+    request: ValidatedRequest,
+  ) => Promise<GitDeliveryProviderResolution> | GitDeliveryProviderResolution;
+  readonly branchProtectionReader?: GitDeliveryBranchProtectionReader;
   // The server clock (epoch ms). Injectable for deterministic tests; defaults to Date.now. Used only
   // to demote an expired granted approval to "waiting-for-approval" in the projection.
   readonly now?: () => number;
+}
+
+interface GitDeliveryProviderResolution {
+  readonly facts: GitDeliveryProviderStateFacts;
+  readonly ready: boolean;
+}
+
+function preferredRemoteAlias(snapshot: GitWorktreeSnapshot): string | undefined {
+  return snapshot.remoteAliases.includes("origin") ? "origin" : snapshot.remoteAliases[0];
+}
+
+function providerProtectionTarget(
+  request: ValidatedRequest,
+): { readonly remoteAlias: string; readonly branchName: string } | undefined {
+  const inputs = request.resolvedInputs;
+  if (inputs.kind === "push") {
+    return { remoteAlias: inputs.remoteAlias, branchName: inputs.remoteBranchName };
+  }
+  if (inputs.kind !== "commit") return undefined;
+  const remoteAlias = preferredRemoteAlias(request.worktreeSnapshot);
+  const branchName = request.worktreeSnapshot.currentBranchName;
+  return remoteAlias === undefined || branchName === undefined
+    ? undefined
+    : { remoteAlias, branchName };
+}
+
+async function defaultProviderState(
+  deps: UiHandlerDeps,
+  request: ValidatedRequest,
+  reader: GitDeliveryBranchProtectionReader,
+): Promise<GitDeliveryProviderResolution> {
+  const target = providerProtectionTarget(request);
+  if (target === undefined) return { facts: {}, ready: true };
+  const workspace = resolveProjectWorkspace(deps, request.projectId);
+  if (workspace === undefined) return { facts: {}, ready: false };
+  const result = await reader(workspace, target.remoteAlias, target.branchName);
+  if (result.outcome === "unavailable") return { facts: {}, ready: false };
+  return result.outcome === "protected"
+    ? { facts: { branchProtection: result.protection }, ready: true }
+    : { facts: {}, ready: true };
+}
+
+async function resolvedProviderState(
+  resolver: NonNullable<GitDeliveryActionSheetRouteOptions["providerState"]>,
+  deps: UiHandlerDeps,
+  request: ValidatedRequest,
+): Promise<GitDeliveryProviderResolution> {
+  try {
+    return await resolver(deps, request);
+  } catch {
+    return { facts: {}, ready: false };
+  }
 }
 
 export const createHandleGitDeliveryActionSheet = (
   options: GitDeliveryActionSheetRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   const idGenerator = options.idGenerator ?? defaultActionId;
-  const resolvePolicyPacks = options.policyPacks ?? ((): GitDeliveryTrustedPolicyPacks => ({}));
+  const resolvePolicyPacks =
+    options.policyPacks ??
+    ((_deps: UiHandlerDeps, actionKind: GitDeliveryActionKind): GitDeliveryTrustedPolicyPacks =>
+      defaultGitDeliveryPolicyPacksForAction(actionKind));
   const now = options.now ?? ((): number => Date.now());
+  const branchProtectionReader =
+    options.branchProtectionReader ?? readTrustedGitDeliveryBranchProtection;
+  const resolveProviderState =
+    options.providerState ??
+    ((deps: UiHandlerDeps, request: ValidatedRequest): Promise<GitDeliveryProviderResolution> =>
+      defaultProviderState(deps, request, branchProtectionReader));
   return async (ctx, deps): Promise<RouteResult> => {
     let raw: string;
     try {
@@ -370,15 +412,16 @@ export const createHandleGitDeliveryActionSheet = (
     if (validation.kind === "err") return validation.result;
     const { request } = validation;
 
+    const provider = await resolvedProviderState(resolveProviderState, deps, request);
     const sheet = buildActionSheetFromFacts({
       actionId: idGenerator(request),
       resolvedInputs: request.resolvedInputs,
       worktreeSnapshot: request.worktreeSnapshot,
       approvalRequirement: request.approvalRequirement,
-      policyPacks: resolvePolicyPacks(deps),
+      policyPacks: resolvePolicyPacks(deps, request.resolvedInputs.kind),
       activeProviderCapabilities: request.activeProviderCapabilities,
-      providerState: request.providerState,
-      providerReady: true,
+      providerState: provider.facts,
+      providerReady: provider.ready,
       nowMs: now(),
     });
     return { status: 200, body: deps.redactor(sheet) };

@@ -18,7 +18,7 @@ import type { LiveRuntimeFixtureOptions } from "./coding-workbench-live-runtime.
 
 export type FixtureAuthStatus = Extract<
   CodingWorkbenchCodexSubscriptionProfile["status"],
-  "connected" | "missing" | "expired"
+  "connected" | "missing" | "expired" | "redistribution-unapproved"
 >;
 
 const AT = "2026-07-13T12:00:00.000Z";
@@ -109,6 +109,7 @@ export function sourceProfile(): CodingWorkbenchSidecarGatewayResult {
 }
 
 export function codexProfile(status: FixtureAuthStatus): CodingWorkbenchCodexSubscriptionProfile {
+  const redistributionUnapproved = status === "redistribution-unapproved";
   const profile: CodingWorkbenchCodexSubscriptionProfile = {
     schemaVersion: "1",
     profileId: "codex-subscription",
@@ -116,14 +117,14 @@ export function codexProfile(status: FixtureAuthStatus): CodingWorkbenchCodexSub
     runtimeSource: "codex-cli-adapter",
     status,
     ...(status === "connected" ? { authMethod: "chatgpt-device-code" } : {}),
-    credentialStore: "keyring",
-    stateScope: "os-credential-store",
-    stateRoot: "os-credential-store",
+    credentialStore: redistributionUnapproved ? "file" : "keyring",
+    stateScope: redistributionUnapproved ? "keiko-owned-state" : "os-credential-store",
+    stateRoot: redistributionUnapproved ? "keiko-codex-runtime-state" : "os-credential-store",
     usesGlobalCodexHome: false,
-    runtimeBinarySources: ["managed-sidecar-runtime"],
-    supportsBrowserLogin: true,
-    supportsDeviceCode: true,
-    supportsAccessToken: true,
+    runtimeBinarySources: redistributionUnapproved ? [] : ["managed-sidecar-runtime"],
+    supportsBrowserLogin: !redistributionUnapproved,
+    supportsDeviceCode: !redistributionUnapproved,
+    supportsAccessToken: !redistributionUnapproved,
     deploymentPolicyDisabled: false,
     headless: false,
   };

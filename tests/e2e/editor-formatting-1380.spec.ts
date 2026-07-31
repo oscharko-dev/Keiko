@@ -1,4 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
+import {
+  editorBuiltinDocumentFormatting,
+  inferEditorLanguageModeId,
+  type EditorBuiltinFormattingSource,
+} from "@oscharko-dev/keiko-contracts";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -11,11 +16,11 @@ import { dirname, join } from "node:path";
 //         the bootstrap must now register, ADR-0068 D5), and "Plain Text" for an unknown file.
 //   AC1 — basic-languages grammars actually tokenise (colourised Monaco tokens, not flat plaintext).
 //   AC2 — theme + tokenisation stay stable across a page reload (dark theme persists; tokens reapply).
-//   AC5 — the Format affordance reflects the registry-derived formatting SOURCE consistently:
-//         enabled ("Format ready") for monaco-builtin (json/css) and keiko-language-service (ts),
-//         disabled ("Format unavailable") for a "none" language (markdown/yaml).
-//   AC3/AC4 — Format applies deterministic edits for valid input, and a forced failure (invalid JSON)
-//         leaves the buffer byte-identical.
+//   AC5 — the Format affordance reflects the registry-derived formatting source consistently:
+//         enabled ("Format ready") for keiko-language-service (ts/js) and disabled
+//         ("Format unavailable") for release-packaged "none" languages, including json/css.
+//   AC3/AC4 — Format applies deterministic edits for TypeScript through the governed language
+//         service, while a "none" language leaves the buffer byte-identical.
 //
 // This is a dedicated, NON-gating coordinator-evidence config (port 32203); the scenarios are tagged
 // @formatting-1380 (NOT @smoke) so they can be filtered without joining the gating set.
@@ -27,15 +32,9 @@ const tempProjects: string[] = [];
 // fixture body, so finding it can only mean this test put it there.
 const FORMAT_NOOP_WITNESS = "ZZ";
 
-// One representative file per ADR-0068 formatting source, each in its own folder so the tree
-// navigation is deterministic. `language` is the EXACT status-bar `[data-field="language"]` label
-// (keiko-editor LANGUAGE_LABELS). `source` is the ADR-0068 D1 documentFormatting classification.
-type FormattingSource = "keiko-language-service" | "monaco-builtin" | "none";
-
 interface FixtureFile {
   readonly relativePath: string;
   readonly language: string;
-  readonly source: FormattingSource;
   readonly content: string;
 }
 
@@ -49,56 +48,47 @@ interface FixtureFile {
 const TS_FILE: FixtureFile = {
   relativePath: "example.ts",
   language: "TypeScript",
-  source: "keiko-language-service",
-  content: "export const answer = 42;\n",
+  // Deliberately poorly spaced: the governed TypeScript service must return deterministic edits.
+  content: "export const answer   =   42;\n",
 };
 const JSON_FILE: FixtureFile = {
   relativePath: "example.json",
   language: "JSON",
-  source: "monaco-builtin",
-  // Deliberately poorly-indented but VALID JSON — Format must reflow it deterministically (AC3).
   content: '{"alpha":1,"beta":{"gamma":2}}\n',
 };
 const CSS_FILE: FixtureFile = {
   relativePath: "example.css",
   language: "CSS",
-  source: "monaco-builtin",
   content: ".panel{color:red;background:blue}\n",
 };
 const SCSS_FILE: FixtureFile = {
   relativePath: "example.scss",
   language: "SCSS",
-  source: "monaco-builtin",
   content: "$brand: #336699;\n.card { color: $brand; .inner { padding: 4px; } }\n",
 };
 const LESS_FILE: FixtureFile = {
   relativePath: "example.less",
   language: "Less",
-  source: "monaco-builtin",
   content: "@brand: #336699;\n.card { color: @brand; }\n",
 };
 const HTML_FILE: FixtureFile = {
   relativePath: "example.html",
   language: "HTML",
-  source: "monaco-builtin",
   content: '<section class="hero"><h1>Title</h1><p>Body</p></section>\n',
 };
 const MARKDOWN_FILE: FixtureFile = {
   relativePath: "example.md",
   language: "Markdown",
-  source: "none",
   content: "# Heading\n\nSome **bold** prose.\n",
 };
 const YAML_FILE: FixtureFile = {
   relativePath: "example.yaml",
   language: "YAML",
-  source: "none",
   content: "name: keiko\nvalues:\n  - one\n  - two\n",
 };
 const UNKNOWN_FILE: FixtureFile = {
   relativePath: "notes.unknownext",
   language: "Plain Text",
-  source: "none",
   content: "plain unknown file content\n",
 };
 
@@ -113,6 +103,11 @@ const ALL_FIXTURE_FILES: readonly FixtureFile[] = [
   YAML_FILE,
   UNKNOWN_FILE,
 ];
+
+function formattingSource(file: FixtureFile): EditorBuiltinFormattingSource {
+  const languageId = inferEditorLanguageModeId(file.relativePath);
+  return languageId === null ? "none" : editorBuiltinDocumentFormatting(languageId);
+}
 
 function isBenignMonacoCancellation(error: Error): boolean {
   if (error.message === "Canceled: Canceled") return true;
@@ -254,9 +249,8 @@ async function readEditorBuffer(editorWindow: ReturnType<Page["getByRole"]>): Pr
 
 // Trigger Format reliably: focus the buffer by clicking a `.view-line` (so the keybinding targets
 // the editor), click the explicit Format button, then issue Monaco's native Format Document
-// keybinding belt-and-braces (the worker-backed json/css formatter resolves asynchronously). The
-// caller is responsible for first waiting until the Format affordance is ready (status "Format
-// ready"), which is the editor-tier signal that the formatter is reachable.
+// keybinding belt-and-braces. The caller first waits until the Format affordance is ready, which is
+// the editor-tier signal that the governed language-service formatter is reachable.
 async function triggerFormat(
   page: Page,
   editorWindow: ReturnType<Page["getByRole"]>,
@@ -303,7 +297,7 @@ test(`AC1 language mode on open reflects every registry language and unknown→P
   assertNoPageErrors();
 });
 
-test(`AC1 syntax highlighting produces colourised tokens (scss/css/html not flat plaintext) ${TAG}`, async ({
+test(`AC1 syntax highlighting produces token spans (scss/css/html not flat plaintext) ${TAG}`, async ({
   page,
 }) => {
   const projectPath = createFormattingFixture();
@@ -311,25 +305,18 @@ test(`AC1 syntax highlighting produces colourised tokens (scss/css/html not flat
   const assertNoPageErrors = collectPageErrors(page);
 
   // For each grammar-bearing language, real content must tokenise into MULTIPLE `.mtk*` token spans
-  // with more than one distinct token class — i.e. NOT a single undifferentiated plaintext run. This
-  // is the empirical proof the basic-languages grammar is registered (ADR-0068 D5); scss/less/html
-  // are the languages most at risk of silently falling back to plaintext.
+  // instead of one undifferentiated plaintext run. Do not require multiple colour classes: the
+  // active theme may deliberately map distinct HTML token kinds to the same colour. The separate
+  // spans are the stable browser proof that the basic-languages grammar is registered (ADR-0068 D5).
   for (const file of [SCSS_FILE, CSS_FILE, HTML_FILE]) {
     const editorWindow = await openInEditor(page, file);
     const tokenSpans = editorWindow.locator(".monaco-editor .view-line span[class*='mtk']");
-    await expect.poll(() => tokenSpans.count(), { timeout: 20_000 }).toBeGreaterThan(1);
-    const distinctClasses = await tokenSpans.evaluateAll((spans) => {
-      const classes = new Set<string>();
-      for (const span of spans) {
-        for (const cls of span.classList) {
-          if (cls.startsWith("mtk")) classes.add(cls);
-        }
-      }
-      return classes.size;
-    });
-    expect(distinctClasses, `${file.language} must colourise into >1 token class`).toBeGreaterThan(
-      1,
-    );
+    await expect
+      .poll(() => tokenSpans.count(), {
+        message: `${file.language} must render as multiple grammar token spans`,
+        timeout: 20_000,
+      })
+      .toBeGreaterThan(1);
   }
 
   assertNoPageErrors();
@@ -387,62 +374,50 @@ test(`AC5 Format availability + status field reflect the formatting source consi
   await seedFilesWindow(page, projectPath);
   const assertNoPageErrors = collectPageErrors(page);
 
-  // monaco-builtin (JSON) and keiko-language-service (TS) → ENABLED + "Format ready".
-  for (const file of [JSON_FILE, TS_FILE]) {
+  // Derive the expected source from the production registry. Release packaging deliberately carries
+  // no rich Monaco workers, so TypeScript is ready and JSON/CSS/HTML/etc. are unavailable.
+  for (const file of ALL_FIXTURE_FILES) {
     const editorWindow = await openInEditor(page, file);
+    const available = formattingSource(file) !== "none";
     await expect(statusBar(editorWindow).locator('[data-field="formatting"]')).toHaveText(
-      "Format ready",
+      available ? "Format ready" : "Format unavailable",
     );
-    await expect(formatButton(editorWindow)).not.toHaveAttribute("aria-disabled", "true");
-  }
-
-  // "none" sources (Markdown, YAML) → DISABLED + "Format unavailable" (the AC5 fix: never advertise a
-  // formatter the browser cannot reach).
-  for (const file of [MARKDOWN_FILE, YAML_FILE]) {
-    const editorWindow = await openInEditor(page, file);
-    await expect(statusBar(editorWindow).locator('[data-field="formatting"]')).toHaveText(
-      "Format unavailable",
+    await expect(formatButton(editorWindow)).toHaveAttribute(
+      "aria-disabled",
+      available ? "false" : "true",
     );
-    await expect(formatButton(editorWindow)).toHaveAttribute("aria-disabled", "true");
   }
 
   assertNoPageErrors();
 });
 
-test(`AC3 Format applies deterministic edits to valid JSON ${TAG}`, async ({ page }) => {
+test(`AC3 Format applies deterministic edits to TypeScript ${TAG}`, async ({ page }) => {
   const projectPath = createFormattingFixture();
   await seedFilesWindow(page, projectPath);
   const assertNoPageErrors = collectPageErrors(page);
 
-  const editorWindow = await openInEditor(page, JSON_FILE);
+  const editorWindow = await openInEditor(page, TS_FILE);
   // Close the Files window so neither the tree nor the FilePreview pane can overlap the editor when
   // we click inside it to trigger Format.
   await closeFilesWindow(page);
   // Sanity-check the pre-format buffer is the unformatted single line.
-  expect((await readEditorBuffer(editorWindow)).replace(/\s+$/u, "")).toBe(
-    JSON_FILE.content.trim(),
-  );
+  expect((await readEditorBuffer(editorWindow)).replace(/\s+$/u, "")).toBe(TS_FILE.content.trim());
 
-  // Wait until the Format affordance reports ready — this is the editor-tier signal that Monaco's
-  // bundled JSON worker formatter is reachable, so the trigger is not raced against worker load.
+  // Wait until the Format affordance reports ready — this is the signal that the governed
+  // TypeScript language-service formatter is reachable.
   await expect(statusBar(editorWindow).locator('[data-field="formatting"]')).toHaveText(
     "Format ready",
   );
   await triggerFormat(page, editorWindow);
 
-  // Monaco's bundled JSON worker reflows to a deterministically INDENTED document: more lines than
-  // the single-line input, and at least one indented line. We assert structure (indentation +
-  // multi-line) rather than an exact byte string, since the worker's indent width is its own
-  // deterministic choice — the AC is "applies deterministic edits", reflected by the reformat.
   await expect
-    .poll(async () => (await readEditorBuffer(editorWindow)).split("\n").length, {
+    .poll(async () => readEditorBuffer(editorWindow), {
       timeout: 30_000,
     })
-    .toBeGreaterThan(1);
+    .not.toContain("   ");
   const formatted = await readEditorBuffer(editorWindow);
-  expect(formatted, "formatted JSON must contain indentation").toMatch(/\n[ \t]+"/u);
-  // The reformat is content-preserving: the keys/values survive.
-  expect(formatted.replace(/\s+/gu, "")).toBe(JSON_FILE.content.replace(/\s+/gu, ""));
+  expect(formatted).not.toBe(TS_FILE.content.trim());
+  expect(formatted.replace(/\s+/gu, "")).toBe(TS_FILE.content.replace(/\s+/gu, ""));
 
   assertNoPageErrors();
 });
@@ -456,16 +431,15 @@ test(`AC4 a "none"-source file has no reachable formatter and its buffer is unto
   //    unit-tested in `packages/keiko-editor/src/components/formatting-bridge.test.ts` (6 scenarios),
   //    which is exactly where the issue's Expected Verification places it; reproducing it end-to-end in
   //    the browser would require forcing a server error, not a content shape.
-  //  - For a "none"-source language (markdown/yaml/…) NO in-browser document formatter is reachable, so
+  //  - For a "none"-source language (json/css/markdown/…) NO in-browser document formatter is reachable, so
   //    invoking Format cannot change the buffer. That is the deterministic, content-only browser proof
-  //    we assert here. (We deliberately do NOT test invalid-JSON: Monaco's bundled JSON formatter is a
-  //    lenient pretty-printer that reformats lexically-recoverable input, so "invalid JSON ⇒ no-op" is
-  //    empirically false and is not a Keiko guarantee.)
+  //    we assert here. JSON is deliberate: ADR-0042 D3.6 excludes the rich JSON worker from the
+  //    release artifact, so advertising or applying its formatter would be packaging drift.
   const projectPath = createFormattingFixture();
   await seedFilesWindow(page, projectPath);
   const assertNoPageErrors = collectPageErrors(page);
 
-  const editorWindow = await openInEditor(page, MARKDOWN_FILE);
+  const editorWindow = await openInEditor(page, JSON_FILE);
   // Close the Files window so nothing overlaps the editor when we focus it for the keybinding.
   await closeFilesWindow(page);
 
@@ -476,7 +450,7 @@ test(`AC4 a "none"-source file has no reachable formatter and its buffer is unto
   await expect(formatButton(editorWindow)).toHaveAttribute("aria-disabled", "true");
 
   const before = await readEditorBuffer(editorWindow);
-  // Issue Monaco's native Format Document shortcut directly: with no provider registered for markdown
+  // Issue Monaco's native Format Document shortcut directly: with no provider registered for JSON
   // it is a no-op, so the buffer must remain byte-identical (the browser-observable failure-safe path).
   await editorWindow.locator(".monaco-editor .view-lines").first().click();
   await page.keyboard.press("Shift+Alt+KeyF");
@@ -506,7 +480,7 @@ test(`AC4 a "none"-source file has no reachable formatter and its buffer is unto
   expect(after).toContain(FORMAT_NOOP_WITNESS);
   // … and taking the witness back out must leave the pre-Format buffer byte for byte: the ONLY
   // change to this document across the whole window was the one the test made itself. A formatter
-  // that had reflowed the markdown would leave its own edits behind here.
+  // that had reflowed the JSON would leave its own edits behind here.
   expect(after.replace(FORMAT_NOOP_WITNESS, "")).toBe(before);
 
   assertNoPageErrors();

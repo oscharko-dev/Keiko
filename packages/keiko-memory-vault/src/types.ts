@@ -99,6 +99,25 @@ export interface MemoryBatchUpdate {
   readonly id: MemoryId;
   readonly patch: MemoryUpdatePatch;
   readonly nowMs: number;
+  readonly expectedStatus?: MemoryStatus;
+  readonly expectedUpdatedAt?: number;
+}
+
+export interface MemoryGraphMutation {
+  readonly preconditions?: readonly MemoryGraphPrecondition[];
+  readonly updates: readonly MemoryBatchUpdate[];
+  readonly edges: readonly MemoryEdge[];
+}
+
+export interface MemoryGraphPrecondition {
+  readonly id: MemoryId;
+  readonly expectedStatus: MemoryStatus;
+  readonly expectedUpdatedAt: number;
+}
+
+export interface MemoryGraphMutationResult {
+  readonly memories: readonly MemoryRecord[];
+  readonly edges: readonly MemoryEdge[];
 }
 
 export interface MemoryBatchDelete {
@@ -138,6 +157,7 @@ export interface MemoryVaultStore {
   readonly insertMemory: (record: MemoryRecord) => MemoryRecord;
   readonly updateMemory: (id: MemoryId, patch: MemoryUpdatePatch, nowMs: number) => MemoryRecord;
   readonly updateMemories: (updates: readonly MemoryBatchUpdate[]) => readonly MemoryRecord[];
+  readonly applyGraphMutation: (mutation: MemoryGraphMutation) => MemoryGraphMutationResult;
   readonly getMemory: (id: MemoryId) => MemoryRecord | undefined;
   readonly deleteMemory: (id: MemoryId, options: DeleteMemoryOptions) => void;
   readonly deleteMemories: (deletes: readonly MemoryBatchDelete[]) => readonly MemoryDeleteResult[];

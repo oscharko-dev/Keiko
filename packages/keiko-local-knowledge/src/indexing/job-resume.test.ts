@@ -129,12 +129,6 @@ describe("findResumableJob", () => {
       .run({ t: "doc-1#unit-1#c12", id: "job-1" });
     const row = findResumableJob(fixture.store, fixture.capsuleId);
     expect(row).toBeDefined();
-    // The IndexingJobRecord contract does not surface resume_token directly; this test
-    // pins the SELECT statement's column list so a future schema change cannot drop it
-    // silently. The orchestrator's resume path queries the same row separately.
-    const raw = fixture.store._internal.db
-      .prepare("SELECT resume_token FROM indexing_jobs WHERE id = :id")
-      .get({ id: "job-1" }) as { readonly resume_token: string | null };
-    expect(raw.resume_token).toBe("doc-1#unit-1#c12");
+    expect(row?.resumeToken).toBe("doc-1#unit-1#c12");
   });
 });

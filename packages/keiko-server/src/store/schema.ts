@@ -8,7 +8,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 19;
 
 interface Migration {
   readonly version: number;
@@ -482,6 +482,39 @@ CREATE UNIQUE INDEX uniq_workspace_manifest_root_object_identity
   WHERE object_identity_digest IS NOT NULL;
 `;
 
+// V18 (#2860) — immutable assistant-response history for regeneration. The current response stays
+// on the existing chat_messages row so gateway/history ordering and canonical turn identity remain
+// unchanged; this JSON column stores the validated, monotonic version chain atomically with each
+// content update. NULL is the legacy single-version representation.
+const V18_SQL = `
+ALTER TABLE chat_messages ADD COLUMN assistant_response_versions_json TEXT;
+`;
+
+// V19 (#2857) — terminal OpenCode process result without process bodies. Only a closed status,
+// bounded exit code, saturating counts, truncation flags and SHA-256 digests are retained.
+const V19_SQL = `
+ALTER TABLE coding_runtime_snapshots ADD COLUMN result_status TEXT
+  CHECK (result_status IS NULL OR result_status IN ('cancelled','failed','signalled','succeeded'));
+ALTER TABLE coding_runtime_snapshots ADD COLUMN exit_code INTEGER
+  CHECK (exit_code IS NULL OR exit_code BETWEEN 0 AND 255);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN stdout_byte_count INTEGER
+  CHECK (stdout_byte_count IS NULL OR stdout_byte_count BETWEEN 0 AND 1073741824);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN stdout_line_count INTEGER
+  CHECK (stdout_line_count IS NULL OR stdout_line_count BETWEEN 0 AND 1000000);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN stdout_sha256 TEXT
+  CHECK (stdout_sha256 IS NULL OR length(stdout_sha256) = 64);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN stdout_truncated INTEGER
+  CHECK (stdout_truncated IS NULL OR stdout_truncated IN (0,1));
+ALTER TABLE coding_runtime_snapshots ADD COLUMN stderr_byte_count INTEGER
+  CHECK (stderr_byte_count IS NULL OR stderr_byte_count BETWEEN 0 AND 1073741824);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN stderr_line_count INTEGER
+  CHECK (stderr_line_count IS NULL OR stderr_line_count BETWEEN 0 AND 1000000);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN stderr_sha256 TEXT
+  CHECK (stderr_sha256 IS NULL OR length(stderr_sha256) = 64);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN stderr_truncated INTEGER
+  CHECK (stderr_truncated IS NULL OR stderr_truncated IN (0,1));
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },
@@ -500,6 +533,8 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 15, sql: V15_SQL, apply: migrateLegacyProjectManifests },
   { version: 16, sql: V16_SQL },
   { version: 17, sql: V17_SQL, apply: migrateWorkspaceRootObjectIdentities },
+  { version: 18, sql: V18_SQL },
+  { version: 19, sql: V19_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

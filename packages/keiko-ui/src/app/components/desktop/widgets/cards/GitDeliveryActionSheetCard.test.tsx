@@ -177,6 +177,33 @@ describe("GitDeliveryActionSheetCard", () => {
     expect(screen.getByTestId("gdas-recovery-strategy")).toHaveTextContent("stash and reset");
   });
 
+  it("shows informational check failures separately from required checks", () => {
+    const checks = {
+      total: 1,
+      passing: 1,
+      failing: 0,
+      pending: 0,
+      overallStatus: "passing" as const,
+      informational: {
+        total: 1,
+        passing: 0,
+        failing: 1,
+        pending: 0,
+        overallStatus: "failing" as const,
+      },
+    };
+    render(
+      <GitDeliveryActionSheetCard
+        actionSheet={makeSheet("ready-to-execute", { preview: makePreview({ checks }) })}
+      />,
+    );
+
+    expect(screen.getByTestId("gdas-preview-checks")).toHaveTextContent("Required checks: passing");
+    expect(screen.getByTestId("gdas-preview-informational-checks")).toHaveTextContent(
+      "Informational checks: failing",
+    );
+  });
+
   it("renders the preview manifest: branch, risk, remote impact, and merge readiness (AC2)", () => {
     render(<GitDeliveryActionSheetCard actionSheet={makeSheet("ready-to-execute")} />);
     // feature/x is the affected branch AND (for a push) the remote branch — both are rendered.
@@ -186,6 +213,40 @@ describe("GitDeliveryActionSheetCard", () => {
     expect(screen.getByText(/Touches the remote/)).toBeInTheDocument();
     expect(screen.getByTestId("gdas-preview-merge")).toHaveTextContent("Not ready to merge");
     expect(screen.getByTestId("gdas-preview-merge")).toHaveTextContent("1 of 2 approvals");
+  });
+
+  it("discloses whether branch protection requires signed commits", () => {
+    const branchProtection = {
+      deletionAllowed: false,
+      forcePushAllowed: false,
+      linearHistoryRequired: true,
+      requiredReviewCount: 1,
+      requiredStatusCheckCount: 2,
+      signaturesRequired: true,
+    };
+    const { rerender } = render(
+      <GitDeliveryActionSheetCard
+        actionSheet={makeSheet("ready-to-execute", {
+          preview: makePreview({ branchProtection }),
+        })}
+      />,
+    );
+    expect(screen.getByTestId("gdas-preview-protection")).toHaveTextContent(
+      "Signed commits required",
+    );
+
+    rerender(
+      <GitDeliveryActionSheetCard
+        actionSheet={makeSheet("ready-to-execute", {
+          preview: makePreview({
+            branchProtection: { ...branchProtection, signaturesRequired: false },
+          }),
+        })}
+      />,
+    );
+    expect(screen.getByTestId("gdas-preview-protection")).toHaveTextContent(
+      "Signed commits not required",
+    );
   });
 
   it("wires Reject and Escape to onReject", async () => {
@@ -222,6 +283,7 @@ describe("GitDeliveryActionSheetCard", () => {
     const fetchImpl = vi.fn().mockResolvedValue(sheet);
     const request = {
       schemaVersion: "1" as const,
+      projectId: "/repos/project",
       resolvedInputs: {
         kind: "push" as const,
         sourceBranchName: "feature/x",
@@ -255,6 +317,7 @@ describe("GitDeliveryActionSheetCard", () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error("boom"));
     const request = {
       schemaVersion: "1" as const,
+      projectId: "/repos/project",
       resolvedInputs: {
         kind: "push" as const,
         sourceBranchName: "feature/x",

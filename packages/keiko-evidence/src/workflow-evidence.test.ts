@@ -142,6 +142,34 @@ describe("buildWorkflowManifest", () => {
       expectedChecks: ["tests"],
     });
   });
+
+  it("projects only content-free autonomy facts for governed agent runs", () => {
+    const manifest = buildWorkflowManifest(
+      identity(),
+      [],
+      { workflowId: "unit-test-generation", status: "dry-run" },
+      undefined,
+      {
+        autonomy: {
+          requestedMode: "autonomous-delivery",
+          effectiveMode: "supervised-coding",
+          deploymentCeiling: "supervised-coding",
+        },
+      },
+    );
+
+    expect(manifest.autonomy).toEqual({
+      requestedMode: "autonomous-delivery",
+      effectiveMode: "supervised-coding",
+      deploymentCeiling: "supervised-coding",
+    });
+    expect(Object.keys(manifest.autonomy ?? {})).toEqual([
+      "requestedMode",
+      "effectiveMode",
+      "deploymentCeiling",
+    ]);
+    expect(JSON.stringify(manifest.autonomy)).not.toMatch(/authorityRef|sessionId|prompt|file/iu);
+  });
 });
 
 describe("persistWorkflowEvidence", () => {

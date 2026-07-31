@@ -75,6 +75,22 @@ function defaultReviewItems(): readonly MemoryConsolidationReviewItem[] {
         older: memoryId("mem-old"),
         newer: memoryId("mem-new"),
       },
+      memoryExcerpts: [
+        {
+          memoryId: memoryId("mem-old"),
+          bodyExcerpt: "Old local excerpt",
+          truncated: false,
+          status: "accepted",
+          expectedUpdatedAt: 1_700_000_000_000,
+        },
+        {
+          memoryId: memoryId("mem-new"),
+          bodyExcerpt: "New local excerpt",
+          truncated: false,
+          status: "accepted",
+          expectedUpdatedAt: 1_700_000_000_100,
+        },
+      ],
       detectedAt: 1_700_000_000_500,
     },
   ];
@@ -268,6 +284,46 @@ describe("MemoryConsolidation", () => {
     });
   });
 
+  it("applies a proposed consolidation target with the reviewed preconditions", async () => {
+    const reviewItem: MemoryConsolidationReviewItem = {
+      ...defaultReviewItems()[0]!,
+      memoryExcerpts: defaultReviewItems()[0]!.memoryExcerpts.map((excerpt) => ({
+        ...excerpt,
+        status: excerpt.memoryId === memoryId("mem-old") ? "proposed" : "accepted",
+      })),
+    };
+    const applyReviewItemImpl = vi.fn().mockResolvedValue({
+      application: {
+        itemId: reviewItem.id,
+        outcome: "applied",
+        winnerMemoryId: memoryId("mem-new"),
+        affectedMemoryIds: [memoryId("mem-old")],
+        appliedAt: 1_700_000_000_600,
+      },
+    });
+    const user = userEvent.setup();
+    render(
+      <MemoryConsolidation
+        startJobImpl={vi.fn().mockResolvedValue(runningJob())}
+        fetchJobImpl={vi.fn().mockResolvedValue(completedJob([reviewItem]))}
+        cancelJobImpl={vi.fn()}
+        applyReviewItemImpl={applyReviewItemImpl}
+        pollIntervalMs={5}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /start consolidation/i }));
+    await user.click(await screen.findByRole("button", { name: "Apply proposal" }));
+
+    await waitFor(() => {
+      expect(applyReviewItemImpl).toHaveBeenCalledWith("job-1", "rv-1", [
+        { memoryId: memoryId("mem-old"), expectedUpdatedAt: 1_700_000_000_000 },
+        { memoryId: memoryId("mem-new"), expectedUpdatedAt: 1_700_000_000_100 },
+      ]);
+    });
+    expect(screen.getByText("Consolidation proposal applied.")).toBeInTheDocument();
+  });
+
   // A duplicate-derived review item always carries a `merge` action, and POST
   // /api/memory/conflicts/resolve refuses any pair that is not a *detected conflict* — which a
   // near/exact duplicate can never be (memory-handlers.test.ts pins that server contract against
@@ -291,6 +347,13 @@ describe("MemoryConsolidation", () => {
             id: "rv-merge",
             reason,
             relatedMemoryIds,
+            memoryExcerpts: relatedMemoryIds.map((memoryId, index) => ({
+              memoryId,
+              bodyExcerpt: `Excerpt ${index.toString()}`,
+              truncated: false,
+              status: "accepted",
+              expectedUpdatedAt: 1_700_000_000_000 + index,
+            })),
             proposedAction: { kind: "merge", winner, losers },
             detectedAt: 1_700_000_000_500,
           },

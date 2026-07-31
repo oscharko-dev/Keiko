@@ -15,6 +15,7 @@ import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import type { NativeDialogPickOutcome } from "@/lib/native-file-dialog";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { ActiveWorkspaceProvider, type ActiveWorkspaceApi } from "./context/ActiveWorkspaceContext";
+import { ATTACHMENT_CLEANUP_DEFERRED_ERROR } from "@/lib/chat-session-error";
 import { TaskWorkspaceSwitcher } from "./TaskWorkspaceSwitcher";
 
 const SELECTED_ROOT = "/Users/oscharko-dev/Projects/Keiko";
@@ -23,6 +24,7 @@ const catalogState = vi.hoisted(() => ({
   activeProject: undefined as ProjectWithAvailability | undefined,
   projects: [] as ProjectWithAvailability[],
   actionsAvailable: true,
+  error: undefined as string | undefined,
 }));
 const chatActions = vi.hoisted(() => ({
   addProject: vi.fn<(path: string) => Promise<ProjectWithAvailability | undefined>>(() =>
@@ -43,6 +45,7 @@ vi.mock("./context/ChatSessionContext", async (importOriginal) => {
     useOptionalChatSessionCatalog: () => ({
       activeProject: catalogState.activeProject,
       projects: catalogState.projects,
+      error: catalogState.error,
     }),
   };
 });
@@ -142,6 +145,7 @@ describe("TaskWorkspaceSwitcher", () => {
     catalogState.activeProject = undefined;
     catalogState.projects = [];
     catalogState.actionsAvailable = true;
+    catalogState.error = undefined;
     chatActions.addProject.mockReset().mockResolvedValue(undefined);
     chatActions.openProject.mockReset().mockResolvedValue(undefined);
     nativeDialogState.supported = true;
@@ -166,6 +170,9 @@ describe("TaskWorkspaceSwitcher", () => {
 
     expect(screen.getByRole("button", { name: "Workspace context: Keiko" })).toBeInTheDocument();
     const dialog = openDialog();
+    expect(dialog).toBeInstanceOf(HTMLDialogElement);
+    expect(dialog).toHaveAttribute("open");
+    expect(dialog).toHaveAttribute("aria-modal", "false");
     expect(within(dialog).getAllByText(SELECTED_ROOT).length).toBeGreaterThan(0);
   });
 
@@ -353,5 +360,18 @@ describe("TaskWorkspaceSwitcher", () => {
     openDialog();
 
     expect(screen.getByRole("alert")).toHaveTextContent("Folder selection failed");
+  });
+
+  it("localizes attachment cleanup deferral without exposing the session sentinel", () => {
+    catalogState.error = ATTACHMENT_CLEANUP_DEFERRED_ERROR;
+    renderSwitcher(api());
+
+    openDialog();
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(
+      "The encrypted local image copy could not be removed now and will expire automatically.",
+    );
+    expect(alert).not.toHaveTextContent(ATTACHMENT_CLEANUP_DEFERRED_ERROR);
   });
 });

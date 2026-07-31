@@ -193,10 +193,16 @@ describe("POST /api/prompt-enhancement", () => {
       const manifestRes = await fetch(url(body.evidence.manifestUrl ?? ""));
       expect(manifestRes.status).toBe(200);
       const served = (await manifestRes.json()) as {
-        manifest: { readonly runId: string; readonly requestId: string };
+        manifest: {
+          readonly runId: string;
+          readonly requestId: string;
+          readonly candidateRejections: PromptEnhancementWireResponse["candidates"]["rejected"];
+        };
       };
       expect(served.manifest.runId).toBe(body.evidence.runId);
       expect(served.manifest.requestId).toBe(body.analysis.requestId);
+      expect(served.manifest.candidateRejections).toEqual(body.candidates.rejected);
+      expect(JSON.stringify(served.manifest.candidateRejections)).not.toContain("renderedPrompt");
     } finally {
       rmSync(evidenceDir, { recursive: true, force: true });
     }

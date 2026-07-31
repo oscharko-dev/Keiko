@@ -896,6 +896,7 @@ export function buildPromptEnhancementRecordInput(options: {
       item.kind === "assumption" ? [item.statement] : [],
     ),
     candidateScores: evidenceCandidateRows(result.candidates),
+    candidateRejections: result.candidates.rejected,
     safety: {
       decision: result.safety.decision,
       verificationStatus: result.safety.verificationStatus,

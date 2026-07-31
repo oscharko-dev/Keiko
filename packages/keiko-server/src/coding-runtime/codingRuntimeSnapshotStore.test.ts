@@ -37,6 +37,21 @@ function store(): ReturnType<typeof createCodingRuntimeSnapshotStore> {
 }
 
 describe("CodingRuntimeSnapshotStore", () => {
+  it("round-trips only the bounded terminal process result", () => {
+    const s = store();
+    s.create(snapshot());
+    const result = {
+      status: "failed" as const,
+      exitCode: 9,
+      output: { byteCount: 12, lineCount: 1, sha256: "b".repeat(64), truncated: false },
+      error: { byteCount: 99, lineCount: 3, sha256: "c".repeat(64), truncated: true },
+    };
+    s.transition("run-1", { state: "failed", revision: 1, updatedAt: at, result });
+
+    expect(s.get("run-1")?.result).toEqual(result);
+    expect(JSON.stringify(s.get("run-1"))).not.toContain("stdout body");
+  });
+
   it("persists only lifecycle snapshots and holds the recovery slot after acknowledgement", () => {
     const s = store();
     s.create(snapshot());

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,12 +10,26 @@ import {
   resolveEditorM11Settings,
   type EditorM11ProfileSettingsLayer,
   type EditorM11SettingsSnapshot,
+  type EditorM7ReasonCode,
   type EditorM7SettingId,
   type EditorM7SettingValue,
   type WorkspaceProfileRef,
 } from "@oscharko-dev/keiko-contracts";
 import { I18nProvider } from "@/lib/i18n";
 import type { EditorSettingsEditScope, EditorSettingsView } from "../cards/useEditorSettings";
+
+const projectedRefusals = vi.hoisted(() => ({
+  current: [] as { commandId: string; reasonCode: EditorM7ReasonCode }[],
+}));
+
+vi.mock("../../shellShortcutState", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../shellShortcutState")>();
+  return {
+    ...actual,
+    projectShellShortcutRefusals: () => projectedRefusals.current,
+  };
+});
+
 import { KeyboardShortcutsPanel } from "./KeyboardShortcutsPanel";
 
 type SettingValues = Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>>;
@@ -115,8 +129,14 @@ function search(term: string): void {
 }
 
 describe("KeyboardShortcutsPanel", () => {
+  beforeEach(() => {
+    projectedRefusals.current = [];
+    window.localStorage.removeItem("keiko.locale");
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
+    window.localStorage.removeItem("keiko.locale");
   });
 
   it("has no axe violations in its normal rendered state", async () => {
@@ -205,6 +225,50 @@ describe("KeyboardShortcutsPanel", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("KEYBINDING_COLLISION");
     expect(currentView.setValue).not.toHaveBeenCalled();
+  });
+
+  it("explains a dispatch-refused persisted override on the affected command", async () => {
+    projectedRefusals.current = [{ commandId: "undo", reasonCode: "INVALID_INPUT" }];
+    const { container } = renderPanel(view());
+
+    const row = screen.getByRole("article", { name: "Undo" });
+    const refusal = within(row).getByRole("status");
+    expect(refusal).toHaveTextContent(
+      "This saved shortcut cannot be used. The default shortcut remains active.",
+    );
+    expect(refusal).not.toHaveTextContent("INVALID_INPUT");
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("localizes a dispatch refusal without exposing the reason code", async () => {
+    window.localStorage.setItem("keiko.locale", "de");
+    projectedRefusals.current = [{ commandId: "undo", reasonCode: "INVALID_INPUT" }];
+    renderPanel(view());
+
+    const row = await screen.findByRole("article", { name: "Rückgängig" });
+    const refusal = within(row).getByRole("status");
+    expect(refusal).toHaveTextContent(
+      "Dieses gespeicherte Tastenkürzel kann nicht verwendet werden. Das Standardkürzel bleibt aktiv.",
+    );
+    expect(refusal).not.toHaveTextContent("INVALID_INPUT");
+  });
+
+  it.each([
+    [
+      "RESERVED_KEYBINDING",
+      "This saved shortcut is reserved by the browser or operating system. The default shortcut remains active.",
+    ],
+    [
+      "KEYBINDING_COLLISION",
+      "This saved shortcut conflicts with another active command. The default shortcut remains active.",
+    ],
+  ] as const)("translates the %s refusal into actionable copy", (reasonCode, expected) => {
+    projectedRefusals.current = [{ commandId: "undo", reasonCode }];
+    renderPanel(view());
+
+    const refusal = within(screen.getByRole("article", { name: "Undo" })).getByRole("status");
+    expect(refusal).toHaveTextContent(expected);
+    expect(refusal).not.toHaveTextContent(reasonCode);
   });
 
   it("keeps non-rebindable protected commands disabled", () => {

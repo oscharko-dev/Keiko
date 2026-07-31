@@ -411,8 +411,29 @@ describe("AC #3 — pending attachment removal", () => {
       }),
     });
 
-    const view = renderHook(() => useChatSession());
-    // No boot data needed — addPendingAttachment reads models from state (empty => permissive).
+    const bootChat = makeChat();
+    vi.spyOn(api, "fetchModels").mockResolvedValue({ models: [makeModelCapability()] });
+    vi.spyOn(api, "fetchProjects").mockResolvedValue({
+      projects: [
+        {
+          path: bootChat.projectPath,
+          name: "proj",
+          favorite: false,
+          createdAt: 0,
+          lastOpenedAt: 0,
+          available: true,
+        },
+      ],
+    });
+    vi.spyOn(api, "fetchChats").mockResolvedValue({ chats: [bootChat] });
+    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
+    vi.spyOn(api, "uploadConversationAttachment").mockResolvedValue({
+      attachmentRef: `chat-attachment:${"a".repeat(64)}`,
+      expiresAt: 60_000,
+    });
+    vi.spyOn(api, "deleteConversationAttachment").mockResolvedValue(undefined);
+    const view = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(view.result.current.loading).toBe(false));
     const image = new File([new Uint8Array([1, 2, 3])], "photo.png", { type: "image/png" });
     await act(async () => {
       const result = await view.result.current.addPendingAttachment(image);
@@ -428,6 +449,7 @@ describe("AC #3 — pending attachment removal", () => {
     });
     // Exactly one revoke for the one created preview — no leak, no double-revoke.
     expect(revoked).toEqual(created);
+    expect(api.deleteConversationAttachment).toHaveBeenCalledTimes(1);
   });
 
   it("revokes image previews on clearPendingAttachments (MEMORY-001)", async () => {

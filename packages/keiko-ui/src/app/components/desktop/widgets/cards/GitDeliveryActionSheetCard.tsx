@@ -39,6 +39,7 @@ import {
   type OptionalWidgetTranslate,
 } from "@/lib/optional-widget-i18n";
 import { Icons } from "../../Icons";
+import { NATIVE_FIELDSET_STYLE } from "../../native-element-styles";
 
 const GitIcon = Icons.git;
 
@@ -231,19 +232,35 @@ function PreviewReadinessDetails({
           {t("gitDelivery.preview.branchProtection", {
             reviews: preview.branchProtection.requiredReviewCount,
             checks: preview.branchProtection.requiredStatusCheckCount,
+            signatures: preview.branchProtection.signaturesRequired
+              ? t("gitDelivery.preview.signaturesRequired")
+              : t("gitDelivery.preview.signaturesNotRequired"),
           })}
         </p>
       ) : null}
       {preview.checks !== undefined ? (
-        <p className="gdas-preview-line" data-testid="gdas-preview-checks">
-          {t("gitDelivery.preview.checks", {
-            status: preview.checks.overallStatus,
-            passing: preview.checks.passing,
-            failing: preview.checks.failing,
-            pending: preview.checks.pending,
-            total: preview.checks.total,
-          })}
-        </p>
+        <>
+          <p className="gdas-preview-line" data-testid="gdas-preview-checks">
+            {t("gitDelivery.preview.checks", {
+              status: preview.checks.overallStatus,
+              passing: preview.checks.passing,
+              failing: preview.checks.failing,
+              pending: preview.checks.pending,
+              total: preview.checks.total,
+            })}
+          </p>
+          {preview.checks.informational !== undefined ? (
+            <p className="gdas-preview-line" data-testid="gdas-preview-informational-checks">
+              {t("gitDelivery.preview.informationalChecks", {
+                status: preview.checks.informational.overallStatus,
+                passing: preview.checks.informational.passing,
+                failing: preview.checks.informational.failing,
+                pending: preview.checks.informational.pending,
+                total: preview.checks.informational.total,
+              })}
+            </p>
+          ) : null}
+        </>
       ) : null}
     </>
   );
@@ -511,9 +528,9 @@ function GitDeliveryActionSheetView({
   // GEN-UI-A11Y-006 — this is an inline embedded card, not a modal: it has no focus trap and no
   // modality (its comment notes it never executes the mutation). Grabbing focus on mount would
   // hijack the reading order of the surrounding surface, so we do NOT auto-focus. The container is
-  // a named role="group" (see below) and the Escape-to-reject shortcut remains for keyboard users.
+  // a named native fieldset group and the Escape-to-reject shortcut remains for keyboard users.
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLFieldSetElement>): void => {
     if (event.key === "Escape" && onReject !== undefined) {
       event.stopPropagation();
       onReject();
@@ -521,14 +538,14 @@ function GitDeliveryActionSheetView({
   };
 
   return (
-    // GEN-UI-A11Y-006 — non-modal embedded card: role="group" (an accessibly-named container),
+    // GEN-UI-A11Y-006 — non-modal embedded card: a named native fieldset group,
     // NOT role="alertdialog" (which would falsely promise a focus trap + modality this inline card
     // does not provide). Escape-to-reject is retained for keyboard users.
     // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- Escape-to-reject on the group container mirrors the Reject button for keyboard users
-    <div
+    <fieldset
       className="arun-gate gdas-card"
       data-state={actionSheet.state}
-      role="group"
+      style={NATIVE_FIELDSET_STYLE}
       aria-labelledby={titleId}
       aria-describedby={stateId}
       onKeyDown={handleKeyDown}
@@ -589,7 +606,7 @@ function GitDeliveryActionSheetView({
           </button>
         )}
       </div>
-    </div>
+    </fieldset>
   );
 }
 

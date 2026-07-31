@@ -27,6 +27,11 @@ product.
 > `dev`, force pushes, gate bypasses, and authority widening remain denied or separately approved.
 > Manifest-producing surfaces emit **redacted** evidence for deterministic gate evaluation.
 
+The repository-delivery sentence above governs how agents contribute accepted work to Keiko's own
+`dev` branch under ADR-0135. It is not a capability promise for the end-user Governed Merge Gateway:
+ADR-0087 continues to require an explicit, approval-gated merge request and excludes autonomous or
+background auto-merge scheduling from that product surface.
+
 The product has exactly three user-facing modes — the product-wide authority model for every
 autonomy-capable surface, anchored by
 [ADR-0129](docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md), amended for repository

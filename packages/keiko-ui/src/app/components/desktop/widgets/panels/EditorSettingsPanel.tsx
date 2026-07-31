@@ -12,7 +12,11 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { useEditorSettings, type EditorSettingsEditScope } from "../cards/useEditorSettings";
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
-import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./settings-i18n";
+import {
+  useSettingsTranslate as useTranslate,
+  type I18nTranslate,
+  type SettingsMessageKey,
+} from "./settings-i18n";
 import { KeyboardShortcutsPanel } from "./KeyboardShortcutsPanel";
 import { WorkspaceSnippetsPanel } from "./WorkspaceSnippetsPanel";
 import { EditorProfilesPanel } from "./EditorProfilesPanel";
@@ -482,23 +486,29 @@ function issueCopy(issue: "load" | "mutation" | "conflict", t: I18nTranslate): s
   return t("settings.editor.mutationError");
 }
 
+const SETTING_LABEL_KEYS: Readonly<Record<EditorM7SettingId, SettingsMessageKey>> = {
+  fontSize: "settings.editor.setting.fontSize",
+  tabSize: "settings.editor.setting.tabSize",
+  insertSpaces: "settings.editor.setting.insertSpaces",
+  wordWrap: "settings.editor.setting.wordWrap",
+  renderWhitespace: "settings.editor.setting.renderWhitespace",
+  minimap: "settings.editor.setting.minimap",
+  formatOnSave: "settings.editor.setting.formatOnSave",
+  externalReload: "settings.editor.setting.externalReload",
+  inlineCompletion: "settings.editor.setting.inlineCompletion",
+  testGeneration: "settings.editor.setting.testGeneration",
+  patchApply: "settings.editor.setting.patchApply",
+  watcherExclusions: "settings.editor.setting.watcherExclusions",
+  largeFileMode: "settings.editor.setting.largeFileMode",
+  modelRetentionCount: "settings.editor.setting.modelRetentionCount",
+  modelRetentionBytes: "settings.editor.setting.modelRetentionBytes",
+  gitCommitMessagePolicy: "settings.editor.setting.gitCommitMessagePolicy",
+  keybindingOverrides: "settings.editor.setting.keybindingOverrides",
+  debuggingEnabled: "settings.editor.setting.keybindingOverrides",
+};
+
 function settingLabel(id: EditorM7SettingId, t: I18nTranslate): string {
-  if (id === "fontSize") return t("settings.editor.setting.fontSize");
-  if (id === "tabSize") return t("settings.editor.setting.tabSize");
-  if (id === "insertSpaces") return t("settings.editor.setting.insertSpaces");
-  if (id === "wordWrap") return t("settings.editor.setting.wordWrap");
-  if (id === "renderWhitespace") return t("settings.editor.setting.renderWhitespace");
-  if (id === "minimap") return t("settings.editor.setting.minimap");
-  if (id === "formatOnSave") return t("settings.editor.setting.formatOnSave");
-  if (id === "externalReload") return t("settings.editor.setting.externalReload");
-  if (id === "inlineCompletion") return t("settings.editor.setting.inlineCompletion");
-  if (id === "testGeneration") return t("settings.editor.setting.testGeneration");
-  if (id === "patchApply") return t("settings.editor.setting.patchApply");
-  if (id === "watcherExclusions") return t("settings.editor.setting.watcherExclusions");
-  if (id === "largeFileMode") return t("settings.editor.setting.largeFileMode");
-  if (id === "modelRetentionCount") return t("settings.editor.setting.modelRetentionCount");
-  if (id === "modelRetentionBytes") return t("settings.editor.setting.modelRetentionBytes");
-  return t("settings.editor.setting.keybindingOverrides");
+  return t(SETTING_LABEL_KEYS[id]);
 }
 
 function settingSupportsScope(

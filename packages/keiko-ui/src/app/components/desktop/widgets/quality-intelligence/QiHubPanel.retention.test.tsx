@@ -7,7 +7,8 @@
 // numbers the server actually enforces.
 
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   QualityIntelligenceUiRetentionNotice,
   QualityIntelligenceUiRunSummary,
@@ -30,6 +31,7 @@ function makeRun(id: string): QualityIntelligenceUiRunSummary {
 const fakeFetch = (
   runs: readonly QualityIntelligenceUiRunSummary[],
   retention?: QualityIntelligenceUiRetentionNotice,
+  retentionPolicies?: readonly QualityIntelligenceUiRetentionNotice[],
 ): FetchRunsImpl =>
   vi.fn().mockResolvedValue({
     runs,
@@ -37,6 +39,7 @@ const fakeFetch = (
     totalRunIds: runs.length,
     truncated: false,
     ...(retention !== undefined ? { retention } : {}),
+    ...(retentionPolicies !== undefined ? { retentionPolicies } : {}),
   }) as unknown as FetchRunsImpl;
 
 const NOTICE: QualityIntelligenceUiRetentionNotice = {
@@ -45,7 +48,33 @@ const NOTICE: QualityIntelligenceUiRetentionNotice = {
   maxRunArtifacts: 100,
 };
 
+const POLICIES: readonly QualityIntelligenceUiRetentionNotice[] = [
+  NOTICE,
+  { policyId: "qi:standard-90d", retainedDays: 90, maxRunArtifacts: 500 },
+  { policyId: "qi:long-365d", retainedDays: 365, maxRunArtifacts: 2000 },
+];
+
 describe("QiHubPanel — automatic-deletion disclosure", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("offers every server-enforced profile and persists the selection", async () => {
+    const user = userEvent.setup();
+    render(<QiHubPanel openRun={vi.fn()} fetchRunsImpl={fakeFetch([], NOTICE, POLICIES)} />);
+
+    const selector = await screen.findByRole("combobox", {
+      name: /retention policy for new runs/i,
+    });
+    expect(selector.querySelectorAll("option")).toHaveLength(3);
+    await user.selectOptions(selector, "qi:long-365d");
+    expect(window.localStorage.getItem("keiko.quality-intelligence.retention-policy")).toBe(
+      "qi:long-365d",
+    );
+    expect(screen.getByTestId("qi-runs-retention")).toHaveTextContent("365");
+    expect(screen.getByTestId("qi-runs-retention")).toHaveTextContent("2000");
+  });
+
   it("states that runs are deleted automatically, with the enforced limits", async () => {
     render(
       <QiHubPanel

@@ -195,6 +195,14 @@ export interface Chat {
 
 export type ChatRole = "user" | "assistant" | "system";
 export type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+export type ChatTurnState = "pending" | "completed" | "failed" | "cancelled";
+
+export interface ChatAssistantResponseVersion {
+  readonly version: number;
+  readonly content: string;
+  readonly timestamp: number;
+  readonly supersedesVersion?: number | undefined;
+}
 
 export interface ChatMessage {
   readonly id: string;
@@ -205,6 +213,15 @@ export interface ChatMessage {
   // Path/body-free scoped digest of a canonical client turn. It lets the browser reconcile one
   // exact durable user row after a failed request without exposing the caller's raw turn identity.
   readonly canonicalTurnRef?: string | undefined;
+  // State-only lifecycle projection for a canonical user turn. Provider details and transcript
+  // bodies never ride this field.
+  readonly turnState?: ChatTurnState | undefined;
+  // Regeneration preserves every assistant body under the same stable message identity. The
+  // monotonic version relationship is explicit; diagnostics and evidence consume only these
+  // numeric/opaque coordinates, never the version bodies.
+  readonly responseVersion?: number | undefined;
+  readonly supersedesResponseVersion?: number | undefined;
+  readonly responseVersions?: readonly ChatAssistantResponseVersion[] | undefined;
   readonly runId: string | undefined;
   readonly workflowId: string | undefined;
   readonly workflowStatus: WorkflowStatus | undefined;
@@ -306,6 +323,14 @@ export interface ChatsResponse {
 
 export interface ChatResponse {
   readonly chat: Chat;
+}
+
+export interface PurgeChatRequest {
+  readonly projectPath: string;
+  readonly confirmation: {
+    readonly chatId: string;
+    readonly irreversible: true;
+  };
 }
 
 export interface MessagesResponse {
@@ -450,6 +475,7 @@ export interface DesktopChatSendResponse {
   readonly messages: readonly ChatMessage[];
   readonly usage?: DesktopChatSendUsage;
   readonly memory?: ConversationMemoryResultWire;
+  readonly attachmentDeliveries?: readonly ConversationImageDeliveryWire[];
 }
 
 export const DESKTOP_CHAT_STREAM_EVENT_TYPES = ["token", "done", "error", "cancelled"] as const;
@@ -584,6 +610,31 @@ export interface ConversationAttachmentDescriptorWire {
   readonly name: string;
   readonly mimeType: string;
   readonly sizeBytes: number;
+  /** Opaque server-issued reference. It is never a filesystem path or bearer credential. */
+  readonly attachmentRef?: string | undefined;
+  readonly sha256?: string | undefined;
+}
+
+export const CONVERSATION_IMAGE_DELIVERY_INTENT = "deliver-images-to-selected-model" as const;
+export type ConversationImageDeliveryIntent = typeof CONVERSATION_IMAGE_DELIVERY_INTENT;
+
+export interface ConversationAttachmentUploadRequestWire {
+  readonly projectPath: string;
+  readonly chatId: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+  readonly contentBase64: string;
+}
+
+export interface ConversationAttachmentUploadResponseWire {
+  readonly attachmentRef: string;
+  readonly expiresAt: number;
+}
+
+export interface ConversationImageDeliveryWire {
+  readonly id: string;
+  readonly status: "delivered";
 }
 
 // The loopback endpoint every Keiko surface binds/dials (ADR-0011): one host and one
@@ -602,6 +653,9 @@ export const DEFAULT_UI_PORT = 1983;
 // security loosening (the server behaviour is unchanged). SVG is denied even though it is
 // `image/*` because it is a script-carrying vector.
 export const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024; // 8 MiB, per-attachment ceiling
+// Canonical MIME values are ASCII and travel in bindings plus provider data URLs. 255 bytes is far
+// above the registered values Keiko accepts while bounding attacker-controlled metadata everywhere.
+export const MAX_ATTACHMENT_MIME_BYTES = 255;
 export const ALLOWED_IMAGE_MIME_PREFIXES = ["image/"] as const;
 export const ALLOWED_DOCUMENT_MIME_PREFIXES = ["text/"] as const;
 export const ALLOWED_DOCUMENT_MIME_LITERALS: ReadonlySet<string> = new Set([
@@ -614,12 +668,45 @@ export const ALLOWED_DOCUMENT_MIME_LITERALS: ReadonlySet<string> = new Set([
   "application/pdf",
 ]);
 
+// Keiko intentionally accepts a strict URI-unreserved subset of MIME's wider `token` grammar.
+// Structured suffixes and other reserved characters remain unsupported until product policy
+// explicitly admits them; broadening syntax here would also broaden the image/* allowlist.
+const MIME_COMPONENT_PATTERN = /^[a-z0-9][a-z0-9._~-]*$/u;
+
+/**
+ * Returns the lowercase base media type without parameters. Malformed media types are refused so
+ * callers can safely use the result in a structured transport such as an image data URL.
+ */
+export function normalizeAttachmentMime(mimeType: string): string | undefined {
+  const [base] = mimeType.split(";", 1);
+  if (base === undefined) return undefined;
+  const normalized = base.trim().toLowerCase();
+  if (normalized.length > MAX_ATTACHMENT_MIME_BYTES) return undefined;
+  const parts = normalized.split("/");
+  if (parts.length !== 2) return undefined;
+  const [type, subtype] = parts;
+  if (
+    type === undefined ||
+    subtype === undefined ||
+    !MIME_COMPONENT_PATTERN.test(type) ||
+    !MIME_COMPONENT_PATTERN.test(subtype)
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
 export function classifyAttachmentMime(mimeType: string): "image" | "document" | "unsupported" {
-  // SVG is denied (script-carrying vector) even though it is image/*
-  if (mimeType === "image/svg+xml" || mimeType === "image/svg") return "unsupported";
-  if (ALLOWED_IMAGE_MIME_PREFIXES.some((p) => mimeType.startsWith(p))) return "image";
-  if (ALLOWED_DOCUMENT_MIME_PREFIXES.some((p) => mimeType.startsWith(p))) return "document";
-  if (ALLOWED_DOCUMENT_MIME_LITERALS.has(mimeType)) return "document";
+  const normalized = normalizeAttachmentMime(mimeType);
+  if (normalized === undefined) return "unsupported";
+  // SVG is denied (script-carrying vector) even though it is image/*. The structured-suffix form
+  // is already refused by the intentionally narrower normalizer above.
+  if (normalized === "image/svg") return "unsupported";
+  if (ALLOWED_IMAGE_MIME_PREFIXES.some((prefix) => normalized.startsWith(prefix))) return "image";
+  if (ALLOWED_DOCUMENT_MIME_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
+    return "document";
+  }
+  if (ALLOWED_DOCUMENT_MIME_LITERALS.has(normalized)) return "document";
   return "unsupported";
 }
 
@@ -662,6 +749,7 @@ export interface DesktopChatSendRequestWire {
   readonly memory?: ConversationMemoryRequestWire | undefined;
   readonly documentContext?: readonly ConversationDocumentContextWire[] | undefined;
   readonly attachments?: readonly ConversationAttachmentDescriptorWire[] | undefined;
+  readonly attachmentIntent?: ConversationImageDeliveryIntent | undefined;
   readonly discussionMode?: DiscussionMode | undefined;
   // Optional stable client identity for safe retry of one canonical chat turn. The server scopes it
   // to `chatId` and the normalized semantic turn (effective model, grounding/memory context, and

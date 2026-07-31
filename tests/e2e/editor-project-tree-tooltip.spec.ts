@@ -1,16 +1,31 @@
 import { expect, test, type Page } from "@playwright/test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
-const PROJECT_ROOT = process.cwd();
-const LONG_FILE = ".dependency-cruiser.cjs";
+// Keep this safely beyond the 175 px project-tree label width across Linux, macOS, and Windows
+// reference fonts. A real but only moderately long repository filename made the truncation premise
+// platform-dependent, so CI could correctly render it without overflow and invalidate the test.
+const LONG_FILE =
+  "this-is-an-intentionally-long-project-tree-filename-that-must-overflow-across-linux-macos-and-windows-reference-font-metrics-without-depending-on-a-specific-glyph-width.ts";
 const SHORT_FILE = "NOTICE";
 const ACTIVE_FILE = LONG_FILE;
+const tempProjects: string[] = [];
 // Virtual-time budgets for the tooltip window. `TOOLTIP_BELOW_DELAY_MS` must stay UNDER the
 // FilesWidget hover delay (it is the point at which a correctly delayed tooltip is still absent)
 // and `TOOLTIP_DRAIN_MS` comfortably over it, so a drain leaves no tooltip timer pending. Both are
 // virtual milliseconds, so neither costs wall-clock time nor depends on machine load.
 const TOOLTIP_BELOW_DELAY_MS = 500;
 const TOOLTIP_DRAIN_MS = 2_000;
+
+function createTooltipFixture(): string {
+  const root = mkdtempSync(join(tmpdir(), "keiko-e2e-tooltip-"));
+  tempProjects.push(root);
+  writeFileSync(join(root, LONG_FILE), "module.exports = {};\n", "utf8");
+  writeFileSync(join(root, SHORT_FILE), "Keiko tooltip fixture\n", "utf8");
+  return root;
+}
 
 function collectPageErrors(page: Page): () => void {
   const errors: string[] = [];
@@ -76,11 +91,17 @@ async function seedEditorWindow(page: Page, projectPath: string): Promise<void> 
   );
 }
 
-test("editor project-tree filenames use delayed Keiko tooltip only when truncated", async ({
+test.afterEach(() => {
+  for (const root of tempProjects.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("editor project-tree filenames use delayed Keiko tooltip only when truncated @smoke", async ({
   page,
 }) => {
   const assertNoPageErrors = collectPageErrors(page);
-  const projectPath = PROJECT_ROOT;
+  const projectPath = createTooltipFixture();
   await ensureProject(page, projectPath);
   await seedEditorWindow(page, projectPath);
 

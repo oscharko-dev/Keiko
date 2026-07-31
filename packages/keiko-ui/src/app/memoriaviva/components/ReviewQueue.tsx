@@ -117,7 +117,7 @@ interface ReviewRowProps {
   readonly record: MemoryRecord;
   readonly busyAction: ReviewAction | null;
   readonly rowError: string | null;
-  readonly onAccept: (record: MemoryRecord) => void;
+  readonly onAccept: (record: MemoryRecord, bodyOverride?: string) => void;
   readonly onReject: (record: MemoryRecord) => void;
   readonly onArchive: (record: MemoryRecord) => void;
   readonly onOpenDetail?: ((id: string) => void) | undefined;
@@ -256,6 +256,9 @@ function ReviewRowActions({
   onAccept,
   onReject,
   onArchive,
+  editing,
+  onEdit,
+  onCancelEdit,
   t,
 }: {
   readonly record: MemoryRecord;
@@ -264,6 +267,9 @@ function ReviewRowActions({
   readonly onAccept: (record: MemoryRecord) => void;
   readonly onReject: (record: MemoryRecord) => void;
   readonly onArchive: (record: MemoryRecord) => void;
+  readonly editing: boolean;
+  readonly onEdit: () => void;
+  readonly onCancelEdit: () => void;
   readonly t: I18nTranslate;
 }): ReactNode {
   if (record.status === "proposed") {
@@ -278,8 +284,16 @@ function ReviewRowActions({
           busyAction={busyAction}
           isBusy={busyAction === "accept"}
           busyLabel={t("memoria.approving")}
-          idleLabel={t("memoria.approve")}
+          idleLabel={editing ? t("memoria.approveEditedProposal") : t("memoria.approve")}
           onClick={() => onAccept(record)}
+        />
+        <RowActionButton
+          variant="ghost"
+          busyAction={busyAction}
+          isBusy={false}
+          busyLabel=""
+          idleLabel={editing ? t("memoria.cancelEdit") : t("memoria.editProposal")}
+          onClick={editing ? onCancelEdit : onEdit}
         />
         <RowActionButton
           variant="ghost"
@@ -348,7 +362,10 @@ function ReviewRow({
   onOpenDetail,
   t,
 }: ReviewRowProps): ReactNode {
+  const [editing, setEditing] = useState(false);
+  const [draftBody, setDraftBody] = useState(record.body);
   const labelId = `memory-review-body-${record.id}`;
+  const editorId = `memory-review-editor-${record.id}`;
   const detailLinkLabel = t("memoria.viewDetailsFor", {
     id: record.id,
     preview: record.body.slice(0, 80),
@@ -360,9 +377,23 @@ function ReviewRow({
           {/* multi-line clamp via .mc-review-row .mc-row-body — accepting or
               rejecting a memory whose text is hard-truncated to one line is a
               blind decision (uiux-fix F035) */}
-          <p id={labelId} className="mc-row-body">
-            {record.body}
-          </p>
+          {editing ? (
+            <div style={{ display: "grid", gap: "var(--space-2)" }}>
+              <label id={labelId} htmlFor={editorId}>
+                {t("memoria.proposalText")}
+              </label>
+              <textarea
+                id={editorId}
+                className="lk-input"
+                value={draftBody}
+                onChange={(event) => setDraftBody(event.currentTarget.value)}
+              />
+            </div>
+          ) : (
+            <p id={labelId} className="mc-row-body">
+              {record.body}
+            </p>
+          )}
           <div className="mc-row-meta">
             <span className="mc-row-type">{typeLabel(record.type, t)}</span>
             <span className="mc-row-scope">{scopeLabel(record.scope.kind, t)}</span>
@@ -395,9 +426,15 @@ function ReviewRow({
           record={record}
           busyAction={busyAction}
           labelId={labelId}
-          onAccept={onAccept}
+          onAccept={(row) => onAccept(row, editing ? draftBody : undefined)}
           onReject={onReject}
           onArchive={onArchive}
+          editing={editing}
+          onEdit={() => setEditing(true)}
+          onCancelEdit={() => {
+            setDraftBody(record.body);
+            setEditing(false);
+          }}
           t={t}
         />
       </article>
@@ -500,7 +537,11 @@ export function ReviewQueue({
   }, [records]);
 
   const runRowAction = useCallback(
-    async (record: MemoryRecord, action: "accept" | "reject" | "archive"): Promise<void> => {
+    async (
+      record: MemoryRecord,
+      action: "accept" | "reject" | "archive",
+      bodyOverride?: string,
+    ): Promise<void> => {
       const id = record.id as MemoryId;
       setBusyById((prev) => ({ ...prev, [id]: action }));
       setRowErrorsById((prev) => {
@@ -511,7 +552,11 @@ export function ReviewQueue({
 
       try {
         if (action === "accept") {
-          await acceptImpl(id);
+          if (bodyOverride === undefined) {
+            await acceptImpl(id);
+          } else {
+            await acceptImpl(id, { bodyOverride });
+          }
         } else if (action === "archive") {
           await archiveImpl(
             id,
@@ -600,8 +645,8 @@ export function ReviewQueue({
             record={record}
             busyAction={busyById[record.id] ?? null}
             rowError={rowErrorsById[record.id] ?? null}
-            onAccept={(row) => {
-              void runRowAction(row, "accept");
+            onAccept={(row, bodyOverride) => {
+              void runRowAction(row, "accept", bodyOverride);
             }}
             onReject={(row) => {
               void runRowAction(row, "reject");

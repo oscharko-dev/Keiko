@@ -238,6 +238,7 @@ describe("production runtime singleton manager", () => {
       takeover: vi.fn(() => Promise.resolve({ ok: true as const, status: "stopped" as const })),
       reconcile: vi.fn(() => Promise.resolve({ ok: true as const, status: "stopped" as const })),
       health: vi.fn(() => ({ status: "running" as const })),
+      result: vi.fn(() => undefined),
       ...overrides,
     } as CodingRuntimeManager & { readonly start: ReturnType<typeof vi.fn> };
   }
@@ -245,13 +246,22 @@ describe("production runtime singleton manager", () => {
   function fakeAuthority(): CodingRuntimeAuthorityService & {
     readonly transition: ReturnType<typeof vi.fn>;
     readonly abandonUnlaunched: ReturnType<typeof vi.fn>;
+    readonly pause: ReturnType<typeof vi.fn>;
+    readonly resume: ReturnType<typeof vi.fn>;
   } {
     return {
       transition: vi.fn(() => true),
       abandonUnlaunched: vi.fn(() => true),
+      pause: vi.fn(() => ({ ok: true, effectiveMode: "supervised-coding" as const })),
+      resume: vi.fn((_runId: string, requestedMode: string) => ({
+        ok: true,
+        effectiveMode: requestedMode,
+      })),
     } as unknown as CodingRuntimeAuthorityService & {
       readonly transition: ReturnType<typeof vi.fn>;
       readonly abandonUnlaunched: ReturnType<typeof vi.fn>;
+      readonly pause: ReturnType<typeof vi.fn>;
+      readonly resume: ReturnType<typeof vi.fn>;
     };
   }
 
@@ -381,6 +391,26 @@ describe("production runtime singleton manager", () => {
       ok: false,
       failureCode: "runtime-run-mismatch",
     });
+  });
+
+  it("retains a body-free terminal result after the runtime slot is cleared", async () => {
+    const terminal = {
+      status: "succeeded" as const,
+      exitCode: null,
+      output: { byteCount: 4, lineCount: 1, sha256: "a".repeat(64), truncated: false },
+      error: { byteCount: 0, lineCount: 0, sha256: "b".repeat(64), truncated: false },
+    };
+    const inner = fakeManager({ result: vi.fn(() => terminal) });
+    const runs = new Map([["run-1", managedRecord("run-1", inner)]]);
+    const manager = createProductionRuntimeManager(runs, fakeAuthority());
+    await manager.start(launch("run-1"));
+
+    await expect(manager.stop("run-1", "succeeded")).resolves.toEqual({
+      ok: true,
+      status: "stopped",
+    });
+    expect(runs.size).toBe(0);
+    expect(manager.result("run-1")).toEqual(terminal);
   });
 
   it("fails approvals closed without a live run and delegates them to the live run", async () => {

@@ -11,7 +11,7 @@ import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION,
   validatePromptEnhancementEvidenceManifest,
-} from "../manifestSchema.js";
+} from "./manifestSchema.js";
 import {
   buildPromptEnhancementEvidenceManifest,
   createInMemoryPromptEnhancementLocalStore,
@@ -24,7 +24,7 @@ import {
   PE_SUBDIR,
   recordPromptEnhancementRun,
   type PromptEnhancementRecordInput,
-} from "../store.js";
+} from "./store.js";
 
 const SECRET = "sk-abcdefghij1234567890";
 
@@ -54,6 +54,7 @@ function recordInput(
         selected: true,
       },
     ],
+    candidateRejections: [],
     safety: {
       decision: "accepted",
       verificationStatus: "passed",
@@ -111,6 +112,7 @@ describe("buildPromptEnhancementEvidenceManifest", () => {
     // Totals match collection lengths.
     expect(manifest.totals).toEqual({
       candidateScores: 1,
+      candidateRejections: 0,
       appliedSafetyRules: 2,
       assumptions: 1,
       safetyFindings: 0,
@@ -121,6 +123,36 @@ describe("buildPromptEnhancementEvidenceManifest", () => {
     const { manifest } = buildPromptEnhancementEvidenceManifest(recordInput());
     expect(validatePromptEnhancementEvidenceManifest(manifest).ok).toBe(true);
     expect(manifest.peEvidenceSchemaVersion).toBe(PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION);
+  });
+
+  it("persists bounded rejection metadata without candidate prompt bodies", () => {
+    const promptBody = "private rejected candidate prompt";
+    const input = {
+      ...recordInput(),
+      candidateRejections: [
+        {
+          candidateId: "candidate-fast",
+          profile: "fast" as const,
+          aggregateScore: 0.61,
+          reason: "lower-aggregate-score" as const,
+          promptText: promptBody,
+        },
+      ],
+    };
+    const { manifest } = buildPromptEnhancementEvidenceManifest(input);
+    const persisted = manifest as unknown as {
+      readonly candidateRejections: readonly Record<string, unknown>[];
+    };
+
+    expect(persisted.candidateRejections).toEqual([
+      {
+        candidateId: "candidate-fast",
+        profile: "fast",
+        aggregateScore: 0.61,
+        reason: "lower-aggregate-score",
+      },
+    ]);
+    expect(JSON.stringify(persisted.candidateRejections)).not.toContain(promptBody);
   });
 
   it("fingerprints the redacted input deterministically and independently of the excerpt cap", () => {
@@ -310,6 +342,33 @@ describe("createNodePromptEnhancementLocalStore", () => {
     onDisk.enhancedPromptTextRedacted = "tampered output";
     writeFileSync(location, JSON.stringify(onDisk));
     expect(() => loadPromptEnhancementRun("pe-run-1", { evidenceDir })).toThrow(/integrity/);
+  });
+
+  it("fails closed on tampered candidate rejection metadata", () => {
+    const evidenceDir = tempEvidenceDir();
+    const { location } = recordPromptEnhancementRun(
+      recordInput({
+        candidateRejections: [
+          {
+            candidateId: "candidate-fast",
+            profile: "fast",
+            aggregateScore: 0.61,
+            reason: "lower-aggregate-score",
+          },
+        ],
+      }),
+      { evidenceDir },
+    );
+    const onDisk = JSON.parse(readFileSync(location, "utf8")) as Record<string, unknown>;
+    const rejections = onDisk.candidateRejections as Record<string, unknown>[];
+    const first = rejections[0];
+    if (first === undefined) throw new Error("expected candidate rejection fixture");
+    first.reason = "lower-tie-break-rank";
+    writeFileSync(location, JSON.stringify(onDisk));
+
+    expect(() => loadPromptEnhancementRun("pe-run-1", { evidenceDir })).toThrow(
+      /candidateRejections integrity/,
+    );
   });
 
   it("fails closed on a tampered safety/status field covered by the record hash", () => {

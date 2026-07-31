@@ -11,12 +11,16 @@ import type {
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
   QualityIntelligenceInlineSource,
+  QualityIntelligenceRetentionPolicyId,
   QualityIntelligenceUiRetentionNotice,
   QualityIntelligenceUiRunSummary,
 } from "@oscharko-dev/keiko-contracts";
+import { isQualityIntelligenceRetentionPolicyId } from "@oscharko-dev/keiko-contracts";
 import { useQiTranslate as useTranslate, type I18nTranslate } from "./qi-i18n";
 import { deleteQiRun, fetchQiRuns } from "@/lib/quality-intelligence-api";
 import { RunLauncher } from "./RunLauncher";
+import { useQualityIntelligenceRetentionSettings } from "@/app/components/desktop/hooks/qualityIntelligenceRetentionSettings";
+import { NATIVE_FIELDSET_RESET_STYLE } from "@/app/components/desktop/native-element-styles";
 import {
   StatusBadge,
   ReviewBadge,
@@ -200,13 +204,13 @@ function RunRow({
         // Step 2: inline confirm strip — Confirm + Cancel as siblings in a group.
         // Escape is handled on the focusable buttons (not this group container) so it stays within
         // jsx-a11y's interactive-element rule; focus is always on Confirm or Cancel while open.
-        <div
+        <fieldset
           className="qi-cand-actions"
-          role="group"
           aria-label={t("qi.hub.confirmDeleteGroup", {
             requestedAt: formatDate(run.requestedAt),
           })}
           style={{
+            ...NATIVE_FIELDSET_RESET_STYLE,
             display: "flex",
             alignItems: "center",
             gap: 4,
@@ -251,7 +255,7 @@ function RunRow({
           >
             {t("common.cancel")}
           </button>
-        </div>
+        </fieldset>
       )}
     </li>
   );
@@ -368,6 +372,44 @@ function RetentionNotice({
   );
 }
 
+function RetentionSettings({
+  policies,
+  selectedPolicyId,
+  onChange,
+  t,
+}: {
+  readonly policies: readonly QualityIntelligenceUiRetentionNotice[];
+  readonly selectedPolicyId: string;
+  readonly onChange: (policyId: QualityIntelligenceRetentionPolicyId) => void;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (policies.length === 0) return null;
+  return (
+    <label className="qi-field qi-field-inline">
+      <span className="qi-field-label">{t("qi.hub.retentionPolicy")}</span>
+      <select
+        className="qi-select"
+        value={selectedPolicyId}
+        aria-label={t("qi.hub.retentionPolicy")}
+        onChange={(event) => {
+          if (isQualityIntelligenceRetentionPolicyId(event.currentTarget.value)) {
+            onChange(event.currentTarget.value);
+          }
+        }}
+      >
+        {policies.map((policy) => (
+          <option key={policy.policyId} value={policy.policyId}>
+            {t("qi.hub.retentionOption", {
+              days: policy.retainedDays,
+              max: policy.maxRunArtifacts,
+            })}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 interface RunsListBodyProps {
   readonly loading: boolean;
   readonly error: string | null;
@@ -470,6 +512,10 @@ export function QiHubPanel({
   // Automatic-deletion policy reported by the route; null until the first load resolves, and left
   // null by a server that reports none — the UI must never invent a retention claim.
   const [retention, setRetention] = useState<QualityIntelligenceUiRetentionNotice | null>(null);
+  const [retentionPolicies, setRetentionPolicies] = useState<
+    readonly QualityIntelligenceUiRetentionNotice[]
+  >([]);
+  const { retentionPolicyId, setRetentionPolicyId } = useQualityIntelligenceRetentionSettings();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [visibleRuns, setVisibleRuns] = useState(INITIAL_VISIBLE_RUNS);
@@ -500,6 +546,7 @@ export function QiHubPanel({
       setTotalRunIds(res.totalRunIds);
       setTruncated(res.truncated);
       setRetention(res.retention ?? null);
+      setRetentionPolicies(res.retentionPolicies ?? []);
     } catch (err) {
       setError(formatError(err));
     } finally {
@@ -555,6 +602,7 @@ export function QiHubPanel({
         connectedFigmaSnapshotRunIds={connectedFigmaSnapshotRunIds}
         connectedFigmaSnapshotSources={connectedFigmaSnapshotSources}
         connectedImageSources={connectedImageSources}
+        retentionPolicyId={retentionPolicyId}
       />
       <section className="qi-hub-runs" aria-label={t("qi.hub.runsAria")}>
         <header className="qi-col-header">
@@ -604,7 +652,18 @@ export function QiHubPanel({
         </div>
         {/* Outside the list body on purpose: the body early-returns for the loading/error/empty
             states, and an empty list is exactly when a user most needs to know why it is empty. */}
-        <RetentionNotice retention={retention} t={t} />
+        <RetentionSettings
+          policies={retentionPolicies}
+          selectedPolicyId={retentionPolicyId}
+          onChange={setRetentionPolicyId}
+          t={t}
+        />
+        <RetentionNotice
+          retention={
+            retentionPolicies.find((policy) => policy.policyId === retentionPolicyId) ?? retention
+          }
+          t={t}
+        />
       </section>
     </div>
   );

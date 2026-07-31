@@ -208,6 +208,7 @@ describe("production coding runtime BFF", () => {
         reconcile: () => Promise.resolve({ ok: true, status: "stopped" }),
         health: () => ({ status: "stopped" }),
         pendingApprovalReview: () => undefined,
+        result: () => undefined,
       }),
       mintLaunch: {
         resolve: (input) => {

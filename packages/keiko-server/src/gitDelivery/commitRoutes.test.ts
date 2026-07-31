@@ -27,6 +27,9 @@ import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
+import { createWorkspaceMutexRegistry } from "../task-workspace/mutex.js";
+import { createEditorSettingsControlService } from "../editor/settings/editorSettingsControl.js";
+import { createEditorSettingsStore } from "../editor/settings/editorSettingsStore.js";
 import type { RouteContext } from "../routes.js";
 import {
   createHandleCommitExecute,
@@ -133,6 +136,7 @@ let port: number;
 let staticRoot: string;
 let store: UiStore;
 let projectId: string;
+const settingsStateDirs: string[] = [];
 
 function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   return {
@@ -208,11 +212,36 @@ function seams(overrides: Partial<GitDeliveryExecutionSeams> = {}): GitDeliveryE
     snapshotReader: () => Promise.resolve(SNAPSHOT),
     stagedPathsReader: () => Promise.resolve(["packages/keiko-ui/a.ts", "docs/b.md"]),
     conflictMarkerReader: () => Promise.resolve(0),
+    branchProtectionReader: () => Promise.resolve({ outcome: "unprotected" }),
     now: () => 1_700_000_000_000,
     newActionId: () => "action-test-1",
     policyPacks: { repoPack: ALLOW_LOCAL_PACK },
     ...overrides,
   };
+}
+
+async function repositoryNativeSettings(): Promise<
+  NonNullable<UiHandlerDeps["editorSettingsControl"]>
+> {
+  const stateDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-commit-settings-")));
+  settingsStateDirs.push(stateDir);
+  const control = createEditorSettingsControlService({
+    store: createEditorSettingsStore({ stateDir }),
+    mutex: createWorkspaceMutexRegistry(),
+  });
+  const mutation = await control.mutate({
+    action: "set",
+    expectedRevision: 0,
+    idempotencyKey: "commit-policy-repository-native",
+    scope: "user",
+    values: { gitCommitMessagePolicy: "repository-native" },
+  });
+  if (mutation.kind !== "ok") {
+    throw new Error(
+      `failed to configure commit-message policy fixture: ${JSON.stringify(mutation)}`,
+    );
+  }
+  return control;
 }
 
 function issueCommitApproval(
@@ -259,6 +288,9 @@ beforeEach(() => {
 afterEach(() => {
   store.close();
   rmSync(staticRoot, { recursive: true, force: true });
+  for (const stateDir of settingsStateDirs.splice(0)) {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
 });
 
 describe("commit routes — central enforcement (real dispatch)", () => {
@@ -383,6 +415,58 @@ describe("commit preview — read-only verification context (AC3)", () => {
     expect(body.policyOutcome).toBe("constrained");
   });
 
+  it("discloses a trusted signed-commit requirement before commit", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({
+        branchProtectionReader: (_workspace, remoteAlias, branchName) => {
+          expect(remoteAlias).toBe("origin");
+          expect(branchName).toBe("feature/x");
+          return Promise.resolve({
+            outcome: "protected",
+            protection: {
+              deletionAllowed: false,
+              forcePushAllowed: false,
+              linearHistoryRequired: true,
+              signaturesRequired: true,
+              requiredReviewCount: 0,
+              requiredStatusCheckCount: 1,
+            },
+          });
+        },
+      }),
+    });
+    const res = await handler(
+      ctxFor(PREVIEW, {
+        schemaVersion: "1",
+        projectId,
+        messageDraft: "feat(ui): add governed flow",
+      }),
+      deps(),
+    );
+    const body = res.body as GitDeliveryCommitPreviewBody;
+    expect(body.signatureRequirement).toBe("required");
+    expect(body.preflightFindingCodes).toContain("signed-commits-required");
+  });
+
+  it("does not treat a failed branch-protection read as no signature requirement", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({
+        branchProtectionReader: () => Promise.resolve({ outcome: "unavailable" }),
+      }),
+    });
+    const res = await handler(
+      ctxFor(PREVIEW, {
+        schemaVersion: "1",
+        projectId,
+        messageDraft: "feat(ui): add governed flow",
+      }),
+      deps(),
+    );
+    const body = res.body as GitDeliveryCommitPreviewBody;
+    expect(body.signatureRequirement).toBe("unavailable");
+    expect(body.preflightFindingCodes).toContain("branch-protection-unavailable");
+  });
+
   it("accepts a clean conventional message in the same scope", async () => {
     const handler = createHandleCommitPreview({
       execution: seams({ stagedPathsReader: () => Promise.resolve(["packages/keiko-ui/a.ts"]) }),
@@ -398,6 +482,32 @@ describe("commit preview — read-only verification context (AC3)", () => {
     const body = res.body as GitDeliveryCommitPreviewBody;
     expect(body.intent.warnings).not.toContain("mixed-scope");
     expect(body.messageValidation.ok).toBe(true);
+  });
+
+  it("uses one persisted Repository Native selection for preview and execute", async () => {
+    const editorSettingsControl = await repositoryNativeSettings();
+    const adapter = recordingAdapter();
+    const routeSeams = seams({ adapterFactory: () => adapter.adapter });
+    const preview = await createHandleCommitPreview({ execution: routeSeams })(
+      ctxFor(PREVIEW, {
+        schemaVersion: "1",
+        projectId,
+        messageDraft: "repository native subject",
+      }),
+      deps({ editorSettingsControl }),
+    );
+    expect((preview.body as GitDeliveryCommitPreviewBody).messageValidation).toEqual({ ok: true });
+
+    const execute = await createHandleCommitExecute({ execution: routeSeams })(
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message: "repository native subject",
+      }),
+      deps({ editorSettingsControl }),
+    );
+    expect(execute.body).toMatchObject({ status: "succeeded" });
+    expect(adapter.calls()).toEqual(["commit"]);
   });
 });
 

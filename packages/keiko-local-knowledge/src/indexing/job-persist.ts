@@ -12,6 +12,7 @@
 // to documents — the token is purely diagnostic for now and is consumed by #198 UI later.
 
 import type {
+  ChunkId,
   IndexingJobError,
   IndexingJobRecord,
   IndexingJobStatus,
@@ -174,10 +175,16 @@ export function isJobCancellationRequested(db: DatabaseSync, id: string): boolea
 // ─── Row → IndexingJobRecord ──────────────────────────────────────────────────
 function parseSourceIds(json: string): readonly KnowledgeSourceId[] {
   const parsed: unknown = JSON.parse(json);
-  if (!Array.isArray(parsed)) return [];
-  return parsed
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry as KnowledgeSourceId);
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every(
+      (entry): entry is string =>
+        typeof entry === "string" && entry.length > 0 && entry.trim() === entry,
+    )
+  ) {
+    return [];
+  }
+  return parsed.map((entry) => entry as KnowledgeSourceId);
 }
 
 const VALID_STATUSES: ReadonlySet<IndexingJobStatus> = new Set<IndexingJobStatus>([
@@ -225,5 +232,14 @@ export function rowToIndexingJobRecord(row: IndexingJobRow): IndexingJobRecord {
     failedDocuments: row.failed_documents,
     skippedDocuments: row.skipped_documents,
     ...optionalJobFields(row),
+  };
+}
+
+export function rowToResumableIndexingJobRecord(
+  row: IndexingJobRow,
+): IndexingJobRecord & { readonly resumeToken?: ChunkId } {
+  return {
+    ...rowToIndexingJobRecord(row),
+    ...(row.resume_token !== null ? { resumeToken: row.resume_token as ChunkId } : {}),
   };
 }

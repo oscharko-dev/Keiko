@@ -18,6 +18,7 @@ import {
   loadQualityIntelligenceRun,
   loadQualityIntelligenceCandidates,
   QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID,
+  QUALITY_INTELLIGENCE_RETENTION_PROFILES,
   type QualityIntelligenceCandidateRow,
 } from "@oscharko-dev/keiko-evidence";
 import type {
@@ -343,12 +344,11 @@ function parseLimitParam(ctx: RouteContext): LimitOutcome {
 /**
  * The automatic-deletion disclosure for the run list (0.3.0 release audit).
  *
- * `enforceQiRetentionAtStartup` purges runs on every server start under the profile every run is
- * recorded with — `persistRun` in keiko-workflows writes exactly
- * `QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID`. Reading the same constant and the same
- * profile table the purge reads means the disclosed numbers cannot drift away from the enforced
- * ones; restating "30 days / 100 runs" here would silently lie the moment the profile moved.
- * Returns undefined only if the default id ever stops resolving — better no claim than a wrong one.
+ * `enforceQiRetentionAtStartup` purges every run under the profile recorded on its manifest. This
+ * legacy singular field projects the fallback profile for older clients; `retentionPolicies`
+ * exposes every selectable profile to current clients, which render the user's persisted choice.
+ * Both projections read the same profile table as enforcement, so no route restates retention
+ * limits. Returns undefined only if the fallback id stops resolving.
  */
 function retentionNotice(): QualityIntelligenceUiRetentionNotice | undefined {
   const profile = getQualityIntelligenceRetentionProfile(
@@ -360,6 +360,14 @@ function retentionNotice(): QualityIntelligenceUiRetentionNotice | undefined {
     retainedDays: profile.retainedDays,
     maxRunArtifacts: profile.maxRunArtifacts,
   };
+}
+
+function retentionPolicyOptions(): readonly QualityIntelligenceUiRetentionNotice[] {
+  return Object.values(QUALITY_INTELLIGENCE_RETENTION_PROFILES).map((profile) => ({
+    policyId: profile.id,
+    retainedDays: profile.retainedDays,
+    maxRunArtifacts: profile.maxRunArtifacts,
+  }));
 }
 
 export function handleListQiRuns(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
@@ -404,6 +412,7 @@ export function handleListQiRuns(ctx: RouteContext, deps: UiHandlerDeps): RouteR
       limit,
       totalRunIds,
       truncated,
+      retentionPolicies: retentionPolicyOptions(),
       ...(retention !== undefined ? { retention } : {}),
     };
     return { status: 200, body };

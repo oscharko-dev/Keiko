@@ -1,8 +1,9 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PromptEnhancerPanel } from "./PromptEnhancerPanel";
 import { ApiError } from "@/lib/api";
 import type { ModelCapability, PromptEnhancementWireResponse } from "@/lib/types";
+import { I18nProvider } from "@/lib/i18n";
 
 function makeResponse(overrides: Record<string, unknown> = {}): PromptEnhancementWireResponse {
   const base = {
@@ -105,7 +106,7 @@ function makeResponse(overrides: Record<string, unknown> = {}): PromptEnhancemen
       reason: "evidence-recorded",
       runId: "pe-run-1",
       manifestUrl: "/api/prompt-enhancement/evidence/pe-run-1",
-      peEvidenceSchemaVersion: 2,
+      peEvidenceSchemaVersion: 3,
       recordIntegritySha256: "b".repeat(64),
     },
   };
@@ -158,6 +159,7 @@ function setExecCommand(result: boolean): ReturnType<typeof vi.fn> {
 
 describe("PromptEnhancerPanel", () => {
   afterEach(() => {
+    window.localStorage.removeItem("keiko.locale");
     if (clipboardDescriptor === undefined) {
       Reflect.deleteProperty(navigator, "clipboard");
     } else {
@@ -271,6 +273,85 @@ describe("PromptEnhancerPanel", () => {
     await screen.findByTestId("pe-scorecards");
     const winnerRow = screen.getByRole("row", { name: /precise/ });
     expect(winnerRow).toHaveTextContent("★");
+  });
+
+  it("renders rejected candidates with score metadata and translated body-free reasons", async () => {
+    const base = makeResponse();
+    const response = makeResponse({
+      candidates: {
+        ...base.candidates,
+        rejected: [
+          {
+            candidateId: "cand-fast",
+            profile: "fast",
+            aggregateScore: 0.71,
+            reason: "lower-aggregate-score",
+            promptText: "private rejected prompt body",
+          },
+          {
+            candidateId: "cand-unsafe",
+            profile: "technical",
+            aggregateScore: null,
+            reason: "safety-validation-failed",
+          },
+        ],
+      },
+    });
+    render(
+      <PromptEnhancerPanel
+        enhanceImpl={vi.fn().mockResolvedValue(response)}
+        fetchModelsImpl={noModels}
+      />,
+    );
+    typeDraft("x");
+    fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+
+    const table = await screen.findByTestId("pe-rejections");
+    expect(screen.getByRole("heading", { name: "Rejected candidates" })).toBeInTheDocument();
+    const fast = within(table).getByRole("row", { name: /cand-fast/ });
+    expect(fast).toHaveTextContent("0.710");
+    expect(fast).toHaveTextContent("Ranked below the selected candidate");
+    const unsafe = within(table).getByRole("row", { name: /cand-unsafe/ });
+    expect(unsafe).toHaveTextContent("Not scored");
+    expect(unsafe).toHaveTextContent("Rejected by safety validation");
+    expect(table).not.toHaveTextContent("lower-aggregate-score");
+    expect(table).not.toHaveTextContent("safety-validation-failed");
+    expect(table).not.toHaveTextContent("private rejected prompt body");
+  });
+
+  it("renders candidate rejection reasons in German", async () => {
+    window.localStorage.setItem("keiko.locale", "de");
+    const base = makeResponse();
+    const response = makeResponse({
+      candidates: {
+        ...base.candidates,
+        rejected: [
+          {
+            candidateId: "cand-budget",
+            profile: "research",
+            aggregateScore: null,
+            reason: "exceeded-token-budget",
+          },
+        ],
+      },
+    });
+    render(
+      <I18nProvider>
+        <PromptEnhancerPanel
+          enhanceImpl={vi.fn().mockResolvedValue(response)}
+          fetchModelsImpl={noModels}
+        />
+      </I18nProvider>,
+    );
+    fireEvent.change(screen.getByLabelText("Raw prompt"), { target: { value: "x" } });
+    fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+
+    const table = await screen.findByTestId("pe-rejections");
+    expect(
+      await screen.findByRole("heading", { name: "Abgelehnte Kandidaten" }),
+    ).toBeInTheDocument();
+    expect(table).toHaveTextContent("Token-Budget überschritten");
+    expect(table).not.toHaveTextContent("exceeded-token-budget");
   });
 
   // Issue #1297 — the scorecards adopt the shared DS 0.4.0 .c-table data-grid component,

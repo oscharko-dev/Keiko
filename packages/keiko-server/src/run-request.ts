@@ -8,6 +8,8 @@
 // them.
 
 import {
+  isCodingWorkbenchMode,
+  type CodingWorkbenchMode,
   type SpokenActionAuditRecord,
   type VoiceProfile,
   type VoiceTranscriptSource,
@@ -29,6 +31,7 @@ export interface RunRequest {
   readonly kind: RunKind;
   readonly modelId: string;
   readonly apply: boolean;
+  readonly requestedMode?: CodingWorkbenchMode | undefined;
   // The workflow/task input object, passed through to the entry point after shape validation.
   readonly input: Record<string, unknown>;
   // Optional per-run limits, passed through to the workflow/harness.
@@ -52,6 +55,7 @@ export interface RunRequestError {
 interface RunRequestCore {
   readonly kind: RunKind;
   readonly modelId: string;
+  readonly requestedMode: CodingWorkbenchMode;
   readonly input: Record<string, unknown>;
   readonly limits: Record<string, unknown> | undefined;
 }
@@ -420,6 +424,10 @@ function parseRunRequestCore(parsed: Record<string, unknown>): RunRequestCore | 
   if (typeof modelId !== "string" || modelId.length === 0) {
     return { code: "BAD_REQUEST", message: "A non-empty modelId is required." };
   }
+  const requestedMode = parsed.requestedMode ?? "governed-assist";
+  if (!isCodingWorkbenchMode(requestedMode)) {
+    return { code: "BAD_REQUEST", message: "requestedMode is invalid." };
+  }
   const input = parsed.input;
   if (!isRecord(input)) {
     return { code: "BAD_REQUEST", message: "An input object is required." };
@@ -432,6 +440,7 @@ function parseRunRequestCore(parsed: Record<string, unknown>): RunRequestCore | 
   return {
     kind,
     modelId,
+    requestedMode,
     input,
     limits: isRecord(limits) ? limits : undefined,
   };
@@ -473,6 +482,7 @@ function buildRunRequest(core: RunRequestCore, metadata: GovernedHandoffMetadata
     // (route 9), which re-invokes the workflow through the gated path. A one-shot create-with-apply
     // would bypass the explicit review→apply step, so the body flag is deliberately ignored here.
     apply: false,
+    requestedMode: core.requestedMode,
     input: core.input,
     limits: core.limits,
     ...(metadata.governedHandoff === undefined

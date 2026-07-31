@@ -955,7 +955,7 @@ describe("desktop chat SSE streaming handler", () => {
       ]),
     );
     expect(store.listMessages(chatId)).toMatchObject([
-      { role: "user", content: "keep the transcript only" },
+      { role: "user", content: "keep the transcript only", turnState: "cancelled" },
       { role: "user", content: "successor waits for cancelled provider" },
       { role: "assistant", content: "successor answer" },
     ]);
@@ -1004,7 +1004,7 @@ describe("desktop chat SSE streaming handler", () => {
 
     await expect(outcome).resolves.toMatchObject({ status: 499 });
     expect(store.listMessages(chatId)).toMatchObject([
-      { role: "user", content: "generic provider abort" },
+      { role: "user", content: "generic provider abort", turnState: "cancelled" },
     ]);
     expect(
       store.inspectChatTurn(
@@ -1749,7 +1749,7 @@ describe("desktop chat SSE streaming handler", () => {
     );
     await started.promise;
 
-    store.replaceAssistantMessageContent(assistant.id, "parallel edit", assistant.timestamp + 1);
+    store.createAssistantResponseVersion(assistant.id, "parallel edit", assistant.timestamp + 1);
     response.resolve(normalizedResponse("stale regenerated answer"));
 
     await expect(outcome).resolves.toMatchObject({
@@ -1804,6 +1804,7 @@ describe("desktop chat SSE streaming handler", () => {
     expect(modelCalls).toBe(0);
     expect(store.findMessageById(assistant.id)?.content).toBe("grounded answer");
     expect(store.findMessageById(assistant.id)?.groundedAnswer).toEqual(groundedBeforeDetach);
+    expect(store.findMessageById(assistant.id)?.responseVersions).toBeUndefined();
   });
 
   it("preserves a concurrent title and model patch after regeneration", async () => {

@@ -66,16 +66,18 @@ export function sanitizeField(value, fallback) {
 }
 
 export function selectFindings(payload, { scope, changed }) {
-  const findings = payload.issues.map((issue) => ({
+  const touched = new Set(changed);
+  const selectedIssues =
+    scope === SCOPE_CHANGED
+      ? payload.issues.filter((issue) => touched.has(componentPath(issue.component)))
+      : payload.issues;
+  return selectedIssues.map((issue) => ({
     rule: sanitizeField(issue.rule, "unknown"),
     severity: sanitizeField(issue.severity, "UNKNOWN"),
     path: sanitizeField(componentPath(issue.component), ""),
     line: typeof issue.line === "number" && Number.isSafeInteger(issue.line) ? issue.line : 0,
     message: sanitizeField(issue.message, ""),
   }));
-  if (scope !== SCOPE_CHANGED) return findings;
-  const touched = new Set(changed);
-  return findings.filter((finding) => touched.has(finding.path));
 }
 
 /**
@@ -107,18 +109,38 @@ function changedFiles(raw) {
     .filter((entry) => entry !== "");
 }
 
+function changedFilesFromJson(raw) {
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "string")) {
+    throw new TypeError("the changed-file JSON must be an array of strings");
+  }
+  return parsed;
+}
+
 export function isTruncated(payload) {
   const total = typeof payload.total === "number" ? payload.total : payload.issues.length;
   return total > payload.issues.length;
 }
 
+function truncatedVerdictIsIndeterminate(payload, scope, changed) {
+  if (!isTruncated(payload)) return false;
+  if (scope !== SCOPE_CHANGED) return true;
+  return changed.length > 0;
+}
+
 export function runLocalSonarReport(io = {}) {
   const scope = io.scope ?? process.env.KEIKO_SONAR_SCOPE ?? SCOPE_CHANGED;
-  const changed = changedFiles(io.changed ?? process.env.KEIKO_SONAR_CHANGED ?? "");
+  const changedJson = io.changedJson ?? process.env.KEIKO_SONAR_CHANGED_JSON;
+  const changed =
+    changedJson === undefined
+      ? changedFiles(io.changed ?? process.env.KEIKO_SONAR_CHANGED ?? "")
+      : changedFilesFromJson(changedJson);
   const payload = parseIssuePayload(io.input ?? "");
   const findings = selectFindings(payload, { scope, changed });
   (io.log ?? writeOut)(renderFindings(findings, payload, scope));
-  return { findings, truncated: isTruncated(payload) };
+  const truncated = isTruncated(payload);
+  const indeterminate = truncatedVerdictIsIndeterminate(payload, scope, changed);
+  return { findings, indeterminate, truncated };
 }
 
 async function readStdin(stream = process.stdin) {
@@ -136,10 +158,11 @@ export async function executeLocalSonarCli(io = {}) {
   const error = io.error ?? writeErr;
   try {
     const input = io.input ?? (await (io.read ?? readStdin)());
-    const { findings, truncated } = (io.run ?? runLocalSonarReport)({ ...io, input });
-    if (truncated) {
+    const { findings, indeterminate } = (io.run ?? runLocalSonarReport)({ ...io, input });
+    if (indeterminate) {
       // A capped page can hide the very finding this run exists to catch, so an empty scoped list
-      // over a truncated payload is not a pass - it is an unknown, and unknown fails closed.
+      // over a truncated payload is not a pass when the verdict covers any files. A known-empty
+      // diff cannot contain a hidden finding and remains a deterministic pass.
       error("local-sonar: FAIL - the analyzer returned a truncated issue list; narrow the scope.");
       exit(1);
       return;

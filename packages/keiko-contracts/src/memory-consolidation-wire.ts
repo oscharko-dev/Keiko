@@ -50,6 +50,16 @@ export interface MemoryConsolidationSuggestedResolutionWire {
   readonly rationale: string;
 }
 
+export const MEMORY_CONSOLIDATION_EXCERPT_MAX_CHARS = 240;
+
+export interface MemoryConsolidationExcerptWire {
+  readonly memoryId: MemoryId;
+  readonly bodyExcerpt: string;
+  readonly truncated: boolean;
+  readonly status: MemoryStatus;
+  readonly expectedUpdatedAt: number;
+}
+
 export interface MemoryConsolidationReviewItemWire {
   readonly id: string;
   readonly reason: MemoryConsolidationReviewReasonWire;
@@ -60,6 +70,32 @@ export interface MemoryConsolidationReviewItemWire {
   readonly proposedEdges?: readonly MemoryEdge[];
   readonly detectedAt: number;
   readonly suggestedResolution?: MemoryConsolidationSuggestedResolutionWire;
+  // Response-only, locally loaded review context. The BFF bounds and redacts these excerpts and
+  // never persists them in the consolidation registry or evidence store.
+  readonly memoryExcerpts: readonly MemoryConsolidationExcerptWire[];
+}
+
+export interface MemoryConsolidationApplyPreconditionWire {
+  readonly memoryId: MemoryId;
+  readonly expectedUpdatedAt: number;
+}
+
+export interface MemoryConsolidationApplyRequestWire {
+  readonly preconditions: readonly MemoryConsolidationApplyPreconditionWire[];
+}
+
+export type MemoryConsolidationApplyOutcomeWire = "applied" | "conflicted";
+
+export interface MemoryConsolidationApplicationWire {
+  readonly itemId: string;
+  readonly outcome: MemoryConsolidationApplyOutcomeWire;
+  readonly winnerMemoryId: MemoryId;
+  readonly affectedMemoryIds: readonly MemoryId[];
+  readonly appliedAt: number;
+}
+
+export interface MemoryConsolidationApplyResponseWire {
+  readonly application: MemoryConsolidationApplicationWire;
 }
 
 export interface MemoryConsolidationSummaryStatusWire {

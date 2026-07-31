@@ -43,6 +43,7 @@ import {
   MEMORY_TYPES,
   MEMORY_SENSITIVITIES,
   validateMemoryScope,
+  validateMemoryAcceptance,
   type MemoryConversationId,
   type MemoryAuditEvent,
   type MemoryEdge,
@@ -426,31 +427,37 @@ function invalidSinceResult(): RouteResult {
 
 function parseRecentSince(ctx: RouteContext): number | null | RouteResult {
   const values = ctx.url.searchParams.getAll("since");
-  if (values.length === 0) return null;
-  const raw = values[0];
-  if (
-    values.length !== 1 ||
-    raw === undefined ||
-    raw.length === 0 ||
-    raw.length > MAX_RECENT_SINCE_CHARS ||
-    !/^\d+$/.test(raw)
-  ) {
-    return invalidSinceResult();
+  let result: number | null | RouteResult = null;
+  if (values.length > 0) {
+    const raw = values[0];
+    if (
+      values.length !== 1 ||
+      raw === undefined ||
+      raw.length === 0 ||
+      raw.length > MAX_RECENT_SINCE_CHARS ||
+      !/^\d+$/.test(raw)
+    ) {
+      result = invalidSinceResult();
+    } else {
+      const since = Number(raw);
+      result = Number.isSafeInteger(since) ? since : invalidSinceResult();
+    }
   }
-  const since = Number(raw);
-  return Number.isSafeInteger(since) ? since : invalidSinceResult();
+  return result;
 }
 
 function parseRecentOrder(ctx: RouteContext): "asc" | "desc" | RouteResult {
   const values = ctx.url.searchParams.getAll("order");
-  if (values.length === 0) return "desc";
-  if (values.length !== 1 || (values[0] !== "asc" && values[0] !== "desc")) {
-    return {
+  let result: "asc" | "desc" | RouteResult = "desc";
+  if (values.length === 1 && (values[0] === "asc" || values[0] === "desc")) {
+    result = values[0];
+  } else if (values.length > 0) {
+    result = {
       status: 400,
       body: errorBody("BAD_REQUEST", "order must be either asc or desc."),
     };
   }
-  return values[0];
+  return result;
 }
 
 function hasUnsupportedRecentFilter(ctx: RouteContext): boolean {
@@ -724,10 +731,13 @@ function buildEditPatch(input: EditInput, existing: MemoryRecord): Record<string
 
 function memoryIdFromParams(ctx: RouteContext): MemoryId | RouteResult {
   const { id } = ctx.params;
+  let result: MemoryId | RouteResult;
   if (id === undefined || id.length === 0) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
+    result = { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
+  } else {
+    result = id as MemoryId;
   }
-  return id as MemoryId;
+  return result;
 }
 
 async function readEditRouteInput(ctx: RouteContext): Promise<EditInput | RouteResult> {
@@ -1705,14 +1715,20 @@ function acceptedCorrectionType(
   return first;
 }
 
-function buildAcceptProposalPatch(origins: readonly CorrectionSupersessionOrigin[]): {
+function buildAcceptProposalPatch(
+  origins: readonly CorrectionSupersessionOrigin[],
+  bodyOverride?: string,
+): {
   readonly status: "accepted";
   readonly type?: MemoryType;
+  readonly body?: string;
 } {
   const correctionType = acceptedCorrectionType(origins);
-  return correctionType === undefined
-    ? { status: "accepted" }
-    : { status: "accepted", type: correctionType };
+  return {
+    status: "accepted",
+    ...(correctionType === undefined ? {} : { type: correctionType }),
+    ...(bodyOverride === undefined ? {} : { body: bodyOverride }),
+  };
 }
 
 function buildCorrectionAcceptanceUpdates(
@@ -1775,12 +1791,13 @@ function acceptMemoryProposal(
   vault: MemoryVaultStore,
   deps: UiHandlerDeps,
   id: MemoryId,
+  bodyOverride?: string,
 ): RouteResult {
   const existing = ensureProposedMemory(vault.getMemory(id));
   if (isRouteResult(existing)) return existing;
   const nowMs = Date.now();
   const origins = loadCorrectionSupersessionOrigins(vault, existing);
-  const acceptPatch = buildAcceptProposalPatch(origins);
+  const acceptPatch = buildAcceptProposalPatch(origins, bodyOverride);
   const updates = buildCorrectionAcceptanceUpdates(id, acceptPatch, origins, nowMs);
   const [updated] = vault.updateMemories(updates);
   if (updated === undefined) {
@@ -1798,7 +1815,32 @@ function acceptMemoryProposal(
   return { status: 200, body: { memory: redactMemory(deps, updated) } };
 }
 
-export function handleAcceptMemoryProposal(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+function parseAcceptBody(
+  raw: Record<string, unknown>,
+  id: MemoryId,
+  deps: UiHandlerDeps,
+): string | undefined | RouteResult {
+  if (raw.bodyOverride === undefined) return undefined;
+  const result = validateMemoryAcceptance({
+    schemaVersion: "1",
+    proposalId: id,
+    mintedMemoryId: id,
+    reviewerId: reviewerIdForMemoryMutation(deps),
+    acceptedAt: Date.now(),
+    bodyOverride: raw.bodyOverride,
+  });
+  return result.ok
+    ? result.value.bodyOverride
+    : {
+        status: 400,
+        body: errorBody("BAD_REQUEST", "bodyOverride must be a bounded safe memory body."),
+      };
+}
+
+export async function handleAcceptMemoryProposal(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
 
@@ -1806,9 +1848,13 @@ export function handleAcceptMemoryProposal(ctx: RouteContext, deps: UiHandlerDep
   if (id === undefined || id.length === 0) {
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
+  const body = await readJsonBody(ctx.req);
+  if (isRouteResult(body)) return body;
+  const bodyOverride = parseAcceptBody(body, id as MemoryId, deps);
+  if (isRouteResult(bodyOverride)) return bodyOverride;
 
   try {
-    return acceptMemoryProposal(vault, deps, id as MemoryId);
+    return acceptMemoryProposal(vault, deps, id as MemoryId, bodyOverride);
   } catch (err) {
     return memoryMutationErrorBody(err, "Failed to accept proposal.");
   }

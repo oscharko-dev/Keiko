@@ -532,6 +532,7 @@ async function createGatewayHarness(
         capability === MODEL_CAPABILITY && audience === "model-gateway"
           ? { ok: true, binding: { runId: RUN_ID } }
           : { ok: false },
+      reservePromptTokens: () => ({ ok: true, runId: RUN_ID }),
     },
     openCodeGatewayReadinessRegistry: readiness,
     codingWorkbenchEvidenceStore: {

@@ -1,6 +1,7 @@
 // Tests for the Prompt Enhancement strict-schema gate (Issue #1313).
 
 import { describe, expect, it } from "vitest";
+import { PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT } from "@oscharko-dev/keiko-contracts";
 import {
   PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION,
   validatePromptEnhancementEvidenceManifest,
@@ -20,6 +21,7 @@ function validManifest(): Record<string, unknown> {
     appliedGroundingDirectives: ["disclose-uncertainty"],
     assumptions: [],
     candidateScores: [],
+    candidateRejections: [],
     safety: {
       decision: "accepted",
       verificationStatus: "passed",
@@ -85,7 +87,57 @@ describe("validatePromptEnhancementEvidenceManifest", () => {
     expect(result.reason).toContain("integrityHashes.record");
   });
 
+  it("accepts bounded, content-free candidate rejection records", () => {
+    const result = validatePromptEnhancementEvidenceManifest({
+      ...validManifest(),
+      candidateRejections: [
+        {
+          candidateId: "candidate-fast",
+          profile: "fast",
+          aggregateScore: 0.61,
+          reason: "lower-aggregate-score",
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects prompt content and unknown fields in candidate rejection records", () => {
+    const result = validatePromptEnhancementEvidenceManifest({
+      ...validManifest(),
+      candidateRejections: [
+        {
+          candidateId: "candidate-fast",
+          profile: "fast",
+          aggregateScore: 0.61,
+          reason: "lower-aggregate-score",
+          promptText: "private prompt body",
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("candidateRejections[0]");
+    expect(result.reason).toContain("unknown");
+  });
+
+  it("rejects candidate rejection collections beyond the governed candidate bound", () => {
+    const result = validatePromptEnhancementEvidenceManifest({
+      ...validManifest(),
+      candidateRejections: Array.from(
+        { length: PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT + 1 },
+        (_, index) => ({
+          candidateId: `candidate-${String(index)}`,
+          profile: "fast",
+          aggregateScore: null,
+          reason: "exceeded-token-budget",
+        }),
+      ),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("at most");
+  });
+
   it("exposes the current schema version literal", () => {
-    expect(PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION).toBe(2);
+    expect(PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION).toBe(3);
   });
 });

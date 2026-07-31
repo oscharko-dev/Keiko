@@ -1,5 +1,5 @@
 import { dirname } from "node:path";
-import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import type { CapsuleHealth, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import type {
   KnowledgeStore,
   VectorIndexOptions,
@@ -7,6 +7,7 @@ import type {
 } from "@oscharko-dev/keiko-local-knowledge";
 import {
   createLocalKnowledgeStoreVectorIndexPort,
+  findResumableJob,
   KnowledgeStoreError,
   openKnowledgeStore,
   resolveVectorIndexOptions,
@@ -19,19 +20,120 @@ import { localKnowledgeProtectionOptions } from "./localKnowledgeKeyProvider.js"
 import type { UiHandlerDeps } from "./deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 
+type ResumableIndexingJobRecord = NonNullable<ReturnType<typeof findResumableJob>>;
+
 interface RecoverableRunningJobRow {
   readonly id: string;
   readonly capsule_id: string;
   readonly cancellation_requested: number;
 }
 
+export interface IndexingRecoveryCandidate {
+  readonly state: NonNullable<CapsuleHealth["indexingRecovery"]>["state"];
+  readonly job: ResumableIndexingJobRecord;
+}
+
+// eslint-disable-next-line no-control-regex -- durable tokens containing control bytes fail closed
+const RESUME_TOKEN_CONTROL_CHAR = /[\u0000-\u001f\u007f]/u;
+
+function isValidResumeToken(token: ResumableIndexingJobRecord["resumeToken"]): boolean {
+  return (
+    token !== undefined &&
+    token.length > 0 &&
+    token.length <= 1024 &&
+    token.trim() === token &&
+    !RESUME_TOKEN_CONTROL_CHAR.test(token)
+  );
+}
+
+function isValidResumeSourceIds(sourceIds: readonly string[]): boolean {
+  return (
+    sourceIds.length > 0 &&
+    sourceIds.every((sourceId) => sourceId.length > 0 && sourceId.trim() === sourceId)
+  );
+}
+
+function isValidResumableJob(job: ResumableIndexingJobRecord): boolean {
+  return isValidResumeToken(job.resumeToken) && isValidResumeSourceIds(job.sourceIds);
+}
+
+export function findIndexingRecoveryCandidate(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+): IndexingRecoveryCandidate | undefined {
+  const job = findResumableJob(store, capsuleId);
+  if (job === undefined) return undefined;
+  if (
+    localKnowledgeIndexingRegistry.isActiveCapsule(String(capsuleId)) ||
+    localKnowledgeIndexingRegistry.isActiveJob(job.id)
+  ) {
+    return { state: "active", job };
+  }
+  return isValidResumableJob(job) ? { state: "resumable", job } : undefined;
+}
+
+function finalizeAbandonedJob(
+  store: KnowledgeStore,
+  row: RecoverableRunningJobRow,
+  finishedAt: number,
+): void {
+  const cancelled = row.cancellation_requested === 1;
+  store._internal.db
+    .prepare(
+      [
+        "UPDATE indexing_jobs SET",
+        "  status = :status,",
+        "  finished_at = :finished_at,",
+        "  last_error_code = :error_code,",
+        "  last_error_message = :error_message",
+        "WHERE id = :id AND status = 'running'",
+      ].join(" "),
+    )
+    .run({
+      status: cancelled ? "cancelled" : "failed",
+      finished_at: finishedAt,
+      error_code: cancelled ? "CANCELLED" : "INDEXING_INTERRUPTED",
+      error_message: cancelled
+        ? "Indexing was cancelled before the run could be finalized."
+        : "Indexing stopped unexpectedly and cannot be resumed safely.",
+      id: row.id,
+    });
+}
+
+function isActiveRunningRow(row: RecoverableRunningJobRow): boolean {
+  return (
+    localKnowledgeIndexingRegistry.isActiveCapsule(row.capsule_id) ||
+    localKnowledgeIndexingRegistry.isActiveJob(row.id)
+  );
+}
+
+function candidateForRow(
+  store: KnowledgeStore,
+  row: RecoverableRunningJobRow,
+  resumableByCapsule: Map<string, ResumableIndexingJobRecord | undefined>,
+): ResumableIndexingJobRecord | undefined {
+  if (!resumableByCapsule.has(row.capsule_id)) {
+    resumableByCapsule.set(
+      row.capsule_id,
+      findResumableJob(store, row.capsule_id as KnowledgeCapsuleId),
+    );
+  }
+  return resumableByCapsule.get(row.capsule_id);
+}
+
+function shouldPreserveRunningRow(
+  row: RecoverableRunningJobRow,
+  candidate: ResumableIndexingJobRecord | undefined,
+): boolean {
+  return (
+    row.cancellation_requested !== 1 && candidate?.id === row.id && isValidResumableJob(candidate)
+  );
+}
+
 /**
- * Finalize `running` indexing jobs that were orphaned by a crash/restart. A job is left as-is
- * while its capsule or job id is still active in the in-process registry; otherwise it is flipped
- * to `cancelled` (if a cancellation was requested) or `failed`, and its capsule is best-effort
- * marked `error`. Shared verbatim by every store opener that runs on the recovery path so the
- * body cannot drift (GEN-DUP-NEAR-001). The `rows.length === 0` fast path is harmless in every
- * caller and skips `store._internal.now()` when there is nothing to recover.
+ * Preserve the latest valid resumable job per capsule; finalize active-looking rows that cannot
+ * safely resume. In-process jobs are never touched. Repeated recovery is idempotent because a
+ * preserved row remains the same `findResumableJob` candidate and terminal rows leave the query.
  */
 export function recoverAbandonedIndexingJobs(store: KnowledgeStore): void {
   const rows = store._internal.db
@@ -48,34 +150,12 @@ export function recoverAbandonedIndexingJobs(store: KnowledgeStore): void {
     return;
   }
   const finishedAt = store._internal.now();
+  const resumableByCapsule = new Map<string, ResumableIndexingJobRecord | undefined>();
   for (const row of rows) {
-    if (
-      localKnowledgeIndexingRegistry.isActiveCapsule(row.capsule_id) ||
-      localKnowledgeIndexingRegistry.isActiveJob(row.id)
-    ) {
-      continue;
-    }
-    const cancelled = row.cancellation_requested === 1;
-    store._internal.db
-      .prepare(
-        [
-          "UPDATE indexing_jobs SET",
-          "  status = :status,",
-          "  finished_at = :finished_at,",
-          "  last_error_code = :error_code,",
-          "  last_error_message = :error_message",
-          "WHERE id = :id AND status = 'running'",
-        ].join(" "),
-      )
-      .run({
-        status: cancelled ? "cancelled" : "failed",
-        finished_at: finishedAt,
-        error_code: cancelled ? "CANCELLED" : "INDEXING_INTERRUPTED",
-        error_message: cancelled
-          ? "Indexing was cancelled before the run could be finalized."
-          : "Indexing stopped unexpectedly before completion. Restart the run to finish indexing.",
-        id: row.id,
-      });
+    if (isActiveRunningRow(row)) continue;
+    const candidate = candidateForRow(store, row, resumableByCapsule);
+    if (shouldPreserveRunningRow(row, candidate)) continue;
+    finalizeAbandonedJob(store, row, finishedAt);
     try {
       updateCapsuleState(store, row.capsule_id as KnowledgeCapsuleId, "error");
     } catch {

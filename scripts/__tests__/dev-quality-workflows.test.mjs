@@ -131,6 +131,27 @@ describe("dev quality workflows", () => {
     expect(packageJson.scripts["gates:sonar:stop"]).toBe("./docker/gates/run-sonar.sh --stop");
   });
 
+  it("keeps the changed-file verdict when a dynamic [capsuleId] route needs a full scan", () => {
+    const unsafePathFallback = localSonar.match(
+      /elif \[\[ "\$\{unsafe_path\}" == "yes" \]\]; then[\s\S]*?\n {2}else/u,
+    )?.[0];
+
+    expect(localSonar).toContain('readonly changed_scope="changed"');
+    expect(localSonar).toContain('analysis_scope="${changed_scope}"');
+    expect(localSonar).toContain('report_scope="${changed_scope}"');
+    expect(localSonar).toContain('analysis_scope="all"');
+    expect(localSonar).toContain(
+      'KEIKO_SONAR_SCOPE="${report_scope}" KEIKO_SONAR_CHANGED_JSON="${changed_json}"',
+    );
+    expect(localSonar).toContain("analysis covers the whole project; verdict remains filtered to");
+    expect(localSonar).toContain(
+      'if [[ "${report_scope}" == "${changed_scope}" && "${changed_count}" != "0" ]]',
+    );
+    expect(localSonar).toContain('while IFS= read -r -d "" file');
+    expect(unsafePathFallback).toContain('analysis_scope="all"');
+    expect(unsafePathFallback).not.toContain('report_scope="all"');
+  });
+
   it("keeps scanner files, logs, and working data outside the repository", () => {
     expect(ci).toContain('scanner_zip="$RUNNER_TEMP/sonar-scanner-cli.zip"');
     expect(ci).toContain("SONAR_SCANNER_HOME=$RUNNER_TEMP/sonar-scanner-8.1.0.6389-linux-x64");

@@ -790,8 +790,13 @@ export async function rebuildCapsuleIndex(
 
 export async function resumeCapsuleLargeDocuments(
   capsuleId: KnowledgeCapsuleId,
+  resumeJobId?: string,
 ): Promise<CapsuleActionResponse> {
-  const request: CapsuleReindexRequest = { capsuleId, mode: "resume" };
+  const request: CapsuleReindexRequest = {
+    capsuleId,
+    mode: "resume",
+    ...(resumeJobId !== undefined ? { resumeJobId } : {}),
+  };
   return fetchJson<CapsuleActionResponse>(
     `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/reindex`,
     { method: "POST", body: JSON.stringify(request) },

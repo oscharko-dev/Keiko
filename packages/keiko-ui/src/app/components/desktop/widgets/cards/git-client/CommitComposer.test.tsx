@@ -18,6 +18,7 @@ function makePreview(
     intent: { warnings: [], mixedScope: false, isWip: false },
     messageValidation: { ok: true },
     preflightFindingCodes: [],
+    signatureRequirement: "not-required",
     policyOutcome: "allowed",
     ...overrides,
   };

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -8,6 +9,7 @@ import {
   latestQodoReview,
 } from "./keiko-for-quality-core.mjs";
 import {
+  allCheckRuns,
   evidence,
   github,
   installationToken,
@@ -36,15 +38,31 @@ const actionsAppId = 15368;
 const defaultCheckName = "Keiko for Quality (Action)";
 const defaultMarker = "<!-- keiko-for-quality-action-dashboard:v1 -->";
 const defaultLabel = "kfq-action-poc";
+const kfqAppId = 4_290_143;
+const kfqBotUserId = 304_621_804;
+const reviewBaselineMarker = "<!-- keiko-for-quality-review-baseline:v1";
+const reviewBaselinePattern =
+  /<!-- keiko-for-quality-review-baseline:v1 head=([0-9a-f]{40}) state=(accepted|pending) -->/u;
+const reviewDigestPattern =
+  /<!-- keiko-for-quality-review-digest:v1 head=([0-9a-f]{40}) sha256=([0-9a-f]{64}) -->/u;
+const missingPriorDigestFailure =
+  "Expected app-bound prior Qodo digest evidence is missing or unparseable.";
+const unchangedReviewFailure =
+  "Current Qodo review content is unchanged from the previously evaluated head.";
+const bootstrapReviewFailure =
+  "App-bound prior Qodo digest evidence has not been established for this pull request.";
+const missingReviewDigest = createHash("sha256")
+  .update("missing-qodo-review:v1", "utf8")
+  .digest("hex");
 
 // React only to completions of the direct required-check contexts (the union across quality
-// targets). Since Issue #2508 the aggregate no longer reads check-run evidence — branch protection
-// owns those contexts directly — but their completions remain the natural "time passed on this
-// pull" signals that let a stability-window verdict settle without a cron. The fixed allowlist is a
-// trigger filter, not merge authority, and it structurally prevents a self-trigger loop: neither
-// this workflow's job status check nor the aggregate check it posts is a listed name, so their
-// completions are ignored (the Actions GITHUB_TOKEN also suppresses recursion, but App auth would
-// not).
+// targets). Since Issue #2508 the aggregate no longer reads direct-check evidence — branch
+// protection owns those contexts directly — but their completions remain the natural "time passed
+// on this pull" signals that let a stability-window verdict settle without a cron. The fixed
+// allowlist is a trigger filter, not merge authority, and it structurally prevents a self-trigger
+// loop: neither this workflow's job status check nor the aggregate check it posts is a listed name,
+// so their completions are ignored (the Actions GITHUB_TOKEN also suppresses recursion, but App auth
+// would not).
 const reevaluationCheckNames = new Set([
   "ci",
   "workflow hygiene",
@@ -188,18 +206,110 @@ function logVerdict(pullNumber, headSha, result, dryRun) {
   if (!result.passed) for (const failure of result.failures) console.log(`  - ${failure}`);
 }
 
+function reviewBodyDigest(body) {
+  const normalized = body.replaceAll(/[0-9a-f]{40}/giu, "<sha>");
+  return createHash("sha256").update(normalized, "utf8").digest("hex");
+}
+
+function reviewBaseline(currentEvidence, identity, producerAppId) {
+  const dashboard = currentEvidence.comments.find(
+    (comment) =>
+      producerAppId === kfqAppId &&
+      comment.appId === kfqAppId &&
+      comment.authorId === kfqBotUserId &&
+      comment.authorType === "Bot" &&
+      comment.author === "keiko-for-quality[bot]" &&
+      Number.isInteger(comment.id) &&
+      comment.body.includes(identity.marker),
+  );
+  if (dashboard === undefined) return undefined;
+  if (!dashboard.body.includes(reviewBaselineMarker)) return { kind: "legacy" };
+  const match = reviewBaselinePattern.exec(dashboard.body);
+  const headSha = match?.[1];
+  if (!isValidHeadSha(headSha)) throw new Error("KfQ review baseline marker is invalid.");
+  return { headSha, kind: "recorded", state: match[2] };
+}
+
+function digestFromCheck(check, baselineHeadSha) {
+  const evidenceMarker = reviewDigestPattern.exec(String(check.output?.summary ?? ""));
+  if (evidenceMarker?.[1] !== baselineHeadSha) return undefined;
+  return evidenceMarker[2];
+}
+
+async function priorReviewDigest(context, baselineHeadSha) {
+  const checks = await allCheckRuns(
+    `/repos/${context.owner}/${context.repository}/commits/${baselineHeadSha}/check-runs`,
+    context.token,
+  );
+  const check = checks
+    .filter(
+      (candidate) =>
+        context.producerAppId === kfqAppId &&
+        candidate.app?.id === kfqAppId &&
+        candidate.head_sha === baselineHeadSha &&
+        candidate.name === context.identity.name,
+    )
+    .toSorted((left, right) => Number(right.id) - Number(left.id))[0];
+  return check === undefined ? undefined : digestFromCheck(check, baselineHeadSha);
+}
+
+function bootstrapFreshness(review, headSha) {
+  return {
+    baselineHeadSha: headSha,
+    baselineState: "pending",
+    failures: [bootstrapReviewFailure],
+    reviewDigest: review === undefined ? missingReviewDigest : reviewBodyDigest(review.body),
+  };
+}
+
+function freshnessWithoutReview(baseline, priorDigest, headSha) {
+  return {
+    baselineHeadSha: baseline.headSha,
+    baselineState: baseline.state,
+    failures: priorDigest === undefined ? [missingPriorDigestFailure] : [],
+    reviewDigest: baseline.headSha === headSha ? priorDigest : undefined,
+  };
+}
+
+function freshnessWithReview(baseline, priorDigest, headSha, review) {
+  const reviewDigest = reviewBodyDigest(review.body);
+  const requiresContentChange = baseline.state === "pending" || baseline.headSha !== headSha;
+  let failure;
+  if (priorDigest === undefined) {
+    failure = missingPriorDigestFailure;
+  } else if (requiresContentChange && priorDigest === reviewDigest) {
+    failure = unchangedReviewFailure;
+  }
+  return {
+    baselineHeadSha: failure === undefined ? headSha : baseline.headSha,
+    baselineState: failure === undefined ? "accepted" : baseline.state,
+    failures: failure === undefined ? [] : [failure],
+    reviewDigest,
+  };
+}
+
+async function reviewFreshness(context, currentEvidence, headSha, merge) {
+  const baseline = reviewBaseline(currentEvidence, context.identity, context.producerAppId);
+  const review = latestQodoReview(
+    currentEvidence.comments,
+    headSha,
+    merge.parents,
+    merge.commitTime,
+  );
+  if (baseline === undefined || baseline.kind === "legacy") {
+    return bootstrapFreshness(review, headSha);
+  }
+  const priorDigest = await priorReviewDigest(context, baseline.headSha);
+  return review === undefined
+    ? freshnessWithoutReview(baseline, priorDigest, headSha)
+    : freshnessWithReview(baseline, priorDigest, headSha, review);
+}
+
 async function publishResult(context) {
   const env = { GITHUB_APP_ID: context.producerAppId };
-  await publishCheck(
-    context.owner,
-    context.repository,
-    context.headSha,
-    context.result,
-    context.token,
-    env,
-    context.identity.name,
-  );
   await publishDashboardComment({
+    baselineHeadSha: context.baselineHeadSha,
+    baselineState: context.baselineState,
     currentEvidence: context.currentEvidence,
     env,
     marker: context.identity.marker,
@@ -211,13 +321,22 @@ async function publishResult(context) {
     result: context.result,
     token: context.token,
   });
+  await publishCheck(
+    context.owner,
+    context.repository,
+    context.headSha,
+    context.result,
+    context.token,
+    env,
+    context.identity.name,
+  );
 }
 
 async function evaluateHeadOnce(context, headSha, evaluationTime) {
   const { config, owner, pullNumber, repository, token } = context;
   const currentEvidence = await evidence(owner, repository, pullNumber, token);
   const merge = await mergeContextForHead(currentEvidence, owner, repository, headSha, token);
-  const decisionResult = evaluateKeikoForQuality({
+  const baseResult = evaluateKeikoForQuality({
     comments: currentEvidence.comments,
     headSha,
     mergeCommitTime: merge.commitTime,
@@ -225,7 +344,18 @@ async function evaluateHeadOnce(context, headSha, evaluationTime) {
     now: evaluationTime,
     stabilityMs: config.stabilityMs,
   });
+  const freshness = await reviewFreshness(context, currentEvidence, headSha, merge);
+  const failures = [...baseResult.failures, ...freshness.failures];
+  const decisionResult = {
+    failures,
+    passed: failures.length === 0,
+    ...(freshness.reviewDigest === undefined
+      ? {}
+      : { reviewDigest: freshness.reviewDigest, reviewHeadSha: headSha }),
+  };
   return {
+    baselineHeadSha: freshness.baselineHeadSha,
+    baselineState: freshness.baselineState,
     currentEvidence,
     decisionResult,
     merge,
@@ -285,10 +415,8 @@ async function evaluatePull(context) {
   }
   const headSha = pull.head?.sha;
   if (!isValidHeadSha(headSha)) throw new Error("Pull request head SHA is invalid.");
-  const { currentEvidence, decisionResult, evaluatedAt, merge } = await settledEvaluation(
-    context,
-    headSha,
-  );
+  const { baselineHeadSha, baselineState, currentEvidence, decisionResult, evaluatedAt, merge } =
+    await settledEvaluation(context, headSha);
   const result = resultWithEvidenceUpdatedAt(
     decisionResult,
     currentEvidence,
@@ -300,6 +428,8 @@ async function evaluatePull(context) {
   if (dryRun) return;
   await publishResult({
     ...context,
+    baselineHeadSha,
+    baselineState,
     currentEvidence,
     headSha,
     producerAppId: context.producerAppId,

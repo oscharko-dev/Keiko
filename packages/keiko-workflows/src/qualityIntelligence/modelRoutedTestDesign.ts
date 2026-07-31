@@ -165,6 +165,7 @@ export interface QualityIntelligenceModelRoutedTestDesignDeps {
   readonly limits?: QualityIntelligenceWorkflowLimits | undefined;
   readonly redaction?: QualityIntelligenceRecordOptions["redaction"] | undefined;
   readonly modelRouting?: QI.QualityIntelligenceModelRouting | undefined;
+  readonly retentionPolicyId?: QI.QualityIntelligenceRetentionPolicyId | undefined;
 }
 
 class EmptyEvidenceError extends Error {
@@ -1099,6 +1100,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
     clock: deps.clock,
     limits: deps.limits,
     policyProfile: input.profile,
+    retentionPolicyId: deps.retentionPolicyId,
     signal: deps.signal,
   });
   ctx.modelGatewayCallCount += deps.initialModelGatewayCallCount ?? 0;

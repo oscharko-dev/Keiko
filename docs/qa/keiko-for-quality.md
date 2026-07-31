@@ -32,8 +32,8 @@ machine-readable, bound to a stable producer App ID, and bounded by a repository
 The following analysis remains valuable but is not merge-critical:
 
 - `Qodo` review is comment-only; its summary comment may be absent when automatic processing is
-  paused. The comment remains advisory, and evidence currency is the head SHA embedded in it rather
-  than a check-run emission SLO.
+  paused. The comment remains advisory. Its embedded head SHA is necessary but not sufficient
+  currency evidence: KFQ also requires the SHA-normalized body digest to change across heads.
 - `Keiko for Quality` is required and app-bound since the ADR-0142 cutover (2026-07-19): the six
   live-probe conditions below were proven on live pull requests (ledger in
   [`keiko-for-quality-action-evaluation.md`](keiko-for-quality-action-evaluation.md)) and the
@@ -76,11 +76,14 @@ repository-secret access. Its check and dashboard comment are not merge authorit
 Since Issue #2508 ([ADR-0143](../adr/ADR-0143-keiko-for-quality-narrowed-to-the-qodo-bridge.md))
 the evaluator is narrowed to the Qodo bridge: it requires a current-head (or fresh
 merge-parent-bound), app-id-verified, parseable Qodo summary with zero blocking findings, and
-applies the stability window to that evidence. Unresolved findings publish a `failure` conclusion;
-missing, stale, unparseable, or still-settling evidence keeps the check `in_progress`. The 10
-direct required checks and Socket's comment alerts are no longer re-checked — branch protection and
-the organisation-level Socket policy own those decisions directly — which removes the
-per-evaluation check-runs listing and the `SOCKET_RISK_*` configuration surface.
+applies the stability window to that evidence. The canonical Action additionally stores a
+SHA-normalized, body-free review digest in its app-bound check output. Its app-bound dashboard keeps
+only the full head pointer and acceptance state for the last digest baseline. A new head whose
+normalized digest is unchanged, or whose expected predecessor check is absent or malformed, remains
+`in_progress`; the baseline is not advanced by that pending evaluation. Unresolved findings publish
+a `failure` conclusion; missing, stale, unparseable, unchanged, or still-settling evidence keeps the
+check `in_progress`. The 10 direct required checks and Socket's comment alerts are not re-checked —
+branch protection and the organisation-level Socket policy own those decisions directly.
 
 **Worker era (retired 2026-07-19; kept for the rollback template only).** The following two
 paragraphs describe the retired Cloudflare Worker's reconciliation model. The canonical Action is

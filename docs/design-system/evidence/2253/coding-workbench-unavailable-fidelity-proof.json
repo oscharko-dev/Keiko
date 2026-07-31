@@ -4,9 +4,9 @@
   "harness": "tests/e2e/config/playwright.issue-2253-coding-workbench.config.ts",
   "route": "/",
   "appPath": "dev-runner-ui",
-  "globalsCssSha256": "0cf1be9d6a7419236ad719386d6d590c2c8875fb4ea96c69ba1eb5446cc5a2b5",
-  "codingWorkbenchModuleSha256": "45af594d4cf14f25c62df9ec2efa77672fd5d3915556d1c2032454700d291be5",
-  "codingWorkbenchStylesSha256": "6168508ecdad747409c626fdc8b93f9c7218afa21e2cf0fbaeda3c23ab7ed374",
+  "globalsCssSha256": "416783ba19cc77a3f5754d62093cffd250724211fe126d8785faa7466d3af68d",
+  "codingWorkbenchModuleSha256": "3caaf69d86d33cc6c99bcc1b7445a9af90075cb56d41e92438ce106790a344e4",
+  "codingWorkbenchStylesSha256": "203d9196f46e174ec05343dab3c5edaf94ee65cf1fc19fdb35989125e5c182c7",
   "captures": [
     {
       "file": "01-dark-desktop.png",
@@ -19,18 +19,17 @@
       "dataHc": null,
       "forcedColors": "none",
       "reducedMotion": "no-preference",
-      "liveAnnouncement": "ChatGPT/Codex subscription profile unavailable in this release",
-      "unavailableCopy": "Codex subscriptions are not supported in this release.",
+      "liveAnnouncement": "Ready to start. Revision 1. Model source ready. Subscription authentication not selected. Workspace ready. Runtime ready.",
+      "profileStatus": "redistribution-unapproved",
+      "confirmedSource": "Keiko Gateway",
+      "codexSourceAffordances": 0,
       "workbenchLabel": "Coding Workbench",
-      "runtimeCardLabelledBy": "coding-workbench-runtime-title",
       "seriousOrCriticalAxeViolations": 0,
       "viewportBoundsChecks": [],
       "documentHasHorizontalOverflow": false,
       "outerWindowHasHorizontalOverflow": false,
       "windowBodyHasHorizontalOverflow": false,
-      "workbenchHasHorizontalOverflow": false,
-      "sourceStatusHasHorizontalOverflow": false,
-      "codexCardHasHorizontalOverflow": false
+      "workbenchHasHorizontalOverflow": false
     },
     {
       "file": "02-light-desktop.png",
@@ -43,18 +42,17 @@
       "dataHc": null,
       "forcedColors": "none",
       "reducedMotion": "no-preference",
-      "liveAnnouncement": "ChatGPT/Codex subscription profile unavailable in this release",
-      "unavailableCopy": "Codex subscriptions are not supported in this release.",
+      "liveAnnouncement": "Ready to start. Revision 1. Model source ready. Subscription authentication not selected. Workspace ready. Runtime ready.",
+      "profileStatus": "redistribution-unapproved",
+      "confirmedSource": "Keiko Gateway",
+      "codexSourceAffordances": 0,
       "workbenchLabel": "Coding Workbench",
-      "runtimeCardLabelledBy": "coding-workbench-runtime-title",
       "seriousOrCriticalAxeViolations": 0,
       "viewportBoundsChecks": [],
       "documentHasHorizontalOverflow": false,
       "outerWindowHasHorizontalOverflow": false,
       "windowBodyHasHorizontalOverflow": false,
-      "workbenchHasHorizontalOverflow": false,
-      "sourceStatusHasHorizontalOverflow": false,
-      "codexCardHasHorizontalOverflow": false
+      "workbenchHasHorizontalOverflow": false
     },
     {
       "file": "03-dark-high-contrast.png",
@@ -67,18 +65,17 @@
       "dataHc": "more",
       "forcedColors": "none",
       "reducedMotion": "no-preference",
-      "liveAnnouncement": "ChatGPT/Codex subscription profile unavailable in this release",
-      "unavailableCopy": "Codex subscriptions are not supported in this release.",
+      "liveAnnouncement": "Ready to start. Revision 1. Model source ready. Subscription authentication not selected. Workspace ready. Runtime ready.",
+      "profileStatus": "redistribution-unapproved",
+      "confirmedSource": "Keiko Gateway",
+      "codexSourceAffordances": 0,
       "workbenchLabel": "Coding Workbench",
-      "runtimeCardLabelledBy": "coding-workbench-runtime-title",
       "seriousOrCriticalAxeViolations": 0,
       "viewportBoundsChecks": [],
       "documentHasHorizontalOverflow": false,
       "outerWindowHasHorizontalOverflow": false,
       "windowBodyHasHorizontalOverflow": false,
-      "workbenchHasHorizontalOverflow": false,
-      "sourceStatusHasHorizontalOverflow": false,
-      "codexCardHasHorizontalOverflow": false
+      "workbenchHasHorizontalOverflow": false
     },
     {
       "file": "04-light-high-contrast.png",
@@ -91,18 +88,17 @@
       "dataHc": "more",
       "forcedColors": "none",
       "reducedMotion": "no-preference",
-      "liveAnnouncement": "ChatGPT/Codex subscription profile unavailable in this release",
-      "unavailableCopy": "Codex subscriptions are not supported in this release.",
+      "liveAnnouncement": "Ready to start. Revision 1. Model source ready. Subscription authentication not selected. Workspace ready. Runtime ready.",
+      "profileStatus": "redistribution-unapproved",
+      "confirmedSource": "Keiko Gateway",
+      "codexSourceAffordances": 0,
       "workbenchLabel": "Coding Workbench",
-      "runtimeCardLabelledBy": "coding-workbench-runtime-title",
       "seriousOrCriticalAxeViolations": 0,
       "viewportBoundsChecks": [],
       "documentHasHorizontalOverflow": false,
       "outerWindowHasHorizontalOverflow": false,
       "windowBodyHasHorizontalOverflow": false,
-      "workbenchHasHorizontalOverflow": false,
-      "sourceStatusHasHorizontalOverflow": false,
-      "codexCardHasHorizontalOverflow": false
+      "workbenchHasHorizontalOverflow": false
     },
     {
       "file": "05-prefers-contrast.png",
@@ -115,18 +111,17 @@
       "dataHc": null,
       "forcedColors": "none",
       "reducedMotion": "no-preference",
-      "liveAnnouncement": "ChatGPT/Codex subscription profile unavailable in this release",
-      "unavailableCopy": "Codex subscriptions are not supported in this release.",
+      "liveAnnouncement": "Ready to start. Revision 1. Model source ready. Subscription authentication not selected. Workspace ready. Runtime ready.",
+      "profileStatus": "redistribution-unapproved",
+      "confirmedSource": "Keiko Gateway",
+      "codexSourceAffordances": 0,
       "workbenchLabel": "Coding Workbench",
-      "runtimeCardLabelledBy": "coding-workbench-runtime-title",
       "seriousOrCriticalAxeViolations": 0,
       "viewportBoundsChecks": [],
       "documentHasHorizontalOverflow": false,
       "outerWindowHasHorizontalOverflow": false,
       "windowBodyHasHorizontalOverflow": false,
-      "workbenchHasHorizontalOverflow": false,
-      "sourceStatusHasHorizontalOverflow": false,
-      "codexCardHasHorizontalOverflow": false
+      "workbenchHasHorizontalOverflow": false
     },
     {
       "file": "06-forced-colors.png",
@@ -139,18 +134,17 @@
       "dataHc": null,
       "forcedColors": "active",
       "reducedMotion": "no-preference",
-      "liveAnnouncement": "ChatGPT/Codex subscription profile unavailable in this release",
-      "unavailableCopy": "Codex subscriptions are not supported in this release.",
+      "liveAnnouncement": "Ready to start. Revision 1. Model source ready. Subscription authentication not selected. Workspace ready. Runtime ready.",
+      "profileStatus": "redistribution-unapproved",
+      "confirmedSource": "Keiko Gateway",
+      "codexSourceAffordances": 0,
       "workbenchLabel": "Coding Workbench",
-      "runtimeCardLabelledBy": "coding-workbench-runtime-title",
       "seriousOrCriticalAxeViolations": 0,
       "viewportBoundsChecks": [],
       "documentHasHorizontalOverflow": false,
       "outerWindowHasHorizontalOverflow": false,
       "windowBodyHasHorizontalOverflow": false,
-      "workbenchHasHorizontalOverflow": false,
-      "sourceStatusHasHorizontalOverflow": false,
-      "codexCardHasHorizontalOverflow": false
+      "workbenchHasHorizontalOverflow": false
     },
     {
       "file": "07-reduced-motion.png",
@@ -163,18 +157,17 @@
       "dataHc": null,
       "forcedColors": "none",
       "reducedMotion": "reduce",
-      "liveAnnouncement": "ChatGPT/Codex subscription profile unavailable in this release",
-      "unavailableCopy": "Codex subscriptions are not supported in this release.",
+      "liveAnnouncement": "Ready to start. Revision 1. Model source ready. Subscription authentication not selected. Workspace ready. Runtime ready.",
+      "profileStatus": "redistribution-unapproved",
+      "confirmedSource": "Keiko Gateway",
+      "codexSourceAffordances": 0,
       "workbenchLabel": "Coding Workbench",
-      "runtimeCardLabelledBy": "coding-workbench-runtime-title",
       "seriousOrCriticalAxeViolations": 0,
       "viewportBoundsChecks": [],
       "documentHasHorizontalOverflow": false,
       "outerWindowHasHorizontalOverflow": false,
       "windowBodyHasHorizontalOverflow": false,
-      "workbenchHasHorizontalOverflow": false,
-      "sourceStatusHasHorizontalOverflow": false,
-      "codexCardHasHorizontalOverflow": false
+      "workbenchHasHorizontalOverflow": false
     },
     {
       "file": "08-320px-reflow.png",
@@ -187,18 +180,19 @@
       "dataHc": null,
       "forcedColors": "none",
       "reducedMotion": "no-preference",
-      "liveAnnouncement": "ChatGPT/Codex subscription profile unavailable in this release",
-      "unavailableCopy": "Codex subscriptions are not supported in this release.",
+      "liveAnnouncement": "Ready to start. Revision 1. Model source ready. Subscription authentication not selected. Workspace ready. Runtime ready.",
+      "profileStatus": "redistribution-unapproved",
+      "confirmedSource": "Keiko Gateway",
+      "codexSourceAffordances": 0,
       "workbenchLabel": "Coding Workbench",
-      "runtimeCardLabelledBy": "coding-workbench-runtime-title",
       "seriousOrCriticalAxeViolations": 0,
       "viewportBoundsChecks": [
         {
           "label": "outer Workbench window",
           "left": 59,
           "right": 291,
-          "top": 96,
-          "bottom": 844,
+          "top": 100,
+          "bottom": 848,
           "withinViewport": true,
           "withinOuterFrame": null
         },
@@ -206,53 +200,17 @@
           "label": "Coding Workbench",
           "left": 60,
           "right": 290,
-          "top": 135,
-          "bottom": 3232.3125,
+          "top": 139,
+          "bottom": 859,
           "withinViewport": true,
           "withinOuterFrame": true
         },
         {
-          "label": "Source status region",
-          "left": 78,
-          "right": 272,
-          "top": 971.75,
-          "bottom": 1551.9375,
-          "withinViewport": true,
-          "withinOuterFrame": true
-        },
-        {
-          "label": "Codex card",
-          "left": 91,
-          "right": 259,
-          "top": 1364.9375,
-          "bottom": 1538.9375,
-          "withinViewport": true,
-          "withinOuterFrame": true
-        },
-        {
-          "label": "Codex profile label",
-          "left": 100,
-          "right": 250,
-          "top": 1386.9375,
-          "bottom": 1418.9375,
-          "withinViewport": true,
-          "withinOuterFrame": true
-        },
-        {
-          "label": "unavailable detail",
-          "left": 100,
-          "right": 250,
-          "top": 1431.9375,
-          "bottom": 1485.9375,
-          "withinViewport": true,
-          "withinOuterFrame": true
-        },
-        {
-          "label": "unavailable status",
-          "left": 100,
-          "right": 250,
-          "top": 1499.9375,
-          "bottom": 1529.9375,
+          "label": "confirmed source context",
+          "left": 186,
+          "right": 216.328125,
+          "top": 205.5,
+          "bottom": 219.5,
           "withinViewport": true,
           "withinOuterFrame": true
         }
@@ -260,9 +218,7 @@
       "documentHasHorizontalOverflow": false,
       "outerWindowHasHorizontalOverflow": false,
       "windowBodyHasHorizontalOverflow": false,
-      "workbenchHasHorizontalOverflow": false,
-      "sourceStatusHasHorizontalOverflow": false,
-      "codexCardHasHorizontalOverflow": false
+      "workbenchHasHorizontalOverflow": false
     },
     {
       "file": "09-desktop-304px-frame-reflow.png",
@@ -275,10 +231,11 @@
       "dataHc": null,
       "forcedColors": "none",
       "reducedMotion": "no-preference",
-      "liveAnnouncement": "ChatGPT/Codex subscription profile unavailable in this release",
-      "unavailableCopy": "Codex subscriptions are not supported in this release.",
+      "liveAnnouncement": "Ready to start. Revision 1. Model source ready. Subscription authentication not selected. Workspace ready. Runtime ready.",
+      "profileStatus": "redistribution-unapproved",
+      "confirmedSource": "Keiko Gateway",
+      "codexSourceAffordances": 0,
       "workbenchLabel": "Coding Workbench",
-      "runtimeCardLabelledBy": "coding-workbench-runtime-title",
       "seriousOrCriticalAxeViolations": 0,
       "viewportBoundsChecks": [
         {
@@ -295,52 +252,16 @@
           "left": 130,
           "right": 432,
           "top": 154,
-          "bottom": 2840.9375,
+          "bottom": 834,
           "withinViewport": true,
           "withinOuterFrame": true
         },
         {
-          "label": "Source status region",
-          "left": 148,
-          "right": 414,
-          "top": 782.46875,
-          "bottom": 1259.5625,
-          "withinViewport": true,
-          "withinOuterFrame": true
-        },
-        {
-          "label": "Codex card",
-          "left": 161,
-          "right": 401,
-          "top": 1103.5625,
-          "bottom": 1246.5625,
-          "withinViewport": true,
-          "withinOuterFrame": true
-        },
-        {
-          "label": "Codex profile label",
-          "left": 170,
-          "right": 392,
-          "top": 1125.5625,
-          "bottom": 1157.5625,
-          "withinViewport": true,
-          "withinOuterFrame": true
-        },
-        {
-          "label": "unavailable detail",
-          "left": 170,
-          "right": 392,
-          "top": 1170.5625,
-          "bottom": 1206.5625,
-          "withinViewport": true,
-          "withinOuterFrame": true
-        },
-        {
-          "label": "unavailable status",
-          "left": 170,
-          "right": 324.625,
-          "top": 1220.5625,
-          "bottom": 1237.5625,
+          "label": "confirmed source context",
+          "left": 297.53125,
+          "right": 339.875,
+          "top": 220.5,
+          "bottom": 234.5,
           "withinViewport": true,
           "withinOuterFrame": true
         }
@@ -348,22 +269,20 @@
       "documentHasHorizontalOverflow": false,
       "outerWindowHasHorizontalOverflow": false,
       "windowBodyHasHorizontalOverflow": false,
-      "workbenchHasHorizontalOverflow": false,
-      "sourceStatusHasHorizontalOverflow": false,
-      "codexCardHasHorizontalOverflow": false
+      "workbenchHasHorizontalOverflow": false
     }
   ],
   "assertions": {
     "redistributionProfileHasNoRuntimeBinarySources": true,
     "redistributionProfileHasNoSetupCapabilities": true,
-    "unavailableCopyVisibleInEveryMode": 9,
+    "confirmedGatewayContextVisibleInEveryMode": 9,
     "politeStatusAnnouncements": 9,
-    "labelledWorkbenchAndRuntimeCard": 9,
-    "unavailableAffordancesAbsent": true,
+    "labelledWorkbench": 9,
+    "codexSourceAffordancesAbsent": true,
     "native304pxOuterFrameReflowAt320px": true,
     "desktopViewport304pxFrameReflow": true,
-    "viewportBoundsChecksPer304pxFrame": 7,
-    "outerFrameContentBoundsChecksPer304pxFrame": 6,
+    "viewportBoundsChecksPer304pxFrame": 3,
+    "outerFrameContentBoundsChecksPer304pxFrame": 2,
     "windowBodyNoHorizontalOverflow": true
   }
 }

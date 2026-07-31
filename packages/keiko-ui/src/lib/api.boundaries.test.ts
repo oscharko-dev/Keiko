@@ -228,6 +228,36 @@ describe("API BFF boundary helpers", () => {
     } satisfies Partial<ApiError>);
   });
 
+  it("fails closed when a run-start governance projection violates its response contract", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse({
+            runId: "run-1",
+            fingerprint: "fp-1",
+            governance: {
+              requestedMode: "invented-mode",
+              effectiveMode: "supervised-coding",
+              deploymentCeiling: "supervised-coding",
+              connectorExecution: "unavailable",
+              deliveryExecution: "unavailable",
+            },
+          }),
+        ),
+      ),
+    );
+
+    await expect(
+      startRun({
+        workflowId: "unit-test-generation",
+        input: { workspaceRoot: "/repo", target: { kind: "file", filePath: "src/app.ts" } },
+        modelId: "model-a",
+        requestedMode: "governed-assist",
+      }),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED", status: 502 });
+  });
+
   it("dispatches real SSE token, done, error, and cancellation events", async () => {
     const fetchMock = vi.fn(() =>
       Promise.resolve(

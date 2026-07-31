@@ -77,6 +77,7 @@ import type {
   GroundingLimits,
   MessageResponse,
   MessagesResponse,
+  PurgeChatRequest,
   ModelCapability,
   NativeFileDialogCapability,
   NativeFileDialogRequest,
@@ -102,56 +103,8 @@ import type {
   WorkflowStatus,
   WorkflowsResponse,
 } from "./types";
-import type {
-  GitCommitChangeSummary,
-  GitCommitIntentAnalysis,
-  GitCommitMessageValidation,
-  GitCommitMessageViolationCode,
-  GitDeliveryActionSheet,
-  GitDeliveryActionSheetRequest,
-  GitDeliveryApprovalClaim,
-  EditorHotExitSnapshotV1,
-  PdfCitationPreviewOpenResponse,
-  PdfCitationPreviewSelection,
-  PdfCitationPreviewStatusRequest,
-  PdfCitationPreviewStatusResponse,
-  VoicePersona,
-  GitRepositoryValidation,
-  WorkspaceSearchRequest,
-  WorkspaceSearchResponse,
-  WorkspaceReplaceApplyRequest,
-  WorkspaceReplaceApplyResponse,
-  WorkspaceReplacePreviewRequest,
-  WorkspaceReplacePreviewResponse,
-  WorkspaceSymbolSearchRequest,
-  WorkspaceSymbolSearchResponse,
-  LanguageCallHierarchyResult,
-  LanguageInlayHintsResult,
-  ManagedLspConfigurationSummary as ManagedLspConfigurationSummaryContract,
-  ManagedLspControlAction,
-  ManagedLspControlRequest,
-  ManagedLspControlResponse,
-  ManagedLspControlSuccessResult,
-  ManagedLspSemanticTokenResponse,
-  EditorM11SettingsMutation,
-  EditorM11SettingsMutationOk,
-  EditorM11SettingsMutationResult,
-  EditorM11SettingsSnapshot,
-  EditorM11ProfileMutation,
-  EditorM11ProfileMutationResult,
-  EditorM11ProfilesSnapshot,
-  EditorLocalHistoryEntry,
-  WorkspaceProfileExportResult,
-  WorkspaceProfileImportApply,
-  WorkspaceProfileImportPreview,
-  EditorM7WorkspaceSnippetMutation,
-  EditorM7WorkspaceSnippetMutationResult,
-  EditorM7WorkspaceSnippetSnapshot,
-  GitEditorBlameResponse,
-  GitEditorDiffResponse,
-  GitEditorDiffScope,
-} from "@oscharko-dev/keiko-contracts";
 import {
+  isCodingWorkbenchMode,
   validateGitHistoryResponse,
   validateGitRemotesResponse,
   validateGitRepositoryDiffResponse,
@@ -159,11 +112,61 @@ import {
   validateGitRepositorySummary,
   validateGitSyncExecuteResponse,
   validateGitSyncPreview,
+  type CodingWorkbenchMode,
+  type GitCommitChangeSummary,
+  type GitCommitIntentAnalysis,
+  type GitCommitMessageValidation,
+  type GitCommitMessageViolationCode,
+  type GitDeliveryActionSheet,
+  type GitDeliveryActionSheetRequest,
+  type GitDeliveryApprovalClaim,
+  type EditorHotExitSnapshotV1,
+  type PdfCitationPreviewOpenResponse,
+  type PdfCitationPreviewSelection,
+  type PdfCitationPreviewStatusRequest,
+  type PdfCitationPreviewStatusResponse,
+  type VoicePersona,
+  type GitRepositoryValidation,
+  type WorkspaceSearchRequest,
+  type WorkspaceSearchResponse,
+  type WorkspaceReplaceApplyRequest,
+  type WorkspaceReplaceApplyResponse,
+  type WorkspaceReplacePreviewRequest,
+  type WorkspaceReplacePreviewResponse,
+  type WorkspaceSymbolSearchRequest,
+  type WorkspaceSymbolSearchResponse,
+  type LanguageCallHierarchyResult,
+  type LanguageInlayHintsResult,
+  type ManagedLspConfigurationSummary as ManagedLspConfigurationSummaryContract,
+  type ManagedLspControlAction,
+  type ManagedLspControlRequest,
+  type ManagedLspControlResponse,
+  type ManagedLspControlSuccessResult,
+  type ManagedLspSemanticTokenResponse,
+  type EditorM11SettingsMutation,
+  type EditorM11SettingsMutationOk,
+  type EditorM11SettingsMutationResult,
+  type EditorM11SettingsSnapshot,
+  type EditorM11ProfileMutation,
+  type EditorM11ProfileMutationResult,
+  type EditorM11ProfilesSnapshot,
+  type EditorLocalHistoryEntry,
+  type WorkspaceProfileExportResult,
+  type WorkspaceProfileImportApply,
+  type WorkspaceProfileImportPreview,
+  type EditorM7WorkspaceSnippetMutation,
+  type EditorM7WorkspaceSnippetMutationResult,
+  type EditorM7WorkspaceSnippetSnapshot,
+  type GitEditorBlameResponse,
+  type GitEditorDiffResponse,
+  type GitEditorDiffScope,
 } from "@oscharko-dev/keiko-contracts";
 import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
   isDesktopChatStreamEvent,
   type DesktopChatSendRequestWire,
+  type ConversationAttachmentUploadRequestWire,
+  type ConversationAttachmentUploadResponseWire,
   type DesktopChatStreamDoneEvent,
   type DesktopChatStreamErrorEvent,
   type DesktopChatStreamEventType,
@@ -673,6 +676,7 @@ export interface StartRunInput {
   taskType?: string;
   input: Record<string, unknown>;
   modelId: string;
+  requestedMode?: CodingWorkbenchMode;
   apply?: boolean;
   limits?: Record<string, unknown>;
   governedHandoff?: Record<string, unknown>;
@@ -687,13 +691,64 @@ export interface StartRunInput {
   };
 }
 
-export async function startRun(
-  body: StartRunInput,
-): Promise<{ runId: string; fingerprint: string }> {
-  return fetchJson("/api/runs", {
+export interface StartRunResponse {
+  readonly runId: string;
+  readonly fingerprint: string;
+  readonly governance?: {
+    readonly requestedMode: CodingWorkbenchMode;
+    readonly effectiveMode: CodingWorkbenchMode;
+    readonly deploymentCeiling: CodingWorkbenchMode;
+    readonly connectorExecution: "unavailable";
+    readonly deliveryExecution: "unavailable";
+  };
+}
+
+function isStartRunGovernance(
+  value: unknown,
+): value is NonNullable<StartRunResponse["governance"]> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const allowedKeys = new Set([
+    "requestedMode",
+    "effectiveMode",
+    "deploymentCeiling",
+    "connectorExecution",
+    "deliveryExecution",
+  ]);
+  return (
+    Object.keys(record).every((key) => allowedKeys.has(key)) &&
+    isCodingWorkbenchMode(record.requestedMode) &&
+    isCodingWorkbenchMode(record.effectiveMode) &&
+    isCodingWorkbenchMode(record.deploymentCeiling) &&
+    record.connectorExecution === "unavailable" &&
+    record.deliveryExecution === "unavailable"
+  );
+}
+
+function validateStartRunResponse(value: unknown): StartRunResponse {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ApiError("CONTRACT_VALIDATION_FAILED", "Invalid run-start response.", 502);
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.runId !== "string" || typeof record.fingerprint !== "string") {
+    throw new ApiError("CONTRACT_VALIDATION_FAILED", "Invalid run-start response.", 502);
+  }
+  const governance = record.governance;
+  if (governance === undefined) {
+    return { runId: record.runId, fingerprint: record.fingerprint };
+  }
+  if (!isStartRunGovernance(governance)) {
+    throw new ApiError("CONTRACT_VALIDATION_FAILED", "Invalid run-start response.", 502);
+  }
+  return { runId: record.runId, fingerprint: record.fingerprint, governance };
+}
+
+export async function startRun(body: StartRunInput): Promise<StartRunResponse> {
+  const response = await fetchJson<unknown>("/api/runs", {
     method: "POST",
     body: JSON.stringify(body),
   });
+  return validateStartRunResponse(response);
 }
 
 // Epic #1307 / Issue #1314 — generate a governed, reviewable Enhanced Prompt. Deterministic and
@@ -974,10 +1029,14 @@ export async function updateChatLocalKnowledgeScopes(
   });
 }
 
-export async function deleteChat(id: string): Promise<void> {
+export async function deleteChat(id: string, projectPath: string): Promise<void> {
+  const request: PurgeChatRequest = {
+    projectPath,
+    confirmation: { chatId: id, irreversible: true },
+  };
   await fetchJson<void>(`/api/chats?id=${encodeURIComponent(id)}`, {
     method: "DELETE",
-    body: "{}",
+    body: JSON.stringify(request),
   });
 }
 
@@ -1092,6 +1151,29 @@ export async function sendDesktopChat(
     method: "POST",
     body: JSON.stringify(input),
     signal: signal ?? null,
+  });
+}
+
+export async function uploadConversationAttachment(
+  input: ConversationAttachmentUploadRequestWire,
+): Promise<ConversationAttachmentUploadResponseWire> {
+  return fetchJson("/api/desktop/chat/attachments", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteConversationAttachment(input: {
+  readonly attachmentRef: string;
+  readonly projectPath: string;
+  readonly chatId: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+}): Promise<void> {
+  await fetchJson("/api/desktop/chat/attachments/delete", {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }
 
@@ -2515,12 +2597,12 @@ export async function fetchPdfCitationPreviewDocument(
 // Issue #473 (Epic #470) — governed Git delivery action sheet
 // ---------------------------------------------------------------------------
 // POSTs the content-free repository facts a caller legitimately holds — the proposed resolved action,
-// the worktree snapshot, optional provider PR/merge/branch-protection/checks state, and the active
-// provider capabilities — to the BFF, which establishes policy/approval
-// AUTHORITY server-side and assembles the UI-safe GitDeliveryActionSheet projection. The request
-// carries NO authority fields (policy decision, providerReady, expected blockers); the server rejects
-// any such key. The response carries counts/flags/names/typed codes only — never diff content, file
-// paths, secrets, or command strings. The CSRF header is added by `fetchJson` for the POST.
+// the worktree snapshot and active provider capabilities — to the BFF, which establishes policy,
+// approval, and provider-state AUTHORITY server-side and assembles the UI-safe
+// GitDeliveryActionSheet projection. The request carries NO authority fields (policy decision,
+// providerReady, provider state, expected blockers); the server rejects any such key. The response
+// carries counts/flags/names/typed codes only — never diff content, file paths, secrets, or command
+// strings. The CSRF header is added by `fetchJson` for the POST.
 
 export async function fetchGitDeliveryActionSheet(
   request: GitDeliveryActionSheetRequest,
@@ -2661,6 +2743,7 @@ export interface GitDeliveryCommitPreviewResponse {
   readonly intent: GitCommitIntentAnalysis;
   readonly messageValidation: GitCommitMessageValidation;
   readonly preflightFindingCodes: readonly string[];
+  readonly signatureRequirement: "required" | "not-required" | "unavailable";
   readonly policyOutcome: string;
   readonly policyBlockReason?: string;
 }
@@ -2725,6 +2808,7 @@ export interface GitDeliveryPushPreviewResponse {
   readonly wouldCreateRemoteBranch: boolean;
   readonly wouldTriggerChecks: boolean;
   readonly forceBlocked: boolean;
+  readonly signatureRequirement: "required" | "not-required" | "unavailable";
   readonly preflightBlockingCodes: readonly string[];
   readonly preflightAdvisoryCodes: readonly string[];
   readonly policyOutcome: string;

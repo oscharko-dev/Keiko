@@ -476,6 +476,78 @@ function CandidateScorecards({
   );
 }
 
+type CandidateRejection = PromptEnhancementWireResponse["candidates"]["rejected"][number];
+
+function candidateRejectionReason(
+  reason: CandidateRejection["reason"],
+  t: OptionalWidgetTranslate,
+): string {
+  switch (reason) {
+    case "lower-aggregate-score":
+      return t("promptEnhancer.rejections.reason.lowerAggregateScore");
+    case "lower-tie-break-rank":
+      return t("promptEnhancer.rejections.reason.lowerTieBreakRank");
+    case "exceeded-token-budget":
+      return t("promptEnhancer.rejections.reason.exceededTokenBudget");
+    case "duplicate-candidate":
+      return t("promptEnhancer.rejections.reason.duplicateCandidate");
+    case "safety-floor-not-preserved":
+      return t("promptEnhancer.rejections.reason.safetyFloorNotPreserved");
+    case "safety-validation-failed":
+      return t("promptEnhancer.rejections.reason.safetyValidationFailed");
+    case "profile-preference-not-matched":
+      return t("promptEnhancer.rejections.reason.profilePreferenceNotMatched");
+  }
+}
+
+function CandidateRejections({
+  rejected,
+  t,
+}: {
+  readonly rejected: readonly CandidateRejection[];
+  readonly t: OptionalWidgetTranslate;
+}): ReactNode {
+  if (rejected.length === 0) return null;
+  return (
+    <Section title={t("promptEnhancer.rejections.title")}>
+      <div className="c-tablewrap">
+        <div className="c-tablescroll">
+          <table className="c-table responsive" data-testid="pe-rejections">
+            <thead>
+              <tr>
+                <th scope="col">{t("promptEnhancer.rejections.candidate")}</th>
+                <th scope="col">{t("promptEnhancer.analysis.profile")}</th>
+                <th scope="col" className="num">
+                  {t("promptEnhancer.scorecards.score")}
+                </th>
+                <th scope="col">{t("promptEnhancer.rejections.reason")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rejected.map((candidate) => (
+                <tr key={candidate.candidateId}>
+                  <th scope="row">
+                    <code>{candidate.candidateId}</code>
+                  </th>
+                  <td>{candidate.profile}</td>
+                  <td className="num" data-label={t("promptEnhancer.scorecards.score")}>
+                    {candidate.aggregateScore === null
+                      ? t("promptEnhancer.rejections.notScored")
+                      : candidate.aggregateScore.toFixed(3)}
+                  </td>
+                  <td data-label={t("promptEnhancer.rejections.reason")}>
+                    {candidateRejectionReason(candidate.reason, t)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
 // On the model-assisted path the rendered prompt is the model's text, while the structured sections,
 // the winning profile and the candidate scorecards all describe the deterministic baseline the model
 // was given. Rendering both without saying so presents baseline numbers as a description of the
@@ -677,8 +749,8 @@ export function PromptEnhancerPanel({
         setResult(response);
         setResultGroundingSignature(groundingContext.signature);
       }
-    } catch (caught) {
-      if (!controller.signal.aborted) setError(describeError(caught, t));
+    } catch (caughtError) {
+      if (!controller.signal.aborted) setError(describeError(caughtError, t));
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
@@ -953,6 +1025,7 @@ export function PromptEnhancerPanel({
           <BaselineNotice routing={result.modelRouting} t={t} />
           <EnhancedPromptSections result={result} t={t} />
           <CandidateScorecards candidates={result.candidates} t={t} />
+          <CandidateRejections rejected={result.candidates.rejected} t={t} />
           <EvidencePanel
             evidence={result.evidence}
             fingerprint={result.inputFingerprintSha256}

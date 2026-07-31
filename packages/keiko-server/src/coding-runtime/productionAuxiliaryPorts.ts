@@ -36,6 +36,7 @@ import {
 
 export interface ProductionAuxiliaryPortInput {
   readonly authority: Pick<CodingRuntimeAuthorityService, "state">;
+  readonly reservePromptTokens: (promptTokens: number) => boolean;
   readonly taskId: string;
   readonly runId: string;
   readonly workspaceId: () => string;
@@ -62,6 +63,7 @@ export function createProductionAuxiliaryPorts(
   const runner = createProductionReadOnlyChildRunner({
     modelPortFactory: input.modelPortFactory,
     secureWorkspaceTextRead: input.secureWorkspaceTextRead,
+    reservePromptTokens: input.reservePromptTokens,
   });
   return {
     skillAuthority: skillPort(input),
