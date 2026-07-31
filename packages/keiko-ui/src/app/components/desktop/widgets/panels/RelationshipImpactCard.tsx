@@ -224,16 +224,19 @@ export function RelationshipImpactCard({
       aria-label={t("relationships.impact.cardAria")}
     >
       {error !== null ? (
-        // A failed walk is a degraded SECTION, not a failed panel: role=status keeps it out of
-        // the assertive queue the inspector's own error banner owns (error-and-denial-ux.md §10).
-        <div className="lk-alert" role="status" data-testid="impact-error">
+        // A failed walk is a degraded SECTION, not a failed panel: the implicit `status` role of
+        // <output> keeps it out of the assertive queue the inspector's own error banner owns
+        // (error-and-denial-ux.md §10). <output> is inline by default and `.lk-alert` only carries
+        // box styling, so the block display the banner had as a div is restated here rather than in
+        // globals.css (byte-exact visual-proof gate, #1300).
+        <output className="lk-alert" style={{ display: "block" }} data-testid="impact-error">
           <span>{error}</span>
           {onRetryImpact !== undefined && (
             <button type="button" className="lk-alert-retry" onClick={onRetryImpact}>
               {t("relationships.impact.retry")}
             </button>
           )}
-        </div>
+        </output>
       ) : (
         <>
           <ImpactDirection

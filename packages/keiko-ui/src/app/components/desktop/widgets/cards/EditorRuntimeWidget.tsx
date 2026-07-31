@@ -5807,11 +5807,18 @@ function EditorRuntimeWidget({
     />,
   );
 
-  const renderEditorPanel = (): ReactNode => {
-    let panel: ReactNode;
+  /**
+   * The pending-review surface that takes the pane away from the editor, or null when none is.
+   *
+   * Every branch below is a change waiting on an operator decision — an external write, a
+   * recovered hot-exit buffer, an agent changeset, an agent patch, a rename the language service
+   * produced, or generated tests — and each one owns the pane until it is accepted or dismissed.
+   * The order is the precedence: the editor itself is only reached once all of them are clear.
+   */
+  const renderActiveReviewSurface = (): ReactNode => {
     if (externalCompareContent !== null) {
       const externalDiffModel = buildAgentPatchDiffModel(externalCompareContent, content, file);
-      panel = (
+      return (
         <div style={EDITOR_REVIEW_SURFACE_STYLE}>
           <fieldset
             aria-label={`Compare external changes for ${definedOr(file, "this file")}`}
@@ -5850,7 +5857,8 @@ function EditorRuntimeWidget({
           </div>
         </div>
       );
-    } else if (activeRecoveryCompare !== null) {
+    }
+    if (activeRecoveryCompare !== null) {
       // AC4 "compare": a true side-by-side diff of the on-disk file (left) against the recovered
       // unsaved buffer (right), reusing the same diff surface as agent-patch review. The disk side is
       // the baseline captured when recovery was offered, not the live buffer, so it stays accurate
@@ -5860,7 +5868,7 @@ function EditorRuntimeWidget({
         activeRecoveryCompare.content,
         file,
       );
-      panel = (
+      return (
         <div style={EDITOR_REVIEW_SURFACE_STYLE}>
           <fieldset
             aria-label={`Compare recovered changes for ${definedOr(file, "this file")}`}
@@ -5894,8 +5902,9 @@ function EditorRuntimeWidget({
           </div>
         </div>
       );
-    } else if (agentChangesetPending !== null) {
-      panel = (
+    }
+    if (agentChangesetPending !== null) {
+      return (
         <div style={EDITOR_REVIEW_SURFACE_STYLE}>
           <fieldset
             aria-label="Agent changeset review"
@@ -5926,13 +5935,14 @@ function EditorRuntimeWidget({
           </fieldset>
         </div>
       );
-    } else if (agentPatchPending !== null) {
+    }
+    if (agentPatchPending !== null) {
       const patchDiffModel = buildAgentPatchDiffModel(
         agentPatchPending.original,
         agentPatchPending.modified,
         file,
       );
-      panel = (
+      return (
         <div style={EDITOR_REVIEW_SURFACE_STYLE}>
           {/* A11Y-3: label the diff review surface and provide an sr-only instruction */}
           <fieldset
@@ -5992,11 +6002,12 @@ function EditorRuntimeWidget({
           </div>
         </div>
       );
-    } else if (renameReview !== null) {
+    }
+    if (renameReview !== null) {
       // A rename the language service could not finish is stated in full and cannot be applied: the
       // counts come from the changeset's own report, so the reviewer sees how much of the rename is
       // missing before deciding (a preview built from the returned files alone looks complete).
-      panel = (
+      return (
         <div style={EDITOR_REVIEW_SURFACE_STYLE}>
           {renameReview.truncation === null ? null : (
             <div
@@ -6025,8 +6036,9 @@ function EditorRuntimeWidget({
           </div>
         </div>
       );
-    } else if (testGenerationPreview !== null) {
-      panel = (
+    }
+    if (testGenerationPreview !== null) {
+      return (
         <EditorDiffSurface
           model={testGenerationPreview.model}
           loadState={{ status: "ready" }}
@@ -6037,7 +6049,15 @@ function EditorRuntimeWidget({
           }}
         />
       );
-    } else if (editorLoadError !== null) {
+    }
+    return null;
+  };
+
+  const renderEditorPanel = (): ReactNode => {
+    const reviewSurface = renderActiveReviewSurface();
+    if (reviewSurface !== null) return reviewSurface;
+    let panel: ReactNode;
+    if (editorLoadError !== null) {
       panel = (
         <div className="ed-host-loading" role="alert">
           <span>{`Editor failed to load: ${editorLoadError}`}</span>
@@ -6232,6 +6252,9 @@ function EditorRuntimeWidget({
     const insertEdge = tabInsertTarget?.file === path ? tabInsertTarget.edge : null;
     const conflictAttr = tabHandle?.["data-merge-conflicts"] ?? String(tabConflictCount);
     const closable = onCloseOpenFile !== undefined;
+    const tabHitClassName = closable
+      ? `ed-tab-hit ui-tip ${runtimeStyles.tabHitClosable}`
+      : "ed-tab-hit ui-tip";
     return (
       <span
         className={`ed-tab${active ? " active" : ""}`}
@@ -6247,7 +6270,7 @@ function EditorRuntimeWidget({
       >
         <button
           type="button"
-          className={`ed-tab-hit ui-tip${closable ? ` ${runtimeStyles.tabHitClosable}` : ""}`}
+          className={tabHitClassName}
           draggable={tabHandle?.draggable}
           role="tab"
           id={tabDomId}
