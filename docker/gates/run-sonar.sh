@@ -45,14 +45,18 @@ process.stdin.on("data", (d) => (s += d)).on("end", () => {
   process.stdout.write(createHash("sha256").update(s).digest("hex").slice(0, 12));
 });')"
 project="keiko-local-${checkout_id}"
-scope="changed"
+analysis_scope="changed"
+report_scope="changed"
 base="origin/dev"
 action="scan"
 
 while [[ $# -gt 0 ]]; do
   argument="$1"
   case "${argument}" in
-    --all) scope="all" ;;
+    --all)
+      analysis_scope="all"
+      report_scope="all"
+      ;;
     --stop) action="stop" ;;
     --base)
       base="${2:?--base needs a ref}"
@@ -157,16 +161,20 @@ fi
 # Analysing the whole monorepo takes half an hour, and a gate nobody runs is not a gate. The default
 # analyses ONLY the files this branch changed, which is the pre-push question and takes seconds; the
 # rules this exists to catch (S7755, S7778, S7786, S7776) are single-file rules, so nothing is lost.
-# `--all` analyses everything when a whole-project picture is what you want.
+# `--all` analyses and reports everything when a whole-project picture is what you want.
 inclusions=""
-if [[ "${scope}" == "changed" ]]; then
+changed_json="[]"
+changed_count="0"
+if [[ "${report_scope}" == "changed" ]]; then
   # The scan sees the working tree, so its scope must include all three sources of change: commits
   # against the selected base, staged/unstaged tracked changes against HEAD, and untracked files.
   # Keep Git's NUL framing until Node has decoded and deduplicated the union; a newline in a path
   # must never turn into two apparently safe inclusions.
   if ! git -C "${repo_root}" rev-parse --verify "${base}^{commit}" >/dev/null 2>&1; then
-    printf '\033[33m! base %s cannot be resolved — analysing the whole project instead\033[0m\n' "${base}"
-    scope="all"
+    printf '\033[33m! base %s cannot be resolved — the diff cannot be determined\033[0m\n' "${base}"
+    printf '  analysis and verdict cover the whole project\n'
+    analysis_scope="all"
+    report_scope="all"
   else
     changed_json="$(
       {
@@ -193,25 +201,23 @@ process.stdin.on("data", (d) => (s += d)).on("end", () => {
 });')"
   fi
 
-  if [[ "${scope}" == "all" ]]; then
+  if [[ "${report_scope}" == "all" ]]; then
     :
   elif [[ "${changed_count}" == "0" ]]; then
-    printf '\033[33m! no diff against %s — analysing the whole project instead\033[0m\n' "${base}"
-    scope="all"
+    printf '\033[33m! no diff against %s — exact Sonar inclusions would be empty\033[0m\n' "${base}"
+    printf '  analysis covers the whole project; verdict remains filtered to 0 changed files\n'
+    analysis_scope="all"
   elif [[ "${unsafe_path}" == "yes" ]]; then
     printf '\033[33m! a changed path cannot be represented as an exact Sonar inclusion\033[0m\n'
-    printf '  analysing the whole project instead, so nothing is skipped\n'
-    scope="all"
+    printf '  analysis covers the whole project; verdict remains filtered to %s changed file(s)\n' \
+      "${changed_count}"
+    analysis_scope="all"
   else
     inclusions="$(printf '%s' "${changed_json}" | node -e 'let s = "";
 process.stdin.on("data", (d) => (s += d)).on("end", () => {
   process.stdout.write(JSON.parse(s).join(","));
 });')"
-    changed="$(printf '%s' "${changed_json}" | node -e 'let s = "";
-process.stdin.on("data", (d) => (s += d)).on("end", () => {
-  process.stdout.write(JSON.parse(s).join("\n"));
-});')"
-    printf '  scoped to %s changed file(s)\n' "${changed_count}"
+    printf '  scoped analysis and verdict to %s changed file(s)\n' "${changed_count}"
   fi
 fi
 
@@ -233,7 +239,7 @@ say "Analysing"
 # An array, not an unquoted expansion: a changed path containing a space would otherwise split into
 # two arguments and silently scan the wrong scope.
 scanner_args=()
-if [[ -n "${inclusions}" ]]; then
+if [[ "${analysis_scope}" == "changed" && -n "${inclusions}" ]]; then
   # Sonar classifies tests separately and does not apply `sonar.inclusions` to them. Bind both
   # domains to the same exact union or a 100-file diff silently expands into every test in the
   # monorepo, defeating the local gate's bounded-runtime contract.
@@ -253,11 +259,14 @@ KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm scanner \
 # `shelldre:*` rules do not exist there — while SonarCloud runs them. A clean scan here therefore
 # says nothing about a changed shell script, which is exactly the kind of silent gap this lane exists
 # to remove. shellcheck is the closest locally available substitute and covers most of that class.
-if [[ "${scope}" == "changed" && -n "${changed}" ]]; then
+if [[ "${report_scope}" == "changed" && "${changed_count}" != "0" ]]; then
   shell_files=()
-  while IFS= read -r file; do
+  while IFS= read -r -d "" file; do
     [[ "${file}" == *.sh && -f "${repo_root}/${file}" ]] && shell_files+=("${repo_root}/${file}")
-  done <<< "${changed}"
+  done < <(printf '%s' "${changed_json}" | node -e 'let s = "";
+process.stdin.on("data", (d) => (s += d)).on("end", () => {
+  for (const path of JSON.parse(s)) process.stdout.write(`${path}\0`);
+});')
   if [[ ${#shell_files[@]} -gt 0 ]]; then
     say "Checking changed shell scripts (SonarQube Community has no shell analyzer)"
     if ! command -v shellcheck >/dev/null 2>&1; then
@@ -319,5 +328,6 @@ say "Collecting findings"
 issues="$(ask -u "${token}": \
   "${host}/api/issues/search?componentKeys=${project}&resolved=false&ps=500")"
 
-printf '%s' "${issues}" | KEIKO_SONAR_SCOPE="${scope}" KEIKO_SONAR_CHANGED="${changed:-}" \
-  node "${repo_root}/scripts/report-local-sonar-findings.mjs"
+printf '%s' "${issues}" |
+  KEIKO_SONAR_SCOPE="${report_scope}" KEIKO_SONAR_CHANGED_JSON="${changed_json}" \
+    node "${repo_root}/scripts/report-local-sonar-findings.mjs"

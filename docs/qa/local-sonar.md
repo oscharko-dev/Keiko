@@ -46,7 +46,9 @@ single MINOR of this class fails the required `ci` context.
    one machine can run the lane concurrently without overwriting each other's analysis state or
    revoking each other's in-flight token.
 4. Prints the findings that land **on files this branch changed against `origin/dev`**, and exits
-   non-zero if there are any.
+   non-zero if there are any. If a changed path cannot be expressed as an exact Sonar inclusion
+   (for example, a Next.js `[capsuleId]` route), analysis safely expands to the whole project while
+   the report and verdict remain losslessly filtered to the changed-file set.
 
 ```bash
 npm run gates:sonar          # findings on your diff — the pre-push question
@@ -104,5 +106,6 @@ anyway: the rule is real, and the organisation's profile can change.
 | Port 9234 is already allocated            | Another analyzer is active. Run with an unused `KEIKO_LOCAL_SONAR_PORT` as shown above; do not stop or delete an unrelated server.                                                                                                                   |
 | `could not obtain a local analysis token` | The selected server's persisted password and credential file disagree. Stop that same port, remove only its repository/port-scoped `sonar-data` volume and reported credential file, then re-run. Never delete a different Compose project's volume. |
 | The server never becomes healthy          | SonarQube needs roughly 2 GB. Raise Docker Desktop's memory limit, then re-run.                                                                                                                                                                      |
-| `no diff against origin/dev`              | Fetch first (`git fetch origin`). The scan falls back to reporting every finding in the project.                                                                                                                                                     |
+| `base origin/dev cannot be resolved`      | Fetch first (`git fetch origin`). Because the diff cannot be determined, analysis and verdict fail closed to the whole project.                                                                                                                      |
+| `no diff against origin/dev`              | The diff is known to be empty. Analysis covers the whole project because Sonar cannot accept an empty inclusion, but the verdict remains filtered to zero changed files.                                                                             |
 | The scan is slow on the first run         | Expected: the analyzer downloads its Node runtime once into a cached volume. Later runs reuse it.                                                                                                                                                    |

@@ -62,6 +62,32 @@ describe("scoping to the diff", () => {
     expect(selectFindings(payload, { scope: "changed", changed: ["README.md"] })).toEqual([]);
   });
 
+  it("matches dynamic routes and newline paths before sanitizing their report fields", () => {
+    const unusual = {
+      total: 2,
+      issues: [
+        issue(
+          "keiko-local:packages/keiko-ui/src/app/api/capsules/[capsuleId]/route.ts",
+          "typescript:S1",
+          4,
+        ),
+        issue("keiko-local:scripts/line\nbreak.sh", "shell:S2", 8),
+      ],
+    };
+
+    const findings = selectFindings(unusual, {
+      scope: "changed",
+      changed: [
+        "packages/keiko-ui/src/app/api/capsules/[capsuleId]/route.ts",
+        "scripts/line\nbreak.sh",
+      ],
+    });
+
+    expect(findings).toHaveLength(2);
+    expect(findings[0].path).toContain("[capsuleId]");
+    expect(findings[1].path).toBe("scripts/line break.sh");
+  });
+
   it("substitutes a placeholder rather than dropping a finding with missing fields", () => {
     const sparse = { total: 1, issues: [{ component: "keiko-local:a.mjs" }] };
 
@@ -161,6 +187,38 @@ describe("command line surface", () => {
 
     expect(findings).toHaveLength(3);
   });
+
+  it("prefers the lossless changed-file JSON supplied by the shell gate", () => {
+    const unusual = {
+      total: 1,
+      issues: [issue("keiko-local:scripts/line\nbreak.sh", "shell:S2", 8)],
+    };
+    const { findings } = runLocalSonarReport({
+      input: JSON.stringify(unusual),
+      scope: "changed",
+      changed: "README.md",
+      changedJson: JSON.stringify(["scripts/line\nbreak.sh"]),
+      log: vi.fn(),
+    });
+
+    expect(findings).toHaveLength(1);
+  });
+
+  it("fails loud when the lossless changed-file payload is malformed", async () => {
+    const error = vi.fn();
+    const setExitCode = vi.fn();
+
+    await executeLocalSonarCli({
+      input: JSON.stringify(payload),
+      changedJson: JSON.stringify(["README.md", 42]),
+      log: vi.fn(),
+      error,
+      setExitCode,
+    });
+
+    expect(setExitCode).toHaveBeenCalledWith(1);
+    expect(error.mock.calls[0][0]).toContain("changed-file JSON");
+  });
 });
 
 describe("the analyzer payload is untrusted text", () => {
@@ -217,6 +275,42 @@ describe("the analyzer payload is untrusted text", () => {
     await executeLocalSonarCli({
       input: JSON.stringify(capped),
       scope: "all",
+      log: vi.fn(),
+      error,
+      setExitCode,
+    });
+
+    expect(setExitCode).toHaveBeenCalledWith(1);
+    expect(error.mock.calls[0][0]).toContain("truncated");
+  });
+
+  it("does not let an unrelated truncated full scan overturn a known-empty diff", async () => {
+    const capped = { total: 900, issues: [] };
+    const error = vi.fn();
+    const setExitCode = vi.fn();
+
+    await executeLocalSonarCli({
+      input: JSON.stringify(capped),
+      scope: "changed",
+      changedJson: "[]",
+      log: vi.fn(),
+      error,
+      setExitCode,
+    });
+
+    expect(setExitCode).toHaveBeenCalledWith(0);
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("still fails closed when a truncated scan covers a non-empty changed set", async () => {
+    const capped = { total: 900, issues: [] };
+    const error = vi.fn();
+    const setExitCode = vi.fn();
+
+    await executeLocalSonarCli({
+      input: JSON.stringify(capped),
+      scope: "changed",
+      changedJson: JSON.stringify(["packages/keiko-ui/src/app/page.tsx"]),
       log: vi.fn(),
       error,
       setExitCode,

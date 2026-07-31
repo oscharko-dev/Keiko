@@ -19,10 +19,12 @@ otherwise healthy cannot merge because live branch protection requires KFQ.
 
 ## Root Cause
 
-KFQ fails closed: absent, stale, malformed, or still-settling Qodo evidence remains pending rather
-than being reported as successful. The dashboard binds an evaluation to a head SHA and exposes only
-redacted timing metadata. A delayed or lost webhook, an unavailable evaluator, or missing
-current-head review evidence can therefore leave the check pending.
+KFQ fails closed: absent, stale, malformed, unchanged, or still-settling Qodo evidence remains
+pending rather than being reported as successful. The dashboard binds an evaluation to a head SHA
+and exposes only redacted timing metadata. The app-bound check output also carries a body-free
+SHA-256 digest of the Qodo body after all 40-hex commit IDs are normalized. A delayed event, an
+unavailable evaluator, missing predecessor evidence, or a vendor edit that rewrites only commit SHAs
+can therefore leave the check pending.
 
 Since the ADR-0142 cutover (2026-07-19) the canonical producer is the GitHub Action: recovery is
 event-driven. Every completion of a direct required check (`check_run`) and every pull-request
@@ -75,6 +77,16 @@ Worker era only; the rollback template in `infrastructure/keiko-for-quality/` re
    (`KFQ_APP_ID` / `KFQ_PRIVATE_KEY_PKCS8` repository secrets) are missing or invalid — the
    pinned protection context will not accept that check, so repair the secrets rather than
    re-dispatching.
+7. Classify digest-chain failures without copying the review body:
+   - `prior ... has not been established` means KFQ recorded a pending baseline. Await a genuine
+     Qodo production on that head or request `/review`; the normalized digest must change before the
+     baseline becomes accepted.
+   - `prior ... is missing or unparseable` means the app-bound dashboard points to an evidence head
+     whose matching app-bound KFQ check or digest marker cannot be verified. Re-dispatch once to
+     exclude transient publication failure; repeated failure is an evaluator/evidence incident.
+   - `unchanged from the previously evaluated head` means Qodo changed only normalized-away commit
+     references. Request `/review` once. If the digest stays unchanged, treat it as a vendor incident
+     rather than advancing or deleting the baseline.
 
 Do not copy review bodies, source URLs, tokens, webhook payloads, or private run logs into an
 incident record. Record pull-request number, head SHA, normalized timestamps, check state, event
@@ -86,7 +98,8 @@ type, and redacted error category only.
    event (a new head, a completed direct required check, a pull-request comment) or run the
    explicit dispatch, then verify that the dashboard's evaluated head matches the pull request's
    current head and that its timestamp advances. Repair event delivery, workflow, or
-   App-credential configuration at the owning surface.
+   App-credential configuration at the owning surface. Never edit the hidden baseline marker or
+   synthesize a digest: both are body-free evidence owned by the KFQ App.
 2. If recovery does not occur and an owner determines that KFQ is unavailable, unbounded, or
    self-deadlocked, the owner may explicitly authorize the narrow ADR-0135 D7 escape. Before use,
    re-check repository administrators and custom roles with `bypass branch protections`; GitHub's
