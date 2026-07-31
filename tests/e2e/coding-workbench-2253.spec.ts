@@ -1,8 +1,10 @@
-import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
+import { validateCodingWorkbenchCodexSubscriptionProfile } from "@oscharko-dev/keiko-contracts";
 import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, writeFileSync, type Stats } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
+import { installLiveCodingWorkbenchRuntime } from "./support/coding-workbench-live-runtime.js";
 import { evidenceScreenshotPath } from "./support/evidence.js";
 
 // Issue #2253 - browser evidence that an unapproved Codex redistribution fails closed in the
@@ -12,8 +14,8 @@ import { evidenceScreenshotPath } from "./support/evidence.js";
 const REPO_ROOT = resolve(process.cwd());
 const EVIDENCE_DIR = resolve(REPO_ROOT, "docs", "design-system", "evidence", "2253");
 const WORKSPACE_KEY = "keiko.workspace.v4";
-const UNAVAILABLE_COPY = "Codex subscriptions are not supported in this release.";
-const UNAVAILABLE_ANNOUNCEMENT = "ChatGPT/Codex subscription profile unavailable in this release";
+const CONFIRMED_SOURCE = "Keiko Gateway";
+const UNAVAILABLE_ANNOUNCEMENT = "Subscription authentication not selected.";
 // WindowFrame's 2px border plus its one-pixel selection edge appear in scroll metrics but cannot
 // produce a horizontal scroll range. Anything beyond this is content overflow.
 const HORIZONTAL_OVERFLOW_TOLERANCE_PX = 3;
@@ -74,16 +76,15 @@ interface CaptureRecord {
   readonly forcedColors: MediaForcedColors;
   readonly reducedMotion: MediaReducedMotion;
   readonly liveAnnouncement: string;
-  readonly unavailableCopy: string;
+  readonly profileStatus: "redistribution-unapproved";
+  readonly confirmedSource: string;
+  readonly codexSourceAffordances: number;
   readonly workbenchLabel: string | null;
-  readonly runtimeCardLabelledBy: string | null;
   readonly seriousOrCriticalAxeViolations: number;
   readonly documentHasHorizontalOverflow: boolean;
   readonly outerWindowHasHorizontalOverflow: boolean;
   readonly windowBodyHasHorizontalOverflow: boolean;
   readonly workbenchHasHorizontalOverflow: boolean;
-  readonly sourceStatusHasHorizontalOverflow: boolean;
-  readonly codexCardHasHorizontalOverflow: boolean;
   readonly viewportBoundsChecks: readonly ViewportBoundsCheck[];
 }
 
@@ -196,43 +197,6 @@ function cssSha256(path: string): string {
     .digest("hex");
 }
 
-function redistributionUnapprovedProfile(): JsonObject {
-  return {
-    schemaVersion: "1",
-    profileId: "codex-subscription",
-    modelSource: "chatgpt-codex-subscription-profile",
-    runtimeSource: "codex-cli-adapter",
-    status: "redistribution-unapproved",
-    credentialStore: "file",
-    stateScope: "keiko-owned-state",
-    stateRoot: "keiko-codex-runtime-state",
-    usesGlobalCodexHome: false,
-    runtimeBinarySources: [],
-    supportsBrowserLogin: false,
-    supportsDeviceCode: false,
-    supportsAccessToken: false,
-    deploymentPolicyDisabled: false,
-    headless: false,
-  };
-}
-
-function unavailableSidecarProfile(): JsonObject {
-  return { status: "unavailable", reason: "missing-config" };
-}
-
-async function fulfillJson(route: Route, body: JsonObject): Promise<void> {
-  await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
-}
-
-async function installProfileRoutes(page: Page): Promise<void> {
-  await page.route("**/api/coding-sidecar/gateway/profile", async (route) => {
-    await fulfillJson(route, unavailableSidecarProfile());
-  });
-  await page.route("**/api/coding-workbench/codex-subscription/profile", async (route) => {
-    await fulfillJson(route, redistributionUnapprovedProfile());
-  });
-}
-
 function codingWindow(mode: ModeCase): JsonObject {
   return {
     id: "issue-2253-coding-unavailable",
@@ -262,7 +226,9 @@ async function seedUnavailableWorkbench(page: Page, mode: ModeCase): Promise<voi
 async function openMode(page: Page, mode: ModeCase): Promise<void> {
   await page.setViewportSize(mode.viewport);
   await page.emulateMedia(mode.media);
-  await installProfileRoutes(page);
+  await installLiveCodingWorkbenchRuntime(page, {
+    authStatus: "redistribution-unapproved",
+  });
   await seedUnavailableWorkbench(page, mode);
   await page.goto("/");
   await page.evaluate((dataHc) => {
@@ -283,43 +249,43 @@ function windowBody(page: Page): Locator {
   return outerWindow(page).locator(".win-body");
 }
 
-function sourceStatus(page: Page): Locator {
-  return page.getByRole("region", { name: "Source status" });
-}
-
-function codexCard(page: Page): Locator {
-  return sourceStatus(page)
-    .locator("article")
-    .filter({ hasText: "ChatGPT/Codex subscription profile" });
-}
-
-function codexProfileLabel(page: Page): Locator {
-  return codexCard(page).getByText("ChatGPT/Codex subscription profile", { exact: true });
-}
-
-function unavailableDetail(page: Page): Locator {
-  return codexCard(page).getByText(UNAVAILABLE_COPY, { exact: true });
-}
-
-function unavailableStatus(page: Page): Locator {
-  return codexCard(page).getByText("Unavailable in this release", { exact: true });
+function confirmedSource(page: Page): Locator {
+  return workbench(page).getByText(CONFIRMED_SOURCE, { exact: true });
 }
 
 function unavailableAnnouncement(surface: Locator): Locator {
   return surface.locator('[role="status"]').filter({ hasText: UNAVAILABLE_ANNOUNCEMENT });
 }
 
+async function expectUnapprovedProfile(page: Page): Promise<void> {
+  const candidate: unknown = await page.evaluate(async () => {
+    const response = await fetch("/api/coding-workbench/codex-subscription/profile");
+    if (!response.ok) throw new Error("Codex profile fixture request failed");
+    const body: unknown = await response.json();
+    return body;
+  });
+  const validation = validateCodingWorkbenchCodexSubscriptionProfile(candidate);
+  expect(validation.ok).toBe(true);
+  if (!validation.ok) throw new Error("Codex profile fixture failed contract validation");
+  expect(validation.value).toMatchObject({
+    status: "redistribution-unapproved",
+    runtimeBinarySources: [],
+    supportsBrowserLogin: false,
+    supportsDeviceCode: false,
+    supportsAccessToken: false,
+  });
+}
+
 async function expectUnavailableSurface(page: Page): Promise<Locator> {
   const surface = workbench(page);
   await expect(surface).toBeVisible();
-  await expect(sourceStatus(page)).toBeVisible();
-  await expect(codexCard(page)).toBeVisible();
-  await expect(unavailableDetail(page)).toBeVisible();
-  await expect(unavailableStatus(page)).toBeVisible();
+  await expect(confirmedSource(page)).toBeVisible();
   const announcement = unavailableAnnouncement(surface);
   await expect(announcement).toBeAttached();
   await expect(announcement).toHaveAttribute("aria-live", "polite");
   await expect(announcement).toHaveAttribute("aria-atomic", "true");
+  await expect(surface.getByRole("radiogroup", { name: "Runtime model source" })).toHaveCount(0);
+  await expect(surface.getByText("ChatGPT/Codex subscription", { exact: true })).toHaveCount(0);
   await expect(surface.getByText("Needs setup", { exact: true })).toHaveCount(0);
   await expect(surface.getByRole("button", { name: /login|local install/u })).toHaveCount(0);
   return surface;
@@ -327,6 +293,7 @@ async function expectUnavailableSurface(page: Page): Promise<Locator> {
 
 async function captureMode(page: Page, mode: ModeCase): Promise<CaptureRecord> {
   await openMode(page, mode);
+  await expectUnapprovedProfile(page);
   const surface = await expectUnavailableSurface(page);
   const violations = seriousOrCritical(
     await runAxe(page, 'section[aria-label="Coding Workbench"][data-state]'),
@@ -341,12 +308,9 @@ async function captureMode(page: Page, mode: ModeCase): Promise<CaptureRecord> {
     expect(overflow.outerWindowHasHorizontalOverflow).toBe(false);
     expect(overflow.windowBodyHasHorizontalOverflow).toBe(false);
     expect(overflow.workbenchHasHorizontalOverflow).toBe(false);
-    expect(overflow.sourceStatusHasHorizontalOverflow).toBe(false);
-    expect(overflow.codexCardHasHorizontalOverflow).toBe(false);
   }
-  const status = sourceStatus(page);
-  await status.scrollIntoViewIfNeeded();
-  await status.screenshot({ path: screenshotPath(mode.file) });
+  await surface.scrollIntoViewIfNeeded();
+  await surface.screenshot({ path: screenshotPath(mode.file) });
   return captureRecord(page, surface, mode, violations.length, overflow, viewportBoundsChecks);
 }
 
@@ -368,14 +332,10 @@ async function assertNarrowFrameViewportBounds(
   const outerFrameBounds = { left: outerFrame.left, right: outerFrame.right };
   const innerChecks = await Promise.all([
     boundsCheck(surface, "Coding Workbench", viewportWidth, outerFrameBounds),
-    boundsCheck(sourceStatus(page), "Source status region", viewportWidth, outerFrameBounds),
-    boundsCheck(codexCard(page), "Codex card", viewportWidth, outerFrameBounds),
-    boundsCheck(codexProfileLabel(page), "Codex profile label", viewportWidth, outerFrameBounds),
-    boundsCheck(unavailableDetail(page), "unavailable detail", viewportWidth, outerFrameBounds),
-    boundsCheck(unavailableStatus(page), "unavailable status", viewportWidth, outerFrameBounds),
+    boundsCheck(confirmedSource(page), "confirmed source context", viewportWidth, outerFrameBounds),
   ]);
   const checks = [outerFrame, ...innerChecks];
-  expect(checks).toHaveLength(7);
+  expect(checks).toHaveLength(3);
   return checks;
 }
 
@@ -422,8 +382,6 @@ async function overflowState(
   readonly outerWindowHasHorizontalOverflow: boolean;
   readonly windowBodyHasHorizontalOverflow: boolean;
   readonly workbenchHasHorizontalOverflow: boolean;
-  readonly sourceStatusHasHorizontalOverflow: boolean;
-  readonly codexCardHasHorizontalOverflow: boolean;
 }> {
   const documentHasHorizontalOverflow = await page.evaluate(
     (tolerance) => document.documentElement.scrollWidth > window.innerWidth + tolerance,
@@ -441,21 +399,11 @@ async function overflowState(
     (node, tolerance) => node.scrollWidth > node.clientWidth + tolerance,
     HORIZONTAL_OVERFLOW_TOLERANCE_PX,
   );
-  const sourceStatusHasHorizontalOverflow = await sourceStatus(page).evaluate(
-    (node, tolerance) => node.scrollWidth > node.clientWidth + tolerance,
-    HORIZONTAL_OVERFLOW_TOLERANCE_PX,
-  );
-  const codexCardHasHorizontalOverflow = await codexCard(page).evaluate(
-    (node, tolerance) => node.scrollWidth > node.clientWidth + tolerance,
-    HORIZONTAL_OVERFLOW_TOLERANCE_PX,
-  );
   return {
     documentHasHorizontalOverflow,
     outerWindowHasHorizontalOverflow,
     windowBodyHasHorizontalOverflow,
     workbenchHasHorizontalOverflow,
-    sourceStatusHasHorizontalOverflow,
-    codexCardHasHorizontalOverflow,
   };
 }
 
@@ -476,9 +424,12 @@ async function captureRecord(
     forcedColors: mode.media.forcedColors,
     reducedMotion: mode.media.reducedMotion,
     liveAnnouncement: await unavailableAnnouncement(surface).innerText(),
-    unavailableCopy: await surface.getByText(UNAVAILABLE_COPY, { exact: true }).innerText(),
+    profileStatus: "redistribution-unapproved",
+    confirmedSource: await confirmedSource(page).innerText(),
+    codexSourceAffordances: await surface
+      .getByText("ChatGPT/Codex subscription", { exact: true })
+      .count(),
     workbenchLabel: await surface.getAttribute("aria-label"),
-    runtimeCardLabelledBy: await sourceStatus(page).getAttribute("aria-labelledby"),
     seriousOrCriticalAxeViolations: axeViolationCount,
     viewportBoundsChecks,
     ...overflow,
@@ -489,7 +440,7 @@ function sourceProof(): JsonObject {
   return {
     globalsCssSha256: cssSha256("packages/keiko-ui/src/app/globals.css"),
     codingWorkbenchModuleSha256: cssSha256(
-      "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchModelCards.tsx",
+      "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.tsx",
     ),
     codingWorkbenchStylesSha256: cssSha256(
       "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css",
@@ -509,14 +460,14 @@ function fidelityProof(captures: readonly CaptureRecord[], source: JsonObject): 
     assertions: {
       redistributionProfileHasNoRuntimeBinarySources: true,
       redistributionProfileHasNoSetupCapabilities: true,
-      unavailableCopyVisibleInEveryMode: captures.length,
+      confirmedGatewayContextVisibleInEveryMode: captures.length,
       politeStatusAnnouncements: captures.length,
-      labelledWorkbenchAndRuntimeCard: captures.length,
-      unavailableAffordancesAbsent: true,
+      labelledWorkbench: captures.length,
+      codexSourceAffordancesAbsent: true,
       native304pxOuterFrameReflowAt320px: true,
       desktopViewport304pxFrameReflow: true,
-      viewportBoundsChecksPer304pxFrame: 7,
-      outerFrameContentBoundsChecksPer304pxFrame: 6,
+      viewportBoundsChecksPer304pxFrame: 3,
+      outerFrameContentBoundsChecksPer304pxFrame: 2,
       windowBodyNoHorizontalOverflow: true,
     },
   };
@@ -527,7 +478,7 @@ function a11yProof(captures: readonly CaptureRecord[], source: JsonObject): Json
     issue: 2253,
     verdict: "PASS",
     proofType: "browser-capture-plus-axe-core",
-    gate: "Unavailable Codex subscription state remains labelled, politely announced, actionable only through supported paths, and reflows inside a 304px frame at mobile and desktop viewport widths.",
+    gate: "An unapproved Codex redistribution remains absent from the reachable Workbench while the server-confirmed Gateway context stays labelled, politely announced, and bounded inside a 304px frame.",
     ...source,
     captures: captures.map((capture) => ({
       file: capture.file,
@@ -538,8 +489,6 @@ function a11yProof(captures: readonly CaptureRecord[], source: JsonObject): Json
       outerWindowHasHorizontalOverflow: capture.outerWindowHasHorizontalOverflow,
       windowBodyHasHorizontalOverflow: capture.windowBodyHasHorizontalOverflow,
       workbenchHasHorizontalOverflow: capture.workbenchHasHorizontalOverflow,
-      sourceStatusHasHorizontalOverflow: capture.sourceStatusHasHorizontalOverflow,
-      codexCardHasHorizontalOverflow: capture.codexCardHasHorizontalOverflow,
       viewportBoundsChecks: capture.viewportBoundsChecks,
     })),
   };
@@ -557,7 +506,8 @@ function manifest(captures: readonly CaptureRecord[]): JsonObject {
     redaction: {
       profileFixture:
         "contains only deterministic status/capability metadata; no credentials, paths, endpoints, or runtime output",
-      screenshots: "capture the labelled Source status region and unavailable Codex card",
+      screenshots:
+        "capture the current labelled Workbench with its server-confirmed Gateway context",
       proofs: "contain assertions, accessibility counts, hashes, and visible product copy only",
     },
   };
@@ -573,7 +523,7 @@ function writeArtifacts(captures: readonly CaptureRecord[]): void {
   writeJsonArtifact("manifest.json", manifest(captures));
 }
 
-test("Issue #2253 unavailable Codex subscription fidelity and accessibility evidence", async ({
+test("Issue #2253 unapproved Codex redistribution stays absent from the Workbench", async ({
   browser,
 }) => {
   ensureEvidenceDir();

@@ -647,7 +647,8 @@ async function uiRenameCapsule(page: Page, fromName: string, toName: string): Pr
   await page.getByRole("button", { name: "Cancel" }).click();
   await expect(page.getByRole("heading", { name: fromName })).toBeVisible();
   await page.getByRole("button", { name: `Rename Knowledge Pod ${fromName}` }).click();
-  const input = page.getByLabel("Display name");
+  const renameForm = page.getByRole("form", { name: "Rename Knowledge Pod" });
+  const input = renameForm.getByLabel("Display name", { exact: true });
   await input.fill("");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Display name is required.")).toBeVisible();

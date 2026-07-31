@@ -9,7 +9,7 @@ import { installRuntimeRoutes } from "./coding-workbench-live-runtime-routes.js"
 
 type FixtureAuthStatus = Extract<
   CodingWorkbenchCodexAuthStatus,
-  "connected" | "missing" | "expired"
+  "connected" | "missing" | "expired" | "redistribution-unapproved"
 >;
 
 export interface LiveRuntimeFixtureOptions {

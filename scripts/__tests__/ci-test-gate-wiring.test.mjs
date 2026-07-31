@@ -61,6 +61,9 @@ const retrievalFixtures = readFileSync(
 const REQUIRED_EXTENDED_SUITES = [
   "test:e2e:editor-baseline-1377",
   "test:e2e:editor-layout-1375",
+  "test:e2e:coding-workbench-2253",
+  "test:e2e:formatting-1380",
+  "test:e2e:language-intelligence-1383",
   "test:e2e:git-changes-1575",
   "test:e2e:local-knowledge",
   "test:e2e:code-task:opencode-tracer",
