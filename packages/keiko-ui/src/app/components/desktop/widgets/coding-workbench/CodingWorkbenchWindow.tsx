@@ -1,10 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import type {
-  CodingWorkbenchRuntimeApprovalDecision,
-  CodingWorkbenchRuntimePendingPermission,
-  CodingWorkbenchRuntimeSseEvent,
+import {
+  CODING_WORKBENCH_MODES,
+  isCodingWorkbenchMode,
+  isCodingWorkbenchModeWidening,
+  type CodingWorkbenchMode,
+  type CodingWorkbenchRuntimeApprovalDecision,
+  type CodingWorkbenchRuntimePendingPermission,
+  type CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
 import { useTranslate } from "@/lib/i18n";
 import {
@@ -64,6 +68,27 @@ function latestChangesSignal(events: readonly CodingWorkbenchRuntimeSseEvent[]):
     if (event?.kind === "status" || event?.eventKind === "diff-summarized") return event.cursor;
   }
   return null;
+}
+
+interface ResumeModeSelection {
+  readonly runId: string;
+  readonly currentMode: CodingWorkbenchMode;
+  readonly value: CodingWorkbenchMode;
+}
+
+function resumableModes(currentMode: CodingWorkbenchMode): readonly CodingWorkbenchMode[] {
+  return CODING_WORKBENCH_MODES.filter((mode) => !isCodingWorkbenchModeWidening(currentMode, mode));
+}
+
+function selectedResumeMode(
+  selection: ResumeModeSelection | null,
+  runId: string | undefined,
+  currentMode: CodingWorkbenchMode | undefined,
+): CodingWorkbenchMode | null {
+  if (runId === undefined || currentMode === undefined) return null;
+  return selection?.runId === runId && selection.currentMode === currentMode
+    ? selection.value
+    : currentMode;
 }
 
 export function CodingWorkbenchWindow({
@@ -199,6 +224,7 @@ function WorkbenchColumns({
   research,
 }: Omit<WorkbenchContentProps, "alert" | "focusRef" | "t" | "workbenchLabel">): ReactNode {
   const t = useCodingWorkbenchTranslate();
+  const [resumeSelection, setResumeSelection] = useState<ResumeModeSelection | null>(null);
   // The bootstrap Code setup (#2385) renders whenever no active task-workspace binding exists, so a
   // hand-bound repository can be bound → verified → started entirely from the UI (#2476). It no longer
   // hides behind runtime availability: on an unactivated install it stays reachable and honestly
@@ -234,6 +260,13 @@ function WorkbenchColumns({
     runId: state.run.value?.runId,
     active: activeRunState(state.run.value?.state),
   });
+  const pausedRun = state.run.value?.state === "paused" ? state.run.value : undefined;
+  const resumeMode = selectedResumeMode(
+    resumeSelection,
+    pausedRun?.runId,
+    pausedRun?.effectiveMode,
+  );
+  const resumeModes = pausedRun?.effectiveMode ? resumableModes(pausedRun.effectiveMode) : [];
   const taskComposer = (
     <TaskStartSection
       taskIntent={taskIntent}
@@ -241,11 +274,14 @@ function WorkbenchColumns({
       actions={{
         onStart: () => void actions.start(taskIntent.trim()),
         onPause: () => void actions.pause(),
-        onResume: () => void actions.resume(),
+        onResume: () => {
+          if (resumeMode !== null) void actions.resume(resumeMode);
+        },
         onSend: () => void actions.submitFollowUp(taskIntent.trim()),
       }}
       canStart={state.canStart}
       runState={state.run.value?.state}
+      canResume={resumeMode !== null}
       mutationPending={state.mutation.status === "pending"}
       startBusy={state.mutation.kind === "start" && state.mutation.status === "pending"}
     />
@@ -285,6 +321,7 @@ function WorkbenchColumns({
             if (research.grant !== null) void actions.revokeResearchGrant(research.grant);
           }}
         />
+        <RuntimeResultPanel state={state} />
         <Timeline events={state.events} activity={activity} questions={questions} />
         <CodingWorkbenchChanges
           root={
@@ -299,7 +336,20 @@ function WorkbenchColumns({
         />
       </div>
       <div className={styles.composerDock}>
-        <RuntimeControls state={state} actions={actions} />
+        <RuntimeControls
+          state={state}
+          actions={actions}
+          resumeMode={resumeMode}
+          resumeModes={resumeModes}
+          onResumeModeChange={(mode): void => {
+            if (pausedRun?.runId === undefined || pausedRun.effectiveMode === undefined) return;
+            setResumeSelection({
+              runId: pausedRun.runId,
+              currentMode: pausedRun.effectiveMode,
+              value: mode,
+            });
+          }}
+        />
         {taskComposer}
       </div>
     </div>
@@ -351,7 +401,10 @@ function SessionContextBar({
   // Never present the locally requested mode as the effective one. Until readiness resolves, the
   // request and the server's answer can differ — a deployment ceiling clamps it — and this bar is
   // where an operator reads the authority a run will actually get.
-  const confirmedMode = state.runtime.value?.effectiveMode ?? null;
+  const snapshot = state.run.value;
+  const confirmedMode = activeRunState(snapshot?.state)
+    ? (snapshot?.effectiveMode ?? null)
+    : (state.runtime.value?.effectiveMode ?? null);
   const repository = activeWorkspace.activeBinding?.activeRoot;
   const workspaceValue = workspaceContextValue(workspace, t);
   // F-01: an unavailable source (e.g. the sidecar gateway profile reporting no-tool-calling) is
@@ -391,7 +444,19 @@ interface LiveSectionProps {
   readonly actions: CodingWorkbenchRuntimeActions;
 }
 
-function RuntimeControls({ state, actions }: LiveSectionProps): ReactNode {
+interface RuntimeControlsProps extends LiveSectionProps {
+  readonly resumeMode: CodingWorkbenchMode | null;
+  readonly resumeModes: readonly CodingWorkbenchMode[];
+  readonly onResumeModeChange: (mode: CodingWorkbenchMode) => void;
+}
+
+function RuntimeControls({
+  state,
+  actions,
+  resumeMode,
+  resumeModes,
+  onResumeModeChange,
+}: RuntimeControlsProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const running = activeRunState(state.run.value?.state);
   const busy = state.mutation.status === "pending";
@@ -399,6 +464,34 @@ function RuntimeControls({ state, actions }: LiveSectionProps): ReactNode {
   return (
     <div className={styles.runtimeControls} aria-label={t("codingWorkbench.controls.title")}>
       <span>{t("codingWorkbench.controls.help")}</span>
+      {state.run.value?.state === "paused" && resumeMode !== null ? (
+        <div className={styles.resumeModeControl}>
+          <label className={styles.resumeModeLabel} htmlFor="coding-workbench-resume-mode">
+            {t("codingWorkbench.controls.resumeMode.label")}
+          </label>
+          <select
+            className={styles.resumeModeSelect}
+            id="coding-workbench-resume-mode"
+            value={resumeMode}
+            disabled={busy}
+            aria-describedby="coding-workbench-resume-mode-help"
+            onChange={(event): void => {
+              if (isCodingWorkbenchMode(event.target.value)) {
+                onResumeModeChange(event.target.value);
+              }
+            }}
+          >
+            {resumeModes.map((mode) => (
+              <option key={mode} value={mode}>
+                {modeLabel(mode, t)}
+              </option>
+            ))}
+          </select>
+          <span className="sr-only" id="coding-workbench-resume-mode-help">
+            {t("codingWorkbench.controls.resumeMode.help")}
+          </span>
+        </div>
+      ) : null}
       <div className={styles.inlineActions}>
         <button
           className={cx(styles.button, styles.buttonDanger)}
@@ -418,6 +511,48 @@ function RuntimeControls({ state, actions }: LiveSectionProps): ReactNode {
         </button>
       </div>
     </div>
+  );
+}
+
+function RuntimeResultPanel({ state }: { readonly state: CodingWorkbenchRuntimeState }): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const result = state.run.value?.result;
+  if (result === undefined) return null;
+  const exitCode =
+    result.exitCode === null ? t("codingWorkbench.result.noExitCode") : String(result.exitCode);
+  const summary = (channel: "output" | "error"): readonly { label: string; value: string }[] => {
+    const value = result[channel];
+    return [
+      { label: t(`codingWorkbench.result.${channel}.bytes`), value: String(value.byteCount) },
+      { label: t(`codingWorkbench.result.${channel}.lines`), value: String(value.lineCount) },
+      { label: t(`codingWorkbench.result.${channel}.digest`), value: value.sha256 },
+      {
+        label: t(`codingWorkbench.result.${channel}.truncated`),
+        value: t(value.truncated ? "codingWorkbench.result.yes" : "codingWorkbench.result.no"),
+      },
+    ];
+  };
+  const facts = [
+    {
+      label: t("codingWorkbench.result.status"),
+      value: t(`codingWorkbench.result.status.${result.status}`),
+    },
+    { label: t("codingWorkbench.result.exitCode"), value: exitCode },
+    ...summary("output"),
+    ...summary("error"),
+  ];
+  return (
+    <section className={styles.card} aria-labelledby="coding-runtime-result-title">
+      <PanelTitle eyebrow={t("codingWorkbench.result.eyebrow")} id="coding-runtime-result-title">
+        {t("codingWorkbench.result.title")}
+      </PanelTitle>
+      <p className={styles.helpText}>{t("codingWorkbench.result.help")}</p>
+      <dl className={styles.approvalFacts} aria-label={t("codingWorkbench.result.facts")}>
+        {facts.map((fact) => (
+          <ApprovalFact key={fact.label} label={fact.label} value={fact.value} />
+        ))}
+      </dl>
+    </section>
   );
 }
 

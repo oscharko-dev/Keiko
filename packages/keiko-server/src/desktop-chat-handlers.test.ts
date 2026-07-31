@@ -26,7 +26,10 @@ import type {
   MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
 import { DEFAULT_CONTEXT_PROFILE, deriveContextProfile } from "@oscharko-dev/keiko-contracts";
-import { MAX_DESKTOP_CHAT_INPUT_BYTES } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  MAX_DESKTOP_CHAT_INPUT_BYTES,
+  type ChatMessage,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 
 const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "example-chat-model";
@@ -394,7 +397,11 @@ describe("desktop chat routes", () => {
 
     expect(sendRes.status).toBe(400);
     expect(store.listMessages(created.chat.id)).toMatchObject([
-      { role: "user", content: "Keep the adapter-failure transcript" },
+      {
+        role: "user",
+        content: "Keep the adapter-failure transcript",
+        turnState: "failed",
+      },
     ]);
   });
 
@@ -1275,7 +1282,7 @@ describe("desktop chat routes", () => {
     memoryVault.close();
   });
 
-  it("regenerates the latest assistant turn through the gateway and preserves its message id", async () => {
+  it("regenerates as a new response version without losing the prior answer", async () => {
     await restartWithDeps(deps(fakeModel("replacement answer")));
     const chat = store.createChat(projectDir, "t", CHAT_MODEL);
     store.createMessage({
@@ -1313,14 +1320,22 @@ describe("desktop chat routes", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      messages: { id: string; role: string; content: string }[];
-    };
+    const body = (await res.json()) as { messages: ChatMessage[] };
     expect(body.messages).toHaveLength(1);
     expect(body.messages[0]).toMatchObject({
       id: assistant.id,
       role: "assistant",
       content: "replacement answer",
+      responseVersion: 2,
+      supersedesResponseVersion: 1,
+      responseVersions: [
+        { version: 1, content: "stale answer", timestamp: 2 },
+        {
+          version: 2,
+          content: "replacement answer",
+          supersedesVersion: 1,
+        },
+      ],
     });
     expect(seenRequests).toHaveLength(1);
     expect(seenRequests[0]?.messages.at(-1)).toEqual({
@@ -1328,7 +1343,11 @@ describe("desktop chat routes", () => {
       content: "original question",
     });
     expect(JSON.stringify(seenRequests[0]?.messages)).not.toContain("stale answer");
-    expect(store.findMessageById(assistant.id)?.content).toBe("replacement answer");
+    expect(store.findMessageById(assistant.id)).toMatchObject({
+      content: "replacement answer",
+      responseVersion: 2,
+      supersedesResponseVersion: 1,
+    });
     expect(store.listMessages(chat.id).map((message) => message.id)).toContain(assistant.id);
   });
 
@@ -2481,6 +2500,49 @@ describe("desktop chat routes", () => {
   // calls on every rejection path. AC#3 requires error messages are safe for browser display;
   // we assert the four typed error codes flow through to the wire shape and contain no value
   // echo from the caller's payload.
+
+  it("refuses vision delivery without current app-session authority before the provider call", async () => {
+    const visionConfig: GatewayConfig = {
+      ...customModelConfig(CHAT_MODEL),
+      capabilities: customModelConfig(CHAT_MODEL).capabilities?.map((capability) => ({
+        ...capability,
+        supportsImageInput: true,
+      })),
+    };
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    await restartWithDeps(deps(fakeModel("must not run"), { config: visionConfig }));
+
+    const response = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        content: "Inspect this image.",
+        modelId: CHAT_MODEL,
+        attachmentIntent: "deliver-images-to-selected-model",
+        attachments: [
+          {
+            id: "d9428888-122b-4b3e-a23f-123456789abc",
+            kind: "image",
+            name: "screen.png",
+            mimeType: "image/png",
+            sizeBytes: 4,
+            attachmentRef: `chat-attachment:${"a".repeat(64)}`,
+            sha256: "b".repeat(64),
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(seenRequests).toHaveLength(0);
+  });
 
   it("rejects a send when the selected model is an embedding model with CONVERSATION_UNAVAILABLE_MODEL", async () => {
     const modelId = "example-embed";

@@ -26,6 +26,12 @@ function tableNames(db: DatabaseSync): string[] {
 
 function seedV16WorkspaceTables(db: DatabaseSync): void {
   db.exec(`
+    CREATE TABLE chat_messages (
+      id TEXT NOT NULL PRIMARY KEY
+    ) STRICT;
+    CREATE TABLE coding_runtime_snapshots (
+      run_id TEXT NOT NULL PRIMARY KEY
+    ) STRICT;
     CREATE TABLE workspace_manifest_roots (
       workspace_id TEXT NOT NULL,
       root_ref TEXT NOT NULL UNIQUE,
@@ -134,7 +140,7 @@ describe("runMigrations", () => {
 
       runMigrations(db);
 
-      expect(userVersion(db)).toBe(17);
+      expect(userVersion(db)).toBe(SCHEMA_VERSION);
       expect(
         db.prepare("SELECT object_identity_digest FROM workspace_manifest_roots").get(),
       ).toEqual({ object_identity_digest: identity.objectIdentityDigest });
@@ -325,6 +331,18 @@ describe("runMigrations", () => {
     expect(index.sql).toContain("client_turn_id IS NOT NULL");
   });
 
+  it("v18 adds durable assistant response-version history", () => {
+    const db = openMem();
+    runMigrations(db);
+
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(18);
+    const columns = (
+      db.prepare("PRAGMA table_info(chat_messages)").all() as { name: string }[]
+    ).map((row) => row.name);
+    expect(columns).toContain("assistant_response_versions_json");
+    db.close();
+  });
+
   it("v11 creates the singleton canonical memory autonomy policy", () => {
     const db = openMem();
     runMigrations(db);
@@ -397,6 +415,38 @@ describe("runMigrations", () => {
       )
       .get() as { sql: string };
     expect(index.sql).toContain("WHERE terminal_at IS NULL");
+  });
+
+  it("migrates a v17 database through chat v18 and body-free runtime-result v19", () => {
+    const db = openMem();
+    db.exec(`
+      CREATE TABLE chat_messages (id TEXT PRIMARY KEY) STRICT;
+      CREATE TABLE coding_runtime_snapshots (run_id TEXT PRIMARY KEY) STRICT;
+      PRAGMA user_version = 17;
+    `);
+
+    runMigrations(db);
+
+    expect(userVersion(db)).toBe(SCHEMA_VERSION);
+    const chatColumns = (
+      db.prepare("PRAGMA table_info(chat_messages)").all() as { name: string }[]
+    ).map((row) => row.name);
+    const runtimeColumns = (
+      db.prepare("PRAGMA table_info(coding_runtime_snapshots)").all() as { name: string }[]
+    ).map((row) => row.name);
+    expect(chatColumns).toContain("assistant_response_versions_json");
+    expect(runtimeColumns).toEqual(
+      expect.arrayContaining([
+        "result_status",
+        "exit_code",
+        "stdout_byte_count",
+        "stdout_sha256",
+        "stderr_byte_count",
+        "stderr_sha256",
+      ]),
+    );
+    expect(runtimeColumns).not.toContain("stdout_body");
+    expect(runtimeColumns).not.toContain("stderr_body");
   });
 
   it("creates the v1 schema and bumps user_version", () => {

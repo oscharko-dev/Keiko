@@ -83,15 +83,17 @@ function fixture(activityProjection?: CodingSafeActivityProjection, clock?: () =
     listPrunableSettled,
     deletePruned,
   };
+  let terminalResultStatus: "cancelled" | "failed" | "succeeded" | undefined;
   const manager = {
     start: vi.fn<CodingRuntimeManager["start"]>((request) => ({
       ok: true,
       runId: request.runId,
       status: "ready",
     })),
-    stop: vi.fn<CodingRuntimeManager["stop"]>(() =>
-      Promise.resolve({ ok: true, status: "stopped" }),
-    ),
+    stop: vi.fn<CodingRuntimeManager["stop"]>((_runId, resultStatus = "cancelled") => {
+      terminalResultStatus = resultStatus;
+      return Promise.resolve({ ok: true, status: "stopped" });
+    }),
     takeover: vi.fn<CodingRuntimeManager["takeover"]>(() =>
       Promise.resolve({
         ok: true,
@@ -100,6 +102,16 @@ function fixture(activityProjection?: CodingSafeActivityProjection, clock?: () =
     ),
     health: vi.fn<CodingRuntimeManager["health"]>(() => ({ status: "stopped" })),
     pendingApprovalReview: vi.fn<CodingRuntimeManager["pendingApprovalReview"]>(() => undefined),
+    result: vi.fn<CodingRuntimeManager["result"]>(() =>
+      terminalResultStatus === undefined
+        ? undefined
+        : {
+            status: terminalResultStatus,
+            exitCode: null,
+            output: { byteCount: 0, lineCount: 0, sha256: "a".repeat(64), truncated: false },
+            error: { byteCount: 0, lineCount: 0, sha256: "b".repeat(64), truncated: false },
+          },
+    ),
     issueApproval: vi.fn<CodingRuntimeManager["issueApproval"]>(() => ({
       ok: true,
       approval: {} as never,
@@ -247,7 +259,11 @@ describe("CodingRuntimeOrchestrator", () => {
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
     });
-    expect(f.manager.stop).toHaveBeenCalledOnce();
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "succeeded");
+    expect(f.orchestrator.getSnapshot("run-1")?.result).toMatchObject({
+      status: "succeeded",
+      exitCode: null,
+    });
     expect(f.evidence.settle).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "run-1", state: "succeeded" }),
     );
@@ -1009,7 +1025,32 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     expect(f.manager.pause).toHaveBeenCalledWith("run-1");
     const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
     expect(successfulSnapshot(resumed).state).toBe("running");
-    expect(f.manager.resume).toHaveBeenCalledWith("run-1");
+    expect(f.manager.resume).toHaveBeenCalledWith("run-1", "supervised-coding");
+  });
+
+  it("persists a narrower resumed mode so a later mode-less resume cannot request widening", async () => {
+    const f = await runningFixture();
+    f.manager.resume.mockImplementation((_runId, requestedMode) => ({
+      ok: true,
+      paused: false,
+      ...(requestedMode === undefined ? {} : { effectiveMode: requestedMode }),
+    }));
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+
+    const narrowed = await f.orchestrator.resume("run-1", {
+      requestId: "run-1",
+      requestedMode: "governed-assist",
+    });
+    expect(successfulSnapshot(narrowed).requestedMode).toBe("supervised-coding");
+    expect(successfulSnapshot(narrowed).effectiveMode).toBe("governed-assist");
+
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    const resumedAgain = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+    expect(f.manager.resume).toHaveBeenLastCalledWith("run-1", "governed-assist");
+    expect(successfulSnapshot(resumedAgain)).toMatchObject({
+      requestedMode: "supervised-coding",
+      effectiveMode: "governed-assist",
+    });
   });
 
   it("keeps a paused run paused when adapter events arrive", async () => {
@@ -1058,6 +1099,30 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
       kind: "failure-redacted",
     });
     expect(successfulSnapshot(failed).state).toBe("failed");
+  });
+
+  it("projects the manager's body-free process result on terminal status", async () => {
+    const f = await runningFixture();
+    f.manager.result.mockReturnValue({
+      status: "failed",
+      exitCode: 9,
+      output: { byteCount: 12, lineCount: 1, sha256: "a".repeat(64), truncated: false },
+      error: { byteCount: 8, lineCount: 1, sha256: "b".repeat(64), truncated: false },
+    });
+
+    const terminal = await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-result-1",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:01.000Z",
+      kind: "failure-redacted",
+      failureCode: "runtime-failed",
+      failureSummary: "runtime-failed",
+      retryable: true,
+    });
+
+    expect(successfulSnapshot(terminal).result).toMatchObject({ status: "failed", exitCode: 9 });
+    expect(JSON.stringify(successfulSnapshot(terminal))).not.toContain("stdout-body");
   });
 
   it("allows an explicit stop of a paused run", async () => {

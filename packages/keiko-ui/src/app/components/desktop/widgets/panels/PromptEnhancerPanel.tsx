@@ -749,8 +749,8 @@ export function PromptEnhancerPanel({
         setResult(response);
         setResultGroundingSignature(groundingContext.signature);
       }
-    } catch (caught) {
-      if (!controller.signal.aborted) setError(describeError(caught, t));
+    } catch (caughtError) {
+      if (!controller.signal.aborted) setError(describeError(caughtError, t));
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }

@@ -7,6 +7,7 @@
 // so each server instance (and each test) owns an isolated registry with no cross-talk.
 
 import type { WorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";
+import type { AgentRunGovernanceBinding } from "./agent-run-governance.js";
 import type { QueueEventSink } from "./sink.js";
 
 export type RunStatus = "running" | "completed" | "cancelled" | "failed";
@@ -28,6 +29,7 @@ export interface RunRecord {
   // The run's resolved model id, used by the gated apply path to rebuild the ModelPort (the
   // fingerprint is a config hash, NOT a model id — passing it to the factory was a defect).
   readonly modelId: string;
+  readonly governance?: AgentRunGovernanceBinding | undefined;
   readonly sink: QueueEventSink;
   status: RunStatus;
   // The redacted final report projection, set once the run terminates.
@@ -47,6 +49,7 @@ export interface RegisterRunInput {
   readonly runId: string;
   readonly fingerprint: string;
   readonly modelId: string;
+  readonly governance?: AgentRunGovernanceBinding | undefined;
   readonly sink: QueueEventSink;
   readonly cancel: (reason?: string) => void;
 }
@@ -130,6 +133,7 @@ function registerRun(state: RegistryState, input: RegisterRunInput): RunRecord {
     runId: input.runId,
     fingerprint: input.fingerprint,
     modelId: input.modelId,
+    ...(input.governance === undefined ? {} : { governance: input.governance }),
     sink: input.sink,
     status: "running",
     report: undefined,

@@ -232,6 +232,8 @@ function composeRuntime(
     runtimeCapabilityAuthenticator: {
       authenticate: (capability, audience) =>
         authority.authenticateCapability(capability, audience),
+      reservePromptTokens: (capability, promptTokens) =>
+        authority.reservePromptTokens(capability, promptTokens),
     },
     ...(input.backend.safeActivityProjection
       ? { safeActivityProjection: input.backend.safeActivityProjection }
@@ -559,6 +561,9 @@ function createManagedToolFacade({
     ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
     authorityExpiresAt: context.expiresAt,
     effectiveMode: minted.effectiveMode,
+    effectiveModeNow: () => authority.effectiveMode(),
+    reservePromptTokens: (promptTokens): boolean =>
+      authority.reservePromptTokens(minted.modelGatewayCapability, promptTokens).ok,
     deploymentCeiling: context.deploymentCeiling,
     liveFacts: () => productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
     secureWorkspaceTextRead: input.secureWorkspaceTextRead,

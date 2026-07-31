@@ -108,6 +108,7 @@ function makeCommitPreview(): GitDeliveryCommitPreviewResponse {
     intent: { warnings: [], mixedScope: false, isWip: false },
     messageValidation: { ok: true },
     preflightFindingCodes: [],
+    signatureRequirement: "not-required",
     policyOutcome: "allowed",
   };
 }
@@ -632,16 +633,16 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       expect(await axe(dialog)).toHaveNoViolations();
     });
 
-    it("history list and selected commit details expose name, role, and selected value", async () => {
+    it("history list and selected commit details expose name, role, and current value", async () => {
       const user = userEvent.setup();
       const client = makeClient({ getHistory: vi.fn(async () => makeHistory()) });
       render(<GitClientWindow projectId={REPO_A.path} client={client} />);
       await user.click(await screen.findByRole("tab", { name: "History" }));
 
-      const listbox = await screen.findByRole("listbox", { name: "Commit history" });
-      expect(listbox).toBeInTheDocument();
-      expect(screen.getByRole("option", { name: /feat: history detail/ })).toHaveAttribute(
-        "aria-selected",
+      const list = await screen.findByRole("list", { name: "Commit history" });
+      expect(list).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /feat: history detail/ })).toHaveAttribute(
+        "aria-current",
         "true",
       );
       expect(screen.getByRole("region", { name: "Commit details" })).toBeInTheDocument();

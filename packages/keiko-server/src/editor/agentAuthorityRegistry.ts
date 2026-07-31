@@ -260,6 +260,51 @@ export class EditorAgentAuthorityRegistry {
     return drift === undefined ? { ok: true, envelope } : { ok: false, reason: drift };
   }
 
+  /** Atomically charges one model request against the retained runtime prompt budget. */
+  public reserveRuntimePromptTokens(
+    reference: EditorAgentGovernedAuthorityReference,
+    promptTokens: number,
+    nowIso: string,
+  ):
+    | { readonly ok: true }
+    | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
+    if (!validUsageCount(promptTokens)) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    const resolved = this.resolveRetainedRuntime(reference, nowIso);
+    if (!resolved.ok) return resolved;
+    return reserveUsage(resolved.record, { toolCalls: 0, patchBytes: 0, promptTokens })
+      ? { ok: true }
+      : { ok: false, reason: "authority-budget-exceeded" };
+  }
+
+  /** Revalidates retained authority at a pause/resume boundary without consuming budget. */
+  public revalidateRetainedRuntime(
+    reference: EditorAgentGovernedAuthorityReference,
+    nowIso: string,
+  ):
+    | { readonly ok: true }
+    | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
+    const resolved = this.resolveRetainedRuntime(reference, nowIso);
+    return resolved.ok ? { ok: true } : resolved;
+  }
+
+  private resolveRetainedRuntime(
+    reference: EditorAgentGovernedAuthorityReference,
+    nowIso: string,
+  ): RuntimeRecordResolution {
+    const record = this.records.get(recordKey(reference));
+    if (record?.runtimeEnvelope === undefined) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    if (record.revoked) return { ok: false, reason: "revoked" };
+    if (expired(nowIso, record.envelope.expiresAt)) {
+      this.records.delete(recordKey(reference));
+      return { ok: false, reason: "authority-expired" };
+    }
+    return { ok: true, record };
+  }
+
   private resolveRuntimeRecord(
     reference: EditorAgentGovernedAuthorityReference,
     workspaceRoot: string,
@@ -357,6 +402,26 @@ export class EditorAgentAuthorityRegistry {
     return safeEqual(record.sessionId, action.sessionId)
       ? resolved
       : { ok: false, reason: "invalid" };
+  }
+
+  /** Atomically charges one agent-run effect after revalidating its retained authority. */
+  public reserveForAgentRun(
+    reference: EditorAgentGovernedAuthorityReference,
+    workspaceRoot: string,
+    deploymentCeiling: CodingWorkbenchMode,
+    usage: CodingWorkbenchRuntimeDelegationUsage,
+    nowIso: string,
+  ): EditorAgentAuthorityResolution {
+    if (![usage.toolCalls, usage.patchBytes, usage.promptTokens].every(validUsageCount)) {
+      return { ok: false, reason: "invalid" };
+    }
+    const resolved = this.resolve(reference, workspaceRoot, deploymentCeiling, nowIso);
+    if (!resolved.ok) return resolved;
+    const record = this.records.get(recordKey(reference));
+    if (record === undefined || record.localActionBinding !== undefined) {
+      return { ok: false, reason: "invalid" };
+    }
+    return reserveUsage(record, usage) ? resolved : { ok: false, reason: "budget-exceeded" };
   }
 
   public reserveForAction(

@@ -474,6 +474,20 @@ export const DE_MESSAGES = {
   "agentLauncher.agent": "Agent",
   "agentLauncher.agentCount": "{count} Agenten",
   "agentLauncher.model": "Modell",
+  "agentLauncher.autonomy": "Autonomiemodus",
+  "agentLauncher.mode.governedAssist.label": "Um Genehmigung bitten",
+  "agentLauncher.mode.governedAssist.description":
+    "Lesen und Planen sind möglich. Der geprüfte Patch benötigt weiterhin deine ausdrückliche Apply-Bestätigung.",
+  "agentLauncher.mode.supervisedCoding.label": "Überwachter Workspace",
+  "agentLauncher.mode.supervisedCoding.description":
+    "Routinemäßige Workspace-Arbeit wird von der Policy zugelassen; die Dry-Run-Prüfung bleibt für diese Agentenoberfläche verpflichtend.",
+  "agentLauncher.mode.autonomousDelivery.label": "Vollzugriff",
+  "agentLauncher.mode.autonomousDelivery.description":
+    "Begrenzte Workspace-Arbeit darf ohne einzelne Rückfragen fortfahren. Connector- und Delivery-Ausführung bleiben hier nicht verfügbar.",
+  "agentLauncher.executionUnavailable":
+    "Connector- und Delivery-Ausführung sind für Unit-Test- und Bugfix-Agenten nicht verfügbar.",
+  "agentLauncher.governanceUnavailable":
+    "Der Server hat keinen Authority Envelope bestätigt. Der Agentenlauf wurde nicht geöffnet.",
   "agentLauncher.repository": "Repository",
   "agentLauncher.repositoryPlaceholder": "/absoluter/repository/pfad",
   "agentLauncher.workflow.unitTest": "Unit Test Agent",
@@ -504,6 +518,8 @@ export const DE_MESSAGES = {
   "agentLauncher.validation.bugDescription":
     "Der Bugfix Agent benötigt ein beobachtetes Verhalten.",
   "agentLauncher.fileOutsideRepository": "Wähle eine Datei innerhalb des ausgewählten Repositorys.",
+  "agentRunWidget.autonomyMode": "Effektive Autonomie: {mode}",
+  "agentRunWidget.executionUnavailable": "Connector- und Delivery-Ausführung nicht verfügbar",
   "command.group.create": "Erstellen",
   "command.group.tools": "Werkzeuge",
   "command.group.layout": "Layout",
@@ -1009,6 +1025,8 @@ export const DE_MESSAGES = {
   "attachment.rejection.oversized":
     "Die Datei ist größer als das Limit von 8 MiB. Wähle eine kleinere Datei oder fasse den Inhalt als Text zusammen.",
   "attachment.rejection.empty": "Leere Datei. Füge eine Datei mit Inhalt hinzu.",
+  "attachment.rejection.deliveryRefused":
+    "Das Bild konnte nicht sicher gespeichert oder für die Übertragung autorisiert werden. Füge es erneut hinzu und versuche es noch einmal.",
   "attachment.remove": "Anhang {name} entfernen",
   "attachment.pending": "Ausstehende Anhänge",
   "attachment.voiceStaged": "Wird mit deinem nächsten gesprochenen Beitrag gesendet",
@@ -1030,6 +1048,9 @@ export const DE_MESSAGES = {
   "attachment.attachFile": "Datei anfügen",
   "attachment.notSupported": "Anhänge nicht unterstützt",
   "attachment.docsContext": "Dokumente als Kontext einbezogen",
+  "attachment.imagesDelivered": "Bilder an das ausgewählte Modell übertragen",
+  "attachment.cleanupDeferred":
+    "Das Bild wurde übertragen. Die verschlüsselte lokale Kopie konnte jetzt nicht entfernt werden und läuft automatisch ab.",
   "attachment.docContextLabel": "Dokument als Kontext einbezogen:",
   "attachment.docsContextLabel": "Dokumente als Kontext einbezogen:",
   "attachment.truncated": " (gekürzt)",
@@ -2392,6 +2413,17 @@ export const DE_MESSAGES = {
   "gitClientWindow.sync.hint.recoverViaStrategy":
     "Stellen Sie zuerst das Arbeitsverzeichnis wieder her.",
   "gitClientWindow.sync.hint.waitForProvider": "Warten Sie, bis der Anbieter verfügbar ist.",
+  "gitClientWindow.confirm.branchSwitch.title": "Branchwechsel bestätigen",
+  "gitClientWindow.confirm.branchSwitch.body":
+    "Zu {branch} wechseln? Dateien im Arbeitsbaum können sich ändern. Offene Editor-Puffer werden nach erfolgreichem Git-Vorgang abgeglichen.",
+  "gitClientWindow.confirm.branchSwitch.action": "Branch wechseln",
+  "gitClientWindow.confirm.pull.title": "Pull bestätigen",
+  "gitClientWindow.confirm.pull.body":
+    "Remote-Änderungen in den Arbeitsbaum übernehmen? Offene Editor-Puffer werden nach erfolgreichem Git-Vorgang abgeglichen.",
+  "gitClientWindow.confirm.pull.action": "Änderungen übernehmen",
+  "gitClientWindow.confirm.cancel": "Abbrechen",
+  "gitClientWindow.sync.editorReconciliationFailed":
+    "Der Pull wurde abgeschlossen, aber Editor-Puffer müssen wiederhergestellt werden. Prüfen Sie offene Dateien, bevor Sie fortfahren.",
   "gitClientWindow.panel.pullRequest": "Pull Request",
   "gitClientWindow.panel.merge": "Merge",
   "gitClientWindow.action.backToDiff": "Zurück zum Diff",

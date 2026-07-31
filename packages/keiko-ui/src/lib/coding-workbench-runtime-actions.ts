@@ -28,7 +28,7 @@ export interface CodingWorkbenchRuntimeActions {
   readonly retry: (taskIntent: string) => Promise<void>;
   readonly acknowledgeRecovery: () => Promise<void>;
   readonly pause: () => Promise<void>;
-  readonly resume: () => Promise<void>;
+  readonly resume: (requestedMode: CodingWorkbenchMode) => Promise<void>;
   readonly submitFollowUp: (taskIntent: string) => Promise<void>;
   readonly revokeResearchGrant: (grant: CodingWorkbenchRuntimeResearchGrant) => Promise<void>;
 }

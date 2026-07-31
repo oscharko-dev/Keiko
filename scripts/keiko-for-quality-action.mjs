@@ -274,12 +274,12 @@ function freshnessWithoutReview(baseline, priorDigest, headSha) {
 function freshnessWithReview(baseline, priorDigest, headSha, review) {
   const reviewDigest = reviewBodyDigest(review.body);
   const requiresContentChange = baseline.state === "pending" || baseline.headSha !== headSha;
-  const failure =
-    priorDigest === undefined
-      ? missingPriorDigestFailure
-      : requiresContentChange && priorDigest === reviewDigest
-        ? unchangedReviewFailure
-        : undefined;
+  let failure;
+  if (priorDigest === undefined) {
+    failure = missingPriorDigestFailure;
+  } else if (requiresContentChange && priorDigest === reviewDigest) {
+    failure = unchangedReviewFailure;
+  }
   return {
     baselineHeadSha: failure === undefined ? headSha : baseline.headSha,
     baselineState: failure === undefined ? "accepted" : baseline.state,

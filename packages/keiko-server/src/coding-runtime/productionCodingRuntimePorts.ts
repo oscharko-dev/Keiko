@@ -111,48 +111,146 @@ function inadmissibleOperation(
   );
 }
 
+interface ProductionRuntimeManagerContext {
+  readonly slot: ProductionRuntimeSlot;
+  readonly authority: CodingRuntimeAuthorityService;
+  readonly now: () => Date;
+  lastResult:
+    | {
+        readonly runId: string;
+        readonly result: NonNullable<ReturnType<CodingRuntimeManager["result"]>>;
+      }
+    | undefined;
+}
+
 export function createProductionRuntimeManager(
   runs: Map<string, ProductionRuntimeRunRecord>,
   authority: CodingRuntimeAuthorityService,
   now: () => Date = () => new Date(),
 ): CodingRuntimeManager {
-  const slot = createProductionRuntimeSlot(runs);
-  const settle = async (
-    runId: string,
-    action: "stop" | "takeover" | "reconcile",
-  ): ReturnType<CodingRuntimeManager["stop"]> => {
-    const manager = slot.manager();
-    if (manager === undefined || !slot.matches(runId)) return stoppedRun();
-    const result = await manager[action](runId);
-    if (result.ok) await slot.cleanup(runId);
-    return result;
+  const context: ProductionRuntimeManagerContext = {
+    slot: createProductionRuntimeSlot(runs),
+    authority,
+    now,
+    lastResult: undefined,
   };
+  return buildProductionRuntimeManager(runs, context);
+}
+
+function buildProductionRuntimeManager(
+  runs: Map<string, ProductionRuntimeRunRecord>,
+  context: ProductionRuntimeManagerContext,
+): CodingRuntimeManager {
   return {
-    start: async (request): Promise<CodingRuntimeStartResult> => {
-      await slot.cleanupIfStopped();
-      const record = runs.get(request.runId);
-      if (record?.manager === undefined || !slot.claim(request.runId)) return startMismatch();
-      const result = await record.manager.start(request);
-      if (result.ok) {
-        authority.transition(request.runId, "ready", now().toISOString());
-        authority.transition(request.runId, "running", now().toISOString());
-      } else if (record.manager.health().status === "stopped") {
-        authority.abandonUnlaunched(request.runId, now().toISOString());
-        await slot.cleanup(request.runId);
-      }
-      return result;
-    },
-    issueApproval: (request) => slot.manager()?.issueApproval(request) ?? stoppedApprovalIssue(),
-    pause: (runId) => slot.manager()?.pause(runId) ?? pauseRunMismatch(),
-    resume: (runId) => slot.manager()?.resume(runId) ?? pauseRunMismatch(),
-    stop: (runId) => settle(runId, "stop"),
-    takeover: (runId) => settle(runId, "takeover"),
-    reconcile: (runId) => settle(runId, "reconcile"),
-    health: () => slot.manager()?.health() ?? { status: "stopped" },
+    start: (request) => startProductionRuntime(runs, context, request),
+    issueApproval: (request) =>
+      context.slot.manager()?.issueApproval(request) ?? stoppedApprovalIssue(),
+    pause: (runId) => pauseProductionRuntime(context, runId),
+    resume: (runId, requestedMode) => resumeProductionRuntime(context, runId, requestedMode),
+    stop: (runId, resultStatus) => stopProductionRuntime(context, runId, resultStatus),
+    takeover: (runId) => settleProductionRuntime(context, runId, "takeover"),
+    reconcile: (runId) => settleProductionRuntime(context, runId, "reconcile"),
+    health: () => context.slot.manager()?.health() ?? { status: "stopped" },
     // Delegated to the slot's live manager and additionally slot-matched, so a review can never be
     // read from a run the slot no longer owns (#2802).
     pendingApprovalReview: (runId, requestId) =>
-      slot.matches(runId) ? slot.manager()?.pendingApprovalReview(runId, requestId) : undefined,
+      context.slot.matches(runId)
+        ? context.slot.manager()?.pendingApprovalReview(runId, requestId)
+        : undefined,
+    result: (runId) =>
+      (context.slot.matches(runId) ? context.slot.manager()?.result(runId) : undefined) ??
+      (context.lastResult?.runId === runId ? context.lastResult.result : undefined),
+  };
+}
+
+async function startProductionRuntime(
+  runs: Map<string, ProductionRuntimeRunRecord>,
+  context: ProductionRuntimeManagerContext,
+  request: Parameters<CodingRuntimeManager["start"]>[0],
+): Promise<CodingRuntimeStartResult> {
+  await context.slot.cleanupIfStopped();
+  const record = runs.get(request.runId);
+  if (record?.manager === undefined || !context.slot.claim(request.runId)) return startMismatch();
+  const result = await record.manager.start(request);
+  if (result.ok) {
+    context.authority.transition(request.runId, "ready", context.now().toISOString());
+    context.authority.transition(request.runId, "running", context.now().toISOString());
+  } else if (record.manager.health().status === "stopped") {
+    context.authority.abandonUnlaunched(request.runId, context.now().toISOString());
+    await context.slot.cleanup(request.runId);
+  }
+  return result;
+}
+
+function pauseProductionRuntime(
+  context: ProductionRuntimeManagerContext,
+  runId: string,
+): ReturnType<CodingRuntimeManager["pause"]> {
+  const manager = context.slot.manager();
+  if (manager === undefined || !context.slot.matches(runId)) return pauseRunMismatch();
+  const admitted = context.authority.pause(runId, context.now().toISOString());
+  return admitted.ok ? manager.pause(runId) : authorityBoundaryFailure(admitted.reason);
+}
+
+function resumeProductionRuntime(
+  context: ProductionRuntimeManagerContext,
+  runId: string,
+  requestedMode: Parameters<CodingRuntimeManager["resume"]>[1],
+): ReturnType<CodingRuntimeManager["resume"]> {
+  const manager = context.slot.manager();
+  if (manager === undefined || !context.slot.matches(runId) || requestedMode === undefined) {
+    return pauseRunMismatch();
+  }
+  const admitted = context.authority.resume(runId, requestedMode, context.now().toISOString());
+  return admitted.ok
+    ? manager.resume(runId, admitted.effectiveMode)
+    : authorityBoundaryFailure(admitted.reason);
+}
+
+function captureTerminalResult(
+  context: ProductionRuntimeManagerContext,
+  manager: CodingRuntimeManager,
+  runId: string,
+): void {
+  const terminal = manager.result(runId);
+  if (terminal !== undefined) context.lastResult = { runId, result: terminal };
+}
+
+async function settleProductionRuntime(
+  context: ProductionRuntimeManagerContext,
+  runId: string,
+  action: "takeover" | "reconcile",
+): ReturnType<CodingRuntimeManager["stop"]> {
+  const manager = context.slot.manager();
+  if (manager === undefined || !context.slot.matches(runId)) return stoppedRun();
+  const result = await manager[action](runId);
+  if (result.ok) {
+    captureTerminalResult(context, manager, runId);
+    await context.slot.cleanup(runId);
+  }
+  return result;
+}
+
+async function stopProductionRuntime(
+  context: ProductionRuntimeManagerContext,
+  runId: string,
+  resultStatus?: Parameters<CodingRuntimeManager["stop"]>[1],
+): ReturnType<CodingRuntimeManager["stop"]> {
+  const manager = context.slot.manager();
+  if (manager === undefined || !context.slot.matches(runId)) return stoppedRun();
+  const result = await manager.stop(runId, resultStatus);
+  if (result.ok) {
+    captureTerminalResult(context, manager, runId);
+    await context.slot.cleanup(runId);
+  }
+  return result;
+}
+
+function authorityBoundaryFailure(reason: string): ReturnType<CodingRuntimeManager["pause"]> {
+  return {
+    ok: false,
+    failureCode: reason === "authority-expired" ? reason : "authority-resolution-failed",
+    retryable: false,
   };
 }
 

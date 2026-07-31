@@ -1,10 +1,11 @@
-import type {
-  CodingWorkbenchAuthorityEnvelope,
-  CodingWorkbenchMode,
-  CodingWorkbenchRuntimeAdapterKind,
-  CodingWorkbenchRuntimeAuthorityFacts,
-  CodingWorkbenchRuntimeAuthorityEnvelope,
-  CodingWorkbenchRuntimeDelegationUsage,
+import {
+  codingWorkbenchPolicyEffectFor,
+  type CodingWorkbenchAuthorityEnvelope,
+  type CodingWorkbenchMode,
+  type CodingWorkbenchRuntimeAdapterKind,
+  type CodingWorkbenchRuntimeAuthorityFacts,
+  type CodingWorkbenchRuntimeAuthorityEnvelope,
+  type CodingWorkbenchRuntimeDelegationUsage,
 } from "@oscharko-dev/keiko-contracts";
 
 import type {
@@ -277,10 +278,11 @@ function additionalPolicyAllowed(
     case "read":
     case "discover":
     case "edit":
-    case "verification":
       return true;
+    case "verification":
+      return workspaceMediumRiskAllowed(envelope);
     case "command":
-      return commandAllowed(envelope, request.commandId);
+      return workspaceMediumRiskAllowed(envelope) && commandAllowed(envelope, request.commandId);
     case "git":
       return gitPolicyAllowed(envelope, request.operation);
     case "delivery":
@@ -293,6 +295,16 @@ function additionalPolicyAllowed(
     case "child-agent":
       return true;
   }
+}
+
+function workspaceMediumRiskAllowed(envelope: CodingWorkbenchRuntimeAuthorityEnvelope): boolean {
+  return (
+    codingWorkbenchPolicyEffectFor(
+      envelope.authority.effectiveMode,
+      "workspace-contained",
+      "medium",
+    ) === "allowed"
+  );
 }
 
 function gitPolicyAllowed(

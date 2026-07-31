@@ -8,11 +8,19 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { startRun } from "./run-engine.js";
+import { randomUUID } from "node:crypto";
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import { startRun, workflowFingerprint } from "./run-engine.js";
 import { createRunRegistry, type RunRegistry } from "./runs.js";
 import { parseRunRequest, type RunRequest } from "./run-request.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type { AppSession } from "./coding-app-session/sessionRegistry.js";
+import {
+  createAgentRunGovernance,
+  type AgentRunGovernanceBinding,
+} from "./agent-run-governance.js";
+import { editorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 
 const REJECT_MODEL: ModelPort = {
   call: (): Promise<NormalizedResponse> =>
@@ -21,6 +29,14 @@ const REJECT_MODEL: ModelPort = {
 
 let workspaceRoot: string;
 let registry: RunRegistry;
+const GOVERNANCE_NOW = "2026-07-31T08:00:00.000Z";
+const GOVERNANCE_SESSION: AppSession = {
+  sessionId: "sess_0123456789abcdef01234567",
+  principalLabel: "local-user",
+  issuedAtMs: Date.parse(GOVERNANCE_NOW),
+  lastSeenAtMs: Date.parse(GOVERNANCE_NOW),
+  rotationCount: 0,
+};
 
 function makeWorkspace(scripts: Record<string, string> = {}): string {
   const root = mkdtempSync(join(tmpdir(), "keiko-verify-"));
@@ -35,9 +51,56 @@ function ok(value: ReturnType<typeof parseRunRequest>): RunRequest {
   return value;
 }
 
+function governance(
+  requestedMode: CodingWorkbenchMode,
+  deploymentCeiling: CodingWorkbenchMode,
+): AgentRunGovernanceBinding {
+  const result = createAgentRunGovernance({
+    runId: randomUUID(),
+    workflow: "unit-tests",
+    workspaceRoot,
+    modelId: "m",
+    requestedMode,
+    deploymentCeiling,
+    session: GOVERNANCE_SESSION,
+    nowIso: GOVERNANCE_NOW,
+  });
+  if (!result.ok) throw new Error(result.reason);
+  return result.binding;
+}
+
 beforeEach(() => {
+  editorAgentAuthorityRegistry.reset();
   workspaceRoot = makeWorkspace();
   registry = createRunRegistry();
+});
+
+describe("workflow governance fingerprint", () => {
+  it("is stable for identical config and separates requested mode, effective mode, and ceiling", () => {
+    const request = ok(
+      parseRunRequest(
+        JSON.stringify({
+          workflowId: "unit-test-generation",
+          modelId: "m",
+          input: { workspaceRoot, target: { kind: "file", filePath: "src/add.ts" } },
+        }),
+      ),
+    );
+    const supervised = governance("supervised-coding", "autonomous-delivery");
+    const sameConfigNewAuthority = governance("supervised-coding", "autonomous-delivery");
+    const lowerCeiling = governance("supervised-coding", "supervised-coding");
+    const fullAccess = governance("autonomous-delivery", "autonomous-delivery");
+
+    expect(workflowFingerprint(request, sameConfigNewAuthority)).toBe(
+      workflowFingerprint(request, supervised),
+    );
+    expect(workflowFingerprint(request, lowerCeiling)).not.toBe(
+      workflowFingerprint(request, supervised),
+    );
+    expect(workflowFingerprint(request, fullAccess)).not.toBe(
+      workflowFingerprint(request, supervised),
+    );
+  });
 });
 
 afterEach(() => {

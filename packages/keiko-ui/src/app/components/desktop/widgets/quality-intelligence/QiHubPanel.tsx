@@ -20,6 +20,7 @@ import { useQiTranslate as useTranslate, type I18nTranslate } from "./qi-i18n";
 import { deleteQiRun, fetchQiRuns } from "@/lib/quality-intelligence-api";
 import { RunLauncher } from "./RunLauncher";
 import { useQualityIntelligenceRetentionSettings } from "@/app/components/desktop/hooks/qualityIntelligenceRetentionSettings";
+import { NATIVE_FIELDSET_RESET_STYLE } from "@/app/components/desktop/native-element-styles";
 import {
   StatusBadge,
   ReviewBadge,
@@ -203,13 +204,13 @@ function RunRow({
         // Step 2: inline confirm strip — Confirm + Cancel as siblings in a group.
         // Escape is handled on the focusable buttons (not this group container) so it stays within
         // jsx-a11y's interactive-element rule; focus is always on Confirm or Cancel while open.
-        <div
+        <fieldset
           className="qi-cand-actions"
-          role="group"
           aria-label={t("qi.hub.confirmDeleteGroup", {
             requestedAt: formatDate(run.requestedAt),
           })}
           style={{
+            ...NATIVE_FIELDSET_RESET_STYLE,
             display: "flex",
             alignItems: "center",
             gap: 4,
@@ -254,7 +255,7 @@ function RunRow({
           >
             {t("common.cancel")}
           </button>
-        </div>
+        </fieldset>
       )}
     </li>
   );

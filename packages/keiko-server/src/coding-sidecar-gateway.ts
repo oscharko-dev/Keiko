@@ -673,6 +673,8 @@ function emitGatewayStreamFailureDiagnostic(
 
 interface RuntimeCapabilityAuthenticator {
   readonly authenticate: (capability: string, audience: "model-gateway" | "tool-facade") => unknown;
+  readonly reservePromptTokens?:
+    ((capability: string, promptTokens: number) => unknown) | undefined;
 }
 
 function runtimeCapabilityAuthenticator(
@@ -686,6 +688,11 @@ function authenticatedRuntimeRunId(value: unknown): string | undefined {
   return typeof value.binding.runId === "string" && value.binding.runId.length > 0
     ? value.binding.runId
     : undefined;
+}
+
+function promptReservationRunId(value: unknown): string | undefined {
+  if (!isRecord(value) || value.ok !== true) return undefined;
+  return typeof value.runId === "string" && value.runId.length > 0 ? value.runId : undefined;
 }
 
 function gatewayReadinessRegistry(
@@ -792,8 +799,8 @@ function authenticateGatewayRequest(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ):
-  | { readonly runtimeAuthenticated: false; readonly runId: string }
-  | { readonly runtimeAuthenticated: true; readonly runId: string }
+  | { readonly runtimeAuthenticated: false; readonly runId: string; readonly capability: string }
+  | { readonly runtimeAuthenticated: true; readonly runId: string; readonly capability: string }
   | RouteResult {
   if (hasOrigin(ctx)) return forbiddenGatewayRequest();
   const authenticator = runtimeCapabilityAuthenticator(deps);
@@ -805,7 +812,24 @@ function authenticateGatewayRequest(
   }
   // Runtime launch wires the readiness registry. Other callers still require the
   // same bound bearer, but do not claim the one-shot OpenCode readiness challenge.
-  return { runtimeAuthenticated: gatewayReadinessRegistry(deps) !== undefined, runId };
+  return {
+    runtimeAuthenticated: gatewayReadinessRegistry(deps) !== undefined,
+    runId,
+    capability,
+  };
+}
+
+function reserveGatewayPromptBudget(
+  deps: UiHandlerDeps,
+  capability: string,
+  runId: string,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+): boolean {
+  const reserved = runtimeCapabilityAuthenticator(deps)?.reservePromptTokens?.(
+    capability,
+    promptTokenEstimate(parsed),
+  );
+  return promptReservationRunId(reserved) === runId;
 }
 
 function isAvailableGatewayProfile(
@@ -1354,7 +1378,7 @@ export async function handleCodingSidecarGatewayChatCompletions(
     }
     noteToolAdoptionGap(ctx, deps, authentication.runId, parsed.messages);
   }
-  return executeGatewayChat(ctx, deps, resolved.config, parsed, authentication.runId, {
+  return executeBudgetedGatewayChat(ctx, deps, resolved.config, parsed, authentication, {
     modelAlias: resolved.result.modelAlias,
     maxOutputTokens: resolved.result.runMetadata.maxOutputTokens,
     upstreamStreamingSupported: upstreamGatewayStreamingSupported(
@@ -1362,6 +1386,24 @@ export async function handleCodingSidecarGatewayChatCompletions(
       resolved.result.supportsStreaming,
     ),
   });
+}
+
+function executeBudgetedGatewayChat(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  config: GatewayConfig,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  authentication: { readonly capability: string; readonly runId: string },
+  profile: {
+    readonly modelAlias: string;
+    readonly maxOutputTokens: number;
+    readonly upstreamStreamingSupported: boolean;
+  },
+): Promise<RouteResult | typeof STREAMING> {
+  if (!reserveGatewayPromptBudget(deps, authentication.capability, authentication.runId, parsed)) {
+    return Promise.resolve(forbiddenGatewayRequest());
+  }
+  return executeGatewayChat(ctx, deps, config, parsed, authentication.runId, profile);
 }
 
 function fixedReadinessResponse(

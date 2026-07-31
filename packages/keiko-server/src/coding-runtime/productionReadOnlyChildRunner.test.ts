@@ -50,6 +50,7 @@ interface RunInput {
   readonly call?: (() => Promise<NormalizedResponse>) | undefined;
   readonly gate?: (() => ReadOnlyChildGateDecision) | undefined;
   readonly signal?: AbortSignal | undefined;
+  readonly reservePromptTokens?: ((promptTokens: number) => boolean) | undefined;
 }
 
 function runChild(
@@ -63,6 +64,7 @@ function runChild(
       readText: (): ReturnType<SecureWorkspaceTextReadPort["readText"]> =>
         Promise.resolve({ ok: true as const, text: "file text" }),
     },
+    reservePromptTokens: input.reservePromptTokens ?? ((): boolean => true),
   });
   return runner.run({
     envelope: {
@@ -106,6 +108,28 @@ describe("createProductionReadOnlyChildRunner", () => {
 
     expect(requested).toEqual(["src/index.ts"]);
     expect(outcome.resultCount).toBe(1);
+  });
+
+  it("reserves every child prompt immediately before dispatch and never calls the provider after exhaustion", async () => {
+    const reservations: number[] = [];
+    let providerCalls = 0;
+
+    await expect(
+      runChild({
+        call: (): Promise<NormalizedResponse> => {
+          providerCalls += 1;
+          return toolThenFinish("read_file", { relativePath: "src/index.ts" })();
+        },
+        reservePromptTokens: (promptTokens): boolean => {
+          reservations.push(promptTokens);
+          return reservations.length === 1;
+        },
+      }),
+    ).rejects.toThrow("child-session-failed");
+
+    expect(reservations).toHaveLength(2);
+    expect(reservations.every((tokens) => tokens > 0)).toBe(true);
+    expect(providerCalls).toBe(1);
   });
 
   it("denies a tool the child was never given, without touching the workspace", async () => {
@@ -209,6 +233,7 @@ describe("createProductionReadOnlyChildRunner", () => {
   it("fails closed when no model port resolves for the child model id", async () => {
     const runner = createProductionReadOnlyChildRunner({
       modelPortFactory: () => undefined,
+      reservePromptTokens: () => true,
       secureWorkspaceTextRead: {
         readText: () => Promise.resolve({ ok: true as const, text: "text" }),
       },

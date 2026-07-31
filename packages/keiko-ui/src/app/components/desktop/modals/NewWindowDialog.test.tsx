@@ -84,7 +84,17 @@ function mockAgentDependencies(): void {
   vi.mocked(fetchProjects).mockResolvedValue({
     projects: [project()],
   });
-  vi.mocked(startRun).mockResolvedValue({ runId: "run 1", fingerprint: "fp 1" });
+  vi.mocked(startRun).mockResolvedValue({
+    runId: "run 1",
+    fingerprint: "fp 1",
+    governance: {
+      requestedMode: "governed-assist",
+      effectiveMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      connectorExecution: "unavailable",
+      deliveryExecution: "unavailable",
+    },
+  });
 }
 
 async function chooseComboboxOption(
@@ -234,6 +244,7 @@ describe("NewWindowDialog agents: start-run contract", () => {
       expect(startRun).toHaveBeenCalledWith({
         workflowId: "unit-test-generation",
         modelId: "example-chat-model",
+        requestedMode: "governed-assist",
         input: {
           workspaceRoot: "/repo",
           target: { kind: "file", filePath: "src/app.ts" },
@@ -306,6 +317,59 @@ describe("NewWindowDialog agents: start-run contract", () => {
     expect(screen.queryByRole("option", { name: "Explain plan" })).toBeNull();
   });
 
+  it("selects all three autonomy modes and keeps the server-clamped posture in the window config", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    await renderAgentDialog(onConfirm);
+    vi.mocked(startRun).mockResolvedValueOnce({
+      runId: "run-1",
+      fingerprint: "fp-1",
+      governance: {
+        requestedMode: "autonomous-delivery",
+        effectiveMode: "supervised-coding",
+        deploymentCeiling: "supervised-coding",
+        connectorExecution: "unavailable",
+        deliveryExecution: "unavailable",
+      },
+    });
+
+    expect(screen.getByRole("radio", { name: /Ask for approval/u })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Supervised workspace/u })).toBeEnabled();
+    await user.click(screen.getByRole("radio", { name: /Full access/u }));
+    await user.click(screen.getByRole("button", { name: "Start Unit Test Agent" }));
+
+    await waitFor(() =>
+      expect(startRun).toHaveBeenCalledWith(
+        expect.objectContaining({ requestedMode: "autonomous-delivery" }),
+      ),
+    );
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestedMode: "autonomous-delivery",
+        effectiveMode: "supervised-coding",
+        deploymentCeiling: "supervised-coding",
+        connectorExecution: "unavailable",
+        deliveryExecution: "unavailable",
+      }),
+    );
+  });
+
+  it("fails closed when the server omits the governed Authority projection", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    await renderAgentDialog(onConfirm);
+    vi.mocked(startRun).mockResolvedValueOnce({ runId: "run-1", fingerprint: "fp-1" });
+
+    await user.click(screen.getByRole("button", { name: "Start Unit Test Agent" }));
+
+    expect(
+      await screen.findByText(
+        "The server did not confirm an Authority Envelope. The agent run was not opened.",
+      ),
+    ).toBeInTheDocument();
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
   it("starts unit-test-generation for one normalized source file", async () => {
     const user = userEvent.setup();
     await renderAgentDialog();
@@ -328,6 +392,7 @@ describe("NewWindowDialog agents: start-run contract", () => {
       expect(startRun).toHaveBeenCalledWith({
         workflowId: "unit-test-generation",
         modelId: "example-chat-model",
+        requestedMode: "governed-assist",
         input: {
           workspaceRoot: "/repo",
           target: { kind: "file", filePath: "src/app.ts" },
@@ -362,6 +427,7 @@ describe("NewWindowDialog agents: start-run contract", () => {
       expect(startRun).toHaveBeenCalledWith({
         workflowId: "unit-test-generation",
         modelId: "example-chat-model",
+        requestedMode: "governed-assist",
         input: {
           workspaceRoot: "/repo",
           target: { kind: "file", filePath: "src/app.ts" },
@@ -562,6 +628,7 @@ describe("NewWindowDialog agents: start-run contract", () => {
       expect(startRun).toHaveBeenCalledWith({
         workflowId: "bug-investigation",
         modelId: "example-chat-model",
+        requestedMode: "governed-assist",
         input: {
           workspaceRoot: "/repo",
           report: {
@@ -587,7 +654,17 @@ describe("NewWindowDialog agents: start-run contract", () => {
     vi.mocked(createProject).mockResolvedValue({
       project: project("/external", "External"),
     });
-    vi.mocked(startRun).mockResolvedValue({ runId: "run 2", fingerprint: "fp 2" });
+    vi.mocked(startRun).mockResolvedValue({
+      runId: "run 2",
+      fingerprint: "fp 2",
+      governance: {
+        requestedMode: "governed-assist",
+        effectiveMode: "governed-assist",
+        deploymentCeiling: "governed-assist",
+        connectorExecution: "unavailable",
+        deliveryExecution: "unavailable",
+      },
+    });
     const onConfirm = vi.fn();
 
     render(
@@ -622,6 +699,7 @@ describe("NewWindowDialog agents: start-run contract", () => {
       expect(startRun).toHaveBeenCalledWith({
         workflowId: "unit-test-generation",
         modelId: "example-chat-model",
+        requestedMode: "governed-assist",
         input: {
           workspaceRoot: "/external",
           target: { kind: "file", filePath: "src/app.ts" },

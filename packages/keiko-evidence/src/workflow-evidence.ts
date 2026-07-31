@@ -59,6 +59,7 @@ interface WorkflowManifestOptions {
   readonly governedHandoff?: EvidenceManifest["governedHandoff"];
   readonly includeDiff?: boolean | undefined;
   readonly redactString?: ((value: string) => string) | undefined;
+  readonly autonomy?: EvidenceManifest["autonomy"] | undefined;
 }
 
 const KIND_TO_TASK_TYPE: Readonly<Record<WorkflowRunKind, TaskType>> = {
@@ -133,6 +134,7 @@ export function buildWorkflowManifest(
     patch: patchOf(report, options),
     failure: undefined,
     ...(options.governedHandoff === undefined ? {} : { governedHandoff: options.governedHandoff }),
+    ...(options.autonomy === undefined ? {} : { autonomy: options.autonomy }),
   };
 }
 

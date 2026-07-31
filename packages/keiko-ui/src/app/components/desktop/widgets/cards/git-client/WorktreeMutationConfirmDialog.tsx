@@ -21,7 +21,7 @@ export function WorktreeMutationConfirmDialog({
   onConfirm,
 }: WorktreeMutationConfirmDialogProps): ReactNode {
   const t = useTranslate();
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   useDialogTabTrap(dialogRef);
   const branchSwitch = request.kind === "branch-switch";
   const label = branchSwitch
@@ -44,15 +44,22 @@ export function WorktreeMutationConfirmDialog({
   }, [onCancel]);
 
   const dialog = (
-    <div
+    <dialog
+      open
       ref={dialogRef}
-      role="dialog"
       aria-modal="true"
       aria-label={label}
       tabIndex={-1}
       style={{
         position: "fixed",
         inset: 0,
+        width: "auto",
+        height: "auto",
+        maxWidth: "none",
+        maxHeight: "none",
+        margin: 0,
+        padding: 0,
+        border: 0,
         zIndex: 100,
         display: "grid",
         placeItems: "center",
@@ -91,7 +98,7 @@ export function WorktreeMutationConfirmDialog({
           </button>
         </div>
       </section>
-    </div>
+    </dialog>
   );
   return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
 }

@@ -212,6 +212,7 @@ function seams(overrides: Partial<GitDeliveryExecutionSeams> = {}): GitDeliveryE
     snapshotReader: () => Promise.resolve(SNAPSHOT),
     stagedPathsReader: () => Promise.resolve(["packages/keiko-ui/a.ts", "docs/b.md"]),
     conflictMarkerReader: () => Promise.resolve(0),
+    branchProtectionReader: () => Promise.resolve({ outcome: "unprotected" }),
     now: () => 1_700_000_000_000,
     newActionId: () => "action-test-1",
     policyPacks: { repoPack: ALLOW_LOCAL_PACK },
@@ -412,6 +413,58 @@ describe("commit preview — read-only verification context (AC3)", () => {
     expect(body.intent.isWip).toBe(true);
     expect(body.messageValidation.ok).toBe(false);
     expect(body.policyOutcome).toBe("constrained");
+  });
+
+  it("discloses a trusted signed-commit requirement before commit", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({
+        branchProtectionReader: (_workspace, remoteAlias, branchName) => {
+          expect(remoteAlias).toBe("origin");
+          expect(branchName).toBe("feature/x");
+          return Promise.resolve({
+            outcome: "protected",
+            protection: {
+              deletionAllowed: false,
+              forcePushAllowed: false,
+              linearHistoryRequired: true,
+              signaturesRequired: true,
+              requiredReviewCount: 0,
+              requiredStatusCheckCount: 1,
+            },
+          });
+        },
+      }),
+    });
+    const res = await handler(
+      ctxFor(PREVIEW, {
+        schemaVersion: "1",
+        projectId,
+        messageDraft: "feat(ui): add governed flow",
+      }),
+      deps(),
+    );
+    const body = res.body as GitDeliveryCommitPreviewBody;
+    expect(body.signatureRequirement).toBe("required");
+    expect(body.preflightFindingCodes).toContain("signed-commits-required");
+  });
+
+  it("does not treat a failed branch-protection read as no signature requirement", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({
+        branchProtectionReader: () => Promise.resolve({ outcome: "unavailable" }),
+      }),
+    });
+    const res = await handler(
+      ctxFor(PREVIEW, {
+        schemaVersion: "1",
+        projectId,
+        messageDraft: "feat(ui): add governed flow",
+      }),
+      deps(),
+    );
+    const body = res.body as GitDeliveryCommitPreviewBody;
+    expect(body.signatureRequirement).toBe("unavailable");
+    expect(body.preflightFindingCodes).toContain("branch-protection-unavailable");
   });
 
   it("accepts a clean conventional message in the same scope", async () => {

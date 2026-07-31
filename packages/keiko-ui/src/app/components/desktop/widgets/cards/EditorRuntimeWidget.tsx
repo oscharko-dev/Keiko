@@ -2610,46 +2610,111 @@ function EditorRuntimeWidget({
   // now-current design tokens — the editor registers only its mount-time variant.
   const themeVariant = useEditorThemeVariant();
 
+  const clearLoadedTarget = useCallback((): void => {
+    setContent("");
+    setFileModel(null);
+    setModifiedAt(null);
+    setVersion(null);
+    setMaxBytes(null);
+    setLoadState({ status: "ready" });
+    setSaveStatus("idle");
+    setSaveError(undefined);
+    setLocalHistoryProtection(undefined);
+  }, []);
+
+  const restoreLoadedSession = useCallback((cached: EditorFileSessionSnapshot): void => {
+    setContent(cached.content);
+    setFileModel(cached.fileModel);
+    setModifiedAt(cached.modifiedAt);
+    setVersion(cached.version);
+    setMaxBytes(cached.maxBytes);
+    setLoadState(cached.loadState);
+    setSaveStatus(cached.saveStatus);
+    setSaveError(cached.saveError);
+    setLocalHistoryProtection(cached.localHistoryProtection);
+    setCursor(cached.cursor);
+    setCurrentSelection(cached.currentSelection);
+    setDiagnosticsSummary(cached.diagnosticsSummary);
+  }, []);
+
+  const beginLoad = useCallback((): void => {
+    setLoadState({ status: "loading" });
+    setSaveStatus("idle");
+    setSaveError(undefined);
+    setLocalHistoryProtection(undefined);
+  }, []);
+
+  const reconcilePreservedDirtyBuffer = useCallback(
+    (response: FilesContentResponse, requestedFile: string): void => {
+      if (versionRef.current?.contentHash === response.session.version.contentHash) return;
+      gitReconciliationSequenceRef.current += 1;
+      setExternalCompareBaseline(response.content);
+      dispatchExternalChange({
+        type: "observed",
+        event: {
+          schemaVersion: "1",
+          sequence: gitReconciliationSequenceRef.current,
+          kind: "changed",
+          relativePath: requestedFile,
+          sizeBytes: response.session.version.sizeBytes,
+          modifiedAt: response.session.version.modifiedAt,
+          metadataHash: response.session.version.contentHash,
+        },
+        activePath: requestedFile,
+        dirty: true,
+        saving: savingRef.current,
+        originatedByKeiko: false,
+      });
+    },
+    [],
+  );
+
+  const finishLoad = useCallback(
+    (
+      requestedRoot: string,
+      requestedFile: string,
+      response: FilesContentResponse,
+      snapshot: EditorHotExitSnapshotV1 | null,
+    ): void => {
+      const identity: EditorDocumentIdentity = {
+        uri: documentUri(requestedRoot, requestedFile, editorModelScope),
+        language: inferEditorLanguage(requestedFile),
+        version: 0,
+      };
+      setContent(response.content);
+      setFileModel(createFileModel(identity));
+      setModifiedAt(response.modifiedAt);
+      setVersion(response.session.version);
+      setMaxBytes(response.maxBytes);
+      setLocalHistoryProtection(response.localHistoryProtection);
+      setLoadState({ status: "ready" });
+      setExternalCompareBaseline(null);
+      dispatchExternalChange({ type: "reloadSucceeded" });
+      const recoverable = snapshot !== null && snapshot.content !== response.content;
+      setRecoverySnapshot(recoverable ? snapshot : null);
+      setRecoveryDiskBaseline(recoverable ? response.content : null);
+    },
+    [editorModelScope],
+  );
+
   const load = useCallback(
     async (
       signal: { cancelled: boolean },
       options: { bypassCache?: boolean; preserveDirty?: boolean } = {},
     ): Promise<void> => {
       if (!hasTarget) {
-        setContent("");
-        setFileModel(null);
-        setModifiedAt(null);
-        setVersion(null);
-        setMaxBytes(null);
-        setLoadState({ status: "ready" });
-        setSaveStatus("idle");
-        setSaveError(undefined);
-        setLocalHistoryProtection(undefined);
+        clearLoadedTarget();
         return;
       }
       const sessionKey = documentSessionKey(root, file);
       const cached =
         options.bypassCache === true ? undefined : sessionCacheRef.current.get(sessionKey);
       if (cached !== undefined) {
-        setContent(cached.content);
-        setFileModel(cached.fileModel);
-        setModifiedAt(cached.modifiedAt);
-        setVersion(cached.version);
-        setMaxBytes(cached.maxBytes);
-        setLoadState(cached.loadState);
-        setSaveStatus(cached.saveStatus);
-        setSaveError(cached.saveError);
-        setLocalHistoryProtection(cached.localHistoryProtection);
-        setCursor(cached.cursor);
-        setCurrentSelection(cached.currentSelection);
-        setDiagnosticsSummary(cached.diagnosticsSummary);
+        restoreLoadedSession(cached);
         return;
       }
       if (options.preserveDirty !== true || !dirtyRef.current) {
-        setLoadState({ status: "loading" });
-        setSaveStatus("idle");
-        setSaveError(undefined);
-        setLocalHistoryProtection(undefined);
+        beginLoad();
       }
       try {
         const response = await fetchFilesContent(root, file);
@@ -2657,57 +2722,26 @@ function EditorRuntimeWidget({
         const snapshot = await readEditorHotExitSnapshot(root, file);
         if (signal.cancelled) return;
         if (options.preserveDirty === true && dirtyRef.current) {
-          if (versionRef.current?.contentHash !== response.session.version.contentHash) {
-            gitReconciliationSequenceRef.current += 1;
-            setExternalCompareBaseline(response.content);
-            dispatchExternalChange({
-              type: "observed",
-              event: {
-                schemaVersion: "1",
-                sequence: gitReconciliationSequenceRef.current,
-                kind: "changed",
-                relativePath: file,
-                sizeBytes: response.session.version.sizeBytes,
-                modifiedAt: response.session.version.modifiedAt,
-                metadataHash: response.session.version.contentHash,
-              },
-              activePath: file,
-              dirty: true,
-              saving: savingRef.current,
-              originatedByKeiko: false,
-            });
-          }
+          reconcilePreservedDirtyBuffer(response, file);
           return;
         }
-        const identity: EditorDocumentIdentity = {
-          uri: documentUri(root, file, editorModelScope),
-          language: inferEditorLanguage(file),
-          version: 0,
-        };
-        setContent(response.content);
-        setFileModel(createFileModel(identity));
-        setModifiedAt(response.modifiedAt);
-        setVersion(response.session.version);
-        setMaxBytes(response.maxBytes);
-        setLocalHistoryProtection(response.localHistoryProtection);
-        setLoadState({ status: "ready" });
-        setExternalCompareBaseline(null);
-        dispatchExternalChange({ type: "reloadSucceeded" });
-        // AC3: offer recovery whenever the snapshot's buffer differs from what is on disk now.
-        if (snapshot !== null && snapshot.content !== response.content) {
-          setRecoverySnapshot(snapshot);
-          setRecoveryDiskBaseline(response.content);
-        } else {
-          setRecoverySnapshot(null);
-          setRecoveryDiskBaseline(null);
-        }
+        finishLoad(root, file, response, snapshot);
       } catch (err: unknown) {
         if (signal.cancelled) return;
         setLoadState({ status: "error", message: errorMessage(err) });
         throw err;
       }
     },
-    [editorModelScope, hasTarget, root, file],
+    [
+      beginLoad,
+      clearLoadedTarget,
+      file,
+      finishLoad,
+      hasTarget,
+      reconcilePreservedDirtyBuffer,
+      restoreLoadedSession,
+      root,
+    ],
   );
 
   useEffect(() => {
@@ -2784,7 +2818,7 @@ function EditorRuntimeWidget({
     setReloadConfirm(false);
   }, []);
 
-  const reloadConfirmRef = useRef<HTMLDivElement>(null);
+  const reloadConfirmRef = useRef<HTMLDialogElement>(null);
   // GEN-UI-FOCUS-002: this destructive confirm declares `aria-modal="true"`, which promises assistive
   // technology that the rest of the shell is unavailable. Without containment a keyboard or
   // screen-reader user could Tab straight out of "Discard unsaved changes?" into the editor and the
@@ -6640,14 +6674,15 @@ function EditorRuntimeWidget({
   const renderReloadConfirmation = (): ReactNode => (
     <>
       {reloadConfirm ? (
-        <div className="ed-dialog-backdrop" role="presentation">
-          <div
+        <div className="ed-dialog-backdrop">
+          <dialog
+            open
             className="ed-dirty-dialog"
             ref={reloadConfirmRef}
-            role="dialog"
             aria-modal="true"
             aria-labelledby="editor-reload-confirm-title"
             tabIndex={-1}
+            style={{ position: "relative", inset: "auto", margin: 0, color: "inherit" }}
           >
             <h2 id="editor-reload-confirm-title">Discard unsaved changes?</h2>
             <p>
@@ -6663,7 +6698,7 @@ function EditorRuntimeWidget({
                 Cancel
               </button>
             </div>
-          </div>
+          </dialog>
         </div>
       ) : null}
     </>

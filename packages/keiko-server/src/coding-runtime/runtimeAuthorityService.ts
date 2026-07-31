@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+  isCodingWorkbenchModeWidening,
   isLegalCodingWorkbenchRuntimeTransition,
   resolveEffectiveCodingWorkbenchMode,
   validateCodingWorkbenchRuntimeAuthorityEnvelope,
@@ -90,6 +91,10 @@ export type CodingRuntimeResolution =
   | { readonly ok: true; readonly envelope: CodingWorkbenchRuntimeAuthorityEnvelope }
   | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode };
 
+export type CodingRuntimeAuthorityBoundaryResult =
+  | { readonly ok: true; readonly effectiveMode: CodingWorkbenchMode }
+  | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode };
+
 export interface CodingRuntimeCapabilityDelegationInput {
   readonly capability: string;
   readonly adapterKind: CodingWorkbenchRuntimeAdapterKind;
@@ -110,6 +115,7 @@ export type CodingRuntimeCapabilityRecheckInput = Omit<
 export class CodingRuntimeAuthorityService {
   private activeAuthorityRef: CodingRuntimeAuthorityRef | undefined;
   private activeTreeBindingId: string | undefined;
+  private activeEffectiveMode: CodingWorkbenchMode | undefined;
   private reapPending: { readonly runId: string; readonly treeBindingId: string } | undefined;
   private runtimeState: CodingWorkbenchRuntimeState = {
     schemaVersion: "1",
@@ -216,6 +222,7 @@ export class CodingRuntimeAuthorityService {
     const treeBindingId = randomBytes(32).toString("hex");
     this.activeAuthorityRef = registered.authorityRef;
     this.activeTreeBindingId = treeBindingId;
+    this.activeEffectiveMode = envelope.authority.effectiveMode;
     this.runtimeState = stateForMint(this.runtimeState, envelope, nowIso);
     return {
       ok: true,
@@ -239,6 +246,86 @@ export class CodingRuntimeAuthorityService {
     return authenticated;
   }
 
+  public effectiveMode(): CodingWorkbenchMode | undefined {
+    return this.activeEffectiveMode;
+  }
+
+  /** Authenticates and atomically reserves estimated prompt tokens before provider dispatch. */
+  public reservePromptTokens(
+    capability: string,
+    promptTokens: number,
+    nowMs = Date.now(),
+  ):
+    | { readonly ok: true; readonly runId: string }
+    | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
+    const authenticated = this.capabilities.authenticate(capability, nowMs);
+    const reference = this.activeAuthorityRef;
+    if (!authenticated.ok) return capabilityFailure(authenticated.reason);
+    if (
+      authenticated.binding.audience !== "model-gateway" ||
+      reference === undefined ||
+      this.runtimeState.state !== "running" ||
+      this.runtimeState.runId !== authenticated.binding.runId ||
+      reference.runId !== authenticated.binding.runId ||
+      reference.envelopeDigest !== authenticated.binding.envelopeDigest
+    ) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    const reserved = this.registry.reserveRuntimePromptTokens(
+      reference,
+      promptTokens,
+      new Date(nowMs).toISOString(),
+    );
+    return reserved.ok ? { ok: true, runId: reference.runId } : reserved;
+  }
+
+  public pause(runId: string, nowIso: string): CodingRuntimeAuthorityBoundaryResult {
+    const reference = this.activeAuthorityRef;
+    if (
+      this.runtimeState.runId !== runId ||
+      reference === undefined ||
+      this.activeEffectiveMode === undefined
+    ) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    const revalidated = this.registry.revalidateRetainedRuntime(reference, nowIso);
+    if (!revalidated.ok) return revalidated;
+    if (this.runtimeState.state === "paused") {
+      return { ok: true, effectiveMode: this.activeEffectiveMode };
+    }
+    if (this.runtimeState.state !== "running" || !this.transition(runId, "paused", nowIso)) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    return { ok: true, effectiveMode: this.activeEffectiveMode };
+  }
+
+  public resume(
+    runId: string,
+    requestedMode: CodingWorkbenchMode,
+    nowIso: string,
+  ): CodingRuntimeAuthorityBoundaryResult {
+    const reference = this.activeAuthorityRef;
+    const currentMode = this.activeEffectiveMode;
+    if (this.runtimeState.runId !== runId || reference === undefined || currentMode === undefined) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    if (isCodingWorkbenchModeWidening(currentMode, requestedMode)) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    const revalidated = this.registry.revalidateRetainedRuntime(reference, nowIso);
+    if (!revalidated.ok) return revalidated;
+    if (this.runtimeState.state === "running") {
+      return requestedMode === currentMode
+        ? { ok: true, effectiveMode: currentMode }
+        : { ok: false, reason: "authority-resolution-failed" };
+    }
+    if (this.runtimeState.state !== "paused" || !this.transition(runId, "running", nowIso)) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    this.activeEffectiveMode = requestedMode;
+    return { ok: true, effectiveMode: requestedMode };
+  }
+
   public resolveForDelegation(
     reference: CodingRuntimeAuthorityRef,
     request: EditorAgentRuntimeDelegationRequest,
@@ -256,7 +343,7 @@ export class CodingRuntimeAuthorityService {
     ) {
       return { ok: false, reason: "authority-resolution-failed" };
     }
-    return this.registry.resolveRuntime(reference, request);
+    return this.restrictResolution(this.registry.resolveRuntime(reference, request));
   }
 
   public resolveCapabilityForDelegation(
@@ -312,12 +399,14 @@ export class CodingRuntimeAuthorityService {
     ) {
       return { ok: false, reason: "authority-resolution-failed" };
     }
-    return this.registry.revalidateRuntime(
-      reference,
-      input.liveFacts,
-      input.workspaceRoot,
-      input.deploymentCeiling,
-      input.nowIso,
+    return this.restrictResolution(
+      this.registry.revalidateRuntime(
+        reference,
+        input.liveFacts,
+        input.workspaceRoot,
+        input.deploymentCeiling,
+        input.nowIso,
+      ),
     );
   }
 
@@ -355,6 +444,7 @@ export class CodingRuntimeAuthorityService {
     if (!this.settleStateAfterObservedReap(runId, nowIso)) return false;
     this.activeAuthorityRef = undefined;
     this.activeTreeBindingId = undefined;
+    this.activeEffectiveMode = undefined;
     this.reapPending = undefined;
     return true;
   }
@@ -378,6 +468,7 @@ export class CodingRuntimeAuthorityService {
     this.approvals.invalidateRun(runId);
     this.activeAuthorityRef = undefined;
     this.activeTreeBindingId = undefined;
+    this.activeEffectiveMode = undefined;
     this.runtimeState = {
       schemaVersion: "1",
       state: "idle",
@@ -410,6 +501,20 @@ export class CodingRuntimeAuthorityService {
     const candidate = transitionedState(this.runtimeState, target, nowIso, failureCode);
     if (!validateCodingWorkbenchRuntimeState(candidate).ok) return false;
     return this.applyTransition(runId, target, candidate);
+  }
+
+  private restrictResolution(resolution: CodingRuntimeResolution): CodingRuntimeResolution {
+    if (!resolution.ok || this.activeEffectiveMode === undefined) return resolution;
+    return {
+      ok: true,
+      envelope: {
+        ...resolution.envelope,
+        authority: {
+          ...resolution.envelope.authority,
+          effectiveMode: this.activeEffectiveMode,
+        },
+      },
+    };
   }
 
   private applyTransition(

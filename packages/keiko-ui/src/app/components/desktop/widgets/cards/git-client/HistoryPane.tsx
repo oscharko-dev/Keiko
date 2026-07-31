@@ -1,10 +1,11 @@
 "use client";
 
 import { useRef } from "react";
-import { useTranslate } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { GitHistoryEntry, GitHistoryResponse } from "@/lib/types";
 import { Icons } from "../../../Icons";
+import { NATIVE_LIST_KEEP_PADDING_STYLE } from "../../../native-element-styles";
 import {
   avatarStyle,
   commitRowStyle,
@@ -46,6 +47,16 @@ function authorInitials(author: string): string {
 // The decoration list carries "HEAD" / "HEAD -> branch" when the commit is the current tip.
 function isHeadCommit(entry: GitHistoryEntry): boolean {
   return entry.refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD"));
+}
+
+function loadMoreLabel(
+  loadingMore: boolean,
+  loadMoreError: string | null,
+  t: I18nTranslate,
+): string {
+  if (loadingMore) return t("gitClientWindow.history.loadingMore");
+  if (loadMoreError === null) return t("gitClientWindow.history.loadMore");
+  return t("gitClientWindow.history.retryLoadMore");
 }
 
 export function HistoryPane({
@@ -134,65 +145,68 @@ export function HistoryPane({
           {t("gitClientWindow.history.truncated", { count: entries.length })}
         </output>
       ) : null}
-      <div role="listbox" aria-label="Commit history" style={HISTORY_LIST_STYLE}>
+      <ul
+        aria-label="Commit history"
+        style={{ ...NATIVE_LIST_KEEP_PADDING_STYLE, ...HISTORY_LIST_STYLE }}
+      >
         {entries.map((entry, index) => {
           const selected = entry.sha === selectedSha;
           const head = isHeadCommit(entry);
           return (
-            <button
-              key={entry.sha}
-              ref={(node) => {
-                refs.current[index] = node;
-              }}
-              type="button"
-              role="option"
-              aria-selected={selected}
-              style={commitRowStyle(selected)}
-              onClick={() => onSelect(entry)}
-              onKeyDown={(event) => onKeyDown(event, index)}
-            >
-              <span aria-hidden="true" style={{ ...avatarStyle(28), fontSize: 10.5 }}>
-                {authorInitials(entry.author)}
-              </span>
-              <span
-                style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0, flex: 1 }}
+            <li key={entry.sha} style={{ display: "contents" }}>
+              <button
+                ref={(node) => {
+                  refs.current[index] = node;
+                }}
+                type="button"
+                aria-current={selected ? "true" : undefined}
+                style={commitRowStyle(selected)}
+                onClick={() => onSelect(entry)}
+                onKeyDown={(event) => onKeyDown(event, index)}
               >
-                <span
-                  style={{
-                    fontSize: 13,
-                    fontWeight: 500,
-                    color: "var(--fg)",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    lineHeight: 1.3,
-                  }}
-                >
-                  {entry.subject}
+                <span aria-hidden="true" style={{ ...avatarStyle(28), fontSize: 10.5 }}>
+                  {authorInitials(entry.author)}
                 </span>
                 <span
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 7,
-                    fontSize: 11,
-                    color: "var(--fg-faint)",
-                  }}
+                  style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0, flex: 1 }}
                 >
-                  <span className="mono" style={{ color: "var(--fg-muted)" }}>
-                    {entry.shortSha}
+                  <span
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 500,
+                      color: "var(--fg)",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      lineHeight: 1.3,
+                    }}
+                  >
+                    {entry.subject}
                   </span>
-                  <span aria-hidden="true">·</span>
-                  <span>{entry.author}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>{formatDate(entry.date)}</span>
-                  {head ? <span style={HEAD_PILL_STYLE}>HEAD</span> : null}
+                  <span
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 7,
+                      fontSize: 11,
+                      color: "var(--fg-faint)",
+                    }}
+                  >
+                    <span className="mono" style={{ color: "var(--fg-muted)" }}>
+                      {entry.shortSha}
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <span>{entry.author}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{formatDate(entry.date)}</span>
+                    {head ? <span style={HEAD_PILL_STYLE}>HEAD</span> : null}
+                  </span>
                 </span>
-              </span>
-            </button>
+              </button>
+            </li>
           );
         })}
-      </div>
+      </ul>
       <div
         style={{
           display: "flex",
@@ -215,11 +229,7 @@ export function HistoryPane({
               disabled={loadingMore}
               onClick={onLoadMore}
             >
-              {loadingMore
-                ? t("gitClientWindow.history.loadingMore")
-                : loadMoreError === null
-                  ? t("gitClientWindow.history.loadMore")
-                  : t("gitClientWindow.history.retryLoadMore")}
+              {loadMoreLabel(loadingMore, loadMoreError, t)}
             </button>
           </>
         ) : (

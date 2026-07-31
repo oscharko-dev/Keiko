@@ -7,7 +7,11 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { makeFakeChild, makeWorkspace, recordingSpawn } from "./_support.js";
-import { createNodeGitMergeAdapter } from "./git-merge-node.js";
+import {
+  createNodeGitMergeAdapter,
+  readNodeGitBranchProtection,
+  type GitBranchProtectionReadResult,
+} from "./git-merge-node.js";
 import type { HomeProvider, SpawnFn } from "./exec.js";
 import type { GitMergeAdapter, GitMergeExecRequest } from "./git-merge-gateway.js";
 
@@ -59,6 +63,21 @@ function makeAdapter(spawn: ScriptedSpawn): GitMergeAdapter {
   });
 }
 
+function readProtection(spawn: ScriptedSpawn): Promise<GitBranchProtectionReadResult> {
+  const { info } = makeWorkspace();
+  return readNodeGitBranchProtection(
+    {
+      workspace: info,
+      processEnv: { PATH: "/usr/bin" },
+      now: () => 0,
+      spawn: spawn.fn,
+      home: FAKE_HOME,
+      resolveExecutable: () => "gh",
+    },
+    { ownerAndRepo: "oscharko-dev/Keiko", baseBranchName: "main" },
+  );
+}
+
 const READINESS_REQ = {
   ownerAndRepo: "oscharko-dev/Keiko",
   prExternalId: "42",
@@ -102,6 +121,27 @@ const CLEAN_PR = JSON.stringify({
 });
 
 const REPO_CFG = JSON.stringify({ squash: true, merge: false, rebase: true });
+
+describe("readNodeGitBranchProtection", () => {
+  it("projects the signed-commit requirement through the governed gh read", async () => {
+    const spawn = scriptedSpawn([{ stdout: NO_REQUIRED_REVIEWS }]);
+    const result = await readProtection(spawn);
+    expect(result).toMatchObject({
+      outcome: "protected",
+      protection: { signaturesRequired: false },
+    });
+    expect(spawn.calls()[0]?.args).toContain("/repos/oscharko-dev/Keiko/branches/main/protection");
+  });
+
+  it("distinguishes an unprotected branch from an unavailable provider read", async () => {
+    await expect(
+      readProtection(scriptedSpawn([{ exit: 1, stderr: "HTTP 404: Not Found" }])),
+    ).resolves.toEqual({ outcome: "unprotected" });
+    await expect(
+      readProtection(scriptedSpawn([{ exit: 1, stderr: "provider unavailable" }])),
+    ).resolves.toEqual({ outcome: "unavailable" });
+  });
+});
 
 describe("readMergeReadiness", () => {
   it("maps a clean PR + repo config to neutral facts and capable strategies (no checks read)", async () => {

@@ -7,8 +7,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { validateKnowledgePodRetrievalActivity } from "@oscharko-dev/keiko-contracts";
 import type {
+  ChatAssistantResponseVersion,
   ChatMessage,
   ChatRole,
+  ChatTurnState,
   GroundedAnswer,
   NewChatMessage,
   StoredPdfCitationPreviewCitation,
@@ -48,6 +50,60 @@ interface MessageRow {
   readonly client_turn_id: string | null;
   readonly client_turn_state: string | null;
   readonly client_turn_content_digest: string | null;
+  readonly assistant_response_versions_json: string | null;
+}
+
+const MAX_ASSISTANT_RESPONSE_VERSIONS = 50;
+
+function isResponseVersion(
+  value: unknown,
+  expectedVersion: number,
+): value is ChatAssistantResponseVersion {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  const expectedSupersedes = expectedVersion === 1 ? undefined : expectedVersion - 1;
+  return (
+    candidate.version === expectedVersion &&
+    typeof candidate.content === "string" &&
+    candidate.content.length > 0 &&
+    typeof candidate.timestamp === "number" &&
+    Number.isFinite(candidate.timestamp) &&
+    candidate.supersedesVersion === expectedSupersedes
+  );
+}
+
+function isAssistantResponseVersionChain(
+  row: MessageRow,
+  value: unknown,
+): value is ChatAssistantResponseVersion[] {
+  return (
+    row.role === "assistant" &&
+    Array.isArray(value) &&
+    value.length >= 2 &&
+    value.length <= MAX_ASSISTANT_RESPONSE_VERSIONS &&
+    value.every((candidate, index) => isResponseVersion(candidate, index + 1))
+  );
+}
+
+function parseAssistantResponseVersions(
+  row: MessageRow,
+): readonly ChatAssistantResponseVersion[] | undefined {
+  const raw = row.assistant_response_versions_json;
+  if (raw === null) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new UiStoreError("INTERNAL", "Stored assistant response versions are invalid.", 500);
+  }
+  if (!isAssistantResponseVersionChain(row, parsed)) {
+    throw new UiStoreError("INTERNAL", "Stored assistant response versions are invalid.", 500);
+  }
+  const current = parsed.at(-1);
+  if (current?.content !== row.content || current.timestamp !== row.timestamp) {
+    throw new UiStoreError("INTERNAL", "Stored assistant response versions are inconsistent.", 500);
+  }
+  return parsed;
 }
 
 function parseGroundedAnswer(raw: string | null): GroundedAnswer | undefined {
@@ -79,6 +135,9 @@ function parseGroundedPreviewCitations(
 
 function rowToMessage(row: MessageRow): ChatMessage {
   const groundedAnswer = parseGroundedAnswer(row.grounded_answer_json);
+  const turnState = parseClientTurnState(row.client_turn_state);
+  const responseVersions = parseAssistantResponseVersions(row);
+  const currentResponse = responseVersions?.at(-1);
   return {
     id: row.id,
     chatId: row.chat_id,
@@ -86,17 +145,21 @@ function rowToMessage(row: MessageRow): ChatMessage {
     content: row.content,
     timestamp: row.timestamp,
     canonicalTurnRef: row.client_turn_id ?? undefined,
+    turnState,
+    responseVersion: currentResponse?.version,
+    supersedesResponseVersion: currentResponse?.supersedesVersion,
+    responseVersions,
     runId: row.run_id ?? undefined,
     workflowId: row.workflow_id ?? undefined,
     workflowStatus: (row.workflow_status ?? undefined) as WorkflowStatus | undefined,
     shortResult: row.short_result ?? undefined,
     taskType: row.task_type ?? undefined,
-    ...(groundedAnswer === undefined ? {} : { groundedAnswer }),
+    groundedAnswer,
   };
 }
 
 const COLUMNS =
-  "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json, client_turn_id, client_turn_state, client_turn_content_digest";
+  "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json, client_turn_id, client_turn_state, client_turn_content_digest, assistant_response_versions_json";
 
 const SQL_LIST = `SELECT ${COLUMNS} FROM chat_messages WHERE chat_id = ? ORDER BY timestamp ASC, rowid ASC`;
 const SQL_LIST_LIMITED = `
@@ -140,9 +203,9 @@ const SQL_FIND_BY_CLIENT_TURN = `
   ORDER BY timestamp ASC, rowid ASC
 `;
 const SQL_CHAT_EXISTS = "SELECT 1 FROM chats WHERE id = ?";
-const SQL_REPLACE_ASSISTANT_CONTENT = `
+const SQL_VERSION_ASSISTANT_CONTENT = `
   UPDATE chat_messages
-  SET content = ?, timestamp = ?
+  SET content = ?, timestamp = ?, assistant_response_versions_json = ?
   WHERE id = ? AND role = 'assistant'
   RETURNING ${COLUMNS}
 `;
@@ -331,13 +394,15 @@ export function findMessageById(db: DatabaseSync, id: string): ChatMessage | und
 export interface ClientTurnRecord {
   readonly userMessage?: ChatMessage | undefined;
   readonly assistantMessage?: ChatMessage | undefined;
-  readonly state?: "pending" | "completed" | "failed" | undefined;
+  readonly state?: ChatTurnState | undefined;
   readonly contentDigest?: string | undefined;
 }
 
 function parseClientTurnState(value: string | null): ClientTurnRecord["state"] {
   if (value === null) return undefined;
-  if (value === "pending" || value === "completed" || value === "failed") return value;
+  if (value === "pending" || value === "completed" || value === "failed" || value === "cancelled") {
+    return value;
+  }
   throw new UiStoreError("INTERNAL", "Stored client turn state is invalid.", 500);
 }
 
@@ -394,8 +459,8 @@ export function markClientTurnState(
   db: DatabaseSync,
   chatId: string,
   clientTurnId: string,
-  from: "failed" | "pending",
-  to: "failed" | "pending",
+  from: ChatTurnState,
+  to: ChatTurnState,
 ): boolean {
   const result = db
     .prepare(
@@ -737,15 +802,42 @@ export function updateMessage(
   return rowToMessage(row);
 }
 
-export function replaceAssistantMessageContent(
+function initialAssistantResponseVersion(row: MessageRow): ChatAssistantResponseVersion {
+  return { version: 1, content: row.content, timestamp: row.timestamp };
+}
+
+export function createAssistantResponseVersion(
   db: DatabaseSync,
   id: string,
   content: string,
   timestamp: number,
 ): ChatMessage {
   if (content.length === 0) throw invalidRequest("Content is required.");
-  const row = db.prepare(SQL_REPLACE_ASSISTANT_CONTENT).get(content, timestamp, id) as unknown as
-    MessageRow | undefined;
-  if (row === undefined) throw notFound("Message");
-  return rowToMessage(row);
+  const current = db.prepare(SQL_FIND_BY_ID).get(id) as unknown as MessageRow | undefined;
+  if (current?.role !== "assistant") throw notFound("Message");
+  if (current.grounded_answer_json !== null) {
+    throw invalidRequest("Grounded assistant responses cannot be regenerated.");
+  }
+  const existing = parseAssistantResponseVersions(current) ?? [
+    initialAssistantResponseVersion(current),
+  ];
+  if (existing.length >= MAX_ASSISTANT_RESPONSE_VERSIONS) {
+    throw invalidRequest("Assistant response version limit reached.");
+  }
+  const previous = existing.at(-1);
+  if (previous === undefined) {
+    throw new UiStoreError("INTERNAL", "Stored assistant response versions are invalid.", 500);
+  }
+  const next: ChatAssistantResponseVersion = {
+    version: previous.version + 1,
+    content,
+    timestamp,
+    supersedesVersion: previous.version,
+  };
+  const versions = [...existing, next];
+  const updated = db
+    .prepare(SQL_VERSION_ASSISTANT_CONTENT)
+    .get(content, timestamp, JSON.stringify(versions), id) as unknown as MessageRow | undefined;
+  if (updated === undefined) throw notFound("Message");
+  return rowToMessage(updated);
 }

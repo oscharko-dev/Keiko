@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import {
   ApiError,
   applyRun,
@@ -34,6 +35,9 @@ const ResetIcon = Icons.reset;
 const SparkIcon = Icons.spark;
 const FilesIcon = Icons.files;
 
+const PREFORMATTED_REGION_STYLE = { overflow: "auto", maxHeight: 220 } as const;
+const PREFORMATTED_CONTENT_STYLE = { overflow: "visible", maxHeight: "none" } as const;
+
 interface AgentRunCfg {
   workflow?: string;
   model?: string;
@@ -43,6 +47,17 @@ interface AgentRunCfg {
   inputJson?: string;
   keikoMode?: boolean;
   access?: "ask" | "full";
+  requestedMode?: CodingWorkbenchMode;
+  effectiveMode?: CodingWorkbenchMode;
+  deploymentCeiling?: CodingWorkbenchMode;
+  connectorExecution?: "unavailable";
+  deliveryExecution?: "unavailable";
+}
+
+function autonomyModeLabel(mode: CodingWorkbenchMode, t: I18nTranslate): string {
+  if (mode === "governed-assist") return t("agentLauncher.mode.governedAssist.label");
+  if (mode === "supervised-coding") return t("agentLauncher.mode.supervisedCoding.label");
+  return t("agentLauncher.mode.autonomousDelivery.label");
 }
 
 interface AgentRunWidgetProps {
@@ -56,6 +71,30 @@ interface UsageTotals {
   readonly completionTokens: number;
   readonly latencyMs: number;
   readonly requestCount: number;
+}
+
+function PreformattedScrollRegion({
+  title,
+  value,
+}: {
+  readonly title: string;
+  readonly value: string;
+}): ReactNode {
+  return (
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- named scroll region must receive keyboard focus (WCAG 2.1.1)
+    <section aria-label={title} tabIndex={0} style={PREFORMATTED_REGION_STYLE}>
+      <pre style={PREFORMATTED_CONTENT_STYLE}>{value}</pre>
+    </section>
+  );
+}
+
+interface AgentRunData {
+  readonly report: RunReport | null;
+  readonly evidence: EvidenceManifest | null;
+  readonly error: string | null;
+  readonly loadReport: () => Promise<void>;
+  readonly replaceReport: (report: RunReport) => void;
+  readonly setError: (message: string | null) => void;
 }
 
 const TERMINAL_REPORT_STATUSES = new Set<RunReport["status"]>([
@@ -324,16 +363,9 @@ function renderExplainReport(report: RunReport, t: I18nTranslate): ReactNode {
   return (
     <div className="arun-result-card">
       <div className="arun-result-title">{title}</div>
-      {/* GEN-UI-KEYBOARD-005 — overflow:auto scroll container (max-height 220px) exposed
-          as a focusable named region so keyboard-only users can scroll it (WCAG 2.1.1). */}
-      <pre
-        role="region"
-        aria-label={title}
-        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
-        tabIndex={0}
-      >
-        {report.report}
-      </pre>
+      {/* GEN-UI-KEYBOARD-005 — named, focusable overflow:auto scroll container
+          so keyboard-only users can scroll it (WCAG 2.1.1). */}
+      <PreformattedScrollRegion title={title} value={report.report} />
     </div>
   );
 }
@@ -362,16 +394,9 @@ function renderTextCard(title: string, value: string | undefined): ReactNode {
   return (
     <div className="arun-result-card">
       <div className="arun-result-title">{title}</div>
-      {/* GEN-UI-KEYBOARD-005 — overflow:auto scroll container exposed as a focusable
-          named region so keyboard-only users can scroll it (WCAG 2.1.1). */}
-      <pre
-        role="region"
-        aria-label={title}
-        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
-        tabIndex={0}
-      >
-        {value}
-      </pre>
+      {/* GEN-UI-KEYBOARD-005 — named, focusable overflow:auto scroll container
+          so keyboard-only users can scroll it (WCAG 2.1.1). */}
+      <PreformattedScrollRegion title={title} value={value} />
     </div>
   );
 }
@@ -493,14 +518,7 @@ function PreformattedResultCard({
   return (
     <div className={`arun-result-card${applied ? " arun-applied" : ""}`}>
       <div className="arun-result-title">{title}</div>
-      <pre
-        role="region"
-        aria-label={title}
-        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
-        tabIndex={0}
-      >
-        {value}
-      </pre>
+      <PreformattedScrollRegion title={title} value={value} />
     </div>
   );
 }
@@ -726,6 +744,269 @@ function AgentRunControls(props: AgentRunControlsProps): ReactNode {
   );
 }
 
+function useAgentRunData(runId: string | null, t: I18nTranslate): AgentRunData {
+  const [report, setReport] = useState<RunReport | null>(null);
+  const [evidence, setEvidence] = useState<EvidenceManifest | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const loadReport = useCallback(async (): Promise<void> => {
+    if (runId === null) return;
+    setError(null);
+    try {
+      const response = await fetchRunReport(runId);
+      setReport(response.report);
+      setEvidence(null);
+    } catch (loadError: unknown) {
+      if (!(loadError instanceof ApiError) || loadError.status !== 404) {
+        setError(
+          loadError instanceof Error ? loadError.message : t("agentRunWidget.error.loadReport"),
+        );
+        return;
+      }
+      try {
+        const response = await fetchEvidenceManifest(runId);
+        setEvidence(response.manifest);
+        setReport(null);
+      } catch (evidenceError: unknown) {
+        setError(
+          evidenceError instanceof Error
+            ? evidenceError.message
+            : t("agentRunWidget.error.loadEvidence"),
+        );
+      }
+    }
+  }, [runId, t]);
+
+  useEffect(() => {
+    void loadReport();
+  }, [loadReport]);
+
+  return { report, evidence, error, loadReport, replaceReport: setReport, setError };
+}
+
+function useModelCostClass(modelId: string): CostClass | null {
+  const [costClass, setCostClass] = useState<CostClass | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (modelId.length === 0) return;
+    void fetchModels()
+      .then((payload) => {
+        if (!cancelled) {
+          setCostClass(payload.models.find((model) => model.id === modelId)?.costClass ?? null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setCostClass(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [modelId]);
+  return costClass;
+}
+
+function useCancelFocus(
+  showCancel: boolean,
+  evidenceLinkRef: RefObject<HTMLAnchorElement | null>,
+): void {
+  const previousShowCancelRef = useRef(false);
+  useEffect(() => {
+    if (previousShowCancelRef.current && !showCancel && document.activeElement === document.body) {
+      evidenceLinkRef.current?.focus();
+    }
+    previousShowCancelRef.current = showCancel;
+  }, [evidenceLinkRef, showCancel]);
+}
+
+function useApplyConfirmation(
+  applying: boolean,
+  onConfirmed: () => void,
+): {
+  readonly confirmApply: boolean;
+  readonly onApplyClick: () => void;
+} {
+  const [confirmApply, setConfirmApply] = useState(false);
+  const confirmTimerRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (confirmTimerRef.current !== null) window.clearTimeout(confirmTimerRef.current);
+    },
+    [],
+  );
+  const onApplyClick = (): void => {
+    if (applying) return;
+    if (!confirmApply) {
+      setConfirmApply(true);
+      if (confirmTimerRef.current !== null) window.clearTimeout(confirmTimerRef.current);
+      confirmTimerRef.current = window.setTimeout(() => {
+        setConfirmApply(false);
+        confirmTimerRef.current = null;
+      }, 6000);
+      return;
+    }
+    if (confirmTimerRef.current !== null) window.clearTimeout(confirmTimerRef.current);
+    confirmTimerRef.current = null;
+    setConfirmApply(false);
+    onConfirmed();
+  };
+  return { confirmApply, onApplyClick };
+}
+
+function AgentRunHeader({
+  workflow,
+  modelId,
+  costClass,
+  cfg,
+  report,
+  status,
+  statusLabel,
+  t,
+}: {
+  readonly workflow: AgentWorkflowId;
+  readonly modelId: string;
+  readonly costClass: CostClass | null;
+  readonly cfg: AgentRunCfg;
+  readonly report: RunReport | null;
+  readonly status: string;
+  readonly statusLabel: string;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  return (
+    <div className="arun-head">
+      <span className="arun-role">{workflowLabel(workflow, t)}</span>
+      {modelId.length > 0 ? <span className="ag-model mono">{modelId}</span> : null}
+      {costClass === null ? null : (
+        <span className="arun-gov" title={t("agentRunWidget.costClassTitle")}>
+          {costClassLabel(costClass)}
+        </span>
+      )}
+      {cfg.effectiveMode === undefined ? null : (
+        <span
+          className="arun-gov"
+          title={t("agentRunWidget.autonomyMode", {
+            mode: autonomyModeLabel(cfg.effectiveMode, t),
+          })}
+        >
+          {autonomyModeLabel(cfg.effectiveMode, t)}
+        </span>
+      )}
+      {cfg.connectorExecution === "unavailable" && cfg.deliveryExecution === "unavailable" ? (
+        <span className="arun-gov" title={t("agentRunWidget.executionUnavailable")}>
+          {t("agentRunWidget.executionUnavailable")}
+        </span>
+      ) : null}
+      <span className="spacer" />
+      <span className="arun-status">
+        <span className="dot" data-live={report?.status === "running"} data-status={status} />
+        {statusLabel}
+      </span>
+    </div>
+  );
+}
+
+function AgentRunMeters({
+  elapsedMs,
+  usage,
+  t,
+}: {
+  readonly elapsedMs: number;
+  readonly usage: UsageTotals;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const tokenUsage =
+    usage.requestCount === 0
+      ? t("agentRunWidget.meter.noUsage")
+      : t("agentRunWidget.meter.tokens", {
+          tokens: formatTokens(usage.promptTokens + usage.completionTokens),
+        });
+  const latency = usage.requestCount === 0 ? "—" : formatMs(usage.latencyMs);
+  return (
+    <div className="arun-meters">
+      <div className="arun-meter">
+        <span className="arun-mk">{t("agentRunWidget.meter.elapsed")}</span>
+        <span className="arun-mv mono">{formatMs(elapsedMs)}</span>
+      </div>
+      <div className="arun-meter">
+        <span className="arun-mk">{t("agentRunWidget.meter.usage")}</span>
+        <span className="arun-mv mono">{tokenUsage}</span>
+      </div>
+      <div className="arun-meter">
+        <span className="arun-mk">{t("agentRunWidget.meter.latency")}</span>
+        <span className="arun-mv mono">{latency}</span>
+      </div>
+    </div>
+  );
+}
+
+function AgentRunPermissions({
+  linkedRoot,
+  workspaceRoot,
+  linkedFilePath,
+  t,
+}: {
+  readonly linkedRoot: string | null;
+  readonly workspaceRoot: string | undefined;
+  readonly linkedFilePath: string | undefined;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const displayedRoot = linkedRoot ?? workspaceRoot;
+  return (
+    <div className="arun-perms">
+      <span className="arun-perm" data-on={linkedRoot !== null} title={displayedRoot}>
+        <FilesIcon size={11} />
+        <span className="arun-perm-path">
+          {displayedRoot ?? t("agentRunWidget.perm.noWorkspace")}
+        </span>
+      </span>
+      {linkedFilePath === undefined ? null : (
+        <span className="arun-perm" data-on={true} title={linkedFilePath}>
+          <FilesIcon size={11} />
+          <span className="arun-perm-path">{linkedFilePath}</span>
+        </span>
+      )}
+    </div>
+  );
+}
+
+function AgentRunInput({
+  input,
+  t,
+}: {
+  readonly input: Record<string, unknown> | null;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (input === null) return null;
+  const label = t("agentRunWidget.runInput.summary");
+  return (
+    <details className="arun-input">
+      <summary>{label}</summary>
+      <PreformattedScrollRegion title={label} value={JSON.stringify(input, null, 2)} />
+    </details>
+  );
+}
+
+function AgentRunErrors({
+  error,
+  applyError,
+}: {
+  readonly error: string | null;
+  readonly applyError: string | null;
+}): ReactNode {
+  return (
+    <>
+      {error === null ? null : (
+        <div className="arun-error" role="alert">
+          {error}
+        </div>
+      )}
+      {applyError === null ? null : (
+        <div className="arun-error" role="alert">
+          {applyError}
+        </div>
+      )}
+    </>
+  );
+}
+
 export function AgentRunWidget({
   cfg = {},
   linkedRoot = null,
@@ -737,69 +1018,18 @@ export function AgentRunWidget({
   const modelId = cfg.model ?? "";
   const input = parseInput(cfg.inputJson);
   const sse = useSSE(runId);
-  const [report, setReport] = useState<RunReport | null>(null);
-  const [evidence, setEvidence] = useState<EvidenceManifest | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { report, evidence, error, loadReport, replaceReport, setError } = useAgentRunData(
+    runId,
+    t,
+  );
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
-  const [costClass, setCostClass] = useState<CostClass | null>(null);
-  // uiux-fix F018 C258: Apply writes to the working tree — require an explicit
-  // second click ("Confirm apply (N files)") that times out back to "Apply".
-  const [confirmApply, setConfirmApply] = useState(false);
-  const confirmTimerRef = useRef<number | null>(null);
+  const costClass = useModelCostClass(modelId);
   const evidenceLinkRef = useRef<HTMLAnchorElement | null>(null);
-
-  const loadReport = useCallback(async (): Promise<void> => {
-    if (runId === null) return;
-    setError(null);
-    try {
-      const response = await fetchRunReport(runId);
-      setReport(response.report);
-      setEvidence(null);
-    } catch (loadError: unknown) {
-      if (loadError instanceof ApiError && loadError.status === 404) {
-        try {
-          const response = await fetchEvidenceManifest(runId);
-          setEvidence(response.manifest);
-          setReport(null);
-        } catch (evidenceError: unknown) {
-          setError(
-            evidenceError instanceof Error
-              ? evidenceError.message
-              : t("agentRunWidget.error.loadEvidence"),
-          );
-        }
-        return;
-      }
-      setError(
-        loadError instanceof Error ? loadError.message : t("agentRunWidget.error.loadReport"),
-      );
-    }
-  }, [runId, t]);
-
-  useEffect(() => {
-    void loadReport();
-  }, [loadReport]);
 
   useEffect(() => {
     if (sse.status === "terminal") void loadReport();
   }, [loadReport, sse.status]);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (modelId.length === 0) return;
-    void fetchModels()
-      .then((payload) => {
-        if (cancelled) return;
-        setCostClass(payload.models.find((model) => model.id === modelId)?.costClass ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) setCostClass(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [modelId]);
 
   const usage = useMemo(() => aggregateUsage(sse.events, report), [sse.events, report]);
   // GEN-PERF-WIDGET-005 — the newest-first 50-row log view copies/reverses the (≤500
@@ -827,19 +1057,7 @@ export function AgentRunWidget({
   // uiux-fix F018 C124: the Cancel button unmounts the moment the run turns
   // terminal; if it held keyboard focus the browser silently drops focus to
   // <body>. Restore it to the always-rendered Evidence control instead.
-  const prevShowCancelRef = useRef(false);
-  useEffect(() => {
-    if (prevShowCancelRef.current && !showCancel && document.activeElement === document.body) {
-      evidenceLinkRef.current?.focus();
-    }
-    prevShowCancelRef.current = showCancel;
-  }, [showCancel]);
-
-  useEffect(() => {
-    return () => {
-      if (confirmTimerRef.current !== null) window.clearTimeout(confirmTimerRef.current);
-    };
-  }, []);
+  useCancelFocus(showCancel, evidenceLinkRef);
 
   const doCancel = async (): Promise<void> => {
     if (runId === null) return;
@@ -860,7 +1078,7 @@ export function AgentRunWidget({
     setApplyError(null);
     try {
       const response = await applyRun(runId);
-      setReport(response.report);
+      replaceReport(response.report);
     } catch (applyRunError: unknown) {
       setApplyError(
         applyRunError instanceof Error ? applyRunError.message : t("agentRunWidget.error.applyRun"),
@@ -872,24 +1090,7 @@ export function AgentRunWidget({
 
   // uiux-fix F018 C258: first click arms the confirm state (auto-resets after 6 s),
   // the second click actually applies.
-  const onApplyClick = (): void => {
-    if (applying) return;
-    if (!confirmApply) {
-      setConfirmApply(true);
-      if (confirmTimerRef.current !== null) window.clearTimeout(confirmTimerRef.current);
-      confirmTimerRef.current = window.setTimeout(() => {
-        setConfirmApply(false);
-        confirmTimerRef.current = null;
-      }, 6000);
-      return;
-    }
-    if (confirmTimerRef.current !== null) {
-      window.clearTimeout(confirmTimerRef.current);
-      confirmTimerRef.current = null;
-    }
-    setConfirmApply(false);
-    void doApply();
-  };
+  const { confirmApply, onApplyClick } = useApplyConfirmation(applying, () => void doApply());
 
   if (runId === null || workflow === null) {
     return (
@@ -902,26 +1103,16 @@ export function AgentRunWidget({
 
   return (
     <div className="arun arun-real" aria-busy={runBusy ? "true" : undefined}>
-      <div className="arun-head">
-        <span className="arun-role">{workflowLabel(workflow, t)}</span>
-        {/* uiux-fix F054 C385: cfg.model is optional — skip the pill entirely so no
-            empty bordered artefact renders between the workflow label and status. */}
-        {modelId.length > 0 ? <span className="ag-model mono">{modelId}</span> : null}
-        {/* uiux-fix F054 C382: human-readable cost class ("Low cost") instead of the
-            raw enum, plus a title explaining what the pill refers to. */}
-        {costClass !== null ? (
-          <span className="arun-gov" title={t("agentRunWidget.costClassTitle")}>
-            {costClassLabel(costClass)}
-          </span>
-        ) : null}
-        <span className="spacer" />
-        <span className="arun-status">
-          {/* uiux-fix F018 C265: data-status feeds the idle/terminal dot colours in
-              globals.css — the bare .dot class paints no background at all. */}
-          <span className="dot" data-live={report?.status === "running"} data-status={status} />
-          {statusLabel}
-        </span>
-      </div>
+      <AgentRunHeader
+        workflow={workflow}
+        modelId={modelId}
+        costClass={costClass}
+        cfg={cfg}
+        report={report}
+        status={status}
+        statusLabel={statusLabel}
+        t={t}
+      />
 
       {/* uiux-fix F018 C109: announce run completion (shortSummary changes) to AT.
           title carries the full run id, which is otherwise unobtainable (C110). */}
@@ -932,65 +1123,18 @@ export function AgentRunWidget({
         </span>
       </div>
 
-      <div className="arun-meters">
-        <div className="arun-meter">
-          <span className="arun-mk">{t("agentRunWidget.meter.elapsed")}</span>
-          <span className="arun-mv mono">{formatMs(elapsedMs)}</span>
-        </div>
-        <div className="arun-meter">
-          <span className="arun-mk">{t("agentRunWidget.meter.usage")}</span>
-          <span className="arun-mv mono">
-            {usage.requestCount === 0
-              ? t("agentRunWidget.meter.noUsage")
-              : t("agentRunWidget.meter.tokens", {
-                  tokens: formatTokens(usage.promptTokens + usage.completionTokens),
-                })}
-          </span>
-        </div>
-        <div className="arun-meter">
-          <span className="arun-mk">{t("agentRunWidget.meter.latency")}</span>
-          <span className="arun-mv mono">
-            {usage.requestCount === 0 ? "—" : formatMs(usage.latencyMs)}
-          </span>
-        </div>
-      </div>
+      <AgentRunMeters elapsedMs={elapsedMs} usage={usage} t={t} />
 
       {/* uiux-fix F018 C266: absolute paths are single unbreakable words — wrap them in a
           truncating span and expose the full path via title so the end stays reachable. */}
-      <div className="arun-perms">
-        <span
-          className="arun-perm"
-          data-on={linkedRoot !== null}
-          title={linkedRoot ?? cfg.workspaceRoot ?? undefined}
-        >
-          <FilesIcon size={11} />
-          <span className="arun-perm-path">
-            {linkedRoot ?? cfg.workspaceRoot ?? t("agentRunWidget.perm.noWorkspace")}
-          </span>
-        </span>
-        {linkedFilePath !== undefined ? (
-          <span className="arun-perm" data-on={true} title={linkedFilePath}>
-            <FilesIcon size={11} />
-            <span className="arun-perm-path">{linkedFilePath}</span>
-          </span>
-        ) : null}
-      </div>
+      <AgentRunPermissions
+        linkedRoot={linkedRoot}
+        workspaceRoot={cfg.workspaceRoot}
+        linkedFilePath={linkedFilePath}
+        t={t}
+      />
 
-      {input !== null ? (
-        <details className="arun-input">
-          <summary>{t("agentRunWidget.runInput.summary")}</summary>
-          {/* GEN-UI-KEYBOARD-005 — overflow:auto scroll container exposed as a focusable
-              named region so keyboard-only users can scroll it (WCAG 2.1.1). */}
-          <pre
-            role="region"
-            aria-label={t("agentRunWidget.runInput.summary")}
-            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
-            tabIndex={0}
-          >
-            {JSON.stringify(input, null, 2)}
-          </pre>
-        </details>
-      ) : null}
+      <AgentRunInput input={input} t={t} />
 
       {/* uiux-fix F018 C109: role=log announces appended entries (TerminalWidget
           pattern). The C026 disconnect row below lives inside this live region, so
@@ -999,17 +1143,7 @@ export function AgentRunWidget({
 
       <AgentRunResults report={report} evidence={evidence} t={t} />
 
-      {/* uiux-fix F018 C109: async failures must be announced (WCAG 4.1.3) */}
-      {error !== null ? (
-        <div className="arun-error" role="alert">
-          {error}
-        </div>
-      ) : null}
-      {applyError !== null ? (
-        <div className="arun-error" role="alert">
-          {applyError}
-        </div>
-      ) : null}
+      <AgentRunErrors error={error} applyError={applyError} />
 
       <AgentRunControls
         runId={runId}

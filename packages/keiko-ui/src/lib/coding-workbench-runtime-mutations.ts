@@ -1,7 +1,9 @@
-import type {
-  CodingWorkbenchRuntimeApprovalDecision,
-  CodingWorkbenchRuntimeResearchGrant,
-  CodingWorkbenchRuntimeSnapshot,
+import {
+  isCodingWorkbenchModeWidening,
+  type CodingWorkbenchMode,
+  type CodingWorkbenchRuntimeApprovalDecision,
+  type CodingWorkbenchRuntimeResearchGrant,
+  type CodingWorkbenchRuntimeSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 import {
   acknowledgeCodingWorkbenchRuntimeRecovery,
@@ -101,6 +103,7 @@ export function createRunBoundMutation(
 export function createLifecycleMutation(
   kind: "pause" | "resume",
   current: CodingWorkbenchRuntimeState,
+  requestedMode?: CodingWorkbenchMode,
 ): CodingWorkbenchMutationCommand {
   const snapshot = current.run.value;
   const runId = snapshot?.runId;
@@ -108,6 +111,8 @@ export function createLifecycleMutation(
     kind === "pause" ? snapshot?.state === "running" : snapshot?.state === "paused";
   if (!runId || snapshot === null || !admissible)
     throw codingWorkbenchRuntimeActionError("The run cannot change lifecycle state right now.");
+  const resumeMode =
+    kind === "resume" ? validatedResumeMode(snapshot.effectiveMode, requestedMode) : undefined;
   return {
     requestId: runId,
     expected: { runId, revision: snapshot.revision },
@@ -115,8 +120,22 @@ export function createLifecycleMutation(
     run: () =>
       kind === "pause"
         ? pauseCodingWorkbenchRuntime(runId, { requestId: runId })
-        : resumeCodingWorkbenchRuntime(runId, { requestId: runId }),
+        : resumeCodingWorkbenchRuntime(runId, { requestId: runId, requestedMode: resumeMode }),
   };
+}
+
+function validatedResumeMode(
+  currentMode: CodingWorkbenchMode | undefined,
+  requestedMode: CodingWorkbenchMode | undefined,
+): CodingWorkbenchMode {
+  if (
+    currentMode === undefined ||
+    requestedMode === undefined ||
+    isCodingWorkbenchModeWidening(currentMode, requestedMode)
+  ) {
+    throw codingWorkbenchRuntimeActionError("Resume requires the current or a narrower mode.");
+  }
+  return requestedMode;
 }
 
 export function createFollowUpMutation(

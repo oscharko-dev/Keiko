@@ -3,11 +3,13 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   isLegalCodingWorkbenchRuntimeTransition,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
+  parseCodingWorkbenchRuntimeResumeRequest,
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeResearchRevokeRequest,
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
   parseCodingWorkbenchRuntimeTakeoverRequest,
+  type CodingWorkbenchMode,
   type CodingWorkbenchRuntimeApprovalDecisionRequest,
   type CodingWorkbenchRuntimeEvent,
   type CodingWorkbenchRuntimePendingApprovalReview,
@@ -40,6 +42,12 @@ import type {
 } from "./codingRuntimeOrchestratorTypes.js";
 import type { CodingRuntimeTaskOutcome } from "./productionCodingRuntimeHost.js";
 
+function runtimePauseFailureCode(
+  code: "authority-expired" | "authority-resolution-failed" | "runtime-run-mismatch",
+): CodingWorkbenchRuntimeFailureCode {
+  return code === "runtime-run-mismatch" ? "authority-resolution-failed" : code;
+}
+
 export type {
   CodingRuntimeApprovalAuthority,
   CodingRuntimeLaunchResolver,
@@ -54,6 +62,13 @@ interface ApprovalChallenge {
   readonly permission: CodingWorkbenchRuntimePendingPermission;
   used: boolean;
 }
+
+const TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
+  "succeeded",
+  "failed",
+  "cancelled",
+  "taken-over",
+]);
 
 /**
  * Server-side ceiling on how long one approval challenge may live.
@@ -92,6 +107,7 @@ const GRANT_VISIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new S
 export class CodingRuntimeOrchestrator {
   private tail: Promise<void> = Promise.resolve();
   private activeRunId: string | undefined;
+  private activeEffectiveMode: CodingWorkbenchMode | undefined;
   private readonly approvals = new Map<string, ApprovalChallenge>();
   private readonly operations: CodingRuntimeOperationCoordinator;
   private readonly projection: CodingRuntimeOrchestratorState;
@@ -114,6 +130,8 @@ export class CodingRuntimeOrchestrator {
       now: this.now,
       pendingPermission: (runId: string): CodingWorkbenchRuntimePendingPermission | undefined =>
         this.approvals.get(runId)?.permission,
+      effectiveMode: (runId: string): CodingWorkbenchMode | undefined =>
+        this.activeRunId === runId ? this.activeEffectiveMode : undefined,
     });
     this.operations = new CodingRuntimeOperationCoordinator({
       current: (): CodingRuntimeSnapshot | undefined => this.current(),
@@ -145,6 +163,7 @@ export class CodingRuntimeOrchestrator {
       if (this.activeRunId !== undefined && this.activeRunId !== runId)
         return this.fail("active-run-conflict");
       this.activeRunId = undefined;
+      this.activeEffectiveMode = undefined;
       try {
         return await this.startFresh(input, runId);
       } finally {
@@ -212,19 +231,34 @@ export class CodingRuntimeOrchestrator {
    */
   pause(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
     return this.serialValue(() => {
-      const result = this.transitionLifecycle(runId, input, "running", "paused");
-      // Make pause load-bearing: quiesce the manager's mutation admission. A run-mismatch here
-      // means no active runtime remains, so nothing can be admitted anyway; the paused state stands.
-      if (result.ok) this.deps.manager.pause(runId);
-      return result;
+      const current = this.current();
+      const parsed = parseCodingWorkbenchRuntimeStopRequest(input);
+      if (!parsed.ok || parsed.value.requestId !== runId || current?.state !== "running") {
+        return this.fail("invalid-intent");
+      }
+      const paused = this.deps.manager.pause(runId);
+      return paused.ok
+        ? this.transition(current, "paused")
+        : this.fail(runtimePauseFailureCode(paused.failureCode));
     });
   }
 
   resume(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
     return this.serialValue(() => {
-      const result = this.transitionLifecycle(runId, input, "paused", "running");
-      if (result.ok) this.deps.manager.resume(runId);
-      return result;
+      const current = this.current();
+      const parsed = parseCodingWorkbenchRuntimeResumeRequest(input);
+      if (!parsed.ok || parsed.value.requestId !== runId || current?.state !== "paused") {
+        return this.fail("invalid-intent");
+      }
+      const requestedMode =
+        parsed.value.requestedMode ?? this.activeEffectiveMode ?? current.requestedMode;
+      const resumed = this.deps.manager.resume(runId, requestedMode);
+      if (!resumed.ok) return this.fail(runtimePauseFailureCode(resumed.failureCode));
+      const effectiveMode = resumed.effectiveMode ?? requestedMode;
+      this.activeEffectiveMode = effectiveMode;
+      const transitioned = this.transition(current, "running");
+      this.activeEffectiveMode = effectiveModeAfterResume(transitioned, effectiveMode);
+      return transitioned;
     });
   }
 
@@ -310,19 +344,6 @@ export class CodingRuntimeOrchestrator {
     );
     const expiresAtMs = Math.max(...grants.map((grant) => grant.expiresAtMs));
     return { grantId: newest.grantId, domains, expiresAt: new Date(expiresAtMs).toISOString() };
-  }
-
-  private transitionLifecycle(
-    runId: string,
-    input: unknown,
-    from: CodingWorkbenchRuntimeStateName,
-    to: CodingWorkbenchRuntimeStateName,
-  ): CodingRuntimeOrchestratorResult {
-    const parsed = parseCodingWorkbenchRuntimeStopRequest(input);
-    const current = this.current();
-    if (!parsed.ok || parsed.value.requestId !== runId) return this.fail("invalid-intent");
-    if (current?.runId !== runId || current.state !== from) return this.fail("invalid-intent");
-    return this.transition(current, to);
   }
 
   decideApproval(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
@@ -558,25 +579,31 @@ export class CodingRuntimeOrchestrator {
   private async settleTask(runId: string, outcome: CodingRuntimeTaskOutcome): Promise<void> {
     const current = this.current();
     if (current?.runId !== runId) return;
-    let stopped: Awaited<ReturnType<CodingRuntimeManager["stop"]>>;
-    try {
-      stopped = await this.deps.manager.stop(runId);
-    } catch {
-      this.transition(current, "recovery-required", "recovery-required");
-      return;
-    }
+    const stopped = await this.stopForSettlement(runId, outcome);
     const live = this.current();
     if (live?.runId !== runId) return;
-    if (!stopped.ok) {
+    const terminalResult = this.deps.manager.result(runId);
+    if (!stopped || terminalResult?.status !== outcome) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
-    const target = outcome === "succeeded" ? "succeeded" : "failed";
-    if (!isLegalCodingWorkbenchRuntimeTransition(live.state, target)) {
+    const target = taskOutcomeState(outcome);
+    if (!isLegalCodingWorkbenchRuntimeTransition(live.state, target.state)) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
-    this.transition(live, target, target === "failed" ? "runtime-failed" : undefined);
+    this.transition(live, target.state, target.failureCode);
+  }
+
+  private async stopForSettlement(
+    runId: string,
+    outcome: CodingRuntimeTaskOutcome,
+  ): Promise<boolean> {
+    try {
+      return (await this.deps.manager.stop(runId, outcome)).ok;
+    } catch {
+      return false;
+    }
   }
 
   private publishOrRecover(
@@ -656,6 +683,7 @@ export class CodingRuntimeOrchestrator {
     );
     this.deps.snapshots.create(snapshot);
     this.activeRunId = runId;
+    this.activeEffectiveMode = launch.effectiveMode;
     if (predecessorRunId !== undefined) this.settlePredecessorRecovery(predecessorRunId);
     this.projection.publish(snapshot);
     const started = await this.startManagedRuntime(parsed.value, active, runId, launch);
@@ -916,11 +944,13 @@ export class CodingRuntimeOrchestrator {
     state: CodingWorkbenchRuntimeStateName,
     failureCode?: CodingWorkbenchRuntimeFailureCode,
   ): CodingRuntimeSnapshot {
+    const result = TERMINAL_STATES.has(state) ? this.deps.manager.result(current.runId) : undefined;
     return this.deps.snapshots.transition(current.runId, {
       state,
       revision: current.revision + 1,
       updatedAt: this.now().toISOString(),
       ...(failureCode ? { failureCode } : {}),
+      ...(result === undefined ? {} : { result }),
     });
   }
 
@@ -989,6 +1019,7 @@ export class CodingRuntimeOrchestrator {
       provenanceDigest: next.provenanceDigest,
     });
     if (terminal.has(state)) this.activeRunId = undefined;
+    if (terminal.has(state) || state === "recovery-required") this.activeEffectiveMode = undefined;
     this.approvals.delete(next.runId);
     this.operations.clear(next.runId);
     this.pruneSettled();
@@ -1018,6 +1049,22 @@ export class CodingRuntimeOrchestrator {
   private serialValue<T>(work: () => T): Promise<T> {
     return this.serial(() => Promise.resolve(work()));
   }
+}
+
+function taskOutcomeState(outcome: CodingRuntimeTaskOutcome): {
+  readonly state: "failed" | "succeeded";
+  readonly failureCode?: "runtime-failed" | undefined;
+} {
+  return outcome === "succeeded"
+    ? { state: "succeeded" }
+    : { state: "failed", failureCode: "runtime-failed" };
+}
+
+function effectiveModeAfterResume(
+  result: CodingRuntimeOrchestratorResult,
+  effectiveMode: CodingWorkbenchMode,
+): CodingWorkbenchMode | undefined {
+  return result.ok && result.snapshot.state === "running" ? effectiveMode : undefined;
 }
 
 export function createCodingRuntimeOrchestrator(

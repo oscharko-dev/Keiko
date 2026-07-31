@@ -66,6 +66,7 @@ const ALLOWED_CHAT_MESSAGES_COLUMNS = new Set([
   "task_type",
   "grounded_answer_json",
   "grounded_preview_citations_json",
+  "assistant_response_versions_json",
   // V12 stores only the scoped digest and lifecycle state of an opaque client turn identity.
   "client_turn_id",
   "client_turn_state",
@@ -96,6 +97,16 @@ const ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS = new Set([
   "patch_byte_count",
   "model_request_count",
   "recovery_handle",
+  "result_status",
+  "exit_code",
+  "stdout_byte_count",
+  "stdout_line_count",
+  "stdout_sha256",
+  "stdout_truncated",
+  "stderr_byte_count",
+  "stderr_line_count",
+  "stderr_sha256",
+  "stderr_truncated",
 ]);
 
 // V11 (issue #2521) persisted workspace-trust records. Content-free by construction: an opaque

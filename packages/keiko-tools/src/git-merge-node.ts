@@ -42,6 +42,7 @@ import {
   gitMergeRejectionToErrorCode,
   mapRawMergeReadiness,
   type GitMergeAdapter,
+  type GitBranchProtectionRequest,
   type GitMergeExecRequest,
   type GitMergeExecResult,
   type GitMergeProviderReadiness,
@@ -400,9 +401,13 @@ async function readHeadChecks(
   }
   const runs = parseJsonArray(result.stdout);
   if (runs === undefined) return undefined;
-  const parsedRuns = runs.map(rawCheckRun);
-  if (parsedRuns.some((run) => run === undefined)) return undefined;
-  return classifyChecks(requiredChecks, parsedRuns as readonly RawCheckRun[]);
+  const parsedRuns: RawCheckRun[] = [];
+  for (const run of runs) {
+    const parsed = rawCheckRun(run);
+    if (parsed === undefined) return undefined;
+    parsedRuns.push(parsed);
+  }
+  return classifyChecks(requiredChecks, parsedRuns);
 }
 
 interface RawReview {
@@ -464,10 +469,12 @@ function requiredCheck(value: unknown): RequiredCheck | undefined {
 }
 
 function uniqueRequiredChecks(values: readonly unknown[]): readonly RequiredCheck[] | undefined {
-  const parsed = values.map(requiredCheck);
-  if (parsed.some((check) => check === undefined)) return undefined;
   const unique = new Map<string, RequiredCheck>();
-  for (const check of parsed as readonly RequiredCheck[]) unique.set(checkKey(check), check);
+  for (const value of values) {
+    const check = requiredCheck(value);
+    if (check === undefined) return undefined;
+    unique.set(checkKey(check), check);
+  }
   return [...unique.values()];
 }
 
@@ -522,7 +529,7 @@ function isNotFound(result: CommandResult): boolean {
 
 async function readBranchProtection(
   ctx: RunContext,
-  req: GitMergeReadinessRequest,
+  req: GitBranchProtectionRequest,
 ): Promise<BranchProtectionRead> {
   let argv: readonly string[];
   try {
@@ -536,6 +543,22 @@ async function readBranchProtection(
   if (result.exitCode !== 0) return { outcome: "error" };
   const projection = parseBranchProtection(result.stdout);
   return projection === undefined ? { outcome: "error" } : { outcome: "protected", projection };
+}
+
+export type GitBranchProtectionReadResult =
+  | { readonly outcome: "protected"; readonly protection: GitDeliveryBranchProtection }
+  | { readonly outcome: "unprotected" }
+  | { readonly outcome: "unavailable" };
+
+export async function readNodeGitBranchProtection(
+  deps: NodeGitMergeAdapterDeps,
+  req: GitBranchProtectionRequest,
+): Promise<GitBranchProtectionReadResult> {
+  const result = await readBranchProtection(buildRunContext(deps), req);
+  if (result.outcome === "protected") {
+    return { outcome: "protected", protection: result.projection.protection };
+  }
+  return result.outcome === "unprotected" ? { outcome: "unprotected" } : { outcome: "unavailable" };
 }
 
 // Reads the PR object (facts only, un-enriched with approval counts). Returns undefined on any

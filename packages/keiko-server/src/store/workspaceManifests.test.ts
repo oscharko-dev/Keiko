@@ -9,6 +9,7 @@ import {
   UiStoreError,
   UiStoreSchemaVersionError,
 } from "./index.js";
+import { restoreV13SchemaFixture } from "./legacySchemaTestFixture.js";
 
 let tmp: string;
 let project: string;
@@ -34,11 +35,7 @@ describe("workspace manifest migration", () => {
     if (expected === undefined) throw new Error("missing initial manifest");
 
     const legacy = new DatabaseSync(dbPath);
-    legacy.exec(
-      "DROP TABLE workspace_manifest_roots; DROP TABLE workspace_manifests; " +
-        "DROP TABLE workspace_trust_records; " +
-        "ALTER TABLE memory_autonomy_policy DROP COLUMN revision; PRAGMA user_version = 13;",
-    );
+    restoreV13SchemaFixture(legacy);
     legacy.close();
 
     const migrated = createNodeUiStore(dbPath, { now: () => 999 });

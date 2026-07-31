@@ -7,6 +7,7 @@
 // true is the gated apply path (run-handlers), which re-invokes this engine with apply:true.
 
 import { createHash, randomUUID } from "node:crypto";
+import type { EvidenceManifest } from "@oscharko-dev/keiko-contracts";
 import {
   canonicalise,
   createSession,
@@ -40,7 +41,14 @@ import {
 import { detectWorkspace, readWorkspaceFile } from "@oscharko-dev/keiko-workspace";
 import type { EvidenceReport } from "@oscharko-dev/keiko-evidence";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import type { RunRequest } from "./run-request.js";
+import {
+  agentRunGovernanceFingerprintProjection,
+  createAgentRunBudgetedModelPort,
+  createAgentRunBudgetedSpawn,
+  type AgentRunGovernanceBinding,
+} from "./agent-run-governance.js";
 import { QueueEventSink } from "./sink.js";
 import type { AppliableSnapshot, RunRegistry, RunStatus } from "./runs.js";
 import {
@@ -74,6 +82,7 @@ interface EngineContext {
   readonly request: RunRequest;
   readonly model: ModelPort;
   readonly registry: RunRegistry;
+  readonly governance?: AgentRunGovernanceBinding | undefined;
   // Where terminated runs persist their redacted evidence manifest (AC5). Optional so the 3-arg
   // engine-context form in older tests still compiles; persistence is simply skipped when absent.
   readonly evidence?: EvidencePersistContext | undefined;
@@ -127,7 +136,10 @@ function workspaceRoot(request: RunRequest): string {
   return root;
 }
 
-function workflowFingerprint(request: RunRequest): string {
+export function workflowFingerprint(
+  request: RunRequest,
+  governance?: AgentRunGovernanceBinding,
+): string {
   const taskType = KIND_TO_TASK_TYPE[request.kind];
   const canonical = canonicalise({
     taskType,
@@ -137,6 +149,8 @@ function workflowFingerprint(request: RunRequest): string {
     governedHandoff: request.governedHandoff ?? null,
     governedHandoffSourceGroundedRunId: request.governedHandoffSourceGroundedRunId ?? null,
     governedHandoffVoiceAction: request.governedHandoffVoiceAction ?? null,
+    governance:
+      governance === undefined ? null : agentRunGovernanceFingerprintProjection(governance),
     workingDirectory: workspaceRoot(request),
     dryRun: true,
     harnessVersion: HARNESS_VERSION,
@@ -204,13 +218,37 @@ interface Dispatched {
   readonly cancel: (reason?: string) => void;
 }
 
+function governedWorkflowPorts(ctx: EngineContext): {
+  readonly model: ModelPort;
+  readonly spawn?: typeof nodeSpawnFn | undefined;
+} {
+  if (ctx.governance === undefined) return { model: ctx.model };
+  const budgetInput = {
+    binding: ctx.governance,
+    workspaceRoot: workspaceRoot(ctx.request),
+    nowIso: (): string => new Date().toISOString(),
+  };
+  return {
+    model: createAgentRunBudgetedModelPort({ ...budgetInput, model: ctx.model }),
+    spawn: createAgentRunBudgetedSpawn({ ...budgetInput, spawn: nodeSpawnFn }),
+  };
+}
+
+function cancelWorkflow(controller: AbortController): (reason?: string) => void {
+  return (reason?: string): void => {
+    controller.abort(reason);
+  };
+}
+
 // Starts the underlying run for a workflow request: an AbortController drives cancellation (the
 // workflow honours deps.signal), and the BFF-owned runId is injected as the workflow idSource so the
 // streamed events carry the same runId the registry/SSE key on.
 function dispatchWorkflow(ctx: EngineContext, sink: QueueEventSink, runId: string): Dispatched {
   const controller = new AbortController();
+  const ports = governedWorkflowPorts(ctx);
   const commonDeps = {
-    model: ctx.model,
+    model: ports.model,
+    ...(ports.spawn === undefined ? {} : { spawn: ports.spawn }),
     sink,
     signal: controller.signal,
     idSource: (): string => runId,
@@ -239,9 +277,7 @@ function dispatchWorkflow(ctx: EngineContext, sink: QueueEventSink, runId: strin
     }));
     return {
       result,
-      cancel: (reason?: string): void => {
-        controller.abort(reason);
-      },
+      cancel: cancelWorkflow(controller),
     };
   }
   const result = investigateBug(bugInput(ctx.request), commonDeps).then((report) => ({
@@ -251,9 +287,7 @@ function dispatchWorkflow(ctx: EngineContext, sink: QueueEventSink, runId: strin
   }));
   return {
     result,
-    cancel: (reason?: string): void => {
-      controller.abort(reason);
-    },
+    cancel: cancelWorkflow(controller),
   };
 }
 
@@ -358,7 +392,7 @@ function emitVerifyComplete(
 // (`run:started`, `run:completed`) frame the run for any attached UI subscriber.
 function dispatchVerify(ctx: EngineContext, sink: QueueEventSink, runId: string): Dispatched {
   const controller = new AbortController();
-  const fingerprint = workflowFingerprint(ctx.request);
+  const fingerprint = workflowFingerprint(ctx.request, ctx.governance);
   const root = workspaceRoot(ctx.request);
   emitVerifyStart(sink, runId, fingerprint, ctx.request.modelId);
   const result = runVerify(ctx, controller.signal, root).then((report): DispatchOutcome => {
@@ -415,13 +449,13 @@ export function startRun(
   }
   if (ctx.request.kind === "verify") {
     const runId = options.runId ?? randomUUID();
-    const fingerprint = workflowFingerprint(ctx.request);
+    const fingerprint = workflowFingerprint(ctx.request, ctx.governance);
     const dispatched = dispatchVerify(ctx, sink, runId);
     registerAndCapture(ctx, { runId, fingerprint, sink, startedAt }, dispatched, redactReport);
     return { runId, fingerprint };
   }
   const runId = options.runId ?? randomUUID();
-  const fingerprint = workflowFingerprint(ctx.request);
+  const fingerprint = workflowFingerprint(ctx.request, ctx.governance);
   const dispatched = dispatchWorkflow(ctx, sink, runId);
   registerAndCapture(ctx, { runId, fingerprint, sink, startedAt }, dispatched, redactReport);
   return { runId, fingerprint };
@@ -444,6 +478,7 @@ function registerAndCapture(
     runId: identity.runId,
     fingerprint: identity.fingerprint,
     modelId: ctx.request.modelId,
+    ...(ctx.governance === undefined ? {} : { governance: ctx.governance }),
     sink: identity.sink,
     cancel: dispatched.cancel,
   });
@@ -453,7 +488,7 @@ function registerAndCapture(
       ctx.registry.complete(
         identity.runId,
         outcome.status,
-        redactReport(attachEvidenceReport(outcome.report, evidence)),
+        redactReport(attachEvidenceReport(outcome.report, evidence, ctx.governance)),
         outcome.appliable,
       );
     })
@@ -518,17 +553,50 @@ function persistOutcome(
           sourceGroundedRunId: ctx.request.governedHandoffSourceGroundedRunId,
           voiceAction: ctx.request.governedHandoffVoiceAction,
         }),
+    evidenceAutonomyFor(ctx.governance),
   );
 }
 
-function attachEvidenceReport(report: unknown, evidence: EvidenceReport | undefined): unknown {
-  if (evidence === undefined) {
-    return report;
-  }
+function evidenceAutonomyFor(
+  governance: AgentRunGovernanceBinding | undefined,
+): EvidenceManifest["autonomy"] | undefined {
+  return governance === undefined
+    ? undefined
+    : {
+        requestedMode: governance.requestedMode,
+        effectiveMode: governance.effectiveMode,
+        deploymentCeiling: governance.deploymentCeiling,
+      };
+}
+
+function attachEvidenceReport(
+  report: unknown,
+  evidence: EvidenceReport | undefined,
+  governance: AgentRunGovernanceBinding | undefined,
+): unknown {
+  const autonomy =
+    governance === undefined
+      ? undefined
+      : {
+          requestedMode: governance.requestedMode,
+          effectiveMode: governance.effectiveMode,
+          deploymentCeiling: governance.deploymentCeiling,
+          connectorExecution: governance.connectorExecution,
+          deliveryExecution: governance.deliveryExecution,
+        };
+  if (evidence === undefined && autonomy === undefined) return report;
   if (isRecord(report)) {
-    return { ...report, evidence };
+    return {
+      ...report,
+      ...(evidence === undefined ? {} : { evidence }),
+      ...(autonomy === undefined ? {} : { autonomy }),
+    };
   }
-  return { report, evidence };
+  return {
+    report,
+    ...(evidence === undefined ? {} : { evidence }),
+    ...(autonomy === undefined ? {} : { autonomy }),
+  };
 }
 
 // Re-invokes a workflow with apply:true through the SAME gated entry point (D8). This is the only
@@ -540,13 +608,31 @@ export async function applyRun(
   model: ModelPort,
   modelId: string,
   redactReport: (value: unknown) => unknown,
+  governance?: AgentRunGovernanceBinding,
 ): Promise<unknown> {
   const input = isRecord(snapshot.payload) ? snapshot.payload : {};
   const limitsOverride = snapshot.limits !== undefined ? { limits: snapshot.limits } : {};
-  const deps =
-    snapshot.governedHandoff === undefined
-      ? { model }
-      : { model, workflowHandoff: snapshot.governedHandoff };
+  const root = typeof input.workspaceRoot === "string" ? input.workspaceRoot : "";
+  const budgetInput = {
+    binding: governance,
+    workspaceRoot: root,
+    nowIso: (): string => new Date().toISOString(),
+  };
+  const executionModel =
+    governance === undefined
+      ? model
+      : createAgentRunBudgetedModelPort({ ...budgetInput, binding: governance, model });
+  const spawn =
+    governance === undefined
+      ? undefined
+      : createAgentRunBudgetedSpawn({ ...budgetInput, binding: governance, spawn: nodeSpawnFn });
+  const deps = {
+    model: executionModel,
+    ...(spawn === undefined ? {} : { spawn }),
+    ...(snapshot.governedHandoff === undefined
+      ? {}
+      : { workflowHandoff: snapshot.governedHandoff }),
+  };
   if (snapshot.kind === "unit-tests") {
     const report = await generateUnitTests(
       { ...input, modelId, apply: true, ...limitsOverride } as unknown as UnitTestWorkflowInput,

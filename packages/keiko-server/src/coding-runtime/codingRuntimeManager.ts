@@ -7,6 +7,7 @@ import {
   CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
   CODING_WORKBENCH_SCHEMA_VERSION,
   decideCodingWorkbenchActionForMode,
+  isCodingWorkbenchModeWidening,
   validateCodingWorkbenchPermissionRequest,
   validateCodingWorkbenchRuntimeApprovalReviewChannelPayload,
   validateCodingWorkbenchRuntimeEvent,
@@ -67,8 +68,11 @@ import {
 } from "./runtimeProcessSupervisor.js";
 import {
   createCodingRuntimeLineParser,
+  createCodingRuntimeProcessSummaryAccumulator,
   createCodingRuntimeStderrDrainer,
   type CodingRuntimeLineParser,
+  type CodingRuntimeProcessSummary,
+  type CodingRuntimeProcessSummaryAccumulator,
   type CodingRuntimeStderrDrainer,
   type CodingRuntimeStderrSummary,
 } from "./codingRuntimeProcessIo.js";
@@ -168,9 +172,25 @@ export type CodingRuntimeStopResult =
       readonly retryable: false;
     };
 
+export interface CodingRuntimeRunResult {
+  readonly status: "cancelled" | "failed" | "signalled" | "succeeded";
+  readonly exitCode: number | null;
+  readonly output: CodingRuntimeProcessSummary;
+  readonly error: CodingRuntimeProcessSummary;
+}
+
 export type CodingRuntimePauseResult =
-  | { readonly ok: true; readonly paused: boolean }
-  | { readonly ok: false; readonly failureCode: "runtime-run-mismatch"; readonly retryable: false };
+  | {
+      readonly ok: true;
+      readonly paused: boolean;
+      readonly effectiveMode?: CodingWorkbenchMode | undefined;
+    }
+  | {
+      readonly ok: false;
+      readonly failureCode:
+        "authority-expired" | "authority-resolution-failed" | "runtime-run-mismatch";
+      readonly retryable: false;
+    };
 
 export interface CodingRuntimeApprovalIssueRequest {
   readonly runId: string;
@@ -370,8 +390,11 @@ export interface CodingRuntimeManager {
   ): CodingRuntimeStartResult | Promise<CodingRuntimeStartResult>;
   issueApproval(request: CodingRuntimeApprovalIssueRequest): CodingRuntimeApprovalIssueResult;
   pause(runId: string): CodingRuntimePauseResult;
-  resume(runId: string): CodingRuntimePauseResult;
-  stop(runId: string): Promise<CodingRuntimeStopResult>;
+  resume(runId: string, requestedMode?: CodingWorkbenchMode): CodingRuntimePauseResult;
+  stop(
+    runId: string,
+    resultStatus?: Extract<CodingRuntimeRunResult["status"], "cancelled" | "failed" | "succeeded">,
+  ): Promise<CodingRuntimeStopResult>;
   takeover(runId: string): Promise<CodingRuntimeStopResult>;
   reconcile(runId: string): Promise<CodingRuntimeStopResult>;
   health(): CodingRuntimeHealthReport;
@@ -384,6 +407,7 @@ export interface CodingRuntimeManager {
     runId: string,
     requestId: string,
   ): CodingWorkbenchRuntimePendingApprovalReview | undefined;
+  result(runId: string): CodingRuntimeRunResult | undefined;
 }
 
 interface PreflightOk {
@@ -411,6 +435,7 @@ interface RuntimeEventContext {
 
 interface ActiveRuntime {
   readonly context: RuntimeEventContext;
+  effectiveMode: CodingWorkbenchMode;
   readonly tree: RuntimeProcessTree;
   readonly shutdownTimeoutMs: number;
   readonly approvalStore: SupervisedCodingApprovalStore;
@@ -423,6 +448,9 @@ interface ActiveRuntime {
   codexDetach: (() => boolean | Promise<boolean>) | undefined;
   stdoutParser: CodingRuntimeLineParser | undefined;
   stderrDrainer: CodingRuntimeStderrDrainer | undefined;
+  readonly outputSummary: CodingRuntimeProcessSummaryAccumulator;
+  readonly errorSummary: CodingRuntimeProcessSummaryAccumulator;
+  streamDrainComplete: Promise<boolean>;
   /**
    * The reviewable changeset facts of the ask currently awaiting an operator decision (#2802).
    * Transient and run-local: it never enters a runtime event, a snapshot, the SSE projection or
@@ -568,6 +596,8 @@ const unavailableRuntimeBackend = {
 
 class CodingRuntimeManagerImpl implements CodingRuntimeManager {
   private active: ActiveRuntime | undefined;
+  private lastResult:
+    { readonly runId: string; readonly result: CodingRuntimeRunResult } | undefined;
 
   public constructor(private readonly deps: NormalizedCodingRuntimeManagerDeps) {}
 
@@ -628,7 +658,13 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     return this.spawnRuntime(request, preflight.executablePath, env.value, portable, request.args);
   }
 
-  public async stop(runId: string): Promise<CodingRuntimeStopResult> {
+  public async stop(
+    runId: string,
+    resultStatus: Extract<
+      CodingRuntimeRunResult["status"],
+      "cancelled" | "failed" | "succeeded"
+    > = "cancelled",
+  ): Promise<CodingRuntimeStopResult> {
     const active = this.active;
     if (active === undefined) return { ok: true, status: "stopped" };
     if (active.context.runId !== runId) {
@@ -646,6 +682,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
     }
     active.status = "stopped";
+    this.captureResult(active, resultStatus, null);
     this.active = undefined;
     this.emit(
       runtimeEvent(active, this.nextSequence(active), "runtime-stopped", { health: "stopped" }),
@@ -663,8 +700,28 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     return this.setPaused(runId, true);
   }
 
-  public resume(runId: string): CodingRuntimePauseResult {
-    return this.setPaused(runId, false);
+  public resume(runId: string, requestedMode?: CodingWorkbenchMode): CodingRuntimePauseResult {
+    const active = this.active;
+    if (active?.context.runId !== runId) {
+      return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
+    }
+    if (
+      requestedMode !== undefined &&
+      isCodingWorkbenchModeWidening(active.effectiveMode, requestedMode)
+    ) {
+      return { ok: false, failureCode: "authority-resolution-failed", retryable: false };
+    }
+    if (requestedMode !== undefined) active.effectiveMode = requestedMode;
+    active.paused = false;
+    return {
+      ok: true,
+      paused: false,
+      ...(requestedMode === undefined ? {} : { effectiveMode: active.effectiveMode }),
+    };
+  }
+
+  public result(runId: string): CodingRuntimeRunResult | undefined {
+    return this.lastResult?.runId === runId ? this.lastResult.result : undefined;
   }
 
   private setPaused(runId: string, paused: boolean): CodingRuntimePauseResult {
@@ -1064,10 +1121,12 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
           this.handleStdoutLine(active, line);
         },
       });
-      active.tree.stdout.on("data", (chunk) => {
-        this.handleStdout(active, Buffer.isBuffer(chunk) ? chunk : String(chunk));
-      });
     }
+    active.tree.stdout.on("data", (chunk) => {
+      const value = Buffer.isBuffer(chunk) ? chunk : String(chunk);
+      active.outputSummary.push(value);
+      if (active.codexLifecycleAdapter === undefined) this.handleStdout(active, value);
+    });
     active.stderrDrainer = createCodingRuntimeStderrDrainer({
       onSummary: (summary) => {
         emitRuntimeStderrSummary(
@@ -1079,8 +1138,11 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       },
     });
     active.tree.stderr.on("data", (chunk) => {
-      active.stderrDrainer?.push(Buffer.isBuffer(chunk) ? chunk : String(chunk));
+      const value = Buffer.isBuffer(chunk) ? chunk : String(chunk);
+      active.errorSummary.push(value);
+      active.stderrDrainer?.push(value);
     });
+    active.streamDrainComplete = runtimeStreamDrainCompletion(active.tree);
   }
 
   private handleExit(active: ActiveRuntime, code: number | null): void {
@@ -1096,6 +1158,22 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     void this.finalizeUnexpectedExit(active, code);
   }
 
+  private captureResult(
+    active: ActiveRuntime,
+    status: CodingRuntimeRunResult["status"],
+    exitCode: number | null,
+  ): void {
+    this.lastResult = {
+      runId: active.context.runId,
+      result: {
+        status,
+        exitCode,
+        output: active.outputSummary.snapshot(),
+        error: active.errorSummary.snapshot(),
+      },
+    };
+  }
+
   private async finalizeUnexpectedExit(active: ActiveRuntime, code: number | null): Promise<void> {
     const receipt = await this.revokeAndTerminate(active);
     if (this.active !== active) return;
@@ -1109,6 +1187,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       this.emit(runtimeExitEvent(active, this.nextSequence(active), code));
       return;
     }
+    this.captureResult(active, exitResultStatus(code), boundedExitCode(code));
     active.status = "stopped";
     this.active = undefined;
     this.emit(runtimeExitEvent(active, this.nextSequence(active), code));
@@ -1138,6 +1217,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     active: ActiveRuntime,
     receipt: RuntimeReapReceipt,
   ): Promise<boolean> {
+    if (!(await boundedStreamDrain(active))) return false;
     try {
       if (
         active.openCodeLifecycleAdapter?.dispose !== undefined &&
@@ -1522,6 +1602,44 @@ async function boundedLifecycleDisposal(
   }
 }
 
+function runtimeStreamDrainCompletion(tree: RuntimeProcessTree): Promise<boolean> {
+  return Promise.all([readableDrainCompletion(tree.stdout), readableDrainCompletion(tree.stderr)])
+    .then(([stdout, stderr]) => stdout && stderr)
+    .catch(() => false);
+}
+
+function readableDrainCompletion(stream: Readable): Promise<boolean> {
+  if (stream.readableEnded) return Promise.resolve(true);
+  if (stream.closed || stream.destroyed) return Promise.resolve(false);
+  return new Promise<boolean>((resolve) => {
+    const finish = (complete: boolean): void => {
+      stream.off("end", onEnd);
+      stream.off("close", onClose);
+      stream.off("error", onError);
+      resolve(complete);
+    };
+    const onEnd = (): void => {
+      finish(true);
+    };
+    const onClose = (): void => {
+      finish(stream.readableEnded);
+    };
+    const onError = (): void => {
+      finish(false);
+    };
+    stream.once("end", onEnd);
+    stream.once("close", onClose);
+    stream.once("error", onError);
+  });
+}
+
+function boundedStreamDrain(active: ActiveRuntime): Promise<boolean> {
+  return boundedLifecycleDisposal(
+    (): Promise<boolean> => active.streamDrainComplete,
+    active.shutdownTimeoutMs,
+  );
+}
+
 async function prepareCodexLaunch(
   adapter: CodexLifecycleAdapter,
   request: CodingRuntimeLaunchRequest,
@@ -1659,6 +1777,7 @@ function createActiveRuntime(
 ): ActiveRuntime {
   return {
     context: eventContext(request),
+    effectiveMode: request.effectiveMode,
     tree,
     shutdownTimeoutMs: request.shutdownTimeoutMs,
     approvalStore,
@@ -1672,6 +1791,9 @@ function createActiveRuntime(
     codexDetach: undefined,
     stdoutParser: undefined,
     stderrDrainer: undefined,
+    outputSummary: createCodingRuntimeProcessSummaryAccumulator(),
+    errorSummary: createCodingRuntimeProcessSummaryAccumulator(),
+    streamDrainComplete: Promise.resolve(false),
     pendingApprovalReview: undefined,
     shutdownBarrierComplete: false,
     stopRequested: false,
@@ -1689,6 +1811,7 @@ function createInactiveRuntime(
 ): ActiveRuntime {
   return {
     context: eventContext(request),
+    effectiveMode: request.effectiveMode,
     tree: inertTree(),
     shutdownTimeoutMs: request.shutdownTimeoutMs,
     approvalStore,
@@ -1701,6 +1824,9 @@ function createInactiveRuntime(
     codexDetach: undefined,
     stdoutParser: undefined,
     stderrDrainer: undefined,
+    outputSummary: createCodingRuntimeProcessSummaryAccumulator(),
+    errorSummary: createCodingRuntimeProcessSummaryAccumulator(),
+    streamDrainComplete: Promise.resolve(true),
     pendingApprovalReview: undefined,
     shutdownBarrierComplete: false,
     stopRequested: false,
@@ -2058,6 +2184,15 @@ function runtimeExitEvent(
   });
 }
 
+function boundedExitCode(code: number | null): number | null {
+  return code !== null && Number.isSafeInteger(code) && code >= 0 && code <= 255 ? code : null;
+}
+
+function exitResultStatus(code: number | null): CodingRuntimeRunResult["status"] {
+  if (code === null) return "signalled";
+  return code === 0 ? "succeeded" : "failed";
+}
+
 function runtimeEvent(
   active: ActiveRuntime,
   sequence: number,
@@ -2084,14 +2219,14 @@ function runtimeContextFields(
       runtimeSource: active.context.runtimeSource,
       modelSource: active.context.modelSource,
       requestedMode: active.context.requestedMode,
-      effectiveMode: active.context.effectiveMode,
+      effectiveMode: active.effectiveMode,
     };
   }
   if (kind === "runtime-stopped") {
     return {
       runtimeSource: active.context.runtimeSource,
       modelSource: active.context.modelSource,
-      effectiveMode: active.context.effectiveMode,
+      effectiveMode: active.effectiveMode,
     };
   }
   if (kind === "runtime-health") {
@@ -2125,12 +2260,14 @@ function sidecarRuntimeEvent(
   if (!validation.ok) {
     return runtimeEvent(active, sequence, "failure-redacted", invalidSidecarEventDetails());
   }
+  const unavailable = unavailableRuntimeActionEvent(active, sequence, event, request);
+  if (unavailable !== undefined) return unavailable;
   const autonomous = autonomousDeliveryRuntimeEvent(active, sequence, event, request);
   if (autonomous !== undefined) return autonomous;
   const supervised = supervisedCodingRuntimeEvent(active, sequence, event, request);
   if (supervised !== undefined) return supervised;
   const decision = decideCodingWorkbenchActionForMode(
-    active.context.effectiveMode,
+    active.effectiveMode,
     request.actionClass,
     request.connectorScopes ?? [],
   );
@@ -2164,6 +2301,36 @@ const ACTION_CLASS_RESOURCE_SCOPE: Readonly<
 } as const satisfies Readonly<
   Record<CodingWorkbenchActionClass, CodingWorkbenchPolicyResourceScope>
 >);
+
+function unavailableRuntimeActionEvent(
+  active: ActiveRuntime,
+  sequence: number,
+  event: SidecarPermissionEvent,
+  request: CodingWorkbenchPermissionRequest,
+): CodingWorkbenchRuntimeEvent | undefined {
+  if (active.stopRequested || event.operatorStopped === true) {
+    return runtimeEvent(active, sequence, "failure-redacted", {
+      failureCode: "operator-stopped",
+      failureSummary: "operator-stopped",
+      retryable: false,
+    });
+  }
+  if (request.actionClass === "connector-access") {
+    return runtimeEvent(active, sequence, "failure-redacted", {
+      failureCode: "connector-access-denied",
+      failureSummary: "connector-access-denied",
+      retryable: false,
+    });
+  }
+  if (request.actionClass === "delivery-substrate") {
+    return runtimeEvent(active, sequence, "failure-redacted", {
+      failureCode: "delivery-denied",
+      failureSummary: "delivery-denied",
+      retryable: false,
+    });
+  }
+  return undefined;
+}
 
 /**
  * Projects the reviewable changeset facts of a governed `file-edit` ask (#2802). The admission
@@ -2204,16 +2371,16 @@ function approvalReviewFacts(
  * terminal failed run — so a scoped file edit and an allowlisted verification command that
  * Supervised workspace admits outright killed the run under the WIDER Full access. Workspace-
  * contained actions therefore run the exact same dispatcher Supervised workspace runs, keeping the
- * independent containment and verifier-allowlist gates in force. Delivery and internet mutations
- * stay denied here: the server delivery executor is the only delivery authority and no connector
- * executor is mounted, mode-invariant gates composed stricter-wins (ADR-0125 D1).
+ * independent containment and verifier-allowlist gates in force. Delivery and connector requests
+ * are rejected before mode dispatch because no executor is mounted; remaining internet mutations
+ * stay denied here, with mode-invariant gates composed stricter-wins (ADR-0125 D1).
  */ function autonomousDeliveryRuntimeEvent(
   active: ActiveRuntime,
   sequence: number,
   event: SidecarPermissionEvent,
   request: CodingWorkbenchPermissionRequest,
 ): CodingWorkbenchRuntimeEvent | undefined {
-  if (active.context.effectiveMode !== "autonomous-delivery") return undefined;
+  if (active.effectiveMode !== "autonomous-delivery") return undefined;
   if (active.stopRequested || event.operatorStopped === true) {
     return runtimeEvent(active, sequence, "failure-redacted", {
       failureCode: "operator-stopped",
@@ -2248,7 +2415,7 @@ function supervisedCodingRuntimeEvent(
   event: SidecarPermissionEvent,
   request: CodingWorkbenchPermissionRequest,
 ): CodingWorkbenchRuntimeEvent | undefined {
-  if (active.context.effectiveMode !== "supervised-coding") return undefined;
+  if (active.effectiveMode !== "supervised-coding") return undefined;
   return governedActionRuntimeEvent(active, sequence, event, request);
 }
 
@@ -2423,7 +2590,7 @@ function supervisedEvidenceContext(
     recordId: `coding-runtime-${active.context.runId}-${label}`,
     runId: active.context.runId,
     occurredAt: active.nowIso(),
-    effectiveMode: active.context.effectiveMode,
+    effectiveMode: active.effectiveMode,
     runtimeSource: active.context.runtimeSource,
     modelSource: active.context.modelSource,
   } as const;

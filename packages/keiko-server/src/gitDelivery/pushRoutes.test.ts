@@ -125,6 +125,7 @@ function ctxFor(path: string, body: unknown): RouteContext {
 function seams(overrides: Partial<GitDeliveryPublishSeams> = {}): GitDeliveryPublishSeams {
   return {
     snapshotReader: () => Promise.resolve(SNAPSHOT),
+    branchProtectionReader: () => Promise.resolve({ outcome: "unprotected" }),
     now: () => 1_700_000_000_000,
     newActionId: () => "action-test-1",
     ...overrides,
@@ -216,6 +217,44 @@ describe("push preview — read-only risk context (AC1/AC2)", () => {
     expect(body.riskClass).toBe("publish");
     expect(body.wouldCreateRemoteBranch).toBe(false); // hasUpstream === true
     expect(body.policyOutcome).toBe("allowed"); // effective: feat/ passes the default pack's constraints
+  });
+
+  it("discloses the trusted target branch signed-commit requirement before push", async () => {
+    const handler = createHandlePushPreview({
+      execution: seams({
+        branchProtectionReader: (_workspace, remoteAlias, branchName) => {
+          expect(remoteAlias).toBe("origin");
+          expect(branchName).toBe("feat/x");
+          return Promise.resolve({
+            outcome: "protected",
+            protection: {
+              deletionAllowed: false,
+              forcePushAllowed: false,
+              linearHistoryRequired: true,
+              signaturesRequired: true,
+              requiredReviewCount: 0,
+              requiredStatusCheckCount: 1,
+            },
+          });
+        },
+      }),
+    });
+    const res = await handler(ctxFor(PREVIEW, pushBody()), deps());
+    const body = res.body as GitDeliveryPushPreviewBody;
+    expect(body.signatureRequirement).toBe("required");
+    expect(body.preflightAdvisoryCodes).toContain("signed-commits-required");
+  });
+
+  it("keeps an unavailable protection read distinct from no signature requirement", async () => {
+    const handler = createHandlePushPreview({
+      execution: seams({
+        branchProtectionReader: () => Promise.reject(new Error("provider unavailable")),
+      }),
+    });
+    const res = await handler(ctxFor(PREVIEW, pushBody()), deps());
+    const body = res.body as GitDeliveryPushPreviewBody;
+    expect(body.signatureRequirement).toBe("unavailable");
+    expect(body.preflightAdvisoryCodes).toContain("branch-protection-unavailable");
   });
 
   // The invariant this pins — a shared/protected remote target is blocked by the DEFAULT pack — is

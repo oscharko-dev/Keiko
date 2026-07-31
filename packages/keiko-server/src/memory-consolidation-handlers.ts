@@ -32,7 +32,10 @@ import type {
   WorkflowDefinitionId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
-import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import {
+  MemoryStoragePreconditionError,
+  type MemoryVaultStore,
+} from "@oscharko-dev/keiko-memory-vault";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
@@ -325,7 +328,7 @@ function parseSelection(raw: Record<string, unknown>): ConsolidationJobSelection
   if (raw.statuses !== undefined && statuses === null) {
     return badRequest(`statuses must be an array of: ${MEMORY_STATUSES.join(", ")}.`);
   }
-  if (typeof raw.includeExpired !== "undefined" && typeof raw.includeExpired !== "boolean") {
+  if (raw.includeExpired !== undefined && typeof raw.includeExpired !== "boolean") {
     return badRequest("includeExpired must be a boolean when provided.");
   }
   return {
@@ -949,7 +952,8 @@ function executeApply(
       inputs.targets.losers,
       nowMs,
     );
-  } catch {
+  } catch (error) {
+    if (!(error instanceof MemoryStoragePreconditionError)) throw error;
     const application = conflictApplication(vault, itemId, inputs.targets, nowMs);
     if (application !== undefined) return application;
     return {

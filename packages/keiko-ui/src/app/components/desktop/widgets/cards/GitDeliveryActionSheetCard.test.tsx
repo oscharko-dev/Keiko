@@ -283,6 +283,7 @@ describe("GitDeliveryActionSheetCard", () => {
     const fetchImpl = vi.fn().mockResolvedValue(sheet);
     const request = {
       schemaVersion: "1" as const,
+      projectId: "/repos/project",
       resolvedInputs: {
         kind: "push" as const,
         sourceBranchName: "feature/x",
@@ -316,6 +317,7 @@ describe("GitDeliveryActionSheetCard", () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error("boom"));
     const request = {
       schemaVersion: "1" as const,
+      projectId: "/repos/project",
       resolvedInputs: {
         kind: "push" as const,
         sourceBranchName: "feature/x",

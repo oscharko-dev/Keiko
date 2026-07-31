@@ -206,6 +206,7 @@ export function createNodeGitMutationAdapter(
 export {
   GIT_WORKTREE_READ_COMMAND_RULES,
   GitWorktreeReadError,
+  readGitRemoteUrl,
   readGitWorktreeSnapshot,
   readStagedConflictMarkerFileCount,
   readStagedPaths,
@@ -263,4 +264,9 @@ export {
 // OWN dedicated merge allowlist (the merge PUT, the readiness GETs, and the guarded branch DELETE — no
 // generic exec); it is exposed on the SAME `./internal/git-mutation` subpath. The GitHub token is read by
 // gh itself, never by Keiko.
-export { createNodeGitMergeAdapter, type NodeGitMergeAdapterDeps } from "./git-merge-node.js";
+export {
+  createNodeGitMergeAdapter,
+  readNodeGitBranchProtection,
+  type GitBranchProtectionReadResult,
+  type NodeGitMergeAdapterDeps,
+} from "./git-merge-node.js";

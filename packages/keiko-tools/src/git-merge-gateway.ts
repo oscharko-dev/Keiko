@@ -91,6 +91,11 @@ export interface GitMergeReadinessRequest {
   readonly baseBranchName: string;
 }
 
+export type GitBranchProtectionRequest = Pick<
+  GitMergeReadinessRequest,
+  "ownerAndRepo" | "baseBranchName"
+>;
+
 export interface GitMergeExecRequest {
   readonly ownerAndRepo: string;
   readonly prExternalId: string;
@@ -305,7 +310,7 @@ export function buildPullRequestReviewsArgv(req: GitMergeReadinessRequest): read
 // requirement" (0), never as a hard error — the provider's own merge-time enforcement remains the
 // ultimate authority (Force 2 / ADR-0087) regardless of what this best-effort read could see.
 export function buildBranchProtectionRequiredReviewsArgv(
-  req: GitMergeReadinessRequest,
+  req: GitBranchProtectionRequest,
 ): readonly string[] {
   const repo = assertOwnerAndRepo(req.ownerAndRepo);
   const branch = assertRef(req.baseBranchName, "baseBranchName");
@@ -323,7 +328,7 @@ const BRANCH_PROTECTION_JQ =
 // Reads only the content-free branch rules needed to classify required checks. Provider-specific
 // names and application identifiers are consumed inside the GitHub adapter and never cross the
 // provider-neutral contract boundary.
-export function buildBranchProtectionArgv(req: GitMergeReadinessRequest): readonly string[] {
+export function buildBranchProtectionArgv(req: GitBranchProtectionRequest): readonly string[] {
   const repo = assertOwnerAndRepo(req.ownerAndRepo);
   const branch = assertRef(req.baseBranchName, "baseBranchName");
   return ["api", `/repos/${repo}/branches/${branch}/protection`, "--jq", BRANCH_PROTECTION_JQ];

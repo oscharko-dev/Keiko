@@ -278,6 +278,7 @@ function makeCommitPreview(
     intent: { warnings: [], mixedScope: false, isWip: false },
     messageValidation: { ok: true },
     preflightFindingCodes: [],
+    signatureRequirement: "not-required",
     policyOutcome: "allowed",
     ...overrides,
   };
@@ -318,6 +319,7 @@ function makePushPreview(
     wouldCreateRemoteBranch: false,
     wouldTriggerChecks: true,
     forceBlocked: false,
+    signatureRequirement: "not-required",
     preflightBlockingCodes: [],
     preflightAdvisoryCodes: [],
     policyOutcome: "allowed",
@@ -1464,16 +1466,16 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
       expect(client.getHistory).toHaveBeenCalledWith({ root: REPO_A.path, limit: 50, skip: 0 }),
     );
 
-    expect(screen.getByRole("listbox", { name: "Commit history" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: /feat: add history/ })).toHaveAttribute(
-      "aria-selected",
+    expect(screen.getByRole("list", { name: "Commit history" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /feat: add history/ })).toHaveAttribute(
+      "aria-current",
       "true",
     );
     expect(screen.getByRole("region", { name: "Commit details" })).toHaveTextContent(
       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     );
 
-    await user.click(screen.getByRole("option", { name: /fix: repair sync/ }));
+    await user.click(screen.getByRole("button", { name: /fix: repair sync/ }));
 
     expect(screen.getByRole("region", { name: "Commit details" })).toHaveTextContent(
       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -1837,7 +1839,11 @@ describe("GitClientWindow — Changes/History tabs", () => {
     await user.click(await screen.findByRole("tab", { name: "History" }));
     await user.click(await screen.findByRole("button", { name: "Load more commits" }));
 
-    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(51));
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("list", { name: "Commit history" })).getAllByRole("button"),
+      ).toHaveLength(51),
+    );
     expect(getHistory).toHaveBeenNthCalledWith(1, { root: REPO_A.path, limit: 50, skip: 0 });
     expect(getHistory).toHaveBeenNthCalledWith(2, { root: REPO_A.path, limit: 50, skip: 50 });
     expect(screen.getByRole("status", { name: "History pagination status" })).toHaveTextContent(
@@ -1864,12 +1870,24 @@ describe("GitClientWindow — Changes/History tabs", () => {
 
     await user.click(await screen.findByRole("tab", { name: "History" }));
     await user.click(await screen.findByRole("button", { name: "Load more commits" }));
-    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(51));
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("list", { name: "Commit history" })).getAllByRole("button"),
+      ).toHaveLength(51),
+    );
     await user.click(screen.getByRole("button", { name: "Load more commits" }));
 
-    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(52));
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("list", { name: "Commit history" })).getAllByRole("button"),
+      ).toHaveLength(52),
+    );
     expect(getHistory).toHaveBeenNthCalledWith(3, { root: REPO_A.path, limit: 50, skip: 52 });
-    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(
+    expect(
+      within(screen.getByRole("list", { name: "Commit history" }))
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(
       Array.from({ length: 52 }, (_entry, index) =>
         expect.stringContaining(`commit ${index.toString()}`),
       ),
@@ -1896,14 +1914,16 @@ describe("GitClientWindow — Changes/History tabs", () => {
     await user.click(await screen.findByRole("button", { name: "Load more commits" }));
     await user.click(screen.getByRole("combobox", { name: "Repository" }));
     await user.click(await screen.findByRole("option", { name: /beta/ }));
-    expect(await screen.findByRole("option", { name: /commit 500/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /commit 500/ })).toBeInTheDocument();
 
     act((): void => resolveStalePage(makeHistoryPage(100, 1, { skip: 50, truncated: false })));
     await waitFor(() =>
       expect(getHistory).toHaveBeenCalledWith({ root: REPO_B.path, limit: 50, skip: 0 }),
     );
     expect(screen.queryByText("commit 100")).not.toBeInTheDocument();
-    expect(screen.getAllByRole("option")).toHaveLength(1);
+    expect(
+      within(screen.getByRole("list", { name: "Commit history" })).getAllByRole("button"),
+    ).toHaveLength(1);
   });
 
   it("keeps loaded commits and retries the same cursor without exposing the failure body", async () => {
@@ -1923,10 +1943,16 @@ describe("GitClientWindow — Changes/History tabs", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not load more commits.");
     expect(screen.queryByText(/private provider response body/i)).not.toBeInTheDocument();
-    expect(screen.getAllByRole("option")).toHaveLength(50);
+    expect(
+      within(screen.getByRole("list", { name: "Commit history" })).getAllByRole("button"),
+    ).toHaveLength(50);
     await user.click(screen.getByRole("button", { name: "Retry loading commits" }));
 
-    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(51));
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("list", { name: "Commit history" })).getAllByRole("button"),
+      ).toHaveLength(51),
+    );
     expect(getHistory).toHaveBeenNthCalledWith(3, { root: REPO_A.path, limit: 50, skip: 50 });
     expect(screen.getByRole("status", { name: "History pagination status" })).toHaveTextContent(
       "End of history. 51 commits loaded.",
@@ -2061,8 +2087,8 @@ describe("GitClientWindow — empty / loading / error states", () => {
     await waitFor(() => expect(client.getHistory).toHaveBeenCalled());
 
     expect(screen.getByText("No commits yet. Make a commit to start history.")).toBeInTheDocument();
-    // An empty history must not render the commit listbox.
-    expect(screen.queryByRole("listbox", { name: "Commit history" })).not.toBeInTheDocument();
+    // An empty history must not render the commit list.
+    expect(screen.queryByRole("list", { name: "Commit history" })).not.toBeInTheDocument();
   });
 });
 

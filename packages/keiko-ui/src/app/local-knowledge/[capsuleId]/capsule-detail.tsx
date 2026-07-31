@@ -1581,6 +1581,13 @@ export interface CapsuleDetailProps {
   readonly updateContextualRetrievalImpl?: typeof updateCapsuleContextualRetrieval;
 }
 
+function optionalResumeImplementation(resumeImpl: typeof resumeCapsuleLargeDocuments | undefined): {
+  readonly resumeImpl?: typeof resumeCapsuleLargeDocuments;
+} {
+  if (resumeImpl === undefined) return {};
+  return { resumeImpl };
+}
+
 export function CapsuleDetail({
   capsuleId: providedCapsuleId,
   onDeleted,
@@ -1598,6 +1605,7 @@ export function CapsuleDetail({
     capsuleId,
     fetchDetailImpl,
   );
+  const resumeImplementation = optionalResumeImplementation(resumeImpl);
 
   function handleDeleted(response: CapsuleActionResponse): void {
     if (onDeleted !== undefined) {
@@ -1693,7 +1701,7 @@ export function CapsuleDetail({
           capsuleId={capsuleId}
           recovery={data.health.indexingRecovery}
           onActionComplete={reload}
-          {...(resumeImpl !== undefined ? { resumeImpl } : {})}
+          {...resumeImplementation}
         />
       ) : null}
       <details className={detailStyles.advancedDisclosure}>
@@ -1725,7 +1733,7 @@ export function CapsuleDetail({
                 latestJob(data)?.status === "running" ||
                 latestJob(data)?.status === "queued"
               }
-              {...(resumeImpl !== undefined ? { resumeImpl } : {})}
+              {...resumeImplementation}
             />
           ) : null}
           <SourcesSection capsuleId={capsuleId} sources={data.sources} onActionComplete={reload} />

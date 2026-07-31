@@ -2,6 +2,7 @@ import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   validateCodingWorkbenchRuntimeSnapshot,
   type CodingWorkbenchRuntimeEvent,
+  type CodingWorkbenchMode,
   type CodingWorkbenchRuntimePendingPermission,
   type CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
 } from "@oscharko-dev/keiko-contracts";
@@ -37,11 +38,13 @@ export class CodingRuntimeOrchestratorState {
       readonly pendingPermission: (
         runId: string,
       ) => CodingWorkbenchRuntimePendingPermission | undefined;
+      readonly effectiveMode: (runId: string) => CodingWorkbenchMode | undefined;
     },
   ) {}
 
   public publicSnapshot(snapshot: CodingRuntimeSnapshot | undefined): PublicSnapshot {
     if (!snapshot) return this.idle();
+    const effectiveMode = this.deps.effectiveMode(snapshot.runId);
     const out: PublicSnapshot = {
       schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
       state: snapshot.state,
@@ -49,6 +52,7 @@ export class CodingRuntimeOrchestratorState {
       updatedAt: snapshot.updatedAt,
       runId: snapshot.runId,
       requestedMode: snapshot.requestedMode,
+      ...(effectiveMode === undefined ? {} : { effectiveMode }),
       runtimeSource: snapshot.runtimeSource,
       modelSource: snapshot.modelSource,
       ...(snapshot.failureCode ? { failureCode: snapshot.failureCode } : {}),
@@ -58,9 +62,11 @@ export class CodingRuntimeOrchestratorState {
       ...(snapshot.state === "awaiting-approval" && this.deps.pendingPermission(snapshot.runId)
         ? { pendingPermission: this.deps.pendingPermission(snapshot.runId) }
         : {}),
+      ...(snapshot.result === undefined ? {} : { result: snapshot.result }),
     };
-    if (!validateCodingWorkbenchRuntimeSnapshot(out).ok) {
-      throw new Error("invalid runtime snapshot projection");
+    const validated = validateCodingWorkbenchRuntimeSnapshot(out);
+    if (!validated.ok) {
+      throw new Error(`invalid runtime snapshot projection: ${validated.errors.join(", ")}`);
     }
     return out;
   }

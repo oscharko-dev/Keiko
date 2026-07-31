@@ -2223,7 +2223,7 @@ describe("delete helpers", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await deleteProject("/repo/project");
-    await deleteChat("chat-123");
+    await deleteChat("chat-123", "/repo/project");
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -2248,7 +2248,10 @@ describe("delete helpers", () => {
           "Content-Type": "application/json",
           "X-Keiko-CSRF": "1",
         }),
-        body: "{}",
+        body: JSON.stringify({
+          projectPath: "/repo/project",
+          confirmation: { chatId: "chat-123", irreversible: true },
+        }),
       }),
     );
   });
@@ -2259,7 +2262,7 @@ describe("delete helpers", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(deleteProject("/repo/project")).rejects.toBe(networkError);
-    await expect(deleteChat("chat-123")).rejects.toBe(networkError);
+    await expect(deleteChat("chat-123", "/repo/project")).rejects.toBe(networkError);
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,

@@ -30,7 +30,11 @@ import {
   type GitCommitMessageValidation,
   type GitDeliveryResolvedInputs,
 } from "@oscharko-dev/keiko-contracts";
-import { evaluateGitPreflight, summarizeStagedChangeset } from "@oscharko-dev/keiko-tools";
+import {
+  evaluateGitPreflight,
+  summarizeStagedChangeset,
+  type GitWorktreeSnapshot,
+} from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
@@ -58,6 +62,11 @@ import {
   type GitDeliveryParsedBody,
 } from "./requestGuards.js";
 import { resolveGovernedCommitMessagePolicy } from "./commitPolicySettings.js";
+import {
+  readTrustedGitDeliveryBranchProtection,
+  signatureRequirementOf,
+  type GitDeliverySignatureRequirement,
+} from "./branchProtectionPreflight.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 
@@ -127,6 +136,7 @@ export interface GitDeliveryCommitPreviewBody {
   readonly intent: GitCommitIntentAnalysis;
   readonly messageValidation: GitCommitMessageValidation;
   readonly preflightFindingCodes: readonly string[];
+  readonly signatureRequirement: GitDeliverySignatureRequirement;
   readonly policyOutcome: string;
   readonly policyBlockReason?: string;
 }
@@ -136,6 +146,7 @@ function buildPreviewBody(
   messageDraft: string,
   policy: GitCommitMessagePolicy,
   preflightCodes: readonly string[],
+  signatureRequirement: GitDeliverySignatureRequirement,
   policyOutcome: string,
   policyBlockReason: string | undefined,
 ): GitDeliveryCommitPreviewBody {
@@ -145,9 +156,35 @@ function buildPreviewBody(
     intent: analyzeGitCommitIntent({ summary, message: messageDraft }),
     messageValidation: validateGitCommitMessage(messageDraft, policy),
     preflightFindingCodes: preflightCodes,
+    signatureRequirement,
     policyOutcome,
     ...(policyBlockReason !== undefined ? { policyBlockReason } : {}),
   };
+}
+
+function preferredRemoteAlias(snapshot: GitWorktreeSnapshot): string | undefined {
+  return snapshot.remoteAliases.includes("origin") ? "origin" : snapshot.remoteAliases[0];
+}
+
+async function commitSignatureRequirement(
+  workspace: WorkspaceInfo,
+  snapshot: GitWorktreeSnapshot,
+  seams: GitDeliveryExecutionSeams,
+): Promise<GitDeliverySignatureRequirement> {
+  const branchName = snapshot.currentBranchName;
+  const remoteAlias = preferredRemoteAlias(snapshot);
+  if (branchName === undefined || remoteAlias === undefined) return "unavailable";
+  const reader = seams.branchProtectionReader ?? readTrustedGitDeliveryBranchProtection;
+  try {
+    return signatureRequirementOf(await reader(workspace, remoteAlias, branchName));
+  } catch {
+    return "unavailable";
+  }
+}
+
+function signatureFinding(requirement: GitDeliverySignatureRequirement): readonly string[] {
+  if (requirement === "required") return ["signed-commits-required"];
+  return requirement === "unavailable" ? ["branch-protection-unavailable"] : [];
 }
 
 // Reads the live worktree and assembles the read-only preview. May throw if the worktree cannot be
@@ -169,6 +206,7 @@ async function computePreview(
     allowEmptyCommit: false,
   };
   const preflight = evaluateGitPreflight(commitInputs, snapshot);
+  const signatureRequirement = await commitSignatureRequirement(workspace, snapshot, seams);
   const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK };
   const decision = evaluateGitPolicy(packs.orgPack, packs.repoPack, {
     actionKind: "commit",
@@ -181,7 +219,8 @@ async function computePreview(
     summary,
     messageDraft,
     policy,
-    preflight.findings.map((f) => f.code),
+    [...preflight.findings.map((f) => f.code), ...signatureFinding(signatureRequirement)],
+    signatureRequirement,
     decision.outcome,
     decision.outcome === "blocked" ? decision.reason : undefined,
   );

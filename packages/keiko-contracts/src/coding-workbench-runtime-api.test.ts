@@ -7,6 +7,7 @@ import {
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeReadinessRequest,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
+  parseCodingWorkbenchRuntimeResumeRequest,
   parseCodingWorkbenchRuntimeResearchRevokeRequest,
   parseCodingWorkbenchRuntimeRetryRequest,
   parseCodingWorkbenchRuntimeStartRequest,
@@ -112,6 +113,18 @@ describe("Coding Workbench runtime API contracts", () => {
     expect(parseCodingWorkbenchRuntimeStopRequest({ requestId: "../forged" })).toMatchObject({
       ok: false,
     });
+    expect(
+      parseCodingWorkbenchRuntimeResumeRequest({
+        requestId: "request-3",
+        requestedMode: "governed-assist",
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      parseCodingWorkbenchRuntimeResumeRequest({
+        requestId: "request-3",
+        requestedMode: "unbounded",
+      }),
+    ).toMatchObject({ ok: false });
   });
 
   it("accepts only a literal recovery acknowledgement", () => {
@@ -239,12 +252,20 @@ describe("Coding Workbench runtime API contracts", () => {
       revision: 2,
       updatedAt: AT,
       runId: "run-1",
-      requestedMode: "supervised-coding",
+      requestedMode: "autonomous-delivery",
+      effectiveMode: "supervised-coding",
       runtimeSource: "keiko-sidecar",
       modelSource: "keiko-model-gateway",
     };
     expect(validateCodingWorkbenchRuntimeSnapshot(snapshot)).toEqual({ ok: true, value: snapshot });
     expect(validateCodingWorkbenchRuntimeStatus(snapshot)).toEqual({ ok: true, value: snapshot });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...snapshot,
+        requestedMode: "supervised-coding",
+        effectiveMode: "autonomous-delivery",
+      }),
+    ).toMatchObject({ ok: false });
     for (const field of [
       "taskIntent",
       "prompt",
@@ -259,6 +280,37 @@ describe("Coding Workbench runtime API contracts", () => {
         ok: false,
       });
     }
+  });
+
+  it("accepts only bounded body-free terminal process summaries", () => {
+    const result = {
+      status: "failed",
+      exitCode: 9,
+      output: { byteCount: 12, lineCount: 1, sha256: "a".repeat(64), truncated: false },
+      error: { byteCount: 8, lineCount: 1, sha256: "b".repeat(64), truncated: false },
+    };
+    const snapshot = {
+      schemaVersion: "1",
+      state: "failed",
+      revision: 3,
+      updatedAt: AT,
+      runId: "run-1",
+      requestedMode: "supervised-coding",
+      runtimeSource: "keiko-sidecar",
+      modelSource: "keiko-model-gateway",
+      result,
+    };
+
+    expect(validateCodingWorkbenchRuntimeSnapshot(snapshot)).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...snapshot,
+        result: { ...result, output: { ...result.output, body: "hostile-stdout" } },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, result: { ...result, exitCode: 256 } }),
+    ).toMatchObject({ ok: false });
   });
 
   it("binds pending permission to awaiting-approval snapshots only", () => {

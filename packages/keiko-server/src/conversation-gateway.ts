@@ -1,10 +1,12 @@
 import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import { isLegacyEmptyAssistantPlaceholder } from "./assistant-response.js";
 import type { ChatMessage } from "./store/index.js";
+import type { ChatMessageContentPart } from "@oscharko-dev/keiko-contracts";
 
 export interface GatewayConversationMessage {
   readonly role: "system" | "user" | "assistant";
   readonly content: string;
+  readonly contentParts?: readonly ChatMessageContentPart[] | undefined;
 }
 
 export const MAX_CONTEXT_MESSAGES = 24;

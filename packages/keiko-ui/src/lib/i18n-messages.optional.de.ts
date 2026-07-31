@@ -1,6 +1,20 @@
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
 
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  "chat.turn.failed": "Beitrag fehlgeschlagen",
+  "chat.turn.cancelled": "Beitrag abgebrochen",
+  "chat.contextWindow.label": "Hinweis zum Kontextfenster",
+  "chat.contextWindow.notice":
+    "Der sichtbare Verlauf enthält {count} Beiträge. Kontext jenseits der Grenze von 48 Beiträgen kann komprimiert werden.",
+  "chat.history.purge": "Dauerhaft löschen",
+  "chat.history.purgeConfirm": "Dauerhaftes Löschen bestätigen",
+  "chat.history.purgeWarning":
+    "Diese Konversation und ihre gespeicherten Nachrichten dauerhaft löschen? Dies kann nicht rückgängig gemacht werden.",
+  "chat.history.purgeFailed": "Dauerhaftes Löschen fehlgeschlagen: {detail}",
+  "chat.regenerate.versionSelector": "Antwortversion",
+  "chat.regenerate.version": "Version {version}",
+  "chat.regenerate.versionCurrent": "Version {version} (aktuell)",
+  "chat.regenerate.versionSummary": "Version {version} von {count}",
   "quickAccess.empty.commands": "Keine passenden Befehle.",
   "quickAccess.empty.noRoot": "Kein aktiver Arbeitsbereich.",
   "quickAccess.empty.startSearch": "Arbeitsbereichsdateien und Symbole durchsuchen.",

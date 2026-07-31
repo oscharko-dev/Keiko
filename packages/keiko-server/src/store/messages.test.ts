@@ -188,6 +188,18 @@ function tamperGroundedAnswerJson(dbPath: string, messageId: string, raw: string
   }
 }
 
+function tamperAssistantResponseVersionsJson(dbPath: string, messageId: string, raw: string): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare("UPDATE chat_messages SET assistant_response_versions_json = ? WHERE id = ?").run(
+      raw,
+      messageId,
+    );
+  } finally {
+    db.close();
+  }
+}
+
 function createOnDiskStoreFixture(): {
   readonly dbPath: string;
   readonly chatId: string;
@@ -881,8 +893,8 @@ describe("updateMessage (issue #66)", () => {
   });
 });
 
-describe("replaceAssistantMessageContent (issue #1405)", () => {
-  it("updates only assistant content while preserving the message id", () => {
+describe("createAssistantResponseVersion (issues #1405 and #2860)", () => {
+  it("preserves prior assistant bodies as an explicit response-version chain", () => {
     const assistant = store.createMessage({
       chatId,
       role: "assistant",
@@ -895,7 +907,7 @@ describe("replaceAssistantMessageContent (issue #1405)", () => {
       taskType: undefined,
     });
 
-    const updated = store.replaceAssistantMessageContent(assistant.id, "replacement answer", 20);
+    const updated = store.createAssistantResponseVersion(assistant.id, "replacement answer", 20);
 
     expect(updated).toMatchObject({
       id: assistant.id,
@@ -903,8 +915,29 @@ describe("replaceAssistantMessageContent (issue #1405)", () => {
       role: "assistant",
       content: "replacement answer",
       timestamp: 20,
+      responseVersion: 2,
+      supersedesResponseVersion: 1,
+      responseVersions: [
+        { version: 1, content: "stale answer", timestamp: 10 },
+        {
+          version: 2,
+          content: "replacement answer",
+          timestamp: 20,
+          supersedesVersion: 1,
+        },
+      ],
     });
-    expect(store.findMessageById(assistant.id)?.content).toBe("replacement answer");
+    const third = store.createAssistantResponseVersion(assistant.id, "third answer", 30);
+    expect(third.responseVersions).toMatchObject([
+      { version: 1, content: "stale answer" },
+      { version: 2, content: "replacement answer", supersedesVersion: 1 },
+      { version: 3, content: "third answer", supersedesVersion: 2 },
+    ]);
+    expect(store.findMessageById(assistant.id)).toMatchObject({
+      content: "third answer",
+      responseVersion: 3,
+      supersedesResponseVersion: 2,
+    });
   });
 
   it("does not rewrite user turns through the regenerate update primitive", () => {
@@ -920,10 +953,68 @@ describe("replaceAssistantMessageContent (issue #1405)", () => {
       taskType: undefined,
     });
 
-    expect(() => store.replaceAssistantMessageContent(user.id, "replacement", 20)).toThrow(
+    expect(() => store.createAssistantResponseVersion(user.id, "replacement", 20)).toThrow(
       UiStoreError,
     );
     expect(store.findMessageById(user.id)?.content).toBe("original question");
+  });
+
+  it("does not version grounded replies or detach their response-bound provenance", () => {
+    const assistant = store.createMessage({
+      chatId,
+      role: "assistant",
+      content: "grounded answer",
+      timestamp: 10,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const attached = store.attachGroundedAnswer(
+      assistant.id,
+      groundedAnswer({ assistantMessageId: assistant.id, content: assistant.content }),
+    );
+
+    expect(() => store.createAssistantResponseVersion(assistant.id, "replacement", 20)).toThrow(
+      UiStoreError,
+    );
+    expect(store.findMessageById(assistant.id)).toEqual(attached);
+    expect(store.findMessageById(assistant.id)?.responseVersions).toBeUndefined();
+  });
+
+  it("fails closed with a body-free error when stored version history is inconsistent", () => {
+    const fixture = createOnDiskStoreFixture();
+    const assistant = fixture.store.createMessage({
+      chatId: fixture.chatId,
+      role: "assistant",
+      content: "original answer",
+      timestamp: 10,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    fixture.store.createAssistantResponseVersion(assistant.id, "current answer", 20);
+    fixture.store.close();
+    tamperAssistantResponseVersionsJson(
+      fixture.dbPath,
+      assistant.id,
+      JSON.stringify([
+        { version: 1, content: "original answer", timestamp: 10 },
+        { version: 2, content: "different body", timestamp: 20, supersedesVersion: 1 },
+      ]),
+    );
+
+    const reopened = createNodeUiStore(fixture.dbPath, { redactString: makeRedactor("SECRET") });
+    try {
+      expect(() => reopened.findMessageById(assistant.id)).toThrow(
+        "Stored assistant response versions are inconsistent.",
+      );
+    } finally {
+      reopened.close();
+    }
   });
 
   it("rejects empty replacement content", () => {
@@ -939,7 +1030,7 @@ describe("replaceAssistantMessageContent (issue #1405)", () => {
       taskType: undefined,
     });
 
-    expect(() => store.replaceAssistantMessageContent(assistant.id, "", 20)).toThrow(UiStoreError);
+    expect(() => store.createAssistantResponseVersion(assistant.id, "", 20)).toThrow(UiStoreError);
     expect(store.findMessageById(assistant.id)?.content).toBe("answer");
   });
 });

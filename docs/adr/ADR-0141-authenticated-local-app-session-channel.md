@@ -147,6 +147,18 @@ pattern. A negative test asserts on production composition that, without an inje
 without launcher authority, no session is issuable and the channel stays content-free — the fake is
 unreachable, not merely unused.
 
+### D8 — Conversation images use session-bound opaque custody, not browser paths
+
+A local human may stage an image for the selected chat model through the paired app session. The
+browser uploads bytes only to the loopback BFF and retains an opaque reference plus body-free
+metadata; it never sends a filesystem path. The BFF seals bytes in the dedicated bounded local
+secret vault and binds the reference to the app-session id and rotation count, project, chat, MIME,
+size, digest, and expiry. Immediately before the Model Gateway call, the BFF revalidates that full
+binding, the current app session, the explicit delivery intent, and the selected model's image-input
+capability. Only the existing Model Gateway content-part contract receives the resulting data URL.
+SQLite chat text, evidence, diagnostics, and delivery projections remain body-free. Hard chat purge
+deletes bound sealed blobs before deleting the chat row and fails closed if custody cleanup fails.
+
 ## W1.5 finalization (Issue #2478)
 
 W1.5 enforced this authority on the content-bearing routes and finalized the two decisions D2 and

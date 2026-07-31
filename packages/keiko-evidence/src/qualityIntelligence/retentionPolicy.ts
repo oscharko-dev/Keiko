@@ -4,10 +4,9 @@
 // it becomes a candidate for `applyQualityIntelligenceRetention`. The profile is a pure
 // description; the decision function is in `./retention.ts`.
 
-import {
-  QUALITY_INTELLIGENCE_DEFAULT_RETENTION_POLICY_ID,
-  type QualityIntelligenceRetentionPolicyId,
-} from "@oscharko-dev/keiko-contracts";
+import type { QualityIntelligenceRetentionPolicyId } from "@oscharko-dev/keiko-contracts";
+
+export { QUALITY_INTELLIGENCE_DEFAULT_RETENTION_POLICY_ID as QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID } from "@oscharko-dev/keiko-contracts";
 
 export interface QualityIntelligenceRetentionProfile {
   readonly id: QualityIntelligenceRetentionPolicyId;
@@ -48,9 +47,6 @@ const QI_RETENTION_PROFILES_MUTABLE: Record<
 export const QUALITY_INTELLIGENCE_RETENTION_PROFILES: Readonly<
   Record<string, QualityIntelligenceRetentionProfile>
 > = Object.freeze(QI_RETENTION_PROFILES_MUTABLE);
-
-export const QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID =
-  QUALITY_INTELLIGENCE_DEFAULT_RETENTION_POLICY_ID;
 
 // Looks up a profile by id, returning undefined for unknown ids. Callers MUST not throw on
 // unknown — a future schema migration may introduce a profile a current binary does not know,

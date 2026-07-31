@@ -18,6 +18,7 @@ import { createVerificationRunnerManager } from "./editor/verificationRunner.js"
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import { deriveWorkspaceRootRef } from "./workspaceTrust/canonicalTrustIdentity.js";
 import { createInMemoryUiStore, createNodeUiStore, type UiStore } from "./store/index.js";
+import { restoreV13SchemaFixture } from "./store/legacySchemaTestFixture.js";
 import {
   createWorkspaceScriptTrustService,
   WorkspaceScriptTrustError,
@@ -468,11 +469,7 @@ describe("WorkspaceScriptTrustService", () => {
       seed.close();
 
       const legacy = new DatabaseSync(dbPath);
-      legacy.exec(
-        "DROP TABLE workspace_manifest_roots; DROP TABLE workspace_manifests; " +
-          "DROP TABLE workspace_trust_records; " +
-          "ALTER TABLE memory_autonomy_policy DROP COLUMN revision; PRAGMA user_version = 13;",
-      );
+      restoreV13SchemaFixture(legacy);
       legacy.close();
 
       const migrated = createNodeUiStore(dbPath, options);

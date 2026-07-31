@@ -32,11 +32,14 @@ export function useQualityIntelligenceRetentionSettings(): {
   readonly retentionPolicyId: QualityIntelligenceRetentionPolicyId;
   readonly setRetentionPolicyId: (value: QualityIntelligenceRetentionPolicyId) => void;
 } {
-  const [retentionPolicyId, setRetentionPolicyIdState] = useState(readPersistedRetentionPolicyId);
-  const setRetentionPolicyId = useCallback((value: QualityIntelligenceRetentionPolicyId): void => {
-    const resolved = resolveQualityIntelligenceRetentionPolicyId(value);
-    setRetentionPolicyIdState(resolved);
-    persistRetentionPolicyId(resolved);
-  }, []);
-  return { retentionPolicyId, setRetentionPolicyId };
+  const [retentionPolicyId, setRetentionPolicyId] = useState(readPersistedRetentionPolicyId);
+  const updateRetentionPolicyId = useCallback(
+    (value: QualityIntelligenceRetentionPolicyId): void => {
+      const resolved = resolveQualityIntelligenceRetentionPolicyId(value);
+      setRetentionPolicyId(resolved);
+      persistRetentionPolicyId(resolved);
+    },
+    [],
+  );
+  return { retentionPolicyId, setRetentionPolicyId: updateRetentionPolicyId };
 }

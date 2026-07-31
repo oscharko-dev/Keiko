@@ -30,6 +30,7 @@ import { PermControl, type Cfg, type CfgValue } from "./PermControl";
 import { isWorkflowEligibleModel } from "../../../../lib/workflow-eligibility";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
+import { CODING_WORKBENCH_MODES, type CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const FilesIcon = Icons.files;
@@ -206,41 +207,23 @@ function buildInitialAgentFields(
 }
 
 function workflowRunBody(
-  workflow: AgentWorkflowId,
+  workflow: ProductionAgentWorkflowId,
   workspaceRoot: string,
   modelId: string,
   fields: AgentLauncherFields,
-): { workflowId?: string; taskType?: string; input: Record<string, unknown>; modelId: string } {
-  if (workflow === "verify") {
-    const targetFiles = splitPaths(fields.verifyTargetFiles).map((entry) =>
-      normalizeAgentPathForWorkspace(workspaceRoot, entry),
-    );
-    return {
-      taskType: "verify",
-      modelId,
-      input: {
-        workspaceRoot,
-        ...(targetFiles.length > 0 ? { targetFiles } : {}),
-      },
-    };
-  }
-  if (workflow === "explain-plan") {
-    return {
-      taskType: "explain-plan",
-      modelId,
-      input: {
-        workspaceRoot,
-        filePath: normalizeAgentPathForWorkspace(workspaceRoot, fields.explainFilePath),
-        ...(fields.explainQuestion.trim().length > 0
-          ? { question: fields.explainQuestion.trim() }
-          : {}),
-      },
-    };
-  }
+  requestedMode: CodingWorkbenchMode,
+): {
+  workflowId?: string;
+  taskType?: string;
+  input: Record<string, unknown>;
+  modelId: string;
+  requestedMode: CodingWorkbenchMode;
+} {
   if (workflow === "unit-test-generation") {
     return {
       workflowId: "unit-test-generation",
       modelId,
+      requestedMode,
       input: {
         workspaceRoot,
         target: {
@@ -253,6 +236,7 @@ function workflowRunBody(
   return {
     workflowId: "bug-investigation",
     modelId,
+    requestedMode,
     input: {
       workspaceRoot,
       report: {
@@ -277,6 +261,58 @@ function workflowRunBody(
   };
 }
 
+const AGENT_MODE_KEYS = {
+  "governed-assist": {
+    label: "agentLauncher.mode.governedAssist.label",
+    description: "agentLauncher.mode.governedAssist.description",
+  },
+  "supervised-coding": {
+    label: "agentLauncher.mode.supervisedCoding.label",
+    description: "agentLauncher.mode.supervisedCoding.description",
+  },
+  "autonomous-delivery": {
+    label: "agentLauncher.mode.autonomousDelivery.label",
+    description: "agentLauncher.mode.autonomousDelivery.description",
+  },
+} as const satisfies Readonly<
+  Record<CodingWorkbenchMode, { readonly label: MessageKey; readonly description: MessageKey }>
+>;
+
+function AgentAutonomyModePicker({
+  value,
+  onChange,
+  t,
+}: {
+  readonly value: CodingWorkbenchMode;
+  readonly onChange: (mode: CodingWorkbenchMode) => void;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  return (
+    <fieldset className="dlg-agent-task">
+      <legend className="dlg-agent-task-title">{t("agentLauncher.autonomy")}</legend>
+      {CODING_WORKBENCH_MODES.map((mode) => {
+        const copy = AGENT_MODE_KEYS[mode];
+        return (
+          <label className="dlg-field" key={mode}>
+            <span>
+              <input
+                type="radio"
+                name="agent-autonomy-mode"
+                value={mode}
+                checked={value === mode}
+                onChange={() => onChange(mode)}
+              />{" "}
+              <strong>{t(copy.label)}</strong>
+            </span>
+            <span className="dlg-note">{t(copy.description)}</span>
+          </label>
+        );
+      })}
+      <span className="dlg-note">{t("agentLauncher.executionUnavailable")}</span>
+    </fieldset>
+  );
+}
+
 interface AgentLauncherFields {
   readonly verifyTargetFiles: string;
   readonly explainFilePath: string;
@@ -289,7 +325,7 @@ interface AgentLauncherFields {
 }
 
 function validationMessage(
-  workflow: AgentWorkflowId,
+  workflow: ProductionAgentWorkflowId,
   workspaceRoot: string,
   modelId: string,
   fields: AgentLauncherFields,
@@ -297,9 +333,6 @@ function validationMessage(
 ): string | null {
   if (workspaceRoot.length === 0) return t("agentLauncher.validation.repositoryRequired");
   if (modelId.length === 0) return t("agentLauncher.validation.noModel");
-  if (workflow === "explain-plan" && fields.explainFilePath.trim().length === 0) {
-    return t("agentLauncher.validation.explainFile");
-  }
   if (workflow === "unit-test-generation") {
     if (fields.unitFilePath.trim().length === 0) {
       return t("agentLauncher.validation.unitSource");
@@ -721,6 +754,7 @@ function AgentLauncher({
   const [workflow, setWorkflow] = useState<ProductionAgentWorkflowId>("unit-test-generation");
   const [workspaceRoot, setWorkspaceRoot] = useState(filesContext?.root ?? "");
   const [modelId, setModelId] = useState("");
+  const [requestedMode, setRequestedMode] = useState<CodingWorkbenchMode>("governed-assist");
   const [models, setModels] = useState<readonly ModelCapability[]>([]);
   const [projects, setProjects] = useState<readonly string[]>([]);
   const [fields, setFields] = useState<AgentLauncherFields>(() =>
@@ -820,9 +854,13 @@ function AgentLauncher({
     }
     setStarting(true);
     setDialogError(null);
-    const body = workflowRunBody(workflow, workspace, modelId, fields);
+    const body = workflowRunBody(workflow, workspace, modelId, fields, requestedMode);
     try {
       const started = await startRun(body);
+      if (started.governance === undefined) {
+        throw new Error(t("agentLauncher.governanceUnavailable"));
+      }
+      const governance = started.governance;
       onConfirm({
         workflow,
         model: modelId,
@@ -830,6 +868,11 @@ function AgentLauncher({
         fingerprint: started.fingerprint,
         workspaceRoot: workspace,
         inputJson: JSON.stringify(body.input),
+        requestedMode: governance.requestedMode,
+        effectiveMode: governance.effectiveMode,
+        deploymentCeiling: governance.deploymentCeiling,
+        connectorExecution: governance.connectorExecution,
+        deliveryExecution: governance.deliveryExecution,
         ...(filesContext !== null && filesContext.root === workspace
           ? { __connectFilesId: filesContext.id }
           : {}),
@@ -960,6 +1003,7 @@ function AgentLauncher({
         () => void registerWorkspace(),
         t,
       )}
+      <AgentAutonomyModePicker value={requestedMode} onChange={setRequestedMode} t={t} />
       {renderCurrentFileButton(currentFile, useCurrentFile, t)}
       <div className="dlg-agent-task">
         <div className="dlg-agent-task-head">
@@ -1016,7 +1060,7 @@ export function NewWindowDialog({
   const [dialogError, setDialogError] = useState<string | null>(null);
   const nativeDialogSupported = useNativeFileDialogCapability();
   const firstFieldRef = useRef<HTMLElement | null>(null);
-  const dlgRef = useRef<HTMLDivElement | null>(null);
+  const dlgRef = useRef<HTMLDialogElement | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   const windowLabel = localizedWindowTitle(translate, type);
   const dialogTitle = translate("newWindow.title", { label: windowLabel });
@@ -1119,7 +1163,7 @@ export function NewWindowDialog({
     if (type !== "agents") onConfirm(withChatUntitledMarker(type, fields, cfg));
   };
 
-  const onKey = (e: KeyboardEvent<HTMLDivElement>): void => {
+  const onKey = (e: KeyboardEvent<HTMLDialogElement>): void => {
     if (e.key === "Escape") {
       onClose();
       return;
@@ -1158,14 +1202,15 @@ export function NewWindowDialog({
   return (
     <div className={"dlg-overlay" + (shown ? " in" : "")} onPointerDown={onClose}>
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- modal dialog needs Esc/Tab/⌘Enter key handling */}
-      <div
+      <dialog
+        open
         ref={dlgRef}
         className={type === "agents" ? "dlg dlg-agents" : "dlg"}
-        role="dialog"
         aria-modal="true"
         aria-labelledby="new-window-title"
         aria-describedby="new-window-desc"
         tabIndex={-1}
+        style={{ position: "relative", inset: "auto", margin: 0, padding: 0, color: "inherit" }}
         onPointerDown={(e) => e.stopPropagation()}
         onKeyDown={onKey}
       >
@@ -1246,7 +1291,7 @@ export function NewWindowDialog({
             </button>
           </div>
         ) : null}
-      </div>
+      </dialog>
     </div>
   );
 }

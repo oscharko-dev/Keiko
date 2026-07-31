@@ -12,6 +12,7 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
   GIT_WORKTREE_READ_COMMAND_RULES,
   GitWorktreeReadError,
+  readGitRemoteUrl,
   readGitWorktreeSnapshot,
   readStagedConflictMarkerFileCount,
   readStagedPaths,
@@ -133,6 +134,19 @@ describe("readStagedPaths", () => {
     git(["add", "a.txt"]);
     git(["commit", "-m", "base"]);
     expect(await readStagedPaths(deps())).toEqual([]);
+  });
+});
+
+describe("readGitRemoteUrl", () => {
+  it("resolves exactly the configured URL for a safe remote alias", async () => {
+    git(["remote", "add", "origin", "git@github.com:example/repository.git"]);
+    expect(await readGitRemoteUrl(deps(), "origin")).toBe("git@github.com:example/repository.git");
+  });
+
+  it("rejects flag-shaped remote aliases before spawning git", async () => {
+    await expect(readGitRemoteUrl(deps(), "--upload-pack=evil")).rejects.toBeInstanceOf(
+      GitWorktreeReadError,
+    );
   });
 });
 

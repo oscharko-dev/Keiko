@@ -10,10 +10,12 @@ import {
   type ReactNode,
 } from "react";
 import type { Chat } from "@/lib/types";
-import { updateChat } from "@/lib/api";
+import { deleteChat, updateChat } from "@/lib/api";
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { Icons } from "../../Icons";
 import { useChatSessionActions, useChatSessionCatalog } from "../../context/ChatSessionContext";
 import { effectiveLocalKnowledgeScopes, effectiveScopes } from "../../hooks/workspaceActions";
+import { notifyChatDeleted } from "../../hooks/useChatSession";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const RestoreIcon = Icons.restore;
@@ -78,6 +80,7 @@ function createdChatMatchesCurrentProject(
 }
 
 export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): ReactNode {
+  const optionalT = useOptionalWidgetTranslate();
   const session = useChatSessionCatalog();
   const actions = useChatSessionActions();
   const [query, setQuery] = useState("");
@@ -134,7 +137,10 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     if (container === null) return;
     const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>("button[role='tab']"));
     if (tabs.length === 0) return;
-    const current = tabs.findIndex((tab) => tab === document.activeElement);
+    const current =
+      document.activeElement instanceof HTMLButtonElement
+        ? tabs.indexOf(document.activeElement)
+        : -1;
     const from = initialTabIndex(view, current);
     event.preventDefault();
     let next = from;
@@ -202,8 +208,8 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       const response = await updateChat(chat.id, { status: "closed" });
       actions.replaceChat(response.chat);
       setDeleteConfirmId(null);
-    } catch (caught) {
-      const detail = caught instanceof Error ? caught.message : "Request failed.";
+    } catch (caughtError) {
+      const detail = caughtError instanceof Error ? caughtError.message : "Request failed.";
       setError(`Delete failed: ${detail}`);
     } finally {
       setBusyId(null);
@@ -217,9 +223,24 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       const response = await updateChat(chat.id, { status: "open" });
       actions.replaceChat(response.chat);
       setDeleteConfirmId(null);
-    } catch (caught) {
-      const detail = caught instanceof Error ? caught.message : "Request failed.";
+    } catch (caughtError) {
+      const detail = caughtError instanceof Error ? caughtError.message : "Request failed.";
       setError(`Restore failed: ${detail}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const purgeChat = async (chat: Chat): Promise<void> => {
+    setBusyId(chat.id);
+    setError(null);
+    try {
+      await deleteChat(chat.id, chat.projectPath);
+      notifyChatDeleted(chat.id);
+      setDeleteConfirmId(null);
+    } catch (caughtError) {
+      const detail = caughtError instanceof Error ? caughtError.message : "Request failed.";
+      setError(optionalT("chat.history.purgeFailed", { detail }));
     } finally {
       setBusyId(null);
     }
@@ -257,19 +278,28 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
 
   // GEN-UI-FOCUS-016: Escape on either confirm button cancels the
   // destructive confirmation and returns to the row's default actions.
-  const renderConfirmingDeleteRowActions = (chat: Chat, busy: boolean): ReactNode => (
+  const renderConfirmingDeleteRowActions = (
+    chat: Chat,
+    busy: boolean,
+    deleted: boolean,
+  ): ReactNode => (
     <>
+      {deleted ? (
+        <output className="chat-history-purge-warning">
+          {optionalT("chat.history.purgeWarning")}
+        </output>
+      ) : null}
       <button
         ref={confirmDeleteRef}
         type="button"
         className="lk-btn lk-btn-danger"
         disabled={busy}
-        onClick={() => void moveToTrash(chat)}
+        onClick={() => void (deleted ? purgeChat(chat) : moveToTrash(chat))}
         onKeyDown={(event) => {
           if (event.key === "Escape") setDeleteConfirmId(null);
         }}
       >
-        Delete
+        {deleted ? optionalT("chat.history.purgeConfirm") : "Delete"}
       </button>
       <button
         type="button"
@@ -298,6 +328,17 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       </button>
       <button type="button" className="lk-btn lk-btn-ghost" onClick={() => startRename(chat)}>
         Rename
+      </button>
+      <button
+        type="button"
+        className="lk-btn lk-btn-danger"
+        disabled={busy}
+        onClick={() => {
+          setDeleteConfirmId(chat.id);
+          setEditingId(null);
+        }}
+      >
+        {optionalT("chat.history.purge")}
       </button>
     </>
   );
@@ -334,7 +375,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     readonly busy: boolean;
   }): ReactNode => {
     if (editing) return renderEditingRowActions(chat, busy);
-    if (confirmingDelete) return renderConfirmingDeleteRowActions(chat, busy);
+    if (confirmingDelete) return renderConfirmingDeleteRowActions(chat, busy, deleted);
     if (deleted) return renderDeletedRowActions(chat, busy);
     return renderDefaultRowActions(chat);
   };

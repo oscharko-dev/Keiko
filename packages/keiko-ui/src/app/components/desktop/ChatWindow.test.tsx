@@ -18,6 +18,7 @@ import {
   ChatWindow,
   clearKnowledgeCatalogCacheForTests,
   copyableMessageText,
+  messageForSelectedResponseVersion,
   MemoryActionForgetButtons,
   rootDisplayName,
 } from "./ChatWindow";
@@ -303,6 +304,22 @@ async function chooseComboboxOption(
   await user.click(await screen.findByRole("option", { name: option }));
 }
 
+function repositoryResultsElement(): HTMLUListElement {
+  const results = screen.getByRole("list", { name: "Repository file results" });
+  if (!(results instanceof HTMLUListElement)) {
+    throw new TypeError("Repository results are not rendered as a semantic list.");
+  }
+  return results;
+}
+
+function repositoryResultOptions(): readonly HTMLButtonElement[] {
+  return within(repositoryResultsElement()).getAllByRole("button");
+}
+
+async function findRepositoryResultOption(name: string): Promise<HTMLButtonElement> {
+  return screen.findByRole("button", { name });
+}
+
 describe("ChatWindow cancel button", () => {
   it("renders regenerate on the latest ungrounded assistant response", async () => {
     const regenerateMessage = vi.fn().mockResolvedValue(undefined);
@@ -342,6 +359,69 @@ describe("ChatWindow cancel button", () => {
 
     await user.click(screen.getByRole("button", { name: /regenerate response/i }));
     expect(regenerateMessage).toHaveBeenCalledWith("a1");
+  });
+
+  it("lets the user inspect preserved assistant response versions", async () => {
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          makeMessage({ id: "u-version", content: "Question" }),
+          makeMessage({
+            id: "a-version",
+            role: "assistant",
+            content: "Current answer",
+            timestamp: 20,
+            responseVersion: 2,
+            supersedesResponseVersion: 1,
+            responseVersions: [
+              { version: 1, content: "Original answer", timestamp: 10 },
+              {
+                version: 2,
+                content: "Current answer",
+                timestamp: 20,
+                supersedesVersion: 1,
+              },
+            ],
+          }),
+        ],
+      }),
+    );
+
+    expect(screen.getByText("Current answer")).toBeInTheDocument();
+    const selector = screen.getByRole("combobox", { name: "Response version" });
+    expect(selector).toHaveValue("2");
+    await user.selectOptions(selector, "1");
+    expect(screen.getByText("Original answer")).toBeInTheDocument();
+    expect(screen.queryByText("Current answer")).toBeNull();
+    expect(screen.getByText("Version 1 of 2")).toBeInTheDocument();
+  });
+
+  it("does not project current grounding metadata onto a historical response version", () => {
+    const currentGrounding = {
+      groundingKind: "connected-context",
+      content: "Current answer",
+    } as unknown as GroundedAnswer;
+    const message = makeMessage({
+      role: "assistant",
+      content: "Current answer",
+      timestamp: 20,
+      groundedAnswer: currentGrounding,
+      responseVersion: 2,
+      supersedesResponseVersion: 1,
+      responseVersions: [
+        { version: 1, content: "Original answer", timestamp: 10 },
+        { version: 2, content: "Current answer", timestamp: 20, supersedesVersion: 1 },
+      ],
+    });
+
+    expect(messageForSelectedResponseVersion(message, 1)).toMatchObject({
+      content: "Original answer",
+      responseVersion: 1,
+      groundedAnswer: undefined,
+    });
+    expect(messageForSelectedResponseVersion(message, 2).groundedAnswer).toBe(currentGrounding);
   });
 
   it("keeps cancel reachable while regeneration is in flight", async () => {
@@ -878,14 +958,10 @@ describe("ChatWindow repository file focus picker", () => {
       target: { value: draft, selectionStart: draft.length },
     });
 
-    const result = await screen.findByRole("option", {
-      name: "Reference src/context/coding-context.ts",
-    });
+    const result = await findRepositoryResultOption("Reference src/context/coding-context.ts");
     expect(result).toHaveTextContent("Source");
     expect(result).toHaveTextContent("Nested repo");
-    const generatedResult = screen.getByRole("option", {
-      name: "Reference dist/coding-context.js",
-    });
+    const generatedResult = await findRepositoryResultOption("Reference dist/coding-context.js");
     expect(generatedResult).toHaveTextContent("Generated");
     expect(generatedResult).toHaveClass("repo-focus-result-secondary");
     await user.click(result);
@@ -985,7 +1061,7 @@ describe("ChatWindow repository file focus picker", () => {
     });
 
     await waitFor(() => expect(signals[0]?.aborted).toBe(true));
-    await screen.findByRole("option", { name: "Reference src/range.ts" });
+    await findRepositoryResultOption("Reference src/range.ts");
     expect(fetchFilesSearchMock).toHaveBeenCalledWith(
       "/repo",
       "range",
@@ -1035,11 +1111,7 @@ describe("ChatWindow repository file focus picker", () => {
 
     const input = screen.getByRole("textbox", { name: "Chat message" });
     await user.type(input, "Explain this @coding");
-    await user.click(
-      await screen.findByRole("option", {
-        name: "Reference src/context/coding-context.ts",
-      }),
-    );
+    await user.click(await findRepositoryResultOption("Reference src/context/coding-context.ts"));
     await user.click(
       screen.getByRole("button", {
         name: "Remove repository reference src/context/coding-context.ts",
@@ -1091,11 +1163,7 @@ describe("ChatWindow repository file focus picker", () => {
 
     const input = screen.getByRole("textbox", { name: "Chat message" });
     await user.type(input, "@range");
-    await user.click(
-      await screen.findByRole("option", {
-        name: "Reference src/range.ts",
-      }),
-    );
+    await user.click(await findRepositoryResultOption("Reference src/range.ts"));
     await user.click(
       screen.getByRole("button", {
         name: "Remove repository reference src/range.ts",
@@ -1184,7 +1252,7 @@ describe("ChatWindow repository file focus picker", () => {
 
     const input = screen.getByRole("textbox", { name: "Chat message" });
     await user.type(input, "@readme");
-    await user.click(await screen.findByRole("option", { name: "Reference README.md" }));
+    await user.click(await findRepositoryResultOption("Reference README.md"));
 
     await waitFor(() => {
       expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
@@ -1222,12 +1290,10 @@ describe("ChatWindow repository file focus picker", () => {
   });
 
   // GEN-UI-A11Y-001 / GEN-UI-TEST-GAP-010 — the composer @-mention picker is an
-  // ARIA combobox. Because a multi-line <textarea> may not carry role="combobox"
-  // itself (ARIA 1.2), the WAI-ARIA 1.1 pattern is used: a wrapper exposes
-  // role="combobox" + aria-expanded + aria-controls (owning the results listbox)
-  // while the textbox keeps DOM focus and conveys the highlighted option via
-  // aria-autocomplete + aria-activedescendant.
-  it("exposes the @-mention picker as a combobox owning the results listbox", async () => {
+  // The picker remains a native textbox controlling a semantic result list. Arrow-key highlighting
+  // is visual state rather than a fabricated listbox selection, and every result is an accessible
+  // button that can be activated directly.
+  it("links the @-mention textbox to a visible list of result buttons", async () => {
     const user = userEvent.setup();
     fetchFilesSearchMock.mockResolvedValue({
       root: "/repo",
@@ -1279,41 +1345,29 @@ describe("ChatWindow repository file focus picker", () => {
       }),
     );
 
-    // Idle: plain textbox, no @-mention combobox exposed yet. (Model / grounding
-    // KeikoSelects are separate comboboxes with their own names.)
+    // Idle: plain textbox with no dangling result-list idref.
     const textbox = screen.getByRole("textbox", { name: "Chat message" });
-    expect(textbox).not.toHaveAttribute("aria-expanded");
-    expect(textbox).not.toHaveAttribute("aria-activedescendant");
-    expect(screen.queryByRole("combobox", { name: "Chat message" })).toBeNull();
+    expect(textbox).not.toHaveAttribute("aria-controls");
 
     await user.type(textbox, "Explain this @coding");
 
-    // Once results load, the wrapper is a combobox owning the results listbox
-    // while the textbox stays the focused input carrying aria-activedescendant.
-    const combobox = await screen.findByRole("combobox", { name: "Chat message" });
-    expect(combobox).toHaveAttribute("aria-expanded", "true");
-    expect(combobox).toHaveAttribute("aria-haspopup", "listbox");
-    expect(textbox).toHaveAttribute("aria-autocomplete", "list");
+    await findRepositoryResultOption("Reference src/context/coding-context.ts");
+    const results = repositoryResultsElement();
+    expect(results).toHaveAttribute("id", "repo-file-picker-results");
+    expect(textbox).toHaveAttribute("aria-controls", results.id);
 
-    const listbox = await screen.findByRole("listbox", { name: "Repository file results" });
-    expect(listbox).toHaveAttribute("id", "repo-file-picker-listbox");
-    expect(combobox).toHaveAttribute("aria-controls", "repo-file-picker-listbox");
+    // First button is highlighted visually; DOM focus remains on the textbox.
+    const options = repositoryResultOptions();
+    expect(options[0]).toHaveAttribute("data-highlighted", "true");
 
-    // First option is highlighted; aria-activedescendant on the textbox tracks it.
-    const options = screen.getAllByRole("option");
-    expect(textbox).toHaveAttribute("aria-activedescendant", options[0]?.id);
-    expect(options[0]).toHaveAttribute("id", "repo-file-picker-option-0");
-
-    // ArrowDown moves the active option; DOM focus stays on the textarea.
+    // ArrowDown moves the visible highlight without inventing ARIA selection state.
     textbox.focus();
     await user.keyboard("{ArrowDown}");
     await waitFor(() => {
-      expect(textbox).toHaveAttribute("aria-activedescendant", "repo-file-picker-option-1");
+      expect(options[1]).toHaveAttribute("data-highlighted", "true");
     });
     expect(document.activeElement).toBe(textbox);
-    expect(
-      screen.getByRole("option", { name: "Reference src/context/coding-notes.ts" }),
-    ).toHaveAttribute("aria-selected", "true");
+    expect(await findRepositoryResultOption("Reference src/context/coding-notes.ts")).toBeVisible();
   });
 });
 
@@ -2881,6 +2935,54 @@ describe("ChatWindow message copy", () => {
       "50",
     );
     scrollSpy.mockRestore();
+  });
+
+  it.each([
+    { turnCount: 47, visible: false },
+    { turnCount: 48, visible: false },
+    { turnCount: 49, visible: true },
+  ])("discloses the 48-turn context boundary at $turnCount turns", ({ turnCount, visible }) => {
+    const messages = Array.from({ length: turnCount }, (_, index) => [
+      makeMessage({
+        id: `boundary-user-${String(index)}`,
+        content: `Question ${String(index)}`,
+        timestamp: index * 2,
+      }),
+      makeMessage({
+        id: `boundary-assistant-${String(index)}`,
+        role: "assistant",
+        content: `Answer ${String(index)}`,
+        timestamp: index * 2 + 1,
+      }),
+    ]).flat();
+    renderWindow(makeSession({ activeChat: makeChat(), messages }));
+
+    const notice = screen.queryByRole("status", { name: /context window/i });
+    if (visible) {
+      expect(notice).toHaveTextContent("49 turns");
+      expect(notice).toHaveTextContent("48-turn boundary");
+      expect(notice).not.toHaveTextContent("Question 0");
+    } else {
+      expect(notice).toBeNull();
+    }
+  });
+
+  it.each([
+    { turnState: "cancelled" as const, label: "Turn cancelled" },
+    { turnState: "failed" as const, label: "Turn failed" },
+  ])("renders persisted $turnState user-turn endings after reload", ({ turnState, label }) => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          makeMessage({ id: `user-${turnState}`, content: "Visible user text", turnState }),
+        ],
+      }),
+    );
+
+    const status = screen.getByText(label);
+    expect(status.tagName).toBe("OUTPUT");
+    expect(status).toHaveTextContent(label);
   });
 
   it("keeps a single-question chat in the full-width log column", () => {

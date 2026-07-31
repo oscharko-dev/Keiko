@@ -26,6 +26,7 @@ import {
   type SpawnFn,
 } from "./exec.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
+import { isSafeGitRefName } from "./git-worktree-adapter.js";
 
 // The dedicated READ-ONLY allowlist. Mirrors the mutation rules' defence-in-depth flag denials but
 // permits only inspection subcommands — no `branch <name>`, no `add`, no `commit`, no network verb.
@@ -232,6 +233,27 @@ export async function readStagedPaths(deps: NodeGitWorktreeReaderDeps): Promise<
   const ctx = buildReadContext(deps);
   const out = await runRead(ctx, ["diff", "--cached", "--name-only"]);
   return parseLines(out);
+}
+
+/**
+ * Resolves one configured remote URL for a trusted remote alias. The URL never crosses the tools
+ * boundary into a response or evidence document; the server consumes it only to derive the bounded
+ * GitHub owner/repository operand used by its branch-protection reader.
+ */
+export async function readGitRemoteUrl(
+  deps: NodeGitWorktreeReaderDeps,
+  remoteAlias: string,
+): Promise<string> {
+  if (!isSafeGitRefName(remoteAlias)) {
+    throw new GitWorktreeReadError("remote alias is unsafe");
+  }
+  const lines = parseLines(
+    await runRead(buildReadContext(deps), ["remote", "get-url", "--", remoteAlias]),
+  );
+  if (lines.length !== 1) {
+    throw new GitWorktreeReadError("remote URL could not be resolved uniquely");
+  }
+  return lines[0] ?? "";
 }
 
 // Matches git's own "leftover conflict marker" diagnostic line, e.g.

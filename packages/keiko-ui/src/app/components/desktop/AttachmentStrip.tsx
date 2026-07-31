@@ -28,6 +28,7 @@ import type {
   AttachmentRejectionReason,
   PendingAttachment,
   SentDocumentDisclosure,
+  SentImageDisclosure,
 } from "./hooks/useChatSession";
 import type { ModelCapability } from "@/lib/types";
 
@@ -59,6 +60,8 @@ function rejectionMessageFor(
           return "File is larger than the 8 MiB limit. Choose a smaller file or summarize the content as text.";
         case "attachment.rejection.empty":
           return "Empty file. Add a file with content to attach.";
+        case "attachment.rejection.deliveryRefused":
+          return "The image could not be stored or authorized for delivery. Add it again and retry.";
         default:
           return key;
       }
@@ -75,6 +78,8 @@ function rejectionMessageFor(
       return tr("attachment.rejection.oversized");
     case "empty":
       return tr("attachment.rejection.empty");
+    case "delivery-refused":
+      return tr("attachment.rejection.deliveryRefused");
   }
 }
 
@@ -412,3 +417,24 @@ function SentDocumentsNoteImpl({ documents }: SentDocumentsNoteProps): ReactNode
 // GEN-PERF-CHAT-014 — the documents list keeps identity across chat stream flushes, so
 // the memo skips the per-frame re-render inside ChatWindow's log.
 export const SentDocumentsNote = memo(SentDocumentsNoteImpl);
+
+export function SentImagesNote({
+  images,
+}: {
+  readonly images: readonly SentImageDisclosure[];
+}): ReactNode {
+  const t = useTranslate();
+  if (images.length === 0) return null;
+  return (
+    <div role="note" className="sent-docs-note" aria-label={t("attachment.imagesDelivered")}>
+      <span className="sent-docs-note-label">{t("attachment.imagesDelivered")}</span>
+      <ul className="sent-docs-note-list">
+        {images.map((image) => (
+          <li key={image.id} className="sent-docs-note-item">
+            {image.displayName}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}

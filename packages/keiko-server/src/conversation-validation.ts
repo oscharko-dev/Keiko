@@ -25,9 +25,12 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 export interface ConversationAttachment {
+  readonly id?: string | undefined;
   readonly kind: "image" | "document";
   readonly mimeType: string;
   readonly sizeBytes: number;
+  readonly attachmentRef?: string | undefined;
+  readonly sha256?: string | undefined;
 }
 
 export interface ConversationValidationInput {

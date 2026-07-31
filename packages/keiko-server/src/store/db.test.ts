@@ -232,6 +232,45 @@ describe("createInMemoryUiStore", () => {
     store.close();
   });
 
+  it("persists distinct failed and cancelled canonical turn endings for reload", () => {
+    const projectDir = mkdtempSync(join(tmpDir, "turn-ending-project-"));
+    const store = createInMemoryUiStore();
+    store.createProject(projectDir);
+    const chat = store.createChat(projectDir, "Turn endings", "example-chat-model");
+    const admit = (clientTurnId: string, content: string, timestamp: number): void => {
+      expect(
+        store.admitChatTurn(clientTurnId, {
+          chatId: chat.id,
+          role: "user",
+          content,
+          timestamp,
+          runId: undefined,
+          workflowId: undefined,
+          workflowStatus: undefined,
+          shortResult: undefined,
+          taskType: undefined,
+        }).kind,
+      ).toBe("admitted");
+    };
+    admit("failed-turn", "Failure body", 1);
+    store.failChatTurn(chat.id, "failed-turn", "failed");
+    admit("cancelled-turn", "Cancellation body", 2);
+    store.failChatTurn(chat.id, "cancelled-turn", "cancelled");
+
+    expect(
+      store.listMessages(chat.id).map(({ content, turnState }) => ({ content, turnState })),
+    ).toEqual([
+      { content: "Failure body", turnState: "failed" },
+      { content: "Cancellation body", turnState: "cancelled" },
+    ]);
+    expect(store.inspectChatTurn(chat.id, "cancelled-turn", "Cancellation body").kind).toBe(
+      "retryable",
+    );
+    store.failChatTurn(chat.id, "cancelled-turn", "cancelled");
+    expect(store.listMessages(chat.id).at(-1)?.turnState).toBe("cancelled");
+    store.close();
+  });
+
   it("keeps visible incomplete turns out of gateway history", (): void => {
     const projectDir = mkdtempSync(join(tmpDir, "gateway-history-project-"));
     const store = createInMemoryUiStore();

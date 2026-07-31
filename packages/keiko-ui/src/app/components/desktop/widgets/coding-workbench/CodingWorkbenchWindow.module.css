@@ -292,6 +292,36 @@
   margin-inline-end: auto;
 }
 
+.resumeModeControl {
+  display: inline-flex;
+  min-width: 12rem;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.resumeModeLabel {
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.resumeModeSelect {
+  min-width: 0;
+  min-height: var(--control-height);
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-control);
+  padding: 0 var(--space-3);
+  color: var(--text-primary);
+  background: var(--input-surface);
+  font: inherit;
+}
+
+.resumeModeSelect:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .button {
   min-height: var(--control-height);
   max-width: 100%;

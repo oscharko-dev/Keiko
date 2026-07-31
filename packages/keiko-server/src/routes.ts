@@ -52,6 +52,10 @@ import {
   handleSendDesktopChat,
 } from "./chat-handlers.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
+import {
+  handleDeleteConversationAttachment,
+  handleUploadConversationAttachment,
+} from "./conversation-attachment-routes.js";
 import { handleCloneRepository } from "./gitRepositoryRoutes.js";
 import {
   handleListMemories,
@@ -544,6 +548,16 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   },
   // Desktop canvas V1 — real chat against the configured gateway model without new agent scope.
   { method: "POST", pattern: "/api/desktop/chats", handler: handleCreateDesktopChat },
+  {
+    method: "POST",
+    pattern: "/api/desktop/chat/attachments",
+    handler: handleUploadConversationAttachment,
+  },
+  {
+    method: "POST",
+    pattern: "/api/desktop/chat/attachments/delete",
+    handler: handleDeleteConversationAttachment,
+  },
   { method: "POST", pattern: "/api/desktop/chat", handler: handleSendDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat/regenerate", handler: handleRegenerateDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat/stream", handler: handleSendDesktopChatStream },
@@ -1572,10 +1586,12 @@ export function matchRoute(
     }
   }
   const otherMethodSpecificity = bestOtherMethodSpecificity(method, pathParts);
+  let result: RouteMatch | "method-not-allowed" | undefined =
+    otherMethodSpecificity >= 0 ? "method-not-allowed" : undefined;
   if (bestMethodMatch !== undefined && bestMethodSpecificity >= otherMethodSpecificity) {
-    return bestMethodMatch;
+    result = bestMethodMatch;
   }
-  return otherMethodSpecificity >= 0 ? "method-not-allowed" : undefined;
+  return result;
 }
 
 export function isApiPath(pathname: string): boolean {

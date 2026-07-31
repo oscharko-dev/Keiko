@@ -24,6 +24,8 @@ import type {
 import {
   commitChatAfterTurn,
   buildGatewayAssembly,
+  assemblyWithConversationImages,
+  conversationImageDeliveries,
   buildMemoryResult,
   captureGatewayTurnSnapshot,
   collectMemoryActions,
@@ -221,6 +223,9 @@ async function persistStreamedTurn(
     messages: [canonicalUser, assistantMessage],
     usage: turn.response.usage,
     memory: { ...memory, actions },
+    ...(conversationImageDeliveries(request).length === 0
+      ? {}
+      : { attachmentDeliveries: conversationImageDeliveries(request) }),
   };
 }
 
@@ -288,7 +293,7 @@ function failCancelledStreamTurn(
   request: SendDesktopChatRequest,
   emitTerminal: boolean,
 ): void {
-  failDesktopChatTurn(deps, request);
+  failDesktopChatTurn(deps, request, "cancelled");
   if (emitTerminal) writeTerminalFrame(ctx, sseMessage({ event: "cancelled", data: {} }));
 }
 
@@ -306,7 +311,12 @@ async function streamAndPersist(
     failCancelledStreamTurn(ctx, deps, request, true);
     return;
   }
-  const assembly = buildGatewayAssembly(deps, request, memory, modelId, gatewayTurn);
+  const assembly = assemblyWithConversationImages(
+    deps,
+    request,
+    modelId,
+    buildGatewayAssembly(deps, request, memory, modelId, gatewayTurn),
+  );
   const stream = callStream({ modelId, messages: assembly.messages }, controller.signal);
   const termination: StreamTermination = { backpressure: false };
   const turn = await streamConversation(ctx, deps, stream, controller, termination);
@@ -460,8 +470,9 @@ function writeStreamFailure(
   controller: AbortController,
   error: unknown,
 ): void {
-  failDesktopChatTurn(deps, request);
-  const event: DesktopChatStreamEvent = requestIsAborted(controller.signal)
+  const cancelled = requestIsAborted(controller.signal);
+  failDesktopChatTurn(deps, request, cancelled ? "cancelled" : "failed");
+  const event: DesktopChatStreamEvent = cancelled
     ? { event: "cancelled", data: {} }
     : { event: "error", data: errorEvent(error, deps, ctx.correlationId) };
   writeTerminalFrame(ctx, sseMessage(event));

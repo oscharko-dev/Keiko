@@ -166,11 +166,63 @@ function sortedRecords(state: RegistryState): readonly ConsolidationJobRecord[] 
   });
 }
 
+function bodyFreeEvidence(
+  evidence: ConsolidationResult["reviewItems"][number]["evidence"],
+): ConsolidationResult["reviewItems"][number]["evidence"] {
+  return evidence?.map(({ detail: _detail, ...safe }) => safe);
+}
+
+function bodyFreeReviewItem(
+  item: ConsolidationResult["reviewItems"][number],
+): ConsolidationResult["reviewItems"][number] {
+  const evidence = bodyFreeEvidence(item.evidence);
+  return {
+    id: item.id,
+    reason: item.reason,
+    relatedMemoryIds: item.relatedMemoryIds,
+    ...(item.sourceMemoryIds !== undefined ? { sourceMemoryIds: item.sourceMemoryIds } : {}),
+    ...(item.proposedAction !== undefined ? { proposedAction: item.proposedAction } : {}),
+    ...(evidence !== undefined ? { evidence } : {}),
+    ...(item.proposedEdges !== undefined
+      ? {
+          proposedEdges: item.proposedEdges.map(({ provenanceSummary: _summary, ...edge }) => edge),
+        }
+      : {}),
+    detectedAt: item.detectedAt,
+  };
+}
+
+function bodyFreeResult(result: ConsolidationResult): ConsolidationResult {
+  return {
+    ...result,
+    edgesProposed: result.edgesProposed.map(({ provenanceSummary: _summary, ...edge }) => edge),
+    // MemoryUpdate carries bodyPatch/reviewerNote. The operative in-memory record retains those
+    // proposals; the evidence snapshot retains their count in summaryStatus only.
+    updatesProposed: [],
+    reviewItems: result.reviewItems.map(bodyFreeReviewItem),
+  };
+}
+
+function bodyFreePersistedRecord(record: ConsolidationJobRecord): ConsolidationJobRecord {
+  return {
+    ...record,
+    // Snapshots are the optimistic-concurrency authority for Apply. An evidence projection cannot
+    // restore that operative authority after restart, so restored review items are deliberately
+    // non-applicable even though their body-free audit facts remain inspectable.
+    reviewSnapshots: [],
+    job: {
+      ...record.job,
+      ...(record.job.result === undefined ? {} : { result: bodyFreeResult(record.job.result) }),
+      ...(record.job.error === undefined ? {} : { error: "Consolidation run failed." }),
+    },
+  };
+}
+
 function persistState(state: RegistryState): void {
   if (state.evidenceStore === undefined) return;
   const snapshot: PersistedRegistrySnapshot = {
     schemaVersion: "1",
-    records: sortedRecords(state),
+    records: sortedRecords(state).map(bodyFreePersistedRecord),
   };
   state.evidenceStore.put(state.evidenceRunId, JSON.stringify(snapshot));
 }

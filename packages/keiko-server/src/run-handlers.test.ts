@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Server } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import {
@@ -40,6 +40,11 @@ import {
   deriveWorkspaceId,
 } from "./task-workspace/naming.js";
 import { closeUiTestServer, startUiTestServer } from "./ui-test-server/_support.js";
+import type { AppSession } from "./coding-app-session/sessionRegistry.js";
+import type { CodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
+import { contentFreeCodingAppSessionChannelSnapshot } from "./coding-app-session/channelContract.js";
+import { editorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
+import { reserveAgentRunBudget } from "./agent-run-governance.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(here, "..", "..", "..", "tests", "fixtures", "unit-tests", "target-project");
@@ -82,6 +87,32 @@ interface HandlerDepsOptions {
   readonly modelPortFactory?: () => ModelPort | undefined;
   readonly managedTaskWorkspaceRoot?: string | undefined;
   readonly managedWorkspaceInstance?: WorkspaceInstance | undefined;
+  readonly appSessionPaired?: boolean | undefined;
+  readonly maxActiveRuns?: number | undefined;
+}
+
+const TEST_APP_SESSION: AppSession = {
+  sessionId: "sess_0123456789abcdef01234567",
+  principalLabel: "local-user",
+  issuedAtMs: 1,
+  lastSeenAtMs: 1,
+  rotationCount: 0,
+};
+
+function testAppSessionChannel(paired: boolean): CodingAppSessionChannel {
+  return {
+    pair: () => ({ paired: false }),
+    snapshot: () => contentFreeCodingAppSessionChannelSnapshot(),
+    rotate: () => ({ rotated: false }),
+    signOut: () => undefined,
+    sessionCount: () => (paired ? 1 : 0),
+    verifySession: () => (paired ? TEST_APP_SESSION : undefined),
+    subscribe: () => ({
+      snapshot: contentFreeCodingAppSessionChannelSnapshot(),
+      live: false,
+      detach: () => undefined,
+    }),
+  };
 }
 
 function handlerDeps(model: ModelPort, options: HandlerDepsOptions = {}): UiHandlerDeps {
@@ -97,6 +128,7 @@ function handlerDeps(model: ModelPort, options: HandlerDepsOptions = {}): UiHand
     redactor: buildRedactor({ KEY: SECRET }),
     registry,
     modelPortFactory: options.modelPortFactory ?? ((): ModelPort => model),
+    codingAppSessionChannel: testAppSessionChannel(options.appSessionPaired !== false),
     store,
     ...(options.managedTaskWorkspaceRoot === undefined
       ? {}
@@ -118,7 +150,9 @@ function handlerDeps(model: ModelPort, options: HandlerDepsOptions = {}): UiHand
 
 async function start(model: ModelPort, options: HandlerDepsOptions = {}): Promise<void> {
   staticRoot = mkdtempSync(join(tmpdir(), "keiko-ui-runs-"));
-  registry = createRunRegistry();
+  registry = createRunRegistry(
+    options.maxActiveRuns === undefined ? {} : { maxActiveRuns: options.maxActiveRuns },
+  );
   evidenceStore = createInMemoryEvidenceStore();
   const started = await startUiTestServer({
     staticRoot,
@@ -187,6 +221,24 @@ describe("POST /api/runs", () => {
     expect(created.status).toBe(202);
     expect(created.body.runId).toBeTruthy();
     expect(created.body.fingerprint).toBeTruthy();
+  });
+
+  it("fails closed without a launcher-paired app session", async () => {
+    await start(fakeModel("unused"), { appSessionPaired: false });
+    const created = await createRun();
+    expect(created.status).toBe(403);
+    expect(created.body).toMatchObject({
+      error: { code: "AGENT_RUN_AUTHORITY_REQUIRED" },
+    });
+  });
+
+  it("revokes the minted Authority Envelope when synchronous run admission fails", async () => {
+    const revoke = vi.spyOn(editorAgentAuthorityRegistry, "revoke");
+    await start(fakeModel("unused"), { maxActiveRuns: 0 });
+    const created = await createRun();
+    expect(created.status).toBe(429);
+    expect(revoke).toHaveBeenCalledTimes(1);
+    revoke.mockRestore();
   });
 
   it("rejects a missing model with 400 NO_MODEL", async () => {
@@ -399,6 +451,15 @@ maybeApply("POST /api/runs/:runId/apply — applies through the gated workflow",
     await start(fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n")));
     const { body } = await createRun();
     await awaitTerminal(body.runId);
+    const unconfirmed = await fetch(`${base()}/api/runs/${body.runId}/apply`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({}),
+    });
+    expect(unconfirmed.status).toBe(403);
+    expect((await unconfirmed.json()) as { error: { code: string } }).toMatchObject({
+      error: { code: "APPROVAL_REQUIRED" },
+    });
     const res = await fetch(`${base()}/api/runs/${body.runId}/apply`, {
       method: "POST",
       headers: POST_JSON_HEADERS,
@@ -407,6 +468,47 @@ maybeApply("POST /api/runs/:runId/apply — applies through the gated workflow",
     expect(res.status).toBe(200);
     const json = (await res.json()) as { report: { status: string } };
     expect(["completed", "dry-run"]).toContain(json.report.status);
+  }, 60_000);
+
+  it("denies an exhausted apply budget before any downstream model call", async () => {
+    rmSync(workspace, { recursive: true, force: true });
+    workspace = mkdtempSync(join(hostRoot ?? ".", ".keiko-ui-apply-budget-"));
+    cpSync(FIXTURE, workspace, { recursive: true });
+    let modelCalls = 0;
+    const delegate = fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n"));
+    const model: ModelPort = {
+      call: (request, signal): ReturnType<ModelPort["call"]> => {
+        modelCalls += 1;
+        return delegate.call(request, signal);
+      },
+    };
+    await start(model);
+    const { body } = await createRun();
+    await awaitTerminal(body.runId);
+    const beforeApplyCalls = modelCalls;
+    const record = registry.get(body.runId);
+    if (record?.governance === undefined) throw new Error("expected governed run");
+    expect(
+      reserveAgentRunBudget({
+        binding: record.governance,
+        workspaceRoot: workspace,
+        usage: { toolCalls: 0, patchBytes: 65_536, promptTokens: 0 },
+        nowIso: new Date().toISOString(),
+      }),
+    ).toEqual({ ok: true });
+
+    const res = await fetch(`${base()}/api/runs/${body.runId}/apply`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ confirm: true }),
+    });
+    const json = (await res.json()) as { error: { code: string; message: string } };
+
+    expect(res.status).toBe(403);
+    expect(json.error.code).toBe("AGENT_RUN_BUDGET_EXCEEDED");
+    expect(JSON.stringify(json)).not.toContain(SECRET);
+    expect(modelCalls).toBe(beforeApplyCalls);
+    expect(record.appliable).toBeDefined();
   }, 60_000);
 });
 
@@ -457,6 +559,12 @@ describe("FIX 1 — UI runs persist a redacted evidence manifest (AC5)", () => {
     expect(manifest?.evidenceSchemaVersion).toBe("1");
     expect(manifest?.run.runId).toBe(body.runId);
     expect(manifest?.run.fingerprint).toBe(body.fingerprint);
+    expect(manifest?.autonomy).toEqual({
+      requestedMode: "governed-assist",
+      effectiveMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+    });
+    expect(JSON.stringify(manifest?.autonomy)).not.toMatch(/authorityRef|sessionId|prompt|file/iu);
     expect(JSON.stringify(manifest)).not.toContain(SECRET);
   });
 

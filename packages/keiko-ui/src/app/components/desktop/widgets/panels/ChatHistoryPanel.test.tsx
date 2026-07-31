@@ -2,17 +2,26 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Chat } from "@/lib/types";
-import { updateChat } from "@/lib/api";
+import { deleteChat, updateChat } from "@/lib/api";
 import { ChatSessionProvider } from "../../context/ChatSessionContext";
 import type { ChatSessionApi } from "../../hooks/useChatSession";
+import { notifyChatDeleted } from "../../hooks/useChatSession";
 import { ChatHistoryPanel, initialTabIndex } from "./ChatHistoryPanel";
 
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return {
     ...actual,
+    deleteChat: vi.fn(),
     updateChat: vi.fn(),
   };
+});
+
+vi.mock("../../hooks/useChatSession", async () => {
+  const actual = await vi.importActual<typeof import("../../hooks/useChatSession")>(
+    "../../hooks/useChatSession",
+  );
+  return { ...actual, notifyChatDeleted: vi.fn() };
 });
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
@@ -252,6 +261,46 @@ describe("ChatHistoryPanel", () => {
 
     await waitFor(() => expect(updateChat).toHaveBeenCalledWith("chat-1", { status: "open" }));
     expect(replaceChat).toHaveBeenCalledWith({ ...chat, status: "open" });
+  });
+
+  it("cancels a hard-purge confirmation without calling the server", async () => {
+    const user = userEvent.setup();
+    renderPanel(makeSession({ chats: [makeChat({ status: "closed" })] }));
+    await user.click(screen.getByRole("tab", { name: /deleted/i }));
+    await user.click(screen.getByRole("button", { name: "Delete permanently" }));
+    expect(screen.getByText(/cannot be undone/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(deleteChat).not.toHaveBeenCalled();
+  });
+
+  it("purges only after server success and publishes the existing delete mutation", async () => {
+    vi.mocked(deleteChat).mockResolvedValueOnce();
+    const chat = makeChat({ status: "closed" });
+    const user = userEvent.setup();
+    renderPanel(makeSession({ chats: [chat], activeProject: makeProject("/repo") }));
+    await user.click(screen.getByRole("tab", { name: /deleted/i }));
+    await user.click(screen.getByRole("button", { name: "Delete permanently" }));
+    await user.click(screen.getByRole("button", { name: "Confirm permanent delete" }));
+
+    await waitFor(() => expect(deleteChat).toHaveBeenCalledWith("chat-1", "/repo"));
+    expect(notifyChatDeleted).toHaveBeenCalledWith("chat-1");
+  });
+
+  it("keeps a failed purge available for an explicit retry", async () => {
+    vi.mocked(deleteChat).mockRejectedValueOnce(new Error("disk busy")).mockResolvedValueOnce();
+    const chat = makeChat({ status: "closed" });
+    const user = userEvent.setup();
+    renderPanel(makeSession({ chats: [chat], activeProject: makeProject("/repo") }));
+    await user.click(screen.getByRole("tab", { name: /deleted/i }));
+    await user.click(screen.getByRole("button", { name: "Delete permanently" }));
+    await user.click(screen.getByRole("button", { name: "Confirm permanent delete" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("disk busy");
+    expect(notifyChatDeleted).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Confirm permanent delete" }));
+    await waitFor(() => expect(deleteChat).toHaveBeenCalledTimes(2));
+    expect(notifyChatDeleted).toHaveBeenCalledWith("chat-1");
   });
 
   it("keeps the deleted tab selected after restoring a chat", async () => {

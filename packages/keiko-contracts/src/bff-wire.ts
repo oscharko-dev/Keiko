@@ -195,6 +195,14 @@ export interface Chat {
 
 export type ChatRole = "user" | "assistant" | "system";
 export type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+export type ChatTurnState = "pending" | "completed" | "failed" | "cancelled";
+
+export interface ChatAssistantResponseVersion {
+  readonly version: number;
+  readonly content: string;
+  readonly timestamp: number;
+  readonly supersedesVersion?: number | undefined;
+}
 
 export interface ChatMessage {
   readonly id: string;
@@ -205,6 +213,15 @@ export interface ChatMessage {
   // Path/body-free scoped digest of a canonical client turn. It lets the browser reconcile one
   // exact durable user row after a failed request without exposing the caller's raw turn identity.
   readonly canonicalTurnRef?: string | undefined;
+  // State-only lifecycle projection for a canonical user turn. Provider details and transcript
+  // bodies never ride this field.
+  readonly turnState?: ChatTurnState | undefined;
+  // Regeneration preserves every assistant body under the same stable message identity. The
+  // monotonic version relationship is explicit; diagnostics and evidence consume only these
+  // numeric/opaque coordinates, never the version bodies.
+  readonly responseVersion?: number | undefined;
+  readonly supersedesResponseVersion?: number | undefined;
+  readonly responseVersions?: readonly ChatAssistantResponseVersion[] | undefined;
   readonly runId: string | undefined;
   readonly workflowId: string | undefined;
   readonly workflowStatus: WorkflowStatus | undefined;
@@ -306,6 +323,14 @@ export interface ChatsResponse {
 
 export interface ChatResponse {
   readonly chat: Chat;
+}
+
+export interface PurgeChatRequest {
+  readonly projectPath: string;
+  readonly confirmation: {
+    readonly chatId: string;
+    readonly irreversible: true;
+  };
 }
 
 export interface MessagesResponse {
@@ -450,6 +475,7 @@ export interface DesktopChatSendResponse {
   readonly messages: readonly ChatMessage[];
   readonly usage?: DesktopChatSendUsage;
   readonly memory?: ConversationMemoryResultWire;
+  readonly attachmentDeliveries?: readonly ConversationImageDeliveryWire[];
 }
 
 export const DESKTOP_CHAT_STREAM_EVENT_TYPES = ["token", "done", "error", "cancelled"] as const;
@@ -584,6 +610,31 @@ export interface ConversationAttachmentDescriptorWire {
   readonly name: string;
   readonly mimeType: string;
   readonly sizeBytes: number;
+  /** Opaque server-issued reference. It is never a filesystem path or bearer credential. */
+  readonly attachmentRef?: string | undefined;
+  readonly sha256?: string | undefined;
+}
+
+export const CONVERSATION_IMAGE_DELIVERY_INTENT = "deliver-images-to-selected-model" as const;
+export type ConversationImageDeliveryIntent = typeof CONVERSATION_IMAGE_DELIVERY_INTENT;
+
+export interface ConversationAttachmentUploadRequestWire {
+  readonly projectPath: string;
+  readonly chatId: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+  readonly contentBase64: string;
+}
+
+export interface ConversationAttachmentUploadResponseWire {
+  readonly attachmentRef: string;
+  readonly expiresAt: number;
+}
+
+export interface ConversationImageDeliveryWire {
+  readonly id: string;
+  readonly status: "delivered";
 }
 
 // The loopback endpoint every Keiko surface binds/dials (ADR-0011): one host and one
@@ -662,6 +713,7 @@ export interface DesktopChatSendRequestWire {
   readonly memory?: ConversationMemoryRequestWire | undefined;
   readonly documentContext?: readonly ConversationDocumentContextWire[] | undefined;
   readonly attachments?: readonly ConversationAttachmentDescriptorWire[] | undefined;
+  readonly attachmentIntent?: ConversationImageDeliveryIntent | undefined;
   readonly discussionMode?: DiscussionMode | undefined;
   // Optional stable client identity for safe retry of one canonical chat turn. The server scopes it
   // to `chatId` and the normalized semantic turn (effective model, grounding/memory context, and

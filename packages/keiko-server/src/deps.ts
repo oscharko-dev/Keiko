@@ -19,17 +19,33 @@ import {
   Gateway,
   resolveCostClass,
   type EnvSource,
+  type GatewayRequest,
+  type GatewayStreamChunk,
   type GatewayConfig,
+  type LiteLLMRerankRequest,
   type ModelProviderConfig,
+  type NormalizedResponse,
+  type OpenAIEmbeddingBatchOutcome,
+  type OpenAIEmbeddingBatchRequest,
+  type OpenAIEmbeddingOutcome,
+  type OpenAIEmbeddingRequest,
+  type RealtimeNegotiationOutcome,
+  type RealtimeNegotiationRequest,
+  type RerankOutcome,
+  type SpeechToTextOutcome,
+  type SpeechToTextRequest,
+  type TextToSpeechOutcome,
+  type TextToSpeechRequest,
+  type TextToSpeechStreamOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
-import { GatewayModelPort } from "@oscharko-dev/keiko-harness";
-import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { GatewayModelPort, type ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   createAuditRedactor,
   writeSideFile,
   deepRedactStrings,
   createNodeEvidenceStore,
   resolveEvidenceDir,
+  type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
 import { keikoApiKeySecretValues, redact } from "@oscharko-dev/keiko-security";
 import {
@@ -51,11 +67,14 @@ import {
 import type { IncomingMessage } from "node:http";
 import { detectWorkspaceAt, isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
+import {
+  createConversationAttachmentStore,
+  type ConversationAttachmentStore,
+} from "./conversation-attachment-store.js";
 import { createRunRegistry } from "./runs.js";
 import type { ChatTurnSerializer } from "./chat-turn-serializer.js";
 import {
@@ -125,24 +144,6 @@ import {
   createConsolidationJobRegistry,
   type ConsolidationJobRegistry,
 } from "./memory-consolidation-registry.js";
-import type {
-  OpenAIEmbeddingBatchOutcome,
-  OpenAIEmbeddingBatchRequest,
-  OpenAIEmbeddingOutcome,
-  OpenAIEmbeddingRequest,
-  RealtimeNegotiationOutcome,
-  RealtimeNegotiationRequest,
-  RerankOutcome,
-  LiteLLMRerankRequest,
-  SpeechToTextOutcome,
-  SpeechToTextRequest,
-  TextToSpeechOutcome,
-  TextToSpeechRequest,
-  TextToSpeechStreamOutcome,
-  GatewayRequest,
-  GatewayStreamChunk,
-  NormalizedResponse,
-} from "@oscharko-dev/keiko-model-gateway";
 import {
   createRelationshipStorePort,
   type RelationshipHandlerDeps,
@@ -358,6 +359,8 @@ export type CodingSidecarGatewayModelSourceResolver = () => CodingWorkbenchModel
 export interface UiHandlerDeps {
   // The resolved gateway config, or undefined when no config file was provided / it failed to load.
   readonly config: GatewayConfig | undefined;
+  /** Encrypted, bounded local custody for browser-uploaded conversation images. */
+  readonly conversationAttachmentStore?: ConversationAttachmentStore | undefined;
   // True when a config file path was supplied AND parsed successfully.
   readonly configPresent: boolean;
   // The evidence store the evidence routes read from.
@@ -392,6 +395,8 @@ export interface UiHandlerDeps {
           capability: string,
           audience: "model-gateway" | "tool-facade",
         ) => unknown;
+        readonly reservePromptTokens?:
+          ((capability: string, promptTokens: number) => unknown) | undefined;
       }
     | undefined;
   readonly openCodeGatewayReadinessRegistry?:
@@ -717,6 +722,7 @@ export interface BuildHandlerDepsOptions {
   // Evidence directory (`keiko ui --evidence-dir`); resolved via the audit precedence rules.
   readonly evidenceDir: string | undefined;
   readonly env: EnvSource;
+  readonly conversationAttachmentStore?: ConversationAttachmentStore | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   // Optional deployment replacement for the default memory category denylist. Production leaves
   // this unset unless an operator supplies a reviewed, ReDoS-safe policy at composition time.
@@ -3367,6 +3373,7 @@ type BaseUiHandlerDeps = ReturnType<typeof gatewayConfigFields> &
     | "store"
     | "uiDbPath"
     | "preferredProjectPath"
+    | "conversationAttachmentStore"
   >;
 
 function buildBaseUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): BaseUiHandlerDeps {
@@ -3381,6 +3388,12 @@ function buildBaseUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): BaseUiHandlerD
     store: args.bundle.uiStore,
     uiDbPath: args.resolvedUiDbPath,
     preferredProjectPath: args.bundle.preferredProjectPath,
+    conversationAttachmentStore:
+      args.options.conversationAttachmentStore ??
+      createConversationAttachmentStore({
+        runtimeStateDir: dirname(args.resolvedUiDbPath),
+        env: args.options.env,
+      }),
   };
 }
 

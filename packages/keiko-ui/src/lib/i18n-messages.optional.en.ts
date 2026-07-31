@@ -1,4 +1,18 @@
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
+  "chat.turn.failed": "Turn failed",
+  "chat.turn.cancelled": "Turn cancelled",
+  "chat.contextWindow.label": "Context window notice",
+  "chat.contextWindow.notice":
+    "This transcript shows {count} turns. Context beyond the 48-turn boundary may be compacted.",
+  "chat.history.purge": "Delete permanently",
+  "chat.history.purgeConfirm": "Confirm permanent delete",
+  "chat.history.purgeWarning":
+    "Permanently delete this conversation and its stored messages? This cannot be undone.",
+  "chat.history.purgeFailed": "Permanent delete failed: {detail}",
+  "chat.regenerate.versionSelector": "Response version",
+  "chat.regenerate.version": "Version {version}",
+  "chat.regenerate.versionCurrent": "Version {version} (current)",
+  "chat.regenerate.versionSummary": "Version {version} of {count}",
   "quickAccess.empty.commands": "No matching commands.",
   "quickAccess.empty.noRoot": "No active workspace root.",
   "quickAccess.empty.startSearch": "Type to search workspace files and symbols.",

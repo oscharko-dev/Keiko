@@ -267,6 +267,31 @@ async function openSmokeEditor(
   return editorWindow;
 }
 
+function gitActionSheetRequest(projectId: string): Record<string, unknown> {
+  return {
+    schemaVersion: "1",
+    projectId,
+    resolvedInputs: {
+      kind: "commit",
+      messageByteLength: 24,
+      stagedPathCount: 2,
+      allowEmptyCommit: false,
+    },
+    worktreeSnapshot: {
+      headDetached: false,
+      currentBranchName: "feature/x",
+      stagedFileCount: 2,
+      unstagedFileCount: 0,
+      untrackedFileCount: 0,
+      hasUpstream: true,
+      aheadCount: 0,
+      behindCount: 0,
+      existingLocalBranchNames: ["feature/x", "main"],
+      remoteAliases: ["origin"],
+    },
+  };
+}
+
 test("app start exposes the workspace shell and health endpoint @smoke", async ({
   page,
   request,
@@ -299,29 +324,11 @@ test("governed Git action-sheet endpoint is wired, CSRF-protected, and returns t
   request,
 }) => {
   // Issue #473: the action-sheet BFF is read-only/computational. Against the packaged app it must
-  // return a well-formed, content-free GitDeliveryActionSheet that reaches policy evaluation and
-  // fail-closes when no trusted policy pack applies — never a 500 or raw output.
-  const body = {
-    schemaVersion: "1",
-    resolvedInputs: {
-      kind: "commit",
-      messageByteLength: 24,
-      stagedPathCount: 2,
-      allowEmptyCommit: false,
-    },
-    worktreeSnapshot: {
-      headDetached: false,
-      currentBranchName: "feature/x",
-      stagedFileCount: 2,
-      unstagedFileCount: 0,
-      untrackedFileCount: 0,
-      hasUpstream: true,
-      aheadCount: 0,
-      behindCount: 0,
-      existingLocalBranchNames: ["feature/x", "main"],
-      remoteAliases: ["origin"],
-    },
-  };
+  // return a well-formed, content-free GitDeliveryActionSheet that reaches trusted default policy
+  // evaluation and fail-closes when provider state is unavailable — never a 500 or raw output.
+  const projectId = createProjectFixture();
+  await ensureProject(request, projectId);
+  const body = gitActionSheetRequest(projectId);
 
   const ok = await request.post("/api/git-delivery/action-sheet", {
     headers: MUTATION_HEADERS,
@@ -343,9 +350,10 @@ test("governed Git action-sheet endpoint is wired, CSRF-protected, and returns t
   expect(typeof sheet.approval.necessity).toBe("string");
   expect(typeof sheet.policyExplanation.decision).toBe("string");
   expect(Array.isArray(sheet.recovery)).toBe(true);
-  // No trusted policy pack is configured in the packaged deployment -> fail-closed to a hard block.
+  // The fixture is not a Git repository, so trusted branch-protection state is unavailable and the
+  // governed preflight must fail closed without accepting browser-supplied provider facts.
   expect(sheet.state).toBe("blocked");
-  expect(sheet.blocked?.cause).toBe("policy");
+  expect(sheet.blocked?.cause).toBe("provider-not-ready");
   // Content-free guarantee: no raw repo paths or command output leaked into the response.
   expect(JSON.stringify(sheet)).not.toContain("/Users/");
 
@@ -416,11 +424,15 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
 
 test("selected workspace keeps root-relative ids and internal navigation @smoke", async ({
   page,
+  request,
 }) => {
   // The global workspace selector is the one root authority for Files, Editor, and Coding
   // Workbench. Files still supports in-root navigation and root-relative identifiers, but it does
   // not expose a second path picker that could appear to override the accepted workspace.
   const projectPath = createProjectFixture();
+  // A window cfg restores presentation state; it cannot mint server-side workspace authority.
+  // Register the fixture through the same project contract a real selected workspace uses.
+  await ensureProject(request, projectPath);
   await seedFilesWindow(page, projectPath);
   const assertNoPageErrors = collectPageErrors(page);
 

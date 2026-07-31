@@ -77,7 +77,7 @@ import {
   linkAssistantToClientTurn as sqlLinkAssistantToClientTurn,
   markClientTurnState as sqlMarkClientTurnState,
   recoverInterruptedClientTurns as sqlRecoverInterruptedClientTurns,
-  replaceAssistantMessageContent as sqlReplaceAssistantMessageContent,
+  createAssistantResponseVersion as sqlCreateAssistantResponseVersion,
   updateMessage as sqlUpdateMessage,
   validateMessage as sqlValidateMessage,
 } from "./messages.js";
@@ -363,9 +363,9 @@ function existingTurnAdmission(
   if (turn.state === "completed" && turn.assistantMessage !== undefined) {
     return { kind: "replay", userMessage: user, assistantMessage: turn.assistantMessage };
   }
-  if (turn.state === "failed") {
+  if (turn.state === "failed" || turn.state === "cancelled") {
     if (!sqlIsLatestChatMessage(db, chatId, user.id)) return { kind: "conflict" };
-    if (!sqlMarkClientTurnState(db, chatId, clientTurnId, "failed", "pending")) {
+    if (!sqlMarkClientTurnState(db, chatId, clientTurnId, turn.state, "pending")) {
       return { kind: "in-progress", userMessage: user };
     }
     return { kind: "admitted", userMessage: user };
@@ -393,7 +393,7 @@ function inspectChatTurnRecord(
       ? { kind: "conflict" }
       : { kind: "replay", userMessage: user, assistantMessage: turn.assistantMessage };
   }
-  if (turn.state === "failed") {
+  if (turn.state === "failed" || turn.state === "cancelled") {
     return sqlIsLatestChatMessage(db, chatId, user.id)
       ? { kind: "retryable", userMessage: user }
       : { kind: "conflict" };
@@ -545,10 +545,15 @@ function completeChatTurnRecord(
   return result;
 }
 
-function failChatTurnRecord(db: DatabaseSync, chatId: string, clientTurnId: string): string {
+function failChatTurnRecord(
+  db: DatabaseSync,
+  chatId: string,
+  clientTurnId: string,
+  terminalState: "failed" | "cancelled",
+): string {
   validateClientTurnId(clientTurnId);
   const storedTurnId = storedClientTurnId(chatId, clientTurnId);
-  sqlMarkClientTurnState(db, chatId, storedTurnId, "pending", "failed");
+  sqlMarkClientTurnState(db, chatId, storedTurnId, "pending", terminalState);
   return storedTurnId;
 }
 
@@ -675,8 +680,8 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
         userContent,
         assistantMessageId,
       ),
-    failChatTurn: (chatId: string, clientTurnId: string): void => {
-      const storedTurnId = failChatTurnRecord(db, chatId, clientTurnId);
+    failChatTurn: (chatId: string, clientTurnId: string, terminalState = "failed"): void => {
+      const storedTurnId = failChatTurnRecord(db, chatId, clientTurnId, terminalState);
       for (const [id, pending] of stagedTurnAssistants) {
         if (pending.clientTurnId === storedTurnId) stagedTurnAssistants.delete(id);
       }
@@ -693,8 +698,8 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
         options.redactString,
       ),
     findGroundedPreviewCitations: (id: string) => sqlFindGroundedPreviewCitations(db, id),
-    replaceAssistantMessageContent: (id: string, content: string, timestamp: number): ChatMessage =>
-      sqlReplaceAssistantMessageContent(db, id, content, timestamp),
+    createAssistantResponseVersion: (id: string, content: string, timestamp: number): ChatMessage =>
+      sqlCreateAssistantResponseVersion(db, id, content, timestamp),
     readMemoryAutonomyPolicy: () => sqlReadMemoryAutonomyPolicy(db),
     updateMemoryAutonomyPolicy: (mode, expectedRevision) =>
       sqlUpdateMemoryAutonomyPolicy(db, mode, expectedRevision),

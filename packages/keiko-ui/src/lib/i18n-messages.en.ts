@@ -460,6 +460,20 @@ export const EN_MESSAGES = {
   "agentLauncher.agent": "Agent",
   "agentLauncher.agentCount": "{count} agents",
   "agentLauncher.model": "Model",
+  "agentLauncher.autonomy": "Autonomy mode",
+  "agentLauncher.mode.governedAssist.label": "Ask for approval",
+  "agentLauncher.mode.governedAssist.description":
+    "Reads and planning proceed. The reviewed patch still requires your explicit Apply confirmation.",
+  "agentLauncher.mode.supervisedCoding.label": "Supervised workspace",
+  "agentLauncher.mode.supervisedCoding.description":
+    "Routine workspace work is admitted by policy; the dry-run review remains mandatory for this agent surface.",
+  "agentLauncher.mode.autonomousDelivery.label": "Full access",
+  "agentLauncher.mode.autonomousDelivery.description":
+    "Bounded workspace work may proceed without per-action prompts. Connector and delivery execution remain unavailable here.",
+  "agentLauncher.executionUnavailable":
+    "Connector and delivery execution are unavailable for Unit Test and Bugfix agents.",
+  "agentLauncher.governanceUnavailable":
+    "The server did not confirm an Authority Envelope. The agent run was not opened.",
   "agentLauncher.repository": "Repository",
   "agentLauncher.repositoryPlaceholder": "/absolute/repository/path",
   "agentLauncher.workflow.unitTest": "Unit Test Agent",
@@ -488,6 +502,8 @@ export const EN_MESSAGES = {
   "agentLauncher.validation.unitSource": "Unit Test Agent requires a source file.",
   "agentLauncher.validation.bugDescription": "Bugfix Agent requires an observed behavior.",
   "agentLauncher.fileOutsideRepository": "Choose a file inside the selected repository.",
+  "agentRunWidget.autonomyMode": "Effective autonomy: {mode}",
+  "agentRunWidget.executionUnavailable": "Connector and delivery execution unavailable",
   "command.group.create": "Create",
   "command.group.tools": "Tools",
   "command.group.layout": "Layout",
@@ -984,6 +1000,8 @@ export const EN_MESSAGES = {
   "attachment.rejection.oversized":
     "File is larger than the 8 MiB limit. Choose a smaller file or summarize the content as text.",
   "attachment.rejection.empty": "Empty file. Add a file with content to attach.",
+  "attachment.rejection.deliveryRefused":
+    "The image could not be stored or authorized for delivery. Add it again and retry.",
   "attachment.remove": "Remove attachment {name}",
   "attachment.pending": "Pending attachments",
   "attachment.voiceStaged": "Sent with your next spoken turn",
@@ -1005,6 +1023,9 @@ export const EN_MESSAGES = {
   "attachment.attachFile": "Attach file",
   "attachment.notSupported": "Attachments not supported",
   "attachment.docsContext": "Documents included as context",
+  "attachment.imagesDelivered": "Images delivered to the selected model",
+  "attachment.cleanupDeferred":
+    "The image was delivered. Its encrypted local copy could not be removed now and will expire automatically.",
   "attachment.docContextLabel": "Document included as context:",
   "attachment.docsContextLabel": "Documents included as context:",
   "attachment.truncated": " (truncated)",
@@ -2322,6 +2343,17 @@ export const EN_MESSAGES = {
   "gitClientWindow.sync.hint.adjustPolicyTarget": "Choose a target branch that policy permits.",
   "gitClientWindow.sync.hint.recoverViaStrategy": "Recover the working tree first.",
   "gitClientWindow.sync.hint.waitForProvider": "Wait for the provider to become available.",
+  "gitClientWindow.confirm.branchSwitch.title": "Confirm branch switch",
+  "gitClientWindow.confirm.branchSwitch.body":
+    "Switch to {branch}? Files in the working tree may change. Open editor buffers will be reconciled after Git succeeds.",
+  "gitClientWindow.confirm.branchSwitch.action": "Switch branch",
+  "gitClientWindow.confirm.pull.title": "Confirm pull",
+  "gitClientWindow.confirm.pull.body":
+    "Pull remote changes into the working tree? Open editor buffers will be reconciled after Git succeeds.",
+  "gitClientWindow.confirm.pull.action": "Pull changes",
+  "gitClientWindow.confirm.cancel": "Cancel",
+  "gitClientWindow.sync.editorReconciliationFailed":
+    "Pull completed, but editor buffers need recovery. Review open files before continuing.",
   "gitClientWindow.panel.pullRequest": "Pull Request",
   "gitClientWindow.panel.merge": "Merge",
   "gitClientWindow.action.backToDiff": "Back to diff",

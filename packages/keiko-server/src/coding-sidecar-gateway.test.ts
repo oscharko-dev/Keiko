@@ -113,6 +113,7 @@ function depsValue(
         capability === "gateway-capability-material-0000000001" && audience === "model-gateway"
           ? { ok: true, binding: { runId: "run-gateway-test" } }
           : { ok: false },
+      reservePromptTokens: () => ({ ok: true, runId: "run-gateway-test" }),
     },
   };
 }
@@ -140,9 +141,31 @@ function runtimeGatewayDeps(
   readiness = createOpenCodeGatewayReadinessRegistry(),
   streamFactory?: unknown,
 ): UiHandlerDeps {
+  let authenticatedRunId = "run-1";
+  const authenticateAndRemember = (
+    capability: string,
+    audience: "model-gateway" | "tool-facade",
+  ): unknown => {
+    const value = authenticate(capability, audience);
+    if (typeof value === "object" && value !== null && "binding" in value) {
+      const binding = value.binding;
+      if (
+        typeof binding === "object" &&
+        binding !== null &&
+        "runId" in binding &&
+        typeof binding.runId === "string"
+      ) {
+        authenticatedRunId = binding.runId;
+      }
+    }
+    return value;
+  };
   return {
     ...depsValue(configValue(provider(), capability()), chatFactory),
-    runtimeCapabilityAuthenticator: { authenticate },
+    runtimeCapabilityAuthenticator: {
+      authenticate: authenticateAndRemember,
+      reservePromptTokens: () => ({ ok: true, runId: authenticatedRunId }),
+    },
     openCodeGatewayReadinessRegistry: readiness,
     ...(streamFactory === undefined
       ? {}
@@ -532,6 +555,35 @@ describe("coding-sidecar gateway", () => {
       runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-1" } })),
     );
     expect(browser).toMatchObject({ status: 403 });
+  });
+
+  it("fails closed before provider dispatch when the cumulative prompt budget is exhausted", async () => {
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+      ),
+      runtimeCapabilityAuthenticator: {
+        authenticate: (): unknown => ({ ok: true, binding: { runId: "run-1" } }),
+        reservePromptTokens: (): unknown => ({
+          ok: false,
+          reason: "authority-budget-exceeded",
+        }),
+      },
+    };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "continue" }],
+        tools: modelVisibleTools(),
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 403 });
+    expect(chat).not.toHaveBeenCalled();
   });
 
   it("accepts exactly the pinned OpenCode v1.17.17 visible schemas by canonical digest", async () => {

@@ -100,6 +100,12 @@ export interface CodingWorkbenchRuntimeStopRequest {
   readonly requestId: string;
 }
 
+export interface CodingWorkbenchRuntimeResumeRequest {
+  readonly requestId: string;
+  /** Omitted means retain the run's current mode; supplied values may only narrow it. */
+  readonly requestedMode?: CodingWorkbenchMode | undefined;
+}
+
 export interface CodingWorkbenchRuntimeTakeoverRequest {
   readonly requestId: string;
 }
@@ -148,6 +154,22 @@ export interface CodingWorkbenchRuntimeRecoveryAcknowledgementRequest {
   readonly acknowledged: true;
 }
 
+export type CodingWorkbenchRuntimeResultStatus = "cancelled" | "failed" | "signalled" | "succeeded";
+
+export interface CodingWorkbenchRuntimeProcessSummary {
+  readonly byteCount: number;
+  readonly lineCount: number;
+  readonly sha256: string;
+  readonly truncated: boolean;
+}
+
+export interface CodingWorkbenchRuntimeResult {
+  readonly status: CodingWorkbenchRuntimeResultStatus;
+  readonly exitCode: number | null;
+  readonly output: CodingWorkbenchRuntimeProcessSummary;
+  readonly error: CodingWorkbenchRuntimeProcessSummary;
+}
+
 /**
  * Content-free status projection. `runId` is intentionally optional for unbound availability
  * states; task/workspace/authority/process/model content never crosses this boundary.
@@ -158,7 +180,10 @@ export interface CodingWorkbenchRuntimeSnapshot {
   readonly revision: number;
   readonly updatedAt: string;
   readonly runId?: string | undefined;
+  /** Original start/retry intent; never rewritten by a narrower resume. */
   readonly requestedMode?: CodingWorkbenchMode | undefined;
+  /** Server-confirmed live authority after ceiling and resume narrowing. */
+  readonly effectiveMode?: CodingWorkbenchMode | undefined;
   readonly runtimeSource?: CodingWorkbenchRuntimeSource | undefined;
   readonly modelSource?: CodingWorkbenchModelSource | undefined;
   readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
@@ -166,6 +191,8 @@ export interface CodingWorkbenchRuntimeSnapshot {
   readonly recoveryAcknowledged?: true | undefined;
   /** Present exactly while the runtime is awaiting an operator decision. */
   readonly pendingPermission?: CodingWorkbenchRuntimePendingPermission | undefined;
+  /** Terminal, body-free process outcome; never contains stdout or stderr content. */
+  readonly result?: CodingWorkbenchRuntimeResult | undefined;
 }
 
 export type CodingWorkbenchRuntimeStatus = CodingWorkbenchRuntimeSnapshot;
@@ -271,6 +298,18 @@ export function parseCodingWorkbenchRuntimeStopRequest(
   return parseRequestIdOnly(value, "stopRequest");
 }
 
+export function parseCodingWorkbenchRuntimeResumeRequest(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeResumeRequest> {
+  if (!isRecord(value)) return invalid("runtime resume request must be an object");
+  const errors = exactKeys(value, ["requestId", "requestedMode"], "runtimeResume");
+  validateRequestId(value.requestId, errors);
+  if (value.requestedMode !== undefined && !isOneOf(value.requestedMode, CODING_WORKBENCH_MODES)) {
+    errors.push("requestedMode is invalid");
+  }
+  return result(value, errors);
+}
+
 export function parseCodingWorkbenchRuntimeTakeoverRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeTakeoverRequest> {
@@ -332,16 +371,69 @@ export function validateCodingWorkbenchRuntimeSnapshot(
       "updatedAt",
       "runId",
       "requestedMode",
+      "effectiveMode",
       "runtimeSource",
       "modelSource",
       "failureCode",
       "recoveryAcknowledged",
       "pendingPermission",
+      "result",
     ],
     "runtimeSnapshot",
   );
   validateSnapshotFields(value, errors);
+  validateRuntimeResult(value.result, errors);
+  if (
+    value.result !== undefined &&
+    !["succeeded", "failed", "cancelled", "taken-over"].includes(String(value.state))
+  ) {
+    errors.push("result is permitted only on a terminal snapshot");
+  }
   return result(value, errors);
+}
+
+function validateRuntimeResult(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    errors.push("result must be an object");
+    return;
+  }
+  errors.push(...exactKeys(value, ["status", "exitCode", "output", "error"], "result"));
+  if (!["cancelled", "failed", "signalled", "succeeded"].includes(String(value.status))) {
+    errors.push("result.status is invalid");
+  }
+  if (
+    value.exitCode !== null &&
+    (!Number.isSafeInteger(value.exitCode) ||
+      Number(value.exitCode) < 0 ||
+      Number(value.exitCode) > 255)
+  ) {
+    errors.push("result.exitCode is invalid");
+  }
+  validateProcessSummary(value.output, "result.output", errors);
+  validateProcessSummary(value.error, "result.error", errors);
+}
+
+function validateProcessSummary(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push(`${path} must be an object`);
+    return;
+  }
+  errors.push(...exactKeys(value, ["byteCount", "lineCount", "sha256", "truncated"], path));
+  if (!validBoundedCount(value.byteCount, 1_073_741_824)) {
+    errors.push(`${path}.byteCount is invalid`);
+  }
+  if (!validBoundedCount(value.lineCount, 1_000_000)) {
+    errors.push(`${path}.lineCount is invalid`);
+  }
+  if (typeof value.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(value.sha256)) {
+    errors.push(`${path}.sha256 is invalid`);
+  }
+  if (typeof value.truncated !== "boolean") errors.push(`${path}.truncated is invalid`);
+}
+
+function validBoundedCount(value: unknown, maximum: number): boolean {
+  return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= maximum;
 }
 
 // A status read validates the identical snapshot shape; the distinct name documents the read call
@@ -461,6 +553,8 @@ function validateOptionalSnapshotFields(value: Record<string, unknown>, errors: 
     validateSafeId(value.runId, "runId", errors, CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS);
   }
   validateOptionalEnum(value.requestedMode, CODING_WORKBENCH_MODES, "requestedMode", errors);
+  validateOptionalEnum(value.effectiveMode, CODING_WORKBENCH_MODES, "effectiveMode", errors);
+  validateSnapshotModeRelationship(value, errors);
   validateOptionalEnum(
     value.runtimeSource,
     CODING_WORKBENCH_RUNTIME_SOURCES,
@@ -468,6 +562,22 @@ function validateOptionalSnapshotFields(value: Record<string, unknown>, errors: 
     errors,
   );
   validateOptionalEnum(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES, "modelSource", errors);
+}
+
+function validateSnapshotModeRelationship(value: Record<string, unknown>, errors: string[]): void {
+  const requested = value.requestedMode;
+  const effective = value.effectiveMode;
+  if (effective === undefined) return;
+  if (!isOneOf(requested, CODING_WORKBENCH_MODES)) {
+    errors.push("requestedMode is required when effectiveMode is present");
+    return;
+  }
+  if (
+    isOneOf(effective, CODING_WORKBENCH_MODES) &&
+    isCodingWorkbenchModeWidening(requested, effective)
+  ) {
+    errors.push("effectiveMode must not widen past requestedMode");
+  }
 }
 
 function validateOptionalEnum(

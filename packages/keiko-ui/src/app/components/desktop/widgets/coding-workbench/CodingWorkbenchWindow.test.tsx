@@ -618,6 +618,44 @@ describe("CodingWorkbenchWindow", () => {
     expect(liveActions.acknowledgeRecovery).toHaveBeenCalledOnce();
   });
 
+  it("shows an accessible body-free terminal result without rendering hostile process text", async () => {
+    renderWorkbench(
+      liveState({
+        canStart: false,
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "failed",
+            runId: "run-1",
+            result: {
+              status: "failed",
+              exitCode: 9,
+              output: {
+                byteCount: 22,
+                lineCount: 1,
+                sha256: "a".repeat(64),
+                truncated: false,
+              },
+              error: {
+                byteCount: 17,
+                lineCount: 2,
+                sha256: "b".repeat(64),
+                truncated: true,
+              },
+            },
+          }),
+        },
+      }),
+    );
+
+    expect(screen.getByRole("heading", { name: "Body-free process summary" })).toBeInTheDocument();
+    expect(screen.getByText("9")).toBeInTheDocument();
+    expect(screen.getByText("a".repeat(64))).toBeInTheDocument();
+    expect(screen.queryByText(/hostile-process-body/u)).not.toBeInTheDocument();
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
   // 0.3.0 release audit: `RuntimeControls` rendered nothing for a paused run, and these two
   // buttons are the ONLY call sites of `actions.stop` and `actions.takeover` in the whole UI — so
   // a paused run offered no way to end it at all, while the server admits stop and takeover from
@@ -639,6 +677,86 @@ describe("CodingWorkbenchWindow", () => {
     expect(liveActions.stop).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Take over manually" }));
     expect(liveActions.takeover).toHaveBeenCalledOnce();
+  });
+
+  it("resumes a full-access run with the explicitly selected supervised mode", async () => {
+    const user = userEvent.setup();
+    const liveActions = actions();
+    const pausedState = liveState({
+      canStart: false,
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "paused",
+          runId: "run-1",
+          requestedMode: "autonomous-delivery",
+          effectiveMode: "autonomous-delivery",
+        }),
+      },
+    });
+    runtimeHookMock.mockReturnValue({ state: pausedState, actions: liveActions });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    const selector = screen.getByRole("combobox", { name: "Resume autonomy" });
+    expect(screen.getByRole("option", { name: "Full access" })).toBeInTheDocument();
+    await user.selectOptions(selector, "supervised-coding");
+    await user.click(screen.getByRole("button", { name: "Resume run" }));
+
+    expect(liveActions.resume).toHaveBeenCalledWith("supervised-coding");
+    expect(document.querySelector('[data-mode="autonomous-delivery"]')).toHaveTextContent(
+      "Full access",
+    );
+
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        canStart: false,
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "running",
+            runId: "run-1",
+            requestedMode: "autonomous-delivery",
+            effectiveMode: "supervised-coding",
+          }),
+        },
+      }),
+      actions: liveActions,
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    expect(document.querySelector('[data-mode="autonomous-delivery"]')).not.toBeInTheDocument();
+    expect(document.querySelector('[data-mode="supervised-coding"]')).toHaveTextContent(
+      "Supervised workspace",
+    );
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it("offers no widening mode when a supervised run is paused", () => {
+    renderWorkbench(
+      liveState({
+        canStart: false,
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "paused",
+            runId: "run-1",
+            requestedMode: "autonomous-delivery",
+            effectiveMode: "supervised-coding",
+          }),
+        },
+      }),
+    );
+
+    expect(screen.getByRole("combobox", { name: "Resume autonomy" })).toHaveValue(
+      "supervised-coding",
+    );
+    expect(screen.queryByRole("option", { name: "Full access" })).not.toBeInTheDocument();
+    expect(document.querySelector('[data-mode="supervised-coding"]')).toHaveTextContent(
+      "Supervised workspace",
+    );
   });
 
   // Same root cause, higher consequence. `activeRunState` also drives the headless editor-bridge

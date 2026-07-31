@@ -240,6 +240,16 @@ function service(): CodingRuntimeAuthorityService {
   );
 }
 
+function promptBudgetService(): CodingRuntimeAuthorityService {
+  return new CodingRuntimeAuthorityService(
+    new EditorAgentAuthorityRegistry(),
+    () => "run-1",
+    () => "nonce-1",
+    undefined,
+    createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.parse(NOW) }),
+  );
+}
+
 function mint(
   authority: CodingRuntimeAuthorityService,
   startIntent = intent,
@@ -302,6 +312,91 @@ function serviceInState(state: CodingWorkbenchRuntimeStateName): {
 }
 
 describe("CodingRuntimeAuthorityService", () => {
+  it("atomically charges the exact prompt budget and fails closed after exhaustion", async () => {
+    const authority = promptBudgetService();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    expect(authority.state()).toMatchObject({ state: "running", runId: "run-1" });
+    expect(
+      authority.authenticateCapability(
+        minted.modelGatewayCapability,
+        "model-gateway",
+        Date.parse(NOW),
+      ),
+    ).toMatchObject({ ok: true, binding: { runId: "run-1" } });
+
+    expect(
+      authority.reservePromptTokens(minted.modelGatewayCapability, 10_000, Date.parse(NOW)),
+    ).toEqual({ ok: true, runId: "run-1" });
+    expect(
+      authority.reservePromptTokens(minted.modelGatewayCapability, 1, Date.parse(NOW)),
+    ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
+
+    const concurrent = promptBudgetService();
+    const concurrentMint = mint(concurrent);
+    if (!concurrentMint.ok) throw new Error("expected mint");
+    const reservations = await Promise.all(
+      Array.from({ length: 2 }, async () => {
+        await Promise.resolve();
+        return concurrent.reservePromptTokens(
+          concurrentMint.modelGatewayCapability,
+          6_000,
+          Date.parse(NOW),
+        );
+      }),
+    );
+    expect(reservations.filter((result) => result.ok)).toHaveLength(1);
+    expect(reservations.filter((result) => !result.ok)).toEqual([
+      { ok: false, reason: "authority-budget-exceeded" },
+    ]);
+  });
+
+  it("revalidates expiry and permits only idempotent or monotonically narrower resume", () => {
+    const authority = service();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+
+    expect(authority.pause("run-1", NOW)).toEqual({ ok: true, effectiveMode: "supervised-coding" });
+    expect(authority.pause("run-1", NOW)).toEqual({ ok: true, effectiveMode: "supervised-coding" });
+    expect(authority.resume("run-1", "governed-assist", NOW)).toEqual({
+      ok: true,
+      effectiveMode: "governed-assist",
+    });
+    expect(authority.resume("run-1", "governed-assist", NOW)).toEqual({
+      ok: true,
+      effectiveMode: "governed-assist",
+    });
+    expect(authority.pause("run-1", NOW)).toMatchObject({ ok: true });
+    expect(authority.resume("run-1", "supervised-coding", NOW)).toEqual({
+      ok: false,
+      reason: "authority-resolution-failed",
+    });
+    expect(authority.resume("run-1", "governed-assist", context().expiresAt)).toEqual({
+      ok: false,
+      reason: "authority-expired",
+    });
+  });
+
+  it("fails pause closed when retained authority is expired or revoked", () => {
+    const expired = service();
+    expect(mint(expired)).toMatchObject({ ok: true });
+    expect(expired.pause("run-1", context().expiresAt)).toEqual({
+      ok: false,
+      reason: "authority-expired",
+    });
+
+    const registry = new EditorAgentAuthorityRegistry();
+    const revoked = new CodingRuntimeAuthorityService(
+      registry,
+      () => "run-1",
+      () => "nonce-1",
+    );
+    const minted = mint(revoked);
+    if (!minted.ok) throw new Error("expected mint");
+    registry.revoke(minted.authorityRef);
+    expect(revoked.pause("run-1", NOW)).toEqual({ ok: false, reason: "revoked" });
+  });
+
   it("uses a one-use confirmation to mint retained server authority", () => {
     const authority = service();
     const trusted = context();

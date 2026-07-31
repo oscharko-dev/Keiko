@@ -983,6 +983,19 @@ function applyChatUpdate(deps: UiHandlerDeps, id: string, patch: UpdateChatPatch
 // Route 20 — DELETE /api/chats?id=...
 // ──────────────────────────────────────────────────────────────────────────
 
+function requireChatPurgeConfirmation(body: Record<string, unknown>, chatId: string): string {
+  const projectPath = requireString(body, "projectPath");
+  const confirmation = body.confirmation;
+  if (typeof confirmation !== "object" || confirmation === null || Array.isArray(confirmation)) {
+    throw new InvalidRequest("Irreversible chat deletion confirmation is required.");
+  }
+  const record = confirmation as Record<string, unknown>;
+  if (record.chatId !== chatId || record.irreversible !== true) {
+    throw new InvalidRequest("Irreversible chat deletion confirmation does not match the target.");
+  }
+  return projectPath;
+}
+
 export async function handleDeleteChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -991,7 +1004,13 @@ export async function handleDeleteChat(
   try {
     return await runHandler(async () => {
       const id = requireQuery(ctx, "id");
+      const body = await readJsonObject(ctx.req);
+      const projectPath = requireChatPurgeConfirmation(body, id);
+      if (!chatBelongsToProject(deps, projectPath, id)) return notFoundResult("Chat not found.");
       const result = await runSerializedChatTurn(deps, id, cancellation.signal, (): RouteResult => {
+        // Fail closed: encrypted image custody is purged before the SQLite chat row. A vault fault
+        // leaves the chat intact, so the UI can retry rather than orphaning content-bearing blobs.
+        deps.conversationAttachmentStore?.deleteForChat(projectPath, id);
         deps.store.deleteChat(id);
         clearGroundedContextIndexesForConversation(id);
         clearGroundedTurnsForConversation(id);

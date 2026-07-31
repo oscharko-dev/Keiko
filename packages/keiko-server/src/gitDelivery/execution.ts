@@ -34,6 +34,7 @@ import type { UiHandlerDeps } from "../deps.js";
 import { resolveRegisteredOrManagedWorkspaceRoot } from "../task-workspace/authorization.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
+import type { GitDeliveryBranchProtectionReader } from "./branchProtectionPreflight.js";
 import { recordGitDeliveryMutationEvidence } from "./mutationEvidenceLedger.js";
 
 // Default trusted policy: PERMIT the lowest risk class (local-mutation = branch create/switch, stage,
@@ -58,6 +59,7 @@ export interface GitDeliveryExecutionSeams {
     ((workspace: WorkspaceInfo) => Promise<readonly string[]>) | undefined;
   // Injectable seam for the staged-conflict-marker guard (see readStagedConflictMarkerFileCountFor).
   readonly conflictMarkerReader?: ((workspace: WorkspaceInfo) => Promise<number>) | undefined;
+  readonly branchProtectionReader?: GitDeliveryBranchProtectionReader | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
   readonly now?: (() => number) | undefined;

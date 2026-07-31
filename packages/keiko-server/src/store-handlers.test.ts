@@ -1609,6 +1609,28 @@ describe("PATCH /api/chats", () => {
 
 // ─── Route 20: DELETE /api/chats ─────────────────────────────────────────────
 describe("DELETE /api/chats", () => {
+  it("fails closed when irreversible confirmation is missing or targets another chat", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    const missing = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+      method: "DELETE",
+      headers: DELETE_HEADERS,
+      body: "{}",
+    });
+    const mismatched = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+      method: "DELETE",
+      headers: DELETE_HEADERS,
+      body: JSON.stringify({
+        projectPath: projDir,
+        confirmation: { chatId: "different-chat", irreversible: true },
+      }),
+    });
+
+    expect(missing.status).toBe(400);
+    expect(mismatched.status).toBe(400);
+    expect(store.findChatById(chat.id)).toBeDefined();
+  });
+
   it("cancels a queued deletion when the unfinished response closes", async () => {
     store.createProject(projDir);
     const chat = store.createChat(projDir, "t", "m");
@@ -1621,7 +1643,13 @@ describe("DELETE /api/chats", () => {
     });
     await predecessorStarted.promise;
     const observedSignal = deferred<AbortSignal>();
-    const fixture = directRouteContext(`/api/chats?id=${encodeURIComponent(chat.id)}`);
+    const fixture = directRouteContext(
+      `/api/chats?id=${encodeURIComponent(chat.id)}`,
+      JSON.stringify({
+        projectPath: projDir,
+        confirmation: { chatId: chat.id, irreversible: true },
+      }),
+    );
     const outcome = handleDeleteChat(
       fixture.ctx,
       deps({ chatTurnSerializer: observeSerializedSignal(serializer, observedSignal) }),
@@ -1658,10 +1686,43 @@ describe("DELETE /api/chats", () => {
     const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
       method: "DELETE",
       headers: DELETE_HEADERS,
+      body: JSON.stringify({
+        projectPath: projDir,
+        confirmation: { chatId: c.id, irreversible: true },
+      }),
     });
     expect(res.status).toBe(204);
     expect(store.listChats(projDir)).toHaveLength(0);
     expect(store.listMessages(c.id)).toHaveLength(0);
+  });
+
+  it("keeps the chat intact when encrypted attachment purge fails", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    const fixture = directRouteContext(
+      `/api/chats?id=${encodeURIComponent(chat.id)}`,
+      JSON.stringify({
+        projectPath: projDir,
+        confirmation: { chatId: chat.id, irreversible: true },
+      }),
+    );
+    const attachmentStore = {
+      put: (): never => {
+        throw new Error("not used");
+      },
+      resolve: (): never => {
+        throw new Error("not used");
+      },
+      deleteBound: (): void => undefined,
+      deleteForChat: (): never => {
+        throw new Error("sealed store unavailable");
+      },
+    };
+
+    await expect(
+      handleDeleteChat(fixture.ctx, deps({ conversationAttachmentStore: attachmentStore })),
+    ).rejects.toThrow("sealed store unavailable");
+    expect(store.findChatById(chat.id)).toBeDefined();
   });
 
   it("clears grounded context indexes when a chat is deleted", async () => {
@@ -1672,6 +1733,10 @@ describe("DELETE /api/chats", () => {
     const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
       method: "DELETE",
       headers: DELETE_HEADERS,
+      body: JSON.stringify({
+        projectPath: projDir,
+        confirmation: { chatId: c.id, irreversible: true },
+      }),
     });
     expect(res.status).toBe(204);
     expect(groundedContextIndexRegistry.size()).toBe(0);
@@ -1681,6 +1746,10 @@ describe("DELETE /api/chats", () => {
     const res = await fetch(url("/api/chats?id=nope"), {
       method: "DELETE",
       headers: DELETE_HEADERS,
+      body: JSON.stringify({
+        projectPath: projDir,
+        confirmation: { chatId: "nope", irreversible: true },
+      }),
     });
     expect(res.status).toBe(404);
   });

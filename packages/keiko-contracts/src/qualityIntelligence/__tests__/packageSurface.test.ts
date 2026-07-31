@@ -12,6 +12,8 @@ const requiredValueExports: readonly string[] = [
   "QUALITY_INTELLIGENCE_SCHEMA_VERSION",
   "QUALITY_INTELLIGENCE_EVENT_SCHEMA_VERSION",
   "QUALITY_INTELLIGENCE_AUDIT_MANIFEST_SCHEMA_VERSION",
+  "QUALITY_INTELLIGENCE_DEFAULT_RETENTION_POLICY_ID",
+  "QUALITY_INTELLIGENCE_RETENTION_POLICY_IDS",
   "QUALITY_INTELLIGENCE_SOURCE_KINDS",
   "QUALITY_INTELLIGENCE_EVIDENCE_ATOM_KINDS",
   "QUALITY_INTELLIGENCE_REDACTION_STATUSES",
@@ -47,6 +49,7 @@ const requiredValueExports: readonly string[] = [
   "asQualityIntelligenceEvidenceAtomId",
   "asQualityIntelligenceAuditSummaryId",
   "validateQualityIntelligenceIdString",
+  "isQualityIntelligenceRetentionPolicyId",
   "isQualityIntelligenceReviewAction",
   "isTerminalReviewState",
   "reviewActionResultState",
@@ -56,10 +59,13 @@ const requiredValueExports: readonly string[] = [
   "assertRunEventSequenceMonotonic",
   "hasCanonicalSha256Hash",
   "looksLikeBrowserSafeSourceEnvelope",
+  "resolveQualityIntelligenceRetentionPolicyId",
 ];
 
 const QI_SOURCE_FILES: readonly string[] = [
   "ids.ts",
+  "retentionPolicy.ts",
+  "retentionPolicy.test.ts",
   "assertNever.ts",
   "sourceEnvelope.ts",
   "evidenceAtom.ts",

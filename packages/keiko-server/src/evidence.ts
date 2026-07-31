@@ -62,6 +62,7 @@ export function persistWorkflowEvidence(
   events: readonly StreamEvent[],
   ctx: EvidencePersistContext,
   governedHandoff?: EvidenceManifest["governedHandoff"],
+  autonomy?: EvidenceManifest["autonomy"],
 ): EvidenceReport {
   return persistWorkflowEvidenceCore(
     {
@@ -77,7 +78,7 @@ export function persistWorkflowEvidence(
     report,
     events,
     { ...ctx, costClassResolver: resolveCostClass },
-    { governedHandoff, includeDiff: true },
+    { governedHandoff, autonomy, includeDiff: true },
   );
 }
 

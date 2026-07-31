@@ -80,6 +80,7 @@ describe("coding runtime control plane", () => {
           }),
         health: () => ({ status: "stopped" }),
         pendingApprovalReview: () => undefined,
+        result: () => undefined,
       }),
       launchResolver: {
         resolve: () => ({

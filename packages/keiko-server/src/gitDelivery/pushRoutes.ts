@@ -14,6 +14,7 @@
 // diff content, secrets, or credentials. CSRF + JSON content type are enforced centrally by server.ts.
 
 import type { GitPushCommand } from "@oscharko-dev/keiko-tools";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
@@ -38,6 +39,11 @@ import {
   scanUnsafeFormatChars,
 } from "./requestGuards.js";
 import { prepareGitDeliveryRequest, type GitDeliveryRequestErrors } from "./requestPreparation.js";
+import {
+  readTrustedGitDeliveryBranchProtection,
+  signatureRequirementOf,
+  type GitDeliverySignatureRequirement,
+} from "./branchProtectionPreflight.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 
@@ -148,6 +154,21 @@ function validate(parsed: unknown): Validation {
   return { kind: "ok", value: { projectId: parsed.projectId, command, approval } };
 }
 
+async function pushSignatureRequirement(
+  workspace: WorkspaceInfo,
+  command: GitPushCommand,
+  seams: GitDeliveryPublishSeams,
+): Promise<GitDeliverySignatureRequirement> {
+  const reader = seams.branchProtectionReader ?? readTrustedGitDeliveryBranchProtection;
+  try {
+    return signatureRequirementOf(
+      await reader(workspace, command.remoteAlias, command.remoteBranchName),
+    );
+  } catch {
+    return "unavailable";
+  }
+}
+
 // ─── Preview handler (read-only) ────────────────────────────────────────────────────────────────
 
 export const createHandlePushPreview = (
@@ -163,9 +184,12 @@ export const createHandlePushPreview = (
     const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_PUBLISH_POLICY_PACK };
     try {
       const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
+      const signatureRequirement = await pushSignatureRequirement(workspace, command, seams);
       return {
         status: 200,
-        body: deps.redactor(buildGitDeliveryPushPreview(command, snapshot, packs)),
+        body: deps.redactor(
+          buildGitDeliveryPushPreview(command, snapshot, packs, signatureRequirement),
+        ),
       };
     } catch {
       return errResult(409, "GIT_DELIVERY_PUSH_WORKTREE_UNAVAILABLE");

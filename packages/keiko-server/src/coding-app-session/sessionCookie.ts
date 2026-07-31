@@ -22,7 +22,9 @@ export const APP_SESSION_GIT_COOKIE_PATH = "/api/git";
 export const APP_SESSION_FILES_COOKIE_PATH = "/api/files";
 export const APP_SESSION_EDITOR_COOKIE_PATH = "/api/editor";
 export const APP_SESSION_RUNTIME_COOKIE_PATH = "/api/runtime";
+export const APP_SESSION_RUNS_COOKIE_PATH = "/api/runs";
 export const APP_SESSION_WORKSPACES_COOKIE_PATH = "/api/workspaces";
+export const APP_SESSION_DESKTOP_COOKIE_PATH = "/api/desktop/chat";
 
 export interface SessionCookieOptions {
   readonly secure: boolean;
@@ -68,7 +70,9 @@ export function serializeSessionCookies(
     projection(APP_SESSION_FILES_COOKIE_PATH),
     projection(APP_SESSION_EDITOR_COOKIE_PATH),
     projection(APP_SESSION_RUNTIME_COOKIE_PATH),
+    projection(APP_SESSION_RUNS_COOKIE_PATH),
     projection(APP_SESSION_WORKSPACES_COOKIE_PATH),
+    projection(APP_SESSION_DESKTOP_COOKIE_PATH),
     // Retire both predecessor projections. Otherwise a browser may send the old, narrower cookie
     // alongside the new editor projection under the same name and leave ordering browser-dependent.
     expiredCookie(options.secure, APP_SESSION_RETIRED_LOCAL_HISTORY_COOKIE_PATH),
@@ -91,7 +95,9 @@ export function clearSessionCookies(secure: boolean): readonly string[] {
     expire(APP_SESSION_FILES_COOKIE_PATH),
     expire(APP_SESSION_EDITOR_COOKIE_PATH),
     expire(APP_SESSION_RUNTIME_COOKIE_PATH),
+    expire(APP_SESSION_RUNS_COOKIE_PATH),
     expire(APP_SESSION_WORKSPACES_COOKIE_PATH),
+    expire(APP_SESSION_DESKTOP_COOKIE_PATH),
     expire(APP_SESSION_RETIRED_LOCAL_HISTORY_COOKIE_PATH),
     expire(APP_SESSION_LEGACY_COOKIE_PATH),
   ];

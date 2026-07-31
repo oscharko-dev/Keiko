@@ -20,6 +20,7 @@ function renderComposer(
       onTaskIntentChange={vi.fn()}
       actions={actions}
       canStart
+      canResume
       runState={runState}
       mutationPending={false}
       startBusy={false}

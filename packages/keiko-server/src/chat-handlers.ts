@@ -21,6 +21,7 @@ import {
   DEFAULT_CONTEXT_PROFILE,
   type ConversationDocumentContextWire,
   type DiscussionMode,
+  type ChatMessageContentPart,
 } from "@oscharko-dev/keiko-contracts";
 import {
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
@@ -33,6 +34,7 @@ import {
   type ConversationMemoryResultWire,
   type DesktopChatSendRequestWire,
   type DesktopChatSendResponse,
+  CONVERSATION_IMAGE_DELIVERY_INTENT,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   MemoryAuditEvent,
@@ -134,6 +136,8 @@ import {
 } from "./chat-prompt-budget.js";
 import { MAX_CONTEXT_MESSAGES, usableGatewayMessages } from "./conversation-gateway.js";
 import type { GatewayConversationMessage } from "./conversation-gateway.js";
+import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
+import { ConversationAttachmentStoreError } from "./conversation-attachment-store.js";
 export {
   MAX_CONTEXT_MESSAGES,
   conversationForGateway,
@@ -307,6 +311,12 @@ function gatewayErrorResult(error: GatewayError, deps: UiHandlerDeps): RouteResu
 }
 
 export function desktopChatErrorResult(error: unknown, deps: UiHandlerDeps): RouteResult {
+  if (error instanceof ConversationAttachmentStoreError) {
+    return {
+      status: 409,
+      body: errorBody("INVALID_REQUEST", "Conversation image delivery was refused."),
+    };
+  }
   if (error instanceof GatewayError) {
     return gatewayErrorResult(error, deps);
   }
@@ -337,6 +347,13 @@ export type SendDesktopChatRequest = Omit<
   // shapes the additive directive block on the latest user turn and is NEVER replayed into
   // compacted history. An unknown value is dropped to `undefined` (backward-compatible default).
   readonly discussionMode: DesktopChatSendRequestWire["discussionMode"];
+  readonly attachmentAuthority?:
+    | {
+        readonly sessionId: string;
+        readonly sessionRotationCount: number;
+        readonly revalidate: () => boolean;
+      }
+    | undefined;
 };
 
 interface RegenerateDesktopChatRequest {
@@ -455,22 +472,42 @@ export function parseMemoryRequest(
 }
 
 const MAX_ATTACHMENT_ENTRIES = 16;
+const CONTENT_FREE_ATTACHMENT_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+function attachmentKind(value: unknown): ConversationAttachment["kind"] | undefined {
+  return value === "image" || value === "document" ? value : undefined;
+}
+
+function validAttachmentSize(value: unknown): value is number {
+  return (
+    typeof value === "number" && value >= 0 && Number.isFinite(value) && Number.isInteger(value)
+  );
+}
+
+function contentFreeAttachmentId(value: unknown): string | undefined {
+  return typeof value === "string" && CONTENT_FREE_ATTACHMENT_ID.test(value) ? value : undefined;
+}
 
 function parseAttachmentEntry(value: unknown): ConversationAttachment | undefined {
   if (!isRecord(value)) return undefined;
-  const kind = value.kind;
-  if (kind !== "image" && kind !== "document") return undefined;
+  const kind = attachmentKind(value.kind);
+  if (kind === undefined) return undefined;
   const mimeType = pickString(value, "mimeType");
-  const sizeBytes = pickNumber(value, "sizeBytes");
   if (mimeType === undefined || mimeType.length === 0) return undefined;
-  if (
-    sizeBytes === undefined ||
-    sizeBytes < 0 ||
-    !Number.isFinite(sizeBytes) ||
-    !Number.isInteger(sizeBytes)
-  )
-    return undefined;
-  return { kind, mimeType, sizeBytes };
+  const sizeBytes = value.sizeBytes;
+  if (!validAttachmentSize(sizeBytes)) return undefined;
+  const id = contentFreeAttachmentId(value.id);
+  const attachmentRef = pickString(value, "attachmentRef");
+  const sha256 = pickString(value, "sha256");
+  return {
+    kind,
+    mimeType,
+    sizeBytes,
+    ...(id === undefined ? {} : { id }),
+    ...(attachmentRef === undefined ? {} : { attachmentRef }),
+    ...(sha256 === undefined ? {} : { sha256 }),
+  };
 }
 
 function parseAttachments(value: unknown): readonly ConversationAttachment[] {
@@ -663,6 +700,10 @@ function sendRequestFromBody(body: Record<string, unknown>): SendDesktopChatRequ
     modelId: typeof body.modelId === "string" && body.modelId.length > 0 ? body.modelId : undefined,
     documentContext: parseDocumentContext(body.documentContext),
     attachments: parseAttachments(body.attachments),
+    attachmentIntent:
+      body.attachmentIntent === CONVERSATION_IMAGE_DELIVERY_INTENT
+        ? CONVERSATION_IMAGE_DELIVERY_INTENT
+        : undefined,
     memory,
     discussionMode: parseDiscussionMode(body.discussionMode),
     ...(clientTurnId === undefined ? {} : { clientTurnId }),
@@ -876,9 +917,13 @@ export function completeDesktopChatTurn(
   return [completion.userMessage, completion.assistantMessage];
 }
 
-export function failDesktopChatTurn(deps: UiHandlerDeps, request: SendDesktopChatRequest): void {
+export function failDesktopChatTurn(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  terminalState: "failed" | "cancelled" = "failed",
+): void {
   if (request.clientTurnId !== undefined) {
-    deps.store.failChatTurn(request.chatId, request.clientTurnId);
+    deps.store.failChatTurn(request.chatId, request.clientTurnId, terminalState);
   }
 }
 
@@ -1637,52 +1682,73 @@ async function persistModelChatTurn(
   prepared: PreparedDesktopChatSend,
   abortSignal: AbortSignal,
 ): Promise<RouteResult> {
-  const { request, modelId, memoryContext } = prepared;
+  const { request } = prepared;
   // ADR-0057 D3: pin the pre-user-message count BEFORE createUserMessage stores the turn, so the
   // compaction-evidence runId is collision-free and matches the streaming path's lifecycle moment.
   const messageCountBeforeTurn = deps.store.countMessages(request.chatId);
   const startedAt = Date.now();
   try {
-    const admitted = admitBufferedModelTurn(deps, prepared);
-    if (isRouteResult(admitted)) return admitted;
-    const { userMessage, model } = admitted;
-    const gatewayTurn = captureGatewayTurnSnapshot(deps, request, userMessage);
-    const memory =
-      memoryContext === undefined
-        ? emptyMemoryResult(false)
-        : await buildMemoryResult(request, deps, memoryContext);
-    if (requestSignalAborted(abortSignal)) {
-      failDesktopChatTurn(deps, request);
-      return requestCancelledResult();
-    }
-    const assembly = buildGatewayAssembly(deps, request, memory, modelId, gatewayTurn);
-    const response = await model.call(
-      { modelId, messages: assembly.messages, stream: false },
-      abortSignal,
-    );
-    if (requestSignalAborted(abortSignal)) {
-      failDesktopChatTurn(deps, request);
-      return requestCancelledResult();
-    }
-    return await finalizeAndRecordBufferedTurn(
+    return await executeBufferedModelTurn(
       deps,
       prepared,
-      memory,
-      { userMessage, response },
       abortSignal,
-      {
-        assembly,
-        messageCount: messageCountBeforeTurn,
-        startedAt,
-        historyPrefix: gatewayHistoryPrefix(gatewayTurn),
-      },
+      messageCountBeforeTurn,
+      startedAt,
     );
   } catch (error) {
-    failDesktopChatTurn(deps, request);
-    return requestSignalAborted(abortSignal)
-      ? requestCancelledResult()
-      : desktopChatErrorResult(error, deps);
+    const cancelled = requestSignalAborted(abortSignal);
+    failDesktopChatTurn(deps, request, cancelled ? "cancelled" : "failed");
+    return cancelled ? requestCancelledResult() : desktopChatErrorResult(error, deps);
   }
+}
+
+async function executeBufferedModelTurn(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  abortSignal: AbortSignal,
+  messageCountBeforeTurn: number,
+  startedAt: number,
+): Promise<RouteResult> {
+  const { request, modelId, memoryContext } = prepared;
+  const admitted = admitBufferedModelTurn(deps, prepared);
+  if (isRouteResult(admitted)) return admitted;
+  const { userMessage, model } = admitted;
+  const gatewayTurn = captureGatewayTurnSnapshot(deps, request, userMessage);
+  const memory =
+    memoryContext === undefined
+      ? emptyMemoryResult(false)
+      : await buildMemoryResult(request, deps, memoryContext);
+  if (requestSignalAborted(abortSignal)) {
+    failDesktopChatTurn(deps, request, "cancelled");
+    return requestCancelledResult();
+  }
+  const assembly = assemblyWithConversationImages(
+    deps,
+    request,
+    modelId,
+    buildGatewayAssembly(deps, request, memory, modelId, gatewayTurn),
+  );
+  const response = await model.call(
+    { modelId, messages: assembly.messages, stream: false },
+    abortSignal,
+  );
+  if (requestSignalAborted(abortSignal)) {
+    failDesktopChatTurn(deps, request, "cancelled");
+    return requestCancelledResult();
+  }
+  return finalizeAndRecordBufferedTurn(
+    deps,
+    prepared,
+    memory,
+    { userMessage, response },
+    abortSignal,
+    {
+      assembly,
+      messageCount: messageCountBeforeTurn,
+      startedAt,
+      historyPrefix: gatewayHistoryPrefix(gatewayTurn),
+    },
+  );
 }
 
 type BufferedTurnContext = PreparedDesktopChatSend;
@@ -1755,6 +1821,9 @@ function commitBufferedTurn(
       messages: [userMessage, assistantMessage],
       usage: result.response.usage,
       memory: { ...memory, actions: memoryActions },
+      ...(conversationImageDeliveries(request).length === 0
+        ? {}
+        : { attachmentDeliveries: conversationImageDeliveries(request) }),
     } satisfies DesktopChatSendResponse,
   };
 }
@@ -1776,7 +1845,7 @@ async function finalizeBufferedTurn(
   assertUsableAssistantContent(redactedContent, modelId);
   const memoryActions = await collectMemoryActions(deps, request, memoryContext);
   if (requestSignalAborted(abortSignal)) {
-    failDesktopChatTurn(deps, request);
+    failDesktopChatTurn(deps, request, "cancelled");
     return requestCancelledResult();
   }
   return commitBufferedTurn(deps, turn, memory, result, redactedContent, memoryActions);
@@ -1882,8 +1951,27 @@ export async function parseDesktopChatSend(
 ): Promise<ParsedDesktopChatSend | RouteResult> {
   const body = await readJsonObject(ctx.req, signal);
   if (isRouteResult(body)) return body;
-  const request = sendRequestFromBody(body);
-  if (isRouteResult(request)) return request;
+  const parsedRequest = sendRequestFromBody(body);
+  if (isRouteResult(parsedRequest)) return parsedRequest;
+  const hasImages = parsedRequest.attachments.some((attachment) => attachment.kind === "image");
+  const session = hasImages ? resolveAppSessionReadAuthority(deps, ctx.req) : undefined;
+  const request: SendDesktopChatRequest =
+    session === undefined
+      ? parsedRequest
+      : {
+          ...parsedRequest,
+          attachmentAuthority: {
+            sessionId: session.sessionId,
+            sessionRotationCount: session.rotationCount,
+            revalidate: (): boolean => {
+              const current = resolveAppSessionReadAuthority(deps, ctx.req);
+              return (
+                current?.sessionId === session.sessionId &&
+                current.rotationCount === session.rotationCount
+              );
+            },
+          },
+        };
   const normalizedProjectPath = normalizeDesktopProjectPath(request.projectPath, deps);
   if (isRouteResult(normalizedProjectPath)) return normalizedProjectPath;
   const chat = findChat(deps, normalizedProjectPath, request.chatId);
@@ -2101,6 +2189,93 @@ function pushCanonicalTurnSaliencePair(
   });
 }
 
+function conversationImageParts(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  modelId: string,
+): readonly ChatMessageContentPart[] {
+  const images = request.attachments.filter((attachment) => attachment.kind === "image");
+  if (images.length === 0) return [];
+  const authority = request.attachmentAuthority;
+  if (authority === undefined || !conversationImageDeliveryAllowed(deps, request, modelId)) {
+    throw new ConversationAttachmentStoreError();
+  }
+  return images.map((attachment): ChatMessageContentPart => {
+    if (
+      attachment.attachmentRef === undefined ||
+      attachment.sha256 === undefined ||
+      attachment.id === undefined ||
+      !CONTENT_FREE_ATTACHMENT_ID.test(attachment.id)
+    ) {
+      throw new ConversationAttachmentStoreError();
+    }
+    const bytes = deps.conversationAttachmentStore?.resolve(attachment.attachmentRef, {
+      sessionId: authority.sessionId,
+      sessionRotationCount: authority.sessionRotationCount,
+      projectPath: request.projectPath,
+      chatId: request.chatId,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+      sha256: attachment.sha256,
+    });
+    if (bytes === undefined) throw new ConversationAttachmentStoreError();
+    return {
+      type: "image_url",
+      image_url: { url: `data:${attachment.mimeType};base64,${bytes.toString("base64")}` },
+    };
+  });
+}
+
+function conversationImageDeliveryAllowed(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  modelId: string,
+): boolean {
+  const authority = request.attachmentAuthority;
+  const capability = chatCapability(deps, modelId);
+  return (
+    request.attachmentIntent === CONVERSATION_IMAGE_DELIVERY_INTENT &&
+    authority !== undefined &&
+    authority.revalidate() &&
+    deps.store.findChatById(request.chatId)?.projectPath === request.projectPath &&
+    capability?.kind === "chat" &&
+    capability.supportsImageInput &&
+    deps.conversationAttachmentStore !== undefined
+  );
+}
+
+export function assemblyWithConversationImages(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  modelId: string,
+  assembly: GatewayPromptAssembly,
+): GatewayPromptAssembly {
+  const imageParts = conversationImageParts(deps, request, modelId);
+  if (imageParts.length === 0) return assembly;
+  const lastIndex = assembly.messages.length - 1;
+  const messages = assembly.messages.map((message, index): GatewayConversationMessage =>
+    index === lastIndex
+      ? {
+          ...message,
+          contentParts: [{ type: "text", text: message.content }, ...imageParts],
+        }
+      : message,
+  );
+  return { ...assembly, messages };
+}
+
+export function conversationImageDeliveries(
+  request: SendDesktopChatRequest,
+): readonly { readonly id: string; readonly status: "delivered" }[] {
+  return request.attachments.flatMap((attachment) =>
+    attachment.kind === "image" &&
+    attachment.id !== undefined &&
+    CONTENT_FREE_ATTACHMENT_ID.test(attachment.id)
+      ? [{ id: attachment.id, status: "delivered" as const }]
+      : [],
+  );
+}
+
 function canonicalTurnSaliencePairs(
   request: CanonicalTurnMemoryRequest,
 ): readonly CanonicalTurnSaliencePair[] {
@@ -2299,7 +2474,7 @@ async function persistRegeneratedChatTurn(
     assertUsableAssistantContent(redactedContent, modelId);
     const currentAssistant = validateRegenerateCommit(deps, prepared);
     if (isRouteResult(currentAssistant)) return currentAssistant;
-    const assistantMessage = deps.store.replaceAssistantMessageContent(
+    const assistantMessage = deps.store.createAssistantResponseVersion(
       currentAssistant.id,
       redactedContent,
       Date.now(),

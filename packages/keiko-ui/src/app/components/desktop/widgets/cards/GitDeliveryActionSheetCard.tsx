@@ -39,6 +39,7 @@ import {
   type OptionalWidgetTranslate,
 } from "@/lib/optional-widget-i18n";
 import { Icons } from "../../Icons";
+import { NATIVE_FIELDSET_STYLE } from "../../native-element-styles";
 
 const GitIcon = Icons.git;
 
@@ -527,9 +528,9 @@ function GitDeliveryActionSheetView({
   // GEN-UI-A11Y-006 — this is an inline embedded card, not a modal: it has no focus trap and no
   // modality (its comment notes it never executes the mutation). Grabbing focus on mount would
   // hijack the reading order of the surrounding surface, so we do NOT auto-focus. The container is
-  // a named role="group" (see below) and the Escape-to-reject shortcut remains for keyboard users.
+  // a named native fieldset group and the Escape-to-reject shortcut remains for keyboard users.
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLFieldSetElement>): void => {
     if (event.key === "Escape" && onReject !== undefined) {
       event.stopPropagation();
       onReject();
@@ -537,14 +538,14 @@ function GitDeliveryActionSheetView({
   };
 
   return (
-    // GEN-UI-A11Y-006 — non-modal embedded card: role="group" (an accessibly-named container),
+    // GEN-UI-A11Y-006 — non-modal embedded card: a named native fieldset group,
     // NOT role="alertdialog" (which would falsely promise a focus trap + modality this inline card
     // does not provide). Escape-to-reject is retained for keyboard users.
     // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- Escape-to-reject on the group container mirrors the Reject button for keyboard users
-    <div
+    <fieldset
       className="arun-gate gdas-card"
       data-state={actionSheet.state}
-      role="group"
+      style={NATIVE_FIELDSET_STYLE}
       aria-labelledby={titleId}
       aria-describedby={stateId}
       onKeyDown={handleKeyDown}
@@ -605,7 +606,7 @@ function GitDeliveryActionSheetView({
           </button>
         )}
       </div>
-    </div>
+    </fieldset>
   );
 }
 

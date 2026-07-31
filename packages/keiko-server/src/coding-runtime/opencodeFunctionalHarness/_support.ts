@@ -1162,6 +1162,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 interface ScriptedTree extends RuntimeProcessTree {
   readonly child: FakeOpenCodeChild;
   readonly exits: Set<(code: number | null) => void>;
+  readonly stdout: PassThrough;
+  readonly stderr: PassThrough;
   exited: boolean;
 }
 
@@ -1191,10 +1193,11 @@ class ScriptedChildBackend implements RuntimeProcessBackend {
     child
       .listen()
       .then((port) => {
-        stdout.write(`opencode server listening on http://127.0.0.1:${String(port)}\n`);
+        if (!tree.exited)
+          stdout.write(`opencode server listening on http://127.0.0.1:${String(port)}\n`);
       })
       .catch(() => {
-        stdout.end();
+        if (!stdout.writableEnded) stdout.end();
       });
     return tree;
   }
@@ -1232,6 +1235,8 @@ class ScriptedChildBackend implements RuntimeProcessBackend {
 function settleScripted(tree: ScriptedTree): void {
   if (tree.exited) return;
   tree.exited = true;
+  tree.stdout.end();
+  tree.stderr.end();
   for (const listener of tree.exits) listener(0);
   tree.exits.clear();
 }

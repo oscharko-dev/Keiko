@@ -427,31 +427,37 @@ function invalidSinceResult(): RouteResult {
 
 function parseRecentSince(ctx: RouteContext): number | null | RouteResult {
   const values = ctx.url.searchParams.getAll("since");
-  if (values.length === 0) return null;
-  const raw = values[0];
-  if (
-    values.length !== 1 ||
-    raw === undefined ||
-    raw.length === 0 ||
-    raw.length > MAX_RECENT_SINCE_CHARS ||
-    !/^\d+$/.test(raw)
-  ) {
-    return invalidSinceResult();
+  let result: number | null | RouteResult = null;
+  if (values.length > 0) {
+    const raw = values[0];
+    if (
+      values.length !== 1 ||
+      raw === undefined ||
+      raw.length === 0 ||
+      raw.length > MAX_RECENT_SINCE_CHARS ||
+      !/^\d+$/.test(raw)
+    ) {
+      result = invalidSinceResult();
+    } else {
+      const since = Number(raw);
+      result = Number.isSafeInteger(since) ? since : invalidSinceResult();
+    }
   }
-  const since = Number(raw);
-  return Number.isSafeInteger(since) ? since : invalidSinceResult();
+  return result;
 }
 
 function parseRecentOrder(ctx: RouteContext): "asc" | "desc" | RouteResult {
   const values = ctx.url.searchParams.getAll("order");
-  if (values.length === 0) return "desc";
-  if (values.length !== 1 || (values[0] !== "asc" && values[0] !== "desc")) {
-    return {
+  let result: "asc" | "desc" | RouteResult = "desc";
+  if (values.length === 1 && (values[0] === "asc" || values[0] === "desc")) {
+    result = values[0];
+  } else if (values.length > 0) {
+    result = {
       status: 400,
       body: errorBody("BAD_REQUEST", "order must be either asc or desc."),
     };
   }
-  return values[0];
+  return result;
 }
 
 function hasUnsupportedRecentFilter(ctx: RouteContext): boolean {
@@ -725,10 +731,13 @@ function buildEditPatch(input: EditInput, existing: MemoryRecord): Record<string
 
 function memoryIdFromParams(ctx: RouteContext): MemoryId | RouteResult {
   const { id } = ctx.params;
+  let result: MemoryId | RouteResult;
   if (id === undefined || id.length === 0) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
+    result = { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
+  } else {
+    result = id as MemoryId;
   }
-  return id as MemoryId;
+  return result;
 }
 
 async function readEditRouteInput(ctx: RouteContext): Promise<EditInput | RouteResult> {
