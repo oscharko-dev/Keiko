@@ -4,6 +4,8 @@
 
 Accepted (Issue #2546, Epic #2537, Memory M1.1, 2026-07-19). Amended by Issue #2549
 (Memory M1.4, 2026-07-19) to add the user-selected requested-mode surface described in D1.
+Amended by Issue #2864 (2026-07-31) to record that standing and opportunistic maintenance apply
+the same D2 autonomy gate before unattended promotion.
 
 ## Amends
 
@@ -124,6 +126,21 @@ path (`collectMemoryActions` → `captureSalientFromTurn`), **one** policy modul
 (`memory-capture-policy.ts`), and **one** promotion lever (`planMemoryMaintenance`/`shouldPromote`).
 No second acceptance rule is fabricated outside governance, per §5 of `AGENTS.md` ("do not introduce
 a parallel policy or memory subsystem when an existing one can be shaped for the need").
+
+### D4a — Maintenance promotion uses the same unattended-acceptance gate
+
+Both the explicit maintenance route and the bounded opportunistic maintenance pass resolve the
+effective memory autonomy posture from the same persisted requested mode and server deployment
+ceiling used by capture. Promotion from `proposed` to `accepted` is unattended acceptance, so the
+promotion phase runs only when `memoryUnattendedAcceptanceAllowed` admits that effective posture.
+In `governed-assist`, or when the posture is absent or cannot be resolved, promotion is skipped and
+proposals remain available for human review. Consolidation, archive, expiry, and forgetting remain
+mode-independent because none accepts a proposal on the human's behalf.
+
+This is the maintenance application of D2 and D4, not a maintenance-local authority model. The
+standing and opportunistic entry points both delegate to `runMemoryMaintenance`; neither may call
+the promotion planner through an alternate path or infer authority from the auto-maintenance
+enabled flag.
 
 ### D5 — Capture stays failure-contained and diagnostics stay content-free
 

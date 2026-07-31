@@ -73,7 +73,11 @@ interface SelectionState {
 The `useKeyboardShortcuts` hook wires the minimum shortcut set declared in the [UX blueprint](../workspace/518-ux-blueprint.md#minimum-shortcut-set-the-contract-527-must-wire).
 
 - Normalization: `Cmd` on macOS, `Ctrl` on Windows/Linux, detected via `navigator.platform`. Cross-platform commands declare `mod: ["cmd"]` and the hook substitutes `Ctrl` where appropriate.
-- Conflict detection: at startup the hook builds a `Map<chord-string, commandId>`; duplicate chord declarations crash the build at module-evaluation. This is the substrate's first-user-action fail-closed.
+- Conflict detection: when the registered command table is rendered, the hook builds a
+  `Map<chord-string, commandId>` and throws before listener registration on a duplicate declaration.
+  The default table is pinned conflict-free by test, so a contributor cannot ship a collision; a
+  Next.js static build alone does not evaluate this render-body guard. This is the substrate's
+  first-user-action fail-closed.
 - Browser-reserved chords (`Cmd/Ctrl+T`, `Cmd/Ctrl+R`, `Cmd/Ctrl+W`, and `Cmd/Ctrl+Shift+N`) are never claimed by workspace commands. The hook refuses to bind them; `WORKSPACE_RESERVED_CHORDS` in `keiko-contracts` is the source of truth.
 - Modifier matching is exact: `Ctrl+K` does not match `Ctrl+Shift+K`.
 
@@ -147,7 +151,8 @@ When an authority moment that is _not_ reversible completes (a patch is applied,
 - Adding a new reversible UI behavior is a single PR: add an Action variant, push it from the mutating call site, render the action label in `undoLabel`.
 - Adding a non-reversible authority moment (a new tool, a new evidence-bearing window) requires NO Action work and therefore cannot break the boundary.
 - The substrate cost of `useKeyboardShortcuts` is one `keydown` listener; no library.
-- The conflict-at-startup rule means a contributor cannot ship a chord collision; the build fails first.
+- The conflict-at-startup rule means a contributor cannot ship a chord collision: the default-table
+  test fails first, and the render-body guard remains a runtime backstop before any listener binds.
 
 ## Alternatives considered
 

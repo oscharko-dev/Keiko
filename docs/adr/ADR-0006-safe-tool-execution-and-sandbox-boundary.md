@@ -6,10 +6,11 @@ Accepted
 
 Accepted; module location superseded by ADR-0019 (monorepo split — code now under `packages/keiko-tools/src/**`). Dimension 4 (network isolation) is further superseded by ADR-0043, which enforces `network:"none"` via `keiko-sandbox` at the OS level rather than relying on convention alone.
 
-> **Amended by the 0.3.0 release audit — governed git env lanes (2026-07-30).** D2 Dimension 1
-> below describes `DEFAULT_SANDBOX_POLICY`, which is unchanged and remains the profile for every
-> tool that runs ON the workspace. Two additional, explicitly declared profiles now exist for the
-> governed git surfaces, which do not run on the workspace but act AS the local human against their
+> **Amended by the 0.3.0 release audit — governed git env lanes (2026-07-30; owner-approved in
+> Issue #2864 on 2026-07-31).** D2 Dimension 1 below describes `DEFAULT_SANDBOX_POLICY`, which is
+> unchanged and remains the profile for every tool that runs ON the workspace. Two additional,
+> explicitly declared profiles now exist for governed git surfaces, which do not run on the
+> workspace but act AS the local human against their
 > own machine and their own remote (`GOVERNED_GIT_IDENTITY_SANDBOX_POLICY`,
 > `GOVERNED_GIT_REMOTE_SANDBOX_POLICY`, `packages/keiko-contracts/src/tools.ts`). Under the default
 > profile a governed `git commit` cannot read the user's identity or `commit.gpgsign`/

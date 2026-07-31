@@ -66,6 +66,20 @@ from the central mode/resource/risk matrix, and compose with surface-specific ba
 using stricter-wins. Genuinely new action classes are added to the shared contracts with an ADR
 note; they are never declared surface-locally.
 
+### D2a — The agent repository facade is an admission layer, not new Git authority
+
+The typed agent repository facade applies this product-wide ceiling before it delegates an
+operation: reads and previews remain available in every mode, workspace-contained executes require
+at least `supervised-coding`, and remote delivery executes require `autonomous-delivery`. A missing
+or invalid ceiling fails closed to `governed-assist`. Admission runs before idempotency reservation
+or delegation, so a denied request cannot mutate the repository or occupy a replay slot.
+
+The facade grants no shell, provider, credential, or Git execution authority of its own. An
+admitted request still traverses the existing Git read or governed-delivery route and remains
+subject to its Authority Envelope, policy pack, approval, preflight, workspace containment, and
+mode-independent hard denials. The facade may narrow those authorities; it may never bypass or
+widen them.
+
 ### D3 — Hard denials stay mode-independent
 
 Invalid or expired authority, workspace escape, denied sensitive paths, secret exfiltration
@@ -79,6 +93,11 @@ repository work targeting `dev`, ADR-0135 supersedes the former per-action human
 accepted task authority permits branch commits, pushes, and pull-request updates, while the direct
 app-bound required checks authorize GitHub native auto-merge. Direct pushes
 to `dev`, force pushes, gate bypasses, and authority widening remain denied or separately approved.
+
+This `dev` rule governs how agents contribute accepted work to the Keiko repository. It does not
+add autonomous or background auto-merge scheduling to Keiko's end-user Governed Merge Gateway.
+That product feature remains governed by ADR-0087: merge is an explicit, approval-gated action and
+auto-merge scheduling is out of scope.
 
 ### D5 — Vocabulary home and naming
 
