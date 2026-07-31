@@ -328,6 +328,7 @@ describe("sanitizeRenamePrepare and sanitizeRenameApply", () => {
         totalFileCount: 2,
         returnedEditCount: 3,
         totalEditCount: 3,
+        unreadableFileCount: 1,
       },
       {
         ...DEFAULT_LANGUAGE_SERVICE_LIMITS,
@@ -348,6 +349,9 @@ describe("sanitizeRenamePrepare and sanitizeRenameApply", () => {
     ]);
     expect(result.returnedEditCount).toBe(2);
     expect(result.truncated).toBe(true);
+    // The provider's dropped-reference count survives sanitisation: it is a count, not content, and
+    // the client needs it to explain why a rename is partial.
+    expect(result.unreadableFileCount).toBe(1);
   });
 });
 

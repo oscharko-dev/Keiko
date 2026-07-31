@@ -238,6 +238,79 @@ describe("ConnectorPickerWidget", () => {
     expect(screen.getByRole("option", { name: /Members unavailable/i })).toBeInTheDocument();
   });
 
+  // Audit regression (0.3.0): Knowledge Pods were filtered to `lifecycleState === "ready"` but
+  // Knowledge Pod Sets were not filtered at all, so a failed set — or one with no members left — was
+  // offered in the grounding picker as if it could answer.
+  it.each([
+    ["error" as const, 2],
+    ["unavailable" as const, 2],
+    ["indexing" as const, 2],
+    ["draft" as const, 2],
+    ["stale" as const, 2],
+  ])(
+    "does not offer a Knowledge Pod Set whose readiness is %s",
+    async (readiness, capsuleCount) => {
+      const unusableSet: CapsuleSetListEntry = {
+        ...CAPSULE_SET,
+        capsuleCount,
+        knowledgePod: { readiness, reindexRecommended: false, queryEmbeddingAllowed: false },
+      };
+      mockFetchCapsules.mockResolvedValue({ capsules: [READY_CAPSULE] });
+      mockFetchCapsuleSets.mockResolvedValue({ capsuleSets: [unusableSet] });
+      const user = userEvent.setup();
+      render(<ConnectorPickerWidget onSelect={vi.fn()} />);
+      expect(await screen.findByRole("combobox")).toBeInTheDocument();
+      await user.click(screen.getByRole("combobox"));
+      expect(screen.queryByRole("option", { name: /All Sources/i })).toBeNull();
+    },
+  );
+
+  it("does not offer a Knowledge Pod Set with no members", async () => {
+    const emptySet: CapsuleSetListEntry = { ...CAPSULE_SET, capsuleCount: 0 };
+    mockFetchCapsules.mockResolvedValue({ capsules: [READY_CAPSULE] });
+    mockFetchCapsuleSets.mockResolvedValue({ capsuleSets: [emptySet] });
+    const user = userEvent.setup();
+    render(<ConnectorPickerWidget onSelect={vi.fn()} />);
+    expect(await screen.findByRole("combobox")).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox"));
+    expect(screen.queryByRole("option", { name: /All Sources/i })).toBeNull();
+  });
+
+  it("says how many Knowledge Pod Sets it withheld instead of letting them vanish", async () => {
+    const unusableSet: CapsuleSetListEntry = {
+      ...CAPSULE_SET,
+      knowledgePod: {
+        readiness: "error",
+        reindexRecommended: false,
+        queryEmbeddingAllowed: false,
+      },
+    };
+    mockFetchCapsules.mockResolvedValue({ capsules: [READY_CAPSULE] });
+    mockFetchCapsuleSets.mockResolvedValue({ capsuleSets: [unusableSet] });
+    render(<ConnectorPickerWidget onSelect={vi.fn()} />);
+    expect(await screen.findByRole("combobox")).toBeInTheDocument();
+    expect(screen.getByText(/1 Knowledge Pod Sets are not ready/i)).toBeInTheDocument();
+  });
+
+  it("still offers a degraded Knowledge Pod Set (every member is ready; guidance explains the rest)", async () => {
+    const degradedSet: CapsuleSetListEntry = {
+      ...CAPSULE_SET,
+      knowledgePod: {
+        readiness: "degraded",
+        reindexRecommended: true,
+        queryEmbeddingAllowed: false,
+      },
+    };
+    mockFetchCapsules.mockResolvedValue({ capsules: [] });
+    mockFetchCapsuleSets.mockResolvedValue({ capsuleSets: [degradedSet] });
+    const user = userEvent.setup();
+    render(<ConnectorPickerWidget onSelect={vi.fn()} />);
+    expect(await screen.findByRole("combobox")).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox"));
+    expect(screen.getByRole("option", { name: /All Sources/i })).toBeInTheDocument();
+    expect(screen.queryByText(/are not ready/i)).toBeNull();
+  });
+
   it("shows an empty state with a 'Create' action when no Knowledge Pods exist", async () => {
     mockFetchCapsules.mockResolvedValue({ capsules: [] });
     mockFetchCapsuleSets.mockResolvedValue({ capsuleSets: [] });

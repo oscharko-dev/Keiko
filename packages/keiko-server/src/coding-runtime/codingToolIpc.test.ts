@@ -120,3 +120,53 @@ describe("coding tool IPC auxiliary requests", () => {
     ).toBeUndefined();
   });
 });
+
+/**
+ * Where the shipped OpenCode runtime's edit containment actually lives.
+ *
+ * `decideSupervisedFileEdit` (supervisedCodingPolicy) also performs a realpath containment check,
+ * but it is reached only from `supervisedCodingRuntimeEvent`, which requires a permission ask in
+ * `supervised-coding` mode — and the generated child tool source asks for permission ONLY in
+ * `governed-assist` (opencodeRuntimeAdapter: `KEIKO_CODING_MODE !== "governed-assist"` returns
+ * early). For the bundled OpenCode child that branch therefore never runs. The containment the edit
+ * path really depends on is (1) THIS parse boundary and (2) the `keiko-tools` contained writer's
+ * `assertContained` / `assertNoSymlink` / realpath-parent checks at the effect edge.
+ *
+ * These cases pin layer (1) explicitly. Note the deliberate scope: the changeset file predicate
+ * (`isContainedAgentPath`) is NARROWER than the read path's `normalizedRelativePath` in this
+ * same module — it does not reject `~`-anchored, UNC, colon-bearing or empty-segment paths,
+ * which the read path does. Those shapes are contained at layer (2) instead, so this pin asserts
+ * only what layer (1) genuinely guarantees; asserting more here would be a fixture that lies about
+ * the code. If layer (1) is ever narrowed, the edit path is left standing on layer (2) alone.
+ */
+describe("coding tool IPC edit containment is the live workspace-escape gate", () => {
+  function editBody(file: string): string {
+    return JSON.stringify({
+      action: "edit",
+      actionId: "edit-1",
+      idempotencyKey: "edit-key",
+      changeset: {
+        patch: "--- a/x\n+++ b/x\n@@\n-old\n+new\n",
+        files: [{ file, expectedContentHash: "a".repeat(64) }],
+      },
+    });
+  }
+
+  it("admits a contained relative changeset file", () => {
+    expect(parseCodingToolRequest(editBody("src/a.ts"), 262_144)).toMatchObject({
+      action: "edit",
+    });
+  });
+
+  it.each([
+    ["a POSIX absolute path", "/etc/passwd"],
+    ["a parent escape", "../outside.ts"],
+    ["an embedded parent escape", "src/../../outside.ts"],
+    ["a backslash-separated parent escape", "..\\outside.ts"],
+    ["a Windows drive-qualified path", "C:/Windows/system32/drivers/etc/hosts"],
+    ["a NUL-bearing path", "src/a.ts\u0000.png"],
+    ["an empty path", ""],
+  ])("rejects %s before an edit request exists", (_name, file) => {
+    expect(parseCodingToolRequest(editBody(file), 262_144)).toBeUndefined();
+  });
+});

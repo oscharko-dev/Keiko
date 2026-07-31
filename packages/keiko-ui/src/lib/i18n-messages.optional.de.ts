@@ -18,6 +18,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "quickAccess.result.truncatedSuffix": " Die Ergebnisse wurden begrenzt; Suchbegriff eingrenzen.",
   "quickAccess.result.truncatedPerRootSuffix":
     " Ergebnisse werden pro Root begrenzt und fair zusammengeführt; Suchbegriff eingrenzen.",
+  "quickAccess.searchUnavailable": "Suche für {roots} nicht verfügbar.",
   "browserWidget.error.unexpected": "Unerwarteter Fehler.",
   "browserWidget.error.streamDisconnected":
     "Die Live-Browserereignisse wurden getrennt. Öffnen Sie die Sitzung erneut, um den Feed fortzusetzen.",
@@ -211,6 +212,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "promptEnhancer.analysis.profile": "Profil",
   "promptEnhancer.analysis.input": "Eingabe",
   "promptEnhancer.analysis.chars": "{count} Zeichen",
+  "promptEnhancer.analysis.promptTokens": "Prompt-Tokens",
+  "promptEnhancer.analysis.tokenEstimate": "~{count} Tokens",
   "promptEnhancer.analysis.ariaLabel": "Analyse der Prompt-Verbesserung",
   "promptEnhancer.routing.deterministic": "Deterministische Verbesserung",
   "promptEnhancer.routing.modelEnhanced": "Durch Modell verbessert: {model}",
@@ -223,6 +226,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "promptEnhancer.safety.humanReview": "Menschliche Prüfung:",
   "promptEnhancer.safety.reviewWarning":
     "Dieser Prompt muss vor jeder nachgelagerten Verwendung durch einen Menschen geprüft werden.",
+  "promptEnhancer.safety.rejectedWarning":
+    "Dieser Prompt wurde von der Sicherheitsprüfung abgelehnt und darf nicht verwendet werden.",
   "promptEnhancer.safety.findings": "Sicherheitsbefunde",
   "promptEnhancer.safety.leastPrivilege": "Least-Privilege-Einschränkungen",
   "promptEnhancer.common.required": "erforderlich",
@@ -293,6 +298,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "promptEnhancer.action.clear": "Leeren",
   "promptEnhancer.result.eyebrow": "Prüfarbeitsprodukt",
   "promptEnhancer.result.title": "Verbesserter Prompt",
+  "promptEnhancer.result.baselineNote":
+    "Das Modell hat diesen Prompt neu geschrieben. Profil, strukturierte Abschnitte und Kandidaten-Scorecards unten beschreiben die deterministische Basis, aus der er verfeinert wurde, nicht den oben gerenderten Prompt.",
   "promptEnhancer.rendered.title": "Gerenderter Prompt",
   "promptEnhancer.rendered.ariaLabel": "Text des gerenderten Prompts",
   "promptEnhancer.action.copying": "Wird kopiert...",
@@ -479,6 +486,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitDelivery.recoveryStrategy.stash-and-reset": "Stash und Reset",
   "gitDelivery.recoveryStrategy.restore-index": "Index wiederherstellen",
   "gitDelivery.constraint.branchPattern": "Branch-Muster: {patterns}",
+  "gitDelivery.constraint.protectedBranch": "Geschützte Branches: {patterns}",
   "gitDelivery.constraint.providerCapability": "Erfordert Provider-Fähigkeit: {capability}",
   "gitDelivery.constraint.riskCeiling": "Risikoklassenobergrenze: {risk}",
   "gitDelivery.error.unexpected": "Ein unerwarteter Fehler ist aufgetreten.",

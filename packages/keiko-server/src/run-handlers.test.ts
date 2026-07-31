@@ -532,9 +532,24 @@ describe("FIX 3 — a failed UI run's report is redacted (security L1)", () => {
   });
 });
 
+/**
+ * The apply route re-proves workspace authorization at the write boundary, so an apply fixture must
+ * satisfy the same precondition production does: a real directory registered in the project store.
+ * The helper returns that store plus the canonical path the appliable payload must name.
+ */
+function authorizedApplyWorkspace(): {
+  readonly store: ReturnType<typeof createInMemoryUiStore>;
+  readonly root: string;
+} {
+  const store = createInMemoryUiStore();
+  const created = store.createProject(realpathSync(mkdtempSync(join(tmpdir(), "keiko-apply-ws-"))));
+  return { store, root: created.path };
+}
+
 describe("FIX 4 — apply rebuilds the ModelPort from the run's modelId, not the fingerprint", () => {
   it("passes record.modelId (never the fingerprint) to the model-port factory", async () => {
     const localRegistry = createRunRegistry();
+    const applyWorkspace = authorizedApplyWorkspace();
     const record = localRegistry.register({
       runId: "fix4-run",
       fingerprint: "deadbeefcafef00d",
@@ -548,7 +563,10 @@ describe("FIX 4 — apply rebuilds the ModelPort from the run's modelId, not the
       { status: "dry-run" },
       {
         kind: "unit-tests",
-        payload: { workspaceRoot: ".", target: { kind: "file", filePath: "x.ts" } },
+        payload: {
+          workspaceRoot: applyWorkspace.root,
+          target: { kind: "file", filePath: "x.ts" },
+        },
         limits: undefined,
       },
     );
@@ -561,7 +579,7 @@ describe("FIX 4 — apply rebuilds the ModelPort from the run's modelId, not the
       env: {},
       redactor: buildRedactor({}),
       registry: localRegistry,
-      store: createInMemoryUiStore(),
+      store: applyWorkspace.store,
       modelPortFactory: (modelId): undefined => {
         seen.push(modelId);
         return undefined;
@@ -583,6 +601,7 @@ describe("FIX B — apply snapshot retains the original limits from the dry-run"
   it("stores limits in the appliable snapshot and threads them into the apply re-invocation", async () => {
     // Build a registry record whose appliable snapshot carries non-undefined limits.
     const localRegistry = createRunRegistry();
+    const applyWorkspace = authorizedApplyWorkspace();
     const testLimits = { maxTokens: 1000, timeoutMs: 30_000 };
     localRegistry.register({
       runId: "fixb-run",
@@ -597,7 +616,10 @@ describe("FIX B — apply snapshot retains the original limits from the dry-run"
       { status: "dry-run" },
       {
         kind: "unit-tests",
-        payload: { workspaceRoot: ".", target: { kind: "file", filePath: "x.ts" } },
+        payload: {
+          workspaceRoot: applyWorkspace.root,
+          target: { kind: "file", filePath: "x.ts" },
+        },
         limits: testLimits,
       },
     );
@@ -618,7 +640,7 @@ describe("FIX B — apply snapshot retains the original limits from the dry-run"
       env: {},
       redactor: buildRedactor({}),
       registry: localRegistry,
-      store: createInMemoryUiStore(),
+      store: applyWorkspace.store,
       modelPortFactory: (): ModelPort => failingModel,
     };
     const ctx = {
@@ -821,6 +843,7 @@ describe("issue #638 — overlapping apply requests cannot reuse the same snapsh
     await start(fakeModel("noop"));
 
     const localRegistry = createRunRegistry();
+    const applyWorkspace = authorizedApplyWorkspace();
     localRegistry.register({
       runId: "race-run",
       fingerprint: "fp-race",
@@ -834,7 +857,10 @@ describe("issue #638 — overlapping apply requests cannot reuse the same snapsh
       { status: "dry-run" },
       {
         kind: "unit-tests",
-        payload: { workspaceRoot: ".", target: { kind: "file", filePath: "x.ts" } },
+        payload: {
+          workspaceRoot: applyWorkspace.root,
+          target: { kind: "file", filePath: "x.ts" },
+        },
         limits: undefined,
       },
     );
@@ -854,7 +880,7 @@ describe("issue #638 — overlapping apply requests cannot reuse the same snapsh
       env: {},
       redactor: buildRedactor({}),
       registry: localRegistry,
-      store: createInMemoryUiStore(),
+      store: applyWorkspace.store,
       modelPortFactory: (): ModelPort => hangingModel,
     };
     const ctx = {
@@ -952,5 +978,131 @@ describe("GAP-E — workspace detection failure returns 400 not 500 (run launch 
     expect(json.error.code).toBe("WORKSPACE_UNAVAILABLE");
     // The absolute path must NOT appear in the response body.
     expect(JSON.stringify(json)).not.toContain(noMarkerWorkspace);
+  });
+});
+
+/**
+ * Regression: POST /api/runs/:runId/apply is the ONLY write path of the unit-test and bug-fix agent
+ * surfaces, and it mutates the working tree. `handleCreateRun` authorizes the workspaceRoot against
+ * the local project store precisely so a CSRF-equipped local client cannot drive workflows in an
+ * arbitrary directory; before this pin the write boundary itself never re-asked, so a root that had
+ * since been de-registered — or one that was never registered because the record was created by any
+ * other path — was still written to. Authorization must be re-proven at the moment of the write.
+ */
+describe("apply re-proves workspace authorization at the write boundary", () => {
+  function applyDeps(
+    store: ReturnType<typeof createInMemoryUiStore>,
+    registry: ReturnType<typeof createRunRegistry>,
+  ): { readonly deps: UiHandlerDeps; readonly modelCalls: string[] } {
+    const modelCalls: string[] = [];
+    const deps: UiHandlerDeps = {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: createInMemoryEvidenceStore(),
+      env: {},
+      redactor: buildRedactor({}),
+      registry,
+      store,
+      modelPortFactory: (modelId: string): ModelPort => {
+        modelCalls.push(modelId);
+        return { call: (): Promise<NormalizedResponse> => Promise.reject(new Error("test-stop")) };
+      },
+    };
+    return { deps, modelCalls };
+  }
+
+  function appliableRun(
+    registry: ReturnType<typeof createRunRegistry>,
+    runId: string,
+    workspaceRoot: string,
+  ): void {
+    registry.register({
+      runId,
+      fingerprint: `fp-${runId}`,
+      modelId: "example-chat-model",
+      sink: new QueueEventSink(),
+      cancel: (): void => undefined,
+    });
+    registry.complete(
+      runId,
+      "completed",
+      { status: "dry-run" },
+      {
+        kind: "unit-tests",
+        payload: { workspaceRoot, target: { kind: "file", filePath: "x.ts" } },
+        limits: undefined,
+      },
+    );
+  }
+
+  function applyContext(runId: string): Parameters<typeof handleApplyRun>[0] {
+    return {
+      req: {} as never,
+      res: {} as never,
+      params: { runId },
+      url: new URL(`http://127.0.0.1/api/runs/${runId}/apply`),
+    };
+  }
+
+  it("refuses to write into a root the project store does not authorize and keeps the run appliable", async () => {
+    const registry = createRunRegistry();
+    appliableRun(registry, "unregistered-run", "/not/a/registered/project");
+    const { deps, modelCalls } = applyDeps(createInMemoryUiStore(), registry);
+
+    const result = await handleApplyRun(applyContext("unregistered-run"), deps);
+
+    expect(result).toMatchObject({
+      status: 403,
+      body: { error: { code: "WORKSPACE_NOT_REGISTERED" } },
+    });
+    // No model is resolved and the pending patch is NOT consumed: a refused write leaves the run
+    // exactly as it was, so a later authorized apply is still possible.
+    expect(modelCalls).toEqual([]);
+    expect(registry.get("unregistered-run")?.appliable).toBeDefined();
+  });
+
+  it("refuses a root that was authorized at start but de-registered before the write", async () => {
+    const registry = createRunRegistry();
+    const store = createInMemoryUiStore();
+    const projectRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-apply-authz-")));
+    const project = store.createProject(projectRoot);
+    appliableRun(registry, "revoked-run", project.path);
+    const authorized = applyDeps(store, registry);
+
+    // Same run, same snapshot — only the authorization fact changed between the two calls.
+    const revoked = applyDeps(createInMemoryUiStore(), registry);
+    const refused = await handleApplyRun(applyContext("revoked-run"), revoked.deps);
+    expect(refused.status).toBe(403);
+
+    const allowed = await handleApplyRun(applyContext("revoked-run"), authorized.deps);
+    expect(allowed.status).toBe(200);
+    expect(authorized.modelCalls).toEqual(["example-chat-model"]);
+  });
+
+  it("refuses a snapshot whose payload carries no workspace root at all", async () => {
+    const registry = createRunRegistry();
+    registry.register({
+      runId: "rootless-run",
+      fingerprint: "fp-rootless",
+      modelId: "example-chat-model",
+      sink: new QueueEventSink(),
+      cancel: (): void => undefined,
+    });
+    registry.complete(
+      "rootless-run",
+      "completed",
+      { status: "dry-run" },
+      {
+        kind: "unit-tests",
+        payload: { target: { kind: "file", filePath: "x.ts" } },
+        limits: undefined,
+      },
+    );
+    const { deps, modelCalls } = applyDeps(createInMemoryUiStore(), registry);
+
+    const result = await handleApplyRun(applyContext("rootless-run"), deps);
+
+    expect(result.status).toBe(403);
+    expect(modelCalls).toEqual([]);
   });
 });

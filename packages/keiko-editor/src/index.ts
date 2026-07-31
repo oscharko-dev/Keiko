@@ -173,6 +173,12 @@ export type {
 export { applyTextEditsToText, applyTextEditsToTextWithinLimit } from "./apply-text-edits.js";
 export type { BoundedTextEditResult } from "./apply-text-edits.js";
 
+// `formattingApplyDecision` is the apply gate for a formatting result: a server-capped reformat is a
+// PARTIAL mutation and must never reach a buffer or disk as if it were the finished format. It is the
+// mutation-path counterpart to the `capped` label the outcome seam renders (0.3.0 release audit).
+export { formattingApplyDecision } from "./formatting-apply.js";
+export type { FormattingApplyDecision } from "./formatting-apply.js";
+
 // ─── Runtime: range mapping ──────────────────────────────────────────────────────
 export {
   comparePositions,
@@ -626,8 +632,11 @@ export type {
   PatchPreviewLimits,
   PatchPreviewModel,
   PatchPreviewSource,
+  PatchPreviewSourceTruncation,
 } from "./patch-preview.js";
-export { buildRenamePreview } from "./rename-preview.js";
+// `renameChangesetTruncation` is the host's Accept gate: a capped rename changeset must never be
+// applied as if it were the whole rename (#2105 follow-up).
+export { buildRenamePreview, renameChangesetTruncation } from "./rename-preview.js";
 export type { BuildRenamePreviewInput } from "./rename-preview.js";
 
 // ─── Runtime: KeikoDiffEditor React component (#1195) ───
@@ -701,6 +710,7 @@ export type {
 export { deriveEditorStatusBar, editorLanguageLabel } from "./components/status-bar.js";
 export type {
   EditorDiagnosticsSummary,
+  EditorStatusLanguageIntelligence,
   EditorStatusLanguageService,
   EditorStatusTone,
   EditorStatusRun,
@@ -708,6 +718,31 @@ export type {
   EditorStatusField,
   EditorStatusBarViewModel,
 } from "./components/status-bar.js";
+export {
+  EDITOR_LANGUAGE_OPERATIONS,
+  EMPTY_LANGUAGE_INTELLIGENCE_STATE,
+  classifyLanguageFailure,
+  classifyResultKind,
+  isCancellation,
+  languageIntelligenceNotice,
+  outcomeForError,
+  reduceLanguageIntelligence,
+  runLanguageBridgeCall,
+  summarizeLanguageIntelligence,
+} from "./components/language-intelligence.js";
+export type {
+  EditorLanguageFailureKind,
+  EditorLanguageIntelligenceEvent,
+  EditorLanguageIntelligenceNotice,
+  EditorLanguageIntelligenceReporter,
+  EditorLanguageIntelligenceState,
+  EditorLanguageIntelligenceSummary,
+  EditorLanguageOperation,
+  EditorLanguageOutcome,
+  EditorLanguageResultKind,
+  EditorLanguageStatusByOperation,
+  LanguageBridgeCall,
+} from "./components/language-intelligence.js";
 export { EditorStatusBar } from "./components/EditorStatusBar.js";
 export type { EditorStatusBarProps } from "./components/EditorStatusBar.js";
 export {

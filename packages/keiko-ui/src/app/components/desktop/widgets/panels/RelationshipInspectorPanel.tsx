@@ -32,7 +32,10 @@ import type {
   RelationshipType,
   RelationshipValidationError,
 } from "@oscharko-dev/keiko-contracts";
-import { RELATIONSHIP_TYPE_DEFINITIONS } from "@oscharko-dev/keiko-contracts";
+import {
+  RELATIONSHIP_QUERY_BOUNDS,
+  RELATIONSHIP_TYPE_DEFINITIONS,
+} from "@oscharko-dev/keiko-contracts";
 import {
   getRelationship,
   getExplain,
@@ -47,8 +50,10 @@ import type {
   ExplainResult,
   DependencyReport,
 } from "../../../../relationships/api";
+import { deriveImpact, type ImpactOrigin } from "../../../../relationships/impact";
 import { RelationshipEdgeBadge } from "./RelationshipEdgeBadge";
 import { RelationshipImpactCard } from "./RelationshipImpactCard";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 
 // ─── Authority disclaimer constant (inspector-spec.md §6) ─────────────────────
 // Verbatim string — never interpolated, never translated (Wave 3 non-goal).
@@ -471,12 +476,23 @@ function EvidenceSection({ rel }: { readonly rel: ApiRelationship }): ReactNode 
 
 // ─── Section 9: Impact summary ─────────────────────────────────────────────────
 
+// A dependency figure is one of three states, and they must not be conflated: still loading
+// (em dash), failed (named as unavailable — the walk was swallowed before, so a failure was
+// indistinguishable from an idle graph), or a real count.
+function dependencyFigure(count: number | null, failed: boolean, t: I18nTranslate): string {
+  if (failed) return t("relationships.impact.unavailableValue");
+  return count === null ? "—" : String(count);
+}
+
 function ImpactSection({
   relationshipId,
   forwardCount,
   reverseCount,
   outgoing,
   incoming,
+  origin,
+  impactError,
+  onRetryImpact,
   expanded,
   onToggle,
   onSelectRelationship,
@@ -486,25 +502,26 @@ function ImpactSection({
   readonly reverseCount: number | null;
   readonly outgoing: DependencyReport | null;
   readonly incoming: DependencyReport | null;
+  readonly origin: ImpactOrigin;
+  readonly impactError: string | null;
+  readonly onRetryImpact: () => void;
   readonly expanded: boolean;
   readonly onToggle: () => void;
   readonly onSelectRelationship: (id: string) => void;
 }): ReactNode {
+  const t = useTranslate();
+  const failed = impactError !== null;
   return (
     <>
       <SectionLabel>Impact summary</SectionLabel>
       <div className="rb-rows">
         <div className="rb-row">
           <span className="rb-row-k">Forward dependencies</span>
-          <span className="rb-row-v mono">
-            {forwardCount === null ? "—" : String(forwardCount)}
-          </span>
+          <span className="rb-row-v mono">{dependencyFigure(forwardCount, failed, t)}</span>
         </div>
         <div className="rb-row">
           <span className="rb-row-k">Reverse dependencies</span>
-          <span className="rb-row-v mono">
-            {reverseCount === null ? "—" : String(reverseCount)}
-          </span>
+          <span className="rb-row-v mono">{dependencyFigure(reverseCount, failed, t)}</span>
         </div>
         <div className="rb-row">
           {/* arun-btn reuses globals.css:1972 */}
@@ -530,6 +547,9 @@ function ImpactSection({
           <RelationshipImpactCard
             outgoing={outgoing}
             incoming={incoming}
+            origin={origin}
+            error={impactError}
+            onRetryImpact={onRetryImpact}
             onSelectRelationship={onSelectRelationship}
           />
         </div>
@@ -748,6 +768,7 @@ export function RelationshipInspectorPanel({
   animateBadges = true,
   highContrast = false,
 }: RelationshipInspectorPanelProps): ReactNode {
+  const t = useTranslate();
   const [rel, setRel] = useState<ApiRelationship | null>(null);
   const [explain, setExplain] = useState<ExplainResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -760,76 +781,110 @@ export function RelationshipInspectorPanel({
   // are the summary; the reports back the expandable RelationshipImpactCard.
   const [outgoingReport, setOutgoingReport] = useState<DependencyReport | null>(null);
   const [incomingReport, setIncomingReport] = useState<DependencyReport | null>(null);
+  const [impactError, setImpactError] = useState<string | null>(null);
   const [impactExpanded, setImpactExpanded] = useState(false);
-  const forwardCount = outgoingReport === null ? null : outgoingReport.relationships.length;
-  const reverseCount = incomingReport === null ? null : incomingReport.relationships.length;
+  // Both figures come from the SAME derivation the impact card renders (relationships/impact.ts),
+  // so the summary can never disagree with the list — and neither counts the inspected
+  // relationship itself, which is what made both figures read one too high.
+  const impactOrigin: ImpactOrigin | null =
+    rel === null ? null : { relationshipId: rel.id, source: rel.source, target: rel.target };
+  const forwardCount =
+    outgoingReport === null || impactOrigin === null
+      ? null
+      : deriveImpact(outgoingReport, impactOrigin).relationships.length;
+  const reverseCount =
+    incomingReport === null || impactOrigin === null
+      ? null
+      : deriveImpact(incomingReport, impactOrigin).relationships.length;
 
   // Skeleton debounce: only show skeleton after 500 ms (inspector-spec.md §"Loading state")
   const [showSkeleton, setShowSkeleton] = useState(false);
   const skeletonTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fetchGeneration = useRef(0);
 
-  const fetchRel = useCallback(async (id: string) => {
-    const generation = ++fetchGeneration.current;
-    setError(null);
-    setLoading(true);
-    setMutationDenial(null);
-    // Reset the per-relationship impact walk so a new selection never shows the previous one's graph.
-    setOutgoingReport(null);
-    setIncomingReport(null);
-    setImpactExpanded(false);
-    // 500 ms skeleton threshold
-    const timer = setTimeout(() => {
-      if (fetchGeneration.current === generation) {
-        setShowSkeleton(true);
-      }
-    }, 500);
-    skeletonTimer.current = timer;
-    try {
-      const [fetchedRel, fetchedExplain] = await Promise.all([getRelationship(id), getExplain(id)]);
-      if (fetchGeneration.current !== generation) {
-        return;
-      }
-      setRel(fetchedRel);
-      setExplain(fetchedExplain);
-
-      // Fetch the bounded dependency walk in both directions (#542). maxDepth is the server cap
-      // (MAX_IMPACT_DEPTH=3) rather than the depth-1 default, so the impact card shows the full
-      // transitive reachable set an operator needs before a delete/revoke — still bounded, with the
-      // truncation note covering anything beyond the cap. Errors are non-fatal: the impact surface
-      // degrades to "unavailable" without breaking the rest of the inspector.
+  // The bounded dependency walk is advisory for the rest of the inspector but NOT optional: a
+  // failure has to be stated. It used to sit in a bare `catch {}`, which left the summary showing
+  // an em dash (indistinguishable from "still loading") and the expanded card showing "Loading…"
+  // forever. Own generation counter so a retry never resurrects a superseded selection's walk.
+  const impactGeneration = useRef(0);
+  const fetchImpact = useCallback(
+    async (id: string) => {
+      const generation = ++impactGeneration.current;
+      setImpactError(null);
+      setOutgoingReport(null);
+      setIncomingReport(null);
+      // Depth and budget come from the bounded-query contract, not from restated numbers: the walk
+      // must show the full transitive reachable set an operator needs before a delete/revoke, and
+      // the request must stay inside the range the server accepts.
+      const walkOptions = {
+        maxDepth: RELATIONSHIP_QUERY_BOUNDS.impactDepthMax,
+        maxRelationships: RELATIONSHIP_QUERY_BOUNDS.impactRelationshipsDefault,
+      } as const;
       try {
         const [fwd, rev] = await Promise.all([
-          getDependencies(id, { direction: "outgoing", maxDepth: 3, maxRelationships: 512 }),
-          getDependencies(id, { direction: "incoming", maxDepth: 3, maxRelationships: 512 }),
+          getDependencies(id, { direction: "outgoing", ...walkOptions }),
+          getDependencies(id, { direction: "incoming", ...walkOptions }),
+        ]);
+        if (impactGeneration.current !== generation) return;
+        setOutgoingReport(fwd);
+        setIncomingReport(rev);
+      } catch (err) {
+        if (impactGeneration.current !== generation) return;
+        setImpactError(
+          err instanceof RelationshipApiError ? err.message : t("relationships.impact.failed"),
+        );
+      }
+    },
+    [t],
+  );
+
+  const fetchRel = useCallback(
+    async (id: string) => {
+      const generation = ++fetchGeneration.current;
+      setError(null);
+      setLoading(true);
+      setMutationDenial(null);
+      // Reset the per-relationship impact view so a new selection never shows the previous graph.
+      setImpactExpanded(false);
+      // 500 ms skeleton threshold
+      const timer = setTimeout(() => {
+        if (fetchGeneration.current === generation) {
+          setShowSkeleton(true);
+        }
+      }, 500);
+      skeletonTimer.current = timer;
+      try {
+        const [fetchedRel, fetchedExplain] = await Promise.all([
+          getRelationship(id),
+          getExplain(id),
         ]);
         if (fetchGeneration.current !== generation) {
           return;
         }
-        setOutgoingReport(fwd);
-        setIncomingReport(rev);
-      } catch {
-        // Impact is advisory; do not fail the inspector.
+        setRel(fetchedRel);
+        setExplain(fetchedExplain);
+        await fetchImpact(id);
+      } catch (err) {
+        if (fetchGeneration.current !== generation) {
+          return;
+        }
+        const msg = err instanceof RelationshipApiError ? err.message : BACKEND_UNREACHABLE_MESSAGE;
+        setError(msg);
+      } finally {
+        if (skeletonTimer.current === timer) {
+          clearTimeout(timer);
+          skeletonTimer.current = null;
+        } else {
+          clearTimeout(timer);
+        }
+        if (fetchGeneration.current === generation) {
+          setLoading(false);
+          setShowSkeleton(false);
+        }
       }
-    } catch (err) {
-      if (fetchGeneration.current !== generation) {
-        return;
-      }
-      const msg = err instanceof RelationshipApiError ? err.message : BACKEND_UNREACHABLE_MESSAGE;
-      setError(msg);
-    } finally {
-      if (skeletonTimer.current === timer) {
-        clearTimeout(timer);
-        skeletonTimer.current = null;
-      } else {
-        clearTimeout(timer);
-      }
-      if (fetchGeneration.current === generation) {
-        setLoading(false);
-        setShowSkeleton(false);
-      }
-    }
-  }, []);
+    },
+    [fetchImpact],
+  );
 
   useEffect(() => {
     if (relationshipId === null) {
@@ -916,6 +971,12 @@ export function RelationshipInspectorPanel({
   const handleViewImpact = useCallback(() => {
     setImpactExpanded((v) => !v);
   }, []);
+
+  // Retry the walk ALONE: the relationship read succeeded, so re-reading it would be noise.
+  const handleRetryImpact = useCallback(() => {
+    if (rel === null) return;
+    void fetchImpact(rel.id);
+  }, [rel, fetchImpact]);
 
   // Navigate the inspector to another relationship (clicked inside the impact card). Reuses the
   // parent's focus callback — selecting a related relationship is exactly "focus this id".
@@ -1070,16 +1131,21 @@ export function RelationshipInspectorPanel({
           </div>
 
           {/* Section 9: Impact summary + bounded dependency walk (#542) */}
-          <ImpactSection
-            relationshipId={rel.id}
-            forwardCount={forwardCount}
-            reverseCount={reverseCount}
-            outgoing={outgoingReport}
-            incoming={incomingReport}
-            expanded={impactExpanded}
-            onToggle={handleViewImpact}
-            onSelectRelationship={handleSelectRelated}
-          />
+          {impactOrigin !== null && (
+            <ImpactSection
+              relationshipId={rel.id}
+              forwardCount={forwardCount}
+              reverseCount={reverseCount}
+              outgoing={outgoingReport}
+              incoming={incomingReport}
+              origin={impactOrigin}
+              impactError={impactError}
+              onRetryImpact={handleRetryImpact}
+              expanded={impactExpanded}
+              onToggle={handleViewImpact}
+              onSelectRelationship={handleSelectRelated}
+            />
+          )}
 
           {/* Section 10: Denial reason (conditional) */}
           {showDenialSection && visibleDenial !== null && (

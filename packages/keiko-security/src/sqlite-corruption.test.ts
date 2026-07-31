@@ -82,6 +82,107 @@ describe("shape helpers", () => {
   });
 });
 
+// ── 0.3.0 audit item 6: the persisted quarantine diagnostic is hardened ────────
+//
+// `errorRecord` output is written VERBATIM into `<db>.corrupt.<ts>.diagnostic.json` by three stores,
+// so it is a persistence boundary. It used to emit the raw `cause.message`, a wholesale
+// `String(cause)` for non-Errors, and an unhardened mutable `cause.name`.
+describe("errorRecord hardening (persisted quarantine diagnostic)", () => {
+  // Fragmented literals so this source file contains no contiguous credential pattern.
+  const API_KEY = ["sk-", "proj", "_", "AbCDef0123456789", "GhIjKl"].join("");
+  const DSN_PASSWORD = "hunter2SuperSecret";
+
+  it("redacts credential-shaped content out of a SQLite error message", () => {
+    const record = errorRecord(
+      new Error(
+        `unable to open database: dsn=postgres://ops:${DSN_PASSWORD}@db.internal:5432/keiko api_key=${API_KEY}`,
+      ),
+    );
+    const serialized = JSON.stringify(record);
+    expect(serialized).not.toContain(DSN_PASSWORD);
+    expect(serialized).not.toContain(API_KEY);
+    expect(serialized).toContain("[REDACTED]");
+  });
+
+  it("redacts the SQLite code and errstr fields too, not just the message", () => {
+    const record = errorRecord({
+      code: `SQLITE_CANTOPEN api_key=${API_KEY}`,
+      errstr: `unable to open database file for ${API_KEY}`,
+      message: "open failed",
+    });
+    expect(JSON.stringify(record)).not.toContain(API_KEY);
+  });
+
+  it("caps an oversized message instead of persisting it whole", () => {
+    const record = errorRecord(new Error("x".repeat(20_000)));
+    expect(typeof record.message).toBe("string");
+    expect(String(record.message).length).toBeLessThanOrEqual(513);
+  });
+
+  it("never admits request-derived text through the mutable `name` property", () => {
+    const hostile = Object.assign(new Error("boom"), {
+      name: `Injected ${API_KEY} <script>${"A".repeat(500)}`,
+    });
+    const record = errorRecord(hostile);
+    expect(record.errorClass).toBe("Error");
+    expect(JSON.stringify(record)).not.toContain(API_KEY);
+    expect(JSON.stringify(record)).not.toContain("<script>");
+  });
+
+  it("keeps an over-long but identifier-shaped name out of the record", () => {
+    const record = errorRecord(Object.assign(new Error("boom"), { name: "A".repeat(200) }));
+    expect(record.errorClass).toBe("Error");
+  });
+
+  it("never invokes a hostile value's own toString", () => {
+    let called = false;
+    const hostile = {
+      code: "SQLITE_CORRUPT",
+      toString: (): string => {
+        called = true;
+        return API_KEY;
+      },
+    };
+    const record = errorRecord(hostile);
+    expect(called).toBe(false);
+    expect(record.message).toBe("[object]");
+    expect(JSON.stringify(record)).not.toContain(API_KEY);
+  });
+
+  it("does not let a throwing toString or accessor take the quarantine write down", () => {
+    const throwingToString = {
+      toString: (): string => {
+        throw new Error("toString exploded");
+      },
+    };
+    expect(() => errorRecord(throwingToString)).not.toThrow();
+
+    const throwingName = new Error("boom");
+    Object.defineProperty(throwingName, "name", {
+      get: (): string => {
+        throw new Error("name accessor exploded");
+      },
+    });
+    expect(() => errorRecord(throwingName)).not.toThrow();
+    expect(errorRecord(throwingName).errorClass).toBe("Error");
+  });
+
+  it("renders null, undefined, and primitives without stringifying an object", () => {
+    expect(errorRecord(null).message).toBe("null");
+    expect(errorRecord(undefined).message).toBe("undefined");
+    expect(errorRecord(42).message).toBe("42");
+    expect(errorRecord(true).message).toBe("true");
+    expect(errorRecord([1, 2, 3]).message).toBe("[object]");
+  });
+
+  it("preserves a declared subclass name that is identifier-shaped", () => {
+    expect(errorRecord(new SqliteQuickCheckError(["row 1 corrupt"])).errorClass).toBe(
+      "SqliteQuickCheckError",
+    );
+    expect(errorRecord(new TypeError("bad type")).errorClass).toBe("TypeError");
+  });
+});
+
 // The optional unwrap hook lets a wrapping domain error (e.g. keiko-local-knowledge's
 // KnowledgeStoreError, which carries the real SQLite error on `.cause`) be classified by its
 // underlying cause rather than the wrapper. Without unwrap the wrapper's own (non-corruption) shape

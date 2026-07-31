@@ -16,9 +16,9 @@ criteria, uncertainty handling, and safety rules. The transformation is **determ
 analyzer, planner, generator, critic, grounding planner, and safety assessor are all pure functions —
 no clock or randomness — so identical deterministic-only input yields an identical artefact and the
 suite gives reproducible CI coverage. When the caller supplies an enhancement `modelId`, the workflow
-can route the deterministic winner through a bounded model-assisted refinement stage. That stage must
-return validated JSON, preserve the deterministic safety and grounding guardrails, and falls back to
-the deterministic artefact when the model is unavailable, unsafe, or malformed.
+can route the deterministic winner through a bounded model-assisted refinement stage. That stage
+returns plain Markdown, is re-validated as a prompt in its own right, and falls back to the
+deterministic artefact when the model is unavailable, unsafe, or malformed.
 
 The Enhanced Prompt is **data, never a capability grant** (ADR-0044 §4): it isolates the untrusted
 user draft into a single `input` section, never self-authorizes tools, file writes, network egress, or
@@ -34,22 +34,31 @@ PromptEnhancementRequest
                  ├─ scorePromptCandidate({…})     → PromptCandidateScorecard  (keiko-model-gateway)
                  └─ assessPromptSafety({…})       → PromptSafetyAssessment    (keiko-model-gateway + keiko-security)
                       └─ optional model refine     → EnhancedPrompt | deterministic fallback (keiko-workflows + ModelPort)
+                           └─ assessPromptTextSafety({…}) → PromptSafetyAssessment of the RETURNED text
 ```
+
+**The validate stage always runs on the artefact that is returned** (ADR-0044 §5). Model refinement is
+skipped entirely when the deterministic prompt was already `rejected` (`fallbackReason:
+prompt-rejected-by-validation`), and refined text that the validate stage rejects never reaches the
+caller (`fallbackReason: model-unsafe-prompt`); in both cases the validated deterministic prompt is
+returned instead. Because a model-refined prompt has no marked untrusted region, all of its text is the
+trusted channel and is held to exactly the trusted-channel standard a generated candidate must pass.
 
 `generateEnhancedPrompt` internally calls `planGrounding` (keiko-contracts) so every Enhanced Prompt
 carries a complete `groundingPlan` (always present, even when its strategy is `no-grounding`).
 
-| Stage                                                                              | Module                                   | Entry point                                                           |
-| ---------------------------------------------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------- |
-| Analyze (taxonomy, domain, criticality, grounding need, output schema, risk flags) | `keiko-contracts`                        | `analyzePrompt`                                                       |
-| Grounding policy                                                                   | `keiko-contracts`                        | `planGrounding`                                                       |
-| Plan (profile, reasoning strategy/depth, token budget, safety posture)             | `keiko-model-gateway`                    | `PromptEnhancer.planPromptEnhancement`                                |
-| Generate the structured artefact                                                   | `keiko-model-gateway`                    | `PromptEnhancer.generateEnhancedPrompt`                               |
-| Deterministic critic (6 quality dimensions)                                        | `keiko-model-gateway`                    | `PromptEnhancer.scorePromptCandidate`                                 |
-| Candidate generation + bounded optimization                                        | `keiko-model-gateway`                    | `PromptEnhancer.generatePromptCandidates`, `optimizePromptCandidates` |
-| Validate / safety assessment                                                       | `keiko-model-gateway` + `keiko-security` | `PromptEnhancer.assessPromptSafety`, `detectPromptInjectionSignals`   |
-| Structural safety (pure)                                                           | `keiko-contracts`                        | `assessEnhancedPromptStructuralSafety`                                |
-| Evidence record (redact → hash → validate → write)                                 | `keiko-evidence`                         | `recordPromptEnhancementRun`                                          |
+| Stage                                                                              | Module                                   | Entry point                                                                   |
+| ---------------------------------------------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------- |
+| Analyze (taxonomy, domain, criticality, grounding need, output schema, risk flags) | `keiko-contracts`                        | `analyzePrompt`                                                               |
+| Grounding policy                                                                   | `keiko-contracts`                        | `planGrounding`                                                               |
+| Plan (profile, reasoning strategy/depth, token budget, safety posture)             | `keiko-model-gateway`                    | `PromptEnhancer.planPromptEnhancement`                                        |
+| Generate the structured artefact                                                   | `keiko-model-gateway`                    | `PromptEnhancer.generateEnhancedPrompt`                                       |
+| Deterministic critic (6 quality dimensions)                                        | `keiko-model-gateway`                    | `PromptEnhancer.scorePromptCandidate`                                         |
+| Candidate generation + bounded optimization                                        | `keiko-model-gateway`                    | `PromptEnhancer.generatePromptCandidates`, `optimizePromptCandidates`         |
+| Validate / safety assessment                                                       | `keiko-model-gateway` + `keiko-security` | `PromptEnhancer.assessPromptSafety`, `detectPromptInjectionSignals`           |
+| Validate a model-refined prompt (text only)                                        | `keiko-model-gateway` + `keiko-security` | `PromptEnhancer.assessPromptTextSafety`                                       |
+| Structural safety (pure)                                                           | `keiko-contracts`                        | `assessEnhancedPromptStructuralSafety`, `collectProhibitedPromptTextFindings` |
+| Evidence record (redact → hash → validate → write)                                 | `keiko-evidence`                         | `recordPromptEnhancementRun`                                                  |
 
 ## 3. Contracts surface (`keiko-contracts`)
 
@@ -103,7 +112,10 @@ capabilities:
   manifest (`recordPromptEnhancementRun`) following the Quality Intelligence template
   (record → redact → hash → validate → write). The original draft is represented as a stable SHA-256
   fingerprint plus a redacted, truncated excerpt; non-secret prompt text may remain in that excerpt, so
-  it is redacted evidence rather than anonymous telemetry. Current manifest schema:
+  it is redacted evidence rather than anonymous telemetry. `appliedSafetyRules` and
+  `appliedGroundingDirectives` are claims **about** `enhancedPromptText` and are derived from it: on a
+  model-refined run a deterministic rule is claimed only where the recorded text demonstrably still
+  carries it, and no grounding plan is bound to that text. Current manifest schema:
   `PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION = 2`.
 
 ## 5. Extension points

@@ -4,7 +4,7 @@
  * Bridges Monaco's `languages.registerCompletionItemProvider` to the host-injected
  * {@link EditorCompletionResolver}. The bridge is pure wiring: it maps a Monaco completion call to a
  * content-free {@link EditorCompletionRequest}, hands the host the request plus the live buffer text,
- * applies cross-boundary stale-response discard ({@link shouldDiscardResponse}, #1192), and maps the
+ * applies cross-boundary stale-response discard ({@link shouldDiscardAgainstLatest}, #1192), and maps the
  * returned {@link EditorCompletionResponse} items back to Monaco suggestions. It computes no
  * completions, calls no model, and performs no I/O — every result comes from the host resolver
  * (ADR-0042 D5).
@@ -13,8 +13,13 @@
  * `monaco-editor`), so the mappers are unit-testable without a browser and the module stays
  * import-side-effect-free.
  */
-import { shouldDiscardResponse } from "../completion-identity.js";
+import { shouldDiscardAgainstLatest } from "../completion-identity.js";
 import type { EditorLanguageId } from "../languages.js";
+import {
+  classifyResultKind,
+  runLanguageBridgeCall,
+  type EditorLanguageIntelligenceReporter,
+} from "./language-intelligence.js";
 import type {
   EditorCompletionItem,
   EditorCompletionItemKind,
@@ -263,6 +268,8 @@ export interface KeikoCompletionProviderDeps {
   readonly streamId: string;
   /** Unique request-id factory. Injected so tests stay deterministic. */
   readonly newRequestId: () => string;
+  /** Outcome sink so a completion failure is distinguishable from "no suggestions here". */
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function buildRequest(
@@ -294,73 +301,86 @@ function buildRequest(
   };
 }
 
+// Mutable per-instance supersession state: a monotonic sequence, the latest request identity, and the
+// in-flight controller (mirrors the inline-completion bridge's state bundle).
+interface CompletionProviderState {
+  sequence: number;
+  latest: EditorRequestIdentity | null;
+  activeController: AbortController | null;
+}
+
+// The provider's `provideCompletionItems` body, extracted so the factory stays a thin assembler.
+function provideCompletions(
+  deps: KeikoCompletionProviderDeps,
+  state: CompletionProviderState,
+  model: MonacoCompletionModel,
+  position: MonacoPositionLike,
+  context: MonacoCompletionContext,
+  token: MonacoCancellationToken,
+): Promise<MonacoCompletionList> {
+  const documentUri = model.uri.toString();
+  if (!deps.isCurrentDocument(documentUri)) {
+    return Promise.resolve(EMPTY_LIST);
+  }
+  state.sequence += 1;
+  const request = buildRequest(deps, model, position, context, state.sequence);
+  state.latest = request.request;
+
+  state.activeController?.abort();
+  const controller = new AbortController();
+  state.activeController = controller;
+  if (token.isCancellationRequested) {
+    controller.abort();
+  }
+  const cancellationSub = token.onCancellationRequested(() => {
+    controller.abort();
+  });
+
+  return runLanguageBridgeCall<EditorCompletionResponse, MonacoCompletionList>({
+    operation: "completion",
+    resolve: () => deps.resolve({ request, documentText: model.getValue() }, controller.signal),
+    // Cross-boundary stale-response discard: a later keystroke may have superseded this request while
+    // it was in flight. `state.latest` always holds the newest identity for this stream (it is
+    // assigned before the resolver call above), so a superseded response renders nothing.
+    isDiscarded: (response) =>
+      shouldDiscardAgainstLatest(response.request, state.latest) ||
+      !deps.isCurrentDocument(documentUri),
+    discardedValue: EMPTY_LIST,
+    failedValue: EMPTY_LIST,
+    classify: (response) => classifyResultKind(response.items.length, response.truncated),
+    present: (response) =>
+      responseToCompletionList(
+        response,
+        wordRangeAt(model, position),
+        deps.languages.CompletionItemKind,
+        deps.languages.CompletionItemInsertTextRule?.InsertAsSnippet,
+      ),
+    report: deps.report,
+  }).finally(() => {
+    cancellationSub.dispose();
+    if (state.activeController === controller) {
+      state.activeController = null;
+    }
+  });
+}
+
 /**
  * Create a Monaco completion provider backed by the host resolver. The provider:
  *  - builds a content-free {@link EditorCompletionRequest} with a monotonic per-stream sequence,
  *  - hands the resolver the request plus the live buffer text and an {@link AbortSignal} wired to
  *    Monaco's cancellation token,
  *  - discards a response that a later request has superseded (Acceptance Criterion 3), and
- *  - returns an empty list on any failure so a completion error never breaks editing (AC4).
+ *  - returns an empty list on any failure so a completion error never breaks editing (AC4) — while
+ *    reporting that failure through the shared seam, so an empty list stays distinguishable from one.
  */
-// eslint-disable-next-line max-lines-per-function
 export function createKeikoCompletionProvider(
   deps: KeikoCompletionProviderDeps,
 ): MonacoCompletionItemProvider {
-  let sequence = 0;
-  let latest: EditorRequestIdentity | null = null;
-  let activeController: AbortController | null = null;
-
+  const state: CompletionProviderState = { sequence: 0, latest: null, activeController: null };
   return {
     triggerCharacters: deps.triggerCharacters,
-    async provideCompletionItems(model, position, context, token): Promise<MonacoCompletionList> {
-      const documentUri = model.uri.toString();
-      if (!deps.isCurrentDocument(documentUri)) {
-        return EMPTY_LIST;
-      }
-      sequence += 1;
-      const request = buildRequest(deps, model, position, context, sequence);
-      latest = request.request;
-
-      activeController?.abort();
-      const controller = new AbortController();
-      activeController = controller;
-      if (token.isCancellationRequested) {
-        controller.abort();
-      }
-      const cancellationSub = token.onCancellationRequested(() => {
-        controller.abort();
-      });
-
-      try {
-        const response = await deps.resolve(
-          { request, documentText: model.getValue() },
-          controller.signal,
-        );
-        // Cross-boundary stale-response discard: a later keystroke may have superseded this request
-        // while it was in flight. `latest` always holds the newest identity for this stream (it is
-        // assigned before the await above), so a superseded response renders nothing.
-        if (shouldDiscardResponse(response.request, latest)) {
-          return EMPTY_LIST;
-        }
-        if (!deps.isCurrentDocument(documentUri)) {
-          return EMPTY_LIST;
-        }
-        return responseToCompletionList(
-          response,
-          wordRangeAt(model, position),
-          deps.languages.CompletionItemKind,
-          deps.languages.CompletionItemInsertTextRule?.InsertAsSnippet,
-        );
-      } catch {
-        // AC4: a completion failure (network, abort, host error) must never break editing.
-        return EMPTY_LIST;
-      } finally {
-        cancellationSub.dispose();
-        if (activeController === controller) {
-          activeController = null;
-        }
-      }
-    },
+    provideCompletionItems: (model, position, context, token): Promise<MonacoCompletionList> =>
+      provideCompletions(deps, state, model, position, context, token),
   };
 }
 
@@ -378,6 +398,7 @@ export interface RegisterKeikoCompletionProviderArgs {
   readonly contextBudgetBytes: number;
   readonly streamId: string;
   readonly newRequestId: () => string;
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
@@ -409,6 +430,7 @@ export function registerKeikoCompletionProvider(
       // Supersession is scoped per language registration; each serves a distinct model.
       streamId: `${args.streamId}:${documentLanguage}`,
       newRequestId: args.newRequestId,
+      report: args.report,
     });
     return args.languages.registerCompletionItemProvider(documentLanguage, provider);
   });

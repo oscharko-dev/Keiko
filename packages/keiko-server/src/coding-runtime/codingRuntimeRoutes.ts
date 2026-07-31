@@ -6,13 +6,16 @@ import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   parseCodingWorkbenchRuntimeReadinessRequest,
   resolveEffectiveCodingWorkbenchMode,
+  unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload,
   unpairedCodingWorkbenchRuntimeQuestionsChannelPayload,
   unpairedCodingWorkbenchRuntimeResearchChannelPayload,
   type CodingWorkbenchMode,
+  type CodingWorkbenchRuntimeApprovalReviewChannelPayload,
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimeQuestionsChannelPayload,
   type CodingWorkbenchRuntimeResearchChannelPayload,
   type CodingWorkbenchRuntimeSseEvent,
+  type CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -26,7 +29,6 @@ import {
 } from "../routes.js";
 import { SSE_HEADERS } from "../sse.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
-import { decideCodingRuntimeModeChange } from "./codingRuntimeModeChangeGate.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -137,6 +139,37 @@ async function withBody(work: () => Promise<RouteResult>): Promise<RouteResult> 
   }
 }
 
+/**
+ * The single authority choke point for every state-changing coding-runtime route.
+ *
+ * ADR-0141 D1 fixes loopback, same-origin `Origin`, the constant CSRF header, and `runId` knowledge
+ * as routing facts that never grant a route; D2 makes the launcher-attested app session the
+ * authority. Enforcement was scoped to the content-bearing question and research reads (W1.5,
+ * #2478), which left the authority-GRANTING lifecycle mutations — start, approve, stop, takeover,
+ * retry, recovery-ack, pause, resume, follow-up, research revoke — reachable by any same-user local
+ * process that replayed those routing facts. Every one of them funnels through this helper, so the
+ * boundary lives here once: a route that cannot mutate without `mutation()` cannot forget the
+ * guard, and a future lifecycle route inherits it by construction.
+ *
+ * The check runs BEFORE run resolution and before the body is read (ADR-0141 F1 ordering), and it
+ * fails closed: an absent channel, an absent cookie, a forged, revoked, rotated-away, or expired
+ * session all resolve to no authority and are denied. The denial shape is deliberately split:
+ *   - a per-run mutation answers with the existence-concealing not-found result, byte-identical to
+ *     the response an unknown `runId` yields, so the denial is not a run-existence oracle
+ *     (ADR-0141 D6, the same posture the question mutations already take);
+ *   - the run-creating `POST /runs` names no run and conceals no existence, so it answers with the
+ *     honest `authority-resolution-failed` the Workbench already renders as an actionable start
+ *     failure — never a dead button, and never a silent success.
+ */
+function requireMutationAuthority(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string | undefined,
+): RouteResult | undefined {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) !== undefined) return undefined;
+  return runId === undefined ? failureResult("authority-resolution-failed") : notFound();
+}
+
 async function mutation(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -146,6 +179,8 @@ async function mutation(
     body: unknown,
   ) => ReturnType<CodingRuntimeOrchestrator["start"]>,
 ): Promise<RouteResult> {
+  const denied = requireMutationAuthority(ctx, deps, runId);
+  if (denied !== undefined) return denied;
   const required = requireRuntime(deps);
   if (isRouteResult(required)) return required;
   if (runId !== undefined && !required.orchestrator.getSnapshot(runId)) return notFound();
@@ -205,10 +240,28 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
 }
 
 /**
- * The server-confirmed effective mode is anchored to the live run (#2386): a requested change is
- * confirmed only when the mode-change gate admits it — while the run is idle or paused, and
- * widening only from idle. A rejected request keeps confirming the run's own effective posture,
- * so the browser can never display a widened authority the server did not grant.
+ * States in which a run still holds the Authority Envelope minted for it. `effectiveMode` is fixed
+ * at mint (`CodingRuntimeAuthorityService.mintConfirmedStartForRun`) and nothing re-mints it —
+ * `resume` only clears the manager's paused flag — so for these states the run's own posture is
+ * the only truthful answer to "what authority does this run actually hold".
+ */
+const RUN_STATES_HOLDING_MINTED_AUTHORITY: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
+  "starting",
+  "ready",
+  "running",
+  "awaiting-approval",
+  "paused",
+  "stopping",
+]);
+
+/**
+ * The server-confirmed effective mode is anchored to the live run (#2386), so the browser can
+ * never display an authority the server did not grant — in EITHER direction. While a run holds a
+ * minted envelope the answer is that run's ceiling-clamped posture: a widening request is not
+ * granted, and a narrowing one is not applied either (0.3.0 release audit — the mode-change gate
+ * admits a narrowing selection from `paused`, but no code path re-mints the live envelope, so
+ * confirming it understated the authority the tool facade actually enforces). Once no envelope is
+ * held, the next start or retry mints from the request, so the clamped request is the truth.
  */
 function confirmedEffectiveMode(
   deps: UiHandlerDeps,
@@ -216,18 +269,13 @@ function confirmedEffectiveMode(
   deploymentCeiling: CodingWorkbenchMode,
 ): CodingWorkbenchMode {
   const current = deps.codingRuntimeOrchestrator?.status();
-  if (current?.runId === undefined || current.requestedMode === undefined) {
+  if (
+    current?.requestedMode === undefined ||
+    !RUN_STATES_HOLDING_MINTED_AUTHORITY.has(current.state)
+  ) {
     return resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling);
   }
-  const decision = decideCodingRuntimeModeChange({
-    currentState: current.state,
-    currentRequestedMode: current.requestedMode,
-    requestedMode,
-    deploymentCeiling,
-  });
-  return decision.ok
-    ? decision.effectiveMode
-    : resolveEffectiveCodingWorkbenchMode(current.requestedMode, deploymentCeiling);
+  return resolveEffectiveCodingWorkbenchMode(current.requestedMode, deploymentCeiling);
 }
 
 export function handleGetCodingRuntimeRun(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
@@ -418,6 +466,34 @@ export function handleCodingRuntimeResearch(ctx: RouteContext, deps: UiHandlerDe
   return { status: 200, body: payload };
 }
 
+/**
+ * The authenticated approval-review projection (#2802): which workspace files the pending edit
+ * approval would write and how large the change is. A human cannot exercise control over a change
+ * they are not shown (ADR-0129 D1) — and the paths are model-selected, so like the research ask
+ * they may not ride the general runtime snapshot or the SSE projection (#2644). An unpaired caller
+ * receives the one constant content-free payload BEFORE any run resolution, so this route is never
+ * an existence oracle (ADR-0141 D6). Patch bytes, file bodies and model prose are not carried.
+ */
+export function handleCodingRuntimeApprovalReview(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): RouteResult {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    return { status: 200, body: unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload() };
+  }
+  const runId = ctx.params.runId;
+  if (runId === undefined) return notFound();
+  const required = requireRuntime(deps);
+  if (isRouteResult(required)) return required;
+  if (!required.orchestrator.getSnapshot(runId)) return notFound();
+  const pending = required.orchestrator.pendingApprovalReview(runId);
+  const payload: CodingWorkbenchRuntimeApprovalReviewChannelPayload = {
+    session: "active",
+    ...(pending === undefined ? {} : { pending }),
+  };
+  return { status: 200, body: payload };
+}
+
 function frame(event: CodingWorkbenchRuntimeSseEvent): string {
   return `id: ${event.cursor}\nevent: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`;
 }
@@ -496,6 +572,11 @@ export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/coding-workbench/runtime/runs/:runId/research",
     handler: handleCodingRuntimeResearch,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/approval-review",
+    handler: handleCodingRuntimeApprovalReview,
   },
   {
     method: "POST",

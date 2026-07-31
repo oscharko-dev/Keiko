@@ -437,6 +437,11 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       createdPrExternalId: "1577",
     })),
     mergePreview: vi.fn<GitClientSeam["mergePreview"]>(async () => makeMergePreview()),
+    mergeApprove: vi.fn<GitClientSeam["mergeApprove"]>(async () => ({
+      schemaVersion: "1",
+      approval: { schemaVersion: "1", approvalId: "gda_gcw", approvalToken: "token-gcw" },
+      expiresAt: "2026-01-01T00:00:00.000Z",
+    })),
     mergeExecute: vi.fn<GitClientSeam["mergeExecute"]>(async () => ({
       schemaVersion: "1",
       status: "succeeded",
@@ -1211,6 +1216,129 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     await waitFor(() => expect(screen.getByRole("button", { name: "New branch" })).toHaveFocus());
   });
 
+  it("keeps the new-branch dialog open and shows the reason when the create-then-switch is blocked", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      branchCreate: vi.fn<GitClientSeam["branchCreate"]>(async () => ({
+        schemaVersion: "1",
+        status: "blocked",
+        actionKind: "branch-create",
+        preflightFindingCodes: ["branch-already-exists"],
+      })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
+
+    await user.click(screen.getByRole("button", { name: "New branch" }));
+    const dialog = screen.getByRole("dialog", { name: "New branch" });
+    await user.type(within(dialog).getByLabelText("Branch name"), "feat/x");
+    await user.click(within(dialog).getByRole("button", { name: "Create branch" }));
+
+    await waitFor(() => expect(client.branchCreate).toHaveBeenCalled());
+    // A rejected create must never proceed to switch, and the dialog must stay open with the
+    // rejection reason visible instead of silently sitting there with no explanation.
+    expect(client.branchSwitch).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "New branch" })).toBeInTheDocument();
+    const outcome = within(dialog).getByTestId("git-branch-outcome");
+    expect(outcome).toHaveTextContent("Blocked");
+    expect(outcome).toHaveTextContent("branch-already-exists");
+  });
+
+  // Sibling-handoff gap: sync-outcome classification was fixed for fetch/pull/push, but a
+  // rejected branch switch was never wired to any visible outcome — the busy spinner just turns
+  // off and the branch silently stays put with no reason shown (#2841 follow-up).
+  it("surfaces a blocked branch-switch outcome instead of silently swallowing it", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      branchSwitch: vi.fn<GitClientSeam["branchSwitch"]>(async () => ({
+        schemaVersion: "1",
+        status: "blocked",
+        actionKind: "branch-switch",
+        preflightFindingCodes: ["switch-target-missing"],
+      })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
+
+    await user.click(screen.getByRole("combobox", { name: "Branch: main" }));
+    await user.click(screen.getByRole("option", { name: /feat\/x/ }));
+
+    await waitFor(() =>
+      expect(client.branchSwitch).toHaveBeenCalledWith({
+        projectId: REPO_A.path,
+        branchName: "feat/x",
+      }),
+    );
+
+    const outcome = await screen.findByTestId("git-branch-outcome");
+    expect(outcome).toHaveTextContent("Blocked");
+    expect(outcome).toHaveTextContent("switch-target-missing");
+  });
+
+  it("surfaces a failed branch-switch outcome with its execution error code", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      branchSwitch: vi.fn<GitClientSeam["branchSwitch"]>(async () => ({
+        schemaVersion: "1",
+        status: "failed",
+        actionKind: "branch-switch",
+        executionErrorCode: "conflict",
+      })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
+
+    await user.click(screen.getByRole("combobox", { name: "Branch: main" }));
+    await user.click(screen.getByRole("option", { name: /feat\/x/ }));
+
+    await waitFor(() => expect(client.branchSwitch).toHaveBeenCalled());
+
+    const outcome = await screen.findByTestId("git-branch-outcome");
+    expect(outcome).toHaveTextContent("Failed");
+    expect(outcome).toHaveTextContent("conflict");
+  });
+
+  it("does not surface a stale branch-switch outcome after switching repositories", async () => {
+    let resolveSwitch!: (v: {
+      readonly schemaVersion: "1";
+      readonly status: "blocked";
+      readonly actionKind: string;
+      readonly preflightFindingCodes: readonly string[];
+    }) => void;
+    const switchPending = new Promise<{
+      readonly schemaVersion: "1";
+      readonly status: "blocked";
+      readonly actionKind: string;
+      readonly preflightFindingCodes: readonly string[];
+    }>((res) => {
+      resolveSwitch = res;
+    });
+    const client = makeClient({
+      branchSwitch: vi.fn<GitClientSeam["branchSwitch"]>(() => switchPending),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Branch: main" }));
+    fireEvent.click(screen.getByRole("option", { name: /feat\/x/ }));
+    await waitFor(() => expect(client.branchSwitch).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Repository" }));
+    fireEvent.click(await screen.findByRole("option", { name: /beta/ }));
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path));
+
+    await act(async () => {
+      resolveSwitch({
+        schemaVersion: "1",
+        status: "blocked",
+        actionKind: "branch-switch",
+        preflightFindingCodes: ["switch-target-missing"],
+      });
+    });
+
+    expect(screen.queryByTestId("git-branch-outcome")).not.toBeInTheDocument();
+  });
+
   it("renders commit history and selected commit diff metadata", async () => {
     const user = userEvent.setup();
     const client = makeClient({ getHistory: vi.fn(async () => makeHistory()) });
@@ -1356,6 +1484,78 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     });
   });
 
+  // A settled-but-FAILED sync used to render in the neutral success pill (role=status,
+  // --fg-muted) as the untranslated machine token, e.g. "Pull: auth-failed".
+  it("renders a failed fetch/pull outcome as an alert in human language", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getSummary: vi.fn(async () => makeSummary({ behind: 2 })),
+      syncPreview: vi.fn<GitClientSeam["syncPreview"]>(async (input) =>
+        makeSyncPreview(input.operation, { behind: 2 }),
+      ),
+      syncExecute: vi.fn<GitClientSeam["syncExecute"]>(async (input) => ({
+        schemaVersion: "1",
+        operation: input.operation,
+        status: "remote-unavailable",
+        available: true,
+        truncated: false,
+      })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("button", { name: "Run sync: Pull" }));
+    await waitFor(() => expect(client.syncExecute).toHaveBeenCalled());
+
+    const pill = await screen.findByRole("alert");
+    expect(pill).toHaveTextContent(/remote/i);
+    expect(pill).not.toHaveTextContent("remote-unavailable");
+    expect(screen.queryByRole("status", { name: /Pull:/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps a successful sync outcome in the neutral status pill", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getSummary: vi.fn(async () => makeSummary({ behind: 2 })),
+      syncPreview: vi.fn<GitClientSeam["syncPreview"]>(async (input) =>
+        makeSyncPreview(input.operation, { behind: 2 }),
+      ),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("button", { name: "Run sync: Pull" }));
+    await waitFor(() => expect(client.syncExecute).toHaveBeenCalled());
+
+    expect(await screen.findByRole("status", { name: /Pull: succeeded/ })).toBeInTheDocument();
+  });
+
+  // The server computes publishRejectionReason / recoveryActionHint for a rejected push; the Git
+  // window's sync path never rendered either, so a rejected push read as a neutral "Push: failed".
+  it("surfaces the push rejection reason and the recovery hint", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getSummary: vi.fn(async () => makeSummary({ ahead: 2 })),
+      pushExecute: vi.fn<GitClientSeam["pushExecute"]>(async () => ({
+        schemaVersion: "1",
+        status: "failed",
+        actionKind: "push",
+        executionErrorCode: "precondition-failed",
+        publishRejectionReason: "non-fast-forward",
+        recoveryDisposition: "user-fixable",
+        recoveryActionHint: "resolve-conflicts",
+      })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("button", { name: "Run sync: Push" }));
+    await waitFor(() => expect(client.pushExecute).toHaveBeenCalled());
+
+    const pill = await screen.findByRole("alert");
+    expect(pill).toHaveTextContent(/newer commits/i);
+    expect(pill).toHaveTextContent(/resolve/i);
+    expect(pill).not.toHaveTextContent("non-fast-forward");
+    expect(pill).not.toHaveTextContent("resolve-conflicts");
+  });
+
   it("shows diverged branches as an explicit safe fetch state with merge guidance", async () => {
     const client = makeClient({
       getSummary: vi.fn(async () => makeSummary({ ahead: 2, behind: 3 })),
@@ -1421,6 +1621,31 @@ describe("GitClientWindow — Changes/History tabs", () => {
       "aria-selected",
       "false",
     );
+  });
+
+  // The server already reports `truncated` for a capped history read (and the Changes and Diff panes
+  // both label their own truncation); History dropped the label, so the list silently claimed to be
+  // the whole history.
+  it("labels a truncated commit history instead of presenting it as complete", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({ getHistory: vi.fn(async () => makeHistory({ truncated: true })) });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("tab", { name: "History" }));
+    await waitFor(() => expect(client.getHistory).toHaveBeenCalled());
+
+    expect(await screen.findByText(/truncated/i)).toBeInTheDocument();
+  });
+
+  it("does not label an untruncated commit history", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({ getHistory: vi.fn(async () => makeHistory()) });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("tab", { name: "History" }));
+    await waitFor(() => expect(client.getHistory).toHaveBeenCalled());
+
+    expect(screen.queryByText(/truncated/i)).not.toBeInTheDocument();
   });
 
   it("ArrowRight on Changes tab moves focus and selection to History", async () => {

@@ -50,6 +50,7 @@ import {
 } from "./workspaceActions";
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import type { WorkspaceUiSelectionState } from "@oscharko-dev/keiko-contracts";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 export type { AppWindow, View };
 export type { UseWorkspaceResult, ViewportWorld };
@@ -849,7 +850,7 @@ export function resetWorkspaceKeepaliveOvercapCount(): void {
 }
 
 // Surfaced (not swallowed) when the final flush cannot be delivered — a bounded
-// per-origin console.warn so an oversize/rejected keepalive is observable rather
+// per-origin diagnostic so an oversize/rejected keepalive is observable rather
 // than a silent data loss. Never logs body contents (SEC: no secret-shaped
 // payloads escape). Counter is process-local and used by the perf/telemetry test.
 let workspaceKeepaliveOvercapCount = 0;
@@ -858,17 +859,15 @@ export function readWorkspaceKeepaliveOvercapCount(): number {
 }
 function surfaceWorkspaceKeepaliveOvercap(byteLength: number): void {
   workspaceKeepaliveOvercapCount += 1;
-  if (typeof console !== "undefined" && typeof console.warn === "function") {
-    console.warn(
-      `workspace-state: keepalive body ${String(byteLength)}B over budget; retrying without keepalive`,
-    );
-  }
+  reportClientDiagnostic(
+    `workspace-state: keepalive body ${String(byteLength)}B over budget; retrying without keepalive`,
+  );
 }
 
 // Server sync failures were swallowed by bare `catch { return null; }` — network
 // errors, non-OK statuses (e.g. a 413 over the server body cap) and malformed
 // payloads were indistinguishable and invisible, silently degrading the workspace
-// to localStorage-only persistence. Surface ONE bounded, body-free console.warn
+// to localStorage-only persistence. Surface ONE bounded, body-free diagnostic
 // per outage (re-armed by the next successful exchange, so a recovered-then-broken
 // sync warns again) — the same bounded-surface pattern as the keepalive overcap
 // above. Never logs snapshot contents. Counter is process-local for tests.
@@ -886,11 +885,9 @@ function surfaceWorkspaceSyncFailure(op: "pull" | "put", detail: string): void {
   workspaceSyncFailureCount += 1;
   if (workspaceSyncFailureSurfaced) return;
   workspaceSyncFailureSurfaced = true;
-  if (typeof console !== "undefined" && typeof console.warn === "function") {
-    console.warn(
-      `workspace-state: ${op} ${detail}; workspace changes persist locally until sync recovers`,
-    );
-  }
+  reportClientDiagnostic(
+    `workspace-state: ${op} ${detail}; workspace changes persist locally until sync recovers`,
+  );
 }
 function noteWorkspaceSyncRecovered(): void {
   workspaceSyncFailureSurfaced = false;
@@ -1427,6 +1424,15 @@ function useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef }: UseKeybo
         cancelConnectRef.current();
         return;
       }
+      // Audit — the window geometry chords share Alt+Arrow with the editor tab strip's
+      // reorder/move-to-pane handler (`handleAltArrowTabKey` in EditorWidget.tsx), so ONE Alt+Left
+      // press both reordered the tab AND resized the editor window a step — and persisted the new
+      // geometry. This window-level listener is the LAST stop in the bubble path, which makes it
+      // the layer that owns the collision: a surface that has already consumed the chord marks the
+      // event handled via preventDefault, and a geometry chord must never act on a key the focused
+      // surface owns. Honouring `defaultPrevented` fixes the whole class (the Files/Project tree
+      // arrow navigation had the same double-action), not just the editor tab strip.
+      if (e.defaultPrevented) return;
       if (isFormField(document.activeElement)) return;
       // GEN-UI-KEYBOARD-006 — every geometry/content chord now acts on the window
       // that currently holds focus, not the topmost window regardless of focus.

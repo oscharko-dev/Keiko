@@ -15,6 +15,7 @@ import { useCallback, useId, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import {
   ApiError,
+  fetchGitDeliveryMergeApprove,
   fetchGitDeliveryMergeExecute,
   fetchGitDeliveryMergePreview,
   type GitDeliveryMergeExecuteResponse,
@@ -33,11 +34,18 @@ const CheckIcon = Icons.check;
 
 export interface GovernedMergeClient {
   readonly mergePreview: typeof fetchGitDeliveryMergePreview;
+  // Mints the server-issued approval claim the default approval-gated merge policy requires. Before
+  // this existed, nothing in the product could ever produce a claim execute would accept, so a
+  // policy-gated merge was unreachable from this card by construction (issue: "Merge is unreachable
+  // by construction"). onExecute below mints one immediately before execute whenever the loaded
+  // preview says requiresApproval.
+  readonly mergeApprove: typeof fetchGitDeliveryMergeApprove;
   readonly mergeExecute: typeof fetchGitDeliveryMergeExecute;
 }
 
 const DEFAULT_CLIENT: GovernedMergeClient = {
   mergePreview: fetchGitDeliveryMergePreview,
+  mergeApprove: fetchGitDeliveryMergeApprove,
   mergeExecute: fetchGitDeliveryMergeExecute,
 };
 
@@ -125,6 +133,11 @@ interface MergeForm {
   // Empty until a preview seeds the eligible-strategy selector with the preview's default (AC2).
   readonly mergeStrategy: string;
   readonly deleteBranchAfterMerge: boolean;
+  // Empty until a preview reports the provider's current head SHA. Forwarded to execute as the
+  // GitHub merge `sha` guard so the merge is PINNED to the exact head the readiness/approval decision
+  // was made against — an unpinned merge would silently merge whatever the head has become by the
+  // time execute runs, even if it advanced after the last preview.
+  readonly expectedHeadRefHash: string;
 }
 
 function initialForm({
@@ -145,6 +158,7 @@ function initialForm({
     headBranchName: headBranchName ?? "",
     mergeStrategy: "",
     deleteBranchAfterMerge: false,
+    expectedHeadRefHash: "",
   };
 }
 
@@ -172,6 +186,7 @@ function formToInput(form: MergeForm, projectId: string): GitDeliveryMergeInput 
     // member of the closed strategy set by the time execute is reachable.
     mergeStrategy: (form.mergeStrategy || "provider-default") as GitDeliveryMergeStrategy,
     deleteBranchAfterMerge: form.deleteBranchAfterMerge,
+    ...(form.expectedHeadRefHash === "" ? {} : { expectedHeadRefHash: form.expectedHeadRefHash }),
   };
 }
 
@@ -188,7 +203,11 @@ interface MergeAsync extends MergeAsyncState {
   readonly runPreview: (
     input: GitDeliveryMergeInput,
   ) => Promise<GitDeliveryMergePreviewResponse | null>;
-  readonly runExecute: (input: GitDeliveryMergeInput) => void;
+  // `requiresApproval` mirrors the loaded preview's `requiresApproval` flag: when true, an approval
+  // claim is minted (via client.mergeApprove) and attached to the SAME input before execute runs, so
+  // the default approval-gated merge policy — which execute enforces unconditionally server-side — is
+  // actually satisfiable from this card instead of failing every time with "approval-required".
+  readonly runExecute: (input: GitDeliveryMergeInput, requiresApproval: boolean) => void;
 }
 
 function useGovernedMergeActions(client: GovernedMergeClient): MergeAsync {
@@ -227,11 +246,19 @@ function useGovernedMergeActions(client: GovernedMergeClient): MergeAsync {
   );
 
   const runExecute = useCallback(
-    (input: GitDeliveryMergeInput): void => {
+    (input: GitDeliveryMergeInput, requiresApproval: boolean): void => {
       const token = (seq.current += 1);
       setState((s) => ({ ...s, busy: true, error: null, outcome: null }));
-      void client
-        .mergeExecute(input)
+      // When the loaded preview requires final approval, mint the claim FIRST and attach it to the
+      // identical input before calling execute — the mint route binds to that exact typed command, so
+      // the claim it returns is redeemable only for this same target/strategy/delete-flag combination.
+      const readyToExecute = requiresApproval
+        ? client
+            .mergeApprove(input)
+            .then((approved): GitDeliveryMergeInput => ({ ...input, approval: approved.approval }))
+        : Promise.resolve(input);
+      void readyToExecute
+        .then((executeInput) => client.mergeExecute(executeInput))
         .then((outcome) => {
           if (token !== seq.current) return;
           setState((s) => ({ ...s, busy: false, outcome }));
@@ -587,7 +614,13 @@ function GovernedMergeBody({
       // Default the selection to the preview's chosen default strategy (AC2 — never a hard-coded UI
       // default). When the preview offers no default, fall back to the first eligible value.
       const next = preview.selectedDefaultStrategy ?? preview.eligibleStrategies[0] ?? "";
-      setForm((f) => ({ ...f, mergeStrategy: next }));
+      // Pin the merge to the exact head the readiness decision was made against (fixes the previously
+      // unpinned merge — see execute request construction in formToInput above).
+      setForm((f) => ({
+        ...f,
+        mergeStrategy: next,
+        expectedHeadRefHash: preview.headRefHash ?? "",
+      }));
       // This preview is valid only for the target it was run against; a later target edit re-gates.
       setPreviewedKey(previewedTarget);
       // A fresh preview re-arms the high-risk confirmation.
@@ -595,10 +628,16 @@ function GovernedMergeBody({
     });
   }, [async, form, projectId]);
 
+  // The loaded preview must be for the CURRENT target — editing a target field after a preview re-gates
+  // the merge until a fresh preview confirms the new target's readiness/approval (AC1).
+  const targetKey = targetKeyOf(form);
+  const preview = previewedKey === targetKey ? async.preview : null;
+  const requiresApproval = preview?.requiresApproval ?? false;
+
   const onExecute = useCallback((): void => {
     setActionKey(targetKeyOf(form));
-    async.runExecute(formToInput(form, projectId));
-  }, [async, form, projectId]);
+    async.runExecute(formToInput(form, projectId), requiresApproval);
+  }, [async, form, projectId, requiresApproval]);
 
   // Preview needs the full target; execute additionally requires a loaded preview, a chosen strategy, a
   // mergeable PR, and — when the policy gates approval — the explicit high-risk confirmation.
@@ -607,11 +646,6 @@ function GovernedMergeBody({
     isValidPrNumber(form.prExternalId) &&
     form.baseBranchName !== "" &&
     form.headBranchName !== "";
-  const targetKey = targetKeyOf(form);
-  // The loaded preview must be for the CURRENT target — editing a target field after a preview re-gates
-  // the merge until a fresh preview confirms the new target's readiness/approval (AC1).
-  const preview = previewedKey === targetKey ? async.preview : null;
-  const requiresApproval = preview?.requiresApproval ?? false;
   const mergeable = preview?.readiness.mergeable ?? false;
   const previewMatchesTarget = preview !== null;
   const visibleOutcome = actionKey === targetKey ? async.outcome : null;

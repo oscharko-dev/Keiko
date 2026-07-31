@@ -1,6 +1,8 @@
 import {
+  parseWorkspaceManifestAccess,
   validateWorkspaceManifest,
   type WorkspaceManifest,
+  type WorkspaceManifestAccess,
   type WorkspaceRootDescriptor,
   type WorkspaceRootDispatch,
   type WorkspaceRootDispatchOperationClass,
@@ -12,11 +14,6 @@ import { codingAppSessionPairingSettled } from "./coding-app-session-client";
 const WORKSPACES_URL = "/api/workspaces";
 
 export const WORKSPACE_MANIFEST_CHANGED_EVENT = "keiko:workspace-manifest-changed";
-
-export interface WorkspaceManifestAccess {
-  readonly session: "paired" | "unpaired";
-  readonly manifests: readonly WorkspaceManifest[];
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -33,19 +30,13 @@ function assertManifest(path: string, value: unknown): WorkspaceManifest {
   return value as WorkspaceManifest;
 }
 
+// The wire shape, the pairing union, and the fail-closed marker resolution are owned by
+// keiko-contracts (ADR-0019), so this client cannot drift from what the server route asserts. An
+// absent marker resolves to "unknown" there and is NOT read as a pairing.
 function manifestListValidator(path: string, value: unknown): WorkspaceManifestAccess {
-  if (!isRecord(value) || !Array.isArray(value["manifests"])) {
-    throw invalidManifestResponse(path);
-  }
-  const session = value["session"];
-  if (session !== undefined && session !== "unpaired") {
-    throw invalidManifestResponse(path);
-  }
-  const manifests = value["manifests"].map((candidate) => assertManifest(path, candidate));
-  if (session === "unpaired" && manifests.length > 0) {
-    throw invalidManifestResponse(path);
-  }
-  return { session: session === "unpaired" ? "unpaired" : "paired", manifests };
+  const parsed = parseWorkspaceManifestAccess(value);
+  if (!parsed.ok) throw invalidManifestResponse(path);
+  return parsed.access;
 }
 
 function manifestMutationValidator(path: string, value: unknown): WorkspaceManifest {

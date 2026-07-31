@@ -293,13 +293,32 @@ describe("pr preview — read-only metadata + readiness (AC1/AC2/AC3)", () => {
     ).toBe(400);
   });
 
+  // The invariant: a PR body carrying a credential is refused at the boundary. The sample is a
+  // realistic token because the guard now matches a credential VALUE rather than the bare word
+  // "Bearer" — the substring test rejected ordinary prose (see the accepted cases below), which made
+  // the PR surface unusable for any description that mentioned auth at all.
   it("400s a credential-shaped body", async () => {
     const handler = createHandlePrPreview({ execution: seams() });
     const res = await handler(
-      ctxFor(PREVIEW, createBody({ body: "see Authorization: Bearer abc123" })),
+      ctxFor(
+        PREVIEW,
+        createBody({
+          body: "see Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abcdefghij",
+        }),
+      ),
       deps(),
     );
     expect(res.status).toBe(400);
+  });
+
+  it.each([
+    "Rejects a malformed bearer token before the retry loop.",
+    "Documents the api_key rotation runbook and the basic auth fallback.",
+    "Drops the set-cookie header on redirect.",
+  ])("accepts an ordinary description that merely mentions auth: %s", async (body) => {
+    const handler = createHandlePrPreview({ execution: seams() });
+    const res = await handler(ctxFor(PREVIEW, createBody({ body })), deps());
+    expect(res.status).toBe(200);
   });
 });
 

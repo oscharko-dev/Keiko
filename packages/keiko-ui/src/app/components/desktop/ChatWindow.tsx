@@ -77,6 +77,7 @@ import { FileIcon } from "./widgets/shared/projectTree";
 import type {
   AttachmentRejectionReason,
   ChatSessionApi,
+  PendingAttachment,
   SendMessageOutcome,
   SendStatus,
   SentDocumentDisclosure,
@@ -2545,6 +2546,28 @@ function ComposerStatusRow({
 // Extracted from ComposerCoreImpl (SonarCloud S3776) — the voice-dialogue overlay: the announced
 // headline live region (only while the aura is active) and the Voice Dialogue control layer
 // (only while available), each independently gated.
+// #2843 — the composer's chip strip lives in the normal layer, which becomes `inert` + `aria-hidden`
+// while dialogue is active. A spoken turn carries the staged attachments exactly like a typed one
+// (useChatSession `executeSendAttempt`), so the user must be able to see and remove them in the layer
+// that is actually interactive — previously the chips were silently unreachable for the whole
+// dialogue. Rendered only while dialogue is active so the accessible chip set is never duplicated.
+function VoiceDialogAttachments({
+  attachments,
+  onRemove,
+}: {
+  readonly attachments: readonly PendingAttachment[];
+  readonly onRemove: (id: string) => void;
+}): ReactNode {
+  const t = useTranslate();
+  if (attachments.length === 0) return null;
+  return (
+    <div className={styles["cmp-voice-attachments"]}>
+      <p className={styles["cmp-voice-attachments-label"]}>{t("attachment.voiceStaged")}</p>
+      <AttachmentStrip attachments={attachments} onRemove={onRemove} />
+    </div>
+  );
+}
+
 function ComposerVoiceOverlay({
   voiceAuraActive,
   announcedVoiceHeadline,
@@ -2560,6 +2583,8 @@ function ComposerVoiceOverlay({
   onDismissVoiceError,
   voiceDialogButtonRef,
   compact,
+  pendingAttachments,
+  onRemoveAttachment,
 }: {
   readonly voiceAuraActive: boolean;
   readonly announcedVoiceHeadline: string;
@@ -2575,6 +2600,8 @@ function ComposerVoiceOverlay({
   readonly onDismissVoiceError: () => void;
   readonly voiceDialogButtonRef: Ref<HTMLButtonElement>;
   readonly compact: boolean;
+  readonly pendingAttachments: readonly PendingAttachment[];
+  readonly onRemoveAttachment: (id: string) => void;
 }): ReactNode {
   return (
     <>
@@ -2600,6 +2627,12 @@ function ComposerVoiceOverlay({
               <VoiceRealtimeStatusFromController
                 controller={realtimeVoiceController}
                 onAfterDismiss={onDismissVoiceError}
+              />
+            ) : null}
+            {voiceDialogActive ? (
+              <VoiceDialogAttachments
+                attachments={pendingAttachments}
+                onRemove={onRemoveAttachment}
               />
             ) : null}
             <VoiceDialogComposerControls
@@ -2641,7 +2674,7 @@ function ComposerCoreImpl({
     sendMessage,
     enqueueCanonicalVoiceTurn,
     canonicalVoiceCaptureMustPause,
-    cancelSend,
+    interruptCanonicalVoiceDelivery,
     models,
     selectedModel,
     pendingAttachments,
@@ -2836,12 +2869,17 @@ function ComposerCoreImpl({
       sendMessage,
     ],
   );
+  // ADR-0154 D4 — barge-in stops local playback and returns the floor to capture. It must NOT reach
+  // for the blanket cancelSend: that aborted whatever happened to be in flight, including a typed
+  // composer send Voice does not own, and left the interrupted turn to be re-sent by the Chat-owned
+  // queue (#2842). The session's owner-scoped interrupt cancels only a canonical Voice delivery and
+  // makes that cancellation terminal for the utterance the user just talked over.
   const interruptCanonicalVoiceTurn = useCallback((): void => {
     voiceDialogGenerationRef.current += 1;
     playback.interrupt();
-    cancelSend();
+    interruptCanonicalVoiceDelivery?.();
     setPendingVoiceAnswer(null);
-  }, [cancelSend, playback]);
+  }, [interruptCanonicalVoiceDelivery, playback]);
   const canStartCanonicalVoiceCapture = useCallback(
     (): boolean => canonicalVoiceCaptureMustPause?.() !== true,
     [canonicalVoiceCaptureMustPause],
@@ -3173,6 +3211,12 @@ function ComposerCoreImpl({
               value={draft}
               aria-label={t("chat.messageLabel")}
               placeholder={placeholder}
+              // The composer opts into shell chord dispatch (SHELL_CHORD_BYPASS_ATTRIBUTE in
+              // hooks/useKeyboardShortcuts.ts). Without it the substrate's editable-target guard
+              // left Cmd/Ctrl+P, Cmd/Ctrl+Shift+P and Cmd/Ctrl+Shift+F dead in the product's
+              // primary input. The rule the substrate then applies keeps the field's own
+              // text-editing chords (Cmd/Ctrl+Z undoes typing, not a workspace panel toggle).
+              data-shell-chord-bypass=""
               // aria-autocomplete + aria-activedescendant are valid on the textbox
               // and communicate the autocomplete behavior and highlighted option
               // without moving DOM focus off the textarea.
@@ -3264,6 +3308,8 @@ function ComposerCoreImpl({
         onDismissVoiceError={leaveVoiceDialog}
         voiceDialogButtonRef={voiceDialogButtonRef}
         compact={controlsNarrow}
+        pendingAttachments={pendingAttachments}
+        onRemoveAttachment={removePendingAttachment}
       />
     </div>
   );
@@ -3707,6 +3753,9 @@ function LocalKnowledgeScopeControl({
   const value = groundedModeValue(chat);
   const capsuleChoices = capsuleOptions(chat, capsules, t);
   const capsuleSetChoices = capsuleSetOptions(chat, capsuleSets, t);
+  // Audit F-12 — a disabled option must say why: without a connected Files source the reason
+  // for the greyed-out "Live Files context" entry is otherwise undiscoverable.
+  const liveFilesAvailable = hasFolderGroundingScope(chat);
   // C172 — a catalog load failure surfaces here too; an update error wins.
   const displayedError = error ?? loadError;
   // uiux-fix F041 (C178) — classed instead of inline-styled (theme/hover/focus
@@ -3727,7 +3776,10 @@ function LocalKnowledgeScopeControl({
               {
                 value: "files",
                 label: t("chat.grounding.liveFiles"),
-                disabled: !hasFolderGroundingScope(chat),
+                disabled: !liveFilesAvailable,
+                ...(liveFilesAvailable
+                  ? {}
+                  : { description: t("chat.grounding.liveFilesUnavailableHint") }),
               },
               ...(value === "multi"
                 ? [{ value: "multi", label: t("chat.grounding.multiple"), disabled: true }]
@@ -4678,16 +4730,21 @@ function ChatWindowLog({
 function ComposerSendNotice({
   canonicalVoiceTurnRequiresRetry,
   retryPendingCanonicalVoiceTurn,
+  discardPendingCanonicalVoiceTurn,
   error,
   clearError,
 }: {
   readonly canonicalVoiceTurnRequiresRetry: boolean;
   readonly retryPendingCanonicalVoiceTurn: (() => void) | undefined;
+  readonly discardPendingCanonicalVoiceTurn: (() => void) | undefined;
   readonly error: string | undefined;
   readonly clearError: (() => void) | undefined;
 }): ReactNode {
   const t = useTranslate();
   if (canonicalVoiceTurnRequiresRetry) {
+    // #2842 — retry alone is not an exit: a delivery that keeps failing would leave this chat's
+    // composer disabled indefinitely. Discard drops the queued transcript and hands the composer
+    // back, so the wedge is always the user's decision to end.
     return (
       <div className={styles.pendingVoiceTurnNotice} role="alert">
         <span>{t("chat.voice.pendingTurn")}</span>
@@ -4697,6 +4754,9 @@ function ComposerSendNotice({
           onClick={retryPendingCanonicalVoiceTurn}
         >
           {t("chat.voice.retryPendingTurn")}
+        </button>
+        <button type="button" className="cmp-voice-btn" onClick={discardPendingCanonicalVoiceTurn}>
+          {t("chat.voice.discardPendingTurn")}
         </button>
       </div>
     );
@@ -4721,6 +4781,7 @@ function ChatWindowComposerFooter({
   clearError,
   canonicalVoiceTurnRequiresRetry,
   retryPendingCanonicalVoiceTurn,
+  discardPendingCanonicalVoiceTurn,
 }: {
   readonly visible: readonly ChatMessage[];
   readonly activeChat: Chat | undefined;
@@ -4735,6 +4796,7 @@ function ChatWindowComposerFooter({
   readonly clearError: (() => void) | undefined;
   readonly canonicalVoiceTurnRequiresRetry: boolean;
   readonly retryPendingCanonicalVoiceTurn: (() => void) | undefined;
+  readonly discardPendingCanonicalVoiceTurn: (() => void) | undefined;
 }): ReactNode {
   const t = useTranslate();
   return (
@@ -4759,6 +4821,7 @@ function ChatWindowComposerFooter({
             <ComposerSendNotice
               canonicalVoiceTurnRequiresRetry={canonicalVoiceTurnRequiresRetry}
               retryPendingCanonicalVoiceTurn={retryPendingCanonicalVoiceTurn}
+              discardPendingCanonicalVoiceTurn={discardPendingCanonicalVoiceTurn}
               error={error}
               clearError={clearError}
             />
@@ -4812,6 +4875,7 @@ export function ChatWindow({
     activeChat,
     canonicalVoiceTurnRequiresRetry,
     retryPendingCanonicalVoiceTurn,
+    discardPendingCanonicalVoiceTurn,
     replaceChat,
     latestMemory,
     lastSentDocuments,
@@ -5042,6 +5106,7 @@ export function ChatWindow({
         clearError={session.clearError}
         canonicalVoiceTurnRequiresRetry={canonicalVoiceTurnRequiresRetry === true}
         retryPendingCanonicalVoiceTurn={retryPendingCanonicalVoiceTurn}
+        discardPendingCanonicalVoiceTurn={discardPendingCanonicalVoiceTurn}
       />
     </div>
   );

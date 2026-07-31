@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { GovernedMergeCard, type GovernedMergeClient } from "./GovernedMergeCard";
 import {
   ApiError,
+  type GitDeliveryMergeApproveResponse,
   type GitDeliveryMergeExecuteResponse,
   type GitDeliveryMergePreviewResponse,
 } from "@/lib/api";
@@ -47,9 +48,21 @@ function makeExecute(
   };
 }
 
+function makeApprove(
+  overrides: Partial<GitDeliveryMergeApproveResponse> = {},
+): GitDeliveryMergeApproveResponse {
+  return {
+    schemaVersion: "1",
+    approval: { schemaVersion: "1", approvalId: "gda_test", approvalToken: "token-test" },
+    expiresAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
 function makeClient(overrides: Partial<GovernedMergeClient> = {}): GovernedMergeClient {
   return {
     mergePreview: vi.fn(async () => makePreview()),
+    mergeApprove: vi.fn(async () => makeApprove()),
     mergeExecute: vi.fn(async () => makeExecute({ merged: true, branchDeleted: false })),
     ...overrides,
   };
@@ -168,6 +181,47 @@ describe("GovernedMergeCard", () => {
     expect(screen.getByTestId("gm-submit")).toBeDisabled();
     fireEvent.click(screen.getByLabelText("I confirm this high-risk merge"));
     expect(screen.getByTestId("gm-submit")).not.toBeDisabled();
+  });
+
+  it("mints an approval claim and attaches it to execute when approval is required (closes the previously-unreachable merge gate)", async () => {
+    const mergePreview = vi.fn(async () => makePreview({ requiresApproval: true }));
+    const mergeApprove = vi.fn(async () => makeApprove());
+    const mergeExecute = vi.fn(async () => makeExecute({ merged: true }));
+    render(
+      <GovernedMergeCard
+        projectId={PROJECT}
+        client={makeClient({ mergePreview, mergeApprove, mergeExecute })}
+      />,
+    );
+    fillTarget();
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(await screen.findByTestId("gm-readiness")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("I confirm this high-risk merge"));
+    fireEvent.click(screen.getByTestId("gm-submit"));
+    expect(await screen.findByTestId("gm-outcome")).toBeInTheDocument();
+    // Before this route/wiring existed, no path anywhere could mint a claim execute would accept, so
+    // this mergeExecute call would have been reached only with `approval` absent, and the server would
+    // return "approval-required" forever. Proves the mint happens and its claim reaches execute.
+    expect(mergeApprove).toHaveBeenCalledTimes(1);
+    expect(mergeExecute).toHaveBeenCalledWith(
+      expect.objectContaining({ approval: makeApprove().approval }),
+    );
+  });
+
+  it("pins execute to the preview's reported head SHA (fixes an unpinned merge)", async () => {
+    const mergePreview = vi.fn(async () => makePreview({ headRefHash: "abc1234" }));
+    const mergeExecute = vi.fn(async () => makeExecute({ merged: true }));
+    render(
+      <GovernedMergeCard projectId={PROJECT} client={makeClient({ mergePreview, mergeExecute })} />,
+    );
+    fillTarget();
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(await screen.findByTestId("gm-readiness")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("gm-submit"));
+    expect(await screen.findByTestId("gm-outcome")).toBeInTheDocument();
+    expect(mergeExecute).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedHeadRefHash: "abc1234" }),
+    );
   });
 
   it("re-gates the merge when a target field changes after a preview (AC1 — no stale gate)", async () => {

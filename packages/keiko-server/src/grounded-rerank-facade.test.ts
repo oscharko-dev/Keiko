@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
 import type {
   GatewayConfig,
   LiteLLMRerankRequest,
@@ -163,6 +164,9 @@ describe("rerankSelection", () => {
         },
         present: () => true,
         set: () => undefined,
+        generation: () => 0,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
       },
     };
 
@@ -198,6 +202,9 @@ describe("rerankSelection", () => {
         },
         present: () => true,
         set: () => undefined,
+        generation: () => 0,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
       },
     };
 

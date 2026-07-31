@@ -34,6 +34,11 @@ export type RejectionReason =
   // The same canonical body was already forgotten in this scope. Suppress re-capture without
   // echoing the body back to the caller.
   | "suppressed-by-forget"
+  // The same canonical body was already REJECTED in this scope by the local human in the review
+  // queue. A rejection is a governed refusal exactly like a forget, so it suppresses re-capture the
+  // same way — otherwise the extractor re-derives the fact from natural conversation and the
+  // operator is asked the identical question forever. The body is never echoed back.
+  | "suppressed-by-rejection"
   // Inferred scope is null because the required coordinate is missing from the CaptureContext.
   // Returned in the rejection path rather than thrown so the caller can render a "please switch
   // to a project/workspace first" prompt.

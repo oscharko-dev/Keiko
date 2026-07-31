@@ -12,8 +12,14 @@ import {
   MAX_DOCUMENT_CONTEXT_TEXT_BYTES,
   extractDocumentContext,
   isTextExtractableMime,
+  undeliverableAttachmentNotices,
   type PendingDocument,
 } from "./documentContext";
+import { DEFAULT_LOCALE, translate, type I18nTranslate } from "@/lib/i18n";
+
+// The notices are localized; "en" is the locale under test, and resolving through the shipped
+// catalog keeps these assertions exact without restating the copy in the test.
+const t: I18nTranslate = (key, values) => translate(DEFAULT_LOCALE, key, values);
 
 const encoder = new TextEncoder();
 function utf8Bytes(text: string): number {
@@ -77,12 +83,39 @@ describe("isTextExtractableMime", () => {
   });
 });
 
+// 0.3.0 release audit — the conversation send wire carries attachment METADATA only, so a staged
+// image contributes nothing to the prompt. It used to be accepted, previewed, modality-validated
+// and then dropped without a word. These pin the disclosure that replaces the silence.
+describe("undeliverableAttachmentNotices", () => {
+  it("names every staged image, says the model will not receive it, and leaks no path", () => {
+    const notices = undeliverableAttachmentNotices(
+      [
+        { kind: "image", name: "/Users/secret/screen.png" },
+        { kind: "document", name: "notes.txt" },
+        { kind: "image", name: "chart.webp" },
+      ],
+      t,
+    );
+    expect(notices).toHaveLength(2);
+    expect(notices[0]).toContain('"screen.png"');
+    expect(notices[0]).not.toContain("/Users/");
+    expect(notices[0]).toMatch(/model/i);
+    expect(notices[1]).toContain('"chart.webp"');
+  });
+
+  it("stays silent for an empty queue and for documents, which extraction already reports", () => {
+    expect(undeliverableAttachmentNotices([], t)).toEqual([]);
+    expect(undeliverableAttachmentNotices([{ kind: "document", name: "spec.pdf" }], t)).toEqual([]);
+  });
+});
+
 describe("extractDocumentContext — single document", () => {
   it("emits a full-text entry with truncated:false and correct UTF-8 extractedBytes", async () => {
     const text = "# Title\nbody with unicode 漢字 and emoji 🎉";
-    const { entries, failures } = await extractDocumentContext([
-      makeDoc({ id: "d1", name: "notes.md", mimeType: "text/markdown", text }),
-    ]);
+    const { entries, failures } = await extractDocumentContext(
+      [makeDoc({ id: "d1", name: "notes.md", mimeType: "text/markdown", text })],
+      t,
+    );
 
     expect(failures).toEqual([]);
     expect(entries).toHaveLength(1);
@@ -99,17 +132,19 @@ describe("extractDocumentContext — single document", () => {
   });
 
   it("uses the basename only — never a path component (AC #4)", async () => {
-    const { entries } = await extractDocumentContext([
-      makeDoc({ id: "d1", name: "/Users/secret/Projects/report.txt", text: "hello" }),
-    ]);
+    const { entries } = await extractDocumentContext(
+      [makeDoc({ id: "d1", name: "/Users/secret/Projects/report.txt", text: "hello" })],
+      t,
+    );
     expect(entries[0]?.displayName).toBe("report.txt");
     expect(entries[0]?.displayName).not.toContain("/Users/");
   });
 
   it("strips Windows path separators too", async () => {
-    const { entries } = await extractDocumentContext([
-      makeDoc({ id: "d1", name: "C:\\Users\\me\\notes.txt", text: "hi" }),
-    ]);
+    const { entries } = await extractDocumentContext(
+      [makeDoc({ id: "d1", name: "C:\\Users\\me\\notes.txt", text: "hi" })],
+      t,
+    );
     expect(entries[0]?.displayName).toBe("notes.txt");
   });
 });
@@ -118,7 +153,7 @@ describe("extractDocumentContext — per-entry budget", () => {
   it("truncates an over-budget document to <= the byte cap and appends the marker", async () => {
     // 70 000 ASCII bytes — over the 65 536 cap.
     const big = "a".repeat(70_000);
-    const { entries } = await extractDocumentContext([makeDoc({ id: "big", text: big })]);
+    const { entries } = await extractDocumentContext([makeDoc({ id: "big", text: big })], t);
 
     const entry = entries[0];
     expect(entry).toBeDefined();
@@ -134,7 +169,7 @@ describe("extractDocumentContext — per-entry budget", () => {
     // Each 漢 is 3 UTF-8 bytes. 22_000 of them = 66_000 bytes (> 65_536). The truncation
     // must land on a code-point boundary so the result re-encodes without replacement chars.
     const big = "漢".repeat(22_000);
-    const { entries } = await extractDocumentContext([makeDoc({ id: "cjk", text: big })]);
+    const { entries } = await extractDocumentContext([makeDoc({ id: "cjk", text: big })], t);
 
     const entry = entries[0];
     expect(entry).toBeDefined();
@@ -158,7 +193,7 @@ describe("extractDocumentContext — aggregate budget", () => {
       makeDoc({ id: "c", name: "c.txt", text: chunk }),
       makeDoc({ id: "d", name: "d.txt", text: chunk }),
     ];
-    const { entries } = await extractDocumentContext(docs);
+    const { entries } = await extractDocumentContext(docs, t);
 
     const total = entries.reduce(
       (sum, e) => sum + utf8Bytes(e.text) + utf8Bytes(e.truncationMarker ?? ""),
@@ -181,7 +216,7 @@ describe("extractDocumentContext — aggregate budget", () => {
       makeDoc({ id: "d", name: "d.txt", text: chunk }),
       makeDoc({ id: "e", name: "/Users/secret/e.txt", text: chunk }),
     ];
-    const { entries, failures } = await extractDocumentContext(docs);
+    const { entries, failures } = await extractDocumentContext(docs, t);
     expect(entries.map((e) => e.id)).not.toContain("e");
     const total = entries.reduce(
       (sum, e) => sum + utf8Bytes(e.text) + utf8Bytes(e.truncationMarker ?? ""),
@@ -199,7 +234,7 @@ describe("extractDocumentContext — aggregate budget", () => {
     const docs: PendingDocument[] = Array.from({ length: 20 }, (_unused, i) =>
       makeDoc({ id: `d${String(i)}`, name: `d${String(i)}.txt`, text: "x" }),
     );
-    const { entries, failures } = await extractDocumentContext(docs);
+    const { entries, failures } = await extractDocumentContext(docs, t);
     expect(entries.length).toBeLessThanOrEqual(MAX_DOCUMENT_CONTEXT_ENTRIES);
     // d16..d19 fall over the 16-entry cap — each must produce a count-skip message.
     expect(failures).toHaveLength(4);
@@ -209,13 +244,16 @@ describe("extractDocumentContext — aggregate budget", () => {
   });
 
   it("stays silent for genuinely empty files but discloses binary (PDF) text skips", async () => {
-    const { entries, failures } = await extractDocumentContext([
-      makeDoc({ id: "empty", name: "empty.txt", text: "" }),
-      {
-        ...makeDoc({ id: "pdf", name: "/Users/secret/spec.pdf", text: "x" }),
-        mimeType: "application/pdf",
-      },
-    ]);
+    const { entries, failures } = await extractDocumentContext(
+      [
+        makeDoc({ id: "empty", name: "empty.txt", text: "" }),
+        {
+          ...makeDoc({ id: "pdf", name: "/Users/secret/spec.pdf", text: "x" }),
+          mimeType: "application/pdf",
+        },
+      ],
+      t,
+    );
     expect(entries).toEqual([]);
     expect(failures).toHaveLength(1);
     expect(failures[0]).toContain('"spec.pdf"');
@@ -254,7 +292,7 @@ describe("extractDocumentContext — bounded prefix read (GEN-PERF-CHAT-013)", (
       sizeBytes: eightMiB.length,
       file,
     };
-    const { entries } = await extractDocumentContext([doc]);
+    const { entries } = await extractDocumentContext([doc], t);
 
     // The whole-file text() reader must NOT be used.
     expect(wholeTextCalled).toBe(false);
@@ -274,9 +312,10 @@ describe("extractDocumentContext — bounded prefix read (GEN-PERF-CHAT-013)", (
   it("yields a byte-identical entry to the whole-file path for a below-budget file", async () => {
     const text = "# Notes\nHello 漢字 🎉 world.";
     // Reference entry from the ordinary (real File) path.
-    const { entries: ref } = await extractDocumentContext([
-      makeDoc({ id: "d1", name: "notes.md", mimeType: "text/markdown", text }),
-    ]);
+    const { entries: ref } = await extractDocumentContext(
+      [makeDoc({ id: "d1", name: "notes.md", mimeType: "text/markdown", text })],
+      t,
+    );
 
     // A File whose whole-file text() throws — proving the bounded prefix slice produced the entry.
     const file = new File([text], "notes.md", { type: "text/markdown" });
@@ -290,7 +329,7 @@ describe("extractDocumentContext — bounded prefix read (GEN-PERF-CHAT-013)", (
       sizeBytes: utf8Bytes(text),
       file,
     };
-    const { entries: bounded } = await extractDocumentContext([doc]);
+    const { entries: bounded } = await extractDocumentContext([doc], t);
 
     expect(bounded).toEqual(ref);
     expect(bounded[0]?.text).toBe(text);
@@ -300,7 +339,10 @@ describe("extractDocumentContext — bounded prefix read (GEN-PERF-CHAT-013)", (
 
 describe("extractDocumentContext — unreadable files", () => {
   it("reports a fixed, path-safe failure and never throws", async () => {
-    const { entries, failures } = await extractDocumentContext([makeUnreadableDoc("locked.txt")]);
+    const { entries, failures } = await extractDocumentContext(
+      [makeUnreadableDoc("locked.txt")],
+      t,
+    );
     expect(entries).toEqual([]);
     expect(failures).toHaveLength(1);
     const message = failures[0] ?? "";
@@ -314,10 +356,10 @@ describe("extractDocumentContext — unreadable files", () => {
   });
 
   it("emits readable docs and reports only the unreadable ones", async () => {
-    const { entries, failures } = await extractDocumentContext([
-      makeDoc({ id: "ok", name: "ok.txt", text: "fine" }),
-      makeUnreadableDoc("bad.txt"),
-    ]);
+    const { entries, failures } = await extractDocumentContext(
+      [makeDoc({ id: "ok", name: "ok.txt", text: "fine" }), makeUnreadableDoc("bad.txt")],
+      t,
+    );
     expect(entries.map((e) => e.id)).toEqual(["ok"]);
     expect(failures).toHaveLength(1);
     expect(failures[0]).toContain("bad.txt");

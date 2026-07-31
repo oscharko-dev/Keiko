@@ -426,7 +426,7 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
         {
           modelId: "azure-coding-model",
           baseUrl: "https://azure.example/openai",
-          apiKey: "azure-secret",
+          apiKey: "test-placeholder-key",
           apiKeyHeaderName: "api-key",
           endpointStyle: "azure-openai-deployment",
           apiVersion: "2024-06-01",
@@ -451,6 +451,36 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
     expect(JSON.stringify(result)).not.toContain("baseUrl");
     expect(JSON.stringify(result)).not.toContain("apiKey");
     expect(JSON.stringify(result)).not.toContain("api-key");
+  });
+
+  // Release-audit F-01: this resolver reads configuration only, so the projection it publishes must
+  // never imply that anything reached the gateway. The probe outcome is threaded in by the caller
+  // that holds it (the BFF's profile route); with none supplied the field stays unverified.
+  it("publishes an unverified projection unless the caller supplies a probe outcome", () => {
+    const configValue = sidecarConfig(
+      [
+        {
+          modelId: "azure-coding-model",
+          baseUrl: "https://azure.example/openai",
+          apiKey: "test-placeholder-key",
+          apiKeyHeaderName: "api-key",
+          endpointStyle: "azure-openai-deployment",
+          apiVersion: "2024-06-01",
+          timeoutMs: 30_000,
+          maxRetries: 3,
+          retryBaseDelayMs: 500,
+        },
+      ],
+      [codingSidecarCapability("azure-coding-model")],
+    );
+
+    expect(resolveCodingSafeSidecarGatewayProfile(configValue)).toMatchObject({
+      status: "available",
+      verification: "unverified",
+    });
+    expect(
+      resolveCodingSafeSidecarGatewayProfile(configValue, { gatewayVerification: "verified" }),
+    ).toMatchObject({ status: "available", verification: "verified" });
   });
 
   // Release-audit F-01: the unavailable reason must be computed over the CHAT capabilities only.

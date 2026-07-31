@@ -19,6 +19,7 @@ import {
   FilesWindowSessionHost,
   normalizedChatTitle,
 } from "./SelectionAwareWorkspaceHosts";
+import { subText } from "../windows/connectionUtils";
 
 const addRoot = vi.hoisted(() => vi.fn());
 const disposeRoot = vi.hoisted(() => vi.fn());
@@ -389,6 +390,74 @@ describe("EditorWindowSessionHost managed task workspace access", () => {
   });
 });
 
+// Release-audit F-08: the Files window shares the editor's managed-access gate. Without it, an
+// unpaired window targeting the bound managed task-workspace root rendered the raw denials
+// ("Git unavailable", "The requested path is excluded from the read surface.") instead of naming
+// the real condition — the browser window is not paired (ADR-0141).
+describe("FilesWindowSessionHost managed task workspace access (F-08)", () => {
+  function filesHost(
+    cfg: Record<string, unknown>,
+    ctx: WindowRenderContext,
+    boundRoot?: string,
+  ): ReactNode {
+    const configuredRoot = typeof cfg["root"] === "string" ? cfg["root"] : undefined;
+    return (
+      <I18nProvider>
+        <FilesWindowSessionHost cfg={cfg} ctx={ctx} root={boundRoot ?? configuredRoot} />
+      </I18nProvider>
+    );
+  }
+
+  function managedContext(activeRoot: string): WindowRenderContext {
+    return context({
+      activeRoot,
+      activeBinding: {
+        schemaVersion: "1",
+        workspaceId: "ws-managed",
+        taskId: "task-managed",
+        activeRoot,
+        boundSurfaces: ["editor"],
+        gitDeliveryRoot: activeRoot,
+        editorProjectRoot: activeRoot,
+      },
+    });
+  }
+
+  it("renders the paired-session note instead of the raw denials while unpaired", () => {
+    const activeRoot = "/managed/task";
+    manifestAccessRef.current = "unpaired";
+
+    render(filesHost({ root: "/repo" }, managedContext(activeRoot), activeRoot));
+
+    expect(
+      screen.getByRole("note", { name: "Task workspace unavailable in this browser" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("files-without-root-bar")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps a normal folder's Files window usable while only managed authority is unpaired", async () => {
+    manifestAccessRef.current = "unpaired";
+
+    render(filesHost({ root: "/repo" }, context()));
+
+    expect(await screen.findByTestId("files-without-root-bar")).toBeInTheDocument();
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
+  it("offers an explicit recheck of managed access without clearing the window", async () => {
+    const activeRoot = "/managed/task";
+    manifestAccessRef.current = "unavailable";
+    const ctx = managedContext(activeRoot);
+
+    render(filesHost({}, ctx, activeRoot));
+    await userEvent.click(screen.getByRole("button", { name: "Check again" }));
+
+    expect(refreshManifest).toHaveBeenCalledOnce();
+    expect(ctx.updateCfg).not.toHaveBeenCalled();
+  });
+});
+
 // Issue #2621 — the removed-root disposal and the reveal both belong to this host, because it is the
 // one layer that is mounted for a single-root AND a multi-root workspace and therefore sees every
 // transition between them.
@@ -585,16 +654,32 @@ describe("EditorWindowSessionHost reveal targeting (#2621)", () => {
     // jump-to-line meant for /repo-a was handed to /repo-b as well. Whether that moved a cursor
     // depended on an unrelated render gate; the request must not reach the root in the first place.
     manifestRef.current = TWO_ROOTS;
-    render(
-      editorHost(
-        { root: "/repo-a", revealLineStart: 7, revealLineEnd: 10, revealRequestId: "reveal-1" },
-        context(),
-      ),
-    );
+    const cfg = {
+      root: "/repo-a",
+      revealLineStart: 7,
+      revealLineEnd: 10,
+      revealRequestId: "reveal-1",
+    };
+    const ctx = context();
+    const view = render(editorHost(cfg, ctx));
     await screen.findByTestId("editor-/repo-a");
+    // The INACTIVE root is mounted inside a hidden `<Activity>`, whose children React prerenders in
+    // a deferred pass that is not part of the commit the await above settles on. Nothing here makes
+    // React run that pass on its own — a full second of `waitFor` polling does not, and the sibling
+    // stayed absent — but it does land on the tree's next render pass. So drive one with the SAME
+    // cfg, ctx and manifest (a scenario-preserving repeat render, not a new situation) and await the
+    // sibling, making its mount a fact this test establishes instead of one it inherits from however
+    // far the scheduler happened to get. Before this, the assertion below failed with `[]` on every
+    // shuffle order that ran this test first (#2871).
+    view.rerender(editorHost(cfg, ctx));
+    await screen.findByTestId("editor-/repo-b");
 
     expect(revealsFor("/repo-a")).toEqual(["7:10:reveal-1"]);
-    // The sibling root is mounted, and it never once saw the request.
+    // The sibling root is mounted, and it never once saw the request. This stays a proof that the
+    // reveal was WITHHELD rather than merely not-yet-rendered, because `revealsFor` returns the
+    // root's whole recorded prop history and the two outcomes are different values: a root that
+    // never mounted yields `[]` and still fails here; only a root that mounted and was handed an
+    // empty triple yields exactly `["::"]`. A root handed the request would yield the triple.
     expect(revealsFor("/repo-b")).toEqual(["::"]);
   });
 
@@ -682,13 +767,22 @@ describe("EditorWindowSessionHost reveal targeting (#2621)", () => {
     // `selectedRoot()` falls back to the focused root when cfg names an unknown root. The fallback
     // decides which tab is visible; it must not make that tab the addressee of someone else's jump.
     manifestRef.current = TWO_ROOTS;
-    render(
-      editorHost(
-        { root: "/repo-gone", revealLineStart: 7, revealLineEnd: 10, revealRequestId: "reveal-1" },
-        context(),
-      ),
-    );
+    const cfg = {
+      root: "/repo-gone",
+      revealLineStart: 7,
+      revealLineEnd: 10,
+      revealRequestId: "reveal-1",
+    };
+    const ctx = context();
+    const view = render(editorHost(cfg, ctx));
     await screen.findByTestId("editor-/repo-a");
+    // Same deferred hidden-`<Activity>` prerender as the addressed-root case above: the inactive
+    // sibling only mounts on the tree's next render pass, so drive one with unchanged cfg and await
+    // it rather than reading whatever the scheduler has done. The assertion below keeps its full
+    // strength — `[]` (never mounted) and `["::"]` (mounted, handed nothing) are distinct values, so
+    // it still proves the reveal was withheld and not merely undelivered so far.
+    view.rerender(editorHost(cfg, ctx));
+    await screen.findByTestId("editor-/repo-b");
 
     expect(revealsFor("/repo-a")).toEqual(["::"]);
     expect(revealsFor("/repo-b")).toEqual(["::"]);
@@ -1212,6 +1306,111 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(
       screen.getByText("This conversation was deleted or is no longer available."),
     ).toBeInTheDocument();
+  });
+
+  // 0.3.0 release audit — the chat window is a singleton and its bound chat is resolved only
+  // inside the CURRENT project's list. After a project switch that list is replaced wholesale, so
+  // a window still carrying the previous project's chatId claimed the conversation had been
+  // deleted. It had not: the session had simply moved on. The window must follow the session's
+  // active conversation instead of accusing the product of losing data.
+  it("retargets to the active conversation instead of claiming a project-switched chat was deleted", async (): Promise<void> => {
+    const switched = chatFixture("chat-other-project", "Other project chat", 7);
+    chatSessionState.activeChat = switched;
+    chatSessionState.chats = [switched];
+    chatSessionState.loading = false;
+    const ctx = context();
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "chat-previous-project" }} ctx={ctx} />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void => {
+      expect(ctx.updateCfg).toHaveBeenCalledWith({
+        chatId: switched.id,
+        title: switched.title,
+      });
+    });
+    expect(screen.queryByText("Chat not found")).not.toBeInTheDocument();
+  });
+
+  // The honest case stays honest: a conversation trashed from Chat History remains in the list
+  // with status "closed", which is the only proof the window has that it really is gone.
+  it("still reports a trashed conversation as deleted rather than retargeting", async (): Promise<void> => {
+    const trashed: Chat = { ...chatFixture("chat-trashed", "Trashed", 3), status: "closed" };
+    const other = chatFixture("chat-live", "Live", 9);
+    chatSessionState.activeChat = other;
+    chatSessionState.chats = [trashed, other];
+    chatSessionState.loading = false;
+    const ctx = context();
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: trashed.id }} ctx={ctx} />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByText("Chat not found")).toBeInTheDocument();
+    expect(ctx.updateCfg).not.toHaveBeenCalled();
+  });
+
+  // ─── 0.3.0 release audit — the structural "still untitled" marker ─────────────────────────────
+  // The workspace decides whether to repeat a chat's title as a subtitle from a cfg marker rather
+  // than from a comparison against display copy (which missed under `de`). This host owns the only
+  // post-creation write of `cfg.title`, so it also owns keeping that marker honest.
+  describe("untitled marker upkeep", () => {
+    function renderBoundChat(cfg: Record<string, unknown>, ctx: WindowRenderContext): void {
+      render(
+        <I18nProvider>
+          <ChatWindowSessionHost cfg={cfg} ctx={ctx} />
+        </I18nProvider>,
+      );
+    }
+
+    it("keeps the marker while materialising the record's title for the first time", async () => {
+      const chat = chatFixture("chat-untitled", "New chat", 1);
+      chatSessionState.activeChat = chat;
+      chatSessionState.chats = [chat];
+      chatSessionState.loading = false;
+      const ctx = context();
+
+      renderBoundChat({ chatId: chat.id, titleIsDefault: true }, ctx);
+
+      await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledOnce());
+      expect(lastCfgPatch(ctx)).toEqual({ title: chat.title });
+      expect(
+        subText("chat", { chatId: chat.id, titleIsDefault: true, ...lastCfgPatch(ctx) }),
+      ).toBeNull();
+    });
+
+    it("clears the marker when the record is renamed or auto-titled from the first turn", async () => {
+      const chat = chatFixture("chat-titled", "Wie richte ich das Gateway ein?", 2);
+      chatSessionState.activeChat = chat;
+      chatSessionState.chats = [chat];
+      chatSessionState.loading = false;
+      const ctx = context();
+
+      renderBoundChat({ chatId: chat.id, title: "Neuer Chat", titleIsDefault: true }, ctx);
+
+      await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledOnce());
+      const patch = lastCfgPatch(ctx);
+      expect(patch).toEqual({ title: chat.title, titleIsDefault: false });
+      expect(subText("chat", { chatId: chat.id, ...patch })).toBe(chat.title);
+    });
+
+    it("leaves a window whose title already matches the record untouched", async () => {
+      const chat = chatFixture("chat-stable", "Release QA", 3);
+      chatSessionState.activeChat = chat;
+      chatSessionState.chats = [chat];
+      chatSessionState.loading = false;
+      const ctx = context();
+
+      renderBoundChat({ chatId: chat.id, title: chat.title }, ctx);
+
+      await waitFor((): void => expect(chatSessionState.openChat).not.toHaveBeenCalled());
+      expect(ctx.updateCfg).not.toHaveBeenCalled();
+    });
   });
 });
 

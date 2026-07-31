@@ -31,8 +31,8 @@ import type {
 import {
   evaluateGitPolicy,
   GIT_DELIVERY_SCHEMA_VERSION,
-  gitDeliveryBranchNameMatchesAny,
-  gitDeliveryRiskClassWithinCeiling,
+  gitDeliveryConstraintBlockReason,
+  gitDeliveryRiskClassForInputs,
 } from "@oscharko-dev/keiko-contracts";
 import type { GitLocalMutationAdapter } from "./git-mutation-adapter.js";
 import type {
@@ -337,24 +337,19 @@ function resolveApprovalGate(
 }
 
 // Maps an unsatisfied constraint to its typed block reason. A satisfied constraint returns undefined.
+// Delegates to the contract-owned resolver so this gate and every preview surface resolve a
+// `constrained` decision identically.
 function constraintBlockReason(
   constraint: GitDeliveryConstraint,
   inputs: GitDeliveryResolvedInputs,
   target: string | undefined,
   capabilities: readonly GitDeliveryProviderCapability[],
 ): GitDeliveryBlockReason | undefined {
-  if (constraint.kind === "branch-pattern") {
-    const matches =
-      target !== undefined && gitDeliveryBranchNameMatchesAny(target, constraint.patterns);
-    return matches ? undefined : "policy-pack-blocked";
-  }
-  if (constraint.kind === "provider-capability") {
-    return capabilities.includes(constraint.capability) ? undefined : "provider-capability-absent";
-  }
-  // risk-class-ceiling
-  return gitDeliveryRiskClassWithinCeiling(inputs.kind, constraint.maxRiskClass)
-    ? undefined
-    : "risk-class-ceiling";
+  return gitDeliveryConstraintBlockReason(constraint, {
+    riskClass: gitDeliveryRiskClassForInputs(inputs),
+    targetBranchName: target,
+    activeProviderCapabilities: capabilities,
+  });
 }
 
 function resolveConstrainedGate(

@@ -7,10 +7,12 @@
 
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildBranchProtectionRequiredReviewsArgv,
+  buildCheckRunsArgv,
   buildDeleteMergedBranchArgv,
-  buildHeadStatusArgv,
   buildMergeArgv,
   buildMergeReadinessArgv,
+  buildPullRequestReviewsArgv,
   buildRepoMergeConfigArgv,
   classifyGitMergeRejection,
   evaluateGitMergeEffectivePolicy,
@@ -169,21 +171,23 @@ describe("merge argv builders", () => {
     );
   });
 
-  it("builds the readiness, repo-config, head-status, and branch-delete argvs", () => {
-    expect(buildMergeReadinessArgv({ ownerAndRepo: "o/r", prExternalId: "7" })).toEqual([
+  const readinessReq = { ownerAndRepo: "o/r", prExternalId: "7", baseBranchName: "main" };
+
+  it("builds the readiness, repo-config, check-runs, and branch-delete argvs", () => {
+    expect(buildMergeReadinessArgv(readinessReq)).toEqual([
       "api",
       "/repos/o/r/pulls/7",
       "--jq",
       expect.stringContaining("mergeable_state"),
     ]);
-    expect(buildRepoMergeConfigArgv({ ownerAndRepo: "o/r", prExternalId: "7" })[1]).toBe(
-      "/repos/o/r",
-    );
-    expect(buildHeadStatusArgv("o/r", "abcdef1")).toEqual([
+    expect(buildRepoMergeConfigArgv(readinessReq)[1]).toBe("/repos/o/r");
+    // The modern Checks API — NOT the legacy `/commits/{sha}/status` combined-status endpoint, which
+    // reported only one lossy aggregate "state" string with no total/pass/fail/pending breakdown.
+    expect(buildCheckRunsArgv("o/r", "abcdef1")).toEqual([
       "api",
-      "/repos/o/r/commits/abcdef1/status",
+      "/repos/o/r/commits/abcdef1/check-runs?per_page=100",
       "--jq",
-      ".state",
+      expect.stringContaining("check_runs"),
     ]);
     expect(buildDeleteMergedBranchArgv("o/r", "feat/x")).toEqual([
       "api",
@@ -191,6 +195,27 @@ describe("merge argv builders", () => {
       "DELETE",
       "/repos/o/r/git/refs/heads/feat/x",
     ]);
+  });
+
+  it("builds the reviews and branch-protection argvs used to derive REAL approval counts", () => {
+    expect(buildPullRequestReviewsArgv(readinessReq)).toEqual([
+      "api",
+      "/repos/o/r/pulls/7/reviews?per_page=100",
+      "--jq",
+      expect.stringContaining("state"),
+    ]);
+    expect(buildBranchProtectionRequiredReviewsArgv(readinessReq)).toEqual([
+      "api",
+      "/repos/o/r/branches/main/protection",
+      "--jq",
+      expect.stringContaining("required_approving_review_count"),
+    ]);
+  });
+
+  it("rejects a flag-injection base branch name in the branch-protection builder", () => {
+    expect(() =>
+      buildBranchProtectionRequiredReviewsArgv({ ...readinessReq, baseBranchName: "-rf" }),
+    ).toThrow(GitMergeArgvError);
   });
 
   it("rejects a head branch with a flag-injection prefix in the delete builder", () => {
@@ -360,6 +385,34 @@ describe("runGitMerge gates (AC1/AC4/AC5)", () => {
     expect(adapter.mergeCalls()).toHaveLength(0);
   });
 
+  it("blocks at the readiness gate for a PR missing a required approval (fixes the hardcoded 0/0 that made this unblockable)", async () => {
+    const provider = readyProvider({
+      pullRequest: {
+        schemaVersion: "1",
+        externalId: "42",
+        status: "open",
+        isDraft: false,
+        headBranchName: "feat/x",
+        baseBranchName: "main",
+        // mergeable_state says clean (no conflicts, no branch-protection block), but the branch
+        // requires 2 approvals and only 1 has been given. Before this fix, git-merge-node.ts always
+        // reported requiredApprovalCount/receivedApprovalCount as 0/0 regardless of the real review
+        // state, so `receivedApprovalCount < requiredApprovalCount` could never be true and
+        // "approvals-missing" could never fire through this exact readiness gate.
+        mergeReadiness: { ready: true, requiredApprovalCount: 2, receivedApprovalCount: 1 },
+      },
+    });
+    const adapter = fakeAdapter(provider, SUCCEEDED);
+    const result = await runGitMerge(
+      { command: COMMAND, approval: NO_APPROVAL },
+      deps(adapter, ALLOW_PACK),
+    );
+    expect(result.lifecycle.outcome.status).toBe("blocked");
+    expect(result.readiness?.mergeable).toBe(false);
+    expect(result.readiness?.blockers.some((b) => b.code === "approvals-missing")).toBe(true);
+    expect(adapter.mergeCalls()).toHaveLength(0);
+  });
+
   it("blocks at the readiness gate when the requested strategy is not provider-eligible", async () => {
     const adapter = fakeAdapter(
       readyProvider({ providerCapableStrategies: ["merge-commit"] }),
@@ -511,6 +564,39 @@ describe("mapRawMergeReadiness — all mergeable states", () => {
     const pr = mapRawMergeReadiness({ prNumber: "9", headBranchName: "feat/x" });
     expect(pr.baseBranchName).toBe("unknown");
     expect(pr.status).toBe("open");
+  });
+
+  it("defaults BOTH approval counts to 0 when the caller supplies neither (previous hardcoded behavior, now only a fallback)", () => {
+    const pr = mapRawMergeReadiness({
+      prNumber: "1",
+      headBranchName: "feat/x",
+      mergeableState: "clean",
+    });
+    expect(pr.mergeReadiness.requiredApprovalCount).toBe(0);
+    expect(pr.mergeReadiness.receivedApprovalCount).toBe(0);
+  });
+
+  it("threads REAL received/required approval counts through instead of hardcoding 0/0", () => {
+    const underApproved = mapRawMergeReadiness({
+      prNumber: "1",
+      headBranchName: "feat/x",
+      mergeableState: "clean",
+      receivedApprovalCount: 1,
+      requiredApprovalCount: 2,
+    });
+    expect(underApproved.mergeReadiness).toMatchObject({
+      requiredApprovalCount: 2,
+      receivedApprovalCount: 1,
+    });
+    // Before this fix, `receivedApprovalCount < requiredApprovalCount` could never be true (both were
+    // always 0), so `gitMergeReadinessFor` could never emit "approvals-missing" regardless of the
+    // PR's real review state. With real counts threaded through, an under-approved PR now IS reported
+    // as mergeReadiness.ready === false via that same, unmodified contract-layer derivation. `ready`
+    // here reflects only the mergeable_state signal (a separate provider fact) — the approvals gap is
+    // what `gitMergeReadinessFor` (git-merge.ts) turns into the "approvals-missing" blocker.
+    expect(underApproved.mergeReadiness.receivedApprovalCount).toBeLessThan(
+      underApproved.mergeReadiness.requiredApprovalCount,
+    );
   });
 });
 

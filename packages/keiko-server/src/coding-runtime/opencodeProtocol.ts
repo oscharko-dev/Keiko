@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 
 import {
+  CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
+  CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS,
+} from "@oscharko-dev/keiko-contracts";
+
+import {
   parseCodingSidecarEventLine,
   type SidecarPermissionEvent,
 } from "./codingSidecarEventParser.js";
@@ -377,11 +382,16 @@ function fixedPermissionMetadata(
 function governedPaths(value: unknown): readonly string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const paths: readonly unknown[] = value;
+  // One owner for the reviewable bound: the admission boundary and the operator review contract
+  // share the same cap so a card can never be asked to render a wider list than admission accepts.
   if (
     paths.length < 1 ||
-    paths.length > 50 ||
+    paths.length > CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS ||
     !paths.every(
-      (path) => typeof path === "string" && path.length <= 512 && GOVERNED_PATH.test(path),
+      (path) =>
+        typeof path === "string" &&
+        path.length <= CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS &&
+        GOVERNED_PATH.test(path),
     ) ||
     new Set(paths).size !== paths.length
   ) {

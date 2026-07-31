@@ -19,6 +19,7 @@ import {
   WORKSPACE_TRUST_SCHEMA_VERSION,
 } from "@oscharko-dev/keiko-contracts";
 import type { EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
+import type { FilesMutationEvent } from "./FilesWidget";
 import { EditorWidget } from "./EditorWidget";
 import editorWidgetStyles from "./EditorWidget.module.css";
 import { resetEditorVerificationRunStateForTests } from "./useEditorVerificationRun";
@@ -155,41 +156,136 @@ vi.mock("next/dynamic", () => ({
   },
 }));
 
+// Verdicts the tree received from the host's pre-flight ask, in order. The probe mirrors the real
+// FilesWidget's sequence exactly — ask first, mutate only on `true`, report the mutation afterwards —
+// so a host that fails to prompt or fails to veto is visible here. That the real widget actually
+// follows that sequence is pinned separately in FilesWidget.test.tsx.
+const filesProbeState = vi.hoisted(() => ({
+  verdicts: [] as Array<{ readonly path: string; readonly allowed: boolean }>,
+  // The real widget invokes both host callbacks through refs it refreshes on every render, so an
+  // in-flight mutation always reaches the host's CURRENT handler. The probe mirrors that with
+  // latest-value holders; capturing the props in a click closure instead would hand the host a stale
+  // dirty snapshot and quietly hide a regression.
+  onFilesMutated: undefined as ((event: FilesMutationEvent) => void) | undefined,
+  onBeforeEntryMutation: undefined as ((path: string) => Promise<boolean>) | undefined,
+}));
+
 vi.mock("./FilesWidget", () => ({
   FilesWidget: ({
     root,
     activeFilePath,
     onOpenFile,
     onRootChange,
+    onFilesMutated,
+    onBeforeEntryMutation,
   }: {
     readonly root?: string;
     readonly activeFilePath?: string;
     readonly onOpenFile: (root: string, path: string) => void;
     readonly onRootChange: (root: string) => void;
-  }) => (
-    <div data-testid="files-probe">
-      <span data-testid="files-root">{root ?? ""}</span>
-      <span data-testid="files-active">{activeFilePath ?? ""}</span>
-      <button type="button" onClick={() => onOpenFile("/repo", "package.json")}>
-        Open package
-      </button>
-      <button type="button" onClick={() => onOpenFile("/repo", "")}>
-        Open empty file
-      </button>
-      <button type="button" onClick={() => onOpenFile("", "package.json")}>
-        Open file without root
-      </button>
-      <button type="button" onClick={() => onOpenFile("/repo", "/other/project/main.py")}>
-        Open absolute file outside root
-      </button>
-      <button type="button" onClick={() => onRootChange("/next")}>
-        Open next root
-      </button>
-      <button type="button" onClick={() => onRootChange("   ")}>
-        Open empty root
-      </button>
-    </div>
-  ),
+    readonly onFilesMutated?: (event: FilesMutationEvent) => void;
+    readonly onBeforeEntryMutation?: (path: string) => Promise<boolean>;
+  }) => {
+    filesProbeState.onFilesMutated = onFilesMutated;
+    filesProbeState.onBeforeEntryMutation = onBeforeEntryMutation;
+    const report = (event: FilesMutationEvent): void => {
+      filesProbeState.onFilesMutated?.(event);
+    };
+    const mutate = async (path: string, event: FilesMutationEvent): Promise<void> => {
+      const allowed = (await filesProbeState.onBeforeEntryMutation?.(path)) ?? true;
+      filesProbeState.verdicts.push({ path, allowed });
+      if (allowed) report(event);
+    };
+    return (
+      <div data-testid="files-probe">
+        <span data-testid="files-root">{root ?? ""}</span>
+        <span data-testid="files-active">{activeFilePath ?? ""}</span>
+        <button type="button" onClick={() => onOpenFile("/repo", "package.json")}>
+          Open package
+        </button>
+        <button type="button" onClick={() => onOpenFile("/repo", "")}>
+          Open empty file
+        </button>
+        <button type="button" onClick={() => onOpenFile("", "package.json")}>
+          Open file without root
+        </button>
+        <button type="button" onClick={() => onOpenFile("/repo", "/other/project/main.py")}>
+          Open absolute file outside root
+        </button>
+        <button type="button" onClick={() => onRootChange("/next")}>
+          Open next root
+        </button>
+        <button type="button" onClick={() => onRootChange("   ")}>
+          Open empty root
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            void mutate("src/a.ts", {
+              op: "rename",
+              mutation: {
+                root: "/repo",
+                path: "src/c.ts",
+                previousPath: "src/a.ts",
+                kind: "file",
+              },
+            })
+          }
+        >
+          Rename a in tree
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            void mutate("src", {
+              op: "rename",
+              mutation: { root: "/repo", path: "lib", previousPath: "src", kind: "directory" },
+            })
+          }
+        >
+          Rename src folder in tree
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            void mutate("src/a.ts", {
+              op: "delete",
+              mutation: { root: "/repo", path: "src/a.ts", kind: "file" },
+            })
+          }
+        >
+          Delete a in tree
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            report({
+              op: "rename",
+              mutation: {
+                root: "/repo",
+                path: "src/c.ts",
+                previousPath: "src/a.ts",
+                kind: "file",
+              },
+            })
+          }
+        >
+          Report rename without asking
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            report({
+              op: "delete",
+              mutation: { root: "/repo", path: "src/a.ts", kind: "file" },
+            })
+          }
+        >
+          Report delete without asking
+        </button>
+      </div>
+    );
+  },
 }));
 
 const hotExitState = vi.hoisted(() => ({ deletes: [] as Array<readonly [string, string]> }));
@@ -209,8 +305,23 @@ afterEach(() => {
   probeState.runtimeProps = null;
   probeState.dragModeStarts = [];
   probeState.propsByPane.clear();
+  // Both recorders are module-scoped, so they have to be emptied between cases for a test to be able
+  // to assert that NO snapshot was deleted and NO verdict was reached.
+  hotExitState.deletes.length = 0;
+  filesProbeState.verdicts.length = 0;
+  filesProbeState.onFilesMutated = undefined;
+  filesProbeState.onBeforeEntryMutation = undefined;
   vi.clearAllMocks();
 });
+
+// The pre-flight ask resolves through a promise chain; flushing microtasks inside act() lets the
+// veto/allow verdict land without wrapping the (already act-wrapped) fireEvent click itself (S8980).
+async function flushPreflight(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
 
 describe("EditorWidget workspace session", () => {
   it("shows the project picker (not the runtime widget) while no workspace root is selected", () => {
@@ -1056,6 +1167,198 @@ describe("EditorWidget workspace session", () => {
     });
     expect(confirmSpy).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
+  });
+
+  // Renaming, moving or deleting an open DIRTY file from the Files tree used to be the one close path
+  // in the product that skipped the dirty-close dialog: the tab was re-homed or removed, the unsaved
+  // buffer was dropped by `reconcileEditorDirtyByPane`, AND the crash-recovery snapshot for the old
+  // path was deleted — unrecoverable loss with no prompt. The tree now asks the host first, and the
+  // host routes the answer through the same `requestDirtyClose` policy as every other close.
+  describe("Files-tree mutations over unsaved buffers", () => {
+    async function markDirtyAndTriggerTree(buttonName: string): Promise<void> {
+      fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+      fireEvent.click(screen.getByRole("button", { name: buttonName }));
+      await flushPreflight();
+    }
+
+    it("prompts before a tree rename of a dirty file and keeps its recovery snapshot", async () => {
+      render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+      await markDirtyAndTriggerTree("Rename a in tree");
+
+      expect(
+        await screen.findByRole("dialog", { name: "Unsaved editor changes" }),
+      ).toHaveTextContent("src/a.ts");
+      // Nothing is decided yet: the tree is still waiting, so no mutation has been reported.
+      expect(filesProbeState.verdicts).toEqual([]);
+
+      fireEvent.keyDown(document, { key: "Escape" });
+
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+      // Cancel is a veto, not a silent proceed: the tree learns the rename must not be sent.
+      expect(filesProbeState.verdicts).toEqual([{ path: "src/a.ts", allowed: false }]);
+      expect(screen.getByTestId("runtime-open-files")).toHaveTextContent("src/a.ts|src/b.ts");
+      expect(screen.getByTestId("runtime-dirty-files")).toHaveTextContent("src/a.ts");
+      // The snapshot is the last copy of the unsaved buffer — it must survive.
+      expect(hotExitState.deletes).toEqual([]);
+    });
+
+    it("prompts before a tree delete of a dirty file and keeps its recovery snapshot", async () => {
+      render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+      await markDirtyAndTriggerTree("Delete a in tree");
+
+      expect(
+        await screen.findByRole("dialog", { name: "Unsaved editor changes" }),
+      ).toHaveTextContent("src/a.ts");
+      fireEvent.keyDown(document, { key: "Escape" });
+
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+      expect(filesProbeState.verdicts).toEqual([{ path: "src/a.ts", allowed: false }]);
+      expect(screen.getByTestId("runtime-open-files")).toHaveTextContent("src/a.ts|src/b.ts");
+      expect(hotExitState.deletes).toEqual([]);
+    });
+
+    it("prompts before renaming a DIRECTORY that contains a dirty file", async () => {
+      render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+      await markDirtyAndTriggerTree("Rename src folder in tree");
+
+      // The folder itself is never an open buffer; the dirty file *inside* it is what is at risk.
+      expect(
+        await screen.findByRole("dialog", { name: "Unsaved editor changes" }),
+      ).toHaveTextContent("src/a.ts");
+      fireEvent.keyDown(document, { key: "Escape" });
+
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+      expect(filesProbeState.verdicts).toEqual([{ path: "src", allowed: false }]);
+      expect(hotExitState.deletes).toEqual([]);
+    });
+
+    it("prompts when the mutated file is dirty only in a second pane", async () => {
+      render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+      expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
+      // Dirty in the split pane while pane-1 stays the intent's nominal pane: a pane-scoped lookup
+      // would find nothing here and mutate straight through.
+      fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-2" }));
+      fireEvent.click(screen.getByRole("button", { name: "Rename a in tree" }));
+      await flushPreflight();
+
+      expect(
+        await screen.findByRole("dialog", { name: "Unsaved editor changes" }),
+      ).toHaveTextContent("src/a.ts");
+      fireEvent.keyDown(document, { key: "Escape" });
+
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+      expect(filesProbeState.verdicts).toEqual([{ path: "src/a.ts", allowed: false }]);
+      expect(hotExitState.deletes).toEqual([]);
+    });
+
+    it("reports a veto when another close intent displaces the pending prompt", async () => {
+      render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+      await markDirtyAndTriggerTree("Rename a in tree");
+      await screen.findByRole("dialog", { name: "Unsaved editor changes" });
+      // A tab close raised while the tree is still waiting replaces the dialog. The displaced ask can
+      // never be answered, so it must come back as a veto rather than leaving the tree hanging.
+      fireEvent.click(screen.getByRole("button", { name: "Close a" }));
+
+      await waitFor(() => {
+        expect(filesProbeState.verdicts).toEqual([{ path: "src/a.ts", allowed: false }]);
+      });
+      expect(hotExitState.deletes).toEqual([]);
+    });
+
+    it("re-homes the tab and drops the stale snapshot once the prompt is discarded", async () => {
+      render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+      await markDirtyAndTriggerTree("Rename a in tree");
+      fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
+
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+      // An explicit Discard is a decision, so the rename proceeds and the snapshot goes with it.
+      expect(filesProbeState.verdicts).toEqual([{ path: "src/a.ts", allowed: true }]);
+      await waitFor(() => {
+        expect(screen.getByTestId("runtime-open-files")).toHaveTextContent("src/c.ts|src/b.ts");
+      });
+      expect(hotExitState.deletes).toContainEqual(["/repo", "src/a.ts"]);
+    });
+
+    it("saves first, then applies the tree rename, when the prompt is answered with Save", async () => {
+      render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+      await markDirtyAndTriggerTree("Rename a in tree");
+      fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Complete save src/a.ts" }));
+
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+      expect(filesProbeState.verdicts).toEqual([{ path: "src/a.ts", allowed: true }]);
+      await waitFor(() => {
+        expect(screen.getByTestId("runtime-open-files")).toHaveTextContent("src/c.ts|src/b.ts");
+      });
+    });
+
+    it("renames a CLEAN file with no prompt at all (happy path)", async () => {
+      render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Rename a in tree" }));
+      await flushPreflight();
+
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(filesProbeState.verdicts).toEqual([{ path: "src/a.ts", allowed: true }]);
+      expect(screen.getByTestId("runtime-open-files")).toHaveTextContent("src/c.ts|src/b.ts");
+      // Nothing was unsaved, so the old path's stale snapshot is still cleaned up.
+      expect(hotExitState.deletes).toContainEqual(["/repo", "src/a.ts"]);
+    });
+
+    it("deletes a CLEAN file with no prompt at all (happy path)", async () => {
+      render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Delete a in tree" }));
+      await flushPreflight();
+
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(filesProbeState.verdicts).toEqual([{ path: "src/a.ts", allowed: true }]);
+      expect(screen.getByTestId("runtime-open-files")).toHaveTextContent("src/b.ts");
+      expect(hotExitState.deletes).toContainEqual(["/repo", "src/a.ts"]);
+    });
+
+    // Second line of defence: a mutation that reaches the host with the buffer still dirty (an
+    // unguarded host, or a report from outside the guarded path) is too late to veto — but the
+    // snapshot is then the only remaining copy of the unsaved work, so it must not be deleted.
+    it("keeps the recovery snapshot when a rename is reported without the pre-flight ask", () => {
+      render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+      fireEvent.click(screen.getByRole("button", { name: "Report rename without asking" }));
+
+      expect(screen.getByTestId("runtime-open-files")).toHaveTextContent("src/c.ts|src/b.ts");
+      expect(hotExitState.deletes).toEqual([]);
+    });
+
+    it("keeps the recovery snapshot when a delete is reported without the pre-flight ask", () => {
+      render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+      fireEvent.click(screen.getByRole("button", { name: "Report delete without asking" }));
+
+      expect(screen.getByTestId("runtime-open-files")).toHaveTextContent("src/b.ts");
+      expect(hotExitState.deletes).toEqual([]);
+    });
   });
 
   it("supports keyboard tab reordering within a pane", () => {

@@ -55,7 +55,31 @@ function ok(stdout: string, stderr = ""): GitProcessResult {
 }
 
 function fail(stderr: string, exitCode = 1, truncated = false): GitProcessResult {
-  return { exitCode, signal: null, stdout: "", stderr, truncated };
+  return { exitCode, signal: null, stdout: "", stderr, truncated, timedOut: false };
+}
+
+// The runner sets `truncated` for BOTH of its stops and `timedOut` for the wall-clock stop only, so
+// the two must be constructible independently here or the classifier's distinction is untestable.
+function cutOffByTimeout(): GitProcessResult {
+  return {
+    exitCode: null,
+    signal: "SIGTERM",
+    stdout: "",
+    stderr: "",
+    truncated: true,
+    timedOut: true,
+  };
+}
+
+function cutOffByOutputCap(): GitProcessResult {
+  return {
+    exitCode: null,
+    signal: "SIGTERM",
+    stdout: "",
+    stderr: "",
+    truncated: true,
+    timedOut: false,
+  };
 }
 
 // --- scripted runner -------------------------------------------------------
@@ -333,10 +357,30 @@ describe("fetch execute — outcomes", () => {
     expect(body.status).toBe("no-remote");
   });
 
-  it("reports timeout when the process truncated", async () => {
-    const body = await runFetch({ fetch: fail("", null as unknown as number, true) });
+  // Strengthened from a single "truncated ⇒ timeout" assertion: `truncated` is set for the byte cap
+  // as well as for the wall clock, so the old shape could not tell a real timeout from a capped run
+  // and reported both as "timeout". Both stops still refuse to report success; they now report WHICH.
+  it("reports timeout only when the wall-clock budget fired", async () => {
+    const body = await runFetch({ fetch: cutOffByTimeout() });
     expect(body.status).toBe("timeout");
     expect(body.truncated).toBe(true);
+  });
+
+  it("reports output-truncated when the byte cap cut the run", async () => {
+    const body = await runFetch({ fetch: cutOffByOutputCap() });
+    expect(body.status).toBe("output-truncated");
+    expect(body.truncated).toBe(true);
+  });
+
+  it("reports remote-unavailable when the host cannot be reached", async () => {
+    for (const stderr of [
+      "ssh: Could not resolve hostname github.com: Name or service not known\nfatal: Could not read from remote repository.",
+      "ssh: connect to host github.com port 22: Connection refused",
+      "fatal: unable to access 'https://example.invalid/x.git/': Could not resolve host: example.invalid",
+    ]) {
+      const body = await runFetch({ fetch: fail(stderr, 128) });
+      expect(body.status).toBe("remote-unavailable");
+    }
   });
 
   it("reports git-missing on exit code 127", async () => {
@@ -479,9 +523,24 @@ describe("pull execute — outcomes", () => {
     expect(body.status).toBe("untrusted-host-key");
   });
 
-  it("reports timeout when the process truncated", async () => {
-    const body = await runPull({ pull: fail("", null as unknown as number, true) });
+  it("reports timeout only when the wall-clock budget fired", async () => {
+    const body = await runPull({ pull: cutOffByTimeout() });
     expect(body.status).toBe("timeout");
+  });
+
+  it("reports output-truncated when the byte cap cut the run", async () => {
+    const body = await runPull({ pull: cutOffByOutputCap() });
+    expect(body.status).toBe("output-truncated");
+  });
+
+  it("reports remote-unavailable when the host cannot be reached", async () => {
+    const body = await runPull({
+      pull: fail(
+        "ssh: connect to host github.com port 22: Operation timed out\nfatal: Could not read from remote repository.",
+        128,
+      ),
+    });
+    expect(body.status).toBe("remote-unavailable");
   });
 
   it("reports git-missing on exit code 127", async () => {

@@ -53,7 +53,7 @@ export type {
 export { generatePromptCandidates } from "./candidates.js";
 
 // ─── Bounded optimization (#1312) ──────────────────────────────────────────────
-export type { OptimizePromptCandidatesArgs } from "./optimize.js";
+export type { OptimizePromptCandidatesArgs, PreferredPromptCandidate } from "./optimize.js";
 export {
   DEFAULT_CANDIDATE_COUNT,
   DEFAULT_MAX_ITERATIONS,
@@ -61,12 +61,18 @@ export {
   MAX_CANDIDATE_COUNT,
   optimizePromptCandidates,
   rankCandidates,
+  resolvePreferredCandidate,
 } from "./optimize.js";
 
 // ─── Validate stage (#1313) ─────────────────────────────────────────────────────
 export type {
   AssessPromptSafetyArgs,
+  AssessPromptTextSafetyArgs,
   CandidateSafetyScreen,
   ScreenedPromptCandidate,
 } from "./validate.js";
-export { assessPromptSafety, screenCandidatesForSafety } from "./validate.js";
+export {
+  assessPromptSafety,
+  assessPromptTextSafety,
+  screenCandidatesForSafety,
+} from "./validate.js";

@@ -759,6 +759,10 @@ function renameChangesetFromResult(
     totalFileCount: counts.totalFileCount,
     returnedEditCount: counts.overlayEdits.length,
     totalEditCount: counts.totalEditCount,
+    // An LSP workspace edit carries the edits themselves, so nothing is dropped for being
+    // unreadable: every non-overlay document is dropped by this bridge's overlay-only scope, which
+    // `filesTruncated`/`totalFileCount` already report.
+    unreadableFileCount: 0,
   };
 }
 

@@ -726,7 +726,9 @@ describe("ExportBar — traceability matrix export", () => {
     await selectExportAdapter(user, "traceability-csv");
     await user.click(screen.getByRole("button", { name: /download/i }));
     await waitFor(() => {
-      expect(traceabilityImpl).toHaveBeenCalledWith("run-trace", "csv");
+      // The user-visible scope MUST travel with the request: the scope notice above the picker
+      // renders for traceability formats too, and the default is the approved-only scope.
+      expect(traceabilityImpl).toHaveBeenCalledWith("run-trace", "csv", { approvedOnly: true });
     });
     expect(exportImpl).not.toHaveBeenCalled();
     expect(await screen.findByTestId("qi-export-success")).toHaveTextContent(
@@ -741,7 +743,25 @@ describe("ExportBar — traceability matrix export", () => {
     await selectExportAdapter(user, "traceability-markdown");
     await user.click(screen.getByRole("button", { name: /download/i }));
     await waitFor(() => {
-      expect(traceabilityImpl).toHaveBeenCalledWith("run-trace", "markdown");
+      expect(traceabilityImpl).toHaveBeenCalledWith("run-trace", "markdown", {
+        approvedOnly: true,
+      });
+    });
+  });
+
+  // 0.3.0 release audit: the scope notice and the "Approved only" checkbox render for the
+  // traceability formats, but the matrix used to be requested unscoped — the download contradicted
+  // the promise the notice made, on a compliance-shaped artifact. Both checkbox states must reach
+  // the route, or the control is decoration.
+  it("forwards the user's unchecked approved-only scope to the traceability route", async () => {
+    const user = userEvent.setup();
+    const traceabilityImpl = makeTraceabilityFake();
+    render(<ExportBar runId="run-trace" traceabilityImpl={traceabilityImpl} />);
+    await selectExportAdapter(user, "traceability-csv");
+    await user.click(screen.getByTestId("qi-export-approved-only"));
+    await user.click(screen.getByRole("button", { name: /download/i }));
+    await waitFor(() => {
+      expect(traceabilityImpl).toHaveBeenCalledWith("run-trace", "csv", { approvedOnly: false });
     });
   });
 });

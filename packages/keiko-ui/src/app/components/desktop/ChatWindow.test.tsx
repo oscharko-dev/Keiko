@@ -1787,7 +1787,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     renderWindow(makeSession({ activeChat: makeChat(), replaceChat }));
 
     await openCombobox(user, "Grounding mode");
-    expect(screen.getByRole("option", { name: "Live Files context" })).toBeDisabled();
+    expect(screen.getByRole("option", { name: /Live Files context/u })).toBeDisabled();
 
     await user.click(screen.getByRole("option", { name: "Knowledge Pod Set: Release pack" }));
 
@@ -1801,6 +1801,40 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     });
     expect(updateChatMock.mock.calls[0]?.[1]).not.toHaveProperty("connectedScopes");
     expect(replaceChat).toHaveBeenCalledWith(updated);
+  });
+
+  // Audit F-12 — a user could not discover WHY "Live Files context" was greyed out. The
+  // disabled option must carry the connect-a-Files-window hint, and only when disabled.
+  it("explains the disabled Live Files option when no folder scope exists", async () => {
+    const user = userEvent.setup();
+    renderWindow(makeSession({ activeChat: makeChat() }));
+
+    await openCombobox(user, "Grounding mode");
+
+    const option = screen.getByRole("option", { name: /Live Files context/u });
+    expect(option).toBeDisabled();
+    expect(option).toHaveTextContent(
+      "Connect a Files window to this chat to ground answers in your repository.",
+    );
+  });
+
+  it("omits the Live Files hint when a folder scope is connected", async () => {
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          connectedScopes: [
+            { kind: "directory", root: "/repo", relativePaths: ["docs"], connectedAtMs: 1 },
+          ],
+        }),
+      }),
+    );
+
+    await openCombobox(user, "Grounding mode");
+
+    const option = screen.getByRole("option", { name: "Live Files context" });
+    expect(option).not.toBeDisabled();
+    expect(screen.queryByText(/Connect a Files window to this chat/u)).toBeNull();
   });
 
   it("clears mixed folder and knowledge grounding when Model only is selected", async () => {

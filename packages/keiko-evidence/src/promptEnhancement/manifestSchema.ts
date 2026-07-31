@@ -98,6 +98,10 @@ export interface PromptEnhancementManifestTotals {
 //   redacted, truncated excerpt. Non-secret prompt text may remain in that excerpt, so the manifest is
 //   redacted evidence rather than anonymous telemetry. The enhanced output and applied rules are
 //   redacted strings; everything else is ids / enums / numbers.
+// - Every free-text leaf that can carry the raw draft is BOUNDED by the store's single content
+//   -minimisation budget, not just `inputExcerptRedacted`: the rendered prompt embeds the draft in its
+//   Input section, so an unbounded `enhancedPromptTextRedacted` would silently re-persist far more of
+//   it than the excerpt cap allows. Truncation of the prompt text is marked, never silent.
 // - `totals` MUST match the lengths of the corresponding collections (asserted on read).
 // - `integrityHashes` MUST match the SHA-256 of the redacted groups (asserted on read).
 export interface PromptEnhancementEvidenceManifest {

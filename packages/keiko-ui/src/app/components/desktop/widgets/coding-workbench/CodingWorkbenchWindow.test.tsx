@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
 import type {
   AvailableCodingSafeActivityFeed,
   CodingWorkbenchRuntimeSnapshot,
@@ -21,7 +22,9 @@ const runtimeHookMock = vi.hoisted(() => vi.fn());
 const questionsHookMock = vi.hoisted(() => vi.fn());
 const activityHookMock = vi.hoisted(() => vi.fn());
 const researchHookMock = vi.hoisted(() => vi.fn());
+const approvalReviewHookMock = vi.hoisted(() => vi.fn());
 const autonomyHookMock = vi.hoisted(() => vi.fn());
+const editorBridgeHookMock = vi.hoisted(() => vi.fn());
 const chatCatalogMock = vi.hoisted(() => ({
   activeProject: undefined as ProjectWithAvailability | undefined,
   projects: [] as ProjectWithAvailability[],
@@ -43,8 +46,16 @@ vi.mock("@/lib/useCodingWorkbenchResearch", () => ({
   useCodingWorkbenchResearch: researchHookMock,
 }));
 
+vi.mock("@/lib/useCodingWorkbenchApprovalReview", () => ({
+  useCodingWorkbenchApprovalReview: approvalReviewHookMock,
+}));
+
 vi.mock("../../hooks/useAutonomyModePolicy", () => ({
   useAutonomyModePolicy: autonomyHookMock,
+}));
+
+vi.mock("@/lib/useCodingWorkbenchEditorBridge", () => ({
+  useCodingWorkbenchEditorBridge: editorBridgeHookMock,
 }));
 
 vi.mock("../../context/ChatSessionContext", async (importOriginal) => {
@@ -66,6 +77,7 @@ const EMPTY_QUESTIONS: UseCodingWorkbenchQuestionsResult = {
   status: "empty",
   questions: [],
   errorCode: null,
+  mutationFailure: null,
   answer: vi.fn(() => Promise.resolve(true)),
   reject: vi.fn(() => Promise.resolve(true)),
   retry: vi.fn(),
@@ -137,6 +149,7 @@ function liveState(
         modelSource: "keiko-model-gateway",
         runtimeSource: "keiko-sidecar",
         available: true,
+        verification: "verified",
       },
       error: null,
     },
@@ -191,7 +204,15 @@ describe("CodingWorkbenchWindow", () => {
     chatCatalogMock.projects = [];
     questionsHookMock.mockReturnValue(EMPTY_QUESTIONS);
     activityHookMock.mockReturnValue(IDLE_ACTIVITY);
+    approvalReviewHookMock.mockReturnValue({ status: "idle", review: null });
     researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null });
+    editorBridgeHookMock.mockReset();
+    editorBridgeHookMock.mockReturnValue({
+      pendingReview: null,
+      approve: vi.fn(),
+      deny: vi.fn(),
+      retry: vi.fn(),
+    });
     autonomyHookMock.mockReturnValue({
       requestedMode: "supervised-coding",
       effectiveMode: "supervised-coding",
@@ -239,6 +260,30 @@ describe("CodingWorkbenchWindow", () => {
             actionKind: "research",
             risk: "medium",
             expiresAt: "2026-07-13T12:02:00.000Z",
+          },
+        }),
+      },
+    });
+  }
+
+  function editApprovalState(): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "awaiting-approval",
+          runId: "run-1",
+          pendingPermission: {
+            requestId: "permission-7",
+            kind: "workspace-write",
+            actionClass: "workspace-write",
+            reasonCode: "approval-required",
+            actionKind: "file-edit",
+            scopeLabel: "workspace-scope",
+            risk: "medium",
+            policyReason: "approval-required",
+            expiresAt: "2026-07-13T12:05:00.000Z",
           },
         }),
       },
@@ -361,6 +406,19 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Workspace could not be refreshed.");
   });
 
+  // Release-audit F-08/RG-12: an unpaired browser window cannot start a coding run (ADR-0141 —
+  // authority resolution fails without launcher pairing), so the surface must render the
+  // blocked-idle state and name pairing as the missing input instead of narrating readiness.
+  it("names the unpaired window instead of narrating readiness (F-08/RG-12)", (): void => {
+    renderWorkbench(liveState({ canStart: false, pairing: "unpaired" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Browser window not paired — open Keiko through the launcher to enable coding runs.",
+    );
+    expect(screen.getByText("Not ready to start")).toBeInTheDocument();
+    expect(screen.queryByText("Ready to start")).not.toBeInTheDocument();
+  });
+
   // Release-audit F-01: the idle header pill is a READINESS claim, not a run state. It must
   // consume the same server-confirmed readiness the start action gates on — including the
   // sidecar gateway profile — so it can never say "Ready to start" over an unavailable source.
@@ -376,6 +434,7 @@ describe("CodingWorkbenchWindow", () => {
             runtimeSource: "keiko-sidecar",
             available: false,
             unavailableReason: "no-tool-calling",
+            verification: UNVERIFIED_GATEWAY,
           },
           error: null,
         },
@@ -477,6 +536,66 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.queryByText("Research destination")).not.toBeInTheDocument();
   });
 
+  it("#2802: shows the files and magnitude of the edit the operator is approving", async () => {
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-7",
+        paths: ["src/alpha.ts", "src/beta.ts"],
+        pathsTruncated: false,
+        fileCount: 2,
+        addedLines: 12,
+        deletedLines: 4,
+      },
+    });
+    renderWorkbench(editApprovalState());
+
+    const changes = screen.getByRole("group", { name: "Files this change would write" });
+    expect(changes).toHaveTextContent("src/alpha.ts");
+    expect(changes).toHaveTextContent("src/beta.ts");
+    expect(changes).toHaveTextContent("+12 / -4");
+    // Reviewable text only: never a live link, and never a byte of the patch.
+    expect(changes.querySelector("a")).toBeNull();
+    expect(screen.queryByText(/diff --git/u)).not.toBeInTheDocument();
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it("#2802: marks a truncated file list instead of understating the blast radius", () => {
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-7",
+        paths: ["src/alpha.ts"],
+        pathsTruncated: true,
+        fileCount: 9,
+        addedLines: 30,
+        deletedLines: 0,
+      },
+    });
+    renderWorkbench(editApprovalState());
+
+    const changes = screen.getByRole("group", { name: "Files this change would write" });
+    expect(changes).toHaveTextContent("Only the first 1 of 9 files are listed.");
+    expect(changes).toHaveTextContent("9");
+  });
+
+  it("#2802: says the changed files are unavailable rather than implying there are none", () => {
+    approvalReviewHookMock.mockReturnValue({ status: "unavailable", review: null });
+    renderWorkbench(editApprovalState());
+
+    expect(
+      screen.getByText(/Changed files unavailable\. Re-pair this window/u),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeInTheDocument();
+  });
+
+  it("#2802: shows no changed-file block for an approval that writes no file", () => {
+    approvalReviewHookMock.mockReturnValue({ status: "idle", review: null });
+    renderWorkbench(egressApprovalState());
+
+    expect(screen.queryByText("Files this change would write")).not.toBeInTheDocument();
+  });
+
   it("renders recovery acknowledgement before allowing a fresh retry", async () => {
     const user = userEvent.setup();
     const liveActions = renderWorkbench(
@@ -497,6 +616,53 @@ describe("CodingWorkbenchWindow", () => {
 
     await user.click(screen.getByRole("button", { name: "Acknowledge recovery" }));
     expect(liveActions.acknowledgeRecovery).toHaveBeenCalledOnce();
+  });
+
+  // 0.3.0 release audit: `RuntimeControls` rendered nothing for a paused run, and these two
+  // buttons are the ONLY call sites of `actions.stop` and `actions.takeover` in the whole UI — so
+  // a paused run offered no way to end it at all, while the server admits stop and takeover from
+  // `paused`. Pausing must not remove the operator's exits.
+  it("keeps stop and takeover reachable while a run is paused", async () => {
+    const user = userEvent.setup();
+    const liveActions = renderWorkbench(
+      liveState({
+        canStart: false,
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "paused", runId: "run-1" }),
+        },
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Stop run" }));
+    expect(liveActions.stop).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Take over manually" }));
+    expect(liveActions.takeover).toHaveBeenCalledOnce();
+  });
+
+  // Same root cause, higher consequence. `activeRunState` also drives the headless editor-bridge
+  // lease and the autonomy auto-sync: while paused the bridge must stay leased — a changeset
+  // review already pending when the operator pauses can only be delivered over a live lease, so
+  // tearing it down loses the operator's Approve/Deny — and the requested mode must not be
+  // re-synced under a run whose minted envelope can no longer change.
+  it("keeps the editor bridge leased and the minted mode untouched while a run is paused", () => {
+    const liveActions = renderWorkbench(
+      liveState({
+        requestedMode: "governed-assist",
+        canStart: false,
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "paused", runId: "run-1" }),
+        },
+      }),
+    );
+
+    expect(editorBridgeHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-1", active: true }),
+    );
+    expect(liveActions.setRequestedMode).not.toHaveBeenCalled();
   });
 
   it("announces an unavailable authentication setup plan in the single live status", () => {
@@ -555,6 +721,7 @@ describe("CodingWorkbenchWindow", () => {
         },
       ],
       errorCode: null,
+      mutationFailure: null,
       answer,
       reject: vi.fn(() => Promise.resolve(true)),
       retry: vi.fn(),

@@ -10,7 +10,11 @@ import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import {
   GIT_REPOSITORY_AGENT_SCHEMA_VERSION,
+  gitRepositoryAgentMinimumMode,
+  gitRepositoryAgentOperationAdmitted,
   parseGitRepositoryAgentOperationRequest,
+  resolveEffectiveCodingWorkbenchMode,
+  type CodingWorkbenchMode,
   type GitRepositoryAgentDenialReason,
   type GitRepositoryAgentOperationKind,
   type GitRepositoryAgentOperationRequest,
@@ -430,7 +434,41 @@ function fingerprintRequest(request: GitRepositoryAgentOperationRequest): string
 }
 
 function deniedStatus(reason: GitRepositoryAgentDenialReason): number {
-  return reason === "unsupported-direct-shell" ? 200 : 400;
+  if (reason === "unsupported-direct-shell") return 200;
+  return reason === "autonomy-mode-denied" ? 403 : 400;
+}
+
+// The server-owned product-wide autonomy ceiling (ADR-0129). Undefined fails closed to the narrowest
+// posture: an operator who has configured nothing has accepted nothing, so an agent gets reads only.
+// This is the same resolution the coding-runtime, coding-context, editor-agent and Atlassian action
+// surfaces use — one ceiling for the product, not a second one for Git.
+export function gitAgentEffectiveMode(
+  deps: Pick<UiHandlerDeps, "codingRuntimeDeploymentCeiling">,
+): CodingWorkbenchMode {
+  const ceiling = deps.codingRuntimeDeploymentCeiling ?? "governed-assist";
+  return resolveEffectiveCodingWorkbenchMode(ceiling, ceiling);
+}
+
+// The authority gate for the agent repository facade. It runs BEFORE the idempotency reservation and
+// before any delegation, so a denied operation neither mutates the repository nor occupies a replay
+// slot. A denial is content-free: the operation, the effective mode, and the mode that would have
+// admitted it — never a path, a branch name, or any part of the payload.
+function autonomyDenial(
+  request: GitRepositoryAgentOperationRequest,
+  effectiveMode: CodingWorkbenchMode,
+): RouteResult | undefined {
+  if (gitRepositoryAgentOperationAdmitted(request.operation, request.mode, effectiveMode)) {
+    return undefined;
+  }
+  const required = gitRepositoryAgentMinimumMode(request.operation);
+  return {
+    status: deniedStatus("autonomy-mode-denied"),
+    body: denied(
+      request,
+      "autonomy-mode-denied",
+      `The autonomy mode in effect (${effectiveMode}) does not admit an agent-initiated ${request.operation} execute; ${required} or higher is required.`,
+    ),
+  };
 }
 
 async function parseAgentRequest(req: IncomingMessage): Promise<
@@ -527,6 +565,8 @@ export async function handleGitAgentOperation(
 ): Promise<RouteResult> {
   const parsed = await parseAgentRequest(ctx.req);
   if (!parsed.ok) return parsed.result;
+  const gate = autonomyDenial(parsed.request, gitAgentEffectiveMode(deps));
+  if (gate !== undefined) return gate;
   return handleGitAgentOperationWithDelegate(parsed.request, parsed.fingerprint, () =>
     delegateRequest(parsed.request, ctx, deps),
   );

@@ -34,9 +34,9 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   evaluateGitPolicy,
-  GIT_DELIVERY_RISK_CLASS_SEVERITY,
   GIT_DELIVERY_SCHEMA_VERSION,
-  gitDeliveryBranchNameMatchesAny,
+  gitDeliveryConstraintBlockReason,
+  gitDeliveryPolicyTargetBranchName,
   gitDeliveryRiskClassForInputs,
 } from "@oscharko-dev/keiko-contracts";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
@@ -436,25 +436,20 @@ function approvalState(
   return "valid";
 }
 
+// Delegates to the contract-owned resolver so this gate and every preview surface resolve a
+// `constrained` decision identically. The FORCE-AWARE risk class (a force push escalates to
+// recovery-or-rewrite, so the publish ceiling blocks it — AC4) is derived there from the same inputs.
 function constraintBlock(
   constraint: GitDeliveryConstraint,
   target: string | undefined,
   capabilities: readonly GitDeliveryProviderCapability[],
   pushInputs: GitDeliveryPushInputs,
 ): GitDeliveryBlockReason | undefined {
-  if (constraint.kind === "branch-pattern") {
-    const ok = target !== undefined && gitDeliveryBranchNameMatchesAny(target, constraint.patterns);
-    return ok ? undefined : "policy-pack-blocked";
-  }
-  if (constraint.kind === "provider-capability") {
-    return capabilities.includes(constraint.capability) ? undefined : "provider-capability-absent";
-  }
-  // The FORCE-AWARE risk class: a force push escalates to recovery-or-rewrite (severity 4), so the
-  // publish ceiling (severity 2) blocks it (AC4). A future pack with a recovery-or-rewrite ceiling is
-  // the "explicit policy path" that could permit force; the default publish ceiling does not.
-  const pushSeverity = GIT_DELIVERY_RISK_CLASS_SEVERITY[gitDeliveryRiskClassForInputs(pushInputs)];
-  const ceilingSeverity = GIT_DELIVERY_RISK_CLASS_SEVERITY[constraint.maxRiskClass];
-  return pushSeverity <= ceilingSeverity ? undefined : "risk-class-ceiling";
+  return gitDeliveryConstraintBlockReason(constraint, {
+    riskClass: gitDeliveryRiskClassForInputs(pushInputs),
+    targetBranchName: target,
+    activeProviderCapabilities: capabilities,
+  });
 }
 
 // The EFFECTIVE policy outcome for a specific push target, evaluating a `constrained` decision's
@@ -552,7 +547,8 @@ function preparePublish(request: GitPublishRequest, deps: GitPublishOrchestrator
   const capabilities = deps.activeProviderCapabilities ?? [];
   const context: GitDeliveryPolicyContext = {
     actionKind: "push",
-    targetBranchName: request.command.remoteBranchName,
+    // ONE derivation, shared with every preview surface (contracts): a push targets its REMOTE branch.
+    targetBranchName: gitDeliveryPolicyTargetBranchName(inputs),
     activeProviderCapabilities: capabilities,
   };
   return {

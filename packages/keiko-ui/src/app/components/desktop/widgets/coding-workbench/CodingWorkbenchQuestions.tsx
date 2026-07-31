@@ -22,6 +22,7 @@ import {
 
 import {
   useCodingWorkbenchQuestions,
+  type CodingWorkbenchQuestionMutationFailure,
   type CodingWorkbenchQuestionsStatus,
   type UseCodingWorkbenchQuestionsResult,
 } from "@/lib/useCodingWorkbenchQuestions";
@@ -30,7 +31,7 @@ import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
-import { cx } from "./codingWorkbenchLabels";
+import { actionFailureAlert, cx } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 const TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
@@ -91,6 +92,10 @@ export function CodingWorkbenchQuestionsSurface({
 
   const retryable =
     result.status === "offline" || result.status === "error" || result.status === "stale";
+  // F-09a: only work actually in flight disables the form. A refused answer/reject leaves the
+  // question open, and re-submitting it is the whole point of keeping it on screen — deriving
+  // `busy` from `status !== "ready"` disabled every control the operator needed.
+  const busy = result.status === "submitting" || result.status === "loading";
   return (
     <section
       className={variant === "inline" ? styles.questionInline : styles.card}
@@ -105,7 +110,12 @@ export function CodingWorkbenchQuestionsSurface({
         {t("codingWorkbench.questions.title")}
       </PanelTitle>
       <p className={styles.helpText}>{t("codingWorkbench.questions.help")}</p>
-      <QuestionStatus status={result.status} count={result.questions.length} t={t} />
+      <QuestionStatus
+        status={result.status}
+        count={result.questions.length}
+        failure={result.mutationFailure}
+        t={t}
+      />
       {retryable ? (
         <button className={styles.button} type="button" onClick={result.retry}>
           {t("codingWorkbench.questions.retry")}
@@ -117,7 +127,7 @@ export function CodingWorkbenchQuestionsSurface({
             <QuestionRequestForm
               key={request.id}
               request={request}
-              busy={result.status !== "ready"}
+              busy={busy}
               headingRef={headingRef}
               onAnswer={answer}
               onReject={reject}
@@ -147,13 +157,15 @@ function useFocusRestoringAction<T extends readonly unknown[]>(
 function QuestionStatus({
   status,
   count,
+  failure,
   t,
 }: {
   readonly status: CodingWorkbenchQuestionsStatus;
   readonly count: number;
+  readonly failure: CodingWorkbenchQuestionMutationFailure | null;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
-  const alert = status === "offline" || status === "error";
+  const alert = failure !== null || status === "offline" || status === "error";
   return (
     <p
       className={styles.questionStatus}
@@ -161,12 +173,29 @@ function QuestionStatus({
       aria-live={alert ? undefined : "polite"}
       aria-atomic="true"
       data-tone={statusTone(alert, status)}
+      data-question-failure-code={failure?.code}
     >
-      {status === "ready"
-        ? t("codingWorkbench.questions.ready", { count })
-        : t(`codingWorkbench.questions.${status}`)}
+      {questionStatusMessage(status, count, failure, t)}
     </p>
   );
+}
+
+// F-09a: a refused answer or reject reported the LISTING failure ("Questions could not be
+// refreshed.") — a different action, and a sentence that told the operator to retry the wrong
+// thing. The mutation failure owns the sentence whenever there is one, names the action that
+// actually failed, and carries the machine code plus the correlation id.
+function questionStatusMessage(
+  status: CodingWorkbenchQuestionsStatus,
+  count: number,
+  failure: CodingWorkbenchQuestionMutationFailure | null,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (failure !== null) {
+    return actionFailureAlert(`codingWorkbench.questions.${failure.action}Failed`, failure, t);
+  }
+  return status === "ready"
+    ? t("codingWorkbench.questions.ready", { count })
+    : t(`codingWorkbench.questions.${status}`);
 }
 
 interface QuestionRequestFormProps {

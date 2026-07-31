@@ -10,6 +10,12 @@
 //      trail and escalated to human review when an attack is detected, but never blocking, because the
 //      generated prompt isolates the input as data (AC2: untrusted content cannot override).
 //
+// Two entry points, one rule set. `assessPromptSafety` assesses a structured candidate;
+// `assessPromptTextSafety` assesses a prompt that exists only as text (a model-refined prompt), so the
+// stage can always run on the artefact that is actually RETURNED rather than on a candidate a later
+// stage supersedes (ADR-0044 §5). Both share `assessTrustedProjection`, so neither can be served by a
+// weaker variant of the trusted-channel scan.
+//
 // The model gateway is allowed to depend on {contracts, security} (ADR-0019), so this is the natural
 // home for the stage that needs both — mirroring how the QI dispatch primitives live here. The stage
 // makes NO model call and grants NO authority (ADR-0044 §4): it produces an assessment artefact only.
@@ -18,9 +24,14 @@
 
 import {
   assessEnhancedPromptStructuralSafety,
+  collectProhibitedPromptTextFindings,
+  leastPrivilegeForAnalysis,
+  requiresHumanReviewForAnalysis,
   summarizePromptSafety,
+  PROMPT_ENHANCER_SCHEMA_VERSION,
   PROMPT_SAFETY_VIOLATION_DETAILS,
   type EnhancedPrompt,
+  type EnhancedPromptId,
   type LeastPrivilegeConstraint,
   type PromptSafetyAssessment,
   type PromptSafetyFinding,
@@ -127,6 +138,50 @@ function dedupeFindings(findings: readonly PromptSafetyFinding[]): readonly Prom
   return [...byCode.values()];
 }
 
+// One trusted-channel projection of a prompt, plus the untrusted draft it was derived from. The single
+// implementation of the validate stage's two text passes, shared by every entry point below so no
+// caller can be served by a weaker variant of the rule set.
+interface TrustedProjectionArgs {
+  readonly promptId: EnhancedPromptId;
+  // Everything the downstream assistant will read as instructions.
+  readonly trustedText: string;
+  // Findings already established about the artefact (structural safeguards, prohibited claims).
+  readonly priorFindings: readonly PromptSafetyFinding[];
+  readonly requiresReview: boolean;
+  readonly leastPrivilege: readonly LeastPrivilegeConstraint[];
+  readonly input: RawPromptInput;
+}
+
+function assessTrustedProjection(args: TrustedProjectionArgs): PromptSafetyAssessment {
+  // (a) Trusted-channel scan: any unsafe signal here is a blocking rejection (a safe prompt never
+  // contains it; a forged, tampered, or model-authored candidate can).
+  const trustedFindings = detectPromptInjectionSignals(args.trustedText).map((signal) =>
+    findingFor(signal, "blocking"),
+  );
+
+  // (b) Untrusted-input scan: recorded for the audit trail. Critical attack attempts escalate to human
+  // review; nothing here is blocking because the prompt isolates the input as data.
+  const inputSignals = detectPromptInjectionSignals(args.input.text);
+  const inputFindings = inputSignals.map((signal) =>
+    findingFor(signal, signal.severity === "critical" ? "warning" : "info"),
+  );
+  const inputAttackDetected = inputSignals.some((signal) => signal.severity === "critical");
+
+  const findings = dedupeFindings([...args.priorFindings, ...trustedFindings, ...inputFindings]);
+  const requiresHumanReview = args.requiresReview || inputAttackDetected;
+  const { decision, verificationStatus } = summarizePromptSafety(findings, requiresHumanReview);
+
+  return {
+    schemaVersion: PROMPT_ENHANCER_SCHEMA_VERSION,
+    promptId: args.promptId,
+    decision,
+    requiresHumanReview,
+    verificationStatus,
+    findings,
+    leastPrivilege: withHumanApproval(args.leastPrivilege, requiresHumanReview),
+  };
+}
+
 /**
  * Assess the safety of one Enhanced Prompt against the full validate-stage rule set. Pure. Combines
  * the contracts structural assessment with the keiko-security text detector over the trusted sections
@@ -137,35 +192,50 @@ function dedupeFindings(findings: readonly PromptSafetyFinding[]): readonly Prom
 export function assessPromptSafety(args: AssessPromptSafetyArgs): PromptSafetyAssessment {
   const { prompt, analysis, input } = args;
   const structural = assessEnhancedPromptStructuralSafety(prompt, analysis);
-
-  // (a) Trusted-section scan: any unsafe signal here is a blocking rejection (a safe generated prompt
-  // never contains it; a forged/tampered candidate would).
-  const trustedFindings = detectPromptInjectionSignals(trustedSectionsText(prompt)).map((signal) =>
-    findingFor(signal, "blocking"),
-  );
-
-  // (b) Untrusted-input scan: recorded for the audit trail. Critical attack attempts escalate to human
-  // review; nothing here is blocking because the prompt isolates the input as data.
-  const inputSignals = detectPromptInjectionSignals(input.text);
-  const inputFindings = inputSignals.map((signal) =>
-    findingFor(signal, signal.severity === "critical" ? "warning" : "info"),
-  );
-  const inputAttackDetected = inputSignals.some((signal) => signal.severity === "critical");
-
-  const findings = dedupeFindings([...structural.findings, ...trustedFindings, ...inputFindings]);
-  const requiresHumanReview = structural.requiresHumanReview || inputAttackDetected;
-  const { decision, verificationStatus } = summarizePromptSafety(findings, requiresHumanReview);
-  const leastPrivilege = withHumanApproval(structural.leastPrivilege, requiresHumanReview);
-
-  return {
-    schemaVersion: structural.schemaVersion,
+  return assessTrustedProjection({
     promptId: prompt.promptId,
-    decision,
-    requiresHumanReview,
-    verificationStatus,
-    findings,
-    leastPrivilege,
-  };
+    trustedText: trustedSectionsText(prompt),
+    priorFindings: structural.findings,
+    requiresReview: structural.requiresHumanReview,
+    leastPrivilege: structural.leastPrivilege,
+    input,
+  });
+}
+
+export interface AssessPromptTextSafetyArgs {
+  // The id of the artefact the assessment describes; it MUST be the id the surface reports for the
+  // text below, so an assessment can never be read as evidence about a different prompt.
+  readonly promptId: EnhancedPromptId;
+  // The exact prompt text that will be returned to the user and persisted as evidence.
+  readonly promptText: string;
+  readonly analysis: PromptTaskAnalysis;
+  // The original untrusted draft, scanned exactly as in `assessPromptSafety`.
+  readonly input: RawPromptInput;
+}
+
+/**
+ * Assess the safety of a prompt that exists only as TEXT — a model-refined prompt with no section
+ * structure to walk. Pure.
+ *
+ * ADR-0044 §5 requires the validate stage to reject a prompt that claims tool/secret/egress authority,
+ * and states that redaction never substitutes for it. The stage must therefore run on the text that is
+ * actually handed to the user: a structured candidate that a later stage supersedes proves nothing
+ * about what was returned. Because unstructured text carries no marked untrusted region, ALL of it is
+ * the trusted channel and is held to exactly the trusted-channel standard `assessPromptSafety` applies
+ * — the same detector, the same blocking severity, the same cue vocabulary. Structural safeguard
+ * presence is not asserted here: it is a property of the generator's own output shape, which this text
+ * does not have. Human-review and least-privilege posture come from the analysis, so a risky task keeps
+ * its review requirement no matter who wrote the words.
+ */
+export function assessPromptTextSafety(args: AssessPromptTextSafetyArgs): PromptSafetyAssessment {
+  return assessTrustedProjection({
+    promptId: args.promptId,
+    trustedText: args.promptText,
+    priorFindings: collectProhibitedPromptTextFindings(args.promptText),
+    requiresReview: requiresHumanReviewForAnalysis(args.analysis),
+    leastPrivilege: leastPrivilegeForAnalysis(args.analysis),
+    input: args.input,
+  });
 }
 
 function withHumanApproval(

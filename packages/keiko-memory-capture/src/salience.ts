@@ -66,7 +66,7 @@ interface CandidateMetadata {
 // ─── Verbatim extraction prompt ──────────────────────────────────────────────
 export const SALIENCE_SYSTEM_PROMPT = `You extract durable memories from a chat turn so an assistant can remember the user across future conversations.
 
-Return ONLY a JSON array (no prose, no markdown fences). Each element:
+Return ONLY a JSON object of the shape {"items":[...]} (no prose, no markdown fences). Each element of "items":
 { "body": string, "type": string, "confidence": number, "scope": string, "source": "user", "tags": string[] }
 
 Capture ONLY facts the USER asserted about THEMSELVES or THEIR work that are durable and worth remembering: identity, stable preferences, project and technology facts, decisions, constraints, goals, environment, team, and recurring workflow lessons. Write each "body" as a concise, self-contained, third-person statement in the same language as the user's fact or the conversation. Do not translate German or multilingual facts into English.
@@ -82,7 +82,7 @@ EXCLUDE: questions; one-off ephemeral task requests; anything the ASSISTANT said
 
 "type" is one of: identity, preference, fact, decision, constraint, goal, lesson, procedural. "scope" is one of: user (personal facts/preferences), project (project-specific facts), workspace. "source" MUST be "user"; never emit assistant-sourced facts. "confidence" is 0..1. "tags" is a short list of lowercase keywords.
 
-If there is nothing durable to capture, return [].`;
+If there is nothing durable to capture, return {"items":[]}.`;
 
 function buildLegacyUserPrompt(messages: readonly SalienceModelMessage[]): string {
   return messages
@@ -204,10 +204,38 @@ function isRawSalienceItem(value: unknown): value is RawSalienceItem {
   );
 }
 
-// Parse the model output into validated raw items. ANY failure (no array, bad JSON, wrong element
-// shapes) yields [] — capture must never throw into the chat path.
+// Structured-output callers wrap the item array in a root object under "items" — Azure OpenAI
+// rejects a root array schema, so the server's SALIENCE_RESPONSE_FORMAT mandates that object shape
+// (F-11) — while the prompt-only fallback path emits the bare array. Returns the wrapped array
+// when the whole payload parses as that object shape, or null to fall back to the balanced-array
+// scan. Defensive: any parse failure yields null, never a throw.
+function unwrapWrappedItems(text: string): readonly unknown[] | null {
+  // Bare-array replies (the fallback path) skip straight to the balanced-array scan instead of
+  // paying a guaranteed-to-fail full-text parse first (#2842 review).
+  if (!text.trimStart().startsWith("{")) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return null;
+  }
+  const items = (parsed as Record<string, unknown>).items;
+  return Array.isArray(items) ? items : null;
+}
+
+// Parse the model output into validated raw items. Accepts the structured-output root object
+// ({ "items": [...] }) and the bare-array fallback shape. ANY failure (no array, bad JSON, wrong
+// element shapes) yields [] — capture must never throw into the chat path.
 export function parseSalienceItems(raw: string): readonly RawSalienceItem[] {
-  const arrayText = firstBalancedArray(stripCodeFences(raw));
+  const text = stripCodeFences(raw);
+  const wrapped = unwrapWrappedItems(text);
+  if (wrapped !== null) {
+    return wrapped.filter(isRawSalienceItem);
+  }
+  const arrayText = firstBalancedArray(text);
   if (arrayText === null) {
     return [];
   }

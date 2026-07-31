@@ -13,7 +13,12 @@ import {
   startRun,
 } from "@/lib/api";
 import { resetNativeFileDialogCapabilityCacheForTests } from "@/lib/native-file-dialog";
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
+import { DE_MESSAGES } from "@/lib/i18n-messages.de";
+import { EN_MESSAGES } from "@/lib/i18n-messages.en";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
+import { subText } from "../windows/connectionUtils";
+import type { Cfg } from "./PermControl";
 
 vi.mock("@/lib/api", () => ({
   ApiError: class ApiError extends Error {
@@ -816,5 +821,117 @@ describe("NewWindowDialog dialog controls and Files defaults", () => {
     openButton.focus();
     fireEvent.keyDown(dialog, { key: "Tab" });
     expect(document.activeElement).toBe(closeButton);
+  });
+});
+
+// ─── 0.3.0 release audit — the chat window's untitled default must never be load-bearing copy ────
+// The dialog seeds the title field with the LOCALIZED default. Before this fix that localized
+// string was submitted as the window title, so (a) the workspace sentinel that asks "is this chat
+// still untitled" compared it against the English literal "New chat" and missed under `de`, and
+// (b) the localized string was persisted as the chat record's title, which permanently disabled
+// the server's first-turn auto-title (it keys on the canonical stored default).
+//
+// Every expectation below is derived from the production catalog and the production consumer —
+// nothing restates a default title as a test literal.
+describe("NewWindowDialog chat title (0.3.0 audit: locale-independent untitled marker)", () => {
+  afterEach(() => {
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
+  });
+
+  async function renderGermanChatDialog(onConfirm: (cfg: Cfg) => void): Promise<void> {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    render(
+      <I18nProvider>
+        <NewWindowDialog type="chat" types={WIN_TYPES} onConfirm={onConfirm} onClose={vi.fn()} />
+      </I18nProvider>,
+    );
+    await screen.findByDisplayValue(DE_MESSAGES["window.default.chatTitle"]);
+  }
+
+  function confirmedCfg(onConfirm: ReturnType<typeof vi.fn>): Record<string, unknown> {
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    return onConfirm.mock.calls[0]?.[0] as Record<string, unknown>;
+  }
+
+  it("marks an accepted German default as untitled instead of shipping it as a title", async () => {
+    const onConfirm = vi.fn();
+    await renderGermanChatDialog(onConfirm);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: DE_MESSAGES["newWindow.open"].replace(
+          "{label}",
+          DE_MESSAGES["window.type.chat.title"],
+        ),
+      }),
+    );
+
+    const cfg = confirmedCfg(onConfirm);
+    // The consumer decides on the structural marker, not on the display string.
+    expect(subText("chat", cfg)).toBeNull();
+    // The localized default is never persisted as data, so the server's canonical default (and
+    // with it the first-turn auto-title) still applies to a German-locale chat.
+    expect(cfg["title"]).toBeUndefined();
+  });
+
+  it("keeps an operator-chosen German title as a real title", async () => {
+    const onConfirm = vi.fn();
+    await renderGermanChatDialog(onConfirm);
+
+    const input = screen.getByDisplayValue(DE_MESSAGES["window.default.chatTitle"]);
+    fireEvent.change(input, { target: { value: "Freigabeprüfung" } });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: DE_MESSAGES["newWindow.open"].replace(
+          "{label}",
+          DE_MESSAGES["window.type.chat.title"],
+        ),
+      }),
+    );
+
+    const cfg = confirmedCfg(onConfirm);
+    expect(cfg["title"]).toBe("Freigabeprüfung");
+    expect(subText("chat", cfg)).toBe("Freigabeprüfung");
+  });
+
+  it("treats an accepted English default exactly the same way", () => {
+    const onConfirm = vi.fn();
+    render(
+      <NewWindowDialog type="chat" types={WIN_TYPES} onConfirm={onConfirm} onClose={vi.fn()} />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: EN_MESSAGES["newWindow.open"].replace(
+          "{label}",
+          EN_MESSAGES["window.type.chat.title"],
+        ),
+      }),
+    );
+
+    const cfg = confirmedCfg(onConfirm);
+    expect(subText("chat", cfg)).toBeNull();
+    expect(cfg["title"]).toBeUndefined();
+  });
+
+  it("treats a blank title as untitled rather than as an empty operator title", async () => {
+    const onConfirm = vi.fn();
+    await renderGermanChatDialog(onConfirm);
+
+    const input = screen.getByDisplayValue(DE_MESSAGES["window.default.chatTitle"]);
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: DE_MESSAGES["newWindow.open"].replace(
+          "{label}",
+          DE_MESSAGES["window.type.chat.title"],
+        ),
+      }),
+    );
+
+    const cfg = confirmedCfg(onConfirm);
+    expect(subText("chat", cfg)).toBeNull();
+    expect(cfg["title"]).toBeUndefined();
   });
 });

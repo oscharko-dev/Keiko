@@ -3,6 +3,10 @@
 import dynamic, { type DynamicOptionsLoadingProps } from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, SyntheticEvent } from "react";
+// Installs the browser transport for reportClientDiagnostic at module scope, so a diagnostic
+// raised during hydration or an early boot crash is delivered rather than only buffered.
+import "@/lib/install-client-diagnostics";
+import { AppShellBoundary } from "./AppShellBoundary";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { ActiveWorkspaceProvider } from "./context/ActiveWorkspaceContext";
 import { AnnouncerProvider } from "./context/AnnouncerContext";
@@ -20,8 +24,6 @@ import {
   readWorkspaceCameraSmoothness,
   WORKSPACE_CAMERA_SMOOTHNESS_EVENT,
 } from "./workspace-appearance";
-import { NewWindowDialog } from "./modals/NewWindowDialog";
-import { Palette } from "./modals/Palette";
 import { type Cfg } from "./modals/PermControl";
 import { useChatSession } from "./hooks/useChatSession";
 import { useTheme } from "./hooks/useTheme";
@@ -43,6 +45,7 @@ import {
 import { fetchConfig, updateChatConnectedScopes, updateChatLocalKnowledgeScopes } from "@/lib/api";
 import { newClientCorrelationId } from "@/lib/http";
 import { I18nProvider, useTranslate } from "@/lib/i18n";
+import type { I18nTranslate } from "@/lib/i18n";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type {
   Chat,
@@ -56,7 +59,7 @@ import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import type { WorkspaceUiAction, WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
 import { resolveWorkspaceFileIdentifier } from "@oscharko-dev/keiko-contracts";
-import { applyShellUndoAction } from "./shell-undo-bindings";
+import { applyShellUndoAction, shellPanelIsOpen } from "./shell-undo-bindings";
 import type { ShellShortcutState } from "./shellShortcutState";
 import { WORKSPACE_SEARCH_FOCUS_EVENT } from "./widgets/panels/searchPanelEvents";
 import { EditorPaletteHostRegistryProvider } from "./EditorPaletteHostRegistryContext";
@@ -72,10 +75,9 @@ import {
   type Command,
 } from "./quickAccessRegistry";
 import "./widgets";
-import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
+import { localizedWindowTitle, WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow, Connection } from "./windows/types";
 import { registerSw } from "./install/registerSw";
-import { UpdateStartupNotice } from "./update/UpdateStartupNotice";
 import { workspaceRootTargets } from "./workspaceRootTargets";
 import styles from "./AppShell.module.css";
 
@@ -179,6 +181,32 @@ const TaskWorkspaceSwitcher = dynamic(
 
 const UnifiedQuickAccessPalette = dynamic(
   () => import("./modals/UnifiedQuickAccessPalette").then((mod) => mod.UnifiedQuickAccessPalette),
+  { ssr: false, loading: () => null },
+);
+
+// Issue #1207 (ADR-0042 D3.6) — the new-window dialog is reached only by an explicit gesture
+// (`pending !== null`), exactly like the quick-access palette and the gateway setup dialog above, so
+// it must not sit in the first-load chunk. Its subtree (KeikoSelect, the native file-dialog client,
+// the workflow-eligibility predicate) is the largest gesture-only surface the shell still pulled in
+// eagerly; loading it behind the same `next/dynamic(..., { ssr: false })` boundary keeps the initial
+// desktop paint under the committed initialPageChunkGzipBytesCeiling.
+const NewWindowDialog = dynamic(
+  () => import("./modals/NewWindowDialog").then((mod) => mod.NewWindowDialog),
+  { ssr: false, loading: () => null },
+);
+
+// Issue #1207 (ADR-0042 D3.6) — same reasoning for the window-launcher palette: it renders only
+// while `palOpen` is true, so its card grid and roving-focus keyboard model are gesture-only code.
+const Palette = dynamic(() => import("./modals/Palette").then((mod) => mod.Palette), {
+  ssr: false,
+  loading: () => null,
+});
+
+// Issue #1207 (ADR-0042 D3.6) — the startup update notice renders nothing until its own preflight
+// resolves, and it is gated on a workspace that has already loaded, so neither it nor the release
+// copy catalog it carries belongs in the initial desktop paint.
+const UpdateStartupNotice = dynamic(
+  () => import("./update/UpdateStartupNotice").then((mod) => mod.UpdateStartupNotice),
   { ssr: false, loading: () => null },
 );
 
@@ -584,82 +612,60 @@ function focusCreatedWindow(id: string): void {
   });
 }
 
-export function buildAppShellCommands(
+function layoutAndViewCommands(
   api: WorkspaceApi,
-  toggleTool: (type: WindowType) => void,
-  openPalettePick: (type: WindowType) => void,
   theme: "light" | "dark",
   toggleTheme: () => void,
-  undoStack: WorkspaceUndoStackApi,
+  t: I18nTranslate,
 ): readonly Command[] {
-  const createCommands = CARD_TYPES.map((tp): Command => {
-    const t = WIN_TYPES[tp];
-    return {
-      id: `new-${tp}`,
-      label: `New ${t.title}`,
-      group: "Create",
-      icon: t.icon,
-      run: () => openPalettePick(tp),
-    };
-  });
-  const toolCommands = TOOL_TYPES.map((tp): Command => {
-    const t = WIN_TYPES[tp];
-    return {
-      id: `open-${tp}`,
-      label: `Open ${t.title}`,
-      group: "Tools",
-      icon: t.icon,
-      run: () => toggleTool(tp),
-    };
-  });
-  const openEditorSettingsCommand: Command = {
-    id: "open-editor-settings",
-    label: "Open Editor settings",
-    group: "Tools",
-    icon: "settings",
-    run: () => {
-      toggleTool("settings");
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent(OPEN_EDITOR_SETTINGS_EVENT));
-      }
-    },
-  };
-  const staticCommands: readonly Command[] = [
+  return [
     {
       id: "tile",
-      label: "Tile all windows",
-      group: "Layout",
+      label: t("header.tileAll"),
+      group: t("command.group.layout"),
       icon: "tile",
       run: api.tileAll,
     },
     {
       id: "split",
-      label: "Split front windows",
-      group: "Layout",
+      label: t("header.splitFront"),
+      group: t("command.group.layout"),
       icon: "split",
       run: api.splitFront,
     },
     {
       id: "cascade",
-      label: "Cascade windows",
-      group: "Layout",
+      label: t("header.cascade"),
+      group: t("command.group.layout"),
       icon: "cascade",
       run: api.cascade,
     },
     {
       id: "theme",
-      label: "Toggle light / dark theme",
-      group: "View",
+      label: t("command.toggleTheme"),
+      group: t("command.group.view"),
       icon: theme === "light" ? "moon" : "sun",
       run: toggleTheme,
     },
+  ];
+}
+
+// Audit — the empty-stack labels used to advertise "window and panel changes", but the shell
+// instruments exactly ONE action kind: the `ui.panel.toggle` pushed by `onTool`. No window
+// move/resize/maximize/close reaches the stack (the geometry chords and WindowFrame gestures
+// never push), so the label promised a scope the stack could not deliver. Recording window
+// geometry would mean instrumenting every drag/resize/snap frame — a behaviour change well
+// beyond a truth fix — so the label is narrowed to what is actually recorded instead. The wider
+// `command.undo`/`command.undoLabelled` wording is deliberately not used here.
+function undoRedoCommands(undoStack: WorkspaceUndoStackApi, t: I18nTranslate): readonly Command[] {
+  return [
     {
       id: "undo",
       label:
         undoStack.undoLabel !== null
-          ? `Undo: ${undoStack.undoLabel}`
-          : "Undo (window and panel changes only)",
-      group: "Edit",
+          ? t("shell.command.undo.target", { target: undoStack.undoLabel })
+          : t("shell.command.undo.panelOnly"),
+      group: t("command.group.edit"),
       icon: "back",
       shortcut: "⌘Z",
       run: undoStack.undo,
@@ -668,15 +674,61 @@ export function buildAppShellCommands(
       id: "redo",
       label:
         undoStack.redoLabel !== null
-          ? `Redo: ${undoStack.redoLabel}`
-          : "Redo (window and panel changes only)",
-      group: "Edit",
+          ? t("shell.command.redo.target", { target: undoStack.redoLabel })
+          : t("shell.command.redo.panelOnly"),
+      group: t("command.group.edit"),
       icon: "fwd",
       shortcut: "⇧⌘Z",
       run: undoStack.redo,
     },
   ];
-  return [...createCommands, ...toolCommands, openEditorSettingsCommand, ...staticCommands];
+}
+
+// `t` is a required argument, not an optional convenience: every label and group name below reaches
+// the quick-access command list, which used to render English template literals (`New ${title}`,
+// "Layout", "Edit") no matter which locale the user selected.
+export function buildAppShellCommands(
+  api: WorkspaceApi,
+  toggleTool: (type: WindowType) => void,
+  openPalettePick: (type: WindowType) => void,
+  theme: "light" | "dark",
+  toggleTheme: () => void,
+  undoStack: WorkspaceUndoStackApi,
+  t: I18nTranslate,
+): readonly Command[] {
+  const createCommands = CARD_TYPES.map((tp): Command => ({
+    id: `new-${tp}`,
+    label: t("command.new", { label: localizedWindowTitle(t, tp) }),
+    group: t("command.group.create"),
+    icon: WIN_TYPES[tp].icon,
+    run: () => openPalettePick(tp),
+  }));
+  const toolCommands = TOOL_TYPES.map((tp): Command => ({
+    id: `open-${tp}`,
+    label: t("command.open", { label: localizedWindowTitle(t, tp) }),
+    group: t("command.group.tools"),
+    icon: WIN_TYPES[tp].icon,
+    run: () => toggleTool(tp),
+  }));
+  const openEditorSettingsCommand: Command = {
+    id: "open-editor-settings",
+    label: t("command.openEditorSettings"),
+    group: t("command.group.tools"),
+    icon: "settings",
+    run: () => {
+      toggleTool("settings");
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent(OPEN_EDITOR_SETTINGS_EVENT));
+      }
+    },
+  };
+  return [
+    ...createCommands,
+    ...toolCommands,
+    openEditorSettingsCommand,
+    ...layoutAndViewCommands(api, theme, toggleTheme, t),
+    ...undoRedoCommands(undoStack, t),
+  ];
 }
 
 // S3358 — the two deep-linked tool routes each map to a fixed singleton window type.
@@ -1262,9 +1314,17 @@ function AppShellInner(): ReactNode {
   // Epic #518 / ADR-0028 — undo stack wired at the shell. The apply
   // dispatcher lives in shell-undo-bindings.ts so the integration is
   // unit-testable without mounting the whole AppShell tree.
+  //
+  // The openness read goes through the wins ref, not the render-time `ws.wins`: undo applies the
+  // RECORDED state, so it must compare against the panel state at APPLY time (the user may have
+  // moved the panel by hand since the action was pushed), and the ref is refreshed every render.
+  const isPanelOpen = useCallback(
+    (panel: WindowType): boolean => shellPanelIsOpen(wsWinsForBindingRef.current, panel),
+    [],
+  );
   const applyUndoAction = useCallback(
-    (action: WorkspaceUiAction): void => applyShellUndoAction(ws.api, action),
-    [ws.api],
+    (action: WorkspaceUiAction): void => applyShellUndoAction({ api: ws.api, isPanelOpen }, action),
+    [isPanelOpen, ws.api],
   );
   const undoStack = useUndoStack({ apply: applyUndoAction });
 
@@ -1272,10 +1332,10 @@ function AppShellInner(): ReactNode {
     (id: string): void => {
       if (!(id in WIN_TYPES)) return;
       const panel = id as WindowType;
-      const existing = ws.wins?.find((win): boolean => win.type === panel);
-      const before = existing !== undefined && existing.minimized !== true;
-      const opensSearch =
-        panel === "search" && (existing === undefined || existing.minimized === true);
+      // Same predicate the apply dispatcher compares against, so the recorded state and the applied
+      // state are one rule (shellPanelIsOpen) rather than two copies that can drift.
+      const before = shellPanelIsOpen(ws.wins, panel);
+      const opensSearch = panel === "search" && !before;
       const searchRoot = opensSearch
         ? resolveSearchRoot(activeWorkspace.activeRoot, searchOwner)
         : undefined;
@@ -1358,8 +1418,8 @@ function AppShellInner(): ReactNode {
   }, []);
 
   const commands = useMemo(
-    () => buildAppShellCommands(ws.api, onTool, pick, theme, toggleTheme, undoStack),
-    [ws.api, onTool, pick, theme, toggleTheme, undoStack],
+    () => buildAppShellCommands(ws.api, onTool, pick, theme, toggleTheme, undoStack, t),
+    [ws.api, onTool, pick, t, theme, toggleTheme, undoStack],
   );
   const activeEditorHost =
     active?.type === "editor" && active.id.length > 0 ? (editorHosts.get(active.id) ?? null) : null;
@@ -1579,10 +1639,25 @@ export function AppShell(): ReactNode {
     );
   }
   return (
+    <AppShellFrame>
+      <AppShellInner />
+    </AppShellFrame>
+  );
+}
+
+/**
+ * The mounted shell's provider frame. The error boundary sits INSIDE `I18nProvider` (so the recovery
+ * surface is still translated) and ABOVE everything else: before it existed, any render-time throw
+ * in the shell — including the fail-closed throw the keyboard-shortcut substrate raises for a
+ * refused persisted binding — unmounted the desktop to a blank page with no way back. Exported so
+ * the boundary's position in this exact tree is asserted rather than assumed.
+ */
+export function AppShellFrame({ children }: { readonly children: ReactNode }): ReactNode {
+  return (
     <I18nProvider>
-      <TwinProvider>
-        <AppShellInner />
-      </TwinProvider>
+      <AppShellBoundary>
+        <TwinProvider>{children}</TwinProvider>
+      </AppShellBoundary>
     </I18nProvider>
   );
 }

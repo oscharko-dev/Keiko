@@ -21,10 +21,14 @@ import type {
   EditorM7SettingValue,
   EditorM7SettingsSnapshot,
   EditorInlineCompletionWireResponse,
+  GatewayVerificationState,
   LatencyClass,
 } from "@oscharko-dev/keiko-contracts";
+import { probeVerifiedGatewayConfig } from "../_support.js";
+import type { RuntimeGatewayConfig } from "../deps.js";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { UiStore } from "../store/index.js";
 import { handleEditorCompletion, type CompletionChatFactory } from "./completionRoutes.js";
 import {
@@ -54,23 +58,57 @@ function postContext(body: unknown): RouteContext {
 let root: string;
 let store: UiStore;
 
-function deps(
-  input: {
-    config?: GatewayConfig;
-    env?: Record<string, string | undefined>;
-    evidenceStore?: EvidenceStore;
-    aiSettings?: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> | undefined;
-  } = {},
-): UiHandlerDeps {
+// F-01: inline completion is admitted only while AI-assist activation is active, and activation now
+// requires a probe-confirmed gateway rather than a configured one. These suites are about the
+// completion ladder behind that gate, so they run against a gateway whose last readiness probe
+// passed; the gate itself is pinned in editor/aiAssistActivation.test.ts. `gatewayVerification` lets
+// a single test opt out and exercise the denial instead.
+interface DepsInput {
+  readonly config?: GatewayConfig;
+  readonly env?: Record<string, string | undefined>;
+  readonly evidenceStore?: EvidenceStore;
+  readonly aiSettings?:
+    Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> | undefined;
+  readonly gatewayVerification?: GatewayVerificationState;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+}
+
+function gatewayHolder(input: DepsInput): RuntimeGatewayConfig | undefined {
+  if (input.config === undefined) return undefined;
+  const holder = probeVerifiedGatewayConfig(input.config);
+  if (input.gatewayVerification !== undefined) holder.recordVerification(input.gatewayVerification);
+  return holder;
+}
+
+function deps(input: DepsInput = {}): UiHandlerDeps {
   const aiSettings = input.aiSettings ?? { inlineCompletion: true };
+  const gatewayConfig = gatewayHolder(input);
   return {
     store,
     redactor: buildRedactor(input.env ?? {}, input.config),
     evidenceStore: input.evidenceStore ?? createInMemoryEvidenceStore(),
     env: input.env ?? {},
     editorSettingsControl: editorSettingsControl(aiSettings),
+    ...(gatewayConfig === undefined ? {} : { gatewayConfig }),
+    ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
     ...(input.config === undefined ? {} : { config: input.config }),
   } as unknown as UiHandlerDeps;
+}
+
+// Capturing operator-diagnostic sink (never the default stderr sink) for the observability pins.
+function capturingDiagnostics(): {
+  readonly sink: ServerDiagnosticSink;
+  readonly records: ServerDiagnosticRecord[];
+} {
+  const records: ServerDiagnosticRecord[] = [];
+  return {
+    records,
+    sink: {
+      record: (entry: ServerDiagnosticRecord): void => {
+        records.push(entry);
+      },
+    },
+  };
 }
 
 function editorSettingsSnapshot(
@@ -144,6 +182,17 @@ function fimConfig(
   overrides: { readonly id?: string; readonly costClass?: CostClass } = {},
 ): GatewayConfig {
   const capability = fimCapability(latencyClass, overrides);
+  return {
+    providers: [{ modelId: capability.id, baseUrl: "http://localhost", apiKey: "x" }],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 1_000, halfOpenProbes: 1 },
+    capabilities: [capability],
+  } as unknown as GatewayConfig;
+}
+
+// A configured, credentialed gateway whose only chat model cannot infill: the completion ladder has
+// a gateway to look at and still finds nothing usable, which is the `no-infilling-model` degrade.
+function nonInfillingConfig(): GatewayConfig {
+  const capability = { ...fimCapability("fast"), supportsInfilling: false };
   return {
     providers: [{ modelId: capability.id, baseUrl: "http://localhost", apiKey: "x" }],
     circuitBreaker: { failureThreshold: 5, cooldownMs: 1_000, halfOpenProbes: 1 },
@@ -286,8 +335,42 @@ describe("POST /api/editor/inline-completion — degradation (model-only)", () =
     expect(chat).not.toHaveBeenCalled();
   });
 
-  it("returns zero items with a degrade reason when no gateway is configured", async () => {
-    const result = await handleEditorInlineCompletion(postContext(inlineBody()), deps());
+  // F-01: with no gateway configured at all, the AI-assist projection reports a missing model
+  // capability, so admission denies before the completion ladder runs. This used to reach the ladder
+  // because the projection defaulted its gateway input to "configured".
+  it("returns zero items without attempting a model when no gateway is configured", async () => {
+    const chat = vi.fn(() => Promise.resolve("a + b;"));
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps(),
+      permissiveOptions(() => chat),
+    );
+    expect(result.status).toBe(200);
+    const wire = body(result);
+    expect(wire.items).toEqual([]);
+    expect(wire.provenance.modelMode).toBe("deterministic");
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  // F-01: the same denial applies to a configured gateway whose last probe failed — the operator has
+  // live evidence that the provider does not answer, so no model call is attempted.
+  it("returns zero items without attempting a model when the last gateway probe failed", async () => {
+    const chat = vi.fn(() => Promise.resolve("a + b;"));
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: fimConfig("fast"), gatewayVerification: "failed" }),
+      permissiveOptions(() => chat),
+    );
+    expect(body(result).items).toEqual([]);
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it("returns zero items with a degrade reason when no configured model can infill", async () => {
+    const result = await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: nonInfillingConfig() }),
+      permissiveOptions(),
+    );
     expect(result.status).toBe(200);
     const wire = body(result);
     expect(wire.items).toEqual([]);
@@ -568,6 +651,53 @@ describe("POST /api/editor/inline-completion — model tier (fast FIM, as-you-ty
     );
     expect(result.status).toBe(200);
     expect(body(result).items).toEqual([]);
+  });
+
+  // 0.3.0 audit: a model failure and "the model had nothing to suggest" produce the IDENTICAL
+  // zero-item wire response, so before this the two were indistinguishable to an operator — the cause
+  // was swallowed by a bare `catch {}` with nothing recorded anywhere.
+  it("emits a redacted, correlation-keyed diagnostic when the model tier fails", async () => {
+    const captured = capturingDiagnostics();
+    const failing: InlineCompletionChatFactory = () => () =>
+      Promise.reject(
+        Object.assign(new Error("provider rejected key sk-ABCDEFGHIJKLMNOPQRSTUV"), {
+          code: "GATEWAY_AUTHENTICATION",
+        }),
+      );
+    const ctx: RouteContext = {
+      ...postContext(inlineBody()),
+      correlationId: "inline-correlation-0001",
+    };
+    const result = await handleEditorInlineCompletion(
+      ctx,
+      deps({ config: fimConfig("fast"), diagnostics: captured.sink }),
+      permissiveOptions(failing),
+    );
+
+    expect(result.status).toBe(200);
+    expect(body(result).items).toEqual([]);
+    expect(captured.records).toHaveLength(1);
+    const record = captured.records[0];
+    expect(record?.correlationId).toBe("inline-correlation-0001");
+    expect(record?.source).toBe("editor.inlineCompletionRoutes");
+    expect(record?.operation).toBe("editor.inlineCompletion");
+    expect(record?.errorClass).toBe("Error");
+    expect(record?.code).toBe("GATEWAY_AUTHENTICATION");
+    // Body-free: the provider's message (and the key inside it) never enters the record.
+    expect(JSON.stringify(record)).not.toContain("sk-ABCDEFGHIJKLMNOPQRSTUV");
+    expect(JSON.stringify(record)).not.toContain("provider rejected");
+  });
+
+  it("still records a correlation id when the request carried none", async () => {
+    const captured = capturingDiagnostics();
+    const failing: InlineCompletionChatFactory = () => () => Promise.reject(new Error("boom"));
+    await handleEditorInlineCompletion(
+      postContext(inlineBody()),
+      deps({ config: fimConfig("fast"), diagnostics: captured.sink }),
+      permissiveOptions(failing),
+    );
+    expect(captured.records).toHaveLength(1);
+    expect(captured.records[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
   });
 
   it("self-cancels as-you-type model calls after the latency budget", async () => {

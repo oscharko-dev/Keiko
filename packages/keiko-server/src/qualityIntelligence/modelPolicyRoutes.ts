@@ -41,7 +41,11 @@ import {
   resolveQiModelPolicy,
   validateQiModelPolicy,
 } from "./modelSelection.js";
-import { buildQiJudgePreflightRequest, tryParseJudgeVerdict } from "./judgePort.js";
+import {
+  buildQiJudgePreflightRequest,
+  tryParseJudgeVerdict,
+  withQiJudgeStageFailure,
+} from "./judgePort.js";
 
 const QI_POLICY_DIR = "quality-intelligence";
 const QI_POLICY_FILE = "model-policy.json";
@@ -436,6 +440,30 @@ export async function buildQiModelRouting(
   };
 }
 
+/**
+ * The redaction-safe reason for a failed judge preflight, or undefined when it did not fail. Built
+ * from the preflight's own category enum plus one of this module's fixed sentences — never an
+ * endpoint, key, or provider response body.
+ */
+function judgePreflightFailureReason(routing: QualityIntelligenceModelRouting): string | undefined {
+  const judge = routing.preflight.judge;
+  if (judge?.status !== "failed") return undefined;
+  return `qi-judge-preflight-${judge.category ?? "failed"}: ${
+    judge.message ?? "The selected Quality Intelligence judge model failed preflight."
+  }`;
+}
+
+/**
+ * Resolve the model routing a run will execute under.
+ *
+ * A GENERATION preflight failure is fatal: without a generation model the run has no result to
+ * preserve, so the request is rejected before a run id is streamed. A JUDGE preflight failure is
+ * NOT fatal — `modelRoutedTestDesign.runJudgeStage` documents that the judge AUGMENTS generation
+ * and must never fail an otherwise successful run, and the workflow already degrades cleanly when
+ * no judge port is supplied. Throwing here contradicted that contract and destroyed the whole run
+ * (POST /runs answered 400) over an optional stage; the failure is now classified onto
+ * `stageFailures` and carried into the manifest and the SSE frames instead.
+ */
 export async function buildQiModelRoutingForRun(
   deps: UiHandlerDeps,
   request: Pick<QualityIntelligenceStartRunRequest, "modelId" | "modelPolicy">,
@@ -448,14 +476,7 @@ export async function buildQiModelRoutingForRun(
       generation?.message ?? "The selected Quality Intelligence generation model is unavailable.",
     );
   }
-  if (routing.preflight.judge?.status === "failed") {
-    throw new QiModelPolicyError(
-      "QI_MODEL_PREFLIGHT_FAILED",
-      routing.preflight.judge.message ??
-        "The selected Quality Intelligence judge model failed preflight.",
-    );
-  }
-  return routing;
+  return withQiJudgeStageFailure(routing, judgePreflightFailureReason(routing));
 }
 
 export function handleGetQiModelPolicy(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {

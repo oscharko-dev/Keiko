@@ -38,6 +38,11 @@ import type {
 } from "@oscharko-dev/keiko-memory-vault";
 import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import {
+  FORGOTTEN_MEMORY_SUPPRESSION_REASON,
+  REJECTED_MEMORY_SUPPRESSION_REASON,
+  type MemoryCaptureSuppressionReason,
+} from "./memory-capture-policy.js";
+import {
   configuredEmbeddingProviders,
   selectEmbeddingModelId,
 } from "./local-knowledge-handlers.js";
@@ -460,41 +465,86 @@ function autoLinkRelatedMemories(
 // dedup corpus bound). Scope-local list preserves cross-scope isolation.
 const MAX_DEDUP_NEIGHBORS = 200;
 
+// The dedup corpus covers every LIVE record — accepted AND proposed. A proposal is a real record
+// occupying the review queue, so a second capture of the same fact must reinforce it rather than
+// queue the operator a duplicate question. Excluding `proposed` here (and in gatherExistingBodies)
+// meant that in the default "Ask for approval" posture, where nothing is accepted at capture, the
+// corpus stayed empty for every newly learned fact and the extractor re-proposed it every turn.
+// Terminal and suppressed states (rejected / superseded / archived / forgotten / expired /
+// conflicted) stay OUT: merging into one of them would reinforce a record the human already
+// retired. Refused bodies are handled by the suppression gate, not by merging.
+const DEDUP_CORPUS_STATUSES = ["accepted", "proposed"] as const;
+
 function gatherScopeEmbeddings(
   vault: MemoryVaultStore,
   scope: MemoryScope,
 ): ReadonlyMap<MemoryId, MemoryEmbeddingRow> {
   const ids = vault
-    .listMemoriesByScope(scope, { status: ["accepted"] })
+    .listMemoriesByScope(scope, { status: [...DEDUP_CORPUS_STATUSES] })
     .slice(0, MAX_DEDUP_NEIGHBORS)
     .map((record) => record.id);
   return ids.length === 0 ? new Map() : vault.getEmbeddings(ids);
 }
 
-export interface NoveltyInsertResult {
-  // The inserted record, or null when the candidate was merged into an existing near-duplicate, OR
-  // suppressed as a semantic paraphrase of a forgotten memory (GEN-AI-MEMORY-003, RB-4).
-  readonly inserted: MemoryRecord | null;
-  // The canonical memory the candidate merged into (reinforced via recordAccess), or null.
-  readonly mergedInto: MemoryId | null;
+// Three genuinely different endings, kept as a discriminated union so a caller cannot mistake one
+// for another. The previous shape returned `{ inserted: null, mergedInto: null }` for a SUPPRESSED
+// candidate and `{ inserted: null, mergedInto: id }` for a MERGED one; every caller discriminated on
+// `inserted` alone, so a refusal was tallied and reported as "the canonical was reinforced" — a
+// statement that was simply false, and one that also skipped the refusal's audit event.
+export type NoveltyInsertOutcome =
+  | { readonly kind: "inserted"; readonly record: MemoryRecord }
+  // The candidate is a semantic near-duplicate of a live in-scope memory: that canonical was
+  // reinforced via recordAccess and nothing new was stored.
+  | { readonly kind: "merged"; readonly mergedInto: MemoryId }
+  // The local human already refused this fact (forgot or rejected it) and the candidate is a
+  // PARAPHRASE of it: nothing was stored and nothing was reinforced.
+  | { readonly kind: "suppressed"; readonly reason: MemoryCaptureSuppressionReason };
+
+// Sealed vectors of the memories the local human has refused in this scope: forget tombstones
+// (deletion-grade, GEN-AI-MEMORY-003 / RB-4) plus records the operator rejected in the review queue.
+// Both are governed refusals, so both must survive a paraphrase — an exact body_hash match is
+// already handled upstream by `exactCaptureSuppressionReason` (memory-suppression.ts); this catches
+// the cosine-similar re-derivation whose normalized body differs.
+function refusedScopeVectors(
+  vault: MemoryVaultStore,
+  scope: MemoryRecord["scope"],
+  reason: MemoryCaptureSuppressionReason,
+): readonly Float32Array[] {
+  if (reason === FORGOTTEN_MEMORY_SUPPRESSION_REASON) return vault.forgetTombstoneVectors(scope);
+  const ids = vault
+    .listMemoriesByScope(scope, {
+      status: ["rejected"],
+      limit: MAX_DEDUP_NEIGHBORS,
+      includeExpired: true,
+    })
+    .map((record) => record.id);
+  if (ids.length === 0) return [];
+  return [...vault.getEmbeddings(ids).values()].map((row) => row.vector);
 }
 
-// GEN-AI-MEMORY-003 (RB-4): forgetting a memory must suppress a paraphrased re-capture, not only an
-// exact-body-hash match. `isSuppressedByForgetTombstone` (memory-suppression.ts) already catches the
-// exact-hash case before this gate runs; this catches a candidate whose embedding is cosine-similar
-// to a FORGOTTEN memory's embedding even though its normalized body (and hence body_hash) differs.
-// Pure: true iff some forget-tombstone vector in scope is at/above threshold. A null candidate (no
-// embedder configured) never suppresses — graceful degradation matches the rest of this module.
-function isSemanticForgetParaphrase(
+// Pure over the vault reads: returns the refusal reason iff some refused vector in scope is at/above
+// threshold. A null candidate (no embedder configured) never suppresses — graceful degradation
+// matches the rest of this module.
+function semanticSuppressionReason(
   vault: MemoryVaultStore,
   scope: MemoryRecord["scope"],
   candidate: MemoryEmbeddingInput | null,
   threshold: number,
-): boolean {
-  if (candidate === null) return false;
-  const forgottenVectors = vault.forgetTombstoneVectors(scope);
-  return forgottenVectors.some((vector) => cosineSimilarity(candidate.vector, vector) >= threshold);
+): MemoryCaptureSuppressionReason | null {
+  if (candidate === null) return null;
+  for (const reason of SEMANTIC_SUPPRESSION_REASONS) {
+    const refused = refusedScopeVectors(vault, scope, reason);
+    if (refused.some((vector) => cosineSimilarity(candidate.vector, vector) >= threshold)) {
+      return reason;
+    }
+  }
+  return null;
 }
+
+const SEMANTIC_SUPPRESSION_REASONS: readonly MemoryCaptureSuppressionReason[] = [
+  FORGOTTEN_MEMORY_SUPPRESSION_REASON,
+  REJECTED_MEMORY_SUPPRESSION_REASON,
+];
 
 // Insert a freshly-built salience capture record UNLESS it is a semantic near-duplicate of an
 // existing in-scope memory (reinforce the canonical instead) or a semantic paraphrase of a memory
@@ -506,18 +556,19 @@ export async function insertSalienceMemoryWithNoveltyGate(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   record: MemoryRecord,
-): Promise<NoveltyInsertResult> {
+): Promise<NoveltyInsertOutcome> {
   const embedding = await embedMemoryText(deps, record.body, "document");
   const calibration = embedding === null ? {} : memoryEmbeddingCalibrationFor(deps.env, embedding);
   const dedupThreshold = calibration.semanticDedupThreshold ?? SEMANTIC_DEDUP_COSINE_THRESHOLD;
-  if (isSemanticForgetParaphrase(vault, record.scope, embedding, dedupThreshold)) {
-    return { inserted: null, mergedInto: null };
+  const suppression = semanticSuppressionReason(vault, record.scope, embedding, dedupThreshold);
+  if (suppression !== null) {
+    return { kind: "suppressed", reason: suppression };
   }
   const neighbors = gatherScopeEmbeddings(vault, record.scope);
   const duplicateOf = findSemanticDuplicate(embedding, neighbors, dedupThreshold);
   if (duplicateOf !== null) {
     vault.recordAccess([duplicateOf], Date.now());
-    return { inserted: null, mergedInto: duplicateOf };
+    return { kind: "merged", mergedInto: duplicateOf };
   }
   const inserted = vault.insertMemory(record);
   if (embedding !== null) {
@@ -530,5 +581,5 @@ export async function insertSalienceMemoryWithNoveltyGate(
     // novelty gate — no extra IO. Opt-in (default off => no edges, byte-identical).
     autoLinkRelatedMemories(deps, vault, inserted.id, embedding, neighbors, calibration);
   }
-  return { inserted, mergedInto: null };
+  return { kind: "inserted", record: inserted };
 }

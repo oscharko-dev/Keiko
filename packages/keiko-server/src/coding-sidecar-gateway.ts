@@ -16,7 +16,7 @@ import {
   type CodingWorkbenchSidecarGatewayRunMetadata,
   type CodingWorkbenchSidecarGatewayResult,
 } from "@oscharko-dev/keiko-contracts";
-import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
+import { currentGatewayConfig, currentGatewayVerification, type UiHandlerDeps } from "./deps.js";
 import { OPENCODE_RUNTIME_MODEL_ALIAS } from "./coding-runtime/opencodeLaunchProfile.js";
 import { hasExactOpenCodeVisibleToolContract } from "./coding-runtime/opencodeToolSchemas.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
@@ -445,6 +445,11 @@ function resolveGatewayProfile(deps: UiHandlerDeps): ResolvedGatewayProfile {
   const result = resolveCodingSafeSidecarGatewayProfile(config, {
     deploymentPolicyDisabled: sidecarPolicyDisabled(deps),
     modelSource,
+    // F-01: the projection this route publishes must carry the last live-probe outcome, not just
+    // the stored config. The admission decision below is deliberately unchanged: a stale negative
+    // probe must not lock out a gateway that answers now — a request that cannot be served fails on
+    // its own live error, while the projection is what a surface is allowed to CLAIM.
+    gatewayVerification: currentGatewayVerification(deps),
   });
   return { config, modelSource, result };
 }
@@ -634,6 +639,33 @@ function emitGatewayFailureDiagnostic(
       operation: CODING_SIDECAR_GATEWAY_ROUTE,
       source: "coding-sidecar-gateway.chat",
       error,
+      redact: (message) => String(deps.redactor(message)),
+    }),
+  );
+}
+
+/**
+ * A mid-stream failure aborts an in-flight coding turn. Before this the cause went into a bare
+ * `catch {}` — the pattern AGENTS.md §7 forbids — leaving `settleGatewayStreamError` to emit the SSE
+ * error frame with nothing recorded anywhere, on the coding path. The frame and the run outcome are
+ * unchanged; only the redacted cause is added, keyed by the request correlation id and separated from
+ * the pre-stream failure by `source` so an operator can tell "the stream never opened" from "the
+ * stream died after N deltas". `partialUsage` rides along through `serverDiagnosticFromError`, so an
+ * interrupted turn's accumulated token counts stay visible instead of vanishing with the error.
+ */
+function emitGatewayStreamFailureDiagnostic(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: ctx.correlationId ?? "unknown",
+      operation: CODING_SIDECAR_GATEWAY_ROUTE,
+      source: "coding-sidecar-gateway.stream",
+      error,
+      summary: "The coding sidecar gateway stream failed mid-response.",
       redact: (message) => String(deps.redactor(message)),
     }),
   );
@@ -946,7 +978,8 @@ async function streamGatewayChat(
   cancellationSignal.addEventListener("abort", cancelIterator, { once: true });
   try {
     await pumpGatewayStream(session);
-  } catch {
+  } catch (error) {
+    emitGatewayStreamFailureDiagnostic(ctx, deps, error);
     settleGatewayStreamError(session);
   } finally {
     cancellationSignal.removeEventListener("abort", cancelIterator);

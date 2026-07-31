@@ -49,8 +49,9 @@ import {
   evaluateGitPolicy,
   GIT_DELIVERY_MERGE_STRATEGY_HINTS,
   GIT_DELIVERY_SCHEMA_VERSION,
-  gitDeliveryBranchNameMatchesAny,
-  gitDeliveryRiskClassWithinCeiling,
+  gitDeliveryConstraintBlockReason,
+  gitDeliveryDefaultRiskClass,
+  gitDeliveryPolicyTargetBranchName,
   gitMergeReadinessFor,
   gitMergeRejectionFor,
 } from "@oscharko-dev/keiko-contracts";
@@ -84,6 +85,10 @@ export interface GitMergeCommand {
 export interface GitMergeReadinessRequest {
   readonly ownerAndRepo: string;
   readonly prExternalId: string;
+  // The PR's base branch. Needed to read the base branch's protection rule (the required-approving-
+  // review-count read) — the readiness request previously carried only enough to identify the PR
+  // itself, before that read existed.
+  readonly baseBranchName: string;
 }
 
 export interface GitMergeExecRequest {
@@ -106,6 +111,11 @@ export interface GitMergeProviderReadiness {
   readonly providerCapableStrategies: readonly GitDeliveryMergeStrategyHint[];
   // Set when the provider read failed.
   readonly providerError?: boolean | undefined;
+  // The PR's current head commit SHA, when the readiness read reported one. Surfaced through the
+  // preview so the UI can round-trip it back as `expectedHeadRefHash` on execute (the GitHub merge
+  // `sha` guard) — pinning the merge to the exact head the readiness/approval decision was made
+  // against instead of an unpinned "merge whatever the head has become by execute time" call.
+  readonly headRefHash?: string | undefined;
 }
 
 // The merge execution result: the content-free contract execution result, plus the typed merge
@@ -254,12 +264,57 @@ export function buildRepoMergeConfigArgv(req: GitMergeReadinessRequest): readonl
   return ["api", `/repos/${repo}`, "--jq", REPO_MERGE_CONFIG_JQ];
 }
 
-// `gh api /repos/{owner}/{repo}/commits/{sha}/status --jq .state`. Reads the head commit's combined
-// check status (success / pending / failure) to refine a blocked/unstable merge state.
-export function buildHeadStatusArgv(repoSlug: string, headSha: string): readonly string[] {
+// `gh api /repos/{owner}/{repo}/commits/{sha}/check-runs --jq <projection>`. Reads the head commit's
+// per-run status/conclusion from the modern Checks API (NOT the legacy combined-status endpoint this
+// replaces): the legacy `/commits/{sha}/status` read reported only a single aggregate "state" string
+// with no breakdown, so a caller could never tell "3 of 5 required checks passed" from "the one
+// Actions summary check happened to succeed" — it just proxied a lossy verdict. Bounded to a single
+// page (`per_page=100`, no `--paginate`, matching every other read in this gateway) since a commit
+// with more than 100 check runs is not a shape this projection needs to enumerate exactly.
+export function buildCheckRunsArgv(repoSlug: string, headSha: string): readonly string[] {
   const repo = assertOwnerAndRepo(repoSlug);
   const sha = assertSha(headSha);
-  return ["api", `/repos/${repo}/commits/${sha}/status`, "--jq", ".state"];
+  return [
+    "api",
+    `/repos/${repo}/commits/${sha}/check-runs?per_page=100`,
+    "--jq",
+    "[.check_runs[] | {status:.status, conclusion:.conclusion}]",
+  ];
+}
+
+// `gh api /repos/{owner}/{repo}/pulls/{number}/reviews --jq <projection>`. Reads the PR's review
+// history (reviewer login + review state) so the caller can derive a REAL received-approval count
+// instead of the previously hardcoded 0. GitHub does not dedupe by reviewer server-side (a reviewer's
+// second review supersedes their first) — the caller must reduce this to "latest state per reviewer"
+// (see `approvedReviewCountFrom` in git-merge-node.ts).
+export function buildPullRequestReviewsArgv(req: GitMergeReadinessRequest): readonly string[] {
+  const repo = assertOwnerAndRepo(req.ownerAndRepo);
+  const number = assertPrNumber(req.prExternalId);
+  return [
+    "api",
+    `/repos/${repo}/pulls/${number}/reviews?per_page=100`,
+    "--jq",
+    "[.[] | {user:.user.login, state:.state}]",
+  ];
+}
+
+// `gh api /repos/{owner}/{repo}/branches/{branch}/protection --jq <projection>`. Reads the base
+// branch's required-approving-review-count so the caller can derive a REAL required-approval count
+// instead of the previously hardcoded 0. This 404s for an unprotected branch and can 403 for a caller
+// without admin on the target repository; both are read failures the caller treats as "no known
+// requirement" (0), never as a hard error — the provider's own merge-time enforcement remains the
+// ultimate authority (Force 2 / ADR-0087) regardless of what this best-effort read could see.
+export function buildBranchProtectionRequiredReviewsArgv(
+  req: GitMergeReadinessRequest,
+): readonly string[] {
+  const repo = assertOwnerAndRepo(req.ownerAndRepo);
+  const branch = assertRef(req.baseBranchName, "baseBranchName");
+  return [
+    "api",
+    `/repos/${repo}/branches/${branch}/protection`,
+    "--jq",
+    ".required_pull_request_reviews.required_approving_review_count // 0",
+  ];
 }
 
 // `gh api --method DELETE /repos/{owner}/{repo}/git/refs/heads/{branch}`. The guarded branch deletion
@@ -358,33 +413,38 @@ export interface RawMergeReadiness {
   readonly headSha?: string | undefined;
   readonly prNumber: string;
   readonly headBranchName: string;
+  // The REAL received/required approval counts (from the reviews + branch-protection reads in
+  // git-merge-node.ts), each defaulting to 0 when the corresponding read failed or reported none.
+  // Previously this pair was hardcoded to 0/0 unconditionally here, which meant `approvals-missing`
+  // (gated on `receivedApprovalCount < requiredApprovalCount` in keiko-contracts/git-merge.ts) could
+  // never fire regardless of the PR's actual review state — a merge missing every required approval
+  // was reported exactly the same as one with none required.
+  readonly receivedApprovalCount?: number | undefined;
+  readonly requiredApprovalCount?: number | undefined;
 }
 
-function mergeReadinessFromState(mergeableState: string | undefined): GitDeliveryMergeReadiness {
+function mergeReadinessFromState(
+  mergeableState: string | undefined,
+  approvals: { readonly required: number; readonly received: number },
+): GitDeliveryMergeReadiness {
+  const counts = {
+    requiredApprovalCount: approvals.required,
+    receivedApprovalCount: approvals.received,
+  };
   switch (mergeableState) {
     case "clean":
     case "has_hooks":
     case "unstable":
-      return { ready: true, requiredApprovalCount: 0, receivedApprovalCount: 0 };
+      return { ready: true, ...counts };
     case "dirty":
-      return {
-        ready: false,
-        blockingReason: "conflicts",
-        requiredApprovalCount: 0,
-        receivedApprovalCount: 0,
-      };
+      return { ready: false, blockingReason: "conflicts", ...counts };
     case "blocked":
     case "behind":
-      return {
-        ready: false,
-        blockingReason: "branch-protection",
-        requiredApprovalCount: 0,
-        receivedApprovalCount: 0,
-      };
+      return { ready: false, blockingReason: "branch-protection", ...counts };
     // "draft" is reflected by isDraft; "unknown" (still computing) yields no specific reason so the
     // contract derivation emits readiness-unknown.
     default:
-      return { ready: false, requiredApprovalCount: 0, receivedApprovalCount: 0 };
+      return { ready: false, ...counts };
   }
 }
 
@@ -405,7 +465,10 @@ export function mapRawMergeReadiness(raw: RawMergeReadiness): GitDeliveryPullReq
     ...(raw.baseRef !== undefined
       ? { baseBranchName: raw.baseRef }
       : { baseBranchName: "unknown" }),
-    mergeReadiness: mergeReadinessFromState(raw.mergeableState),
+    mergeReadiness: mergeReadinessFromState(raw.mergeableState, {
+      required: raw.requiredApprovalCount ?? 0,
+      received: raw.receivedApprovalCount ?? 0,
+    }),
   };
 }
 
@@ -416,21 +479,18 @@ export interface GitMergeEffectivePolicy {
   readonly blockReason?: GitDeliveryBlockReason | undefined;
 }
 
+// Delegates to the contract-owned resolver so this gate and every preview surface resolve a
+// `constrained` decision identically.
 function constraintBlock(
   constraint: GitDeliveryConstraint,
   target: string | undefined,
   capabilities: readonly GitDeliveryProviderCapability[],
 ): GitDeliveryBlockReason | undefined {
-  if (constraint.kind === "branch-pattern") {
-    const ok = target !== undefined && gitDeliveryBranchNameMatchesAny(target, constraint.patterns);
-    return ok ? undefined : "policy-pack-blocked";
-  }
-  if (constraint.kind === "provider-capability") {
-    return capabilities.includes(constraint.capability) ? undefined : "provider-capability-absent";
-  }
-  return gitDeliveryRiskClassWithinCeiling("merge", constraint.maxRiskClass)
-    ? undefined
-    : "risk-class-ceiling";
+  return gitDeliveryConstraintBlockReason(constraint, {
+    riskClass: gitDeliveryDefaultRiskClass("merge"),
+    targetBranchName: target,
+    activeProviderCapabilities: capabilities,
+  });
 }
 
 export function evaluateGitMergeEffectivePolicy(
@@ -608,7 +668,11 @@ function prepareMerge(request: GitMergeRequest, deps: GitMergeOrchestratorDeps):
   const capabilities = deps.activeProviderCapabilities ?? [];
   const context: GitDeliveryPolicyContext = {
     actionKind: "merge",
-    targetBranchName: request.command.baseBranchName,
+    // ONE derivation, shared with every preview surface (contracts). GitDeliveryMergeInputs carries
+    // only the provider PR id, so the base branch is supplied here from the command.
+    targetBranchName: gitDeliveryPolicyTargetBranchName(inputs, {
+      mergeBaseBranchName: request.command.baseBranchName,
+    }),
     activeProviderCapabilities: capabilities,
   };
   return {
@@ -653,6 +717,7 @@ async function readReadiness(
     provider = await deps.adapter.readMergeReadiness({
       ownerAndRepo: command.ownerAndRepo,
       prExternalId: command.prExternalId,
+      baseBranchName: command.baseBranchName,
     });
   } catch {
     provider = { providerCapableStrategies: [], providerError: true };

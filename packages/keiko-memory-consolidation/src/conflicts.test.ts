@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 
+import {
+  MEMORY_NEGATION_TIERS,
+  MEMORY_NEGATION_VOCABULARY,
+  memoryNegationTokens,
+} from "@oscharko-dev/keiko-contracts/memory";
+
 import { FIXED_NOW_MS, makeIdFactory, makeRecord, must } from "./_support.js";
 import {
   CONFLICT_OVERLAP_THRESHOLD,
@@ -85,6 +91,45 @@ describe("detectConflicts - potential conflict (2-member negation pair)", () => 
 
   it("does not treat words ending in nt as contractions", () => {
     expect(hasNegation("we want tabs")).toBe(false);
+  });
+
+  // Cross-layer pin (#208 <-> #209): the word list is owned by keiko-contracts and this layer reads
+  // ALL of its tiers — that is what makes its vocabulary a superset of the governance layer's, which
+  // reads only the "english-particle" tier. Derived from the production table, never restated.
+  it("recognizes every token of every shared tier (this layer reads the full vocabulary)", () => {
+    for (const tier of MEMORY_NEGATION_TIERS) {
+      for (const token of MEMORY_NEGATION_VOCABULARY[tier]) {
+        expect(hasNegation(`we ship the release ${token} today`)).toBe(true);
+      }
+    }
+  });
+
+  it("recognizes a negation token regardless of case and surrounding punctuation", () => {
+    for (const token of memoryNegationTokens(MEMORY_NEGATION_TIERS)) {
+      expect(hasNegation(`We ship, ${token.toUpperCase()}!`)).toBe(true);
+    }
+  });
+
+  it("does not fire on a body whose tokens merely CONTAIN a negation token", () => {
+    expect(hasNegation("important notation cannotate nowhere keinerlei")).toBe(false);
+  });
+
+  // Negative control for the same drift: these read as negations to a human but are deliberately
+  // absent from MEMORY_NEGATION_VOCABULARY. Re-growing a PRIVATE word list in this package — the
+  // exact regression the shared table was introduced to end — is what this catches; widening the
+  // vocabulary is legitimate, but it has to happen in the one owning table, which flips this
+  // assertion and forces the governance side to be considered at the same time.
+  it("does not fire on negation-flavoured words that the shared table does not list", () => {
+    const shared = memoryNegationTokens(MEMORY_NEGATION_TIERS);
+    for (const control of ["nope", "nah", "nein", "negative", "nix"]) {
+      expect(shared.has(control)).toBe(false);
+      expect(hasNegation(`we ship the release ${control} today`)).toBe(false);
+    }
+  });
+
+  it("does not fire on an empty or whitespace-only body", () => {
+    expect(hasNegation("")).toBe(false);
+    expect(hasNegation("   \n\t ")).toBe(false);
   });
 
   it("does NOT emit a conflict review item for a 2-member non-negating cluster", () => {

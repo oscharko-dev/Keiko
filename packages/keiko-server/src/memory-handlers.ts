@@ -1389,17 +1389,17 @@ function persistConflictTransitions(
   resolution: ReturnType<typeof buildConflictTransitions>,
   reason: string,
 ): void {
+  // Bi-temporal-lite (#204, C1) deliberately does NOT apply here. `buildConflictTransitions` moves
+  // every loser to `conflicted`, and MEMORY_STATUS_TRANSITIONS lets `conflicted` return to
+  // `accepted` — closing the belief window would assert that the belief ended, which is false for a
+  // record still open to rehabilitation. The window is closed only where supersession is monotonic:
+  // the correction-acceptance path (`buildCorrectionAcceptanceUpdates`, which calls
+  // `supersededValidity`). If conflict resolution ever starts emitting a `superseded` transition,
+  // that transition must close the window here at the same time.
   for (const transition of resolution.statusTransitions) {
-    // Bi-temporal-lite (#204, C1): a record losing a conflict and being SUPERSEDED gets its belief
-    // window closed at the transition time, same as the correction path. Other transitions (e.g.
-    // the winner re-accepted) leave validity untouched.
-    const existing =
-      transition.to === "superseded" ? vault.getMemory(transition.memoryId) : undefined;
-    const validity =
-      existing !== undefined ? supersededValidity(existing, transition.transitionedAt) : null;
     vault.updateMemory(
       transition.memoryId,
-      { status: transition.to, staleReason: reason, ...(validity !== null ? { validity } : {}) },
+      { status: transition.to, staleReason: reason },
       transition.transitionedAt,
     );
   }
@@ -1824,14 +1824,24 @@ function parseRejectInput(raw: Record<string, unknown>): { reason: string } {
   return { reason };
 }
 
+// Rejection is a governed status mutation, so it answers to MEMORY_STATUS_TRANSITIONS like every
+// other one (buildArchiveOperation, buildConflictTransitions, assertSupersedable). The table gives
+// `rejected` exactly one inbound edge — from `proposed` — and it is terminal. A `conflicted` record
+// is therefore NOT rejectable: its legal exits are accepted, superseded, archived, and forgotten,
+// and the review queue offers Archive for it. Writing `rejected` from any other state produced a
+// record in a state the contract says cannot exist, silently, past the only check that would have
+// caught it.
 function ensureRejectableMemory(existing: MemoryRecord | undefined): RouteResult | MemoryRecord {
   if (existing === undefined) {
     return { status: 404, body: errorBody("NOT_FOUND", "Memory proposal not found.") };
   }
-  if (existing.status !== "proposed" && existing.status !== "conflicted") {
+  // The contract table is the ONLY authority here — no hand-maintained second list of "rejectable"
+  // statuses to drift away from it. `check.error` is deliberately not forwarded: the response stays
+  // a fixed code-keyed string, matching governanceErrorBody / memoryMutationErrorBody.
+  if (!checkStatusTransition(existing.status, "rejected").ok) {
     return {
       status: 409,
-      body: errorBody("CONFLICT", "Memory is not in proposed or conflicted status."),
+      body: errorBody("CONFLICT", "Memory cannot be rejected from its current status."),
     };
   }
   return existing;

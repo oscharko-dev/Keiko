@@ -11,6 +11,7 @@ import {
 } from "./references-bridge.js";
 import type { MonacoCancellationToken } from "./completion-bridge.js";
 import type { MonacoUriLike } from "./definition-bridge.js";
+import type { EditorLanguageIntelligenceEvent } from "./language-intelligence.js";
 import type { EditorReferencesResolver } from "../types.js";
 
 const URI: MonacoUriLike = { toString: () => "keiko-editor://current" };
@@ -101,6 +102,44 @@ describe("createKeikoReferencesProvider", () => {
       token(),
     );
     expect(seenText).toBe("buffer");
+  });
+
+  // "Find all references" is the input a user relies on to conclude a symbol is unused before
+  // deleting or refactoring it, and the server caps the list at `maxReferenceLocations` (512). A
+  // capped list renders exactly like a complete one, so the cap must reach the outcome seam as
+  // `capped` — dropping `response.truncated` from `classify` here would silently restore the lie
+  // while every other test in this file still passed.
+  it("labels a server-capped reference list as capped, not as the whole answer", async () => {
+    const events: EditorLanguageIntelligenceEvent[] = [];
+    const resolve: EditorReferencesResolver = (query) =>
+      Promise.resolve({
+        request: query.request.request,
+        locations: [
+          {
+            path: "src/a.ts",
+            range: { start: { line: 0, column: 6 }, end: { line: 0, column: 7 } },
+          },
+        ],
+        includesDeclaration: true,
+        truncated: true,
+      });
+    const locations = await createKeikoReferencesProvider({
+      resolve,
+      isCurrentDocument: (documentUri) => documentUri === URI.toString(),
+      documentLanguage: "typescript",
+      streamId: "stream",
+      newRequestId: () => "req",
+      report: (event) => events.push(event),
+    }).provideReferences(
+      model(),
+      { lineNumber: 1, column: 7 },
+      { includeDeclaration: true },
+      token(),
+    );
+
+    // The partial list is still shown — it is true as far as it goes — but it is labelled.
+    expect(locations).toHaveLength(1);
+    expect(events).toEqual([{ operation: "references", outcome: { status: "capped" } }]);
   });
 
   it("returns an empty list for another model or resolver failure", async () => {

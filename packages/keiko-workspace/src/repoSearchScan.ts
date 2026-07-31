@@ -17,7 +17,12 @@ import {
   isValidScopePath,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { redact } from "@oscharko-dev/keiko-security";
-import { discoverWithStats, readWorkspaceFile } from "./discovery.js";
+import {
+  discoverWithStats,
+  readWorkspaceFile,
+  readWorkspaceFileForEditing,
+  type WorkspaceContentLane,
+} from "./discovery.js";
 import { FileTooLargeError, RepoSearchInvalidQueryError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
 import { isDenied } from "./ignore.js";
@@ -485,6 +490,16 @@ export interface SearchTextRunner {
   readonly fingerprint: string;
   readonly policy: SearchPolicy;
   readonly query: RetrievalQuery;
+  // Which bytes the per-file matcher sees. REQUIRED, never defaulted here: every runner has to state
+  // its lane so a new call site cannot inherit the wrong one silently.
+  //   "evidence" — text is redacted at the IO boundary (context packs, grounded answers, evidence
+  //                atoms, the persisted workspace index). The default for every non-editor caller.
+  //   "editor"   — RAW bytes. The editor's own search/replace surface must match what the user can
+  //                see in the editor and must address the real file's lines and columns, because the
+  //                same coordinates drive a WRITE. Redaction collapsed multi-line PEM blocks and
+  //                changed the width of same-line secrets, so redacted coordinates addressed text
+  //                that is not in the file.
+  readonly contentLane: WorkspaceContentLane;
   readonly candidatePathPredicate?: ((scopePath: string) => boolean) | undefined;
   readonly workspaceIndex?:
     | {
@@ -623,10 +638,22 @@ function cachedRecordMetadata(
   };
 }
 
+// The persisted workspace index is an evidence-lane artifact: its lexical records are built from
+// REDACTED text. Reading one back in the editor lane would reintroduce exactly the under-reporting
+// the raw lane fixes, and writing a raw-derived record into it would put secret-shaped tokens in a
+// persisted store. `searchText` already refuses to open an index session for the editor lane; these
+// two guards fail closed so a future wiring mistake degrades to "no cache" instead of leaking.
+function usesWorkspaceIndex(runner: SearchTextRunner): boolean {
+  return runner.contentLane !== "editor";
+}
+
 function cachedRecord(
   runner: SearchTextRunner,
   relativePath: string,
 ): WorkspaceIndexRecord | undefined {
+  if (!usesWorkspaceIndex(runner)) {
+    return undefined;
+  }
   const entry = runner.workspaceIndex?.entries.get(relativePath);
   if (entry?.stale !== false || entry.record === undefined) {
     return undefined;
@@ -668,6 +695,9 @@ function persistWorkspaceIndexRecord(
         readonly content: string;
       },
 ): void {
+  if (!usesWorkspaceIndex(runner)) {
+    return;
+  }
   const metadata = currentRecordMetadata(
     runner,
     record.scopePath,
@@ -705,6 +735,13 @@ function recordSizeExceeded(
   return undefined;
 }
 
+// The lane switch for every byte the matcher sees. The evidence lane redacts here, at the IO
+// boundary, so no secret-shaped byte can reach an evidence atom, the persisted index, or a grounded
+// answer. The editor lane keeps the raw bytes: see `SearchTextRunner.contentLane`.
+function laneText(runner: SearchTextRunner, text: string): string {
+  return runner.contentLane === "editor" ? text : redact(text);
+}
+
 async function readTextPrefixForScan(
   runner: SearchTextRunner,
   absolutePath: string,
@@ -715,7 +752,7 @@ async function readTextPrefixForScan(
   }
   const bytes = await readFileBytes(absolutePath, runner.limits.maxBytesPerFileScanned);
   const decoded = decodeTextBytes(bytes, undefined, { allowIncompleteTail: true });
-  return decoded === undefined ? undefined : redact(decoded.text);
+  return decoded === undefined ? undefined : laneText(runner, decoded.text);
 }
 
 async function readRawTextForScan(
@@ -784,7 +821,7 @@ async function readBoundedRawText(
     recordCandidateOmission(candidates, relativePath, "binary");
     return undefined;
   }
-  const text = redact(decoded.text);
+  const text = laneText(runner, decoded.text);
   persistWorkspaceIndexRecord(runner, {
     kind: "text",
     scopePath: relativePath,
@@ -793,6 +830,17 @@ async function readBoundedRawText(
     content: text,
   });
   return text;
+}
+
+// The guarded-read variant of `laneText`: both lanes run the same containment/deny/size chain, the
+// editor lane just keeps the bytes it returns.
+function readLaneText(runner: SearchTextRunner, relativePath: string): string {
+  const opts = { maxBytes: runner.limits.maxBytesPerFileScanned };
+  if (runner.contentLane === "editor") {
+    return readWorkspaceFileForEditing(runner.scope.workspace, relativePath, opts, runner.fs)
+      .rawText;
+  }
+  return readWorkspaceFile(runner.scope.workspace, relativePath, opts, runner.fs).text;
 }
 
 async function readUtf8TextForScan(
@@ -804,12 +852,7 @@ async function readUtf8TextForScan(
   candidates: CandidateFile[],
 ): Promise<string | undefined> {
   try {
-    const text = readWorkspaceFile(
-      runner.scope.workspace,
-      relativePath,
-      { maxBytes: runner.limits.maxBytesPerFileScanned },
-      runner.fs,
-    ).text;
+    const text = readLaneText(runner, relativePath);
     persistWorkspaceIndexRecord(runner, {
       kind: "text",
       scopePath: relativePath,

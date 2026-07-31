@@ -288,6 +288,37 @@ describe("ManagedLanguageSettings", () => {
     await waitFor(() => expect(disable).toHaveFocus());
   });
 
+  // GEN-UI-FOCUS-002 — the confirm is role="alertdialog" aria-modal="true", so Tab must not reach
+  // the language cards behind it and Escape must dismiss it (WCAG 2.1.2). Before the shared
+  // containment seam was wired in, the dialog had neither: Tab walked out into "Disable Python" and
+  // Escape did nothing, on a dialog that told assistive technology the page was unavailable.
+  it("contains Tab inside the confirm dialog and cancels it on Escape", async () => {
+    fetchSettingsMock.mockResolvedValue(snapshot());
+    renderSettings();
+    const disable = await screen.findByRole("button", { name: "Disable Python" });
+    disable.focus();
+    fireEvent.click(disable);
+
+    const dialog = screen.getByRole("alertdialog");
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    const confirm = screen.getByRole("button", { name: "Confirm disable" });
+    await waitFor(() => expect(cancel).toHaveFocus());
+
+    // Cancel is the FIRST control, so Shift+Tab from it must wrap to Confirm, not leave the dialog.
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(confirm).toHaveFocus();
+    // Tab off the last control wraps back to the first.
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(cancel).toHaveFocus();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    // Escape cancels without mutating and hands focus back to the opener.
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(mutateSettingsMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(disable).toHaveFocus());
+  });
+
   it("restores focus to the section title immediately when the opener is already disconnected", async () => {
     fetchSettingsMock.mockResolvedValue(snapshot());
     renderSettings();

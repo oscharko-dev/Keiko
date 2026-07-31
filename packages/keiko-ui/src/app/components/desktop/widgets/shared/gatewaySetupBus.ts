@@ -13,6 +13,19 @@
 
 export const GATEWAY_SETUP_REQUEST_EVENT = "keiko:gateway-setup-request";
 
+/**
+ * Announced by the gateway-setup dialog the moment a submission has replaced the stored gateway
+ * configuration. Surfaces that remember observations ABOUT the gateway — readiness runs, the
+ * verification badge derived from them — must treat everything they measured before this signal as
+ * evidence about the PREVIOUS configuration.
+ *
+ * It exists because the safe config projection the UI receives carries no credential: rotating an
+ * API key leaves every field the panel can see byte-identical, so a value comparison cannot detect
+ * that replacement. This is the client-side counterpart of the server holder's `set()`, which
+ * invalidates its recorded verification for exactly the same reason.
+ */
+export const GATEWAY_CONFIG_UPDATED_EVENT = "keiko:gateway-config-updated";
+
 let pending = false;
 
 /**
@@ -34,4 +47,14 @@ export function consumePendingGatewaySetup(): boolean {
   const had = pending;
   pending = false;
   return had;
+}
+
+/**
+ * Announce that the stored gateway configuration was just replaced. Fire-and-forget: unlike the
+ * setup request there is no latch, because a listener that does not exist yet has nothing stale to
+ * invalidate — it starts with no remembered observations at all.
+ */
+export function notifyGatewayConfigUpdated(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(GATEWAY_CONFIG_UPDATED_EVENT));
 }

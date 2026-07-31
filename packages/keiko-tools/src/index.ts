@@ -31,6 +31,8 @@ export {
   DEFAULT_PATCH_LIMITS,
   DEFAULT_SANDBOX_POLICY,
   DEFAULT_TOOL_HOST_CONFIG,
+  GOVERNED_GIT_IDENTITY_SANDBOX_POLICY,
+  GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
   resolveToolHostConfig,
 } from "./types.js";
 
@@ -179,6 +181,9 @@ export {
   type GitStageExecRequest,
   type GitUnstageExecRequest,
 } from "./git-mutation-adapter.js";
+// readStagedConflictMarkerFileCount is intentionally NOT re-exported from this pure barrel: like
+// readGitWorktreeSnapshot/readStagedPaths, it carries the Node spawn effect and lives on the
+// `./internal/git-mutation` subpath (see git-mutation-node.ts).
 export {
   createInMemoryGitMutationJournal,
   gitMutationOutcomeFailureCategory,
@@ -277,10 +282,12 @@ export {
 // `gh api` executor (createNodeGitMergeAdapter) carries the spawn effect and is reachable on the
 // `./internal/git-mutation` subpath, never the package barrel.
 export {
+  buildBranchProtectionRequiredReviewsArgv,
+  buildCheckRunsArgv,
   buildDeleteMergedBranchArgv,
-  buildHeadStatusArgv,
   buildMergeArgv,
   buildMergeReadinessArgv,
+  buildPullRequestReviewsArgv,
   buildRepoMergeConfigArgv,
   classifyGitMergeRejection,
   evaluateGitMergeEffectivePolicy,

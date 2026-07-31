@@ -24,6 +24,7 @@ const POLL_INTERVAL_MS = 1500;
 const REFRESH_LABEL_KEYS: ManualPodStateLabelKeys = {
   running: "manualPodRefresh.progress.running",
   succeeded: "manualPodRefresh.state.succeeded",
+  partial: "manualPodRefresh.state.partial",
   failed: "manualPodRefresh.state.failed",
 };
 

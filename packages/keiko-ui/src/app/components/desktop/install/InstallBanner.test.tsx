@@ -263,6 +263,39 @@ describe("InstallBanner", () => {
     expect(installIndex).toBeLessThan(dismissIndex);
   });
 
+  // ── Blocked storage (0.3.0 release audit) ─────────────────────────────────
+  //
+  // Reading `localStorage` is not total either: a browser configured to block site data makes the
+  // property access itself throw a SecurityError, and the two reads below run inside the visibility
+  // gate — i.e. during render. An unguarded read there takes the whole shell down with it the
+  // moment this banner is mounted, and the dismissal write has the same exposure in a handler.
+
+  it("renders instead of throwing when reading persisted install state is blocked", () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+    render(<InstallBanner />);
+    act(() => {
+      window.dispatchEvent(makePromptEvent());
+    });
+
+    expect(screen.getByRole("region", { name: "Install Keiko" })).toBeInTheDocument();
+  });
+
+  it("dismisses for the session instead of throwing when the dismissal cannot be persisted", () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("quota", "QuotaExceededError");
+    });
+    render(<InstallBanner />);
+    act(() => {
+      window.dispatchEvent(makePromptEvent());
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /not now/i }));
+
+    expect(screen.queryByRole("region", { name: "Install Keiko" })).toBeNull();
+  });
+
   // ── Accessibility ─────────────────────────────────────────────────────────
 
   it("passes jest-axe with no violations (Chromium path)", async () => {

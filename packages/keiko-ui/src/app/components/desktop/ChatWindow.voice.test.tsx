@@ -324,6 +324,30 @@ describe("ChatWindow canonical spoken-turn recovery", () => {
     await userEvent.click(retry);
     expect(retryPendingCanonicalVoiceTurn).toHaveBeenCalledOnce();
   });
+
+  // #2842 — a retry that keeps failing left the composer permanently dead with no way out. The
+  // wedged turn must also be discardable, and the discard must not double as a retry.
+  it("offers a discard action beside the retry for a wedged spoken turn", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: NONE });
+    const retryPendingCanonicalVoiceTurn = vi.fn();
+    const discardPendingCanonicalVoiceTurn = vi.fn();
+    renderWindow(
+      makeSession({
+        canonicalVoiceTurnRequiresRetry: true,
+        retryPendingCanonicalVoiceTurn,
+        discardPendingCanonicalVoiceTurn,
+      }),
+    );
+    await waitFor(() => expect(api.fetchVoiceCapability).toHaveBeenCalled());
+
+    const alert = screen.getByRole("alert");
+    const discard = within(alert).getByRole("button", { name: "Discard spoken turn" });
+    expect(discard).toBeEnabled();
+
+    await userEvent.click(discard);
+    expect(discardPendingCanonicalVoiceTurn).toHaveBeenCalledOnce();
+    expect(retryPendingCanonicalVoiceTurn).not.toHaveBeenCalled();
+  });
 });
 
 const FULL_REALTIME: VoiceCapabilityResolution = {
@@ -732,6 +756,51 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     expect(voiceLayer).not.toHaveAttribute("inert");
   });
 
+  // #2843 — the chip strip lives in the normal composer layer, which becomes `inert` + `aria-hidden`
+  // during dialogue. Since a spoken turn carries the staged attachments exactly like a typed one
+  // (ADR-0154 D1/D5), the chips must stay visible and removable in the layer that is interactive —
+  // before this pin the user could neither see nor remove an attachment their next spoken turn sent.
+  it("keeps a staged attachment visible and removable while dialogue holds the composer", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    const removePendingAttachment = vi.fn();
+    renderWindow(
+      makeSession({
+        pendingAttachments: [
+          {
+            id: "att-spoken-1",
+            kind: "document",
+            name: "spec.txt",
+            mimeType: "text/plain",
+            sizeBytes: 11,
+          },
+        ],
+        removePendingAttachment,
+      }),
+    );
+
+    const dialogSwitch = await screen.findByRole("switch", { name: "Voice dialogue mode" });
+    // The typed composer owns the chip before dialogue starts.
+    expect(screen.getByRole("button", { name: "Remove attachment spec.txt" })).toBeInTheDocument();
+
+    await userEvent.click(dialogSwitch);
+
+    const box = getComposerBox();
+    expect(box.querySelector('[data-composer-layer="normal"]')).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    // Exactly one reachable chip: the inert normal-layer copy is out of the accessibility tree.
+    const removeButtons = within(box).getAllByRole("button", {
+      name: "Remove attachment spec.txt",
+    });
+    expect(removeButtons).toHaveLength(1);
+    expect(within(box).getByText("Sent with your next spoken turn")).toBeInTheDocument();
+
+    await userEvent.click(removeButtons[0] as HTMLElement);
+    expect(removePendingAttachment).toHaveBeenCalledWith("att-spoken-1");
+  });
+
   it("entering dialogue mode sets aria-checked=true on the switch without opening a control panel", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
     stubRealtimeBrowser(async () => ({}) as MediaStream);
@@ -1093,13 +1162,17 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     });
   });
 
-  it("cancels canonical generation when the user barges in", async () => {
+  // Relocated pin (#2842): barge-in still cancels the canonical generation, but through the
+  // owner-scoped interrupt. The blanket cancelSend aborted whatever was in flight — including a
+  // typed composer send Voice does not own — and left the queued turn to be re-sent.
+  it("cancels only the canonical generation Voice owns when the user barges in", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
       voice: FULL_REALTIME_WITH_PERSONAS,
     });
     stubRealtimeBrowser(async () => ({}) as MediaStream);
     const cancelSend = vi.fn();
-    renderWindow(makeSession({ cancelSend }));
+    const interruptCanonicalVoiceDelivery = vi.fn();
+    renderWindow(makeSession({ cancelSend, interruptCanonicalVoiceDelivery }));
 
     await waitFor(() => expect(useRealtimeVoice).toHaveBeenCalled());
     const options = vi.mocked(useRealtimeVoice).mock.calls.at(-1)?.[0];
@@ -1107,7 +1180,8 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
 
     act(() => options?.onUserSpeechStart?.());
 
-    expect(cancelSend).toHaveBeenCalledOnce();
+    expect(interruptCanonicalVoiceDelivery).toHaveBeenCalledOnce();
+    expect(cancelSend).not.toHaveBeenCalled();
   });
 
   it("speaks the settled canonical answer without replaying older chat history", async () => {

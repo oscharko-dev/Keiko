@@ -107,6 +107,41 @@ describe("buildHtmlManualIndexingProgress", () => {
     expect(progress.indexing).toBeNull();
   });
 
+  // Audit regression (0.3.0): a crawl that DROPPED pages of the approved manual — a page that could
+  // not be fetched, a page over the per-page byte cap, a page with no indexable content, a page that
+  // redirected — completed with `status: "completed"`, and indexing over the pages that DID arrive
+  // succeeded with zero failures. The phase therefore read "ready": a demonstrably incomplete import
+  // reported as a clean one. Only scope exclusions (a link outside the approved origin/prefix, a
+  // non-document asset, an action link) may leave the phase "ready".
+  it.each([
+    "fetch-failed" as const,
+    "oversized-page" as const,
+    "empty-page" as const,
+    "redirect" as const,
+  ])("reports a crawl that dropped pages (%s) as degraded, never ready", (reason) => {
+    const progress = buildHtmlManualIndexingProgress(
+      crawlResult("completed", [{ reason, count: 1 }]),
+      indexingResult(),
+    );
+    expect(progress.phase).toBe("degraded");
+  });
+
+  it.each([
+    "cross-origin" as const,
+    "outside-path-prefix" as const,
+    "unsupported-scheme" as const,
+    "credentialed-url" as const,
+    "path-traversal" as const,
+    "action-link" as const,
+    "non-html" as const,
+  ])("keeps a scope-excluded link (%s) out of the coverage verdict", (reason) => {
+    const progress = buildHtmlManualIndexingProgress(
+      crawlResult("completed", [{ reason, count: 2 }]),
+      indexingResult(),
+    );
+    expect(progress.phase).toBe("ready");
+  });
+
   it("maps an indexing policy denial to remediation guidance", () => {
     const progress = buildHtmlManualIndexingProgress(
       crawlResult("completed"),

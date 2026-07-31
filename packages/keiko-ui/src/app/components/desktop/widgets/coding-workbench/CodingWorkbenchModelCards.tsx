@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { gatewayVerificationContradictsReadiness } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchCodexAuthMethod,
   CodingWorkbenchCodexSubscriptionProfile,
@@ -9,12 +10,16 @@ import {
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
 import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
-import type { CodingWorkbenchRuntimeState } from "@/lib/coding-workbench-live-state";
+import type {
+  CodingWorkbenchRuntimeState,
+  CodingWorkbenchSourceProjection,
+} from "@/lib/coding-workbench-live-state";
 import {
   modelSourceLabel,
   resourceStatusLabel,
   resourceStatusSymbol,
   resourceTone,
+  sourceVerificationLabel,
 } from "./codingWorkbenchLabels";
 import { PanelTitle } from "./CodingWorkbenchSections";
 import styles from "./CodingWorkbenchWindow.module.css";
@@ -119,6 +124,16 @@ function SourceCard({
   );
 }
 
+// F-01: an available source is a CONFIGURED source. The verification word next to it is the only
+// part of this row backed by a live probe, and the hint appears when a probe actually failed —
+// refreshing the profile re-reads the same configuration, so the operator has to be told where the
+// re-check lives.
+function sourceTruthStatus(source: CodingWorkbenchSourceProjection): string {
+  if (!source.available) return "unavailable";
+  if (gatewayVerificationContradictsReadiness(source.verification)) return "unavailable";
+  return source.verification === "verified" ? "ready" : "unverified";
+}
+
 function SourceTruth({
   state,
   onRetry,
@@ -129,8 +144,9 @@ function SourceTruth({
   const t = useTranslate();
   const source = state.source.value;
   if (source === null) return null;
+  const probeFailed = gatewayVerificationContradictsReadiness(source.verification);
   return (
-    <div className={styles.truthRow} data-status={source.available ? "ready" : "unavailable"}>
+    <div className={styles.truthRow} data-status={sourceTruthStatus(source)}>
       <div>
         <p className={styles.truthLabel}>{t("codingWorkbench.source.confirmedLabel")}</p>
         <p className={styles.truthValue}>
@@ -139,8 +155,12 @@ function SourceTruth({
             status: source.available
               ? t("codingWorkbench.status.available")
               : t("codingWorkbench.status.unavailable"),
+            verification: sourceVerificationLabel(source.verification, t),
           })}
         </p>
+        {probeFailed ? (
+          <p className={styles.helpText}>{t("codingWorkbench.source.verificationHint")}</p>
+        ) : null}
       </div>
       {!source.available ? (
         <button className={styles.button} type="button" onClick={() => void onRetry()}>

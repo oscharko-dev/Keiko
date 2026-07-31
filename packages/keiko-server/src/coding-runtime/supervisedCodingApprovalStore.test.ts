@@ -206,3 +206,53 @@ describe("SupervisedCodingApprovalStore (task grants)", () => {
     ).toBeDefined();
   });
 });
+
+// Release-audit P0 (second half), store layer: the configured TTL was only a DEFAULT, so any caller
+// that supplied `ttlMs` chose the stored approval's lifetime with no ceiling — and the only caller
+// on the coding-runtime path derives that number from an instant the untrusted runtime child sends.
+// The store owns the record it persists, so the ceiling belongs here as well as at the orchestrator:
+// two independent layers must both be wrong before a long-lived approval can exist.
+describe("SupervisedCodingApprovalStore lifetime ceiling", () => {
+  const once = binding("run-1", "request-1");
+
+  it("clamps a caller-supplied lifetime to the store's configured ceiling", () => {
+    const store = createInMemorySupervisedCodingApprovalStore({ ttlMs: 1_000 });
+    const issued = store.issue({
+      binding: once,
+      approvedByUserId: "u",
+      nowMs: 0,
+      ttlMs: 24 * 60 * 60 * 1_000,
+    });
+
+    expect(issued.expiresAtMs).toBe(1_000);
+    expect(
+      store.consume({ approval: issued.approval, binding: once, nowMs: 1_001 }),
+    ).toBeUndefined();
+  });
+
+  it("clamps a caller-supplied lifetime on a reusable task grant too", () => {
+    const store = createInMemorySupervisedCodingApprovalStore({ ttlMs: 1_000 });
+    const grant = store.issueTaskGrant({
+      binding: taskBinding(),
+      approvedByUserId: "u",
+      nowMs: 0,
+      ttlMs: Number.MAX_SAFE_INTEGER,
+    });
+    if (grant === undefined) throw new Error("expected grant");
+
+    expect(grant.expiresAtMs).toBe(1_000);
+  });
+
+  it.each([
+    ["a shorter lifetime", 250, 250],
+    ["exactly the ceiling", 1_000, 1_000],
+    ["a zero lifetime", 0, 1],
+    ["a negative lifetime", -5_000, 1],
+    ["a non-finite lifetime", Number.NaN, 1],
+  ])("honours %s without ever exceeding the ceiling", (_label, ttlMs, expectedExpiry) => {
+    const store = createInMemorySupervisedCodingApprovalStore({ ttlMs: 1_000 });
+    const issued = store.issue({ binding: once, approvedByUserId: "u", nowMs: 0, ttlMs });
+
+    expect(issued.expiresAtMs).toBe(expectedExpiry);
+  });
+});

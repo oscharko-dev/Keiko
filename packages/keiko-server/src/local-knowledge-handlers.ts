@@ -60,6 +60,7 @@ import type {
   KnowledgePodModelUsePolicy,
   KnowledgePodSummary,
   KnowledgePodSummaryKind,
+  UnsupportedDocumentGuidanceCode,
 } from "@oscharko-dev/keiko-contracts";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "@oscharko-dev/keiko-local-knowledge";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
@@ -921,23 +922,21 @@ interface UnsupportedReasonRow {
   readonly unsupported_reason: string | null;
 }
 
-function unsupportedGuidanceFor(reason: string): string {
-  if (reason === "pdf-no-text-layer" || reason === "pdf-not-implemented") {
-    return "Scanned PDFs need an OCR-capable extraction path. Configure a verified OCR or vision adapter, or provide a text-layer PDF.";
-  }
-  if (reason === "image-not-supported") {
-    return "Image-only documents need an OCR-capable extraction path before they can be indexed.";
-  }
-  if (reason.startsWith("ocr-failed:")) {
-    return "OCR extraction failed for at least one document. Review the OCR adapter configuration and retry indexing.";
-  }
-  return "Some documents are unsupported in this build. Review the health diagnostics for the affected formats and next steps.";
+// 0.3.0 release audit — this used to return English prose that the capsule health surface rendered
+// verbatim under a translated heading, so a German operator read German labels with English next
+// steps. The extraction reason is a server fact; the remediation wording is UI copy. The wire
+// therefore carries the stable code and the UI resolves it against its own locale catalog.
+function unsupportedGuidanceCodeFor(reason: string): UnsupportedDocumentGuidanceCode {
+  if (reason === "pdf-no-text-layer" || reason === "pdf-not-implemented") return "pdf-needs-ocr";
+  if (reason === "image-not-supported") return "image-needs-ocr";
+  if (reason.startsWith("ocr-failed:")) return "ocr-failed";
+  return "unsupported-format";
 }
 
-function loadUnsupportedGuidance(
+function loadUnsupportedGuidanceCodes(
   store: ReturnType<typeof openKnowledgeStore>,
   capsuleId: string,
-): readonly string[] {
+): readonly UnsupportedDocumentGuidanceCode[] {
   const rows = store._internal.db
     .prepare(
       [
@@ -948,12 +947,12 @@ function loadUnsupportedGuidance(
       ].join(" "),
     )
     .all({ c: capsuleId }) as unknown as readonly UnsupportedReasonRow[];
-  const guidance = new Set<string>();
+  const codes = new Set<UnsupportedDocumentGuidanceCode>();
   for (const row of rows) {
     if (typeof row.unsupported_reason !== "string" || row.unsupported_reason.length === 0) continue;
-    guidance.add(unsupportedGuidanceFor(row.unsupported_reason));
+    codes.add(unsupportedGuidanceCodeFor(row.unsupported_reason));
   }
-  return [...guidance];
+  return [...codes];
 }
 
 interface IndexingJobRow {
@@ -1210,8 +1209,12 @@ function buildCapsuleHealth(
   const contextualHealth = contextualRetrievalHealth(deps, store, capsule);
   const contextualReasons = contextualRetrievalHealthReasons(deps, store, capsule);
   const indexedAt = lastIndexedAt(store, capsule.id);
-  const unsupportedGuidance =
-    unsupportedDocuments > 0 ? loadUnsupportedGuidance(store, capsule.id) : [];
+  // An unsupported document whose parsed unit carries no reason still owes the operator a next
+  // step, so the generic code stands in rather than an empty list.
+  const guidanceCodes =
+    unsupportedDocuments > 0 ? loadUnsupportedGuidanceCodes(store, capsule.id) : [];
+  const unsupportedGuidanceCodes: readonly UnsupportedDocumentGuidanceCode[] =
+    unsupportedDocuments > 0 && guidanceCodes.length === 0 ? ["unsupported-format"] : guidanceCodes;
   return {
     capsuleId: capsule.id,
     sourceIds: capsule.sourceIds,
@@ -1227,12 +1230,7 @@ function buildCapsuleHealth(
     failedDocuments,
     skippedDocuments,
     unsupportedDocuments,
-    unsupportedGuidance:
-      unsupportedDocuments > 0 && unsupportedGuidance.length === 0
-        ? [
-            "Some documents were skipped because this build cannot extract them yet. Review the health diagnostics for the affected formats and next steps.",
-          ]
-        : unsupportedGuidance,
+    unsupportedGuidanceCodes,
     staleReasons: [...compatibility.staleReasons, ...contextualReasons],
     contextualRetrieval: contextualHealth,
     partialCoverageDocuments: countPartialCoverageDocuments(store, capsule.id),

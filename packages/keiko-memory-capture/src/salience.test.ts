@@ -93,8 +93,12 @@ const ATLAS_FACTS = JSON.stringify([
 ]);
 
 describe("SALIENCE_SYSTEM_PROMPT", () => {
-  it("instructs JSON-array-only output and excludes assistant claims", () => {
-    expect(SALIENCE_SYSTEM_PROMPT).toContain("JSON array");
+  it("instructs machine-parseable wrapped-object output and excludes assistant claims", (): void => {
+    // #2842 review: the prompt must describe the SAME shape the structured-output schema mandates
+    // ({"items":[...]}), so schema-enforcing and prompt-only models converge on one contract.
+    expect(SALIENCE_SYSTEM_PROMPT).toContain('{"items":[...]}');
+    expect(SALIENCE_SYSTEM_PROMPT).toContain('return {"items":[]}');
+    expect(SALIENCE_SYSTEM_PROMPT).not.toContain("Return ONLY a JSON array");
     expect(SALIENCE_SYSTEM_PROMPT).toContain("assistant");
     expect(SALIENCE_SYSTEM_PROMPT).toContain('"source": "user"');
   });
@@ -182,6 +186,42 @@ describe("extractSalientMemories", () => {
     );
     expect(projectScoped).toHaveLength(3);
     expect(userScoped).toHaveLength(1);
+  });
+
+  // Boundary pin: the extraction model's `scope` label is a CLASSIFICATION over the coordinates
+  // this turn already carries, never an authority to reach a coordinate it does not have. It can
+  // pick between the turn's own user and project scope; it cannot mint a foreign project, cannot
+  // resolve a coordinate absent from the context, and cannot reach `global` (write-denied unless
+  // the caller opts in, and no capture policy does). Anything else fails closed by dropping the
+  // candidate rather than downgrading it to a wider scope.
+  it("confines a model-chosen scope to the coordinates the turn already carries", async () => {
+    const label = (scope: string, body: string): Record<string, unknown> => ({
+      body,
+      type: "fact",
+      confidence: 0.7,
+      scope,
+      source: "user",
+      tags: [],
+    });
+    const model = JSON.stringify([
+      label("user", "The user prefers dark mode."),
+      label("project", "Atlas targets Rust."),
+      label("workspace", "The workspace pins Node 24."),
+      label("global", "Everything everywhere is TypeScript."),
+      label("organization", "The organization is Acme."),
+    ]);
+
+    const result = await extractSalientMemories(
+      input({ context: baseContext({ projectId: "proj-atlas" as ProjectId }) }),
+      deps(model),
+    );
+
+    expect(
+      candidatesOnly(result).map((c) => (c.kind === "candidate" ? c.proposal.scope : null)),
+    ).toEqual([
+      { kind: "user", userId: "u-1" },
+      { kind: "project", projectId: "proj-atlas" },
+    ]);
   });
 
   it("wires the salience captureRationale onto provenance", async () => {
@@ -656,6 +696,34 @@ describe("parseSalienceItems", () => {
     },
   ])("filters an item missing the required '$field' field", ({ raw }) => {
     expect(parseSalienceItems(raw)).toEqual([]);
+  });
+
+  // Structured-output callers wrap the item array in a root object under "items" (Azure OpenAI
+  // rejects a root array schema — F-11); the prompt-only fallback path still emits the bare
+  // array, so BOTH shapes must parse.
+  it.each([
+    {
+      title: "unwraps the structured-output root object payload",
+      raw: '{"items":[{"body":"x","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}]}',
+    },
+    {
+      title: "filters invalid entries inside a wrapped payload",
+      raw: '{"items":[{"body":"ok","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]},{"body":123}]}',
+    },
+    {
+      title: "unwraps a wrapped payload wrapped in markdown code fences",
+      raw: '```json\n{"items":[{"body":"x","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}]}\n```',
+    },
+    {
+      title: "unwraps despite a decoy string property containing an array bracket",
+      raw: '{"note":"see arr[0]","items":[{"body":"x","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}]}',
+    },
+  ])("$title", ({ raw }) => {
+    expect(parseSalienceItems(raw)).toHaveLength(1);
+  });
+
+  it("returns [] when the wrapped items value is not an array", () => {
+    expect(parseSalienceItems('{"items":{"body":"x"}}')).toEqual([]);
   });
 });
 

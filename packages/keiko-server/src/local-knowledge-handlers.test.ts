@@ -27,6 +27,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+  UNSUPPORTED_DOCUMENT_GUIDANCE_CODES,
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts";
@@ -1132,6 +1133,50 @@ describe("local-knowledge handlers", () => {
     expect(detail.status).toBe(200);
   });
 
+  // Audit regression (0.3.0): capsule-set-compose.tsx documents that "incompatible embedding
+  // identities across members are rejected server-side and surfaced here as a 400 — the UI cannot
+  // pre-validate identity". No such validation existed, so the documented 400 could never happen and
+  // a set mixing embedding spaces was created and offered as a grounding source.
+  it("rejects a capsule set whose members live in different embedding spaces with a 400", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const seeded = seedStore(tmp);
+    createCapsule(seeded.store, {
+      id: capsuleId("cap-other-space"),
+      displayName: "Other Space Capsule",
+      tags: [],
+      retrievalEffort: "default",
+      outputMode: "snippets",
+      answerGroundingPolicy: "require-citations",
+      modelUsePolicy: standardPodModelUsePolicy(),
+      embeddingModelIdentity: {
+        provider: "openai",
+        modelId: "text-embedding-3-large",
+        vectorDimensions: 3072,
+        vectorMetric: "cosine",
+      },
+      lifecycleState: "ready",
+      storageReference: "capsules/cap-other-space",
+    });
+    seeded.store.close();
+
+    const result = await handleCreateLocalKnowledgeCapsuleSet(
+      baseCtx(tmp, "POST", {
+        displayName: "Mixed Spaces",
+        capsuleIds: ["cap-1", "cap-other-space"],
+      }),
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toMatch(/must share one embedding identity/u);
+
+    // The set was never created: the listing still has none.
+    const listed = await handleListLocalKnowledgeCapsuleSets(baseCtx(tmp, "GET"), depsFor(tmp));
+    expect(listed.status).toBe(200);
+    expect((listed.body as { capsuleSets: readonly unknown[] }).capsuleSets).toHaveLength(0);
+  });
+
   it("deletes a capsule set (#1929 audit fix), leaving member capsules unchanged", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
@@ -2027,7 +2072,7 @@ describe("local-knowledge handlers", () => {
         capsuleId: "cap-1",
         failedDocuments: 1,
         unsupportedDocuments: 0,
-        unsupportedGuidance: [],
+        unsupportedGuidanceCodes: [],
         vectorCompatible: true,
       },
       sources: [{ sourceId: "src-1", displayName: "Policies", failedCount: 1 }],
@@ -2064,16 +2109,80 @@ describe("local-knowledge handlers", () => {
     );
 
     expect(result.status).toBe(200);
+    // 0.3.0 release audit — relocated from an English prose assertion. The remediation the operator
+    // reads is UI copy in the operator's locale; the wire carries the stable reason code only, so
+    // the server never ships locale-bound text.
     expect(result.body).toMatchObject({
       health: {
         skippedDocuments: 1,
         unsupportedDocuments: 1,
-        unsupportedGuidance: [
-          "Image-only documents need an OCR-capable extraction path before they can be indexed.",
-        ],
+        unsupportedGuidanceCodes: ["image-needs-ocr"],
       },
       sources: [{ sourceId: "src-1", skippedCount: 1 }],
     });
+  });
+
+  // 0.3.0 release audit — the capsule health wire must carry reason CODES only. Operator-facing
+  // remediation is UI copy in the operator's locale, so an English sentence appearing here is the
+  // defect this pin exists to catch. Every extraction reason the store can hold is exercised,
+  // including one the mapper does not know and one with no reason recorded at all.
+  it("emits stable unsupported-document reason codes, never operator prose", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: join(tmp, "docs"), recursive: true },
+    });
+    const reasons = [
+      "pdf-no-text-layer",
+      "pdf-not-implemented",
+      "image-not-supported",
+      "ocr-failed:tesseract",
+      "some-future-reason",
+    ];
+    reasons.forEach((reason, index) => {
+      const documentId = `doc-${String(index)}`;
+      store._internal.db
+        .prepare(
+          "INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name) VALUES (:d, :c, 'src-1', :p, 10, 'application/octet-stream', :h, 'unsupported', '1', 10, 'unsupported', :p)",
+        )
+        .run({
+          c: capId,
+          d: documentId,
+          p: `policy-${String(index)}.bin`,
+          h: `hash-${documentId}`,
+        });
+      store._internal.db
+        .prepare(
+          "INSERT INTO parsed_units (id, capsule_id, document_id, kind, unsupported_reason, character_start, character_end) VALUES (:u, :c, :d, 'unsupported-media', :r, NULL, NULL)",
+        )
+        .run({ c: capId, d: documentId, r: reason, u: `unit-${documentId}` });
+    });
+    store.close();
+
+    const result = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(200);
+    const health = (result.body as { readonly health: CapsuleHealth }).health;
+    const known = new Set<string>(UNSUPPORTED_DOCUMENT_GUIDANCE_CODES);
+    expect(health.unsupportedGuidanceCodes.length).toBeGreaterThan(0);
+    for (const code of health.unsupportedGuidanceCodes) {
+      expect(known.has(code)).toBe(true);
+      // Prose has spaces and sentence punctuation; a code has neither.
+      expect(code).toMatch(/^[a-z0-9-]+$/u);
+    }
+    expect([...health.unsupportedGuidanceCodes].sort((a, b) => a.localeCompare(b))).toEqual([
+      "image-needs-ocr",
+      "ocr-failed",
+      "pdf-needs-ocr",
+      "unsupported-format",
+    ]);
   });
 
   it("runs incremental refresh and treats repair-failed with no failed sources as a no-op", async () => {

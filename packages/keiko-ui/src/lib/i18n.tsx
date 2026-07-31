@@ -32,9 +32,13 @@ type I18nState = {
   readonly ready: boolean;
 };
 
-const loadedMessageCatalogs: Partial<Record<Locale, MessageCatalog>> = {
-  en: EN_MESSAGES,
-};
+// The baseline a freshly loaded module starts from: English is bundled, every other locale arrives
+// lazily. Kept as a factory so the test seam below can restore it without a dynamic `delete`.
+function englishOnlyCatalogs(): Partial<Record<Locale, MessageCatalog>> {
+  return { en: EN_MESSAGES };
+}
+
+let loadedMessageCatalogs = englishOnlyCatalogs();
 
 const catalogLoads = new Map<Locale, Promise<MessageCatalog>>();
 
@@ -69,6 +73,22 @@ export function loadLocaleMessages(locale: Locale): Promise<MessageCatalog> {
   });
   catalogLoads.set(locale, promise);
   return promise;
+}
+
+/**
+ * Drop every lazily loaded catalog and in-flight load, restoring the English-only baseline.
+ * Tests use this; product code does not.
+ *
+ * WHY this seam exists: the two stores above are module state, and `I18nProvider` reads them
+ * synchronously on its very first render (`activeLocale = ready && catalogReady ? locale : …`). So a
+ * test that resolves the German catalog silently changes what a later, `de`-seeded provider renders
+ * on that first pass — the English transition state simply stops existing. No storage or DOM
+ * teardown can reach this, which is why the reset has to be offered by the module that owns it
+ * rather than reconstructed per test file.
+ */
+export function resetLoadedMessageCatalogs(): void {
+  loadedMessageCatalogs = englishOnlyCatalogs();
+  catalogLoads.clear();
 }
 
 export function resolveLocale(input: string | null | undefined): Locale {

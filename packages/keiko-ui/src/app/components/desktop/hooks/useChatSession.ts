@@ -10,6 +10,7 @@ import {
   type SetStateAction,
 } from "react";
 import { classifyAttachmentMime, MAX_ATTACHMENT_BYTES } from "@oscharko-dev/keiko-contracts";
+import { useTranslate } from "@/lib/i18n";
 import type { ConversationAttachmentDescriptorWire, MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
@@ -64,7 +65,11 @@ import type {
 import { isConversationEligibleModel } from "@/lib/types";
 import { formatUserError } from "../format-error";
 import { canonicalVoiceSha256Hex } from "./canonical-voice-hasher";
-import { extractDocumentContext, type PendingDocument } from "./documentContext";
+import {
+  extractDocumentContext,
+  undeliverableAttachmentNotices,
+  type PendingDocument,
+} from "./documentContext";
 import {
   currentConversationMemoryModeRevision,
   useConversationMemorySettings,
@@ -289,6 +294,16 @@ function errorMessage(error: unknown): string {
 
 function sortChats(chats: readonly Chat[]): Chat[] {
   return [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+// 0.3.0 release audit — the chat list deliberately carries trashed conversations (status
+// "closed") so Chat History's Deleted tab can restore them, and the panel filters them out of the
+// visible list. The resume paths did not filter: taking `sorted[0]` could land the session on a
+// conversation the user had just trashed — invisible in Chat History, and refused by the server
+// on every send with 409 CHAT_CLOSED. One helper, used by every path that resumes a conversation,
+// so a future resume path cannot reintroduce the omission.
+function pickResumableChat(sortedChats: readonly Chat[]): Chat | undefined {
+  return sortedChats.find((chat) => chat.status !== "closed");
 }
 
 // Sonar S2004 — the upsert/remove/replace/rollback list transforms below are extracted to
@@ -532,9 +547,15 @@ function hasGroundingScope(chat: Chat): boolean {
 export type ChatSessionApi = UseChatSessionResult;
 
 // Issue #1561 — options for an explicit-text send. The voice dialogue session (Epic #1556) commits a
-// spoken transcript and must send it through THIS chat path so the spoken turn carries the identical
-// context (attachments → documentContext, repository/local-knowledge grounding scope, memory) a typed
-// turn would. It cannot rely on `setDraft(text)` + `sendMessage()` in the same tick: `sendMessage`
+// spoken transcript and must send it through THIS chat path so the spoken turn carries the same
+// context a typed turn would: the staged attachments (→ documentContext + descriptors),
+// repository/local-knowledge grounding scope, and memory. ADR-0154 D1/D5 make that parity the
+// contract — one canonical pipeline, no Voice-specific substitute, and equal final text plus equal
+// chat context must make the same retrieval decisions. The staged attachments are captured into
+// `canonicalVoiceTarget.attachments` at handoff rather than read live at drain time (see that field),
+// and a grounded chat carries scope instead of attachments for spoken and typed turns alike — with
+// GROUNDED_ATTACHMENT_NOTICE surfaced either way, never a silent drop (#2843).
+// It cannot rely on `setDraft(text)` + `sendMessage()` in the same tick: `sendMessage`
 // reads `draft` from React state captured in its closure, so the just-set draft is invisible until the
 // next render and the send would early-return on an empty draft. Passing the committed text directly
 // decouples the send from the async draft state. The field is content-only (the committed transcript,
@@ -567,6 +588,13 @@ interface CanonicalVoiceSendTarget {
   readonly project: CanonicalChatProjectTarget;
   readonly modelId: string;
   readonly memory: ConversationMemoryRequestWire;
+  // #2843 — the composer's staged attachments, snapshotted with the rest of the immutable target
+  // during the synchronous handoff (ADR-0154 D1). The FIFO can drain after the user switched chats or
+  // staged different files, so reading live composer state at drain time would attach the wrong files
+  // to this turn; the snapshot binds exactly what was staged when the transcript settled. Nothing
+  // here reaches the Realtime session — descriptors and extracted text ride the canonical BFF
+  // request, which is the only path that ever carried them (ADR-0154 D2/D5).
+  readonly attachments: readonly PendingAttachment[];
 }
 
 interface CanonicalChatProjectTarget {
@@ -601,6 +629,10 @@ interface SendAttemptRequest {
 interface SendAttemptExecution {
   readonly terminal: SendAttemptOutcome;
   readonly disclosures: readonly SentDocumentDisclosure[];
+  // #2843 — the staged attachments this attempt actually put on the wire. A settled send releases
+  // exactly these, so files staged while the send was in flight (the composer stays editable, F041,
+  // and a queued Voice turn can settle much later) are never dropped unsent.
+  readonly consumedAttachmentIds: readonly string[];
 }
 
 interface CompletedSendOutcome {
@@ -635,7 +667,17 @@ export type SendMessageOutcome =
       readonly suspend?: true;
     }
   | { readonly status: "in-progress" | "not-sent" }
-  | { readonly status: "cancelled"; readonly userPersisted: boolean };
+  | {
+      readonly status: "cancelled";
+      readonly userPersisted: boolean;
+      // The local human deliberately ended this turn: a Voice barge-in, or an explicit discard of a
+      // wedged spoken turn. ADR-0154 D4 returns the floor to input capture and the dialog generation
+      // has already advanced, so a re-sent turn could never speak. Terminal regardless of
+      // persistence, which is strictly stronger than D1/D4's persisted-cancellation rule and never
+      // weakens it. A cancellation Keiko did not ask for (chat switch, unmount, unknown
+      // reconciliation) carries no such proof of intent and stays retryable.
+      readonly interrupted?: true;
+    };
 
 interface CanonicalVoiceTurnInput {
   readonly text: string;
@@ -681,6 +723,16 @@ interface CanonicalVoiceSettledDelivery {
   readonly outcome: SendMessageOutcome;
 }
 
+interface CanonicalVoiceOutboxStatus {
+  // The chat that owns the head-of-queue spoken turn whose bounded delivery window ran out. The
+  // outbox itself is page-scoped, but its suspension is reported per chat: a single wedged turn must
+  // never disable typed sending in every other conversation on the page.
+  readonly suspendedChatId: string | undefined;
+  // Bumped on every membership change so a chat-scoped gate derived from the queue re-renders even
+  // when the suspended chat itself does not change.
+  readonly revision: number;
+}
+
 interface CanonicalVoicePageOutbox {
   readonly queueRef: { current: CanonicalVoiceQueueItem[] };
   readonly queueBytesRef: { current: number };
@@ -696,8 +748,8 @@ interface CanonicalVoicePageOutbox {
   drainingOwner: symbol | undefined;
   activeDelivery: { readonly key: string; readonly abort: () => void } | undefined;
   readonly wakes: Set<() => void>;
-  readonly suspensionSubscribers: Set<(suspended: boolean) => void>;
-  suspended: boolean;
+  readonly statusSubscribers: Set<(status: CanonicalVoiceOutboxStatus) => void>;
+  status: CanonicalVoiceOutboxStatus;
 }
 
 // Page-lifecycle outbox: accepted provider finals survive ChatSession/Voice component replacement
@@ -714,14 +766,27 @@ const canonicalVoicePageOutbox: CanonicalVoicePageOutbox = {
   drainingOwner: undefined,
   activeDelivery: undefined,
   wakes: new Set(),
-  suspensionSubscribers: new Set(),
-  suspended: false,
+  statusSubscribers: new Set(),
+  status: { suspendedChatId: undefined, revision: 0 },
 };
 
-function setCanonicalVoicePageOutboxSuspended(suspended: boolean): void {
-  if (canonicalVoicePageOutbox.suspended === suspended) return;
-  canonicalVoicePageOutbox.suspended = suspended;
-  for (const subscriber of canonicalVoicePageOutbox.suspensionSubscribers) subscriber(suspended);
+function publishCanonicalVoicePageOutboxStatus(suspendedChatId: string | undefined): void {
+  canonicalVoicePageOutbox.status = {
+    suspendedChatId,
+    revision: canonicalVoicePageOutbox.status.revision + 1,
+  };
+  for (const subscriber of canonicalVoicePageOutbox.statusSubscribers) {
+    subscriber(canonicalVoicePageOutbox.status);
+  }
+}
+
+function setCanonicalVoicePageOutboxSuspended(suspendedChatId: string | undefined): void {
+  if (canonicalVoicePageOutbox.status.suspendedChatId === suspendedChatId) return;
+  publishCanonicalVoicePageOutboxStatus(suspendedChatId);
+}
+
+function canonicalVoicePageOutboxSuspended(): boolean {
+  return canonicalVoicePageOutbox.status.suspendedChatId !== undefined;
 }
 
 function releaseCanonicalVoiceProjectionByKey(key: string): void {
@@ -741,17 +806,31 @@ function clearSettledCanonicalVoiceDeliveries(chatId: string): void {
   }
 }
 
+function cacheCanonicalVoiceSettledDelivery(
+  key: string,
+  entry: CanonicalVoiceSettledDelivery,
+): void {
+  const settled = canonicalVoicePageOutbox.settledRef.current;
+  settled.set(key, entry);
+  if (settled.size <= CANONICAL_VOICE_QUEUE_MAX_ITEMS * 2) return;
+  const oldestKey = settled.keys().next().value as string | undefined;
+  if (oldestKey !== undefined) settled.delete(oldestKey);
+}
+
 function abortRemovedCanonicalVoiceDelivery(removedKeys: ReadonlySet<string>): void {
   const activeDelivery = canonicalVoicePageOutbox.activeDelivery;
   if (activeDelivery !== undefined && removedKeys.has(activeDelivery.key)) activeDelivery.abort();
 }
 
-function resolveRemovedCanonicalVoiceItems(items: readonly CanonicalVoiceQueueItem[]): number {
+function resolveRemovedCanonicalVoiceItems(
+  items: readonly CanonicalVoiceQueueItem[],
+  outcome: SendMessageOutcome,
+): number {
   let removedBytes = 0;
   for (const item of items) {
     releaseCanonicalVoiceProjectionByKey(item.key);
     canonicalVoicePageOutbox.deliveriesRef.current.delete(item.key);
-    item.resolve({ status: "failed", retryable: false });
+    item.resolve(outcome);
     removedBytes += item.byteLength;
   }
   return removedBytes;
@@ -767,25 +846,63 @@ function removeCanonicalVoiceQueueItems(
   }
 }
 
-function purgeCanonicalVoicePageOutboxChat(chatId: string): void {
+function removeCanonicalVoicePageOutboxItems(
+  removed: readonly CanonicalVoiceQueueItem[],
+  outcome: SendMessageOutcome,
+): void {
   const queue = canonicalVoicePageOutbox.queueRef.current;
-  const headKey = queue[0]?.key;
-  const removed = queue.filter((item) => item.target.chat.id === chatId);
-  clearSettledCanonicalVoiceDeliveries(chatId);
-  if (removed.length === 0) return;
   const removedKeys = new Set(removed.map((item) => item.key));
-  const removedHead = headKey !== undefined && removedKeys.has(headKey);
   abortRemovedCanonicalVoiceDelivery(removedKeys);
-  const removedBytes = resolveRemovedCanonicalVoiceItems(removed);
+  const removedBytes = resolveRemovedCanonicalVoiceItems(removed, outcome);
   canonicalVoicePageOutbox.queueBytesRef.current = Math.max(
     0,
     canonicalVoicePageOutbox.queueBytesRef.current - removedBytes,
   );
   removeCanonicalVoiceQueueItems(queue, removedKeys);
-  if (removedHead && canonicalVoicePageOutbox.suspended) {
-    setCanonicalVoicePageOutboxSuspended(false);
+  // Suspension outlives a removal only while the suspended chat still owns a queued turn; once its
+  // last item is gone there is nothing left for the user to retry or discard.
+  const suspendedChatId = canonicalVoicePageOutbox.status.suspendedChatId;
+  const stillSuspended =
+    suspendedChatId !== undefined && canonicalVoicePageOutboxHasPendingTurn(suspendedChatId);
+  publishCanonicalVoicePageOutboxStatus(stillSuspended ? suspendedChatId : undefined);
+  if (!stillSuspended) wakeCanonicalVoicePageOutbox();
+}
+
+function purgeCanonicalVoicePageOutboxChat(chatId: string): void {
+  const removed = canonicalVoicePageOutbox.queueRef.current.filter(
+    (item) => item.target.chat.id === chatId,
+  );
+  clearSettledCanonicalVoiceDeliveries(chatId);
+  if (removed.length === 0) return;
+  removeCanonicalVoicePageOutboxItems(removed, { status: "failed", retryable: false });
+}
+
+// The local human's escape hatch from a wedged spoken turn. Terminal by intent: the identity is
+// cached as settled so a replayed final resolves from that cache instead of re-entering the queue,
+// and the transcript is released from the outbox without ever reaching another store. Reports
+// whether the discarded set owned the active delivery, so the caller can stop that request too
+// instead of paying for an answer nobody will ever read.
+function discardCanonicalVoicePageOutboxChat(chatId: string): {
+  readonly discarded: boolean;
+  readonly ownedActiveDelivery: boolean;
+} {
+  const removed = canonicalVoicePageOutbox.queueRef.current.filter(
+    (item) => item.target.chat.id === chatId,
+  );
+  if (removed.length === 0) return { discarded: false, ownedActiveDelivery: false };
+  const activeKey = canonicalVoicePageOutbox.activeDelivery?.key;
+  const ownedActiveDelivery =
+    activeKey !== undefined && removed.some((item) => item.key === activeKey);
+  const outcome: SendMessageOutcome = {
+    status: "cancelled",
+    userPersisted: false,
+    interrupted: true,
+  };
+  for (const item of removed) {
+    cacheCanonicalVoiceSettledDelivery(item.key, { contentDigest: item.contentDigest, outcome });
   }
-  if (removedHead || !canonicalVoicePageOutbox.suspended) wakeCanonicalVoicePageOutbox();
+  removeCanonicalVoicePageOutboxItems(removed, outcome);
+  return { discarded: true, ownedActiveDelivery };
 }
 
 export function canonicalVoicePageOutboxRetainsPlaintextForTests(content: string): boolean {
@@ -811,8 +928,8 @@ export function clearCanonicalVoicePageOutboxForTests(): void {
   canonicalVoicePageOutbox.activeDelivery?.abort();
   canonicalVoicePageOutbox.activeDelivery = undefined;
   canonicalVoicePageOutbox.wakes.clear();
-  setCanonicalVoicePageOutboxSuspended(false);
-  canonicalVoicePageOutbox.suspensionSubscribers.clear();
+  setCanonicalVoicePageOutboxSuspended(undefined);
+  canonicalVoicePageOutbox.statusSubscribers.clear();
 }
 
 function wakeCanonicalVoicePageOutbox(): void {
@@ -882,7 +999,10 @@ function canonicalVoiceOutcomeIsPersisted(outcome: SendMessageOutcome): boolean 
 function canonicalVoiceOutcomeIsTerminal(outcome: SendMessageOutcome): boolean {
   return (
     outcome.status === "completed" ||
-    (outcome.status === "cancelled" && outcome.userPersisted) ||
+    // ADR-0154 D1/D4 keep a persisted cancellation terminal. A deliberate interruption is terminal
+    // as well, with or without a persisted user row: the dialog generation has moved on, so a resend
+    // could only produce an answer the user never hears (#2842).
+    (outcome.status === "cancelled" && (outcome.userPersisted || outcome.interrupted === true)) ||
     (outcome.status === "failed" && outcome.retryable === false && outcome.suspend !== true)
   );
 }
@@ -1009,9 +1129,17 @@ export interface UseChatSessionResult {
   canonicalVoiceCaptureMustPause?: (() => boolean) | undefined;
   // A finite delivery window has ended without a terminal canonical result for the active chat.
   // The transcript remains in the page-lifecycle outbox until this explicit action starts one more
-  // bounded window with the same immutable clientTurnId. No background poll is armed.
+  // bounded window with the same immutable clientTurnId. No background poll is armed. True only for
+  // a chat that still owns a queued turn, so a wedged conversation never gates the whole page.
   canonicalVoiceTurnRequiresRetry?: boolean | undefined;
   retryPendingCanonicalVoiceTurn?: (() => void) | undefined;
+  // The second half of that recovery: drop the active chat's queued spoken turns instead of
+  // retrying them, so a delivery that keeps failing cannot leave the composer permanently dead.
+  discardPendingCanonicalVoiceTurn?: (() => void) | undefined;
+  // ADR-0154 D4 barge-in. Cancels the in-flight canonical send ONLY while Voice owns it — a typed
+  // composer send is a separate user intent — and makes that cancellation terminal for the
+  // interrupted utterance so the Chat-owned queue never re-sends it.
+  interruptCanonicalVoiceDelivery?: (() => void) | undefined;
   regenerateMessage: (assistantMessageId: string) => Promise<void>;
   // Issue #152 — cancel the in-flight send (grounded OR ungrounded). No-op
   // when sendStatus is terminal/idle. Sets sendStatus to "cancelled" and
@@ -1359,34 +1487,38 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   const projects = sortProjects(projectPayload.projects);
   const project = projects.find((item) => item.available) ?? projects[0];
 
-  if (project !== undefined) {
-    const chatPayload = await sharedFetchChats(project.path).catch(() => ({ chats: [] }));
-    const sortedChats = sortChats(chatPayload.chats);
-    const latestChat = sortedChats[0];
-    if (latestChat !== undefined) {
-      const messagePayload = await sharedFetchChatMessages(latestChat.id, project.path);
-      const selectedModel = resolveSelectedModelId(latestChat.selectedModel, chatModels);
-      return {
-        models: chatModels,
-        selectedModel,
-        projects: Array.from(projects),
-        activeProject: project,
-        chats: sortedChats,
-        activeChat: latestChat,
-        messages: Array.from(messagePayload.messages),
-      };
-    }
+  const chatPayload =
+    project === undefined
+      ? { chats: [] as readonly Chat[] }
+      : await sharedFetchChats(project.path).catch(() => ({ chats: [] as readonly Chat[] }));
+  const sortedChats = sortChats(chatPayload.chats);
+  const latestChat = pickResumableChat(sortedChats);
+  if (project !== undefined && latestChat !== undefined) {
+    const messagePayload = await sharedFetchChatMessages(latestChat.id, project.path);
+    const selectedModel = resolveSelectedModelId(latestChat.selectedModel, chatModels);
+    return {
+      models: chatModels,
+      selectedModel,
+      projects: Array.from(projects),
+      activeProject: project,
+      chats: sortedChats,
+      activeChat: latestChat,
+      messages: Array.from(messagePayload.messages),
+    };
   }
 
   // AC #1: when no eligible model exists, set selectedModel to undefined so
   // downstream surfaces show a clear error instead of a placeholder id.
+  //
+  // 0.3.0 release audit — the trashed conversations stay in `chats` even though none of them may
+  // be resumed: Chat History's Deleted tab is the surface that restores them.
   if (defaultModel === undefined || !autoCreate) {
     return {
       models: chatModels,
       selectedModel: defaultModel,
       projects: Array.from(projects),
       activeProject: project,
-      chats: [],
+      chats: sortedChats,
       activeChat: undefined,
       messages: [],
     };
@@ -1531,10 +1663,14 @@ function settledSendMessageOutcome(input: {
   readonly terminal: SendAttemptOutcome;
   readonly persistence: UserPersistenceProof;
   readonly canonicalTarget: CanonicalVoiceSendTarget | undefined;
+  readonly interrupted: boolean;
 }): SendMessageOutcome {
-  const { settled, terminal, persistence, canonicalTarget } = input;
+  const { settled, terminal, persistence, canonicalTarget, interrupted } = input;
   if (settled.status === "cancelled") {
-    return { status: "cancelled", userPersisted: persistence === "persisted" };
+    const userPersisted = persistence === "persisted";
+    return interrupted
+      ? { status: "cancelled", userPersisted, interrupted: true }
+      : { status: "cancelled", userPersisted };
   }
   const canonicalFailure =
     settled.status === "failed" && terminal.status === "failed" && canonicalTarget !== undefined;
@@ -1642,6 +1778,11 @@ export interface UseChatSessionOptions {
 }
 
 export function useChatSession(options: UseChatSessionOptions = {}): UseChatSessionResult {
+  // 0.3.0 release audit — the pre-send attachment notices are user-facing text and were hardcoded
+  // English. `documentContext` is not a component and cannot call a hook, so the session hook
+  // resolves the translator once and passes it down. Outside an I18nProvider this falls back to the
+  // shipped English catalog rather than throwing, which keeps the pure-function tests provider-free.
+  const t = useTranslate();
   const autoCreate = options.autoCreate ?? true;
   const loadMemoryAutonomyModeImpl = options.loadMemoryAutonomyModeImpl ?? loadMemoryAutonomyMode;
   const [state, setState] = useState<SessionState>(INITIAL_STATE);
@@ -1666,6 +1807,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // adds signal support to sendDesktopChat in this issue).
   const sendControllerRef = useRef<AbortController | null>(null);
   const sendControllerOwnerRef = useRef<"composer" | "canonical-voice" | null>(null);
+  // Set only by the deliberate Voice interrupt, and read once by the attempt that owns this exact
+  // signal. It is the proof of intent that makes the resulting cancellation terminal for the queue;
+  // any other abort (chat switch, unmount, replacement) leaves it untouched and stays retryable.
+  const interruptedSendSignalRef = useRef<AbortSignal | null>(null);
   const sendSlotWaitersRef = useRef<Set<() => void>>(new Set());
   // Unlike sendControllerRef this remains bound to a cancelled attempt until that attempt settles.
   // A replacement writes a new signal synchronously, preventing late callbacks from the old attempt
@@ -1683,8 +1828,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const canonicalVoiceDeliveriesRef = canonicalVoicePageOutbox.deliveriesRef;
   const canonicalVoiceSettledRef = canonicalVoicePageOutbox.settledRef;
   const drainCanonicalVoiceQueueRef = useRef<() => void>(() => undefined);
-  const [canonicalVoiceOutboxSuspended, setCanonicalVoiceOutboxSuspended] = useState(
-    canonicalVoicePageOutbox.suspended,
+  const [canonicalVoiceOutboxStatus, setCanonicalVoiceOutboxStatus] = useState(
+    canonicalVoicePageOutbox.status,
   );
   const [error, setError] = useState<string | undefined>();
   // Issue #185 — most recent grounded answer for the active chat. Cleared when the active
@@ -1825,8 +1970,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     });
   }, []);
 
-  // Clears all pending attachments (called after successful sendMessage).
-  // GEN-PERF-MEMORY-001 — revoke every removed attachment's object-URL preview.
+  // Clears all pending attachments (exposed on the session API for surfaces that discard the whole
+  // staging area). GEN-PERF-MEMORY-001 — revoke every removed attachment's object-URL preview.
   const clearPendingAttachments = useCallback(() => {
     setPendingAttachments((previous) => {
       for (const attachment of previous) revokeAttachmentPreview(attachment);
@@ -1834,44 +1979,91 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     });
   }, []);
 
-  // Issue #148 — extract bounded text from the pending DOCUMENT attachments for the send body.
+  // #2843 — releases exactly the attachments a settled send consumed, rather than clearing the whole
+  // staging area. The composer stays editable during a send (uiux-fix F041) and a queued canonical
+  // Voice turn can settle turns later still, so anything staged AFTER the consumed set must survive
+  // to be sent by its own turn. GEN-PERF-MEMORY-001 — revoke the released previews.
+  const releasePendingAttachments = useCallback((ids: readonly string[]): void => {
+    if (ids.length === 0) return;
+    const consumed = new Set(ids);
+    setPendingAttachments((previous) => {
+      const retained = previous.filter((attachment) => !consumed.has(attachment.id));
+      if (retained.length === previous.length) return previous;
+      for (const attachment of previous) {
+        if (consumed.has(attachment.id)) revokeAttachmentPreview(attachment);
+      }
+      return retained;
+    });
+  }, []);
+
+  // 0.3.0 release audit — the composer (draft text + staged attachment queue) is ONE app-wide
+  // slot because the chat window is a singleton (ADR-0114). Switching the active conversation
+  // reset the stream bubble, the grounded answer, the latest memory and the document note, but
+  // never the composer — so a document staged in chat A was extracted and sent into chat B, under
+  // whatever model and provider chat B had selected. Content a user staged for one conversation
+  // must never ride along into another: every path that changes the active conversation clears it
+  // fail-closed. Placed here, on the state that owns the composer, so a new switch path cannot
+  // forget to call it.
+  const resetComposerForConversationSwitch = useCallback((): void => {
+    setDraft("");
+    clearPendingAttachments();
+  }, [clearPendingAttachments]);
+
+  // Issue #148 — extract bounded text from the staged DOCUMENT attachments for the send body.
   // Images are excluded here (they stay on the metadata-only attachments path). A document with
   // no retained File (synthetic fixture) is skipped. Read failures surface a fixed, path-safe
   // alert and never abort the send. Returns the wire entries to attach plus a disclosure list.
-  const buildDocumentContext = useCallback(async (): Promise<{
-    readonly entries: readonly ConversationDocumentContextWire[];
-    readonly disclosures: readonly SentDocumentDisclosure[];
-  }> => {
-    const documents: PendingDocument[] = pendingAttachments
-      .filter((a) => a.kind === "document" && a.file !== undefined)
-      .map((a) => ({
-        id: a.id,
-        name: a.name,
-        mimeType: a.mimeType,
-        sizeBytes: a.sizeBytes,
-        file: a.file as File,
+  // #2843 — the staged set is an argument, not closed-over state: a canonical Voice turn passes the
+  // snapshot captured at handoff, so a turn is never built from a composer the user has since changed.
+  //
+  // 0.3.0 release audit — the metadata-only path is exactly why an image cannot reach the model,
+  // so every staged image is disclosed by name through the same pre-send alert channel the
+  // document skips already use. The notice is emitted whether or not any document is attached,
+  // and it is derived from the SAME staged snapshot as the extraction, so a spoken turn discloses
+  // what that turn actually carries rather than what the composer happens to hold now.
+  const buildDocumentContext = useCallback(
+    async (
+      staged: readonly PendingAttachment[],
+    ): Promise<{
+      readonly entries: readonly ConversationDocumentContextWire[];
+      readonly disclosures: readonly SentDocumentDisclosure[];
+    }> => {
+      const undeliverable = undeliverableAttachmentNotices(staged, t);
+      const documents: PendingDocument[] = staged
+        .filter((a) => a.kind === "document" && a.file !== undefined)
+        .map((a) => ({
+          id: a.id,
+          name: a.name,
+          mimeType: a.mimeType,
+          sizeBytes: a.sizeBytes,
+          file: a.file as File,
+        }));
+      const extracted =
+        documents.length === 0
+          ? { entries: [] as readonly ConversationDocumentContextWire[], failures: [] }
+          : await extractDocumentContext(documents, t);
+      const notices = [...extracted.failures, ...undeliverable];
+      if (notices.length > 0) setError(notices.join(" "));
+      const disclosures = extracted.entries.map((e) => ({
+        id: e.id,
+        displayName: e.displayName,
+        truncated: e.truncated,
       }));
-    if (documents.length === 0) return { entries: [], disclosures: [] };
-    const { entries, failures } = await extractDocumentContext(documents);
-    if (failures.length > 0) setError(failures.join(" "));
-    const disclosures = entries.map((e) => ({
-      id: e.id,
-      displayName: e.displayName,
-      truncated: e.truncated,
-    }));
-    return { entries, disclosures };
-  }, [pendingAttachments]);
+      return { entries: extracted.entries, disclosures };
+    },
+    [t],
+  );
 
   const buildAttachmentDescriptors = useCallback(
-    (): readonly ConversationAttachmentDescriptorWire[] =>
-      pendingAttachments.map((attachment) => ({
+    (staged: readonly PendingAttachment[]): readonly ConversationAttachmentDescriptorWire[] =>
+      staged.map((attachment) => ({
         id: attachment.id,
         kind: attachment.kind,
         name: attachment.name,
         mimeType: attachment.mimeType,
         sizeBytes: attachment.sizeBytes,
       })),
-    [pendingAttachments],
+    [],
   );
 
   const clearLatestMemory = useCallback(() => {
@@ -2320,6 +2512,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       }
       setError(undefined);
       setStreamingAssistantMessage(undefined);
+      // 0.3.0 release audit — a new conversation is a different conversation: whatever was staged
+      // for the previous one must not be carried into it.
+      resetComposerForConversationSwitch();
       try {
         const trimmedTitle = title?.trim();
         const input: { modelId: string; title: string; projectPath?: string } = {
@@ -2353,20 +2548,23 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return undefined;
       }
     },
-    [state.selectedModel, state.activeProject, state.models],
+    [resetComposerForConversationSwitch, state.selectedModel, state.activeProject, state.models],
   );
 
   const openProject = useCallback(
     async (project: ProjectWithAvailability): Promise<void> => {
       setError(undefined);
       setStreamingAssistantMessage(undefined);
+      // 0.3.0 release audit — a project switch changes the active conversation, so the one
+      // app-wide composer must not carry the previous project's draft or staged files into it.
+      resetComposerForConversationSwitch();
       activeProjectPathRef.current = project.path;
       setState((previous) => ({ ...previous, activeProject: project }));
       try {
         const chatPayload = await sharedFetchChats(project.path);
         if (activeProjectPathRef.current !== project.path) return;
         const sorted = sortChats(chatPayload.chats);
-        const latest = sorted[0];
+        const latest = pickResumableChat(sorted);
         if (latest === undefined) {
           if (activeProjectPathRef.current !== project.path) return;
           await openNewChat(project);
@@ -2393,7 +2591,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setError(errorMessage(error_));
       }
     },
-    [canonicalVoiceProjectionRef, openNewChat, state.models],
+    [canonicalVoiceProjectionRef, openNewChat, resetComposerForConversationSwitch, state.models],
   );
 
   const openChat = useCallback(
@@ -2415,6 +2613,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setLatestMemory(undefined);
       // Issue #148 — clear the document-disclosure note so it never bleeds across chats.
       setLastSentDocuments([]);
+      // 0.3.0 release audit — and neither may the draft or the staged attachments.
+      resetComposerForConversationSwitch();
       try {
         const messagePayload = await sharedFetchChatMessages(chat.id, chat.projectPath);
         if (!isStillActiveChat(chat.id)) return;
@@ -2438,7 +2638,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setError(errorMessage(error_));
       }
     },
-    [canonicalVoiceProjectionRef, state.activeChat?.id, state.models],
+    [
+      canonicalVoiceProjectionRef,
+      resetComposerForConversationSwitch,
+      state.activeChat?.id,
+      state.models,
+    ],
   );
 
   const addProject = useCallback(
@@ -2830,15 +3035,26 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     async (request: SendAttemptRequest): Promise<SendAttemptExecution> => {
       const { chat, canonicalTarget, signal } = request;
       const grounded = hasGroundingScope(chat);
-      const skipSupplementalContext = grounded || canonicalTarget !== undefined;
-      const documentBundle = skipSupplementalContext
+      // #2843 — the ONLY route without an attachment channel is the grounded one: it derives context
+      // from the repository / Knowledge Pod scope instead. A spoken turn is not a second reason to
+      // drop supplemental context; ADR-0154 D1/D5 require it to carry the same context a typed turn
+      // would, and the queue-captured snapshot binds exactly the files staged at handoff.
+      const staged = canonicalTarget?.attachments ?? pendingAttachments;
+      const documentBundle = grounded
         ? { entries: [] as readonly ConversationDocumentContextWire[], disclosures: [] }
-        : await buildDocumentContext();
-      const attachments: readonly ConversationAttachmentDescriptorWire[] = skipSupplementalContext
+        : await buildDocumentContext(staged);
+      const attachments: readonly ConversationAttachmentDescriptorWire[] = grounded
         ? []
-        : buildAttachmentDescriptors();
+        : buildAttachmentDescriptors(staged);
+      const consumedAttachmentIds = grounded ? [] : staged.map((attachment) => attachment.id);
       const memory = canonicalTarget?.memory ?? buildMemoryRequest(chat, request.project);
       if (grounded) {
+        // A typed send in this state is rejected before admission (resolveSendMessageAdmission), so
+        // only a spoken turn can reach here with files staged. A settled final transcript must never
+        // be discarded (ADR-0154 D1), so the turn proceeds on the grounded route and the SAME notice
+        // states that the staged attachments were not part of it. Unconditional on purpose: whichever
+        // caller arrives here with staged files, the user is told rather than silently ignored.
+        if (staged.length > 0) setError(GROUNDED_ATTACHMENT_NOTICE);
         const terminal = await sendGrounded(
           chat,
           request.content,
@@ -2848,7 +3064,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           memory,
           request.clientTurnId,
         );
-        return { terminal, disclosures: documentBundle.disclosures };
+        return { terminal, disclosures: documentBundle.disclosures, consumedAttachmentIds };
       }
       const ungroundedRequest: UngroundedSendRequest = {
         chat,
@@ -2865,12 +3081,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       const terminal = request.forceBuffered
         ? await sendUngroundedBuffered(ungroundedRequest)
         : await sendUngrounded(ungroundedRequest);
-      return { terminal, disclosures: documentBundle.disclosures };
+      return { terminal, disclosures: documentBundle.disclosures, consumedAttachmentIds };
     },
     [
       buildAttachmentDescriptors,
       buildDocumentContext,
       buildMemoryRequest,
+      pendingAttachments,
       sendGrounded,
       sendUngrounded,
       sendUngroundedBuffered,
@@ -2916,26 +3133,33 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     [reconcileCanonicalUserPersistence],
   );
 
+  // #2843 — a spoken turn settles here too. It used to return early for a canonical target, which
+  // left the staged chips claiming to be unsent and left `lastSentDocuments` holding the PREVIOUS
+  // turn's disclosure list, so a "documents included as context" note could sit on screen next to a
+  // spoken answer that carried different documents (or none). Typed and spoken turns now settle
+  // identically here; only the visible chat's own latest settled turn may rewrite the disclosure note.
   const presentCompletedSend = useCallback(
     (input: {
       readonly settled: SendAttemptOutcome;
-      readonly canonicalTarget: CanonicalVoiceSendTarget | undefined;
       readonly chatId: string;
       readonly signal: AbortSignal;
       readonly disclosures: readonly SentDocumentDisclosure[];
+      readonly consumedAttachmentIds: readonly string[];
     }): void => {
-      if (input.settled.status !== "completed" || input.canonicalTarget !== undefined) return;
+      if (input.settled.status !== "completed" || !mountedRef.current) return;
+      // The consumed files are on the wire, so they are released whichever chat is visible now:
+      // leaving a chip staged after its turn sent it claims the opposite and would re-send the same
+      // document on the next turn. Only the disclosure note is chat- and supersession-scoped.
+      releasePendingAttachments(input.consumedAttachmentIds);
       if (
-        !mountedRef.current ||
         activeChatIdRef.current !== input.chatId ||
         latestSendSignalRef.current !== input.signal
       ) {
         return;
       }
-      clearPendingAttachments();
       setLastSentDocuments(input.disclosures);
     },
-    [clearPendingAttachments],
+    [releasePendingAttachments],
   );
 
   // Issue #152 — unified cancel that aborts any in-flight send (grounded OR
@@ -2943,14 +3167,34 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // request is in flight this is a safe no-op. We flip sendStatus to
   // "cancelled" immediately so the UI re-renders out of the in-flight state
   // even before the fetch rejection reaches the awaited site.
-  const cancelSend = useCallback(() => {
-    if (!isInFlight(sendStatusRef.current)) return;
-    sendControllerRef.current?.abort();
+  const releaseCancelledSendController = useCallback((): void => {
     sendControllerRef.current = null;
     sendControllerOwnerRef.current = null;
     setRegeneratingMessageId(undefined);
     updateSendStatus("cancelled");
   }, [updateSendStatus]);
+
+  const cancelSend = useCallback(() => {
+    if (!isInFlight(sendStatusRef.current)) return;
+    sendControllerRef.current?.abort();
+    releaseCancelledSendController();
+  }, [releaseCancelledSendController]);
+
+  // ADR-0154 D4 barge-in. Unlike cancelSend (the visible stop control, which cancels whatever the
+  // user can see in flight) this is scoped by send owner exactly like openChat's abort: a typed
+  // composer send belongs to a different intent and must survive. The interrupted signal is recorded
+  // first so the attempt reports a terminal cancellation and the Chat-owned queue advances instead
+  // of re-sending an answer whose dialog generation has already been retired (#2842).
+  const interruptCanonicalVoiceDelivery = useCallback((): void => {
+    if (!isInFlight(sendStatusRef.current)) return;
+    if (sendControllerOwnerRef.current !== "canonical-voice") return;
+    const controller = sendControllerRef.current;
+    if (controller !== null) {
+      interruptedSendSignalRef.current = controller.signal;
+      controller.abort();
+    }
+    releaseCancelledSendController();
+  }, [releaseCancelledSendController]);
 
   // Issue #185 → #152: cancelGrounded is preserved as a thin alias so existing
   // call sites (ChatWindow.tsx grounded TypingBubble) keep working. New code
@@ -3005,7 +3249,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       latestSendSignalRef.current = controller.signal;
       setLatestMemory(undefined);
       try {
-        const { terminal, disclosures } = await executeSendAttempt({
+        const { terminal, disclosures, consumedAttachmentIds } = await executeSendAttempt({
           chat,
           project,
           content,
@@ -3031,12 +3275,18 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         updateOwnedSendStatus(controller.signal, settled.status);
         presentCompletedSend({
           settled,
-          canonicalTarget,
           chatId: chat.id,
           signal: controller.signal,
           disclosures,
+          consumedAttachmentIds,
         });
-        return settledSendMessageOutcome({ settled, terminal, persistence, canonicalTarget });
+        return settledSendMessageOutcome({
+          settled,
+          terminal,
+          persistence,
+          canonicalTarget,
+          interrupted: interruptedSendSignalRef.current === controller.signal,
+        });
       } finally {
         if (sendControllerRef.current === controller) {
           sendControllerRef.current = null;
@@ -3044,6 +3294,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         }
         if (latestSendSignalRef.current === controller.signal) {
           latestSendSignalRef.current = null;
+        }
+        if (interruptedSendSignalRef.current === controller.signal) {
+          interruptedSendSignalRef.current = null;
         }
       }
     },
@@ -3075,15 +3328,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   const cacheSettledCanonicalVoiceDelivery = useCallback(
     (item: CanonicalVoiceQueueItem, outcome: SendMessageOutcome): void => {
-      canonicalVoiceSettledRef.current.set(item.key, {
-        contentDigest: item.contentDigest,
-        outcome,
-      });
-      if (canonicalVoiceSettledRef.current.size <= CANONICAL_VOICE_QUEUE_MAX_ITEMS * 2) return;
-      const oldestKey = canonicalVoiceSettledRef.current.keys().next().value as string | undefined;
-      if (oldestKey !== undefined) canonicalVoiceSettledRef.current.delete(oldestKey);
+      cacheCanonicalVoiceSettledDelivery(item.key, { contentDigest: item.contentDigest, outcome });
     },
-    [canonicalVoiceSettledRef],
+    [],
   );
 
   const requestQueuedCanonicalVoiceDelivery = useCallback(
@@ -3127,7 +3374,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     ): boolean => {
       if (delivery === undefined) return false;
       if (delivery.kind === "suspended") {
-        setCanonicalVoicePageOutboxSuspended(true);
+        setCanonicalVoicePageOutboxSuspended(item.target.chat.id);
         return false;
       }
       if (delivery.kind === "aborted") {
@@ -3163,7 +3410,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     if (
       loading ||
       canonicalVoicePageOutbox.drainingOwner !== undefined ||
-      canonicalVoicePageOutbox.suspended
+      canonicalVoicePageOutboxSuspended()
     )
       return;
     canonicalVoicePageOutbox.drainingOwner = owner;
@@ -3183,7 +3430,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       if (canonicalVoicePageOutbox.drainingOwner === owner) {
         canonicalVoicePageOutbox.drainingOwner = undefined;
       }
-      if (canonicalVoiceQueueRef.current.length > 0 && !canonicalVoicePageOutbox.suspended) {
+      if (canonicalVoiceQueueRef.current.length > 0 && !canonicalVoicePageOutboxSuspended()) {
         wakeCanonicalVoicePageOutbox();
       }
     }
@@ -3199,13 +3446,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   };
 
   useEffect(() => {
-    const observeSuspension = (suspended: boolean): void => {
-      setCanonicalVoiceOutboxSuspended(suspended);
+    const observeStatus = (status: CanonicalVoiceOutboxStatus): void => {
+      setCanonicalVoiceOutboxStatus(status);
     };
-    canonicalVoicePageOutbox.suspensionSubscribers.add(observeSuspension);
-    observeSuspension(canonicalVoicePageOutbox.suspended);
+    canonicalVoicePageOutbox.statusSubscribers.add(observeStatus);
+    observeStatus(canonicalVoicePageOutbox.status);
     return () => {
-      canonicalVoicePageOutbox.suspensionSubscribers.delete(observeSuspension);
+      canonicalVoicePageOutbox.statusSubscribers.delete(observeStatus);
     };
   }, []);
 
@@ -3214,7 +3461,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     const wake = (): void => {
       if (
         canonicalVoiceQueueControllerRef.current.signal.aborted ||
-        canonicalVoicePageOutbox.suspended
+        canonicalVoicePageOutboxSuspended()
       )
         return;
       drainCanonicalVoiceQueueRef.current();
@@ -3299,7 +3546,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         content,
         contentDigest,
         clientTurnId,
-        target: { chat, project, modelId, memory: buildMemoryRequest(chat, project, "voice") },
+        target: {
+          chat,
+          project,
+          modelId,
+          memory: buildMemoryRequest(chat, project, "voice"),
+          // #2843 — snapshot the staged attachments with the rest of the immutable target so the
+          // spoken turn carries the files the user had staged when the transcript settled, not
+          // whatever the composer happens to hold whenever the FIFO drains.
+          attachments: pendingAttachmentsRef.current,
+        },
         optimistic,
         byteLength,
         promise,
@@ -3324,7 +3580,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           ? previous
           : { ...previous, messages: [...previous.messages, optimistic] },
       );
-      if (!canonicalVoicePageOutbox.suspended) void drainCanonicalVoiceQueue();
+      if (!canonicalVoicePageOutboxSuspended()) void drainCanonicalVoiceQueue();
       return promise;
     },
     [
@@ -3339,17 +3595,39 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   );
 
   const retryPendingCanonicalVoiceTurn = useCallback((): void => {
-    if (!canonicalVoicePageOutbox.suspended || canonicalVoiceQueueRef.current.length === 0) return;
+    if (!canonicalVoicePageOutboxSuspended() || canonicalVoiceQueueRef.current.length === 0) return;
     setError(undefined);
-    setCanonicalVoicePageOutboxSuspended(false);
+    setCanonicalVoicePageOutboxSuspended(undefined);
     void drainCanonicalVoiceQueue();
   }, [canonicalVoiceQueueRef, drainCanonicalVoiceQueue]);
+
+  const discardPendingCanonicalVoiceTurn = useCallback((): void => {
+    const chatId = activeChatIdRef.current;
+    if (chatId === undefined) return;
+    const { discarded, ownedActiveDelivery } = discardCanonicalVoicePageOutboxChat(chatId);
+    if (!discarded) return;
+    // Reached only when the discard took the turn whose request is on the wire (the wedged case has
+    // no delivery in flight). Scoped to that turn: the interrupt is a no-op unless Voice still owns
+    // the send, so a typed composer send is never touched.
+    if (ownedActiveDelivery) interruptCanonicalVoiceDelivery();
+    setError(undefined);
+    // A head-of-line wedge in another chat leaves the outbox suspended and this drain returns
+    // immediately; otherwise the queue resumes with the remaining turns.
+    void drainCanonicalVoiceQueue();
+  }, [drainCanonicalVoiceQueue, interruptCanonicalVoiceDelivery]);
 
   const canonicalVoiceCaptureMustPause = useCallback((): boolean => {
     return canonicalVoiceQueueRef.current.length >= CANONICAL_VOICE_QUEUE_REGULAR_MAX_ITEMS;
   }, [canonicalVoiceQueueRef]);
 
-  const canonicalVoiceTurnRequiresRetry = canonicalVoiceOutboxSuspended;
+  // #2842 — the outbox suspends page-wide because its FIFO is page-wide, but the composer gate is
+  // per chat: only a conversation that still owns a queued spoken turn is asked to retry or discard.
+  // Every other chat keeps a live composer. The status object's revision is what makes a membership
+  // change (an enqueue here, a discard elsewhere) publish a fresh identity and re-derive this gate.
+  const canonicalVoiceTurnRequiresRetry =
+    canonicalVoiceOutboxStatus.suspendedChatId !== undefined &&
+    state.activeChat !== undefined &&
+    canonicalVoicePageOutboxHasPendingTurn(state.activeChat.id);
 
   const regenerateMessage = useCallback(
     async (assistantMessageId: string): Promise<void> => {
@@ -3479,6 +3757,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       canonicalVoiceCaptureMustPause,
       canonicalVoiceTurnRequiresRetry,
       retryPendingCanonicalVoiceTurn,
+      discardPendingCanonicalVoiceTurn,
+      interruptCanonicalVoiceDelivery,
       regenerateMessage,
       cancelSend,
       replaceChat,
@@ -3526,6 +3806,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       canonicalVoiceCaptureMustPause,
       canonicalVoiceTurnRequiresRetry,
       retryPendingCanonicalVoiceTurn,
+      discardPendingCanonicalVoiceTurn,
+      interruptCanonicalVoiceDelivery,
       regenerateMessage,
       cancelSend,
       replaceChat,

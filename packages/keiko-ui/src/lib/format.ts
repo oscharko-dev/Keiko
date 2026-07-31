@@ -160,6 +160,20 @@ export function formatDate(value: number | string): string {
 }
 
 /**
+ * Convert an epoch-ms/ISO value to an ISO-8601 string, or `undefined` when it does not resolve to
+ * a valid date. Unlike `toLocaleString` (formatDate) and manual UTC getters (toDateString) above —
+ * neither of which throws on an Invalid Date — `Date#toISOString` throws `RangeError: Invalid time
+ * value`. F3/F4: an unvalidated persisted/wire timestamp (a connector's `createdAt`, an indexing
+ * job's `startedAt`/`finishedAt`) fed straight into `.toISOString()` crashed the render with no
+ * error boundary above either route. Any render path that needs an ISO string from such a value
+ * must go through this guard instead of calling `.toISOString()` directly.
+ */
+export function toSafeIsoString(value: number | string): string | undefined {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+/**
  * Derive the UTC YYYY-MM-DD string from an epoch-ms timestamp or ISO string.
  * Used by the evidence date filter to compare against the date-input value.
  * UTC is used because the audit layer stores epoch-ms without a timezone offset

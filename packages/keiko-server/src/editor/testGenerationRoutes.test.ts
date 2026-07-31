@@ -16,9 +16,13 @@ import {
   type EditorAgentSessionSnapshot,
   type EditorTestGenerationWireResponse,
   type EvidenceStore,
+  type GatewayVerificationState,
 } from "@oscharko-dev/keiko-contracts";
+import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import { probeVerifiedGatewayConfig } from "../_support.js";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { UiStore } from "../store/index.js";
 import {
   handleEditorTestGeneration,
@@ -58,21 +62,61 @@ function rawPostContext(body: string): RouteContext {
   };
 }
 
+// A configured, credentialed chat gateway. The generation runner is injected in every test, so the
+// config exists only to make the deployment the AI-assist projection sees a real one (F-01).
+function chatGatewayConfig(): GatewayConfig {
+  return {
+    providers: [{ modelId: "test-generation-model", baseUrl: "http://localhost", apiKey: "x" }],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 1_000, halfOpenProbes: 1 },
+    capabilities: [],
+  } as unknown as GatewayConfig;
+}
+
+// F-01: test generation is admitted only while AI-assist activation is active, and activation now
+// requires a probe-confirmed gateway rather than a configured one. This suite is about the generation
+// and verification seam behind that gate, so it runs against a gateway whose last readiness probe
+// passed; the gate itself is pinned in editor/aiAssistActivation.test.ts.
 function deps(
   input: {
     env?: Record<string, string | undefined>;
     evidenceStore?: EvidenceStore;
     aiSettings?: Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> | undefined;
+    gatewayVerification?: GatewayVerificationState;
+    diagnostics?: ServerDiagnosticSink | undefined;
   } = {},
 ): UiHandlerDeps {
   const aiSettings = input.aiSettings ?? { testGeneration: true };
+  const config = chatGatewayConfig();
+  const gatewayConfig = probeVerifiedGatewayConfig(config);
+  if (input.gatewayVerification !== undefined) {
+    gatewayConfig.recordVerification(input.gatewayVerification);
+  }
   return {
     store,
     redactor: buildRedactor(input.env ?? {}, undefined),
     evidenceStore: input.evidenceStore ?? createInMemoryEvidenceStore(),
     env: input.env ?? {},
     editorSettingsControl: editorSettingsControl(aiSettings),
+    config,
+    gatewayConfig,
+    ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
   } as unknown as UiHandlerDeps;
+}
+
+// Capturing operator-diagnostic sink (never the default stderr sink) for the observability pin below.
+function capturingDiagnostics(): {
+  readonly sink: ServerDiagnosticSink;
+  readonly records: ServerDiagnosticRecord[];
+} {
+  const records: ServerDiagnosticRecord[] = [];
+  return {
+    records,
+    sink: {
+      record: (entry: ServerDiagnosticRecord): void => {
+        records.push(entry);
+      },
+    },
+  };
 }
 
 function editorSettingsSnapshot(
@@ -332,6 +376,22 @@ describe("POST /api/editor/test-generation — switched off (v1 default)", () =>
     expect(response.context).toBeUndefined();
     expect(response.patch).toBeUndefined();
   });
+
+  // F-01: opting in and enabling the flag are operator decisions; neither is evidence that the
+  // gateway answers. A failed readiness probe therefore keeps the feature disabled, and an
+  // unprobed gateway does too — the projection reports PROVIDER_UNVERIFIED rather than active.
+  it("stays disabled when the gateway has no passing probe outcome", async () => {
+    for (const gatewayVerification of ["failed", "unverified"] as const) {
+      const result = await handleEditorTestGeneration(
+        postContext(fileBody()),
+        deps({ env: ENABLED, gatewayVerification }),
+      );
+      expect(result.status).toBe(200);
+      const response = wire(result);
+      expect(response.status).toBe("disabled");
+      expect(response.patch).toBeUndefined();
+    }
+  });
 });
 
 describe("POST /api/editor/test-generation — enabled, egress not enforced (deferred)", () => {
@@ -481,5 +541,37 @@ describe("POST /api/editor/test-generation — execution enabled (wave-2 seam)",
     const body = wire(result);
     expect(body.status).toBe("failed");
     expect(JSON.stringify(body)).not.toContain("/secret/path");
+  });
+
+  // 0.3.0 audit: `failed` is also what an unproducible candidate yields, so a swallowed runner error
+  // left an operator with no way to tell an outage from a decline. The wire body stays content-free;
+  // only the redacted cause is added.
+  it("emits a redacted, correlation-keyed diagnostic when the runner throws", async () => {
+    const captured = capturingDiagnostics();
+    const ctx: RouteContext = {
+      ...postContext(fileBody()),
+      correlationId: "testgen-correlation-0001",
+    };
+    const result = await handleEditorTestGeneration(
+      ctx,
+      deps({ env: EXECUTION, diagnostics: captured.sink }),
+      execOptions(() =>
+        Promise.reject(
+          Object.assign(new Error("/secret/path leaked sk-ABCDEFGHIJKLMNOPQRSTUV"), {
+            code: "RUNNER_UNAVAILABLE",
+          }),
+        ),
+      ),
+    );
+
+    expect(wire(result).status).toBe("failed");
+    expect(captured.records).toHaveLength(1);
+    const record = captured.records[0];
+    expect(record?.correlationId).toBe("testgen-correlation-0001");
+    expect(record?.operation).toBe("editor.testGeneration");
+    expect(record?.source).toBe("editor.testGenerationRoutes");
+    expect(record?.code).toBe("RUNNER_UNAVAILABLE");
+    expect(JSON.stringify(record)).not.toContain("/secret/path");
+    expect(JSON.stringify(record)).not.toContain("sk-ABCDEFGHIJKLMNOPQRSTUV");
   });
 });

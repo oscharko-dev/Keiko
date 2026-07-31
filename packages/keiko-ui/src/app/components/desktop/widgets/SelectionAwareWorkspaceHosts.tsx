@@ -10,8 +10,9 @@ import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 
 import { useChatSessionContext } from "../context/ChatSessionContext";
 import type { ChatSessionApi } from "../hooks/useChatSession";
-import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
+import { useWorkspaceManifest, type WorkspaceManifestView } from "../hooks/useWorkspaceManifest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
+import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
 import {
   ManagedTaskWorkspaceUnavailable,
@@ -51,6 +52,24 @@ const FilesWidget = dynamic(() => import("./cards/FilesWidget").then((mod) => mo
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const value = cfg[key];
   return typeof value === "string" ? value : undefined;
+}
+
+// One predicate for "this window targets the bound managed task-workspace root and the paired
+// read authority is not confirmed" — shared by the editor AND Files hosts (release-audit F-08) so
+// the two surfaces can never disagree about when the managed root is presentable. The managed
+// root lives under the deny-listed state area and is readable only through a launcher-paired app
+// session (ADR-0141); when authority is missing the host renders the paired-session note instead
+// of the raw denials.
+function managedTaskWorkspaceAccess(
+  ctx: WindowRenderContext,
+  targetRoot: string | undefined,
+  workspace: Pick<WorkspaceManifestView, "pathReadAuthority">,
+): ManagedTaskWorkspaceAccess | null {
+  return ctx.activeBinding !== null &&
+    targetRoot === ctx.activeBinding.activeRoot &&
+    workspace.pathReadAuthority !== "available"
+    ? workspace.pathReadAuthority
+    : null;
 }
 
 function num(cfg: Record<string, unknown>, key: string): number | undefined {
@@ -681,16 +700,50 @@ export function ChatWindowSessionHost({
     if (target !== undefined) void openChat(target);
   }, [chatId, activeTarget?.id, chats, loading, openChat, selectionHandoffId]);
 
+  // `cfg.title` mirrors the chat record. 0.3.0 release audit — this is the ONE place a bound chat
+  // window's title changes after creation, so it also owns the structural "still untitled" marker
+  // the workspace reads instead of comparing the title against display copy. Materialising the
+  // record's title for the first time (the window was created without one) leaves the window
+  // untitled; any LATER change is a real name — an operator rename, or the server's first-turn
+  // auto-title — and clears the marker so the subtitle surfaces it.
   useEffect(() => {
     if (loading || chatId === undefined || activeTarget?.id !== chatId) return;
-    if (activeTarget.title !== title) updateCfg({ title: activeTarget.title });
+    if (activeTarget.title === title) return;
+    const materializesInitialTitle = normalizedChatTitle(title) === undefined;
+    updateCfg(
+      materializesInitialTitle
+        ? { title: activeTarget.title }
+        : { title: activeTarget.title, [CHAT_TITLE_IS_DEFAULT_CFG_KEY]: false },
+    );
   }, [activeTarget?.id, activeTarget?.title, chatId, loading, title, updateCfg]);
+
+  // 0.3.0 release audit — `chats` is the CURRENT project's list, so a window still bound to the
+  // previous project's conversation resolved nothing and was told the conversation "was deleted".
+  // It was not: the singleton chat window simply lagged behind a project switch. The two cases are
+  // distinguishable — a conversation trashed from Chat History stays in the list with status
+  // "closed", while one that belongs to another project is absent entirely — so only the absent
+  // case retargets the window onto the session's active conversation, and the honest deletion
+  // message is left to the case that can actually prove a deletion.
+  const boundChatKnownHere = chatId !== undefined && chats.some((chat) => chat.id === chatId);
+  const retargetChat =
+    chatId !== undefined &&
+    !boundChatKnownHere &&
+    activeTarget !== undefined &&
+    activeTarget.id !== chatId
+      ? activeTarget
+      : undefined;
+
+  useEffect((): void => {
+    if (loading || selectionHandoffId !== undefined || retargetChat === undefined) return;
+    updateCfg({ chatId: retargetChat.id, title: retargetChat.title });
+  }, [loading, retargetChat, selectionHandoffId, updateCfg]);
 
   const targetMissing =
     selectionHandoffId === undefined &&
     chatId !== undefined &&
     !session.loading &&
     activeTarget?.id !== chatId &&
+    retargetChat === undefined &&
     !session.chats.some((chat) => chat.id === chatId && chat.status !== "closed");
   const waitingForTarget =
     session.loading ||
@@ -848,12 +901,7 @@ export function EditorWindowSessionHost({
     updateCfg: ctx.updateCfg,
   });
   const effectiveRoot = root ?? configuredRoot;
-  const managedAccess: ManagedTaskWorkspaceAccess | null =
-    ctx.activeBinding !== null &&
-    effectiveRoot === ctx.activeBinding.activeRoot &&
-    workspace.pathReadAuthority !== "available"
-      ? workspace.pathReadAuthority
-      : null;
+  const managedAccess = managedTaskWorkspaceAccess(ctx, effectiveRoot, workspace);
   const buildBaseProps = useCallback(
     (targetRoot: string): EditorSessionBaseProps => ({
       ...editorSessionBaseProps(targetRoot, cfg, ctx),
@@ -1016,6 +1064,20 @@ export function FilesWindowSessionHost({
 }): ReactNode {
   const t = useTranslate();
   const workspace = useWorkspaceManifest(root);
+  // Release-audit F-08: the bound managed task-workspace root is readable only through a
+  // launcher-paired app session (ADR-0141). Without this gate — the same one the editor host
+  // applies — an unpaired window rendered the raw denials ("Git unavailable", "The requested path
+  // is excluded from the read surface.") instead of naming the real, actionable condition. The
+  // deny list and the server's content-free deny reason stay untouched; this only presents them.
+  const managedAccess = managedTaskWorkspaceAccess(ctx, root, workspace);
+  if (managedAccess !== null) {
+    return (
+      <ManagedTaskWorkspaceUnavailable
+        access={managedAccess}
+        onRetry={() => void workspace.refresh()}
+      />
+    );
+  }
   const onActiveFileChange = (
     path: string | null,
     resolvedRoot: string | null,

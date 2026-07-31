@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
 import { parseGatewayConfig, type ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { RuntimeGatewayConfig, UiHandlerDeps } from "../../deps.js";
@@ -192,6 +193,9 @@ describe("QI model-policy routes", () => {
         currentConfig = nextConfig;
         configPresent = nextPresent;
       },
+      generation: () => 0,
+      verification: () => UNVERIFIED_GATEWAY,
+      recordVerification: () => undefined,
     };
     const deps: UiHandlerDeps = {
       ...initialDeps,

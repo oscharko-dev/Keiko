@@ -25,6 +25,7 @@ import type {
   CodingWorkbenchSidecarGatewayResult,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  isGatewayVerificationState,
   validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexSubscriptionProfile,
 } from "@oscharko-dev/keiko-contracts";
@@ -119,6 +120,12 @@ function validateSidecarGatewayProfileResponse(
   }
   if (typeof value.supportsToolCalling !== "boolean") {
     reasons.push("supportsToolCalling must be boolean");
+  }
+  // F-01: fail closed on the probe outcome. An absent or unrecognized value is rejected rather than
+  // defaulted, because the only safe default a validator could pick is "unverified" — and silently
+  // substituting it would hide a BFF that stopped reporting verification at all.
+  if (!isGatewayVerificationState(value.verification)) {
+    reasons.push("verification must be a gateway verification state");
   }
   validateSidecarRunMetadata(value.runMetadata, reasons);
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };

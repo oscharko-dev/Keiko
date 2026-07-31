@@ -5,6 +5,18 @@
 //       blockers), the eligible merge strategies (policy ∩ provider capability — never a hard-coded UI
 //       default), the recommendation, the effective policy decision, and whether final approval is
 //       required. Never mutates, never records evidence.
+//   * POST /api/git-delivery/merge/approve  — Mints the server-issued approval claim the default
+//       approval-gated merge policy pack (KEIKO_DEFAULT_MERGE_POLICY_PACK) requires before execute may
+//       proceed. Before this route existed, no HTTP path anywhere could produce a
+//       GitDeliveryApprovalClaim: `GitDeliveryApprovalStore.issue()` was called only from unit tests,
+//       so a merge gated by the default pack was unreachable from any UI surface by construction — the
+//       final-approval checkbox in GovernedMergeCard confirmed nothing the server could verify. This
+//       route rebuilds the EXACT typed GitMergeCommand the execute route would build from the identical
+//       request body (the shared `validate()` below) and binds the mint to it, so the claim this
+//       returns is redeemable by execute for that exact target only (same binding-hash rule consume()
+//       already enforced). Attributed to the fixed local-operator principal: this product is
+//       loopback-bound and single-user (ADR-0129/AGENTS.md §1), so there is no separate authenticated
+//       end user to attribute the mint to beyond the one human at the keyboard.
 //   * POST /api/git-delivery/merge/execute  — Governed. Drives the #478 merge gateway end-to-end through
 //       executeGovernedMerge (preflight + policy + final-approval + the readiness gate + the dedicated
 //       `gh api` merge adapter) and appends content-free evidence for the allowed AND blocked outcome
@@ -14,11 +26,14 @@
 // Content-free in evidence: only the merge inputs (PR number, strategy, delete flag) and outcome enter the
 // ledger. CSRF + JSON content type are enforced centrally by server.ts.
 
+import type { GitDeliveryApprovalClaim } from "@oscharko-dev/keiko-contracts";
 import { isGitDeliveryMergeStrategyHint } from "@oscharko-dev/keiko-contracts";
 import type { GitMergeCommand } from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
+  DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
+  GIT_DELIVERY_LOCAL_OPERATOR_ID,
   parseGitDeliveryApprovalRequest,
   resolveGitDeliveryApprovalRequirement,
   type ParsedGitDeliveryApprovalRequest,
@@ -198,6 +213,40 @@ export const createHandleMergePreview = (
   };
 };
 
+// ─── Approve handler (mints the server-issued approval claim execute consumes) ────────────────────
+
+export interface GitDeliveryMergeApproveResponseBody {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
+}
+
+export const createHandleMergeApprove = (
+  options: GitDeliveryMergeRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  const seams = options.execution ?? {};
+  return async (ctx, deps): Promise<RouteResult> => {
+    // Reuses the IDENTICAL `validate()` the preview/execute handlers use, so the GitMergeCommand this
+    // mints against is byte-for-byte the same typed value execute will rebuild from the same request
+    // body — the binding-hash consume() already enforces then matches by construction.
+    const prepared = await prepareGitDeliveryRequest(ctx, deps, MERGE_REQUEST_ERRORS, validate);
+    if (!prepared.ok) return prepared.result;
+    const { projectId, command } = prepared.value;
+    const store = seams.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;
+    const issued = store.issue({
+      binding: { projectId, operation: "merge", command },
+      approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
+      nowMs: (seams.now ?? Date.now)(),
+    });
+    const body: GitDeliveryMergeApproveResponseBody = {
+      schemaVersion: "1",
+      approval: issued.approval,
+      expiresAt: new Date(issued.expiresAtMs).toISOString(),
+    };
+    return { status: 200, body: deps.redactor(body) };
+  };
+};
+
 // ─── Execute handler (governed) ───────────────────────────────────────────────────────────────
 
 export const createHandleMergeExecute = (
@@ -235,6 +284,11 @@ export const createGitDeliveryMergeRouteGroup = (
     method: "POST",
     pattern: "/api/git-delivery/merge/preview",
     handler: createHandleMergePreview(options),
+  },
+  {
+    method: "POST",
+    pattern: "/api/git-delivery/merge/approve",
+    handler: createHandleMergeApprove(options),
   },
   {
     method: "POST",

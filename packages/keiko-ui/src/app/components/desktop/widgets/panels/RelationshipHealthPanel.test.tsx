@@ -138,6 +138,94 @@ describe("RelationshipHealthPanel", () => {
     ).toHaveLength(50);
   });
 
+  // A bounded scan cannot certify a clean graph: the categories it never finished reading may
+  // hold every defect there is. The panel used to render "Healthy — No relationship-graph
+  // defects were found" from exactly that scan, with the truncation flags it was handed set.
+  it("reports a truncated zero-finding scan as inconclusive, not healthy", async () => {
+    mockGetHealth.mockResolvedValue({
+      checkedAt: 1_700_000_000_000,
+      totals: { ...ZERO_TOTALS, active: 2 },
+      truncated: true,
+      findings: { ...emptyFindings(), cycleScanTruncated: true },
+    });
+    render(<RelationshipHealthPanel onSelectRelationship={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("health-inconclusive")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Healthy")).toBeNull();
+    expect(screen.queryByText(/No relationship-graph defects were found/i)).toBeNull();
+    // The inconclusive state must name which categories were left bounded.
+    expect(screen.getByTestId("health-inconclusive").textContent).toMatch(/cycle participants/i);
+  });
+
+  it("still reports a clean bill of health when nothing was truncated", async () => {
+    mockGetHealth.mockResolvedValue({
+      checkedAt: 1_700_000_000_000,
+      totals: { ...ZERO_TOTALS, active: 2 },
+      truncated: false,
+      findings: emptyFindings(),
+    });
+    render(<RelationshipHealthPanel onSelectRelationship={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByText("Healthy")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("health-inconclusive")).toBeNull();
+  });
+
+  it("renders a truncated category count as a lower bound, not an exact figure", async () => {
+    mockGetHealth.mockResolvedValue({
+      checkedAt: 1_700_000_000_000,
+      totals: { ...ZERO_TOTALS, blocked: 1 },
+      truncated: true,
+      findings: {
+        ...emptyFindings(),
+        blockedRelationships: [relRef("rel-blocked-1")],
+        blockedRelationshipsTruncated: true,
+      },
+    });
+    render(<RelationshipHealthPanel onSelectRelationship={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByRole("region", { name: /Blocked \(at least 1\)/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("region", { name: /^Blocked \(1\)$/ })).toBeNull();
+    // The whole-scan note states that every count below is a lower bound.
+    expect(screen.getByTestId("health-partial-note")).toBeInTheDocument();
+  });
+
+  it("discloses a truncated category that returned no items at all", async () => {
+    mockGetHealth.mockResolvedValue({
+      checkedAt: 1_700_000_000_000,
+      totals: { ...ZERO_TOTALS, blocked: 1 },
+      truncated: true,
+      findings: {
+        ...emptyFindings(),
+        blockedRelationships: [relRef("rel-blocked-1")],
+        invalidReferencesTruncated: true,
+        orphanedEndpointsTruncated: true,
+      },
+    });
+    render(<RelationshipHealthPanel onSelectRelationship={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /Invalid references/i })).toBeInTheDocument();
+    });
+    expect(screen.getByRole("heading", { name: /Orphaned endpoints/i })).toBeInTheDocument();
+    expect(screen.getAllByTestId("health-category-bounded-empty")).toHaveLength(2);
+  });
+
+  it("labels the totals as installation-wide rather than project-scoped", async () => {
+    mockGetHealth.mockResolvedValue({
+      checkedAt: 1_700_000_000_000,
+      totals: { ...ZERO_TOTALS, active: 3 },
+      truncated: false,
+      findings: emptyFindings(),
+    });
+    render(<RelationshipHealthPanel onSelectRelationship={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("health-scope-note")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("health-scope-note").textContent).toMatch(/installation/i);
+  });
+
   it("shows an alert with retry when the health check fails", async () => {
     mockGetHealth.mockRejectedValue(
       new RelationshipApiError("relationship/health-failed", "health check failed", 500),

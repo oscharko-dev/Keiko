@@ -68,28 +68,53 @@ interface RouterState {
   instances: readonly WorkspaceInstance[];
 }
 
-// Content-free healthy reconciliation report for the routed active workspace (F-09b: every
-// restored active binding is re-verified through this pass before any surface may claim it).
-function healthyReport(state: RouterState): unknown {
+// Content-free reconciliation report for the routed active workspace (F-09b: every active binding
+// is re-verified through this pass before any surface may claim it).
+function reconciliationReport(
+  state: RouterState,
+  status: (workspaceId: string) => string,
+): unknown {
+  const active = state.active;
   return {
     report: {
       entries:
-        state.active === null
+        active === null
           ? []
-          : [{ workspaceId: state.active.instance.workspaceId, status: "healthy" }],
+          : [
+              {
+                workspaceId: active.instance.workspaceId,
+                status: status(active.instance.workspaceId),
+              },
+            ],
     },
   };
 }
 
+function healthyReport(state: RouterState): unknown {
+  return reconciliationReport(state, () => "healthy");
+}
+
+// The reconciliation POSTs the hook issued — the observable proof that the verification pass
+// actually ran for a binding, as opposed to the pointer being claimed as-is.
+function reconciliationCount(fetchMock: ReturnType<typeof vi.fn>): number {
+  return fetchMock.mock.calls.filter((call: readonly unknown[]) => {
+    const method = (call[1] as RequestInit | undefined)?.method ?? "GET";
+    return call[0] === "/api/task-workspaces/reconciliation" && method.toUpperCase() === "POST";
+  }).length;
+}
+
 // A stateful fetch router so a switch is observable through a subsequent getActive reload.
-function installRouter(state: RouterState): ReturnType<typeof vi.fn> {
+function installRouter(
+  state: RouterState,
+  reconcileStatus: (workspaceId: string) => string = () => "healthy",
+): ReturnType<typeof vi.fn> {
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     const method = (init?.method ?? "GET").toUpperCase();
     if (url.startsWith("/api/task-workspaces/active") && method === "GET") {
       return Promise.resolve(json({ active: state.active }));
     }
     if (url === "/api/task-workspaces/reconciliation" && method === "POST") {
-      return Promise.resolve(json(healthyReport(state)));
+      return Promise.resolve(json(reconciliationReport(state, reconcileStatus)));
     }
     if (url.startsWith("/api/task-workspaces?") && method === "GET") {
       return Promise.resolve(json({ instances: state.instances }));
@@ -310,16 +335,12 @@ describe("useActiveWorkspaceState", () => {
       await act(async (): Promise<void> => {
         await result.current.refresh("/repo");
       });
-      const reconciliations = fetchMock.mock.calls.filter((call: readonly unknown[]) => {
-        const method = (call[1] as RequestInit | undefined)?.method ?? "GET";
-        return call[0] === "/api/task-workspaces/reconciliation" && method.toUpperCase() === "POST";
-      });
-      expect(reconciliations.length).toBeGreaterThanOrEqual(1);
+      expect(reconciliationCount(fetchMock)).toBeGreaterThanOrEqual(1);
       expect(result.current.activeRoot).toBe("/wt/1");
       expect(result.current.error).toBeNull();
     });
 
-    it("does not re-run the reconciliation pass on later reloads once the restore verified", async (): Promise<void> => {
+    it("does not re-run the reconciliation pass on later reloads of the same workspace", async (): Promise<void> => {
       const fetchMock = installRouter(boundState());
       const { result } = renderHook(() => useActiveWorkspaceState());
       await act(async (): Promise<void> => {
@@ -328,14 +349,76 @@ describe("useActiveWorkspaceState", () => {
       await act(async (): Promise<void> => {
         await result.current.refresh("/repo");
       });
-      // Restore-time verification is a per-session pass, not a per-reload tax: routine refreshes
-      // after a verified restore must read state without the heavy git/filesystem pass (#2841).
-      const reconciliations = fetchMock.mock.calls.filter((call: readonly unknown[]) => {
-        const method = (call[1] as RequestInit | undefined)?.method ?? "GET";
-        return call[0] === "/api/task-workspaces/reconciliation" && method.toUpperCase() === "POST";
-      });
-      expect(reconciliations).toHaveLength(1);
+      // Verification is scoped to the ACTIVE WORKSPACE IDENTITY, not to a reload: repeated
+      // refreshes of an already-verified binding must read state without the heavy
+      // git/filesystem pass (#2841).
+      expect(reconciliationCount(fetchMock)).toBe(1);
       expect(result.current.error).toBeNull();
+    });
+
+    // The counterpart of the pin above, and the reason it must not be a session-wide latch:
+    // `switchTo` routes through the very same `reload`, so a "verified once this session" flag
+    // would let every workspace activated after the first one claim its binding WITHOUT the pass.
+    // `setActiveTaskWorkspace` does not reconcile, so a newly activated pointer carries no more
+    // runtime start authority than a restored one (F-09b).
+    it("re-verifies every newly activated workspace, including a switch back", async (): Promise<void> => {
+      const first = instance("ws-1", "/wt/1");
+      const second = instance("ws-2", "/wt/2");
+      const state: RouterState = {
+        active: { instance: first, binding: binding("ws-1", "/wt/1"), pointer: {} },
+        instances: [first, second],
+      };
+      const fetchMock = installRouter(state);
+      const { result } = renderHook(() => useActiveWorkspaceState());
+      await act(async (): Promise<void> => {
+        await result.current.refresh("/repo");
+      });
+      await act(async (): Promise<void> => {
+        await result.current.refresh("/repo");
+      });
+      expect(reconciliationCount(fetchMock)).toBe(1);
+
+      await act(async (): Promise<void> => {
+        await result.current.switchTo("ws-2");
+      });
+      expect(result.current.activeRoot).toBe("/wt/2");
+      expect(reconciliationCount(fetchMock)).toBe(2);
+
+      // Switching back re-verifies rather than reusing the earlier verdict: ws-1 may have drifted
+      // while ws-2 was the bound workspace.
+      await act(async (): Promise<void> => {
+        await result.current.switchTo("ws-1");
+      });
+      expect(result.current.activeRoot).toBe("/wt/1");
+      expect(reconciliationCount(fetchMock)).toBe(3);
+      expect(result.current.error).toBeNull();
+    });
+
+    it("refuses to claim a switched-to binding the verification pass rejects", async (): Promise<void> => {
+      const first = instance("ws-1", "/wt/1");
+      const second = instance("ws-2", "/wt/2");
+      const state: RouterState = {
+        active: { instance: first, binding: binding("ws-1", "/wt/1"), pointer: {} },
+        instances: [first, second],
+      };
+      const fetchMock = installRouter(state, (workspaceId) =>
+        workspaceId === "ws-2" ? "stale-pointer" : "healthy",
+      );
+      const { result } = renderHook(() => useActiveWorkspaceState());
+      await act(async (): Promise<void> => {
+        await result.current.refresh("/repo");
+      });
+      expect(result.current.activeRoot).toBe("/wt/1");
+
+      await act(async (): Promise<void> => {
+        await result.current.switchTo("ws-2");
+      });
+      // The pass ran for the newly activated workspace and rejected it, so no surface ever claims
+      // ws-2; the previously verified binding is preserved and the failure surfaced instead.
+      expect(reconciliationCount(fetchMock)).toBe(2);
+      expect(result.current.activeInstance?.workspaceId).not.toBe("ws-2");
+      expect(result.current.activeRoot).toBe("/wt/1");
+      expect(result.current.error).toContain("re-verification");
     });
 
     it("refuses to claim a restored binding the verification pass rejected", async (): Promise<void> => {

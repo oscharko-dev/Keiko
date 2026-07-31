@@ -191,10 +191,15 @@
       "Documentation Browser"
     ],
     "settingsTabs": ["Models", "General", "Editor", "Languages", "Debugging", "Security"],
-    "registeredWindowTypes": 45,
+    "registeredWindowTypes": 44,
     "typeOrderEntries": 25,
     "paletteCards": 6,
-    "note": "handoff expected a Workspace Trust settings tab; workspaceTrust is its own window type, not a tab"
+    "note": "handoff expected a Workspace Trust settings tab; workspaceTrust is its own window type, not a tab",
+    "unreachableWindowTypes": 12,
+    "correction": "earlier entries said 45 types / 12 unreachable, then 44 / 9; both were wrong. Correct: 44 declared types (editor-settings is a Quick Access pseudo-command, not a WindowType) and 12 unreachable — 8 with no entry point at all plus 4 reachable only through the unreachable runtime window. search/problems/debug ARE reachable (keyboard- and editor-command-only); integ and keiko were missing from the earlier suspect list. Per-type evidence ships with the F-05 matrix in PR #2843 (docs/release/0.3.0-unreachable-surface-decisions.md).",
+    "unreachableNotInert": "the persistence layer restores ANY declared WindowType from localStorage and AGENTS.md section 7 treats workspace input as hostile, so an unreachable window still renders from a tampered or older persisted layout",
+    "unreachableWindowTypesDirect": 8,
+    "unreachableWindowTypesTransitive": 4
   },
   "journeys": [
     {
@@ -646,8 +651,9 @@
       {
         "id": "RG-18",
         "title": "Files header count vs Git truth",
-        "result": "FAIL-MINOR",
-        "finding": "F-12"
+        "result": "FAIL-PRE-FIX",
+        "finding": "F-12",
+        "observed": "pre-fix observation: the Files header claimed 45 changed files for a root where git and the Git window truthfully reported 8, because the header counted ignored porcelain entries. FIXED in PR #2843; the header now counts the same worktree truth, with regression tests and a clean-worktree boundary case. No post-fix live re-check was run from this session — the fix is covered by those tests."
       },
       {
         "id": "RG-19",
@@ -683,13 +689,55 @@
         "title": "Dictation with denied microphone",
         "result": "PASS",
         "observed": "honest actionable denial with Try again / Dismiss"
+      },
+      {
+        "id": "RG-25",
+        "title": "Create a Knowledge Pod",
+        "result": "PASS",
+        "observed": "honest Draft state; compatibility disclosed as unverified with lexical fallback before a source existed"
+      },
+      {
+        "id": "RG-26",
+        "title": "Connect a folder source",
+        "result": "PASS",
+        "observed": "real embedding identity reported (text-embedding-3-large, 3072d, cosine, l2, space fingerprint); Vector compatible: Compatible; precise privacy disclosure"
+      },
+      {
+        "id": "RG-27",
+        "title": "Index the pod",
+        "result": "PASS",
+        "observed": "150 documents, 4796 chunks, 4796 vectors, lifecycleState ready; Index correctly aria-disabled while no source was connected"
+      },
+      {
+        "id": "RG-28",
+        "title": "Pod offered as a chat grounding source",
+        "result": "PASS"
+      },
+      {
+        "id": "RG-29",
+        "title": "Pod-grounded question",
+        "result": "PASS",
+        "observed": "hybrid retrieval 588 vector / 124 lexical / 100 fused; 16 references, 2 citations; correct file cited"
+      },
+      {
+        "id": "RG-30",
+        "title": "Abstention on a fact absent from the evidence",
+        "result": "PASS",
+        "observed": "named the governing ADR from the pod and refused the version pin (which genuinely is not in the indexed corpus) rather than guessing"
+      },
+      {
+        "id": "RG-31",
+        "title": "Knowledge activity accounting",
+        "result": "PASS",
+        "observed": "per-pod searched/skipped/degraded/denied/unavailable/not-selected plus retrieval modes and context budget"
       }
     ],
     "newFindings": [
       {
         "id": "F-08",
         "severity": "P0",
-        "title": "Managed task workspaces created inside the security deny surface (.keiko); product denies its own workspace; git status reason 'unknown'"
+        "title": "Managed task workspaces created inside the security deny surface (.keiko); product denies its own workspace; git status reason 'unknown'",
+        "status": "server boundary unchanged by design; the UI-side residual (pairing dimension in readiness and on managed-root surfaces) is FIXED"
       },
       {
         "id": "F-09a",
@@ -709,12 +757,24 @@
       {
         "id": "F-11",
         "severity": "P1",
-        "title": "memory.salience.capture fails GATEWAY_PROVIDER_ERROR on every turn against the real gateway; memory semantic scores disabled reason no-embeddings despite configured embedding model"
+        "title": "memory.salience.capture fails GATEWAY_PROVIDER_ERROR on every turn against the real gateway; memory semantic scores disabled reason no-embeddings despite configured embedding model",
+        "status": "FIXED (named root object schema + aligned prompt)"
       },
       {
         "id": "F-12",
         "severity": "P2",
-        "title": "Files header change count (45) vs Git truth (8); disabled grounding option unexplained; coding.runtime.discover ENOENT diagnostic at every dev-lane boot"
+        "title": "Files header change count (45) vs Git truth (8); disabled grounding option unexplained; coding.runtime.discover ENOENT diagnostic at every dev-lane boot",
+        "status": "FIXED in PR #2843 (a: header counts worktree truth plus a clean-worktree boundary case; b: the disabled grounding option carries a translated hint; c: an absent portable install no longer emits an error-class diagnostic while a present-but-corrupt one still does)"
+      },
+      {
+        "id": "F-13",
+        "severity": "P2",
+        "title": "check:editor-release-evidence is not reproducible ACROSS PLATFORMS: it fails on a macOS host at clean dev with a measurement-fingerprint mismatch while the required ci context, which runs the same gate in three places, is green on that exact SHA. The committed evidence carries CI/Linux lineage and was deliberately not regenerated from macOS. Document the platform sensitivity or exclude platform-variable inputs (gzip byte counts) from the fingerprint."
+      },
+      {
+        "id": "F-14",
+        "severity": "P2",
+        "title": "Retrieval relevance scores shown to the operator are uninformative (0.02 on both citations of a correctly targeted answer) even though ranking surfaced the right document."
       }
     ],
     "fixDelegation": "F-01/F-08/F-09a/F-09b with a worktree-isolated agent (regression-test-first, full gates); F-04 investigation complete (see F-10)",
@@ -740,6 +800,119 @@
       "f08Deepened": "the narrowly-scoped managed-root allow already exists (gitRoutes resolveManagedRepositoryRequest, files.ts managed branch) but requires a live launcher-attested app session; the session registry is process-memory with 30-min idle expiry, so after restart/expiry every managed read fails closed with content-free reason 'unknown' (intentional, ADR-0141 D6). Additionally a repository located under ANY deny-listed segment (e.g. .claude/worktrees/...) cannot be bound at all - observed live.",
       "f11RootCause": "memory-salience sends response_format with a root ARRAY schema and no json_schema.name; Azure structured outputs require a named root OBJECT - every salience call 400s when supportsResponseFormat is true. 'no-embeddings' is downstream: only the salience path embeds on capture; the regex-intent path inserts without vectors.",
       "pendingHumanAction": "full paired coding run (real OpenCode execution) requires the launcher-opened paired browser window - deliberately not circumvented"
+    }
+  },
+  "deepSurfacePhase": {
+    "ledgerSection": 11,
+    "surfacesAudited": [
+      "editor",
+      "git-delivery",
+      "opencode-coding-runtime",
+      "prompt-enhancer",
+      "chat-history-and-attachments",
+      "memoriaviva",
+      "voice",
+      "shell-and-accessibility"
+    ],
+    "findingCounts": {
+      "total": 73,
+      "byArea": {
+        "gitDelivery": {
+          "total": 18,
+          "p0": 3,
+          "p1": 11,
+          "p2": 3,
+          "confirmedSound": 1
+        },
+        "openCodeRuntime": {
+          "total": 15,
+          "p0": 1,
+          "p1": 5,
+          "p2": 8,
+          "confirmedSound": 1
+        },
+        "promptEnhancer": {
+          "total": 13,
+          "p0": 2,
+          "p1": 4,
+          "p2": 4,
+          "confirmedSound": 3
+        },
+        "chatDepth": {
+          "total": 14,
+          "p0": 0,
+          "p1": 3,
+          "p2": 8,
+          "confirmedSound": 3
+        },
+        "memoriaViva": {
+          "total": 13,
+          "p0": 1,
+          "p1": 3,
+          "p2": 6,
+          "confirmedSound": 3
+        }
+      },
+      "p0Total": 7,
+      "p1Total": 26,
+      "p2Total": 29,
+      "confirmedSoundTotal": 11,
+      "note": "counts cover the five subsystem audits only; F-15 (shell reserved-chord bypass) was found separately by adversarial verification and is counted in p0TotalIncludingAdversarial"
+    },
+    "p0Summary": [
+      "git-delivery: pull request, merge and push cannot authenticate on the governed path",
+      "git-delivery: governed commit is structurally unsigned and cannot see the user git identity",
+      "git-delivery: the signed-commit requirement is enforced nowhere",
+      "opencode: state-changing routes are not bound to the authenticated app session and an unauthenticated status route publishes the challenge binding",
+      "prompt-enhancer: model-assisted output bypasses the validate stage and is reported as accepted",
+      "prompt-enhancer: the evidence manifest records a governance claim the persisted prompt text does not support",
+      "memoriaviva: mode-blind auto-maintenance accepts proposed memories in the ask-for-approval mode"
+    ],
+    "refutedWithProof": [
+      "retrieval cannot leak across unselected knowledge pods; isolation holds at every layer",
+      "voice acoustic-profile documentation drift: the referenced block is explicitly marked superseded",
+      "voice digital-twin language indication omission: mandated by the governing ADR"
+    ],
+    "fixesLandedAndPinned": [
+      "voice: spoken turns carry staged attachments and document context, snapshotted at handoff",
+      "voice: barge-in cancels only the generation voice owns; outbox suspension is chat-scoped",
+      "editor: search and replace compute coordinates on raw bytes behind an explicit read-lane boundary",
+      "editor: rename and refactor outcomes are reported truthfully; a capped changeset refuses accept",
+      "editor: language intelligence classifies and labels capped results instead of failing silently",
+      "shell: one keybinding parser plus an error boundary above the shell with a recovery action",
+      "shell: palette chord labels derive from the binding that actually dispatches",
+      "ui: german locale completed and the i18n literal gate given a baseline it can fail on",
+      "a11y: destructive confirmations trap focus; axe coverage widened with a static membership check"
+    ],
+    "p0RemediationStatus": "in progress at the time of writing; per-defect outcomes recorded in ledger section 11.4",
+    "adrDecisions": [
+      {
+        "adr": "ADR-0028",
+        "question": "is the substrate render-time throw the intended fail-closed behaviour for a PERSISTED keybinding override, or only for compile-time declarations",
+        "decision": "only for declarations; a persisted override is untrusted runtime input, refused at the single dispatch-safe projection and dropped back to the command default",
+        "basis": "ADR-0028 section 4 has no persisted-override vocabulary at all; the setting arrives later via ADR-0133 D5, and the Consequences scope the guard to a contributor shipping a collision with the build failing first",
+        "amendment": "appended to ADR-0028 section 4; the throw is not softened and the refusal is reported as a body-free commandId plus reasonCode",
+        "correctionRecorded": "ADR-0028 claims the conflict guard crashes the build at module-evaluation; the shipped hook checks a prop during render, and the real build-time enforcement is the default-table test pin"
+      }
+    ],
+    "adversarialVerification": {
+      "claimTested": "no persisted keybinding override can put a browser-reserved or colliding chord into the dispatched table",
+      "verdict": "REFUTED",
+      "holes": 2,
+      "note": "the refuted claim had been stated to the operator before verification; corrected in this document and to the operator",
+      "findingId": "F-15",
+      "severity": "P0"
+    },
+    "p0TotalIncludingAdversarial": 8,
+    "reconciliation": {
+      "method": "Every finding from the 5 subsystem briefs plus F-15 was matched individually against fix-agent final reports by an independent reconciliation pass, not recalled from memory.",
+      "handoffGapsFound": [
+        "git: a failed governed branch switch was silently swallowed (the outcome-truth fix did not extend from sync to branch-switch)",
+        "prompt-enhancer: PromptEnhancerPanel gated role=alert on requiresHumanReview instead of decision, so a rejected+requiresHumanReview:false verdict showed no warning"
+      ],
+      "renderThrowSweepFindings": 6,
+      "gapFixWorkflow": "wsdjgkacd",
+      "capabilityGapIssues": [2856, 2857, 2858, 2859, 2860, 2861, 2862, 2863]
     }
   }
 }

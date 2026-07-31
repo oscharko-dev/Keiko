@@ -22,6 +22,7 @@ import type {
   RelationshipType,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  RELATIONSHIP_QUERY_BOUNDS,
   RELATIONSHIP_SCHEMA_VERSION,
   RELATIONSHIP_SUPPORTED_OBJECT_KINDS,
 } from "@oscharko-dev/keiko-contracts";
@@ -51,14 +52,19 @@ function statement(db: DatabaseSync, sql: string): StatementSync {
 }
 
 // ─── Bounded-query caps (api-contract.md §7) ──────────────────────────────────
-export const MAX_LIST_LIMIT = 256;
-export const DEFAULT_LIST_LIMIT = 64;
-export const MAX_IMPACT_DEPTH = 3;
-export const DEFAULT_IMPACT_DEPTH = 1;
-export const MAX_IMPACT_NODES = 1024;
-export const DEFAULT_IMPACT_NODES = 256;
-export const MAX_IMPACT_RELATIONSHIPS = 2048;
-export const DEFAULT_IMPACT_RELATIONSHIPS = 512;
+// Derived from `RELATIONSHIP_QUERY_BOUNDS` in @oscharko-dev/keiko-contracts — the single
+// declaration of the accepted range, shared with the clients that build requests against it.
+// These aliases keep the store/handler call sites reading in their own vocabulary; they must
+// never restate a literal, because a UI control that restated one shipped a permanently
+// rejected query (the "Dense" density button, see the contract's own comment).
+export const MAX_LIST_LIMIT = RELATIONSHIP_QUERY_BOUNDS.listLimitMax;
+export const DEFAULT_LIST_LIMIT = RELATIONSHIP_QUERY_BOUNDS.listLimitDefault;
+export const MAX_IMPACT_DEPTH = RELATIONSHIP_QUERY_BOUNDS.impactDepthMax;
+export const DEFAULT_IMPACT_DEPTH = RELATIONSHIP_QUERY_BOUNDS.impactDepthDefault;
+export const MAX_IMPACT_NODES = RELATIONSHIP_QUERY_BOUNDS.impactNodesMax;
+export const DEFAULT_IMPACT_NODES = RELATIONSHIP_QUERY_BOUNDS.impactNodesDefault;
+export const MAX_IMPACT_RELATIONSHIPS = RELATIONSHIP_QUERY_BOUNDS.impactRelationshipsMax;
+export const DEFAULT_IMPACT_RELATIONSHIPS = RELATIONSHIP_QUERY_BOUNDS.impactRelationshipsDefault;
 export const LIFECYCLE_HISTORY_RETAIN = 32;
 // Alias used by #542 health surface — counts in every finding category are hard-capped at
 // this number. It is the same hard cap as MAX_IMPACT_RELATIONSHIPS; the alias is exported
@@ -1049,6 +1055,11 @@ interface WalkState {
   readonly maxNodes: number;
   readonly maxRelationships: number;
   truncationReason: WalkTruncation | null;
+  // Set when a single node's neighbour query hit the per-node MAX_LIST_LIMIT cap, so edges
+  // past that cap were never seen. Tracked separately from `truncationReason` because it
+  // must NOT abort the walk (the edges already fetched are still valid) — it only forbids
+  // the result from claiming completeness.
+  neighbourCapHit: boolean;
 }
 
 function nodeKey(n: { readonly kind: string; readonly id: string }): string {
@@ -1079,6 +1090,27 @@ function admitRelationship(state: WalkState, rel: StoredRelationship): boolean {
   return true;
 }
 
+/**
+ * Admit one node's neighbour edges and both of their endpoints into the walk.
+ *
+ * Returns `false` the moment a per-walk cap (`max-nodes` / `max-relationships`) refuses an
+ * admission. `state.truncationReason` already carries the reason at that point, so the caller
+ * must stop expanding the frontier entirely rather than move on to the next node — the walk is
+ * already incomplete and any further edge would be dropped by the same cap.
+ */
+function admitNeighbourhood(
+  state: WalkState,
+  neighbours: readonly StoredRelationship[],
+  nextFrontier: WalkNode[],
+): boolean {
+  for (const rel of neighbours) {
+    if (!admitRelationship(state, rel)) return false;
+    if (!admitEndpoint(state, rel.source, nextFrontier)) return false;
+    if (!admitEndpoint(state, rel.target, nextFrontier)) return false;
+  }
+  return true;
+}
+
 function expandFrontier(
   outgoingStatement: StatementSync | undefined,
   incomingStatement: StatementSync | undefined,
@@ -1088,19 +1120,18 @@ function expandFrontier(
   state: WalkState,
 ): WalkNode[] {
   const nextFrontier: WalkNode[] = [];
-  outer: for (const node of frontier) {
-    const neighbours = expandNeighbours(
+  for (const node of frontier) {
+    const { relationships: neighbours, capped } = expandNeighbours(
       outgoingStatement,
       incomingStatement,
       workspaceId,
       node,
       direction,
     );
-    for (const rel of neighbours) {
-      if (!admitRelationship(state, rel)) break outer;
-      if (!admitEndpoint(state, rel.source, nextFrontier)) break outer;
-      if (!admitEndpoint(state, rel.target, nextFrontier)) break outer;
-    }
+    // A per-node neighbour cap does NOT abort the walk (see `WalkState.neighbourCapHit`); only a
+    // refused admission does.
+    if (capped) state.neighbourCapHit = true;
+    if (!admitNeighbourhood(state, neighbours, nextFrontier)) break;
   }
   return nextFrontier;
 }
@@ -1120,6 +1151,7 @@ function seedWalkState(seed: readonly WalkNode[], options: WalkOptions): WalkSta
     maxNodes: options.maxNodes,
     maxRelationships: options.maxRelationships,
     truncationReason: null,
+    neighbourCapHit: false,
   };
   for (const s of seed) {
     if (!state.visitedNodes.has(nodeKey(s))) {
@@ -1174,28 +1206,53 @@ function runWalk(
     frontier = nextFrontier;
   }
   // depth-bounded normal completion is not a truncation per se; we only mark `max-depth`
-  // when the frontier was non-empty after the last hop (more work to do).
+  // when the frontier was non-empty after the last hop (more work to do). A neighbour-cap
+  // hit is reported first: it means edges of an ALREADY-visited node were dropped, which is
+  // the less visible loss of the two, and it is a relationship-count bound — so it maps onto
+  // the `max-relationships` member of the documented reason vocabulary (api-contract.md §4.7)
+  // rather than widening that wire enum.
   const exhaustedDepth = frontier.length > 0 && depthReached === options.maxDepth;
-  return walkResult(state, depthReached, exhaustedDepth ? "max-depth" : null);
+  return walkResult(state, depthReached, resolveWalkTruncation(state, exhaustedDepth));
 }
 
+function resolveWalkTruncation(state: WalkState, exhaustedDepth: boolean): WalkTruncation | null {
+  if (state.neighbourCapHit) return "max-relationships";
+  return exhaustedDepth ? "max-depth" : null;
+}
+
+// Per-node neighbour fetch. Each direction is bounded at MAX_LIST_LIMIT edges; the query asks
+// for one row MORE than it will use so a node whose real degree exceeds the cap is DETECTED
+// instead of silently returning a full-looking page (`capped`). Only the first MAX_LIST_LIMIT
+// rows are ever admitted to the walk, so the SQL bound still holds.
 function expandNeighbours(
   outgoingStatement: StatementSync | undefined,
   incomingStatement: StatementSync | undefined,
   workspaceId: string,
   node: { readonly kind: RelationshipObjectKind; readonly id: string },
   direction: RelationshipWalkDirection,
-): readonly StoredRelationship[] {
+): { readonly relationships: readonly StoredRelationship[]; readonly capped: boolean } {
   const out: StoredRelationship[] = [];
+  let capped = false;
   if (direction !== "incoming") {
-    const rows = outgoingStatement?.all(workspaceId, node.kind, node.id, MAX_LIST_LIMIT) as
-      RelationshipRow[] | undefined;
-    for (const row of rows ?? []) out.push(rowToRelationship(row));
+    capped = collectNeighbourPage(outgoingStatement, workspaceId, node, out) || capped;
   }
   if (direction !== "outgoing") {
-    const rows = incomingStatement?.all(workspaceId, node.kind, node.id, MAX_LIST_LIMIT) as
-      RelationshipRow[] | undefined;
-    for (const row of rows ?? []) out.push(rowToRelationship(row));
+    capped = collectNeighbourPage(incomingStatement, workspaceId, node, out) || capped;
   }
-  return out;
+  return { relationships: out, capped };
+}
+
+function collectNeighbourPage(
+  prepared: StatementSync | undefined,
+  workspaceId: string,
+  node: { readonly kind: RelationshipObjectKind; readonly id: string },
+  out: StoredRelationship[],
+): boolean {
+  const rows = (prepared?.all(workspaceId, node.kind, node.id, MAX_LIST_LIMIT + 1) ??
+    []) as unknown as RelationshipRow[];
+  const capped = rows.length > MAX_LIST_LIMIT;
+  for (const row of capped ? rows.slice(0, MAX_LIST_LIMIT) : rows) {
+    out.push(rowToRelationship(row));
+  }
+  return capped;
 }

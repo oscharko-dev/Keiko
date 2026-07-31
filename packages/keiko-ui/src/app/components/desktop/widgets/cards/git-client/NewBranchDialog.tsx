@@ -6,6 +6,8 @@ import { createPortal } from "react-dom";
 import type { GitBranchListEntry } from "@/lib/api";
 import KeikoSelect from "../../../KeikoSelect";
 import { Icons } from "../../../Icons";
+import type { GitMutationOutcome } from "./git-client-seam";
+import { MutationOutcome } from "./git-client-ui";
 import {
   INPUT_STYLE,
   PRIMARY_BTN,
@@ -21,6 +23,10 @@ interface NewBranchDialogProps {
   readonly branches: readonly GitBranchListEntry[];
   readonly currentBranch: string;
   readonly busy: boolean;
+  // The create-then-switch chain runs through the same mutation flow as a direct branch switch
+  // (GitClientWindow#createBranch): a rejected create OR a rejected switch of the newly created
+  // branch must be classified and shown here, not just a transport-level error.
+  readonly outcome: GitMutationOutcome | null;
   readonly error: string | null;
   readonly onCreate: (input: {
     readonly branchName: string;
@@ -33,6 +39,7 @@ export function NewBranchDialog({
   branches,
   currentBranch,
   busy,
+  outcome,
   error,
   onCreate,
   onClose,
@@ -162,10 +169,8 @@ export function NewBranchDialog({
         <p style={SUBTLE_TEXT_STYLE}>
           The branch starts from the selected base branch. Commit hashes stay internal.
         </p>
-        {error !== null ? (
-          <p role="alert" style={{ ...SUBTLE_TEXT_STYLE, color: "var(--feedback-danger)" }}>
-            {error}
-          </p>
+        {error !== null || (outcome !== null && outcome.status !== "succeeded") ? (
+          <MutationOutcome outcome={outcome} error={error} testid="git-branch-outcome" />
         ) : null}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--space-3)" }}>
           <button type="button" style={SECONDARY_BTN} onClick={onClose}>

@@ -16,6 +16,7 @@ import type {
 } from "./productionCodingRuntimeHost.js";
 import {
   createCodingRuntimeOrchestrator,
+  MAX_APPROVAL_CHALLENGE_TTL_MS,
   type CodingRuntimeOrchestratorResult,
 } from "./codingRuntimeOrchestrator.js";
 import { createPendingResearchApprovals } from "./researchApprovalIssuance.js";
@@ -36,7 +37,7 @@ function rowFor(
   return row;
 }
 
-function fixture(activityProjection?: CodingSafeActivityProjection) {
+function fixture(activityProjection?: CodingSafeActivityProjection, clock?: () => Date) {
   const rows = new Map<string, CodingRuntimeSnapshot>();
   const listPrunableSettled = vi.fn((): readonly string[] => []);
   const deletePruned = vi.fn();
@@ -98,6 +99,7 @@ function fixture(activityProjection?: CodingSafeActivityProjection) {
       }),
     ),
     health: vi.fn<CodingRuntimeManager["health"]>(() => ({ status: "stopped" })),
+    pendingApprovalReview: vi.fn<CodingRuntimeManager["pendingApprovalReview"]>(() => undefined),
     issueApproval: vi.fn<CodingRuntimeManager["issueApproval"]>(() => ({
       ok: true,
       approval: {} as never,
@@ -173,7 +175,7 @@ function fixture(activityProjection?: CodingSafeActivityProjection) {
     serverPrincipal: () => "server",
     researchGrants,
     pendingResearchApprovals,
-    now: () => new Date("2026-01-01T00:00:00.000Z"),
+    now: clock ?? ((): Date => new Date("2026-01-01T00:00:00.000Z")),
     newRunId: () => `run-${String(rows.size + 1)}`,
   });
   return {
@@ -561,6 +563,59 @@ describe("CodingRuntimeOrchestrator", () => {
     });
   });
 
+  it("#2802: serves the approval review only for the live, unconsumed challenge", async () => {
+    const f = fixture();
+    const review = {
+      requestId: "permission-1",
+      paths: ["src/a.ts"],
+      pathsTruncated: false,
+      fileCount: 1,
+      addedLines: 4,
+      deletedLines: 2,
+    } as const;
+    f.manager.pendingApprovalReview.mockImplementation((runId, requestId) =>
+      runId === "run-1" && requestId === "permission-1" ? review : undefined,
+    );
+    await f.orchestrator.start(start);
+    // Before the ask lands there is no decision to review, so there is nothing to project.
+    expect(f.orchestrator.pendingApprovalReview("run-1")).toBeUndefined();
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-0",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "task-submitted",
+    });
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-1",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-1",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        actionKind: "file-edit",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+
+    expect(f.orchestrator.pendingApprovalReview("run-1")).toEqual(review);
+    // A foreign run id can never read the live run's review.
+    expect(f.orchestrator.pendingApprovalReview("run-9")).toBeUndefined();
+
+    await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-1",
+      decision: "approved",
+      expectedRevision: 4,
+    });
+
+    // Once the decision is taken the run is no longer awaiting approval: the review closes with it.
+    expect(f.orchestrator.pendingApprovalReview("run-1")).toBeUndefined();
+  });
+
   it("fails closed and stops when the managed runtime cannot settle the exact permission", async () => {
     const f = fixture();
     await f.orchestrator.start(start);
@@ -685,6 +740,87 @@ describe("CodingRuntimeOrchestrator", () => {
         .runId,
     ).toBe("run-2");
     expect(f.rows.get("run-2")?.predecessorRunId).toBe("run-1");
+  });
+
+  // 0.3.0 release audit: a retry used to settle the acknowledged recovery row and clear the active
+  // slot BEFORE the fresh start was admitted. A start that never reached the ledger (the authority
+  // mint still refuses while the predecessor's process tree is unreaped) therefore left the
+  // orchestrator with no active run at all, so `snapshot()` fell back to the unbound idle
+  // projection and the workbench offered "Ready to start" for a runtime whose every start is 403.
+  it("keeps the recovery slot when a retry never reaches the ledger", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    await f.orchestrator.startupReconcile();
+    await f.orchestrator.acknowledgeRecovery("run-1", { requestId: "run-1", acknowledged: true });
+    f.launchResolver.resolve.mockImplementationOnce(() => {
+      throw new Error("active-run-conflict");
+    });
+
+    expect(await f.orchestrator.retry("run-1", { ...start, requestId: "request-2" })).toEqual({
+      ok: false,
+      failureCode: "authority-resolution-failed",
+    });
+
+    expect(f.orchestrator.snapshot()).toMatchObject({
+      runId: "run-1",
+      state: "recovery-required",
+      recoveryAcknowledged: true,
+    });
+    expect(f.rows.get("run-1")?.terminalAt).toBeUndefined();
+    expect(f.safeActivityProjection.purge).not.toHaveBeenCalledWith("run-1", "stop");
+    // The slot stays retryable: once the tree is reaped the very next retry is admitted.
+    expect(
+      successfulSnapshot(await f.orchestrator.retry("run-1", { ...start, requestId: "request-3" }))
+        .runId,
+    ).toBe("run-2");
+    expect(f.rows.get("run-1")?.terminalAt).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  // 0.3.0 release audit: `cancelled` is legal only from `starting`/`stopping`, so an ingested
+  // runtime-stopped event from a LIVE state was rejected with `invalid-intent` and produced no
+  // transition, no evidence, and no SSE frame. A dead runtime kept presenting as `running` until
+  // the separate 30-minute task-settlement wait expired.
+  it.each(["ready", "running", "awaiting-approval", "paused"] as const)(
+    "terminates a run whose runtime exits while it is %s",
+    async (state) => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      f.rows.set("run-1", { ...rowFor(f.rows, "run-1"), state });
+
+      const stopped = await f.orchestrator.ingest({
+        schemaVersion: "1",
+        eventId: "event-exit",
+        runId: "run-1",
+        occurredAt: "2026-01-01T00:00:00.000Z",
+        kind: "runtime-stopped",
+      });
+
+      expect(successfulSnapshot(stopped)).toMatchObject({
+        state: "failed",
+        failureCode: "runtime-failed",
+      });
+      expect(f.evidence.settle).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: "run-1", state: "failed", failureCode: "runtime-failed" }),
+      );
+    },
+  );
+
+  it("still cancels a run whose runtime exits during an operator-initiated stop", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    f.rows.set("run-1", { ...rowFor(f.rows, "run-1"), state: "stopping" });
+
+    expect(
+      successfulSnapshot(
+        await f.orchestrator.ingest({
+          schemaVersion: "1",
+          eventId: "event-exit-stopping",
+          runId: "run-1",
+          occurredAt: "2026-01-01T00:00:00.000Z",
+          kind: "runtime-stopped",
+        }),
+      ).state,
+    ).toBe("cancelled");
   });
 
   it("recovers startup state without replay and supports stop/takeover settlement", async () => {
@@ -1150,5 +1286,114 @@ describe("auxiliary event facts reach the SSE frame", () => {
     expect(f.eventHub.publish).toHaveBeenLastCalledWith(
       expect.not.objectContaining({ contentTrust: "untrusted" }),
     );
+  });
+});
+
+// Release-audit P0 (second half): the approval challenge lifetime arrived from the runtime CHILD as
+// `permissionRequest.expiresAt`, was accepted for any future instant, and was handed straight to the
+// authority mint as `ttlMs`. A child process must never choose its own security lifetime, so the
+// orchestrator — the trust boundary between the untrusted child event and the server-owned authority
+// — clamps it. One clamped instant feeds the challenge expiry, the operator-visible deadline, and
+// the minted TTL, so the approval card can never show a deadline the server does not enforce. The
+// expectations import the production ceiling instead of restating it.
+describe("approval challenge lifetime ceiling", () => {
+  const CHILD_REQUESTED_LIFETIME_MS = 24 * 60 * 60 * 1_000;
+
+  async function awaitingApproval(clock?: () => Date, expiresAt = "2026-01-02T00:00:00.000Z") {
+    const f = fixture(undefined, clock);
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "task",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "task-submitted",
+    });
+    const ingested = await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "permission",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-1",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        actionKind: "file-edit",
+        expiresAt,
+      },
+    });
+    return { f, ingested };
+  }
+
+  it("clamps a child-supplied lifetime in the operator-visible deadline and the minted TTL alike", async () => {
+    const { f, ingested } = await awaitingApproval();
+    const ceiling = new Date(FIXTURE_NOW_MS + MAX_APPROVAL_CHALLENGE_TTL_MS).toISOString();
+
+    expect(successfulSnapshot(ingested)).toMatchObject({
+      state: "awaiting-approval",
+      pendingPermission: { requestId: "permission-1", expiresAt: ceiling },
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.pendingPermission?.expiresAt).toBe(ceiling);
+
+    expect(
+      (
+        await f.orchestrator.decideApproval("run-1", {
+          requestId: "permission-1",
+          decision: "approved",
+          expectedRevision: 4,
+        })
+      ).ok,
+    ).toBe(true);
+    expect(f.approvalAuthority.issue).toHaveBeenCalledWith(
+      expect.objectContaining({ ttlMs: MAX_APPROVAL_CHALLENGE_TTL_MS }),
+    );
+    // The child asked for a whole day; no issued authority carries that lifetime anywhere.
+    expect(MAX_APPROVAL_CHALLENGE_TTL_MS).toBeLessThan(CHILD_REQUESTED_LIFETIME_MS);
+  });
+
+  it("expires the clamped challenge at the server ceiling even though the child asked for longer", async () => {
+    let nowMs = FIXTURE_NOW_MS;
+    const { f } = await awaitingApproval(() => new Date(nowMs));
+
+    nowMs = FIXTURE_NOW_MS + MAX_APPROVAL_CHALLENGE_TTL_MS + 1;
+
+    expect(
+      await f.orchestrator.decideApproval("run-1", {
+        requestId: "permission-1",
+        decision: "approved",
+        expectedRevision: 4,
+      }),
+    ).toEqual({ ok: false, failureCode: "invalid-intent" });
+    expect(f.approvalAuthority.issue).not.toHaveBeenCalled();
+  });
+
+  it("leaves a child lifetime below the ceiling exactly as asked", async () => {
+    const { f, ingested } = await awaitingApproval(undefined, "2026-01-01T00:01:00.000Z");
+
+    expect(successfulSnapshot(ingested)).toMatchObject({
+      pendingPermission: { expiresAt: "2026-01-01T00:01:00.000Z" },
+    });
+    await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-1",
+      decision: "approved",
+      expectedRevision: 4,
+    });
+    expect(f.approvalAuthority.issue).toHaveBeenCalledWith(
+      expect.objectContaining({ ttlMs: 60_000 }),
+    );
+  });
+
+  it.each([
+    ["a non-numeric instant", "not-a-date"],
+    ["an empty instant", ""],
+    ["an already elapsed instant", "2025-12-31T23:59:59.000Z"],
+    ["the current instant", "2026-01-01T00:00:00.000Z"],
+  ])("refuses %s as an approval challenge lifetime", async (_label, expiresAt) => {
+    const { f, ingested } = await awaitingApproval(undefined, expiresAt);
+
+    expect(ingested).toEqual({ ok: false, failureCode: "invalid-intent" });
+    expect(f.orchestrator.getSnapshot("run-1")?.state).not.toBe("awaiting-approval");
   });
 });

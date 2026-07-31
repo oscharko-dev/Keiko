@@ -56,7 +56,6 @@ import {
   type MemoryCaptureDecisionReason,
 } from "./memory-capture-projection.js";
 import {
-  FORGOTTEN_MEMORY_SUPPRESSION_REASON,
   isPersistableMemoryCandidate,
   memoryCaptureAutoAcceptEligible,
   memoryCapturePolicyForDeps,
@@ -64,7 +63,7 @@ import {
   SENSITIVE_MEMORY_ACTION_BODY,
   SENSITIVE_MEMORY_REJECTION_REASON,
 } from "./memory-capture-policy.js";
-import { isSuppressedByForgetTombstone } from "./memory-suppression.js";
+import { exactCaptureSuppressionReason } from "./memory-suppression.js";
 
 // Mirror of chat-handlers' private scopeLabel (decision 3 — mirrored rather than exported to keep
 // the modules decoupled). Pure and trivial.
@@ -90,45 +89,66 @@ const SALIENCE_MODEL_ENV = "KEIKO_MEMORY_SALIENCE_MODEL_ID";
 const SALIENCE_DEFAULT_SEED = 204;
 let pendingSalienceCaptures = 0;
 
+// Azure OpenAI structured outputs reject a request whose json_schema carries no `name` or whose
+// schema root is an array (both 400) — with a bare root-array schema every salience call on a
+// supportsResponseFormat model failed GATEWAY_PROVIDER_ERROR (F-11). The item array is therefore
+// wrapped in a named root OBJECT under "items"; parseSalienceItems in keiko-memory-capture unwraps
+// that shape and still accepts the bare array the prompt-only fallback path produces.
 const SALIENCE_RESPONSE_FORMAT: ResponseFormat = {
   type: "json_schema",
+  name: "salient_memories",
   schema: {
-    type: "array",
-    items: {
-      type: "object",
-      additionalProperties: false,
-      required: ["body", "type", "confidence", "scope", "source", "tags"],
-      properties: {
-        body: { type: "string", minLength: 1 },
-        type: {
-          type: "string",
-          enum: [
-            "identity",
-            "preference",
-            "fact",
-            "decision",
-            "constraint",
-            "goal",
-            "lesson",
-            "procedural",
-          ],
+    type: "object",
+    additionalProperties: false,
+    required: ["items"],
+    properties: {
+      items: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["body", "type", "confidence", "scope", "source", "tags"],
+          properties: {
+            body: { type: "string", minLength: 1 },
+            type: {
+              type: "string",
+              enum: [
+                "identity",
+                "preference",
+                "fact",
+                "decision",
+                "constraint",
+                "goal",
+                "lesson",
+                "procedural",
+              ],
+            },
+            confidence: { type: "number", minimum: 0, maximum: 1 },
+            scope: { type: "string", enum: ["user", "project", "workspace"] },
+            source: { type: "string", enum: ["user"] },
+            tags: { type: "array", items: { type: "string" } },
+          },
         },
-        confidence: { type: "number", minimum: 0, maximum: 1 },
-        scope: { type: "string", enum: ["user", "project", "workspace"] },
-        source: { type: "string", enum: ["user"] },
-        tags: { type: "array", items: { type: "string" } },
       },
     },
   },
 };
 
+// Lexical dedup corpus for the extractor. It covers every LIVE record — accepted AND proposed —
+// because a proposal is a real record already occupying the review queue: re-deriving the same fact
+// next turn must not queue the operator a second copy of the same question. In the default "Ask for
+// approval" posture nothing is accepted at capture, so an accepted-only corpus was empty for every
+// newly learned fact and the extractor re-proposed it on every single turn. Refused bodies
+// (forgotten / rejected) are deliberately NOT here: they are handled by the suppression gate in
+// persistCandidate, which records the refusal as a capture-decision audit event instead of dropping
+// the candidate silently.
 function gatherExistingBodies(
   vault: MemoryVaultStore,
   context: ConversationMemoryRuntimeContext,
 ): readonly string[] {
   const seen = new Set<string>();
   for (const scope of conversationMemoryScopes(context)) {
-    for (const record of vault.listMemoriesByScope(scope, { status: ["accepted"] })) {
+    for (const record of vault.listMemoriesByScope(scope, { status: ["accepted", "proposed"] })) {
       seen.add(record.body);
       if (seen.size >= MAX_EXISTING_BODIES) {
         return [...seen];
@@ -408,18 +428,26 @@ async function persistCandidate(
   if (record === null) {
     return { action: null, disposition: "none" };
   }
-  if (isSuppressedByForgetTombstone(vault, record)) {
-    return rejectedCandidate(deps, mode, surface, outcome, FORGOTTEN_MEMORY_SUPPRESSION_REASON);
+  const exactSuppression = exactCaptureSuppressionReason(vault, record);
+  if (exactSuppression !== null) {
+    return rejectedCandidate(deps, mode, surface, outcome, exactSuppression);
   }
   const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
     ? promoteEligibleRecord(record)
     : record;
-  const { inserted } = await insertSalienceMemoryWithNoveltyGate(deps, vault, candidate);
-  if (inserted === null) {
+  const outcomeOfInsert = await insertSalienceMemoryWithNoveltyGate(deps, vault, candidate);
+  if (outcomeOfInsert.kind === "suppressed") {
+    // A PARAPHRASE of a fact the human already forgot or rejected. Nothing was stored and nothing
+    // was reinforced — this is a refusal, so it is audited and tallied as one, exactly like the
+    // exact-body suppression above.
+    return rejectedCandidate(deps, mode, surface, outcome, outcomeOfInsert.reason);
+  }
+  if (outcomeOfInsert.kind === "merged") {
     // Near-duplicate of an existing in-scope memory: the canonical was reinforced, nothing new to
     // surface. Over-capture is bounded at the encode boundary rather than deferred to a decay pass.
     return { action: null, disposition: "merged" };
   }
+  const inserted = outcomeOfInsert.record;
   recordPersistedCandidateDecision(deps, mode, surface, outcome, inserted);
   return {
     action: candidateWireAction(outcome, inserted),

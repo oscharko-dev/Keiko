@@ -27,6 +27,10 @@ import { deriveChatGroundingScopeIdentity } from "./chat-grounding-scope-identit
 const MAX_CONNECTED_SCOPE_PATHS = 50;
 const SELECTED_SCOPE_KIND_SET: ReadonlySet<SelectedScopeKind> = new Set(SELECTED_SCOPE_KINDS);
 
+// A chat title is a short human label for a conversation. The only previous bound was the
+// 256 KB request-body cap, which is not a title bound at all.
+export const MAX_CHAT_TITLE_LEN = 256;
+
 const MAX_SELECTED_MODEL_LEN = 160;
 const SELECTED_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._/\- ]*$/;
 const FORBIDDEN_SELECTED_MODEL_TERMS = [
@@ -339,7 +343,17 @@ const SELECT_COLUMNS =
   "connected_scope_paths, connected_scope_at, local_knowledge_scope_json, created_at, updated_at";
 
 const SQL_LIST = `SELECT ${SELECT_COLUMNS} FROM chats WHERE project_path = ? ORDER BY created_at ASC`;
-const SQL_LIST_LIMITED = `${SQL_LIST} LIMIT ?`;
+// 0.3.0 release audit — the LIMITED page decides which conversations the product can show and
+// which one a session resumes: every production reader passes a limit (Chat History, the chat
+// sidebar, and the create/send envelope). Reusing SQL_LIST's `created_at ASC` here returned the
+// OLDEST page, so past the limit a conversation the user had just created was absent from the
+// list and bootstrap resumed an ancient chat instead. The window is therefore ordered by
+// recency. `rowid` is the insertion sequence and breaks an equal-`updated_at` tie (two chats
+// created within the same millisecond) deterministically, newest first — a UUID primary key
+// would order the tie at random.
+const SQL_LIST_LIMITED =
+  `SELECT ${SELECT_COLUMNS} FROM chats WHERE project_path = ? ` +
+  "ORDER BY updated_at DESC, rowid DESC LIMIT ?";
 // Epic #177 audit: grounded-ask and chat PATCH paths used a project-scan + chat-scan helper that
 // fired O(projects × chats) row fetches per request. The chat id is unique across projects (the
 // schema enforces it via the chats.id primary key), so a single-row lookup is correct and bounded.
@@ -375,6 +389,17 @@ RETURNING ${SELECT_COLUMNS}
 const SQL_DELETE = "DELETE FROM chats WHERE id = ?";
 const SQL_PROJECT_EXISTS = "SELECT 1 FROM projects WHERE path = ?";
 const SQL_TOUCH = "UPDATE chats SET updated_at = ? WHERE id = ?";
+
+// 0.3.0 release audit — the emptiness guard lived inline in insertChat, so PATCH /api/chats
+// could persist `""` (the update statement's `title = COALESCE(?, title)` treats an empty string
+// as a value) and neither path bounded the length. The column is owned here, so the guard is
+// enforced here for every writer instead of being mirrored per route.
+function validateChatTitle(value: string): void {
+  if (value.length === 0) throw invalidRequest("Title is required.");
+  if (value.length > MAX_CHAT_TITLE_LEN) {
+    throw invalidRequest(`Title must be at most ${String(MAX_CHAT_TITLE_LEN)} characters.`);
+  }
+}
 
 function validateSelectedModel(value: string): void {
   if (value.length === 0) throw invalidRequest("selectedModel is required.");
@@ -424,7 +449,7 @@ export function insertChat(
     readonly now: number;
   },
 ): Chat {
-  if (args.title.length === 0) throw invalidRequest("Title is required.");
+  validateChatTitle(args.title);
   validateSelectedModel(args.selectedModel);
   const projectExists = db.prepare(SQL_PROJECT_EXISTS).get(args.projectPath) !== undefined;
   if (!projectExists) throw notFound("Project");
@@ -761,6 +786,7 @@ export function updateChat(
 ): Chat {
   validateChatPatch(patch, options);
   validateTotalSourceCap(db, id, patch, options);
+  if (patch.title !== undefined) validateChatTitle(patch.title);
   if (patch.selectedModel !== undefined) validateSelectedModel(patch.selectedModel);
   const titleParam = patch.title ?? null;
   const modelParam = patch.selectedModel ?? null;

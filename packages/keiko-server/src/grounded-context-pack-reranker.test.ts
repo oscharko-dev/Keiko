@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type CandidateFile,
@@ -153,6 +154,9 @@ describe("configuredContextPackRerankerFor", () => {
         },
         present: () => true,
         set: () => undefined,
+        generation: () => 0,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
       },
     };
     const reranker = configuredContextPackRerankerFor(deps, QUERY, undefined);

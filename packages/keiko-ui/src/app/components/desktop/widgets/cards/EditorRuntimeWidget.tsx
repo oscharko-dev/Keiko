@@ -35,6 +35,9 @@ import {
   useState,
   type ButtonHTMLAttributes,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { toExactArrayBuffer } from "@/lib/bytes";
@@ -55,13 +58,19 @@ import {
   disposeEditorModelRegistryRoot,
   editorFileModelReducer,
   EditorStatusBar,
+  EMPTY_LANGUAGE_INTELLIGENCE_STATE,
+  formattingApplyDecision,
   IDLE_TEST_GENERATION_STATE,
   inferMonacoLanguageId,
   isDocumentDirty,
   isSupportedEditorLanguage,
   isTestGenerationBusy,
   isTestGenerationPreviewing,
+  languageIntelligenceNotice,
+  reduceLanguageIntelligence,
+  renameChangesetTruncation,
   saveStatusReducer,
+  summarizeLanguageIntelligence,
   testGenerationReducer,
   type EditorBuffer,
   type EditorChangeOrigin,
@@ -95,6 +104,7 @@ import {
   type EditorInlineCompletionQuery,
   type EditorInlayHintsQuery,
   type EditorInlayHintsResolver,
+  type EditorLanguageIntelligenceEvent,
   type EditorLanguageId,
   type EditorLocation,
   type EditorPosition,
@@ -115,6 +125,7 @@ import {
   type KeikoEditorLoadState,
   type PatchPreviewModel,
   type PatchPreviewSource,
+  type PatchPreviewSourceTruncation,
   type TestGenerationFlowAction,
   type TestGenerationFlowState,
   type TestGenerationPreview,
@@ -208,6 +219,7 @@ import type {
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/useWorkspace.types";
 import { Icons } from "../../Icons";
 
+import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
 import {
   useRegisterWorkspaceReplaceBuffer,
@@ -244,6 +256,10 @@ import {
 } from "./editorSemanticTokens";
 import { EditorBreadcrumbBar } from "./EditorBreadcrumbBar";
 import { EditorGitHunkPeek } from "./EditorGitHunkPeek";
+import {
+  editorLanguageIntelligenceStatus,
+  useEditorLanguageIntelligenceTranslate,
+} from "./editor-language-intelligence-i18n";
 import { useEditorSourceControlTranslate } from "./editor-source-control-i18n";
 import {
   GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
@@ -280,6 +296,7 @@ import {
   rootHash,
   safeDomIdSegment,
 } from "./editorDocumentUri";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const EditorIcon = Icons.editor;
@@ -316,6 +333,18 @@ const EDITOR_REVIEW_DIFF_GROUP_STYLE: CSSProperties = {
   width: "100%",
   minWidth: 0,
   minHeight: 0,
+};
+
+// Blocking notice above a rename review the language service could not complete. Styled inline with
+// design tokens like the other review-surface chrome in this file, so no global stylesheet changes
+// are needed (the editor globals are behind a byte-exact visual-proof gate).
+const EDITOR_RENAME_INCOMPLETE_STYLE: CSSProperties = {
+  flex: "0 0 auto",
+  padding: "6px 12px",
+  color: "var(--text-primary)",
+  background: "var(--feedback-warning-surface)",
+  borderBottom: "1px solid color-mix(in oklch, var(--feedback-warning) 40%, transparent)",
+  fontSize: "var(--text-body-sm)",
 };
 
 function hunksForPath(response: GitEditorDiffResponse, path: string): readonly GitEditorDiffHunk[] {
@@ -511,6 +540,15 @@ const SESSION_CACHE_CAPACITY = 16;
 const HOT_EXIT_WRITE_DEBOUNCE_MS = 400;
 const CONTENT_HASH_DEBOUNCE_MS = 150;
 const FORMAT_ON_SAVE_DEADLINE_MS = 5_000;
+/**
+ * Stated in full because the user asked for a formatted file and is getting neither the reformat nor
+ * the write: what stopped it, that nothing reached disk, and how to proceed. Applying the surviving
+ * edits instead would persist a half-formatted file under a clean "saved" — the same silent partial
+ * application the rename changeset refuses (0.3.0 release audit).
+ */
+const FORMAT_ON_SAVE_CAPPED_MESSAGE =
+  "Format-on-save stopped because the formatter hit a result limit and returned only part of the " +
+  "reformat. Nothing was written. Turn format-on-save off to save this file unformatted.";
 const UTF8_ENCODER = new TextEncoder();
 /**
  * #2347 replaces this consumption seam with its server-resolved, minimum-wins capability result.
@@ -869,6 +907,29 @@ function renameEditsToEditor(fileChange: LanguageRenameChangesetFile): readonly 
     },
     newText: edit.newText,
   }));
+}
+
+/**
+ * The localized, count-naming notice for a rename the language service could not complete (result
+ * caps reached, a reference file it could not read, a bounded project graph). Applying such a
+ * changeset renames some occurrences and leaves the rest pointing at the old name, so this text is
+ * shown before Accept is offered and Accept is refused while it is present.
+ */
+function renameIncompleteNotice(
+  t: EditorAgentTranslate,
+  truncation: PatchPreviewSourceTruncation,
+): string {
+  const notice = t("editor.rename.incomplete", {
+    files: truncation.returnedFileCount,
+    totalFiles: truncation.totalFileCount,
+    edits: truncation.returnedEditCount,
+    totalEdits: truncation.totalEditCount,
+  });
+  if (truncation.unreadableFileCount === 0) return notice;
+  const unreadable = t("editor.rename.incompleteUnreadable", {
+    count: truncation.unreadableFileCount,
+  });
+  return `${notice} ${unreadable}`;
 }
 
 function promptRenameSymbol(placeholder: string): string | null {
@@ -1810,6 +1871,7 @@ function EditorRuntimeWidget({
 }: EditorRuntimeWidgetProps): ReactNode {
   const commonT = useTranslate();
   const sourceControlT = useEditorSourceControlTranslate();
+  const languageIntelligenceT = useEditorLanguageIntelligenceTranslate();
   const locale = useLocale();
   const t = useEditorAgentTranslate();
   const editorSettings = useEditorSettings(root);
@@ -1824,6 +1886,16 @@ function EditorRuntimeWidget({
   // bar live region (status-bar.ts's isExceptionPause); DebugPanel renders the same distinction
   // visually but deliberately never announces it (see its no-duplicate-live-region rationale).
   const [debugPauseIsException, setDebugPauseIsException] = useState(false);
+  // The last non-cancelled outcome of every Monaco language bridge (one shared reducer in the editor
+  // package). Without it, a language-provider crash, a timeout and a genuinely empty result all reach
+  // the user as "nothing found"; the status-bar field below is what makes them distinguishable.
+  const [languageIntelligence, dispatchLanguageIntelligence] = useReducer(
+    reduceLanguageIntelligence,
+    EMPTY_LANGUAGE_INTELLIGENCE_STATE,
+  );
+  const reportLanguageIntelligence = useCallback((event: EditorLanguageIntelligenceEvent): void => {
+    dispatchLanguageIntelligence(event);
+  }, []);
   const workspaceSnippets = useWorkspaceSnippets(root);
   // Applies the effective, policy-aware modelRetentionCount/modelRetentionBytes live to the shared
   // Monaco model registry. Every mounted editor surface renders this component, so the registry
@@ -2182,6 +2254,9 @@ function EditorRuntimeWidget({
     // on the bounded LRU session cache surviving (a wide rename can touch far more files than the
     // cache capacity, so relying on the cache produced spurious "not loaded" conflicts — Issue #2105).
     readonly snapshots: Readonly<Record<string, EditorFileSessionSnapshot>>;
+    // What the language service left out, or null when the changeset is the whole rename. Non-null
+    // blocks Accept: renaming 2 of 400 files leaves every other reference on the old name.
+    readonly truncation: PatchPreviewSourceTruncation | null;
   } | null>(null);
   // Issue #2212 fix-up — one scoped "Run Verification" callback per review surface, each resolving its
   // OWN reviewed file(s) rather than the pane's active file (see runScopedVerification above).
@@ -2661,6 +2736,13 @@ function EditorRuntimeWidget({
   }, []);
 
   const reloadConfirmRef = useRef<HTMLDivElement>(null);
+  // GEN-UI-FOCUS-002: this destructive confirm declares `aria-modal="true"`, which promises assistive
+  // technology that the rest of the shell is unavailable. Without containment a keyboard or
+  // screen-reader user could Tab straight out of "Discard unsaved changes?" into the editor and the
+  // window chrome behind it. Reuse the shared containment seam (the same one the gateway, editor
+  // settings, and debugging confirms use) instead of re-deriving the wrap here; it is a no-op while
+  // the dialog is unmounted because the ref is then null.
+  useDialogTabTrap(reloadConfirmRef);
   useEffect(() => {
     if (!reloadConfirm) return;
     // GEN-UI-FOCUS-006: capture the opener (the Reload button) before moving focus into the dialog,
@@ -2679,59 +2761,76 @@ function EditorRuntimeWidget({
     };
   }, [reloadConfirm, cancelReloadDiscard]);
 
-  const prepareFormatOnSave = useCallback(async (text: string): Promise<string | null> => {
-    const state = formatOnSaveStateRef.current;
-    if (!state.enabled) return text;
-    if (
-      !state.canFormat ||
-      state.document === null ||
-      state.root === undefined ||
-      state.file === undefined
-    ) {
-      return text;
-    }
-    const baseVersion = versionRef.current;
-    const request = {
-      request: {
-        requestId: createEditorRequestId(),
-        streamId: "editor-format-on-save",
-        sequence: Date.now(),
-      },
-      document: state.document,
-      options: { tabSize: state.tabSize, insertSpaces: state.insertSpaces },
-    };
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), FORMAT_ON_SAVE_DEADLINE_MS);
-    try {
-      const wire = await requestEditorFormatting(
-        {
-          root: state.root,
-          path: state.file,
-          languageId: state.document.language,
-          text,
-          options: request.options,
-        },
-        controller.signal,
-      );
-      if (contentRef.current !== text || versionRef.current !== baseVersion) {
-        setSaveError("Format-on-save stopped because the file changed while formatting.");
-        setSaveStatus((status) => saveStatusReducer(status, { type: "failed" }));
-        return null;
-      }
-      const response = mapWireToEditorFormattingResponse(request.request, wire);
-      return response.edits.length === 0 ? text : applyTextEditsToText(text, response.edits);
-    } catch (error: unknown) {
-      setSaveError(
-        error instanceof DOMException && error.name === "AbortError"
-          ? "Format-on-save timed out. Save again after formatting is available."
-          : `Format-on-save failed: ${errorMessage(error)}`,
-      );
-      setSaveStatus((status) => saveStatusReducer(status, { type: "failed" }));
-      return null;
-    } finally {
-      window.clearTimeout(timeout);
-    }
+  /** Abandon the save and state why. `null` is `persist`'s "nothing was written" signal. */
+  const failFormatOnSave = useCallback((message: string): null => {
+    setSaveError(message);
+    setSaveStatus((status) => saveStatusReducer(status, { type: "failed" }));
+    return null;
   }, []);
+
+  const prepareFormatOnSave = useCallback(
+    async (text: string): Promise<string | null> => {
+      const state = formatOnSaveStateRef.current;
+      if (!state.enabled) return text;
+      if (
+        !state.canFormat ||
+        state.document === null ||
+        state.root === undefined ||
+        state.file === undefined
+      ) {
+        return text;
+      }
+      const baseVersion = versionRef.current;
+      const request = {
+        request: {
+          requestId: createEditorRequestId(),
+          streamId: "editor-format-on-save",
+          sequence: Date.now(),
+        },
+        document: state.document,
+        options: { tabSize: state.tabSize, insertSpaces: state.insertSpaces },
+      };
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), FORMAT_ON_SAVE_DEADLINE_MS);
+      try {
+        const wire = await requestEditorFormatting(
+          {
+            root: state.root,
+            path: state.file,
+            languageId: state.document.language,
+            text,
+            options: request.options,
+          },
+          controller.signal,
+        );
+        if (contentRef.current !== text || versionRef.current !== baseVersion) {
+          return failFormatOnSave(
+            "Format-on-save stopped because the file changed while formatting.",
+          );
+        }
+        // This path WRITES the result to disk, so the shared apply gate decides — a capped reformat
+        // is refused rather than persisted as a finished format. The empty-edit case is inside the
+        // gate's `apply` branch on purpose: an empty edit list is "already formatted" only when the
+        // result also reports itself uncapped.
+        const decision = formattingApplyDecision(
+          mapWireToEditorFormattingResponse(request.request, wire),
+        );
+        if (decision.status === "refused") {
+          return failFormatOnSave(FORMAT_ON_SAVE_CAPPED_MESSAGE);
+        }
+        return decision.edits.length === 0 ? text : applyTextEditsToText(text, decision.edits);
+      } catch (error: unknown) {
+        return failFormatOnSave(
+          error instanceof DOMException && error.name === "AbortError"
+            ? "Format-on-save timed out. Save again after formatting is available."
+            : `Format-on-save failed: ${errorMessage(error)}`,
+        );
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    },
+    [failFormatOnSave],
+  );
 
   const markBufferEdited = useCallback((text: string): void => {
     contentRef.current = text;
@@ -3024,9 +3123,9 @@ function EditorRuntimeWidget({
   const onRuntimeError = useCallback((message: string): void => {
     // A non-fatal theme-registration failure (e.g. the editor design tokens are not present on this
     // surface). The editor still renders with Monaco's base theme; surface it for diagnostics rather
-    // than swallowing a system-boundary signal.
-    // eslint-disable-next-line no-console -- non-fatal, observable diagnostic only.
-    console.warn(`Keiko editor runtime notice: ${message}`);
+    // than swallowing a system-boundary signal. Routed through the one client sink so the console
+    // access stays in a single reviewable place (0.3.0 audit, #2802).
+    reportClientDiagnostic(`Keiko editor runtime notice: ${message}`);
   }, []);
 
   const restoreRecovery = useCallback((): void => {
@@ -4294,6 +4393,7 @@ function EditorRuntimeWidget({
             patchId: `rename-symbol:${newName}`,
           }),
           snapshots: sources.snapshots,
+          truncation: renameChangesetTruncation(changeset),
         });
       } catch (error) {
         announceToolbarNotice(error instanceof Error ? error.message : "Rename failed.");
@@ -4408,6 +4508,10 @@ function EditorRuntimeWidget({
         ? undefined
         : { label: testGenStatusLabel, busy: testGenBusy };
     const statusBarRun = verification.statusBarRun ?? fallbackRun;
+    const languageIntelligenceStatus = editorLanguageIntelligenceStatus(
+      languageIntelligenceNotice(summarizeLanguageIntelligence(languageIntelligence)),
+      languageIntelligenceT,
+    );
     const languageService =
       languageProvider === null
         ? { providerId: null, available: false }
@@ -4437,6 +4541,9 @@ function EditorRuntimeWidget({
             },
           }),
       languageService,
+      ...(languageIntelligenceStatus === undefined
+        ? {}
+        : { languageIntelligence: languageIntelligenceStatus }),
       readOnly: largeFileDegraded,
       formatting: { available: formattingEnabled, source: builtinFormatting },
       ...(statusBarRun === undefined ? {} : { run: statusBarRun }),
@@ -5542,6 +5649,13 @@ function EditorRuntimeWidget({
 
   const handleRenameAccept = useCallback((): void => {
     if (renameReview === null || root === undefined) return;
+    // Fail closed on a rename the language service could not finish. The Apply control is already
+    // disabled for it, but this path is also reachable programmatically, and applying a partial
+    // rename would leave the un-renamed references pointing at a symbol that no longer exists.
+    if (renameReview.truncation !== null) {
+      announceToolbarNotice(t("editor.rename.incompleteRefused"));
+      return;
+    }
     const plans: RenameApplyPlan[] = [];
     for (const change of renameReview.changeset.files) {
       const plan = buildRenamePlan(
@@ -5584,7 +5698,7 @@ function EditorRuntimeWidget({
       }
     }
     setRenameReview(null);
-  }, [onDirtyChange, renameReview, renameTargetForPath, root]);
+  }, [announceToolbarNotice, onDirtyChange, renameReview, renameTargetForPath, root, t]);
 
   const handleRenameReject = useCallback((): void => {
     setRenameReview(null);
@@ -5693,11 +5807,18 @@ function EditorRuntimeWidget({
     />,
   );
 
-  const renderEditorPanel = (): ReactNode => {
-    let panel: ReactNode;
+  /**
+   * The pending-review surface that takes the pane away from the editor, or null when none is.
+   *
+   * Every branch below is a change waiting on an operator decision — an external write, a
+   * recovered hot-exit buffer, an agent changeset, an agent patch, a rename the language service
+   * produced, or generated tests — and each one owns the pane until it is accepted or dismissed.
+   * The order is the precedence: the editor itself is only reached once all of them are clear.
+   */
+  const renderActiveReviewSurface = (): ReactNode => {
     if (externalCompareContent !== null) {
       const externalDiffModel = buildAgentPatchDiffModel(externalCompareContent, content, file);
-      panel = (
+      return (
         <div style={EDITOR_REVIEW_SURFACE_STYLE}>
           <fieldset
             aria-label={`Compare external changes for ${definedOr(file, "this file")}`}
@@ -5736,7 +5857,8 @@ function EditorRuntimeWidget({
           </div>
         </div>
       );
-    } else if (activeRecoveryCompare !== null) {
+    }
+    if (activeRecoveryCompare !== null) {
       // AC4 "compare": a true side-by-side diff of the on-disk file (left) against the recovered
       // unsaved buffer (right), reusing the same diff surface as agent-patch review. The disk side is
       // the baseline captured when recovery was offered, not the live buffer, so it stays accurate
@@ -5746,7 +5868,7 @@ function EditorRuntimeWidget({
         activeRecoveryCompare.content,
         file,
       );
-      panel = (
+      return (
         <div style={EDITOR_REVIEW_SURFACE_STYLE}>
           <fieldset
             aria-label={`Compare recovered changes for ${definedOr(file, "this file")}`}
@@ -5780,8 +5902,9 @@ function EditorRuntimeWidget({
           </div>
         </div>
       );
-    } else if (agentChangesetPending !== null) {
-      panel = (
+    }
+    if (agentChangesetPending !== null) {
+      return (
         <div style={EDITOR_REVIEW_SURFACE_STYLE}>
           <fieldset
             aria-label="Agent changeset review"
@@ -5812,13 +5935,14 @@ function EditorRuntimeWidget({
           </fieldset>
         </div>
       );
-    } else if (agentPatchPending !== null) {
+    }
+    if (agentPatchPending !== null) {
       const patchDiffModel = buildAgentPatchDiffModel(
         agentPatchPending.original,
         agentPatchPending.modified,
         file,
       );
-      panel = (
+      return (
         <div style={EDITOR_REVIEW_SURFACE_STYLE}>
           {/* A11Y-3: label the diff review surface and provide an sr-only instruction */}
           <fieldset
@@ -5878,24 +6002,43 @@ function EditorRuntimeWidget({
           </div>
         </div>
       );
-    } else if (renameReview !== null) {
-      panel = (
-        <EditorDiffSurface
-          model={renameReview.model}
-          loadState={{ status: "ready" }}
-          themeVariant={themeVariant}
-          actions={{
-            canApply: true,
-            canReject: true,
-            canRunVerification: !verification.verificationRunning,
-          }}
-          onApply={handleRenameAccept}
-          onReject={handleRenameReject}
-          onRunVerification={runRenameVerification}
-        />
+    }
+    if (renameReview !== null) {
+      // A rename the language service could not finish is stated in full and cannot be applied: the
+      // counts come from the changeset's own report, so the reviewer sees how much of the rename is
+      // missing before deciding (a preview built from the returned files alone looks complete).
+      return (
+        <div style={EDITOR_REVIEW_SURFACE_STYLE}>
+          {renameReview.truncation === null ? null : (
+            <div
+              role="note"
+              aria-live="polite"
+              data-testid="editor-rename-incomplete"
+              style={EDITOR_RENAME_INCOMPLETE_STYLE}
+            >
+              {renameIncompleteNotice(t, renameReview.truncation)}
+            </div>
+          )}
+          <div style={EDITOR_REVIEW_DIFF_GROUP_STYLE}>
+            <EditorDiffSurface
+              model={renameReview.model}
+              loadState={{ status: "ready" }}
+              themeVariant={themeVariant}
+              actions={{
+                canApply: renameReview.truncation === null,
+                canReject: true,
+                canRunVerification: !verification.verificationRunning,
+              }}
+              onApply={handleRenameAccept}
+              onReject={handleRenameReject}
+              onRunVerification={runRenameVerification}
+            />
+          </div>
+        </div>
       );
-    } else if (testGenerationPreview !== null) {
-      panel = (
+    }
+    if (testGenerationPreview !== null) {
+      return (
         <EditorDiffSurface
           model={testGenerationPreview.model}
           loadState={{ status: "ready" }}
@@ -5906,7 +6049,15 @@ function EditorRuntimeWidget({
           }}
         />
       );
-    } else if (editorLoadError !== null) {
+    }
+    return null;
+  };
+
+  const renderEditorPanel = (): ReactNode => {
+    const reviewSurface = renderActiveReviewSurface();
+    if (reviewSurface !== null) return reviewSurface;
+    let panel: ReactNode;
+    if (editorLoadError !== null) {
       panel = (
         <div className="ed-host-loading" role="alert">
           <span>{`Editor failed to load: ${editorLoadError}`}</span>
@@ -5981,6 +6132,7 @@ function EditorRuntimeWidget({
             hostEditRequest={activeHostEditRequest}
             onDiagnosticsSummary={whenEnabled(diagnosticsEnabled, setDiagnosticsSummary)}
             onDiagnostics={whenEnabled(diagnosticsEnabled, onPaneDiagnostics)}
+            onLanguageIntelligence={reportLanguageIntelligence}
             onGenerateTests={whenEnabled(completionEnabled, runTestGeneration)}
             onAskKeikoAboutSelection={whenEnabled(onAskSelection !== undefined, handleAskSelection)}
             onRenameSymbol={whenEnabled(canRename, runRename)}
@@ -6049,116 +6201,161 @@ function EditorRuntimeWidget({
     );
   };
 
+  /**
+   * Close the focused tab from the keyboard (0.3.0 release audit, #2802).
+   *
+   * `role="tab"` presents its children, so the close control inside a tab cannot itself be
+   * focusable — axe reports `nested-interactive` for that shape, which is how the previous
+   * standalone close button became an owned child of the tablist in the first place. The WAI-ARIA
+   * APG's deletable-tabs pattern puts the affordance on the tab instead; Backspace is accepted
+   * alongside Delete because that is the key Mac keyboards send.
+   */
+  const handleTabCloseKey = (path: string, event: ReactKeyboardEvent<HTMLElement>): void => {
+    if (onCloseOpenFile === undefined) return;
+    if (event.key !== "Delete" && event.key !== "Backspace") return;
+    event.preventDefault();
+    void handleCloseTab(path);
+  };
+
+  const renderTabCloseAffordance = (path: string): ReactNode => {
+    if (onCloseOpenFile === undefined) return null;
+    return (
+      <span
+        className={`ed-tab-close ${runtimeStyles.tabClose}`}
+        // Decoration for the pointer: the tab owns the name and the keyboard path, and an exposed
+        // control here would be an unallowed owned child of the tablist again.
+        aria-hidden="true"
+        data-tab-close-file={path}
+        onPointerDown={(event: ReactPointerEvent<HTMLSpanElement>) => {
+          // The tab arms pointer drags; pressing × must not start one.
+          event.stopPropagation();
+        }}
+        onClick={(event: ReactMouseEvent<HTMLSpanElement>) => {
+          // The tab is the selection target; closing must not also select it.
+          event.stopPropagation();
+          void handleCloseTab(path);
+        }}
+      >
+        ×
+      </span>
+    );
+  };
+
+  const renderOpenDocumentTab = (path: string): ReactNode => {
+    const active = path === file;
+    const tabDomId = active ? tabId : `${editorDomIdPrefix}-tab-${safeDomIdSegment(path)}`;
+    const tabDirty = effectiveDirtyFiles.has(path);
+    const tabConflictCount = active ? mergeConflicts.count : 0;
+    const tabHandle = renderTabHandle?.(path, active, tabDirty, {
+      mergeConflicts: tabConflictCount,
+    });
+    const insertEdge = tabInsertTarget?.file === path ? tabInsertTarget.edge : null;
+    const conflictAttr = tabHandle?.["data-merge-conflicts"] ?? String(tabConflictCount);
+    const closable = onCloseOpenFile !== undefined;
+    const tabHitClassName = closable
+      ? `ed-tab-hit ui-tip ${runtimeStyles.tabHitClosable}`
+      : "ed-tab-hit ui-tip";
+    return (
+      <span
+        className={`ed-tab${active ? " active" : ""}`}
+        data-dirty={tabDirty ? "true" : "false"}
+        data-pane-id={paneId}
+        data-tab-file={path}
+        data-tab-draggable={tabHandle?.["data-tab-draggable"]}
+        data-tab-held={tabHandle?.["data-tab-held"]}
+        data-merge-conflicts={conflictAttr}
+        data-tab-insert-before={insertEdge === "before" ? "true" : "false"}
+        data-tab-insert-after={insertEdge === "after" ? "true" : "false"}
+        key={path}
+      >
+        <button
+          type="button"
+          className={tabHitClassName}
+          draggable={tabHandle?.draggable}
+          role="tab"
+          id={tabDomId}
+          aria-selected={active ? "true" : "false"}
+          aria-controls={tabpanelId}
+          tabIndex={active ? 0 : -1}
+          data-tip={path}
+          data-pane-id={paneId}
+          data-tab-file={path}
+          data-tab-draggable={tabHandle?.["data-tab-draggable"]}
+          data-tab-held={tabHandle?.["data-tab-held"]}
+          data-merge-conflicts={conflictAttr}
+          aria-label={tabAriaLabel(path, tabConflictCount, sourceControlT)}
+          onClickCapture={tabHandle?.onClickCapture}
+          onDragStart={tabHandle?.onDragStart}
+          onDragEnd={tabHandle?.onDragEnd}
+          onPointerDown={tabHandle?.onPointerDown}
+          onKeyDown={(event) => {
+            handleTabCloseKey(path, event);
+            if (event.defaultPrevented) return;
+            tabHandle?.onKeyDown?.(event);
+          }}
+          onClick={() => handleSelectTab(path)}
+          onAuxClick={(event) => {
+            // Middle-click closes the tab (VS Code parity), routed through the same
+            // dirty-close guard as the × affordance.
+            if (event.button === 1 && closable) {
+              event.preventDefault();
+              void handleCloseTab(path);
+            }
+          }}
+        >
+          <FileIcon name={path} />
+          <span className="ed-tab-label">{path}</span>
+          {tabConflictCount > 0 ? (
+            <span className={conflictStyles.badge} aria-hidden="true">
+              {tabConflictCount}
+            </span>
+          ) : null}
+          {tabDirty ? (
+            <span className="ed-dirty" aria-hidden="true">
+              ●
+            </span>
+          ) : null}
+          {renderTabCloseAffordance(path)}
+        </button>
+      </span>
+    );
+  };
+
   const renderOpenDocumentTabs = (): ReactNode => (
     <div
       className="ed-tablist"
       ref={tablistRef}
-      role="tablist"
-      aria-label="Open documents"
       // GEN-PERF-EDITOR-003: the held-file scalar exists to trip React.memo for the one pane whose
       // tab visual must repaint; surfacing it as a DOM marker is its one real read and gives the
       // drag e2e a stable observation point.
       data-held-tab-file={heldTabFile}
     >
-      {visibleTabs.length > 0 ? (
-        visibleTabs.map((path) => {
-          const active = path === file;
-          const tabDomId = active ? tabId : `${editorDomIdPrefix}-tab-${safeDomIdSegment(path)}`;
-          const tabDirty = effectiveDirtyFiles.has(path);
-          const tabConflictCount = active ? mergeConflicts.count : 0;
-          const tabHandle = renderTabHandle?.(path, active, tabDirty, {
-            mergeConflicts: tabConflictCount,
-          });
-          const insertEdge = tabInsertTarget?.file === path ? tabInsertTarget.edge : null;
-          return (
+      {/*
+        0.3.0 release audit (#2802) — `role="tablist"` sits on this inner row rather than on
+        `.ed-tablist`, because a tablist may own nothing but tabs and the overflow chooser below is
+        not one. `.ed-tablist` stays the measured element so `readableTabCapacity` keeps reserving
+        the chooser's width from a box that still contains it.
+      */}
+      <div className={runtimeStyles.tabRow} role="tablist" aria-label="Open documents">
+        {visibleTabs.length > 0 ? (
+          visibleTabs.map((path) => renderOpenDocumentTab(path))
+        ) : (
+          <span className="ed-tab active" data-dirty="false">
             <span
-              className={`ed-tab${active ? " active" : ""}`}
-              data-dirty={tabDirty ? "true" : "false"}
-              data-pane-id={paneId}
-              data-tab-file={path}
-              data-tab-draggable={tabHandle?.["data-tab-draggable"]}
-              data-tab-held={tabHandle?.["data-tab-held"]}
-              data-merge-conflicts={tabHandle?.["data-merge-conflicts"] ?? String(tabConflictCount)}
-              data-tab-insert-before={insertEdge === "before" ? "true" : "false"}
-              data-tab-insert-after={insertEdge === "after" ? "true" : "false"}
-              key={path}
+              className="ed-tab-hit ui-tip"
+              role="tab"
+              id={tabId}
+              aria-selected="true"
+              aria-controls={tabpanelId}
+              tabIndex={0}
+              data-tip="Editor"
             >
-              <button
-                type="button"
-                className="ed-tab-hit ui-tip"
-                draggable={tabHandle?.draggable}
-                role="tab"
-                id={tabDomId}
-                aria-selected={active ? "true" : "false"}
-                aria-controls={tabpanelId}
-                tabIndex={active ? 0 : -1}
-                data-tip={path}
-                data-pane-id={paneId}
-                data-tab-file={path}
-                data-tab-draggable={tabHandle?.["data-tab-draggable"]}
-                data-tab-held={tabHandle?.["data-tab-held"]}
-                data-merge-conflicts={
-                  tabHandle?.["data-merge-conflicts"] ?? String(tabConflictCount)
-                }
-                aria-label={tabAriaLabel(path, tabConflictCount, sourceControlT)}
-                onClickCapture={tabHandle?.onClickCapture}
-                onDragStart={tabHandle?.onDragStart}
-                onDragEnd={tabHandle?.onDragEnd}
-                onPointerDown={tabHandle?.onPointerDown}
-                onKeyDown={tabHandle?.onKeyDown}
-                onClick={() => handleSelectTab(path)}
-                onAuxClick={(event) => {
-                  // Middle-click closes the tab (VS Code parity), routed through the same
-                  // dirty-close guard as the × button.
-                  if (event.button === 1 && onCloseOpenFile !== undefined) {
-                    event.preventDefault();
-                    void handleCloseTab(path);
-                  }
-                }}
-              >
-                <FileIcon name={path} />
-                <span className="ed-tab-label">{path}</span>
-                {tabConflictCount > 0 ? (
-                  <span className={conflictStyles.badge} aria-hidden="true">
-                    {tabConflictCount}
-                  </span>
-                ) : null}
-                {tabDirty ? (
-                  <span className="ed-dirty" aria-hidden="true">
-                    ●
-                  </span>
-                ) : null}
-              </button>
-              {onCloseOpenFile !== undefined ? (
-                <button
-                  type="button"
-                  className="ed-tab-close ui-tip"
-                  aria-label={`Close ${path}`}
-                  data-tip={`Close ${path}`}
-                  onClick={() => void handleCloseTab(path)}
-                >
-                  ×
-                </button>
-              ) : null}
+              <EditorIcon size={12} />
+              <span className="ed-tab-label">Editor</span>
             </span>
-          );
-        })
-      ) : (
-        <span className="ed-tab active" data-dirty="false">
-          <span
-            className="ed-tab-hit ui-tip"
-            role="tab"
-            id={tabId}
-            aria-selected="true"
-            aria-controls={tabpanelId}
-            tabIndex={0}
-            data-tip="Editor"
-          >
-            <EditorIcon size={12} />
-            <span className="ed-tab-label">Editor</span>
           </span>
-        </span>
-      )}
+        )}
+      </div>
       {compactTabs && summaryTabs.length > 0 ? (
         <details
           ref={summaryMenuRef}

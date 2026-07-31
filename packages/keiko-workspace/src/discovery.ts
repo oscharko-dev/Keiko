@@ -233,12 +233,51 @@ function assertNoHardLinkAlias(stats: WorkspaceStat, relPath: string): void {
   }
 }
 
-function readContent(
+// ─── The read-lane boundary (the ONE switch that decides redaction) ─────────────────────────────
+//
+// Two reads, one security chain, deliberately incompatible result types:
+//
+//   * `readWorkspaceFile` is the EVIDENCE lane. Its `text` is redacted at the IO boundary, so
+//     nothing it returns can carry a secret into a context pack, a retrieval answer, an evidence
+//     atom, the workspace index, a manifest, an audit export, or a diagnostic. Everything that
+//     feeds any of those MUST keep using it. It is the only read on the package's public barrel.
+//
+//   * `readWorkspaceFileForEditing` is the EDITOR lane. It runs the SAME chain (boundary -> deny
+//     -> realpath containment -> hard-link alias -> size cap) and then returns the RAW bytes. It
+//     exists because a surface that WRITES the file back — workspace search & replace — has to
+//     derive its match ranges, its base-content hash, and its replacement text from the same bytes
+//     the write preflight reads. Deriving them from redacted text made every replace on a file
+//     containing secret-shaped text fail as a false write-conflict (nothing was ever written), and
+//     highlighted the wrong text in the diff the human approved.
+//
+// The raw result is `RawFileContent`, whose payload field is `rawText` — NOT `text`. A raw read can
+// therefore never be passed where a redacted `FileContent` is expected, and `.text` on a raw read
+// does not compile. Outside this package the raw read is reachable only through the
+// `./internal/editor-read` export subpath, so an evidence-lane caller cannot pick it by accident.
+
+/** Which lane a workspace content read belongs to. See the boundary note above. */
+export type WorkspaceContentLane = "evidence" | "editor";
+
+/**
+ * RAW, UNREDACTED workspace bytes for the editor lane.
+ *
+ * Structurally distinct from `FileContent` on purpose: the payload lives on `rawText`, so it cannot
+ * be substituted for a redacted read. Never persist it, never log it, never embed it in evidence,
+ * a manifest, or a grounded answer — redact at the surface that emits, not here.
+ */
+export interface RawFileContent {
+  readonly relativePath: string;
+  readonly sizeBytes: number;
+  readonly rawText: string;
+  readonly truncated: boolean;
+}
+
+function readRawContent(
   fs: WorkspaceFs,
   absolutePath: string,
   relPath: string,
   opts: ReadOptions,
-): FileContent {
+): RawFileContent {
   let raw: string;
   try {
     raw = fs.readFileUtf8(absolutePath);
@@ -247,22 +286,23 @@ function readContent(
   }
   const rawBytes = Buffer.byteLength(raw, "utf8");
   const truncated = rawBytes > opts.maxBytes;
-  const text = truncated
+  const rawText = truncated
     ? Buffer.from(raw, "utf8").subarray(0, opts.maxBytes).toString("utf8")
     : raw;
-  return { relativePath: relPath, sizeBytes: rawBytes, text: redact(text), truncated };
+  return { relativePath: relPath, sizeBytes: rawBytes, rawText, truncated };
 }
 
-// The single read path. Order: boundary -> deny -> realpath containment -> size cap -> read -> redact.
-// Realpath containment is shared with the write/cwd paths via assertContainedRealPath: when the
-// path does not exist, it validates the nearest existing parent and returns absolutePath, so a
-// missing in-root file still surfaces as a WorkspaceReadError (not a false PathEscapeError).
-export function readWorkspaceFile(
+// The shared guard chain both lanes run. Order: boundary -> deny -> realpath containment ->
+// hard-link alias -> size cap. Realpath containment is shared with the write/cwd paths via
+// assertContainedRealPath: when the path does not exist, it validates the nearest existing parent
+// and returns absolutePath, so a missing in-root file still surfaces as a WorkspaceReadError (not a
+// false PathEscapeError).
+function resolveReadableWorkspaceFile(
   workspace: WorkspaceInfo,
   relPath: string,
-  opts: ReadOptions = DEFAULT_READ_OPTIONS,
-  fs: WorkspaceFs = nodeWorkspaceFs,
-): FileContent {
+  opts: ReadOptions,
+  fs: WorkspaceFs,
+): { readonly resolvedPath: string; readonly normalizedRel: string } {
   const absolutePath = resolveWithinWorkspace(workspace.root, relPath);
   const normalizedRel = toRelative(workspace.root, absolutePath);
   if (isDenied(normalizedRel)) {
@@ -291,5 +331,33 @@ export function readWorkspaceFile(
       opts.maxBytes,
     );
   }
-  return readContent(fs, resolvedPath, normalizedRel, opts);
+  return { resolvedPath, normalizedRel };
+}
+
+// The evidence-lane read: the guard chain, then redact() at the IO boundary.
+export function readWorkspaceFile(
+  workspace: WorkspaceInfo,
+  relPath: string,
+  opts: ReadOptions = DEFAULT_READ_OPTIONS,
+  fs: WorkspaceFs = nodeWorkspaceFs,
+): FileContent {
+  const raw = readWorkspaceFileForEditing(workspace, relPath, opts, fs);
+  return {
+    relativePath: raw.relativePath,
+    sizeBytes: raw.sizeBytes,
+    text: redact(raw.rawText),
+    truncated: raw.truncated,
+  };
+}
+
+// The editor-lane read: the SAME guard chain, no redaction. Editor-owned, NON-evidence callers
+// only — see the read-lane boundary note above and `./internal/editor-read`.
+export function readWorkspaceFileForEditing(
+  workspace: WorkspaceInfo,
+  relPath: string,
+  opts: ReadOptions = DEFAULT_READ_OPTIONS,
+  fs: WorkspaceFs = nodeWorkspaceFs,
+): RawFileContent {
+  const target = resolveReadableWorkspaceFile(workspace, relPath, opts, fs);
+  return readRawContent(fs, target.resolvedPath, target.normalizedRel, opts);
 }

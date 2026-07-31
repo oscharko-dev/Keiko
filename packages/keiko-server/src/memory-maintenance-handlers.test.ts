@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type {
+  CodingWorkbenchMode,
   MemoryId,
   MemoryRecord,
   MemoryStatus,
@@ -19,7 +20,7 @@ import {
   MEMORY_AUTO_MAINTENANCE_MIN_INTERVAL_MS,
   type AutoMaintenanceState,
 } from "./memory-maintenance-handlers.js";
-import { createInMemoryUiStore } from "./store/index.js";
+import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 
 const DAY = 864e5;
@@ -46,6 +47,18 @@ function makeDeps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     store: createInMemoryUiStore(),
     ...overrides,
   };
+}
+
+// Deps whose EFFECTIVE memory autonomy posture permits unattended acceptance: the operator's
+// persisted requested mode is written through the same store the /api/memory/autonomy-policy route
+// uses, and the server-owned deployment ceiling is raised to admit it (ADR-0146 D1).
+function makeUnattendedDeps(
+  vault: MemoryVaultStore,
+  mode: CodingWorkbenchMode = "autonomous-delivery",
+): UiHandlerDeps {
+  const store: UiStore = createInMemoryUiStore();
+  store.updateMemoryAutonomyPolicy(mode, 0);
+  return makeDeps({ memoryVault: vault, store, codingRuntimeDeploymentCeiling: mode });
 }
 
 let activeVaults: MemoryVaultStore[] = [];
@@ -141,10 +154,10 @@ describe("handleRunMaintenance", () => {
     expect(result.status).toBe(503);
   });
 
-  it("promotes a strong public proposed memory to accepted", () => {
+  it("promotes a strong public proposed memory to accepted when the mode permits it", () => {
     const vault = makeVault();
     insert(vault, { id: "m", status: "proposed", sensitivity: "public", confidence: 0.6 });
-    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    const result = handleRunMaintenance(makeCtx(), makeUnattendedDeps(vault));
     expect(result.status).toBe(200);
     expect(counts(result).promoted).toBe(1);
     expect(vault.getMemory(mid("m"))?.status).toBe("accepted");
@@ -284,7 +297,7 @@ describe("handleRunMaintenance", () => {
       body: "our primary production database is not postgresql for all storage",
       createdAt: now - DAY,
     });
-    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    const result = handleRunMaintenance(makeCtx(), makeUnattendedDeps(vault));
     expect(counts(result).promoted).toBe(2);
     const body = result.body as {
       reviewItems: readonly { reason: string }[];
@@ -379,6 +392,187 @@ describe("handleRunMaintenance", () => {
   });
 });
 
+// ADR-0146 D2: in `governed-assist` ("Ask for approval") a routine, public candidate is held as
+// `proposed` for human review. The standing maintenance sweep shares the promotion lever with
+// at-capture promotion, so it must consult the SAME autonomy posture — otherwise the sweep silently
+// accepts exactly the set the capture gate refused, and the human-control invariant is defeated.
+describe("handleRunMaintenance — autonomy-mode gate on promotion (ADR-0146 D2)", () => {
+  function seedStrongPublicProposal(vault: MemoryVaultStore): void {
+    insert(vault, { id: "m", status: "proposed", sensitivity: "public", confidence: 0.6 });
+  }
+
+  it("does NOT promote a strong public proposal in the default governed-assist posture", () => {
+    const vault = makeVault();
+    seedStrongPublicProposal(vault);
+    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    expect(result.status).toBe(200);
+    expect(counts(result).promoted).toBe(0);
+    expect(vault.getMemory(mid("m"))?.status).toBe("proposed");
+  });
+
+  it("does NOT promote when the ceiling is wide but the operator's persisted posture is governed-assist", () => {
+    const vault = makeVault();
+    seedStrongPublicProposal(vault);
+    const store: UiStore = createInMemoryUiStore();
+    store.updateMemoryAutonomyPolicy("governed-assist", 0);
+    const result = handleRunMaintenance(
+      makeCtx(),
+      makeDeps({
+        memoryVault: vault,
+        store,
+        codingRuntimeDeploymentCeiling: "autonomous-delivery",
+      }),
+    );
+    expect(counts(result).promoted).toBe(0);
+    expect(vault.getMemory(mid("m"))?.status).toBe("proposed");
+  });
+
+  it("does NOT promote when the operator requested a wide posture the deployment ceiling denies", () => {
+    const vault = makeVault();
+    seedStrongPublicProposal(vault);
+    const store: UiStore = createInMemoryUiStore();
+    store.updateMemoryAutonomyPolicy("autonomous-delivery", 0);
+    const result = handleRunMaintenance(
+      makeCtx(),
+      makeDeps({ memoryVault: vault, store, codingRuntimeDeploymentCeiling: "governed-assist" }),
+    );
+    expect(counts(result).promoted).toBe(0);
+    expect(vault.getMemory(mid("m"))?.status).toBe("proposed");
+  });
+
+  it("fails closed to no promotion when the deployment ceiling is malformed", () => {
+    const vault = makeVault();
+    seedStrongPublicProposal(vault);
+    const store: UiStore = createInMemoryUiStore();
+    store.updateMemoryAutonomyPolicy("autonomous-delivery", 0);
+    const result = handleRunMaintenance(
+      makeCtx(),
+      makeDeps({
+        memoryVault: vault,
+        store,
+        codingRuntimeDeploymentCeiling: "not-a-mode" as unknown as CodingWorkbenchMode,
+      }),
+    );
+    expect(counts(result).promoted).toBe(0);
+    expect(vault.getMemory(mid("m"))?.status).toBe("proposed");
+  });
+
+  it("fails closed to no promotion when the persisted posture cannot be read", () => {
+    const vault = makeVault();
+    seedStrongPublicProposal(vault);
+    const store = createInMemoryUiStore();
+    const faultyStore: UiStore = {
+      ...store,
+      readMemoryAutonomyPolicy: () => {
+        throw new Error("ui store unavailable");
+      },
+    };
+    const result = handleRunMaintenance(
+      makeCtx(),
+      makeDeps({
+        memoryVault: vault,
+        store: faultyStore,
+        codingRuntimeDeploymentCeiling: "autonomous-delivery",
+      }),
+    );
+    expect(result.status).toBe(200);
+    expect(counts(result).promoted).toBe(0);
+    expect(vault.getMemory(mid("m"))?.status).toBe("proposed");
+  });
+
+  it("promotes under supervised-coding, so raising the posture never tightens the outcome", () => {
+    const vault = makeVault();
+    seedStrongPublicProposal(vault);
+    const result = handleRunMaintenance(makeCtx(), makeUnattendedDeps(vault, "supervised-coding"));
+    expect(counts(result).promoted).toBe(1);
+    expect(vault.getMemory(mid("m"))?.status).toBe("accepted");
+  });
+
+  it("attributes an unattended promotion to retention, never to the operator's Memory Center", () => {
+    // The audit envelope is the only record of WHO accepted a memory. Claiming `memory-center` for
+    // an autonomous sweep would attribute an unattended acceptance to a human surface.
+    const vault = makeVault();
+    seedStrongPublicProposal(vault);
+    const ledger = new Map<string, string>();
+    const evidenceStore: UiHandlerDeps["evidenceStore"] = {
+      put: (runId: string, json: string): string => {
+        ledger.set(runId, json);
+        return runId;
+      },
+      get: (runId: string): string | undefined => ledger.get(runId),
+      list: (): readonly string[] => [...ledger.keys()],
+      delete: (runId: string): void => {
+        ledger.delete(runId);
+      },
+    };
+    const base = makeUnattendedDeps(vault);
+    const result = handleRunMaintenance(makeCtx(), { ...base, evidenceStore });
+    expect(counts(result).promoted).toBe(1);
+    const serialized = [...ledger.values()].join("\n");
+    expect(serialized).toContain('"initiatorSurface":"retention"');
+    expect(serialized).not.toContain("memory-center");
+    // Still body-free.
+    expect(serialized).not.toContain("prefers dark mode");
+  });
+});
+
+// A `proposed` record exists solely to be decided by a human. An unattended pass may fade it out of
+// retrieval, but it may NOT destroy it: `proposed -> expired` is the contract's documented terminus
+// for "capture window elapsed before review" (MEMORY_STATUS_TRANSITIONS), and it keeps the record
+// visible in the review queue and recoverable (expired -> accepted / archived / forgotten).
+describe("handleRunMaintenance — un-reviewed proposals are expired, never hard-deleted", () => {
+  const SCOPE = { kind: "user", userId: "u-1" as unknown as MemoryUserId } as const;
+
+  it("expires a faint aged-out proposal instead of deleting it", () => {
+    const vault = makeVault();
+    insert(vault, {
+      id: "m",
+      status: "proposed",
+      sensitivity: "public",
+      confidence: 0.2,
+      createdAt: Date.now() - 400 * DAY,
+    });
+    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    expect(counts(result).forgotten).toBe(0);
+    expect(counts(result).expired).toBe(1);
+    expect(vault.getMemory(mid("m"))?.status).toBe("expired");
+    expect(vault.getMemory(mid("m"))?.staleReason).toBe("proposed-faint-aged-out");
+    expect(vault.listTombstonesByScope(SCOPE)).toHaveLength(0);
+  });
+
+  it("is idempotent: a second pass neither re-expires nor deletes the record", () => {
+    const vault = makeVault();
+    insert(vault, {
+      id: "m",
+      status: "proposed",
+      sensitivity: "public",
+      confidence: 0.2,
+      createdAt: Date.now() - 400 * DAY,
+    });
+    handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    const second = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    expect(counts(second).expired).toBe(0);
+    expect(counts(second).forgotten).toBe(0);
+    expect(vault.getMemory(mid("m"))?.status).toBe("expired");
+    expect(vault.listTombstonesByScope(SCOPE)).toHaveLength(0);
+  });
+
+  it("still hard-deletes a record whose explicit validity window elapsed", () => {
+    // The validity-expired branch is an author-declared end date, not an un-answered review item.
+    const vault = makeVault();
+    insert(vault, {
+      id: "m",
+      status: "proposed",
+      confidence: 0.9,
+      createdAt: Date.now() - DAY,
+      validUntil: Date.now() - 1,
+    });
+    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    expect(counts(result).forgotten).toBe(1);
+    expect(vault.getMemory(mid("m"))).toBeUndefined();
+  });
+});
+
 const HOUR = 3_600_000;
 const NOW = 1_600_000_000_000;
 
@@ -451,6 +645,43 @@ describe("maybeRunAutoMaintenance (O-V4)", () => {
     ).toBeNull();
     // Cursor advanced BEFORE running so a persistently-failing pass cannot hot-loop.
     expect(state.lastRunAtMs).toBe(NOW);
+  });
+
+  it("promotes nothing when no autonomy mode is supplied (fail closed to governed-assist)", () => {
+    const vault = makeVault();
+    insert(vault, {
+      id: "m",
+      status: "proposed",
+      sensitivity: "public",
+      confidence: 0.6,
+      createdAt: NOW,
+    });
+    const result = maybeRunAutoMaintenance(vault, undefined, {}, { nowMs: NOW, enabled: true });
+    expect(result?.promoted).toBe(0);
+    expect(vault.getMemory(mid("m"))?.status).toBe("proposed");
+  });
+
+  it("promotes only when the caller hands it a posture that permits unattended acceptance", () => {
+    const vault = makeVault();
+    insert(vault, {
+      id: "m",
+      status: "proposed",
+      sensitivity: "public",
+      confidence: 0.6,
+      createdAt: NOW,
+    });
+    const result = maybeRunAutoMaintenance(
+      vault,
+      undefined,
+      {},
+      {
+        nowMs: NOW,
+        enabled: true,
+        autonomyMode: "autonomous-delivery",
+      },
+    );
+    expect(result?.promoted).toBe(1);
+    expect(vault.getMemory(mid("m"))?.status).toBe("accepted");
   });
 });
 

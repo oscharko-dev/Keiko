@@ -16,14 +16,20 @@ import { Icons } from "../Icons";
 import { useNativeFileDialogCapability } from "../hooks/useNativeFileDialogCapability";
 import type { FilesWindowContext } from "../hooks/useWorkspace.types";
 import {
-  type ConfigField,
+  localizedWindowConfigFields,
+  localizedWindowCta,
+  localizedWindowDesc,
+  localizedWindowTitle,
+  type LocalizedConfigField,
   type WIN_TYPES as WinTypes,
   type WindowType,
 } from "../windows/WindowsRegistry";
+import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import KeikoSelect from "../KeikoSelect";
 import { PermControl, type Cfg, type CfgValue } from "./PermControl";
 import { isWorkflowEligibleModel } from "../../../../lib/workflow-eligibility";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-messages.en";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const FilesIcon = Icons.files;
@@ -37,30 +43,33 @@ interface NewWindowDialogProps {
   readonly onClose: () => void;
 }
 
-function initialCfg(fields: readonly ConfigField[]): Cfg {
+function initialCfg(fields: readonly LocalizedConfigField[]): Cfg {
   const out: Cfg = {};
   for (const f of fields) {
-    out[f.key] = f.def ?? "";
+    out[f.key] = f.def;
   }
   return out;
 }
 
-function localizedNewWindowFields(
+// 0.3.0 release audit — the dialog seeds the chat title field with the LOCALIZED default, so that
+// display string must not leave the dialog as data. When the operator accepts it unchanged (or
+// clears the field), the window is confirmed with NO title plus the structural "still untitled"
+// marker the workspace reads (`CHAT_TITLE_IS_DEFAULT_CFG_KEY`). Two things then hold in every
+// locale: the workspace never repeats the default title as a subtitle, and the chat record keeps
+// the server's canonical stored default, which is what the server's first-turn auto-title keys on
+// — a German chat used to be created as "Neuer Chat" and could therefore never be auto-titled.
+// An operator-chosen title is passed through untouched and carries no marker.
+function withChatUntitledMarker(
   type: WindowType,
-  fields: readonly ConfigField[],
-  t: I18nTranslate,
-): readonly ConfigField[] {
-  if (type !== "chat") return fields;
-  return fields.map((field) =>
-    field.key === "title"
-      ? {
-          ...field,
-          label: t("newWindow.chat.fieldTitle"),
-          def: t("newWindow.chat.defaultTitle"),
-          placeholder: t("newWindow.chat.placeholder"),
-        }
-      : field,
-  );
+  fields: readonly LocalizedConfigField[],
+  cfg: Cfg,
+): Cfg {
+  if (type !== "chat") return cfg;
+  const seededDefault = fields.find((field) => field.key === "title")?.def ?? "";
+  const entered = resolveFieldValue(cfg["title"]).trim();
+  if (entered.length > 0 && entered !== seededDefault.trim()) return cfg;
+  const { title, ...rest } = cfg;
+  return { ...rest, [CHAT_TITLE_IS_DEFAULT_CFG_KEY]: true };
 }
 
 function focusableInside(root: HTMLElement): readonly HTMLElement[] {
@@ -74,15 +83,13 @@ function focusableInside(root: HTMLElement): readonly HTMLElement[] {
   return out;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Something went wrong.";
+function errorMessage(error: unknown, t: I18nTranslate): string {
+  return error instanceof Error ? error.message : t("newWindow.unexpectedError");
 }
 
 // Epic #1941 (ADR-0118 D4) — copy for the two calm native-dialog outcomes every Browse surface in
-// this dialog shares. Manual path entry stays available either way.
-const NATIVE_DIALOG_BUSY_MESSAGE = "A native dialog is already open. Close it first.";
-const NATIVE_DIALOG_UNSUPPORTED_MESSAGE =
-  "Native dialogs are unavailable on this platform. Enter the path manually.";
+// this dialog shares. Manual path entry stays available either way. The copy lives in the shared
+// catalog (`nativeDialog.*`) so the German shell no longer falls back to an English sentence.
 
 // Opens the native OS folder dialog and routes the outcome: a picked path lands in `onPick`,
 // cancellation is a non-event, everything else becomes calm dialog copy via `onError`.
@@ -91,6 +98,7 @@ async function browseNativeDirectory(
   title: string,
   onPick: (path: string) => void,
   onError: (message: string) => void,
+  t: I18nTranslate,
 ): Promise<void> {
   const trimmed = seedPath.trim();
   const outcome = await pickWithNativeDialog({
@@ -102,8 +110,8 @@ async function browseNativeDirectory(
     onPick(outcome.paths[0]);
     return;
   }
-  if (outcome.kind === "busy") onError(NATIVE_DIALOG_BUSY_MESSAGE);
-  if (outcome.kind === "unsupported") onError(NATIVE_DIALOG_UNSUPPORTED_MESSAGE);
+  if (outcome.kind === "busy") onError(t("nativeDialog.busy"));
+  if (outcome.kind === "unsupported") onError(t("nativeDialog.unsupported"));
   if (outcome.kind === "error") onError(outcome.message);
 }
 
@@ -112,13 +120,23 @@ type ProductionAgentWorkflowId = Extract<
   "unit-test-generation" | "bug-investigation"
 >;
 
+// Message keys, not display copy: the agent picker and the task-header chip both render from this
+// table, so a literal here reached the user untranslated in every locale.
 const AGENT_WORKFLOWS: readonly {
   readonly id: ProductionAgentWorkflowId;
-  readonly label: string;
-  readonly scope: string;
+  readonly labelKey: MessageKey;
+  readonly scopeKey: MessageKey;
 }[] = [
-  { id: "unit-test-generation", label: "Unit Test Agent", scope: "Source file" },
-  { id: "bug-investigation", label: "Bugfix Agent", scope: "Bug report" },
+  {
+    id: "unit-test-generation",
+    labelKey: "agentLauncher.workflow.unitTest",
+    scopeKey: "agentLauncher.scope.sourceFile",
+  },
+  {
+    id: "bug-investigation",
+    labelKey: "agentLauncher.workflow.bugfix",
+    scopeKey: "agentLauncher.scope.bugReport",
+  },
 ];
 
 function availableProjectPaths(projects: readonly ProjectWithAvailability[]): readonly string[] {
@@ -275,18 +293,22 @@ function validationMessage(
   workspaceRoot: string,
   modelId: string,
   fields: AgentLauncherFields,
+  t: I18nTranslate,
 ): string | null {
-  if (workspaceRoot.length === 0) return "Repository is required.";
-  if (modelId.length === 0) return "No compatible model is available.";
+  if (workspaceRoot.length === 0) return t("agentLauncher.validation.repositoryRequired");
+  if (modelId.length === 0) return t("agentLauncher.validation.noModel");
   if (workflow === "explain-plan" && fields.explainFilePath.trim().length === 0) {
-    return "Explain plan requires a file path.";
+    return t("agentLauncher.validation.explainFile");
   }
   if (workflow === "unit-test-generation") {
-    if (fields.unitFilePath.trim().length === 0) return "Unit Test Agent requires a source file.";
+    if (fields.unitFilePath.trim().length === 0) {
+      return t("agentLauncher.validation.unitSource");
+    }
   }
   if (workflow === "bug-investigation") {
-    if (fields.bugDescription.trim().length === 0)
-      return "Bugfix Agent requires an observed behavior.";
+    if (fields.bugDescription.trim().length === 0) {
+      return t("agentLauncher.validation.bugDescription");
+    }
   }
   return null;
 }
@@ -306,11 +328,12 @@ export function resolveFieldValue(raw: CfgValue): string {
 }
 
 function renderField(
-  f: ConfigField,
+  f: LocalizedConfigField,
   cfg: Cfg,
   set: (k: string, v: CfgValue) => void,
   firstRef: ((node: HTMLElement | null) => void) | null,
   browse: DirectoryBrowseControl,
+  t: I18nTranslate,
 ): ReactNode {
   if (f.type === "perm") return <PermControl cfg={cfg} set={set} />;
   const raw = cfg[f.key];
@@ -371,12 +394,12 @@ function renderField(
             aria-describedby={browse.supported ? undefined : nativeNoteId}
             onClick={() => browse.open(f.key, value)}
           >
-            Browse
+            {t("common.browse")}
           </button>
         </span>
         {!browse.supported ? (
           <span id={nativeNoteId} className="dlg-note">
-            {NATIVE_DIALOG_UNSUPPORTED_MESSAGE}
+            {t("nativeDialog.unsupported")}
           </span>
         ) : null}
       </>
@@ -423,8 +446,8 @@ function findAgentWorkflow(workflow: ProductionAgentWorkflowId): (typeof AGENT_W
   return AGENT_WORKFLOWS.find((item) => item.id === workflow) ?? AGENT_WORKFLOWS[0]!;
 }
 
-function agentStartLabel(workflow: ProductionAgentWorkflowId): string {
-  return workflow === "unit-test-generation" ? "Start Unit Test Agent" : "Start Bugfix Agent";
+function agentStartLabel(workflow: ProductionAgentWorkflowId, t: I18nTranslate): string {
+  return t("agentLauncher.start", { label: t(findAgentWorkflow(workflow).labelKey) });
 }
 
 // The native repository dialog opens at the OS default location when no seed is known; the seed
@@ -473,6 +496,7 @@ type SourceFilePickResolution =
 function resolveSourceFilePick(
   outcome: NativeDialogPickOutcome,
   workspace: string,
+  t: I18nTranslate,
 ): SourceFilePickResolution {
   if (outcome.kind === "picked" && outcome.paths[0] !== undefined) {
     const relative = normalizeAgentPathForWorkspace(workspace, outcome.paths[0]);
@@ -480,9 +504,9 @@ function resolveSourceFilePick(
       ? { kind: "outside-workspace" }
       : { kind: "picked", relative };
   }
-  if (outcome.kind === "busy") return { kind: "message", message: NATIVE_DIALOG_BUSY_MESSAGE };
+  if (outcome.kind === "busy") return { kind: "message", message: t("nativeDialog.busy") };
   if (outcome.kind === "unsupported") {
-    return { kind: "message", message: NATIVE_DIALOG_UNSUPPORTED_MESSAGE };
+    return { kind: "message", message: t("nativeDialog.unsupported") };
   }
   if (outcome.kind === "error") return { kind: "message", message: outcome.message };
   return { kind: "noop" };
@@ -499,6 +523,7 @@ interface AgentTaskFieldsProps {
   readonly canBrowseSourceFile: boolean;
   readonly nativeDialogSupported: boolean;
   readonly sourceBrowseHelperId: string;
+  readonly t: I18nTranslate;
   readonly updateField: (patch: Partial<AgentLauncherFields>) => void;
   readonly onBrowseSourceFile: () => void;
 }
@@ -510,16 +535,17 @@ function renderAgentSourceFileField(props: AgentTaskFieldsProps): ReactNode {
     canBrowseSourceFile,
     nativeDialogSupported,
     sourceBrowseHelperId,
+    t,
     updateField,
     onBrowseSourceFile,
   } = props;
   return (
     <label className="dlg-field">
-      <span className="dlg-label">Source file</span>
+      <span className="dlg-label">{t("agentLauncher.scope.sourceFile")}</span>
       <span className="dlg-dirwrap">
         <input
           className="dlg-input mono"
-          placeholder="src/file.ts"
+          placeholder={t("agentLauncher.sourceFilePlaceholder")}
           value={fields.unitFilePath}
           onChange={(event) => updateField({ unitFilePath: event.target.value })}
           onBlur={(event) =>
@@ -531,19 +557,19 @@ function renderAgentSourceFileField(props: AgentTaskFieldsProps): ReactNode {
         <button
           type="button"
           className="dlg-btn dlg-dirbtn"
-          aria-label="Browse source file"
+          aria-label={t("agentLauncher.browseSourceFile")}
           disabled={!canBrowseSourceFile}
           aria-describedby={!canBrowseSourceFile ? sourceBrowseHelperId : undefined}
           onClick={onBrowseSourceFile}
         >
-          Browse
+          {t("common.browse")}
         </button>
       </span>
       {!canBrowseSourceFile ? (
         <span id={sourceBrowseHelperId} className="dlg-note">
           {nativeDialogSupported
-            ? "Select a repository before browsing source files."
-            : NATIVE_DIALOG_UNSUPPORTED_MESSAGE}
+            ? t("agentLauncher.selectRepositoryFirst")
+            : t("nativeDialog.unsupported")}
         </span>
       ) : null}
     </label>
@@ -551,22 +577,22 @@ function renderAgentSourceFileField(props: AgentTaskFieldsProps): ReactNode {
 }
 
 function renderAgentBugFields(props: AgentTaskFieldsProps): ReactNode {
-  const { fields, workspace, updateField } = props;
+  const { fields, workspace, t, updateField } = props;
   return (
     <>
       <label className="dlg-field">
-        <span className="dlg-label">Observed behavior</span>
+        <span className="dlg-label">{t("agentLauncher.observedBehavior")}</span>
         <textarea
           className="dlg-input dlg-textarea"
           rows={2}
-          placeholder="Describe the observed bug."
+          placeholder={t("agentLauncher.observedBehaviorPlaceholder")}
           value={fields.bugDescription}
           onChange={(event) => updateField({ bugDescription: event.target.value })}
         />
       </label>
       <label className="dlg-field">
         <span className="dlg-label">
-          Failing output <span className="dlg-opt">optional</span>
+          {t("agentLauncher.failingOutput")} <span className="dlg-opt">{t("common.optional")}</span>
         </span>
         <textarea
           className="dlg-input dlg-textarea mono"
@@ -577,7 +603,7 @@ function renderAgentBugFields(props: AgentTaskFieldsProps): ReactNode {
       </label>
       <label className="dlg-field">
         <span className="dlg-label">
-          Stack trace <span className="dlg-opt">optional</span>
+          {t("agentLauncher.stackTrace")} <span className="dlg-opt">{t("common.optional")}</span>
         </span>
         <textarea
           className="dlg-input dlg-textarea mono"
@@ -588,12 +614,12 @@ function renderAgentBugFields(props: AgentTaskFieldsProps): ReactNode {
       </label>
       <label className="dlg-field">
         <span className="dlg-label">
-          Related files <span className="dlg-opt">optional</span>
+          {t("agentLauncher.relatedFiles")} <span className="dlg-opt">{t("common.optional")}</span>
         </span>
         <textarea
           className="dlg-input dlg-textarea mono"
           rows={2}
-          placeholder="src/file.ts, src/other.ts"
+          placeholder={t("agentLauncher.relatedFilesPlaceholder")}
           value={fields.bugTargetFiles}
           onChange={(event) => updateField({ bugTargetFiles: event.target.value })}
           onBlur={(event) =>
@@ -616,13 +642,14 @@ function renderAgentRegistrationWarning(
   registered: boolean,
   registering: boolean,
   onRegister: () => void,
+  t: I18nTranslate,
 ): ReactNode {
   if (workspace.length === 0 || registered) return null;
   return (
     <div className="dlg-agent-warning">
-      <span>Repository is not registered.</span>
+      <span>{t("agentLauncher.notRegistered")}</span>
       <button type="button" className="dlg-btn" disabled={registering} onClick={onRegister}>
-        {registering ? "Registering…" : "Register repository"}
+        {registering ? t("agentLauncher.registering") : t("agentLauncher.register")}
       </button>
     </div>
   );
@@ -631,6 +658,7 @@ function renderAgentRegistrationWarning(
 function renderCurrentFileButton(
   currentFile: string | null,
   onUseCurrentFile: () => void,
+  t: I18nTranslate,
 ): ReactNode {
   if (currentFile === null) return null;
   return (
@@ -640,7 +668,8 @@ function renderCurrentFileButton(
       onClick={onUseCurrentFile}
       title={currentFile}
     >
-      <FilesIcon size={13} /> Use current file <span className="mono">{currentFile}</span>
+      <FilesIcon size={13} /> {t("agentLauncher.useCurrentFile")}{" "}
+      <span className="mono">{currentFile}</span>
     </button>
   );
 }
@@ -649,11 +678,11 @@ function renderCurrentFileButton(
 // Start button's aria-describedby. <output> is the native status live region
 // (S6819); it is inline like the <span> it replaces, so `.dlg-note` keeps
 // rendering the same box.
-function renderAgentLoadingStatus(loading: boolean): ReactNode {
+function renderAgentLoadingStatus(loading: boolean, t: I18nTranslate): ReactNode {
   if (!loading) return null;
   return (
     <output id="agent-start-validation" className="dlg-note">
-      Loading models and projects…
+      {t("agentLauncher.loading")}
     </output>
   );
 }
@@ -669,11 +698,15 @@ function renderAgentValidationStatus(loading: boolean, validation: string | null
   );
 }
 
-function renderRepositoryBrowseNote(canBrowseRepository: boolean, helperId: string): ReactNode {
+function renderRepositoryBrowseNote(
+  canBrowseRepository: boolean,
+  helperId: string,
+  t: I18nTranslate,
+): ReactNode {
   if (canBrowseRepository) return null;
   return (
     <span id={helperId} className="dlg-note">
-      {NATIVE_DIALOG_UNSUPPORTED_MESSAGE}
+      {t("nativeDialog.unsupported")}
     </span>
   );
 }
@@ -684,6 +717,7 @@ function AgentLauncher({
   onConfirm,
   onClose,
 }: AgentLauncherProps): ReactNode {
+  const t = useTranslate();
   const [workflow, setWorkflow] = useState<ProductionAgentWorkflowId>("unit-test-generation");
   const [workspaceRoot, setWorkspaceRoot] = useState(filesContext?.root ?? "");
   const [modelId, setModelId] = useState("");
@@ -699,10 +733,10 @@ function AgentLauncher({
   const workspace = workspaceRoot.trim();
   const currentFile = resolveCurrentFile(filesContext, workspace);
   const registered = workspace.length > 0 && projects.includes(workspace);
-  const validation = validationMessage(workflow, workspace, modelId, fields);
+  const validation = validationMessage(workflow, workspace, modelId, fields, t);
   const canStart = validation === null && registered && !starting && !loading;
   const selectedAgent = findAgentWorkflow(workflow);
-  const startLabel = agentStartLabel(workflow);
+  const startLabel = agentStartLabel(workflow, t);
   const nativeDialogSupported = useNativeFileDialogCapability();
   const firstAvailableProjectRoot = projects[0] ?? "";
   const repositoryBrowseSeed = resolveRepositoryBrowseSeed(
@@ -730,7 +764,7 @@ function AgentLauncher({
         setProjects(availableProjectPaths(projectPayload.projects));
       })
       .catch((error: unknown) => {
-        if (!cancelled) setDialogError(errorMessage(error));
+        if (!cancelled) setDialogError(errorMessage(error, t));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -738,7 +772,7 @@ function AgentLauncher({
     return () => {
       cancelled = true;
     };
-  }, [setDialogError]);
+  }, [setDialogError, t]);
 
   const updateField = (patch: Partial<AgentLauncherFields>): void => {
     setFields((current) => ({ ...current, ...patch }));
@@ -773,7 +807,7 @@ function AgentLauncher({
       await createProject({ path: workspace });
       await refreshProjects();
     } catch (error: unknown) {
-      setDialogError(errorMessage(error));
+      setDialogError(errorMessage(error, t));
     } finally {
       setRegistering(false);
     }
@@ -781,7 +815,7 @@ function AgentLauncher({
 
   const startAgent = async (): Promise<void> => {
     if (!canStart) {
-      setDialogError(validation ?? "Repository is not registered.");
+      setDialogError(validation ?? t("agentLauncher.notRegistered"));
       return;
     }
     setStarting(true);
@@ -803,9 +837,9 @@ function AgentLauncher({
     } catch (error: unknown) {
       if (isWorkspaceNotRegisteredError(error)) {
         await refreshProjects().catch(() => undefined);
-        setDialogError("Repository is not registered.");
+        setDialogError(t("agentLauncher.notRegistered"));
       } else {
-        setDialogError(errorMessage(error));
+        setDialogError(errorMessage(error, t));
       }
     } finally {
       setStarting(false);
@@ -816,9 +850,10 @@ function AgentLauncher({
     if (!canBrowseRepository) return;
     void browseNativeDirectory(
       repositoryBrowseSeed,
-      "Select repository folder",
+      t("nativeDialog.selectRepository"),
       setWorkspaceRoot,
       setDialogError,
+      t,
     );
   };
 
@@ -829,16 +864,16 @@ function AgentLauncher({
     if (!canBrowseSourceFile) return;
     void pickWithNativeDialog({
       mode: "open-file",
-      title: "Select source file",
+      title: t("nativeDialog.selectSourceFile"),
       defaultPath: workspace,
     }).then((outcome) => {
-      const resolved = resolveSourceFilePick(outcome, workspace);
+      const resolved = resolveSourceFilePick(outcome, workspace, t);
       if (resolved.kind === "picked") {
         updateField({ unitFilePath: resolved.relative });
         return;
       }
       if (resolved.kind === "outside-workspace") {
-        setDialogError("Choose a file inside the selected repository.");
+        setDialogError(t("agentLauncher.fileOutsideRepository"));
         return;
       }
       if (resolved.kind === "message") setDialogError(resolved.message);
@@ -849,21 +884,21 @@ function AgentLauncher({
     <>
       <div className="dlg-agent-grid">
         <div className="dlg-field">
-          <span className="dlg-label">Agent</span>
+          <span className="dlg-label">{t("agentLauncher.agent")}</span>
           <span className="dlg-selwrap">
             <KeikoSelect
               triggerClassName="dlg-input"
               value={workflow}
-              ariaLabel="Agent"
+              ariaLabel={t("agentLauncher.agent")}
               /* eslint-disable-next-line jsx-a11y/no-autofocus -- launcher dialog starts on workflow selection for keyboard users. */
               autoFocus
-              menuTitle="Agent"
-              menuCountLabel={`${AGENT_WORKFLOWS.length.toString()} agents`}
+              menuTitle={t("agentLauncher.agent")}
+              menuCountLabel={t("agentLauncher.agentCount", { count: AGENT_WORKFLOWS.length })}
               sections={[
                 {
                   options: AGENT_WORKFLOWS.map((item) => ({
                     value: item.id,
-                    label: item.label,
+                    label: t(item.labelKey),
                   })),
                 },
               ]}
@@ -875,14 +910,14 @@ function AgentLauncher({
           </span>
         </div>
         <div className="dlg-field">
-          <span className="dlg-label">Model</span>
+          <span className="dlg-label">{t("agentLauncher.model")}</span>
           <span className="dlg-selwrap">
             <KeikoSelect
               triggerClassName="dlg-input mono"
               value={modelId}
-              ariaLabel="Model"
+              ariaLabel={t("agentLauncher.model")}
               disabled={models.length === 0}
-              menuTitle="Model"
+              menuTitle={t("agentLauncher.model")}
               mono
               sections={[
                 {
@@ -898,12 +933,12 @@ function AgentLauncher({
         </div>
       </div>
       <label className="dlg-field">
-        <span className="dlg-label">Repository</span>
+        <span className="dlg-label">{t("agentLauncher.repository")}</span>
         <span className="dlg-dirwrap">
           <input
             className="dlg-input mono"
             value={workspaceRoot}
-            placeholder="/absolute/repository/path"
+            placeholder={t("agentLauncher.repositoryPlaceholder")}
             onChange={(event) => setWorkspaceRoot(event.target.value)}
           />
           <button
@@ -913,22 +948,23 @@ function AgentLauncher({
             aria-describedby={!canBrowseRepository ? repositoryBrowseHelperId : undefined}
             onClick={openRepositoryPicker}
           >
-            Browse
+            {t("common.browse")}
           </button>
         </span>
-        {renderRepositoryBrowseNote(canBrowseRepository, repositoryBrowseHelperId)}
+        {renderRepositoryBrowseNote(canBrowseRepository, repositoryBrowseHelperId, t)}
       </label>
       {renderAgentRegistrationWarning(
         workspace,
         registered,
         registering,
         () => void registerWorkspace(),
+        t,
       )}
-      {renderCurrentFileButton(currentFile, useCurrentFile)}
+      {renderCurrentFileButton(currentFile, useCurrentFile, t)}
       <div className="dlg-agent-task">
         <div className="dlg-agent-task-head">
-          <span className="dlg-agent-task-title">{selectedAgent.label}</span>
-          <span className="dlg-agent-task-scope">{selectedAgent.scope}</span>
+          <span className="dlg-agent-task-title">{t(selectedAgent.labelKey)}</span>
+          <span className="dlg-agent-task-scope">{t(selectedAgent.scopeKey)}</span>
         </div>
         {renderAgentTaskFields({
           workflow,
@@ -937,15 +973,16 @@ function AgentLauncher({
           canBrowseSourceFile,
           nativeDialogSupported,
           sourceBrowseHelperId,
+          t,
           updateField,
           onBrowseSourceFile: openSourceFilePicker,
         })}
       </div>
       <div className="dlg-agent-actions">
-        {renderAgentLoadingStatus(loading)}
+        {renderAgentLoadingStatus(loading, t)}
         {renderAgentValidationStatus(loading, validation)}
         <button type="button" className="dlg-btn" onClick={onClose}>
-          Cancel
+          {t("common.cancel")}
         </button>
         <button
           type="button"
@@ -955,7 +992,7 @@ function AgentLauncher({
           aria-describedby={!canStart && !starting ? "agent-start-validation" : undefined}
           onClick={() => void startAgent()}
         >
-          {starting ? "Starting…" : startLabel}
+          {starting ? t("agentLauncher.starting") : startLabel}
         </button>
       </div>
     </>
@@ -970,11 +1007,10 @@ export function NewWindowDialog({
   onClose,
 }: NewWindowDialogProps): ReactNode {
   const translate = useTranslate();
-  const t = types[type];
-  const fields = useMemo(
-    () => localizedNewWindowFields(type, t.config ?? [], translate),
-    [translate, t.config, type],
-  );
+  const def = types[type];
+  // Every launcher field arrives already localized; `type === "chat"` no longer needs a bespoke
+  // branch, because the whole registry now carries message keys instead of English literals.
+  const fields = useMemo(() => localizedWindowConfigFields(translate, type), [translate, type]);
   const [cfg, setCfg] = useState<Cfg>(() => initialCfg(fields));
   const [shown, setShown] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
@@ -982,9 +1018,11 @@ export function NewWindowDialog({
   const firstFieldRef = useRef<HTMLElement | null>(null);
   const dlgRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
-  const dialogTitle = type === "chat" ? translate("newWindow.chat.title") : `New ${t.title} window`;
-  const dialogDesc = type === "chat" ? translate("newWindow.chat.description") : t.desc;
-  const cta = type === "chat" ? translate("newWindow.chat.open") : (t.cta ?? `Open ${t.title}`);
+  const windowLabel = localizedWindowTitle(translate, type);
+  const dialogTitle = translate("newWindow.title", { label: windowLabel });
+  const dialogDesc = localizedWindowDesc(translate, type);
+  const cta =
+    localizedWindowCta(translate, type) ?? translate("newWindow.open", { label: windowLabel });
 
   useEffect(() => {
     // capture the element that opened this dialog so we can return focus on close
@@ -1054,12 +1092,12 @@ export function NewWindowDialog({
         }
       })
       .catch((error: unknown) => {
-        if (!cancelled) setDialogError(errorMessage(error));
+        if (!cancelled) setDialogError(errorMessage(error, translate));
       });
     return () => {
       cancelled = true;
     };
-  }, [cfg.root, type]);
+  }, [cfg.root, type, translate]);
 
   const set = (k: string, v: CfgValue): void => setCfg((s) => ({ ...s, [k]: v }));
   // Epic #1941 — directory fields browse through the native OS dialog; a picked folder lands in
@@ -1068,11 +1106,17 @@ export function NewWindowDialog({
     supported: nativeDialogSupported,
     open: (key, value) => {
       setDialogError(null);
-      void browseNativeDirectory(value, "Select folder", (path) => set(key, path), setDialogError);
+      void browseNativeDirectory(
+        value,
+        translate("nativeDialog.selectFolder"),
+        (path) => set(key, path),
+        setDialogError,
+        translate,
+      );
     },
   };
   const submit = (): void => {
-    if (type !== "agents") onConfirm(cfg);
+    if (type !== "agents") onConfirm(withChatUntitledMarker(type, fields, cfg));
   };
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>): void => {
@@ -1109,7 +1153,7 @@ export function NewWindowDialog({
     }
   };
 
-  const Icon = Icons[t.icon];
+  const Icon = Icons[def.icon];
 
   return (
     <div className={"dlg-overlay" + (shown ? " in" : "")} onPointerDown={onClose}>
@@ -1158,7 +1202,9 @@ export function NewWindowDialog({
             />
           ) : (
             fields.length === 0 && (
-              <div className="dlg-empty">Add a new {t.title} window to your workspace.</div>
+              <div className="dlg-empty">
+                {translate("newWindow.empty", { label: windowLabel })}
+              </div>
             )
           )}
           {type !== "agents" &&
@@ -1180,6 +1226,7 @@ export function NewWindowDialog({
                       }
                     : null,
                   browse,
+                  translate,
                 )}
               </label>
             ))}

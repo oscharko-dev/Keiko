@@ -14,10 +14,18 @@ import {
 import { createCodingAppSessionChannel } from "../coding-app-session/sessionChannel.js";
 import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js";
 import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js";
-import { API_ROUTES, STREAMING, matchRoute, type RouteContext } from "../routes.js";
+import {
+  API_ROUTES,
+  STREAMING,
+  matchRoute,
+  type HandlerOutcome,
+  type RouteContext,
+  type RouteDefinition,
+} from "../routes.js";
 import {
   CODING_RUNTIME_ROUTE_GROUP,
   handleCodingRuntimeApproval,
+  handleCodingRuntimeApprovalReview,
   handleCodingRuntimeEvents,
   handleCodingRuntimeFollowUp,
   handleCodingRuntimePause,
@@ -150,6 +158,17 @@ function runtime(
           }
         : undefined,
     researchGrant: (runId: string) => (runId === "run-1" ? researchGrant : undefined),
+    pendingApprovalReview: (runId: string) =>
+      runId === "run-1"
+        ? {
+            requestId: "permission-7",
+            paths: ["src/alpha.ts", "src/beta.ts"],
+            pathsTruncated: false,
+            fileCount: 2,
+            addedLines: 12,
+            deletedLines: 4,
+          }
+        : undefined,
   };
   const eventHub = {
     subscribe: (
@@ -201,6 +220,7 @@ describe("coding runtime routes", () => {
         "GET /api/coding-workbench/runtime/status",
         "GET /api/coding-workbench/runtime/runs/:runId/events",
         "GET /api/coding-workbench/runtime/runs/:runId/research",
+        "GET /api/coding-workbench/runtime/runs/:runId/approval-review",
         "POST /api/coding-workbench/runtime/runs/:runId/approvals",
         "POST /api/coding-workbench/runtime/runs/:runId/stop",
         "POST /api/coding-workbench/runtime/runs/:runId/takeover",
@@ -370,6 +390,91 @@ describe("coding runtime routes", () => {
     expect(JSON.stringify(result.body)).not.toContain("nodejs.org");
   });
 
+  it("#2802: the paired approval-review route shows the operator the files the change would write", () => {
+    const session = pairedAppSession();
+
+    const reviewed = handleCodingRuntimeApprovalReview(
+      context(
+        "",
+        { runId: "run-1" },
+        "/api/coding-workbench/runtime/runs/run-1/approval-review",
+        session.cookie,
+      ),
+      runtime({ codingAppSessionChannel: session.channel }),
+    );
+
+    expect(reviewed).toEqual({
+      status: 200,
+      body: {
+        session: "active",
+        pending: {
+          requestId: "permission-7",
+          paths: ["src/alpha.ts", "src/beta.ts"],
+          pathsTruncated: false,
+          fileCount: 2,
+          addedLines: 12,
+          deletedLines: 4,
+        },
+      },
+    });
+  });
+
+  it("#2802: an unpaired approval-review read yields the constant projection, never a path", () => {
+    const session = pairedAppSession();
+    const unpairedProjection = { status: 200, body: { session: "unpaired" } };
+    // Same constant shape for a live run, an unknown run, a missing runId, and a server composed
+    // without the runtime, so the response is not an existence oracle (ADR-0141 D6).
+    const cases: readonly [Record<string, string>, UiHandlerDeps][] = [
+      [{ runId: "run-1" }, runtime({ codingAppSessionChannel: session.channel })],
+      [{ runId: "run-9" }, runtime({ codingAppSessionChannel: session.channel })],
+      [{}, runtime({ codingAppSessionChannel: session.channel })],
+      [
+        { runId: "run-1" },
+        runtime({ codingAppSessionChannel: session.channel, codingRuntimeOrchestrator: undefined }),
+      ],
+      [{ runId: "run-1" }, runtime()],
+    ];
+    for (const [params, deps] of cases) {
+      const result = handleCodingRuntimeApprovalReview(context("", params), deps);
+      expect(result).toEqual(unpairedProjection);
+      expect(JSON.stringify(result.body)).not.toContain("src/alpha.ts");
+    }
+  });
+
+  it("#2802: a paired review of an unknown run conceals existence instead of reporting no review", () => {
+    const session = pairedAppSession();
+
+    const result = handleCodingRuntimeApprovalReview(
+      context(
+        "",
+        { runId: "run-9" },
+        "/api/coding-workbench/runtime/runs/run-9/approval-review",
+        session.cookie,
+      ),
+      runtime({ codingAppSessionChannel: session.channel }),
+    );
+
+    expect(result.status).toBe(404);
+    expect(JSON.stringify(result.body)).not.toContain("src/alpha.ts");
+  });
+
+  it("#2802: the content-free status and run projections never carry a reviewable path", () => {
+    const session = pairedAppSession();
+    const status = handleCodingRuntimeStatus(
+      context("", {}, "/api/coding-workbench/runtime/status", session.cookie),
+      runtime({ codingAppSessionChannel: session.channel }),
+    );
+    const run = handleGetCodingRuntimeRun(
+      context("", { runId: "run-1" }, "/api/coding-workbench/runtime/runs/run-1", session.cookie),
+      runtime({ codingAppSessionChannel: session.channel }),
+    );
+
+    for (const body of [status.body, run.body]) {
+      expect(JSON.stringify(body)).not.toContain("src/alpha.ts");
+      expect(JSON.stringify(body)).not.toContain("src/beta.ts");
+    }
+  });
+
   it("#2387: the content-free status projection never carries the pending research destination", () => {
     const status = handleCodingRuntimeStatus(context(""), runtime());
 
@@ -535,16 +640,23 @@ describe("coding runtime routes", () => {
     ).toBeUndefined();
   });
 
-  // #2386 regression: the server-confirmed effective mode is anchored to the LIVE run through the
-  // mode-change gate. Requesting a wider mode while a supervised run is live must keep confirming
-  // the run's own posture; narrowing is confirmed only from the paused (or idle) state.
-  it("anchors the confirmed effective mode to the live run through the mode-change gate", () => {
-    const liveStatus = (state: "running" | "paused"): unknown => ({
+  // #2386 regression, strengthened by the 0.3.0 release audit: the server-confirmed effective mode
+  // is anchored to the LIVE run. Requesting a wider mode while a supervised run is live must keep
+  // confirming the run's own posture — the original invariant, unchanged.
+  //
+  // The audit found the NARROWING direction lies in exactly the same way. The envelope's
+  // effectiveMode is fixed at mint (runtimeAuthorityService.mintConfirmedStartForRun) and nothing
+  // re-mints it — `resume` only clears the manager's paused flag — so confirming `governed-assist`
+  // for a paused run minted as `supervised-coding` told the operator the run holds LESS authority
+  // than the tool facade actually enforces. Both directions are now pinned for every state in
+  // which a run still holds a minted envelope.
+  it("anchors the confirmed effective mode to the live run's minted envelope", () => {
+    const liveStatus = (state: string): unknown => ({
       ...snapshot,
       state,
       requestedMode: "supervised-coding",
     });
-    const readiness = (state: "running" | "paused", requestedMode: string): unknown => {
+    const readiness = (state: string, requestedMode: string): unknown => {
       const result = handleCodingRuntimeReadiness(
         context("", {}, `/api/coding-workbench/runtime/readiness?requestedMode=${requestedMode}`),
         runtime({
@@ -556,12 +668,22 @@ describe("coding runtime routes", () => {
       return (result.body as { effectiveMode?: string }).effectiveMode;
     };
 
-    // Widening past the live run is never confirmed — not even while paused.
-    expect(readiness("paused", "autonomous-delivery")).toBe("supervised-coding");
-    expect(readiness("running", "autonomous-delivery")).toBe("supervised-coding");
-    // Any change while running is deferred to the run's posture; narrowing is confirmed from paused.
-    expect(readiness("running", "governed-assist")).toBe("supervised-coding");
-    expect(readiness("paused", "governed-assist")).toBe("governed-assist");
+    for (const state of [
+      "starting",
+      "ready",
+      "running",
+      "awaiting-approval",
+      "paused",
+      "stopping",
+    ]) {
+      // Widening past the live run is never confirmed — not even while paused.
+      expect(readiness(state, "autonomous-delivery")).toBe("supervised-coding");
+      // Neither is narrowing: the live envelope still grants supervised-coding.
+      expect(readiness(state, "governed-assist")).toBe("supervised-coding");
+    }
+    // A run holding no envelope confirms what the next mint will actually clamp the request to.
+    expect(readiness("recovery-required", "governed-assist")).toBe("governed-assist");
+    expect(readiness("recovery-required", "autonomous-delivery")).toBe("autonomous-delivery");
   });
 
   it("keeps readiness independently available when the runtime is absent and rejects malformed modes", () => {
@@ -605,9 +727,15 @@ describe("coding runtime routes", () => {
   });
 
   it("parses a bounded JSON body and passes it only to the orchestrator", async () => {
-    const deps = runtime();
+    const session = pairedAppSession();
+    const deps = runtime({ codingAppSessionChannel: session.channel });
     const result = await handleCreateCodingRuntimeRun(
-      context('{"requestId":"r","taskIntent":"private","requestedMode":"governed-assist"}'),
+      context(
+        '{"requestId":"r","taskIntent":"private","requestedMode":"governed-assist"}',
+        {},
+        "/api/coding-workbench/runtime/runs",
+        session.cookie,
+      ),
       deps,
     );
     expect(result).toMatchObject({ status: 200, body: { runId: "run-1" } });
@@ -618,14 +746,23 @@ describe("coding runtime routes", () => {
   });
 
   it("fails closed when runtime dependencies are absent and returns 404 for a stale run", async () => {
+    const session = pairedAppSession();
     await expect(
-      handleCreateCodingRuntimeRun(context(), {} as UiHandlerDeps),
+      handleCreateCodingRuntimeRun(
+        context("{}", {}, "/api/coding-workbench/runtime/runs", session.cookie),
+        { codingAppSessionChannel: session.channel } as UiHandlerDeps,
+      ),
     ).resolves.toMatchObject({ status: 503 });
     const stopRoute = CODING_RUNTIME_ROUTE_GROUP.find(({ pattern }) => pattern.endsWith("/stop"));
     if (!stopRoute) throw new Error("missing stop route");
     const stale = await stopRoute.handler(
-      context('{"requestId":"gone"}', { runId: "gone" }),
-      runtime(),
+      context(
+        '{"requestId":"gone"}',
+        { runId: "gone" },
+        "/api/coding-workbench/runtime/runs",
+        session.cookie,
+      ),
+      runtime({ codingAppSessionChannel: session.channel }),
     );
     expect(stale).toMatchObject({ status: 404 });
   });
@@ -698,10 +835,16 @@ describe("coding runtime routes", () => {
   });
 
   it("rejects an over-budget mutation body with 413 without buffering it", async () => {
+    const session = pairedAppSession();
     const oversized = "x".repeat(64 * 1024 + 1);
     const result = await handleCreateCodingRuntimeRun(
-      context(JSON.stringify({ padding: oversized })),
-      runtime(),
+      context(
+        JSON.stringify({ padding: oversized }),
+        {},
+        "/api/coding-workbench/runtime/runs",
+        session.cookie,
+      ),
+      runtime({ codingAppSessionChannel: session.channel }),
     );
     expect(result).toMatchObject({ status: 413 });
     expect(JSON.stringify(result.body)).toContain("PAYLOAD_TOO_LARGE");
@@ -709,8 +852,12 @@ describe("coding runtime routes", () => {
   });
 
   it("normalizes an empty mutation body to an empty object for the orchestrator", async () => {
-    const deps = runtime();
-    const result = await handleCreateCodingRuntimeRun(context(""), deps);
+    const session = pairedAppSession();
+    const deps = runtime({ codingAppSessionChannel: session.channel });
+    const result = await handleCreateCodingRuntimeRun(
+      context("", {}, "/api/coding-workbench/runtime/runs", session.cookie),
+      deps,
+    );
     expect(result).toMatchObject({ status: 200 });
     expect((deps as unknown as { __calls: unknown[] }).__calls).toEqual([{}]);
   });
@@ -720,7 +867,11 @@ describe("coding runtime routes", () => {
     ["a JSON array", "[1,2,3]"],
     ["a JSON scalar", "42"],
   ])("rejects %s mutation bodies as invalid intent", async (_label, body) => {
-    const result = await handleCreateCodingRuntimeRun(context(body), runtime());
+    const session = pairedAppSession();
+    const result = await handleCreateCodingRuntimeRun(
+      context(body, {}, "/api/coding-workbench/runtime/runs", session.cookie),
+      runtime({ codingAppSessionChannel: session.channel }),
+    );
     expect(result).toMatchObject({ status: 400 });
     expect(JSON.stringify(result.body)).toContain("CODING_RUNTIME_INVALID_INTENT");
   });
@@ -754,14 +905,18 @@ describe("coding runtime routes", () => {
     ["retry", handleCodingRuntimeRetry],
     ["recovery acknowledgement", handleCodingRuntimeRecoveryAcknowledgement],
   ] as const)("routes the %s mutation to the live run only", async (_label, handler) => {
-    await expect(handler(context("{}", { runId: "run-1" }), runtime())).resolves.toMatchObject({
-      status: 200,
-      body: snapshot,
-    });
-    await expect(handler(context("{}"), runtime())).resolves.toMatchObject({ status: 404 });
-    await expect(handler(context("{}", { runId: "run-9" }), runtime())).resolves.toMatchObject({
+    const session = pairedAppSession();
+    const runPath = "/api/coding-workbench/runtime/runs";
+    const deps = runtime({ codingAppSessionChannel: session.channel });
+    await expect(
+      handler(context("{}", { runId: "run-1" }, runPath, session.cookie), deps),
+    ).resolves.toMatchObject({ status: 200, body: snapshot });
+    await expect(handler(context("{}", {}, runPath, session.cookie), deps)).resolves.toMatchObject({
       status: 404,
     });
+    await expect(
+      handler(context("{}", { runId: "run-9" }, runPath, session.cookie), deps),
+    ).resolves.toMatchObject({ status: 404 });
   });
 
   it("detaches the SSE subscriber exactly once when the response closes", () => {
@@ -782,5 +937,270 @@ describe("coding runtime routes", () => {
     expect(detached).toBe(1);
     // A destroyed transport is never end()ed again; the guard must not double-finalize it.
     expect(response.writableEnded).toBe(false);
+  });
+});
+
+// Release-audit P0: every authority-granting coding-runtime mutation — start, approve, stop,
+// takeover, retry, recovery-ack, pause, resume, follow-up, research revoke — was reachable by any
+// same-user local process that could set the constant CSRF header. ADR-0141 D1 fixes loopback,
+// Origin, CSRF and runId knowledge as routing facts that never grant a route; D2 makes the
+// launcher-attested app session the authority. These routes bind to it and fail closed.
+// The one POST in the group that is a READ, not a mutation: the question list keeps its documented
+// ADR-0141 F1 content-free `{ session: "unpaired", questions: [] }` projection (HTTP 200) instead of
+// a denial, so the sweep asserts that exact shape for it rather than exempting it.
+const UNPAIRED_CONTENT_FREE_POST = "/api/coding-workbench/runtime/runs/:runId/questions";
+
+const STATE_CHANGING_RUNTIME_ROUTES: readonly RouteDefinition[] = CODING_RUNTIME_ROUTE_GROUP.filter(
+  ({ method, pattern }) => method === "POST" && pattern !== UNPAIRED_CONTENT_FREE_POST,
+);
+
+const RUNTIME_POST_ROUTES: readonly RouteDefinition[] = CODING_RUNTIME_ROUTE_GROUP.filter(
+  ({ method }) => method === "POST",
+);
+
+interface SpyingRuntime {
+  readonly deps: UiHandlerDeps;
+  readonly invoked: readonly string[];
+}
+
+/** Deps whose orchestrator records every lifecycle call, so a denial can be proven to reach none. */
+function spyingRuntime(channel: UiHandlerDeps["codingAppSessionChannel"]): SpyingRuntime {
+  const invoked: string[] = [];
+  const settle = (name: string) => () => {
+    invoked.push(name);
+    return Promise.resolve({ ok: true as const, snapshot });
+  };
+  const orchestrator = {
+    start: settle("start"),
+    retry: settle("retry"),
+    decideApproval: settle("decideApproval"),
+    stop: settle("stop"),
+    takeover: settle("takeover"),
+    acknowledgeRecovery: settle("acknowledgeRecovery"),
+    pause: settle("pause"),
+    resume: settle("resume"),
+    revokeResearch: settle("revokeResearch"),
+    submitFollowUp: settle("submitFollowUp"),
+    answerQuestion: settle("answerQuestion"),
+    rejectQuestion: settle("rejectQuestion"),
+    listQuestions: () => {
+      invoked.push("listQuestions");
+      return Promise.resolve({
+        ok: true as const,
+        snapshot,
+        questions: { schemaVersion: "1" as const, questions: [] },
+      });
+    },
+    status: () => snapshot,
+    getSnapshot: (runId: string) => (runId === "run-1" ? snapshot : undefined),
+    pendingResearchAsk: () => undefined,
+    researchGrant: () => undefined,
+  };
+  return {
+    deps: {
+      codingRuntimeOrchestrator: orchestrator,
+      codingRuntimeEventHub: { subscribe: () => ({ ok: false as const, reason: "unused" }) },
+      codingAppSessionChannel: channel,
+    } as unknown as UiHandlerDeps,
+    get invoked(): readonly string[] {
+      return invoked;
+    },
+  };
+}
+
+function statusOf(outcome: HandlerOutcome): number {
+  return outcome === STREAMING ? 200 : outcome.status;
+}
+
+async function invokeRoute(
+  route: RouteDefinition,
+  deps: UiHandlerDeps,
+  cookie?: string,
+): Promise<HandlerOutcome> {
+  return Promise.resolve(
+    route.handler(context("{}", { runId: "run-1" }, route.pattern, cookie), deps),
+  );
+}
+
+describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
+  it("denies every state-changing runtime route to a caller that presents no app session", async () => {
+    const { channel } = pairedAppSession();
+    // The sweep is over the mounted group, so a lifecycle route added later is covered by default.
+    expect(STATE_CHANGING_RUNTIME_ROUTES.length).toBeGreaterThan(9);
+    for (const route of STATE_CHANGING_RUNTIME_ROUTES) {
+      const spy = spyingRuntime(channel);
+      const outcome = await invokeRoute(route, spy.deps);
+      expect(statusOf(outcome), route.pattern).not.toBe(200);
+      expect(spy.invoked, route.pattern).toEqual([]);
+    }
+  });
+
+  it("reaches no orchestrator operation at all from any unpaired POST in the runtime group", async () => {
+    const { channel } = pairedAppSession();
+    for (const route of RUNTIME_POST_ROUTES) {
+      const spy = spyingRuntime(channel);
+      const outcome = await invokeRoute(route, spy.deps);
+      expect(spy.invoked, route.pattern).toEqual([]);
+      if (route.pattern === UNPAIRED_CONTENT_FREE_POST) {
+        expect(outcome, route.pattern).toEqual({
+          status: 200,
+          body: { session: "unpaired", questions: [] },
+        });
+      }
+    }
+  });
+
+  it("denies a forged, revoked, or idle-expired session on every state-changing runtime route", async () => {
+    const forged = `${APP_SESSION_COOKIE_NAME}=sess_000000000000000000000000.forged`;
+    const revokedSession = pairedAppSession();
+    revokedSession.channel?.signOut(
+      revokedSession.cookie.slice(revokedSession.cookie.indexOf("=") + 1),
+    );
+    let clock = 0;
+    const expiring = createCodingAppSessionChannel({
+      registry: createSessionRegistry({ now: () => clock, idleTtlMs: 10, absoluteTtlMs: 1_000 }),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const expired = expiring.pair(fakePairingRequestBody());
+    if (!expired.paired) throw new Error("test pairing failed");
+    clock = 1_000;
+    const hostile: readonly (readonly [
+      string,
+      UiHandlerDeps["codingAppSessionChannel"],
+      string,
+    ])[] = [
+      ["forged", revokedSession.channel, forged],
+      ["revoked", revokedSession.channel, revokedSession.cookie],
+      ["idle-expired", expiring, `${APP_SESSION_COOKIE_NAME}=${expired.cookieToken}`],
+      ["empty cookie value", revokedSession.channel, `${APP_SESSION_COOKIE_NAME}=`],
+      ["another window's cookie prefix", revokedSession.channel, "unrelated=value"],
+    ];
+    for (const [label, channel, cookie] of hostile) {
+      for (const route of STATE_CHANGING_RUNTIME_ROUTES) {
+        const spy = spyingRuntime(channel);
+        const outcome = await invokeRoute(route, spy.deps, cookie);
+        expect(statusOf(outcome), `${label} ${route.pattern}`).not.toBe(200);
+        expect(spy.invoked, `${label} ${route.pattern}`).toEqual([]);
+      }
+    }
+  });
+
+  it("fails closed on every state-changing runtime route when no app-session channel is composed", async () => {
+    const { cookie } = pairedAppSession();
+    for (const route of STATE_CHANGING_RUNTIME_ROUTES) {
+      const spy = spyingRuntime(undefined);
+      const outcome = await invokeRoute(route, spy.deps, cookie);
+      expect(statusOf(outcome), route.pattern).not.toBe(200);
+      expect(spy.invoked, route.pattern).toEqual([]);
+    }
+  });
+
+  it("admits every state-changing runtime route for the launcher-attested paired caller", async () => {
+    const { channel, cookie } = pairedAppSession();
+    for (const route of STATE_CHANGING_RUNTIME_ROUTES) {
+      const spy = spyingRuntime(channel);
+      const outcome = await invokeRoute(route, spy.deps, cookie);
+      expect(statusOf(outcome), route.pattern).toBe(200);
+      expect(spy.invoked, route.pattern).toHaveLength(1);
+    }
+  });
+
+  it("resolves authority before run existence, so an unpaired per-run denial is byte-identical to an unknown run", async () => {
+    const { channel, cookie } = pairedAppSession();
+    const perRun = STATE_CHANGING_RUNTIME_ROUTES.filter(({ pattern }) =>
+      pattern.includes(":runId"),
+    );
+    for (const route of perRun) {
+      const deps = spyingRuntime(channel).deps;
+      const unpaired = await Promise.resolve(
+        route.handler(context("{}", { runId: "run-1" }, route.pattern), deps),
+      );
+      const unknownRun = await Promise.resolve(
+        route.handler(context("{}", { runId: "run-9" }, route.pattern, cookie), deps),
+      );
+      expect(unpaired, route.pattern).toEqual(unknownRun);
+      expect(statusOf(unpaired), route.pattern).toBe(404);
+    }
+  });
+
+  it("answers an unpaired run start with the honest authority-resolution failure, never a silent success", async () => {
+    const { channel } = pairedAppSession();
+    const spy = spyingRuntime(channel);
+    const denied = await handleCreateCodingRuntimeRun(
+      context('{"requestId":"r","taskIntent":"secret","requestedMode":"governed-assist"}'),
+      spy.deps,
+    );
+    expect(denied).toMatchObject({
+      status: 403,
+      body: { error: { code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED" } },
+    });
+    expect(spy.invoked).toEqual([]);
+    expect(JSON.stringify(denied.body)).not.toContain("secret");
+  });
+
+  // The recorded attack, end to end: the unauthenticated status route publishes the pending
+  // permission's requestId and the snapshot revision — the two values `approvalChallengeMatches`
+  // binds on. Knowing them is now worthless, because the challenge is only spendable by a caller
+  // that also holds the launcher-attested session, which no route publishes and no same-user local
+  // process can mint (ADR-0141 D1: routing facts are never authority).
+  it("refuses an approval minted from the challenge binding harvested off the unauthenticated status route", async () => {
+    const { channel } = pairedAppSession();
+    const awaitingApproval: CodingWorkbenchRuntimeSnapshot = {
+      ...snapshot,
+      state: "awaiting-approval",
+      pendingPermission: {
+        requestId: "permission-1",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        actionKind: "file-edit",
+        expiresAt: "2099-07-13T00:05:00.000Z",
+      },
+    };
+    const spy = spyingRuntime(channel);
+    const deps = {
+      ...spy.deps,
+      codingRuntimeOrchestrator: {
+        ...(spy.deps.codingRuntimeOrchestrator as object),
+        status: () => awaitingApproval,
+        getSnapshot: (runId: string) => (runId === "run-1" ? awaitingApproval : undefined),
+      },
+    } as unknown as UiHandlerDeps;
+
+    const harvested = handleCodingRuntimeStatus(context(""), deps);
+    const published = harvested.body as CodingWorkbenchRuntimeSnapshot;
+    expect(published.pendingPermission?.requestId).toBe("permission-1");
+
+    const replayed = await handleCodingRuntimeApproval(
+      context(
+        JSON.stringify({
+          requestId: published.pendingPermission?.requestId,
+          decision: "approved",
+          expectedRevision: published.revision,
+        }),
+        { runId: published.runId ?? "" },
+        "/api/coding-workbench/runtime/runs",
+      ),
+      deps,
+    );
+
+    expect(replayed).toMatchObject({ status: 404 });
+    expect(spy.invoked).toEqual([]);
+  });
+
+  it("denies an unpaired caller before the body is read, so an oversized hostile body is never buffered", async () => {
+    const { channel } = pairedAppSession();
+    const spy = spyingRuntime(channel);
+    const denied = await handleCodingRuntimeFollowUp(
+      context(
+        JSON.stringify({ taskIntent: "x".repeat(64 * 1024 + 1) }),
+        { runId: "run-1" },
+        "/api/coding-workbench/runtime/runs",
+      ),
+      spy.deps,
+    );
+    expect(denied).toMatchObject({ status: 404 });
+    expect(spy.invoked).toEqual([]);
+    expect(JSON.stringify(denied.body)).not.toContain("xxxx");
   });
 });

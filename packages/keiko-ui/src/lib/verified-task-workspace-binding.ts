@@ -13,6 +13,8 @@ import {
   type ActiveWorkspaceView,
 } from "./task-workspace-api";
 import { isWorkspaceFailureClass, type WorkspaceFailureClass } from "@oscharko-dev/keiko-contracts";
+import { clientErrorSummary } from "./client-error-summary";
+import { reportClientDiagnostic } from "./client-diagnostics";
 
 export type VerifiedTaskWorkspaceBindFailureReason = "branch-conflict";
 
@@ -37,7 +39,9 @@ export interface VerifiedTaskWorkspaceBindInput {
 // Same bounded console idiom as GEN-STAB-WINDOW-002: the caller-visible result stays the
 // sanitized stage label, but the underlying failure remains diagnosable in the local console.
 function warnBindStage(stage: string, error: unknown): void {
-  console.warn(`[keiko] task workspace bind ${stage} failed`, error);
+  reportClientDiagnostic(
+    `[keiko] task workspace bind ${stage} failed: ${clientErrorSummary(error)}`,
+  );
 }
 
 function boundedBindFailure(
@@ -57,6 +61,15 @@ function boundedBindFailure(
   };
 }
 
+export interface RestoreVerifiedActiveTaskWorkspaceOptions {
+  /**
+   * The workspace identity whose restore verification the caller already holds for this session, or
+   * `null`/absent when it holds none. Only an active view resolving to exactly this identity skips
+   * the reconciliation pass; every other identity is verified again.
+   */
+  readonly verifiedWorkspaceId?: string | null;
+}
+
 /**
  * Restore-time counterpart of {@link bindVerifiedTaskWorkspace} (release-audit F-09b).
  *
@@ -71,10 +84,21 @@ function boundedBindFailure(
  * claims healthy, this throws instead of returning — a restored binding must never claim more
  * readiness than the verification pass granted. A view whose own persisted health already shows
  * the problem is returned so drifted worktrees stay visible in the session context (#1990).
+ *
+ * The pass may be skipped for ONE workspace identity only: the caller passes the id whose
+ * verification it already holds, and a re-read that still resolves to that same identity is
+ * returned unverified. Anything else — a first read, a different active workspace, or a pointer
+ * that moved — runs the full pass, because activating a binding is not verifying it
+ * (`setActiveTaskWorkspace` does not reconcile). Scoping the skip to the identity, not to the
+ * session, is what keeps repeated reloads of one workspace cheap without letting a later
+ * activation claim a binding this pass never granted.
  */
-export async function restoreVerifiedActiveTaskWorkspace(): Promise<ActiveWorkspaceView | null> {
+export async function restoreVerifiedActiveTaskWorkspace(
+  options: RestoreVerifiedActiveTaskWorkspaceOptions = {},
+): Promise<ActiveWorkspaceView | null> {
   const active = await getActiveTaskWorkspace();
   if (active === null) return null;
+  if (active.instance.workspaceId === options.verifiedWorkspaceId) return active;
   const report = await reconcileTaskWorkspaces({ root: active.instance.repositoryRoot });
   // Re-read after the pass: reconciliation is the repair authority, so the settled view must be
   // the post-verification truth (fresh health, verified-head stamp, or a self-healed pointer).

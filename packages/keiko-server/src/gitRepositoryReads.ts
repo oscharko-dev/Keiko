@@ -25,6 +25,7 @@ import {
   classifyFailure,
   optionsWithDefaults,
   resolveRepository,
+  selectedRootPathspecArgs,
   type GitProcessResult,
   type GitRouteOptions,
   type NormalizedGitRouteOptions,
@@ -480,7 +481,13 @@ function availableHistory(
   };
 }
 
-function historyArgs(limit: number, skip: number): readonly string[] {
+// History is a read OF THE SELECTED ROOT, exactly like status and diff: `git log` runs with `-C
+// <repositoryRoot>`, so without a pathspec it answers for the whole repository and a user who
+// selected a subfolder sees commits that never touched it. The selected-root pathspec is empty at
+// the repository root, so that case keeps its existing unscoped arguments byte for byte.
+// `--shortstat` honours the same pathspec, so `changedFileCount` counts the files each commit
+// changed INSIDE the selected root rather than across the repository.
+function historyArgs(repo: RepositoryContext, limit: number, skip: number): readonly string[] {
   return [
     "log",
     "--no-color",
@@ -488,6 +495,7 @@ function historyArgs(limit: number, skip: number): readonly string[] {
     `--skip=${String(skip)}`,
     `--pretty=${HISTORY_PRETTY_FORMAT}`,
     "--shortstat",
+    ...selectedRootPathspecArgs(repo.selectedRootPrefix),
   ];
 }
 
@@ -510,7 +518,7 @@ export async function handleGitHistory(
       const body = unavailableHistory(repo.root, repo.repositoryRoot, repo.reason, limit, skip);
       return { status: 200, body: redacted(deps, body) };
     }
-    const result = await runGit(repo, options, historyArgs(limit, skip));
+    const result = await runGit(repo, options, historyArgs(repo, limit, skip));
     if (result.exitCode !== 0) {
       if (isEmptyRepository(result)) {
         return {

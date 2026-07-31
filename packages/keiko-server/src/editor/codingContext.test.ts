@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CODING_CONTEXT_BUDGETS,
+  UNVERIFIED_GATEWAY,
   CODING_CONTEXT_PURPOSES,
   EDITOR_AGENT_SCHEMA_VERSION,
   toCodingContextWirePack,
@@ -55,6 +56,9 @@ function rerankingDeps(
       current,
       present: () => true,
       set: () => undefined,
+      generation: () => 0,
+      verification: () => UNVERIFIED_GATEWAY,
+      recordVerification: () => undefined,
     },
     rerankRequest,
   };

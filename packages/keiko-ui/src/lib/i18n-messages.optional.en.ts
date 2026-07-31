@@ -16,6 +16,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "quickAccess.result.truncatedSuffix": " Results were capped; refine the query.",
   "quickAccess.result.truncatedPerRootSuffix":
     " Results are capped per root and merged fairly; refine the query.",
+  "quickAccess.searchUnavailable": "Search unavailable for {roots}.",
   "browserWidget.error.unexpected": "Unexpected error.",
   "browserWidget.error.streamDisconnected":
     "Live browser events disconnected. Reopen the session to resume the feed.",
@@ -201,6 +202,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "promptEnhancer.analysis.profile": "Profile",
   "promptEnhancer.analysis.input": "Input",
   "promptEnhancer.analysis.chars": "{count} chars",
+  "promptEnhancer.analysis.promptTokens": "Prompt tokens",
+  "promptEnhancer.analysis.tokenEstimate": "~{count} tokens",
   "promptEnhancer.analysis.ariaLabel": "Prompt enhancement analysis",
   "promptEnhancer.routing.deterministic": "Deterministic enhancement",
   "promptEnhancer.routing.modelEnhanced": "Model enhanced: {model}",
@@ -212,6 +215,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "promptEnhancer.safety.humanReview": "Human review:",
   "promptEnhancer.safety.reviewWarning":
     "This prompt requires human review before any downstream use.",
+  "promptEnhancer.safety.rejectedWarning":
+    "This prompt was rejected by the safety review and must not be used.",
   "promptEnhancer.safety.findings": "Safety findings",
   "promptEnhancer.safety.leastPrivilege": "Least-privilege constraints",
   "promptEnhancer.common.required": "required",
@@ -280,6 +285,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "promptEnhancer.action.clear": "Clear",
   "promptEnhancer.result.eyebrow": "Review artifact",
   "promptEnhancer.result.title": "Enhanced prompt",
+  "promptEnhancer.result.baselineNote":
+    "The model rewrote this prompt. The profile, structured sections and candidate scorecards below describe the deterministic baseline it was refined from, not the rendered prompt above.",
   "promptEnhancer.rendered.title": "Rendered prompt",
   "promptEnhancer.rendered.ariaLabel": "Rendered prompt text",
   "promptEnhancer.action.copying": "Copying...",
@@ -455,6 +462,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gitDelivery.recoveryStrategy.stash-and-reset": "stash and reset",
   "gitDelivery.recoveryStrategy.restore-index": "restore index",
   "gitDelivery.constraint.branchPattern": "Branch pattern: {patterns}",
+  "gitDelivery.constraint.protectedBranch": "Protected branches: {patterns}",
   "gitDelivery.constraint.providerCapability": "Requires provider capability: {capability}",
   "gitDelivery.constraint.riskCeiling": "Risk-class ceiling: {risk}",
   "gitDelivery.error.unexpected": "An unexpected error occurred.",

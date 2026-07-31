@@ -13,6 +13,7 @@ import {
   type MonacoFormattingOptions,
 } from "./formatting-bridge.js";
 import type { MonacoCancellationToken } from "./completion-bridge.js";
+import type { EditorLanguageIntelligenceEvent } from "./language-intelligence.js";
 import type { EditorFormattingResolver, EditorTextEdit } from "../types.js";
 import { EDITOR_BUILTIN_CAPABILITIES } from "@oscharko-dev/keiko-contracts";
 
@@ -182,6 +183,35 @@ describe("createKeikoFormattingProvider", () => {
     version = 2;
     settle?.();
     expect(await pending).toEqual([]);
+  });
+
+  // A capped reformat is a PARTIAL mutation: the surviving edits reformat part of the document and
+  // leave the rest untouched, which is indistinguishable from a finished format once it is in the
+  // buffer. The seam labels it `capped`, but a label explains a mutation the user never approved
+  // after it has happened — so the edits must not reach Monaco at all.
+  it("refuses to apply a capped reformat to the buffer", async () => {
+    const events: EditorLanguageIntelligenceEvent[] = [];
+    const resolve: EditorFormattingResolver = (query) =>
+      Promise.resolve({ request: query.request.request, edits: [edit(" = ")], truncated: true });
+    const edits = await createKeikoFormattingProvider({
+      resolve,
+      isCurrentDocument: (documentUri) => documentUri === "inmemory://model/1",
+      documentLanguage: "typescript",
+      streamId: "stream",
+      newRequestId: () => "req",
+      report: (event) => events.push(event),
+    }).provideDocumentFormattingEdits(model(), OPTIONS, token());
+
+    expect(edits).toHaveLength(0);
+    // The refusal is stated, not silent: the same `capped` vocabulary the status bar renders.
+    expect(events).toEqual([{ operation: "formatting", outcome: { status: "capped" } }]);
+  });
+
+  it("still applies a complete reformat that reports itself uncapped", async () => {
+    const resolve: EditorFormattingResolver = (query) =>
+      Promise.resolve({ request: query.request.request, edits: [edit(" = ")], truncated: false });
+    const edits = await provider(resolve).provideDocumentFormattingEdits(model(), OPTIONS, token());
+    expect(edits).toHaveLength(1);
   });
 
   it("aborts the resolver signal when the token is already cancelled", async () => {

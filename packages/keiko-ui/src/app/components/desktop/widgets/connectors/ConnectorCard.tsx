@@ -7,6 +7,7 @@
 import { useState, type ReactNode } from "react";
 import { ApiError } from "@/lib/api";
 import { useTranslate } from "@/lib/i18n";
+import { toSafeIsoString } from "@/lib/format";
 import type {
   AtlassianConnectorMetadata,
   AtlassianConnectorsClient,
@@ -96,7 +97,12 @@ function CardHeader({
     verifyStatus === undefined
       ? t("atlassianConnectors.list.healthUnknown")
       : t(verifyStatusLabelKey(verifyStatus));
-  const added = new Date(connector.createdAt).toISOString().slice(0, 10);
+  // F3 — createdAt comes straight off the BFF response with no runtime shape validation
+  // (AtlassianConnectorMetadata.createdAt is a compile-time-only `number`); `.toISOString()`
+  // throws RangeError on an Invalid Date and this route has no error boundary above it. Fail
+  // closed to a placeholder instead of letting one malformed record white-screen the whole list.
+  const addedIso = toSafeIsoString(connector.createdAt);
+  const added = addedIso === undefined ? "—" : addedIso.slice(0, 10);
   return (
     <div className="acx-card-head">
       <div>

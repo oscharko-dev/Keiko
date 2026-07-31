@@ -1117,7 +1117,7 @@ describe("CapsuleHealth lineage", () => {
       failedDocuments: 0,
       skippedDocuments: 0,
       unsupportedDocuments: 0,
-      unsupportedGuidance: [],
+      unsupportedGuidanceCodes: [],
       staleReasons: [],
     };
     expect(missingSources.capsuleId).toBe(cap("c-1"));

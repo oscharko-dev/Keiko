@@ -9,6 +9,7 @@ import {
   type CodingWorkbenchChangesClient,
   type UseCodingWorkbenchChangesResult,
 } from "@/lib/useCodingWorkbenchChanges";
+import type { CodingWorkbenchPairingState } from "@/lib/coding-workbench-live-state";
 import { DiffFileSection, type DiffViewLabels } from "../cards/shared/diffView";
 import {
   useCodingWorkbenchTranslate,
@@ -27,6 +28,12 @@ export interface CodingWorkbenchChangesProps {
   readonly runId: string | undefined;
   readonly changeSignal: string | null;
   readonly bindingPending: boolean;
+  /**
+   * The window's server-confirmed pairing dimension (release-audit F-08): the run root always
+   * lives under the managed task-workspace area, which is readable only through a launcher-paired
+   * app session (ADR-0141), so a read denial in a confirmed-unpaired window names that condition.
+   */
+  readonly pairing: CodingWorkbenchPairingState;
   readonly client?: CodingWorkbenchChangesClient | undefined;
 }
 
@@ -42,16 +49,18 @@ export function CodingWorkbenchChanges(props: CodingWorkbenchChangesProps): Reac
         {t("codingWorkbench.changes.title")}
       </PanelTitle>
       <p className={styles.helpText}>{t("codingWorkbench.changes.help")}</p>
-      <ChangesContent changes={changes} t={t} />
+      <ChangesContent changes={changes} pairing={props.pairing} t={t} />
     </section>
   );
 }
 
 function ChangesContent({
   changes,
+  pairing,
   t,
 }: {
   readonly changes: UseCodingWorkbenchChangesResult;
+  readonly pairing: CodingWorkbenchPairingState;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   if (changes.status === "idle") return <ChangesMessage text={t("codingWorkbench.changes.idle")} />;
@@ -61,13 +70,21 @@ function ChangesContent({
   if (changes.status === "binding-lost") {
     return <ChangesMessage role="alert" text={t("codingWorkbench.changes.bindingLost")} />;
   }
-  if (changes.status === "unavailable") {
-    return (
-      <RetryMessage text={t("codingWorkbench.changes.unavailable")} retry={changes.retry} t={t} />
-    );
+  // F-08: an UNAVAILABLE read while the window is confirmed unpaired has one real cause — the
+  // missing paired session — so name it instead of the ambiguous denial; retry cannot help until
+  // the window is re-opened through the launcher. The deny decision itself stays server-side and
+  // content-free (ADR-0141 D6). An ERROR result is a transport/validation failure that CAN recover
+  // on its own, so it keeps the retry control even while unpaired (#2843 review).
+  if (changes.status === "unavailable" && pairing === "unpaired") {
+    return <ChangesMessage role="status" text={t("codingWorkbench.changes.unpaired")} />;
   }
-  if (changes.status === "error") {
-    return <RetryMessage text={t("codingWorkbench.changes.error")} retry={changes.retry} t={t} />;
+  if (changes.status === "unavailable" || changes.status === "error") {
+    const text = t(
+      changes.status === "unavailable"
+        ? "codingWorkbench.changes.unavailable"
+        : "codingWorkbench.changes.error",
+    );
+    return <RetryMessage text={text} retry={changes.retry} t={t} />;
   }
   return <ReadyChanges changes={changes} t={t} />;
 }

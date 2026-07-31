@@ -1430,6 +1430,58 @@ describe("coding-sidecar gateway", () => {
     expect(response.body()).toContain("data: [DONE]");
   });
 
+  // 0.3.0 audit: `pumpGatewayStream` failing mid-response went into a bare `catch {}` — the exact
+  // pattern AGENTS.md §7 forbids — on the coding path. The SSE error frame still went out, but the
+  // cause was recorded nowhere, so an interrupted coding turn had no diagnosable reason. The frame is
+  // unchanged; the redacted cause is added and is distinguishable from a pre-stream failure by `source`.
+  it("records the mid-stream failure cause with the request correlation id", async () => {
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield { type: "delta", token: "partial" };
+      throw Object.assign(new Error("upstream reset key sk-ABCDEFGHIJKLMNOPQRSTUV"), {
+        code: "GATEWAY_TRANSPORT",
+        partialUsage: { promptTokens: 11, completionTokens: 3 },
+      });
+    };
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "mid-stream failure" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+      correlationId: "sidecar-corr-0001",
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream-failure" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+      diagnostics,
+    } as UiHandlerDeps;
+
+    const result = await handleCodingSidecarGatewayChatCompletions(context, deps);
+
+    expect(result).toBe(STREAMING);
+    const streamRecords = diagnostics.record.mock.calls
+      .map(([entry]) => entry)
+      .filter((entry) => entry.source === "coding-sidecar-gateway.stream");
+    expect(streamRecords).toHaveLength(1);
+    expect(streamRecords[0]?.correlationId).toBe("sidecar-corr-0001");
+    expect(streamRecords[0]?.errorClass).toBe("Error");
+    expect(streamRecords[0]?.code).toBe("GATEWAY_TRANSPORT");
+    // Interrupted-turn token counts survive the failure instead of vanishing with the error.
+    expect(streamRecords[0]?.partialUsage).toEqual({ promptTokens: 11, completionTokens: 3 });
+    expect(JSON.stringify(streamRecords)).not.toContain("sk-ABCDEFGHIJKLMNOPQRSTUV");
+    expect(JSON.stringify(streamRecords)).not.toContain("upstream reset");
+  });
+
   it("counts only each new UTF-8 stream delta instead of re-encoding accumulated output", async () => {
     const firstToken = "gateway-delta-one-α";
     const secondToken = "gateway-delta-two-β";
@@ -1763,6 +1815,37 @@ describe("coding-sidecar gateway", () => {
     expect(JSON.stringify(result.body)).not.toContain("baseUrl");
     expect(JSON.stringify(result.body)).not.toContain("apiKey");
     expect(put).not.toHaveBeenCalled();
+  });
+
+  // F-01: `status: "available"` describes the stored configuration. A deps assembly with no probe
+  // record must therefore publish `verification: "unverified"` — the Workbench renders this field,
+  // and a missing one would let it keep reading a configured source as a healthy one.
+  it("publishes the last probe outcome alongside the config-derived profile", () => {
+    const context = {
+      req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
+      res: mockResponse().res,
+      params: {},
+      url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+    } satisfies RouteContext;
+    const config = configValue(provider(), capability());
+    const unprobed = handleCodingSidecarGatewayProfile(context, depsValue(config));
+
+    expect(unprobed.body).toMatchObject({ status: "available", verification: "unverified" });
+
+    const verified = handleCodingSidecarGatewayProfile(context, {
+      ...depsValue(config),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        generation: () => 0,
+        verification: () => "verified",
+        recordVerification: () => undefined,
+      },
+    });
+
+    expect(verified.body).toMatchObject({ status: "available", verification: "verified" });
   });
 
   it("fails closed through the profile route when the injected model source is subscription-backed", () => {

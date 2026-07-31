@@ -7,6 +7,7 @@ const ALL_REASONS: readonly EditorDirtyCloseReason[] = [
   "root-change",
   "window-close",
   "reload-file",
+  "path-mutation",
 ];
 
 describe("createEditorDirtyCloseIntent", () => {

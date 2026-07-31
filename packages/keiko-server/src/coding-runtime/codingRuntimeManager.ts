@@ -4,17 +4,22 @@ import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { Readable } from "node:stream";
 
 import {
+  CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
   CODING_WORKBENCH_SCHEMA_VERSION,
   decideCodingWorkbenchActionForMode,
   validateCodingWorkbenchPermissionRequest,
+  validateCodingWorkbenchRuntimeApprovalReviewChannelPayload,
   validateCodingWorkbenchRuntimeEvent,
 } from "@oscharko-dev/keiko-contracts";
 import type {
+  CodingWorkbenchActionClass,
   CodingWorkbenchConnectorScope,
   CodingWorkbenchMode,
   CodingWorkbenchModelSource,
   CodingWorkbenchPermissionRequest,
+  CodingWorkbenchPolicyResourceScope,
   CodingWorkbenchRuntimeEvent,
+  CodingWorkbenchRuntimePendingApprovalReview,
   CodingWorkbenchRuntimeSource,
   CodingWorkbenchSupervisedActionKind,
   CodingWorkbenchSupervisedPolicyReason,
@@ -370,6 +375,15 @@ export interface CodingRuntimeManager {
   takeover(runId: string): Promise<CodingRuntimeStopResult>;
   reconcile(runId: string): Promise<CodingRuntimeStopResult>;
   health(): CodingRuntimeHealthReport;
+  /**
+   * The reviewable changeset facts of the ask the operator is deciding about (#2802). Bound to both
+   * the active run and the exact pending request id, so a stale panel or a foreign run can never
+   * read a review, and it is served only over the authenticated app-session channel.
+   */
+  pendingApprovalReview(
+    runId: string,
+    requestId: string,
+  ): CodingWorkbenchRuntimePendingApprovalReview | undefined;
 }
 
 interface PreflightOk {
@@ -409,6 +423,12 @@ interface ActiveRuntime {
   codexDetach: (() => boolean | Promise<boolean>) | undefined;
   stdoutParser: CodingRuntimeLineParser | undefined;
   stderrDrainer: CodingRuntimeStderrDrainer | undefined;
+  /**
+   * The reviewable changeset facts of the ask currently awaiting an operator decision (#2802).
+   * Transient and run-local: it never enters a runtime event, a snapshot, the SSE projection or
+   * evidence, because the paths are model-selected content (#2644).
+   */
+  pendingApprovalReview: CodingWorkbenchRuntimePendingApprovalReview | undefined;
   shutdownBarrierComplete: boolean;
   stopRequested: boolean;
   paused: boolean;
@@ -706,6 +726,16 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       approvalDigest: issued.approvalDigest,
       expiresAtMs: issued.expiresAtMs,
     };
+  }
+
+  public pendingApprovalReview(
+    runId: string,
+    requestId: string,
+  ): CodingWorkbenchRuntimePendingApprovalReview | undefined {
+    const active = this.active;
+    if (active?.context.runId !== runId) return undefined;
+    const review = active.pendingApprovalReview;
+    return review?.requestId === requestId ? review : undefined;
   }
 
   public health(): CodingRuntimeHealthReport {
@@ -1058,6 +1088,11 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     active.stopRequested = true;
     active.status = "stopping";
     active.startupOutput?.close();
+    // The lifecycle projection collapses the exit to a terminal run state and stderr is drained
+    // count-only, so without this record the numeric exit status exists nowhere: an operator sees
+    // an opaque `runtime-failed` and has nothing to diagnose it with. The code is a bounded number,
+    // never content, and rides the redacted channel keyed by the run's correlation id.
+    emitRuntimeExitDiagnostic(this.deps.diagnostics, active.context.runId, code, this.deps.now);
     void this.finalizeUnexpectedExit(active, code);
   }
 
@@ -1261,6 +1296,22 @@ function emitInvalidRuntimeEventDiagnostic(
     source: "coding-runtime-manager.emit",
     errorClass: "InvalidRuntimeEvent",
     message: `runtime-event-invalid:${event.kind}`,
+  });
+}
+
+function emitRuntimeExitDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  code: number | null,
+  now: () => number,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date(now()).toISOString(),
+    operation: "coding-runtime.exit",
+    source: "coding-runtime-manager.exit",
+    errorClass: "RuntimeUnexpectedExit",
+    message: `runtime-exit-code:${code === null ? "signal" : String(code)}`,
   });
 }
 
@@ -1621,6 +1672,7 @@ function createActiveRuntime(
     codexDetach: undefined,
     stdoutParser: undefined,
     stderrDrainer: undefined,
+    pendingApprovalReview: undefined,
     shutdownBarrierComplete: false,
     stopRequested: false,
     paused: false,
@@ -1649,6 +1701,7 @@ function createInactiveRuntime(
     codexDetach: undefined,
     stdoutParser: undefined,
     stderrDrainer: undefined,
+    pendingApprovalReview: undefined,
     shutdownBarrierComplete: false,
     stopRequested: false,
     paused: false,
@@ -2088,12 +2141,73 @@ function sidecarRuntimeEvent(
       retryable: false,
     });
   }
+  active.pendingApprovalReview = approvalReviewFacts(event);
   return runtimeEvent(active, sequence, "permission-requested", {
     permissionRequest: request,
   });
 }
 
-function autonomousDeliveryRuntimeEvent(
+/**
+ * The ADR-0138 D2 resource scope each action class belongs to. Total over the closed action-class
+ * union so a new class cannot silently inherit a scope it was never assigned.
+ */
+const ACTION_CLASS_RESOURCE_SCOPE: Readonly<
+  Record<CodingWorkbenchActionClass, CodingWorkbenchPolicyResourceScope>
+> = Object.freeze({
+  "workspace-read": "workspace-contained",
+  "workspace-write": "workspace-contained",
+  "command-execution": "workspace-contained",
+  verification: "workspace-contained",
+  "connector-access": "internet",
+  "network-egress": "internet",
+  "delivery-substrate": "delivery",
+} as const satisfies Readonly<
+  Record<CodingWorkbenchActionClass, CodingWorkbenchPolicyResourceScope>
+>);
+
+/**
+ * Projects the reviewable changeset facts of a governed `file-edit` ask (#2802). The admission
+ * projection has already fail-closed on every escaping, duplicated or oversized path shape, and the
+ * shared public contract re-validates here: a review is retained only when the whole payload is
+ * admissible, so an operator surface can never render a path the runtime itself would refuse.
+ *
+ * Deliberately NOT attached to the runtime event: the paths are model-selected content and ride
+ * only the authenticated app-session channel, never a snapshot, the SSE projection, or evidence
+ * (#2644). Only the path, the file count and the line counts travel — never a byte of the patch.
+ */
+function approvalReviewFacts(
+  event: SidecarPermissionEvent,
+): CodingWorkbenchRuntimePendingApprovalReview | undefined {
+  if (event.actionKind !== "file-edit") return undefined;
+  const declared = event.allowedRelativePaths ?? [];
+  const paths = declared.slice(0, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS);
+  const pending: CodingWorkbenchRuntimePendingApprovalReview = {
+    requestId: event.requestId,
+    paths,
+    pathsTruncated: paths.length < declared.length,
+    fileCount: event.fileCount ?? declared.length,
+    addedLines: event.addedLines ?? 0,
+    deletedLines: event.deletedLines ?? 0,
+  };
+  return validateCodingWorkbenchRuntimeApprovalReviewChannelPayload({
+    session: "active",
+    pending,
+  }).ok
+    ? pending
+    : undefined;
+}
+
+/**
+ * ADR-0138 D2 fixes a NORMATIVE monotonicity invariant: for a fixed (resource scope, risk) the
+ * effect never becomes stricter as the mode rises. This branch previously hard-denied every action
+ * whose class was not `workspace-read` with `delivery-denied` — which the orchestrator turns into a
+ * terminal failed run — so a scoped file edit and an allowlisted verification command that
+ * Supervised workspace admits outright killed the run under the WIDER Full access. Workspace-
+ * contained actions therefore run the exact same dispatcher Supervised workspace runs, keeping the
+ * independent containment and verifier-allowlist gates in force. Delivery and internet mutations
+ * stay denied here: the server delivery executor is the only delivery authority and no connector
+ * executor is mounted, mode-invariant gates composed stricter-wins (ADR-0125 D1).
+ */ function autonomousDeliveryRuntimeEvent(
   active: ActiveRuntime,
   sequence: number,
   event: SidecarPermissionEvent,
@@ -2107,23 +2221,48 @@ function autonomousDeliveryRuntimeEvent(
       retryable: false,
     });
   }
+  if (ACTION_CLASS_RESOURCE_SCOPE[request.actionClass] !== "workspace-contained") {
+    return runtimeEvent(active, sequence, "failure-redacted", {
+      failureCode: "delivery-denied",
+      failureSummary: "delivery-denied",
+      retryable: false,
+    });
+  }
   if (request.actionClass === "workspace-read") return undefined;
-  return runtimeEvent(active, sequence, "failure-redacted", {
-    failureCode: "delivery-denied",
-    failureSummary: "delivery-denied",
-    retryable: false,
-  });
+  return governedActionRuntimeEvent(active, sequence, event, request);
 }
 
+/**
+ * Reachability, stated plainly so this is not mistaken for the live containment gate: the bundled
+ * OpenCode child asks for a governed permission ONLY when `KEIKO_CODING_MODE === "governed-assist"`
+ * (the generated tool source in opencodeRuntimeAdapter returns early otherwise). For that runtime
+ * this whole `supervised-coding` branch — including `decideSupervisedFileEdit`'s realpath
+ * containment — is therefore not on the edit path; it stays live for sidecar-stream runtimes that
+ * do announce supervised asks. Workspace containment for the OpenCode edit path is enforced by the
+ * tool-IPC parse boundary (`codingToolIpc`, pinned in codingToolIpc.test.ts) and by the
+ * `keiko-tools` contained writer at the effect edge — not here.
+ */
 function supervisedCodingRuntimeEvent(
   active: ActiveRuntime,
   sequence: number,
   event: SidecarPermissionEvent,
   request: CodingWorkbenchPermissionRequest,
 ): CodingWorkbenchRuntimeEvent | undefined {
-  if (active.context.effectiveMode !== "supervised-coding" || request.actionKind === undefined) {
-    return undefined;
-  }
+  if (active.context.effectiveMode !== "supervised-coding") return undefined;
+  return governedActionRuntimeEvent(active, sequence, event, request);
+}
+
+/**
+ * The one action dispatcher both governed modes share, so Full access is structurally incapable of
+ * being stricter than Supervised workspace for the same action.
+ */
+function governedActionRuntimeEvent(
+  active: ActiveRuntime,
+  sequence: number,
+  event: SidecarPermissionEvent,
+  request: CodingWorkbenchPermissionRequest,
+): CodingWorkbenchRuntimeEvent | undefined {
+  if (request.actionKind === undefined) return undefined;
   if (request.actionKind === "file-edit") return supervisedFileEditEvent(active, sequence, event);
   if (request.actionKind === "verification-command") {
     return supervisedVerificationEvent(active, sequence, event);

@@ -51,6 +51,7 @@ const EMPTY_QUESTIONS: UseCodingWorkbenchQuestionsResult = {
   status: "empty",
   questions: [],
   errorCode: null,
+  mutationFailure: null,
   answer: vi.fn(() => Promise.resolve(true)),
   reject: vi.fn(() => Promise.resolve(true)),
   retry: vi.fn(),
@@ -137,6 +138,9 @@ function sidecarProfile(): unknown {
       maxInputMessages: 100,
       maxRequestBytes: 1_000_000,
     },
+    // F-01: this suite drives Start, which requires a source whose last probe did not fail. The BFF
+    // always reports a verification state, so the stub does too.
+    verification: "verified",
   };
 }
 
@@ -161,6 +165,12 @@ function routeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Respo
   }
   if (url.includes("/api/coding-sidecar/gateway/profile")) {
     return Promise.resolve(jsonResponse(200, sidecarProfile()));
+  }
+  // F-08/RG-12 pairing dimension: this scenario is a PAIRED window whose start is rejected by the
+  // server anyway (workspace-lifecycle state loss) — the honest workspaces read answers paired
+  // (no `session: "unpaired"` marker), so readiness arms and the rejected POST stays reachable.
+  if (url.endsWith("/api/workspaces")) {
+    return Promise.resolve(jsonResponse(200, { session: "paired", manifests: [] }));
   }
   return Promise.resolve(jsonResponse(404, { error: { code: "NOT_FOUND", message: url } }));
 }

@@ -11,6 +11,7 @@ import type {
   MonacoUriForPath,
 } from "./definition-bridge.js";
 import { createLocationNavigationProvider } from "./location-navigation-bridge.js";
+import type { EditorLanguageIntelligenceReporter } from "./language-intelligence.js";
 
 export interface MonacoImplementationProvider {
   provideImplementation(
@@ -35,13 +36,18 @@ export interface RegisterKeikoImplementationProviderArgs {
   readonly streamId: string;
   readonly newRequestId: () => string;
   readonly uriForPath?: MonacoUriForPath | undefined;
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 export function registerKeikoImplementationProvider(
   args: RegisterKeikoImplementationProviderArgs,
 ): MonacoDisposable {
   const disposers = args.documentLanguages.map((documentLanguage) => {
-    const base = createLocationNavigationProvider({ ...args, documentLanguage });
+    const base = createLocationNavigationProvider({
+      ...args,
+      documentLanguage,
+      operation: "implementation",
+    });
     return args.languages.registerImplementationProvider(documentLanguage, {
       provideImplementation: (model, position, token) =>
         base.provideLocation(model, position, token),

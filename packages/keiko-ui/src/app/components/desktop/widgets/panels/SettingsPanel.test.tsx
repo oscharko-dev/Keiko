@@ -9,9 +9,13 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/lib/i18n";
-import type { ModelCapability } from "@/lib/types";
+import type { GatewayReadinessReport, ModelCapability, SafeGatewayConfig } from "@/lib/types";
 import { SettingsPanel, formatGatewayReadinessReport } from "./SettingsPanel";
-import { consumePendingGatewaySetup, requestGatewaySetup } from "../shared/gatewaySetupBus";
+import {
+  consumePendingGatewaySetup,
+  notifyGatewayConfigUpdated,
+  requestGatewaySetup,
+} from "../shared/gatewaySetupBus";
 
 const fetchConfigMock = vi.fn();
 const fetchModelsMock = vi.fn();
@@ -122,6 +126,33 @@ function voiceCapability(
 function primeFetches(models: readonly ModelCapability[]): void {
   fetchConfigMock.mockResolvedValue({ config: null, configPresent: true });
   fetchModelsMock.mockResolvedValue({ models });
+}
+
+// F-02 fixtures. The safe projection is credential-free by contract, so `providers` is the only part
+// of a replaced gateway the panel can compare — hence a fixture that varies exactly that.
+function safeConfig(modelId: string): SafeGatewayConfig {
+  return {
+    providers: [
+      {
+        modelId,
+        credentialHeaderName: "authorization",
+        timeoutMs: 30_000,
+        maxRetries: 2,
+        retryBaseDelayMs: 100,
+      },
+    ],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 1_000, halfOpenProbes: 1 },
+  };
+}
+
+function readyReport(checkedAt = "2026-07-30T09:00:00.000Z"): GatewayReadinessReport {
+  return {
+    modelId: "test-chat-1",
+    checkedAt,
+    overallStatus: "ready",
+    probes: [{ name: "chat", status: "passed", latencyMs: 12, evidence: "Basic chat answered." }],
+    verifiedCapabilities: {},
+  };
 }
 
 function setClipboard(writeText: (text: string) => Promise<void>): PropertyDescriptor | undefined {
@@ -339,16 +370,223 @@ describe("SettingsPanel gateway summary semantics", () => {
   });
 
   // uiux-fix C286: discovered-but-not-chat-capable models must not claim chat works.
+  // F-01 strengthens the same row: with no readiness check run, the summary must not claim a
+  // connected gateway either — the label assertion moved to the honest unverified wording and the
+  // "Gateway connected" claim is now pinned ABSENT, which is strictly more than this test asserted.
   it("does not claim chat capability when no discovered model is conversation-eligible", async () => {
     primeFetches([embeddingCapability("test-embed-1")]);
     render(<SettingsPanel />);
     await waitFor(() => {
-      expect(screen.getByText("Gateway connected")).toBeInTheDocument();
+      expect(screen.getByText("Not verified")).toBeInTheDocument();
     });
+    expect(screen.queryByText("Gateway connected")).toBeNull();
     expect(
       screen.getByText(/none of the discovered models can be used for conversation/i),
     ).toBeInTheDocument();
     expect(screen.queryByText(/keiko can use the configured gateway models for chat/i)).toBeNull();
+  });
+
+  // F-01: with a chat-capable model discovered and no probe run, the summary used to read "Gateway
+  // connected" + "Keiko can use the configured gateway models" — a connection claim derived purely
+  // from a parsed config file. The gateway may be unreachable, expired, or firewalled.
+  it("does not claim a connected gateway before a readiness check has confirmed one", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    const { container } = render(<SettingsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Not verified")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Gateway connected")).toBeNull();
+    expect(
+      screen.getByText(/no readiness check has confirmed that this gateway answers/i),
+    ).toBeInTheDocument();
+    // Scoped to the gateway summary row's own dot: the per-model dot answers a different question
+    // (is this model conversation-eligible by capability), and is not a health claim.
+    const summaryDot = container.querySelector('.ml-status[title="configured, not verified"]');
+    expect(summaryDot).not.toBeNull();
+    expect(summaryDot?.className).toContain("untested");
+    expect(container.querySelector('.ml-status[title="gateway configured"]')).toBeNull();
+  });
+
+  it("promotes the summary once a readiness check passes and demotes it when one fails", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockResolvedValue({
+      modelId: "test-chat-1",
+      checkedAt: "2026-07-30T09:00:00.000Z",
+      overallStatus: "ready",
+      probes: [{ name: "chat", status: "passed", latencyMs: 12, evidence: "Working today" }],
+      verifiedCapabilities: {},
+    });
+    const { container } = render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Gateway connected")).toBeInTheDocument();
+    });
+    const promoted = container.querySelector('.ml-status[title="gateway configured"]');
+    expect(promoted?.className).toContain("connected");
+
+    runGatewayReadinessMock.mockResolvedValue({
+      modelId: "test-chat-1",
+      checkedAt: "2026-07-30T09:05:00.000Z",
+      overallStatus: "failed",
+      probes: [
+        { name: "chat", status: "failed", latencyMs: 30, evidence: "Basic chat could not answer." },
+      ],
+      verifiedCapabilities: {},
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run readiness check" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Gateway check failed")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Gateway connected")).toBeNull();
+    const demoted = container.querySelector('.ml-status[title="gateway check failed"]');
+    expect(demoted?.className).toContain("error");
+  });
+
+  it("demotes the summary when the readiness run itself could not complete", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockRejectedValue(new Error("readiness transport failed"));
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Gateway check failed")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Not verified")).toBeNull();
+  });
+});
+
+// F-02 (review of #2847): F-01 made the gateway summary a verdict derived from readiness runs, but
+// the runs were remembered in a bare model-keyed map that nothing invalidated. A run measured against
+// a configuration that was afterwards REPLACED therefore kept being presented as current
+// verification — both in the gateway summary and in the per-model readiness block. These pins hold
+// the invariant the server holder already enforces: a verdict belongs to the configuration
+// generation it observed, and only the current generation may be displayed.
+describe("SettingsPanel readiness evidence is scoped to the configuration it measured (F-02)", () => {
+  it("stops presenting a verified gateway once the configuration it measured was replaced", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockResolvedValue(readyReport());
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Gateway connected")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Working today")).toBeInTheDocument();
+
+    // A credential update replaced the stored configuration. Nothing about the reachable gateway is
+    // known any more — the run above measured the previous one.
+    act(() => {
+      notifyGatewayConfigUpdated();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Not verified")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Gateway connected")).toBeNull();
+    expect(
+      screen.getByText(/no readiness check has confirmed that this gateway answers/i),
+    ).toBeInTheDocument();
+    // Finding 2: the per-model readiness block must not outlive the configuration either — its
+    // verified-capability badges and its copyable report describe the replaced gateway.
+    expect(screen.queryByLabelText("Verified capabilities")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy report" })).toBeNull();
+  });
+
+  it("presents a readiness run performed after the configuration change", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockResolvedValue(readyReport());
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    await waitFor(() => {
+      expect(screen.getByText("Gateway connected")).toBeInTheDocument();
+    });
+
+    act(() => {
+      notifyGatewayConfigUpdated();
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Not verified")).toBeInTheDocument();
+    });
+
+    runGatewayReadinessMock.mockResolvedValue(readyReport("2026-07-30T10:00:00.000Z"));
+    fireEvent.click(screen.getByRole("button", { name: "Run readiness check" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Gateway connected")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Working today")).toBeInTheDocument();
+    expect(screen.getByLabelText("Verified capabilities")).toBeInTheDocument();
+  });
+
+  it("neither displays nor lets a verdict that resolves after the change overwrite the new one", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    let resolveStale: ((report: GatewayReadinessReport) => void) | undefined;
+    runGatewayReadinessMock
+      .mockImplementationOnce(
+        () =>
+          new Promise<GatewayReadinessReport>((resolve) => {
+            resolveStale = resolve;
+          }),
+      )
+      .mockResolvedValue(readyReport("2026-07-30T10:00:00.000Z"));
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    expect(screen.getByText(/checking basic readiness/i)).toBeInTheDocument();
+
+    act(() => {
+      notifyGatewayConfigUpdated();
+    });
+    // The in-flight probe was aimed at the replaced gateway, so its progress is no longer this
+    // gateway's story either.
+    expect(screen.queryByText(/checking basic readiness/i)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run readiness check" }));
+    await waitFor(() => {
+      expect(screen.getByText("Gateway connected")).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      resolveStale?.(readyReport());
+      await Promise.resolve();
+    });
+
+    // The late verdict describes the previous configuration: it must not be shown AND it must not
+    // demote or duplicate what the current configuration actually measured.
+    expect(screen.getByText("Gateway connected")).toBeInTheDocument();
+    expect(screen.getAllByText("Working today")).toHaveLength(1);
+  });
+
+  it("invalidates a remembered run when a reloaded configuration is not the one it measured", async () => {
+    fetchConfigMock.mockResolvedValue({ config: safeConfig("test-chat-1"), configPresent: true });
+    fetchModelsMock.mockResolvedValue({ models: [chatCapability("test-chat-1")] });
+    runGatewayReadinessMock.mockResolvedValue(readyReport());
+    render(
+      <I18nProvider>
+        <SettingsPanel />
+      </I18nProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    await waitFor(() => {
+      expect(screen.getByText("Gateway connected")).toBeInTheDocument();
+    });
+
+    // The gateway was re-pointed at a different provider elsewhere (another window, the CLI). What
+    // this pin asserts is the consequence of the RELOADED configuration differing from the one the
+    // remembered run measured; switching the interface language is merely the in-panel action that
+    // re-runs the settings load, so the assertions below read in the newly selected locale.
+    fetchConfigMock.mockResolvedValue({ config: safeConfig("other-chat-9"), configPresent: true });
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Interface language" }));
+    fireEvent.click(screen.getByRole("option", { name: "Deutsch" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Modelle" }));
+    await waitFor(() => {
+      expect(screen.getByText("Nicht verifiziert")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Gateway verbunden")).toBeNull();
   });
 });
 

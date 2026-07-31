@@ -191,6 +191,21 @@ export function createInMemorySupervisedCodingApprovalStore(
   };
 }
 
+/**
+ * Resolve the lifetime a stored approval actually gets. The store's configured `ttlMs` is a
+ * CEILING, not merely a default: a caller-supplied lifetime is clamped to it, and a missing, zero,
+ * negative, or non-finite request collapses to the shortest possible life rather than an unbounded
+ * or already-elapsed record. The only coding-runtime caller derives its number from an instant the
+ * untrusted runtime child sends, so an uncapped caller value would let that child choose how long
+ * an approved authority survives (release-audit P0). Clamping here keeps that impossible for every
+ * present and future caller of this store, independently of the orchestrator's own ceiling.
+ */
+function boundedLifetime(requestedMs: number | undefined, ceilingMs: number): number {
+  if (requestedMs === undefined) return Math.max(1, ceilingMs);
+  if (!Number.isFinite(requestedMs)) return 1;
+  return Math.min(Math.max(1, requestedMs), Math.max(1, ceilingMs));
+}
+
 function persistApproval(
   records: Map<string, StoredApprovalRecord>,
   maxRecords: number,
@@ -207,7 +222,7 @@ function persistApproval(
   const approvalId = `sca_${randomBytes(16).toString("hex")}`;
   const approvalToken = randomBytes(32).toString("hex");
   const tokenHash = hashToken(approvalToken);
-  const expiresAtMs = nowMs + (input.ttlMs ?? ttlMs);
+  const expiresAtMs = nowMs + boundedLifetime(input.ttlMs, ttlMs);
   records.set(approvalId, {
     runId: binding.runId,
     bindingHash: supervisedCodingApprovalBindingHash(binding),

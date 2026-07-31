@@ -79,6 +79,7 @@ describe("coding runtime control plane", () => {
             retryable: false,
           }),
         health: () => ({ status: "stopped" }),
+        pendingApprovalReview: () => undefined,
       }),
       launchResolver: {
         resolve: () => ({

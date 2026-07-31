@@ -9,7 +9,13 @@ import { errorBody } from "./routes.js";
 import { pathIsDenied } from "./files-deny.js";
 import { assertUiDbOutsideProject, validateProjectPath } from "./store/index.js";
 import { projectWithWorkspaceAvailability } from "./workspace-root-membership.js";
-import { defaultGitNetworkProcessRunner, isSafeGitPositional } from "@oscharko-dev/keiko-git";
+import {
+  classifyGitRemoteFailure,
+  defaultGitNetworkProcessRunner,
+  isSafeGitPositional,
+  type GitProcessResult,
+  type GitRemoteFailureReason,
+} from "@oscharko-dev/keiko-git";
 
 const MAX_BODY_BYTES = 32 * 1024;
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -225,26 +231,91 @@ const cloneRepository: CloneRepositoryRunner = async function cloneRepository(
     ["clone", "--", repositoryUrl, destinationPath],
     { cwd: dirname(destinationPath), maxBytes: MAX_OUTPUT_BYTES, timeoutMs: CLONE_TIMEOUT_MS },
   );
-  if (result.exitCode === 127) {
-    return {
-      status: 503,
-      body: errorBody("GIT_UNAVAILABLE", "Git is not available on this host."),
-    };
-  }
-  if (result.exitCode === 0) return null;
-  return cloneFailure(result.truncated);
+  return classifyCloneOutcome(result);
 };
 
-function cloneFailure(truncated: boolean): RouteResult {
-  return {
-    status: truncated ? 504 : 409,
-    body: errorBody(
-      truncated ? "GIT_CLONE_TIMEOUT" : "GIT_CLONE_FAILED",
-      truncated
-        ? "Repository clone did not finish within the bounded execution window."
-        : "Repository clone failed. Check the URL, credentials, and destination path.",
-    ),
+interface CloneFailureShape {
+  readonly status: number;
+  readonly code: string;
+  readonly message: string;
+}
+
+// One row per reason the shared classifier can produce. TOTAL over the vocabulary minus "none": a new
+// remote failure reason is a COMPILE error here, so it can never inherit an existing row's meaning —
+// which is exactly how an unreachable host used to be reported as "check the URL and credentials" and
+// an over-cap run as a timeout. Every message is content-free: it names the class of failure and the
+// operator's next step, never the git output, the URL, or a credential (the raw text stays in the
+// spawn boundary and is not carried anywhere).
+const CLONE_FAILURE: Readonly<Record<Exclude<GitRemoteFailureReason, "none">, CloneFailureShape>> =
+  {
+    "git-missing": {
+      status: 503,
+      code: "GIT_UNAVAILABLE",
+      message: "Git is not available on this host.",
+    },
+    timeout: {
+      status: 504,
+      code: "GIT_CLONE_TIMEOUT",
+      message: "Repository clone did not finish within the bounded execution window.",
+    },
+    "output-truncated": {
+      status: 409,
+      code: "GIT_CLONE_OUTPUT_TRUNCATED",
+      message:
+        "Repository clone produced more output than the bounded execution window admits and was stopped.",
+    },
+    "remote-unavailable": {
+      status: 503,
+      code: "GIT_CLONE_REMOTE_UNAVAILABLE",
+      message:
+        "The remote host could not be reached. Check the network connection and the host name.",
+    },
+    "auth-failed": {
+      status: 409,
+      code: "GIT_CLONE_AUTH_FAILED",
+      message: "The remote rejected the credentials for this repository.",
+    },
+    "permission-denied": {
+      status: 409,
+      code: "GIT_CLONE_PERMISSION_DENIED",
+      message: "The remote refused access to this repository for the configured identity.",
+    },
+    "repository-not-found": {
+      status: 409,
+      code: "GIT_CLONE_NOT_FOUND",
+      message: "The remote repository does not exist or is not visible to the configured identity.",
+    },
+    "untrusted-host-key": {
+      status: 409,
+      code: "GIT_CLONE_HOST_KEY_UNTRUSTED",
+      message: "The remote host's SSH key is not trusted on this machine.",
+    },
+    "unsafe-repository": {
+      status: 409,
+      code: "GIT_CLONE_UNSAFE_REPOSITORY",
+      message: "Git refused the destination because of repository ownership.",
+    },
+    "not-a-repository": {
+      status: 409,
+      code: "GIT_CLONE_FAILED",
+      message: "Repository clone failed. Check the URL, credentials, and destination path.",
+    },
+    "git-error": {
+      status: 409,
+      code: "GIT_CLONE_FAILED",
+      message: "Repository clone failed. Check the URL, credentials, and destination path.",
+    },
   };
+
+/**
+ * Pure projection from ONE bounded clone run to its HTTP outcome; `null` means the clone succeeded.
+ * Exported so the mapping is testable without spawning git.
+ */
+export function classifyCloneOutcome(result: GitProcessResult): RouteResult | null {
+  const reason = classifyGitRemoteFailure(result);
+  if (reason === "none") return null;
+  const failure = CLONE_FAILURE[reason];
+  return { status: failure.status, body: errorBody(failure.code, failure.message) };
 }
 
 export function createCloneRepositoryHandler(

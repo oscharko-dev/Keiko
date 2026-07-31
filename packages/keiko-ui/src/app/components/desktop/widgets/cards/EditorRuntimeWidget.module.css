@@ -4,3 +4,36 @@
   --ed-inlay-value-fg: var(--info);
   --ed-inlay-value-bg: color-mix(in oklch, var(--info) 14%, transparent);
 }
+
+/*
+ * Document tab strip, WAI-ARIA APG shape (0.3.0 release audit, #2802).
+ *
+ * `role="tablist"` may own nothing but `role="tab"` elements. The strip previously put the
+ * per-tab close control and the overflow chooser directly under the tablist, so both were owned
+ * children with other roles. The close control is now a descendant of its tab and the tablist role
+ * sits on this inner row, which holds only tabs; `.ed-tablist` stays the measured, styled box so
+ * the overflow chooser remains inside the width `readableTabCapacity` reserves trigger space from.
+ *
+ * `gap: inherit` deliberately takes `.ed-tablist`'s computed gap, so the narrow four-pane
+ * container query that tightens the strip to 1px still reaches the tabs.
+ */
+.tabRow {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: inherit;
+  min-width: 0;
+}
+
+/*
+ * The close control moved from a sibling of the tab into it. These two declarations keep the
+ * label-to-× and ×-to-edge metrics of the previous sibling layout: the tab's 2px flex gap plus the
+ * hit area's 8px right padding become the hit area's own 6px gap plus 4px here.
+ */
+.tabHitClosable {
+  padding-right: 0;
+}
+
+.tabClose {
+  margin-left: 4px;
+}

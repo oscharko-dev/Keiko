@@ -216,7 +216,7 @@ There is **no** action variant for evidence, patch, verification, or model call.
 
 ### Surfacing the refusal
 
-When an authority moment that is _not_ reversible completes, a transient toast in the Notifications panel reads "Recorded as evidence; cannot be undone." The undo command itself notes the boundary in its tooltip: "Undoes window and panel changes only. Evidence and patches cannot be undone."
+When an authority moment that is _not_ reversible completes, a transient toast in the Notifications panel reads "Recorded as evidence; cannot be undone." The undo command itself notes the boundary in its tooltip, naming only the mutation kinds the shell actually records — today panel toggles ("Undo (panel changes only)"), per ADR-0028 §5/§6. Evidence and patches cannot be undone.
 
 ## Context menus and inspector actions
 

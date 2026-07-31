@@ -22,6 +22,7 @@ import {
   asEnhancedPromptId,
   PROMPT_ENHANCEMENT_PROFILE_IDS,
   type EnhancedPrompt,
+  type MissingInformationStrategy,
   type PromptCandidateRejectionReason,
   type PromptEnhancementProfileId,
   type PromptTaskAnalysis,
@@ -63,8 +64,11 @@ export interface GeneratePromptCandidatesArgs {
   readonly input: RawPromptInput;
   // Upper bound on the number of distinct candidates to generate (>= 1). Bounded by the slate size.
   readonly candidateCount: number;
-  // Optional baseline preference / missing-information strategy, forwarded to the planner.
+  // Optional baseline preference, forwarded to the planner.
   readonly profilePreference?: PromptEnhancementProfileId | undefined;
+  // How missing information is represented downstream, forwarded to the planner so the generator's
+  // "assume" branch is reachable from production callers (it defaults to "clarify" when omitted).
+  readonly missingInformationStrategy?: MissingInformationStrategy | undefined;
 }
 
 function candidateId(analysis: PromptTaskAnalysis, profile: PromptEnhancementProfileId): string {
@@ -124,7 +128,11 @@ export function generatePromptCandidates(args: GeneratePromptCandidatesArgs): Pr
   const { analysis, input } = args;
   const count =
     Number.isInteger(args.candidateCount) && args.candidateCount > 0 ? args.candidateCount : 1;
-  const floor = planPromptEnhancement(analysis, { profilePreference: args.profilePreference });
+  const planOptions = {
+    profilePreference: args.profilePreference,
+    missingInformationStrategy: args.missingInformationStrategy,
+  };
+  const floor = planPromptEnhancement(analysis, planOptions);
   const baselineProfile = floor.selectedProfile;
 
   const candidates: PromptCandidate[] = [];
@@ -134,7 +142,7 @@ export function generatePromptCandidates(args: GeneratePromptCandidatesArgs): Pr
 
   for (const preference of preferenceSlate(baselineProfile)) {
     if (candidates.length >= count) break;
-    const plan = planPromptEnhancement(analysis, { profilePreference: preference });
+    const plan = planPromptEnhancement(analysis, { ...planOptions, profilePreference: preference });
     const actualProfile = plan.selectedProfile;
     // Deduplicate by the actual selected profile: a forced escalation (e.g. every preference escalating
     // to `safety-critical` for a critical task) is the same candidate, generated once.

@@ -1,11 +1,14 @@
+import { gatewayVerificationContradictsReadiness } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchModelSource,
   CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
+  GatewayVerificationState,
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
+import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import type {
   CodingWorkbenchResourceStatus,
   CodingWorkbenchRuntimeState,
@@ -29,6 +32,18 @@ export function modelSourceLabel(
   if (source === "openai-api-key-through-gateway")
     return t("codingWorkbench.modelSource.openaiGateway");
   return t("codingWorkbench.modelSource.codexSubscription");
+}
+
+/**
+ * F-01: the source row used to read "Keiko Gateway · Available" from stored configuration alone.
+ * This names what a live probe actually said, so an unprobed gateway reads as unconfirmed instead of
+ * healthy, and a failed probe is visible rather than hidden behind a configured source.
+ */
+export function sourceVerificationLabel(
+  verification: GatewayVerificationState,
+  t: CodingWorkbenchTranslate,
+): string {
+  return t(`codingWorkbench.source.verification.${verification}`);
 }
 
 export function runStateLabel(
@@ -92,9 +107,12 @@ export function lifecycleAnnouncement(
   researchGrant: CodingWorkbenchRuntimeResearchGrant | null = null,
 ): string {
   const snapshot = state.run.value;
+  // F-01: the spoken readiness must match the projected one — a source whose last probe failed is
+  // announced as unavailable, not ready, exactly as `projectReadiness` treats it.
   const sourceAvailable =
     state.source.value?.runtimePreference === state.runtimePreference &&
-    state.source.value.available;
+    state.source.value.available &&
+    !gatewayVerificationContradictsReadiness(state.source.value.verification);
   const workspaceAvailable = state.workspace.value?.health === "healthy";
   const runtimeAvailable = state.runtime.value?.runtimeAvailable === true;
   const recovery =
@@ -103,6 +121,7 @@ export function lifecycleAnnouncement(
       : "";
   return [
     runAnnouncement(state, t),
+    pairingAnnouncement(state, t),
     readinessAnnouncement("modelSource", state.source.status, sourceAvailable, t),
     authenticationAnnouncement(state, t),
     readinessAnnouncement("workspace", state.workspace.status, workspaceAvailable, t),
@@ -113,6 +132,17 @@ export function lifecycleAnnouncement(
   ]
     .filter((announcement) => announcement.length > 0)
     .join(" ");
+}
+
+// Release-audit F-08/RG-12: an unpaired window's run start is guaranteed to fail authority
+// resolution (ADR-0141), so the narration must name pairing as the missing input instead of
+// narrating "Workspace ready. Runtime ready." over a start that can never succeed. Silent while
+// pairing is unconfirmed — the narration never claims a truth the workspaces read has not answered.
+function pairingAnnouncement(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string {
+  return state.pairing === "unpaired" ? t("codingWorkbench.pairing.unpaired") : "";
 }
 
 type ReadinessAnnouncementState =
@@ -160,12 +190,23 @@ function authenticationAnnouncement(
   return t("codingWorkbench.announcement.authenticationNotChecked");
 }
 
+/**
+ * True while a run is still live enough for the operator's end controls to reach it — exactly the
+ * states from which the server's transition table still admits `taken-over` or `cancelled`
+ * (pinned against that table in codingWorkbenchLabels.test.ts).
+ *
+ * `paused` belongs here. The server accepts stop and takeover from a paused run, the run keeps the
+ * Authority Envelope minted for it, and its headless editor-bridge session must stay leased: a
+ * changeset review that is already pending when the operator pauses can only be delivered over a
+ * live bridge lease, so dropping `paused` silently discarded the operator's Approve/Deny.
+ */
 export function activeRunState(state: CodingWorkbenchRuntimeStateName | undefined): boolean {
   return (
     state === "starting" ||
     state === "ready" ||
     state === "running" ||
     state === "awaiting-approval" ||
+    state === "paused" ||
     state === "stopping"
   );
 }
@@ -219,20 +260,48 @@ function eventOutcomeDetail(
   });
 }
 
-// F-09a: a rejected runtime mutation (any non-ok start/stop/approval result — never only one
-// status code) must surface as a visible, actionable alert naming the machine error code and,
-// when the transport carried one, the correlation id that ties this exact failure to its redacted
-// server-side diagnostic. A generic sentence alone left the operator with a dead start button.
-function mutationFailureAlert(
-  error: NonNullable<CodingWorkbenchRuntimeState["mutation"]["error"]>,
+/**
+ * The machine facts every rejected workbench action carries. Structural on purpose: the runtime
+ * mutation error, a refused runtime question, and an undelivered changeset decision are produced by
+ * three different layers and all three get the identical treatment.
+ */
+export interface CodingWorkbenchFailureFacts {
+  readonly code: string;
+  readonly correlationId?: string | undefined;
+}
+
+// F-09a: a rejected action (any non-ok result — never only one status code) must surface as a
+// visible, actionable alert naming the machine error code and, when the transport carried one, the
+// correlation id that ties this exact failure to its redacted server-side diagnostic. A generic
+// sentence alone left the operator with a dead button and nothing to report. `summaryKey` is the
+// caller's sentence saying WHICH action failed: "the requested runtime action", "sending your
+// answer" and "confirming this decision" are three different truths and must not share one.
+export function actionFailureAlert(
+  summaryKey: CodingWorkbenchMessageKey,
+  failure: CodingWorkbenchFailureFacts,
   t: CodingWorkbenchTranslate,
 ): string {
-  const summary = t("codingWorkbench.alert.actionFailedCode", { code: error.code });
-  return error.correlationId === undefined
+  const summary = t(summaryKey, { code: failure.code });
+  return failure.correlationId === undefined
     ? summary
     : `${summary} ${t("codingWorkbench.alert.actionFailedSupportId", {
-        correlationId: error.correlationId,
+        correlationId: failure.correlationId,
       })}`;
+}
+
+/**
+ * F-09a: an editor-changeset approve/deny that never reached the run must name the code that stopped
+ * it — the run's file write is blocked until this decision lands, so "it failed" is not enough to
+ * act on. `null` is only reachable if a delivery failure is ever flagged without facts; the generic
+ * sentence keeps that path honest rather than rendering an empty alert.
+ */
+export function changesetDeliveryAlert(
+  failure: CodingWorkbenchFailureFacts | null,
+  t: CodingWorkbenchTranslate,
+): string {
+  return failure === null
+    ? t("codingWorkbench.changesetReview.deliveryFailed")
+    : actionFailureAlert("codingWorkbench.changesetReview.deliveryFailedCode", failure, t);
 }
 
 export function visibleAlert(
@@ -240,7 +309,9 @@ export function visibleAlert(
   t: CodingWorkbenchTranslate,
   setupVisible: boolean,
 ): string | null {
-  if (state.mutation.error) return mutationFailureAlert(state.mutation.error, t);
+  if (state.mutation.error) {
+    return actionFailureAlert("codingWorkbench.alert.actionFailedCode", state.mutation.error, t);
+  }
   for (const [resource, value] of [
     ["authentication", state.profile],
     ["authenticationSetup", state.codexSetup],
@@ -252,11 +323,14 @@ export function visibleAlert(
   ] as const) {
     if (value.status === "error") return t(`codingWorkbench.alert.${resource}RefreshFailed`);
   }
-  // Last, because the surface shows one alert at a time: a refresh failure is actionable (retry),
-  // an unqualified runtime is a standing condition. Reporting the condition first would swallow the
-  // recoverable error. Only while the bootstrap setup section is off screen — it states the same
-  // condition itself, and duplicating it would announce it twice to assistive technology. This
-  // wording is its own: the setup copy invites binding a workspace, which is already done here.
+  // Standing conditions come after actionable refresh failures (one alert at a time — reporting a
+  // standing condition first would swallow the recoverable error). The unpaired window (F-08/
+  // RG-12) precedes the unqualified runtime: without a paired app session no run can start at all.
+  if (state.pairing === "unpaired") return t("codingWorkbench.pairing.unpaired");
+  // Last: the unqualified runtime, and only while the bootstrap setup section is off screen — it
+  // states the same condition itself, and duplicating it would announce it twice to assistive
+  // technology. This wording is its own: the setup copy invites binding a workspace, which is
+  // already done here.
   if (
     !setupVisible &&
     state.runtime.status === "ready" &&

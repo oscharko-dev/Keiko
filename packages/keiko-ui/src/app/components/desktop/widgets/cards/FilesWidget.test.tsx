@@ -16,7 +16,12 @@ import {
   renameFilesEntry,
   updateChatConnectedScopes,
 } from "../../../../../lib/api";
-import type { Chat, GitChangedFile, GitRepositoryStatusResponse } from "../../../../../lib/types";
+import type {
+  Chat,
+  FilesMutationResponse,
+  GitChangedFile,
+  GitRepositoryStatusResponse,
+} from "../../../../../lib/types";
 import { ChatSessionProvider } from "../../context/ChatSessionContext";
 import type { ChatSessionApi } from "../../hooks/useChatSession";
 import { FilePreview } from "./FilePreview";
@@ -865,6 +870,76 @@ describe("FilesWidget", () => {
     expect(screen.queryByLabelText(/Git changed: ignored\.log/iu)).toBeNull();
     await userEvent.click(row);
     expect(onOpenFile).toHaveBeenCalledWith("/repo", "ignored.log");
+  });
+
+  // Audit F-12 — the widget requests includeIgnored so it can dim ignored rows, but the header
+  // count must agree with `git status` (and the Git window): ignored entries are not changes.
+  it("excludes ignored entries from the header changed-file count", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue(
+      availableGitStatus([
+        gitChange("modified.ts", "M"),
+        gitChange("untracked.ts", "?"),
+        gitChange("dist/bundle.js", "!", { indexStatus: "!" }),
+        gitChange("node_modules/dep/index.js", "!", { indexStatus: "!" }),
+        gitChange("build.log", "!", { indexStatus: "!" }),
+      ]),
+    );
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [{ ...treeEntryBase, name: "modified.ts", path: "modified.ts", kind: "file" }],
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    expect(await screen.findByText("Git main 2 changed files")).toBeInTheDocument();
+  });
+
+  it("uses the singular changed-file wording when ignored entries hide a lone change", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue(
+      availableGitStatus([
+        gitChange("modified.ts", "M"),
+        gitChange("dist/bundle.js", "!", { indexStatus: "!" }),
+        gitChange("build.log", "!", { indexStatus: "!" }),
+      ]),
+    );
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [{ ...treeEntryBase, name: "modified.ts", path: "modified.ts", kind: "file" }],
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    expect(await screen.findByText("Git main 1 changed file")).toBeInTheDocument();
+  });
+
+  it("reports a clean worktree when filtering removes every reported change", async () => {
+    // Boundary: a not-clean response whose only entries are ignored. The server excludes ignored
+    // entries from `clean`, so this shape is defensive — the header must not read "0 changed
+    // files", and it must agree with a tree that shows no changed file.
+    vi.mocked(fetchGitStatus).mockResolvedValue(
+      availableGitStatus(
+        [
+          gitChange("dist/bundle.js", "!", { indexStatus: "!" }),
+          gitChange("build.log", "!", { indexStatus: "!" }),
+        ],
+        { clean: false },
+      ),
+    );
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [{ ...treeEntryBase, name: "ordinary.ts", path: "ordinary.ts", kind: "file" }],
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    expect(await screen.findByText("Git main clean")).toBeInTheDocument();
+    expect(screen.queryByText(/0 changed files/iu)).not.toBeInTheDocument();
   });
 
   it("leaves ordinary rows undecorated when ignored entries are not requested by the response", async () => {
@@ -1966,6 +2041,40 @@ describe("FilesWidget file operations", () => {
     });
   });
 
+  // GEN-UI-FOCUS-002 — the aria-modal promise has to hold for the WHOLE time the dialog is open,
+  // including while the delete is in flight. Confirming disables both buttons, and a real browser
+  // then drops focus out of the dialog (a disabled control cannot hold focus, so it lands on
+  // <body>). jsdom does not blur on disable, so the escaped state is set up explicitly here — the
+  // invariant under test is "focus is outside an open aria-modal dialog", however it got there.
+  // A Tab handler bound to the dialog subtree can never see the next keystroke from outside it, so
+  // Tab used to walk into the still-live tree behind the modal. Containment now lives on the
+  // document (shared useDialogTabTrap seam) and pulls focus back in.
+  it("re-enters the delete dialog when the in-flight delete has dropped focus outside it", async () => {
+    const pending = deferred<FilesMutationResponse>();
+    vi.mocked(deleteFilesEntry).mockReturnValue(pending.promise);
+    render(<FilesWidget root="/repo" />);
+
+    const row = await screen.findByRole("treeitem", { name: /app\.ts/i });
+    row.focus();
+    fireEvent.keyDown(row, { key: "Delete" });
+    const dialog = await screen.findByRole("dialog", { name: /delete file\?/i });
+    const deleteBtn = screen.getByRole("button", { name: "Delete" });
+    await waitFor(() => expect(deleteBtn).toHaveFocus());
+
+    // Confirm without resolving the delete: every control in the dialog is now disabled.
+    fireEvent.click(deleteBtn);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled());
+    row.focus();
+    expect(dialog.contains(document.activeElement)).toBe(false);
+
+    // Tab must NOT move on through the tree behind the modal; it re-enters the dialog.
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    pending.resolve({ root: "/repo", path: "app.ts", kind: "file" });
+    await waitFor(() => expect(deleteFilesEntry).toHaveBeenCalledTimes(1));
+  });
+
   // GEN-UI-KEYBOARD-003 — the context menu moves focus to its first item on open and supports
   // arrow roving among the menu items.
   it("focuses the first context-menu item and roves with arrow keys", async () => {
@@ -2085,6 +2194,137 @@ describe("FilesWidget file operations", () => {
     // AC2 (Epic #2093 audit) — a drag-move must invalidate the shared git status the same way
     // the context-menu rename already does, so decorations re-fetch instead of going stale.
     await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(2));
+  });
+
+  // Renaming, moving or deleting a path whose buffer has unsaved changes used to reach the server
+  // with no consultation at all, so the unsaved buffer was discarded silently. Every path-destroying
+  // mutation now asks the host that owns the open buffers FIRST, and a veto sends no request.
+  describe("unsaved-buffer pre-flight (onBeforeEntryMutation)", () => {
+    it("sends no rename request when the host vetoes the inline rename", async () => {
+      const onBeforeEntryMutation = vi.fn(() => Promise.resolve(false));
+      render(<FilesWidget root="/repo" onBeforeEntryMutation={onBeforeEntryMutation} />);
+      fireEvent.contextMenu(await screen.findByText("app.ts"));
+
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Rename…" }));
+      const input = await screen.findByLabelText("Rename app.ts");
+      await userEvent.clear(input);
+      await userEvent.type(input, "renamed.ts{Enter}");
+
+      await waitFor(() => expect(onBeforeEntryMutation).toHaveBeenCalledWith("app.ts"));
+      expect(renameFilesEntry).not.toHaveBeenCalled();
+      // The typed name survives the veto so nothing the user entered is lost.
+      expect(screen.getByLabelText("Rename app.ts")).toHaveValue("renamed.ts");
+    });
+
+    it("renames once the host allows it, leaving the happy path unchanged", async () => {
+      vi.mocked(renameFilesEntry).mockResolvedValue({
+        root: "/repo",
+        path: "renamed.ts",
+        previousPath: "app.ts",
+        kind: "file",
+      });
+      const onBeforeEntryMutation = vi.fn(() => Promise.resolve(true));
+      const onFilesMutated = vi.fn();
+      render(
+        <FilesWidget
+          root="/repo"
+          onBeforeEntryMutation={onBeforeEntryMutation}
+          onFilesMutated={onFilesMutated}
+        />,
+      );
+      fireEvent.contextMenu(await screen.findByText("app.ts"));
+
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Rename…" }));
+      const input = await screen.findByLabelText("Rename app.ts");
+      await userEvent.clear(input);
+      await userEvent.type(input, "renamed.ts{Enter}");
+
+      await waitFor(() =>
+        expect(renameFilesEntry).toHaveBeenCalledWith({
+          root: "/repo",
+          path: "app.ts",
+          newPath: "renamed.ts",
+        }),
+      );
+      expect(onBeforeEntryMutation).toHaveBeenCalledWith("app.ts");
+      expect(onFilesMutated).toHaveBeenCalledWith({
+        op: "rename",
+        mutation: expect.objectContaining({ path: "renamed.ts", previousPath: "app.ts" }),
+      });
+    });
+
+    it("asks with the folder path when a directory is renamed", async () => {
+      const onBeforeEntryMutation = vi.fn(() => Promise.resolve(false));
+      render(<FilesWidget root="/repo" onBeforeEntryMutation={onBeforeEntryMutation} />);
+      fireEvent.contextMenu(await screen.findByText("src"));
+
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Rename…" }));
+      const input = await screen.findByLabelText("Rename src");
+      await userEvent.clear(input);
+      await userEvent.type(input, "lib{Enter}");
+
+      // The host is asked about the directory, which is what lets it find the dirty files inside it.
+      await waitFor(() => expect(onBeforeEntryMutation).toHaveBeenCalledWith("src"));
+      expect(renameFilesEntry).not.toHaveBeenCalled();
+    });
+
+    it("deletes nothing and closes the confirmation when the host vetoes the delete", async () => {
+      const onBeforeEntryMutation = vi.fn(() => Promise.resolve(false));
+      render(<FilesWidget root="/repo" onBeforeEntryMutation={onBeforeEntryMutation} />);
+      fireEvent.contextMenu(await screen.findByText("app.ts"));
+
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Delete…" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(onBeforeEntryMutation).toHaveBeenCalledWith("app.ts"));
+      expect(deleteFilesEntry).not.toHaveBeenCalled();
+      // No destructive modal is left behind after the veto.
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
+    it("sends no rename request when the host vetoes a drag-move", async () => {
+      const onBeforeEntryMutation = vi.fn(() => Promise.resolve(false));
+      render(<FilesWidget root="/repo" onBeforeEntryMutation={onBeforeEntryMutation} />);
+      await screen.findByText("app.ts");
+
+      const source = screen.getByRole("treeitem", { name: /app\.ts/ });
+      const target = screen.getByRole("treeitem", { name: /src/ });
+      const dataTransfer = {
+        setData: vi.fn(),
+        getData: vi.fn(),
+        effectAllowed: "",
+        dropEffect: "",
+      };
+      fireEvent.dragStart(source, { dataTransfer });
+      fireEvent.dragOver(target, { dataTransfer });
+      fireEvent.drop(target, { dataTransfer });
+
+      await waitFor(() => expect(onBeforeEntryMutation).toHaveBeenCalledWith("app.ts"));
+      expect(renameFilesEntry).not.toHaveBeenCalled();
+    });
+
+    it("does not consult the host for a create or a duplicate, which target a new path", async () => {
+      vi.mocked(createFilesEntry).mockResolvedValue({
+        root: "/repo",
+        path: "new.ts",
+        kind: "file",
+      });
+      const onBeforeEntryMutation = vi.fn(() => Promise.resolve(true));
+      render(
+        <FilesWidget
+          root="/repo"
+          onOpenFile={vi.fn()}
+          onBeforeEntryMutation={onBeforeEntryMutation}
+        />,
+      );
+      await screen.findByText("app.ts");
+
+      await userEvent.click(screen.getByRole("button", { name: "New file" }));
+      await userEvent.type(await screen.findByLabelText("New file name"), "new.ts{Enter}");
+
+      await waitFor(() => expect(createFilesEntry).toHaveBeenCalled());
+      expect(onBeforeEntryMutation).not.toHaveBeenCalled();
+    });
   });
 
   // GEN-PERF-WIDGET-004 — while a tooltip is visible, pointer motion must not commit a React

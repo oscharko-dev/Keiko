@@ -37,7 +37,11 @@ import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 import { Icons } from "../../Icons";
 import { acquireGrabbingBodyStyle } from "../../interactionGuards";
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
-import { reconcileEditorDirtyByPane, type EditorDirtyByPane } from "./editorDirtyState";
+import {
+  dirtyFilesUnderPath,
+  reconcileEditorDirtyByPane,
+  type EditorDirtyByPane,
+} from "./editorDirtyState";
 import { deleteEditorHotExitSnapshot } from "./editorHotExitStore";
 import editorWidgetStyles from "./EditorWidget.module.css";
 import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
@@ -147,10 +151,24 @@ export interface EditorWidgetProps extends EditorRuntimeWidgetProps {
 interface PendingDirtyClose {
   readonly intent: EditorDirtyCloseIntent;
   readonly apply: () => void;
+  // Run instead of `apply` when the user cancels. Only the pre-flight reasons need it: a cancelled
+  // `path-mutation` has to tell the Files tree that its filesystem mutation is vetoed, where a
+  // cancelled tab close simply changes nothing.
+  readonly onCancel?: (() => void) | undefined;
   readonly dirtyFiles: readonly string[];
   readonly saving: boolean;
   readonly error?: string | undefined;
 }
+
+// Reasons whose file list spans every pane rather than one pane's tabs. A root change and a window
+// close act on the whole editor; a path mutation acts on the filesystem, so a second pane holding the
+// same dirty file — or any dirty file under a renamed directory — must be prompted for too (S7776:
+// membership test, not `.includes()` on a constant array).
+const CROSS_PANE_DIRTY_CLOSE_REASONS: ReadonlySet<EditorDirtyCloseIntent["reason"]> = new Set([
+  "root-change",
+  "window-close",
+  "path-mutation",
+]);
 
 interface PointerTabDragPosition {
   readonly x: number;
@@ -627,6 +645,11 @@ export function EditorWidget({
   layoutRef.current = layout;
   const [dirtyByPane, setDirtyByPane] = useState<EditorDirtyByPane>({});
   const [pendingClose, setPendingClose] = useState<PendingDirtyClose | null>(null);
+  // Read by `cancelPendingClose` so dismissing the dialog does not need `pendingClose` in its
+  // dependency list (the file's `layoutRef` pattern): the cancel handler must be able to run the
+  // pending intent's `onCancel` without taking a new identity on every dirty-state change.
+  const pendingCloseRef = useRef<PendingDirtyClose | null>(pendingClose);
+  pendingCloseRef.current = pendingClose;
   // The dialog stamps the root it was opened for so a root switch that races
   // the user's Confirm click cannot silently mutate trust on the new root
   // (M11 CWE-863; the confirm handler closes over a `verification` bound to
@@ -850,16 +873,20 @@ export function EditorWidget({
       readonly files: readonly string[];
       readonly reason: EditorDirtyCloseIntent["reason"];
       readonly apply: () => void;
+      readonly onCancel?: (() => void) | undefined;
     }): boolean => {
       const dirtySet = new Set(allDirtyFiles(dirtyByPane));
-      const dirtyFiles =
-        input.reason === "root-change" || input.reason === "window-close"
-          ? input.files.filter((entry) => dirtySet.has(entry))
-          : dirtyFilesForPane(dirtyByPane, input.paneId, input.files);
+      const dirtyFiles = CROSS_PANE_DIRTY_CLOSE_REASONS.has(input.reason)
+        ? input.files.filter((entry) => dirtySet.has(entry))
+        : dirtyFilesForPane(dirtyByPane, input.paneId, input.files);
       if (dirtyFiles.length === 0) {
         input.apply();
         return true;
       }
+      // A second intent replaces the dialog, so the one being displaced never gets an answer. Report
+      // that as a cancel: a displaced pre-flight `path-mutation` ask would otherwise leave the Files
+      // tree awaiting a promise that can no longer settle, with its busy flag latched.
+      pendingCloseRef.current?.onCancel?.();
       setPendingClose({
         intent: createEditorDirtyCloseIntent({
           paneId: input.paneId,
@@ -867,6 +894,7 @@ export function EditorWidget({
           reason: input.reason,
         }),
         apply: input.apply,
+        onCancel: input.onCancel,
         dirtyFiles,
         saving: false,
       });
@@ -916,9 +944,13 @@ export function EditorWidget({
   }, [dirtyByPane, markDirty, pendingClose, workspaceRoot]);
 
   const cancelPendingClose = useCallback((): void => {
-    if (pendingClose?.saving === true) return;
+    const pending = pendingCloseRef.current;
+    if (pending === null || pending.saving) return;
+    // A cancelled pre-flight intent must report the veto: the Files tree is awaiting this answer and
+    // would otherwise hang with its busy flag latched.
+    pending.onCancel?.();
     setPendingClose(null);
-  }, [pendingClose?.saving]);
+  }, []);
 
   const openRoot = useCallback(
     (nextRoot: string): void => {
@@ -984,11 +1016,53 @@ export function EditorWidget({
     [commitLayout],
   );
 
+  // Drop a mutated path's crash-recovery snapshot — but never while that path still holds unsaved
+  // changes. The snapshot is then the last copy of a buffer whose file has just been renamed away or
+  // deleted, so deleting it would turn a recoverable state into permanent loss. In the guarded flow
+  // nothing is dirty by this point (the pre-flight prompt saved or discarded first, and an explicit
+  // Discard deletes the snapshot itself), so this only ever preserves a snapshot for a mutation that
+  // reached the tree with unsaved work anyway — a host without the pre-flight guard, or a mutation
+  // reported from outside it.
+  const dropHotExitSnapshotForMutatedPath = useCallback(
+    (path: string): void => {
+      if (dirtyFilesUnderPath(dirtyByPane, path).length > 0) return;
+      void deleteEditorHotExitSnapshot(workspaceRoot, path);
+    },
+    [dirtyByPane, workspaceRoot],
+  );
+
+  // The Files tree asks before it renames, moves, or deletes a path. Renaming or deleting the path of
+  // an open buffer with unsaved changes cannot re-home that buffer — the tab reloads the new path from
+  // disk — so this is a close of unsaved work and must route through the one dirty-close policy every
+  // other close path uses (ADR-0065 D1). `true` lets the mutation proceed (nothing unsaved is at
+  // stake, or the user saved/discarded); `false` vetoes it while the buffer is still unsaved. A
+  // directory operation carries every dirty file beneath it, and the check spans panes, so a second
+  // pane holding the same dirty file still prompts.
+  const confirmFilesEntryMutation = useCallback(
+    (path: string): Promise<boolean> => {
+      const dirtyTargets = dirtyFilesUnderPath(dirtyByPane, path);
+      if (dirtyTargets.length === 0) return Promise.resolve(true);
+      return new Promise<boolean>((resolve) => {
+        requestDirtyClose({
+          paneId: activeEditorPane(layoutRef.current).id,
+          files: dirtyTargets,
+          reason: "path-mutation",
+          apply: () => {
+            resolve(true);
+          },
+          onCancel: () => {
+            resolve(false);
+          },
+        });
+      });
+    },
+    [dirtyByPane, requestDirtyClose],
+  );
+
   // A file mutation from the sidebar tree: re-home (rename) or close (delete) any open tabs so they do
   // not go stale and 404. A create needs no layout change — the new file is opened directly by the
   // FilesWidget. The renamed tab reloads from disk (a clean buffer), so the stale dirty marker is
-  // pruned by `reconcileEditorDirtyByPane` inside `commitLayout`; the old hot-exit snapshot is dropped
-  // so discarded edits cannot resurface under the deleted/renamed path.
+  // pruned by `reconcileEditorDirtyByPane` inside `commitLayout`.
   const handleFilesMutated = useCallback(
     (event: FilesMutationEvent): void => {
       const { op, mutation } = event;
@@ -1004,15 +1078,15 @@ export function EditorWidget({
             to: mutation.path,
           }),
         );
-        void deleteEditorHotExitSnapshot(workspaceRoot, mutation.previousPath);
+        dropHotExitSnapshotForMutatedPath(mutation.previousPath);
       } else if (op === "delete") {
         commitLayout(
           editorLayoutReducer(layoutRef.current, { type: "remove-file", file: mutation.path }),
         );
-        void deleteEditorHotExitSnapshot(workspaceRoot, mutation.path);
+        dropHotExitSnapshotForMutatedPath(mutation.path);
       }
     },
-    [commitLayout, workspaceRoot],
+    [commitLayout, dropHotExitSnapshotForMutatedPath],
   );
 
   // Bounded MRU of closed (paneId, file) for the "Reopen Closed Editor" command. Deduped by file so a
@@ -2029,6 +2103,7 @@ export function EditorWidget({
               onRootChange={openRoot}
               onOpenFile={openFile}
               onFilesMutated={handleFilesMutated}
+              onBeforeEntryMutation={confirmFilesEntryMutation}
             />
           </aside>
           {/* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- WAI-ARIA window-splitter pattern: focusable role=separator exposes keyboard resizing through aria-valuenow. */}

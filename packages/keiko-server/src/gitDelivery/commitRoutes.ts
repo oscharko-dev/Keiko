@@ -6,13 +6,20 @@
 //       records evidence.
 //   * POST /api/git-delivery/commit/execute  — Governed. Enforces the message policy FIRST (the kernel
 //       only sees a byte length, so message rules are evaluated here with the pure contract validator);
-//       a violation blocks the commit with typed codes BEFORE the kernel runs. A valid message drives
-//       executeGovernedMutation (preflight + policy + approval + execute) and appends evidence.
+//       a violation blocks the commit with typed codes BEFORE the kernel runs. SECOND, refuses to
+//       commit staged content that still contains an unresolved merge-conflict marker (`git add`
+//       clears git's own "unmerged path" state the moment a conflicted file is staged, so nothing
+//       downstream — the worktree snapshot, the kernel's preflight, the commit adapter — would
+//       otherwise ever notice a conflicted file whose markers were staged without being resolved; the
+//       commit would silently bake the literal marker lines into history). A message that passes both
+//       gates drives executeGovernedMutation (preflight + policy + approval + execute) and appends
+//       evidence.
 //
 // Content-free throughout: counts, structural area tokens, typed warning/violation/finding codes, and
 // the deterministic suggestion scaffold only — never the message body, diff, or raw paths.
 
 import type { IncomingMessage } from "node:http";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
   analyzeGitCommitIntent,
   evaluateGitPolicy,
@@ -36,6 +43,7 @@ import {
   executeGovernedMutation,
   gitDeliveryMutationResponse,
   KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK,
+  readStagedConflictMarkerFileCountFor,
   readStagedPathsFor,
   readWorktreeSnapshotFor,
   resolveProjectWorkspace,
@@ -145,7 +153,7 @@ function buildPreviewBody(
 // Reads the live worktree and assembles the read-only preview. May throw if the worktree cannot be
 // inspected (not a git repository); the handler maps that to a typed content-free error.
 async function computePreview(
-  workspace: import("@oscharko-dev/keiko-workspace").WorkspaceInfo,
+  workspace: WorkspaceInfo,
   messageDraft: string,
   policy: GitCommitMessagePolicy,
   seams: GitDeliveryExecutionSeams,
@@ -233,6 +241,61 @@ function validateExecute(obj: Record<string, unknown>): ExecuteRequest | undefin
   };
 }
 
+// Message-policy gate (AC2): a policy-violating message blocks the commit BEFORE the kernel runs.
+// Returns undefined when the message is clean (proceed).
+function messagePolicyBlockResult(
+  message: string,
+  policy: GitCommitMessagePolicy,
+  deps: Pick<UiHandlerDeps, "redactor">,
+): RouteResult | undefined {
+  const validation = validateGitCommitMessage(message, policy);
+  if (validation.ok) return undefined;
+  return {
+    status: 200,
+    body: deps.redactor({
+      schemaVersion: "1",
+      status: "blocked",
+      actionKind: "commit",
+      blockReason: "message-policy",
+      messageViolations: validation.violations,
+    }),
+  };
+}
+
+// Unresolved-conflict-marker gate: refuses to commit staged content that still contains a
+// `<<<<<<<`/`=======`/`>>>>>>>` marker git-add-ed without being resolved. Runs BEFORE the kernel — by
+// the time `git add` has staged the file, git's OWN "unmerged path" tracking for it is already
+// cleared, so nothing downstream would otherwise ever notice. A read failure here (e.g. the worktree
+// is not inspectable) fails closed to WORKTREE_UNAVAILABLE, same as every other worktree read this
+// route performs. Returns undefined when nothing was flagged (proceed).
+async function conflictMarkerBlockResult(
+  workspace: WorkspaceInfo,
+  seams: GitDeliveryExecutionSeams,
+  deps: Pick<UiHandlerDeps, "redactor">,
+): Promise<RouteResult | undefined> {
+  let conflictMarkerFileCount: number;
+  try {
+    conflictMarkerFileCount = await readStagedConflictMarkerFileCountFor(
+      workspace,
+      seams,
+      seams.now ?? Date.now,
+    );
+  } catch {
+    return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
+  }
+  if (conflictMarkerFileCount === 0) return undefined;
+  return {
+    status: 200,
+    body: deps.redactor({
+      schemaVersion: "1",
+      status: "blocked",
+      actionKind: "commit",
+      blockReason: "unresolved-conflict-markers",
+      conflictMarkerFileCount,
+    }),
+  };
+}
+
 export const createHandleCommitExecute = (
   options: GitDeliveryCommitRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
@@ -248,20 +311,12 @@ export const createHandleCommitExecute = (
     const workspace = resolveProjectWorkspace(deps, req.projectId);
     if (workspace === undefined) return errResult(404, "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT");
 
-    // Message-policy gate (AC2): a policy-violating message blocks the commit BEFORE the kernel runs.
-    const validation = validateGitCommitMessage(req.message, policy);
-    if (!validation.ok) {
-      return {
-        status: 200,
-        body: deps.redactor({
-          schemaVersion: "1",
-          status: "blocked",
-          actionKind: "commit",
-          blockReason: "message-policy",
-          messageViolations: validation.violations,
-        }),
-      };
-    }
+    const messageBlock = messagePolicyBlockResult(req.message, policy, deps);
+    if (messageBlock !== undefined) return messageBlock;
+
+    const conflictBlock = await conflictMarkerBlockResult(workspace, seams, deps);
+    if (conflictBlock !== undefined) return conflictBlock;
+
     const command = { kind: "commit" as const, message: req.message, allowEmpty: req.allowEmpty };
     const verifiedApproval = resolveGitDeliveryApprovalRequirement(req.approval, {
       store: seams.approvalStore,

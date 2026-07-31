@@ -6,7 +6,7 @@
 
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { makeFakeChild, makeWorkspace } from "./_support.js";
+import { makeFakeChild, makeWorkspace, recordingSpawn } from "./_support.js";
 import { createNodeGitPullRequestAdapter } from "./git-pr-node.js";
 import type { HomeProvider, SpawnFn } from "./exec.js";
 import type {
@@ -235,5 +235,49 @@ describe("node PR adapter — output parsing edge cases", () => {
     );
     expect(result.outcome).toBe("failed");
     expect(result.errorCode).toBe("internal-error");
+  });
+});
+
+// ─── Governed remote lane ──────────────────────────────────────────────────────────────────────
+// Every `gh api` call must run under the GOVERNED REMOTE env profile. Under the fully isolated
+// default profile `gh` sees neither GH_TOKEN/GITHUB_TOKEN nor a HOME that contains ~/.config/gh, so
+// it cannot authenticate and every governed pull request operation fails.
+
+const REMOTE_PARENT_ENV: NodeJS.ProcessEnv = {
+  PATH: "/usr/bin",
+  HOME: "/Users/dev",
+  GH_TOKEN: "gho_pr_lane_token_value",
+  GH_HOST: "github.example.com",
+  AWS_SECRET_ACCESS_KEY: "aws-pr-lane-must-not-see-this",
+};
+
+async function prLaneEnv(): Promise<Record<string, string>> {
+  const rec = recordingSpawn();
+  const { info } = makeWorkspace();
+  const ad = createNodeGitPullRequestAdapter({
+    workspace: info,
+    processEnv: REMOTE_PARENT_ENV,
+    now: () => 0,
+    spawn: rec.fn,
+    resolveExecutable: () => "gh",
+  });
+  const pending = ad.createPullRequest(CREATE);
+  rec.child.stdout.emit("data", Buffer.from(JSON.stringify({ number: 7 })));
+  rec.child.emit("close", 0, null);
+  await pending;
+  return rec.calls()[0]?.options.env ?? {};
+}
+
+describe("node git pull request adapter — `gh` can authenticate", () => {
+  it("forwards the GitHub token and the real HOME so gh resolves its own credentials", async () => {
+    const env = await prLaneEnv();
+    expect(env.GH_TOKEN).toBe("gho_pr_lane_token_value");
+    expect(env.HOME).toBe("/Users/dev");
+    expect(env.GH_HOST).toBe("github.example.com");
+  });
+
+  it("still copies by name only — an unrelated ambient secret never reaches gh", async () => {
+    const env = await prLaneEnv();
+    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
   });
 });

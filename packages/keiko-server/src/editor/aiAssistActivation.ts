@@ -1,6 +1,7 @@
 import {
   EDITOR_M7_SCHEMA_VERSION,
   resolveEditorM7AiActivation,
+  UNVERIFIED_GATEWAY,
   type EditorM7AiActivationInput,
   type EditorM7AiActivationStatus,
   type EditorM7AiActivationSummary,
@@ -8,9 +9,14 @@ import {
   type EditorM7ReasonCode,
   type EditorM7SettingId,
   type EditorM11ResolvedSetting,
+  type GatewayVerificationState,
 } from "@oscharko-dev/keiko-contracts";
 
-import type { UiHandlerDeps } from "../deps.js";
+import {
+  currentGatewayConfigPresent,
+  currentGatewayVerification,
+  type UiHandlerDeps,
+} from "../deps.js";
 
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -104,21 +110,63 @@ function explicitOptIn(
   return settings.find((setting) => setting.id === FEATURE_SETTINGS[feature])?.value === true;
 }
 
+/**
+ * The gateway truth the AI-assist projection needs, kept as one value so a caller cannot supply the
+ * configuration half and silently omit the probe half.
+ */
+export interface EditorAiGatewayStatus {
+  /** A gateway configuration is present and parsed (a stored setting, not a live check). */
+  readonly configured: boolean;
+  /** What the last live readiness probe said; `unverified` when none has run. */
+  readonly verification: GatewayVerificationState;
+}
+
+/** The fail-closed gateway status: configuration unknown, and nothing verified. */
+export const UNVERIFIED_EDITOR_AI_GATEWAY: EditorAiGatewayStatus = {
+  configured: false,
+  verification: UNVERIFIED_GATEWAY,
+};
+
+/**
+ * Whether a feature reaches the model gateway at all. `patchApply` writes a diff the operator
+ * already reviewed and issues no gateway request, so neither the configured-model check nor the
+ * live-probe check gates it. Every other feature calls a model, so both do. One predicate owns the
+ * distinction — the previous code encoded it only inside the capability check, which is how a
+ * probe-derived health input could have been added to one axis and forgotten on the other.
+ */
+function usesModelGateway(feature: EditorM7AiFeature): boolean {
+  return feature !== "patchApply";
+}
+
 function modelCapability(
   feature: EditorM7AiFeature,
-  gatewayConfigured: boolean,
+  gateway: EditorAiGatewayStatus,
 ): EditorM7AiActivationInput["modelCapability"] {
-  if (feature === "patchApply") return "available";
-  return gatewayConfigured ? "available" : "missing";
+  if (!usesModelGateway(feature)) return "available";
+  return gateway.configured ? "available" : "missing";
+}
+
+/**
+ * F-01: the provider-health input is the SERVER-CONFIRMED probe outcome, never a literal. Without a
+ * probe result this is `unverified`, which resolves to `degraded` / `PROVIDER_UNVERIFIED` — denied,
+ * and honest about why: nobody has checked. `healthy` is reachable only from a passing probe.
+ */
+function providerHealth(
+  feature: EditorM7AiFeature,
+  gateway: EditorAiGatewayStatus,
+): EditorM7AiActivationInput["providerHealth"] {
+  if (!usesModelGateway(feature)) return "healthy";
+  if (gateway.verification === "verified") return "healthy";
+  if (gateway.verification === "partial") return "degraded";
+  return gateway.verification === "failed" ? "unhealthy" : "unverified";
 }
 
 export function resolveEditorAiAssistStatuses(args: {
   readonly env?: Env | undefined;
-  readonly gatewayConfigured?: boolean | undefined;
+  readonly gateway: EditorAiGatewayStatus;
   readonly revision: number;
   readonly settings: readonly EditorM11ResolvedSetting[];
 }): EditorM7AiActivationSummary {
-  const gatewayConfigured = args.gatewayConfigured ?? true;
   const statuses = (
     ["inlineCompletion", "testGeneration", "patchApply", "verification"] as const
   ).map((feature): EditorM7AiActivationStatus =>
@@ -128,9 +176,13 @@ export function resolveEditorAiAssistStatuses(args: {
       productSupported: true,
       operatorCeiling: editorAiOperatorCeiling(args.env, feature),
       explicitOptIn: explicitOptIn(args.settings, feature),
-      modelCapability: modelCapability(feature, gatewayConfigured),
+      modelCapability: modelCapability(feature, args.gateway),
+      // No budget accounting and no security-prerequisite probe exist for editor AI-assist, so
+      // there is nothing to report and these two stay constant. They are NOT stand-ins for missing
+      // evidence: the moment either gains a real source, it derives from that source here — and
+      // inventing a fake budget or security probe to look thorough would be worse than saying so.
       budget: "available",
-      providerHealth: "healthy",
+      providerHealth: providerHealth(feature, args.gateway),
       securityPrerequisites: "satisfied",
       legacyFlag: editorAiLegacyFlag(args.env, feature),
     }),
@@ -163,11 +215,18 @@ export async function resolveEditorAiAssistStatusForRoot(
   if (snapshot.storeState === "unavailable") {
     return inactiveEditorAiStatus(feature, "STATE_UNAVAILABLE");
   }
+  // The snapshot's own summary is the same projection the badge renders, so admission and display
+  // can never disagree. The fallback covers a settings control that does not project one; it reads
+  // the live gateway truth instead of the former `gatewayConfigured: true` literal, which asserted
+  // a configured, reachable gateway on a path that had checked neither.
   const summary =
     snapshot.aiAssistance ??
     resolveEditorAiAssistStatuses({
       env: deps.env,
-      gatewayConfigured: true,
+      gateway: {
+        configured: currentGatewayConfigPresent(deps),
+        verification: currentGatewayVerification(deps),
+      },
       revision: snapshot.revision,
       settings: snapshot.settings,
     });

@@ -4,7 +4,18 @@
 // pinned down. Only node:path (a pure string utility) is imported here.
 
 import { basename } from "node:path";
-import type { CommandRule } from "./types.js";
+import type { CommandRule, SandboxPolicy } from "./types.js";
+
+// A value shorter than this is too generic to scrub safely — redacting it would over-redact
+// ordinary output. Shared by both collectors so the credential lane uses the same floor.
+const MIN_SCRUBBABLE_VALUE_LENGTH = 6;
+
+// True when a value is present and long enough that scrubbing it from captured output is both
+// possible and safe. The credential lane FORWARDS on exactly this predicate too: a secret the
+// boundary could not scrub on the way out is never handed to the child on the way in.
+function isScrubbableValue(value: string | undefined): value is string {
+  return value !== undefined && value.length >= MIN_SCRUBBABLE_VALUE_LENGTH;
+}
 
 // Builds the child env by copying ONLY allowlisted names that are present in the parent.
 // NEVER spreads `...processEnv`, so no credential-bearing variable can leak into the child.
@@ -18,6 +29,33 @@ export function buildSandboxEnv(
     if (value !== undefined) {
       env[name] = value;
     }
+  }
+  return env;
+}
+
+// The full child env for a policy, in three ordered layers:
+//   1. the name-copy above — never a spread of the parent;
+//   2. the policy's declared CREDENTIAL names, if any. These are absent from `envAllowlist` on
+//      purpose, so `collectSensitiveEnvValues` keeps their values in the output scrub set: a lane
+//      may hand a token to `gh`, but the token can never come back out in captured output. A value
+//      too short to scrub safely is not forwarded at all — fail closed rather than unscrubbable;
+//   3. the policy's pinned values, which OVERRIDE anything inherited under the same name (a
+//      localized LC_ALL must not defeat an English-phrase outcome classifier).
+// HOME/USERPROFILE are NOT decided here: the caller applies the home-isolation decision last, so
+// no pinned or inherited value can redirect the child's home.
+export function buildChildEnv(
+  processEnv: NodeJS.ProcessEnv,
+  policy: SandboxPolicy,
+): Record<string, string> {
+  const env = buildSandboxEnv(processEnv, policy.envAllowlist);
+  for (const name of policy.credentialEnvAllowlist ?? []) {
+    const value = processEnv[name];
+    if (isScrubbableValue(value)) {
+      env[name] = value;
+    }
+  }
+  for (const [name, value] of Object.entries(policy.pinnedEnv ?? {})) {
+    env[name] = value;
   }
   return env;
 }
@@ -36,7 +74,25 @@ export function collectSensitiveEnvValues(
     if (allowed.has(name)) {
       continue;
     }
-    if (value !== undefined && value.length >= 6) {
+    if (isScrubbableValue(value)) {
+      values.push(value);
+    }
+  }
+  return values;
+}
+
+// Collects the values of the policy's declared CREDENTIAL names so they are scrubbed from captured
+// output even though the child received them. Redundant today (a credential name is never on
+// `envAllowlist`, so the collector above already returns it) and deliberately so: the scrub set must
+// stay fail-closed if a future edit ever moves one of these names onto the allowlist.
+export function collectCredentialEnvValues(
+  processEnv: NodeJS.ProcessEnv,
+  credentialNames: readonly string[],
+): readonly string[] {
+  const values: string[] = [];
+  for (const name of credentialNames) {
+    const value = processEnv[name];
+    if (isScrubbableValue(value)) {
       values.push(value);
     }
   }

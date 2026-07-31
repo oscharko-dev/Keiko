@@ -799,6 +799,21 @@ function literalGitPathspec(path: string): string {
   return `:(literal)${path}`;
 }
 
+/**
+ * The `-- <pathspec>` tail that confines a repository-wide git read to the SELECTED root. Empty
+ * when the selected root IS the repository root — `rev-parse --show-prefix` reports "" there, an
+ * unscoped read is already exactly the selected root, and appending a pathspec would only add
+ * noise. `:(literal)` keeps a prefix that starts with `-` or with a pathspec-magic character from
+ * being re-read by git as an option or a magic signature.
+ *
+ * This is the one translation from `RepositoryContext.selectedRootPrefix` to a WHOLE-root pathspec;
+ * per-file reads compose the same prefix through `gitPath(prefix, path)` instead.
+ */
+export function selectedRootPathspecArgs(selectedRootPrefix: string): readonly string[] {
+  const prefix = gitPath(selectedRootPrefix, undefined);
+  return prefix === undefined ? [] : ["--", literalGitPathspec(prefix)];
+}
+
 function parseScope(input: string | null): GitDiffScope {
   if (input === null || input.length === 0) return "all";
   if (input === "all" || input === "worktree" || input === "staged") return input;

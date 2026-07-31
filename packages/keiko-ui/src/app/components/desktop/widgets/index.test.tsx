@@ -669,8 +669,11 @@ describe("workspace widget renderer registry", () => {
     const ctx = makeCtx();
     render(<>{WIN_TYPES.chat.render({ chatId: "chat-1", title: "Old title" }, ctx)}</>);
 
+    // 0.3.0 release audit — strengthened: a rename also clears the structural "still untitled"
+    // marker, so the workspace surfaces the new name instead of asking display copy whether the
+    // chat was ever named (which missed under `de`).
     await waitFor(() => {
-      expect(ctx.updateCfg).toHaveBeenCalledWith({ title: "Chat 1" });
+      expect(ctx.updateCfg).toHaveBeenCalledWith({ title: "Chat 1", titleIsDefault: false });
     });
     expect(screen.getByTestId("chat-window")).toHaveTextContent("true:/repo:/repo|/docs:false");
   });

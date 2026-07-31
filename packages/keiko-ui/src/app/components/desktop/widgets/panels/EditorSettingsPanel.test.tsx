@@ -564,4 +564,35 @@ describe("EditorSettingsPanel AI status badges", () => {
     const badge = screen.getByText(needle);
     expect(badge).toHaveAttribute("data-tone", tone);
   });
+
+  // F-01: the server now reports PROVIDER_UNVERIFIED when no readiness probe has confirmed a model
+  // for the feature. The badge has to say that in words — a raw reason code next to the word
+  // "degraded" reads like a provider fault, and the operator's action (run the readiness check) is
+  // different from the one a real fault implies.
+  it("explains an unverified provider instead of printing the raw reason code", () => {
+    editorSettingsView.current = {
+      ...view(),
+      snapshot: {
+        ...snapshot(),
+        aiAssistance: {
+          revision: 1,
+          statuses: [
+            {
+              schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+              feature: "inlineCompletion",
+              state: "degraded",
+              reasonCode: "PROVIDER_UNVERIFIED",
+              policyResult: "denied",
+            },
+          ],
+        },
+      },
+    };
+    renderPanel();
+
+    const badge = screen.getByText(/AI status: not verified/u);
+    expect(badge).toHaveAttribute("data-tone", "warning");
+    expect(badge.textContent).toContain("no gateway readiness check");
+    expect(screen.queryByText(/PROVIDER_UNVERIFIED/u)).toBeNull();
+  });
 });

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
 import { createDefaultChatCapability, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
-import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts";
+import { maxUtf8BytesForTokenBudget, UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import {
@@ -15,6 +15,7 @@ import {
   runGatewayReadiness,
 } from "./gateway-readiness.js";
 import type { RouteContext } from "./routes.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -69,6 +70,7 @@ function embeddingCapability(modelId: string): NonNullable<GatewayConfig["capabi
 function depsWith(
   config: GatewayConfig | undefined,
   fetchImpl: typeof fetch = vi.fn(),
+  diagnostics?: ServerDiagnosticSink,
 ): UiHandlerDeps {
   return {
     config,
@@ -80,6 +82,23 @@ function depsWith(
     modelPortFactory: () => undefined,
     store: createInMemoryUiStore(),
     gatewayReadinessFetch: fetchImpl,
+    ...(diagnostics === undefined ? {} : { diagnostics }),
+  };
+}
+
+// Capturing operator-diagnostic sink (never the default stderr sink) for the observability pins.
+function capturingDiagnostics(): {
+  readonly sink: ServerDiagnosticSink;
+  readonly records: ServerDiagnosticRecord[];
+} {
+  const records: ServerDiagnosticRecord[] = [];
+  return {
+    records,
+    sink: {
+      record: (entry: ServerDiagnosticRecord): void => {
+        records.push(entry);
+      },
+    },
   };
 }
 
@@ -372,6 +391,9 @@ describe("gateway readiness route", () => {
         set: (next) => {
           current = next ?? pinned;
         },
+        generation: () => 0,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
       },
     };
 
@@ -448,6 +470,92 @@ describe("gateway readiness route", () => {
       warning: "The probe timed out before the provider answered.",
     });
     expect(report.probes[1]).toMatchObject({ name: "streaming", status: "skipped" });
+    deps.store.close();
+  });
+
+  // 0.3.0 audit: a readiness run is the product's ONLY live evidence about the gateway, and every
+  // probe's `catch` collapsed the cause into the same two operator-facing sentences with nothing
+  // recorded anywhere. An auth rejection, a DNS failure and a missing model were indistinguishable.
+  it("records the discarded probe cause on the diagnostic sink, keyed by the run's correlation id", async () => {
+    const captured = capturingDiagnostics();
+    const fetchImpl = vi.fn().mockRejectedValue(
+      Object.assign(
+        new TypeError("fetch failed for https://llm-gateway.internal/v1 key=secret-token"),
+        {
+          code: "ENOTFOUND",
+        },
+      ),
+    ) as typeof fetch;
+    const deps = depsWith(gatewayConfig(), fetchImpl, captured.sink);
+
+    const report = await runGatewayReadiness(
+      { options: { probes: [] } },
+      deps,
+      "readiness-corr-001",
+    );
+
+    expect("status" in report).toBe(false);
+    expect(captured.records).toHaveLength(1);
+    const record = captured.records[0];
+    expect(record?.correlationId).toBe("readiness-corr-001");
+    expect(record?.operation).toBe("gateway.readiness");
+    // `source` names WHICH probe failed — the fact the collapsed evidence string cannot carry.
+    expect(record?.source).toBe("gateway-readiness.chat");
+    expect(record?.errorClass).toBe("TypeError");
+    expect(record?.code).toBe("ENOTFOUND");
+    // Body-free: neither the endpoint nor the apiKey in the transport message reaches the record.
+    expect(JSON.stringify(record)).not.toContain("llm-gateway.internal");
+    expect(JSON.stringify(record)).not.toContain("secret-token");
+    deps.store.close();
+  });
+
+  it("names every failing deep probe separately in its own diagnostic record", async () => {
+    const captured = capturingDiagnostics();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
+      .mockRejectedValue(new Error("upstream gone")) as typeof fetch;
+    const deps = depsWith(gatewayConfig(), fetchImpl, captured.sink);
+
+    await runGatewayReadiness(
+      { options: { probes: ["streaming", "json_schema"] } },
+      deps,
+      "readiness-corr-002",
+    );
+
+    expect(captured.records.map((entry) => entry.source).sort()).toEqual([
+      "gateway-readiness.json_schema",
+      "gateway-readiness.streaming",
+    ]);
+    expect(captured.records.every((entry) => entry.correlationId === "readiness-corr-002")).toBe(
+      true,
+    );
+    deps.store.close();
+  });
+
+  it("mints a correlation id when the readiness run has no request context", async () => {
+    const captured = capturingDiagnostics();
+    const fetchImpl = vi.fn().mockRejectedValue(new Error("upstream gone")) as typeof fetch;
+    const deps = depsWith(gatewayConfig(), fetchImpl, captured.sink);
+
+    await runGatewayReadiness({ options: { probes: [] } }, deps);
+
+    expect(captured.records).toHaveLength(1);
+    expect(captured.records[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+    deps.store.close();
+  });
+
+  it("threads the request correlation id from the route into the probe diagnostics", async () => {
+    const captured = capturingDiagnostics();
+    const fetchImpl = vi.fn().mockRejectedValue(new Error("upstream gone")) as typeof fetch;
+    const deps = depsWith(gatewayConfig(), fetchImpl, captured.sink);
+
+    await handleGatewayReadiness(
+      { ...ctx({ options: { probes: [] } }), correlationId: "route-corr-0001" },
+      deps,
+    );
+
+    expect(captured.records[0]?.correlationId).toBe("route-corr-0001");
     deps.store.close();
   });
 
@@ -601,6 +709,63 @@ describe("gateway readiness route", () => {
       "unsupported",
       "unsupported",
     ]);
+    deps.store.close();
+  });
+
+  // F-01: this run is the product's only live gateway evidence. Recording its outcome on the config
+  // holder is what lets the editor AI-assist badge and the Workbench source projection stop
+  // inferring readiness from configuration alone; without it they have nothing to read.
+  it("records the probe outcome on the config holder for other surfaces to read", async () => {
+    const recorded: string[] = [];
+    const config = gatewayConfig();
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchForDefaultSuccess()),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        verification: () => UNVERIFIED_GATEWAY,
+        generation: () => 0,
+        recordVerification: (state) => {
+          recorded.push(state);
+        },
+      },
+    };
+
+    const report = await runGatewayReadiness({ modelId: "test-chat-model" }, deps);
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    expect(report.overallStatus).toBe("ready");
+    expect(recorded).toEqual(["verified"]);
+    deps.store.close();
+  });
+
+  it("records a failed chat probe as a failed verification, never as unverified", async () => {
+    const recorded: string[] = [];
+    const config = gatewayConfig();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("unexpected-answer"))) as typeof fetch;
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        verification: () => UNVERIFIED_GATEWAY,
+        generation: () => 0,
+        recordVerification: (state) => {
+          recorded.push(state);
+        },
+      },
+    };
+
+    await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
+
+    expect(recorded).toEqual(["failed"]);
     deps.store.close();
   });
 });

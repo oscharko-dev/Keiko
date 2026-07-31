@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertValidRunId,
   createInMemoryEvidenceStore,
@@ -29,6 +29,8 @@ import {
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { handleSendDesktopChat } from "./chat-handlers.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
+import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import type { RouteContext } from "./routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -369,6 +371,65 @@ describe("chat compaction evidence wiring (ADR-0057 D3)", () => {
         .map((m) => m.role)
         .slice(-2),
     ).toEqual(["user", "assistant"]);
+  });
+
+  // 0.3.0 audit: the best-effort catch reported through `console.warn(msg, error)` — the raw error
+  // object on a channel no production assembly overrode. A compaction-evidence gap was therefore
+  // invisible in production, and the warn could carry the very content the manifest redacts.
+  it("reports a persistence failure to the diagnostic sink instead of console.warn", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const throwingStore: EvidenceStore = {
+      put: () => {
+        throw Object.assign(new Error(`evidence write failed with key ${SECRET}`), {
+          code: "EACCES",
+        });
+      },
+      list: () => [],
+      get: () => undefined,
+      delete: () => undefined,
+    };
+    const base = deps(bufferedModel("answer"), throwingStore, true);
+
+    expect(() => {
+      persistChatCompactionEvidence(
+        { ...base, diagnostics },
+        {
+          compaction: {
+            schemaVersion: "1",
+            laneId: "history-summary",
+            reason: "budget",
+            itemsBefore: 6,
+            itemsAfter: 4,
+            tokensBefore: 520,
+            tokensAfter: 400,
+          },
+          chatId: "chat-compaction-diagnostic",
+          modelId: CHAT_MODEL,
+          messageCount: 4,
+          startedAt: 1_700_000_000_000,
+          finishedAt: 1_700_000_000_100,
+        },
+      );
+    }).not.toThrow();
+
+    try {
+      expect(records).toHaveLength(1);
+      expect(records[0]?.source).toBe("chat-compaction-evidence");
+      expect(records[0]?.operation).toBe("chat.compaction.evidence");
+      expect(records[0]?.message).toBe("Audit or evidence persistence failed.");
+      expect(records[0]?.errorClass).toMatch(/^[A-Z][A-Za-z0-9]*$/);
+      expect(records[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+      expect(JSON.stringify(records)).not.toContain(SECRET);
+      expect(consoleWarn).not.toHaveBeenCalled();
+    } finally {
+      consoleWarn.mockRestore();
+    }
   });
 
   it("later turns resurface persisted pinned facts from prior compaction evidence", async () => {

@@ -1,4 +1,5 @@
 import {
+  isCodingWorkbenchMode,
   resolveEffectiveCodingWorkbenchMode,
   type CodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts";
@@ -10,10 +11,25 @@ import type {
 import type { UiHandlerDeps } from "./deps.js";
 import { currentRedactionSecrets } from "./deps.js";
 
+// The two ways a capture can be refused because the local human already said "no" to this fact:
+// they forgot it, or they rejected the proposal in the review queue. Both suppress a re-capture and
+// both record a capture-decision audit event; neither ever echoes the body back.
+export type MemoryCaptureSuppressionReason = Extract<
+  RejectionReason,
+  "suppressed-by-forget" | "suppressed-by-rejection"
+>;
+
 export const SENSITIVE_MEMORY_REJECTION_REASON: RejectionReason =
   "sensitive-memory-requires-approval";
-export const FORGOTTEN_MEMORY_SUPPRESSION_REASON: RejectionReason = "suppressed-by-forget";
+export const FORGOTTEN_MEMORY_SUPPRESSION_REASON: MemoryCaptureSuppressionReason =
+  "suppressed-by-forget";
+export const REJECTED_MEMORY_SUPPRESSION_REASON: MemoryCaptureSuppressionReason =
+  "suppressed-by-rejection";
 export const SENSITIVE_MEMORY_ACTION_BODY = "Sensitive memory pending review.";
+
+// The posture a memory surface falls back to when nothing narrower is resolvable: ADR-0124 D2 /
+// ADR-0138 D2 fail closed to the most restrictive mode, and ADR-0146 D5 restates that for memory.
+export const DEFAULT_MEMORY_AUTONOMY_MODE: CodingWorkbenchMode = "governed-assist";
 
 const DEFAULT_MEMORY_DENIED_CATEGORY_MATCHERS: NonNullable<
   CapturePolicyOptions["deniedCategoryMatchers"]
@@ -129,24 +145,51 @@ export function resolveMemoryCaptureAutonomyMode(
   deps: Pick<UiHandlerDeps, "codingRuntimeDeploymentCeiling">,
   requestedMode?: CodingWorkbenchMode,
 ): CodingWorkbenchMode {
-  const deploymentCeiling = deps.codingRuntimeDeploymentCeiling ?? "governed-assist";
+  const deploymentCeiling = deps.codingRuntimeDeploymentCeiling ?? DEFAULT_MEMORY_AUTONOMY_MODE;
   return requestedMode === undefined
-    ? deploymentCeiling
+    ? resolveEffectiveCodingWorkbenchMode(deploymentCeiling, deploymentCeiling)
     : resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling);
 }
 
-// Whether a capture outcome may be auto-accepted (promoted at capture time) under the given mode.
-// The set of modes for which this returns true is upward-closed over CODING_WORKBENCH_MODE_ORDER
+// The effective posture for the STANDING maintenance sweep. The sweep is not a request, so there is
+// no per-call requested mode: the operator's persisted MemoriaViva memory posture (ADR-0146 D1's
+// requested-mode surface, the value GET /api/memory/autonomy-policy projects) IS the request, and it
+// is bounded by the server-owned deployment ceiling through the same canonical clamp the capture
+// path uses. An absent policy row means the operator never widened the posture, which the policy
+// projection already reports as `governed-assist` — so the sweep behaves exactly as the mode the UI
+// is showing. This may throw if the UI store is unreadable; callers that must not fail a chat turn
+// wrap it and fall closed (see resolveMaintenanceAutonomyMode in memory-maintenance-handlers.ts).
+export function resolveMemoryMaintenanceAutonomyMode(
+  deps: Pick<UiHandlerDeps, "codingRuntimeDeploymentCeiling" | "store">,
+): CodingWorkbenchMode {
+  const requestedMode = deps.store.readMemoryAutonomyPolicy()?.requestedMode;
+  return resolveMemoryCaptureAutonomyMode(deps, requestedMode ?? DEFAULT_MEMORY_AUTONOMY_MODE);
+}
+
+// THE lever for "may Keiko make a memory retrievable without the local human accepting it?".
+//
+// ADR-0146 D2 pins the lowest posture: in `governed-assist` (Ask for approval) a routine, public
+// candidate is held as `proposed` for human review. Both auto-accept paths — the at-capture
+// promotion below and the standing maintenance sweep in memory-maintenance-handlers.ts — consult
+// this ONE predicate, so a mode-gated capture path and a mode-blind sweep can never again promote
+// two different sets. The set of modes it admits is upward-closed over CODING_WORKBENCH_MODE_ORDER
 // (governed-assist < supervised-coding < autonomous-delivery), so raising the mode never removes
-// eligibility. Hard denials stay upstream and mode-invariant: a secret body never becomes a
-// candidate, "restricted" is never persistable, and "confidential" carries requiresApproval — none
-// of which can be auto-accepted here regardless of mode.
+// eligibility (ADR-0138 D2 monotonicity). An absent, unknown, or malformed mode fails closed to
+// `governed-assist`, i.e. no unattended acceptance at all (ADR-0124 D2 / ADR-0138 D2).
+export function memoryUnattendedAcceptanceAllowed(mode: CodingWorkbenchMode | undefined): boolean {
+  return isCodingWorkbenchMode(mode) && mode !== "governed-assist";
+}
+
+// Whether a capture outcome may be auto-accepted (promoted at capture time) under the given mode.
+// Hard denials stay upstream and mode-invariant: a secret body never becomes a candidate,
+// "restricted" is never persistable, and "confidential" carries requiresApproval — none of which
+// can be auto-accepted here regardless of mode.
 export function memoryCaptureAutoAcceptEligible(
   mode: CodingWorkbenchMode,
   outcome: CaptureOutcome,
 ): boolean {
   return (
-    mode !== "governed-assist" &&
+    memoryUnattendedAcceptanceAllowed(mode) &&
     outcome.kind === "candidate" &&
     !outcome.requiresApproval &&
     outcome.proposal.provenance.sensitivity === "public"

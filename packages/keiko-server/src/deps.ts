@@ -31,10 +31,11 @@ import {
   createNodeEvidenceStore,
   resolveEvidenceDir,
 } from "@oscharko-dev/keiko-evidence";
-import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
+import { keikoApiKeySecretValues, redact } from "@oscharko-dev/keiko-security";
 import {
   DEFAULT_CONTEXT_PROFILE,
   isCodingWorkbenchMode,
+  UNVERIFIED_GATEWAY,
   type CodingWorkbenchMode,
   type CodingWorkbenchModelSource,
   type CodingWorkbenchRuntimeUnavailableReason,
@@ -43,6 +44,7 @@ import {
   type DebugProvisioning,
   deriveContextProfileFromCapability,
   type ContextProfile,
+  type GatewayVerificationState,
   type UpdatePreflightReport,
   type WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
@@ -60,6 +62,7 @@ import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
   type ServerDiagnosticSink,
+  type ServerDiagnosticSummary,
 } from "./diagnostics-log.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
@@ -322,6 +325,18 @@ export interface RuntimeGatewayConfig {
   current(): GatewayConfig | undefined;
   present(): boolean;
   set(config: GatewayConfig | undefined, present: boolean): void;
+  /** Monotonic config generation; bumped by every set(). Probes capture it before running. */
+  generation(): number;
+  /**
+   * F-01: the last live-probe outcome for the CURRENT configuration generation. Config presence is
+   * not reachability, so every surface that would otherwise infer readiness from `present()` reads
+   * this instead. It lives here, on the owner of the config generation, so that replacing the
+   * config through `set()` structurally invalidates a verification that described the old one — a
+   * separate ledger would have to remember to do that, and forgetting is exactly the class of bug
+   * this fixes.
+   */
+  verification(): GatewayVerificationState;
+  recordVerification(state: GatewayVerificationState, observedGeneration?: number): void;
 }
 
 export interface GatewayDiscoveredModels {
@@ -962,6 +977,14 @@ function createRuntimeGatewayConfig(
 ): RuntimeGatewayConfig {
   let config = initial;
   let present = initialPresent;
+  // A freshly loaded config has never been probed by this process, so it starts unverified. It is
+  // never seeded from disk: a probe outcome describes a live endpoint at a point in time, not a
+  // stored setting, and reloading one would let a surface claim health nobody observed.
+  let verification: GatewayVerificationState = UNVERIFIED_GATEWAY;
+  // Bumped on every set(): a probe captures the generation it observed, and a verdict carrying a
+  // stale generation is dropped, so a slow probe of the PREVIOUS config can never stamp the
+  // replacement config with an outcome nobody measured against it (#2847 review).
+  let generation = 0;
   return {
     storagePath,
     current: (): GatewayConfig | undefined => config,
@@ -969,12 +992,31 @@ function createRuntimeGatewayConfig(
     set(next: GatewayConfig | undefined, nextPresent: boolean): void {
       config = next;
       present = nextPresent;
+      verification = UNVERIFIED_GATEWAY;
+      generation += 1;
+    },
+    generation: (): number => generation,
+    verification: (): GatewayVerificationState => verification,
+    recordVerification(state: GatewayVerificationState, observedGeneration?: number): void {
+      if (observedGeneration !== undefined && observedGeneration !== generation) return;
+      verification = state;
     },
   };
 }
 
 export function currentGatewayConfig(deps: UiHandlerDeps): GatewayConfig | undefined {
   return deps.gatewayConfig?.current() ?? deps.config;
+}
+
+/**
+ * F-01: the last live-probe outcome, or `unverified` when this process holds none (including every
+ * deps assembly that carries a plain `config` without the runtime holder). Fail closed: a surface
+ * that cannot name a probe result must never render a healthy state.
+ */
+export function currentGatewayVerification(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+): GatewayVerificationState {
+  return deps.gatewayConfig?.verification() ?? UNVERIFIED_GATEWAY;
 }
 
 function configuredChatContextProfile(
@@ -1268,6 +1310,20 @@ export function currentRedactionSecrets(deps: UiHandlerDeps): readonly string[] 
   return redactionSecrets(deps.env, currentGatewayConfig(deps), currentGatewayEgressConfig(deps));
 }
 
+/**
+ * The string redactor a route hands to the evidence/audit layer: built-in secret SHAPES plus the LIVE
+ * gateway-derived literals (a key added through PATCH /api/gateway/config after process start is
+ * scrubbed too, which the frozen `deps.redactionSecrets` snapshot would miss).
+ *
+ * `recordMemoryAudit`/`recordMemoryAudits` require a redactor — the identity default that used to
+ * stand in for a forgotten one was a fail-open on the evidence-redaction boundary — so this is the one
+ * place a route resolves it from. Do not hand those APIs `(input) => input` or `deps.redactor` cast to
+ * a string function; both defeat the boundary.
+ */
+export function currentAuditRedactString(deps: UiHandlerDeps): (input: string) => string {
+  return (input: string): string => redact(input, currentRedactionSecrets(deps));
+}
+
 export function currentEvidenceTopologyRedactionSecrets(deps: UiHandlerDeps): readonly string[] {
   return Array.from(
     new Set([
@@ -1500,6 +1556,13 @@ function buildMemoryVault(
 // returns that workspace identifier from `KEIKO_WORKSPACE_ID` (set), or a stable default
 // otherwise. The constant matches the empty-but-non-zero-length contract of `scope()` so
 // every route resolves a workspaceId instead of returning 403.
+//
+// This scope is PROCESS-WIDE, not per project: every relationship row is written and read under
+// the same identifier, so the graph totals and the health findings are installation-wide. There is
+// no project-scoped read to narrow to — narrowing the read alone would simply hide every existing
+// row. The relationship UI therefore labels those numbers installation-wide instead of letting an
+// operator read them as "this project" (RelationshipHealthPanel `scopeNote`). Real per-project
+// scope needs a scope-carrying write path plus a migration of existing rows, not a read filter.
 const DEFAULT_LOOPBACK_WORKSPACE_ID = "local";
 const DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID = "local-operator" as MemoryReviewerId;
 
@@ -1592,13 +1655,14 @@ function resolveManagedWorktreeRoot(uiDbPath: string): string {
 function composedManagedWorktreeRoot(
   provisioning: WorkspaceProvisioningService | undefined,
   resolvedUiDbPath: string,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): string | undefined {
   if (provisioning === undefined) return undefined;
   const managedRoot = resolveManagedWorktreeRoot(resolvedUiDbPath);
   // Canonical managed-root classification is a shared Files/Git trust boundary even before the
   // first Coding run. Materialize the directory with the persistence services so an idle/fresh
   // installation can classify ordinary roots without treating an absent boundary as authority.
-  if (!materializedManagedRoot(managedRoot)) {
+  if (!materializedManagedRoot(managedRoot, diagnostics)) {
     throw new Error("Managed task-workspace boundary initialization failed.");
   }
   return managedRoot;
@@ -2526,6 +2590,13 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
         managedLspControl,
         debugActivation: debugActivationControl,
         processEnv: args.options.env,
+        // F-01: the AI-assist badge and the inline-completion / test-generation admission checks
+        // read this snapshot. Read the config holder on every settings read so a probe that runs
+        // after the control was built is reflected without a cache or a poller.
+        gatewayStatus: () => ({
+          configured: args.runtimeConfig.present(),
+          verification: args.runtimeConfig.verification(),
+        }),
       }),
     editorSettingsEvents: args.options.editorSettingsEvents ?? createEditorSettingsEventBus(),
     workspaceWatchService: args.options.workspaceWatchService ?? createWorkspaceWatchService(),
@@ -2771,6 +2842,7 @@ function buildPersistenceBundle(
     const managedTaskWorkspaceRoot = composedManagedWorktreeRoot(
       services.workspaceProvisioning,
       resolvedUiDbPath,
+      options.diagnostics,
     );
     return {
       uiStore: store,
@@ -2991,6 +3063,35 @@ function dapWorkspaceContext(
   }
 }
 
+/**
+ * Redacted operator diagnostic for a startup/composition boundary in this module.
+ *
+ * A composition failure here silently downgrades a capability for the whole process lifetime — the
+ * caller only ever sees `undefined`/`false` — so discarding the cause outright left an operator with a
+ * missing feature and no reason for it. Content-free: the error class and a machine code only; startup
+ * has no request, so a fresh correlation id ties the record together.
+ */
+function emitCompositionDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  source: string,
+  summary: ServerDiagnosticSummary,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    diagnostics,
+    serverDiagnosticFromError({
+      correlationId: randomUUID(),
+      operation: "server.composition",
+      source,
+      error,
+      summary,
+      // Startup has no live gateway config yet; the fixed allowlisted summary is what is emitted, so
+      // this callback only has to be total.
+      redact: (message): string => message,
+    }),
+  );
+}
+
 function recordDapCompositionFailure(evidenceStore: EvidenceStore): void {
   try {
     evidenceStore.put(
@@ -3037,7 +3138,16 @@ function createQualifiedDapProductionService(
         );
       },
     });
-  } catch {
+  } catch (error) {
+    // The evidence record below is a fixed content-free marker with no error shape at all, and it is
+    // itself best-effort. Name the cause on the operator channel too, or "debug never became
+    // available" has no diagnosable reason anywhere.
+    emitCompositionDiagnostic(
+      args.options.diagnostics,
+      "deps.dapProduction",
+      "Debug production service composition failed.",
+      error,
+    );
     recordDapCompositionFailure(args.evidenceStore);
     return undefined;
   }
@@ -3534,12 +3644,26 @@ function resolveProductionRuntimePorts(
  * On a fresh installation the server-owned managed worktree root does not exist until the first
  * task workspace is provisioned; the resolver's trusted-root check would then keep an otherwise
  * fully activated runtime unqualified. Materialize it at composition time (#2475).
+ *
+ * The failure is diagnosed, not just returned: both callers turn `false` into a silent capability
+ * downgrade (`runtime-unqualified`) or a cause-less `throw new Error(...)`, so a permission or
+ * read-only-volume problem on the one directory the Coding runtime cannot work without had no
+ * observable reason anywhere. Content-free: the error class only — never the path.
  */
-function materializedManagedRoot(managedTaskWorkspaceRoot: string): boolean {
+function materializedManagedRoot(
+  managedTaskWorkspaceRoot: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+): boolean {
   try {
     mkdirSync(managedTaskWorkspaceRoot, { recursive: true, mode: 0o700 });
     return true;
-  } catch {
+  } catch (error) {
+    emitCompositionDiagnostic(
+      diagnostics,
+      "deps.managedTaskWorkspaceRoot",
+      "Managed task-workspace boundary materialization failed.",
+      error,
+    );
     return false;
   }
 }
@@ -3590,7 +3714,7 @@ function productionRuntimeResolver(
   if (resolution.ports === undefined) {
     return unqualifiedComposition(resolution.unavailableReason ?? "runtime-unqualified");
   }
-  if (!materializedManagedRoot(managedTaskWorkspaceRoot)) {
+  if (!materializedManagedRoot(managedTaskWorkspaceRoot, args.options.diagnostics)) {
     return unqualifiedComposition("runtime-unqualified");
   }
   const confirmationConsumer = runtimeStartConfirmationConsumer(args, resolution.activated);

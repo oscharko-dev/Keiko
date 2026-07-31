@@ -94,8 +94,13 @@ interface RunExportContext {
 async function runQiExport(ctx: RunExportContext): Promise<void> {
   const traceFormat = TRACEABILITY_FORMATS[ctx.adapter];
   if (traceFormat !== undefined) {
-    // The matrix is plain text (no base64), served by the dedicated traceability route.
-    const res = await ctx.traceabilityImpl(ctx.runId, traceFormat);
+    // The matrix is plain text (no base64), served by the dedicated traceability route. The scope
+    // notice above the picker renders for the traceability formats too, so the user-chosen
+    // approvedOnly value MUST be forwarded — otherwise the download contradicts the promise the
+    // notice makes, on a compliance-shaped artifact.
+    const res = await ctx.traceabilityImpl(ctx.runId, traceFormat, {
+      approvedOnly: ctx.approvedOnly,
+    });
     triggerDownload(res.filename, res.contentType, res.body);
     ctx.setDownloaded(res.filename);
     return;

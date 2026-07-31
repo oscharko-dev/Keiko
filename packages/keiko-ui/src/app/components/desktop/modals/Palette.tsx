@@ -9,7 +9,13 @@ import {
   type ReactNode,
 } from "react";
 import { Icons } from "../Icons";
-import { type WIN_TYPES as WinTypes, type WindowType } from "../windows/WindowsRegistry";
+import {
+  localizedWindowDesc,
+  localizedWindowTitle,
+  type WIN_TYPES as WinTypes,
+  type WindowType,
+} from "../windows/WindowsRegistry";
+import { useTranslate } from "@/lib/i18n";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const AddIcon = Icons.add;
@@ -42,6 +48,7 @@ function nextCardIndex(key: string, current: number, count: number, columns: 2 |
 }
 
 export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNode {
+  const t = useTranslate();
   const columns = paletteGridColumns(order.length);
   // Match design palette.jsx behaviour: focus the first card on mount and
   // allow Escape to close (the design relies on it; the prior impl had no
@@ -138,10 +145,10 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
         </span>
         <div className="palette-htext">
           <span id="palette-title" className="palette-title">
-            New window
+            {t("workspace.newWindow")}
           </span>
           <span id="palette-desc" className="palette-sub">
-            Pick a card to add to your workspace
+            {t("palette.description")}
           </span>
         </div>
         <span className="spacer" />
@@ -149,16 +156,16 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
           type="button"
           className="palette-x"
           onClick={onClose}
-          aria-label="Close"
-          title="Close"
+          aria-label={t("common.close")}
+          title={t("common.close")}
         >
           <CloseIcon size={16} />
         </button>
       </div>
       <div className="palette-grid">
         {order.map((k, i) => {
-          const t = types[k];
-          const Icon = Icons[t.icon];
+          const def = types[k];
+          const Icon = Icons[def.icon];
           return (
             <button
               type="button"
@@ -171,8 +178,8 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
               <span className="pal-ico">
                 <Icon size={18} />
               </span>
-              <span className="pal-name">{t.title}</span>
-              <span className="pal-desc">{t.desc}</span>
+              <span className="pal-name">{localizedWindowTitle(t, k)}</span>
+              <span className="pal-desc">{localizedWindowDesc(t, k)}</span>
               <span className="pal-add" aria-hidden="true">
                 <PlusIcon size={15} />
               </span>

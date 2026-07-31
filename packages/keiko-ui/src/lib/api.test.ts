@@ -1085,6 +1085,7 @@ describe("language-intelligence helpers (Issue #1201)", () => {
           totalFileCount: 0,
           returnedEditCount: 0,
           totalEditCount: 0,
+          unreadableFileCount: 0,
         },
       }),
     );

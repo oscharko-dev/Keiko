@@ -11,6 +11,7 @@ import type {
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
   QualityIntelligenceInlineSource,
+  QualityIntelligenceUiRetentionNotice,
   QualityIntelligenceUiRunSummary,
 } from "@oscharko-dev/keiko-contracts";
 import { useQiTranslate as useTranslate, type I18nTranslate } from "./qi-i18n";
@@ -342,6 +343,31 @@ function computeRunsStatusText(
   return "";
 }
 
+// Automatic-deletion disclosure (0.3.0 release audit). QI runs are purged by age AND by count when
+// the server starts; without this line the list simply had fewer entries than last session and the
+// user had no way to learn the product deleted them. Rendered whenever the route reports a policy —
+// never invented client-side, so the UI can only ever repeat limits the server actually enforces.
+function RetentionNotice({
+  retention,
+  t,
+}: {
+  readonly retention: QualityIntelligenceUiRetentionNotice | null;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (retention === null) return null;
+  // Reuses the existing run-list footnote token rather than introducing a new global rule:
+  // globals.css is behind a SHA-pinned visual-proof gate (#1300) and this note occupies exactly the
+  // same slot and visual role as the truncation footnote directly above it.
+  return (
+    <p className="qi-runs-truncated" role="note" data-testid="qi-runs-retention">
+      {t("qi.hub.retention", {
+        days: retention.retainedDays,
+        max: retention.maxRunArtifacts,
+      })}
+    </p>
+  );
+}
+
 interface RunsListBodyProps {
   readonly loading: boolean;
   readonly error: string | null;
@@ -441,6 +467,9 @@ export function QiHubPanel({
   // showed an incomplete list with a too-small count once the store exceeded the route limit.
   const [totalRunIds, setTotalRunIds] = useState(0);
   const [truncated, setTruncated] = useState(false);
+  // Automatic-deletion policy reported by the route; null until the first load resolves, and left
+  // null by a server that reports none — the UI must never invent a retention claim.
+  const [retention, setRetention] = useState<QualityIntelligenceUiRetentionNotice | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [visibleRuns, setVisibleRuns] = useState(INITIAL_VISIBLE_RUNS);
@@ -470,6 +499,7 @@ export function QiHubPanel({
       setRuns(res.runs);
       setTotalRunIds(res.totalRunIds);
       setTruncated(res.truncated);
+      setRetention(res.retention ?? null);
     } catch (err) {
       setError(formatError(err));
     } finally {
@@ -572,6 +602,9 @@ export function QiHubPanel({
             registerOpenButton={registerOpenButton}
           />
         </div>
+        {/* Outside the list body on purpose: the body early-returns for the loading/error/empty
+            states, and an empty list is exactly when a user most needs to know why it is empty. */}
+        <RetentionNotice retention={retention} t={t} />
       </section>
     </div>
   );

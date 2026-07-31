@@ -22,6 +22,7 @@ import {
   verdictFromDimensions,
 } from "@oscharko-dev/keiko-quality-intelligence";
 import type {
+  QualityIntelligenceModelRouting,
   TestQualityDimensionName,
   TestQualityJudgeVerdict,
   TestQualityRubricDimension,
@@ -510,5 +511,64 @@ export function createQiJudgePort(
         cancellation.dispose();
       }
     },
+  };
+}
+
+/** Either a usable judge port, or a classified reason why the run has to proceed without one. */
+export type QiJudgePortOutcome =
+  | { readonly available: true; readonly port: QiJudgePort }
+  | { readonly available: false; readonly code: string; readonly reasonSummary: string };
+
+/**
+ * Build the judge port, or classify why it is unavailable — the single seam every caller uses.
+ *
+ * The adversarial judge AUGMENTS a run (see `runJudgeStage` in
+ * `keiko-workflows/src/qualityIntelligence/modelRoutedTestDesign.ts`): a judge that cannot be
+ * constructed must degrade the run's JUDGEMENT, never destroy the run's RESULT. So a `QiJudgeError`
+ * — an unconfigured, incompatible, or unavailable judge model — is turned into a coded,
+ * redaction-safe reason the caller records, not into a thrown run failure. Anything that is not a
+ * judge-side error still propagates: an unexpected fault must not be silently absorbed as
+ * "no judge".
+ *
+ * The reason is body-free by construction: a QiJudgeError code plus one of this module's own fixed
+ * English sentences. No provider response, endpoint, key, or candidate text can reach it.
+ */
+export function tryCreateQiJudgePort(
+  deps: UiHandlerDeps,
+  modelId: string,
+  options: QiJudgePortOptions = {},
+): QiJudgePortOutcome {
+  try {
+    return { available: true, port: createQiJudgePort(deps, modelId, options) };
+  } catch (error) {
+    if (error instanceof QiJudgeError) {
+      return {
+        available: false,
+        code: error.code,
+        reasonSummary: `${error.code}: ${error.message}`,
+      };
+    }
+    throw error;
+  }
+}
+
+/**
+ * Append a classified `judge` stage failure to a run's model routing — the one place a degraded
+ * judgement is recorded, used by both the preflight seam and the port-construction seam.
+ *
+ * `stageFailures` is the contract's designed carrier for "stage X degraded, here is the safe
+ * reason" (the generation fallback already uses it), and the routing travels into the persisted
+ * manifest and both SSE frames — so recording here is what makes the degradation visible instead of
+ * silent. Append-only: two independent judge failures (preflight AND port) legitimately record two
+ * entries. A `undefined` reason is a no-op so callers need no conditional of their own.
+ */
+export function withQiJudgeStageFailure(
+  routing: QualityIntelligenceModelRouting,
+  reasonSummary: string | undefined,
+): QualityIntelligenceModelRouting {
+  if (reasonSummary === undefined) return routing;
+  return {
+    ...routing,
+    stageFailures: [...(routing.stageFailures ?? []), { stage: "judge" as const, reasonSummary }],
   };
 }

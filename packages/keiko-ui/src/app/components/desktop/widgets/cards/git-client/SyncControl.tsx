@@ -10,6 +10,7 @@ import {
   SUBTLE_TEXT_STYLE,
   disabledStyle,
 } from "./git-client-styles";
+import type { SyncOutcomeView } from "./sync-outcome";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const ResetIcon = Icons.reset;
@@ -155,13 +156,16 @@ export function SyncControl({
 }: {
   readonly view: GitSyncView;
   readonly busy: boolean;
-  readonly outcome: string | null;
+  readonly outcome: SyncOutcomeView | null;
   readonly error: string | null;
   readonly onRun: () => void;
 }): ReactNode {
   const disabled = view.disabled || busy;
   const descriptionId = useId();
   const syncLabelId = useId();
+  // A settled-but-failed outcome is a failure, not a status: it must not be announced with role=status
+  // and must not be painted in the neutral colour just because the request itself did not throw.
+  const failed = error !== null || outcome?.failed === true;
   return (
     <div style={{ display: "inline-flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
       <button
@@ -184,7 +188,7 @@ export function SyncControl({
       </span>
       <span
         id={descriptionId}
-        role={error === null ? "status" : "alert"}
+        role={failed ? "alert" : "status"}
         aria-live="polite"
         aria-atomic="true"
         aria-labelledby={`${syncLabelId} ${descriptionId}`}
@@ -192,10 +196,10 @@ export function SyncControl({
           ...STATUS_PILL_STYLE,
           maxWidth: 320,
           whiteSpace: "normal",
-          color: error === null ? "var(--fg-muted)" : "var(--danger)",
+          color: failed ? "var(--danger)" : "var(--fg-muted)",
         }}
       >
-        {error ?? outcome ?? view.description}
+        {error ?? outcome?.message ?? view.description}
       </span>
       {view.action === "fetch" && view.description.startsWith("Diverged") ? (
         <span style={{ ...SUBTLE_TEXT_STYLE, maxWidth: 320 }}>

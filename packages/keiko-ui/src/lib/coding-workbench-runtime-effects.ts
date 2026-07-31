@@ -3,10 +3,13 @@ import type { CodingWorkbenchRuntimeStateName } from "@oscharko-dev/keiko-contra
 import type { ActiveWorkspaceApi } from "@/app/components/desktop/context/ActiveWorkspaceContext";
 import { codingWorkbenchRuntimeApiError } from "./coding-workbench-runtime-api";
 import { useCodingWorkbenchRuntimeEventStream } from "./coding-workbench-event-retention";
+import { fetchWorkspaceManifestAccess } from "./workspace-manifest-api";
 import type {
   CodingWorkbenchRuntimeState,
   CodingWorkbenchRuntimeStateAction,
 } from "./coding-workbench-live-state";
+import { clientErrorSummary } from "./client-error-summary";
+import { reportClientDiagnostic } from "./client-diagnostics";
 
 type RuntimeDispatch = Dispatch<CodingWorkbenchRuntimeStateAction>;
 
@@ -48,6 +51,36 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
   useEffect(() => {
     void refreshRun();
   }, [refreshRun]);
+}
+
+/**
+ * Release-audit F-08/RG-12: resolve the window's pairing dimension once per mount from the honest
+ * workspaces read (which itself orders behind the boot pairing redemption, #2478). The state stays
+ * fail-closed on `unknown` when the read cannot answer — readiness must never claim a paired
+ * session it has not confirmed, because an unpaired start is guaranteed to 403 (ADR-0141).
+ */
+export function useCodingWorkbenchPairingEffect(dispatch: RuntimeDispatch): void {
+  useEffect(() => {
+    let cancelled = false;
+    void fetchWorkspaceManifestAccess().then(
+      (access) => {
+        if (!cancelled) dispatch({ kind: "pairing-set", pairing: access.session });
+      },
+      (error: unknown) => {
+        // Fail closed, but never silently: a BFF or validation outage must stay distinguishable
+        // from an initial boot in the local console (#2843 review). Same bounded idiom as
+        // verified-task-workspace-binding: the caller-visible state stays the sanitized
+        // `unknown`, while the underlying failure remains diagnosable.
+        reportClientDiagnostic(
+          `[keiko] coding workbench pairing discovery failed: ${clientErrorSummary(error)}`,
+        );
+        if (!cancelled) dispatch({ kind: "pairing-set", pairing: "unknown" });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [dispatch]);
 }
 
 export function useCodingWorkbenchWorkspaceEffect({

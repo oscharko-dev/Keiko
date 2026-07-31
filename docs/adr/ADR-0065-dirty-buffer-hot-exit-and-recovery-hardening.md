@@ -155,3 +155,47 @@ and markers only and never print buffer contents.
   buffer before the user acknowledges the loss.
 - **Keep "Compare" as the AC-permitted scoped-equivalent prose notice.** Rejected: a real diff was
   available by reusing `EditorDiffSurface` at no new subsystem cost and removes the over-promise.
+
+## Amendment — the 0.3.0 audit closes the Files-tree hole in D1 (2026-07-30)
+
+D1 claims that "no destructive in-app editor action overwrites a dirty buffer without an explicit
+policy step". The 0.3.0 release audit found one action that did: renaming, moving, or deleting a file
+from the **Files tree**. `FilesWidget` sent the mutation with no dirty-state consultation, and the
+host's `handleFilesMutated` then re-homed (`rename-file`) or removed (`remove-file`) the tab and
+deleted the old path's hot-exit snapshot. The renamed tab reloads the new path from disk, so
+`reconcileEditorDirtyByPane` pruned the now-unreferenced dirty marker — the unsaved buffer and its
+only recovery copy were both discarded, silently. It was the sole close path in the product that
+never reached `requestDirtyClose`. This amendment closes that hole; it relaxes nothing in D1–D5.
+
+### D6 — A path mutation is a dirty close, and it is asked BEFORE the filesystem is touched
+
+`EditorDirtyCloseReason` gains `path-mutation`. Unlike every other reason it is raised *pre-flight*:
+`FilesWidget` gained one optional pre-flight callback, `onBeforeEntryMutation(path)`, which it awaits
+before every rename, drag-move, and delete (never before a create or a duplicate, which target a path
+that cannot be an open buffer). The editor host answers it from `dirtyFilesUnderPath`, which collects
+every dirty file at that path **or beneath it, across all panes** — so a directory rename and a file
+that is dirty only in a split pane both prompt — and routes the answer through the same
+`requestDirtyClose` policy and `DirtyCloseDialog` surface as a tab close. `cancel` therefore *vetoes
+the filesystem mutation* (nothing is sent) instead of discarding the buffer; `save` and `discard`
+behave exactly as they do for a tab close, and the mutation proceeds afterwards.
+
+The ask is a host callback rather than a shared registry because the tree's paths are root-relative
+while roots are spelled differently on each side (`FilesWidget` resolves its real root through the
+BFF): matching a mutation to an owner by root string would fail open, which is the one failure mode
+this decision cannot have. The consequence is that a Files window with **no** editor host in its React
+tree — the standalone `MultiRootFilesWidget` surface — is still unguarded; it also does not re-home
+tabs (it never wired `onFilesMutated`), so closing that gap needs a cross-window dirty registry and is
+left to a follow-up.
+
+### D7 — A hot-exit snapshot is never deleted for a path that is still dirty
+
+`handleFilesMutated` no longer deletes the snapshot unconditionally. It skips the delete while the
+mutated path still has unsaved changes, because in that state the snapshot is the last copy of the
+buffer whose file just moved or vanished. This is a second, independent line of defence: in the
+guarded flow nothing is dirty by then (the prompt saved first, or an explicit Discard deleted the
+snapshot itself under D2), so the branch only ever fires for a mutation that reached the host with
+unsaved work anyway — an unguarded host, or a mutation reported from outside the pre-flight path.
+Stale-snapshot cleanup for clean paths is unchanged.
+
+No wire contract, no `globals.css`, and no user-facing string changes: the pre-flight prompt reuses the
+existing dirty-close dialog copy.

@@ -11,20 +11,23 @@ import {
   analyzePrompt,
   asEnhancedPromptId,
   asPromptEnhancementRequestId,
+  estimateTokens,
   normalizePromptDraft,
   stripUnsafeFormatChars,
   validatePromptEnhancementRequest,
   PROMPT_ENHANCEMENT_DEFAULT_CANDIDATE_COUNT,
   PROMPT_ENHANCER_SCHEMA_VERSION,
   type EnhancedPrompt,
+  type MissingInformationStrategy,
   type ModelCapability,
-  type PromptCandidateSelection,
+  type PromptCandidateRejection,
   type PromptSafetyAssessment,
   type PromptCandidateScorecard,
   type PromptEnhancementGroundingReadiness,
   type PromptEnhancementModelFallbackReason,
   type PromptEnhancementModelRouting,
   type PromptEnhancementModelRoutingReason,
+  type PromptEnhancementProfileId,
   type PromptEnhancementRequest,
   type PromptEnhancementWireRequest,
   type PromptEnhancementWireResponse,
@@ -213,6 +216,9 @@ interface PreparedEnhancement {
   readonly analysis: ReturnType<typeof analyzePrompt>;
   readonly input: RawPromptInput;
   readonly inputFingerprintSha256: string;
+  // The resolved (defaulted) strategy, carried so every planner call in the pipeline sees the same
+  // value the analyzer was given. Dropping it here is what made the generator's "assume" branch dead.
+  readonly missingInformationStrategy: MissingInformationStrategy;
 }
 
 // Normalize + guard the draft, mint the branded ids, build and re-validate the domain request, and run
@@ -258,13 +264,24 @@ function prepareEnhancement(request: PromptEnhancementWireRequest): PreparedEnha
   if (!validation.ok) {
     throw new PromptEnhancementInputError(validation.errors);
   }
-  return { analysis: analyzePrompt(validation.value), input, inputFingerprintSha256 };
+  return {
+    analysis: analyzePrompt(validation.value),
+    input,
+    inputFingerprintSha256,
+    missingInformationStrategy,
+  };
 }
 
-type WorkflowPromptCandidateSelection = Pick<
-  PromptCandidateSelection,
-  "winner" | "ranked" | "rankedPrompts" | "winnerSafetyAssessment" | "rejected"
->;
+// What the workflow keeps from the bounded optimization: the delivered candidate (which honors an
+// explicit caller profile preference), every scored candidate for the comparison view, and the
+// rejection trail re-derived against the delivered candidate.
+interface WorkflowPromptCandidateSelection {
+  readonly winner: PromptCandidateScorecard;
+  readonly winnerPrompt: EnhancedPrompt;
+  readonly ranked: readonly PromptCandidateScorecard[];
+  readonly winnerSafetyAssessment: PromptSafetyAssessment;
+  readonly rejected: readonly PromptCandidateRejection[];
+}
 
 const isNoScoredCandidateError = (error: unknown): boolean =>
   error instanceof Error && error.message === NO_SCORED_CANDIDATE_ERROR_MESSAGE;
@@ -276,6 +293,7 @@ function buildRejectedFailSafeSelection(
 ): WorkflowPromptCandidateSelection {
   const { analysis, input } = prepared;
   const plan = PromptEnhancer.planPromptEnhancement(analysis, {
+    missingInformationStrategy: prepared.missingInformationStrategy,
     ...(request.profilePreference === undefined
       ? {}
       : { profilePreference: request.profilePreference }),
@@ -300,11 +318,25 @@ function buildRejectedFailSafeSelection(
   }
   return {
     winner: scorecard,
+    winnerPrompt: prompt,
     ranked: [scorecard],
-    rankedPrompts: [prompt],
     winnerSafetyAssessment: safety,
     rejected: [],
   };
+}
+
+// The profile the planner actually selects for this request. The planner owns the precedence rule
+// (criticality escalation beats a caller preference, which beats the analyzer's recommendation), so
+// asking it is the only way to honor the preference without re-implementing the escalation here.
+function preferredProfile(
+  prepared: PreparedEnhancement,
+  request: PromptEnhancementWireRequest,
+): PromptEnhancementProfileId | undefined {
+  if (request.profilePreference === undefined) return undefined;
+  return PromptEnhancer.planPromptEnhancement(prepared.analysis, {
+    profilePreference: request.profilePreference,
+    missingInformationStrategy: prepared.missingInformationStrategy,
+  }).selectedProfile;
 }
 
 function selectPromptCandidate(
@@ -313,14 +345,26 @@ function selectPromptCandidate(
 ): WorkflowPromptCandidateSelection {
   const { analysis, input } = prepared;
   try {
-    return PromptEnhancer.optimizePromptCandidates({
+    const selection = PromptEnhancer.optimizePromptCandidates({
       analysis,
       input,
       bounds: { candidateCount: clampCandidateCount(request.candidateCount) },
+      missingInformationStrategy: prepared.missingInformationStrategy,
       ...(request.profilePreference === undefined
         ? {}
         : { profilePreference: request.profilePreference }),
     });
+    const resolved = PromptEnhancer.resolvePreferredCandidate(
+      selection,
+      preferredProfile(prepared, request),
+    );
+    return {
+      winner: resolved.winner,
+      winnerPrompt: resolved.prompt,
+      ranked: selection.ranked,
+      winnerSafetyAssessment: resolved.safetyAssessment,
+      rejected: resolved.rejected,
+    };
   } catch (error) {
     if (!isNoScoredCandidateError(error)) {
       throw error;
@@ -330,10 +374,12 @@ function selectPromptCandidate(
 }
 
 interface ModelRefinementOutcome {
-  readonly enhancedPrompt: EnhancedPrompt;
+  // Identifies the delivered model artefact. The structured `enhancedPrompt` stays the deterministic
+  // baseline: free model text cannot be parsed back into an Enhanced Prompt, so claiming it as one
+  // would attach the baseline's sections, scores and rules to text that may contain none of them.
+  readonly promptId: string;
   readonly renderedPrompt: string;
   readonly safety: PromptSafetyAssessment;
-  readonly scorecard: PromptCandidateScorecard;
   readonly routing: PromptEnhancementModelRouting;
 }
 
@@ -342,6 +388,10 @@ type MaybeModelRefinementOutcome =
   | { readonly applied: false; readonly routing: PromptEnhancementModelRouting };
 
 const MODEL_RENDERED_PROMPT_MAX_CHARS = 24_000;
+// Mirrors `GENERATED_INPUT_MAX_CHARS` / `INPUT_TRUNCATION_MARKER` on the deterministic input path: a
+// bounded artefact says so. Without it the tail of a long model answer is dropped with nothing to
+// distinguish the result from a prompt the model chose to end there (0.3.0 audit, #2802).
+const MODEL_RENDERED_PROMPT_TRUNCATION_MARKER = "\n… [model output truncated]";
 
 const MODEL_SYSTEM_PROMPT = [
   "You are Keiko Prompt Enhancer.",
@@ -436,16 +486,24 @@ function stripOuterMarkdownFence(text: string): string {
 function modelRenderedPrompt(content: string): string | undefined {
   const sanitized = stripOuterMarkdownFence(stripUnsafeFormatChars(content).normalize("NFKC"));
   if (sanitized.length === 0) return undefined;
-  return sanitized.length > MODEL_RENDERED_PROMPT_MAX_CHARS
-    ? sanitized.slice(0, MODEL_RENDERED_PROMPT_MAX_CHARS).trim()
-    : sanitized;
+  if (sanitized.length <= MODEL_RENDERED_PROMPT_MAX_CHARS) return sanitized;
+  const kept = sanitized
+    .slice(0, MODEL_RENDERED_PROMPT_MAX_CHARS - MODEL_RENDERED_PROMPT_TRUNCATION_MARKER.length)
+    .trim();
+  return `${kept}${MODEL_RENDERED_PROMPT_TRUNCATION_MARKER}`;
 }
 
-function isJsonObjectResponse(text: string): boolean {
-  if (!/^\s*\{[\s\S]*\}\s*$/u.test(text)) return false;
+// The system message demands plain Markdown and forbids JSON. Recognize the whole class, not just a
+// bare object: a JSON array and a ```json-fenced payload are the same contract breach, and
+// `stripOuterMarkdownFence` only unwraps markdown/md/text fences, so a json fence reaches here intact.
+const JSON_FENCE = /^```json[^\S\n]*\n([\s\S]*)\n```$/iu;
+
+function isJsonValueResponse(text: string): boolean {
+  const candidate = JSON_FENCE.exec(text.trim())?.[1]?.trim() ?? text;
+  if (!/^\s*[[{][\s\S]*[\]}]\s*$/u.test(candidate)) return false;
   try {
-    const parsed: unknown = JSON.parse(text);
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed);
+    const parsed: unknown = JSON.parse(candidate);
+    return typeof parsed === "object" && parsed !== null;
   } catch {
     return false;
   }
@@ -460,51 +518,16 @@ function hasWrongMetaRole(text: string, analysis: PreparedEnhancement["analysis"
   );
 }
 
-function modelAssistedPrompt(options: {
-  readonly base: EnhancedPrompt;
-  readonly promptId: string;
-}): EnhancedPrompt {
-  return {
-    ...options.base,
-    promptId: asEnhancedPromptId(options.promptId),
-  };
-}
-
-function modelScorecard(options: {
-  readonly prompt: EnhancedPrompt;
-  readonly selection: WorkflowPromptCandidateSelection;
-  readonly analysis: PreparedEnhancement["analysis"];
-}): PromptCandidateScorecard {
-  const plan = PromptEnhancer.planPromptEnhancement(options.analysis, {
-    profilePreference: options.selection.winner.profile,
-  });
-  return PromptEnhancer.scorePromptCandidate({
-    candidateId: options.prompt.promptId,
-    profile: plan.selectedProfile,
-    prompt: options.prompt,
-    plan,
-    analysis: options.analysis,
-  });
-}
-
 function appliedModelRefinement(options: {
-  readonly prompt: EnhancedPrompt;
+  readonly promptId: string;
   readonly renderedPrompt: string;
   readonly safety: PromptSafetyAssessment;
-  readonly selection: WorkflowPromptCandidateSelection;
-  readonly analysis: PreparedEnhancement["analysis"];
   readonly routing: PromptEnhancementModelRouting;
 }): MaybeModelRefinementOutcome {
-  const { prompt, renderedPrompt, safety, selection, analysis, routing } = options;
+  const { promptId, renderedPrompt, safety, routing } = options;
   return {
     applied: true,
-    value: {
-      enhancedPrompt: prompt,
-      renderedPrompt,
-      safety,
-      scorecard: modelScorecard({ prompt, selection, analysis }),
-      routing: appliedRouting(routing),
-    },
+    value: { promptId, renderedPrompt, safety, routing: appliedRouting(routing) },
   };
 }
 
@@ -582,31 +605,70 @@ function buildModelRefinement(options: {
   readonly routing: PromptEnhancementModelRouting;
   readonly prepared: PreparedEnhancement;
   readonly deterministicPrompt: EnhancedPrompt;
-  readonly selection: WorkflowPromptCandidateSelection;
 }): MaybeModelRefinementOutcome {
-  const { content, routing, prepared, deterministicPrompt, selection } = options;
+  const { content, routing, prepared, deterministicPrompt } = options;
   const renderedPrompt = modelRenderedPrompt(content);
   if (renderedPrompt === undefined) {
     return { applied: false, routing: fallbackRouting(routing, "model-empty-response") };
   }
-  if (isJsonObjectResponse(renderedPrompt) || hasWrongMetaRole(renderedPrompt, prepared.analysis)) {
+  if (isJsonValueResponse(renderedPrompt)) {
+    return { applied: false, routing: fallbackRouting(routing, "model-invalid-json") };
+  }
+  if (hasWrongMetaRole(renderedPrompt, prepared.analysis)) {
     return { applied: false, routing: fallbackRouting(routing, "model-invalid-prompt") };
   }
-  const prompt = modelAssistedPrompt({
-    base: deterministicPrompt,
-    promptId: `${prepared.analysis.requestId}-model-assisted-${sha256Hex(content).slice(0, 12)}`,
-  });
   if (renderedPrompt === PromptEnhancer.renderEnhancedPromptText(deterministicPrompt)) {
     return { applied: false, routing: fallbackRouting(routing, "model-no-change") };
   }
-  return appliedModelRefinement({
-    prompt,
-    renderedPrompt,
-    safety: selection.winnerSafetyAssessment,
-    selection,
+  // ADR-0044 §5 (0.3.0 audit P0, #2802): the validate stage must run on the text that is actually
+  // RETURNED. `selection.winnerSafetyAssessment` describes the deterministic candidate this model
+  // text supersedes, so reporting it would publish a verdict about an artefact the user never sees —
+  // the exact "accepted / passed with zero findings over unvalidated model text" defect. A rejected
+  // verdict fails closed onto the deterministic prompt rather than shipping the model text.
+  const safety = PromptEnhancer.assessPromptTextSafety({
+    promptId: asEnhancedPromptId(
+      `${prepared.analysis.requestId}-model-assisted-${sha256Hex(content).slice(0, 12)}`,
+    ),
+    promptText: renderedPrompt,
     analysis: prepared.analysis,
+    input: prepared.input,
+  });
+  if (safety.decision === "rejected") {
+    return { applied: false, routing: fallbackRouting(routing, "model-unsafe-prompt") };
+  }
+  return appliedModelRefinement({
+    promptId: asEnhancedPromptId(
+      `${prepared.analysis.requestId}-model-assisted-${sha256Hex(content).slice(0, 12)}`,
+    ),
+    renderedPrompt,
+    safety,
     routing,
   });
+}
+
+/**
+ * Run model refinement unless the validate stage already rejected the prompt being refined.
+ *
+ * A rejected verdict is the fail-safe result the pipeline exists to produce
+ * (`buildRejectedFailSafeSelection`); handing that prompt to a model replaces it with an artefact
+ * carrying neither the rejection nor the safeguard the rejection is about — for a safety-critical
+ * draft, the professional-advice disclaimer. The rejection is what the user must see, so refinement
+ * is not attempted and the routing says why (0.3.0 audit, #2802).
+ */
+async function refineUnlessRejected(
+  options: Parameters<typeof tryModelRefinement>[0],
+): Promise<MaybeModelRefinementOutcome> {
+  const { resolvedModel, selection } = options;
+  if (selection.winnerSafetyAssessment.decision !== "rejected") {
+    return tryModelRefinement(options);
+  }
+  if (resolvedModel.routing.availability !== "available") {
+    return { applied: false, routing: resolvedModel.routing };
+  }
+  return {
+    applied: false,
+    routing: fallbackRouting(resolvedModel.routing, "prompt-rejected-by-validation"),
+  };
 }
 
 async function tryModelRefinement(options: {
@@ -615,9 +677,11 @@ async function tryModelRefinement(options: {
   readonly resolvedModel: ResolvedEnhancementModel;
   readonly prepared: PreparedEnhancement;
   readonly deterministicPrompt: EnhancedPrompt;
+  // Threaded through by `refineUnlessRejected`'s own decision, not read in this function — kept on
+  // the type so `Parameters<typeof tryModelRefinement>[0]` still describes the whole options bag.
   readonly selection: WorkflowPromptCandidateSelection;
 }): Promise<MaybeModelRefinementOutcome> {
-  const { request, deps, resolvedModel, prepared, deterministicPrompt, selection } = options;
+  const { request, deps, resolvedModel, prepared, deterministicPrompt } = options;
   const execution = resolveModelExecution(resolvedModel, deps);
   if (!execution.ok) return { applied: false, routing: execution.routing };
   const content = await callModelForText({
@@ -628,16 +692,19 @@ async function tryModelRefinement(options: {
     deterministicPrompt,
   });
   if (!content.ok) return { applied: false, routing: content.routing };
+  // No `selection`: the model refinement's verdict is computed on the text it actually returns, so
+  // the winner candidate's assessment is deliberately out of reach here (0.3.0 audit P0, #2802).
   return buildModelRefinement({
     content: content.content,
     routing: execution.context.routing,
     prepared,
     deterministicPrompt,
-    selection,
   });
 }
 
 interface SelectedEnhancement {
+  // Identifies the delivered artefact: the deterministic candidate, or the model refinement of it.
+  readonly promptId: string;
   readonly prompt: EnhancedPrompt;
   readonly renderedPrompt?: string | undefined;
   readonly safety: PromptSafetyAssessment;
@@ -646,26 +713,32 @@ interface SelectedEnhancement {
   readonly routing: PromptEnhancementModelRouting;
 }
 
+// The scored candidates and the winning scorecard describe the deterministic artefact on EVERY path.
+// A model refinement replaces only the delivered text and its id; it is not scored, so it contributes
+// no scorecard — publishing one would report the baseline's numbers as if they described model text.
 function selectFinalEnhancement(
   deterministicPrompt: EnhancedPrompt,
   selection: WorkflowPromptCandidateSelection,
   modelRefinement: MaybeModelRefinementOutcome,
 ): SelectedEnhancement {
+  const deterministic = {
+    prompt: deterministicPrompt,
+    winner: selection.winner,
+    scorecards: selection.ranked,
+  } as const;
   if (!modelRefinement.applied) {
     return {
-      prompt: deterministicPrompt,
+      ...deterministic,
+      promptId: deterministicPrompt.promptId,
       safety: selection.winnerSafetyAssessment,
-      winner: selection.winner,
-      scorecards: selection.ranked,
       routing: modelRefinement.routing,
     };
   }
   return {
-    prompt: modelRefinement.value.enhancedPrompt,
+    ...deterministic,
+    promptId: modelRefinement.value.promptId,
     renderedPrompt: modelRefinement.value.renderedPrompt,
     safety: modelRefinement.value.safety,
-    winner: modelRefinement.value.scorecard,
-    scorecards: [modelRefinement.value.scorecard, ...selection.ranked],
     routing: modelRefinement.value.routing,
   };
 }
@@ -678,14 +751,16 @@ function buildWireResponse(options: {
   readonly selected: SelectedEnhancement;
 }): PromptEnhancementWireResponse {
   const { request, inputFingerprintSha256, analysis, selection, selected } = options;
+  const renderedPrompt =
+    selected.renderedPrompt ?? PromptEnhancer.renderEnhancedPromptText(selected.prompt);
   return {
     schemaVersion: PROMPT_ENHANCER_SCHEMA_VERSION,
-    promptId: selected.prompt.promptId,
+    promptId: selected.promptId,
     inputFingerprintSha256,
     analysis,
     enhancedPrompt: selected.prompt,
-    renderedPrompt:
-      selected.renderedPrompt ?? PromptEnhancer.renderEnhancedPromptText(selected.prompt),
+    renderedPrompt,
+    renderedPromptEstimatedTokens: estimateTokens(renderedPrompt),
     candidates: {
       winnerCandidateId: selected.winner.candidateId,
       scorecards: selected.scorecards,
@@ -708,12 +783,9 @@ export async function runPromptEnhancement(
   throwIfCancelled(deps.signal);
   const selection = selectPromptCandidate(prepared, request);
   throwIfCancelled(deps.signal);
-  const enhancedPrompt = selection.rankedPrompts[0];
-  if (enhancedPrompt === undefined) {
-    throw new Error("Prompt enhancement optimization produced no prompt.");
-  }
+  const enhancedPrompt = selection.winnerPrompt;
   const resolvedModel = resolveModelRouting(request, deps.gatewayRoutingConfig);
-  const modelRefinement = await tryModelRefinement({
+  const modelRefinement = await refineUnlessRejected({
     request,
     deps,
     resolvedModel,
@@ -762,6 +834,36 @@ function evidenceModelMetadata(
   };
 }
 
+interface RecordedAppliedRules {
+  readonly safetyRules: PromptEnhancementRecordInput["appliedSafetyRules"];
+  readonly groundingDirectives: PromptEnhancementRecordInput["appliedGroundingDirectives"];
+}
+
+/**
+ * The applied-rules group of the manifest, derived from the text the manifest actually persists.
+ *
+ * `appliedSafetyRules` / `appliedGroundingDirectives` are governance claims ABOUT
+ * `enhancedPromptText`, and the record is integrity-hashed and schema-validated, so a false claim is
+ * sealed and passes every on-read assertion. Whether the claim holds is decided here by asking the
+ * production renderer whether the recorded text still IS the rendering of the artefact — never by a
+ * routing flag that a later change could desynchronise. When it is not (a model-refined run), a
+ * deterministic safety rule may be claimed only where the recorded text demonstrably still carries
+ * it, and no grounding plan is bound to that text at all (0.3.0 audit P0, #2802).
+ */
+function appliedRulesForRecordedText(result: PromptEnhancementWireResponse): RecordedAppliedRules {
+  const prompt = result.enhancedPrompt;
+  if (result.renderedPrompt === PromptEnhancer.renderEnhancedPromptText(prompt)) {
+    return {
+      safetyRules: prompt.safetyRules,
+      groundingDirectives: prompt.groundingPlan.directives,
+    };
+  }
+  return {
+    safetyRules: prompt.safetyRules.filter((rule) => result.renderedPrompt.includes(rule)),
+    groundingDirectives: [],
+  };
+}
+
 function runIdForEvidence(result: PromptEnhancementWireResponse, recordedAt: string): string {
   return `pe-run-${sha256Hex(
     [result.analysis.requestId, result.promptId, result.inputFingerprintSha256, recordedAt].join(
@@ -779,6 +881,7 @@ export function buildPromptEnhancementRecordInput(options: {
   const winnerProfile = result.candidates.scorecards.find(
     (scorecard) => scorecard.candidateId === result.candidates.winnerCandidateId,
   )?.profile;
+  const applied = appliedRulesForRecordedText(result);
   return {
     runId: runIdForEvidence(result, recordedAt),
     recordedAt,
@@ -787,8 +890,8 @@ export function buildPromptEnhancementRecordInput(options: {
     originalInput: rawInput,
     enhancedPromptId: result.promptId,
     enhancedPromptText: result.renderedPrompt,
-    appliedSafetyRules: result.enhancedPrompt.safetyRules,
-    appliedGroundingDirectives: result.enhancedPrompt.groundingPlan.directives,
+    appliedSafetyRules: applied.safetyRules,
+    appliedGroundingDirectives: applied.groundingDirectives,
     assumptions: result.analysis.missingContext.flatMap((item) =>
       item.kind === "assumption" ? [item.statement] : [],
     ),

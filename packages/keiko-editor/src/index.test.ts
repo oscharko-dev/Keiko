@@ -74,6 +74,9 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "shouldDiscardResponse",
       "applyTextEditsToText",
       "applyTextEditsToTextWithinLimit",
+      // Apply gate for a formatting result: a server-capped reformat is a partial mutation and is
+      // refused, never applied to a buffer or written to disk (0.3.0 release audit).
+      "formattingApplyDecision",
       // IDE-grade layout state and dirty-close/hot-exit contracts (#1375 + #1376).
       "EDITOR_LAYOUT_SCHEMA_VERSION",
       "activeEditorPane",
@@ -117,6 +120,7 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "buildPatchPreview",
       "DEFAULT_PATCH_PREVIEW_LIMITS",
       "buildRenamePreview",
+      "renameChangesetTruncation",
       "KeikoDiffEditor",
       // Monaco completion-provider bridge (#1199).
       "createKeikoCompletionProvider",
@@ -238,6 +242,18 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "deriveEditorStatusBar",
       "editorLanguageLabel",
       "EditorStatusBar",
+      // Shared language-intelligence outcome seam: one classify/report/present path for every Monaco
+      // bridge, so a provider failure, a timeout, a cap and a genuinely empty result stay distinct.
+      "EDITOR_LANGUAGE_OPERATIONS",
+      "EMPTY_LANGUAGE_INTELLIGENCE_STATE",
+      "classifyLanguageFailure",
+      "classifyResultKind",
+      "isCancellation",
+      "languageIntelligenceNotice",
+      "outcomeForError",
+      "reduceLanguageIntelligence",
+      "runLanguageBridgeCall",
+      "summarizeLanguageIntelligence",
       // Large-file degraded-mode policy (#1207).
       "deriveLargeFileMode",
       "isLargeFileDegraded",

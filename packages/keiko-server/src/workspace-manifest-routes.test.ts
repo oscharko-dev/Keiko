@@ -187,7 +187,15 @@ describe("workspace manifest routes", () => {
     expect(pairedText).toContain(rootA);
     expect(pairedText).toContain(rootB);
 
-    const body = JSON.parse(pairedText) as { readonly manifests: readonly WorkspaceManifest[] };
+    const body = JSON.parse(pairedText) as {
+      readonly session?: string;
+      readonly manifests: readonly WorkspaceManifest[];
+    };
+    // The pairing marker is asserted on BOTH outcomes. Clients read it as an authority input (an
+    // unpaired window cannot resolve run authority, ADR-0141), so a paired list that omitted it
+    // would force every such caller to either infer a pairing from silence or fail closed on a
+    // genuinely paired window.
+    expect(body.session).toBe("paired");
     const knownWorkspaceId = body.manifests[0]?.workspaceId;
     if (knownWorkspaceId === undefined) throw new Error("missing paired workspace");
     const unpairedHeaders = { "X-Keiko-Correlation-Id": TEST_CORRELATION_ID };

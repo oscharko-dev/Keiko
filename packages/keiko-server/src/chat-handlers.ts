@@ -45,7 +45,9 @@ import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
   maybeRunAutoMaintenance,
+  memoryMaintenanceAuditSink,
   memorySemanticizationMultipliers,
+  resolveMaintenanceAutonomyMode,
   type AutoMaintenanceState,
 } from "./memory-maintenance-handlers.js";
 import {
@@ -77,6 +79,7 @@ import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-i
 import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
 import {
+  currentAuditRedactString,
   currentContextProfileForModel,
   currentGatewayConfig,
   currentRedactionSecrets,
@@ -933,7 +936,14 @@ function recordConversationMemoryRetrieval(
     scopes: conversationMemoryScopes(context),
     matchedMemoryIds: memories.map((memory) => memory.memoryId as MemoryId),
   };
-  recordMemoryAudit({ evidenceStore: deps.evidenceStore }, event);
+  recordMemoryAudit(
+    {
+      evidenceStore: deps.evidenceStore,
+      redactString: currentAuditRedactString(deps),
+      ...(deps.diagnostics === undefined ? {} : { diagnostics: deps.diagnostics }),
+    },
+    event,
+  );
 }
 
 // The candidate-id gathering, semantic scoring, and strength projection that both this chat path and
@@ -972,11 +982,17 @@ const memoryMaintenanceCursor: AutoMaintenanceState = {};
 
 // Opportunistic, bounded, rate-limited (#204, O-V4) maintenance fired once memory is in use. The
 // pass short-circuits on the cursor almost every turn and never throws into the chat path.
+//
+// GOVERNED (ADR-0146 D2): this sweep shares the promotion lever with at-capture promotion, so it is
+// handed the SAME effective posture — the operator's persisted memory mode clamped by the
+// deployment ceiling. In "Ask for approval" it promotes nothing; an unresolvable posture fails
+// closed to exactly that.
 function maybeRunChatAutoMaintenance(deps: UiHandlerDeps, vault: MemoryVaultStore): void {
   const multipliers = memorySemanticizationMultipliers(deps.env);
-  maybeRunAutoMaintenance(vault, deps.evidenceStore, memoryMaintenanceCursor, {
+  maybeRunAutoMaintenance(vault, memoryMaintenanceAuditSink(deps), memoryMaintenanceCursor, {
     nowMs: Date.now(),
     enabled: deps.env.KEIKO_MEMORY_AUTO_MAINTAIN !== "0",
+    autonomyMode: resolveMaintenanceAutonomyMode(deps),
     ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
   });
 }

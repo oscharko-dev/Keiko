@@ -150,6 +150,15 @@ function Section({
   );
 }
 
+// The profile of the candidate that actually produced the prompt. `analysis.recommendedProfile` is
+// the analyzer's suggestion and can differ from the winner (an explicit profile preference, or a
+// criticality escalation), so showing it under a "Profile" label described the wrong artefact.
+function winningProfile(result: PromptEnhancementWireResponse): string | undefined {
+  return result.candidates.scorecards.find(
+    (scorecard) => scorecard.candidateId === result.candidates.winnerCandidateId,
+  )?.profile;
+}
+
 function AnalysisSummary({
   result,
   t,
@@ -157,15 +166,27 @@ function AnalysisSummary({
   readonly result: PromptEnhancementWireResponse;
   readonly t: OptionalWidgetTranslate;
 }): ReactNode {
+  const profile = winningProfile(result);
+  const tokens = result.renderedPromptEstimatedTokens;
   const items = [
     [t("promptEnhancer.analysis.task"), humanizeToken(result.analysis.taskClass)],
     [t("promptEnhancer.analysis.domain"), humanizeToken(result.analysis.domain)],
     [t("promptEnhancer.analysis.criticality"), humanizeToken(result.analysis.criticality)],
-    [t("promptEnhancer.analysis.profile"), humanizeToken(result.analysis.recommendedProfile)],
+    [t("promptEnhancer.analysis.profile"), profile === undefined ? "-" : humanizeToken(profile)],
     [
       t("promptEnhancer.analysis.input"),
       t("promptEnhancer.analysis.chars", { count: result.analysis.normalizedInputLength }),
     ],
+    // Guarded because the field is a wire value: an older server that omits it must render no token
+    // row at all rather than an "~undefined tokens" figure.
+    ...(Number.isFinite(tokens)
+      ? ([
+          [
+            t("promptEnhancer.analysis.promptTokens"),
+            t("promptEnhancer.analysis.tokenEstimate", { count: tokens }),
+          ],
+        ] as const)
+      : []),
   ] as const;
   return (
     <dl className="pe-analysis" aria-label={t("promptEnhancer.analysis.ariaLabel")}>
@@ -235,6 +256,17 @@ function SafetyPanel({
   readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   const reviewing = safety.requiresHumanReview;
+  // `decision` and `requiresHumanReview` are orthogonal safety signals (ADR-0044 §5): the first is
+  // the validate-stage verdict on the artefact itself ("is this prompt safe to use"), the second is
+  // a risk-profile flag on the underlying task ("does this specific case need a human look").
+  // `requiresHumanReviewForAnalysis` derives the latter from criticality/task-class/risk-flags
+  // independently of any blocking finding, so a `rejected` decision (a blocking structural finding —
+  // e.g. an authority-grant or override cue) can and does arrive with `requiresHumanReview: false`
+  // for a non-agentic, non-critical draft. Gating the alert on `reviewing` alone left that
+  // rejected-but-not-flagged-for-review result rendering with NO visual warning at all (0.3.0
+  // audit sibling-handoff gap). Each condition renders its own alert so neither can silence the
+  // other, and both together render both.
+  const rejected = safety.decision === "rejected";
   return (
     <Section title={t("promptEnhancer.safety.title")}>
       <dl className="pe-safety-summary" data-testid="pe-safety-decision">
@@ -255,6 +287,11 @@ function SafetyPanel({
           </dd>
         </div>
       </dl>
+      {rejected ? (
+        <p className="pe-safety-warning pe-safety-rejected" role="alert">
+          {t("promptEnhancer.safety.rejectedWarning")}
+        </p>
+      ) : null}
       {reviewing ? (
         <p className="pe-safety-warning" role="alert">
           {t("promptEnhancer.safety.reviewWarning")}
@@ -436,6 +473,26 @@ function CandidateScorecards({
         </div>
       </div>
     </Section>
+  );
+}
+
+// On the model-assisted path the rendered prompt is the model's text, while the structured sections,
+// the winning profile and the candidate scorecards all describe the deterministic baseline the model
+// was given. Rendering both without saying so presents baseline numbers as a description of the
+// displayed prompt. Styled with the existing `pe-evidence` caption class: `globals.css` is
+// SHA-pinned by the visual-proof gate (#1300) and must not grow a new rule for this.
+function BaselineNotice({
+  routing,
+  t,
+}: {
+  readonly routing: PromptEnhancementWireResponse["modelRouting"];
+  readonly t: OptionalWidgetTranslate;
+}): ReactNode {
+  if (routing.executionStatus !== "model-applied") return null;
+  return (
+    <p className="pe-evidence" data-testid="pe-baseline-note">
+      {t("promptEnhancer.result.baselineNote")}
+    </p>
   );
 }
 
@@ -893,6 +950,7 @@ export function PromptEnhancerPanel({
               t={t}
             />
           </div>
+          <BaselineNotice routing={result.modelRouting} t={t} />
           <EnhancedPromptSections result={result} t={t} />
           <CandidateScorecards candidates={result.candidates} t={t} />
           <EvidencePanel

@@ -7,6 +7,7 @@ import {
   type LocationNavigationProvider,
 } from "./location-navigation-bridge.js";
 import type { MonacoDefinitionModel, MonacoUriLike } from "./definition-bridge.js";
+import type { EditorLanguageIntelligenceEvent } from "./language-intelligence.js";
 
 const URI: MonacoUriLike = { toString: () => "keiko-editor://current" };
 
@@ -31,6 +32,7 @@ function provider(resolve: EditorDefinitionResolver): LocationNavigationProvider
     documentLanguage: "typescript",
     streamId: "stream",
     newRequestId: () => "request",
+    operation: "type-definition",
     uriForPath: (path) => ({ toString: () => `keiko-editor://workspace/${path}` }),
   });
 }
@@ -90,6 +92,7 @@ describe("createLocationNavigationProvider", () => {
       documentLanguage: "typescript",
       streamId: "stream",
       newRequestId: () => "request",
+      operation: "implementation",
     });
 
     const result = await providerWithoutMapper.provideLocation(
@@ -99,6 +102,38 @@ describe("createLocationNavigationProvider", () => {
     );
 
     expect(result?.[0]?.uri).toBe(URI);
+  });
+
+  // Type-definition and implementation share this provider and are capped at
+  // `maxDefinitionLocations` (64). "Go to implementation" showing 64 of 200 implementers looks
+  // identical to showing all of them, so the cap must reach the outcome seam as `capped` — and under
+  // the operation this instance actually serves, not under a hard-coded one.
+  it("labels a server-capped location list as capped, under its own operation", async () => {
+    const events: EditorLanguageIntelligenceEvent[] = [];
+    const navigation = createLocationNavigationProvider({
+      resolve: (query) =>
+        Promise.resolve({
+          request: query.request.request,
+          locations: [
+            {
+              path: "src/impl.ts",
+              range: { start: { line: 0, column: 0 }, end: { line: 0, column: 1 } },
+            },
+          ],
+          truncated: true,
+        }),
+      isCurrentDocument: () => true,
+      documentLanguage: "typescript",
+      streamId: "stream",
+      newRequestId: () => "request",
+      operation: "implementation",
+      report: (event) => events.push(event),
+    });
+
+    const result = await navigation.provideLocation(model(), { lineNumber: 1, column: 1 }, token());
+
+    expect(result).toHaveLength(1);
+    expect(events).toEqual([{ operation: "implementation", outcome: { status: "capped" } }]);
   });
 
   it("returns empty locations on resolver failure", async () => {

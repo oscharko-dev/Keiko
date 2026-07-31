@@ -23,6 +23,47 @@
 
 import { Readable, PassThrough } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { UNVERIFIED_GATEWAY, type GatewayVerificationState } from "@oscharko-dev/keiko-contracts";
+import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import type { RuntimeGatewayConfig } from "./deps.js";
+
+/**
+ * An onboarded gateway whose last readiness probe succeeded (F-01).
+ *
+ * A probe outcome — not config presence — decides whether editor AI-assist is active, so a route
+ * suite that exercises the work BEHIND that gate has to state which gateway truth it runs against.
+ * Without one, such a suite would silently test the fail-closed `PROVIDER_UNVERIFIED` branch instead
+ * of its own subject. The gate itself is covered by `editor/aiAssistActivation.test.ts` and
+ * `editor/settings/editorSettingsControlFactory.test.ts`; use this only where the gate is not the
+ * thing under test.
+ *
+ * The config is required rather than optional on purpose: "present but no parsed config" is a state
+ * production cannot reach, and a helper that offered it would let a suite claim an onboarded
+ * deployment while handing the code under test an empty gateway.
+ */
+export function probeVerifiedGatewayConfig(config: GatewayConfig): RuntimeGatewayConfig {
+  let current: GatewayConfig | undefined = config;
+  let present = true;
+  let verification: GatewayVerificationState = "verified";
+  let generation = 0;
+  return {
+    storagePath: "/dev/null",
+    current: () => current,
+    present: () => present,
+    set: (next: GatewayConfig | undefined, nextPresent: boolean): void => {
+      current = next;
+      present = nextPresent;
+      verification = UNVERIFIED_GATEWAY;
+      generation += 1;
+    },
+    generation: () => generation,
+    verification: () => verification,
+    recordVerification: (state: GatewayVerificationState, observedGeneration?: number): void => {
+      if (observedGeneration !== undefined && observedGeneration !== generation) return;
+      verification = state;
+    },
+  };
+}
 
 /** Options for {@link mockRequest}. All fields are optional. */
 export interface MockRequestOptions {

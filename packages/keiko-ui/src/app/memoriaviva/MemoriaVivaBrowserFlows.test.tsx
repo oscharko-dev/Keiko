@@ -137,13 +137,16 @@ describe("MemoriaViva browser-tier flows", () => {
       expect(acceptImpl).toHaveBeenCalledWith("mem-browser-proposed");
     });
 
-    await user.click(screen.getByRole("button", { name: "Reject conflict" }));
+    // A conflicted record has no contract edge to `rejected` (MEMORY_STATUS_TRANSITIONS), so the
+    // queue offers the legal, non-destructive exit instead.
+    await user.click(screen.getByRole("button", { name: "Archive conflict" }));
     await waitFor(() => {
-      expect(rejectImpl).toHaveBeenCalledWith(
+      expect(archiveImpl).toHaveBeenCalledWith(
         "mem-browser-conflict",
-        "rejected conflict from review queue",
+        "archived conflicting memory from review queue",
       );
     });
+    expect(rejectImpl).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "Archive stale" }));
     await waitFor(() => {

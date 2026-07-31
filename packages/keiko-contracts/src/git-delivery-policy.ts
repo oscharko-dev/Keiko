@@ -10,12 +10,21 @@
 
 import type {
   GitDeliveryActionKind,
+  GitDeliveryBlockReason,
   GitDeliveryConstraint,
   GitDeliveryParseResult,
   GitDeliveryPolicyDecision,
   GitDeliveryProviderCapability,
+  GitDeliveryResolvedInputs,
+  GitDeliveryRiskClass,
 } from "./git-delivery.js";
-import { isGitDeliveryActionKind, isGitDeliveryConstraint } from "./git-delivery.js";
+import {
+  GIT_DELIVERY_RISK_CLASS_SEVERITY,
+  gitDeliveryBranchNameMatchesAny,
+  gitDeliveryTargetIsProtectedBranch,
+  isGitDeliveryActionKind,
+  isGitDeliveryConstraint,
+} from "./git-delivery.js";
 export { isGitDeliveryProviderCapability } from "./git-delivery.js";
 
 export const GIT_DELIVERY_POLICY_SCHEMA_VERSION = "1" as const;
@@ -152,6 +161,117 @@ export function evaluateGitPolicy(
   const org = resolveLevel(orgPack, context);
   const repo = resolveLevel(repoPack, context);
   return combineDecisions(org, repo);
+}
+
+// ─── Policy target branch (ONE derivation, shared by preview and execute) ────────
+//
+// A branch-pattern constraint is evaluated against the branch the action WRITES — not the branch it
+// reads from. For a push that is the REMOTE branch (a push from `feat/x` to `dev` targets `dev`, which
+// is exactly what the "no direct push to dev" denial rests on); for a pull request or a merge it is the
+// BASE; for a branch create/switch it is the branch that becomes HEAD.
+//
+// This lives in the contract leaf because BOTH the executing gateways and every preview surface must
+// answer it identically. When a preview derives its own answer, it evaluates a different rule than the
+// gate and tells the user the opposite of what will happen.
+
+export interface GitDeliveryPolicyBranchOperands {
+  // `GitDeliveryMergeInputs` carries only the provider PR id — the base branch is not part of the
+  // resolved inputs — so a caller that holds the merge command supplies it here. Ignored for every
+  // other action kind.
+  readonly mergeBaseBranchName?: string | undefined;
+}
+
+export function gitDeliveryPolicyTargetBranchName(
+  inputs: GitDeliveryResolvedInputs,
+  operands: GitDeliveryPolicyBranchOperands = {},
+): string | undefined {
+  switch (inputs.kind) {
+    case "branch-create":
+    case "branch-switch":
+      return inputs.branchName;
+    case "push":
+      return inputs.remoteBranchName;
+    case "pr-create":
+    case "pr-update":
+      return inputs.baseBranchName;
+    case "merge":
+      return operands.mergeBaseBranchName;
+    default:
+      return undefined;
+  }
+}
+
+// ─── Constraint resolution (the second half of a `constrained` decision) ─────────
+//
+// `evaluateGitPolicy` deliberately stops at "constrained": it resolves WHICH constraints apply but not
+// whether this particular action satisfies them, because that needs the action's own operands. Every
+// executing gate and every preview must resolve them the SAME way, so the resolution lives here rather
+// than being re-implemented per surface.
+
+export interface GitDeliveryEffectivePolicyContext {
+  // The risk class the ceiling constraint is judged against. Derive it with
+  // `gitDeliveryRiskClassForInputs(inputs)` whenever the resolved inputs are in hand: that is the
+  // FORCE-AWARE class, and a force push must escalate past a `publish` ceiling.
+  readonly riskClass: GitDeliveryRiskClass;
+  readonly targetBranchName?: string | undefined;
+  readonly activeProviderCapabilities: readonly GitDeliveryProviderCapability[];
+}
+
+export interface GitDeliveryEffectivePolicy {
+  readonly outcome: "allowed" | "blocked" | "approval-gated";
+  readonly blockReason?: GitDeliveryBlockReason | undefined;
+}
+
+/** Maps ONE unsatisfied constraint to its typed block reason; a satisfied constraint yields undefined. */
+export function gitDeliveryConstraintBlockReason(
+  constraint: GitDeliveryConstraint,
+  context: GitDeliveryEffectivePolicyContext,
+): GitDeliveryBlockReason | undefined {
+  if (constraint.kind === "branch-pattern") {
+    const target = context.targetBranchName;
+    const ok = target !== undefined && gitDeliveryBranchNameMatchesAny(target, constraint.patterns);
+    return ok ? undefined : "policy-pack-blocked";
+  }
+  // The protected-branch constraint is deliberately evaluated HERE and not inlined at the four
+  // gateways: it is a governance denial, and four copies of a denial is four places for it to drift
+  // apart. `gitDeliveryTargetIsProtectedBranch` fails closed on an unknown target, so an action that
+  // cannot name its target branch is blocked rather than allowed through (0.3.0 audit, #2802).
+  if (constraint.kind === "protected-branch") {
+    return gitDeliveryTargetIsProtectedBranch(context.targetBranchName, constraint.patterns)
+      ? "protected-branch"
+      : undefined;
+  }
+  if (constraint.kind === "provider-capability") {
+    return context.activeProviderCapabilities.includes(constraint.capability)
+      ? undefined
+      : "provider-capability-absent";
+  }
+  const severity = GIT_DELIVERY_RISK_CLASS_SEVERITY[context.riskClass];
+  return severity <= GIT_DELIVERY_RISK_CLASS_SEVERITY[constraint.maxRiskClass]
+    ? undefined
+    : "risk-class-ceiling";
+}
+
+/**
+ * The EFFECTIVE outcome of a policy decision for one concrete action: a `constrained` decision is
+ * resolved against the action's operands, so a constrained-but-passing action reads as "allowed" and a
+ * failing one as "blocked" with the precise reason. Approval state is NOT considered — an
+ * approval-gated decision stays approval-gated, and the caller decides whether a grant satisfies it.
+ */
+export function evaluateGitDeliveryEffectivePolicy(
+  decision: GitDeliveryPolicyDecision,
+  context: GitDeliveryEffectivePolicyContext,
+): GitDeliveryEffectivePolicy {
+  if (decision.outcome === "allowed") return { outcome: "allowed" };
+  if (decision.outcome === "blocked") {
+    return { outcome: "blocked", blockReason: decision.reason };
+  }
+  if (decision.outcome === "approval-gated") return { outcome: "approval-gated" };
+  for (const constraint of decision.constraints) {
+    const reason = gitDeliveryConstraintBlockReason(constraint, context);
+    if (reason !== undefined) return { outcome: "blocked", blockReason: reason };
+  }
+  return { outcome: "allowed" };
 }
 
 // ─── Private predicate helpers ───────────────────────────────────────────────────

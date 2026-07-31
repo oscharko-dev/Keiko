@@ -18,6 +18,7 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { axe, toHaveNoViolations } from "jest-axe";
+import { RELATIONSHIP_QUERY_BOUNDS } from "@oscharko-dev/keiko-contracts";
 import { RelationshipListPanel } from "./RelationshipListPanel";
 import type { RelationshipFilters } from "./RelationshipListPanel";
 
@@ -124,6 +125,7 @@ function renderPanel(
 describe("RelationshipListPanel", () => {
   beforeEach(() => {
     mockListRelationships.mockReset();
+    window.localStorage.clear();
   });
 
   afterEach(() => {
@@ -200,7 +202,11 @@ describe("RelationshipListPanel", () => {
     it.each([
       { title: "Minimal density: API called with limit ≤ 5", density: "minimal", limit: 5 },
       { title: "Standard density: API called with limit ≤ 25", density: "standard", limit: 25 },
-      { title: "Dense density: API called with limit ≤ 512", density: "dense", limit: 512 },
+      {
+        title: "Dense density: API called with limit ≤ the server's accepted maximum",
+        density: "dense",
+        limit: RELATIONSHIP_QUERY_BOUNDS.listLimitMax,
+      },
     ] as const)("$title", async ({ density, limit }) => {
       mockListRelationships.mockResolvedValue({
         entries: [],
@@ -211,6 +217,59 @@ describe("RelationshipListPanel", () => {
       await waitFor(() => expect(mockListRelationships).toHaveBeenCalled());
       const call = mockListRelationships.mock.calls[0];
       expect(call?.[0]?.limit ?? 0).toBeLessThanOrEqual(limit);
+    });
+
+    // P0 pin: `dense` shipped the blueprint's 512-edge cap as the REQUEST limit against a
+    // 256-entry server cap, so every Dense fetch came back 400
+    // relationship/bounded-query-exceeded — and because the choice is persisted, the window
+    // stayed broken across reopens. The bound is read from the contract, never restated here.
+    it.each(["minimal", "standard", "dense"] as const)(
+      "%s density requests a limit inside the range the server accepts",
+      async (density) => {
+        mockListRelationships.mockResolvedValue({
+          entries: [],
+          truncated: false,
+          nextCursor: null,
+        });
+        renderPanel({ filters: { relDensity: density } });
+        await waitFor(() => expect(mockListRelationships).toHaveBeenCalled());
+        const limit = mockListRelationships.mock.calls[0]?.[0]?.limit ?? 0;
+        expect(limit).toBeGreaterThan(0);
+        expect(limit).toBeLessThanOrEqual(RELATIONSHIP_QUERY_BOUNDS.listLimitMax);
+      },
+    );
+  });
+
+  describe("recovery from a rejected query", () => {
+    it("offers a reset that clears the persisted density and the filters", async () => {
+      window.localStorage.setItem("keiko.relationships.density", "dense");
+      mockListRelationships.mockRejectedValue(
+        new RelationshipApiError(
+          "relationship/bounded-query-exceeded",
+          'Query "limit" exceeds the hard cap.',
+          400,
+        ),
+      );
+      const { onFilterChange } = renderPanel({
+        filters: { relDensity: "dense", relType: "reads-context" },
+      });
+      const alert = await screen.findByRole("alert");
+      fireEvent.click(within(alert).getByRole("button", { name: /reset to defaults/i }));
+      // The persisted override is what made the broken state survive a reopen.
+      expect(window.localStorage.getItem("keiko.relationships.density")).toBeNull();
+      expect(onFilterChange).toHaveBeenCalledWith({
+        relDensity: undefined,
+        relType: undefined,
+        relActivity: undefined,
+        relLifecycle: undefined,
+        relSrcKind: undefined,
+        relTgtKind: undefined,
+      });
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /minimal/i }).getAttribute("aria-pressed")).toBe(
+          "true",
+        );
+      });
     });
   });
 
@@ -479,7 +538,9 @@ describe("RelationshipListPanel", () => {
         "produces-evidence",
       );
       const lastCall = mockListRelationships.mock.calls.at(-1);
-      expect(lastCall?.[0]?.limit).toBe(512);
+      // The resynced density must change the REQUESTED limit — expressed as the contract's
+      // accepted maximum, not as the blueprint's 512 render cap, which the server rejects.
+      expect(lastCall?.[0]?.limit).toBe(RELATIONSHIP_QUERY_BOUNDS.listLimitMax);
     });
   });
 

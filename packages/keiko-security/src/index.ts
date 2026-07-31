@@ -8,6 +8,7 @@ export { KEIKO_SECURITY_VERSION } from "./version.js";
 
 export {
   redact,
+  containsCredentialShape,
   createAuditRedactor,
   deepRedactStrings,
   isCredentialKeyName,

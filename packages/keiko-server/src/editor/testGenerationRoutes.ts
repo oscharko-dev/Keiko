@@ -39,6 +39,8 @@ import {
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { newCorrelationId } from "../correlation.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
 import { assembleCodingContext } from "./codingContext.js";
 import { recordCodingContextEvidence } from "./codingContextEvidence.js";
@@ -262,6 +264,26 @@ interface OutcomeContext {
   readonly signal: AbortSignal;
   readonly nowMs: number;
   readonly options: EditorTestGenerationRouteOptions;
+  // Request-scoped correlation id (RB-6) so the `failed` response an operator sees in the editor can
+  // be tied to the redacted server-side record of WHY the runner or the pre-filter threw.
+  readonly correlationId: string | undefined;
+}
+
+// `failed` is the same wire status a genuinely unproducible candidate yields, so without this record
+// a model outage, a revoked provider credential, and "the runner declined" are indistinguishable.
+// Content-free: error class, machine code, correlation id — never the patch, the buffer, or a prompt.
+function reportTestGenerationFailure(ctx: OutcomeContext, error: unknown): void {
+  emitServerDiagnostic(
+    ctx.deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: ctx.correlationId ?? newCorrelationId(),
+      operation: "editor.testGeneration",
+      source: "editor.testGenerationRoutes",
+      error,
+      summary: "Editor test generation failed.",
+      redact: (message): string => String(ctx.deps.redactor(message)),
+    }),
+  );
 }
 
 // Produces the candidate outcome once the feature is enabled. Gate B off → `deferred` with NO model
@@ -312,7 +334,8 @@ async function produceOutcome(
       applyableDiff: produced.proposedDiff,
       ...(assured.rejectionReason === undefined ? {} : { reason: assured.rejectionReason }),
     };
-  } catch {
+  } catch (error) {
+    reportTestGenerationFailure(ctx, error);
     return failedResponse(discovery.wire);
   }
 }
@@ -326,6 +349,16 @@ async function testGenerationActivationStillActive(
   return editorAiStatusActive(
     await resolveEditorAiAssistStatusForRoot(deps, realRoot, "testGeneration"),
   );
+}
+
+/** Assembles the outcome context, including the request-scoped correlation id for its diagnostics. */
+function outcomeContext(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  options: EditorTestGenerationRouteOptions,
+  resolved: Pick<OutcomeContext, "request" | "realRoot" | "signal" | "nowMs">,
+): OutcomeContext {
+  return { ...resolved, deps, options, correlationId: ctx.correlationId };
 }
 
 export async function handleEditorTestGeneration(
@@ -368,7 +401,7 @@ export async function handleEditorTestGeneration(
       executionEnabled,
     );
     const outcome = await produceOutcome(
-      { request, deps, realRoot: root.realRoot, signal, nowMs, options },
+      outcomeContext(ctx, deps, options, { request, realRoot: root.realRoot, signal, nowMs }),
       discovery,
     );
     if (!(await testGenerationActivationStillActive(deps, root.realRoot))) {

@@ -404,28 +404,41 @@ function nextExportEvidenceId(
   ).slice(0, 24)}`;
 }
 
+interface ExportEvidenceRowInput {
+  readonly runId: string;
+  readonly target: Adapter | BinaryMode;
+  readonly dryRun: boolean;
+  readonly createdAt: string;
+  readonly integrityHash: string;
+  readonly redactionAttested: boolean;
+  readonly modelProvenance: ExportModelProvenance | undefined;
+  /** The EFFECTIVE review scope of this action (TMS adapters force it), not the requested one. */
+  readonly approvedOnly: boolean;
+}
+
 /**
  * Build the export-evidence row for an export action (Issue #283, AC4). Records the target type,
  * a concrete action/artifact id, an integrity hash over the returned artifact or preview, the
- * redaction attestation, model provenance when known, and whether the action was a dry-run.
+ * redaction attestation, model provenance when known, whether the action was a dry-run, and the
+ * review scope the artifact was produced under — without the scope an auditor cannot tell an
+ * approved-only download from a full diagnostic one, since both record the same `targetAdapter`.
  */
-function buildExportEvidenceRow(
-  runId: string,
-  target: Adapter | BinaryMode,
-  dryRun: boolean,
-  createdAt: string,
-  integrityHash: string,
-  redactionAttested: boolean,
-  modelProvenance: ExportModelProvenance | undefined,
-): QualityIntelligenceExportRow {
+function buildExportEvidenceRow(input: ExportEvidenceRowInput): QualityIntelligenceExportRow {
   return {
-    id: nextExportEvidenceId(runId, target, dryRun, createdAt, integrityHash),
-    targetAdapter: target,
-    integrityHash,
-    redactionAttested,
-    createdAt,
-    ...(modelProvenance !== undefined ? { modelProvenance } : {}),
-    dryRun,
+    id: nextExportEvidenceId(
+      input.runId,
+      input.target,
+      input.dryRun,
+      input.createdAt,
+      input.integrityHash,
+    ),
+    targetAdapter: input.target,
+    integrityHash: input.integrityHash,
+    redactionAttested: input.redactionAttested,
+    createdAt: input.createdAt,
+    ...(input.modelProvenance !== undefined ? { modelProvenance: input.modelProvenance } : {}),
+    dryRun: input.dryRun,
+    approvedOnly: input.approvedOnly,
   };
 }
 
@@ -617,6 +630,7 @@ function binaryResponse(
   rows: readonly QualityIntelligenceCandidateRow[],
   manifest: QualityIntelligenceEvidenceManifest,
   candidateArtifactHashSha256Hex: string,
+  approvedOnly: boolean,
 ): ExportResponse {
   const brandedRunId = QualityIntelligence.asQualityIntelligenceRunId(runId);
   const candidates = rows.map((r) => rowToCandidate(r, brandedRunId));
@@ -676,15 +690,16 @@ function binaryResponse(
         ...(warnings.size > 0 ? { warnings: sortedStrings(warnings) } : {}),
       },
     },
-    evidence: buildExportEvidenceRow(
+    evidence: buildExportEvidenceRow({
       runId,
-      mode,
-      false,
+      target: mode,
+      dryRun: false,
       createdAt,
-      sha256Hex(bodyBase64),
+      integrityHash: sha256Hex(bodyBase64),
       redactionAttested,
       modelProvenance,
-    ),
+      approvedOnly,
+    }),
   };
 }
 
@@ -698,7 +713,14 @@ function serialisedResponse(
 ): ExportResponse {
   const adapter = request.adapter;
   if (adapter === "pdf" || adapter === "zip-bundle") {
-    return binaryResponse(runId, adapter, rows, manifest, candidateArtifactHashSha256Hex);
+    return binaryResponse(
+      runId,
+      adapter,
+      rows,
+      manifest,
+      candidateArtifactHashSha256Hex,
+      request.approvedOnly,
+    );
   }
   const brandedRunId = QualityIntelligence.asQualityIntelligenceRunId(runId);
   const candidates = rows.map((r) => rowToCandidate(r, brandedRunId));
@@ -726,15 +748,16 @@ function serialisedResponse(
           ...(warnings.length > 0 ? { warnings } : {}),
         },
       },
-      evidence: buildExportEvidenceRow(
+      evidence: buildExportEvidenceRow({
         runId,
-        adapter,
-        true,
+        target: adapter,
+        dryRun: true,
         createdAt,
-        sha256Hex(serialized.body),
-        bundle.redactionAttested,
-        bundle.modelProvenance,
-      ),
+        integrityHash: sha256Hex(serialized.body),
+        redactionAttested: bundle.redactionAttested,
+        modelProvenance: bundle.modelProvenance,
+        approvedOnly: request.approvedOnly,
+      }),
     };
   }
   const meta = LOCAL_META[adapter] ?? { contentType: "text/plain", ext: "txt" };
@@ -755,15 +778,16 @@ function serialisedResponse(
         ...(warnings.length > 0 ? { warnings } : {}),
       },
     },
-    evidence: buildExportEvidenceRow(
+    evidence: buildExportEvidenceRow({
       runId,
-      adapter,
-      false,
+      target: adapter,
+      dryRun: false,
       createdAt,
-      sha256Hex(body),
-      bundle.redactionAttested,
-      bundle.modelProvenance,
-    ),
+      integrityHash: sha256Hex(body),
+      redactionAttested: bundle.redactionAttested,
+      modelProvenance: bundle.modelProvenance,
+      approvedOnly: request.approvedOnly,
+    }),
   };
 }
 
@@ -804,7 +828,15 @@ function serialiseExport(
       ),
     };
   }
-  return serialisedResponse(runId, request, rows, manifest, candidateArtifactHashSha256Hex);
+  // Hand the EFFECTIVE scope downstream: a TMS adapter forces approvedOnly regardless of what the
+  // caller asked for, and the evidence row must record what actually happened, not what was requested.
+  return serialisedResponse(
+    runId,
+    { ...request, approvedOnly },
+    rows,
+    manifest,
+    candidateArtifactHashSha256Hex,
+  );
 }
 
 export const QI_EXPORT_ROUTE_GROUP: readonly RouteDefinition[] = [

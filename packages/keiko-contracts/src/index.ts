@@ -1259,6 +1259,19 @@ export {
   validateCodingWorkbenchRuntimeQuestionsResponse,
 } from "./coding-workbench-runtime-questions.js";
 export type {
+  CodingWorkbenchRuntimeApprovalReviewChannelPayload,
+  CodingWorkbenchRuntimeApprovalReviewSession,
+  CodingWorkbenchRuntimePendingApprovalReview,
+} from "./coding-workbench-runtime-approval-review.js";
+export {
+  CODING_WORKBENCH_APPROVAL_REVIEW_MAX_COUNT,
+  CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
+  CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS,
+  CODING_WORKBENCH_RUNTIME_APPROVAL_REVIEW_SESSION_STATES,
+  unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload,
+  validateCodingWorkbenchRuntimeApprovalReviewChannelPayload,
+} from "./coding-workbench-runtime-approval-review.js";
+export type {
   CodingWorkbenchRuntimePendingResearch,
   CodingWorkbenchRuntimeResearchChannelPayload,
   CodingWorkbenchRuntimeResearchGrant,
@@ -1502,6 +1515,7 @@ export type {
   GitRepositoryAgentParseOk,
   GitRepositoryAgentParseFail,
   GitRepositoryAgentParseResult,
+  GitRepositoryAgentAuthorityClass,
 } from "./git-repository-agent.js";
 export {
   GIT_REPOSITORY_AGENT_SCHEMA_VERSION,
@@ -1510,6 +1524,9 @@ export {
   GIT_REPOSITORY_AGENT_DENIAL_REASONS,
   parseGitRepositoryAgentOperationRequest,
   isGitRepositoryAgentOperationResponse,
+  gitRepositoryAgentAuthorityClassFor,
+  gitRepositoryAgentMinimumMode,
+  gitRepositoryAgentOperationAdmitted,
 } from "./git-repository-agent.js";
 
 // ─── Controlled command executor (Issue #1387, Epic #1491) ────────────────────────
@@ -1795,6 +1812,18 @@ export {
   listVoicePersonas,
 } from "./gateway.js";
 
+// ─── Gateway verification (F-01) ────────────────────────────────────────────────
+// "Configured" is not "reachable": the one vocabulary every surface uses to report whether a live
+// readiness probe has confirmed the configured gateway, with `unverified` as the fail-closed
+// default. See gateway-verification.ts for why it is dependency-free.
+export type { GatewayVerificationState } from "./gateway-verification.js";
+export {
+  UNVERIFIED_GATEWAY,
+  gatewayVerificationContradictsReadiness,
+  gatewayVerificationFromProbeOutcome,
+  isGatewayVerificationState,
+} from "./gateway-verification.js";
+
 // ─── Voice control / media protocol (Issue #496 / Epic #491; ADR-0101) ──────────
 // Versioned, content-free wire-protocol contract for the optional Voice Digital Twin: the WebSocket
 // control / signaling message catalog, the WebRTC media-plane descriptor, the capability-gating and
@@ -1963,6 +1992,7 @@ export {
 export type {
   NetworkPolicy,
   FilesystemPolicy,
+  HomeIsolation,
   SandboxPolicy,
   SandboxBackend,
   SandboxAttestation,
@@ -1988,6 +2018,10 @@ export type {
 export {
   DEFAULT_ENV_ALLOWLIST,
   DEFAULT_SANDBOX_POLICY,
+  GOVERNED_GIT_IDENTITY_SANDBOX_POLICY,
+  GOVERNED_GIT_REMOTE_CREDENTIAL_ENV_ALLOWLIST,
+  GOVERNED_GIT_REMOTE_ENV_ALLOWLIST,
+  GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
   SANDBOX_BACKENDS,
   DEFAULT_COMMAND_RULES,
   DEFAULT_PATCH_LIMITS,
@@ -2762,6 +2796,7 @@ export type {
   CapsuleContextualRetrievalHealth,
   CapsuleHealth,
   CapsuleDeleteRequest,
+  UnsupportedDocumentGuidanceCode,
 } from "./local-knowledge-records.js";
 export {
   DOCUMENT_STATUSES,
@@ -2769,6 +2804,7 @@ export {
   PARSER_DIAGNOSTIC_SEVERITIES,
   INDEXING_JOB_STATUSES,
   CAPSULE_REINDEX_MODES,
+  UNSUPPORTED_DOCUMENT_GUIDANCE_CODES,
 } from "./local-knowledge-records.js";
 export { isSafeScopePath, isSafeStorageReference } from "./local-knowledge-paths.js";
 export type {
@@ -3143,6 +3179,7 @@ export type {
   QualityIntelligenceUiRunDetail,
   QualityIntelligenceUiAtomCoverage,
   QualityIntelligenceUiRunListResponse,
+  QualityIntelligenceUiRetentionNotice,
   QualityIntelligenceUiRunSummary,
   QualityIntelligenceUiRunTotals,
   QualityIntelligenceUiCandidate,
@@ -3242,6 +3279,8 @@ export type {
   WorkspaceCommandCategory,
   WorkspaceKeyChord,
   WorkspaceKeyChordModifier,
+  WorkspaceKeyChordPlatform,
+  WorkspacePhysicalModifier,
   WorkspaceCommandContext,
   WorkspaceCommand,
   WorkspaceUiWindowSnapshot,
@@ -3256,6 +3295,11 @@ export {
   workspaceActionLabel,
   workspaceChordKey,
   workspaceChordsEqual,
+  workspaceChordClaimKeys,
+  workspaceChordKeyForPlatform,
+  workspaceChordsCollide,
+  workspacePlatformModifiers,
+  isWorkspaceDispatchableChord,
   isWorkspaceReservedChord,
   workspaceInverseAction,
 } from "./workspace-ui.js";
@@ -3302,6 +3346,7 @@ export type {
   RelationshipForbiddenMetadataKeySubstring,
   RelationshipLifecycleState,
   RelationshipObjectKind,
+  RelationshipQueryBounds,
   RelationshipSupportedObjectKind,
   RelationshipType,
   RelationshipTypeDefinition,
@@ -3315,6 +3360,7 @@ export {
   RELATIONSHIP_FORBIDDEN_METADATA_KEY_SUBSTRINGS,
   RELATIONSHIP_LIFECYCLE_STATES,
   RELATIONSHIP_OBJECT_KINDS,
+  RELATIONSHIP_QUERY_BOUNDS,
   RELATIONSHIP_SCHEMA_VERSION,
   RELATIONSHIP_SUPPORTED_OBJECT_KINDS,
   RELATIONSHIP_TYPE_DEFINITIONS,
@@ -3469,6 +3515,7 @@ export {
   leastPrivilegeForAnalysis,
   summarizePromptSafety,
   assessEnhancedPromptStructuralSafety,
+  collectProhibitedPromptTextFindings,
   validatePromptSafetyAssessment,
 } from "./prompt-enhancer-safety.js";
 // Prompt Enhancer BFF wire surface (#1314; ADR-0044 §1 "BFF /api/prompt-enhancer/* routes"). The
@@ -3515,6 +3562,7 @@ export type {
   GitDeliveryBranchMatchKind,
   GitDeliveryBranchPattern,
   GitDeliveryBranchPatternConstraint,
+  GitDeliveryProtectedBranchConstraint,
   GitDeliveryProviderCapabilityConstraint,
   GitDeliveryRiskClassCeilingConstraint,
   GitDeliveryConstraint,
@@ -3587,6 +3635,7 @@ export {
   gitDeliveryRiskClassWithinCeiling,
   gitDeliveryBranchNameMatchesPattern,
   gitDeliveryBranchNameMatchesAny,
+  gitDeliveryTargetIsProtectedBranch,
 } from "./git-delivery.js";
 
 // git-delivery-policy.ts
@@ -3597,12 +3646,18 @@ export type {
   GitDeliveryRepoPolicyPack,
   GitDeliveryOrgPolicyPack,
   GitDeliveryPolicyContext,
+  GitDeliveryPolicyBranchOperands,
+  GitDeliveryEffectivePolicy,
+  GitDeliveryEffectivePolicyContext,
 } from "./git-delivery-policy.js";
 export {
   GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   GIT_DELIVERY_RULE_DECISIONS,
   isGitDeliveryPolicyRule,
   evaluateGitPolicy,
+  evaluateGitDeliveryEffectivePolicy,
+  gitDeliveryConstraintBlockReason,
+  gitDeliveryPolicyTargetBranchName,
   parseGitPolicyPack,
   parseGitRepoPolicyPack,
   parseGitOrgPolicyPack,
@@ -4025,13 +4080,22 @@ export type {
   WorkspaceManifest,
   WorkspaceRootDispatchOperationClass,
   WorkspaceRootDispatch,
+  WorkspaceManifestSessionAssertion,
+  WorkspaceManifestSessionPairing,
+  WorkspaceManifestAccessResponse,
+  WorkspaceManifestAccess,
+  WorkspaceManifestAccessParsed,
+  WorkspaceManifestAccessParse,
 } from "./workspace-manifest.js";
 export {
   WORKSPACE_MANIFEST_SCHEMA_VERSION,
   WORKSPACE_MANIFEST_MAX_ROOTS,
   WORKSPACE_ROOT_DISPLAY_NAME_MAX_CHARS,
+  WORKSPACE_MANIFEST_SESSION_ASSERTIONS,
   validateWorkspaceManifest,
   validateWorkspaceRootDispatch,
+  workspaceManifestAccessResponse,
+  parseWorkspaceManifestAccess,
 } from "./workspace-manifest.js";
 export type {
   WorkspaceTrustLevel,

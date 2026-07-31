@@ -56,19 +56,36 @@ async function startServer(staticRoot: string, handlerDeps: UiHandlerDeps): Prom
   return started.port;
 }
 
-function post(port: number, body: unknown): Promise<Response> {
+/** A live channel plus the cookie a launcher-paired browser would present (ADR-0141 D2). */
+function pairedChannel(): {
+  readonly channel: ReturnType<typeof createCodingAppSessionChannel>;
+  readonly cookie: string;
+} {
+  const channel = createCodingAppSessionChannel({
+    registry: createSessionRegistry(),
+    pairingPort: createFakeSessionPairingPort(),
+  });
+  const paired = channel.pair(fakePairingRequestBody());
+  if (!paired.paired) throw new Error("expected paired app session");
+  return { channel, cookie: `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}` };
+}
+
+// Every state-changing runtime route binds to the paired app session, so the transport helpers
+// present the cookie exactly as the paired browser does.
+function post(port: number, body: unknown, cookie: string): Promise<Response> {
   return fetch(`http://${UI_HOST}:${String(port)}/api/coding-workbench/runtime/runs`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-Keiko-CSRF": "1",
       Origin: `http://${UI_HOST}:${String(port)}`,
+      cookie,
     },
     body: JSON.stringify(body),
   });
 }
 
-function stop(port: number, runId: string): Promise<Response> {
+function stop(port: number, runId: string, cookie: string): Promise<Response> {
   return fetch(
     `http://${UI_HOST}:${String(port)}/api/coding-workbench/runtime/runs/${runId}/stop`,
     {
@@ -77,6 +94,7 @@ function stop(port: number, runId: string): Promise<Response> {
         "Content-Type": "application/json",
         "X-Keiko-CSRF": "1",
         Origin: `http://${UI_HOST}:${String(port)}`,
+        cookie,
       },
       body: JSON.stringify({ requestId: runId }),
     },
@@ -88,13 +106,7 @@ describe("production coding runtime BFF", () => {
     const staticRoot = await mkdtemp(join(tmpdir(), "keiko-runtime-bff-research-"));
     roots.push(staticRoot);
     await writeFile(join(staticRoot, "index.html"), "<html></html>", "utf8");
-    const channel = createCodingAppSessionChannel({
-      registry: createSessionRegistry(),
-      pairingPort: createFakeSessionPairingPort(),
-    });
-    const paired = channel.pair(fakePairingRequestBody());
-    if (!paired.paired) throw new Error("expected paired app session");
-    const cookie = `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`;
+    const { channel, cookie } = pairedChannel();
     const host = "approved-route-canary.example";
     const snapshot: CodingWorkbenchRuntimeSnapshot = {
       schemaVersion: "1",
@@ -195,6 +207,7 @@ describe("production coding runtime BFF", () => {
         takeover: () => Promise.resolve({ ok: true, status: "stopped" }),
         reconcile: () => Promise.resolve({ ok: true, status: "stopped" }),
         health: () => ({ status: "stopped" }),
+        pendingApprovalReview: () => undefined,
       }),
       mintLaunch: {
         resolve: (input) => {
@@ -238,27 +251,58 @@ describe("production coding runtime BFF", () => {
       serverPrincipal: () => "local-operator",
       runtimeHost: host,
     });
+    const { channel, cookie } = pairedChannel();
     const port = await startServer(staticRoot, {
       codingRuntimeOrchestrator: control.orchestrator,
       codingRuntimeEventHub: control.eventHub,
       codingRuntimeHostQualified: control.runtimeHostQualified,
+      codingAppSessionChannel: channel,
     } as UiHandlerDeps);
 
-    const forged = await post(port, {
-      requestId: "request-forged",
-      taskIntent: "private task",
-      requestedMode: "governed-assist",
-      workspaceRoot: "/attacker",
-      env: { TOKEN: "attacker" },
-    });
+    // An unpaired same-user local process reaches no lifecycle authority at all, even with the
+    // loopback host, the same-origin Origin, and the constant CSRF header (ADR-0141 D1).
+    const unpaired = await fetch(
+      `http://${UI_HOST}:${String(port)}/api/coding-workbench/runtime/runs`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+          Origin: `http://${UI_HOST}:${String(port)}`,
+        },
+        body: JSON.stringify({
+          requestId: "request-unpaired",
+          taskIntent: "private task",
+          requestedMode: "governed-assist",
+        }),
+      },
+    );
+    expect(unpaired.status).toBe(403);
+    expect(order).toEqual([]);
+
+    const forged = await post(
+      port,
+      {
+        requestId: "request-forged",
+        taskIntent: "private task",
+        requestedMode: "governed-assist",
+        workspaceRoot: "/attacker",
+        env: { TOKEN: "attacker" },
+      },
+      cookie,
+    );
     expect(forged.status).toBe(400);
     expect(order).toEqual([]);
 
-    const started = await post(port, {
-      requestId: "request-1",
-      taskIntent: "private task",
-      requestedMode: "governed-assist",
-    });
+    const started = await post(
+      port,
+      {
+        requestId: "request-1",
+        taskIntent: "private task",
+        requestedMode: "governed-assist",
+      },
+      cookie,
+    );
     const startedBody = (await started.json()) as { runId: string; state: string };
     expect(startedBody.state).toBe("running");
     expect(order).toEqual([
@@ -269,27 +313,31 @@ describe("production coding runtime BFF", () => {
     expect(JSON.stringify(snapshots.listAll())).not.toContain("private task");
     expect([...evidenceBodies.values()].join("\n")).not.toContain("private task");
 
-    const stopped = await stop(port, startedBody.runId);
+    const stopped = await stop(port, startedBody.runId, cookie);
     expect(stopped.status).toBe(200);
     await expect(stopped.json()).resolves.toMatchObject({
       runId: startedBody.runId,
       state: "cancelled",
     });
     expect(order.at(-1)).toBe(`reaped:${startedBody.runId}`);
-    const duplicateStop = await stop(port, startedBody.runId);
+    const duplicateStop = await stop(port, startedBody.runId, cookie);
     expect(duplicateStop.status).toBe(200);
     await expect(duplicateStop.json()).resolves.toMatchObject({ state: "idle" });
     expect(order.filter((entry) => entry === `reaped:${startedBody.runId}`)).toHaveLength(1);
 
-    const second = await post(port, {
-      requestId: "request-2",
-      taskIntent: "private task",
-      requestedMode: "governed-assist",
-    });
+    const second = await post(
+      port,
+      {
+        requestId: "request-2",
+        taskIntent: "private task",
+        requestedMode: "governed-assist",
+      },
+      cookie,
+    );
     const secondBody = (await second.json()) as { runId: string; state: string };
     expect(secondBody.state).toBe("running");
     expect(order.at(-1)).toBe(`dispatch:${secondBody.runId}:private task`);
-    const secondStopped = await stop(port, secondBody.runId);
+    const secondStopped = await stop(port, secondBody.runId, cookie);
     expect(secondStopped.status).toBe(200);
     await expect(secondStopped.json()).resolves.toMatchObject({
       runId: secondBody.runId,
@@ -299,21 +347,29 @@ describe("production coding runtime BFF", () => {
 
     expect(
       (
-        await post(port, {
-          requestId: "request-1",
-          taskIntent: "private task",
-          requestedMode: "governed-assist",
-        })
+        await post(
+          port,
+          {
+            requestId: "request-1",
+            taskIntent: "private task",
+            requestedMode: "governed-assist",
+          },
+          cookie,
+        )
       ).status,
     ).toBe(403);
     activeRoot = "/managed/drifted";
     expect(
       (
-        await post(port, {
-          requestId: "request-3",
-          taskIntent: "private task",
-          requestedMode: "governed-assist",
-        })
+        await post(
+          port,
+          {
+            requestId: "request-3",
+            taskIntent: "private task",
+            requestedMode: "governed-assist",
+          },
+          cookie,
+        )
       ).status,
     ).toBe(403);
     db.close();

@@ -17,9 +17,14 @@ import type {
   GatewayReadinessReport,
   GatewayReadinessRequest,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts";
+import {
+  gatewayVerificationFromProbeOutcome,
+  maxUtf8BytesForTokenBudget,
+} from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig } from "./deps.js";
+import { newCorrelationId } from "./correlation.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { rerankSelection } from "./grounded-rerank-facade.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 
@@ -252,6 +257,7 @@ function roundedNorm(value: number): number {
 async function probeEmbedding(
   deps: UiHandlerDeps,
   config: GatewayConfig,
+  correlationId: string,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   const provider = chooseEmbeddingProvider(config);
@@ -293,14 +299,42 @@ async function probeEmbedding(
         : "Embedding endpoint returned an empty or zero-norm vector.",
     );
   } catch (probeError) {
-    return result(
+    return probeFailure(
+      deps,
+      correlationId,
       "embedding",
-      "failed",
       start,
       "Embedding endpoint could not be verified.",
-      providerWarning(probeError),
+      probeError,
     );
   }
+}
+
+// Maps one reranker selection onto its probe result. Extracted so `probeReranker` stays inside the
+// 50-line ceiling now that its catch reports through the diagnostic sink.
+function rerankerSelectionResult(
+  selection: Awaited<ReturnType<typeof rerankSelection<string>>>,
+  expectedTopDocument: string,
+  start: number,
+): GatewayReadinessProbeResult {
+  if (selection.diagnostics.status !== "applied") {
+    const kind = selection.diagnostics.failureKind ?? "transport";
+    return result(
+      "reranker",
+      kind === "unsupported-model" || kind === "not-configured" ? "unsupported" : "failed",
+      start,
+      `Reranker endpoint could not be verified (${kind}).`,
+    );
+  }
+  const passed = selection.selected[0] === expectedTopDocument;
+  return result(
+    "reranker",
+    passed ? "passed" : "unsupported",
+    start,
+    passed
+      ? "Reranker returned the expected top document for a two-item probe."
+      : "Reranker answered, but did not rank the expected document first.",
+  );
 }
 
 // The config is threaded in from the readiness run's single `chooseProvider` snapshot rather than
@@ -310,6 +344,7 @@ async function probeEmbedding(
 async function probeReranker(
   deps: UiHandlerDeps,
   config: GatewayConfig,
+  correlationId: string,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   if (config.reranker === undefined) {
@@ -329,31 +364,15 @@ async function probeReranker(
         : {}),
       fallbackMode: "slice-topN",
     });
-    if (selection.diagnostics.status !== "applied") {
-      const kind = selection.diagnostics.failureKind ?? "transport";
-      return result(
-        "reranker",
-        kind === "unsupported-model" || kind === "not-configured" ? "unsupported" : "failed",
-        start,
-        `Reranker endpoint could not be verified (${kind}).`,
-      );
-    }
-    const passed = selection.selected[0] === documents[0];
-    return result(
-      "reranker",
-      passed ? "passed" : "unsupported",
-      start,
-      passed
-        ? "Reranker returned the expected top document for a two-item probe."
-        : "Reranker answered, but did not rank the expected document first.",
-    );
+    return rerankerSelectionResult(selection, documents[0], start);
   } catch (probeError) {
-    return result(
+    return probeFailure(
+      deps,
+      correlationId,
       "reranker",
-      "failed",
       start,
       "Reranker endpoint could not be verified.",
-      providerWarning(probeError),
+      probeError,
     );
   }
 }
@@ -383,6 +402,36 @@ function providerWarning(errorValue: unknown): string {
     return "The probe timed out before the provider answered.";
   }
   return "The provider could not complete this probe. Chat configuration was not changed.";
+}
+
+// Every probe's `catch` used to collapse an actionable cause — an auth rejection, a DNS/TLS failure,
+// a missing model — into the same two operator-facing sentences, and nothing anywhere else recorded
+// it. A readiness run is the product's ONLY live evidence about the gateway (F-01), so an
+// unexplained failure here is the difference between "fix your API key" and "no idea". The probe
+// result stays exactly as before (the browser learns nothing new); the CAUSE goes to the redacted
+// operator sink keyed by the run's correlation id, with the failing probe named by `source`.
+// Content-free: error class, machine code, gateway request id — never a probe body, an endpoint,
+// or a credential.
+function probeFailure(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  name: GatewayReadinessProbeName,
+  start: number,
+  evidence: string,
+  probeError: unknown,
+): GatewayReadinessProbeResult {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation: "gateway.readiness",
+      source: `gateway-readiness.${name}`,
+      error: probeError,
+      summary: "A gateway readiness probe could not be completed.",
+      redact: (message): string => String(deps.redactor(message)),
+    }),
+  );
+  return result(name, "failed", start, evidence, providerWarning(probeError));
 }
 
 function unsupportedStatus(response: Response): boolean {
@@ -466,6 +515,7 @@ async function probeChat(
   deps: UiHandlerDeps,
   config: GatewayConfig,
   provider: ModelProviderConfig,
+  correlationId: string,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
@@ -489,12 +539,13 @@ async function probeChat(
         : "Basic chat answered, but did not return the expected readiness token.",
     );
   } catch (probeError) {
-    return result(
+    return probeFailure(
+      deps,
+      correlationId,
       "chat",
-      "failed",
       start,
       "Basic chat could not be verified.",
-      providerWarning(probeError),
+      probeError,
     );
   }
 }
@@ -503,6 +554,7 @@ async function probeStreaming(
   deps: UiHandlerDeps,
   config: GatewayConfig,
   provider: ModelProviderConfig,
+  correlationId: string,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
@@ -536,12 +588,13 @@ async function probeStreaming(
         : "Streaming completed without the expected text delta.",
     );
   } catch (probeError) {
-    return result(
+    return probeFailure(
+      deps,
+      correlationId,
       "streaming",
-      "failed",
       start,
       "Streaming could not be verified.",
-      providerWarning(probeError),
+      probeError,
     );
   }
 }
@@ -550,6 +603,7 @@ async function probeToolCalling(
   deps: UiHandlerDeps,
   config: GatewayConfig,
   provider: ModelProviderConfig,
+  correlationId: string,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
@@ -560,12 +614,13 @@ async function probeToolCalling(
     }
     return toolCallingPayloadResult(provider, start, await readProviderJson(response));
   } catch (probeError) {
-    return result(
+    return probeFailure(
+      deps,
+      correlationId,
       "tool_calling",
-      "failed",
       start,
       "Tool calling could not be verified.",
-      providerWarning(probeError),
+      probeError,
     );
   }
 }
@@ -636,6 +691,7 @@ async function probeJsonSchema(
   deps: UiHandlerDeps,
   config: GatewayConfig,
   provider: ModelProviderConfig,
+  correlationId: string,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
@@ -646,12 +702,13 @@ async function probeJsonSchema(
     }
     return jsonSchemaPayloadResult(start, await readProviderJson(response));
   } catch (probeError) {
-    return result(
+    return probeFailure(
+      deps,
+      correlationId,
       "json_schema",
-      "failed",
       start,
       "Structured JSON output could not be verified.",
-      providerWarning(probeError),
+      probeError,
     );
   }
 }
@@ -704,6 +761,7 @@ async function probeReasoning(
   deps: UiHandlerDeps,
   config: GatewayConfig,
   provider: ModelProviderConfig,
+  correlationId: string,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
@@ -736,12 +794,13 @@ async function probeReasoning(
       detected ? undefined : qwenReasoningWarning(provider),
     );
   } catch (probeError) {
-    return result(
+    return probeFailure(
+      deps,
+      correlationId,
       "reasoning",
-      "failed",
       start,
       "Reasoning output could not be verified.",
-      providerWarning(probeError),
+      probeError,
     );
   }
 }
@@ -756,6 +815,7 @@ async function probeImageInput(
   deps: UiHandlerDeps,
   config: GatewayConfig,
   provider: ModelProviderConfig,
+  correlationId: string,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
@@ -784,12 +844,13 @@ async function probeImageInput(
         : "The endpoint accepted image input but did not identify the test image content.",
     );
   } catch (probeError) {
-    return result(
+    return probeFailure(
+      deps,
+      correlationId,
       "image_input",
-      "failed",
       start,
       "Image input could not be verified.",
-      providerWarning(probeError),
+      probeError,
     );
   }
 }
@@ -798,6 +859,7 @@ async function probeDocumentInput(
   deps: UiHandlerDeps,
   config: GatewayConfig,
   provider: ModelProviderConfig,
+  correlationId: string,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
@@ -808,12 +870,13 @@ async function probeDocumentInput(
     }
     return documentInputPayloadResult(start, await readProviderJson(response));
   } catch (probeError) {
-    return result(
+    return probeFailure(
+      deps,
+      correlationId,
       "document_input",
-      "failed",
       start,
       "Document input could not be verified.",
-      providerWarning(probeError),
+      probeError,
     );
   }
 }
@@ -918,6 +981,7 @@ async function probeLongContext(
   provider: ModelProviderConfig,
   capability: ModelCapability | undefined,
   options: GatewayReadinessOptions | undefined,
+  correlationId: string,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   const tokens = longContextTokens(options, capability);
@@ -935,12 +999,13 @@ async function probeLongContext(
     }
     return longContextPayloadResult(start, tokens, sentinel, await readProviderJson(response));
   } catch (probeError) {
-    return result(
+    return probeFailure(
+      deps,
+      correlationId,
       "long_context",
-      "failed",
       start,
       "Long-context input could not be verified.",
-      providerWarning(probeError),
+      probeError,
     );
   }
 }
@@ -950,24 +1015,19 @@ async function runProbe(
   deps: UiHandlerDeps,
   selection: ProviderSelection,
   options: GatewayReadinessOptions | undefined,
+  correlationId: string,
 ): Promise<GatewayReadinessProbeResult> {
-  if (name === "chat") return probeChat(deps, selection.config, selection.provider);
-  if (name === "streaming") return probeStreaming(deps, selection.config, selection.provider);
-  if (name === "tool_calling") return probeToolCalling(deps, selection.config, selection.provider);
-  if (name === "json_schema") return probeJsonSchema(deps, selection.config, selection.provider);
-  if (name === "embedding") return probeEmbedding(deps, selection.config);
-  if (name === "reranker") return probeReranker(deps, selection.config);
-  if (name === "reasoning") return probeReasoning(deps, selection.config, selection.provider);
-  if (name === "image_input") return probeImageInput(deps, selection.config, selection.provider);
-  if (name === "document_input")
-    return probeDocumentInput(deps, selection.config, selection.provider);
-  return probeLongContext(
-    deps,
-    selection.config,
-    selection.provider,
-    selection.capability,
-    options,
-  );
+  const { config, provider } = selection;
+  if (name === "chat") return probeChat(deps, config, provider, correlationId);
+  if (name === "streaming") return probeStreaming(deps, config, provider, correlationId);
+  if (name === "tool_calling") return probeToolCalling(deps, config, provider, correlationId);
+  if (name === "json_schema") return probeJsonSchema(deps, config, provider, correlationId);
+  if (name === "embedding") return probeEmbedding(deps, config, correlationId);
+  if (name === "reranker") return probeReranker(deps, config, correlationId);
+  if (name === "reasoning") return probeReasoning(deps, config, provider, correlationId);
+  if (name === "image_input") return probeImageInput(deps, config, provider, correlationId);
+  if (name === "document_input") return probeDocumentInput(deps, config, provider, correlationId);
+  return probeLongContext(deps, config, provider, selection.capability, options, correlationId);
 }
 
 function reportStatus(
@@ -1049,12 +1109,20 @@ function verifiedCapabilities(
 export async function runGatewayReadiness(
   request: GatewayReadinessRequest,
   deps: UiHandlerDeps,
+  // RB-6: the request-scoped correlation id, so every probe diagnostic from ONE readiness run shares
+  // one id. A caller without a request context (a scheduled/CLI run) gets a freshly minted id rather
+  // than an id-less record.
+  requestCorrelationId?: string,
 ): Promise<GatewayReadinessReport | RouteResult> {
   const selection = chooseProvider(currentGatewayConfig(deps), request.modelId);
   if ("status" in selection) return selection;
+  // Capture the config generation BEFORE the async probes: the verdict describes this
+  // configuration, and the holder drops it if the config was replaced mid-probe (#2847 review).
+  const observedGeneration = deps.gatewayConfig?.generation();
+  const correlationId = requestCorrelationId ?? newCorrelationId();
   const names = requestedProbeNames(request.options);
   const probes: GatewayReadinessProbeResult[] = [];
-  const chat = await runProbe("chat", deps, selection, request.options);
+  const chat = await runProbe("chat", deps, selection, request.options, correlationId);
   probes.push(chat);
   if (chat.status !== "passed") {
     for (const name of names.filter((candidate) => candidate !== "chat")) {
@@ -1065,17 +1133,26 @@ export async function runGatewayReadiness(
       ...(await Promise.all(
         names
           .filter((candidate) => candidate !== "chat")
-          .map((name) => runProbe(name, deps, selection, request.options)),
+          .map((name) => runProbe(name, deps, selection, request.options, correlationId)),
       )),
     );
   }
-  return {
+  const report: GatewayReadinessReport = {
     modelId: selection.provider.modelId,
     checkedAt: new Date().toISOString(),
     overallStatus: reportStatus(probes),
     probes,
     verifiedCapabilities: verifiedCapabilities(probes),
   };
+  // F-01: this run is the product's only live evidence about the gateway. Record its outcome on the
+  // config holder so the surfaces that used to infer readiness from configuration alone (the editor
+  // AI-assist badge, the Coding Workbench source projection) report what was actually observed.
+  // Content-free: one state word, no probe bodies, no endpoints, no credentials.
+  deps.gatewayConfig?.recordVerification(
+    gatewayVerificationFromProbeOutcome(report.overallStatus),
+    observedGeneration,
+  );
+  return report;
 }
 
 export async function handleGatewayReadiness(
@@ -1084,7 +1161,7 @@ export async function handleGatewayReadiness(
 ): Promise<RouteResult> {
   const body = await readJsonBody(ctx.req);
   if ("status" in body) return body;
-  const report = await runGatewayReadiness(body.parsed, deps);
+  const report = await runGatewayReadiness(body.parsed, deps, ctx.correlationId);
   if ("status" in report) return report;
   return { status: 200, body: report };
 }

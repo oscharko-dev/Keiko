@@ -31,6 +31,7 @@ import type {
   GitRepositoryStatusResponse,
 } from "../../../../../lib/types";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import { Icons } from "../../Icons";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import { FileIcon } from "../shared/projectTree";
@@ -81,6 +82,12 @@ interface FilesWidgetProps {
   // Notified after a successful create/rename/delete so the host can re-home open editor tabs (rename)
   // or close them (delete). Omitted in read-only contexts; its presence does not gate the affordances.
   readonly onFilesMutated?: ((event: FilesMutationEvent) => void) | undefined;
+  // Consulted BEFORE a rename, drag-move, or delete reaches the server — the pre-flight counterpart
+  // of `onFilesMutated`. The host owns the open buffers, so only it can tell whether the path (or,
+  // for a directory, anything beneath it) has unsaved changes; resolving `false` vetoes the mutation
+  // so the buffer is never orphaned by a path that no longer exists. Omitted where no editor host
+  // owns buffers for this root, which reads as "nothing to veto".
+  readonly onBeforeEntryMutation?: ((path: string) => Promise<boolean>) | undefined;
 }
 
 export interface FilesMutationEvent {
@@ -384,36 +391,6 @@ function handleTreeNavKey(rows: readonly HTMLElement[], index: number, key: stri
   }
 }
 
-// GEN-UI-FOCUS-002 — keep Tab focus cycling within a modal dialog (WCAG 2.1.2/2.4.3). Returns
-// true when it handled the key (caller should not do more). jsdom does not enforce inert, so an
-// explicit wrap is required for keyboard users to stay inside the dialog.
-function trapDialogTab(container: HTMLElement, event: ReactKeyboardEvent): boolean {
-  if (event.key !== "Tab") return false;
-  const focusables = Array.from(
-    container.querySelectorAll<HTMLElement>(
-      "button:not([disabled]),input:not([disabled]),[tabindex]:not([tabindex='-1'])",
-    ),
-  );
-  if (focusables.length === 0) {
-    event.preventDefault();
-    return true;
-  }
-  const first = focusables[0];
-  const last = focusables.at(-1);
-  const active = document.activeElement;
-  if (event.shiftKey && (active === first || !container.contains(active))) {
-    event.preventDefault();
-    last?.focus();
-    return true;
-  }
-  if (!event.shiftKey && active === last) {
-    event.preventDefault();
-    first?.focus();
-    return true;
-  }
-  return false;
-}
-
 // GEN-UI-KEYBOARD-003 — arrow/Home/End roving among role="menuitem" buttons in the context menu
 // (APG menu pattern). Enter/Space activate natively on the focused button.
 function handleMenuNavKey(container: HTMLElement, event: ReactKeyboardEvent): void {
@@ -445,7 +422,15 @@ function gitStatusSummary(state: GitStatusState, t: I18nTranslate): string | nul
     ? t("filesWidget.gitStatus.detachedHead")
     : (status.branch ?? t("filesWidget.gitStatus.unknownBranch"));
   if (status.clean) return t("filesWidget.gitStatus.clean", { branch });
-  const count = status.changes.length;
+  // Audit F-12 — this widget fetches status with includeIgnored so the tree can dim ignored
+  // entries, but an ignored entry is not a worktree change. Counting them made the header
+  // contradict `git status` (and the Git window, which fetches without includeIgnored).
+  const count = status.changes.filter((change) => !isIgnoredGitChange(change)).length;
+  // Defensive boundary (#2843 review): the server excludes ignored entries from `clean`, so a
+  // not-clean response normally carries at least one visible change. If filtering still removes
+  // every entry, the tree shows no changed file either — report that instead of a degenerate
+  // "0 changed files".
+  if (count === 0) return t("filesWidget.gitStatus.clean", { branch });
   return count === 1
     ? t("filesWidget.gitStatus.changedOne", { branch, count })
     : t("filesWidget.gitStatus.changedMany", { branch, count });
@@ -585,6 +570,7 @@ export function FilesWidget({
   onOpenFile,
   onOpenGitDelivery,
   onFilesMutated,
+  onBeforeEntryMutation,
 }: FilesWidgetProps): ReactNode {
   const t = useTranslate();
   const tGit = useFilesWidgetTranslate();
@@ -649,6 +635,12 @@ export function FilesWidget({
   // still-mounted tree, so the row that opened them keeps existing; remember it and put focus back
   // there on close (WCAG 2.4.3). `deleteDialogRef` / `menuRef` scope the focus trap and roving.
   const deleteDialogRef = useRef<HTMLDivElement | null>(null);
+  // GEN-UI-FOCUS-002 — containment comes from the shared seam rather than a local copy of the wrap.
+  // The dialog disables BOTH of its buttons while the delete is in flight, which drops focus to
+  // <body>; a React onKeyDown on the dialog can no longer see the next Tab from there, so the old
+  // per-dialog handler let focus escape exactly while the destructive action ran. The shared hook
+  // listens on the document and re-enters the dialog instead (Issue #2617).
+  useDialogTabTrap(deleteDialogRef);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const confirmDeleteReturnFocusRef = useRef<HTMLElement | null>(null);
   const menuReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -656,9 +648,21 @@ export function FilesWidget({
   const [draggedPath, setDraggedPath] = useState<string | null>(null);
   const onFilesMutatedRef = useRef(onFilesMutated);
   onFilesMutatedRef.current = onFilesMutated;
+  // Read through a ref for the same reason as `onFilesMutated`: the mutation callbacks below would
+  // otherwise take a new identity whenever the host's dirty state changes.
+  const onBeforeEntryMutationRef = useRef(onBeforeEntryMutation);
+  onBeforeEntryMutationRef.current = onBeforeEntryMutation;
 
   const invalidateGitStatus = useCallback((): void => {
     setGitStatusRevision((revision) => revision + 1);
+  }, []);
+
+  // Ask the host whether `path` may be renamed, moved, or deleted. `true` when no host is attached:
+  // absence of an owner of open buffers is not a veto. A host that prompts resolves only after the
+  // user decides, so the caller must hold its busy flag across the await.
+  const mayMutateEntry = useCallback(async (path: string): Promise<boolean> => {
+    const consult = onBeforeEntryMutationRef.current;
+    return consult === undefined ? true : await consult(path);
   }, []);
 
   const clearTreeTooltipTimer = useCallback((): void => {
@@ -1004,41 +1008,51 @@ export function FilesWidget({
       setOpError(invalid);
       return;
     }
+    const commitRename = async (pending: { path: string; name: string }): Promise<void> => {
+      // Vetoed while the target holds unsaved changes: leave the inline editor open with the typed
+      // name so nothing the user entered is lost, and send no request.
+      if (!(await mayMutateEntry(pending.path))) return;
+      const parent = entryParent(pending.path);
+      const result = await renameFilesEntry({
+        root: mutationRoot,
+        path: pending.path,
+        newPath: joinRelative(parent, name),
+      });
+      setPendingEntry(null);
+      setEntryDraft("");
+      if (selectedPath === pending.path) setSelectedPath(result.path);
+      await loadDirectory(parent ?? "");
+      invalidateGitStatus();
+      onFilesMutatedRef.current?.({ op: "rename", mutation: result });
+    };
+    // Derived from the owning union rather than restated: a literal copy drifted from
+    // PendingEntry's "new-folder" and broke the keiko-ui typecheck.
+    const commitCreate = async (
+      pending: Exclude<PendingEntry, { readonly kind: "rename" }>,
+    ): Promise<void> => {
+      const result = await createFilesEntry({
+        root: mutationRoot,
+        path: joinRelative(pending.parentPath, name),
+        kind: pending.kind === "new-file" ? "file" : "directory",
+      });
+      setPendingEntry(null);
+      setEntryDraft("");
+      await loadDirectory(pending.parentPath ?? "");
+      invalidateGitStatus();
+      if (result.kind === "directory") {
+        setExpanded((current) => new Set(current).add(result.path));
+      } else if (onOpenFile !== undefined) {
+        // Open the freshly created (empty) file so the user can start typing immediately.
+        activeFileChangeRef.current?.(result.path, mutationRoot);
+        onOpenFile(mutationRoot, result.path);
+      }
+      onFilesMutatedRef.current?.({ op: "create", mutation: result });
+    };
     setOpBusy(true);
     setOpError(null);
     try {
-      if (pendingEntry.kind === "rename") {
-        const parent = entryParent(pendingEntry.path);
-        const result = await renameFilesEntry({
-          root: mutationRoot,
-          path: pendingEntry.path,
-          newPath: joinRelative(parent, name),
-        });
-        setPendingEntry(null);
-        setEntryDraft("");
-        if (selectedPath === pendingEntry.path) setSelectedPath(result.path);
-        await loadDirectory(parent ?? "");
-        invalidateGitStatus();
-        onFilesMutatedRef.current?.({ op: "rename", mutation: result });
-      } else {
-        const result = await createFilesEntry({
-          root: mutationRoot,
-          path: joinRelative(pendingEntry.parentPath, name),
-          kind: pendingEntry.kind === "new-file" ? "file" : "directory",
-        });
-        setPendingEntry(null);
-        setEntryDraft("");
-        await loadDirectory(pendingEntry.parentPath ?? "");
-        invalidateGitStatus();
-        if (result.kind === "directory") {
-          setExpanded((current) => new Set(current).add(result.path));
-        } else if (onOpenFile !== undefined) {
-          // Open the freshly created (empty) file so the user can start typing immediately.
-          activeFileChangeRef.current?.(result.path, mutationRoot);
-          onOpenFile(mutationRoot, result.path);
-        }
-        onFilesMutatedRef.current?.({ op: "create", mutation: result });
-      }
+      if (pendingEntry.kind === "rename") await commitRename(pendingEntry);
+      else await commitCreate(pendingEntry);
     } catch (error: unknown) {
       setOpError(errorMessage(error, t));
     } finally {
@@ -1049,6 +1063,7 @@ export function FilesWidget({
     entryDraft,
     invalidateGitStatus,
     loadDirectory,
+    mayMutateEntry,
     mutationRoot,
     onOpenFile,
     opBusy,
@@ -1063,6 +1078,13 @@ export function FilesWidget({
       setOpBusy(true);
       setOpError(null);
       try {
+        // Vetoed while the target (or, for a folder, anything inside it) holds unsaved changes: drop
+        // the confirmation too, so declining the unsaved-changes prompt leaves no destructive modal
+        // behind and focus returns to the originating tree row.
+        if (!(await mayMutateEntry(entry.path))) {
+          setConfirmDelete(null);
+          return;
+        }
         const result = await deleteFilesEntry({ root: mutationRoot, path: entry.path });
         setConfirmDelete(null);
         if (selectedPath === entry.path) setSelectedPath(null);
@@ -1075,7 +1097,7 @@ export function FilesWidget({
         setOpBusy(false);
       }
     },
-    [invalidateGitStatus, loadDirectory, mutationRoot, opBusy, selectedPath, t],
+    [invalidateGitStatus, loadDirectory, mayMutateEntry, mutationRoot, opBusy, selectedPath, t],
   );
 
   const duplicateEntry = useCallback(
@@ -1118,6 +1140,8 @@ export function FilesWidget({
       setOpBusy(true);
       setOpError(null);
       try {
+        // A move is a rename, so it orphans an unsaved buffer exactly the same way: ask first.
+        if (!(await mayMutateEntry(sourcePath))) return;
         const result = await renameFilesEntry({ root: mutationRoot, path: sourcePath, newPath });
         await loadDirectory(entryParent(sourcePath) ?? "");
         await loadDirectory(targetDir ?? "");
@@ -1129,7 +1153,7 @@ export function FilesWidget({
         setOpBusy(false);
       }
     },
-    [invalidateGitStatus, loadDirectory, mutationRoot, opBusy, t],
+    [invalidateGitStatus, loadDirectory, mayMutateEntry, mutationRoot, opBusy, t],
   );
 
   const openContextMenu = useCallback(
@@ -1189,8 +1213,8 @@ export function FilesWidget({
   }, [menu, confirmDelete]);
 
   // GEN-UI-FOCUS-002 — focus the delete dialog on open (the Delete button) and restore focus to
-  // the originating tree row on close (WCAG 2.4.3). The Tab trap and Escape live on the dialog's
-  // onKeyDown handler below; here we only manage entering/leaving the dialog.
+  // the originating tree row on close (WCAG 2.4.3). Tab containment comes from useDialogTabTrap
+  // above; here we only manage entering/leaving the dialog.
   useEffect(() => {
     if (confirmDelete === null) {
       const opener = confirmDeleteReturnFocusRef.current;
@@ -1205,6 +1229,23 @@ export function FilesWidget({
     const primary = dialog?.querySelector<HTMLButtonElement>("button.ed-reload");
     (primary ?? dialog?.querySelector<HTMLButtonElement>("button"))?.focus({ preventScroll: true });
   }, [confirmDelete]);
+
+  // WCAG 2.1.2 — Escape cancels the destructive confirm. A document listener rather than a JSX
+  // onKeyDown for the same reason the Tab trap moved: while the delete is in flight both buttons are
+  // disabled and focus sits on <body>, where no handler bound to the dialog subtree can ever run.
+  useEffect(() => {
+    if (confirmDelete === null) return;
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== "Escape" || opBusy) return;
+      event.preventDefault();
+      setConfirmDelete(null);
+      setOpError(null);
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [confirmDelete, opBusy]);
 
   const goUp = useCallback((): void => {
     if (currentDirectoryPath !== null) {
@@ -2134,9 +2175,9 @@ export function FilesWidget({
       ) : null}
       {confirmDelete !== null ? (
         <div className="ed-dialog-backdrop" role="presentation">
-          {/* GEN-UI-FOCUS-002 — Escape cancels; Tab/Shift+Tab stay trapped inside the dialog
-              (WCAG 2.1.2 — jsdom does not enforce inert, so the wrap is explicit). */}
-          {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- WCAG 2.1.2 modal focus trap + Escape */}
+          {/* GEN-UI-FOCUS-002 — Escape cancels and Tab/Shift+Tab stay inside the dialog (WCAG
+              2.1.2). Both live in document-level effects above, not on this element, so they still
+              work while every control is disabled and focus has dropped to <body>. */}
           <div
             ref={deleteDialogRef}
             className="ed-dirty-dialog"
@@ -2145,17 +2186,6 @@ export function FilesWidget({
             aria-labelledby="files-delete-title"
             aria-describedby="files-delete-body"
             tabIndex={-1}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.preventDefault();
-                if (!opBusy) {
-                  setConfirmDelete(null);
-                  setOpError(null);
-                }
-                return;
-              }
-              trapDialogTab(event.currentTarget, event);
-            }}
           >
             <h2 id="files-delete-title">
               {confirmDelete.kind === "directory"

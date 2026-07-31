@@ -573,10 +573,37 @@ describe("LanguageRenameChangeset", () => {
       totalFileCount: 2,
       returnedEditCount: 2,
       totalEditCount: 2,
+      unreadableFileCount: 0,
     };
 
     expect(changeset.files).toHaveLength(2);
     expect(changeset.files[0]?.expectedContentHash).toHaveLength(64);
+  });
+
+  // The dropped-reference count is a distinct incompleteness signal: a file counted in
+  // `totalFileCount` whose content could not be read carries no edits, so a client that only compares
+  // returned/total counts cannot tell why the rename is partial.
+  it("reports references dropped because their content could not be read", () => {
+    const changeset: LanguageRenameChangeset = {
+      schemaVersion: LANGUAGE_RENAME_CHANGESET_SCHEMA_VERSION,
+      files: [
+        {
+          path: "src/a.ts",
+          edits: [{ range: range(), newText: "renamedSymbol" }],
+          expectedContentHash: "a".repeat(64),
+        },
+      ],
+      truncated: true,
+      filesTruncated: true,
+      returnedFileCount: 1,
+      totalFileCount: 2,
+      returnedEditCount: 1,
+      totalEditCount: 2,
+      unreadableFileCount: 1,
+    };
+
+    expect(changeset.unreadableFileCount).toBe(1);
+    expect(changeset.returnedFileCount).toBeLessThan(changeset.totalFileCount);
   });
 });
 

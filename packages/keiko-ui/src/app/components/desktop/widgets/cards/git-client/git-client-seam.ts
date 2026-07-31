@@ -21,6 +21,7 @@ import {
   fetchGitDeliverySyncPreview,
   fetchGitDeliveryCommitExecute,
   fetchGitDeliveryCommitPreview,
+  fetchGitDeliveryMergeApprove,
   fetchGitDeliveryMergeExecute,
   fetchGitDeliveryMergePreview,
   fetchGitDeliveryLocalBranchCreate,
@@ -81,6 +82,7 @@ export interface GitClientSeam {
   readonly prPreview: typeof fetchGitDeliveryPrPreview;
   readonly prExecute: typeof fetchGitDeliveryPrExecute;
   readonly mergePreview: typeof fetchGitDeliveryMergePreview;
+  readonly mergeApprove: typeof fetchGitDeliveryMergeApprove;
   readonly mergeExecute: typeof fetchGitDeliveryMergeExecute;
 }
 
@@ -109,6 +111,7 @@ export const DEFAULT_GIT_CLIENT: GitClientSeam = {
   prPreview: fetchGitDeliveryPrPreview,
   prExecute: fetchGitDeliveryPrExecute,
   mergePreview: fetchGitDeliveryMergePreview,
+  mergeApprove: fetchGitDeliveryMergeApprove,
   mergeExecute: fetchGitDeliveryMergeExecute,
 };
 

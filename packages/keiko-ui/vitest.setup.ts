@@ -1,12 +1,51 @@
 import "@testing-library/jest-dom/vitest";
-import { afterEach, expect } from "vitest";
+import { afterEach, beforeEach, expect } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { toHaveNoViolations } from "jest-axe";
+import { setClientDiagnosticWriter } from "./src/lib/client-diagnostics";
+import { resetLoadedMessageCatalogs } from "./src/lib/i18n";
+import { writeToBrowserConsole } from "./src/lib/install-client-diagnostics";
 
 expect.extend(toHaveNoViolations);
 
+// Give every test the transport the application installs, rather than the sink's pre-transport
+// buffering default. Tests that assert a diagnostic reached the console are then exercising the
+// real delivery path end to end instead of a stand-in, and a suite that swaps the writer for its
+// own spy cannot leave the next one buffering into the void.
+beforeEach(() => {
+  setClientDiagnosticWriter(writeToBrowserConsole);
+  // The lazily loaded locale catalogs are module state that no DOM or storage teardown can reach
+  // (#2871). `I18nProvider` reads them synchronously on its first render — `activeLocale =
+  // ready && catalogReady ? locale : DEFAULT_LOCALE` — so whether a `de`-seeded provider paints
+  // German immediately or paints the English baseline and flips later depended on whether some
+  // EARLIER test in the same worker happened to resolve the German catalog. That made catalog
+  // warmth an invisible cross-test input: the same test passed or failed on execution order.
+  // Resetting here starts every test from the product's real first-load state (English bundled,
+  // every other locale lazy), so a test that needs German must establish that precondition itself
+  // — by awaiting `loadLocaleMessages("de")` or by awaiting the rendered German copy.
+  resetLoadedMessageCatalogs();
+});
+
+// The persisted UI locale is process-global state, so one test choosing a language decided what the
+// NEXT test rendered. `I18nProvider` seeds itself from `localStorage["keiko.locale"]` and writes the
+// active locale back on mount, and `cleanup()` unmounts React trees without touching either that key
+// or the document locale attributes — so a suite asserting English copy passed or failed on whatever
+// a neighbouring test happened to leave behind. Resetting it here makes the precondition the same
+// for every test instead of a property of execution order (AGENTS.md §9: no shared mutable global
+// state). Ordered after `cleanup()` so an unmounting provider cannot write the key back afterwards.
 afterEach(() => {
   cleanup();
+  // A precondition check, not a swallowed failure: a suite may run without a window or replace
+  // storage wholesale, and there is nothing to reset in that case. If storage IS present and the
+  // removal throws, the teardown fails loudly — a broken Storage is a real defect and hiding it
+  // behind an empty catch is what turns one bad suite into an unexplained cascade elsewhere.
+  if (typeof window !== "undefined" && typeof window.localStorage?.removeItem === "function") {
+    window.localStorage.removeItem("keiko.locale");
+  }
+  if (typeof document !== "undefined") {
+    document.documentElement.removeAttribute("lang");
+    delete document.documentElement.dataset.locale;
+  }
 });
 
 // jsdom does not implement HTMLElement.prototype.scrollIntoView — stub it so

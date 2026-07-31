@@ -1,11 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_LOCALE,
   I18N_STORAGE_KEY,
   I18nProvider,
   loadLocaleMessages,
+  resetLoadedMessageCatalogs,
   resolveInitialLocale,
   resolveLocale,
   translate,
@@ -51,6 +52,15 @@ function SetLocaleOnlyProbe(props: { readonly onRender: () => void }): ReactNode
     </button>
   );
 }
+
+// Loaded catalogs live in i18n module scope, so any test that awaits the German catalog leaves it
+// resolved for whatever runs next — and the lazy-transition test below asserts the synchronous state
+// that only exists while German is still missing. Establish the precondition in `beforeEach` rather
+// than in teardown: a test then depends on its own setup instead of on its predecessor's cleanup
+// having run, which is what makes the assertion hold under any execution order.
+beforeEach(() => {
+  resetLoadedMessageCatalogs();
+});
 
 afterEach(() => {
   window.localStorage.clear();
@@ -178,6 +188,13 @@ describe("I18nProvider", () => {
   });
 
   it("uses the stored locale, updates document metadata, and persists changes", async () => {
+    // A precondition, not decoration. This test is about resolution, document metadata and
+    // persistence with a catalog that is already available, so it has to say so: `I18nProvider`
+    // renders the English baseline until the requested catalog resolves, and the synchronous "de"
+    // assertions below describe only the warm case. The cold case belongs to the lazy-transition
+    // test above. Before the module reset seam existed this line was unnecessary purely by
+    // accident — some earlier test had usually warmed the catalog already.
+    await loadLocaleMessages("de");
     window.localStorage.setItem(I18N_STORAGE_KEY, "de-DE");
 
     render(
@@ -204,10 +221,21 @@ describe("I18nProvider", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "German" }));
 
+    // These three were inverted from "de" to the English baseline. The old expectation was not the
+    // product's behaviour on a cold catalog at all — it passed only when some earlier test had
+    // already resolved German into module scope, which the reset seam now prevents. With a cold
+    // catalog the provider deliberately splits the two halves this test is named after: the
+    // preference is persisted at once, while the rendered locale and the document language stay on
+    // the English baseline until the catalog arrives. Asserting that split — and then asserting the
+    // flip below — is strictly more than the old version checked, which only ever saw one state.
+    expect(screen.getByTestId("locale")).toHaveTextContent("en");
+    expect(document.documentElement.lang).toBe("en");
+    expect(window.localStorage.getItem(I18N_STORAGE_KEY)).toBe("de");
+
+    await waitFor(() => expect(screen.getByTestId("label")).toHaveTextContent("Einstellungen"));
     expect(screen.getByTestId("locale")).toHaveTextContent("de");
     expect(document.documentElement.lang).toBe("de");
     expect(window.localStorage.getItem(I18N_STORAGE_KEY)).toBe("de");
-    await waitFor(() => expect(screen.getByTestId("label")).toHaveTextContent("Einstellungen"));
   });
 
   it("keeps locale setter consumers stable when only translated text changes", async () => {

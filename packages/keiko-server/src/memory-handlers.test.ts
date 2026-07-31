@@ -5,11 +5,18 @@ import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import {
+  createAuditRedactor,
+  createInMemoryEvidenceStore,
+  type EvidenceStore,
+} from "@oscharko-dev/keiko-evidence";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { runConsolidation } from "@oscharko-dev/keiko-memory-consolidation";
+import { MEMORY_STATUS_TRANSITIONS } from "@oscharko-dev/keiko-contracts";
 import type {
   MemoryAuditEvent,
   MemoryConversationId,
+  MemoryEdgeId,
   MemoryId,
   MemoryRecord,
   MemoryReviewerId,
@@ -23,6 +30,7 @@ import type {
 } from "@oscharko-dev/keiko-model-gateway";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import {
+  handleArchiveMemory,
   handleEditMemory,
   handleListMemories,
   handleMemoryReviewQueue,
@@ -39,6 +47,10 @@ import { createInMemoryUiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { buildMemoryCaptureDecisionAuditEvent } from "./memory-capture-projection.js";
+
+// Real security-layer redactor: `recordMemoryAudit` requires one by name, so a fixture must not
+// reinstate the identity default that made the evidence-redaction boundary fail open.
+const TEST_AUDIT_REDACT: (input: string) => string = createAuditRedactor({}, {});
 
 function makeReq(payload: unknown): IncomingMessage {
   return Readable.from([Buffer.from(JSON.stringify(payload))]) as unknown as IncomingMessage;
@@ -287,7 +299,7 @@ describe("memory handlers", () => {
       [foreign, 300],
     ] as const) {
       recordMemoryAudit(
-        { evidenceStore },
+        { evidenceStore, redactString: TEST_AUDIT_REDACT },
         buildMemoryCaptureDecisionAuditEvent({
           eventId: `capture-${String(record.id)}`,
           occurredAt,
@@ -396,7 +408,11 @@ describe("memory handlers", () => {
     expect(memories.map((memory) => memory.id)).toEqual(["expired-1", "stale-accepted-1"]);
   });
 
-  it("allows conflicted memories to be dismissed through the reject route", async () => {
+  // MEMORY_STATUS_TRANSITIONS forbids `conflicted -> rejected`; `rejected` is reachable only from
+  // `proposed`. The reject route was the ONE governance mutation that wrote the status without
+  // consulting checkStatusTransition, so it produced a record in a state the contract says cannot
+  // exist. The legal way to retire a conflicted record is `archived` (see the next test).
+  it("refuses the contract-forbidden conflicted -> rejected transition", async () => {
     const vault = makeVault();
     vault.insertMemory(makeMemory("conflict-2", "dismiss me", { status: "conflicted" }));
 
@@ -409,12 +425,66 @@ describe("memory handlers", () => {
       makeDeps({ memoryVault: vault }),
     );
 
-    expect(result.status).toBe(200);
-    const body = asJson(result);
-    const memory = body.memory as MemoryRecord;
-    expect(memory.status).toBe("rejected");
-    expect(memory.staleReason).toBe("dismissed from queue");
+    expect(result.status).toBe(409);
+    expect(asJson(result).error).toMatchObject({ code: "CONFLICT" });
+    expect(vault.getMemory("conflict-2" as MemoryId)?.status).toBe("conflicted");
   });
+
+  it("archives a conflicted memory through the transition the contract does allow", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("conflict-3", "retire me", { status: "conflicted" }));
+
+    const result = await handleArchiveMemory(
+      makeCtx(
+        "/api/memory/conflict-3/archive",
+        { reason: "archived conflicting memory from review queue" },
+        { id: "conflict-3" },
+      ),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(200);
+    expect((asJson(result).memory as MemoryRecord).status).toBe("archived");
+  });
+
+  it("still rejects a proposed memory, the one legal source state", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("proposal-9", "reject me", { status: "proposed" }));
+
+    const result = await handleRejectMemoryProposal(
+      makeCtx(
+        "/api/memory/proposals/proposal-9/reject",
+        { reason: "rejected from review queue" },
+        { id: "proposal-9" },
+      ),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(200);
+    const memory = asJson(result).memory as MemoryRecord;
+    expect(memory.status).toBe("rejected");
+    expect(memory.staleReason).toBe("rejected from review queue");
+  });
+
+  it.each(["accepted", "archived", "superseded", "expired"] as const)(
+    "refuses to reject a %s memory (no contract edge to rejected)",
+    async (status) => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory(`from-${status}`, "not rejectable", { status }));
+
+      const result = await handleRejectMemoryProposal(
+        makeCtx(
+          `/api/memory/proposals/from-${status}/reject`,
+          { reason: "nope" },
+          { id: `from-${status}` },
+        ),
+        makeDeps({ memoryVault: vault }),
+      );
+
+      expect(result.status).toBe(409);
+      expect(vault.getMemory(`from-${status}` as MemoryId)?.status).toBe(status);
+    },
+  );
 
   it("sanitises GovernanceError responses so the memory id is not leaked", () => {
     const vault = makeVault();
@@ -993,6 +1063,33 @@ describe("memory handlers", () => {
     );
   });
 
+  // Pins what `persistConflictTransitions` documents: a conflict loser lands in `conflicted`, a
+  // state MEMORY_STATUS_TRANSITIONS lets return to `accepted`, so its belief window must stay OPEN.
+  // Only monotonic supersession (the correction-acceptance path) closes a window.
+  it("leaves a conflict loser rehabilitable with its belief window open", async () => {
+    const vault = makeVault();
+    const evidenceStore = createInMemoryEvidenceStore();
+    vault.insertMemory(makeMemory("validity-winner", "formatter is biome"));
+    vault.insertMemory(makeMemory("validity-loser", "formatter is prettier"));
+    const before = vault.getMemory(memoryId("validity-loser"))?.validity;
+
+    const result = await handleResolveMemoryConflict(
+      makeCtx("/api/memory/conflicts/resolve", {
+        winner: "validity-winner",
+        losers: ["validity-loser"],
+        reason: "reviewed and winner selected",
+      }),
+      makeDeps({ memoryVault: vault, evidenceStore }),
+    );
+
+    expect(result.status).toBe(200);
+    const loser = vault.getMemory(memoryId("validity-loser"));
+    expect(loser?.status).toBe("conflicted");
+    expect(loser?.validity).toEqual(before);
+    expect(loser?.validity).not.toHaveProperty("validUntil");
+    expect(MEMORY_STATUS_TRANSITIONS.conflicted).toContain("accepted");
+  });
+
   it("rejects conflict resolution for duplicate ids before mutating state", async () => {
     const vault = makeVault();
     vault.insertMemory(makeMemory("conflict-dup-winner", "formatter is biome"));
@@ -1069,6 +1166,65 @@ describe("memory handlers", () => {
     expect(result.status).toBe(400);
     expect(vault.getMemory(memoryId("conflict-real-loser"))?.status).toBe("accepted");
     expect(vault.listOutgoingEdges(memoryId("conflict-real-loser"))).toEqual([]);
+  });
+
+  // Structural pin for MemoryConsolidation.tsx's withheld merge control: the winner/losers are
+  // taken VERBATIM from the consolidation engine's own review item (no hand-written pair), so this
+  // stays true if the engine's clustering or winner selection moves. A duplicate cluster is by
+  // construction above the dedup overlap threshold that disqualifies `value-mismatch`, so the
+  // resolution route can never accept what a duplicate-derived merge item proposes.
+  it("refuses the merge action the consolidation engine emits for a duplicate cluster", async () => {
+    const vault = makeVault();
+    const capturedAt = Date.now();
+    const ids = ["dup-a", "dup-b", "dup-c"];
+    ids.forEach((id, index) => {
+      const at = capturedAt + index * 1_000;
+      vault.insertMemory(
+        makeMemory(id, "The user prefers tabs over spaces.", {
+          createdAt: at,
+          updatedAt: at,
+          validity: { validFrom: at },
+        }),
+      );
+    });
+    const records = ids.flatMap((id) => {
+      const record = vault.getMemory(memoryId(id));
+      return record === undefined ? [] : [record];
+    });
+
+    let reviewSeq = 0;
+    let edgeSeq = 0;
+    const consolidated = runConsolidation(records, {
+      nowMs: Date.now(),
+      newEdgeId: () => `edge-${String((edgeSeq += 1))}` as MemoryEdgeId,
+      newReviewItemId: () => `rv-${String((reviewSeq += 1))}`,
+      includeStatuses: ["accepted", "proposed", "conflicted"],
+    });
+    const mergeAction = consolidated.reviewItems
+      .map((item) => item.proposedAction)
+      .find((action) => action?.kind === "merge");
+    if (mergeAction === undefined) {
+      throw new TypeError("consolidation no longer emits a merge action for a duplicate cluster");
+    }
+
+    const result = await handleResolveMemoryConflict(
+      makeCtx("/api/memory/conflicts/resolve", {
+        winner: mergeAction.winner,
+        losers: mergeAction.losers,
+        reason: "resolved from consolidation review item",
+      }),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(400);
+    // The refusal is the conflict precondition itself, not an incidental status-transition guard.
+    expect(asJson(result)).toMatchObject({
+      error: { message: "Governance constraint violated (invalid-resolution)." },
+    });
+    for (const loser of mergeAction.losers) {
+      expect(vault.getMemory(loser)?.status).toBe("accepted");
+      expect(vault.listOutgoingEdges(loser)).toEqual([]);
+    }
   });
 });
 

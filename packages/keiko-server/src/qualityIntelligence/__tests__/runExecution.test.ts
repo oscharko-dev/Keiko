@@ -24,7 +24,6 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import { executeQiRun, QiGenerationError, QiIngestionError } from "../runExecution.js";
-import { QiJudgeError } from "../judgePort.js";
 import type { CapsuleResolver } from "../capsuleAdapter.js";
 import type { ExecuteQiRunInput, QiRunAccepted } from "../runExecution.js";
 import type {
@@ -1217,30 +1216,31 @@ describe("executeQiRun — N+1 coverage propagation", () => {
   });
 });
 
-// ─── TEST 4 — GAP-T2: QiJudgeError → QiGenerationError conversion (~:217) ────
+// ─── TEST 4 — GAP-T2: an unbuildable judge port is CLASSIFIED, never untyped ─
 //
-// buildJudgePortForModelRun (~:207) wraps createQiJudgePort in a try/catch.  When
-// createQiJudgePort throws QiJudgeError (e.g. QI_JUDGE_MODEL_UNAVAILABLE because
-// modelPortFactory returns undefined for the judge model), the catch block converts it
-// to QiGenerationError with the SAME error code.  Without that conversion the raw
-// QiJudgeError propagates out of executeQiRun and callers (route handlers) would see an
-// untyped, uncoded error — breaking structured error handling.
+// GAP-T2 was written to pin one invariant: a `QiJudgeError` from `createQiJudgePort` (e.g.
+// QI_JUDGE_MODEL_UNAVAILABLE because modelPortFactory returns undefined for the judge model) must
+// never escape `executeQiRun` as an untyped, uncoded error — structured error handling in the route
+// layer depends on it. It asserted that invariant through the only shape the code then had: a
+// thrown QiGenerationError.
 //
-// Setup: configure deps with a modelPortFactory that returns a real ModelPort for the
-// GENERATION model (so ingestion + generation succeed), but returns undefined for the
-// JUDGE model (so createQiJudgePort throws QI_JUDGE_MODEL_UNAVAILABLE).
-// Because resolveModelForQiCapability for qi:judge-logic requires structuredOutput=true
-// we give the generation model structuredOutput=false (chat-only) so the judge selection
-// picks the SECOND model that has structuredOutput=true but gets undefined from the factory.
+// That shape was itself the 0.3.0 audit defect. `runJudgeStage` in keiko-workflows documents that
+// the judge AUGMENTS generation and "must never fail an otherwise successful run", yet converting
+// the judge fault into a GENERATION error destroyed the whole run over an optional stage AND
+// mislabelled which stage failed. The pin is therefore RELOCATED to the seam that now owns the
+// outcome and STRENGTHENED: the judge failure must still be coded and typed (never swallowed,
+// never untyped), and additionally must not terminate the run. See judgeAugmentsRun.test.ts for
+// the full contract; this test keeps the classification assertion at its original call site.
 //
-// RED-verify: mutate the catch block at :219 from
-//   `throw new QiGenerationError(error.code, error.message)`
-// to
-//   `throw error`
-// → executeQiRun rejects with QiJudgeError instead of QiGenerationError
-// → `expect(err).toBeInstanceOf(QiGenerationError)` fails. Restore → green.
-describe("executeQiRun — QiJudgeError from createQiJudgePort converts to QiGenerationError (GAP-T2)", () => {
-  it("wraps QI_JUDGE_MODEL_UNAVAILABLE as QiGenerationError when modelPortFactory returns undefined for the judge model", async () => {
+// Setup: deps whose modelPortFactory returns a real ModelPort for the GENERATION model (so
+// ingestion + generation succeed) but undefined for the JUDGE model. Because qi:judge-logic
+// requires structuredOutput=true, the generation model is chat-only (structuredOutput=false) so
+// judge selection picks the SECOND model, for which the factory yields undefined.
+//
+// RED-verify: make `resolveJudgeForModelRun` swallow the failure (return `{}` with no
+// stageFailureReason) → the recorded judge stage failure disappears and this test fails.
+describe("executeQiRun — an unbuildable judge port is classified, not collapsed (GAP-T2)", () => {
+  it("records QI_JUDGE_MODEL_UNAVAILABLE as a judge stage failure and still completes the run", async () => {
     // Generation model: chat-only (structuredOutput=false, workflowEligible=true).
     // Judge model:      structured-output capable (structuredOutput=true, workflowEligible=true).
     // modelPortFactory returns a real port ONLY for the generation model; returns undefined for
@@ -1302,23 +1302,32 @@ describe("executeQiRun — QiJudgeError from createQiJudgePort converts to QiGen
     };
 
     const controller = new AbortController();
-    try {
-      await executeQiRun({
-        request: { sources: [VALID_SOURCE], modelId: GEN_MODEL },
-        runId: "run-gap-t2-judge-unavail",
-        deps: gapT2Deps,
-        registeredAt: "2026-06-01T10:00:00.000Z",
-        signal: controller.signal,
-        onEvent: vi.fn(),
-        onAccepted: vi.fn(),
-      });
-      expect.fail("expected executeQiRun to throw");
-    } catch (err) {
-      // Must be QiGenerationError (the converted type), NOT the raw QiJudgeError.
-      expect(err).toBeInstanceOf(QiGenerationError);
-      expect(err).not.toBeInstanceOf(QiJudgeError);
-      expect((err as QiGenerationError).code).toBe("QI_JUDGE_MODEL_UNAVAILABLE");
-    }
+    const onAccepted = vi.fn<(accepted: QiRunAccepted) => void>();
+    const runId = "run-gap-t2-judge-unavail";
+    const summary = await executeQiRun({
+      request: { sources: [VALID_SOURCE], modelId: GEN_MODEL },
+      runId,
+      deps: gapT2Deps,
+      registeredAt: "2026-06-01T10:00:00.000Z",
+      signal: controller.signal,
+      onEvent: vi.fn(),
+      onAccepted,
+    });
+
+    // The judge is optional: its absence degrades the judgement, never the run's result.
+    expect(summary.status).toBe("succeeded");
+    // …and the reason is CLASSIFIED, carrying the original judge code — not swallowed, not untyped,
+    // and not relabelled as a generation failure.
+    const judgeFailures = (onAccepted.mock.calls[0]?.[0]?.modelRouting?.stageFailures ?? []).filter(
+      (failure) => failure.stage === "judge",
+    );
+    expect(judgeFailures).toHaveLength(1);
+    expect(judgeFailures[0]?.reasonSummary).toContain("QI_JUDGE_MODEL_UNAVAILABLE");
+    // The same classification is durable on the persisted manifest, not only on the wire.
+    const persisted = loadQualityIntelligenceRun(runId, { evidenceDir });
+    expect((persisted?.modelRouting?.stageFailures ?? []).some((f) => f.stage === "judge")).toBe(
+      true,
+    );
   });
 });
 

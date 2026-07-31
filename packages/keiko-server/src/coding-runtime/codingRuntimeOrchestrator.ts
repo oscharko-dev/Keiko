@@ -10,6 +10,7 @@ import {
   parseCodingWorkbenchRuntimeTakeoverRequest,
   type CodingWorkbenchRuntimeApprovalDecisionRequest,
   type CodingWorkbenchRuntimeEvent,
+  type CodingWorkbenchRuntimePendingApprovalReview,
   type CodingWorkbenchRuntimePendingPermission,
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimePendingResearch,
@@ -53,6 +54,20 @@ interface ApprovalChallenge {
   readonly permission: CodingWorkbenchRuntimePendingPermission;
   used: boolean;
 }
+
+/**
+ * Server-side ceiling on how long one approval challenge may live.
+ *
+ * The lifetime arrives on the runtime child's `permission-requested` event as
+ * `permissionRequest.expiresAt`. The child is on the untrusted side of the boundary — it is the
+ * process the approval is being asked ABOUT — so it must not choose its own security lifetime. This
+ * ceiling is the trusted counterpart of the 5-minute value the generated child-side tool source
+ * happens to send today: a child that asks for longer (or a tampered one that asks for a year) is
+ * clamped here, before the instant becomes the challenge expiry, the operator-visible deadline on
+ * the approval card, and the TTL of the minted approval authority. All three derive from this one
+ * clamped instant, so the card can never display a deadline the server does not enforce.
+ */
+export const MAX_APPROVAL_CHALLENGE_TTL_MS = 5 * 60 * 1_000;
 
 const DIGEST = (value: string): string => createHash("sha256").update(value).digest("hex");
 const terminal = new Set<CodingWorkbenchRuntimeStateName>([
@@ -129,12 +144,37 @@ export class CodingRuntimeOrchestrator {
         return this.fail("invalid-intent");
       if (this.activeRunId !== undefined && this.activeRunId !== runId)
         return this.fail("active-run-conflict");
-      this.deps.snapshots.releaseRecoveryForRetry(runId, this.now().toISOString());
-      this.deps.safeActivityProjection?.purge(runId, "stop");
-      this.pruneSettled();
       this.activeRunId = undefined;
-      return this.startFresh(input, runId);
+      try {
+        return await this.startFresh(input, runId);
+      } finally {
+        this.restoreUnsettledRecoverySlot(runId);
+      }
     });
+  }
+
+  /**
+   * A retry settles its predecessor's recovery row only once the fresh run has actually been
+   * admitted to the ledger (`settlePredecessorRecovery`). When the start never gets that far — the
+   * authority mint still refuses while the predecessor's process tree is unreaped, or no workspace
+   * is bound — the recovery row is untouched and the orchestrator must keep pointing at it.
+   * Without this the slot would fall back to the unbound idle projection, and every readiness
+   * surface would offer "Ready to start" for a runtime whose every start is rejected.
+   */
+  private restoreUnsettledRecoverySlot(runId: string): void {
+    if (this.activeRunId !== undefined) return;
+    const prior = this.deps.snapshots.get(runId);
+    if (prior?.state !== "recovery-required" || prior.terminalAt !== undefined) return;
+    this.activeRunId = runId;
+  }
+
+  /** Settles the retried predecessor once — and only once — its successor holds the active slot. */
+  private settlePredecessorRecovery(predecessorRunId: string): void {
+    const prior = this.deps.snapshots.get(predecessorRunId);
+    if (prior?.state !== "recovery-required" || prior.terminalAt !== undefined) return;
+    this.deps.snapshots.releaseRecoveryForRetry(predecessorRunId, this.now().toISOString());
+    this.deps.safeActivityProjection?.purge(predecessorRunId, "stop");
+    this.pruneSettled();
   }
   snapshot(): PublicSnapshot {
     return this.activeRunId
@@ -229,6 +269,26 @@ export class CodingRuntimeOrchestrator {
       requestLine: reviewable.requestLine,
       expiresAt: new Date(pending.expiresAtMs).toISOString(),
     };
+  }
+
+  /**
+   * The reviewable changeset facts of the approval the operator is being asked to decide, for the
+   * AUTHENTICATED approval-review channel only (#2802). A human cannot exercise control over a
+   * change they are not shown (ADR-0129 D1), so the path list and the change magnitude reach the
+   * card — but never through the unauthenticated status or SSE projection, which stay content-free
+   * (#2644), and never a byte of the patch.
+   *
+   * Fails closed in every stale shape: a run that is not the current one, a run that is no longer
+   * awaiting a decision, a challenge that was already consumed or has expired, and a review the
+   * manager no longer binds to the live request id.
+   */
+  pendingApprovalReview(runId: string): CodingWorkbenchRuntimePendingApprovalReview | undefined {
+    const current = this.current();
+    if (current?.runId !== runId || current.state !== "awaiting-approval") return undefined;
+    const challenge = this.approvals.get(runId);
+    if (challenge === undefined || challenge.used) return undefined;
+    if (challenge.expiresAt <= this.now().getTime()) return undefined;
+    return this.deps.manager.pendingApprovalReview(runId, challenge.permission.requestId);
   }
 
   /**
@@ -436,11 +496,27 @@ export class CodingRuntimeOrchestrator {
         return this.ingestPermissionRequested(current, event);
       }
       if (event.kind === "task-submitted") return this.ingestTaskSubmitted(current);
-      if (event.kind === "runtime-stopped") return this.transition(current, "cancelled");
+      if (event.kind === "runtime-stopped") return this.ingestRuntimeStopped(current);
       if (event.kind === "failure-redacted")
         return this.transition(current, "failed", "runtime-failed");
       return this.publishOrRecover(current, event.kind, auxiliaryEventFacts(event));
     });
+  }
+
+  /**
+   * The runtime process is gone. `cancelled` is legal only from the states an operator-initiated
+   * stop passes through (`starting`, `stopping`); from every live state the machine rejects it, so
+   * this ingest used to fail closed SILENTLY — no transition, no evidence record, no SSE frame —
+   * and a dead runtime kept presenting as `running` until the separate task-settlement wait gave
+   * up (OPEN_CODE_MAX_TURN_WAIT_MS, 30 minutes). A runtime that exits under a live run terminates
+   * that run, the same terminal projection a non-zero exit already produces through
+   * `failure-redacted`; the exit code itself reaches the operator diagnostic sink, not this
+   * content-free lifecycle projection.
+   */
+  private ingestRuntimeStopped(current: CodingRuntimeSnapshot): CodingRuntimeOrchestratorResult {
+    return isLegalCodingWorkbenchRuntimeTransition(current.state, "cancelled")
+      ? this.transition(current, "cancelled")
+      : this.transition(current, "failed", "runtime-failed");
   }
 
   private ingestPermissionRequested(
@@ -448,13 +524,17 @@ export class CodingRuntimeOrchestrator {
     event: CodingWorkbenchRuntimeEvent,
   ): CodingRuntimeOrchestratorResult {
     if (!event.permissionRequest?.actionKind) return this.fail("invalid-intent");
-    const expiresAt = Date.parse(event.permissionRequest.expiresAt);
-    if (!Number.isFinite(expiresAt) || expiresAt <= this.now().getTime())
-      return this.fail("invalid-intent");
+    const requested = Date.parse(event.permissionRequest.expiresAt);
+    const nowMs = this.now().getTime();
+    if (!Number.isFinite(requested) || requested <= nowMs) return this.fail("invalid-intent");
+    // Clamp the child-declared lifetime to the server ceiling and re-publish the clamped instant on
+    // the permission itself, so the challenge expiry, the operator-visible deadline, and the minted
+    // approval TTL are one value the server owns (MAX_APPROVAL_CHALLENGE_TTL_MS).
+    const expiresAt = Math.min(requested, nowMs + MAX_APPROVAL_CHALLENGE_TTL_MS);
     this.approvals.set(current.runId, {
       revision: current.revision + 1,
       expiresAt,
-      permission: event.permissionRequest,
+      permission: { ...event.permissionRequest, expiresAt: new Date(expiresAt).toISOString() },
       used: false,
     });
     const next = this.transition(current, "awaiting-approval");
@@ -576,6 +656,7 @@ export class CodingRuntimeOrchestrator {
     );
     this.deps.snapshots.create(snapshot);
     this.activeRunId = runId;
+    if (predecessorRunId !== undefined) this.settlePredecessorRecovery(predecessorRunId);
     this.projection.publish(snapshot);
     const started = await this.startManagedRuntime(parsed.value, active, runId, launch);
     if (started !== undefined) return started;

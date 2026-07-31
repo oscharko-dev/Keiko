@@ -23,7 +23,12 @@ import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
-import { handleDeleteChat, handleUpdateChat } from "./store-handlers.js";
+import {
+  DEFAULT_CHAT_LIST_LIMIT as DEFAULT_CHAT_LIST_PAGE,
+  handleDeleteChat,
+  handleUpdateChat,
+} from "./store-handlers.js";
+import { MAX_CHAT_TITLE_LEN } from "./store/chats.js";
 import {
   CHAT_TURN_WAIT_CANCELLED,
   createChatTurnSerializer,
@@ -681,7 +686,10 @@ describe("GET /api/chats", () => {
     expect(body.chats.map((c) => c.title).sort()).toEqual(["Chat A", "Chat B"]);
   });
 
-  it("applies the limit query", async () => {
+  // 0.3.0 release audit — the limited page must be the most recently updated conversations.
+  // The previous expectation (["Chat 0", "Chat 1"]) encoded the defect: past the limit, Chat
+  // History showed the OLDEST page and a conversation the user had just created was unreachable.
+  it("applies the limit query to the most recent chats", async () => {
     store.createProject(projDir);
     for (let i = 0; i < 3; i++) {
       store.createChat(projDir, `Chat ${String(i)}`, "m1");
@@ -690,7 +698,20 @@ describe("GET /api/chats", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { chats: { title: string }[] };
     expect(body.chats).toHaveLength(2);
-    expect(body.chats.map((chat) => chat.title)).toEqual(["Chat 0", "Chat 1"]);
+    expect(body.chats.map((chat) => chat.title)).toEqual(["Chat 2", "Chat 1"]);
+  });
+
+  it("keeps a newly created chat in the default page once the limit is exceeded", async () => {
+    store.createProject(projDir);
+    for (let i = 0; i < DEFAULT_CHAT_LIST_PAGE; i++) {
+      store.createChat(projDir, `Old ${String(i)}`, "m1");
+    }
+    const fresh = store.createChat(projDir, "Just created", "m1");
+    const res = await fetch(url(`/api/chats?projectPath=${encodeURIComponent(projDir)}`));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { chats: { id: string; title: string }[] };
+    expect(body.chats).toHaveLength(DEFAULT_CHAT_LIST_PAGE);
+    expect(body.chats[0]?.id).toBe(fresh.id);
   });
 
   it("returns 400 for an out-of-bounds limit", async () => {
@@ -876,6 +897,35 @@ describe("PATCH /api/chats", () => {
     const body = (await res.json()) as { chat: { title: string; status: string } };
     expect(body.chat.title).toBe("renamed");
     expect(body.chat.status).toBe("closed");
+  });
+
+  // 0.3.0 release audit — POST refused an empty title but PATCH did not, and no path bounded the
+  // length: `title = COALESCE(?, title)` treats "" as a value, so a rename could blank a
+  // conversation out of Chat History or persist a body-cap-sized title.
+  it("rejects an empty title on rename and keeps the stored title", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "keep me", "m1");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ title: "" }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.message).toMatch(/title/i);
+    expect(store.findChatById(c.id)?.title).toBe("keep me");
+  });
+
+  it("rejects an over-long title on rename and keeps the stored title", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "keep me", "m1");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ title: "x".repeat(MAX_CHAT_TITLE_LEN + 1) }),
+    });
+    expect(res.status).toBe(400);
+    expect(store.findChatById(c.id)?.title).toBe("keep me");
   });
 
   it("clears grounded context indexes when a chat is closed", async () => {

@@ -117,6 +117,10 @@ export interface MemoryRecentCapture {
   readonly reason: string;
   readonly memoryId?: MemoryId;
   readonly bodyExcerpt?: string;
+  // The record's status RIGHT NOW, reconciled server-side against the live vault. `outcome` stays
+  // the capture-time audit decision; a capture proposed then is routinely accepted afterwards.
+  // Absent for a record-free rejection and for pre-reconciliation server builds.
+  readonly currentStatus?: MemoryStatus;
 }
 
 export interface MemoryRecentCapturesResponse {

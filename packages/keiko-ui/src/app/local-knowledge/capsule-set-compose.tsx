@@ -5,6 +5,9 @@
 // POST /capsule-sets creates a set that references the members by id (no documents are
 // moved or copied). Incompatible embedding identities across members are rejected
 // server-side and surfaced here as a 400 — the UI cannot pre-validate identity.
+// The refusal lives in `composeCapsules` (keiko-local-knowledge/src/composition.ts,
+// CompositionError code `incompatible-embedding-identity`), which the capsule-set route maps to a
+// 400; this comment described that gate for a release in which it did not exist (0.3.0 audit).
 
 import { useEffect, useId, useRef, useState, type ReactNode, type SubmitEvent } from "react";
 import { createPortal } from "react-dom";

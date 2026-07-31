@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo } from "react";
+import { UNSUPPORTED_DOCUMENT_GUIDANCE_CODES } from "@oscharko-dev/keiko-contracts";
+import type { UnsupportedDocumentGuidanceCode } from "@oscharko-dev/keiko-contracts";
 import { useLocale, type Locale, type MessageValues } from "@/lib/i18n";
 
 const LOCAL_KNOWLEDGE_EN_MESSAGES = {
@@ -90,6 +92,10 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
     "This Knowledge Pod no longer exists. Return to the Local Knowledge overview.",
   "localKnowledge.detail.loadFailed": "Failed to load Knowledge Pod.",
   "localKnowledge.detail.retryLoad": "Retry loading Knowledge Pod detail",
+  "localKnowledge.detail.routeError.title": "This Knowledge Pod page hit an error",
+  "localKnowledge.detail.routeError.body":
+    "The page failed to render. Your Knowledge Pod and its data are unaffected.",
+  "localKnowledge.detail.routeError.retry": "Try again",
   "localKnowledge.detail.backToLocalKnowledge": "Back to Local Knowledge",
   "localKnowledge.detail.tools": "Knowledge Pod tools",
   "localKnowledge.detail.advanced.summary": "Status, sources, and diagnostics",
@@ -371,6 +377,17 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
   "localKnowledge.detail.overview.staleReasons": "Stale reasons",
   "localKnowledge.detail.overview.nextSteps": "Next steps",
   "localKnowledge.detail.overview.unsupportedGuidance": "Unsupported document guidance",
+  // 0.3.0 release audit — the operator-facing remediation for a document this build cannot
+  // extract. The server sends the reason CODE only (UNSUPPORTED_DOCUMENT_GUIDANCE_CODES); the
+  // wording lives here so it follows the operator's locale like every other label around it.
+  "localKnowledge.detail.overview.unsupported.pdfNeedsOcr":
+    "Scanned PDFs need an OCR-capable extraction path. Configure a verified OCR or vision adapter, or provide a text-layer PDF.",
+  "localKnowledge.detail.overview.unsupported.imageNeedsOcr":
+    "Image-only documents need an OCR-capable extraction path before they can be indexed.",
+  "localKnowledge.detail.overview.unsupported.ocrFailed":
+    "OCR extraction failed for at least one document. Review the OCR adapter configuration and retry indexing.",
+  "localKnowledge.detail.overview.unsupported.unsupportedFormat":
+    "Some documents are unsupported in this build. Review the health diagnostics for the affected formats and next steps.",
   "localKnowledge.detail.context.title": "Contextual retrieval",
   "localKnowledge.detail.context.description":
     "Adds a context-generation chat call per chunk during indexing. Run Full rebuild / rechunk after saving.",
@@ -558,6 +575,11 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
     "Dieser Knowledge Pod existiert nicht mehr. Kehre zur Übersicht für lokales Wissen zurück.",
   "localKnowledge.detail.loadFailed": "Knowledge Pod konnte nicht geladen werden.",
   "localKnowledge.detail.retryLoad": "Knowledge Pod erneut laden",
+  "localKnowledge.detail.routeError.title":
+    "Bei dieser Knowledge-Pod-Seite ist ein Fehler aufgetreten",
+  "localKnowledge.detail.routeError.body":
+    "Die Seite konnte nicht dargestellt werden. Ihr Knowledge Pod und dessen Daten sind davon nicht betroffen.",
+  "localKnowledge.detail.routeError.retry": "Erneut versuchen",
   "localKnowledge.detail.backToLocalKnowledge": "Zurück zu lokalem Wissen",
   "localKnowledge.detail.tools": "Werkzeuge für diesen Knowledge Pod",
   "localKnowledge.detail.advanced.summary": "Status, Quellen und Diagnose",
@@ -845,6 +867,14 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
   "localKnowledge.detail.overview.nextSteps": "Nächste Schritte",
   "localKnowledge.detail.overview.unsupportedGuidance":
     "Hinweise zu nicht unterstützten Dokumenten",
+  "localKnowledge.detail.overview.unsupported.pdfNeedsOcr":
+    "Gescannte PDFs benötigen einen OCR-fähigen Extraktionspfad. Konfiguriere einen verifizierten OCR- oder Vision-Adapter oder stelle ein PDF mit Textebene bereit.",
+  "localKnowledge.detail.overview.unsupported.imageNeedsOcr":
+    "Reine Bilddokumente benötigen einen OCR-fähigen Extraktionspfad, bevor sie indexiert werden können.",
+  "localKnowledge.detail.overview.unsupported.ocrFailed":
+    "Die OCR-Extraktion ist für mindestens ein Dokument fehlgeschlagen. Prüfe die Konfiguration des OCR-Adapters und starte die Indexierung erneut.",
+  "localKnowledge.detail.overview.unsupported.unsupportedFormat":
+    "Einige Dokumente werden in diesem Build nicht unterstützt. Prüfe die Diagnosen im Zustandsbericht für die betroffenen Formate und die nächsten Schritte.",
   "localKnowledge.detail.context.title": "Kontextuelles Retrieval",
   "localKnowledge.detail.context.description":
     "Erzeugt beim Indexieren pro Chunk einen zusätzlichen Chat-Aufruf für Kontext. Baue den Knowledge Pod nach dem Speichern vollständig neu auf.",
@@ -965,6 +995,36 @@ export function translateLocalKnowledge(
 ): string {
   const catalog = catalogFor(locale);
   return interpolate(catalog[key] ?? LOCAL_KNOWLEDGE_EN_MESSAGES[key], values);
+}
+
+// 0.3.0 release audit — the server sends a stable reason code for a document it could not extract
+// (it must not hold locale copy); this is the single place that turns such a code into operator
+// text. Keyed by the contract's closed code list, so a new code cannot ship without both catalog
+// halves. An unrecognised code — a newer server talking to an older UI — falls back to the generic
+// remediation rather than rendering a raw code or dropping the operator's next step entirely.
+const UNSUPPORTED_GUIDANCE_MESSAGE_KEYS: Readonly<
+  Record<UnsupportedDocumentGuidanceCode, LocalKnowledgeMessageKey>
+> = {
+  "pdf-needs-ocr": "localKnowledge.detail.overview.unsupported.pdfNeedsOcr",
+  "image-needs-ocr": "localKnowledge.detail.overview.unsupported.imageNeedsOcr",
+  "ocr-failed": "localKnowledge.detail.overview.unsupported.ocrFailed",
+  "unsupported-format": "localKnowledge.detail.overview.unsupported.unsupportedFormat",
+};
+
+const KNOWN_UNSUPPORTED_GUIDANCE_CODES: ReadonlySet<string> = new Set(
+  UNSUPPORTED_DOCUMENT_GUIDANCE_CODES,
+);
+
+function isUnsupportedGuidanceCode(value: string): value is UnsupportedDocumentGuidanceCode {
+  return KNOWN_UNSUPPORTED_GUIDANCE_CODES.has(value);
+}
+
+/** Localized remediation text for one unsupported-document reason code. */
+export function unsupportedGuidanceText(code: string, t: I18nTranslate): string {
+  const key = isUnsupportedGuidanceCode(code)
+    ? UNSUPPORTED_GUIDANCE_MESSAGE_KEYS[code]
+    : UNSUPPORTED_GUIDANCE_MESSAGE_KEYS["unsupported-format"];
+  return t(key);
 }
 
 export function useLocalKnowledgeTranslate(): I18nTranslate {

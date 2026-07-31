@@ -65,6 +65,11 @@ function fileScopes(projectPath: string, count: number): readonly Record<string,
   }));
 }
 
+// Tab names carry a file path; `.` and `/` must not act as regex metacharacters when matching one.
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
+}
+
 async function ensureProject(request: APIRequestContext, projectPath: string): Promise<void> {
   const response = await request.post("/api/projects", {
     headers: MUTATION_HEADERS,
@@ -389,7 +394,15 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   // Issue #1376 (AC1/D4): a dirty tab close is gated by the in-app dialog (no native confirm), and
   // Cancel preserves the buffer.
   await replaceMonacoText(page, editorWindow, "export const e2eFixture = 'dirty again';\n");
-  await editorWindow.getByRole("button", { name: `Close ${relativePath}` }).click();
+  // 0.3.0 audit: the tab strip now satisfies `aria-required-children`, so the close affordance is a
+  // decorative span inside the tab rather than an owned button of the tablist. The keyboard path is
+  // the accessible one (WAI-ARIA APG deletable tabs: Delete, or Backspace on Mac keyboards), so the
+  // test drives that instead of the pointer decoration — it exercises the same close handler and
+  // additionally proves the affordance a screen-reader user actually has still reaches the gate.
+  await editorWindow
+    .getByRole("tab", { name: new RegExp(escapeRegExp(relativePath), "u") })
+    .click();
+  await page.keyboard.press("Delete");
   const dirtyDialog = editorWindow.getByRole("dialog", { name: "Unsaved editor changes" });
   await expect(dirtyDialog).toBeVisible();
   await dirtyDialog.getByRole("button", { name: "Cancel" }).click();

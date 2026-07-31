@@ -50,6 +50,7 @@ function hookResult(
     status: "ready",
     questions: requests,
     errorCode: null,
+    mutationFailure: null,
     answer: vi.fn(() => Promise.resolve(true)),
     reject: vi.fn(() => Promise.resolve(true)),
     retry: vi.fn(),
@@ -130,6 +131,57 @@ describe("CodingWorkbenchQuestions", () => {
     renderQuestions(hookResult({ status: "submitting" }));
     expect(screen.getByRole("button", { name: "Send answer" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Reject question" })).toBeDisabled();
+  });
+
+  // F-09a regression: a refused answer/reject rendered the LISTING sentence ("Questions could not
+  // be refreshed."), never the machine error code or the correlation id the transport carried, and
+  // the question form was disabled because `busy` was derived from `status !== "ready"` — so the
+  // operator was told the wrong thing had failed and could not retry the right one.
+  it("names the refused answer with its code and support id and keeps the question submittable", async () => {
+    const user = userEvent.setup();
+    const result = renderQuestions(
+      hookResult({
+        status: "error",
+        mutationFailure: {
+          action: "answer",
+          code: "CODING_RUNTIME_QUESTION_REJECTED",
+          correlationId: "ui-correlation-11",
+        },
+      }),
+    );
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(
+      "Your answer was not accepted (CODING_RUNTIME_QUESTION_REJECTED). The question is still open — send it again. Support id: ui-correlation-11.",
+    );
+    expect(alert).not.toHaveTextContent("Questions could not be refreshed.");
+    expect(screen.getByRole("button", { name: "Send answer" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reject question" })).toBeEnabled();
+
+    await user.click(screen.getByRole("radio", { name: /Proceed/u }));
+    await user.click(screen.getByRole("checkbox", { name: /Unit/u }));
+    await user.type(screen.getByLabelText("Custom answer for Custom response"), "Use staging");
+    await user.click(screen.getByRole("button", { name: "Send answer" }));
+    expect(result.answer).toHaveBeenCalledWith("que_1", [["Proceed"], ["Unit"], ["Use staging"]]);
+  });
+
+  it("attributes a refused rejection to the reject action and omits an absent support id", () => {
+    renderQuestions(
+      hookResult({
+        status: "stale",
+        mutationFailure: { action: "reject", code: "CODING_RUNTIME_QUESTION_REVISION" },
+      }),
+    );
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(
+      "Rejecting the question was not accepted (CODING_RUNTIME_QUESTION_REVISION). The question is still open — try again.",
+    );
+    expect(alert).not.toHaveTextContent("Support id");
+    expect(alert).not.toHaveTextContent("Question state changed.");
+    // The question itself is still on screen — the only surface that can retry the rejection.
+    expect(screen.getByRole("heading", { name: "Runtime needs your input" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reject question" })).toBeEnabled();
   });
 
   it("supports explicit rejection and has no serious or critical axe violations", async () => {

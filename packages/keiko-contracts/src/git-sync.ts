@@ -27,7 +27,9 @@ export type GitSyncOutcome =
   | "not-fast-forward" // pull --ff-only refused
   | "auth-failed"
   | "untrusted-host-key"
-  | "timeout"
+  | "remote-unavailable" // the host could not be reached at all (DNS / refused / network down)
+  | "timeout" // Keiko's own wall-clock budget fired
+  | "output-truncated" // Keiko's own output byte cap cut the run — distinct from a timeout
   | "git-missing"
   | "unsafe-repository"
   | "git-error";
@@ -41,7 +43,9 @@ export const GIT_SYNC_OUTCOMES: readonly GitSyncOutcome[] = [
   "not-fast-forward",
   "auth-failed",
   "untrusted-host-key",
+  "remote-unavailable",
   "timeout",
+  "output-truncated",
   "git-missing",
   "unsafe-repository",
   "git-error",

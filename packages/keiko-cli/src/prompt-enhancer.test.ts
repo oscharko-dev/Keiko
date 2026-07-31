@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { ConfigInvalidError, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import {
+  ConfigInvalidError,
+  type GatewayConfig,
+  type NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
 import { PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-evidence";
 import { runPromptEnhancerCli } from "./prompt-enhancer.js";
 import type { CliIo } from "./runner.js";
@@ -119,6 +123,46 @@ describe("runPromptEnhancerCli", () => {
     expect(out).toContain("Candidate scorecards");
     expect(out).toContain("Model routing: not-requested");
     expect(out).toContain("## Role");
+    expect(out).toMatch(/~\d+ rendered tokens/u);
+    // On a deterministic run the scorecards DO describe the printed prompt, so no baseline caveat.
+    expect(out).not.toContain("deterministic baseline the model refined");
+  });
+
+  // #1307 audit: the CLI prints the winning profile and the candidate scorecards immediately above
+  // the prompt text. On the model-assisted path those describe the deterministic baseline, not the
+  // text printed below, so the reader has to be told which artefact the numbers belong to.
+  it("labels the scorecards as the baseline when a model rewrote the prompt", async () => {
+    const c = makeIo();
+    const code = await runPromptEnhancerCli(
+      ["--input", "Summarize the quarterly report.", "--model", "m", "--config", "/cfg"],
+      c.io,
+      {},
+      {
+        loadConfig: () => configWithProvider("m"),
+        modelPortFactory: () => ({
+          call: (): Promise<NormalizedResponse> =>
+            Promise.resolve({
+              modelId: "m",
+              content: "## Role\nYou are a financial analyst.\n\n## Steps\n- Summarize the report.",
+              toolCalls: [],
+              structuredOutput: null,
+              finishReason: "stop",
+              usage: {
+                requestId: "pe-cli-model-call",
+                promptTokens: 10,
+                completionTokens: 10,
+                latencyMs: 1,
+                costClass: "medium",
+              },
+            }),
+        }),
+      },
+    );
+    expect(code).toBe(0);
+    const out = c.out();
+    expect(out).toContain("model-applied");
+    expect(out).toContain("Candidate scorecards (deterministic baseline the model refined");
+    expect(out).toContain("You are a financial analyst.");
   });
 
   it("accepts raw prompt input that starts with --", async () => {

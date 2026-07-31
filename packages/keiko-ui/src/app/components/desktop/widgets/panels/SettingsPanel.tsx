@@ -1,8 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { VOICE_PERSONAS } from "@oscharko-dev/keiko-contracts";
+import {
+  gatewayVerificationContradictsReadiness,
+  gatewayVerificationFromProbeOutcome,
+  UNVERIFIED_GATEWAY,
+  VOICE_PERSONAS,
+  type GatewayVerificationState,
+} from "@oscharko-dev/keiko-contracts";
 import { fetchConfig, fetchModels, runGatewayReadiness } from "@/lib/api";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import {
@@ -43,7 +49,11 @@ import {
 } from "../../hooks/useVoiceDialogMode";
 import { GatewaySetupDialog } from "../../modals/GatewaySetupDialog";
 import { Toggle } from "../shared/Toggle";
-import { GATEWAY_SETUP_REQUEST_EVENT, consumePendingGatewaySetup } from "../shared/gatewaySetupBus";
+import {
+  GATEWAY_CONFIG_UPDATED_EVENT,
+  GATEWAY_SETUP_REQUEST_EVENT,
+  consumePendingGatewaySetup,
+} from "../shared/gatewaySetupBus";
 import {
   WALLPAPER_ENABLED_EVENT,
   WALLPAPER_ENABLED_KEY,
@@ -225,6 +235,63 @@ type ReadinessRunState =
   | { readonly status: "error"; readonly message: string };
 
 type ReportCopyState = "idle" | "copied" | "failed";
+
+/**
+ * F-02 (review of #2847): a readiness run is live evidence about ONE gateway configuration, so the
+ * panel remembers runs together with the configuration generation they measured instead of in a bare
+ * model-keyed map. This mirrors the server holder that owns `verification()`: there, replacing the
+ * config through `set()` structurally invalidates the recorded verdict, and a verdict whose observed
+ * generation is stale is dropped rather than recorded. The panel needs the identical two guards —
+ * a superseded generation never reaches the display, and a run that started before a configuration
+ * change never overwrites what the current configuration measured.
+ */
+interface ReadinessLedger {
+  readonly generation: number;
+  readonly runs: Record<string, ReadinessRunState>;
+}
+
+const NO_READINESS_RUNS: Record<string, ReadinessRunState> = {};
+const INITIAL_READINESS_LEDGER: ReadinessLedger = { generation: 0, runs: NO_READINESS_RUNS };
+
+/**
+ * The remembered runs that describe the CURRENT configuration. A ledger left behind by a superseded
+ * generation contributes nothing: neither the gateway verification badge nor a per-model readiness
+ * summary may outlive the configuration it was measured against.
+ */
+function readinessRunsForGeneration(
+  ledger: ReadinessLedger,
+  generation: number,
+): Record<string, ReadinessRunState> {
+  return ledger.generation === generation ? ledger.runs : NO_READINESS_RUNS;
+}
+
+/**
+ * Records one run under the generation it observed. A verdict that resolves after the configuration
+ * changed keeps its own (older) generation and therefore stays out of the display, and it may never
+ * clobber a ledger a newer configuration has already written.
+ */
+function recordReadinessRun(
+  ledger: ReadinessLedger,
+  observedGeneration: number,
+  modelId: string,
+  state: ReadinessRunState,
+): ReadinessLedger {
+  if (observedGeneration < ledger.generation) return ledger;
+  const runs = observedGeneration === ledger.generation ? ledger.runs : NO_READINESS_RUNS;
+  return { generation: observedGeneration, runs: { ...runs, [modelId]: state } };
+}
+
+/**
+ * A value identity for the configuration the panel currently holds. Credential-free by construction
+ * (the safe projection carries no key or base URL), so a rotated credential is invisible here and
+ * arrives as GATEWAY_CONFIG_UPDATED_EVENT instead; this catches the replacements that ARE visible —
+ * a different provider/model set, or the configuration disappearing entirely.
+ */
+function gatewayConfigIdentity(config: SafeGatewayConfig | null, present: boolean): string {
+  if (!present) return "absent";
+  if (config === null) return "present";
+  return `present:${JSON.stringify(config.providers)}`;
+}
 
 function readinessErrorMessage(error: unknown, t: I18nTranslate): string {
   if (error instanceof Error && error.message.trim().length > 0) {
@@ -918,14 +985,48 @@ function describeSettingsLoadError(error: unknown, t: I18nTranslate): string {
   return message;
 }
 
+const FAILED_VERIFICATION: GatewayVerificationState = "failed";
+const PARTIAL_VERIFICATION: GatewayVerificationState = "partial";
+const VERIFIED_GATEWAY: GatewayVerificationState = "verified";
+
+/**
+ * F-01: the gateway summary is the panel's own verdict, and "connected" used to mean nothing more
+ * than "a config file parsed". The readiness runs this panel already performs are the only live
+ * evidence about the gateway, so the summary is derived from them: a probe that failed (or a run
+ * whose transport threw) demotes the summary, a passing one promotes it, and a gateway nobody has
+ * checked reads as unverified. The worst outcome across the checked models wins — one reachable
+ * model does not make a gateway whose other model just failed a healthy one.
+ */
+function gatewayVerificationFromRuns(
+  runs: Record<string, ReadinessRunState>,
+): GatewayVerificationState {
+  let best: GatewayVerificationState = UNVERIFIED_GATEWAY;
+  for (const run of Object.values(runs)) {
+    if (run.status === "error") return FAILED_VERIFICATION;
+    if (run.status !== "done") continue;
+    const state = gatewayVerificationFromProbeOutcome(run.report.overallStatus);
+    if (gatewayVerificationContradictsReadiness(state)) return FAILED_VERIFICATION;
+    if (state === PARTIAL_VERIFICATION || best === UNVERIFIED_GATEWAY) best = state;
+  }
+  return best;
+}
+
 function computeGatewayStatusLabel(
   gatewayConfigured: boolean,
   hasDiscoveredModels: boolean,
+  verification: GatewayVerificationState,
   t: I18nTranslate,
 ): string {
   if (!gatewayConfigured) return t("settings.models.setupRequired");
-  if (hasDiscoveredModels) return t("settings.models.connected");
-  return t("settings.models.configured");
+  if (gatewayVerificationContradictsReadiness(verification)) {
+    return t("settings.models.probeFailed");
+  }
+  // A gateway with no discovered models keeps saying so: there is nothing for a probe to confirm,
+  // and "configured" already withholds the connection claim (uiux-fix C286's distinction).
+  if (!hasDiscoveredModels) return t("settings.models.configured");
+  // "connected" is a claim about reaching the gateway, so only a passing probe earns it.
+  if (verification === UNVERIFIED_GATEWAY) return t("settings.models.notVerified");
+  return t("settings.models.connected");
 }
 
 // uiux-fix C286: with models discovered but zero conversation-eligible ones
@@ -934,12 +1035,40 @@ function computeGatewayStatusDetail(
   gatewayConfigured: boolean,
   hasDiscoveredModels: boolean,
   chatCount: number,
+  verification: GatewayVerificationState,
   t: I18nTranslate,
 ): string {
   if (!gatewayConfigured) return t("settings.models.detailSetup");
   if (!hasDiscoveredModels) return t("settings.models.detailNoModels");
   if (chatCount === 0) return t("settings.models.detailNoChat");
+  if (gatewayVerificationContradictsReadiness(verification)) {
+    return t("settings.models.detailProbeFailed");
+  }
+  if (verification === UNVERIFIED_GATEWAY) return t("settings.models.detailNotVerified");
   return t("settings.models.detailReady");
+}
+
+function gatewayStatusTone(
+  gatewayConfigured: boolean,
+  verification: GatewayVerificationState,
+): string {
+  if (!gatewayConfigured) return "untested";
+  if (gatewayVerificationContradictsReadiness(verification)) return "error";
+  if (verification === PARTIAL_VERIFICATION) return "ineligible";
+  return verification === VERIFIED_GATEWAY ? "connected" : "untested";
+}
+
+function gatewayStatusTitle(
+  gatewayConfigured: boolean,
+  verification: GatewayVerificationState,
+  t: I18nTranslate,
+): string {
+  if (!gatewayConfigured) return t("settings.models.statusSetupRequired");
+  if (gatewayVerificationContradictsReadiness(verification)) {
+    return t("settings.models.statusProbeFailed");
+  }
+  if (verification === UNVERIFIED_GATEWAY) return t("settings.models.statusNotVerified");
+  return t("settings.models.statusConfigured");
 }
 
 // Issue #1399: receive gateway-setup deep-link requests. The latch covers "Settings was just
@@ -958,8 +1087,9 @@ function bindGatewaySetupRequestListener(claim: () => void): () => void {
 }
 
 interface SettingsLoadHandlers {
-  readonly setConfig: (config: SafeGatewayConfig | null) => void;
-  readonly setConfigPresent: (present: boolean) => void;
+  // F-02: config + presence + the generation they belong to are applied as ONE step. Splitting them
+  // is what let a readiness run started in the same commit be attributed to the previous generation.
+  readonly applyConfig: (config: SafeGatewayConfig | null, present: boolean) => void;
   readonly setModels: (models: readonly ModelCapability[]) => void;
   readonly setModelError: (message: string | undefined) => void;
   readonly setLoadingModels: (loading: boolean) => void;
@@ -974,8 +1104,7 @@ async function loadSettingsData(handlers: SettingsLoadHandlers, t: I18nTranslate
   try {
     const [configPayload, modelPayload] = await Promise.all([fetchConfig(), fetchModels()]);
     if (handlers.isCancelled()) return;
-    handlers.setConfig(configPayload.config);
-    handlers.setConfigPresent(configPayload.configPresent);
+    handlers.applyConfig(configPayload.config, configPayload.configPresent);
     handlers.setModels(modelPayload.models);
   } catch (error) {
     if (handlers.isCancelled()) return;
@@ -985,26 +1114,28 @@ async function loadSettingsData(handlers: SettingsLoadHandlers, t: I18nTranslate
   }
 }
 
+// F-02: `generation` is the configuration this run measures, captured before the request leaves. It
+// travels with every recorded state so a late verdict is attributed to the configuration it actually
+// observed — never to whichever one happens to be current when the response lands.
 async function runModelReadinessCheck(
   modelId: string,
   deep: boolean,
-  setReadiness: (
-    updater: (current: Record<string, ReadinessRunState>) => Record<string, ReadinessRunState>,
-  ) => void,
+  generation: number,
+  setLedger: (updater: (current: ReadinessLedger) => ReadinessLedger) => void,
   t: I18nTranslate,
 ): Promise<void> {
-  setReadiness((current) => ({ ...current, [modelId]: { status: "running", deep } }));
+  const record = (state: ReadinessRunState): void => {
+    setLedger((current) => recordReadinessRun(current, generation, modelId, state));
+  };
+  record({ status: "running", deep });
   try {
     const report = await runGatewayReadiness(
       modelId,
       deep ? { includeDeepProbes: true } : undefined,
     );
-    setReadiness((current) => ({ ...current, [modelId]: { status: "done", report } }));
+    record({ status: "done", report });
   } catch (error) {
-    setReadiness((current) => ({
-      ...current,
-      [modelId]: { status: "error", message: readinessErrorMessage(error, t) },
-    }));
+    record({ status: "error", message: readinessErrorMessage(error, t) });
   }
 }
 
@@ -1088,14 +1219,21 @@ function ModelsTabContent({
   // Issue #144: source of truth is the helper, not an inline kind check.
   const chatCount = models.filter(isConversationEligibleModel).length;
   const hasDiscoveredModels = models.length > 0;
-  const gatewayStatusLabel = computeGatewayStatusLabel(gatewayConfigured, hasDiscoveredModels, t);
+  const verification = gatewayVerificationFromRuns(readiness);
+  const gatewayStatusLabel = computeGatewayStatusLabel(
+    gatewayConfigured,
+    hasDiscoveredModels,
+    verification,
+    t,
+  );
   const gatewayStatusDetail = computeGatewayStatusDetail(
     gatewayConfigured,
     hasDiscoveredModels,
     chatCount,
+    verification,
     t,
   );
-  const gatewayStatusTone = gatewayConfigured ? "connected" : "untested";
+  const statusTone = gatewayStatusTone(gatewayConfigured, verification);
   return (
     <>
       <div className="set-sec-h">
@@ -1134,12 +1272,8 @@ function ModelsTabContent({
           <div className="ml-url mono">{gatewayStatusDetail}</div>
         </div>
         <span
-          className={"ml-status " + gatewayStatusTone}
-          title={
-            gatewayConfigured
-              ? t("settings.models.statusConfigured")
-              : t("settings.models.statusSetupRequired")
-          }
+          className={"ml-status " + statusTone}
+          title={gatewayStatusTitle(gatewayConfigured, verification, t)}
           aria-hidden="true"
         />
       </div>
@@ -1195,7 +1329,12 @@ export function SettingsPanel({
   const [configPresent, setConfigPresent] = useState(false);
   const [loadingModels, setLoadingModels] = useState(true);
   const [modelError, setModelError] = useState<string | undefined>();
-  const [readiness, setReadiness] = useState<Record<string, ReadinessRunState>>({});
+  // F-02: readiness runs are remembered per configuration generation, never as a bare model-keyed
+  // map — see ReadinessLedger. The generation is the panel's monotonic count of observed
+  // configuration changes; a run tagged with an older one is evidence about a replaced gateway.
+  const [readinessLedger, setReadinessLedger] = useState<ReadinessLedger>(INITIAL_READINESS_LEDGER);
+  const [configGeneration, setConfigGeneration] = useState(0);
+  const measuredConfigIdentity = useRef(gatewayConfigIdentity(null, false));
   const [setupOpen, setSetupOpen] = useState(false);
   // Issue #1399: a PAT error in the Figma Snapshot window can deep-link here to open the
   // gateway-setup dialog on its Figma access-token section. The request is latched until config
@@ -1237,12 +1376,25 @@ export function SettingsPanel({
     }
   }, [pendingSetupRequest, loadingModels, modelError]);
 
+  // F-02: applying a loaded configuration also advances the generation when it is not the one the
+  // remembered runs measured — a replacement performed anywhere else (another window, the CLI, the
+  // first-run dialog) must not leave this panel presenting the old gateway's verdict as current
+  // verification. It happens in the same commit as the config itself so that a readiness run started
+  // from the very first render of that configuration is attributed to it, not to its predecessor.
+  const applyConfig = useCallback((next: SafeGatewayConfig | null, present: boolean): void => {
+    setConfig(next);
+    setConfigPresent(present);
+    const identity = gatewayConfigIdentity(next, present);
+    if (measuredConfigIdentity.current === identity) return;
+    measuredConfigIdentity.current = identity;
+    setConfigGeneration((generation) => generation + 1);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     void loadSettingsData(
       {
-        setConfig,
-        setConfigPresent,
+        applyConfig,
         setModels,
         setModelError,
         setLoadingModels,
@@ -1253,13 +1405,27 @@ export function SettingsPanel({
     return () => {
       cancelled = true;
     };
-  }, [reloadTick, t]);
+  }, [applyConfig, reloadTick, t]);
+
+  // F-02: a credential update replaces the configuration without changing anything the safe
+  // projection can show, so the write is announced instead of inferred. Advancing the generation is
+  // all it takes: every remembered run is tagged with the generation it measured.
+  useEffect(() => {
+    const onConfigUpdated = (): void => {
+      setConfigGeneration((generation) => generation + 1);
+    };
+    window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
+    return () => {
+      window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
+    };
+  }, []);
 
   const voicePersonas = useMemo(() => voicePersonasFromModels(models), [models]);
   const gatewayConfigured = configPresent;
+  const readiness = readinessRunsForGeneration(readinessLedger, configGeneration);
 
   async function handleRunReadiness(modelId: string, deep: boolean): Promise<void> {
-    await runModelReadinessCheck(modelId, deep, setReadiness, t);
+    await runModelReadinessCheck(modelId, deep, configGeneration, setReadinessLedger, t);
   }
 
   return (

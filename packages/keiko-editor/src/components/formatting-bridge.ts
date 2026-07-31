@@ -15,12 +15,14 @@
  * `monaco-editor`), so the mappers are unit-testable without a browser and the module stays
  * import-side-effect-free.
  */
+import { formattingApplyDecision } from "../formatting-apply.js";
 import type { EditorLanguageId } from "../languages.js";
 import type {
   EditorFormattingOptions,
   EditorFormattingQuery,
   EditorFormattingRequest,
   EditorFormattingResolver,
+  EditorFormattingResponse,
   EditorRequestIdentity,
   EditorTextEdit,
 } from "../types.js";
@@ -30,6 +32,11 @@ import {
   type MonacoDisposable,
   type MonacoRange,
 } from "./completion-bridge.js";
+import {
+  classifyResultKind,
+  runLanguageBridgeCall,
+  type EditorLanguageIntelligenceReporter,
+} from "./language-intelligence.js";
 
 // ─── Minimal structural Monaco surface (no value import of `monaco-editor`) ─────────────────────
 
@@ -99,6 +106,8 @@ export interface KeikoFormattingProviderDeps {
   readonly streamId: string;
   /** Unique request-id factory. Injected so tests stay deterministic. */
   readonly newRequestId: () => string;
+  /** Outcome sink so "already formatted" stays distinguishable from "the formatter did not answer". */
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function buildRequest(
@@ -137,43 +146,45 @@ const EMPTY_EDITS: readonly MonacoTextEdit[] = [];
  * Create a Monaco document-formatting provider backed by the host resolver. The provider builds a
  * content-free {@link EditorFormattingRequest} carrying the editor's indentation options, hands the
  * resolver the request plus the live buffer text and an {@link AbortSignal} wired to Monaco's
- * cancellation token, and returns no edits on any failure or cancellation so a formatting error never
- * mutates the buffer or breaks editing.
+ * cancellation token, and returns no edits on any failure, cancellation, or server-capped result so
+ * neither a formatting error nor a half-finished reformat ever mutates the buffer or breaks editing.
  */
 export function createKeikoFormattingProvider(
   deps: KeikoFormattingProviderDeps,
 ): MonacoDocumentFormattingEditProvider {
   let sequence = 0;
   return {
-    async provideDocumentFormattingEdits(
-      model,
-      options,
-      token,
-    ): Promise<readonly MonacoTextEdit[]> {
+    provideDocumentFormattingEdits(model, options, token): Promise<readonly MonacoTextEdit[]> {
       const documentUri = model.uri.toString();
       if (!deps.isCurrentDocument(documentUri)) {
-        return EMPTY_EDITS;
+        return Promise.resolve(EMPTY_EDITS);
       }
       sequence += 1;
       const versionBefore = model.getVersionId();
       const request = buildRequest(deps, documentUri, options, sequence, versionBefore);
       const controller = controllerForToken(token);
-      try {
-        const query: EditorFormattingQuery = { request, documentText: model.getValue() };
-        const response = await deps.resolve(query, controller.signal);
+      const query: EditorFormattingQuery = { request, documentText: model.getValue() };
+      return runLanguageBridgeCall<EditorFormattingResponse, readonly MonacoTextEdit[]>({
+        operation: "formatting",
+        resolve: () => deps.resolve(query, controller.signal),
         // A request cancelled or superseded by a model change while in flight must not mutate the
         // buffer: drop the now-stale edits instead of applying them to a different document state.
-        if (
+        isDiscarded: () =>
           controller.signal.aborted ||
           !deps.isCurrentDocument(documentUri) ||
-          model.getVersionId() !== versionBefore
-        ) {
-          return EMPTY_EDITS;
-        }
-        return editsToMonaco(response.edits);
-      } catch {
-        return EMPTY_EDITS;
-      }
+          model.getVersionId() !== versionBefore,
+        discardedValue: EMPTY_EDITS,
+        failedValue: EMPTY_EDITS,
+        classify: (response) => classifyResultKind(response.edits.length, response.truncated),
+        // A capped reformat is a PARTIAL mutation, so it is refused rather than applied — the shared
+        // apply gate owns that rule for every formatting consumer. `classify` still reports `capped`,
+        // so the refusal is stated on the editor surface instead of looking like "already formatted".
+        present: (response) => {
+          const decision = formattingApplyDecision(response);
+          return decision.status === "apply" ? editsToMonaco(decision.edits) : EMPTY_EDITS;
+        },
+        report: deps.report,
+      });
     },
   };
 }
@@ -185,6 +196,7 @@ export interface RegisterKeikoFormattingProviderArgs {
   readonly documentLanguages: readonly EditorLanguageId[];
   readonly streamId: string;
   readonly newRequestId: () => string;
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
@@ -211,6 +223,7 @@ export function registerKeikoFormattingProvider(
       documentLanguage,
       streamId: `${args.streamId}:${documentLanguage}`,
       newRequestId: args.newRequestId,
+      report: args.report,
     });
     return args.languages.registerDocumentFormattingEditProvider(documentLanguage, provider);
   });

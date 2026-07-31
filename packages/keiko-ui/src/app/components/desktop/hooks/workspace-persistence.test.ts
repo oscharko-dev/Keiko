@@ -10,6 +10,7 @@ import {
   EDITOR_SIDEBAR_MIN_WIDTH,
   EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
 } from "../editorSidebarSizing";
+import { subText } from "../windows/connectionUtils";
 
 function win(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -23,6 +24,16 @@ function win(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWin
     zoom: 1,
     ...patch,
   };
+}
+
+// A hostile persisted window record whose `type` is an own property of Object.prototype
+// rather than a real WindowType. Deliberately untyped (`unknown`, not AppWindow) — this is
+// exactly the shape localStorage hands back after `JSON.parse`, and it must NOT type-check
+// as a real AppWindow so the test exercises the same "trust nothing" boundary production
+// code runs through. `cfg` is omitted unless the caller supplies one, matching the two
+// distinct hostile shapes F1 (no cfg) and F1b (cfg present) target.
+function hostileWindow(type: string, extra: Record<string, unknown> = {}): unknown {
+  return { id: `evil-${type}`, type, x: 0, y: 0, w: 100, h: 100, z: 2, max: false, ...extra };
 }
 
 describe("workspace-persistence", () => {
@@ -93,6 +104,33 @@ describe("workspace-persistence", () => {
 
     expect(persisted).toHaveLength(1);
     expect(persisted[0]?.cfg).toEqual({});
+  });
+
+  // 0.3.0 release audit — the chat window's "still untitled" state is a structural cfg marker, not
+  // a comparison against display copy. A marker that the persistence allowlist drops would be
+  // silently reconstructed from the title text on the next reload, which is exactly the
+  // locale-dependent behaviour it replaced, so the round trip is pinned here.
+  it("persists the structural untitled-chat marker across a reload", () => {
+    // Only the front-most chat window survives the snapshot, so each state is sanitized on its own.
+    const untitled = sanitizePersistedWindows([
+      win({
+        id: "chat-untitled",
+        type: "chat",
+        cfg: { title: "Neuer Chat", titleIsDefault: true },
+      }),
+    ]);
+    const named = sanitizePersistedWindows([
+      win({
+        id: "chat-named",
+        type: "chat",
+        cfg: { title: "Sprint triage", titleIsDefault: false },
+      }),
+    ]);
+
+    expect(untitled[0]?.cfg).toEqual({ title: "Neuer Chat", titleIsDefault: true });
+    expect(named[0]?.cfg).toEqual({ title: "Sprint triage", titleIsDefault: false });
+    expect(subText("chat", untitled[0]?.cfg)).toBeNull();
+    expect(subText("chat", named[0]?.cfg)).toBe("Sprint triage");
   });
 
   it("preserves allowed non-secret config references in the browser-local snapshot", () => {
@@ -766,5 +804,61 @@ describe("workspace-persistence", () => {
       win({ id: "editor-1", type: "editor", cfg: { layoutJson: deepLayout(64) } }),
     ]);
     expect(hostile[0]?.cfg["layoutJson"]).toBeUndefined();
+  });
+
+  // F1/F1b — hasWindowType used `value in WIN_TYPES` rather than Object.hasOwn. The `in`
+  // operator also matches inherited Object.prototype properties, so a persisted window
+  // record whose type is "toString", "constructor", or "__proto__" was treated as a real,
+  // known WindowType.
+  describe("rejects hostile persisted window types that collide with Object.prototype", () => {
+    const HOSTILE_TYPES = ["toString", "constructor", "__proto__"] as const;
+
+    it.each(HOSTILE_TYPES)(
+      "does not admit a corrupted window whose type is the inherited property %s",
+      (hostileType) => {
+        // No `cfg` at all: sanitizeCfgForPersistence short-circuits on a non-record cfg,
+        // so this hostile record survives sanitizeWindow (pre-fix) with type still set to
+        // the Object.prototype member — a corrupted window that later explodes wherever
+        // WIN_TYPES[type]/WIN_META[type] is dereferenced during render (WindowFrame's
+        // selectBody runs OUTSIDE WindowBodyBoundary's coverage), white-screening the
+        // entire desktop rather than just the one window.
+        const raw = [win({ id: "good-1", type: "chat" }), hostileWindow(hostileType)];
+        const persisted = sanitizePersistedWindows(raw as unknown as AppWindow[]);
+        expect(persisted.map((entry) => entry.id)).toEqual(["good-1"]);
+      },
+    );
+
+    it.each(HOSTILE_TYPES)(
+      "does not throw when the hostile record of type %s also carries a cfg object (F1b)",
+      (hostileType) => {
+        // With `cfg` present, pre-fix sanitizeCfgForPersistence spreads
+        // `INTERNAL_CFG_KEYS[type]`/`WIN_TYPES[type].config` — both inherited,
+        // non-nullish, non-iterable Object.prototype members for these type strings — into
+        // an array literal, which throws synchronously. That throw escapes the
+        // `sanitizePersistedWindows` loop uncaught.
+        const raw = [
+          win({ id: "good-1", type: "chat", cfg: { title: "Sprint triage" } }),
+          hostileWindow(hostileType, { cfg: {} }),
+        ];
+        expect(() => sanitizePersistedWindows(raw as unknown as AppWindow[])).not.toThrow();
+      },
+    );
+
+    it.each(HOSTILE_TYPES)(
+      "preserves the rest of a persisted snapshot instead of losing it whole (F1b, type %s)",
+      (hostileType) => {
+        // parsePersistedWindows wraps sanitizePersistedWindows in a try/catch, so pre-fix
+        // the uncaught throw above is swallowed there and the WHOLE snapshot is silently
+        // discarded (parsePersistedWindows returns null) — a data-loss failure mode with no
+        // crash and no message, taking every OTHER valid window down with the hostile one.
+        const raw = JSON.stringify([
+          win({ id: "good-1", type: "chat", cfg: { title: "Sprint triage" } }),
+          hostileWindow(hostileType, { cfg: {} }),
+        ]);
+        const parsed = parsePersistedWindows(raw);
+        expect(parsed).not.toBeNull();
+        expect(parsed?.map((entry) => entry.id)).toEqual(["good-1"]);
+      },
+    );
   });
 });

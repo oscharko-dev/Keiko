@@ -296,6 +296,76 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     ).toMatchObject({ ok: false, reasonCode: "RESERVED_KEYBINDING" });
   });
 
+  // 0.3.0 release audit (#2802) — `Ctrl` and `Meta` name the same position in the chord vocabulary
+  // the workspace matcher uses, so a binding carrying both is not a keystroke a keyboard produces.
+  // It was accepted, and the doubled modifier carried a browser-reserved chord past the reservation
+  // check: `Ctrl+Meta+T` normalized to `ctrlormeta+ctrlormeta+t`, which matches no reservation, and
+  // then fired on a plain Ctrl+T off macOS.
+  it.each([
+    "Ctrl+Meta+T",
+    "Meta+Ctrl+T",
+    "ctrl+meta+t",
+    " Ctrl + Meta + T ",
+    "Ctrl+Meta+Alt+T",
+    "Ctrl+Meta+O",
+    "Meta+Ctrl+Shift+N",
+  ])("rejects the doubled physical modifier in %s", (binding) => {
+    expect(
+      validateEditorM7Keybinding({
+        commandId: "quick-access.files",
+        binding,
+        activeBindings: {},
+      }),
+    ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
+  });
+
+  // A reservation is one PHYSICAL chord however it is spelled — and the collapse must dedupe, or a
+  // doubled modifier produces a key no reservation can equal.
+  it.each(["Ctrl+T", "Meta+T", "CtrlOrMeta+T", "meta+r", "Ctrl+W", "Meta+Shift+N"])(
+    "rejects the reserved chord spelled %s",
+    (binding) => {
+      expect(
+        validateEditorM7Keybinding({
+          commandId: "quick-access.files",
+          binding,
+          activeBindings: {},
+        }),
+      ).toMatchObject({ ok: false, reasonCode: "RESERVED_KEYBINDING" });
+    },
+  );
+
+  // Collision is decided on the physical chord too: dispatch matches keystrokes, not strings. A
+  // `Meta+P` override read as distinct from `CtrlOrMeta+P` and silently took Cmd+P from its owner.
+  it.each(["Meta+P", "Ctrl+P", "ctrlormeta+p", " meta + p "])(
+    "detects the collision when the taken chord is spelled %s",
+    (binding) => {
+      expect(
+        validateEditorM7Keybinding({
+          commandId: "undo",
+          binding,
+          activeBindings: { "quick-access.files": "CtrlOrMeta+P" },
+        }),
+      ).toMatchObject({ ok: false, reasonCode: "KEYBINDING_COLLISION" });
+    },
+  );
+
+  it("rejects a persisted override list that smuggles a reserved chord past the schema", () => {
+    expect(parseEditorM7KeybindingOverrides(["1|undo|Ctrl+T"])).toMatchObject({
+      ok: false,
+      reasonCode: "RESERVED_KEYBINDING",
+    });
+  });
+
+  it("still accepts a chord that only LOOKS adjacent to a claimed one", () => {
+    expect(
+      validateEditorM7Keybinding({
+        commandId: "undo",
+        binding: "CtrlOrMeta+Alt+P",
+        activeBindings: { "quick-access.files": "CtrlOrMeta+P" },
+      }),
+    ).toStrictEqual({ ok: true, value: "CtrlOrMeta+Alt+P" });
+  });
+
   it("rejects unknown and duplicate modifiers and canonicalizes valid chords", () => {
     for (const binding of [
       "Hyper+O",
@@ -739,6 +809,26 @@ describe("M7 malformed input rejection paths", () => {
         activeBindings: hostile,
       }),
     ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
+  });
+
+  it("separates an unverified provider from an unhealthy one, and denies both", () => {
+    expect(resolveEditorM7AiActivation(aiInput({ providerHealth: "unverified" }))).toMatchObject({
+      state: "degraded",
+      reasonCode: "PROVIDER_UNVERIFIED",
+      policyResult: "denied",
+    });
+    expect(resolveEditorM7AiActivation(aiInput({ providerHealth: "degraded" }))).toMatchObject({
+      state: "degraded",
+      reasonCode: "PROVIDER_UNHEALTHY",
+      policyResult: "denied",
+    });
+    expect(
+      resolveEditorM7AiActivation({ ...aiInput(), providerHealth: "probably-fine" }),
+    ).toMatchObject({
+      state: "denied",
+      reasonCode: "INVALID_INPUT",
+      policyResult: "denied",
+    });
   });
 
   it("rejects an unknown setting id in parseEditorM7SettingValue instead of throwing", () => {

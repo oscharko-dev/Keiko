@@ -5,7 +5,7 @@
  * characters, maps the content-free request plus live buffer text to the host, and maps the
  * deterministic response into Monaco's `SignatureHelpResult` shape.
  */
-import { shouldDiscardResponse } from "../completion-identity.js";
+import { shouldDiscardAgainstLatest } from "../completion-identity.js";
 import type { EditorLanguageId } from "../languages.js";
 import type {
   EditorRequestIdentity,
@@ -22,6 +22,11 @@ import {
   type MonacoPositionLike,
 } from "./completion-bridge.js";
 import type { MonacoUriLike } from "./definition-bridge.js";
+import {
+  classifyResultKind,
+  runLanguageBridgeCall,
+  type EditorLanguageIntelligenceReporter,
+} from "./language-intelligence.js";
 
 export interface MonacoSignatureHelpModel {
   getValue(): string;
@@ -107,6 +112,8 @@ export interface KeikoSignatureHelpProviderDeps {
   readonly newRequestId: () => string;
   readonly triggerCharacters: readonly string[];
   readonly retriggerCharacters: readonly string[];
+  /** Outcome sink so "no signature here" stays distinguishable from "parameter hints failed". */
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function buildRequest(
@@ -150,7 +157,7 @@ export function createKeikoSignatureHelpProvider(
   return {
     signatureHelpTriggerCharacters: deps.triggerCharacters,
     signatureHelpRetriggerCharacters: deps.retriggerCharacters,
-    async provideSignatureHelp(
+    provideSignatureHelp(
       model,
       position,
       token,
@@ -158,22 +165,26 @@ export function createKeikoSignatureHelpProvider(
     ): Promise<MonacoSignatureHelpResult | undefined> {
       const documentUri = model.uri.toString();
       if (!deps.isCurrentDocument(documentUri)) {
-        return undefined;
+        return Promise.resolve(undefined);
       }
       sequence += 1;
       const request = buildRequest(deps, documentUri, position, context, sequence);
       latest = request.request;
       const controller = controllerForToken(token);
-      try {
-        const query: EditorSignatureHelpQuery = { request, documentText: model.getValue() };
-        const response = await deps.resolve(query, controller.signal);
-        if (shouldDiscardResponse(response.request, latest)) {
-          return undefined;
-        }
-        return signatureHelpResponseToMonaco(response);
-      } catch {
-        return undefined;
-      }
+      const query: EditorSignatureHelpQuery = { request, documentText: model.getValue() };
+      return runLanguageBridgeCall<
+        EditorSignatureHelpResponse,
+        MonacoSignatureHelpResult | undefined
+      >({
+        operation: "signature-help",
+        resolve: () => deps.resolve(query, controller.signal),
+        isDiscarded: (response) => shouldDiscardAgainstLatest(response.request, latest),
+        discardedValue: undefined,
+        failedValue: undefined,
+        classify: (response) => classifyResultKind(response.signatures.length, response.truncated),
+        present: signatureHelpResponseToMonaco,
+        report: deps.report,
+      });
     },
   };
 }
@@ -187,6 +198,7 @@ export interface RegisterKeikoSignatureHelpProviderArgs {
   readonly newRequestId: () => string;
   readonly triggerCharacters?: readonly string[] | undefined;
   readonly retriggerCharacters?: readonly string[] | undefined;
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
@@ -214,6 +226,7 @@ export function registerKeikoSignatureHelpProvider(
       newRequestId: args.newRequestId,
       triggerCharacters: args.triggerCharacters ?? DEFAULT_SIGNATURE_HELP_TRIGGER_CHARACTERS,
       retriggerCharacters: args.retriggerCharacters ?? DEFAULT_SIGNATURE_HELP_RETRIGGER_CHARACTERS,
+      report: args.report,
     });
     return args.languages.registerSignatureHelpProvider(documentLanguage, provider);
   });

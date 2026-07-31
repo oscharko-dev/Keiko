@@ -13,6 +13,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import { buildActionSheetFromFacts, type BuildActionSheetFacts } from "./actionSheetProjection.js";
+import { KEIKO_DEFAULT_PUBLISH_POLICY_PACK } from "./pushExecution.js";
+import { KEIKO_DEFAULT_PR_POLICY_PACK } from "./prExecution.js";
 
 const CLEAN_SNAPSHOT: GitWorktreeSnapshot = {
   headDetached: false,
@@ -242,5 +244,73 @@ describe("buildActionSheetFromFacts", () => {
 
   it("is deterministic — identical facts yield an identical sheet", () => {
     expect(buildActionSheetFromFacts(facts())).toEqual(buildActionSheetFromFacts(facts()));
+  });
+});
+
+// ─── Preview/execute agreement on the policy target branch ──────────────────────────────────────
+//
+// The action sheet is the surface a human reads BEFORE approving an action. If it evaluates the
+// branch-pattern rules against a different branch than the executing gate does, it tells the human
+// the opposite of what will happen. The packs below are the PRODUCTION packs imported from the
+// executing routes — not copies — so this test moves with them.
+
+const PUSH_TO_DEV: GitDeliveryResolvedInputs = {
+  kind: "push",
+  sourceBranchName: "feat/x",
+  remoteAlias: "origin",
+  remoteBranchName: "dev",
+  forcePush: false,
+  setUpstreamTracking: false,
+};
+
+const PR_ONTO_UNLISTED_BASE: GitDeliveryResolvedInputs = {
+  kind: "pr-create",
+  headBranchName: "feat/x",
+  baseBranchName: "scratch/experiment",
+  titleByteLength: 20,
+  bodyByteLength: 40,
+  isDraft: false,
+};
+
+describe("policy target branch agreement with the executing gates", () => {
+  it("blocks a preview of a push whose REMOTE target is dev under the shipped publish pack", () => {
+    const sheet = buildActionSheetFromFacts(
+      facts({
+        resolvedInputs: PUSH_TO_DEV,
+        policyPacks: { repoPack: KEIKO_DEFAULT_PUBLISH_POLICY_PACK },
+      }),
+    );
+    expect(sheet.policyExplanation.decision).toBe("blocked");
+    expect(sheet.state).toBe("blocked");
+  });
+
+  it("keeps a preview of a push to an allow-listed remote branch executable", () => {
+    const sheet = buildActionSheetFromFacts(
+      facts({
+        resolvedInputs: { ...PUSH_TO_DEV, remoteBranchName: "feat/x" },
+        policyPacks: { repoPack: KEIKO_DEFAULT_PUBLISH_POLICY_PACK },
+      }),
+    );
+    expect(sheet.policyExplanation.decision).not.toBe("blocked");
+  });
+
+  it("blocks a preview of a pull request whose BASE is outside the shipped PR pack", () => {
+    const sheet = buildActionSheetFromFacts(
+      facts({
+        resolvedInputs: PR_ONTO_UNLISTED_BASE,
+        policyPacks: { repoPack: KEIKO_DEFAULT_PR_POLICY_PACK },
+      }),
+    );
+    expect(sheet.policyExplanation.decision).toBe("blocked");
+  });
+
+  it("keeps a preview of a pull request onto an allow-listed base executable", () => {
+    const sheet = buildActionSheetFromFacts(
+      facts({
+        resolvedInputs: { ...PR_ONTO_UNLISTED_BASE, baseBranchName: "dev" },
+        policyPacks: { repoPack: KEIKO_DEFAULT_PR_POLICY_PACK },
+      }),
+    );
+    expect(sheet.policyExplanation.decision).not.toBe("blocked");
   });
 });

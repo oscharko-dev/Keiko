@@ -93,6 +93,7 @@ export async function readMergeProviderReadiness(
     return await adapter.readMergeReadiness({
       ownerAndRepo: command.ownerAndRepo,
       prExternalId: command.prExternalId,
+      baseBranchName: command.baseBranchName,
     });
   } catch {
     return { providerCapableStrategies: [], providerError: true };
@@ -186,6 +187,10 @@ export interface GitDeliveryMergePreviewBody {
   readonly requiresApproval: boolean;
   readonly readiness: GitDeliveryMergeReadinessBody;
   readonly recommendation: string;
+  // The provider's current head SHA (see GitMergeProviderReadiness.headRefHash) — the UI forwards this
+  // back as `expectedHeadRefHash` on execute so the merge is pinned to the exact head this preview was
+  // computed against.
+  readonly headRefHash?: string;
 }
 
 interface MergePreviewParts {
@@ -274,6 +279,7 @@ export function buildGitDeliveryMergePreview(
       blockers: mergeBlockerViews(parts.readiness),
     },
     recommendation: parts.recommendation,
+    ...(provider.headRefHash !== undefined ? { headRefHash: provider.headRefHash } : {}),
   };
 }
 

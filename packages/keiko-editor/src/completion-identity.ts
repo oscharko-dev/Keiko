@@ -37,3 +37,17 @@ export function shouldDiscardResponse(
 ): boolean {
   return !isResponseCurrent(responseRequest, latestRequest);
 }
+
+/**
+ * {@link shouldDiscardResponse} against a provider's *live* latest-request slot, which is `null` until
+ * the first request is issued and may be reassigned while a response is in flight. A bridge must read
+ * that slot at settle time (not snapshot it beforehand), so the nullable case belongs here rather than
+ * in each bridge: with no request outstanding there is nothing the response can be current for, so it
+ * is discarded.
+ */
+export function shouldDiscardAgainstLatest(
+  responseRequest: EditorRequestIdentity,
+  latestRequest: EditorRequestIdentity | null,
+): boolean {
+  return latestRequest === null || shouldDiscardResponse(responseRequest, latestRequest);
+}

@@ -16,8 +16,10 @@
 // Custom stores without that optional method still work through get+put, but the built-in
 // Node and in-memory stores use the safer update path.
 //
-// Failure mode: ordinary post-commit bridge errors are caught and logged to console.error so a
-// noncritical audit sink cannot break already-committed writes. Privacy-critical delete/forget uses
+// Failure mode: ordinary post-commit bridge errors are caught and reported to the server's redacted
+// diagnostic sink (diagnostics-log.ts) so a noncritical audit sink cannot break already-committed
+// writes — and so an evidence write that FAILS is visible to an operator instead of vanishing into a
+// `console.error` default that production never overrode. Privacy-critical delete/forget uses
 // `createMemoryAuditDeleteCommitHandler` below: it writes inside the vault's pre-commit delete hook
 // and throws on persistence failure so the memory mutation rolls back instead of committing without
 // its audit evidence.
@@ -48,6 +50,11 @@ import {
   buildUpdatedEvent,
   type BuildContext,
 } from "./memory-audit-event-builders.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
 import { sanitizeAuditEvent } from "./memory-scope-sanitizer.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -59,8 +66,48 @@ export interface MemoryAuditHandlerOptions {
   readonly now?: () => number;
   // Optional event-id factory; defaults to randomUUID. Injected so tests get stable IDs.
   readonly newEventId?: () => string;
-  // Optional sink for persistence errors; defaults to console.error. Tests inject a spy.
+  // Operator diagnostic sink for persistence failures. When absent the shared default stderr sink in
+  // diagnostics-log.ts is used — NEVER a bare console call carrying the raw error object.
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  // Explicit persistence-error observer. Overrides the diagnostic sink; kept as the injection seam
+  // existing callers and regression pins use.
   readonly onPersistError?: (error: unknown) => void;
+}
+
+// Shape shared by both persistence paths below, so the failure reporter has exactly one implementation.
+interface AuditPersistFailureContext {
+  readonly redactString: (input: string) => string;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly onPersistError?: ((error: unknown) => void) | undefined;
+}
+
+// One redacted, correlation-keyed record for an audit-persistence failure.
+//
+// The previous default was `console.error("…", error)`: it handed the RAW error object (message and
+// stack) to a channel no production assembly ever overrode. That made a failed evidence write both
+// invisible to operators and capable of carrying the very content this module exists to redact.
+// Routing through the server's single diagnostic sink fixes both — `serverDiagnosticFromError`
+// extracts only the content-free shape (class, machine code) and never reads `.message`.
+function reportAuditPersistFailure(
+  options: AuditPersistFailureContext,
+  source: string,
+  error: unknown,
+): void {
+  if (options.onPersistError !== undefined) {
+    options.onPersistError(error);
+    return;
+  }
+  emitServerDiagnostic(
+    options.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: randomUUID(),
+      operation: "memory.audit.persist",
+      source,
+      error,
+      summary: "Audit or evidence persistence failed.",
+      redact: options.redactString,
+    }),
+  );
 }
 
 export type MemoryAuditHandler = (event: MemoryEvent) => void;
@@ -289,12 +336,6 @@ export function assertMemoryAuditWritable(store: EvidenceStore, nowMs: number): 
 export function createMemoryAuditHandler(options: MemoryAuditHandlerOptions): MemoryAuditHandler {
   const now = options.now ?? ((): number => Date.now());
   const newEventId = options.newEventId ?? ((): string => randomUUID());
-  const onPersistError =
-    options.onPersistError ??
-    ((error: unknown): void => {
-      // eslint-disable-next-line no-console
-      console.error("memory-audit-handler: persistence failed", error);
-    });
   const previousStatus = new Map<MemoryId, MemoryStatus>();
   const previousPinned = new Map<MemoryId, boolean>();
 
@@ -314,7 +355,7 @@ export function createMemoryAuditHandler(options: MemoryAuditHandlerOptions): Me
         sanitizeAuditEvent(auditEvent, options.redactString),
       ]);
     } catch (error) {
-      onPersistError(error);
+      reportAuditPersistFailure(options, "memory-audit-handler.bridge", error);
     }
   };
 }
@@ -384,9 +425,31 @@ function updateStateCache(
 export interface RecordMemoryAuditOptions {
   readonly evidenceStore: EvidenceStore;
   readonly now?: () => number;
-  readonly redactString?: (input: string) => string;
+  /**
+   * REQUIRED — this is the evidence-redaction boundary, and it fails closed.
+   *
+   * This field used to be optional with `?? (input) => input`: an IDENTITY default. Every caller that
+   * simply forgot it — `{ evidenceStore: deps.evidenceStore }` was the common shape — silently
+   * persisted UNREDACTED summaries and scope coordinates into the on-disk audit ledger, and nothing
+   * failed. A redactor that must be named cannot be forgotten: a caller with no redactor now does not
+   * compile, rather than writing raw content to evidence.
+   */
+  readonly redactString: (input: string) => string;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly onPersistError?: (error: unknown) => void;
   readonly required?: boolean;
+}
+
+/**
+ * The store-plus-redactor pair a subsystem threads when it emits audit events several call layers away
+ * from the request that owns the redactor (the maintenance pass is the case this exists for). Threading
+ * the pair instead of a bare `EvidenceStore` is what makes the redactor structurally impossible to drop
+ * on the way down: there is no intermediate signature that carries a store WITHOUT its redactor.
+ */
+export interface MemoryAuditSink {
+  readonly evidenceStore: EvidenceStore;
+  readonly redactString: (input: string) => string;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 export function recordMemoryAudit(
@@ -403,13 +466,7 @@ export function recordMemoryAudits(
   if (events.length === 0) {
     return;
   }
-  const redactString = options.redactString ?? ((input: string): string => input);
-  const onPersistError =
-    options.onPersistError ??
-    ((error: unknown): void => {
-      // eslint-disable-next-line no-console
-      console.error("memory-audit-handler: direct emission failed", error);
-    });
+  const redactString = options.redactString;
   const eventsByRunId = new Map<string, MemoryAuditEvent[]>();
   for (const event of events) {
     const runId = auditRunIdFor(event.occurredAt);
@@ -427,7 +484,7 @@ export function recordMemoryAudits(
       if (options.required === true) {
         throw error;
       }
-      onPersistError(error);
+      reportAuditPersistFailure(options, "memory-audit-handler.direct", error);
     }
   }
 }
@@ -470,6 +527,7 @@ export function createMemoryAuditDeleteCommitHandler(
         evidenceStore: options.evidenceStore,
         redactString: options.redactString,
         required: true,
+        ...(options.diagnostics === undefined ? {} : { diagnostics: options.diagnostics }),
         ...(options.onPersistError === undefined ? {} : { onPersistError: options.onPersistError }),
       },
       auditEvents,

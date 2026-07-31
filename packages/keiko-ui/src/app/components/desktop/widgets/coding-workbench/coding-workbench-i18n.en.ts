@@ -45,6 +45,12 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.questions.terminal": "The coding run has ended.",
   "codingWorkbench.questions.unpaired":
     "This window is not paired for question content. Restart Keiko from its launcher to pair a new app session.",
+  "codingWorkbench.pairing.unpaired":
+    "Browser window not paired — open Keiko through the launcher to enable coding runs.",
+  "codingWorkbench.questions.answerFailed":
+    "Your answer was not accepted ({code}). The question is still open — send it again.",
+  "codingWorkbench.questions.rejectFailed":
+    "Rejecting the question was not accepted ({code}). The question is still open — try again.",
   "codingWorkbench.questions.retry": "Check again",
   "codingWorkbench.questions.requestTitle": "Runtime needs your input",
   "codingWorkbench.questions.required": "Answer every question before sending.",
@@ -90,6 +96,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The run's task-workspace binding is no longer available. No diff is shown.",
   "codingWorkbench.changes.unavailable":
     "Changes are unavailable. The app session may need to be paired again; no stale diff is shown.",
+  "codingWorkbench.changes.unpaired":
+    "Browser window not paired — open Keiko through the launcher to read this run's task workspace. No diff is shown.",
   "codingWorkbench.changes.error": "Changes could not be refreshed. No stale diff is shown.",
   "codingWorkbench.changes.retry": "Refresh changes",
   "codingWorkbench.changes.asOf": "As of {head}",
@@ -172,7 +180,13 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.codex.detail":
     "Uses a Keiko-owned subscription session. Credentials remain private.",
   "codingWorkbench.source.confirmedLabel": "Server-confirmed source",
-  "codingWorkbench.source.confirmedValue": "{source} · {status}",
+  "codingWorkbench.source.confirmedValue": "{source} · {status} · {verification}",
+  "codingWorkbench.source.verification.verified": "verified by the last gateway check",
+  "codingWorkbench.source.verification.partial": "partly verified by the last gateway check",
+  "codingWorkbench.source.verification.failed": "the last gateway check failed",
+  "codingWorkbench.source.verification.unverified": "configured, not verified",
+  "codingWorkbench.source.verificationHint":
+    "The last gateway readiness check could not reach this source, so runs stay blocked. Re-run the readiness check in Settings.",
   "codingWorkbench.source.retry": "Retry source",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI through Gateway",
@@ -232,6 +246,15 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.research.loading": "Loading the destination…",
   "codingWorkbench.approval.research.unavailable":
     "Destination unavailable. Re-pair this window to see it before deciding.",
+  "codingWorkbench.approval.changes.title": "Files this change would write",
+  "codingWorkbench.approval.changes.files": "Files",
+  "codingWorkbench.approval.changes.lines": "Lines",
+  "codingWorkbench.approval.changes.lineCounts": "+{added} / -{deleted}",
+  "codingWorkbench.approval.changes.truncated":
+    "Only the first {shown} of {total} files are listed.",
+  "codingWorkbench.approval.changes.loading": "Loading the changed files…",
+  "codingWorkbench.approval.changes.unavailable":
+    "Changed files unavailable. Re-pair this window to see them before deciding.",
   "codingWorkbench.approval.help": "Raw commands, prompts, diffs, and file contents remain hidden.",
   "codingWorkbench.approval.approve": "Approve once",
   "codingWorkbench.approval.deny": "Deny",
@@ -245,6 +268,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changesetReview.retry": "Try again",
   "codingWorkbench.changesetReview.deliveryFailed":
     "Could not confirm this decision with the run. Try again.",
+  "codingWorkbench.changesetReview.deliveryFailedCode":
+    "Could not confirm this decision with the run ({code}). The change was not written — try again.",
   "codingWorkbench.recovery.eyebrow": "Recovery required",
   "codingWorkbench.recovery.title": "Reconcile before retrying",
   "codingWorkbench.recovery.summary":

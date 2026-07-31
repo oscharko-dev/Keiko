@@ -47,6 +47,12 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.questions.terminal": "Der Coding-Lauf ist beendet.",
   "codingWorkbench.questions.unpaired":
     "Dieses Fenster ist nicht für Frageinhalte gekoppelt. Starten Sie Keiko über den Launcher neu, um eine neue App-Sitzung zu koppeln.",
+  "codingWorkbench.pairing.unpaired":
+    "Browserfenster nicht gekoppelt — öffnen Sie Keiko über den Launcher, um Coding-Läufe zu ermöglichen.",
+  "codingWorkbench.questions.answerFailed":
+    "Ihre Antwort wurde nicht angenommen ({code}). Die Frage ist weiterhin offen — senden Sie sie erneut.",
+  "codingWorkbench.questions.rejectFailed":
+    "Das Ablehnen der Frage wurde nicht angenommen ({code}). Die Frage ist weiterhin offen — versuchen Sie es erneut.",
   "codingWorkbench.questions.retry": "Erneut prüfen",
   "codingWorkbench.questions.requestTitle": "Die Laufzeit benötigt Ihre Eingabe",
   "codingWorkbench.questions.required": "Beantworten Sie jede Frage vor dem Senden.",
@@ -92,6 +98,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Aufgaben-Workspace-Bindung des Laufs ist nicht mehr verfügbar. Es wird kein Diff angezeigt.",
   "codingWorkbench.changes.unavailable":
     "Änderungen sind nicht verfügbar. Die App-Sitzung muss möglicherweise erneut gekoppelt werden; es wird kein veraltetes Diff angezeigt.",
+  "codingWorkbench.changes.unpaired":
+    "Browserfenster nicht gekoppelt — öffnen Sie Keiko über den Launcher, um den Aufgaben-Workspace dieses Laufs zu lesen. Es wird kein Diff angezeigt.",
   "codingWorkbench.changes.error":
     "Änderungen konnten nicht aktualisiert werden. Es wird kein veraltetes Diff angezeigt.",
   "codingWorkbench.changes.retry": "Änderungen aktualisieren",
@@ -180,7 +188,14 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.codex.detail":
     "Verwendet eine von Keiko verwaltete Abonnementsitzung. Zugangsdaten bleiben privat.",
   "codingWorkbench.source.confirmedLabel": "Serverbestätigte Quelle",
-  "codingWorkbench.source.confirmedValue": "{source} · {status}",
+  "codingWorkbench.source.confirmedValue": "{source} · {status} · {verification}",
+  "codingWorkbench.source.verification.verified": "durch die letzte Gateway-Prüfung bestätigt",
+  "codingWorkbench.source.verification.partial":
+    "durch die letzte Gateway-Prüfung teilweise bestätigt",
+  "codingWorkbench.source.verification.failed": "letzte Gateway-Prüfung fehlgeschlagen",
+  "codingWorkbench.source.verification.unverified": "konfiguriert, nicht verifiziert",
+  "codingWorkbench.source.verificationHint":
+    "Die letzte Gateway-Bereitschaftsprüfung hat diese Quelle nicht erreicht, daher bleiben Läufe blockiert. Führe die Bereitschaftsprüfung in den Einstellungen erneut aus.",
   "codingWorkbench.source.retry": "Quelle erneut versuchen",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI über Gateway",
@@ -240,6 +255,15 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.research.loading": "Ziel wird geladen …",
   "codingWorkbench.approval.research.unavailable":
     "Ziel nicht abrufbar. Fenster erneut koppeln, um es vor der Entscheidung zu sehen.",
+  "codingWorkbench.approval.changes.title": "Dateien, die diese Änderung schreiben würde",
+  "codingWorkbench.approval.changes.files": "Dateien",
+  "codingWorkbench.approval.changes.lines": "Zeilen",
+  "codingWorkbench.approval.changes.lineCounts": "+{added} / -{deleted}",
+  "codingWorkbench.approval.changes.truncated":
+    "Es werden nur die ersten {shown} von {total} Dateien aufgeführt.",
+  "codingWorkbench.approval.changes.loading": "Geänderte Dateien werden geladen …",
+  "codingWorkbench.approval.changes.unavailable":
+    "Geänderte Dateien nicht abrufbar. Fenster erneut koppeln, um sie vor der Entscheidung zu sehen.",
   "codingWorkbench.approval.help":
     "Unverarbeitete Befehle, Prompts, Diffs und Dateiinhalte bleiben verborgen.",
   "codingWorkbench.approval.approve": "Einmal genehmigen",
@@ -254,6 +278,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changesetReview.retry": "Erneut versuchen",
   "codingWorkbench.changesetReview.deliveryFailed":
     "Diese Entscheidung konnte dem Task nicht bestätigt werden. Bitte erneut versuchen.",
+  "codingWorkbench.changesetReview.deliveryFailedCode":
+    "Diese Entscheidung konnte dem Task nicht bestätigt werden ({code}). Die Änderung wurde nicht geschrieben — bitte erneut versuchen.",
   "codingWorkbench.recovery.eyebrow": "Wiederherstellung erforderlich",
   "codingWorkbench.recovery.title": "Vor erneutem Versuch abgleichen",
   "codingWorkbench.recovery.summary":

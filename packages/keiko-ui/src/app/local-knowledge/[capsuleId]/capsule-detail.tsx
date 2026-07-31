@@ -33,8 +33,13 @@ import {
   resumeCapsuleLargeDocuments,
   updateCapsuleContextualRetrieval,
 } from "@/lib/local-knowledge-api";
-import { formatBytes, formatDurationCompact as formatDuration } from "@/lib/format";
 import {
+  formatBytes,
+  formatDurationCompact as formatDuration,
+  toSafeIsoString,
+} from "@/lib/format";
+import {
+  unsupportedGuidanceText,
   useLocalKnowledgeTranslate as useTranslate,
   type I18nTranslate,
 } from "../local-knowledge-i18n";
@@ -673,7 +678,7 @@ function OverviewSection({ data }: { readonly data: CapsuleDetailData }): ReactN
             }
           />
         ) : null}
-        {health.unsupportedGuidance.length > 0 ? (
+        {health.unsupportedGuidanceCodes.length > 0 ? (
           <OverviewRow
             label={t("localKnowledge.detail.overview.nextSteps")}
             help={t("localKnowledge.detail.help.overviewNextSteps")}
@@ -682,8 +687,9 @@ function OverviewSection({ data }: { readonly data: CapsuleDetailData }): ReactN
                 className="lkd-stale-reasons"
                 aria-label={t("localKnowledge.detail.overview.unsupportedGuidance")}
               >
-                {health.unsupportedGuidance.map((guidance) => (
-                  <li key={guidance}>{guidance}</li>
+                {/* The server sends reason codes; the operator reads them in their own locale. */}
+                {health.unsupportedGuidanceCodes.map((code) => (
+                  <li key={code}>{unsupportedGuidanceText(code, t)}</li>
                 ))}
               </ul>
             }
@@ -1239,6 +1245,18 @@ function jobStatusLabel(status: IndexingJobStatus, t: I18nTranslate): string {
   return t("localKnowledge.detail.jobs.status.cancelled");
 }
 
+// F4 — job.startedAt/finishedAt are unvalidated persisted timestamps; `.toISOString()` throws
+// RangeError on an Invalid Date and this route has no boundary above it that catches a thrown
+// error (`<Suspense>` only covers the loading state). toSafeIsoString fails closed by omitting
+// the `dateTime` attribute instead of crashing the whole page; formatTs (toLocaleString-based)
+// already renders "Invalid Date" safely for the visible label. Both job timestamps render through
+// this one component so neither can regress to a raw `.toISOString()` on its own.
+function JobTimestamp({ epochMs }: { readonly epochMs: number }): ReactNode {
+  const iso = toSafeIsoString(epochMs);
+  const isoAttribute = iso === undefined ? {} : { dateTime: iso };
+  return <time {...isoAttribute}>{formatTs(epochMs)}</time>;
+}
+
 function JobRow({
   job,
   t,
@@ -1263,13 +1281,11 @@ function JobRow({
         {jobStatusLabel(job.status, t)}
       </span>
       <span className="lkd-job-dates">
-        <time dateTime={new Date(job.startedAt).toISOString()}>{formatTs(job.startedAt)}</time>
+        <JobTimestamp epochMs={job.startedAt} />
         {job.finishedAt !== undefined ? (
           <>
             {" — "}
-            <time dateTime={new Date(job.finishedAt).toISOString()}>
-              {formatTs(job.finishedAt)}
-            </time>
+            <JobTimestamp epochMs={job.finishedAt} />
           </>
         ) : null}
       </span>

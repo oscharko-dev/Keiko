@@ -171,6 +171,67 @@ describe("MemoryJournal Keep and Forget", () => {
     expect(acceptImpl).toHaveBeenCalledTimes(1);
   });
 
+  // A capture proposed at capture time can be accepted afterwards (review queue, detail view, or
+  // the maintenance sweep). The row must follow the record's live status: showing "Awaiting
+  // review" would be a lie, and Keep would POST an accept the server answers with 409.
+  it("follows the live status of a capture accepted after the capture decision", async () => {
+    const user = userEvent.setup();
+    const acceptImpl = vi.fn().mockRejectedValue(new Error("Memory is not in proposed status."));
+    renderJournal(
+      [makeCapture("already", 100, { outcome: "proposed", currentStatus: "accepted" })],
+      {
+        acceptMemoryProposalImpl: acceptImpl,
+      },
+    );
+    const row = await screen.findByTestId("memory-journal-row");
+
+    expect(within(row).getByText("Accepted")).toBeInTheDocument();
+    expect(within(row).queryByText("Awaiting review")).not.toBeInTheDocument();
+
+    await user.click(within(row).getByRole("button", { name: "Keep" }));
+
+    await waitFor(() => expect(within(row).getByText("Kept")).toBeInTheDocument());
+    expect(acceptImpl).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    // The audit outcome is history and is never rewritten by the live-status reconciliation.
+    expect(row).toHaveAttribute("data-outcome", "proposed");
+  });
+
+  it("still promotes a capture whose record is genuinely still proposed", async () => {
+    const user = userEvent.setup();
+    const acceptImpl = vi.fn().mockResolvedValue({ memory: {} });
+    renderJournal([makeCapture("open", 100, { outcome: "proposed", currentStatus: "proposed" })], {
+      acceptMemoryProposalImpl: acceptImpl,
+    });
+    const row = await screen.findByTestId("memory-journal-row");
+
+    expect(within(row).getByText("Awaiting review")).toBeInTheDocument();
+    await user.click(within(row).getByRole("button", { name: "Keep" }));
+
+    await waitFor(() => expect(within(row).getByText("Kept")).toBeInTheDocument());
+    expect(acceptImpl).toHaveBeenCalledWith("open");
+    expect(within(row).getByText("Accepted")).toBeInTheDocument();
+  });
+
+  // Acknowledging a row must not invent a transition: an archived record stays archived.
+  it("never rewrites a non-proposed live status when Keep only acknowledges", async () => {
+    const user = userEvent.setup();
+    const acceptImpl = vi.fn();
+    renderJournal(
+      [makeCapture("shelved", 100, { outcome: "auto-accepted", currentStatus: "archived" })],
+      { acceptMemoryProposalImpl: acceptImpl },
+    );
+    const row = await screen.findByTestId("memory-journal-row");
+    expect(within(row).getByText("Archived")).toBeInTheDocument();
+
+    await user.click(within(row).getByRole("button", { name: "Keep" }));
+
+    await waitFor(() => expect(within(row).getByText("Kept")).toBeInTheDocument());
+    expect(acceptImpl).not.toHaveBeenCalled();
+    expect(within(row).getByText("Archived")).toBeInTheDocument();
+    expect(within(row).queryByText("Accepted")).not.toBeInTheDocument();
+  });
+
   it("preserves the original outcome when Keep acknowledges an already-decided capture", async () => {
     const user = userEvent.setup();
     renderJournal([makeCapture("captured", 100, { outcome: "captured" })]);

@@ -15,6 +15,7 @@
 
 import {
   type EnhancedPrompt,
+  type MissingInformationStrategy,
   PROMPT_ENHANCEMENT_PROFILE_IDS,
   PROMPT_ENHANCER_SCHEMA_VERSION,
   type PromptCandidateRejection,
@@ -49,8 +50,13 @@ export interface OptimizePromptCandidatesArgs {
   readonly input: RawPromptInput;
   // Optional bounds; each falls back to its default and is clamped to a safe range.
   readonly bounds?: Partial<PromptOptimizationBounds> | undefined;
-  // Optional baseline profile preference, forwarded to candidate generation.
+  // Optional baseline profile preference, forwarded to candidate generation so the preferred profile
+  // leads the slate. It does NOT decide the winner here: `PromptCandidateSelection.ranked` is contract-
+  // bound to the deterministic score order with the winner at its head. Callers that must honor an
+  // explicit caller preference resolve it with `resolvePreferredCandidate` below.
   readonly profilePreference?: PromptEnhancementProfileId | undefined;
+  // Optional missing-information strategy, forwarded to candidate generation and on to the planner.
+  readonly missingInformationStrategy?: MissingInformationStrategy | undefined;
 }
 
 function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
@@ -175,13 +181,21 @@ function evaluateCandidates(
 function loserRejections(
   winner: PromptCandidateScorecard,
   ranked: readonly PromptCandidateScorecard[],
+  preferencePromoted: boolean,
 ): readonly PromptCandidateRejection[] {
-  return ranked.slice(1).map((card) => ({
-    candidateId: card.candidateId,
-    profile: card.profile,
-    aggregateScore: card.aggregateScore,
-    reason: rankedLoserReason(winner, card),
-  }));
+  return ranked
+    .filter((card) => card.candidateId !== winner.candidateId)
+    .map((card) => ({
+      candidateId: card.candidateId,
+      profile: card.profile,
+      aggregateScore: card.aggregateScore,
+      // A loser that scores at or above the winner can only exist because the caller's explicit
+      // profile preference decided the selection; calling that a tie-break loss would misreport it.
+      reason:
+        preferencePromoted && card.aggregateScore >= winner.aggregateScore
+          ? "profile-preference-not-matched"
+          : rankedLoserReason(winner, card),
+    }));
 }
 
 function generationRejections(
@@ -256,6 +270,7 @@ export function optimizePromptCandidates(
     input: args.input,
     candidateCount: generationCount,
     profilePreference: args.profilePreference,
+    missingInformationStrategy: args.missingInformationStrategy,
   });
   const safetyScreen = screenCandidatesForSafety(candidates, args.analysis, args.input);
 
@@ -286,7 +301,7 @@ export function optimizePromptCandidates(
     winnerSafetyAssessment,
     rankedSafetyAssessments,
     rejected: [
-      ...loserRejections(winner, ranked),
+      ...loserRejections(winner, ranked, false),
       ...budgetSkipped,
       ...safetyRejections(safetyScreen.rejected),
       ...generationRejections(generationRejected),
@@ -295,5 +310,62 @@ export function optimizePromptCandidates(
     iterations: candidates.length,
     candidatesConsidered: scored.length,
     tokensConsumed,
+  };
+}
+
+// ─── Caller-preference resolution ──────────────────────────────────────────────
+// The scored candidate a run actually delivers, plus the rejection trail re-derived against it.
+export interface PreferredPromptCandidate {
+  readonly winner: PromptCandidateScorecard;
+  readonly prompt: EnhancedPrompt;
+  readonly safetyAssessment: PromptSafetyAssessment;
+  readonly rejected: readonly PromptCandidateRejection[];
+}
+
+function preferredCandidateIndex(
+  ranked: readonly PromptCandidateScorecard[],
+  preferredProfile: PromptEnhancementProfileId | undefined,
+): number {
+  if (preferredProfile === undefined) return 0;
+  const index = ranked.findIndex((card) => card.profile === preferredProfile);
+  return Math.max(index, 0);
+}
+
+/**
+ * Resolve which scored candidate an explicit caller profile preference selects, and re-derive the
+ * rejection trail relative to that choice. Pure.
+ *
+ * `optimizePromptCandidates` ranks purely by score because `PromptCandidateSelection.ranked` is
+ * contract-bound to the deterministic score order with the winner at its head. The caller preference
+ * is a *selection* rule, not a scoring rule: the planner documents it as honored unless criticality
+ * escalates the profile, so `preferredProfile` must be the profile the planner actually selected for
+ * the preference (pass `planPromptEnhancement(...).selectedProfile`, never the raw request value).
+ *
+ * When the preferred profile produced no scored candidate — rejected by the safety screen, skipped by
+ * the token budget, or never generated — the top-scoring candidate stands and `selection.rejected`
+ * already records why the preference is not represented.
+ */
+export function resolvePreferredCandidate(
+  selection: PromptCandidateSelection,
+  preferredProfile: PromptEnhancementProfileId | undefined,
+): PreferredPromptCandidate {
+  const index = preferredCandidateIndex(selection.ranked, preferredProfile);
+  const winner = selection.ranked[index];
+  const prompt = selection.rankedPrompts[index];
+  const safetyAssessment = selection.rankedSafetyAssessments[index];
+  if (winner === undefined || prompt === undefined || safetyAssessment === undefined) {
+    throw new Error("Prompt candidate selection is missing the resolved candidate.");
+  }
+  const rankedIds = new Set(selection.ranked.map((card) => card.candidateId));
+  return {
+    winner,
+    prompt,
+    safetyAssessment,
+    rejected: [
+      ...loserRejections(winner, selection.ranked, index > 0),
+      // Rejections for candidates that were never scored (token budget, safety screen, generation)
+      // are independent of which scored candidate wins, so they carry over untouched.
+      ...selection.rejected.filter((entry) => !rankedIds.has(entry.candidateId)),
+    ],
   };
 }

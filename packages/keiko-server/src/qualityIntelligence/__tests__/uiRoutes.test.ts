@@ -8,6 +8,10 @@ import { STREAMING } from "../../routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import {
+  getQualityIntelligenceRetentionProfile,
+  QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID,
+} from "@oscharko-dev/keiko-evidence";
 
 // Stubbed @oscharko-dev/keiko-evidence surface used by uiRoutes. We import the handlers AFTER
 // `vi.mock` so the doMock factory below is the one consulted at handler call time.
@@ -140,11 +144,22 @@ describe("handleListQiRuns", () => {
 
     const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs"), deps()));
     expect(result.status).toBe(200);
+    // The automatic-deletion disclosure travels with the empty list too (0.3.0 release audit): an
+    // empty list is exactly when a user needs to know the product may have deleted their runs.
+    // Derived from the production profile table so the assertion moves with the enforced policy.
+    const enforced = getQualityIntelligenceRetentionProfile(
+      QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID,
+    );
     expect(result.body).toEqual({
       runs: [],
       limit: QI_RUN_LIST_DEFAULT_LIMIT,
       totalRunIds: 0,
       truncated: false,
+      retention: {
+        policyId: QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID,
+        retainedDays: enforced?.retainedDays,
+        maxRunArtifacts: enforced?.maxRunArtifacts,
+      },
     });
     expect(loadMock).not.toHaveBeenCalled();
   });

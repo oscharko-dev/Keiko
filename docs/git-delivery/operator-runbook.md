@@ -14,10 +14,21 @@ It assumes the implementation from Epic #470 is present and verified by the
    GitHub tokens; the `gh` process owns credential lookup through its keyring or `GH_TOKEN` /
    `GITHUB_TOKEN`.
 
-3. Confirm policy packs are loaded from trusted server-side configuration. Clients may request action
+3. Confirm the account Keiko runs as can push to the remote the same way its own shell can: an SSH
+   agent or `~/.ssh` key, or a git credential helper. Governed push runs the user's own credential
+   configuration and never prompts — a missing credential fails the publish rather than hanging.
+
+4. Confirm `user.name` / `user.email` are configured for the account Keiko runs as, and that any
+   signing configuration the repository requires (`commit.gpgsign`, `user.signingkey`, `gpg.format`)
+   is present and usable. Governed commit resolves identity and signing exactly as the user's own
+   `git commit` does: a repository configured for signed commits produces a signed commit, and a
+   commit that cannot be signed FAILS rather than landing unsigned. Keiko does not itself detect a
+   remote branch-protection signature requirement.
+
+5. Confirm policy packs are loaded from trusted server-side configuration. Clients may request action
    intent, but clients do not assert policy decisions or approval state as authority.
 
-4. Confirm evidence storage is writable if audit export is required. Evidence append is best-effort for
+6. Confirm evidence storage is writable if audit export is required. Evidence append is best-effort for
    response availability, but support readiness requires monitoring evidence write failures.
 
 ## Operating modes

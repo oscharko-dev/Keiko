@@ -26,7 +26,11 @@ export interface AxeViolation {
 // Runs axe over the element matched by `selector` and returns every violation. Callers decide which
 // impact levels are gating (the smoke gate fails on serious/critical, matching the W10 criterion).
 export async function runAxe(page: Page, selector: string): Promise<readonly AxeViolation[]> {
-  await page.addScriptTag({ content: AXE_SOURCE });
+  // A single page is scanned more than once by callers that re-measure one surface across contrast
+  // modes, so inject the bundle only when it is not already there instead of re-evaluating it per
+  // scan. The bundle is an IIFE assigning `window.axe`, so a re-inject would be correct but wasteful.
+  const alreadyInjected = await page.evaluate(() => "axe" in window);
+  if (!alreadyInjected) await page.addScriptTag({ content: AXE_SOURCE });
   return page.evaluate(
     async ({ rootSelector, tags }) => {
       const root = document.querySelector(rootSelector);

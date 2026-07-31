@@ -14,15 +14,22 @@ import type {
   CapsuleContextualRetrievalHealth,
   CapsuleLargeDocumentHealth,
   DocumentId,
+  IndexingJobRecord,
   KnowledgeCapsuleId,
   KnowledgeCapsule,
   CapsuleHealth,
+  UnsupportedDocumentGuidanceCode,
 } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
 } from "@oscharko-dev/keiko-contracts";
-import { translateLocalKnowledge, type I18nTranslate } from "../local-knowledge-i18n";
+import {
+  translateLocalKnowledge,
+  unsupportedGuidanceText,
+  type I18nTranslate,
+} from "../local-knowledge-i18n";
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 
 // ---------------------------------------------------------------------------
 // Mock next/navigation so useSearchParams() resolves synchronously in jsdom
@@ -52,6 +59,7 @@ vi.mock("next/navigation", () => ({
 afterEach(() => {
   mockSearchParams = new URLSearchParams("capsuleId=cap-test-1");
   vi.unstubAllGlobals();
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
 });
 
 // ---------------------------------------------------------------------------
@@ -108,7 +116,7 @@ const BASE_HEALTH: CapsuleHealth = {
   failedDocuments: 0,
   skippedDocuments: 0,
   unsupportedDocuments: 0,
-  unsupportedGuidance: [],
+  unsupportedGuidanceCodes: [],
   staleReasons: [],
   contextualRetrieval: {
     enabled: false,
@@ -158,8 +166,21 @@ function resolveDetail(detail: CapsuleDetailData = FULL_DETAIL): () => Promise<C
   return () => Promise.resolve(detail);
 }
 
-async function openAdvanced(user: ReturnType<typeof userEvent.setup>): Promise<void> {
-  await user.click(await screen.findByText("Status, sources, and diagnostics"));
+// Resolved through the production catalog rather than restated here: these are the same functions
+// the component renders with, so a copy change cannot leave a test locator or expectation behind.
+const englishT: I18nTranslate = (key, values) => translateLocalKnowledge("en", key, values);
+const germanT: I18nTranslate = (key, values) => translateLocalKnowledge("de", key, values);
+
+// The advanced disclosure is labelled in the active locale, so the helper has to be told which one
+// the caller rendered. It defaults to English because every test below renders `CapsuleDetail`
+// without an `I18nProvider` — `useLocale()` then returns the context default, `en`, unconditionally.
+// Hardcoding English here instead made the German test depend on the provider still being in its
+// English transition state (issue #2871); the locale is now the caller's explicit input.
+async function openAdvanced(
+  user: ReturnType<typeof userEvent.setup>,
+  t: I18nTranslate = englishT,
+): Promise<void> {
+  await user.click(await screen.findByText(t("localKnowledge.detail.advanced.summary")));
 }
 
 async function openMaintenance(user: ReturnType<typeof userEvent.setup>): Promise<void> {
@@ -287,19 +308,19 @@ describe("CapsuleDetail — overview section", () => {
     });
   });
 
+  // 0.3.0 release audit — the server used to ship this remediation as English prose that rendered
+  // verbatim under a translated heading. It now sends the reason code and the UI owns the copy, so
+  // the expectations below are resolved through the production catalog for the locale under test.
+  function unsupportedDetail(codes: readonly UnsupportedDocumentGuidanceCode[]): CapsuleDetailData {
+    return {
+      ...FULL_DETAIL,
+      health: { ...BASE_HEALTH, unsupportedDocuments: 2, unsupportedGuidanceCodes: codes },
+    };
+  }
+
   it("renders unsupported-document count and guidance when present", async () => {
     const user = userEvent.setup();
-    const detail: CapsuleDetailData = {
-      ...FULL_DETAIL,
-      health: {
-        ...BASE_HEALTH,
-        unsupportedDocuments: 2,
-        unsupportedGuidance: [
-          "Scanned PDFs need an OCR-capable extraction path. Configure a verified OCR or vision adapter, or provide a text-layer PDF.",
-        ],
-      },
-    };
-    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(unsupportedDetail(["pdf-needs-ocr"]))} />);
     await openAdvanced(user);
 
     await waitFor(() => {
@@ -307,8 +328,48 @@ describe("CapsuleDetail — overview section", () => {
     });
 
     expect(
-      screen.getByText(/Scanned PDFs need an OCR-capable extraction path/i),
+      screen.getByText(unsupportedGuidanceText("pdf-needs-ocr", englishT)),
     ).toBeInTheDocument();
+  });
+
+  it("renders the unsupported-document guidance in German", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    // Establish the locale before rendering, not after. The German catalog is imported lazily into
+    // module scope, and `I18nProvider` serves the English baseline until it resolves — so this test
+    // used to walk the UI through English labels and only then assert German, which passes only
+    // while that transition state still exists. Whether it does is a property of execution order
+    // and load timing, not of the component (issue #2871). Awaiting the catalog makes German the
+    // first and only paint, so every label this test touches is German, as its name claims.
+    await loadLocaleMessages("de");
+    render(
+      <I18nProvider>
+        <CapsuleDetail
+          fetchDetailImpl={resolveDetail(unsupportedDetail(["image-needs-ocr", "ocr-failed"]))}
+        />
+      </I18nProvider>,
+    );
+    await openAdvanced(user, germanT);
+
+    for (const code of ["image-needs-ocr", "ocr-failed"] as const) {
+      expect(await screen.findByText(unsupportedGuidanceText(code, germanT))).toBeInTheDocument();
+      // The English copy must be gone, not merely accompanied by German.
+      expect(screen.queryByText(unsupportedGuidanceText(code, englishT))).toBeNull();
+    }
+  });
+
+  it("falls back to the generic remediation for a code this build does not know", async () => {
+    const user = userEvent.setup();
+    // A newer server may add a code before this UI knows it; the operator must still get a next
+    // step instead of a raw wire token or an empty row.
+    const forwardCode = "quantum-format" as UnsupportedDocumentGuidanceCode;
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(unsupportedDetail([forwardCode]))} />);
+    await openAdvanced(user);
+
+    expect(
+      await screen.findByText(unsupportedGuidanceText("unsupported-format", englishT)),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(forwardCode)).toBeNull();
   });
 
   it("renders privacy and deletion disclosure copy", async () => {
@@ -809,6 +870,44 @@ describe("CapsuleDetail — indexing jobs section", () => {
     await user.click(screen.getByRole("button", { name: /show 3 more jobs/i }));
     expect(screen.getAllByText("Succeeded")).toHaveLength(29);
   });
+
+  // F4 — JobRow rendered `new Date(job.startedAt).toISOString()`/`new Date(job.finishedAt)
+  // .toISOString()` directly against unvalidated job timestamps. `<details>` always mounts its
+  // children in the React tree regardless of open/closed state, so this throws on the very first
+  // render — no `openAdvanced()` interaction needed to reach it — and `/local-knowledge/capsule`
+  // has no error.tsx and no boundary above it (`<Suspense>` does not catch thrown errors), so the
+  // whole page goes blank. These fail on the pre-fix component because `render()` itself throws.
+  it("does not crash the page when an indexing job's startedAt is not a valid timestamp", async () => {
+    const hostileJob: IndexingJobRecord = {
+      ...FULL_DETAIL.indexingJobs[0]!,
+      startedAt: Number.NaN,
+    };
+    const detail: CapsuleDetailData = { ...FULL_DETAIL, indexingJobs: [hostileJob] };
+
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { level: 1, name: "My Test Capsule" }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("does not crash the page when an indexing job's finishedAt is not a valid timestamp", async () => {
+    const hostileJob: IndexingJobRecord = {
+      ...FULL_DETAIL.indexingJobs[0]!,
+      finishedAt: Number.NaN,
+    };
+    const detail: CapsuleDetailData = { ...FULL_DETAIL, indexingJobs: [hostileJob] };
+
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { level: 1, name: "My Test Capsule" }),
+      ).toBeInTheDocument();
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1091,17 +1190,15 @@ describe("staleChunksTone", () => {
 // ---------------------------------------------------------------------------
 
 describe("resumeButtonLabel", () => {
-  const t: I18nTranslate = (key, values) => translateLocalKnowledge("en", key, values);
-
   it("shows the busy label while a resume is in flight", () => {
-    expect(resumeButtonLabel(true, 1, t)).toBe("Resuming…");
+    expect(resumeButtonLabel(true, 1, englishT)).toBe("Resuming…");
   });
 
   it("uses the singular label for exactly one resumable document", () => {
-    expect(resumeButtonLabel(false, 1, t)).toBe("Resume 1 document");
+    expect(resumeButtonLabel(false, 1, englishT)).toBe("Resume 1 document");
   });
 
   it("pluralizes the label when more than one document is resumable", () => {
-    expect(resumeButtonLabel(false, 2, t)).toBe("Resume 2 documents");
+    expect(resumeButtonLabel(false, 2, englishT)).toBe("Resume 2 documents");
   });
 });

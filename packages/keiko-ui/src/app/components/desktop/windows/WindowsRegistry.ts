@@ -6,6 +6,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../hooks/useWorkspace.types";
 import type { IconName } from "../Icons";
+import type { I18nTranslate } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-messages.en";
 import type { AppWindow, WindowCfgValue } from "./types";
 
 export type WindowType =
@@ -169,11 +171,35 @@ interface WindowSize {
 
 type ConfigFieldType = "text" | "select" | "textarea" | "perm" | "directory";
 
-export interface ConfigField {
+/**
+ * Issue: German locale coverage. A launcher field carries MESSAGE KEYS, never display copy — the
+ * three surfaces that render these fields (window launcher, New Window dialog, quick-access
+ * commands) all read this one table, so an English literal here reached the user untranslated no
+ * matter which locale was selected. `def` stays a raw string for machine defaults (`""`, an enum
+ * member such as `"empty"`, a provider name); `defKey` is for the one case where the default is
+ * user-visible COPY that gets typed into the created window (the chat title).
+ */
+// Not exported: the only cross-module consumer was a new-window field localizer that became
+// redundant once the registry resolved its own message keys. `LocalizedConfigField` below is the
+// shape callers actually receive.
+interface ConfigField {
+  readonly key: string;
+  readonly labelKey: MessageKey;
+  readonly type: ConfigFieldType;
+  readonly def?: string;
+  readonly defKey?: MessageKey;
+  readonly optional?: boolean;
+  readonly placeholderKey?: MessageKey;
+  readonly options?: readonly string[];
+  readonly prefix?: string;
+}
+
+/** A `ConfigField` with every message key already resolved for the active locale. */
+export interface LocalizedConfigField {
   readonly key: string;
   readonly label: string;
   readonly type: ConfigFieldType;
-  readonly def?: string;
+  readonly def: string;
   readonly optional?: boolean;
   readonly placeholder?: string;
   readonly options?: readonly string[];
@@ -235,10 +261,10 @@ export type WindowRender<T extends WindowType = WindowType> = (
 ) => ReactNode;
 
 export interface WindowTypeDef {
-  readonly title: string;
+  readonly titleKey: MessageKey;
   readonly icon: IconName;
   readonly accent?: boolean;
-  readonly desc: string;
+  readonly descKey: MessageKey;
   readonly w: number;
   readonly h: number;
   readonly min: WindowSize;
@@ -246,7 +272,7 @@ export interface WindowTypeDef {
   readonly tool?: boolean;
   readonly singleton?: boolean;
   readonly config?: readonly ConfigField[];
-  readonly cta?: string;
+  readonly ctaKey?: MessageKey;
   readonly render: WindowRender;
 }
 
@@ -256,10 +282,10 @@ const DEFAULT_MIN: WindowSize = { w: 150, h: 110 };
 const DEFAULT_TINY: WindowSize = { w: 290, h: 190 };
 
 interface PartialDef {
-  readonly title: string;
+  readonly titleKey: MessageKey;
   readonly icon: IconName;
   readonly accent?: boolean;
-  readonly desc: string;
+  readonly descKey: MessageKey;
   readonly w: number;
   readonly h: number;
   readonly min?: WindowSize;
@@ -267,17 +293,17 @@ interface PartialDef {
   readonly tool?: boolean;
   readonly singleton?: boolean;
   readonly config?: readonly ConfigField[];
-  readonly cta?: string;
+  readonly ctaKey?: MessageKey;
 }
 
 // Render is deferred at module load — the real render functions are injected
 // below so this file does not import the components and avoid a cycle.
 const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   chat: {
-    title: "Chat",
+    titleKey: "window.type.chat.title",
     icon: "newChat",
     accent: true,
-    desc: "Talk to Keiko",
+    descKey: "window.type.chat.desc",
     w: 480,
     h: 480,
     min: { w: 300, h: 260 },
@@ -285,18 +311,18 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     config: [
       {
         key: "title",
-        label: "Title",
+        labelKey: "window.field.title",
         type: "text",
-        def: "New chat",
+        defKey: "window.default.chatTitle",
         optional: true,
-        placeholder: "Name this conversation",
+        placeholderKey: "window.placeholder.chatTitle",
       },
     ],
   },
   chatHistory: {
-    title: "Chat History",
+    titleKey: "window.type.chatHistory.title",
     icon: "archive",
-    desc: "Manage conversations",
+    descKey: "window.type.chatHistory.desc",
     w: 380,
     h: 560,
     min: { w: 300, h: 320 },
@@ -305,9 +331,9 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     singleton: true,
   },
   memoria: {
-    title: "MemoriaViva",
+    titleKey: "window.type.memoria.title",
     icon: "brain",
-    desc: "Review governed memory",
+    descKey: "window.type.memoria.desc",
     w: 680,
     h: 600,
     min: { w: 420, h: 360 },
@@ -316,19 +342,19 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     singleton: true,
   },
   files: {
-    title: "Files",
+    titleKey: "window.type.files.title",
     icon: "files",
     accent: true,
-    desc: "Browse a folder",
+    descKey: "window.type.files.desc",
     w: 290,
     h: 340,
     tiny: { w: 200, h: 150 },
-    config: [{ key: "root", label: "Folder", type: "directory", def: "" }],
+    config: [{ key: "root", labelKey: "window.field.folder", type: "directory" }],
   },
   editor: {
-    title: "Editor",
+    titleKey: "window.type.editor.title",
     icon: "editor",
-    desc: "Open a folder or file",
+    descKey: "window.type.editor.desc",
     // Toggle-able from the left rail: `deriveOpenTools` reads `tool` to reflect the open state on
     // the rail button (the editor stays a config-capable card type opened via the New Window dialog
     // or `openWindow("editor", …)`; this only adds the rail-toggle affordance).
@@ -339,26 +365,26 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     config: [
       {
         key: "root",
-        label: "Folder",
+        labelKey: "window.field.folder",
         type: "directory",
         def: "",
         optional: true,
-        placeholder: "/absolute/folder/path",
+        placeholderKey: "window.placeholder.folderPath",
       },
       {
         key: "file",
-        label: "File path",
+        labelKey: "window.field.filePath",
         type: "text",
         def: "",
         optional: true,
-        placeholder: "optional relative file path",
+        placeholderKey: "window.placeholder.relativeFilePath",
       },
     ],
   },
   browser: {
-    title: "Browser",
+    titleKey: "window.type.browser.title",
     icon: "browser",
-    desc: "Open a URL",
+    descKey: "window.type.browser.desc",
     w: 460,
     h: 340,
     config: [
@@ -366,65 +392,65 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
       // prototype; it prefilled the form and stuck in the header badge.
       {
         key: "url",
-        label: "URL",
+        labelKey: "window.field.url",
         type: "text",
         def: "",
         optional: true,
-        placeholder: "https://…",
+        placeholderKey: "window.placeholder.url",
       },
     ],
   },
   docbrowser: {
-    title: "Documentation Browser",
+    titleKey: "window.type.docbrowser.title",
     icon: "file",
-    desc: "Inspect a local or intranet HTML manual",
+    descKey: "window.type.docbrowser.desc",
     w: 480,
     h: 360,
     config: [
       {
         key: "target",
-        label: "Documentation address",
+        labelKey: "window.field.documentationAddress",
         type: "text",
         def: "",
         optional: true,
-        placeholder: "https://intranet/handbook or file:///…",
+        placeholderKey: "window.placeholder.documentationAddress",
       },
     ],
   },
   terminal: {
-    title: "Terminal",
+    titleKey: "window.type.terminal.title",
     icon: "terminal",
     accent: true,
-    desc: "Run commands",
+    descKey: "window.type.terminal.desc",
     w: 460,
     h: 250,
     tiny: { w: 250, h: 140 },
     config: [
       // ADR-0018 — terminal is a permitted-command tool. The user picks the command per run; the
       // window only needs a project path (acts as projectId) and an optional starting cwd.
-      { key: "projectPath", label: "Project path", type: "text", def: "" },
-      { key: "cwd", label: "Working directory", type: "directory", def: "" },
+      { key: "projectPath", labelKey: "window.field.projectPath", type: "text" },
+      { key: "cwd", labelKey: "window.field.workingDirectory", type: "directory" },
     ],
   },
   commands: {
-    title: "Tasks",
+    titleKey: "window.type.commands.title",
     icon: "terminal",
     accent: true,
-    desc: "Run test/build/run tasks",
+    descKey: "window.type.commands.desc",
     w: 460,
     h: 280,
     tiny: { w: 250, h: 140 },
     config: [
       // Issue #1387 — the command runner discovers test/build/run tasks from the project's package
       // scripts. The window only needs a project path (acts as projectId); tasks are picked per run.
-      { key: "projectPath", label: "Project path", type: "text", def: "" },
+      { key: "projectPath", labelKey: "window.field.projectPath", type: "text" },
     ],
   },
   runtime: {
-    title: "Runtime",
+    titleKey: "window.type.runtime.title",
     icon: "cube",
     accent: true,
-    desc: "Runtime, Git, tasks, and audit",
+    descKey: "window.type.runtime.desc",
     w: 500,
     h: 390,
     min: { w: 320, h: 260 },
@@ -432,14 +458,14 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     config: [
       // Issue #1389 — this hub only carries the active project path and opens the specialized
       // governed surfaces. It does not execute commands or Git operations itself.
-      { key: "projectPath", label: "Project path", type: "text", def: "", optional: true },
+      { key: "projectPath", labelKey: "window.field.projectPath", type: "text", optional: true },
     ],
   },
   coding: {
-    title: "Coding Workbench",
+    titleKey: "window.type.coding.title",
     icon: "code",
     accent: true,
-    desc: "Govern coding agents",
+    descKey: "window.type.coding.desc",
     w: 860,
     // #2644 docked the composer to the bottom of the shell, so this window's controls are only
     // reachable while the whole frame fits the scene. At the 1280x720 reference viewport the scene
@@ -453,7 +479,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     config: [
       {
         key: "state",
-        label: "Preview state",
+        labelKey: "window.field.previewState",
         type: "select",
         options: [
           "empty",
@@ -480,9 +506,9 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     ],
   },
   containerStatus: {
-    title: "Containers",
+    titleKey: "window.type.containerStatus.title",
     icon: "cube",
-    desc: "Container engine status & diagnostics",
+    descKey: "window.type.containerStatus.desc",
     w: 460,
     h: 320,
     min: { w: 300, h: 220 },
@@ -490,46 +516,46 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     config: [
       // Issue #1388 — the status surface probes the host container engine on demand. An optional
       // project path scopes the allowlisted diagnostic catalog; with no engine it degrades gracefully.
-      { key: "projectPath", label: "Project path", type: "text", def: "", optional: true },
+      { key: "projectPath", labelKey: "window.field.projectPath", type: "text", optional: true },
     ],
   },
   review: {
-    title: "Review",
+    titleKey: "window.type.review.title",
     icon: "review",
-    desc: "Review a proposed diff",
+    descKey: "window.type.review.desc",
     w: 520,
     h: 420,
     config: [
       {
         key: "runId",
-        label: "Run ID",
+        labelKey: "window.field.runId",
         type: "text",
         def: "",
         optional: true,
-        placeholder: "e.g. r-2026-06-01-…",
+        placeholderKey: "window.placeholder.runId",
       },
     ],
   },
   agents: {
-    title: "Agents",
+    titleKey: "window.type.agents.title",
     icon: "agents",
-    desc: "Choose a coding agent",
+    descKey: "window.type.agents.desc",
     w: 520,
     h: 560,
     tiny: { w: 250, h: 140 },
-    cta: "Start agent",
+    ctaKey: "window.type.agents.cta",
     config: [],
   },
   integ: {
-    title: "Integrations",
+    titleKey: "window.type.integ.title",
     icon: "plugins",
-    desc: "Connect apps",
+    descKey: "window.type.integ.desc",
     w: 320,
     h: 300,
     config: [
       {
         key: "provider",
-        label: "Provider",
+        labelKey: "window.field.provider",
         type: "select",
         options: ["GitHub", "Linear", "Slack", "Sentry"],
         def: "GitHub",
@@ -537,27 +563,27 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     ],
   },
   keiko: {
-    title: "Keiko",
+    titleKey: "window.type.keiko.title",
     icon: "spark",
-    desc: "Keiko twin",
+    descKey: "window.type.keiko.desc",
     w: 344,
     h: 520,
     tool: true,
     singleton: true,
   },
   settings: {
-    title: "Settings",
+    titleKey: "window.type.settings.title",
     icon: "settings",
-    desc: "Preferences",
+    descKey: "window.type.settings.desc",
     w: 470,
     h: 560,
     tool: true,
     singleton: true,
   },
   workspaceTrust: {
-    title: "Workspace Trust",
+    titleKey: "window.type.workspaceTrust.title",
     icon: "settings",
-    desc: "Manage Restricted Mode per workspace",
+    descKey: "window.type.workspaceTrust.desc",
     w: 620,
     h: 560,
     min: { w: 320, h: 360 },
@@ -566,9 +592,9 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     singleton: true,
   },
   updates: {
-    title: "Updates",
+    titleKey: "window.type.updates.title",
     icon: "activity",
-    desc: "Review available updates",
+    descKey: "window.type.updates.desc",
     w: 620,
     h: 640,
     min: { w: 420, h: 430 },
@@ -576,36 +602,36 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     singleton: true,
   },
   project: {
-    title: "Project",
+    titleKey: "window.type.project.title",
     icon: "folder",
-    desc: "Project tree",
+    descKey: "window.type.project.desc",
     w: 304,
     h: 440,
     tool: true,
     singleton: true,
   },
   search: {
-    title: "Search",
+    titleKey: "window.type.search.title",
     icon: "search",
-    desc: "Search the workspace",
+    descKey: "window.type.search.desc",
     w: 320,
     h: 500,
     tool: true,
     singleton: true,
   },
   plugins: {
-    title: "Plugins",
+    titleKey: "window.type.plugins.title",
     icon: "plugins",
-    desc: "Plugins & tools",
+    descKey: "window.type.plugins.desc",
     w: 320,
     h: 470,
     tool: true,
     singleton: true,
   },
   automations: {
-    title: "Automations",
+    titleKey: "window.type.automations.title",
     icon: "automations",
-    desc: "Workflow automations",
+    descKey: "window.type.automations.desc",
     w: 320,
     h: 300,
     tool: true,
@@ -613,47 +639,47 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   },
   mobile: {
     // Audit C412 — title case like every other two-word title ("Figma Snapshot").
-    title: "Keiko Mobile",
+    titleKey: "window.type.mobile.title",
     icon: "mobile",
-    desc: "Mobile companion",
+    descKey: "window.type.mobile.desc",
     w: 300,
     h: 380,
     tool: true,
     singleton: true,
   },
   inspector: {
-    title: "Inspector",
+    titleKey: "window.type.inspector.title",
     icon: "layers",
-    desc: "Inspect the workspace",
+    descKey: "window.type.inspector.desc",
     w: 290,
     h: 440,
     tool: true,
     singleton: true,
   },
   activity: {
-    title: "Activity",
+    titleKey: "window.type.activity.title",
     icon: "activity",
-    desc: "Activity timeline",
+    descKey: "window.type.activity.desc",
     w: 322,
     h: 460,
     tool: true,
     singleton: true,
   },
   notifications: {
-    title: "Notifications",
+    titleKey: "window.type.notifications.title",
     icon: "bell",
     // Audit C412 — the desc only repeated the title; add information like the
     // other palette descriptions ("Browse a folder", "Run commands").
-    desc: "Review alerts & updates",
+    descKey: "window.type.notifications.desc",
     w: 300,
     h: 360,
     tool: true,
     singleton: true,
   },
   resources: {
-    title: "Resources",
+    titleKey: "window.type.resources.title",
     icon: "cube",
-    desc: "System resources",
+    descKey: "window.type.resources.desc",
     w: 300,
     h: 320,
     tool: true,
@@ -662,20 +688,20 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   // Epic #189 Slice 3 / Epic #1815 — compact Knowledge Pod picker window. The user selects
   // a ready capsule or capsule-set; the selection is stored in cfg for relationship binding.
   connector: {
-    title: "Knowledge Pod",
+    titleKey: "window.type.connector.title",
     icon: "server",
     accent: true,
-    desc: "Pick a Knowledge Pod source",
+    descKey: "window.type.connector.desc",
     w: 320,
     h: 380,
     min: { w: 220, h: 180 },
     config: [],
   },
   localKnowledge: {
-    title: "Local Knowledge",
+    titleKey: "window.type.localKnowledge.title",
     icon: "localKnowledge",
     accent: true,
-    desc: "Manage Knowledge Pods",
+    descKey: "window.type.localKnowledge.desc",
     w: 720,
     h: 560,
     min: { w: 360, h: 320 },
@@ -687,10 +713,10 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   // deduplicated instance, localKnowledge-style) aggregating open-file diagnostics + verification
   // failures with jump-to-line.
   problems: {
-    title: "Problems",
+    titleKey: "window.type.problems.title",
     icon: "activity",
     accent: true,
-    desc: "Diagnostics and verification failures",
+    descKey: "window.type.problems.desc",
     w: 640,
     h: 480,
     min: { w: 360, h: 280 },
@@ -699,10 +725,10 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     singleton: true,
   },
   debug: {
-    title: "Debug",
+    titleKey: "window.type.debug.title",
     icon: "activity",
     accent: true,
-    desc: "Governed debug session state",
+    descKey: "window.type.debug.desc",
     w: 680,
     h: 560,
     min: { w: 400, h: 320 },
@@ -713,10 +739,10 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   // Epic #270 — Quality Intelligence hub. Singleton tool window: start a run (requirements or
   // workspace folder) and browse past runs. Selecting/finishing a run opens a `qiRun` result card.
   quality: {
-    title: "Quality Intelligence",
+    titleKey: "window.type.quality.title",
     icon: "check",
     accent: true,
-    desc: "Design & review test cases",
+    descKey: "window.type.quality.desc",
     w: 384,
     h: 580,
     min: { w: 300, h: 320 },
@@ -727,10 +753,10 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   // Epic #1307, Issue #1314 — Prompt Enhancer singleton tool window. Dense workflow-first surface:
   // raw prompt → profile + strategy → governed Enhanced Prompt with candidate scorecards.
   promptEnhancer: {
-    title: "Prompt Enhancer",
+    titleKey: "window.type.promptEnhancer.title",
     icon: "spark",
     accent: true,
-    desc: "Turn a raw prompt into a governed, reviewable Enhanced Prompt",
+    descKey: "window.type.promptEnhancer.desc",
     w: 880,
     h: 720,
     min: { w: 520, h: 420 },
@@ -741,23 +767,23 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   // Epic #270 — Quality Intelligence run result card. Non-singleton: one card per run (keyed by
   // cfg.runId). Shows the generated test cases, per-candidate review, and export.
   qiRun: {
-    title: "QI Run",
+    titleKey: "window.type.qiRun.title",
     icon: "check",
-    desc: "Generated test cases",
+    descKey: "window.type.qiRun.desc",
     w: 760,
     h: 660,
     min: { w: 320, h: 280 },
     tiny: { w: 280, h: 200 },
-    config: [{ key: "runId", label: "Run ID", type: "text", def: "" }],
+    config: [{ key: "runId", labelKey: "window.field.runId", type: "text" }],
   },
   // Epic #532 — Relationship engine hub. Singleton tool window: browse the governed relationship
   // graph (list + filters), inspect a relationship (type/lifecycle/activity/audit/evidence/impact),
   // and review bounded impact, dependency, and health surfaces. Opens once from the LeftRail.
   relationships: {
-    title: "Relationships",
+    titleKey: "window.type.relationships.title",
     icon: "branch",
     accent: true,
-    desc: "Inspect the relationship graph",
+    descKey: "window.type.relationships.desc",
     w: 760,
     h: 600,
     min: { w: 360, h: 320 },
@@ -769,10 +795,10 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   // inspect stored snapshots, and open scoped screen source cards for Quality Intelligence.
   // PAT stays server-side; the manager stores only the currently loaded snapshotRunId in cfg.
   figma: {
-    title: "Figma Snapshot",
+    titleKey: "window.type.figma.title",
     icon: "layers",
     accent: true,
-    desc: "Manage Figma snapshots",
+    descKey: "window.type.figma.desc",
     w: 420,
     h: 540,
     min: { w: 320, h: 360 },
@@ -781,40 +807,40 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     singleton: true,
   },
   figmaView: {
-    title: "Figma View",
+    titleKey: "window.type.figmaView.title",
     icon: "layers",
     accent: true,
-    desc: "Inspect a scoped Figma screen view",
+    descKey: "window.type.figmaView.desc",
     w: 360,
     h: 360,
     min: { w: 300, h: 260 },
     tiny: { w: 260, h: 200 },
   },
   figmaJson: {
-    title: "Figma JSON",
+    titleKey: "window.type.figmaJson.title",
     icon: "file",
     accent: true,
-    desc: "Inspect scoped Figma Screen-IR JSON",
+    descKey: "window.type.figmaJson.desc",
     w: 520,
     h: 540,
     min: { w: 340, h: 300 },
     tiny: { w: 280, h: 220 },
   },
   figmaImage: {
-    title: "Figma Image",
+    titleKey: "window.type.figmaImage.title",
     icon: "file",
     accent: true,
-    desc: "Inspect a scoped Figma screen render",
+    descKey: "window.type.figmaImage.desc",
     w: 560,
     h: 420,
     min: { w: 300, h: 240 },
     tiny: { w: 240, h: 180 },
   },
   pdfCitationPreview: {
-    title: "PDF Preview",
+    titleKey: "window.type.pdfCitationPreview.title",
     icon: "file",
     accent: true,
-    desc: "Read a verified PDF preview in Keiko",
+    descKey: "window.type.pdfCitationPreview.desc",
     w: 880,
     h: 680,
     min: { w: 440, h: 320 },
@@ -823,48 +849,48 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   // Epic #470, Issue #475 — Git flow. Branch → staging → commit, walked entirely
   // through the governed mutation kernel. Reads the active project root from cfg (like terminal).
   governedGit: {
-    title: "Git",
+    titleKey: "window.type.governedGit.title",
     icon: "git",
     accent: true,
-    desc: "Branch, stage, commit, and publish",
+    descKey: "window.type.governedGit.desc",
     w: 520,
     h: 640,
     min: { w: 360, h: 420 },
     tiny: { w: 300, h: 240 },
     tool: true,
     singleton: true,
-    config: [{ key: "projectPath", label: "Project path", type: "text", def: "" }],
+    config: [{ key: "projectPath", labelKey: "window.field.projectPath", type: "text" }],
   },
   // Epic #470, Issue #477 — Governed GitHub pull request command center. Reads the active project root
   // from cfg (like governedGit) and the published head branch carried from the Publish section.
   governedPullRequest: {
-    title: "Pull Request",
+    titleKey: "window.type.governedPullRequest.title",
     icon: "git",
     accent: true,
-    desc: "Open a review-ready PR under policy",
+    descKey: "window.type.governedPullRequest.desc",
     w: 540,
     h: 680,
     min: { w: 380, h: 440 },
     tiny: { w: 320, h: 260 },
     config: [
-      { key: "projectPath", label: "Project path", type: "text", def: "" },
-      { key: "headBranchName", label: "Head branch", type: "text", def: "" },
+      { key: "projectPath", labelKey: "window.field.projectPath", type: "text" },
+      { key: "headBranchName", labelKey: "window.field.headBranch", type: "text" },
     ],
   },
   // Epic #470, Issue #478 — Governed merge command center. Reads the active project root from cfg (like
   // governedPullRequest) and the head branch under review carried from the Pull Request section.
   governedMerge: {
-    title: "Merge",
+    titleKey: "window.type.governedMerge.title",
     icon: "git",
     accent: true,
-    desc: "Merge a review-ready PR under policy",
+    descKey: "window.type.governedMerge.desc",
     w: 540,
     h: 680,
     min: { w: 380, h: 440 },
     tiny: { w: 320, h: 260 },
     config: [
-      { key: "projectPath", label: "Project path", type: "text", def: "" },
-      { key: "headBranchName", label: "Head branch", type: "text", def: "" },
+      { key: "projectPath", labelKey: "window.field.projectPath", type: "text" },
+      { key: "headBranchName", labelKey: "window.field.headBranch", type: "text" },
     ],
   },
 };
@@ -898,10 +924,10 @@ function buildDef(type: WindowType, partial: PartialDef): WindowTypeDef {
     if (fn !== undefined) return fn(cfg, ctx);
     return null;
   };
-  const base: Omit<WindowTypeDef, "accent" | "tool" | "singleton" | "config" | "cta"> = {
-    title: partial.title,
+  const base: Omit<WindowTypeDef, "accent" | "tool" | "singleton" | "config" | "ctaKey"> = {
+    titleKey: partial.titleKey,
     icon: partial.icon,
-    desc: partial.desc,
+    descKey: partial.descKey,
     w: partial.w,
     h: partial.h,
     min: partial.min ?? DEFAULT_MIN,
@@ -913,13 +939,13 @@ function buildDef(type: WindowType, partial: PartialDef): WindowTypeDef {
     tool?: boolean;
     singleton?: boolean;
     config?: readonly ConfigField[];
-    cta?: string;
+    ctaKey?: MessageKey;
   } = {};
   if (partial.accent === true) extra.accent = true;
   if (partial.tool === true) extra.tool = true;
   if (partial.singleton === true) extra.singleton = true;
   if (partial.config !== undefined) extra.config = partial.config;
-  if (partial.cta !== undefined) extra.cta = partial.cta;
+  if (partial.ctaKey !== undefined) extra.ctaKey = partial.ctaKey;
   return { ...base, ...extra };
 }
 
@@ -932,6 +958,48 @@ function buildAll(): Readonly<Record<WindowType, WindowTypeDef>> {
 }
 
 export const WIN_TYPES: Readonly<Record<WindowType, WindowTypeDef>> = buildAll();
+
+/**
+ * The ONE place a window type turns into display copy. Every shell surface that shows a window's
+ * name (launcher grid, New Window dialog, quick-access commands, window chrome, footer, inspector)
+ * routes through these four helpers, so a locale switch moves all of them together instead of
+ * leaving the English literal that used to live in `WIN_TYPES[type].title`.
+ */
+export function localizedWindowTitle(t: I18nTranslate, type: WindowType): string {
+  return t(WIN_TYPES[type].titleKey);
+}
+
+export function localizedWindowDesc(t: I18nTranslate, type: WindowType): string {
+  return t(WIN_TYPES[type].descKey);
+}
+
+export function localizedWindowCta(t: I18nTranslate, type: WindowType): string | undefined {
+  const key = WIN_TYPES[type].ctaKey;
+  return key === undefined ? undefined : t(key);
+}
+
+function localizedConfigField(t: I18nTranslate, field: ConfigField): LocalizedConfigField {
+  const resolved: LocalizedConfigField = {
+    key: field.key,
+    label: t(field.labelKey),
+    type: field.type,
+    def: field.defKey === undefined ? (field.def ?? "") : t(field.defKey),
+  };
+  return {
+    ...resolved,
+    ...(field.optional === true ? { optional: true } : {}),
+    ...(field.placeholderKey === undefined ? {} : { placeholder: t(field.placeholderKey) }),
+    ...(field.options === undefined ? {} : { options: field.options }),
+    ...(field.prefix === undefined ? {} : { prefix: field.prefix }),
+  };
+}
+
+export function localizedWindowConfigFields(
+  t: I18nTranslate,
+  type: WindowType,
+): readonly LocalizedConfigField[] {
+  return (WIN_TYPES[type].config ?? []).map((field) => localizedConfigField(t, field));
+}
 
 // Wave 5 palette ordering. Cards first, then tools.
 export const TYPE_ORDER: readonly WindowType[] = [

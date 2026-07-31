@@ -29,6 +29,7 @@ import type { WindowCfgValue } from "../../../windows/types";
 import type { OpenEditorFileRequest } from "../../../hooks/useWorkspace.types";
 import { DEFAULT_GIT_CLIENT, formatGitError, useGitActions } from "./git-client-seam";
 import type { GitClientSeam } from "./git-client-seam";
+import { MutationOutcome } from "./git-client-ui";
 import { GovernedMergeCard } from "../GovernedMergeCard";
 import { GovernedPullRequestCard } from "../GovernedPullRequestCard";
 import { Icons } from "../../../Icons";
@@ -41,6 +42,11 @@ import { CommitComposer } from "./CommitComposer";
 import { DiffPane } from "./DiffPane";
 import { NewBranchDialog } from "./NewBranchDialog";
 import { deriveSyncView } from "./SyncControl";
+import {
+  pushOutcomePresentation,
+  syncOutcomePresentation,
+  type SyncOutcomeView,
+} from "./sync-outcome";
 import {
   GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
   gitRepositoryStateInvalidationRoots,
@@ -256,26 +262,40 @@ interface SyncExecutionContext {
   readonly repositoryRoot: string | undefined;
   readonly sequenceRef: RefObject<number>;
   readonly setBusy: Dispatch<SetStateAction<boolean>>;
-  readonly setOutcome: Dispatch<SetStateAction<string | null>>;
+  readonly setOutcome: Dispatch<SetStateAction<SyncOutcomeView | null>>;
   readonly setError: Dispatch<SetStateAction<string | null>>;
 }
 
 function syncOutcomeWithMetrics(
   context: SyncExecutionContext,
-  label: string,
+  outcome: SyncOutcomeView,
   t: I18nTranslate,
-): string {
+): SyncOutcomeView {
   const elapsedSeconds = Math.round((performance.now() - context.startedAt) / 100) / 10;
   const delta =
     context.aheadBefore > 0
       ? t("gitClientWindow.sync.aheadSuffix", { count: context.aheadBefore })
       : t("gitClientWindow.sync.behindSuffix", { count: context.behindBefore });
-  return t("gitClientWindow.sync.outcome", { label, seconds: elapsedSeconds, delta });
+  return {
+    message: t("gitClientWindow.sync.outcome", {
+      label: outcome.message,
+      seconds: elapsedSeconds,
+      delta,
+    }),
+    failed: outcome.failed,
+  };
+}
+
+// A preview block is already worded as a refusal ("Blocked: …"), so it keeps the neutral pill; what
+// must never be neutral is a settled EXECUTION that failed, which is what pushOutcomePresentation /
+// syncOutcomePresentation decide.
+function blockedOutcome(message: string): SyncOutcomeView {
+  return { message, failed: false };
 }
 
 function completeSync(
   context: SyncExecutionContext,
-  message: string,
+  outcome: SyncOutcomeView,
   repositoryMayHaveChanged: boolean,
 ): void {
   if (repositoryMayHaveChanged) {
@@ -283,7 +303,7 @@ function completeSync(
   }
   if (context.sequenceRef.current !== context.sequence) return;
   context.setBusy(false);
-  context.setOutcome(message);
+  context.setOutcome(outcome);
 }
 
 function failSync(context: SyncExecutionContext, error: unknown): void {
@@ -307,9 +327,11 @@ function runFetchOrPullSync(
       if (!preview.executable) {
         completeSync(
           context,
-          t("gitClientWindow.sync.blocked", {
-            reason: preview.blockReason ?? t("gitClientWindow.sync.unavailableLower"),
-          }),
+          blockedOutcome(
+            t("gitClientWindow.sync.blocked", {
+              reason: preview.blockReason ?? t("gitClientWindow.sync.unavailableLower"),
+            }),
+          ),
           false,
         );
         return undefined;
@@ -323,11 +345,7 @@ function runFetchOrPullSync(
           operation === "fetch" ? t("gitClientWindow.sync.fetch") : t("gitClientWindow.sync.pull");
         completeSync(
           context,
-          syncOutcomeWithMetrics(
-            context,
-            t("gitClientWindow.sync.operationStatus", { label, status: result.status }),
-            t,
-          ),
+          syncOutcomeWithMetrics(context, syncOutcomePresentation(label, result.status, t), t),
           true,
         );
       },
@@ -370,9 +388,11 @@ function runPushSync(
       if (preview.policyOutcome !== "allowed" || preview.preflightBlockingCodes.length > 0) {
         completeSync(
           context,
-          t("gitClientWindow.sync.blocked", {
-            reason: preview.policyBlockReason ?? preview.preflightBlockingCodes.join(", "),
-          }),
+          blockedOutcome(
+            t("gitClientWindow.sync.blocked", {
+              reason: preview.policyBlockReason ?? preview.preflightBlockingCodes.join(", "),
+            }),
+          ),
           false,
         );
         return undefined;
@@ -388,11 +408,7 @@ function runPushSync(
             : t("gitClientWindow.sync.publishUpstream");
         completeSync(
           context,
-          syncOutcomeWithMetrics(
-            context,
-            t("gitClientWindow.sync.operationStatus", { label, status: result.status }),
-            t,
-          ),
+          syncOutcomeWithMetrics(context, pushOutcomePresentation(label, result, t), t),
           true,
         );
       },
@@ -408,7 +424,7 @@ interface GitSyncActionOptions {
   readonly syncView: SyncView;
   readonly sequenceRef: RefObject<number>;
   readonly setBusy: Dispatch<SetStateAction<boolean>>;
-  readonly setOutcome: Dispatch<SetStateAction<string | null>>;
+  readonly setOutcome: Dispatch<SetStateAction<SyncOutcomeView | null>>;
   readonly setError: Dispatch<SetStateAction<string | null>>;
   readonly t: I18nTranslate;
 }
@@ -599,7 +615,7 @@ export function GitClientWindow({
   const [dialogMode, setDialogMode] = useState<"clone" | "open">("clone");
   const [newBranchOpen, setNewBranchOpen] = useState(false);
   const [syncBusy, setSyncBusy] = useState(false);
-  const [syncOutcome, setSyncOutcome] = useState<string | null>(null);
+  const [syncOutcome, setSyncOutcome] = useState<SyncOutcomeView | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("diff");
   const [rightPaneAnnouncement, setRightPaneAnnouncement] = useState("");
@@ -1205,6 +1221,21 @@ export function GitClientWindow({
         onOpenEditor={onOpenEditor}
         onOpenFiles={onOpenFiles}
       />
+      {/* A rejected branch switch must never render as silent success: the New Branch dialog
+          shows its own copy of this outcome while it is open (the create-then-switch chain runs
+          under the same flow), so this banner is suppressed then to avoid showing the same
+          rejection twice. */}
+      {!newBranchOpen &&
+      (branchActions.flow.error !== null ||
+        (branchOutcome !== null && branchOutcome.status !== "succeeded")) ? (
+        <div style={{ padding: "10px 18px" }}>
+          <MutationOutcome
+            outcome={branchOutcome}
+            error={branchActions.flow.error}
+            testid="git-branch-outcome"
+          />
+        </div>
+      ) : null}
       <div style={BODY_STYLE}>
         {selectedPath === null ? (
           <ConnectPanel
@@ -1321,6 +1352,7 @@ export function GitClientWindow({
             activeStatus?.branch ?? activeBranches.find((branch) => branch.current)?.name ?? ""
           }
           busy={branchActions.flow.busy}
+          outcome={branchOutcome}
           error={branchActions.flow.error}
           onCreate={createBranch}
           onClose={closeNewBranchDialog}

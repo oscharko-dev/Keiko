@@ -12,6 +12,10 @@ import {
   EDITOR_VERIFICATION_SCHEMA_VERSION,
   WORKSPACE_TRUST_SCHEMA_VERSION,
 } from "@oscharko-dev/keiko-contracts";
+import { translate } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-messages.en";
+
+const enTranslate = (key: MessageKey): string => translate("en", key);
 
 function appCommand(id: string): Command {
   return {
@@ -68,7 +72,7 @@ function host(): EditorPaletteHost {
 describe("quick access registry", () => {
   it("combines app and editor command inventories without dropping ids", () => {
     const appCommands = [appCommand("new-chat"), appCommand("theme")];
-    const commands = buildUnifiedQuickAccessCommands(appCommands, host());
+    const commands = buildUnifiedQuickAccessCommands(appCommands, host(), enTranslate);
     const ids = commands.map((command) => command.id);
 
     expect(ids).toContain("new-chat");
@@ -108,7 +112,11 @@ describe("quick access registry", () => {
   });
 
   it("collapses an app command that collides with an editor command id, keeping the app definition", () => {
-    const commands = buildUnifiedQuickAccessCommands([appCommand("tab.close")], host());
+    const commands = buildUnifiedQuickAccessCommands(
+      [appCommand("tab.close")],
+      host(),
+      enTranslate,
+    );
     const matches = commands.filter((command) => command.id === "tab.close");
     const [surviving] = matches;
 

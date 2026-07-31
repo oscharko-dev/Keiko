@@ -23,6 +23,11 @@ import {
   type MonacoRange,
 } from "./completion-bridge.js";
 import type { MonacoUriForPath, MonacoUriLike } from "./definition-bridge.js";
+import {
+  classifyResultKind,
+  runLanguageBridgeCall,
+  type EditorLanguageIntelligenceReporter,
+} from "./language-intelligence.js";
 
 export interface MonacoReferencesModel {
   getValue(): string;
@@ -82,6 +87,8 @@ export interface KeikoReferencesProviderDeps {
   readonly streamId: string;
   readonly newRequestId: () => string;
   readonly uriForPath?: MonacoUriForPath | undefined;
+  /** Outcome sink so "no references" stays distinguishable from "the search failed or was capped". */
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function buildRequest(
@@ -123,7 +130,7 @@ export function createKeikoReferencesProvider(
 ): MonacoReferenceProvider {
   let sequence = 0;
   return {
-    async provideReferences(
+    provideReferences(
       model,
       position,
       context,
@@ -131,22 +138,22 @@ export function createKeikoReferencesProvider(
     ): Promise<readonly MonacoReferenceLocation[]> {
       const documentUri = model.uri.toString();
       if (!deps.isCurrentDocument(documentUri)) {
-        return EMPTY_REFERENCES;
+        return Promise.resolve(EMPTY_REFERENCES);
       }
       sequence += 1;
       const request = buildRequest(deps, documentUri, position, context, sequence);
       const controller = controllerForToken(token);
-      try {
-        const query: EditorReferencesQuery = { request, documentText: model.getValue() };
-        const response = await deps.resolve(query, controller.signal);
-        return referencesResponseToMonaco(
-          response,
-          model.uri,
-          deps.uriForPath ?? defaultUriForPath,
-        );
-      } catch {
-        return EMPTY_REFERENCES;
-      }
+      const query: EditorReferencesQuery = { request, documentText: model.getValue() };
+      return runLanguageBridgeCall<EditorReferencesResponse, readonly MonacoReferenceLocation[]>({
+        operation: "references",
+        resolve: () => deps.resolve(query, controller.signal),
+        discardedValue: EMPTY_REFERENCES,
+        failedValue: EMPTY_REFERENCES,
+        classify: (response) => classifyResultKind(response.locations.length, response.truncated),
+        present: (response) =>
+          referencesResponseToMonaco(response, model.uri, deps.uriForPath ?? defaultUriForPath),
+        report: deps.report,
+      });
     },
   };
 }
@@ -159,6 +166,7 @@ export interface RegisterKeikoReferencesProviderArgs {
   readonly streamId: string;
   readonly newRequestId: () => string;
   readonly uriForPath?: MonacoUriForPath | undefined;
+  readonly report?: EditorLanguageIntelligenceReporter | undefined;
 }
 
 function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
@@ -181,6 +189,7 @@ export function registerKeikoReferencesProvider(
       documentLanguage,
       streamId: `${args.streamId}:${documentLanguage}`,
       newRequestId: args.newRequestId,
+      report: args.report,
       ...(args.uriForPath === undefined ? {} : { uriForPath: args.uriForPath }),
     });
     return args.languages.registerReferenceProvider(documentLanguage, provider);

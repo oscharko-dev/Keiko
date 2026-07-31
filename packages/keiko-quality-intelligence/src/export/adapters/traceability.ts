@@ -11,7 +11,7 @@
 // and there are no timestamps — so the export is byte-stable for identical inputs.
 
 import { compareStrings } from "@oscharko-dev/keiko-contracts";
-import type { CoverageStatus } from "../../domain/coverageRelevance.js";
+import { classifyCoverageMapping, type CoverageStatus } from "../../domain/coverageRelevance.js";
 import { escapeMarkdownActiveSyntax, inlineField } from "../textSafety.js";
 import { encodeSpreadsheetSafeRow, startsWithFormulaLead } from "./spreadsheetSafeCsv.js";
 
@@ -64,6 +64,44 @@ export const TRACEABILITY_CSV_HEADERS: readonly string[] = Object.freeze([
 
 /** Placeholder for an absent display value (legacy rows / unknown candidate). Em-dash, not a formula lead. */
 const ABSENT = "—";
+
+/**
+ * Narrow a traceability matrix to a permitted set of test ids — the projection an approved-only
+ * export needs (0.3.0 release audit).
+ *
+ * Every requirement row is KEPT: dropping a requirement whose tests are all out of scope would hide
+ * exactly the coverage gap an auditor downloads this matrix to see. What changes is the covering
+ * set, and with it the verdict: the row is re-classified through `classifyCoverageMapping`, the
+ * same production classifier the run itself used, so a requirement left with no permitted test can
+ * never keep a "covered" verdict next to an empty test list. Rows whose covering set is untouched
+ * are returned by identity, so an unscoped export is byte-identical to the unfiltered matrix.
+ *
+ * A row whose covering set shrinks but stays non-empty keeps the run's persisted confidence: that
+ * confidence was measured over a superset of the retained tests and cannot be re-derived from the
+ * persisted matrix alone (the source atom text is deliberately not retained), so the classifier is
+ * fed the value the run actually recorded rather than a re-invented one.
+ */
+export function scopeTraceabilityRowsToTests(
+  rows: readonly QualityIntelligenceTraceabilityRow[],
+  permittedCandidateIds: ReadonlySet<string>,
+): readonly QualityIntelligenceTraceabilityRow[] {
+  return rows.map((row) => {
+    const retained = row.coveringCandidateIds.filter((id) => permittedCandidateIds.has(id));
+    if (retained.length === row.coveringCandidateIds.length) return row;
+    const classified = classifyCoverageMapping(
+      retained.length === 0 ? undefined : { confidence: row.confidence, candidateIds: retained },
+    );
+    return {
+      atomId: row.atomId,
+      status: classified.status,
+      confidence: classified.confidence,
+      coveringCandidateIds: classified.coveringCandidateIds,
+      ...(row.requirementExcerptRedacted !== undefined
+        ? { requirementExcerptRedacted: row.requirementExcerptRedacted }
+        : {}),
+    };
+  });
+}
 
 const byAtomIdAsc = (
   a: QualityIntelligenceTraceabilityRow,

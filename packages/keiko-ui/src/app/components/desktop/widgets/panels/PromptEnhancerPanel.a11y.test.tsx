@@ -116,6 +116,39 @@ describe("PromptEnhancerPanel a11y", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
+  it("a rejected decision with human review also required has no axe violations (two alerts)", async () => {
+    const base = response();
+    const rejectedResponse: PromptEnhancementWireResponse = {
+      ...base,
+      safety: {
+        ...base.safety,
+        decision: "rejected",
+        requiresHumanReview: true,
+        verificationStatus: "failed",
+        findings: [
+          {
+            code: "capability-grant-claim",
+            ruleId: "no-authority-grant",
+            severity: "blocking",
+            detail:
+              "A trusted section appears to grant the model tool, file, network, or secret authority.",
+          },
+        ],
+      },
+    };
+    const { container } = render(
+      <PromptEnhancerPanel
+        enhanceImpl={vi.fn().mockResolvedValue(rejectedResponse)}
+        fetchModelsImpl={noModels}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Raw prompt"), { target: { value: "Summarize." } });
+    fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+    await screen.findByTestId("pe-result");
+    expect(screen.getAllByRole("alert")).toHaveLength(2);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
   it("moves focus to the result heading after a successful enhance (GEN-UI-FOCUS-009)", async () => {
     render(
       <PromptEnhancerPanel

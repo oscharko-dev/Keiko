@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
-import { DEFAULT_SEARCH_LIMITS } from "@oscharko-dev/keiko-workspace";
+import { DEFAULT_SEARCH_LIMITS, detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
 import type { UiStore } from "../store/index.js";
@@ -15,6 +15,7 @@ import {
   handleEditorWorkspaceSearch,
   handleEditorWorkspaceSymbols,
 } from "./workspaceSearchRoutes.js";
+import { readWorkspaceFileForEditing } from "@oscharko-dev/keiko-workspace/internal/editor-read";
 
 function rawPostContext(raw: string, path: string): RouteContext {
   const req = Readable.from([Buffer.from(raw, "utf8")]) as unknown as IncomingMessage;
@@ -121,6 +122,26 @@ beforeEach(async () => {
 afterEach(async () => {
   store.close();
   await rm(root, { recursive: true, force: true });
+});
+
+// Qodo review on #2869: the raw editor read reaches this route through the package's
+// `./internal/editor-read` export subpath, not a relative import, so a broken export map would take
+// the whole replace surface down. The rest of this suite already proves that implicitly — breaking
+// the map makes this file fail to load at all — but that failure reads as "suite did not run"
+// rather than "the export map is broken". This asserts the subpath directly so the diagnosis is in
+// the failure message. Verified by temporarily pointing the subpath at a missing file: without this
+// test the suite reports "no tests"; with it, the cause is named.
+describe("the editor read lane is reachable through its published export subpath", () => {
+  it("resolves and returns raw bytes, not the redacted evidence shape", () => {
+    const workspace = detectWorkspaceAt(root);
+
+    const raw = readWorkspaceFileForEditing(workspace, "src/a.ts");
+
+    // `rawText`, never `text`: the two read lanes are structurally incompatible on purpose, so a
+    // raw read can never be substituted for a redacted evidence read by accident.
+    expect(raw.rawText.length).toBeGreaterThan(0);
+    expect(raw).not.toHaveProperty("text");
+  });
 });
 
 describe("POST /api/editor/workspace-search", () => {
@@ -793,5 +814,349 @@ describe("POST /api/editor/workspace-search/replace-apply", () => {
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ appliedCount: 1, conflictCount: 0, conflicts: [] });
     expect(content).toContain('export const marker = readConfig("large-file");');
+  });
+});
+
+// ─── Secret-shaped source text (editor P1: a silent, release-blocking replace failure) ───────────
+//
+// The workspace read path redacts at the IO boundary for the evidence/RAG lane. Search & replace
+// derived its match coordinates, its base-content hash, and its replacement text from that REDACTED
+// text, while the `keiko-tools` write preflight reads the file RAW and compares every `-` line of
+// the rendered diff against the raw lines. So every file containing so much as one secret-shaped
+// assignment — token/password/api_key/client_secret/private_key, a Bearer header, URL userinfo, a
+// phone number, an IBAN, a PEM header: all common in real source — could never be replaced, and the
+// failure surfaced as a false "write-conflict" with nothing written.
+//
+// These fixtures use redaction PATTERNS only; none of them is a real credential.
+describe("workspace search & replace over secret-shaped source text", () => {
+  const SECRET_LINE = 'const token = "s3cr3tlookupvalue";';
+  const PEM_LINES = [
+    "-----BEGIN PRIVATE KEY-----",
+    "AAAAB3NzaC1yc2EAAAADAQABAAABgQ",
+    "CqGKukO1De7zhZj6H0qtjTkVxwTCpv",
+    "-----END PRIVATE KEY-----",
+  ];
+
+  async function previewFile(
+    body: Record<string, unknown>,
+  ): Promise<{ path: string; baseContentHash: string; edits: readonly unknown[] }> {
+    const preview = await handleEditorWorkspaceReplacePreview(
+      postContext(body, "/api/editor/workspace-search/replace-preview"),
+      deps(),
+    );
+    expect(preview.status).toBe(200);
+    const parsed = preview.body as {
+      files: { path: string; baseContentHash: string; edits: readonly unknown[] }[];
+    };
+    const file = parsed.files[0];
+    if (file === undefined) throw new Error("missing preview file");
+    return file;
+  }
+
+  it("finds a match on the line after a secret-shaped assignment", async () => {
+    await writeFile(
+      join(root, "src", "secret.ts"),
+      [SECRET_LINE, 'export const marker = "needleaftersecret";', ""].join("\n"),
+      "utf8",
+    );
+
+    const result = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ query: "needleaftersecret", includeGlobs: ["src/secret.ts"] })),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      results: { path: string; lineRange: { startLine: number; endLine: number } }[];
+    };
+    expect(body.results.map((entry) => entry.path)).toContain("src/secret.ts");
+    expect(
+      body.results.some((entry) => entry.lineRange.startLine <= 2 && entry.lineRange.endLine >= 2),
+    ).toBe(true);
+  });
+
+  it("finds a match that only exists inside the redacted region itself", async () => {
+    await writeFile(join(root, "src", "secret-only.ts"), `${SECRET_LINE}\n`, "utf8");
+
+    const result = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ query: "s3cr3tlookupvalue", includeGlobs: ["src/secret-only.ts"] })),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { results: { path: string }[] };
+    expect(body.results.map((entry) => entry.path)).toContain("src/secret-only.ts");
+  });
+
+  it("reports the real file line for a match after a multi-line PEM block", async () => {
+    await writeFile(
+      join(root, "src", "pem-search.ts"),
+      [...PEM_LINES, 'export const marker = "needleafterpem";', ""].join("\n"),
+      "utf8",
+    );
+
+    const result = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ query: "needleafterpem", includeGlobs: ["src/pem-search.ts"] })),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      results: { path: string; lineRange: { startLine: number; endLine: number } }[];
+    };
+    // Raw: line 5. A redacted read collapsed the 4-line block into one token and reported line 2.
+    expect(
+      body.results.some((entry) => entry.lineRange.startLine <= 5 && entry.lineRange.endLine >= 5),
+    ).toBe(true);
+  });
+
+  it("applies a replacement in a file containing a secret-shaped assignment", async () => {
+    await writeFile(
+      join(root, "src", "secret-apply.ts"),
+      [SECRET_LINE, 'export const marker = parseConfig("a");', ""].join("\n"),
+      "utf8",
+    );
+
+    const file = await previewFile(replaceBody({ includeGlobs: ["src/secret-apply.ts"] }));
+    const result = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: [file] }, "/api/editor/workspace-search/replace-apply"),
+      deps(),
+    );
+    const content = await readFile(join(root, "src", "secret-apply.ts"), "utf8");
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ appliedCount: 1, conflictCount: 0, conflicts: [] });
+    // The secret-shaped line must survive the write byte-for-byte: the editor lane reads and writes
+    // the real file, it never persists the redacted view back over the user's source.
+    expect(content).toBe([SECRET_LINE, 'export const marker = readConfig("a");', ""].join("\n"));
+  });
+
+  it("applies a replacement preceded on the SAME line by a redacted value", async () => {
+    // "[REDACTED]" is wider than the value it replaces, so a redacted read reported this match's
+    // column several characters to the right of where it really is.
+    await writeFile(
+      join(root, "src", "same-line.ts"),
+      'const token = "abc"; export const marker = parseConfig("a");\n',
+      "utf8",
+    );
+
+    const file = await previewFile(replaceBody({ includeGlobs: ["src/same-line.ts"] }));
+    const result = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: [file] }, "/api/editor/workspace-search/replace-apply"),
+      deps(),
+    );
+    const content = await readFile(join(root, "src", "same-line.ts"), "utf8");
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ appliedCount: 1, conflictCount: 0, conflicts: [] });
+    expect(content).toBe('const token = "abc"; export const marker = readConfig("a");\n');
+  });
+
+  it("applies a replacement after a multi-line PEM block, at the real file line", async () => {
+    const original = [...PEM_LINES, 'export const marker = parseConfig("a");', ""].join("\n");
+    await writeFile(join(root, "src", "pem.ts"), original, "utf8");
+
+    const file = await previewFile(replaceBody({ includeGlobs: ["src/pem.ts"] }));
+    const previewEdits = file.edits as { range: { startLine: number } }[];
+    const result = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: [file] }, "/api/editor/workspace-search/replace-apply"),
+      deps(),
+    );
+    const content = await readFile(join(root, "src", "pem.ts"), "utf8");
+
+    expect(previewEdits.map((edit) => edit.range.startLine)).toEqual([5]);
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ appliedCount: 1, conflictCount: 0, conflicts: [] });
+    expect(content).toBe([...PEM_LINES, 'export const marker = readConfig("a");', ""].join("\n"));
+  });
+});
+
+// ─── The preview payload must cross the wire verbatim (residual of the raw-read lane) ────────────
+//
+// The raw-read lane fixed the SERVER half: match ranges, the base hash and the write preflight all
+// read the file RAW. The residual was the WIRE half — the preview response was re-serialized
+// through the live-payload redactor, and `deepRedactStrings` rewrites each string leaf on its own.
+// A leaf that is ITSELF secret-shaped therefore came back masked, and the client echoes the payload
+// straight back into replace-apply:
+//
+//   * a masked `originalText` fails the apply-side equality check against the raw file, so a
+//     secret-shaped string could not be replaced at all ("preview edits no longer match current
+//     content");
+//   * a masked `newText` is what apply WRITES, so a secret-shaped replacement silently landed
+//     "[REDACTED]" in the user's source with status 200 and appliedCount 1.
+//
+// These fixtures use redaction PATTERNS only; none of them is a real credential.
+describe("replace preview payload crosses the wire verbatim", () => {
+  const SECRET_ASSIGNMENT = 'const password = "hunter2placeholder";';
+  const SECRET_SHAPED_REPLACEMENT = '"sk-placeholder0123456789abcdef"';
+
+  async function previewResponse(body: Record<string, unknown>): Promise<{
+    files: {
+      path: string;
+      baseContentHash: string;
+      edits: { originalText: string; newText: string }[];
+    }[];
+  }> {
+    const preview = await handleEditorWorkspaceReplacePreview(
+      postContext(body, "/api/editor/workspace-search/replace-preview"),
+      deps(),
+    );
+    expect(preview.status).toBe(200);
+    return preview.body as {
+      files: {
+        path: string;
+        baseContentHash: string;
+        edits: { originalText: string; newText: string }[];
+      }[];
+    };
+  }
+
+  function firstFile<T>(files: readonly T[]): T {
+    const file = files[0];
+    if (file === undefined) throw new Error("missing preview file");
+    return file;
+  }
+
+  function firstEdit<T>(edits: readonly T[]): T {
+    const edit = edits[0];
+    if (edit === undefined) throw new Error("missing preview edit");
+    return edit;
+  }
+
+  // Collects the dotted key path of every string leaf, arrays collapsed to "[]". Pins WHICH fields
+  // of the preview response are verbatim, so a future string-bearing field (a message, a reason, a
+  // snippet) cannot join the unredacted payload unnoticed.
+  function stringLeafPaths(value: unknown, prefix: string): readonly string[] {
+    if (typeof value === "string") return [prefix];
+    if (Array.isArray(value)) {
+      return value.flatMap((entry: unknown) => stringLeafPaths(entry, `${prefix}[]`));
+    }
+    if (typeof value === "object" && value !== null) {
+      return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) =>
+        stringLeafPaths(child, prefix.length === 0 ? key : `${prefix}.${key}`),
+      );
+    }
+    return [];
+  }
+
+  it("returns matched text verbatim when the match itself is secret-shaped", async () => {
+    const target = join(root, "src", "secret-match.ts");
+    await writeFile(target, [SECRET_ASSIGNMENT, "export const marker = 1;", ""].join("\n"), "utf8");
+    const before = await readFile(target, "utf8");
+
+    const preview = await previewResponse(
+      replaceBody({
+        query: 'password = "hunter2placeholder"',
+        replacement: "PASSWORD_FROM_ENV",
+        includeGlobs: ["src/secret-match.ts"],
+      }),
+    );
+    const file = firstFile(preview.files);
+    const edit = firstEdit(file.edits);
+
+    // Fail-before anchor: the redacted payload carried `password = "[REDACTED]"`, which is not in
+    // the file, so the apply-side equality check could never succeed.
+    expect(before).toContain(edit.originalText);
+
+    const applied = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: [file] }, "/api/editor/workspace-search/replace-apply"),
+      deps(),
+    );
+    const after = await readFile(target, "utf8");
+
+    expect(applied.status).toBe(200);
+    expect(applied.body).toMatchObject({ appliedCount: 1, conflictCount: 0, conflicts: [] });
+    expect(after).toBe(before.replace(edit.originalText, edit.newText));
+  });
+
+  it("writes a secret-shaped replacement verbatim instead of writing the mask", async () => {
+    const target = join(root, "src", "secret-replacement.ts");
+    await writeFile(target, "export const marker = PLACEHOLDER_VALUE;\n", "utf8");
+    const before = await readFile(target, "utf8");
+
+    const preview = await previewResponse(
+      replaceBody({
+        query: "PLACEHOLDER_VALUE",
+        replacement: SECRET_SHAPED_REPLACEMENT,
+        includeGlobs: ["src/secret-replacement.ts"],
+      }),
+    );
+    const file = firstFile(preview.files);
+    const edit = firstEdit(file.edits);
+
+    // Fail-before anchor: the preview echoed the operator's own replacement back as "[REDACTED]".
+    expect(edit.newText).toBe(SECRET_SHAPED_REPLACEMENT);
+
+    const applied = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: [file] }, "/api/editor/workspace-search/replace-apply"),
+      deps(),
+    );
+    const after = await readFile(target, "utf8");
+
+    expect(applied.body).toMatchObject({ appliedCount: 1, conflictCount: 0, conflicts: [] });
+    expect(after).toBe(before.replace(edit.originalText, SECRET_SHAPED_REPLACEMENT));
+    expect(after).not.toContain("[REDACTED]");
+  });
+
+  it("returns a base content hash the apply route accepts", async () => {
+    const target = join(root, "src", "secret-hash.ts");
+    await writeFile(target, [SECRET_ASSIGNMENT, "export const marker = 1;", ""].join("\n"), "utf8");
+
+    const preview = await previewResponse(
+      replaceBody({
+        query: 'password = "hunter2placeholder"',
+        replacement: "PASSWORD_FROM_ENV",
+        includeGlobs: ["src/secret-hash.ts"],
+      }),
+    );
+    const file = firstFile(preview.files);
+
+    expect(file.baseContentHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(file.path).toBe("src/secret-hash.ts");
+  });
+
+  it("carries no string leaf beyond the four round-trip fields", async () => {
+    const target = join(root, "src", "leaf-shape.ts");
+    await writeFile(target, [SECRET_ASSIGNMENT, "export const marker = 1;", ""].join("\n"), "utf8");
+
+    const preview = await previewResponse(
+      replaceBody({
+        query: 'password = "hunter2placeholder"',
+        replacement: "PASSWORD_FROM_ENV",
+        includeGlobs: ["src/leaf-shape.ts"],
+      }),
+    );
+
+    expect([...new Set(stringLeafPaths(preview, ""))].sort()).toEqual([
+      "files[].baseContentHash",
+      "files[].edits[].newText",
+      "files[].edits[].originalText",
+      "files[].path",
+    ]);
+  });
+
+  // The boundary this fix deliberately does NOT move. `handleEditorWorkspaceSearch` is reachable
+  // from the editor agent bridge (`agentRoutes.ts` -> `runSearchWorkspaceAction`), so its snippets
+  // can reach a model prompt; replace-preview and replace-apply are registered for the browser
+  // alone. Search snippets therefore stay redacted.
+  it("keeps the agent-reachable SEARCH response redacted", async () => {
+    await writeFile(
+      join(root, "src", "search-lane.ts"),
+      [SECRET_ASSIGNMENT, 'export const marker = "needleinsearchlane";', ""].join("\n"),
+      "utf8",
+    );
+
+    const result = await handleEditorWorkspaceSearch(
+      postContext(
+        searchBody({ query: "needleinsearchlane", includeGlobs: ["src/search-lane.ts"] }),
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { results: { snippet: string }[] };
+    const snippets = body.results.map((entry) => entry.snippet).join("\n");
+    expect(snippets).toContain("needleinsearchlane");
+    expect(snippets).not.toContain("hunter2placeholder");
   });
 });

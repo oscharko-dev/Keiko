@@ -100,6 +100,87 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 }
 
+// ─── Credential detection in HUMAN-AUTHORED free text ───────────────────────────────────────────
+//
+// redact() answers "scrub this machine-derived string before it is logged". Detecting a credential a
+// PERSON typed into prose — a commit message, a pull-request title or body — is a different question
+// with a different cost of being wrong. Over-matching in the redactor costs a masked token in a log
+// line; over-matching in a DETECTOR rejects the user's commit outright. So the header-word substring
+// test that is right for structured connector payloads ("bearer ", "basic ", "apikey", "cookie:")
+// is wrong here: it rejects "fix: add basic retry" and "docs: the api_key rotation runbook".
+//
+// This detector therefore matches a credential VALUE, never a bare credential-adjacent word. It is
+// a trust-boundary check, so it fails toward DETECTION: every issuer-prefixed token shape the
+// redactor knows is included verbatim (those are self-identifying and need no context), and each
+// contextual form below requires the SAME one definition of "value" so a threshold can never drift
+// between two of them.
+//
+// ReDoS-safe (ADR-0002, CodeQL js/polynomial-redos): every quantifier applies to a single character
+// class and none is nested inside another; the only repeated-class adjacency is a BOUNDED prefix
+// ({0,15}) before a required separator character, so backtracking is bounded by 16 split points.
+
+// A credential value: a run of at least 16 characters from the token alphabet (the lookahead) that
+// contains at least one character which is NOT a letter or hyphen (the bounded prefix followed by a
+// required separator). Real bearer tokens, base64 basic credentials, API keys and session values
+// carry digits or base64 punctuation; English prose does not, which is what keeps "basic
+// internationalization", "token rotation" and "auth-token-refresh-implementation" out of the match
+// set. Both quantifiers are bounded or applied to one flat class, so matching stays linear.
+// This fragment carries no backslash escape, so it is a plain string; the contexts below
+// interpolate it into String.raw templates that do.
+const CREDENTIAL_VALUE = "(?=[A-Za-z0-9._~+/=-]{16,})[A-Za-z-]{0,40}[0-9._~+/=]";
+
+// The credential-bearing CONTEXTS. Each needs a trigger (an auth scheme, an api-key or cookie
+// header, or a known secret key name) immediately followed by a credential value.
+const CREDENTIAL_CONTEXT_SOURCES: readonly string[] = Object.freeze([
+  String.raw`\b(?:proxy-)?authorization\s*:\s*(?:bearer|basic|digest|token)?\s*${CREDENTIAL_VALUE}`,
+  String.raw`\b(?:bearer|basic|digest|token)\s+${CREDENTIAL_VALUE}`,
+  String.raw`\b(?:x-api-key|api[_-]?key|apikey)["']?\s*[:=]\s*["']?${CREDENTIAL_VALUE}`,
+  String.raw`\b(?:set-)?cookie\s*:\s*[^\s;=]{1,64}=${CREDENTIAL_VALUE}`,
+  String.raw`(?<![A-Za-z0-9])(?:${SECRET_KEY_NAMES})["']?\s*[:=]\s*["']?${CREDENTIAL_VALUE}`,
+]);
+
+// Issuer-prefixed tokens that the redaction patterns above either do not cover or cover with a
+// word-boundary anchor the DETECTOR must not rely on. A token pasted into prose can be glued to the
+// preceding character (`key=ghp_…`, `…/AKIA…`), and these prefixes are unique enough that dropping
+// the anchor cannot produce a false positive. AKIA is matched open-ended rather than at exactly 16
+// trailing characters so an over-long access-key-shaped run is still detected.
+const UNANCHORED_ISSUER_TOKEN_PATTERNS: readonly RegExp[] = Object.freeze([
+  /AKIA[0-9A-Z]{12,}/,
+  /gh[pousr]_[A-Za-z0-9]{20,}/,
+  /github_pat_\w{20,}/,
+  /xox[baprs]-[A-Za-z0-9-]{10,}/,
+]);
+
+// `test()` on a /g/ regex is stateful (it advances lastIndex between calls), so the shared redaction
+// patterns are cloned without the global flag before they are used as predicates.
+function withoutGlobalFlag(pattern: RegExp): RegExp {
+  return new RegExp(pattern.source, pattern.flags.replace("g", ""));
+}
+
+const CREDENTIAL_SHAPE_PATTERNS: readonly RegExp[] = Object.freeze([
+  ...CREDENTIAL_CONTEXT_SOURCES.map((source) => new RegExp(source, "i")),
+  ...UNANCHORED_ISSUER_TOKEN_PATTERNS,
+  // `sk-` KEEPS its word-boundary anchor: an unanchored `sk-` matches inside ordinary identifiers
+  // ("task-1234567890abcdef"), and an OpenAI key never appears glued to a preceding word character.
+  ...[
+    GOOGLE_API_KEY_PATTERN,
+    STRIPE_KEY_PATTERN,
+    PEM_PRIVATE_KEY_HEADER_PATTERN,
+    API_KEY_PATTERN,
+    URL_CREDENTIALS_PATTERN,
+  ].map(withoutGlobalFlag),
+]);
+
+/**
+ * True when `value` contains something shaped like an actual credential: an issuer-prefixed token,
+ * a private-key header, URL userinfo credentials, or an auth/api-key/cookie/secret-key context
+ * followed by a credential-length value. Pure, no IO. Intended for scanning free text a human wrote;
+ * structured payloads that may not carry headers at all keep their stricter substring guard.
+ */
+export function containsCredentialShape(value: string): boolean {
+  return CREDENTIAL_SHAPE_PATTERNS.some((pattern) => pattern.test(value));
+}
+
 export function isCredentialKeyName(value: string): boolean {
   const normalized = value.toLowerCase().replace(/[^a-z0-9]/gu, "");
   return NORMALIZED_SECRET_KEY_NAMES.has(normalized);
