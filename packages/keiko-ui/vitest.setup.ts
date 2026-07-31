@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { toHaveNoViolations } from "jest-axe";
 import { setClientDiagnosticWriter } from "./src/lib/client-diagnostics";
+import { resetLoadedMessageCatalogs } from "./src/lib/i18n";
 import { writeToBrowserConsole } from "./src/lib/install-client-diagnostics";
 
 expect.extend(toHaveNoViolations);
@@ -13,6 +14,16 @@ expect.extend(toHaveNoViolations);
 // own spy cannot leave the next one buffering into the void.
 beforeEach(() => {
   setClientDiagnosticWriter(writeToBrowserConsole);
+  // The lazily loaded locale catalogs are module state that no DOM or storage teardown can reach
+  // (#2871). `I18nProvider` reads them synchronously on its first render — `activeLocale =
+  // ready && catalogReady ? locale : DEFAULT_LOCALE` — so whether a `de`-seeded provider paints
+  // German immediately or paints the English baseline and flips later depended on whether some
+  // EARLIER test in the same worker happened to resolve the German catalog. That made catalog
+  // warmth an invisible cross-test input: the same test passed or failed on execution order.
+  // Resetting here starts every test from the product's real first-load state (English bundled,
+  // every other locale lazy), so a test that needs German must establish that precondition itself
+  // — by awaiting `loadLocaleMessages("de")` or by awaiting the rendered German copy.
+  resetLoadedMessageCatalogs();
 });
 
 // The persisted UI locale is process-global state, so one test choosing a language decided what the

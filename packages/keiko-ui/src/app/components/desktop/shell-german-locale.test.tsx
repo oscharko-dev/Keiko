@@ -153,7 +153,13 @@ describe("New Window dialog under the German locale", () => {
 });
 
 describe("Quick Access command palette under the German locale", () => {
-  it("translates every command label and group name the palette lists", () => {
+  it("translates every command label and group name the palette lists", async () => {
+    // `deTranslate` reads the lazily loaded German catalog and falls back to English when it is
+    // absent, so without this the whole block below is tautological: both sides of every `toBe`
+    // resolve to the same English string and the case passes over a completely untranslated
+    // palette. It only ever held because a sibling test above happened to warm the catalog first
+    // (#2871) — the precondition belongs in the test that needs it, exactly as the siblings do.
+    await loadLocaleMessages("de");
     const commands = buildAppShellCommands(
       {} as WorkspaceApi,
       vi.fn(),

@@ -29,7 +29,7 @@ import {
   unsupportedGuidanceText,
   type I18nTranslate,
 } from "../local-knowledge-i18n";
-import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 
 // ---------------------------------------------------------------------------
 // Mock next/navigation so useSearchParams() resolves synchronously in jsdom
@@ -166,8 +166,21 @@ function resolveDetail(detail: CapsuleDetailData = FULL_DETAIL): () => Promise<C
   return () => Promise.resolve(detail);
 }
 
-async function openAdvanced(user: ReturnType<typeof userEvent.setup>): Promise<void> {
-  await user.click(await screen.findByText("Status, sources, and diagnostics"));
+// Resolved through the production catalog rather than restated here: these are the same functions
+// the component renders with, so a copy change cannot leave a test locator or expectation behind.
+const englishT: I18nTranslate = (key, values) => translateLocalKnowledge("en", key, values);
+const germanT: I18nTranslate = (key, values) => translateLocalKnowledge("de", key, values);
+
+// The advanced disclosure is labelled in the active locale, so the helper has to be told which one
+// the caller rendered. It defaults to English because every test below renders `CapsuleDetail`
+// without an `I18nProvider` — `useLocale()` then returns the context default, `en`, unconditionally.
+// Hardcoding English here instead made the German test depend on the provider still being in its
+// English transition state (issue #2871); the locale is now the caller's explicit input.
+async function openAdvanced(
+  user: ReturnType<typeof userEvent.setup>,
+  t: I18nTranslate = englishT,
+): Promise<void> {
+  await user.click(await screen.findByText(t("localKnowledge.detail.advanced.summary")));
 }
 
 async function openMaintenance(user: ReturnType<typeof userEvent.setup>): Promise<void> {
@@ -314,7 +327,6 @@ describe("CapsuleDetail — overview section", () => {
       expect(screen.getByText("2")).toBeInTheDocument();
     });
 
-    const englishT: I18nTranslate = (key, values) => translateLocalKnowledge("en", key, values);
     expect(
       screen.getByText(unsupportedGuidanceText("pdf-needs-ocr", englishT)),
     ).toBeInTheDocument();
@@ -323,6 +335,13 @@ describe("CapsuleDetail — overview section", () => {
   it("renders the unsupported-document guidance in German", async () => {
     const user = userEvent.setup();
     window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    // Establish the locale before rendering, not after. The German catalog is imported lazily into
+    // module scope, and `I18nProvider` serves the English baseline until it resolves — so this test
+    // used to walk the UI through English labels and only then assert German, which passes only
+    // while that transition state still exists. Whether it does is a property of execution order
+    // and load timing, not of the component (issue #2871). Awaiting the catalog makes German the
+    // first and only paint, so every label this test touches is German, as its name claims.
+    await loadLocaleMessages("de");
     render(
       <I18nProvider>
         <CapsuleDetail
@@ -330,13 +349,11 @@ describe("CapsuleDetail — overview section", () => {
         />
       </I18nProvider>,
     );
-    await openAdvanced(user);
+    await openAdvanced(user, germanT);
 
-    const germanT: I18nTranslate = (key, values) => translateLocalKnowledge("de", key, values);
     for (const code of ["image-needs-ocr", "ocr-failed"] as const) {
       expect(await screen.findByText(unsupportedGuidanceText(code, germanT))).toBeInTheDocument();
       // The English copy must be gone, not merely accompanied by German.
-      const englishT: I18nTranslate = (key, values) => translateLocalKnowledge("en", key, values);
       expect(screen.queryByText(unsupportedGuidanceText(code, englishT))).toBeNull();
     }
   });
@@ -349,7 +366,6 @@ describe("CapsuleDetail — overview section", () => {
     render(<CapsuleDetail fetchDetailImpl={resolveDetail(unsupportedDetail([forwardCode]))} />);
     await openAdvanced(user);
 
-    const englishT: I18nTranslate = (key, values) => translateLocalKnowledge("en", key, values);
     expect(
       await screen.findByText(unsupportedGuidanceText("unsupported-format", englishT)),
     ).toBeInTheDocument();
@@ -1174,17 +1190,15 @@ describe("staleChunksTone", () => {
 // ---------------------------------------------------------------------------
 
 describe("resumeButtonLabel", () => {
-  const t: I18nTranslate = (key, values) => translateLocalKnowledge("en", key, values);
-
   it("shows the busy label while a resume is in flight", () => {
-    expect(resumeButtonLabel(true, 1, t)).toBe("Resuming…");
+    expect(resumeButtonLabel(true, 1, englishT)).toBe("Resuming…");
   });
 
   it("uses the singular label for exactly one resumable document", () => {
-    expect(resumeButtonLabel(false, 1, t)).toBe("Resume 1 document");
+    expect(resumeButtonLabel(false, 1, englishT)).toBe("Resume 1 document");
   });
 
   it("pluralizes the label when more than one document is resumable", () => {
-    expect(resumeButtonLabel(false, 2, t)).toBe("Resume 2 documents");
+    expect(resumeButtonLabel(false, 2, englishT)).toBe("Resume 2 documents");
   });
 });
