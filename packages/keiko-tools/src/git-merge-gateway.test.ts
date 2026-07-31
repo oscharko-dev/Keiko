@@ -594,10 +594,9 @@ describe("mapRawMergeReadiness — all mergeable states", () => {
     // as mergeReadiness.ready === false via that same, unmodified contract-layer derivation. `ready`
     // here reflects only the mergeable_state signal (a separate provider fact) — the approvals gap is
     // what `gitMergeReadinessFor` (git-merge.ts) turns into the "approvals-missing" blocker.
-    expect(
-      underApproved.mergeReadiness.receivedApprovalCount <
-        underApproved.mergeReadiness.requiredApprovalCount,
-    ).toBe(true);
+    expect(underApproved.mergeReadiness.receivedApprovalCount).toBeLessThan(
+      underApproved.mergeReadiness.requiredApprovalCount,
+    );
   });
 });
 

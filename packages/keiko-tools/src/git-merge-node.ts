@@ -234,11 +234,19 @@ interface RawCheckRun {
   readonly conclusion?: unknown;
 }
 
-// Derives the REAL aggregate check state from the modern Checks API's per-run status/conclusion list
-// — replaces the previous single combined "state" string read from the legacy Statuses API
-// (`/commits/{sha}/status`), which could report only one aggregate verdict with no total/pass/fail/
-// pending breakdown.
-function checksStateFromCheckRuns(runs: readonly RawCheckRun[]): GitDeliveryChecksState {
+type CheckRunTally = Omit<GitDeliveryChecksState, "overallStatus">;
+
+// Aggregate verdict precedence, strongest signal first: one failing run fails the head; otherwise one
+// still-running run holds it pending; otherwise a non-empty run list passes. Zero runs is "skipped" —
+// a head with no check surface to judge, which must NOT be reported as having passed one.
+function overallChecksStatus(tally: CheckRunTally): GitDeliveryChecksState["overallStatus"] {
+  if (tally.failing > 0) return "failing";
+  if (tally.pending > 0) return "pending";
+  if (tally.total > 0) return "passing";
+  return "skipped";
+}
+
+function tallyCheckRuns(runs: readonly RawCheckRun[]): CheckRunTally {
   let passing = 0;
   let failing = 0;
   let pending = 0;
@@ -253,10 +261,16 @@ function checksStateFromCheckRuns(runs: readonly RawCheckRun[]): GitDeliveryChec
       failing += 1;
     }
   }
-  const total = runs.length;
-  const overallStatus: GitDeliveryChecksState["overallStatus"] =
-    failing > 0 ? "failing" : pending > 0 ? "pending" : total > 0 ? "passing" : "skipped";
-  return { total, passing, failing, pending, overallStatus };
+  return { total: runs.length, passing, failing, pending };
+}
+
+// Derives the REAL aggregate check state from the modern Checks API's per-run status/conclusion list
+// — replaces the previous single combined "state" string read from the legacy Statuses API
+// (`/commits/{sha}/status`), which could report only one aggregate verdict with no total/pass/fail/
+// pending breakdown.
+function checksStateFromCheckRuns(runs: readonly RawCheckRun[]): GitDeliveryChecksState {
+  const tally = tallyCheckRuns(runs);
+  return { ...tally, overallStatus: overallChecksStatus(tally) };
 }
 
 function shouldReadHeadChecks(mergeableState: string | undefined): boolean {
