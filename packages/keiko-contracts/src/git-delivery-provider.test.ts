@@ -39,6 +39,7 @@ describe("isGitDeliveryBranchProtection", () => {
         deletionAllowed: false,
         forcePushAllowed: false,
         linearHistoryRequired: true,
+        signaturesRequired: true,
         requiredReviewCount: 2,
         requiredStatusCheckCount: 3,
       }),
@@ -51,6 +52,7 @@ describe("isGitDeliveryBranchProtection", () => {
         deletionAllowed: "no",
         forcePushAllowed: false,
         linearHistoryRequired: true,
+        signaturesRequired: true,
         requiredReviewCount: 2,
         requiredStatusCheckCount: 3,
       }),
@@ -60,6 +62,7 @@ describe("isGitDeliveryBranchProtection", () => {
         deletionAllowed: false,
         forcePushAllowed: false,
         linearHistoryRequired: true,
+        signaturesRequired: true,
         requiredReviewCount: -1,
         requiredStatusCheckCount: 3,
       }),
@@ -69,11 +72,25 @@ describe("isGitDeliveryBranchProtection", () => {
         deletionAllowed: false,
         forcePushAllowed: false,
         linearHistoryRequired: true,
+        signaturesRequired: true,
         requiredReviewCount: 1.5,
         requiredStatusCheckCount: 3,
       }),
     ).toBe(false);
     expect(isGitDeliveryBranchProtection(null)).toBe(false);
+  });
+
+  it("requires an explicit signed-commit requirement projection", () => {
+    const protection = {
+      deletionAllowed: false,
+      forcePushAllowed: false,
+      linearHistoryRequired: true,
+      requiredReviewCount: 0,
+      requiredStatusCheckCount: 0,
+    };
+    expect(isGitDeliveryBranchProtection({ ...protection, signaturesRequired: true })).toBe(true);
+    expect(isGitDeliveryBranchProtection({ ...protection, signaturesRequired: false })).toBe(true);
+    expect(isGitDeliveryBranchProtection(protection)).toBe(false);
   });
 });
 

@@ -41,6 +41,10 @@ import type { ChangesTab } from "./ChangesPane";
 import { CommitComposer } from "./CommitComposer";
 import { DiffPane } from "./DiffPane";
 import { NewBranchDialog } from "./NewBranchDialog";
+import {
+  WorktreeMutationConfirmDialog,
+  type WorktreeMutationConfirmation,
+} from "./WorktreeMutationConfirmDialog";
 import { deriveSyncView } from "./SyncControl";
 import {
   pushOutcomePresentation,
@@ -53,6 +57,7 @@ import {
   notifyGitRepositoryStateInvalidated,
 } from "../git-repository-state-events";
 import { WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationRoots } from "../workspace-file-events";
+import { requestEditorBufferReconciliation } from "../editor-buffer-reconciliation-events";
 import {
   BODY_STYLE,
   DIFF_HEADER_STYLE,
@@ -63,6 +68,7 @@ import {
 } from "./git-client-styles";
 
 const EMPTY_BRANCHES: readonly GitBranchListEntry[] = [];
+const HISTORY_PAGE_SIZE = 50;
 const ChevronRightIcon = Icons.chevronR;
 
 export interface GitClientWindowProps {
@@ -77,6 +83,8 @@ export interface GitClientWindowProps {
   readonly updateCfg?: ((patch: Record<string, WindowCfgValue>) => void) | undefined;
   /** DI seam; defaults to the real BFF client. */
   readonly client?: GitClientSeam;
+  /** Reconciles open editor buffers after a successful working-tree mutation. */
+  readonly reconcileEditorBuffers?: ((root: string) => Promise<void>) | undefined;
 }
 
 type RightPaneMode = "diff" | "pull-request" | "merge";
@@ -236,6 +244,23 @@ function selectedHistoryCommitResolver(
   };
 }
 
+function appendHistoryPage(
+  current: GitHistoryResponse,
+  page: GitHistoryResponse,
+): GitHistoryResponse {
+  const seen = new Set(current.entries.map((entry) => entry.sha));
+  const appended = page.entries.filter((entry) => {
+    if (seen.has(entry.sha)) return false;
+    seen.add(entry.sha);
+    return true;
+  });
+  return {
+    ...current,
+    entries: [...current.entries, ...appended],
+    truncated: page.entries.length > 0 && page.truncated,
+  };
+}
+
 function diffScopeNormalizer(change: GitChangedFile): (current: GitDiffScope) => GitDiffScope {
   return (current: GitDiffScope): GitDiffScope => normalizeDiffScopeForChange(current, change);
 }
@@ -264,6 +289,7 @@ interface SyncExecutionContext {
   readonly setBusy: Dispatch<SetStateAction<boolean>>;
   readonly setOutcome: Dispatch<SetStateAction<SyncOutcomeView | null>>;
   readonly setError: Dispatch<SetStateAction<string | null>>;
+  readonly reconcileEditorBuffers: (root: string) => Promise<void>;
 }
 
 function syncOutcomeWithMetrics(
@@ -343,10 +369,23 @@ function runFetchOrPullSync(
         if (result === undefined) return;
         const label =
           operation === "fetch" ? t("gitClientWindow.sync.fetch") : t("gitClientWindow.sync.pull");
-        completeSync(
+        const outcome = syncOutcomeWithMetrics(
           context,
-          syncOutcomeWithMetrics(context, syncOutcomePresentation(label, result.status, t), t),
-          true,
+          syncOutcomePresentation(label, result.status, t),
+          t,
+        );
+        if (operation !== "pull" || result.status !== "succeeded") {
+          completeSync(context, outcome, true);
+          return;
+        }
+        return context.reconcileEditorBuffers(projectId).then(
+          () => completeSync(context, outcome, true),
+          () =>
+            completeSync(
+              context,
+              { message: t("gitClientWindow.sync.editorReconciliationFailed"), failed: true },
+              true,
+            ),
         );
       },
       (error: unknown) => failSync(context, error),
@@ -426,6 +465,7 @@ interface GitSyncActionOptions {
   readonly setBusy: Dispatch<SetStateAction<boolean>>;
   readonly setOutcome: Dispatch<SetStateAction<SyncOutcomeView | null>>;
   readonly setError: Dispatch<SetStateAction<string | null>>;
+  readonly reconcileEditorBuffers: (root: string) => Promise<void>;
   readonly t: I18nTranslate;
 }
 
@@ -440,6 +480,7 @@ function useGitSyncAction(options: GitSyncActionOptions): () => void {
     setBusy,
     setOutcome,
     setError,
+    reconcileEditorBuffers,
     t,
   } = options;
   return useCallback((): void => {
@@ -460,6 +501,7 @@ function useGitSyncAction(options: GitSyncActionOptions): () => void {
       setBusy,
       setOutcome,
       setError,
+      reconcileEditorBuffers,
     };
     runFetchOrPullSync(client, selectedPath, syncView, context, t);
     runPushSync(client, selectedPath, syncView, context, t);
@@ -467,6 +509,7 @@ function useGitSyncAction(options: GitSyncActionOptions): () => void {
     activeSummary,
     client,
     repositoryRoot,
+    reconcileEditorBuffers,
     selectedPath,
     sequenceRef,
     setBusy,
@@ -579,6 +622,7 @@ export function GitClientWindow({
   onOpenEditorFile,
   updateCfg,
   client = DEFAULT_GIT_CLIENT,
+  reconcileEditorBuffers = requestEditorBufferReconciliation,
 }: GitClientWindowProps): ReactNode {
   const t = useTranslate();
   const [repositories, setRepositories] = useState<readonly ProjectWithAvailability[]>([]);
@@ -600,6 +644,9 @@ export function GitClientWindow({
   const [historyProjectKey, setHistoryProjectKey] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyNextSkip, setHistoryNextSkip] = useState(0);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  const [historyLoadMoreError, setHistoryLoadMoreError] = useState<string | null>(null);
   const [selectedCommitSha, setSelectedCommitSha] = useState<string | null>(null);
   const [status, setStatus] = useState<GitRepositoryStatusResponse | null>(null);
   const [statusProjectKey, setStatusProjectKey] = useState<string | null>(null);
@@ -614,14 +661,18 @@ export function GitClientWindow({
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<"clone" | "open">("clone");
   const [newBranchOpen, setNewBranchOpen] = useState(false);
+  const [worktreeConfirmation, setWorktreeConfirmation] =
+    useState<WorktreeMutationConfirmation | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncOutcome, setSyncOutcome] = useState<SyncOutcomeView | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [rightPaneMode, setRightPaneMode] = useState<RightPaneMode>("diff");
   const [rightPaneAnnouncement, setRightPaneAnnouncement] = useState("");
   const syncSeqRef = useRef(0);
+  const historyRequestSequenceRef = useRef(0);
   const repositoryConnectSeqRef = useRef(0);
   const newBranchReturnFocusRef = useRef<HTMLElement | null>(null);
+  const worktreeConfirmationReturnFocusRef = useRef<HTMLElement | null>(null);
   const rightPaneRef = useRef<HTMLDivElement | null>(null);
   const diffPaneRef = useRef<HTMLDivElement | null>(null);
   const landedPathRef = useRef<string | null>(null);
@@ -684,6 +735,7 @@ export function GitClientWindow({
     resetCommit();
     resetBranchActions();
     syncSeqRef.current += 1;
+    historyRequestSequenceRef.current += 1;
     setSyncOutcome(null);
     setSyncError(null);
     setSyncBusy(false);
@@ -695,7 +747,11 @@ export function GitClientWindow({
     setHistoryProjectKey(null);
     setHistoryLoading(false);
     setHistoryError(null);
+    setHistoryNextSkip(0);
+    setHistoryLoadingMore(false);
+    setHistoryLoadMoreError(null);
     setSelectedCommitSha(null);
+    setWorktreeConfirmation(null);
   }, [selectedPath, resetStaging, resetCommit, resetBranchActions]);
 
   useEffect(() => {
@@ -785,26 +841,39 @@ export function GitClientWindow({
   // History loads independently from status; selecting the first commit gives the detail pane a
   // deterministic populated state while preserving user selection when it still exists.
   useEffect(() => {
+    historyRequestSequenceRef.current += 1;
+    const requestSequence = historyRequestSequenceRef.current;
     if (selectedPath === null) {
       setHistory(null);
       setHistoryProjectKey(null);
       setHistoryError(null);
       setSelectedCommitSha(null);
+      setHistoryNextSkip(0);
+      setHistoryLoadingMore(false);
+      setHistoryLoadMoreError(null);
       return;
     }
     if (tab !== "history") {
       setHistoryLoading(false);
+      setHistoryLoadingMore(false);
+      setHistoryLoadMoreError(null);
       return;
     }
     let cancelled = false;
+    setHistory(null);
+    setHistoryProjectKey(null);
     setHistoryLoading(true);
     setHistoryError(null);
-    void client.getHistory({ root: selectedPath, limit: 50 }).then(
+    setHistoryNextSkip(0);
+    setHistoryLoadingMore(false);
+    setHistoryLoadMoreError(null);
+    void client.getHistory({ root: selectedPath, limit: HISTORY_PAGE_SIZE, skip: 0 }).then(
       (res) => {
-        if (cancelled) return;
+        if (cancelled || historyRequestSequenceRef.current !== requestSequence) return;
         setHistory(res);
         setHistoryProjectKey(selectedPath);
         setHistoryLoading(false);
+        setHistoryNextSkip(res.entries.length);
         const commitLandingKey =
           initialCommit === undefined ? null : `${selectedPath}\u0000${initialCommit}`;
         const requestedCommit =
@@ -820,18 +889,49 @@ export function GitClientWindow({
           selectedHistoryCommitResolver(res.entries, requestedCommit, hasRequestedCommit),
         );
       },
-      (err: unknown) => {
-        if (cancelled) return;
+      () => {
+        if (cancelled || historyRequestSequenceRef.current !== requestSequence) return;
         setHistory(null);
         setHistoryProjectKey(null);
         setHistoryLoading(false);
-        setHistoryError(formatGitError(err));
+        setHistoryError(t("gitClientWindow.history.loadFailed"));
       },
     );
     return () => {
       cancelled = true;
+      if (historyRequestSequenceRef.current === requestSequence) {
+        historyRequestSequenceRef.current += 1;
+      }
     };
   }, [client, initialCommit, selectedPath, statusRevision, t, tab]);
+
+  const loadMoreHistory = useCallback((): void => {
+    if (selectedPath === null || history === null || !history.truncated || historyLoadingMore) {
+      return;
+    }
+    const requestSequence = historyRequestSequenceRef.current;
+    const skip = historyNextSkip;
+    setHistoryLoadingMore(true);
+    setHistoryLoadMoreError(null);
+    void client.getHistory({ root: selectedPath, limit: HISTORY_PAGE_SIZE, skip }).then(
+      (page) => {
+        if (historyRequestSequenceRef.current !== requestSequence) return;
+        if (!page.available) {
+          setHistoryLoadingMore(false);
+          setHistoryLoadMoreError(t("gitClientWindow.history.loadMoreFailed"));
+          return;
+        }
+        setHistory((current) => (current === null ? null : appendHistoryPage(current, page)));
+        setHistoryNextSkip(skip + page.entries.length);
+        setHistoryLoadingMore(false);
+      },
+      () => {
+        if (historyRequestSequenceRef.current !== requestSequence) return;
+        setHistoryLoadingMore(false);
+        setHistoryLoadMoreError(t("gitClientWindow.history.loadMoreFailed"));
+      },
+    );
+  }, [client, history, historyLoadingMore, historyNextSkip, selectedPath, t]);
 
   // Status load, re-run on every mutation (statusRevision bump). Prunes a selected change that no
   // longer exists (e.g. after a commit) so the diff pane returns to its empty state.
@@ -1107,9 +1207,33 @@ export function GitClientWindow({
   const switchBranch = useCallback(
     (branchName: string): void => {
       if (selectedPath === null) return;
-      branchActions.runMutation(() => client.branchSwitch({ projectId: selectedPath, branchName }));
+      worktreeConfirmationReturnFocusRef.current = document.querySelector<HTMLElement>(
+        '[role="combobox"][aria-label^="Branch:"]',
+      );
+      setWorktreeConfirmation({ kind: "branch-switch", branchName });
     },
-    [branchActions, client, selectedPath],
+    [selectedPath],
+  );
+
+  const runConfirmedBranchSwitch = useCallback(
+    (branchName: string): void => {
+      if (selectedPath === null) return;
+      branchActions.runMutation(async () => {
+        const result = await client.branchSwitch({ projectId: selectedPath, branchName });
+        if (result.status !== "succeeded") return result;
+        try {
+          await reconcileEditorBuffers(selectedPath);
+          return result;
+        } catch {
+          return {
+            ...result,
+            status: "recovery-required",
+            executionErrorCode: "editor-buffer-reconciliation-failed",
+          };
+        }
+      });
+    },
+    [branchActions, client, reconcileEditorBuffers, selectedPath],
   );
 
   const createBranch = useCallback(
@@ -1132,12 +1256,21 @@ export function GitClientWindow({
         });
         if (created.status !== "succeeded") return created;
         const switched = await client.branchSwitch({ projectId: selectedPath, branchName });
-        return switched.status === "succeeded"
-          ? { ...switched, actionKind: "branch-create" }
-          : switched;
+        if (switched.status !== "succeeded") return switched;
+        try {
+          await reconcileEditorBuffers(selectedPath);
+          return { ...switched, actionKind: "branch-create" };
+        } catch {
+          return {
+            ...switched,
+            status: "recovery-required",
+            actionKind: "branch-create",
+            executionErrorCode: "editor-buffer-reconciliation-failed",
+          };
+        }
       });
     },
-    [activeBranches, branchActions, client, selectedPath],
+    [activeBranches, branchActions, client, reconcileEditorBuffers, selectedPath],
   );
 
   const syncView = deriveSyncView(activeSummary, summaryLoading);
@@ -1155,8 +1288,35 @@ export function GitClientWindow({
     setBusy: setSyncBusy,
     setOutcome: setSyncOutcome,
     setError: setSyncError,
+    reconcileEditorBuffers,
     t,
   });
+
+  const requestSync = useCallback((): void => {
+    if (syncView.action === "pull") {
+      worktreeConfirmationReturnFocusRef.current = document.activeElement as HTMLElement | null;
+      setWorktreeConfirmation({ kind: "pull" });
+      return;
+    }
+    runSync();
+  }, [runSync, syncView.action]);
+
+  const closeWorktreeConfirmation = useCallback((): void => {
+    setWorktreeConfirmation(null);
+    const target = worktreeConfirmationReturnFocusRef.current;
+    worktreeConfirmationReturnFocusRef.current = null;
+    if (target !== null) queueMicrotask(() => target.focus());
+  }, []);
+
+  const confirmWorktreeMutation = useCallback((): void => {
+    const request = worktreeConfirmation;
+    closeWorktreeConfirmation();
+    if (request?.kind === "branch-switch") {
+      runConfirmedBranchSwitch(request.branchName);
+    } else if (request?.kind === "pull") {
+      runSync();
+    }
+  }, [closeWorktreeConfirmation, runConfirmedBranchSwitch, runSync, worktreeConfirmation]);
 
   const openRightPane = useCallback(
     (mode: Exclude<RightPaneMode, "diff">): void => {
@@ -1217,7 +1377,7 @@ export function GitClientWindow({
         onSelectRepository={reconnectRepository}
         onSwitchBranch={switchBranch}
         onCreateBranch={openNewBranchDialog}
-        onRunSync={runSync}
+        onRunSync={requestSync}
         onOpenEditor={onOpenEditor}
         onOpenFiles={onOpenFiles}
       />
@@ -1273,6 +1433,9 @@ export function GitClientWindow({
                 history={activeHistory}
                 historyLoading={historyLoading}
                 historyError={historyError}
+                historyLoadingMore={historyLoadingMore}
+                historyLoadMoreError={historyLoadMoreError}
+                onLoadMoreHistory={loadMoreHistory}
                 selectedCommitSha={selectedCommitSha}
                 onSelectCommit={(entry) => setSelectedCommitSha(entry.sha)}
                 commitComposer={
@@ -1358,6 +1521,13 @@ export function GitClientWindow({
           onClose={closeNewBranchDialog}
         />
       </OptionalContent>
+      {worktreeConfirmation === null ? null : (
+        <WorktreeMutationConfirmDialog
+          request={worktreeConfirmation}
+          onCancel={closeWorktreeConfirmation}
+          onConfirm={confirmWorktreeMutation}
+        />
+      )}
     </div>
   );
 }

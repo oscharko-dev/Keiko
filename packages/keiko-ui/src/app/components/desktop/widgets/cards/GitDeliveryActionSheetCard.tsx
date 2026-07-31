@@ -231,6 +231,9 @@ function PreviewReadinessDetails({
           {t("gitDelivery.preview.branchProtection", {
             reviews: preview.branchProtection.requiredReviewCount,
             checks: preview.branchProtection.requiredStatusCheckCount,
+            signatures: preview.branchProtection.signaturesRequired
+              ? t("gitDelivery.preview.signaturesRequired")
+              : t("gitDelivery.preview.signaturesNotRequired"),
           })}
         </p>
       ) : null}

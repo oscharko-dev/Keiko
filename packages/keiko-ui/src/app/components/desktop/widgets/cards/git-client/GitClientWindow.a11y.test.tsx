@@ -8,6 +8,12 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GitBranchListResponse, GitDeliveryCommitPreviewResponse } from "@/lib/api";
+import {
+  I18N_STORAGE_KEY,
+  I18nProvider,
+  loadLocaleMessages,
+  resetLoadedMessageCatalogs,
+} from "@/lib/i18n";
 import type {
   GitHistoryResponse,
   GitRepositoryStatusResponse,
@@ -246,6 +252,8 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
 
 afterEach(() => {
   vi.clearAllMocks();
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
+  resetLoadedMessageCatalogs();
 });
 
 describe("GitClientWindow — axe no-violations", () => {
@@ -591,6 +599,39 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       expect(dialog.contains(document.activeElement)).toBe(true);
     });
 
+    it("branch-switch confirmation is modal, focus-contained, and axe-clean", async () => {
+      const user = userEvent.setup();
+      render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+      await user.click(await screen.findByRole("combobox", { name: "Branch: main" }));
+      await user.click(screen.getByRole("option", { name: /feat\/a11y/ }));
+
+      const dialog = screen.getByRole("dialog", { name: "Confirm branch switch" });
+      expect(dialog).toHaveAttribute("aria-modal", "true");
+      expect(dialog).toHaveFocus();
+      within(dialog).getByRole("button", { name: "Switch branch" }).focus();
+      fireEvent.keyDown(document, { key: "Tab" });
+      expect(dialog.contains(document.activeElement)).toBe(true);
+      expect(await axe(dialog)).toHaveNoViolations();
+    });
+
+    it("localizes the branch-switch confirmation in German", async () => {
+      await loadLocaleMessages("de");
+      window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+      const user = userEvent.setup();
+      render(
+        <I18nProvider>
+          <GitClientWindow projectId={REPO_A.path} client={makeClient()} />
+        </I18nProvider>,
+      );
+      await user.click(await screen.findByRole("combobox", { name: "Branch: main" }));
+      await user.click(screen.getByRole("option", { name: /feat\/a11y/ }));
+
+      const dialog = screen.getByRole("dialog", { name: "Branchwechsel bestätigen" });
+      expect(within(dialog).getByRole("button", { name: "Branch wechseln" })).toBeEnabled();
+      expect(within(dialog).getByRole("button", { name: "Abbrechen" })).toBeEnabled();
+      expect(await axe(dialog)).toHaveNoViolations();
+    });
+
     it("history list and selected commit details expose name, role, and selected value", async () => {
       const user = userEvent.setup();
       const client = makeClient({ getHistory: vi.fn(async () => makeHistory()) });
@@ -604,6 +645,36 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
         "true",
       );
       expect(screen.getByRole("region", { name: "Commit details" })).toBeInTheDocument();
+    });
+
+    it("history pagination exposes an accessible action and remains axe-clean", async () => {
+      const user = userEvent.setup();
+      const client = makeClient({
+        getHistory: vi.fn(async () => makeHistory({ truncated: true })),
+      });
+      const { container } = render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+      await user.click(await screen.findByRole("tab", { name: "History" }));
+
+      expect(await screen.findByRole("button", { name: "Load more commits" })).toBeEnabled();
+      expect(await axe(container)).toHaveNoViolations();
+    });
+
+    it("localizes the accessible pagination action in German", async () => {
+      await loadLocaleMessages("de");
+      window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+      const user = userEvent.setup();
+      const client = makeClient({
+        getHistory: vi.fn(async () => makeHistory({ truncated: true })),
+      });
+      const { container } = render(
+        <I18nProvider>
+          <GitClientWindow projectId={REPO_A.path} client={client} />
+        </I18nProvider>,
+      );
+      await user.click(await screen.findByRole("tab", { name: "History" }));
+
+      expect(await screen.findByRole("button", { name: "Weitere Commits laden" })).toBeEnabled();
+      expect(await axe(container)).toHaveNoViolations();
     });
 
     it("detached and conflicted states expose alert guidance and disabled sync actions", async () => {

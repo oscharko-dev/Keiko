@@ -237,6 +237,10 @@ import { useEditorSettings } from "./useEditorSettings";
 import { useWorkspaceSnippets } from "./useWorkspaceSnippets";
 import { useEditorVerificationRun } from "./useEditorVerificationRun";
 import { useWorkspaceWatch } from "./useWorkspaceWatch";
+import {
+  EDITOR_BUFFER_RECONCILIATION_REQUEST_EVENT,
+  editorBufferReconciliationRequestDetail,
+} from "./editor-buffer-reconciliation-events";
 import { removePaneDiagnostics, setPaneDiagnostics } from "./editorProblemsStore";
 import { useEditorAgentTranslate, type EditorAgentTranslate } from "./editor-agent-i18n";
 import {
@@ -2512,6 +2516,7 @@ function EditorRuntimeWidget({
     [reconcileWorkspaceWatchEvent],
   );
   const workspaceWatch = useWorkspaceWatch(root, handleWorkspaceWatchEvent);
+  const gitReconciliationSequenceRef = useRef(0);
   useEffect(() => {
     if (!hasTarget || root === undefined || file === undefined || !fileModelMatchesTarget) return;
     const snapshotKey = documentSessionKey(root, file);
@@ -2606,7 +2611,10 @@ function EditorRuntimeWidget({
   const themeVariant = useEditorThemeVariant();
 
   const load = useCallback(
-    (signal: { cancelled: boolean }, options: { bypassCache?: boolean } = {}): void => {
+    async (
+      signal: { cancelled: boolean },
+      options: { bypassCache?: boolean; preserveDirty?: boolean } = {},
+    ): Promise<void> => {
       if (!hasTarget) {
         setContent("");
         setFileModel(null);
@@ -2637,55 +2645,74 @@ function EditorRuntimeWidget({
         setDiagnosticsSummary(cached.diagnosticsSummary);
         return;
       }
-      setLoadState({ status: "loading" });
-      setSaveStatus("idle");
-      setSaveError(undefined);
-      setLocalHistoryProtection(undefined);
-      void Promise.resolve()
-        .then(() => fetchFilesContent(root, file))
-        .then(async (response) => {
-          if (signal.cancelled) return;
-          const identity: EditorDocumentIdentity = {
-            uri: documentUri(root, file, editorModelScope),
-            language: inferEditorLanguage(file),
-            version: 0,
-          };
-          const snapshot = await readEditorHotExitSnapshot(root, file);
-          if (signal.cancelled) return;
-          setContent(response.content);
-          setFileModel(createFileModel(identity));
-          setModifiedAt(response.modifiedAt);
-          setVersion(response.session.version);
-          setMaxBytes(response.maxBytes);
-          setLocalHistoryProtection(response.localHistoryProtection);
-          setLoadState({ status: "ready" });
-          setExternalCompareBaseline(null);
-          dispatchExternalChange({ type: "reloadSucceeded" });
-          // AC3: offer recovery whenever the snapshot's buffer differs from what is on disk now.
-          // The content comparison is the authoritative signal; an additional contentHash check is
-          // redundant against it (a content difference implies a hash difference) and can only ever
-          // suppress a legitimate recovery offer when the client buffer hash and the server-issued
-          // version hash are computed over different normalizations — a false negative. Gate solely
-          // on the content the user would lose.
-          if (snapshot !== null && snapshot.content !== response.content) {
-            setRecoverySnapshot(snapshot);
-            setRecoveryDiskBaseline(response.content);
-          } else {
-            setRecoverySnapshot(null);
-            setRecoveryDiskBaseline(null);
+      if (options.preserveDirty !== true || !dirtyRef.current) {
+        setLoadState({ status: "loading" });
+        setSaveStatus("idle");
+        setSaveError(undefined);
+        setLocalHistoryProtection(undefined);
+      }
+      try {
+        const response = await fetchFilesContent(root, file);
+        if (signal.cancelled) return;
+        const snapshot = await readEditorHotExitSnapshot(root, file);
+        if (signal.cancelled) return;
+        if (options.preserveDirty === true && dirtyRef.current) {
+          if (versionRef.current?.contentHash !== response.session.version.contentHash) {
+            gitReconciliationSequenceRef.current += 1;
+            setExternalCompareBaseline(response.content);
+            dispatchExternalChange({
+              type: "observed",
+              event: {
+                schemaVersion: "1",
+                sequence: gitReconciliationSequenceRef.current,
+                kind: "changed",
+                relativePath: file,
+                sizeBytes: response.session.version.sizeBytes,
+                modifiedAt: response.session.version.modifiedAt,
+                metadataHash: response.session.version.contentHash,
+              },
+              activePath: file,
+              dirty: true,
+              saving: savingRef.current,
+              originatedByKeiko: false,
+            });
           }
-        })
-        .catch((err: unknown) => {
-          if (signal.cancelled) return;
-          setLoadState({ status: "error", message: errorMessage(err) });
-        });
+          return;
+        }
+        const identity: EditorDocumentIdentity = {
+          uri: documentUri(root, file, editorModelScope),
+          language: inferEditorLanguage(file),
+          version: 0,
+        };
+        setContent(response.content);
+        setFileModel(createFileModel(identity));
+        setModifiedAt(response.modifiedAt);
+        setVersion(response.session.version);
+        setMaxBytes(response.maxBytes);
+        setLocalHistoryProtection(response.localHistoryProtection);
+        setLoadState({ status: "ready" });
+        setExternalCompareBaseline(null);
+        dispatchExternalChange({ type: "reloadSucceeded" });
+        // AC3: offer recovery whenever the snapshot's buffer differs from what is on disk now.
+        if (snapshot !== null && snapshot.content !== response.content) {
+          setRecoverySnapshot(snapshot);
+          setRecoveryDiskBaseline(response.content);
+        } else {
+          setRecoverySnapshot(null);
+          setRecoveryDiskBaseline(null);
+        }
+      } catch (err: unknown) {
+        if (signal.cancelled) return;
+        setLoadState({ status: "error", message: errorMessage(err) });
+        throw err;
+      }
     },
     [editorModelScope, hasTarget, root, file],
   );
 
   useEffect(() => {
     const signal = { cancelled: false };
-    load(signal);
+    void load(signal).catch(() => undefined);
     return () => {
       signal.cancelled = true;
     };
@@ -2693,8 +2720,30 @@ function EditorRuntimeWidget({
 
   const reload = useCallback((): void => {
     const signal = { cancelled: false };
-    load(signal, { bypassCache: true });
+    void load(signal, { bypassCache: true }).catch(() => undefined);
   }, [load]);
+
+  useEffect((): (() => void) => {
+    const activeSignals = new Set<{ cancelled: boolean }>();
+    const onReconciliationRequest = (event: Event): void => {
+      const detail = editorBufferReconciliationRequestDetail(event);
+      if (detail === null || root === undefined || detail.root !== root) return;
+      const signal = { cancelled: false };
+      activeSignals.add(signal);
+      const reconciliation = load(signal, { bypassCache: true, preserveDirty: true }).finally(() =>
+        activeSignals.delete(signal),
+      );
+      detail.register(reconciliation);
+    };
+    window.addEventListener(EDITOR_BUFFER_RECONCILIATION_REQUEST_EVENT, onReconciliationRequest);
+    return (): void => {
+      window.removeEventListener(
+        EDITOR_BUFFER_RECONCILIATION_REQUEST_EVENT,
+        onReconciliationRequest,
+      );
+      for (const signal of activeSignals) signal.cancelled = true;
+    };
+  }, [load, root]);
 
   // D1/AC1: reloading from disk over a dirty buffer is a destructive discard of unsaved edits, so it
   // must route through the editor's explicit "reload-file" dirty-close policy — a modal acknowledgement

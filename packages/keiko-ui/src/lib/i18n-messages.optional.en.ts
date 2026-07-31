@@ -497,7 +497,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gitDelivery.preview.notReadyToMerge": "Not ready to merge",
   "gitDelivery.preview.approvals": "{received} of {required} approvals",
   "gitDelivery.preview.branchProtection":
-    "Branch protection: {reviews} required reviews, {checks} required checks",
+    "Branch protection: {reviews} required reviews, {checks} required checks, {signatures}",
+  "gitDelivery.preview.signaturesRequired": "Signed commits required",
+  "gitDelivery.preview.signaturesNotRequired": "Signed commits not required",
   "gitDelivery.preview.checks":
     "Required checks: {status} ({passing} passing, {failing} failing, {pending} pending of {total})",
   "gitDelivery.preview.informationalChecks":

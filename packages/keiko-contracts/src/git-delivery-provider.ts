@@ -29,6 +29,7 @@ export interface GitDeliveryBranchProtection {
   readonly deletionAllowed: boolean;
   readonly forcePushAllowed: boolean;
   readonly linearHistoryRequired: boolean;
+  readonly signaturesRequired: boolean;
   readonly requiredReviewCount: number;
   // Count of required status checks (not names — provider-specific check names stay in adapters).
   readonly requiredStatusCheckCount: number;
@@ -160,6 +161,7 @@ export function isGitDeliveryBranchProtection(
     isBoolean(value.deletionAllowed) &&
     isBoolean(value.forcePushAllowed) &&
     isBoolean(value.linearHistoryRequired) &&
+    isBoolean(value.signaturesRequired) &&
     isNonNegativeInteger(value.requiredReviewCount) &&
     isNonNegativeInteger(value.requiredStatusCheckCount)
   );

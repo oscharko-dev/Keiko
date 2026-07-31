@@ -215,6 +215,40 @@ describe("GitDeliveryActionSheetCard", () => {
     expect(screen.getByTestId("gdas-preview-merge")).toHaveTextContent("1 of 2 approvals");
   });
 
+  it("discloses whether branch protection requires signed commits", () => {
+    const branchProtection = {
+      deletionAllowed: false,
+      forcePushAllowed: false,
+      linearHistoryRequired: true,
+      requiredReviewCount: 1,
+      requiredStatusCheckCount: 2,
+      signaturesRequired: true,
+    };
+    const { rerender } = render(
+      <GitDeliveryActionSheetCard
+        actionSheet={makeSheet("ready-to-execute", {
+          preview: makePreview({ branchProtection }),
+        })}
+      />,
+    );
+    expect(screen.getByTestId("gdas-preview-protection")).toHaveTextContent(
+      "Signed commits required",
+    );
+
+    rerender(
+      <GitDeliveryActionSheetCard
+        actionSheet={makeSheet("ready-to-execute", {
+          preview: makePreview({
+            branchProtection: { ...branchProtection, signaturesRequired: false },
+          }),
+        })}
+      />,
+    );
+    expect(screen.getByTestId("gdas-preview-protection")).toHaveTextContent(
+      "Signed commits not required",
+    );
+  });
+
   it("wires Reject and Escape to onReject", async () => {
     const onReject = vi.fn();
     const user = userEvent.setup();

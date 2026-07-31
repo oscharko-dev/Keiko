@@ -524,7 +524,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitDelivery.preview.notReadyToMerge": "Nicht bereit zum Mergen",
   "gitDelivery.preview.approvals": "{received} von {required} Genehmigungen",
   "gitDelivery.preview.branchProtection":
-    "Branch-Schutz: {reviews} erforderliche Reviews, {checks} erforderliche Prüfungen",
+    "Branch-Schutz: {reviews} erforderliche Reviews, {checks} erforderliche Prüfungen, {signatures}",
+  "gitDelivery.preview.signaturesRequired": "Signierte Commits erforderlich",
+  "gitDelivery.preview.signaturesNotRequired": "Signierte Commits nicht erforderlich",
   "gitDelivery.preview.checks":
     "Erforderliche Prüfungen: {status} ({passing} erfolgreich, {failing} fehlgeschlagen, {pending} ausstehend von {total})",
   "gitDelivery.preview.informationalChecks":

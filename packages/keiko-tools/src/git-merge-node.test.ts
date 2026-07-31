@@ -74,6 +74,7 @@ const NO_REQUIRED_REVIEWS = JSON.stringify({
   deletionAllowed: false,
   forcePushAllowed: false,
   linearHistoryRequired: false,
+  signaturesRequired: false,
   requiredReviewCount: 0,
   requiredChecks: [],
 });
@@ -190,6 +191,7 @@ describe("readMergeReadiness", () => {
           deletionAllowed: false,
           forcePushAllowed: false,
           linearHistoryRequired: true,
+          signaturesRequired: true,
           requiredReviewCount: 2,
           requiredChecks: [],
         }),
@@ -218,6 +220,7 @@ describe("readMergeReadiness", () => {
     expect(readiness.providerError).toBeUndefined();
     expect(readiness.pullRequest?.mergeReadiness.receivedApprovalCount).toBe(0);
     expect(readiness.pullRequest?.mergeReadiness.requiredApprovalCount).toBe(0);
+    expect(readiness.branchProtection).toBeUndefined();
   });
 
   it("reports providerError when the PR read fails", async () => {
@@ -368,6 +371,7 @@ describe("readMergeReadiness — additional branches", () => {
           deletionAllowed: false,
           forcePushAllowed: false,
           linearHistoryRequired: true,
+          signaturesRequired: false,
           requiredReviewCount: 0,
           requiredChecks: [{ name: "ci", providerId: 15368 }],
         }),
@@ -464,6 +468,7 @@ describe("readMergeReadiness — required and informational checks", () => {
       deletionAllowed: false,
       forcePushAllowed: false,
       linearHistoryRequired: true,
+      signaturesRequired: true,
       requiredReviewCount: 0,
       requiredChecks,
     });
@@ -507,6 +512,7 @@ describe("readMergeReadiness — required and informational checks", () => {
     );
 
     expect(readiness.branchProtection?.requiredStatusCheckCount).toBe(2);
+    expect(readiness.branchProtection?.signaturesRequired).toBe(true);
     expect(readiness.checks).toMatchObject({
       total: 2,
       passing: 1,
@@ -514,6 +520,32 @@ describe("readMergeReadiness — required and informational checks", () => {
       pending: 1,
       overallStatus: "pending",
     });
+  });
+
+  it("projects both signed-commit requirement states and rejects a missing state", async () => {
+    const unsignedAllowed = await readinessFor([], [], {
+      stdout: JSON.stringify({
+        deletionAllowed: false,
+        forcePushAllowed: false,
+        linearHistoryRequired: true,
+        signaturesRequired: false,
+        requiredReviewCount: 0,
+        requiredChecks: [],
+      }),
+    });
+    expect(unsignedAllowed.branchProtection?.signaturesRequired).toBe(false);
+
+    const missing = await readinessFor([], [], {
+      stdout: JSON.stringify({
+        deletionAllowed: false,
+        forcePushAllowed: false,
+        linearHistoryRequired: true,
+        requiredReviewCount: 0,
+        requiredChecks: [],
+      }),
+    });
+    expect(missing.providerError).toBe(true);
+    expect(missing.branchProtection).toBeUndefined();
   });
 
   it("keeps an in-progress required check pending", async () => {

@@ -12,6 +12,7 @@ import {
   HEAD_PILL_STYLE,
   HISTORY_LIST_STYLE,
   LOADING_STATE_STYLE,
+  SECONDARY_BTN,
   SUBTLE_TEXT_STYLE,
 } from "./git-client-styles";
 
@@ -22,6 +23,9 @@ interface HistoryPaneProps {
   readonly history: GitHistoryResponse | null;
   readonly loading: boolean;
   readonly error: string | null;
+  readonly loadingMore: boolean;
+  readonly loadMoreError: string | null;
+  readonly onLoadMore: () => void;
   readonly selectedSha: string | null;
   readonly onSelect: (entry: GitHistoryEntry) => void;
 }
@@ -48,6 +52,9 @@ export function HistoryPane({
   history,
   loading,
   error,
+  loadingMore,
+  loadMoreError,
+  onLoadMore,
   selectedSha,
   onSelect,
 }: HistoryPaneProps): ReactNode {
@@ -124,7 +131,7 @@ export function HistoryPane({
           className="rv-truncated"
           style={{ ...SUBTLE_TEXT_STYLE, display: "block", padding: "8px 14px 0", fontSize: 12 }}
         >
-          {t("gitClientWindow.history.truncated", { count: history.limit })}
+          {t("gitClientWindow.history.truncated", { count: entries.length })}
         </output>
       ) : null}
       <div role="listbox" aria-label="Commit history" style={HISTORY_LIST_STYLE}>
@@ -185,6 +192,46 @@ export function HistoryPane({
             </button>
           );
         })}
+      </div>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 8,
+          padding: "10px 14px 14px",
+        }}
+      >
+        {history.truncated ? (
+          <>
+            {loadMoreError === null ? null : (
+              <p role="alert" style={{ ...SUBTLE_TEXT_STYLE, color: "var(--danger)", margin: 0 }}>
+                {loadMoreError}
+              </p>
+            )}
+            <button
+              type="button"
+              style={{ ...SECONDARY_BTN, minWidth: 150 }}
+              disabled={loadingMore}
+              onClick={onLoadMore}
+            >
+              {loadingMore
+                ? t("gitClientWindow.history.loadingMore")
+                : loadMoreError === null
+                  ? t("gitClientWindow.history.loadMore")
+                  : t("gitClientWindow.history.retryLoadMore")}
+            </button>
+          </>
+        ) : (
+          <p
+            role="status"
+            aria-live="polite"
+            aria-label={t("gitClientWindow.history.paginationStatusAria")}
+            style={{ ...SUBTLE_TEXT_STYLE, margin: 0 }}
+          >
+            {t("gitClientWindow.history.end", { count: entries.length })}
+          </p>
+        )}
       </div>
     </>
   );

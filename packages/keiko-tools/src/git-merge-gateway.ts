@@ -318,7 +318,7 @@ export function buildBranchProtectionRequiredReviewsArgv(
 }
 
 const BRANCH_PROTECTION_JQ =
-  "{deletionAllowed:(.allow_deletions.enabled // false),forcePushAllowed:(.allow_force_pushes.enabled // false),linearHistoryRequired:(.required_linear_history.enabled // false),requiredReviewCount:(.required_pull_request_reviews.required_approving_review_count // 0),requiredChecks:[(.required_status_checks.checks // [])[] | {name:.context,providerId:.app_id}]}";
+  "{deletionAllowed:(.allow_deletions.enabled // false),forcePushAllowed:(.allow_force_pushes.enabled // false),linearHistoryRequired:(.required_linear_history.enabled // false),signaturesRequired:(.required_signatures.enabled // false),requiredReviewCount:(.required_pull_request_reviews.required_approving_review_count // 0),requiredChecks:[(.required_status_checks.checks // [])[] | {name:.context,providerId:.app_id}]}";
 
 // Reads only the content-free branch rules needed to classify required checks. Provider-specific
 // names and application identifiers are consumed inside the GitHub adapter and never cross the

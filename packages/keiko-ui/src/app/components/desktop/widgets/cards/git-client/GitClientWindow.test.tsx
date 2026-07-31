@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   GitChangedFile,
+  GitHistoryEntry,
   GitHistoryResponse,
   GitRepositorySummary,
   GitSyncPreview,
@@ -222,6 +223,33 @@ function makeHistory(overrides: Partial<GitHistoryResponse> = {}): GitHistoryRes
     truncated: false,
     ...overrides,
   };
+}
+
+function makeHistoryEntry(index: number): GitHistoryEntry {
+  const sha = index.toString(16).padStart(40, "0");
+  return {
+    sha,
+    shortSha: sha.slice(0, 7),
+    subject: `commit ${index.toString()}`,
+    author: "Ada",
+    date: "2026-06-27T10:00:00Z",
+    refs: [],
+    parentCount: 1,
+    changedFileCount: 1,
+  };
+}
+
+function makeHistoryPage(
+  start: number,
+  count: number,
+  overrides: Partial<GitHistoryResponse> = {},
+): GitHistoryResponse {
+  return makeHistory({
+    entries: Array.from({ length: count }, (_entry, offset) => makeHistoryEntry(start + offset)),
+    skip: start,
+    truncated: true,
+    ...overrides,
+  });
 }
 
 function makeProjectResponse(repo: ProjectWithAvailability) {
@@ -1137,6 +1165,87 @@ describe("GitClientWindow — toolbar actions", () => {
 });
 
 describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)", () => {
+  it("requires explicit confirmation for a branch switch and cancellation is a no-op", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await user.click(await screen.findByRole("combobox", { name: "Branch: main" }));
+    await user.click(screen.getByRole("option", { name: /feat\/x/ }));
+
+    const dialog = screen.getByRole("dialog", { name: "Confirm branch switch" });
+    expect(client.branchSwitch).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(client.branchSwitch).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Confirm branch switch" })).not.toBeInTheDocument();
+  });
+
+  it("reconciles editor buffers exactly once after a successful branch switch", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    const reconcileEditorBuffers = vi.fn(async () => undefined);
+    render(
+      <GitClientWindow
+        projectId={REPO_A.path}
+        client={client}
+        reconcileEditorBuffers={reconcileEditorBuffers}
+      />,
+    );
+    await user.click(await screen.findByRole("combobox", { name: "Branch: main" }));
+    await user.click(screen.getByRole("option", { name: /feat\/x/ }));
+    await user.click(screen.getByRole("button", { name: "Switch branch" }));
+
+    await waitFor(() => expect(reconcileEditorBuffers).toHaveBeenCalledTimes(1));
+    expect(reconcileEditorBuffers).toHaveBeenCalledWith(REPO_A.path);
+  });
+
+  it("keeps a Git refusal separate and does not reconcile editor buffers", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      branchSwitch: vi.fn<GitClientSeam["branchSwitch"]>(async () => ({
+        schemaVersion: "1",
+        status: "blocked",
+        actionKind: "branch-switch",
+        preflightFindingCodes: ["dirty-worktree"],
+      })),
+    });
+    const reconcileEditorBuffers = vi.fn(async () => undefined);
+    render(
+      <GitClientWindow
+        projectId={REPO_A.path}
+        client={client}
+        reconcileEditorBuffers={reconcileEditorBuffers}
+      />,
+    );
+    await user.click(await screen.findByRole("combobox", { name: "Branch: main" }));
+    await user.click(screen.getByRole("option", { name: /feat\/x/ }));
+    await user.click(screen.getByRole("button", { name: "Switch branch" }));
+
+    const outcome = await screen.findByTestId("git-branch-outcome");
+    expect(outcome).toHaveTextContent("Blocked");
+    expect(outcome).toHaveTextContent("dirty-worktree");
+    expect(reconcileEditorBuffers).not.toHaveBeenCalled();
+  });
+
+  it("surfaces recovery-required when Git succeeded but editor reconciliation failed", async () => {
+    const user = userEvent.setup();
+    const reconcileEditorBuffers = vi.fn(async () => Promise.reject(new Error("raw path")));
+    render(
+      <GitClientWindow
+        projectId={REPO_A.path}
+        client={makeClient()}
+        reconcileEditorBuffers={reconcileEditorBuffers}
+      />,
+    );
+    await user.click(await screen.findByRole("combobox", { name: "Branch: main" }));
+    await user.click(screen.getByRole("option", { name: /feat\/x/ }));
+    await user.click(screen.getByRole("button", { name: "Switch branch" }));
+
+    const outcome = await screen.findByTestId("git-branch-outcome");
+    expect(outcome).toHaveTextContent("Recovery required");
+    expect(outcome).toHaveTextContent("editor-buffer-reconciliation-failed");
+    expect(outcome).not.toHaveTextContent("raw path");
+  });
+
   it("filters real branches and switches only to a selected branch option", async () => {
     const user = userEvent.setup();
     const client = makeClient();
@@ -1152,6 +1261,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     expect(document.body).not.toHaveTextContent("bbb");
 
     await user.click(screen.getByRole("option", { name: /feat\/x/ }));
+    await user.click(screen.getByRole("button", { name: "Switch branch" }));
 
     await waitFor(() =>
       expect(client.branchSwitch).toHaveBeenCalledWith({
@@ -1262,6 +1372,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
 
     await user.click(screen.getByRole("combobox", { name: "Branch: main" }));
     await user.click(screen.getByRole("option", { name: /feat\/x/ }));
+    await user.click(screen.getByRole("button", { name: "Switch branch" }));
 
     await waitFor(() =>
       expect(client.branchSwitch).toHaveBeenCalledWith({
@@ -1290,6 +1401,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
 
     await user.click(screen.getByRole("combobox", { name: "Branch: main" }));
     await user.click(screen.getByRole("option", { name: /feat\/x/ }));
+    await user.click(screen.getByRole("button", { name: "Switch branch" }));
 
     await waitFor(() => expect(client.branchSwitch).toHaveBeenCalled());
 
@@ -1321,6 +1433,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
 
     fireEvent.click(screen.getByRole("combobox", { name: "Branch: main" }));
     fireEvent.click(screen.getByRole("option", { name: /feat\/x/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch branch" }));
     await waitFor(() => expect(client.branchSwitch).toHaveBeenCalled());
 
     fireEvent.click(screen.getByRole("combobox", { name: "Repository" }));
@@ -1348,7 +1461,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
 
     await user.click(screen.getByRole("tab", { name: "History" }));
     await waitFor(() =>
-      expect(client.getHistory).toHaveBeenCalledWith({ root: REPO_A.path, limit: 50 }),
+      expect(client.getHistory).toHaveBeenCalledWith({ root: REPO_A.path, limit: 50, skip: 0 }),
     );
 
     expect(screen.getByRole("listbox", { name: "Commit history" })).toBeInTheDocument();
@@ -1382,6 +1495,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
 
     const button = await screen.findByRole("button", { name: "Run sync: Pull" });
     await user.click(button);
+    await user.click(screen.getByRole("button", { name: "Pull changes" }));
 
     await waitFor(() =>
       expect(client.syncPreview).toHaveBeenCalledWith({
@@ -1397,6 +1511,66 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     });
   });
 
+  it("confirms pull and reconciles editor buffers once after successful execution", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getSummary: vi.fn(async () => makeSummary({ behind: 1 })),
+      syncPreview: vi.fn<GitClientSeam["syncPreview"]>(async (input) =>
+        makeSyncPreview(input.operation, { behind: 1 }),
+      ),
+    });
+    const reconcileEditorBuffers = vi.fn(async () => undefined);
+    render(
+      <GitClientWindow
+        projectId={REPO_A.path}
+        client={client}
+        reconcileEditorBuffers={reconcileEditorBuffers}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: "Run sync: Pull" }));
+    const dialog = screen.getByRole("dialog", { name: "Confirm pull" });
+    expect(client.syncPreview).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "Pull changes" }));
+
+    await waitFor(() => expect(client.syncExecute).toHaveBeenCalledTimes(1));
+    expect(reconcileEditorBuffers).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a pull without previewing or mutating the working tree", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({ getSummary: vi.fn(async () => makeSummary({ behind: 1 })) });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Run sync: Pull" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(client.syncPreview).not.toHaveBeenCalled();
+    expect(client.syncExecute).not.toHaveBeenCalled();
+  });
+
+  it("reports pull reconciliation recovery without claiming success", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getSummary: vi.fn(async () => makeSummary({ behind: 1 })),
+      syncPreview: vi.fn<GitClientSeam["syncPreview"]>(async (input) =>
+        makeSyncPreview(input.operation, { behind: 1 }),
+      ),
+    });
+    render(
+      <GitClientWindow
+        projectId={REPO_A.path}
+        client={client}
+        reconcileEditorBuffers={async () => Promise.reject(new Error("raw path"))}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: "Run sync: Pull" }));
+    await user.click(screen.getByRole("button", { name: "Pull changes" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Pull completed, but editor buffers need recovery");
+    expect(alert).not.toHaveTextContent("succeeded");
+    expect(alert).not.toHaveTextContent("raw path");
+  });
+
   // GEN-PERF-WIDGET-006 — the sync outcome must carry a duration and an ahead/behind
   // repository-state delta, not just a bare status string.
   it("surfaces sync duration and ahead/behind delta in the outcome", async () => {
@@ -1410,6 +1584,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
     await user.click(await screen.findByRole("button", { name: "Run sync: Pull" }));
+    await user.click(screen.getByRole("button", { name: "Pull changes" }));
 
     await waitFor(() => expect(client.syncExecute).toHaveBeenCalled());
     const pill = await screen.findByRole("status", { name: /Pull: succeeded/ });
@@ -1436,6 +1611,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
     await user.click(await screen.findByRole("button", { name: "Run sync: Pull" }));
+    await user.click(screen.getByRole("button", { name: "Pull changes" }));
 
     await waitFor(() => expect(client.syncPreview).toHaveBeenCalled());
     expect(client.syncExecute).not.toHaveBeenCalled();
@@ -1504,6 +1680,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
     await user.click(await screen.findByRole("button", { name: "Run sync: Pull" }));
+    await user.click(screen.getByRole("button", { name: "Pull changes" }));
     await waitFor(() => expect(client.syncExecute).toHaveBeenCalled());
 
     const pill = await screen.findByRole("alert");
@@ -1523,6 +1700,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
     await user.click(await screen.findByRole("button", { name: "Run sync: Pull" }));
+    await user.click(screen.getByRole("button", { name: "Pull changes" }));
     await waitFor(() => expect(client.syncExecute).toHaveBeenCalled());
 
     expect(await screen.findByRole("status", { name: /Pull: succeeded/ })).toBeInTheDocument();
@@ -1646,6 +1824,113 @@ describe("GitClientWindow — Changes/History tabs", () => {
     await waitFor(() => expect(client.getHistory).toHaveBeenCalled());
 
     expect(screen.queryByText(/truncated/i)).not.toBeInTheDocument();
+  });
+
+  it("loads the 51st commit with a deterministic 50-entry cursor and exposes the end state", async () => {
+    const user = userEvent.setup();
+    const getHistory = vi.fn<GitClientSeam["getHistory"]>(async ({ skip = 0 }) =>
+      skip === 0 ? makeHistoryPage(0, 50) : makeHistoryPage(50, 1, { truncated: false }),
+    );
+    const client = makeClient({ getHistory });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("tab", { name: "History" }));
+    await user.click(await screen.findByRole("button", { name: "Load more commits" }));
+
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(51));
+    expect(getHistory).toHaveBeenNthCalledWith(1, { root: REPO_A.path, limit: 50, skip: 0 });
+    expect(getHistory).toHaveBeenNthCalledWith(2, { root: REPO_A.path, limit: 50, skip: 50 });
+    expect(screen.getByRole("status", { name: "History pagination status" })).toHaveTextContent(
+      "End of history. 51 commits loaded.",
+    );
+    expect(screen.queryByRole("button", { name: "Load more commits" })).not.toBeInTheDocument();
+  });
+
+  it("appends multiple pages in order, deduplicates overlap, and advances by the raw page size", async () => {
+    const user = userEvent.setup();
+    const getHistory = vi.fn<GitClientSeam["getHistory"]>(async ({ skip = 0 }) => {
+      if (skip === 0) return makeHistoryPage(0, 50);
+      if (skip === 50) {
+        return makeHistory({
+          entries: [makeHistoryEntry(49), makeHistoryEntry(50)],
+          skip: 50,
+          truncated: true,
+        });
+      }
+      return makeHistoryPage(51, 1, { skip: 52, truncated: false });
+    });
+    const client = makeClient({ getHistory });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("tab", { name: "History" }));
+    await user.click(await screen.findByRole("button", { name: "Load more commits" }));
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(51));
+    await user.click(screen.getByRole("button", { name: "Load more commits" }));
+
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(52));
+    expect(getHistory).toHaveBeenNthCalledWith(3, { root: REPO_A.path, limit: 50, skip: 52 });
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(
+      Array.from({ length: 52 }, (_entry, index) =>
+        expect.stringContaining(`commit ${index.toString()}`),
+      ),
+    );
+  });
+
+  it("discards an in-flight page when the repository changes", async (): Promise<void> => {
+    const user = userEvent.setup();
+    let resolveStalePage!: (value: GitHistoryResponse) => void;
+    const stalePage = new Promise<GitHistoryResponse>((resolve): void => {
+      resolveStalePage = resolve;
+    });
+    const getHistory = vi.fn<GitClientSeam["getHistory"]>(({ root, skip = 0 }) => {
+      if (root === REPO_A.path && skip === 0) return Promise.resolve(makeHistoryPage(0, 50));
+      if (root === REPO_A.path) return stalePage;
+      return Promise.resolve(
+        makeHistoryPage(500, 1, { root: REPO_B.path, skip: 0, truncated: false }),
+      );
+    });
+    const client = makeClient({ getHistory });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("tab", { name: "History" }));
+    await user.click(await screen.findByRole("button", { name: "Load more commits" }));
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: /beta/ }));
+    expect(await screen.findByRole("option", { name: /commit 500/ })).toBeInTheDocument();
+
+    act((): void => resolveStalePage(makeHistoryPage(100, 1, { skip: 50, truncated: false })));
+    await waitFor(() =>
+      expect(getHistory).toHaveBeenCalledWith({ root: REPO_B.path, limit: 50, skip: 0 }),
+    );
+    expect(screen.queryByText("commit 100")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+  });
+
+  it("keeps loaded commits and retries the same cursor without exposing the failure body", async () => {
+    const user = userEvent.setup();
+    let loadMoreAttempts = 0;
+    const getHistory = vi.fn<GitClientSeam["getHistory"]>(async ({ skip = 0 }) => {
+      if (skip === 0) return makeHistoryPage(0, 50);
+      loadMoreAttempts += 1;
+      if (loadMoreAttempts === 1) throw new Error("private provider response body");
+      return makeHistoryPage(50, 1, { truncated: false });
+    });
+    const client = makeClient({ getHistory });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("tab", { name: "History" }));
+    await user.click(await screen.findByRole("button", { name: "Load more commits" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load more commits.");
+    expect(screen.queryByText(/private provider response body/i)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("option")).toHaveLength(50);
+    await user.click(screen.getByRole("button", { name: "Retry loading commits" }));
+
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(51));
+    expect(getHistory).toHaveBeenNthCalledWith(3, { root: REPO_A.path, limit: 50, skip: 50 });
+    expect(screen.getByRole("status", { name: "History pagination status" })).toHaveTextContent(
+      "End of history. 51 commits loaded.",
+    );
   });
 
   it("ArrowRight on Changes tab moves focus and selection to History", async () => {

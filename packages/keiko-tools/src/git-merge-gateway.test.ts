@@ -217,6 +217,7 @@ describe("merge argv builders", () => {
       "--jq",
       expect.stringContaining("requiredChecks"),
     ]);
+    expect(buildBranchProtectionArgv(readinessReq).at(-1)).toContain("required_signatures");
   });
 
   it("rejects a flag-injection base branch name in the branch-protection builder", () => {

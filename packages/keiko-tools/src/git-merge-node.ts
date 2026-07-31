@@ -471,20 +471,31 @@ function uniqueRequiredChecks(values: readonly unknown[]): readonly RequiredChec
   return [...unique.values()];
 }
 
+interface RawBranchProtection extends Record<string, unknown> {
+  readonly deletionAllowed: boolean;
+  readonly forcePushAllowed: boolean;
+  readonly linearHistoryRequired: boolean;
+  readonly signaturesRequired: boolean;
+  readonly requiredReviewCount: number;
+  readonly requiredChecks: readonly unknown[];
+}
+
+function isRawBranchProtection(value: Record<string, unknown>): value is RawBranchProtection {
+  return (
+    typeof value.deletionAllowed === "boolean" &&
+    typeof value.forcePushAllowed === "boolean" &&
+    typeof value.linearHistoryRequired === "boolean" &&
+    typeof value.signaturesRequired === "boolean" &&
+    typeof value.requiredReviewCount === "number" &&
+    Number.isSafeInteger(value.requiredReviewCount) &&
+    value.requiredReviewCount >= 0 &&
+    Array.isArray(value.requiredChecks)
+  );
+}
+
 function parseBranchProtection(stdout: string): BranchProtectionProjection | undefined {
   const value = parseJsonObject(stdout);
-  if (
-    value === undefined ||
-    typeof value.deletionAllowed !== "boolean" ||
-    typeof value.forcePushAllowed !== "boolean" ||
-    typeof value.linearHistoryRequired !== "boolean" ||
-    typeof value.requiredReviewCount !== "number" ||
-    !Number.isSafeInteger(value.requiredReviewCount) ||
-    value.requiredReviewCount < 0 ||
-    !Array.isArray(value.requiredChecks)
-  ) {
-    return undefined;
-  }
+  if (value === undefined || !isRawBranchProtection(value)) return undefined;
   const requiredChecks = uniqueRequiredChecks(value.requiredChecks);
   if (requiredChecks === undefined) return undefined;
   return {
@@ -492,6 +503,7 @@ function parseBranchProtection(stdout: string): BranchProtectionProjection | und
       deletionAllowed: value.deletionAllowed,
       forcePushAllowed: value.forcePushAllowed,
       linearHistoryRequired: value.linearHistoryRequired,
+      signaturesRequired: value.signaturesRequired,
       requiredReviewCount: value.requiredReviewCount,
       requiredStatusCheckCount: requiredChecks.length,
     },
