@@ -14,9 +14,29 @@ import {
   createFakeSessionPairingPort,
   fakePairingRequestBody,
 } from "./coding-app-session/_support.js";
-import { handleUploadConversationAttachment } from "./conversation-attachment-routes.js";
+import {
+  handleDeleteConversationAttachment,
+  handleUploadConversationAttachment,
+} from "./conversation-attachment-routes.js";
+import {
+  ConversationAttachmentStoreError,
+  type ConversationAttachmentStore,
+} from "./conversation-attachment-store.js";
 import type { UiHandlerDeps } from "./deps.js";
-import type { RouteContext } from "./routes.js";
+import type { RouteContext, RouteResult } from "./routes.js";
+
+const CORRELATION_ID = "attachment-route-test";
+const ATTACHMENT_REF = `chat-attachment:${"a".repeat(64)}`;
+const UNAVAILABLE_RESPONSE = {
+  status: 404,
+  body: {
+    error: {
+      code: "NOT_FOUND",
+      message: "Conversation attachment is unavailable.",
+      correlationId: CORRELATION_ID,
+    },
+  },
+} satisfies RouteResult;
 
 function failingRequest(cookie?: string): IncomingMessage {
   const stream = new Readable({
@@ -30,17 +50,33 @@ function failingRequest(cookie?: string): IncomingMessage {
   return stream as IncomingMessage;
 }
 
+function request(rawBody: string, cookie?: string): IncomingMessage {
+  const stream = Readable.from([rawBody]);
+  Object.defineProperty(stream, "headers", {
+    value: cookie === undefined ? {} : { cookie },
+  });
+  return stream as IncomingMessage;
+}
+
 function context(req: IncomingMessage): RouteContext {
   return {
     req,
     res: new ServerResponse(req),
     params: {},
     url: new URL("http://localhost/api/desktop/chat/attachments"),
-    correlationId: "attachment-route-test",
+    correlationId: CORRELATION_ID,
   };
 }
 
-function fixture(): { readonly deps: UiHandlerDeps; readonly cookie: string } {
+interface AttachmentRouteFixture {
+  readonly deps: UiHandlerDeps;
+  readonly cookie: string;
+  readonly projectPath: string;
+  readonly chatId: string;
+  readonly attachmentStore: ConversationAttachmentStore;
+}
+
+function fixture(): AttachmentRouteFixture {
   const channel = createCodingAppSessionChannel({
     registry: createSessionRegistry(),
     pairingPort: createFakeSessionPairingPort(),
@@ -50,9 +86,18 @@ function fixture(): { readonly deps: UiHandlerDeps; readonly cookie: string } {
   const store = createInMemoryUiStore();
   const projectPath = realpathSync(mkdtempSync(join(tmpdir(), "keiko-attachment-route-")));
   store.createProject(projectPath, "Project");
-  store.createChat(projectPath, "Chat", "model");
+  const chat = store.createChat(projectPath, "Chat", "model");
+  const attachmentStore: ConversationAttachmentStore = {
+    put: () => ({ ref: ATTACHMENT_REF, expiresAt: 1 }),
+    resolve: () => Buffer.alloc(0),
+    deleteBound: () => undefined,
+    deleteForChat: () => undefined,
+  };
   return {
     cookie: `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`,
+    projectPath,
+    chatId: chat.id,
+    attachmentStore,
     deps: {
       config: undefined,
       configPresent: false,
@@ -68,13 +113,30 @@ function fixture(): { readonly deps: UiHandlerDeps; readonly cookie: string } {
       modelPortFactory: () => undefined,
       store,
       codingAppSessionChannel: channel,
-      conversationAttachmentStore: {
-        put: () => ({ ref: `chat-attachment:${"a".repeat(64)}`, expiresAt: 1 }),
-        resolve: () => Buffer.alloc(0),
-        deleteBound: () => undefined,
-        deleteForChat: () => undefined,
-      },
+      conversationAttachmentStore: attachmentStore,
     },
+  };
+}
+
+function uploadBody(projectPath: string, chatId: string): Record<string, unknown> {
+  return {
+    projectPath,
+    chatId,
+    mimeType: "image/png",
+    sizeBytes: 1,
+    sha256: "b".repeat(64),
+    contentBase64: "YQ==",
+  };
+}
+
+function deleteBody(projectPath: string, chatId: string): Record<string, unknown> {
+  return {
+    attachmentRef: ATTACHMENT_REF,
+    projectPath,
+    chatId,
+    mimeType: "image/png",
+    sizeBytes: 1,
+    sha256: "b".repeat(64),
   };
 }
 
@@ -90,8 +152,95 @@ describe("conversation attachment route observability", () => {
     const { deps } = fixture();
     await expect(
       handleUploadConversationAttachment(context(failingRequest()), deps),
-    ).resolves.toMatchObject({
-      status: 404,
-    });
+    ).resolves.toEqual(UNAVAILABLE_RESPONSE);
+  });
+
+  it("correlates an upload 404 when attachment storage is unavailable", async () => {
+    const { deps, cookie } = fixture();
+    await expect(
+      handleUploadConversationAttachment(context(failingRequest(cookie)), {
+        ...deps,
+        conversationAttachmentStore: undefined,
+      }),
+    ).resolves.toEqual(UNAVAILABLE_RESPONSE);
+  });
+
+  it("correlates an upload 404 for an unreadable request body", async () => {
+    const { deps, cookie } = fixture();
+    await expect(
+      handleUploadConversationAttachment(context(request("{", cookie)), deps),
+    ).resolves.toEqual(UNAVAILABLE_RESPONSE);
+  });
+
+  it("correlates an upload 404 for an unauthorized chat binding", async () => {
+    const { deps, cookie, projectPath } = fixture();
+    const body = uploadBody(projectPath, "unknown-chat");
+    await expect(
+      handleUploadConversationAttachment(context(request(JSON.stringify(body), cookie)), deps),
+    ).resolves.toEqual(UNAVAILABLE_RESPONSE);
+  });
+
+  it("correlates an upload 404 rejected by the attachment store", async () => {
+    const { deps, cookie, projectPath, chatId, attachmentStore } = fixture();
+    const body = uploadBody(projectPath, chatId);
+    await expect(
+      handleUploadConversationAttachment(context(request(JSON.stringify(body), cookie)), {
+        ...deps,
+        conversationAttachmentStore: {
+          ...attachmentStore,
+          put: () => {
+            throw new ConversationAttachmentStoreError();
+          },
+        },
+      }),
+    ).resolves.toEqual(UNAVAILABLE_RESPONSE);
+  });
+
+  it("correlates a delete 404 for an unpaired request", async () => {
+    const { deps } = fixture();
+    await expect(
+      handleDeleteConversationAttachment(context(failingRequest()), deps),
+    ).resolves.toEqual(UNAVAILABLE_RESPONSE);
+  });
+
+  it("correlates a delete 404 when attachment storage is unavailable", async () => {
+    const { deps, cookie } = fixture();
+    await expect(
+      handleDeleteConversationAttachment(context(failingRequest(cookie)), {
+        ...deps,
+        conversationAttachmentStore: undefined,
+      }),
+    ).resolves.toEqual(UNAVAILABLE_RESPONSE);
+  });
+
+  it("correlates a delete 404 for an unreadable request body", async () => {
+    const { deps, cookie } = fixture();
+    await expect(
+      handleDeleteConversationAttachment(context(request("{", cookie)), deps),
+    ).resolves.toEqual(UNAVAILABLE_RESPONSE);
+  });
+
+  it("correlates a delete 404 for an unauthorized chat binding", async () => {
+    const { deps, cookie, projectPath } = fixture();
+    const body = deleteBody(projectPath, "unknown-chat");
+    await expect(
+      handleDeleteConversationAttachment(context(request(JSON.stringify(body), cookie)), deps),
+    ).resolves.toEqual(UNAVAILABLE_RESPONSE);
+  });
+
+  it("correlates a delete 404 rejected by the attachment store", async () => {
+    const { deps, cookie, projectPath, chatId, attachmentStore } = fixture();
+    const body = deleteBody(projectPath, chatId);
+    await expect(
+      handleDeleteConversationAttachment(context(request(JSON.stringify(body), cookie)), {
+        ...deps,
+        conversationAttachmentStore: {
+          ...attachmentStore,
+          deleteBound: () => {
+            throw new ConversationAttachmentStoreError();
+          },
+        },
+      }),
+    ).resolves.toEqual(UNAVAILABLE_RESPONSE);
   });
 });

@@ -90,7 +90,7 @@ function expectRecordRemovedDuringValidUpload(
     env: {},
     vault,
     now: () => 1_000,
-    totalBytes: BYTES.length,
+    totalContentBytes: BYTES.length,
     mintRef: () => `chat-attachment:${"b".repeat(64)}`,
   });
 
@@ -160,7 +160,7 @@ describe("conversation attachment store", () => {
       vault,
       now: () => now,
       ttlMs: 25,
-      totalBytes: BYTES.length,
+      totalContentBytes: BYTES.length,
       mintRef: () => refs.shift() ?? "missing-ref",
     });
     const expired = store.put({ ...binding(), bytes: BYTES });
@@ -220,7 +220,7 @@ describe("conversation attachment store", () => {
       env: {},
       vault,
       now: () => 1_000,
-      totalBytes: BYTES.length * 2 - 1,
+      totalContentBytes: BYTES.length * 2 - 1,
       mintRef: () => `chat-attachment:${"d".repeat(64)}`,
     });
 
@@ -262,7 +262,7 @@ describe("conversation attachment store", () => {
       env: {},
       vault,
       now: () => 1_000,
-      totalBytes: BYTES.length * 2 - 1,
+      totalContentBytes: BYTES.length * 2 - 1,
       mintRef: () => `chat-attachment:${"3".repeat(64)}`,
     });
 
@@ -352,7 +352,7 @@ describe("conversation attachment store", () => {
       env: {},
       vault,
       now: () => 1_000,
-      totalBytes: BYTES.length * 2 - 1,
+      totalContentBytes: BYTES.length * 2 - 1,
       mintRef: () => attachmentRef(11),
     });
 
@@ -451,7 +451,7 @@ describe("conversation attachment store", () => {
       env: {},
       vault,
       now: () => 1_000,
-      totalBytes: BYTES.length,
+      totalContentBytes: BYTES.length,
       mintRef: () => `chat-attachment:${"9".repeat(64)}`,
     });
 

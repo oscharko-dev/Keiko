@@ -21,9 +21,10 @@ const DEFAULT_TTL_MS = 30 * 60 * 1_000;
 // Attachment refs are transient authority artifacts. Callers may shorten this window (the test
 // seam does), but neither configuration changes nor persisted data may extend it beyond 30 minutes.
 const MAX_ATTACHMENT_TTL_MS = DEFAULT_TTL_MS;
-const DEFAULT_TOTAL_BYTES = 32 * 1024 * 1024;
-// The byte quota bounds content volume; this independent cap bounds per-entry envelope/decryption
-// work even when every attachment is tiny. A normal conversation cannot approach 256 live images.
+const DEFAULT_TOTAL_CONTENT_BYTES = 32 * 1024 * 1024;
+// The content-byte quota counts decoded attachment bodies, not Base64, JSON, encryption-envelope, or
+// filesystem bytes. This independent cap bounds per-entry envelope/decryption work even when every
+// attachment is tiny. A normal conversation cannot approach 256 live images.
 const MAX_LIVE_ENTRIES = 256;
 const MAX_CONTENT_BASE64_LENGTH = 4 * Math.ceil(MAX_ATTACHMENT_BYTES / 3);
 
@@ -65,7 +66,8 @@ export interface CreateConversationAttachmentStoreOptions {
   readonly now?: (() => number) | undefined;
   readonly mintRef?: (() => string) | undefined;
   readonly ttlMs?: number | undefined;
-  readonly totalBytes?: number | undefined;
+  /** Maximum aggregate decoded attachment-content bytes retained as live records. */
+  readonly totalContentBytes?: number | undefined;
 }
 
 export class ConversationAttachmentStoreError extends Error {
@@ -224,12 +226,12 @@ function validatePut(input: ConversationAttachmentPut): string {
 }
 
 interface LiveAttachmentUsage {
-  readonly bytes: number;
+  readonly contentBytes: number;
   readonly entries: number;
 }
 
 function currentLiveUsage(vault: LocalSecretVault, now: number): LiveAttachmentUsage {
-  let bytes = 0;
+  let contentBytes = 0;
   let entries = 0;
   for (const ref of vault.list()) {
     const verified = readStoredForScan(vault, ref);
@@ -244,19 +246,19 @@ function currentLiveUsage(vault: LocalSecretVault, now: number): LiveAttachmentU
       vault.delete(ref);
     } else {
       // A wall-clock rollback can make a valid record appear future-created. It remains live and
-      // authority-bound; the byte and cardinality caps bound its quota impact until expiry.
-      bytes += stored.sizeBytes;
+      // authority-bound; the content-byte and cardinality caps bound its quota impact until expiry.
+      contentBytes += stored.sizeBytes;
       entries += 1;
     }
   }
-  return { bytes, entries };
+  return { contentBytes, entries };
 }
 
 interface AttachmentStoreRuntime {
   readonly getVault: () => LocalSecretVault;
   readonly now: () => number;
   readonly ttlMs: number;
-  readonly totalBytes: number;
+  readonly totalContentBytes: number;
   readonly mintRef: () => string;
 }
 
@@ -272,7 +274,10 @@ function putAttachment(
     throw new ConversationAttachmentStoreError();
   }
   const usage = currentLiveUsage(vault, createdAt);
-  if (usage.entries >= MAX_LIVE_ENTRIES || usage.bytes + input.sizeBytes > runtime.totalBytes) {
+  if (
+    usage.entries >= MAX_LIVE_ENTRIES ||
+    usage.contentBytes + input.sizeBytes > runtime.totalContentBytes
+  ) {
     throw new ConversationAttachmentStoreError();
   }
   const ref = runtime.mintRef();
@@ -370,10 +375,10 @@ export function createConversationAttachmentStore(
   };
   const now = options.now ?? Date.now;
   const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
-  const totalBytes = options.totalBytes ?? DEFAULT_TOTAL_BYTES;
+  const totalContentBytes = options.totalContentBytes ?? DEFAULT_TOTAL_CONTENT_BYTES;
   const mintRef =
     options.mintRef ?? ((): string => `chat-attachment:${randomBytes(32).toString("hex")}`);
-  const runtime: AttachmentStoreRuntime = { getVault, now, ttlMs, totalBytes, mintRef };
+  const runtime: AttachmentStoreRuntime = { getVault, now, ttlMs, totalContentBytes, mintRef };
 
   return {
     put: (input): { readonly ref: string; readonly expiresAt: number } =>

@@ -9,8 +9,11 @@ import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 
 const MAX_UPLOAD_BODY_BYTES = Math.ceil((MAX_ATTACHMENT_BYTES * 4) / 3) + 4_096;
 
-function unavailable(): RouteResult {
-  return { status: 404, body: errorBody("NOT_FOUND", "Conversation attachment is unavailable.") };
+function unavailable(correlationId: string | undefined): RouteResult {
+  return {
+    status: 404,
+    body: errorBody("NOT_FOUND", "Conversation attachment is unavailable.", correlationId),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -91,12 +94,12 @@ export async function handleUploadConversationAttachment(
 ): Promise<RouteResult> {
   const session = resolveAppSessionReadAuthority(deps, ctx.req);
   if (session === undefined || deps.conversationAttachmentStore === undefined) {
-    return unavailable();
+    return unavailable(ctx.correlationId);
   }
   const body = await readBody(ctx.req);
-  if (body === undefined) return unavailable();
+  if (body === undefined) return unavailable(ctx.correlationId);
   const upload = uploadBody(body, deps);
-  if (upload === undefined) return unavailable();
+  if (upload === undefined) return unavailable(ctx.correlationId);
   try {
     const uploaded = deps.conversationAttachmentStore.put({
       sessionId: session.sessionId,
@@ -116,7 +119,9 @@ export async function handleUploadConversationAttachment(
       } satisfies ConversationAttachmentUploadResponseWire,
     };
   } catch (error) {
-    if (error instanceof ConversationAttachmentStoreError) return unavailable();
+    if (error instanceof ConversationAttachmentStoreError) {
+      return unavailable(ctx.correlationId);
+    }
     throw error;
   }
 }
@@ -127,12 +132,12 @@ export async function handleDeleteConversationAttachment(
 ): Promise<RouteResult> {
   const session = resolveAppSessionReadAuthority(deps, ctx.req);
   if (session === undefined || deps.conversationAttachmentStore === undefined) {
-    return unavailable();
+    return unavailable(ctx.correlationId);
   }
   const body = await readBody(ctx.req);
-  if (body === undefined) return unavailable();
+  if (body === undefined) return unavailable(ctx.correlationId);
   const deletion = deleteBody(body, deps);
-  if (deletion === undefined) return unavailable();
+  if (deletion === undefined) return unavailable(ctx.correlationId);
   try {
     deps.conversationAttachmentStore.deleteBound(deletion.attachmentRef, {
       sessionId: session.sessionId,
@@ -145,7 +150,9 @@ export async function handleDeleteConversationAttachment(
     });
     return { status: 204, body: null };
   } catch (error) {
-    if (error instanceof ConversationAttachmentStoreError) return unavailable();
+    if (error instanceof ConversationAttachmentStoreError) {
+      return unavailable(ctx.correlationId);
+    }
     throw error;
   }
 }
