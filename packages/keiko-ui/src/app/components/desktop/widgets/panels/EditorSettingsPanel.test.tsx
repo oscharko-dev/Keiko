@@ -128,6 +128,19 @@ describe("EditorSettingsPanel", () => {
     expect(editorSettingsView.current.reset).toHaveBeenCalledWith("user", ["fontSize"]);
   });
 
+  it("offers the two governed commit-message policy modes through Settings", () => {
+    renderPanel();
+    const policy = screen.getByRole("combobox", { name: "Commit message policy" });
+    expect(policy).toHaveValue("keiko-conventional");
+
+    fireEvent.change(policy, { target: { value: "repository-native" } });
+    expect(editorSettingsView.current.setValue).toHaveBeenCalledWith(
+      "user",
+      "gitCommitMessagePolicy",
+      "repository-native",
+    );
+  });
+
   it("selects root scope and explains a root-owned effective value", () => {
     const rootLayer: EditorM11RootSettingsLayer = {
       kind: "editor-root-settings",

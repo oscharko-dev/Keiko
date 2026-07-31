@@ -32,6 +32,7 @@ import {
   isGitDeliveryProviderCapability,
   isGitDeliveryPullRequestState,
   parseGitDeliveryResolvedInputs,
+  type GitDeliveryActionKind,
   type GitDeliveryApprovalRequirement,
   type GitDeliveryProviderCapability,
   type GitDeliveryResolvedInputs,
@@ -45,6 +46,7 @@ import {
   type GitDeliveryProviderStateFacts,
   type GitDeliveryTrustedPolicyPacks,
 } from "./actionSheetProjection.js";
+import { defaultGitDeliveryPolicyPacksForAction } from "./defaultPolicyPacks.js";
 
 // ─── Error envelope (typed, content-free) ────────────────────────────────────────────
 
@@ -329,16 +331,16 @@ function defaultActionId(request: ValidatedRequest): string {
 // ─── Handler ───────────────────────────────────────────────────────────────────────
 //
 // The org/repo policy packs come from a TRUSTED server-side SEAM ONLY — never from the request body,
-// preserving the AUTHORITY RULE (AC1). No gateway-config field carries them today, so the default
-// resolver returns no packs; evaluateGitPolicy then fail-closes to blocked/no-applicable-rule, the
-// correct secure default. The injectable `policyPacks` option lets a future slice (#476) hydrate packs
-// from storage — and lets tests configure trusted packs deterministically — without touching the
-// request shape.
+// preserving the AUTHORITY RULE (AC1). Production resolves the exact shipped pack used by the
+// executing route for the action kind. Deployment composition may inject a stricter trusted resolver
+// without touching the request shape.
 
 export interface GitDeliveryActionSheetRouteOptions {
   readonly idGenerator?: (request: ValidatedRequest) => string;
-  // Resolves the trusted org/repo policy packs for this deployment. Default: none configured.
-  readonly policyPacks?: (deps: UiHandlerDeps) => GitDeliveryTrustedPolicyPacks;
+  readonly policyPacks?: (
+    deps: UiHandlerDeps,
+    actionKind: GitDeliveryActionKind,
+  ) => GitDeliveryTrustedPolicyPacks;
   // The server clock (epoch ms). Injectable for deterministic tests; defaults to Date.now. Used only
   // to demote an expired granted approval to "waiting-for-approval" in the projection.
   readonly now?: () => number;
@@ -348,7 +350,10 @@ export const createHandleGitDeliveryActionSheet = (
   options: GitDeliveryActionSheetRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   const idGenerator = options.idGenerator ?? defaultActionId;
-  const resolvePolicyPacks = options.policyPacks ?? ((): GitDeliveryTrustedPolicyPacks => ({}));
+  const resolvePolicyPacks =
+    options.policyPacks ??
+    ((_deps: UiHandlerDeps, actionKind: GitDeliveryActionKind): GitDeliveryTrustedPolicyPacks =>
+      defaultGitDeliveryPolicyPacksForAction(actionKind));
   const now = options.now ?? ((): number => Date.now());
   return async (ctx, deps): Promise<RouteResult> => {
     let raw: string;
@@ -375,7 +380,7 @@ export const createHandleGitDeliveryActionSheet = (
       resolvedInputs: request.resolvedInputs,
       worktreeSnapshot: request.worktreeSnapshot,
       approvalRequirement: request.approvalRequirement,
-      policyPacks: resolvePolicyPacks(deps),
+      policyPacks: resolvePolicyPacks(deps, request.resolvedInputs.kind),
       activeProviderCapabilities: request.activeProviderCapabilities,
       providerState: request.providerState,
       providerReady: true,

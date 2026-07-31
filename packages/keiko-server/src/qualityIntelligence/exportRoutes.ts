@@ -38,6 +38,7 @@ import {
   runReviewStateOf,
 } from "./reviewStore.js";
 import { assemblePdf, assembleZipBundle } from "./exportAssembly.js";
+import { buildQualityIntelligenceExportProvenance } from "./exportProvenance.js";
 
 type Adapter = QI.QualityIntelligenceExportAdapter;
 
@@ -119,36 +120,6 @@ function rowToCandidate(
 }
 
 type ExportModelProvenance = QI.QualityIntelligenceExportModelProvenance;
-
-const UNKNOWN_MODEL_METADATA = "unknown";
-
-function modelStage(modelId: string | undefined): QI.QualityIntelligenceExportModelStageProvenance {
-  return {
-    modelId: modelId?.trim() ? modelId : UNKNOWN_MODEL_METADATA,
-    provider: UNKNOWN_MODEL_METADATA,
-    revision: UNKNOWN_MODEL_METADATA,
-  };
-}
-
-// eslint-disable-next-line complexity
-function buildModelProvenance(
-  manifest: QualityIntelligenceEvidenceManifest,
-): ExportModelProvenance {
-  const generationModelId =
-    manifest.modelRouting?.resolved.testDesignModelId ??
-    manifest.modelRouting?.preflight.generation?.modelId ??
-    manifest.modelId;
-  const judgeModelId =
-    manifest.modelRouting?.resolved.judgeModelId ?? manifest.modelRouting?.preflight.judge?.modelId;
-  return {
-    generation: modelStage(generationModelId),
-    judge: modelStage(judgeModelId),
-    ...(manifest.seedUsed !== undefined ? { seedUsed: manifest.seedUsed } : {}),
-    ...(manifest.modelParameters !== undefined
-      ? { modelParameters: manifest.modelParameters }
-      : {}),
-  };
-}
 
 function coverageRefFor(runId: string, atomId: string): QI.QualityIntelligenceCoverageMapId {
   const runAtomHash = sha256Hex(`${runId}|${atomId}`).slice(0, 32);
@@ -337,7 +308,7 @@ function buildBundle(
   if (!redactionAttested) {
     diagnostics.add("export:redaction-attestation-missing");
   }
-  const modelProvenance = buildModelProvenance(manifest);
+  const modelProvenance = buildQualityIntelligenceExportProvenance(manifest).model;
   const diagnosticsList = [...diagnostics].sort(compareCodeUnits);
   const integrity = sha256Hex(
     canonicalise({
@@ -412,6 +383,7 @@ interface ExportEvidenceRowInput {
   readonly integrityHash: string;
   readonly redactionAttested: boolean;
   readonly modelProvenance: ExportModelProvenance | undefined;
+  readonly policyProvenance: NonNullable<QualityIntelligenceExportRow["policyProvenance"]>;
   /** The EFFECTIVE review scope of this action (TMS adapters force it), not the requested one. */
   readonly approvedOnly: boolean;
 }
@@ -437,6 +409,7 @@ function buildExportEvidenceRow(input: ExportEvidenceRowInput): QualityIntellige
     redactionAttested: input.redactionAttested,
     createdAt: input.createdAt,
     ...(input.modelProvenance !== undefined ? { modelProvenance: input.modelProvenance } : {}),
+    policyProvenance: input.policyProvenance,
     dryRun: input.dryRun,
     approvedOnly: input.approvedOnly,
   };
@@ -674,7 +647,7 @@ function binaryResponse(
     bytes = assembleZipBundle(entries);
   }
   const bodyBase64 = Buffer.from(bytes).toString("base64");
-  const modelProvenance = buildModelProvenance(manifest);
+  const provenance = buildQualityIntelligenceExportProvenance(manifest);
   const redactionAttested = manifest.redactionSummary.totalStringsScanned > 0;
   return {
     result: {
@@ -697,7 +670,8 @@ function binaryResponse(
       createdAt,
       integrityHash: sha256Hex(bodyBase64),
       redactionAttested,
-      modelProvenance,
+      modelProvenance: provenance.model,
+      policyProvenance: provenance.policy,
       approvedOnly,
     }),
   };
@@ -756,6 +730,7 @@ function serialisedResponse(
         integrityHash: sha256Hex(serialized.body),
         redactionAttested: bundle.redactionAttested,
         modelProvenance: bundle.modelProvenance,
+        policyProvenance: buildQualityIntelligenceExportProvenance(manifest).policy,
         approvedOnly: request.approvedOnly,
       }),
     };
@@ -786,6 +761,7 @@ function serialisedResponse(
       integrityHash: sha256Hex(body),
       redactionAttested: bundle.redactionAttested,
       modelProvenance: bundle.modelProvenance,
+      policyProvenance: buildQualityIntelligenceExportProvenance(manifest).policy,
       approvedOnly: request.approvedOnly,
     }),
   };

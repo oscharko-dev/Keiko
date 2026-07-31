@@ -1145,6 +1145,35 @@ describe("CapsuleDetail — large-document progress", () => {
   });
 });
 
+describe("CapsuleDetail — abandoned indexing recovery", () => {
+  it("offers an accessible resume action bound to the projected job id", async () => {
+    const detail: CapsuleDetailData = {
+      ...FULL_DETAIL,
+      health: {
+        ...FULL_DETAIL.health,
+        indexingRecovery: {
+          jobId: "job-abandoned",
+          state: "resumable",
+          sourceCount: 1,
+          processedDocuments: 3,
+        },
+      },
+    };
+    const resumeImpl = vi.fn((id: KnowledgeCapsuleId, _resumeJobId?: string) =>
+      Promise.resolve({ ok: true as const, capsuleId: id }),
+    );
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} resumeImpl={resumeImpl} />);
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Resume interrupted indexing" }),
+    );
+
+    await waitFor(() => {
+      expect(resumeImpl).toHaveBeenCalledWith(detail.capsule.id, "job-abandoned");
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // staleChunksTone (pure helper)
 // ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@ import {
   type ConsolidationJobRegistry,
 } from "./memory-consolidation-registry.js";
 import {
+  handleApplyConsolidationReviewItem,
   handleCancelConsolidationJob,
   handleCreateConsolidationJob,
   handleGetConsolidationJob,
@@ -292,6 +293,250 @@ describe("memory consolidation job handlers", () => {
       "duplicate-review",
     ]);
     expect(fetched.job.result?.reviewItems[0]?.evidence?.[0]?.kind).toBe("lexical-similarity");
+  });
+
+  it("applies a reviewed proposal once and keeps the response body-free", async () => {
+    const vault = makeVault();
+    const proposed = insertMemory(vault, {
+      id: "m-proposed",
+      body: "sensitive local preference",
+      status: "proposed",
+    });
+    insertAcceptedMemory(vault, {
+      id: "m-winner",
+      body: "sensitive local preference",
+    });
+    const deps = makeDeps({ memoryVault: vault });
+    const createResult = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", {
+        scopes: [{ kind: "user", userId: "u-1" }],
+      }),
+      deps,
+    );
+    const jobId = asJobEnvelope(createResult).job.id;
+    await flushImmediate();
+    const fetched = asJobEnvelope(
+      handleGetConsolidationJob(
+        makeCtx(`/api/memory/consolidation/jobs/${jobId}`, {}, { jobId }),
+        deps,
+      ),
+    );
+    const item = fetched.job.result?.reviewItems[0];
+    expect(item?.memoryExcerpts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          memoryId: proposed.id,
+          bodyExcerpt: "sensitive local preference",
+          expectedUpdatedAt: proposed.updatedAt,
+        }),
+      ]),
+    );
+    if (item === undefined) throw new Error("Expected a consolidation review item.");
+
+    const apply = await handleApplyConsolidationReviewItem(
+      makeCtx(
+        `/api/memory/consolidation/jobs/${jobId}/review-items/${item.id}/apply`,
+        {
+          preconditions: item.memoryExcerpts.map(({ memoryId, expectedUpdatedAt }) => ({
+            memoryId,
+            expectedUpdatedAt,
+          })),
+        },
+        { jobId, itemId: item.id },
+      ),
+      deps,
+    );
+
+    expect(apply.status).toBe(200);
+    expect(apply.body).toMatchObject({
+      application: {
+        outcome: "applied",
+        itemId: item.id,
+        affectedMemoryIds: [proposed.id],
+      },
+    });
+    expect(JSON.stringify(apply.body)).not.toContain("sensitive local preference");
+    expect(vault.getMemory(proposed.id)?.status).toBe("superseded");
+    expect(vault.listOutgoingEdges(proposed.id)).toHaveLength(3);
+
+    const second = await handleApplyConsolidationReviewItem(
+      makeCtx(
+        `/api/memory/consolidation/jobs/${jobId}/review-items/${item.id}/apply`,
+        {
+          preconditions: item.memoryExcerpts.map(({ memoryId, expectedUpdatedAt }) => ({
+            memoryId,
+            expectedUpdatedAt,
+          })),
+        },
+        { jobId, itemId: item.id },
+      ),
+      deps,
+    );
+    expect(second).toEqual(apply);
+    expect(vault.listOutgoingEdges(proposed.id)).toHaveLength(3);
+  });
+
+  it("moves a stale proposal to conflicted without persisting excerpts as evidence", async () => {
+    const vault = makeVault();
+    const proposed = insertMemory(vault, {
+      id: "m-stale-proposal",
+      body: "private stale proposal",
+      status: "proposed",
+    });
+    const winner = insertAcceptedMemory(vault, {
+      id: "m-stale-winner",
+      body: "private stale proposal",
+    });
+    const evidence = new Map<string, string>();
+    const deps = makeDeps({
+      memoryVault: vault,
+      consolidationJobs: createConsolidationJobRegistry({
+        evidenceStore: {
+          put: (key, value) => {
+            evidence.set(key, value);
+            return key;
+          },
+          list: () => [],
+          get: (key) => evidence.get(key),
+          delete: (key) => evidence.delete(key),
+        },
+      }),
+    });
+    const created = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", {
+        scopes: [{ kind: "user", userId: "u-1" }],
+      }),
+      deps,
+    );
+    const jobId = asJobEnvelope(created).job.id;
+    await flushImmediate();
+    const fetched = asJobEnvelope(
+      handleGetConsolidationJob(
+        makeCtx(`/api/memory/consolidation/jobs/${jobId}`, {}, { jobId }),
+        deps,
+      ),
+    );
+    const item = fetched.job.result?.reviewItems[0];
+    if (item === undefined) throw new Error("Expected a consolidation review item.");
+    vault.updateMemory(winner.id, { body: "changed after review" }, winner.updatedAt + 1);
+
+    const result = await handleApplyConsolidationReviewItem(
+      makeCtx(
+        `/api/memory/consolidation/jobs/${jobId}/review-items/${item.id}/apply`,
+        {
+          preconditions: item.memoryExcerpts.map(({ memoryId, expectedUpdatedAt }) => ({
+            memoryId,
+            expectedUpdatedAt,
+          })),
+        },
+        { jobId, itemId: item.id },
+      ),
+      deps,
+    );
+
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({
+      application: { outcome: "conflicted", affectedMemoryIds: [proposed.id] },
+    });
+    expect(vault.getMemory(proposed.id)?.status).toBe("conflicted");
+    expect([...evidence.values()].join("")).not.toContain("private stale proposal");
+    expect([...evidence.values()].join("")).not.toContain("bodyExcerpt");
+  });
+
+  it("fails closed when a proposed apply target has entered an illegal state", async () => {
+    const vault = makeVault();
+    const proposed = insertMemory(vault, {
+      id: "m-illegal-proposal",
+      body: "same proposal body",
+      status: "proposed",
+    });
+    insertAcceptedMemory(vault, { id: "m-illegal-winner", body: "same proposal body" });
+    const deps = makeDeps({ memoryVault: vault });
+    const created = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", {
+        scopes: [{ kind: "user", userId: "u-1" }],
+      }),
+      deps,
+    );
+    const jobId = asJobEnvelope(created).job.id;
+    await flushImmediate();
+    const fetched = asJobEnvelope(
+      handleGetConsolidationJob(
+        makeCtx(`/api/memory/consolidation/jobs/${jobId}`, {}, { jobId }),
+        deps,
+      ),
+    );
+    const item = fetched.job.result?.reviewItems[0];
+    if (item === undefined) throw new Error("Expected a consolidation review item.");
+    vault.updateMemory(proposed.id, { status: "rejected" }, proposed.updatedAt + 1);
+
+    const result = await handleApplyConsolidationReviewItem(
+      makeCtx(
+        `/api/memory/consolidation/jobs/${jobId}/review-items/${item.id}/apply`,
+        {
+          preconditions: item.memoryExcerpts.map(({ memoryId, expectedUpdatedAt }) => ({
+            memoryId,
+            expectedUpdatedAt,
+          })),
+        },
+        { jobId, itemId: item.id },
+      ),
+      deps,
+    );
+
+    expect(result.status).toBe(409);
+    expect(vault.getMemory(proposed.id)?.status).toBe("rejected");
+    expect(vault.listOutgoingEdges(proposed.id)).toEqual([]);
+  });
+
+  it("moves the proposal to conflicted when a proposed edge changed before apply", async () => {
+    const vault = makeVault();
+    const proposed = insertMemory(vault, {
+      id: "m-edge-proposal",
+      body: "edge drift proposal",
+      status: "proposed",
+    });
+    insertAcceptedMemory(vault, { id: "m-edge-winner", body: "edge drift proposal" });
+    const deps = makeDeps({ memoryVault: vault });
+    const created = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", {
+        scopes: [{ kind: "user", userId: "u-1" }],
+      }),
+      deps,
+    );
+    const jobId = asJobEnvelope(created).job.id;
+    await flushImmediate();
+    const fetched = asJobEnvelope(
+      handleGetConsolidationJob(
+        makeCtx(`/api/memory/consolidation/jobs/${jobId}`, {}, { jobId }),
+        deps,
+      ),
+    );
+    const item = fetched.job.result?.reviewItems[0];
+    const firstEdge = item?.proposedEdges?.[0];
+    if (item === undefined || firstEdge === undefined) {
+      throw new Error("Expected a consolidation review edge.");
+    }
+    vault.insertEdge(firstEdge);
+
+    const result = await handleApplyConsolidationReviewItem(
+      makeCtx(
+        `/api/memory/consolidation/jobs/${jobId}/review-items/${item.id}/apply`,
+        {
+          preconditions: item.memoryExcerpts.map(({ memoryId, expectedUpdatedAt }) => ({
+            memoryId,
+            expectedUpdatedAt,
+          })),
+        },
+        { jobId, itemId: item.id },
+      ),
+      deps,
+    );
+
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({ application: { outcome: "conflicted" } });
+    expect(vault.getMemory(proposed.id)?.status).toBe("conflicted");
+    expect(vault.listOutgoingEdges(proposed.id)).toEqual([firstEdge]);
   });
 
   it("caps loaded records and marks the result truncated when a selection exceeds maxRecordsPerRun", async () => {

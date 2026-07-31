@@ -498,6 +498,9 @@ function settingLabel(id: EditorM7SettingId, t: I18nTranslate): string {
   if (id === "largeFileMode") return t("settings.editor.setting.largeFileMode");
   if (id === "modelRetentionCount") return t("settings.editor.setting.modelRetentionCount");
   if (id === "modelRetentionBytes") return t("settings.editor.setting.modelRetentionBytes");
+  if (id === "gitCommitMessagePolicy") {
+    return t("settings.editor.setting.gitCommitMessagePolicy");
+  }
   return t("settings.editor.setting.keybindingOverrides");
 }
 

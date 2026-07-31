@@ -23,7 +23,6 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
   analyzeGitCommitIntent,
   evaluateGitPolicy,
-  KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY,
   validateGitCommitMessage,
   type GitCommitChangeSummary,
   type GitCommitIntentAnalysis,
@@ -58,6 +57,7 @@ import {
   scanUnsafeFormatChars,
   type GitDeliveryParsedBody,
 } from "./requestGuards.js";
+import { resolveGovernedCommitMessagePolicy } from "./commitPolicySettings.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 
@@ -89,7 +89,7 @@ const UTF8 = new TextEncoder();
 
 export interface GitDeliveryCommitRouteOptions {
   readonly execution?: GitDeliveryExecutionSeams;
-  // The trusted server-side commit-message policy. Default = the repository's conventional-commit style.
+  // Test/deployment override. Production resolves the persisted governed setting for the workspace.
   readonly messagePolicy?: GitCommitMessagePolicy;
 }
 
@@ -191,7 +191,6 @@ export const createHandleCommitPreview = (
   options: GitDeliveryCommitRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   const seams = options.execution ?? {};
-  const policy = options.messagePolicy ?? KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY;
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
     const read = await readParsed(ctx.req);
@@ -201,6 +200,11 @@ export const createHandleCommitPreview = (
     const messageDraft = typeof pre.obj.messageDraft === "string" ? pre.obj.messageDraft : "";
     const workspace = resolveProjectWorkspace(deps, pre.obj.projectId as string);
     if (workspace === undefined) return errResult(404, "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT");
+    const policy = await resolveGovernedCommitMessagePolicy(
+      deps,
+      workspace.root,
+      options.messagePolicy,
+    );
     let body: GitDeliveryCommitPreviewBody;
     try {
       body = await computePreview(workspace, messageDraft, policy, seams, now);
@@ -300,7 +304,6 @@ export const createHandleCommitExecute = (
   options: GitDeliveryCommitRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   const seams = options.execution ?? {};
-  const policy = options.messagePolicy ?? KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY;
   return async (ctx, deps): Promise<RouteResult> => {
     const read = await readParsed(ctx.req);
     if (!read.ok) return read.result;
@@ -310,6 +313,12 @@ export const createHandleCommitExecute = (
     if (req === undefined) return errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST");
     const workspace = resolveProjectWorkspace(deps, req.projectId);
     if (workspace === undefined) return errResult(404, "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT");
+
+    const policy = await resolveGovernedCommitMessagePolicy(
+      deps,
+      workspace.root,
+      options.messagePolicy,
+    );
 
     const messageBlock = messagePolicyBlockResult(req.message, policy, deps);
     if (messageBlock !== undefined) return messageBlock;

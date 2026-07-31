@@ -32,6 +32,7 @@ import type {
 import type { QualityIntelligenceReviewState } from "./reviewRecord.js";
 import type { TestQualityRubricDimension } from "./testQualityRubric.js";
 import type { ModelCapability } from "../gateway.js";
+import type { QualityIntelligenceRetentionPolicyId } from "./retentionPolicy.js";
 
 // Canonical QI run-status union (GEN-DUP-SEMANTIC-010). The list-view and detail-view
 // projections had re-declared this four-member union inline and could drift apart. Mirrors the
@@ -76,12 +77,12 @@ export interface QualityIntelligenceUiRunSummary {
  * `totalRunIds > limit`. Additive on the wire: legacy clients reading `runs` continue to work.
  */
 /**
- * The local retention policy that governs the listed runs (0.3.0 release audit).
+ * A local retention policy available for Quality Intelligence runs (0.3.0 release audit).
  *
  * QI runs are purged automatically — by age and by count — when the server starts. That destruction
  * used to be invisible: the run list simply had fewer entries than the session before. Producers
- * MUST derive these numbers from the enforced retention profile so the disclosure and the purge can
- * never drift apart. Counts and an id only; nothing about a run's contents.
+ * MUST derive these numbers from the enforced profile table so disclosure and purge cannot drift.
+ * Counts and an id only; nothing about a run's contents.
  */
 export interface QualityIntelligenceUiRetentionNotice {
   /** Id of the enforced retention profile, e.g. `qi:short-30d`. */
@@ -105,6 +106,8 @@ export interface QualityIntelligenceUiRunListResponse {
    * response from an older server still parses; producers on this version always send it.
    */
   readonly retention?: QualityIntelligenceUiRetentionNotice;
+  /** Selectable profiles projected from the same server-owned table used by enforcement. */
+  readonly retentionPolicies?: readonly QualityIntelligenceUiRetentionNotice[];
 }
 
 /**
@@ -517,6 +520,8 @@ export interface QualityIntelligenceStartRunRequest {
   readonly modelPolicy?: QualityIntelligenceModelPolicy;
   /** Optional non-negative deterministic sampling seed for models that advertise seed support. */
   readonly seed?: number;
+  /** Persisted evidence-retention selection; malformed/unknown values fall back server-side. */
+  readonly retentionPolicyId?: QualityIntelligenceRetentionPolicyId;
 }
 
 // ─── Run progress stream (Issue #280) ────────────────────────────────────────────

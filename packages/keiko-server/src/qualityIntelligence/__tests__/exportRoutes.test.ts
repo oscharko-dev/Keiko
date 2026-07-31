@@ -767,6 +767,16 @@ describe("handleQiExport — WP6 export traceability and provenance", () => {
     expect(manifest?.exports[0]?.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
   });
 
+  it("records body-free policy provenance on the export evidence row", async () => {
+    recordRunWithTraceability();
+    await exportJson();
+    const row = loadQualityIntelligenceRun(RUN_ID, { evidenceDir })?.exports[0];
+    expect(row?.policyProvenance).toEqual({
+      retentionPolicyId: "default",
+      policyProfileIds: [],
+    });
+  });
+
   it("marks model provenance as unknown for legacy runs without model metadata", async () => {
     const { envelope } = await exportJson();
     expect(envelope.modelProvenance?.generation.modelId).toBe("unknown");

@@ -201,7 +201,7 @@ export const MEMORY_STATUSES: readonly MemoryStatus[] = [
 //  - A "proposed" memory can also reach "expired" if its capture window elapses before
 //    review (proposal TTL is enforced by #207, not by this contract).
 export const MEMORY_STATUS_TRANSITIONS: Readonly<Record<MemoryStatus, readonly MemoryStatus[]>> = {
-  proposed: ["accepted", "rejected", "expired"],
+  proposed: ["accepted", "rejected", "superseded", "conflicted", "expired"],
   accepted: ["superseded", "archived", "forgotten", "conflicted", "expired"],
   rejected: [],
   superseded: ["archived", "forgotten"],

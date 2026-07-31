@@ -581,10 +581,18 @@ export function validateCapsuleReindexRequest(
   if (input.force !== undefined && typeof input.force !== "boolean") {
     errors.push("reindexRequest.force must be a boolean when provided");
   }
+  validateResumeJobId(input, errors);
   if (errors.length > 0) {
     return { ok: false, errors };
   }
   return { ok: true, value: input as unknown as CapsuleReindexRequest };
+}
+
+function validateResumeJobId(input: Record<string, unknown>, errors: string[]): void {
+  if (input.resumeJobId === undefined) return;
+  if (!isNonEmptyTrimmedString(input.resumeJobId) || input.mode !== "resume") {
+    errors.push("reindexRequest.resumeJobId requires mode resume and a non-empty job id");
+  }
 }
 
 // ─── ConnectorGraphState ──────────────────────────────────────────────────────

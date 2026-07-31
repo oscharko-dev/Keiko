@@ -143,6 +143,7 @@ export {
   type QualityIntelligenceEvidenceRefRow,
   type QualityIntelligenceExportEvidenceInput,
   type QualityIntelligenceExportRow,
+  type QualityIntelligenceExportPolicyProvenance,
   type QualityIntelligenceExportTarget,
   type QualityIntelligenceFindingRow,
   type QualityIntelligenceIntegrityHashes,

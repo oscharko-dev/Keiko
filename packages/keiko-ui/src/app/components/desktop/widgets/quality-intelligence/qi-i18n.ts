@@ -165,8 +165,11 @@ const QI_EN_MESSAGES = {
   "qi.hub.showMoreRuns": "Show more runs ({count} remaining)",
   "qi.hub.truncated": "Showing {shown} of {total} runs.",
   "qi.hub.retention":
-    "Runs are deleted automatically after {days} days, and only the newest {max} runs are kept. " +
+    "New runs are deleted automatically after {days} days, and only the newest {max} runs under " +
+    "that policy are kept. " +
     "Export anything you need to keep.",
+  "qi.hub.retentionPolicy": "Retention policy for new runs",
+  "qi.hub.retentionOption": "{days} days · up to {max} runs",
   "qi.launcher.workflow.source": "Source",
   "qi.launcher.workflow.aria": "Quality Intelligence workflow",
   "qi.launcher.workflow.deterministic": "deterministic",
@@ -399,8 +402,10 @@ const QI_DE_MESSAGES: QiMessageCatalog = {
   "qi.hub.showMoreRuns": "Weitere Läufe anzeigen ({count} verbleibend)",
   "qi.hub.truncated": "{shown} von {total} Läufen werden angezeigt.",
   "qi.hub.retention":
-    "Läufe werden nach {days} Tagen automatisch gelöscht, und nur die neuesten {max} Läufe " +
-    "bleiben erhalten. Exportiere alles, was du behalten möchtest.",
+    "Neue Läufe werden nach {days} Tagen automatisch gelöscht, und nur die neuesten {max} Läufe " +
+    "dieser Richtlinie bleiben erhalten. Exportiere alles, was du behalten möchtest.",
+  "qi.hub.retentionPolicy": "Aufbewahrungsrichtlinie für neue Läufe",
+  "qi.hub.retentionOption": "{days} Tage · bis zu {max} Läufe",
   "qi.launcher.workflow.source": "Quelle",
   "qi.launcher.workflow.aria": "Quality-Intelligence-Workflow",
   "qi.launcher.workflow.deterministic": "deterministisch",

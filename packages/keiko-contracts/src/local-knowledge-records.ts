@@ -247,6 +247,9 @@ export interface CapsuleReindexRequest {
   readonly capsuleId: KnowledgeCapsuleId;
   readonly mode?: CapsuleReindexMode;
   readonly force?: boolean;
+  // Opaque precondition for resuming an abandoned indexing job. The server accepts it only with
+  // mode "resume" and only while the exact durable job remains resumable.
+  readonly resumeJobId?: string;
 }
 
 export interface IndexingJobError {
@@ -367,6 +370,13 @@ export interface CapsuleHealth {
   readonly partialCoverageDocuments?: number;
   readonly qualityWarnings?: readonly string[];
   readonly resumableDocuments?: number;
+  // Body-free projection only: never expose the resume token, source ids, document ids, or paths.
+  readonly indexingRecovery?: {
+    readonly jobId: string;
+    readonly state: "active" | "resumable";
+    readonly sourceCount: number;
+    readonly processedDocuments: number;
+  };
 }
 
 // Sources point at user-owned files that live OUTSIDE Keiko's local state. Deleting them

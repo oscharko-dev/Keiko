@@ -25,6 +25,7 @@ import type {
   QualityIntelligenceModelRouting,
   QualityIntelligence as QI,
 } from "@oscharko-dev/keiko-contracts";
+import { resolveQualityIntelligenceRetentionPolicyId } from "@oscharko-dev/keiko-contracts";
 import { QualityIntelligenceHardening } from "@oscharko-dev/keiko-quality-intelligence";
 import { SSE_HEADERS } from "../sse.js";
 import { writeOrDestroy } from "../sse-write.js";
@@ -278,6 +279,7 @@ function buildStartRequest(
   modelId: string | undefined,
   modelPolicy: QualityIntelligenceModelPolicy | undefined,
   seed: number | undefined,
+  retentionPolicyId: NonNullable<QualityIntelligenceStartRunRequest["retentionPolicyId"]>,
 ): QualityIntelligenceStartRunRequest {
   return {
     sources,
@@ -285,6 +287,7 @@ function buildStartRequest(
     ...(modelId ? { modelId } : {}),
     ...(modelPolicy !== undefined ? { modelPolicy } : {}),
     ...(seed !== undefined ? { seed } : {}),
+    retentionPolicyId,
   };
 }
 
@@ -321,9 +324,17 @@ function validateRequest(parsed: unknown): ParseOutcome {
       ),
     };
   }
+  const retentionPolicyId = resolveQualityIntelligenceRetentionPolicyId(parsed.retentionPolicyId);
   return {
     ok: true,
-    request: buildStartRequest(collected.sources, profileId, modelId, modelPolicy, seed),
+    request: buildStartRequest(
+      collected.sources,
+      profileId,
+      modelId,
+      modelPolicy,
+      seed,
+      retentionPolicyId,
+    ),
   };
 }
 

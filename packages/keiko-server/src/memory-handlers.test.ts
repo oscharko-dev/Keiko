@@ -632,7 +632,7 @@ describe("memory handlers", () => {
     );
 
     const correction = asJson(proposalResult).correction as MemoryRecord;
-    const acceptResult = handleAcceptMemoryProposal(
+    const acceptResult = await handleAcceptMemoryProposal(
       makeCtx(`/api/memory/proposals/${String(correction.id)}/accept`, {}, { id: correction.id }),
       makeDeps({ memoryVault: vault, evidenceStore }),
     );
@@ -679,7 +679,7 @@ describe("memory handlers", () => {
     const correction = asJson(proposalResult).correction as MemoryRecord;
     vault.updateMemory(memoryId("memory-correct-archived"), { status: "archived" }, Date.now());
 
-    const acceptResult = handleAcceptMemoryProposal(
+    const acceptResult = await handleAcceptMemoryProposal(
       makeCtx(`/api/memory/proposals/${String(correction.id)}/accept`, {}, { id: correction.id }),
       makeDeps({ memoryVault: vault }),
     );
@@ -1263,7 +1263,7 @@ describe("memory handlers — outcome-driven forgetting (O-V1)", () => {
     );
     const correction = asJson(proposalResult).correction as MemoryRecord;
 
-    const acceptResult = handleAcceptMemoryProposal(
+    const acceptResult = await handleAcceptMemoryProposal(
       makeCtx(`/api/memory/proposals/${String(correction.id)}/accept`, {}, { id: correction.id }),
       makeDeps({ memoryVault: vault }),
     );
@@ -1278,11 +1278,11 @@ describe("memory handlers — outcome-driven forgetting (O-V1)", () => {
     ).toMatchObject({ outcomeCount: 1, utilitySum: 0 });
   });
 
-  it("records a positive outcome for a plain accepted proposal and no negative", () => {
+  it("records a positive outcome for a plain accepted proposal and no negative", async () => {
     const vault = makeVault();
     vault.insertMemory(makeMemory("ov1-proposal", "Use tabs over spaces.", { status: "proposed" }));
 
-    const result = handleAcceptMemoryProposal(
+    const result = await handleAcceptMemoryProposal(
       makeCtx("/api/memory/proposals/ov1-proposal/accept", {}, { id: "ov1-proposal" }),
       makeDeps({ memoryVault: vault }),
     );

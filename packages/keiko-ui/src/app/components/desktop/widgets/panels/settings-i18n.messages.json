@@ -655,6 +655,10 @@
     "en": "Keyboard shortcut overrides",
     "de": "Tastenkürzel-Overrides"
   },
+  "settings.editor.setting.gitCommitMessagePolicy": {
+    "en": "Commit message policy",
+    "de": "Commit-Nachrichtenrichtlinie"
+  },
   "settings.keyboard.title": {
     "en": "Keyboard shortcuts",
     "de": "Tastenkürzel"

@@ -270,9 +270,9 @@ describe("MEMORY_STATUS_TRANSITIONS", () => {
     expect(MEMORY_STATUS_TRANSITIONS.forgotten).toEqual([]);
   });
 
-  it("proposed → accepted, rejected, expired are the only legal next states", () => {
+  it("allows reviewed proposals to settle as superseded or conflicted", () => {
     expect([...MEMORY_STATUS_TRANSITIONS.proposed].sort()).toEqual(
-      ["accepted", "expired", "rejected"].sort(),
+      ["accepted", "conflicted", "expired", "rejected", "superseded"].sort(),
     );
   });
 

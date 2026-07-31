@@ -7,10 +7,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  GIT_COMMIT_MESSAGE_POLICY_MODES,
   GIT_COMMIT_MESSAGE_VIOLATION_CODES,
   GIT_COMMIT_POLICY_SCHEMA_VERSION,
   KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY,
+  gitCommitMessagePolicyForMode,
   isGitCommitMessagePolicy,
+  resolveGitCommitMessagePolicyMode,
   isGitCommitMessageValidation,
   isGitCommitMessageViolationCode,
   validateGitCommitMessage,
@@ -43,6 +46,23 @@ describe("git-commit-policy schema + vocabulary", () => {
       "missing-signoff",
     ];
     expect([...GIT_COMMIT_MESSAGE_VIOLATION_CODES]).toEqual([...expected]);
+  });
+});
+
+describe("governed commit-message policy selection", () => {
+  it("defaults malformed selections to Keiko Conventional", () => {
+    expect(GIT_COMMIT_MESSAGE_POLICY_MODES).toEqual(["keiko-conventional", "repository-native"]);
+    expect(resolveGitCommitMessagePolicyMode(undefined)).toBe("keiko-conventional");
+    expect(resolveGitCommitMessagePolicyMode("custom-untrusted-mode")).toBe("keiko-conventional");
+  });
+
+  it("lets Repository Native defer formatting rules while retaining the non-empty invariant", () => {
+    const policy = gitCommitMessagePolicyForMode("repository-native");
+    expect(validateGitCommitMessage("repository native subject", policy)).toEqual({ ok: true });
+    expect(validateGitCommitMessage("", policy)).toEqual({
+      ok: false,
+      violations: ["empty-subject"],
+    });
   });
 });
 

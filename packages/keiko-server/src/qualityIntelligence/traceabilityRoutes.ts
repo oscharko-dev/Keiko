@@ -10,7 +10,7 @@
 // artifact is loadable. The serializers are deterministic and formula-injection safe.
 
 import type { IncomingMessage } from "node:http";
-import { sortedStrings, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import { sortedStrings } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   appendQualityIntelligenceExportRow,
@@ -29,6 +29,7 @@ import {
   QualityIntelligenceReviewIntegrityError,
   runReviewStateOf,
 } from "./reviewStore.js";
+import { buildQualityIntelligenceExportProvenance } from "./exportProvenance.js";
 
 const MAX_BODY_BYTES = 4 * 1024;
 
@@ -226,34 +227,6 @@ function candidateTitlesFor(id: string, evidenceDir: string): ReadonlyMap<string
 
 let traceabilityExportEvidenceSequence = 0;
 
-// eslint-disable-next-line complexity
-function buildModelProvenance(
-  manifest: QualityIntelligenceEvidenceManifest,
-): QI.QualityIntelligenceExportModelProvenance {
-  const modelStage = (
-    modelId: string | undefined,
-  ): QI.QualityIntelligenceExportModelStageProvenance => ({
-    modelId: modelId?.trim() ? modelId : "unknown",
-    provider: "unknown",
-    revision: "unknown",
-  });
-  return {
-    generation: modelStage(
-      manifest.modelRouting?.resolved.testDesignModelId ??
-        manifest.modelRouting?.preflight.generation?.modelId ??
-        manifest.modelId,
-    ),
-    judge: modelStage(
-      manifest.modelRouting?.resolved.judgeModelId ??
-        manifest.modelRouting?.preflight.judge?.modelId,
-    ),
-    ...(manifest.seedUsed !== undefined ? { seedUsed: manifest.seedUsed } : {}),
-    ...(manifest.modelParameters !== undefined
-      ? { modelParameters: manifest.modelParameters }
-      : {}),
-  };
-}
-
 /**
  * Best-effort append of an export-evidence row after a successful traceability matrix download
  * (Epic #734, Issue #740). A failed audit write must NOT withhold the already-computed body from
@@ -270,6 +243,7 @@ function recordTraceabilityExportEvidence(
 ): readonly string[] {
   const createdAt = new Date().toISOString();
   const integrityHash = sha256Hex(body);
+  const provenance = buildQualityIntelligenceExportProvenance(manifest);
   traceabilityExportEvidenceSequence += 1;
   const row: QualityIntelligenceExportRow = {
     id: `qi-export-${sha256Hex(
@@ -279,7 +253,8 @@ function recordTraceabilityExportEvidence(
     integrityHash,
     redactionAttested: manifest.redactionSummary.totalStringsScanned > 0,
     createdAt,
-    modelProvenance: buildModelProvenance(manifest),
+    modelProvenance: provenance.model,
+    policyProvenance: provenance.policy,
     dryRun: false,
     // The scope is part of what this artifact claims: without it the audit trail cannot tell an
     // approved-only compliance download from a full diagnostic one.

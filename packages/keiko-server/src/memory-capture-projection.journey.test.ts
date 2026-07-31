@@ -284,7 +284,7 @@ describe("recent memory capture journey", () => {
     const proposedId = proposed[0]?.memoryId;
     expect(proposedId).toBeDefined();
 
-    const accepted = handleAcceptMemoryProposal(
+    const accepted = await handleAcceptMemoryProposal(
       makeRouteContext(`/api/memory/proposals/${String(proposedId)}/accept`, {}, proposedId),
       governed,
     );

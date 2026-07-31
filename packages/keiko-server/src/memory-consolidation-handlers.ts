@@ -9,6 +9,7 @@ import {
 } from "@oscharko-dev/keiko-memory-consolidation";
 import {
   MEMORY_SCOPE_KINDS,
+  MEMORY_CONSOLIDATION_EXCERPT_MAX_CHARS,
   MEMORY_STATUSES,
   MEMORY_TYPES,
   type MemoryEdgeId,
@@ -19,7 +20,11 @@ import {
   type MemoryStatus,
   type MemoryType,
   type MemoryConsolidationJobEnvelopeWire,
+  type MemoryConsolidationApplyPreconditionWire,
+  type MemoryConsolidationApplicationWire,
   type MemoryConsolidationJobResponseWire,
+  type MemoryConsolidationReviewItemWire,
+  type MemoryConsolidationResultWire,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   ProjectId,
@@ -33,6 +38,7 @@ import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type {
   ConsolidationJobRecord,
+  ConsolidationReviewSnapshot,
   ConsolidationJobSelection,
   ConsolidationJobSettings,
 } from "./memory-consolidation-registry.js";
@@ -378,13 +384,16 @@ function loadSelectedMemories(
 function redactJob(
   deps: UiHandlerDeps,
   record: ConsolidationJobRecord,
+  vault?: MemoryVaultStore,
 ): MemoryConsolidationJobEnvelopeWire {
   const job: MemoryConsolidationJobEnvelopeWire["job"] = {
     id: record.job.id,
     state: record.job.state,
     ...(record.job.startedAt !== undefined ? { startedAt: record.job.startedAt } : {}),
     ...(record.job.completedAt !== undefined ? { completedAt: record.job.completedAt } : {}),
-    ...(record.job.result !== undefined ? { result: record.job.result } : {}),
+    ...(record.job.result !== undefined
+      ? { result: projectConsolidationResult(deps, record, vault) }
+      : {}),
     ...(record.job.error !== undefined ? { error: record.job.error } : {}),
   };
   const selection: MemoryConsolidationJobEnvelopeWire["selection"] = {
@@ -402,6 +411,54 @@ function redactJob(
     cancelRequested: record.cancelRequested,
   };
   return deps.redactor(envelope) as MemoryConsolidationJobEnvelopeWire;
+}
+
+function excerptForMemory(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore | undefined,
+  snapshot: ConsolidationReviewSnapshot["memories"][number],
+): MemoryConsolidationReviewItemWire["memoryExcerpts"][number] | undefined {
+  const record = vault?.getMemory(snapshot.memoryId);
+  if (record === undefined) return undefined;
+  const redacted = deps.redactor(record.body);
+  const body = typeof redacted === "string" ? redacted : "";
+  return {
+    memoryId: snapshot.memoryId,
+    bodyExcerpt: body.slice(0, MEMORY_CONSOLIDATION_EXCERPT_MAX_CHARS),
+    truncated: body.length > MEMORY_CONSOLIDATION_EXCERPT_MAX_CHARS,
+    status: record.status,
+    expectedUpdatedAt: snapshot.updatedAt,
+  };
+}
+
+function projectReviewItem(
+  deps: UiHandlerDeps,
+  record: ConsolidationJobRecord,
+  vault: MemoryVaultStore | undefined,
+  item: NonNullable<ConsolidationResult["reviewItems"]>[number],
+): MemoryConsolidationReviewItemWire {
+  const snapshot = record.reviewSnapshots?.find((entry) => entry.itemId === item.id);
+  const memoryExcerpts =
+    snapshot?.memories.flatMap((memory) => {
+      const excerpt = excerptForMemory(deps, vault, memory);
+      return excerpt === undefined ? [] : [excerpt];
+    }) ?? [];
+  return { ...item, memoryExcerpts };
+}
+
+function projectConsolidationResult(
+  deps: UiHandlerDeps,
+  record: ConsolidationJobRecord,
+  vault: MemoryVaultStore | undefined,
+): MemoryConsolidationResultWire {
+  const result = record.job.result;
+  if (result === undefined) {
+    throw new TypeError("Completed consolidation projection requires a result.");
+  }
+  return {
+    ...result,
+    reviewItems: result.reviewItems.map((item) => projectReviewItem(deps, record, vault, item)),
+  };
 }
 
 function newMemoryEdgeId(): MemoryEdgeId {
@@ -461,10 +518,12 @@ function finalizeTerminalJob(
   const finalResult: ConsolidationResult =
     selectionTruncated && !result.truncated ? { ...result, truncated: true } : result;
   if (result.state === "completed") {
+    const reviewSnapshots = buildReviewSnapshots(finalResult, memories);
     registry.complete(
       jobId,
       transitionJob(running, "completed", { completedAt, result: finalResult }),
       memories.length,
+      reviewSnapshots,
     );
     return;
   }
@@ -483,6 +542,22 @@ function finalizeTerminalJob(
     message,
     memories.length,
   );
+}
+
+function buildReviewSnapshots(
+  result: ConsolidationResult,
+  memories: readonly MemoryRecord[],
+): readonly ConsolidationReviewSnapshot[] {
+  const byId = new Map(memories.map((memory) => [memory.id, memory]));
+  return result.reviewItems.map((item) => ({
+    itemId: item.id,
+    memories: item.relatedMemoryIds.flatMap((memoryId) => {
+      const memory = byId.get(memoryId);
+      return memory === undefined
+        ? []
+        : [{ memoryId, status: memory.status, updatedAt: memory.updatedAt }];
+    }),
+  }));
 }
 
 function failScheduledJob(
@@ -664,7 +739,9 @@ export function handleGetConsolidationJob(ctx: RouteContext, deps: UiHandlerDeps
       body: errorBody("NOT_FOUND", "Consolidation job not found."),
     };
   }
-  const body: MemoryConsolidationJobResponseWire = { job: redactJob(deps, record) };
+  const body: MemoryConsolidationJobResponseWire = {
+    job: redactJob(deps, record, deps.memoryVault),
+  };
   return { status: 200, body };
 }
 
@@ -685,9 +762,270 @@ export function handleCancelConsolidationJob(ctx: RouteContext, deps: UiHandlerD
   if (updated.job.state === "queued") {
     const canceled = transitionJob(updated.job, "canceled", { completedAt: Date.now() });
     const finalRecord = registry.complete(updated.job.id, canceled, updated.memoryCount) ?? updated;
-    const body: MemoryConsolidationJobResponseWire = { job: redactJob(deps, finalRecord) };
+    const body: MemoryConsolidationJobResponseWire = {
+      job: redactJob(deps, finalRecord, deps.memoryVault),
+    };
     return { status: 202, body };
   }
-  const body: MemoryConsolidationJobResponseWire = { job: redactJob(deps, updated) };
+  const body: MemoryConsolidationJobResponseWire = {
+    job: redactJob(deps, updated, deps.memoryVault),
+  };
   return { status: 202, body };
+}
+
+function parseApplyPreconditions(
+  raw: Record<string, unknown>,
+): readonly MemoryConsolidationApplyPreconditionWire[] | RouteResult {
+  if (
+    !Array.isArray(raw.preconditions) ||
+    raw.preconditions.length === 0 ||
+    raw.preconditions.length > DEFAULT_MAX_RECORDS_PER_RUN
+  ) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "preconditions must be a non-empty bounded array."),
+    };
+  }
+  const preconditions: MemoryConsolidationApplyPreconditionWire[] = [];
+  const ids = new Set<string>();
+  for (const value of raw.preconditions) {
+    const parsed = parseApplyPrecondition(value, ids);
+    if (parsed === undefined) {
+      return {
+        status: 400,
+        body: errorBody("BAD_REQUEST", "Each apply precondition must be unique and valid."),
+      };
+    }
+    ids.add(parsed.memoryId);
+    preconditions.push(parsed);
+  }
+  return preconditions;
+}
+
+function parseApplyPrecondition(
+  value: unknown,
+  ids: ReadonlySet<string>,
+): MemoryConsolidationApplyPreconditionWire | undefined {
+  if (!isRecord(value) || typeof value.memoryId !== "string" || value.memoryId.length === 0) {
+    return undefined;
+  }
+  if (
+    !Number.isSafeInteger(value.expectedUpdatedAt) ||
+    Number(value.expectedUpdatedAt) < 0 ||
+    ids.has(value.memoryId)
+  ) {
+    return undefined;
+  }
+  return {
+    memoryId: value.memoryId as MemoryId,
+    expectedUpdatedAt: Number(value.expectedUpdatedAt),
+  };
+}
+
+function preconditionsMatchSnapshot(
+  requested: readonly MemoryConsolidationApplyPreconditionWire[],
+  snapshot: ConsolidationReviewSnapshot,
+): boolean {
+  if (requested.length !== snapshot.memories.length) return false;
+  const requestedById = new Map(
+    requested.map((entry) => [entry.memoryId, entry.expectedUpdatedAt]),
+  );
+  return snapshot.memories.every(
+    (memory) => requestedById.get(memory.memoryId) === memory.updatedAt,
+  );
+}
+
+function applyTargets(
+  item: MemoryConsolidationReviewItemWire,
+): { readonly winner: MemoryId; readonly losers: readonly MemoryId[] } | undefined {
+  const action = item.proposedAction;
+  if (action === undefined) return undefined;
+  return action.kind === "merge"
+    ? { winner: action.winner, losers: action.losers }
+    : { winner: action.newer, losers: [action.older] };
+}
+
+function findApplyInputs(
+  record: ConsolidationJobRecord,
+  itemId: string,
+):
+  | {
+      readonly item: MemoryConsolidationReviewItemWire;
+      readonly snapshot: ConsolidationReviewSnapshot;
+      readonly targets: { readonly winner: MemoryId; readonly losers: readonly MemoryId[] };
+    }
+  | RouteResult {
+  const sourceItem = record.job.result?.reviewItems.find((item) => item.id === itemId);
+  const snapshot = record.reviewSnapshots?.find((entry) => entry.itemId === itemId);
+  if (record.job.state !== "completed" || sourceItem === undefined || snapshot === undefined) {
+    return { status: 404, body: errorBody("NOT_FOUND", "Consolidation review item not found.") };
+  }
+  const item: MemoryConsolidationReviewItemWire = { ...sourceItem, memoryExcerpts: [] };
+  const targets = applyTargets(item);
+  if (
+    targets === undefined ||
+    item.proposedEdges === undefined ||
+    item.proposedEdges.length === 0
+  ) {
+    return {
+      status: 409,
+      body: errorBody("APPLY_UNAVAILABLE", "Review item has no governed apply action."),
+    };
+  }
+  const initialById = new Map(snapshot.memories.map((memory) => [memory.memoryId, memory.status]));
+  if (targets.losers.some((id) => initialById.get(id) !== "proposed")) {
+    return {
+      status: 409,
+      body: errorBody("ILLEGAL_INITIAL_STATE", "Apply targets were not proposed at review time."),
+    };
+  }
+  return { item, snapshot, targets };
+}
+
+function applicationResult(
+  itemId: string,
+  outcome: MemoryConsolidationApplicationWire["outcome"],
+  winnerMemoryId: MemoryId,
+  affectedMemoryIds: readonly MemoryId[],
+  appliedAt: number,
+): MemoryConsolidationApplicationWire {
+  return { itemId, outcome, winnerMemoryId, affectedMemoryIds, appliedAt };
+}
+
+function conflictApplication(
+  vault: MemoryVaultStore,
+  itemId: string,
+  targets: { readonly winner: MemoryId; readonly losers: readonly MemoryId[] },
+  nowMs: number,
+): MemoryConsolidationApplicationWire | undefined {
+  const current = targets.losers.map((id) => vault.getMemory(id));
+  if (current.some((memory) => memory?.status !== "proposed")) {
+    return undefined;
+  }
+  const records = current.filter((memory): memory is MemoryRecord => memory !== undefined);
+  vault.applyGraphMutation({
+    preconditions: records.map((memory) => ({
+      id: memory.id,
+      expectedStatus: "proposed",
+      expectedUpdatedAt: memory.updatedAt,
+    })),
+    updates: records.map((memory) => ({
+      id: memory.id,
+      expectedStatus: "proposed",
+      expectedUpdatedAt: memory.updatedAt,
+      patch: { status: "conflicted", staleReason: "consolidation review changed before apply" },
+      nowMs,
+    })),
+    edges: [],
+  });
+  return applicationResult(itemId, "conflicted", targets.winner, targets.losers, nowMs);
+}
+
+function executeApply(
+  vault: MemoryVaultStore,
+  itemId: string,
+  inputs: Exclude<ReturnType<typeof findApplyInputs>, RouteResult>,
+): MemoryConsolidationApplicationWire | RouteResult {
+  const nowMs = Math.max(Date.now(), ...inputs.snapshot.memories.map((item) => item.updatedAt)) + 1;
+  try {
+    vault.applyGraphMutation({
+      preconditions: inputs.snapshot.memories.map((memory) => ({
+        id: memory.memoryId,
+        expectedStatus: memory.status,
+        expectedUpdatedAt: memory.updatedAt,
+      })),
+      updates: inputs.targets.losers.map((id) => ({
+        id,
+        expectedStatus: "proposed",
+        patch: { status: "superseded", staleReason: "applied consolidation review" },
+        nowMs,
+      })),
+      edges: inputs.item.proposedEdges ?? [],
+    });
+    return applicationResult(
+      itemId,
+      "applied",
+      inputs.targets.winner,
+      inputs.targets.losers,
+      nowMs,
+    );
+  } catch {
+    const application = conflictApplication(vault, itemId, inputs.targets, nowMs);
+    if (application !== undefined) return application;
+    return {
+      status: 409,
+      body: errorBody("APPLY_CONFLICT", "Consolidation apply preconditions no longer hold."),
+    };
+  }
+}
+
+interface ResolvedApplyRoute {
+  readonly vault: MemoryVaultStore;
+  readonly registry: NonNullable<UiHandlerDeps["consolidationJobs"]>;
+  readonly jobId: string;
+  readonly itemId: string;
+  readonly record: ConsolidationJobRecord;
+}
+
+function resolveApplyRoute(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): ResolvedApplyRoute | RouteResult {
+  const vault = resolveVault(deps);
+  if (isRouteResult(vault)) return vault;
+  const registry = resolveJobRegistry(deps);
+  if (isRouteResult(registry)) return registry;
+  const { jobId, itemId } = ctx.params;
+  if (jobId === undefined || itemId === undefined) {
+    return { status: 404, body: errorBody("NOT_FOUND", "Consolidation review item not found.") };
+  }
+  const record = registry.get(jobId);
+  if (record === undefined) {
+    return { status: 404, body: errorBody("NOT_FOUND", "Consolidation job not found.") };
+  }
+  return { vault, registry, jobId, itemId, record };
+}
+
+function applicationResponse(application: MemoryConsolidationApplicationWire): RouteResult {
+  return {
+    status: application.outcome === "applied" ? 200 : 409,
+    body: { application },
+  };
+}
+
+function previousApplication(
+  record: ConsolidationJobRecord,
+  itemId: string,
+): RouteResult | undefined {
+  const existing = record.applications?.find((entry) => entry.itemId === itemId);
+  return existing === undefined ? undefined : applicationResponse(existing);
+}
+
+export async function handleApplyConsolidationReviewItem(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const route = resolveApplyRoute(ctx, deps);
+  if (isRouteResult(route)) return route;
+  const previous = previousApplication(route.record, route.itemId);
+  if (previous !== undefined) return previous;
+  const inputs = findApplyInputs(route.record, route.itemId);
+  if (isRouteResult(inputs)) return inputs;
+  const body = await readJsonBody(ctx.req);
+  if (isRouteResult(body)) return body;
+  const latest = route.registry.get(route.jobId);
+  const concurrent = latest === undefined ? undefined : previousApplication(latest, route.itemId);
+  if (concurrent !== undefined) return concurrent;
+  const requested = parseApplyPreconditions(body);
+  if (isRouteResult(requested)) return requested;
+  if (!preconditionsMatchSnapshot(requested, inputs.snapshot)) {
+    return {
+      status: 409,
+      body: errorBody("PRECONDITION_MISMATCH", "Review preconditions do not match the job."),
+    };
+  }
+  const application = executeApply(route.vault, route.itemId, inputs);
+  if (isRouteResult(application)) return application;
+  route.registry.recordApplication(route.jobId, application);
+  return applicationResponse(application);
 }

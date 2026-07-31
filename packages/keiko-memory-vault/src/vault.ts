@@ -68,7 +68,7 @@ import {
   gateMemoryScope,
 } from "./validate.js";
 import { redactMemoryEdge, redactMemoryRecord, redactTombstone } from "./redact-record.js";
-import { MemoryStorageError } from "./errors.js";
+import { MemoryStorageError, MemoryStoragePreconditionError } from "./errors.js";
 import {
   memoryBodySuppressionHash,
   memoryBodySuppressionHashForVault,
@@ -83,6 +83,9 @@ import type {
   MemoryEmbeddingInput,
   MemoryEmbeddingRow,
   MemoryEvent,
+  MemoryGraphMutation,
+  MemoryGraphPrecondition,
+  MemoryGraphMutationResult,
   MemoryTombstone,
   MemoryUpdatePatch,
   MemoryVaultFactoryOptions,
@@ -269,6 +272,7 @@ type MemoryMutators = Pick<
   | "insertMemory"
   | "updateMemory"
   | "updateMemories"
+  | "applyGraphMutation"
   | "deleteMemory"
   | "deleteMemories"
   | "getMemory"
@@ -381,10 +385,56 @@ function updateMemoryInPlace(
   opts: ResolvedOptions,
 ): MemoryRecord {
   const existing = existingMemoryOrThrow(db, update.id, opts.cipher);
+  if (update.expectedStatus !== undefined && existing.status !== update.expectedStatus) {
+    throw new MemoryStoragePreconditionError("status");
+  }
+  if (update.expectedUpdatedAt !== undefined && existing.updatedAt !== update.expectedUpdatedAt) {
+    throw new MemoryStoragePreconditionError("updatedAt");
+  }
   const merged = mergePatch(existing, update.patch, update.nowMs);
   const ready = preparedForWrite(merged, opts);
   updateMemoryRow(db, ready, opts.cipher);
   return ready;
+}
+
+function runGraphMutation(
+  db: DatabaseSync,
+  mutation: MemoryGraphMutation,
+  opts: ResolvedOptions,
+): MemoryGraphMutationResult {
+  const edges = mutation.edges.map((edge) => preparedEdgeForWrite(edge, opts));
+  const memories: MemoryRecord[] = [];
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const precondition of mutation.preconditions ?? []) {
+      assertGraphPrecondition(db, precondition, opts.cipher);
+    }
+    for (const update of mutation.updates) {
+      memories.push(updateMemoryInPlace(db, update, opts));
+    }
+    for (const edge of edges) {
+      insertEdgeRow(db, edge, opts.cipher);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return { memories, edges };
+}
+
+function assertGraphPrecondition(
+  db: DatabaseSync,
+  precondition: MemoryGraphPrecondition,
+  cipher: MemoryContentCipher,
+): void {
+  const existing = existingMemoryOrThrow(db, precondition.id, cipher);
+  if (existing.status !== precondition.expectedStatus) {
+    throw new MemoryStoragePreconditionError("status");
+  }
+  if (existing.updatedAt !== precondition.expectedUpdatedAt) {
+    throw new MemoryStoragePreconditionError("updatedAt");
+  }
 }
 
 function runBatchUpdateMemories(
@@ -430,7 +480,12 @@ function deleteMemoryWithEvents(
 
 type MemoryWriteOps = Pick<
   MemoryMutators,
-  "insertMemory" | "updateMemory" | "updateMemories" | "deleteMemory" | "deleteMemories"
+  | "insertMemory"
+  | "updateMemory"
+  | "updateMemories"
+  | "applyGraphMutation"
+  | "deleteMemory"
+  | "deleteMemories"
 >;
 
 type MemoryReadOps = Pick<
@@ -463,6 +518,16 @@ function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWri
       return withSidecarHardening(opts, () => {
         const ready = runBatchUpdateMemories(db, updates, opts);
         emitUpdatedRecords(ready, opts);
+        return ready;
+      });
+    },
+    applyGraphMutation: (mutation: MemoryGraphMutation): MemoryGraphMutationResult => {
+      return withSidecarHardening(opts, () => {
+        const ready = runGraphMutation(db, mutation, opts);
+        emitUpdatedRecords(ready.memories, opts);
+        for (const edge of ready.edges) {
+          opts.emit({ kind: "edge:inserted", edge });
+        }
         return ready;
       });
     },

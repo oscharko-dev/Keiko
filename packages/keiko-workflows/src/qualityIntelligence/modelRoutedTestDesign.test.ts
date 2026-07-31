@@ -76,6 +76,7 @@ const MODEL_OUTPUT_COVERING_TWO = JSON.stringify([
 
 function makeDeps(
   evidenceStore: ReturnType<typeof createInMemoryQualityIntelligenceLocalStore>,
+  retentionPolicyId?: string,
 ): QualityIntelligenceModelRoutedTestDesignDeps {
   return {
     sink: { emit: () => undefined },
@@ -90,6 +91,7 @@ function makeDeps(
         }),
     },
     clock: { nowIso: () => "2026-06-08T00:01:00.000Z" },
+    ...(retentionPolicyId !== undefined ? { retentionPolicyId } : {}),
   };
 }
 
@@ -109,6 +111,21 @@ function makeDepsWithCandidateCap(
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", () => {
+  it("persists the selected retention profile on the run manifest", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    await runQualityIntelligenceModelRoutedTestDesign(
+      {
+        plan: PLAN,
+        envelopes: [],
+        ingestedAtoms: [makeIngestedAtom("atom-1", "Requirement atom 1")],
+        provenanceRefs: PROVENANCE,
+      },
+      makeDeps(store, "qi:standard-90d"),
+    );
+
+    expect(store.load(String(PLAN.id))?.retentionPolicyId).toBe("qi:standard-90d");
+  });
+
   it("emits coverage-gap findings for atoms not covered by any candidate", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     // 3 atoms; model output covers only atoms 1 and 2

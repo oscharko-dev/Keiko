@@ -748,6 +748,30 @@ describe("validateCapsuleReindexRequest", () => {
     ).toBe(true);
   });
 
+  it("accepts an exact resume-job precondition only with resume mode", () => {
+    expect(
+      validateCapsuleReindexRequest({
+        capsuleId: "cap-1",
+        mode: "resume",
+        resumeJobId: "job-abandoned",
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateCapsuleReindexRequest({
+        capsuleId: "cap-1",
+        mode: "changed-files",
+        resumeJobId: "job-abandoned",
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCapsuleReindexRequest({
+        capsuleId: "cap-1",
+        mode: "resume",
+        resumeJobId: " ",
+      }).ok,
+    ).toBe(false);
+  });
+
   it("rejects invalid mode, missing capsule id, and non-boolean force", () => {
     expect(validateCapsuleReindexRequest({ capsuleId: "", mode: "changed-files" }).ok).toBe(false);
     expect(validateCapsuleReindexRequest({ capsuleId: "cap-1", mode: "all-files" }).ok).toBe(false);

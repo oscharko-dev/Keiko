@@ -12,15 +12,17 @@
 // yet (Epic #189 / Issue #196): it is intentionally retained ahead of the resume surface
 // that will wire it — do not delete it as "dead export".
 
-import type { IndexingJobRecord, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import type { ChunkId, IndexingJobRecord, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 
-import { rowToIndexingJobRecord, selectRunningJobByCapsule } from "./job-persist.js";
+import { rowToResumableIndexingJobRecord, selectRunningJobByCapsule } from "./job-persist.js";
 import type { KnowledgeStore } from "../store.js";
+
+type ResumableIndexingJobRecord = IndexingJobRecord & { readonly resumeToken?: ChunkId };
 
 export function findResumableJob(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
-): IndexingJobRecord | undefined {
+): ResumableIndexingJobRecord | undefined {
   const row = selectRunningJobByCapsule(store._internal.db, capsuleId);
-  return row === undefined ? undefined : rowToIndexingJobRecord(row);
+  return row === undefined ? undefined : rowToResumableIndexingJobRecord(row);
 }

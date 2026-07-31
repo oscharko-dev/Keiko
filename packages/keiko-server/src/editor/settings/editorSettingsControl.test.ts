@@ -222,6 +222,27 @@ describe("editor settings control service", () => {
     });
   });
 
+  it("persists and resolves the governed commit-message policy selection", async () => {
+    const root = temporaryDirectory("git-commit-policy-setting");
+    const stateDir = temporaryDirectory("git-commit-policy-setting-state");
+    const first = service(stateDir);
+    const mutation = await first.mutate({
+      action: "set",
+      expectedRevision: 0,
+      idempotencyKey: "git-commit-policy-native",
+      realRoot: root,
+      scope: "workspace",
+      values: { gitCommitMessagePolicy: "repository-native" },
+    });
+    expect(mutation).toMatchObject({ kind: "ok", changed: true });
+
+    const reloaded = await service(stateDir).read(root);
+    expect(settingRow(reloaded.settings, "gitCommitMessagePolicy")).toMatchObject({
+      value: "repository-native",
+      source: "workspace",
+    });
+  });
+
   it("creates, renames, duplicates, and switches named profiles", async () => {
     const refs = ["profile-focus", "profile-focus-copy"];
     const control = createEditorSettingsControlService({

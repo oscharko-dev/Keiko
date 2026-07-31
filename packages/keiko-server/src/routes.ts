@@ -74,6 +74,7 @@ import {
   handleMemoryCaptureFromConversation,
 } from "./memory-conv-handlers.js";
 import {
+  handleApplyConsolidationReviewItem,
   handleCancelConsolidationJob,
   handleCreateConsolidationJob,
   handleGetConsolidationJob,
@@ -1205,6 +1206,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/memory/consolidation/jobs/:jobId/cancel",
     handler: handleCancelConsolidationJob,
+  },
+  {
+    method: "POST",
+    pattern: "/api/memory/consolidation/jobs/:jobId/review-items/:itemId/apply",
+    handler: handleApplyConsolidationReviewItem,
   },
   // Issue #204 — bounded, user-triggerable memory maintenance (consolidate + decay + forget).
   { method: "POST", pattern: "/api/memory/maintenance", handler: handleRunMaintenance },

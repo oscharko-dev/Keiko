@@ -12,6 +12,7 @@ export type MemoryStorageErrorCode =
   | "invalid-path"
   | "invalid-input"
   | "not-found"
+  | "precondition-failed"
   | "constraint-violation"
   | "schema-mismatch"
   | "internal";
@@ -43,5 +44,16 @@ export class MemoryStorageValidationError extends MemoryStorageError {
   public constructor(message: string, failures: readonly MemoryStorageValidationFailure[]) {
     super("invalid-input", message);
     this.failures = failures;
+  }
+}
+
+export type MemoryStoragePreconditionField = "status" | "updatedAt";
+
+export class MemoryStoragePreconditionError extends MemoryStorageError {
+  public readonly field: MemoryStoragePreconditionField;
+
+  public constructor(field: MemoryStoragePreconditionField) {
+    super("precondition-failed", "Memory mutation precondition failed.");
+    this.field = field;
   }
 }

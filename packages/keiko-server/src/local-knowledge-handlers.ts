@@ -63,7 +63,11 @@ import type {
   UnsupportedDocumentGuidanceCode,
 } from "@oscharko-dev/keiko-contracts";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "@oscharko-dev/keiko-local-knowledge";
-import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
+import {
+  findIndexingRecoveryCandidate,
+  openKnowledgeStoreForDeps,
+  type IndexingRecoveryCandidate,
+} from "./local-knowledge-store-open.js";
 import { runLocalTesseractCommand } from "./local-knowledge-ocr-runtime.js";
 import {
   CAPSULE_SET_MAX_MEMBERS,
@@ -1193,6 +1197,20 @@ function localKnowledgeProgressiveExtractors(
   ];
 }
 
+function indexingRecoveryHealth(
+  recovery: IndexingRecoveryCandidate | undefined,
+): Pick<CapsuleHealth, "indexingRecovery"> {
+  if (recovery === undefined) return {};
+  return {
+    indexingRecovery: {
+      jobId: recovery.job.id,
+      state: recovery.state,
+      sourceCount: recovery.job.sourceIds.length,
+      processedDocuments: recovery.job.processedDocuments,
+    },
+  };
+}
+
 function buildCapsuleHealth(
   deps: UiHandlerDeps,
   store: ReturnType<typeof openKnowledgeStore>,
@@ -1209,6 +1227,7 @@ function buildCapsuleHealth(
   const contextualHealth = contextualRetrievalHealth(deps, store, capsule);
   const contextualReasons = contextualRetrievalHealthReasons(deps, store, capsule);
   const indexedAt = lastIndexedAt(store, capsule.id);
+  const indexingRecovery = findIndexingRecoveryCandidate(store, capsule.id);
   // An unsupported document whose parsed unit carries no reason still owes the operator a next
   // step, so the generic code stands in rather than an empty list.
   const guidanceCodes =
@@ -1236,6 +1255,7 @@ function buildCapsuleHealth(
     partialCoverageDocuments: countPartialCoverageDocuments(store, capsule.id),
     qualityWarnings: loadQualityWarnings(store, capsule.id),
     resumableDocuments: listResumableDocuments(store, capsule.id).length,
+    ...indexingRecoveryHealth(indexingRecovery),
   };
 }
 
@@ -1718,6 +1738,7 @@ interface RunCapsuleIndexingJobOptions {
   // model has rotated. Start-indexing keeps force=false so a first-pass run never wipes
   // a partially-built index.
   readonly force: boolean;
+  readonly resumeJob?: IndexingJobRecord | undefined;
 }
 
 type IndexingSourceSelection =
@@ -1727,9 +1748,12 @@ type IndexingSourceSelection =
 function resolveIndexingSourceSelection(
   store: ReturnType<typeof openKnowledgeStore>,
   capsule: KnowledgeCapsule,
-  mode: RunCapsuleIndexingJobOptions["mode"],
+  options: RunCapsuleIndexingJobOptions,
 ): IndexingSourceSelection {
-  if (mode !== "repair-failed") {
+  if (options.resumeJob !== undefined) {
+    return { shouldRun: true, sourceIds: options.resumeJob.sourceIds };
+  }
+  if (options.mode !== "repair-failed") {
     return { shouldRun: true };
   }
   const sourceIds = failedSourceIds(store, capsule.id);
@@ -1769,6 +1793,77 @@ function runningIndexingJobConflict(
     capsuleId,
     runningJobId,
   );
+}
+
+function requestedResumeJob(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+  requestedJobId: string,
+  recovery: IndexingRecoveryCandidate | undefined,
+): IndexingJobRecord | undefined {
+  if (
+    recovery?.state !== "resumable" ||
+    recovery.job.id !== requestedJobId ||
+    recovery.job.sourceIds.length === 0
+  ) {
+    return undefined;
+  }
+  const attachedSourceIds = new Set(
+    listCapsuleSources(store, capsule.id).map((source) => String(source.id)),
+  );
+  return recovery.job.sourceIds.every((sourceId) => attachedSourceIds.has(String(sourceId)))
+    ? recovery.job
+    : undefined;
+}
+
+function unavailableResumeJobConflict(): RouteResult {
+  return conflict("The requested resumable indexing job is no longer available.");
+}
+
+type ReindexResumePreflight =
+  | { readonly ok: true; readonly resumeJob?: IndexingJobRecord | undefined }
+  | { readonly ok: false; readonly response: RouteResult };
+
+function reindexResumePreflight(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+  requestedJobId: string | undefined,
+): ReindexResumePreflight {
+  if (requestedJobId !== undefined) {
+    const recovery = findIndexingRecoveryCandidate(store, capsule.id);
+    const resumeJob = requestedResumeJob(store, capsule, requestedJobId, recovery);
+    return resumeJob === undefined
+      ? { ok: false, response: unavailableResumeJobConflict() }
+      : { ok: true, resumeJob };
+  }
+  const runningJobId = latestRunningJobId(store, capsule.id);
+  return runningJobId === undefined
+    ? { ok: true }
+    : { ok: false, response: runningIndexingJobConflict(capsule.id, runningJobId) };
+}
+
+type ReindexProviderResolution =
+  | { readonly ok: true; readonly resolved: ResolvedCapsuleEmbeddingProvider }
+  | { readonly ok: false; readonly message: string };
+
+async function resolveReindexProvider(
+  deps: UiHandlerDeps,
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+  force: boolean,
+): Promise<ReindexProviderResolution> {
+  if (force) {
+    const rebound = await rebindCapsuleEmbeddingIdentityForForceReembed(deps, store, capsule);
+    return rebound.ok ? { ok: true, resolved: rebound.resolved } : rebound;
+  }
+  const resolved = await resolveIndexingProviderForCapsule(deps, store, capsule);
+  return resolved === undefined
+    ? {
+        ok: false,
+        message:
+          "No configured embedding-capable model matches this capsule. Update the Model Gateway configuration before refreshing it.",
+      }
+    : { ok: true, resolved };
 }
 
 function envFlagEnabled(value: string | undefined): boolean {
@@ -2010,6 +2105,26 @@ interface RunRepositoryPodIndexingJobInput {
   readonly embeddingPreflightCacheScope: object;
   readonly ocrAdapter: OcrAdapter;
   readonly signal: AbortSignal;
+  readonly resumedJobId?: string | undefined;
+}
+
+function supersedeResumedJob(
+  store: ReturnType<typeof openKnowledgeStore>,
+  resumedJobId: string | undefined,
+  replacementJobId: string,
+): void {
+  if (resumedJobId === undefined || resumedJobId === replacementJobId) return;
+  store._internal.db
+    .prepare(
+      [
+        "UPDATE indexing_jobs SET",
+        "status = 'failed', finished_at = :finished_at,",
+        "last_error_code = 'INDEXING_RESUMED',",
+        "last_error_message = 'Indexing continued in a replacement run.'",
+        "WHERE id = :id AND status = 'running'",
+      ].join(" "),
+    )
+    .run({ id: resumedJobId, finished_at: store._internal.now() });
 }
 
 async function runRepositoryPodIndexingJob(
@@ -2024,6 +2139,7 @@ async function runRepositoryPodIndexingJob(
     embeddingPreflightCacheScope,
     ocrAdapter,
     signal,
+    resumedJobId,
   } = input;
   let terminal: IndexingTerminal | undefined;
   // The capsule setting is resolved through the SAME helper the folder path uses
@@ -2043,6 +2159,7 @@ async function runRepositoryPodIndexingJob(
     ...(contextualRetrieval === undefined ? {} : { contextualRetrieval }),
     onIndexEvent: (event) => {
       if (event.kind === "job-started") {
+        supersedeResumedJob(store, resumedJobId, event.jobId);
         localKnowledgeIndexingRegistry.attachJobId(String(capsule.id), event.jobId);
       }
       if (
@@ -2058,12 +2175,15 @@ async function runRepositoryPodIndexingJob(
 }
 
 async function consumeCapsuleIndexingEvents(
+  store: ReturnType<typeof openKnowledgeStore>,
   capsuleId: KnowledgeCapsuleId,
   events: ReturnType<typeof runIndexingJob>,
+  resumedJobId?: string,
 ): Promise<IndexingTerminal | undefined> {
   let terminal: IndexingTerminal | undefined;
   for await (const event of events) {
     if (event.kind === "job-started") {
+      supersedeResumedJob(store, resumedJobId, event.jobId);
       localKnowledgeIndexingRegistry.attachJobId(String(capsuleId), event.jobId);
     }
     if (
@@ -2090,7 +2210,7 @@ async function runCapsuleIndexingJob(
   canonicalizeCapsuleSourceRoots(store, capsule);
   const adapter = localKnowledgeEmbeddingAdapterForProvider(deps, provider);
   const embeddingPreflightCacheScope = embeddingPreflightCacheScopeForProvider(deps, provider);
-  const sourceSelection = resolveIndexingSourceSelection(store, capsule, options.mode);
+  const sourceSelection = resolveIndexingSourceSelection(store, capsule, options);
   if (!sourceSelection.shouldRun) {
     return undefined;
   }
@@ -2151,10 +2271,12 @@ async function dispatchCapsuleIndexingJob(
       embeddingPreflightCacheScope,
       ocrAdapter,
       signal,
+      ...(options.resumeJob !== undefined ? { resumedJobId: options.resumeJob.id } : {}),
     });
   }
   const extractionCapabilities = await localKnowledgeExtractionCapabilitiesFor(ocrAdapter);
   return await consumeCapsuleIndexingEvents(
+    input.store,
     capsule.id,
     runIndexingJob(
       buildIndexingOptions({
@@ -2170,6 +2292,7 @@ async function dispatchCapsuleIndexingJob(
         signal,
       }),
     ),
+    options.resumeJob?.id,
   );
 }
 
@@ -2977,12 +3100,10 @@ export async function handleDeleteLocalKnowledgeCapsule(
   });
 }
 
-// eslint-disable-next-line max-lines-per-function
 export async function handleReindexLocalKnowledgeCapsule(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  // eslint-disable-next-line max-lines-per-function
   return runHandler(async () => {
     const capsuleId = parseCapsuleId(ctx);
     const body = await readJsonObject(ctx.req);
@@ -3001,33 +3122,19 @@ export async function handleReindexLocalKnowledgeCapsule(
       if (capsule.sourceIds.length === 0) {
         return emptyCapsuleIndexingConflict();
       }
-      // LK-003 (Epic #189): same concurrent-run guard as the start handler. Do this before
-      // a force-reembed identity rebind so a duplicate refresh cannot mutate the capsule
-      // while another indexer is already running.
-      const runningJobId = latestRunningJobId(env.store, capsule.id);
-      if (runningJobId !== undefined) {
-        return runningIndexingJobConflict(capsule.id, runningJobId);
-      }
-      let resolved: ResolvedCapsuleEmbeddingProvider | undefined;
-      if (force) {
-        const rebound = await rebindCapsuleEmbeddingIdentityForForceReembed(
-          deps,
-          env.store,
-          capsule,
-        );
-        if (!rebound.ok) return conflict(rebound.message);
-        resolved = rebound.resolved;
-      } else {
-        resolved = await resolveIndexingProviderForCapsule(deps, env.store, capsule);
-      }
-      if (resolved === undefined) {
-        return conflict(
-          "No configured embedding-capable model matches this capsule. Update the Model Gateway configuration before refreshing it.",
-        );
-      }
+      const preflight = reindexResumePreflight(
+        env.store,
+        capsule,
+        reindexRequest.value.resumeJobId,
+      );
+      if (!preflight.ok) return preflight.response;
+      const provider = await resolveReindexProvider(deps, env.store, capsule, force);
+      if (!provider.ok) return conflict(provider.message);
+      const { resolved } = provider;
       const terminal = await runCapsuleIndexingJob(deps, env.store, resolved.capsule, {
         mode,
         force,
+        ...(preflight.resumeJob !== undefined ? { resumeJob: preflight.resumeJob } : {}),
       });
       return indexingCompletionResponse(
         resolved.capsule.id,

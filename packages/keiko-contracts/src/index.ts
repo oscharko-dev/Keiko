@@ -3121,6 +3121,12 @@ export {
 } from "./memory-barrel.js";
 
 export type {
+  MemoryConsolidationApplicationWire,
+  MemoryConsolidationApplyOutcomeWire,
+  MemoryConsolidationApplyPreconditionWire,
+  MemoryConsolidationApplyRequestWire,
+  MemoryConsolidationApplyResponseWire,
+  MemoryConsolidationExcerptWire,
   MemoryConsolidationJobStateWire,
   MemoryConsolidationStaleReasonWire,
   MemoryConsolidationStaleFlagWire,
@@ -3138,6 +3144,7 @@ export type {
   MemoryConsolidationJobEnvelopeWire,
   MemoryConsolidationJobResponseWire,
 } from "./memory-consolidation-wire.js";
+export { MEMORY_CONSOLIDATION_EXCERPT_MAX_CHARS } from "./memory-consolidation-wire.js";
 
 export type {
   MemoryHealthScanFindingKindWire,
@@ -3238,11 +3245,16 @@ export type {
 // Shared QI status/terminal/projection helpers (GEN-DUP-SEMANTIC-008/-009/-010).
 export {
   QUALITY_INTELLIGENCE_RUN_STATUSES,
+  QUALITY_INTELLIGENCE_DEFAULT_RETENTION_POLICY_ID,
+  QUALITY_INTELLIGENCE_RETENTION_POLICY_IDS,
   QUALITY_INTELLIGENCE_TERMINAL_REVIEW_STATES,
   QUALITY_INTELLIGENCE_REVIEW_ACTION_TARGET,
+  isQualityIntelligenceRetentionPolicyId,
   isTerminalReviewState,
+  resolveQualityIntelligenceRetentionPolicyId,
   reviewActionResultState,
 } from "./qualityIntelligence/index.js";
+export type { QualityIntelligenceRetentionPolicyId } from "./qualityIntelligence/index.js";
 // Epic #736 (Issue #746) added the test-quality rubric judge contracts as flat re-exports.
 export type {
   TestQualityDimensionName,
@@ -3789,13 +3801,18 @@ export type {
   GitCommitConventionalCommitRule,
   GitCommitIssueKeyRule,
   GitCommitMessagePolicy,
+  GitCommitMessagePolicyMode,
   GitCommitMessageViolationCode,
   GitCommitMessageValidation,
 } from "./git-commit-policy.js";
 export {
   GIT_COMMIT_POLICY_SCHEMA_VERSION,
   GIT_COMMIT_MESSAGE_VIOLATION_CODES,
+  GIT_COMMIT_MESSAGE_POLICY_MODES,
   KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY,
+  REPOSITORY_NATIVE_COMMIT_MESSAGE_POLICY,
+  resolveGitCommitMessagePolicyMode,
+  gitCommitMessagePolicyForMode,
   validateGitCommitMessage,
   isGitCommitMessageViolationCode,
   isGitCommitMessagePolicy,

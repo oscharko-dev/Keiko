@@ -11,6 +11,7 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   getQualityIntelligenceRetentionProfile,
   QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID,
+  QUALITY_INTELLIGENCE_RETENTION_PROFILES,
 } from "@oscharko-dev/keiko-evidence";
 
 // Stubbed @oscharko-dev/keiko-evidence surface used by uiRoutes. We import the handlers AFTER
@@ -155,6 +156,11 @@ describe("handleListQiRuns", () => {
       limit: QI_RUN_LIST_DEFAULT_LIMIT,
       totalRunIds: 0,
       truncated: false,
+      retentionPolicies: Object.values(QUALITY_INTELLIGENCE_RETENTION_PROFILES).map((profile) => ({
+        policyId: profile.id,
+        retainedDays: profile.retainedDays,
+        maxRunArtifacts: profile.maxRunArtifacts,
+      })),
       retention: {
         policyId: QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID,
         retainedDays: enforced?.retainedDays,

@@ -30,6 +30,7 @@ import {
   refreshCapsuleChangedFiles,
   renameCapsule,
   repairCapsuleFailedFiles,
+  resumeCapsuleLargeDocuments,
   startIndexing,
   updateCapsuleContextualRetrieval,
   updateCapsuleModelUsePolicy,
@@ -828,6 +829,7 @@ describe("local knowledge BFF boundary helpers", () => {
     await repairCapsuleFailedFiles(capsuleId);
     await reembedCapsuleForCurrentModel(capsuleId);
     await rebuildCapsuleIndex(capsuleId);
+    await resumeCapsuleLargeDocuments(capsuleId, "job-abandoned");
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/local-knowledge/capsules",
@@ -933,6 +935,17 @@ describe("local knowledge BFF boundary helpers", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ capsuleId: "cap 1", mode: "full-rebuild", force: true }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/capsules/cap%201/reindex",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          capsuleId: "cap 1",
+          mode: "resume",
+          resumeJobId: "job-abandoned",
+        }),
       }),
     );
   });
