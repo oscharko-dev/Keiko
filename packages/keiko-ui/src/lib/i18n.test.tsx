@@ -14,7 +14,8 @@ import {
   useSetLocale,
   useTranslate,
 } from "./i18n";
-import { translateOptionalWidget } from "./optional-widget-i18n";
+import { ATTACHMENT_CLEANUP_DEFERRED_ERROR } from "./chat-session-error";
+import { presentChatSessionError, translateOptionalWidget } from "./optional-widget-i18n";
 
 const navigatorLanguageDescriptor = Object.getOwnPropertyDescriptor(window.navigator, "language");
 
@@ -152,6 +153,33 @@ describe("translate", () => {
         timedOut: "",
       }),
     ).toBe("Befehl abgeschlossen: Exit-Code 0, 12 ms");
+  });
+
+  it("presents content-free chat session errors in both locales", () => {
+    expect(
+      presentChatSessionError(ATTACHMENT_CLEANUP_DEFERRED_ERROR, (key, values) =>
+        translateOptionalWidget("en", key, values),
+      ),
+    ).toBe(
+      "The image was delivered. Its encrypted local copy could not be removed now and will expire automatically.",
+    );
+    expect(
+      presentChatSessionError(ATTACHMENT_CLEANUP_DEFERRED_ERROR, (key, values) =>
+        translateOptionalWidget("de", key, values),
+      ),
+    ).toBe(
+      "Das Bild wurde übertragen. Die verschlüsselte lokale Kopie konnte jetzt nicht entfernt werden und läuft automatisch ab.",
+    );
+    expect(
+      presentChatSessionError("opaque-session-error", (key, values) =>
+        translateOptionalWidget("en", key, values),
+      ),
+    ).toBe("opaque-session-error");
+    expect(
+      presentChatSessionError(undefined, (key, values) =>
+        translateOptionalWidget("en", key, values),
+      ),
+    ).toBeUndefined();
   });
 });
 

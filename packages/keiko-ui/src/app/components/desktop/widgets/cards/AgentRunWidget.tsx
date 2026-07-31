@@ -19,7 +19,10 @@ import {
   outcomeLabel,
   runStatusLabel,
 } from "../../../../../lib/format";
-import { useTranslate, type I18nTranslate } from "../../../../../lib/i18n";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "../../../../../lib/optional-widget-i18n";
 import { useSSE } from "../../../../../lib/useSSE";
 import type {
   AgentWorkflowId,
@@ -54,7 +57,7 @@ interface AgentRunCfg {
   deliveryExecution?: "unavailable";
 }
 
-function autonomyModeLabel(mode: CodingWorkbenchMode, t: I18nTranslate): string {
+function autonomyModeLabel(mode: CodingWorkbenchMode, t: OptionalWidgetTranslate): string {
   if (mode === "governed-assist") return t("agentLauncher.mode.governedAssist.label");
   if (mode === "supervised-coding") return t("agentLauncher.mode.supervisedCoding.label");
   return t("agentLauncher.mode.autonomousDelivery.label");
@@ -108,7 +111,7 @@ const TERMINAL_REPORT_STATUSES = new Set<RunReport["status"]>([
   "investigation-only",
 ]);
 
-function workflowLabel(workflow: AgentWorkflowId, t: I18nTranslate): string {
+function workflowLabel(workflow: AgentWorkflowId, t: OptionalWidgetTranslate): string {
   switch (workflow) {
     case "verify":
       return t("agentRunWidget.workflow.verify");
@@ -179,7 +182,7 @@ function aggregateUsage(events: readonly HarnessEvent[], report: RunReport | nul
   return { promptTokens, completionTokens, latencyMs, requestCount };
 }
 
-function eventLabel(event: HarnessEvent, t: I18nTranslate): string {
+function eventLabel(event: HarnessEvent, t: OptionalWidgetTranslate): string {
   switch (event.type) {
     case "ready":
       return t("agentRunWidget.event.ready");
@@ -272,7 +275,7 @@ function reportStatus(report: RunReport | null, evidence: EvidenceManifest | nul
 function reportStatusLabel(
   report: RunReport | null,
   evidence: EvidenceManifest | null,
-  t: I18nTranslate,
+  t: OptionalWidgetTranslate,
 ): string {
   if (report !== null) return runStatusLabel(report.status);
   if (evidence !== null) return outcomeLabel(evidence.run.outcome);
@@ -293,7 +296,7 @@ function shortSummary(
   workflow: AgentWorkflowId | null,
   report: RunReport | null,
   evidence: EvidenceManifest | null,
-  t: I18nTranslate,
+  t: OptionalWidgetTranslate,
 ): string {
   if (report === null && evidence === null) return t("agentRunWidget.summary.loading");
   const label =
@@ -333,7 +336,7 @@ function canApply(workflow: AgentWorkflowId | null, report: RunReport | null): b
   );
 }
 
-function renderVerification(report: RunReport, t: I18nTranslate): ReactNode {
+function renderVerification(report: RunReport, t: OptionalWidgetTranslate): ReactNode {
   const summary = report.verificationSummary;
   if (summary === undefined) return null;
   return (
@@ -357,7 +360,7 @@ function renderVerification(report: RunReport, t: I18nTranslate): ReactNode {
   );
 }
 
-function renderExplainReport(report: RunReport, t: I18nTranslate): ReactNode {
+function renderExplainReport(report: RunReport, t: OptionalWidgetTranslate): ReactNode {
   if (report.report === undefined) return null;
   const title = t("agentRunWidget.result.report");
   return (
@@ -370,7 +373,7 @@ function renderExplainReport(report: RunReport, t: I18nTranslate): ReactNode {
   );
 }
 
-function renderVerifyReport(report: RunReport, t: I18nTranslate): ReactNode {
+function renderVerifyReport(report: RunReport, t: OptionalWidgetTranslate): ReactNode {
   if (report.overallStatus === undefined || report.results === undefined) return null;
   return (
     <div className="arun-result-card">
@@ -420,7 +423,7 @@ function renderListCard(title: string, values: readonly string[] | undefined): R
 // alone. The track is decorative (aria-hidden); the word carries the meaning, so a
 // screen reader hears "Confidence High" / "Confidence Low — verify".
 type ConfidenceLevel = "low" | "medium" | "high";
-function confidenceLabel(level: ConfidenceLevel, t: I18nTranslate): string {
+function confidenceLabel(level: ConfidenceLevel, t: OptionalWidgetTranslate): string {
   switch (level) {
     case "high":
       return t("agentRunWidget.confidence.high");
@@ -434,7 +437,7 @@ function isConfidenceLevel(value: string): value is ConfidenceLevel {
   return value === "low" || value === "medium" || value === "high";
 }
 function ConfidenceSignal({ level }: { readonly level: ConfidenceLevel }): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   return (
     <div className="arun-kv">
       <span>{t("agentRunWidget.field.confidence")}</span>
@@ -459,7 +462,7 @@ function applyButtonLabel({
   readonly applying: boolean;
   readonly confirmApply: boolean;
   readonly fileCount: number;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): string {
   if (applying) return t("agentRunWidget.apply.applying");
   if (!confirmApply) return t("agentRunWidget.apply.apply");
@@ -469,7 +472,7 @@ function applyButtonLabel({
   );
 }
 
-function renderHypothesis(report: RunReport, t: I18nTranslate): ReactNode {
+function renderHypothesis(report: RunReport, t: OptionalWidgetTranslate): ReactNode {
   const hypothesis = report.hypothesis;
   if (hypothesis === undefined) return null;
   const rows = [
@@ -528,7 +531,7 @@ function RunReportResults({
   t,
 }: {
   readonly report: RunReport;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   return (
     <div className="arun-results">
@@ -569,7 +572,7 @@ function EvidenceResults({
   t,
 }: {
   readonly evidence: EvidenceManifest;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   return (
     <div className="arun-results">
@@ -613,7 +616,7 @@ function AgentRunResults({
 }: {
   readonly report: RunReport | null;
   readonly evidence: EvidenceManifest | null;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   if (report !== null) return <RunReportResults report={report} t={t} />;
   return evidence === null ? null : <EvidenceResults evidence={evidence} t={t} />;
@@ -628,7 +631,7 @@ function AgentRunLog({
   readonly sse: ReturnType<typeof useSSE>;
   readonly events: readonly HarnessEvent[];
   readonly busy: boolean;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   const emptyLogRow =
     sse.status === "error" ? null : (
@@ -685,7 +688,7 @@ interface AgentRunControlsProps {
   readonly showCancel: boolean;
   readonly onApply: () => void;
   readonly onCancel: () => void;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }
 
 interface ApplyControlProps {
@@ -695,7 +698,7 @@ interface ApplyControlProps {
   readonly applyFileCount: number;
   readonly appliedAt: number | undefined;
   readonly onApply: () => void;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }
 
 function ApplyControl(props: ApplyControlProps): ReactNode {
@@ -744,7 +747,7 @@ function AgentRunControls(props: AgentRunControlsProps): ReactNode {
   );
 }
 
-function useAgentRunData(runId: string | null, t: I18nTranslate): AgentRunData {
+function useAgentRunData(runId: string | null, t: OptionalWidgetTranslate): AgentRunData {
   const [report, setReport] = useState<RunReport | null>(null);
   const [evidence, setEvidence] = useState<EvidenceManifest | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -868,7 +871,7 @@ function AgentRunHeader({
   readonly report: RunReport | null;
   readonly status: string;
   readonly statusLabel: string;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   return (
     <div className="arun-head">
@@ -910,7 +913,7 @@ function AgentRunMeters({
 }: {
   readonly elapsedMs: number;
   readonly usage: UsageTotals;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   const tokenUsage =
     usage.requestCount === 0
@@ -946,7 +949,7 @@ function AgentRunPermissions({
   readonly linkedRoot: string | null;
   readonly workspaceRoot: string | undefined;
   readonly linkedFilePath: string | undefined;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   const displayedRoot = linkedRoot ?? workspaceRoot;
   return (
@@ -972,7 +975,7 @@ function AgentRunInput({
   t,
 }: {
   readonly input: Record<string, unknown> | null;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   if (input === null) return null;
   const label = t("agentRunWidget.runInput.summary");
@@ -1012,7 +1015,7 @@ export function AgentRunWidget({
   linkedRoot = null,
   linkedFilePath,
 }: AgentRunWidgetProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const runId = cfg.runId ?? null;
   const workflow = normalizeWorkflow(cfg.workflow);
   const modelId = cfg.model ?? "";

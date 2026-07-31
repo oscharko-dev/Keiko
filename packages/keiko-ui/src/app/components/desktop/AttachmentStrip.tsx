@@ -24,6 +24,10 @@ import { Icons } from "./Icons";
 import { NATIVE_LIST_KEEP_PADDING_STYLE } from "./native-element-styles";
 import { formatBytes } from "@/lib/format";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "@/lib/optional-widget-i18n";
 import type {
   AttachmentRejectionReason,
   PendingAttachment,
@@ -40,12 +44,13 @@ const PlusIcon = Icons.plus;
 // ─── Human-readable rejection messages (AC #2) ────────────────────────────────
 
 export function rejectionMessage(reason: AttachmentRejectionReason, mimeType?: string): string {
-  return rejectionMessageFor(reason, undefined, mimeType);
+  return rejectionMessageFor(reason, undefined, undefined, mimeType);
 }
 
 function rejectionMessageFor(
   reason: AttachmentRejectionReason,
   t: I18nTranslate | undefined,
+  optionalT: OptionalWidgetTranslate | undefined,
   mimeType?: string,
 ): string {
   const tr: I18nTranslate =
@@ -60,8 +65,6 @@ function rejectionMessageFor(
           return "File is larger than the 8 MiB limit. Choose a smaller file or summarize the content as text.";
         case "attachment.rejection.empty":
           return "Empty file. Add a file with content to attach.";
-        case "attachment.rejection.deliveryRefused":
-          return "The image could not be stored or authorized for delivery. Add it again and retry.";
         default:
           return key;
       }
@@ -79,7 +82,10 @@ function rejectionMessageFor(
     case "empty":
       return tr("attachment.rejection.empty");
     case "delivery-refused":
-      return tr("attachment.rejection.deliveryRefused");
+      return (
+        optionalT?.("attachment.rejection.deliveryRefused") ??
+        "The image could not be stored or authorized for delivery. Add it again and retry."
+      );
   }
 }
 
@@ -365,10 +371,11 @@ interface AttachRejectionAlertProps {
 
 export function AttachRejectionAlert({ reason, mimeType }: AttachRejectionAlertProps): ReactNode {
   const t = useTranslate();
+  const optionalT = useOptionalWidgetTranslate();
   if (reason === undefined) return null;
   return (
     <div role="alert" className="attach-rejection-alert">
-      {rejectionMessageFor(reason, t, mimeType)}
+      {rejectionMessageFor(reason, t, optionalT, mimeType)}
     </div>
   );
 }
@@ -423,11 +430,15 @@ export function SentImagesNote({
 }: {
   readonly images: readonly SentImageDisclosure[];
 }): ReactNode {
-  const t = useTranslate();
+  const optionalT = useOptionalWidgetTranslate();
   if (images.length === 0) return null;
   return (
-    <div role="note" className="sent-docs-note" aria-label={t("attachment.imagesDelivered")}>
-      <span className="sent-docs-note-label">{t("attachment.imagesDelivered")}</span>
+    <div
+      role="note"
+      className="sent-docs-note"
+      aria-label={optionalT("attachment.imagesDelivered")}
+    >
+      <span className="sent-docs-note-label">{optionalT("attachment.imagesDelivered")}</span>
       <ul className="sent-docs-note-list">
         {images.map((image) => (
           <li key={image.id} className="sent-docs-note-item">

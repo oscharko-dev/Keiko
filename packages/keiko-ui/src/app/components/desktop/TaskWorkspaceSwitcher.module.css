@@ -62,9 +62,14 @@
   position: absolute;
   z-index: var(--z-popover);
   top: calc(100% + var(--space-2));
+  right: auto;
+  bottom: auto;
   left: 0;
   display: grid;
   width: min(390px, calc(100vw - 24px));
+  max-width: none;
+  max-height: none;
+  margin: 0;
   gap: var(--space-3);
   padding: var(--space-4);
   border: 1px solid var(--popover-border);

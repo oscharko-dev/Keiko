@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useTranslate } from "@/lib/i18n";
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { useDialogTabTrap } from "../../../hooks/useDialogTabTrap";
 import { PRIMARY_BTN, SECONDARY_BTN } from "./git-client-styles";
 
@@ -20,7 +20,7 @@ export function WorktreeMutationConfirmDialog({
   onCancel,
   onConfirm,
 }: WorktreeMutationConfirmDialogProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const dialogRef = useRef<HTMLDialogElement>(null);
   useDialogTabTrap(dialogRef);
   const branchSwitch = request.kind === "branch-switch";

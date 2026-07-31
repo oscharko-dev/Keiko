@@ -35,6 +35,8 @@ import {
   type DesktopChatSendRequestWire,
   type DesktopChatSendResponse,
   CONVERSATION_IMAGE_DELIVERY_INTENT,
+  classifyAttachmentMime,
+  normalizeAttachmentMime,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   MemoryAuditEvent,
@@ -2201,7 +2203,10 @@ function conversationImageParts(
     throw new ConversationAttachmentStoreError();
   }
   return images.map((attachment): ChatMessageContentPart => {
+    const mimeType = normalizeAttachmentMime(attachment.mimeType);
     if (
+      mimeType === undefined ||
+      classifyAttachmentMime(mimeType) !== "image" ||
       attachment.attachmentRef === undefined ||
       attachment.sha256 === undefined ||
       attachment.id === undefined ||
@@ -2214,14 +2219,14 @@ function conversationImageParts(
       sessionRotationCount: authority.sessionRotationCount,
       projectPath: request.projectPath,
       chatId: request.chatId,
-      mimeType: attachment.mimeType,
+      mimeType,
       sizeBytes: attachment.sizeBytes,
       sha256: attachment.sha256,
     });
     if (bytes === undefined) throw new ConversationAttachmentStoreError();
     return {
       type: "image_url",
-      image_url: { url: `data:${attachment.mimeType};base64,${bytes.toString("base64")}` },
+      image_url: { url: `data:${mimeType};base64,${bytes.toString("base64")}` },
     };
   });
 }

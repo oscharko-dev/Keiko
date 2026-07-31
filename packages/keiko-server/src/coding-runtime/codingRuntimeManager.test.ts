@@ -1804,6 +1804,52 @@ describe("coding runtime manager", () => {
     });
   });
 
+  it("diagnoses stream errors once without releasing or retaining their bodies", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const privateStdoutErrorBody = "private-stdout-drain-body";
+    const privateStderrErrorBody = "private-stderr-drain-body";
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(() => child.handle),
+      processEnv: {},
+      diagnostics,
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+    });
+
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    child.stdout.emit("error", new Error(privateStdoutErrorBody));
+    child.stderr.emit("error", new Error(privateStderrErrorBody));
+    child.notifyExit(9);
+    child.endStreams();
+
+    await vi.waitFor(() => {
+      expect(manager.health()).toMatchObject({
+        status: "recovery-required",
+        failureCode: "runtime-reap-unproven",
+      });
+    });
+    expect(manager.result("run-1988")).toBeUndefined();
+    const streamDrainDiagnostics = diagnostics.record.mock.calls
+      .map(([record]) => record)
+      .filter((record) => record.operation === "coding-runtime.stream-drain");
+    expect(streamDrainDiagnostics).toEqual([
+      {
+        correlationId: "run-1988",
+        timestamp: "2026-07-07T13:00:00.000Z",
+        operation: "coding-runtime.stream-drain",
+        source: "coding-runtime-manager.stream-drain",
+        errorClass: "Error",
+        message: "runtime-stream-drain-failed",
+      },
+    ]);
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(privateStdoutErrorBody);
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(privateStderrErrorBody);
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(fixture.workspaceRoot);
+  });
+
   it("actively drains high-volume runtime stderr without emitting it or blocking reap", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();

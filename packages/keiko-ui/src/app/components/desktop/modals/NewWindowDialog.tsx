@@ -30,6 +30,11 @@ import { PermControl, type Cfg, type CfgValue } from "./PermControl";
 import { isWorkflowEligibleModel } from "../../../../lib/workflow-eligibility";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "@/lib/optional-widget-i18n";
+import type { OptionalWidgetMessageKey } from "@/lib/i18n-messages.optional.en";
 import { CODING_WORKBENCH_MODES, type CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
@@ -275,21 +280,24 @@ const AGENT_MODE_KEYS = {
     description: "agentLauncher.mode.autonomousDelivery.description",
   },
 } as const satisfies Readonly<
-  Record<CodingWorkbenchMode, { readonly label: MessageKey; readonly description: MessageKey }>
+  Record<
+    CodingWorkbenchMode,
+    { readonly label: OptionalWidgetMessageKey; readonly description: OptionalWidgetMessageKey }
+  >
 >;
 
 function AgentAutonomyModePicker({
   value,
   onChange,
-  t,
+  optionalT,
 }: {
   readonly value: CodingWorkbenchMode;
   readonly onChange: (mode: CodingWorkbenchMode) => void;
-  readonly t: I18nTranslate;
+  readonly optionalT: OptionalWidgetTranslate;
 }): ReactNode {
   return (
     <fieldset className="dlg-agent-task">
-      <legend className="dlg-agent-task-title">{t("agentLauncher.autonomy")}</legend>
+      <legend className="dlg-agent-task-title">{optionalT("agentLauncher.autonomy")}</legend>
       {CODING_WORKBENCH_MODES.map((mode) => {
         const copy = AGENT_MODE_KEYS[mode];
         return (
@@ -302,13 +310,13 @@ function AgentAutonomyModePicker({
                 checked={value === mode}
                 onChange={() => onChange(mode)}
               />{" "}
-              <strong>{t(copy.label)}</strong>
+              <strong>{optionalT(copy.label)}</strong>
             </span>
-            <span className="dlg-note">{t(copy.description)}</span>
+            <span className="dlg-note">{optionalT(copy.description)}</span>
           </label>
         );
       })}
-      <span className="dlg-note">{t("agentLauncher.executionUnavailable")}</span>
+      <span className="dlg-note">{optionalT("agentLauncher.executionUnavailable")}</span>
     </fieldset>
   );
 }
@@ -751,6 +759,7 @@ function AgentLauncher({
   onClose,
 }: AgentLauncherProps): ReactNode {
   const t = useTranslate();
+  const optionalT = useOptionalWidgetTranslate();
   const [workflow, setWorkflow] = useState<ProductionAgentWorkflowId>("unit-test-generation");
   const [workspaceRoot, setWorkspaceRoot] = useState(filesContext?.root ?? "");
   const [modelId, setModelId] = useState("");
@@ -858,7 +867,7 @@ function AgentLauncher({
     try {
       const started = await startRun(body);
       if (started.governance === undefined) {
-        throw new Error(t("agentLauncher.governanceUnavailable"));
+        throw new Error(optionalT("agentLauncher.governanceUnavailable"));
       }
       const governance = started.governance;
       onConfirm({
@@ -1003,7 +1012,11 @@ function AgentLauncher({
         () => void registerWorkspace(),
         t,
       )}
-      <AgentAutonomyModePicker value={requestedMode} onChange={setRequestedMode} t={t} />
+      <AgentAutonomyModePicker
+        value={requestedMode}
+        onChange={setRequestedMode}
+        optionalT={optionalT}
+      />
       {renderCurrentFileButton(currentFile, useCurrentFile, t)}
       <div className="dlg-agent-task">
         <div className="dlg-agent-task-head">

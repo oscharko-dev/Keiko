@@ -18,6 +18,7 @@ import type { ProjectWithAvailability } from "@/lib/types";
 import { newClientCorrelationId } from "@/lib/http";
 import { pickWithNativeDialog } from "@/lib/native-file-dialog";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { presentChatSessionError, useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { useActiveWorkspace, type ActiveWorkspaceApi } from "./context/ActiveWorkspaceContext";
 import {
   useOptionalChatSessionActions,
@@ -311,10 +312,10 @@ function FolderPanel(props: {
 }): ReactNode {
   const error = props.selection.error ?? props.workspaceError;
   return (
-    <div
+    <dialog
+      open
       id={props.panelId}
       className={styles["cmp-p"]}
-      role="dialog"
       aria-modal="false"
       aria-labelledby={props.titleId}
     >
@@ -341,7 +342,7 @@ function FolderPanel(props: {
           {error}
         </p>
       )}
-    </div>
+    </dialog>
   );
 }
 
@@ -412,6 +413,7 @@ function SwitcherContent(props: {
 
 function TaskWorkspaceSwitcherImpl(): ReactNode {
   const t = useTranslate();
+  const optionalT = useOptionalWidgetTranslate();
   const api = useActiveWorkspace();
   const catalog = useOptionalChatSessionCatalog();
   const chatActions = useOptionalChatSessionActions();
@@ -422,7 +424,7 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
       project={catalog?.activeProject}
       chatActions={chatActions}
       nativeSupported={nativeSupported}
-      sessionError={catalog?.error}
+      sessionError={presentChatSessionError(catalog?.error, optionalT)}
       t={t}
     />
   );

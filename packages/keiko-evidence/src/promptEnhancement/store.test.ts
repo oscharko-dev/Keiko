@@ -11,7 +11,7 @@ import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION,
   validatePromptEnhancementEvidenceManifest,
-} from "../manifestSchema.js";
+} from "./manifestSchema.js";
 import {
   buildPromptEnhancementEvidenceManifest,
   createInMemoryPromptEnhancementLocalStore,
@@ -24,7 +24,7 @@ import {
   PE_SUBDIR,
   recordPromptEnhancementRun,
   type PromptEnhancementRecordInput,
-} from "../store.js";
+} from "./store.js";
 
 const SECRET = "sk-abcdefghij1234567890";
 

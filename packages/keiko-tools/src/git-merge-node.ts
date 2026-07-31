@@ -524,7 +524,7 @@ type BranchProtectionRead =
   | { readonly outcome: "error" };
 
 function isNotFound(result: CommandResult): boolean {
-  return result.exitCode !== 0 && /(?:HTTP\s+404|\b404\b)/u.test(result.stderr);
+  return result.exitCode !== 0 && /\bHTTP\s+404\b/u.test(result.stderr);
 }
 
 async function readBranchProtection(

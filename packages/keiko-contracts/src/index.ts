@@ -2283,10 +2283,12 @@ export {
   eventIsDesktopChatStreamTerminal,
   resolveGroundingLimits,
   MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_MIME_BYTES,
   ALLOWED_IMAGE_MIME_PREFIXES,
   ALLOWED_DOCUMENT_MIME_PREFIXES,
   ALLOWED_DOCUMENT_MIME_LITERALS,
   classifyAttachmentMime,
+  normalizeAttachmentMime,
   UI_HOST,
   DEFAULT_UI_PORT,
 } from "./bff-wire.js";

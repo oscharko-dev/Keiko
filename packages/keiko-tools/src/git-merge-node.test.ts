@@ -141,6 +141,14 @@ describe("readNodeGitBranchProtection", () => {
       readProtection(scriptedSpawn([{ exit: 1, stderr: "provider unavailable" }])),
     ).resolves.toEqual({ outcome: "unavailable" });
   });
+
+  it("does not treat a 404 path segment in a different HTTP failure as not found", async () => {
+    const stderr = "gh: API request failed for /repos/acme/404/branches/main/protection (HTTP 500)";
+
+    await expect(readProtection(scriptedSpawn([{ exit: 1, stderr }]))).resolves.toEqual({
+      outcome: "unavailable",
+    });
+  });
 });
 
 describe("readMergeReadiness", () => {

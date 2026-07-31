@@ -79,14 +79,14 @@ import {
 } from "./AttachmentStrip";
 import { isRunSummaryMessage, RunSummaryCard } from "./WorkflowHandoff";
 import { FileIcon } from "./widgets/shared/projectTree";
-import type {
-  AttachmentRejectionReason,
-  ChatSessionApi,
-  PendingAttachment,
-  SendMessageOutcome,
-  SendStatus,
-  SentDocumentDisclosure,
-  SentImageDisclosure,
+import {
+  type AttachmentRejectionReason,
+  type ChatSessionApi,
+  type PendingAttachment,
+  type SendMessageOutcome,
+  type SendStatus,
+  type SentDocumentDisclosure,
+  type SentImageDisclosure,
 } from "./hooks/useChatSession";
 import {
   supportsDictation,
@@ -125,7 +125,7 @@ import { fetchFilesSearch, updateChat } from "@/lib/api";
 import type { ChatEditorApplyOutcome } from "@/lib/chat-editor-apply";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
-import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+import { presentChatSessionError, useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { formatUserError } from "./format-error";
 import {
   capsulesForKnowledgePodUi,
@@ -4926,6 +4926,7 @@ export function ChatWindow({
   onOpenRunResult,
 }: ChatWindowProps): ReactNode {
   const session = useChatSessionContext();
+  const optionalT = useOptionalWidgetTranslate();
   const {
     messages,
     streamingAssistantMessage,
@@ -4953,6 +4954,7 @@ export function ChatWindow({
     rejectMemoryCandidate,
     forgetMemoryAction,
   } = session;
+  const displayedError = presentChatSessionError(error, optionalT);
   const activeProjectRoot = activeProject?.path;
   const activeChatRoot = activeChat?.projectPath;
   const codeApplyWorkspaceRoot = codeApplyWorkspaceRootFor(activeChatRoot, activeProjectRoot);
@@ -5173,7 +5175,7 @@ export function ChatWindow({
         ready={ready}
         loading={loading}
         sendMessage={sendMessage}
-        error={error}
+        error={displayedError}
         clearError={session.clearError}
         canonicalVoiceTurnRequiresRetry={canonicalVoiceTurnRequiresRetry === true}
         retryPendingCanonicalVoiceTurn={retryPendingCanonicalVoiceTurn}

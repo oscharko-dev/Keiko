@@ -1,6 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
 import { join } from "node:path";
-import { classifyAttachmentMime, MAX_ATTACHMENT_BYTES } from "@oscharko-dev/keiko-contracts";
+import {
+  classifyAttachmentMime,
+  MAX_ATTACHMENT_BYTES,
+  normalizeAttachmentMime,
+} from "@oscharko-dev/keiko-contracts";
 import {
   createShardedLocalSecretVault,
   resolveLocalVaultKey,
@@ -14,7 +18,14 @@ const KEY_FILE = "conversation-attachment-vault.key";
 const REF_PATTERN = /^chat-attachment:[0-9a-f]{64}$/u;
 const SHA_PATTERN = /^[0-9a-f]{64}$/u;
 const DEFAULT_TTL_MS = 30 * 60 * 1_000;
+// Attachment refs are transient authority artifacts. Callers may shorten this window (the test
+// seam does), but neither configuration changes nor persisted data may extend it beyond 30 minutes.
+const MAX_ATTACHMENT_TTL_MS = DEFAULT_TTL_MS;
 const DEFAULT_TOTAL_BYTES = 32 * 1024 * 1024;
+// The byte quota bounds content volume; this independent cap bounds per-entry envelope/decryption
+// work even when every attachment is tiny. A normal conversation cannot approach 256 live images.
+const MAX_LIVE_ENTRIES = 256;
+const MAX_CONTENT_BASE64_LENGTH = 4 * Math.ceil(MAX_ATTACHMENT_BYTES / 3);
 
 export interface ConversationAttachmentBinding {
   readonly sessionId: string;
@@ -68,92 +79,177 @@ function sha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function isCanonicalStoredImageMime(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    normalizeAttachmentMime(value) === value &&
+    classifyAttachmentMime(value) === "image"
+  );
+}
+
+function isStoredSha256(value: unknown): value is string {
+  return typeof value === "string" && SHA_PATTERN.test(value);
+}
+
+function isBoundedStoredBase64(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_CONTENT_BASE64_LENGTH;
+}
+
 function hasStoredAttachmentStrings(record: Record<string, unknown>): boolean {
   return (
     typeof record.sessionId === "string" &&
     typeof record.projectPath === "string" &&
     typeof record.chatId === "string" &&
-    typeof record.mimeType === "string" &&
-    typeof record.sha256 === "string" &&
-    typeof record.contentBase64 === "string"
+    isCanonicalStoredImageMime(record.mimeType) &&
+    isStoredSha256(record.sha256) &&
+    isBoundedStoredBase64(record.contentBase64)
+  );
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function hasValidStoredTimeline(createdAt: unknown, expiresAt: unknown): boolean {
+  return (
+    isNonNegativeSafeInteger(createdAt) &&
+    isPositiveSafeInteger(expiresAt) &&
+    expiresAt > createdAt &&
+    expiresAt - createdAt <= MAX_ATTACHMENT_TTL_MS
   );
 }
 
 function hasStoredAttachmentNumbers(record: Record<string, unknown>): boolean {
   return (
-    typeof record.sessionRotationCount === "number" &&
-    typeof record.sizeBytes === "number" &&
-    typeof record.createdAt === "number" &&
-    typeof record.expiresAt === "number"
+    isNonNegativeSafeInteger(record.sessionRotationCount) &&
+    isPositiveSafeInteger(record.sizeBytes) &&
+    record.sizeBytes <= MAX_ATTACHMENT_BYTES &&
+    hasValidStoredTimeline(record.createdAt, record.expiresAt)
   );
 }
 
-function isStoredAttachment(value: unknown): value is StoredAttachment {
+function isStoredAttachment(value: unknown, ref: string): value is StoredAttachment {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   return (
+    REF_PATTERN.test(ref) &&
     record.schemaVersion === 1 &&
     hasStoredAttachmentStrings(record) &&
     hasStoredAttachmentNumbers(record)
   );
 }
 
-function readStored(vault: LocalSecretVault, ref: string): StoredAttachment {
-  try {
-    const raw = vault.get(ref);
-    const parsed: unknown = raw === undefined ? undefined : JSON.parse(raw);
-    if (!isStoredAttachment(parsed)) throw new ConversationAttachmentStoreError();
-    return parsed;
-  } catch (error) {
-    if (error instanceof ConversationAttachmentStoreError) throw error;
+function encodedBase64Length(sizeBytes: number): number {
+  return 4 * Math.ceil(sizeBytes / 3);
+}
+
+function decodeVerified(stored: StoredAttachment): Buffer {
+  if (stored.contentBase64.length !== encodedBase64Length(stored.sizeBytes)) {
     throw new ConversationAttachmentStoreError();
+  }
+  const bytes = Buffer.from(stored.contentBase64, "base64");
+  if (
+    bytes.length !== stored.sizeBytes ||
+    bytes.toString("base64") !== stored.contentBase64 ||
+    sha256(bytes) !== stored.sha256
+  ) {
+    throw new ConversationAttachmentStoreError();
+  }
+  return bytes;
+}
+
+interface VerifiedStoredAttachment {
+  readonly stored: StoredAttachment;
+  readonly bytes: Buffer;
+}
+
+function readStored(vault: LocalSecretVault, ref: string): VerifiedStoredAttachment {
+  const raw = vault.get(ref);
+  let parsed: unknown;
+  try {
+    parsed = raw === undefined ? undefined : JSON.parse(raw);
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new ConversationAttachmentStoreError();
+    throw error;
+  }
+  if (!isStoredAttachment(parsed, ref)) throw new ConversationAttachmentStoreError();
+  return { stored: parsed, bytes: decodeVerified(parsed) };
+}
+
+function readStoredForScan(
+  vault: LocalSecretVault,
+  ref: string,
+): VerifiedStoredAttachment | undefined {
+  try {
+    return readStored(vault, ref);
+  } catch (error) {
+    if (error instanceof ConversationAttachmentStoreError) return undefined;
+    throw error;
   }
 }
 
 function sameBinding(stored: StoredAttachment, binding: ConversationAttachmentBinding): boolean {
+  const storedMimeType = normalizeAttachmentMime(stored.mimeType);
   return (
+    storedMimeType !== undefined &&
     stored.sessionId === binding.sessionId &&
     stored.sessionRotationCount === binding.sessionRotationCount &&
     stored.projectPath === binding.projectPath &&
     stored.chatId === binding.chatId &&
-    stored.mimeType === binding.mimeType &&
+    storedMimeType === normalizeAttachmentMime(binding.mimeType) &&
     stored.sizeBytes === binding.sizeBytes &&
     stored.sha256 === binding.sha256
   );
 }
 
-function validatePut(input: ConversationAttachmentPut): void {
+function validatePut(input: ConversationAttachmentPut): string {
+  const mimeType = normalizeAttachmentMime(input.mimeType);
   if (
+    mimeType === undefined ||
     classifyAttachmentMime(input.mimeType) !== "image" ||
     input.bytes.length === 0 ||
     input.bytes.length > MAX_ATTACHMENT_BYTES ||
+    !isNonNegativeSafeInteger(input.sessionRotationCount) ||
     input.sizeBytes !== input.bytes.length ||
     !SHA_PATTERN.test(input.sha256) ||
     sha256(input.bytes) !== input.sha256
   ) {
     throw new ConversationAttachmentStoreError();
   }
+  return mimeType;
 }
 
-function currentLiveBytes(vault: LocalSecretVault, now: number): number {
-  let total = 0;
+interface LiveAttachmentUsage {
+  readonly bytes: number;
+  readonly entries: number;
+}
+
+function currentLiveUsage(vault: LocalSecretVault, now: number): LiveAttachmentUsage {
+  let bytes = 0;
+  let entries = 0;
   for (const ref of vault.list()) {
-    const stored = readStored(vault, ref);
+    const verified = readStoredForScan(vault, ref);
+    if (verified === undefined) {
+      // This dedicated vault cannot safely resolve a malformed record. Remove it without logging
+      // body-bearing parse context so it can neither consume quota nor block later valid uploads.
+      vault.delete(ref);
+      continue;
+    }
+    const { stored } = verified;
     if (stored.expiresAt <= now) {
       vault.delete(ref);
     } else {
-      total += stored.sizeBytes;
+      // A wall-clock rollback can make a valid record appear future-created. It remains live and
+      // authority-bound; the byte and cardinality caps bound its quota impact until expiry.
+      bytes += stored.sizeBytes;
+      entries += 1;
     }
   }
-  return total;
-}
-
-function decodeVerified(stored: StoredAttachment): Buffer {
-  const bytes = Buffer.from(stored.contentBase64, "base64");
-  if (bytes.length !== stored.sizeBytes || sha256(bytes) !== stored.sha256) {
-    throw new ConversationAttachmentStoreError();
-  }
-  return bytes;
+  return { bytes, entries };
 }
 
 interface AttachmentStoreRuntime {
@@ -169,9 +265,14 @@ function putAttachment(
   input: ConversationAttachmentPut,
 ): { readonly ref: string; readonly expiresAt: number } {
   const vault = runtime.getVault();
-  validatePut(input);
+  const mimeType = validatePut(input);
   const createdAt = runtime.now();
-  if (currentLiveBytes(vault, createdAt) + input.sizeBytes > runtime.totalBytes) {
+  const expiresAt = createdAt + runtime.ttlMs;
+  if (!hasValidStoredTimeline(createdAt, expiresAt)) {
+    throw new ConversationAttachmentStoreError();
+  }
+  const usage = currentLiveUsage(vault, createdAt);
+  if (usage.entries >= MAX_LIVE_ENTRIES || usage.bytes + input.sizeBytes > runtime.totalBytes) {
     throw new ConversationAttachmentStoreError();
   }
   const ref = runtime.mintRef();
@@ -182,11 +283,11 @@ function putAttachment(
     sessionRotationCount: input.sessionRotationCount,
     projectPath: input.projectPath,
     chatId: input.chatId,
-    mimeType: input.mimeType,
+    mimeType,
     sizeBytes: input.sizeBytes,
     sha256: input.sha256,
     createdAt,
-    expiresAt: createdAt + runtime.ttlMs,
+    expiresAt,
     contentBase64: input.bytes.toString("base64"),
   };
   vault.set(ref, JSON.stringify(stored));
@@ -200,13 +301,17 @@ function resolveAttachment(
 ): Buffer {
   const vault = runtime.getVault();
   if (!REF_PATTERN.test(ref)) throw new ConversationAttachmentStoreError();
-  const stored = readStored(vault, ref);
-  if (stored.expiresAt <= runtime.now()) {
+  const { stored, bytes } = readStored(vault, ref);
+  const now = runtime.now();
+  if (stored.expiresAt <= now) {
     vault.delete(ref);
     throw new ConversationAttachmentStoreError();
   }
+  // A clock rollback makes a valid record appear future-created. Keep it quota-bound and sealed,
+  // but do not release its bytes until the clock again reaches the original authority start.
+  if (stored.createdAt > now) throw new ConversationAttachmentStoreError();
   if (!sameBinding(stored, binding)) throw new ConversationAttachmentStoreError();
-  return decodeVerified(stored);
+  return bytes;
 }
 
 function deleteBoundAttachment(
@@ -216,7 +321,7 @@ function deleteBoundAttachment(
 ): void {
   const vault = runtime.getVault();
   if (!REF_PATTERN.test(ref)) throw new ConversationAttachmentStoreError();
-  const stored = readStored(vault, ref);
+  const { stored } = readStored(vault, ref);
   if (stored.expiresAt <= runtime.now() || !sameBinding(stored, binding)) {
     throw new ConversationAttachmentStoreError();
   }
@@ -229,10 +334,16 @@ function deleteChatAttachments(
   chatId: string,
 ): void {
   const vault = runtime.getVault();
+  const refsToDelete: string[] = [];
   for (const ref of vault.list()) {
-    const stored = readStored(vault, ref);
-    if (stored.projectPath === projectPath && stored.chatId === chatId) vault.delete(ref);
+    const verified = readStoredForScan(vault, ref);
+    // A malformed record has no trustworthy chat binding. Abort before deleting any valid record:
+    // the caller must keep the chat intact until custody can be verified and the purge retried.
+    if (verified === undefined) throw new ConversationAttachmentStoreError();
+    const { stored } = verified;
+    if (stored.projectPath === projectPath && stored.chatId === chatId) refsToDelete.push(ref);
   }
+  for (const ref of refsToDelete) vault.delete(ref);
 }
 
 export function createConversationAttachmentStore(

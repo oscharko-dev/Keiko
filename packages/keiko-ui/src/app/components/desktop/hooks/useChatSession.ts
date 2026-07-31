@@ -11,6 +11,7 @@ import {
 } from "react";
 import { classifyAttachmentMime, MAX_ATTACHMENT_BYTES } from "@oscharko-dev/keiko-contracts";
 import { useTranslate } from "@/lib/i18n";
+import { ATTACHMENT_CLEANUP_DEFERRED_ERROR } from "@/lib/chat-session-error";
 import type { ConversationAttachmentDescriptorWire, MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
@@ -2102,19 +2103,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   // AC #3: remove a single pending attachment by id.
   // GEN-PERF-MEMORY-001 — revoke the removed attachment's object-URL preview so no blob is retained.
-  const removePendingAttachment = useCallback(
-    (id: string) => {
-      const removed = pendingAttachmentsRef.current.find((attachment) => attachment.id === id);
-      if (removed !== undefined) {
-        revokeAttachmentPreview(removed);
-        void deletePendingImage(removed).catch(() => {
-          setError(t("attachment.cleanupDeferred"));
-        });
-      }
-      setPendingAttachments((previous) => previous.filter((attachment) => attachment.id !== id));
-    },
-    [t],
-  );
+  const removePendingAttachment = useCallback((id: string) => {
+    const removed = pendingAttachmentsRef.current.find((attachment) => attachment.id === id);
+    if (removed !== undefined) {
+      revokeAttachmentPreview(removed);
+      void deletePendingImage(removed).catch(() => {
+        setError(ATTACHMENT_CLEANUP_DEFERRED_ERROR);
+      });
+    }
+    setPendingAttachments((previous) => previous.filter((attachment) => attachment.id !== id));
+  }, []);
 
   // Clears all pending attachments (exposed on the session API for surfaces that discard the whole
   // staging area). GEN-PERF-MEMORY-001 — revoke every removed attachment's object-URL preview.
@@ -2123,37 +2121,34 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     for (const attachment of removed) {
       revokeAttachmentPreview(attachment);
       void deletePendingImage(attachment).catch(() => {
-        setError(t("attachment.cleanupDeferred"));
+        setError(ATTACHMENT_CLEANUP_DEFERRED_ERROR);
       });
     }
     setPendingAttachments((previous) => (previous.length === 0 ? previous : []));
-  }, [t]);
+  }, []);
 
   // #2843 — releases exactly the attachments a settled send consumed, rather than clearing the whole
   // staging area. The composer stays editable during a send (uiux-fix F041) and a queued canonical
   // Voice turn can settle turns later still, so anything staged AFTER the consumed set must survive
   // to be sent by its own turn. GEN-PERF-MEMORY-001 — revoke the released previews.
-  const releasePendingAttachments = useCallback(
-    (ids: readonly string[]): void => {
-      if (ids.length === 0) return;
-      const consumed = new Set(ids);
-      const removed = pendingAttachmentsRef.current.filter((attachment) =>
-        consumed.has(attachment.id),
-      );
-      for (const attachment of removed) {
-        revokeAttachmentPreview(attachment);
-        void deletePendingImage(attachment).catch(() => {
-          setError(t("attachment.cleanupDeferred"));
-        });
-      }
-      setPendingAttachments((previous) => {
-        const retained = previous.filter((attachment) => !consumed.has(attachment.id));
-        if (retained.length === previous.length) return previous;
-        return retained;
+  const releasePendingAttachments = useCallback((ids: readonly string[]): void => {
+    if (ids.length === 0) return;
+    const consumed = new Set(ids);
+    const removed = pendingAttachmentsRef.current.filter((attachment) =>
+      consumed.has(attachment.id),
+    );
+    for (const attachment of removed) {
+      revokeAttachmentPreview(attachment);
+      void deletePendingImage(attachment).catch(() => {
+        setError(ATTACHMENT_CLEANUP_DEFERRED_ERROR);
       });
-    },
-    [t],
-  );
+    }
+    setPendingAttachments((previous) => {
+      const retained = previous.filter((attachment) => !consumed.has(attachment.id));
+      if (retained.length === previous.length) return previous;
+      return retained;
+    });
+  }, []);
 
   // 0.3.0 release audit — the composer (draft text + staged attachment queue) is ONE app-wide
   // slot because the chat window is a singleton (ADR-0114). Switching the active conversation

@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
-import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_CONTEXT_PROFILE, MAX_ATTACHMENT_MIME_BYTES } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor } from "./index.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
@@ -136,6 +136,65 @@ describe("conversation image finalization", () => {
         image_url: { url: `data:image/png;base64,${IMAGE_BYTES.toString("base64")}` },
       },
     ]);
+  });
+
+  it("uses only the normalized safe base MIME in the provider data URL", () => {
+    const { deps, request, resolve } = fixture();
+    const image = request.attachments[0];
+    if (image === undefined) throw new Error("image fixture missing");
+    const parameterized: SendDesktopChatRequest = {
+      ...request,
+      attachments: [{ ...image, mimeType: "IMAGE/PNG; profile=safe" }],
+    };
+
+    const result = assemblyWithConversationImages(deps, parameterized, "vision-chat", assembly());
+
+    expect(resolve).toHaveBeenCalledWith(image.attachmentRef, {
+      sessionId: "session-1",
+      sessionRotationCount: 2,
+      projectPath: request.projectPath,
+      chatId: request.chatId,
+      mimeType: "image/png",
+      sizeBytes: IMAGE_BYTES.length,
+      sha256: "b".repeat(64),
+    });
+    expect(result.messages.at(-1)?.contentParts?.at(-1)).toEqual({
+      type: "image_url",
+      image_url: { url: `data:image/png;base64,${IMAGE_BYTES.toString("base64")}` },
+    });
+  });
+
+  it("propagates a temporal store refusal without constructing an image data URL", () => {
+    const { deps, request, resolve } = fixture();
+    resolve.mockImplementationOnce((): Buffer => {
+      throw new ConversationAttachmentStoreError();
+    });
+
+    expect(() => assemblyWithConversationImages(deps, request, "vision-chat", assembly())).toThrow(
+      ConversationAttachmentStoreError,
+    );
+    expect(resolve).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    "IMAGE/SVG+XML; charset=UTF-8",
+    "image/p#ng",
+    "image/p%ng",
+    "image/p+ng",
+    `image/${"a".repeat(MAX_ATTACHMENT_MIME_BYTES - "image/".length + 1)}`,
+  ])("rejects unsafe MIME %s before resolving or constructing a data URL", (mimeType) => {
+    const { deps, request, resolve } = fixture();
+    const image = request.attachments[0];
+    if (image === undefined) throw new Error("image fixture missing");
+    const hostile: SendDesktopChatRequest = {
+      ...request,
+      attachments: [{ ...image, mimeType }],
+    };
+
+    expect(() => assemblyWithConversationImages(deps, hostile, "vision-chat", assembly())).toThrow(
+      ConversationAttachmentStoreError,
+    );
+    expect(resolve).not.toHaveBeenCalled();
   });
 
   it("fails closed after authority rotation and never echoes a hostile delivery id", () => {

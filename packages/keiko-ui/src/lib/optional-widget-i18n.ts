@@ -8,6 +8,7 @@ import {
   type OptionalWidgetMessageKey,
 } from "./i18n-messages.optional.en";
 import { OPTIONAL_WIDGET_DE_MESSAGES } from "./i18n-messages.optional.de";
+import { chatSessionErrorPresentation } from "./chat-session-error";
 
 export type OptionalWidgetTranslate = (
   key: OptionalWidgetMessageKey,
@@ -36,4 +37,19 @@ export function useOptionalWidgetTranslate(): OptionalWidgetTranslate {
       translateOptionalWidget(locale, key, values),
     [locale],
   );
+}
+
+export function presentChatSessionError(
+  error: string | undefined,
+  t: OptionalWidgetTranslate,
+): string | undefined {
+  const presentation = chatSessionErrorPresentation(error);
+  switch (presentation.kind) {
+    case "none":
+      return undefined;
+    case "attachment-cleanup-deferred":
+      return t("attachment.cleanupDeferred");
+    case "message":
+      return presentation.message;
+  }
 }

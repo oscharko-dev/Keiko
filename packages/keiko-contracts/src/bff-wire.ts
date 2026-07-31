@@ -653,6 +653,9 @@ export const DEFAULT_UI_PORT = 1983;
 // security loosening (the server behaviour is unchanged). SVG is denied even though it is
 // `image/*` because it is a script-carrying vector.
 export const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024; // 8 MiB, per-attachment ceiling
+// Canonical MIME values are ASCII and travel in bindings plus provider data URLs. 255 bytes is far
+// above the registered values Keiko accepts while bounding attacker-controlled metadata everywhere.
+export const MAX_ATTACHMENT_MIME_BYTES = 255;
 export const ALLOWED_IMAGE_MIME_PREFIXES = ["image/"] as const;
 export const ALLOWED_DOCUMENT_MIME_PREFIXES = ["text/"] as const;
 export const ALLOWED_DOCUMENT_MIME_LITERALS: ReadonlySet<string> = new Set([
@@ -665,12 +668,44 @@ export const ALLOWED_DOCUMENT_MIME_LITERALS: ReadonlySet<string> = new Set([
   "application/pdf",
 ]);
 
+// Only URI-unreserved characters may survive into a transport media type. MIME's wider `token`
+// grammar also permits URI delimiters such as `#`, `%`, and `+`; retaining those in a data URL
+// would let caller-controlled syntax escape the media-type component.
+const MIME_COMPONENT_PATTERN = /^[a-z0-9][a-z0-9._~-]*$/u;
+
+/**
+ * Returns the lowercase base media type without parameters. Malformed media types are refused so
+ * callers can safely use the result in a structured transport such as an image data URL.
+ */
+export function normalizeAttachmentMime(mimeType: string): string | undefined {
+  const [base] = mimeType.split(";", 1);
+  if (base === undefined) return undefined;
+  const normalized = base.trim().toLowerCase();
+  if (normalized.length > MAX_ATTACHMENT_MIME_BYTES) return undefined;
+  const parts = normalized.split("/");
+  if (parts.length !== 2) return undefined;
+  const [type, subtype] = parts;
+  if (
+    type === undefined ||
+    subtype === undefined ||
+    !MIME_COMPONENT_PATTERN.test(type) ||
+    !MIME_COMPONENT_PATTERN.test(subtype)
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
 export function classifyAttachmentMime(mimeType: string): "image" | "document" | "unsupported" {
+  const normalized = normalizeAttachmentMime(mimeType);
+  if (normalized === undefined) return "unsupported";
   // SVG is denied (script-carrying vector) even though it is image/*
-  if (mimeType === "image/svg+xml" || mimeType === "image/svg") return "unsupported";
-  if (ALLOWED_IMAGE_MIME_PREFIXES.some((p) => mimeType.startsWith(p))) return "image";
-  if (ALLOWED_DOCUMENT_MIME_PREFIXES.some((p) => mimeType.startsWith(p))) return "document";
-  if (ALLOWED_DOCUMENT_MIME_LITERALS.has(mimeType)) return "document";
+  if (normalized === "image/svg+xml" || normalized === "image/svg") return "unsupported";
+  if (ALLOWED_IMAGE_MIME_PREFIXES.some((prefix) => normalized.startsWith(prefix))) return "image";
+  if (ALLOWED_DOCUMENT_MIME_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
+    return "document";
+  }
+  if (ALLOWED_DOCUMENT_MIME_LITERALS.has(normalized)) return "document";
   return "unsupported";
 }
 

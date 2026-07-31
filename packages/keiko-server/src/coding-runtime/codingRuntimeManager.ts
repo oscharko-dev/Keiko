@@ -57,7 +57,11 @@ import {
   type SidecarHealthEvent,
   type SidecarPermissionEvent,
 } from "./codingSidecarEventParser.js";
-import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
   createRuntimeProcessSupervisor,
@@ -1142,7 +1146,12 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       active.errorSummary.push(value);
       active.stderrDrainer?.push(value);
     });
-    active.streamDrainComplete = runtimeStreamDrainCompletion(active.tree);
+    active.streamDrainComplete = runtimeStreamDrainCompletion(
+      active.tree,
+      this.deps.diagnostics,
+      active.context.runId,
+      this.deps.now,
+    );
   }
 
   private handleExit(active: ActiveRuntime, code: number | null): void {
@@ -1411,6 +1420,22 @@ function emitRuntimeStderrSummary(
   });
 }
 
+function emitRuntimeStreamDrainFailureDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
+  now: () => number,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date(now()).toISOString(),
+    operation: "coding-runtime.stream-drain",
+    source: "coding-runtime-manager.stream-drain",
+    errorClass: contentFreeErrorClass(error),
+    message: "runtime-stream-drain-failed",
+  });
+}
+
 function resolvePortableRuntime(
   request: CodingRuntimeLaunchRequest,
   deps: Pick<NormalizedCodingRuntimeManagerDeps, "portableRuntimeResolver">,
@@ -1602,13 +1627,33 @@ async function boundedLifecycleDisposal(
   }
 }
 
-function runtimeStreamDrainCompletion(tree: RuntimeProcessTree): Promise<boolean> {
-  return Promise.all([readableDrainCompletion(tree.stdout), readableDrainCompletion(tree.stderr)])
+function runtimeStreamDrainCompletion(
+  tree: RuntimeProcessTree,
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  now: () => number,
+): Promise<boolean> {
+  let failureReported = false;
+  const reportFailure = (error: unknown): void => {
+    if (failureReported) return;
+    failureReported = true;
+    emitRuntimeStreamDrainFailureDiagnostic(diagnostics, runId, error, now);
+  };
+  return Promise.all([
+    readableDrainCompletion(tree.stdout, reportFailure),
+    readableDrainCompletion(tree.stderr, reportFailure),
+  ])
     .then(([stdout, stderr]) => stdout && stderr)
-    .catch(() => false);
+    .catch((error: unknown) => {
+      reportFailure(error);
+      return false;
+    });
 }
 
-function readableDrainCompletion(stream: Readable): Promise<boolean> {
+function readableDrainCompletion(
+  stream: Readable,
+  reportFailure: (error: unknown) => void,
+): Promise<boolean> {
   if (stream.readableEnded) return Promise.resolve(true);
   if (stream.closed || stream.destroyed) return Promise.resolve(false);
   return new Promise<boolean>((resolve) => {
@@ -1624,7 +1669,8 @@ function readableDrainCompletion(stream: Readable): Promise<boolean> {
     const onClose = (): void => {
       finish(stream.readableEnded);
     };
-    const onError = (): void => {
+    const onError = (error: unknown): void => {
+      reportFailure(error);
       finish(false);
     };
     stream.once("end", onEnd);

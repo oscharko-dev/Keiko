@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
-const LONG_FILE = ".dependency-cruiser.cjs";
+// Keep this safely beyond the 175 px project-tree label width across Linux, macOS, and Windows
+// reference fonts. A real but only moderately long repository filename made the truncation premise
+// platform-dependent, so CI could correctly render it without overflow and invalidate the test.
+const LONG_FILE =
+  "this-is-an-intentionally-long-project-tree-filename-that-must-overflow-across-linux-macos-and-windows-reference-font-metrics-without-depending-on-a-specific-glyph-width.ts";
 const SHORT_FILE = "NOTICE";
 const ACTIVE_FILE = LONG_FILE;
 const tempProjects: string[] = [];

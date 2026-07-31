@@ -15,6 +15,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import type { GitBranchListEntry } from "@/lib/api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "@/lib/optional-widget-i18n";
 import type {
   GitChangedFile,
   GitDiffScope,
@@ -344,6 +348,7 @@ function runFetchOrPullSync(
   syncView: SyncView,
   context: SyncExecutionContext,
   t: I18nTranslate,
+  optionalT: OptionalWidgetTranslate,
 ): void {
   if (syncView.action !== "fetch" && syncView.action !== "pull") return;
   const operation = syncView.action;
@@ -383,7 +388,10 @@ function runFetchOrPullSync(
           () =>
             completeSync(
               context,
-              { message: t("gitClientWindow.sync.editorReconciliationFailed"), failed: true },
+              {
+                message: optionalT("gitClientWindow.sync.editorReconciliationFailed"),
+                failed: true,
+              },
               true,
             ),
         );
@@ -467,6 +475,7 @@ interface GitSyncActionOptions {
   readonly setError: Dispatch<SetStateAction<string | null>>;
   readonly reconcileEditorBuffers: (root: string) => Promise<void>;
   readonly t: I18nTranslate;
+  readonly optionalT: OptionalWidgetTranslate;
 }
 
 function useGitSyncAction(options: GitSyncActionOptions): () => void {
@@ -482,6 +491,7 @@ function useGitSyncAction(options: GitSyncActionOptions): () => void {
     setError,
     reconcileEditorBuffers,
     t,
+    optionalT,
   } = options;
   return useCallback((): void => {
     if (selectedPath === null || syncView.disabled || syncView.action === "blocked") return;
@@ -503,13 +513,14 @@ function useGitSyncAction(options: GitSyncActionOptions): () => void {
       setError,
       reconcileEditorBuffers,
     };
-    runFetchOrPullSync(client, selectedPath, syncView, context, t);
+    runFetchOrPullSync(client, selectedPath, syncView, context, t, optionalT);
     runPushSync(client, selectedPath, syncView, context, t);
   }, [
     activeSummary,
     client,
     repositoryRoot,
     reconcileEditorBuffers,
+    optionalT,
     selectedPath,
     sequenceRef,
     setBusy,
@@ -625,6 +636,7 @@ export function GitClientWindow({
   reconcileEditorBuffers = requestEditorBufferReconciliation,
 }: GitClientWindowProps): ReactNode {
   const t = useTranslate();
+  const optionalT = useOptionalWidgetTranslate();
   const [repositories, setRepositories] = useState<readonly ProjectWithAvailability[]>([]);
   const [reposLoading, setReposLoading] = useState(true);
   const [reposError, setReposError] = useState<string | null>(null);
@@ -1290,6 +1302,7 @@ export function GitClientWindow({
     setError: setSyncError,
     reconcileEditorBuffers,
     t,
+    optionalT,
   });
 
   const requestSync = useCallback((): void => {

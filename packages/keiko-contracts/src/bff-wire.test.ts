@@ -17,9 +17,11 @@ import {
   isGroundedRerankerFailureKind,
   isDesktopChatStreamEvent,
   MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_MIME_BYTES,
   MAX_CONNECTED_SOURCES,
   MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS,
   MAX_LOCAL_KNOWLEDGE_SOURCES,
+  normalizeAttachmentMime,
   parseUpdateMemoryAutonomyPolicyWire,
   resolveGroundingLimits,
   type Chat,
@@ -909,6 +911,64 @@ describe("classifyAttachmentMime (GEN-DUP-SEMANTIC-013 / -014)", () => {
     expect(classifyAttachmentMime("image/jpeg")).toBe("image");
     expect(classifyAttachmentMime("image/svg+xml")).toBe("unsupported");
     expect(classifyAttachmentMime("image/svg")).toBe("unsupported");
+    expect(classifyAttachmentMime("IMAGE/SVG+XML; charset=UTF-8")).toBe("unsupported");
+    expect(classifyAttachmentMime("Image/Svg; profile=hostile")).toBe("unsupported");
+  });
+
+  it("normalizes safe base MIME types and rejects malformed media types", () => {
+    expect(normalizeAttachmentMime(" IMAGE/PNG ; charset=binary ")).toBe("image/png");
+    expect(classifyAttachmentMime("IMAGE/PNG; charset=binary")).toBe("image");
+    expect(classifyAttachmentMime("image/webp; profile=safe")).toBe("image");
+    expect(classifyAttachmentMime("image/avif; codecs=av01")).toBe("image");
+    expect(classifyAttachmentMime("image/x-icon")).toBe("image");
+    expect(classifyAttachmentMime("image/vnd.microsoft.icon")).toBe("image");
+    expect(normalizeAttachmentMime("image/vnd.example~preview")).toBe("image/vnd.example~preview");
+    expect(normalizeAttachmentMime("image/webp; codecs=vp8#preview")).toBe("image/webp");
+    expect(normalizeAttachmentMime("Application/PDF; version=1.7")).toBe("application/pdf");
+    expect(classifyAttachmentMime("image/png,text/html")).toBe("unsupported");
+    expect(classifyAttachmentMime("image/png\r\ntext/html")).toBe("unsupported");
+  });
+
+  it("refuses URI delimiters and reserved token characters in the normalized base MIME", () => {
+    const unsafeTokenCharacters = [
+      ":",
+      "?",
+      "#",
+      "[",
+      "]",
+      "@",
+      "!",
+      "$",
+      "&",
+      "'",
+      "(",
+      ")",
+      "*",
+      "+",
+      ",",
+      "=",
+      "%",
+      "\\",
+      "`",
+      "^",
+      "|",
+    ];
+    for (const character of unsafeTokenCharacters) {
+      expect(normalizeAttachmentMime(`image/p${character}ng`)).toBeUndefined();
+    }
+    expect(normalizeAttachmentMime("image/p/ng")).toBeUndefined();
+  });
+
+  it("bounds the canonical ASCII base MIME at 255 bytes", () => {
+    const prefix = "image/";
+    const boundary = `${prefix}${"a".repeat(MAX_ATTACHMENT_MIME_BYTES - prefix.length)}`;
+    const oversized = `${boundary}a`;
+
+    expect(Buffer.byteLength(boundary, "ascii")).toBe(255);
+    expect(normalizeAttachmentMime(boundary)).toBe(boundary);
+    expect(classifyAttachmentMime(boundary)).toBe("image");
+    expect(normalizeAttachmentMime(oversized)).toBeUndefined();
+    expect(classifyAttachmentMime(oversized)).toBe("unsupported");
   });
 
   it("classifies text/* and the document literal superset as document", () => {
@@ -918,6 +978,7 @@ describe("classifyAttachmentMime (GEN-DUP-SEMANTIC-013 / -014)", () => {
     expect(classifyAttachmentMime("application/xml")).toBe("document");
     expect(classifyAttachmentMime("application/typescript")).toBe("document");
     expect(classifyAttachmentMime("application/json")).toBe("document");
+    expect(classifyAttachmentMime("Application/PDF; version=1.7")).toBe("document");
   });
 
   it("classifies unknown application types as unsupported", () => {
