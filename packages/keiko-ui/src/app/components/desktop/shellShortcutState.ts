@@ -53,6 +53,20 @@ export type ShellShortcutState = {
 
 const KEIKO_DISPATCHED_CONTEXTS: readonly EditorM7CommandContext[] = ["global", "editor"];
 
+export function projectShellShortcutRefusals(
+  registry: EffectiveKeyboardShortcutRegistry,
+): readonly DispatchableShortcutRefusal[] {
+  const seen = new Set<string>();
+  return KEIKO_DISPATCHED_CONTEXTS.flatMap(
+    (context) => projectDispatchableWorkspaceShortcuts(registry, context).refusals,
+  ).filter((refusal) => {
+    const key = `${refusal.commandId}:${refusal.reasonCode}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 // The binding each command is labelled from, keyed by command id. Monaco first, then Keiko's own
 // contexts, so a command listed in both is labelled from the projection that refuses hostile input.
 function labelledBindings(
@@ -76,9 +90,10 @@ export function resolveShellShortcutState(overrides: readonly string[]): ShellSh
   const registry = resolveEffectiveKeyboardShortcuts(overrides);
   const platform = detectKeyboardShortcutPlatform();
   const projection = projectDispatchableWorkspaceShortcuts(registry, "global");
+  const refusals = projectShellShortcutRefusals(registry);
   const settingRefusalReasonCode =
     registry.status.kind === "fallback" ? (registry.status.reasonCode ?? "INVALID_INPUT") : null;
-  surfaceShellShortcutRefusals(projection.refusals, settingRefusalReasonCode);
+  surfaceShellShortcutRefusals(refusals, settingRefusalReasonCode);
   return {
     labels: new Map(
       [...labelledBindings(registry)].map(([commandId, binding]) => [

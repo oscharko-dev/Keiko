@@ -687,6 +687,18 @@
     "en": "Shortcut rejected: {reason}",
     "de": "Tastenkürzel abgelehnt: {reason}"
   },
+  "settings.keyboard.refusal.invalid": {
+    "en": "This saved shortcut cannot be used. The default shortcut remains active.",
+    "de": "Dieses gespeicherte Tastenkürzel kann nicht verwendet werden. Das Standardkürzel bleibt aktiv."
+  },
+  "settings.keyboard.refusal.reserved": {
+    "en": "This saved shortcut is reserved by the browser or operating system. The default shortcut remains active.",
+    "de": "Dieses gespeicherte Tastenkürzel ist für den Browser oder das Betriebssystem reserviert. Das Standardkürzel bleibt aktiv."
+  },
+  "settings.keyboard.refusal.collision": {
+    "en": "This saved shortcut conflicts with another active command. The default shortcut remains active.",
+    "de": "Dieses gespeicherte Tastenkürzel steht im Konflikt mit einem anderen aktiven Befehl. Das Standardkürzel bleibt aktiv."
+  },
   "settings.keyboard.sourceDefault": {
     "en": "default",
     "de": "Vorgabe"
