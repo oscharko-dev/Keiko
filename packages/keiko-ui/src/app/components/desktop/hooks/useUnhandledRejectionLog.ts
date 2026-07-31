@@ -10,6 +10,8 @@
 // wholesale, and shared hooks must not ride inside them (see hooks/useLinkRevision.ts).
 
 import { useEffect } from "react";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorSummary } from "@/lib/client-error-summary";
 
 const MAX_LOGGED_REJECTIONS = 5;
 
@@ -19,7 +21,9 @@ export function useUnhandledRejectionLog(): void {
     const onRejection = (event: PromiseRejectionEvent): void => {
       if (logged >= MAX_LOGGED_REJECTIONS) return;
       logged += 1;
-      console.warn("[keiko] unhandled promise rejection", event.reason);
+      reportClientDiagnostic(
+        `[keiko] unhandled promise rejection: ${clientErrorSummary(event.reason)}`,
+      );
     };
     window.addEventListener("unhandledrejection", onRejection);
     return (): void => {

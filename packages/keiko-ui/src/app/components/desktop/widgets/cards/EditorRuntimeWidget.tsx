@@ -296,6 +296,7 @@ import {
   rootHash,
   safeDomIdSegment,
 } from "./editorDocumentUri";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const EditorIcon = Icons.editor;
@@ -3122,9 +3123,9 @@ function EditorRuntimeWidget({
   const onRuntimeError = useCallback((message: string): void => {
     // A non-fatal theme-registration failure (e.g. the editor design tokens are not present on this
     // surface). The editor still renders with Monaco's base theme; surface it for diagnostics rather
-    // than swallowing a system-boundary signal.
-    // eslint-disable-next-line no-console -- non-fatal, observable diagnostic only.
-    console.warn(`Keiko editor runtime notice: ${message}`);
+    // than swallowing a system-boundary signal. Routed through the one client sink so the console
+    // access stays in a single reviewable place (0.3.0 audit, #2802).
+    reportClientDiagnostic(`Keiko editor runtime notice: ${message}`);
   }, []);
 
   const restoreRecovery = useCallback((): void => {

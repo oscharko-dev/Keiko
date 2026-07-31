@@ -110,11 +110,15 @@ describe("WindowBodyBoundary", () => {
       );
       expect(screen.getByRole("alert")).toBeTruthy();
       expect(screen.getByText("This window hit an error")).toBeTruthy();
-      expect(warnSpy).toHaveBeenCalledWith(
-        "[keiko] window body crashed",
-        "agents",
-        expect.any(Error),
-      );
+      // 0.3.0 audit (Qodo review on #2869): the boundary reports the window type and the error's
+      // CLASS through the one client diagnostic sink. Strengthened, not adapted — the window type
+      // that made this attributable is still asserted, and the raw Error is now pinned as absent.
+      expect(warnSpy).toHaveBeenCalledWith("[keiko] window body crashed: agents: Error");
+      for (const call of warnSpy.mock.calls) {
+        for (const argument of call) {
+          expect(argument).not.toBeInstanceOf(Error);
+        }
+      }
     } finally {
       warnSpy.mockRestore();
     }

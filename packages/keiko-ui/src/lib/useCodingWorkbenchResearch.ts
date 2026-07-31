@@ -9,6 +9,8 @@ import type {
 
 import { codingAppSessionPairingSettled } from "./coding-app-session-client";
 import { getCodingWorkbenchRuntimeResearch } from "./coding-workbench-runtime-api";
+import { reportClientDiagnostic } from "./client-diagnostics";
+import { clientErrorSummary } from "./client-error-summary";
 
 export type CodingWorkbenchResearchStatus = "idle" | "loading" | "ready" | "unavailable";
 
@@ -85,7 +87,9 @@ function startResearchSync(
       if (!controller.signal.aborted) {
         // Same bounded console idiom as GEN-STAB-WINDOW-002: the rendered state stays the
         // content-free "unavailable", but the underlying refresh failure remains diagnosable.
-        console.warn("[keiko] research channel refresh failed", error);
+        reportClientDiagnostic(
+          `[keiko] research channel refresh failed: ${clientErrorSummary(error)}`,
+        );
         publish(
           scopeResearchStateFromInput(input, {
             status: "unavailable",

@@ -23,7 +23,15 @@ describe("useUnhandledRejectionLog", () => {
       useUnhandledRejectionLog();
     });
     dispatchRejection("boom");
-    expect(warnSpy).toHaveBeenCalledWith("[keiko] unhandled promise rejection", "boom");
+    // 0.3.0 audit (Qodo review on #2869): a rejection reason is uncontrolled content — it can carry
+    // a token, a path, or anything the user typed — so only its TYPE travels, through the one client
+    // diagnostic sink. The reason value itself is pinned as absent.
+    expect(warnSpy).toHaveBeenCalledWith("[keiko] unhandled promise rejection: string");
+    for (const call of warnSpy.mock.calls) {
+      for (const argument of call) {
+        expect(String(argument)).not.toContain("boom");
+      }
+    }
     view.unmount();
   });
 

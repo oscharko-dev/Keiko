@@ -15,6 +15,8 @@
 
 import { Component, type ReactNode } from "react";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorSummary } from "@/lib/client-error-summary";
 
 interface WindowBodyBoundaryProps {
   // Window TYPE (registry key), not the user-supplied title: the type is the only value
@@ -44,7 +46,9 @@ class InnerWindowBodyBoundary extends Component<
   public override componentDidCatch(error: Error): void {
     // Same observable-not-silent idiom as AppShell's connected-scope warn: the crash must
     // be diagnosable from the console, keyed by window type so it can be attributed.
-    console.warn("[keiko] window body crashed", this.props.windowType, error);
+    reportClientDiagnostic(
+      `[keiko] window body crashed: ${this.props.windowType}: ${clientErrorSummary(error)}`,
+    );
   }
 
   private readonly retry = (): void => {
