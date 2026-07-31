@@ -57,7 +57,7 @@ async function clearOverridesInScope(
  */
 export async function resetPersistedShortcutOverrides(): Promise<void> {
   const { fetchEditorSettings, mutateEditorSettings } = await import("@/lib/api");
-  let snapshot = await fetchEditorSettings(undefined);
+  let snapshot = await fetchEditorSettings();
   let refused = 0;
   let cleared = false;
   for (const scope of RESET_SCOPES) {
