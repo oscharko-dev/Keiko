@@ -1,0 +1,65 @@
+name: CodSpeed
+
+# Continuous performance measurement for the pure hot paths under bench/ (memory retrieval,
+# security redaction / injection screening, editor coordinate translation and grounding text
+# safety). CodSpeed runs the suite under CPU simulation, so the result is hardware-agnostic and
+# comparable run to run; the pull-request lane reports the delta against the base commit.
+#
+# This lane is advisory: it measures, it does not gate. It is deliberately NOT part of ci.yml —
+# the benchmark run is slower than every quality gate there and must never sit on the critical
+# path of a required context.
+on:
+  push:
+    branches:
+      - dev
+      - "release/**"
+  # Required for CodSpeed to report a comparison on the pull request itself.
+  pull_request:
+    branches:
+      - dev
+      - "release/**"
+  # `workflow_dispatch` lets CodSpeed trigger a backtest run to seed initial baseline data.
+  workflow_dispatch:
+
+permissions: {}
+
+# Mirrors ci.yml: a superseded pull-request run has no consumer left, while everything else gets a
+# group of ONE (`github.run_id` is unique per run) so a push to dev can never be cancelled by the
+# next one.
+concurrency:
+  group: codspeed-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  benchmarks:
+    name: Run benchmarks
+    runs-on: ubuntu-latest
+    # The simulated run is a few minutes on the current suite; 30 bounds a hung download or a
+    # runaway benchmark without truncating a healthy run.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # OpenID Connect authentication with CodSpeed — no long-lived token in repository secrets.
+      id-token: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install workspaces
+        run: npm ci --ignore-scripts
+      # Built outside the measured command on purpose: the benchmarks import the workspace
+      # packages through their published `exports` surface, and compiling under the instrument
+      # would add minutes of traced work that is not being measured.
+      - name: Build workspace packages
+        run: npm run build:packages
+      - name: Run benchmarks
+        uses: CodSpeedHQ/action@88472375d0a4572cf70a9f1fe3a4e0ab8da1b924 # v5.0.1
+        with:
+          mode: simulation
+          run: npm run bench:vitest

@@ -45,6 +45,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "npm run build:packages && vitest run",
+    "bench": "npm run build:packages && npm run bench:vitest",
+    "bench:vitest": "vitest bench --run --config vitest.bench.config.ts",
     "test:coverage": "npm run test:coverage:quality",
     "test:coverage:packages": "npm run build:packages && vitest run --config vitest.coverage.packages.config.ts --coverage",
     "test:coverage:packages:shard": "npm run build:packages && vitest run --config vitest.coverage.packages.config.ts --coverage --reporter=default --reporter=blob",
@@ -214,11 +216,15 @@
     "sharp": "npm:empty-npm-package@1.0.0",
     "@monaco-editor/loader": "1.7.0",
     "dompurify": "3.4.12",
-    "qs": "6.15.3"
+    "qs": "6.15.3",
+    "@codspeed/vitest-plugin": {
+      "vite": "8.0.16"
+    }
   },
   "devDependencies": {
     "@babel/core": "^8.0.1",
     "@babel/preset-env": "^8.0.2",
+    "@codspeed/vitest-plugin": "^5.7.1",
     "@eslint/js": "^9.39.5",
     "@oscharko-dev/keiko-editor": "0.2.15",
     "@playwright/test": "^1.61.1",

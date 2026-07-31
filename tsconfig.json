@@ -10,6 +10,7 @@
   "include": [
     "src",
     "tests",
+    "bench",
     "*.config.ts",
     "packages/*/src/**/*.ts",
     "packages/keiko-editor/src/**/*.tsx",

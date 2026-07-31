@@ -12,7 +12,22 @@ npm run build      # compile TypeScript outputs
 npm test           # run the unit test suite
 npm run lint       # ESLint, zero-warning policy
 npm run typecheck  # strict type-checking for src + tests
+npm run bench      # build the workspace packages, then run the CodSpeed benchmark suite
 ```
+
+### Performance benchmarks
+
+`bench/` holds the CodSpeed suite: deterministic, IO-free benchmarks over the hot paths that every
+request pays for — memory ranking and context assembly, audit redaction and prompt-injection
+screening, and the editor's offset/position translation plus grounding text safety. They exercise the
+workspace packages through their published `exports` surface only, so the measured code is the code a
+consumer runs.
+
+`npm run bench` reports local wall-clock numbers, which are useful for a quick before/after. The
+authoritative comparison is the CodSpeed lane (`.github/workflows/codspeed.yml`), which runs the same
+suite under CPU simulation so results are hardware-agnostic and comparable across runs; it reports the
+delta against the base commit on every pull request. That lane is advisory — it measures, it does not
+gate — and it stays out of `ci.yml` so it never sits on the critical path of a required check.
 
 ## Pull requests
 
