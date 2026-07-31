@@ -253,7 +253,7 @@ describe("RelationshipListPanel", () => {
       const { onFilterChange } = renderPanel({
         filters: { relDensity: "dense", relType: "reads-context" },
       });
-      const alert = await waitFor(() => screen.getByRole("alert"));
+      const alert = await screen.findByRole("alert");
       fireEvent.click(within(alert).getByRole("button", { name: /reset to defaults/i }));
       // The persisted override is what made the broken state survive a reopen.
       expect(window.localStorage.getItem("keiko.relationships.density")).toBeNull();

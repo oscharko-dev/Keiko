@@ -10,7 +10,7 @@
 // back to the safe, documented default), the panel renders normally instead, exactly like the
 // already-hardened readMode()/readPersona() readers in the same file.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { KeikoTwinPanel } from "../widgets/panels/KeikoTwinPanel";
 import { WindowBodyBoundary } from "../windows/WindowBodyBoundary";
@@ -64,7 +64,7 @@ describe("TwinContext persisted policy/bridges validation (F2)", () => {
 
     // The provider reads localStorage in a post-mount effect; wait for that hydration pass to
     // land before asserting the panel is still alive.
-    await waitFor(() => expect(screen.getByRole("tablist")).toBeTruthy());
+    expect(await screen.findByRole("tablist")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -78,7 +78,7 @@ describe("TwinContext persisted policy/bridges validation (F2)", () => {
 
     renderTwinPanel();
 
-    await waitFor(() => expect(screen.getByRole("tablist")).toBeTruthy());
+    expect(await screen.findByRole("tablist")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -87,7 +87,7 @@ describe("TwinContext persisted policy/bridges validation (F2)", () => {
 
     renderTwinPanel();
 
-    await waitFor(() => expect(screen.getByRole("tablist")).toBeTruthy());
+    expect(await screen.findByRole("tablist")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -96,7 +96,7 @@ describe("TwinContext persisted policy/bridges validation (F2)", () => {
 
     renderTwinPanel();
 
-    await waitFor(() => expect(screen.getByRole("tablist")).toBeTruthy());
+    expect(await screen.findByRole("tablist")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });

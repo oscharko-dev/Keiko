@@ -599,7 +599,7 @@ describe("RelationshipInspectorPanel", () => {
         expect(impactRowValue("Forward dependencies")).toBe("Unavailable");
       });
       fireEvent.click(screen.getByTestId("view-impact-btn"));
-      await waitFor(() => expect(screen.getByTestId("impact-error")).toBeDefined());
+      expect(await screen.findByTestId("impact-error")).toBeDefined();
       mockGetDependencies.mockResolvedValue(isolatedWalkReport());
       const readsBefore = mockGetRelationship.mock.calls.length;
       fireEvent.click(screen.getByRole("button", { name: /retry impact/i }));
