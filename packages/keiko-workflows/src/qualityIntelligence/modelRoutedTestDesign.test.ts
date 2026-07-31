@@ -76,7 +76,7 @@ const MODEL_OUTPUT_COVERING_TWO = JSON.stringify([
 
 function makeDeps(
   evidenceStore: ReturnType<typeof createInMemoryQualityIntelligenceLocalStore>,
-  retentionPolicyId?: string,
+  retentionPolicyId?: QualityIntelligence.QualityIntelligenceRetentionPolicyId,
 ): QualityIntelligenceModelRoutedTestDesignDeps {
   return {
     sink: { emit: () => undefined },
