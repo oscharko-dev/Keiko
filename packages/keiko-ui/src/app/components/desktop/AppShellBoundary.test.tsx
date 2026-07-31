@@ -7,7 +7,7 @@
 import type { ReactNode } from "react";
 import { fireEvent, render, screen, waitFor, type RenderResult } from "@testing-library/react";
 import { axe } from "jest-axe";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppShellFrame } from "./AppShell";
 import { AppShellBoundary } from "./AppShellBoundary";
 import { I18nProvider } from "@/lib/i18n";
@@ -53,6 +53,15 @@ function renderBoundary(
 }
 
 describe("AppShellBoundary", () => {
+  // Most cases below assert the ENGLISH recovery copy and one deliberately asserts the German, so
+  // the language is part of what is under test and belongs next to the assertion rather than
+  // inherited from jsdom's navigator or from whichever test ran last. The shared teardown clears
+  // the key after every test (AGENTS.md §9: no shared mutable global state); this states the
+  // precondition where a reader checking the expected string can see it.
+  beforeEach(() => {
+    window.localStorage.setItem("keiko.locale", "en");
+  });
+
   it("renders a healthy shell untouched", () => {
     render(
       <I18nProvider>

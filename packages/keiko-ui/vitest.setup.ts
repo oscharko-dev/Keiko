@@ -5,8 +5,24 @@ import { toHaveNoViolations } from "jest-axe";
 
 expect.extend(toHaveNoViolations);
 
+// The persisted UI locale is process-global state, so one test choosing a language decided what the
+// NEXT test rendered. `I18nProvider` seeds itself from `localStorage["keiko.locale"]` and writes the
+// active locale back on mount, and `cleanup()` unmounts React trees without touching either that key
+// or the document locale attributes — so a suite asserting English copy passed or failed on whatever
+// a neighbouring test happened to leave behind. Resetting it here makes the precondition the same
+// for every test instead of a property of execution order (AGENTS.md §9: no shared mutable global
+// state). Ordered after `cleanup()` so an unmounting provider cannot write the key back afterwards.
 afterEach(() => {
   cleanup();
+  try {
+    window.localStorage.removeItem("keiko.locale");
+  } catch {
+    /* a suite may have replaced or removed storage; nothing to reset then */
+  }
+  if (typeof document !== "undefined") {
+    document.documentElement.removeAttribute("lang");
+    delete document.documentElement.dataset.locale;
+  }
 });
 
 // jsdom does not implement HTMLElement.prototype.scrollIntoView — stub it so
