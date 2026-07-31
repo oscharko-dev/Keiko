@@ -5,27 +5,36 @@
 // the policy was satisfied only by convention — eight call sites each re-deciding what "bounded" and
 // "redacted" mean, with nothing to point a test or a future replacement at.
 //
-// This is that sink. It is deliberately thin: one function, one default implementation that writes to
-// the console, and a seam to replace it. Concentrating the console access here means the `no-console`
-// exception is one reviewable line instead of eight scattered ones, and a host that wants to ship
-// these somewhere else (an operator panel, a support bundle, a telemetry endpoint the user opted
-// into) changes one module rather than hunting call sites.
+// This is that sink, and it deliberately owns NO transport. The library decides what a diagnostic is
+// and what it may contain; the application decides where diagnostics go. That split is why this
+// module contains no `console` call: a browser console is one possible transport, not the contract.
+// `packages/keiko-ui/src/lib/install-client-diagnostics.ts` is where this application chooses one.
+//
+// Until a transport is installed, records are held in a bounded buffer and handed to the first
+// writer that arrives. Dropping them instead — the obvious "no-op by default" — would be a silent
+// failure (AGENTS.md §7): every diagnostic raised during module init, hydration, or an early boot
+// crash happens before any host code can run, which is exactly when they matter most.
 //
 // REDACTION IS THE CALLER'S JOB AND THE TYPE ENFORCES IT. The sink takes a `string`, never an
 // `unknown` or an `Error`: a raw error carries a stack with absolute paths and a message Keiko does
-// not control, and the console is the surface users screenshot into bug reports. Callers that hold an
-// error pass `clientErrorSummary(error)`, which yields its class and nothing else.
+// not control, and a diagnostic surface is what users screenshot into bug reports. Callers that hold
+// an error pass `clientErrorSummary(error)`, which yields its class and nothing else.
 
 export type ClientDiagnosticWriter = (message: string) => void;
 
-function defaultWriter(message: string): void {
-  // The single sanctioned console access in keiko-ui production code. Everything above this line is
-  // why it is here rather than at each call site.
-  // eslint-disable-next-line no-console
-  if (typeof console !== "undefined" && typeof console.warn === "function") console.warn(message);
+// Bounded on purpose: a failing poll loop can raise a diagnostic every tick while the BFF restarts,
+// and an unbounded pre-transport buffer would grow without limit in exactly that case. The oldest
+// records are dropped first — a storm's later entries describe the same fault as its first.
+const PENDING_LIMIT = 100;
+
+const pending: string[] = [];
+
+function bufferUntilTransportArrives(message: string): void {
+  pending.push(message);
+  if (pending.length > PENDING_LIMIT) pending.shift();
 }
 
-let writer: ClientDiagnosticWriter = defaultWriter;
+let writer: ClientDiagnosticWriter = bufferUntilTransportArrives;
 
 /**
  * Report a bounded, already-redacted operator diagnostic.
@@ -37,12 +46,21 @@ export function reportClientDiagnostic(message: string): void {
   writer(message);
 }
 
-/** Replace the sink (tests, and any host that ships diagnostics somewhere other than the console). */
+/**
+ * Install the transport diagnostics are delivered to.
+ *
+ * Anything buffered before this call is handed to the new writer first, in order, so installing a
+ * transport late never loses what happened during boot.
+ */
 export function setClientDiagnosticWriter(next: ClientDiagnosticWriter): void {
   writer = next;
+  if (pending.length === 0) return;
+  const buffered = pending.splice(0, pending.length);
+  for (const message of buffered) next(message);
 }
 
-/** Restore the console-backed default. */
+/** Restore the buffering default and discard anything held. Tests use this; product code does not. */
 export function resetClientDiagnosticWriter(): void {
-  writer = defaultWriter;
+  writer = bufferUntilTransportArrives;
+  pending.length = 0;
 }

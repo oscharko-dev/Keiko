@@ -1045,6 +1045,14 @@ describe("AppShell grounding connections", () => {
     expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
   });
 
+  // The `next/dynamic` loadable for GatewaySetupDialog is created once when AppShell is imported and
+  // caches its resolved payload for the rest of the worker's life — neither `cleanup()` nor
+  // `vi.clearAllMocks()` puts it back into its pending state. The transient loading placeholder
+  // asserted below therefore only exists while that payload is still unresolved, which is a
+  // precondition this test must establish itself: relying on being declared before the other test
+  // that mounts the same dialog made the assertion pass on declaration order alone, and it
+  // disappeared under `--sequence.shuffle.tests` (#2871). Re-importing AppShell from a fresh module
+  // registry hands this test its own loadable, still pending on first render.
   it("hides both side rails while the first-run gateway setup is open", async () => {
     mocks.state.session = {
       ...(mocks.state.session as TestSession),
@@ -1052,8 +1060,10 @@ describe("AppShell grounding connections", () => {
       noEligibleModels: true,
       selectedModel: "",
     };
+    vi.resetModules();
+    const { AppShell: FirstRunAppShell } = await import("./AppShell");
 
-    render(<AppShell />);
+    render(<FirstRunAppShell />);
     const loadingDialog = screen.getByRole("dialog", {
       name: "Preparing model gateway setup",
     });

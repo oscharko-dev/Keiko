@@ -3,6 +3,9 @@
 import dynamic, { type DynamicOptionsLoadingProps } from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, SyntheticEvent } from "react";
+// Installs the browser transport for reportClientDiagnostic at module scope, so a diagnostic
+// raised during hydration or an early boot crash is delivered rather than only buffered.
+import "@/lib/install-client-diagnostics";
 import { AppShellBoundary } from "./AppShellBoundary";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { ActiveWorkspaceProvider } from "./context/ActiveWorkspaceContext";

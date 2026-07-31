@@ -1,9 +1,19 @@
 import "@testing-library/jest-dom/vitest";
-import { afterEach, expect } from "vitest";
+import { afterEach, beforeEach, expect } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { toHaveNoViolations } from "jest-axe";
+import { setClientDiagnosticWriter } from "./src/lib/client-diagnostics";
+import { writeToBrowserConsole } from "./src/lib/install-client-diagnostics";
 
 expect.extend(toHaveNoViolations);
+
+// Give every test the transport the application installs, rather than the sink's pre-transport
+// buffering default. Tests that assert a diagnostic reached the console are then exercising the
+// real delivery path end to end instead of a stand-in, and a suite that swaps the writer for its
+// own spy cannot leave the next one buffering into the void.
+beforeEach(() => {
+  setClientDiagnosticWriter(writeToBrowserConsole);
+});
 
 // The persisted UI locale is process-global state, so one test choosing a language decided what the
 // NEXT test rendered. `I18nProvider` seeds itself from `localStorage["keiko.locale"]` and writes the

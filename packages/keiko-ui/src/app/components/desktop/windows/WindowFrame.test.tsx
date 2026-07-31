@@ -925,6 +925,15 @@ describe("WindowFrame content zoom controls", () => {
     });
 
     expect(document.body.style.cursor).toBe("grabbing");
+
+    // A test that starts a gesture owns ending it. attachDragListeners subscribes to `window`
+    // and acquires the ref-counted grabbing body style imperatively from the pointerdown
+    // handler — not from a useEffect — so RTL's cleanup() unmounts the tree while the session,
+    // its window listeners, and the module-level body-style depth all survive. Releasing the
+    // pointer here runs the real teardown; without it the leaked "grabbing" cursor is later
+    // snapshotted and faithfully restored by attachResizeListeners, so unrelated tests that
+    // assert an empty body cursor fail depending on execution order.
+    fireEvent.pointerUp(window);
   });
 
   it("restores maximized geometry before starting a header drag", () => {

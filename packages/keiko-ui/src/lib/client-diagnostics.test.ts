@@ -1,6 +1,7 @@
-// The client diagnostic sink and the redaction rule it exists to make enforceable.
+// The client diagnostic sink: the redaction rule it makes enforceable, and the reason its default
+// buffers instead of dropping.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   reportClientDiagnostic,
   resetClientDiagnosticWriter,
@@ -8,12 +9,19 @@ import {
 } from "./client-diagnostics";
 import { clientErrorSummary } from "./client-error-summary";
 
+// The shared setup installs the application's console transport for every test, which is what the
+// rest of the suite should exercise. These cases are about the sink BEFORE any transport exists, so
+// they establish that precondition explicitly rather than assuming an empty sink.
+beforeEach(() => {
+  resetClientDiagnosticWriter();
+});
+
 afterEach(() => {
   resetClientDiagnosticWriter();
 });
 
 describe("reportClientDiagnostic", () => {
-  it("routes through the replaceable writer rather than the console", () => {
+  it("routes through the installed transport and never touches the console itself", () => {
     const written: string[] = [];
     const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     setClientDiagnosticWriter((message) => written.push(message));
@@ -21,21 +29,59 @@ describe("reportClientDiagnostic", () => {
     reportClientDiagnostic("workspace-state: pull failed (network error)");
 
     expect(written).toEqual(["workspace-state: pull failed (network error)"]);
-    // The seam is the point: a host that replaces the writer takes the console out of the path
-    // entirely, which is what makes this testable and replaceable rather than a convention.
+    // The sink owns the contract, not a transport: it is the transport module that may write to a
+    // console, so this module must not — no matter which writer is installed.
     expect(consoleWarn).not.toHaveBeenCalled();
     consoleWarn.mockRestore();
   });
 
-  it("falls back to the console when no writer was installed", () => {
-    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  // This is the property that rules out the obvious "no-op until a host installs a writer" default.
+  // Diagnostics raised during module init, hydration, or an early boot crash all happen before any
+  // host code can run — which is exactly when they matter most (AGENTS.md §7: no silent failures).
+  it("holds diagnostics raised before a transport exists and delivers them in order", () => {
+    reportClientDiagnostic("boot: first");
+    reportClientDiagnostic("boot: second");
 
-    reportClientDiagnostic("shell-shortcuts: refused persisted keybinding overrides");
+    const written: string[] = [];
+    setClientDiagnosticWriter((message) => written.push(message));
 
-    expect(consoleWarn).toHaveBeenCalledWith(
-      "shell-shortcuts: refused persisted keybinding overrides",
-    );
-    consoleWarn.mockRestore();
+    expect(written).toEqual(["boot: first", "boot: second"]);
+  });
+
+  it("delivers the buffer exactly once, not again to the next transport", () => {
+    reportClientDiagnostic("boot: only");
+    const first: string[] = [];
+    setClientDiagnosticWriter((message) => first.push(message));
+
+    const second: string[] = [];
+    setClientDiagnosticWriter((message) => second.push(message));
+
+    expect(first).toEqual(["boot: only"]);
+    expect(second).toEqual([]);
+  });
+
+  // A failing poll loop can raise one diagnostic per tick while the BFF restarts. The pre-transport
+  // buffer is bounded so that storm cannot grow without limit; the oldest go first because a storm's
+  // later entries describe the same fault as its first.
+  it("bounds the pre-transport buffer and drops the oldest first", () => {
+    for (let index = 0; index < 150; index += 1) reportClientDiagnostic(`tick ${String(index)}`);
+
+    const written: string[] = [];
+    setClientDiagnosticWriter((message) => written.push(message));
+
+    expect(written).toHaveLength(100);
+    expect(written[0]).toBe("tick 50");
+    expect(written.at(-1)).toBe("tick 149");
+  });
+
+  it("discards anything held when the sink is reset", () => {
+    reportClientDiagnostic("boot: dropped by reset");
+    resetClientDiagnosticWriter();
+
+    const written: string[] = [];
+    setClientDiagnosticWriter((message) => written.push(message));
+
+    expect(written).toEqual([]);
   });
 });
 

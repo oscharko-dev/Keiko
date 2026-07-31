@@ -654,16 +654,32 @@ describe("EditorWindowSessionHost reveal targeting (#2621)", () => {
     // jump-to-line meant for /repo-a was handed to /repo-b as well. Whether that moved a cursor
     // depended on an unrelated render gate; the request must not reach the root in the first place.
     manifestRef.current = TWO_ROOTS;
-    render(
-      editorHost(
-        { root: "/repo-a", revealLineStart: 7, revealLineEnd: 10, revealRequestId: "reveal-1" },
-        context(),
-      ),
-    );
+    const cfg = {
+      root: "/repo-a",
+      revealLineStart: 7,
+      revealLineEnd: 10,
+      revealRequestId: "reveal-1",
+    };
+    const ctx = context();
+    const view = render(editorHost(cfg, ctx));
     await screen.findByTestId("editor-/repo-a");
+    // The INACTIVE root is mounted inside a hidden `<Activity>`, whose children React prerenders in
+    // a deferred pass that is not part of the commit the await above settles on. Nothing here makes
+    // React run that pass on its own — a full second of `waitFor` polling does not, and the sibling
+    // stayed absent — but it does land on the tree's next render pass. So drive one with the SAME
+    // cfg, ctx and manifest (a scenario-preserving repeat render, not a new situation) and await the
+    // sibling, making its mount a fact this test establishes instead of one it inherits from however
+    // far the scheduler happened to get. Before this, the assertion below failed with `[]` on every
+    // shuffle order that ran this test first (#2871).
+    view.rerender(editorHost(cfg, ctx));
+    await screen.findByTestId("editor-/repo-b");
 
     expect(revealsFor("/repo-a")).toEqual(["7:10:reveal-1"]);
-    // The sibling root is mounted, and it never once saw the request.
+    // The sibling root is mounted, and it never once saw the request. This stays a proof that the
+    // reveal was WITHHELD rather than merely not-yet-rendered, because `revealsFor` returns the
+    // root's whole recorded prop history and the two outcomes are different values: a root that
+    // never mounted yields `[]` and still fails here; only a root that mounted and was handed an
+    // empty triple yields exactly `["::"]`. A root handed the request would yield the triple.
     expect(revealsFor("/repo-b")).toEqual(["::"]);
   });
 
@@ -751,13 +767,22 @@ describe("EditorWindowSessionHost reveal targeting (#2621)", () => {
     // `selectedRoot()` falls back to the focused root when cfg names an unknown root. The fallback
     // decides which tab is visible; it must not make that tab the addressee of someone else's jump.
     manifestRef.current = TWO_ROOTS;
-    render(
-      editorHost(
-        { root: "/repo-gone", revealLineStart: 7, revealLineEnd: 10, revealRequestId: "reveal-1" },
-        context(),
-      ),
-    );
+    const cfg = {
+      root: "/repo-gone",
+      revealLineStart: 7,
+      revealLineEnd: 10,
+      revealRequestId: "reveal-1",
+    };
+    const ctx = context();
+    const view = render(editorHost(cfg, ctx));
     await screen.findByTestId("editor-/repo-a");
+    // Same deferred hidden-`<Activity>` prerender as the addressed-root case above: the inactive
+    // sibling only mounts on the tree's next render pass, so drive one with unchanged cfg and await
+    // it rather than reading whatever the scheduler has done. The assertion below keeps its full
+    // strength — `[]` (never mounted) and `["::"]` (mounted, handed nothing) are distinct values, so
+    // it still proves the reveal was withheld and not merely undelivered so far.
+    view.rerender(editorHost(cfg, ctx));
+    await screen.findByTestId("editor-/repo-b");
 
     expect(revealsFor("/repo-a")).toEqual(["::"]);
     expect(revealsFor("/repo-b")).toEqual(["::"]);

@@ -1,6 +1,6 @@
 import { useRef, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkspace, type UseWorkspaceOptions } from "./useWorkspace";
 import type { AppWindow, Connection } from "../windows/types";
 
@@ -153,8 +153,17 @@ function readSelection(): { focusedWindowId: string | null; selectedWindowIds: r
 }
 
 describe("useWorkspace keyboard and connection workflow hardening", () => {
-  afterEach(() => {
+  // The persisted-workspace reset is a PRECONDITION each test establishes for itself, not a
+  // teardown. useDebouncedPersist flushes on unmount, so the previous test's cleanup() — which
+  // runs in the shared afterEach of vitest.setup.ts, and therefore AFTER this file's afterEach
+  // under vitest's default reverse ("stack") hook order — writes keiko.workspace.v4 and
+  // keiko.conns.v1 again. Clearing here instead means no unmount write can outrun the reset,
+  // whatever order the tests run in.
+  beforeEach(() => {
     window.localStorage.clear();
+  });
+
+  afterEach(() => {
     vi.restoreAllMocks();
   });
 

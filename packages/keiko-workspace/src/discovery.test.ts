@@ -2,6 +2,7 @@ import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readWorkspaceFileForEditing as readViaPublishedSubpath } from "@oscharko-dev/keiko-workspace/internal/editor-read";
 import {
   discoverFiles,
   discoverWithStats,
@@ -437,6 +438,26 @@ describe("readWorkspaceFileForEditing", () => {
     expect(() => readWorkspaceFileForEditing(detectWorkspace(dir), "missing.txt")).toThrow(
       WorkspaceReadError,
     );
+  });
+
+  it("matches the read published at the ./internal/editor-read subpath", () => {
+    // The package.json `exports` entry is an independent second name for this function: nothing the
+    // cases above assert constrains where it points, so a stale, duplicated, or mis-built artifact
+    // behind `./internal/editor-read` would keep this whole file green while every consumer called
+    // something else. Referential identity cannot express that pin from here — the subpath resolves
+    // through `exports` to the BUILT `dist/editorRead.js` while `./discovery.js` resolves to the TS
+    // source, so the two are distinct module instances by construction and `===` is false. What a
+    // consumer actually depends on is that the published lane reads the same raw bytes.
+    file("app.ts", `${SECRET_LINE}\n`);
+    const workspace = detectWorkspace(dir);
+
+    const viaSubpath = readViaPublishedSubpath(workspace, "app.ts");
+    const viaRelative = readWorkspaceFileForEditing(workspace, "app.ts");
+
+    expect(readViaPublishedSubpath.name).toBe(readWorkspaceFileForEditing.name);
+    expect(viaSubpath).toEqual(viaRelative);
+    expect(viaSubpath.rawText).toBe(`${SECRET_LINE}\n`);
+    expect(viaSubpath.rawText).toContain("s3cr3t-lookup-value");
   });
 });
 
