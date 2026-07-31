@@ -263,7 +263,10 @@ function invalidWorkspaceManifestAccess(): WorkspaceContractValidationFail {
 function isWorkspaceManifestSessionAssertion(
   value: unknown,
 ): value is WorkspaceManifestSessionAssertion {
-  return WORKSPACE_MANIFEST_SESSION_ASSERTIONS.some((assertion): boolean => assertion === value);
+  return (
+    typeof value === "string" &&
+    (WORKSPACE_MANIFEST_SESSION_ASSERTIONS as readonly string[]).includes(value)
+  );
 }
 
 // A present marker must be one of the server assertions; an absent one is NOT read as a pairing.

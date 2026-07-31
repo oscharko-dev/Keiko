@@ -1245,6 +1245,18 @@ function jobStatusLabel(status: IndexingJobStatus, t: I18nTranslate): string {
   return t("localKnowledge.detail.jobs.status.cancelled");
 }
 
+// F4 — job.startedAt/finishedAt are unvalidated persisted timestamps; `.toISOString()` throws
+// RangeError on an Invalid Date and this route has no boundary above it that catches a thrown
+// error (`<Suspense>` only covers the loading state). toSafeIsoString fails closed by omitting
+// the `dateTime` attribute instead of crashing the whole page; formatTs (toLocaleString-based)
+// already renders "Invalid Date" safely for the visible label. Both job timestamps render through
+// this one component so neither can regress to a raw `.toISOString()` on its own.
+function JobTimestamp({ epochMs }: { readonly epochMs: number }): ReactNode {
+  const iso = toSafeIsoString(epochMs);
+  const isoAttribute = iso === undefined ? {} : { dateTime: iso };
+  return <time {...isoAttribute}>{formatTs(epochMs)}</time>;
+}
+
 function JobRow({
   job,
   t,
@@ -1256,13 +1268,6 @@ function JobRow({
     job.finishedAt !== undefined
       ? formatDuration(job.finishedAt - job.startedAt)
       : t("localKnowledge.detail.jobs.inProgress");
-  // F4 — job.startedAt/finishedAt are unvalidated persisted timestamps; `.toISOString()` throws
-  // RangeError on an Invalid Date and this route has no boundary above it that catches a thrown
-  // error (`<Suspense>` only covers the loading state). toSafeIsoString fails closed by omitting
-  // the `dateTime` attribute instead of crashing the whole page; formatTs (toLocaleString-based)
-  // already renders "Invalid Date" safely for the visible label.
-  const startedAtIso = toSafeIsoString(job.startedAt);
-  const finishedAtIso = job.finishedAt === undefined ? undefined : toSafeIsoString(job.finishedAt);
   return (
     <li
       className="lkd-job-row"
@@ -1276,15 +1281,11 @@ function JobRow({
         {jobStatusLabel(job.status, t)}
       </span>
       <span className="lkd-job-dates">
-        <time {...(startedAtIso !== undefined ? { dateTime: startedAtIso } : {})}>
-          {formatTs(job.startedAt)}
-        </time>
+        <JobTimestamp epochMs={job.startedAt} />
         {job.finishedAt !== undefined ? (
           <>
             {" — "}
-            <time {...(finishedAtIso !== undefined ? { dateTime: finishedAtIso } : {})}>
-              {formatTs(job.finishedAt)}
-            </time>
+            <JobTimestamp epochMs={job.finishedAt} />
           </>
         ) : null}
       </span>
