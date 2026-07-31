@@ -78,6 +78,22 @@ describe("classifyGitRemoteFailure", () => {
     );
   });
 
+  // Qodo review on #2869: the byte cap and the exit code are set INDEPENDENTLY. `handleChunk` flips
+  // `state.truncated` and terminates, but `runResult` passes the OS-reported exit code straight
+  // through, so a run whose output was cut while git was already finishing can close with 0. Ranking
+  // success above the cap made that report as a clean run, and `classifyOutcome` then reported the
+  // sync as "succeeded" over output it never fully read.
+  it("reports a byte-capped run as truncated even when the process still exited 0", () => {
+    expect(classifyGitRemoteFailure(result({ exitCode: 0, truncated: true }))).toBe(
+      "output-truncated",
+    );
+    expect(classifyGitRemoteFailure(result({ exitCode: 0, truncated: false }))).toBe("none");
+    // The wall clock still outranks the cap, and a recognized cause still outranks both.
+    expect(classifyGitRemoteFailure(result({ exitCode: 0, truncated: true, timedOut: true }))).toBe(
+      "timeout",
+    );
+  });
+
   it("maps exit 127 to git-missing ahead of every other signal", () => {
     expect(
       classifyGitRemoteFailure(

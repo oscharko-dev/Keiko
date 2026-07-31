@@ -11,6 +11,7 @@
 
 import { useEffect, type ReactNode } from "react";
 import { useTranslate } from "@/lib/i18n";
+import { clientErrorSummary } from "@/lib/client-error-summary";
 
 export default function AtlassianConnectorsRouteError({
   error,
@@ -24,7 +25,7 @@ export default function AtlassianConnectorsRouteError({
   useEffect(() => {
     // Same observable-not-silent idiom as WindowBodyBoundary/AppShellBoundary: the crash must
     // stay diagnosable from the console even though the UI only shows the recovery surface.
-    console.warn("[keiko] atlassian-connectors route crashed", error);
+    console.warn(`[keiko] atlassian-connectors route crashed: ${clientErrorSummary(error)}`);
   }, [error]);
 
   return (

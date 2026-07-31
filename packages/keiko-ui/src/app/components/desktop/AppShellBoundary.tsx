@@ -14,6 +14,7 @@ import { Component, type ReactNode } from "react";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { resetPersistedShortcutOverrides } from "./shellRecovery";
 import styles from "./AppShellBoundary.module.css";
+import { clientErrorSummary } from "@/lib/client-error-summary";
 
 interface AppShellBoundaryProps {
   readonly children: ReactNode;
@@ -43,7 +44,7 @@ class InnerAppShellBoundary extends Component<InnerAppShellBoundaryProps, AppShe
   public override componentDidCatch(error: Error): void {
     // Same observable-not-silent idiom as WindowBodyBoundary: the crash must stay diagnosable from
     // the console even though the UI only shows the recovery surface.
-    console.warn("[keiko] app shell crashed", error);
+    console.warn(`[keiko] app shell crashed: ${clientErrorSummary(error)}`);
   }
 
   private readonly reload = (): void => {

@@ -13,6 +13,7 @@ import {
   type ActiveWorkspaceView,
 } from "./task-workspace-api";
 import { isWorkspaceFailureClass, type WorkspaceFailureClass } from "@oscharko-dev/keiko-contracts";
+import { clientErrorSummary } from "./client-error-summary";
 
 export type VerifiedTaskWorkspaceBindFailureReason = "branch-conflict";
 
@@ -37,7 +38,7 @@ export interface VerifiedTaskWorkspaceBindInput {
 // Same bounded console idiom as GEN-STAB-WINDOW-002: the caller-visible result stays the
 // sanitized stage label, but the underlying failure remains diagnosable in the local console.
 function warnBindStage(stage: string, error: unknown): void {
-  console.warn(`[keiko] task workspace bind ${stage} failed`, error);
+  console.warn(`[keiko] task workspace bind ${stage} failed: ${clientErrorSummary(error)}`);
 }
 
 function boundedBindFailure(

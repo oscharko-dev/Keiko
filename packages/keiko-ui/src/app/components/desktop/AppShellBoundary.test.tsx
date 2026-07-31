@@ -28,8 +28,12 @@ function withBoundaryNoise<T>(message: string, run: () => T): T {
   }
 }
 
+// Declared once so the leak assertion below checks the exact text this suite throws, rather than a
+// second copy that could drift away from it and pass vacuously.
+const BOUNDARY_THROW_MESSAGE = "forced shell defect";
+
 function Bomb({ armed }: { readonly armed: boolean }): ReactNode {
-  if (armed) throw new Error("forced shell defect");
+  if (armed) throw new Error(BOUNDARY_THROW_MESSAGE);
   return <div>desktop rendered</div>;
 }
 
@@ -74,7 +78,17 @@ describe("AppShellBoundary", () => {
         screen.getByRole("button", { name: /Reset saved shortcuts and reload/u }),
       ).toBeTruthy();
       expect(screen.getByRole("button", { name: /Reload Keiko/u })).toBeTruthy();
-      expect(warnSpy).toHaveBeenCalledWith("[keiko] app shell crashed", expect.any(Error));
+      // 0.3.0 audit (Qodo review on #2869): the boundary reports the error's CLASS and nothing else.
+      // Strengthened from asserting the old shape — a raw Error carries a stack with absolute paths
+      // and a message Keiko does not control, and the console is the surface users screenshot into
+      // bug reports. Both directions are pinned: the class is present, the object is not.
+      expect(warnSpy).toHaveBeenCalledWith("[keiko] app shell crashed: Error");
+      for (const call of warnSpy.mock.calls) {
+        for (const argument of call) {
+          expect(argument).not.toBeInstanceOf(Error);
+          expect(String(argument)).not.toContain(BOUNDARY_THROW_MESSAGE);
+        }
+      }
     } finally {
       warnSpy.mockRestore();
     }

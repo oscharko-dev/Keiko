@@ -143,14 +143,20 @@ function remoteFailurePhraseMatch(text: string): GitRemoteFailureReason | undefi
 
 /**
  * Classifies ONE remote-facing git run. Deterministic: the same result always yields the same reason.
- * Precedence: spawn failure, Keiko's wall-clock stop, the recognized cause phrases, success, Keiko's
- * byte-cap stop, then the unrecognized-failure fallback.
+ * Precedence: spawn failure, Keiko's wall-clock stop, the recognized cause phrases, Keiko's byte-cap
+ * stop, success, then the unrecognized-failure fallback.
+ *
+ * The byte cap outranks success on purpose. `truncated` and the exit code are set independently:
+ * the runner flips `truncated` and terminates when the cap trips, while `runResult` passes the
+ * OS-reported exit code straight through, so a run cut off while git was already finishing can
+ * close with 0. Ranking success first made that report as a clean run, and the sync executor then
+ * called it "succeeded" over output it never fully read (Qodo review on #2869).
  */
 export function classifyGitRemoteFailure(result: GitProcessResult): GitRemoteFailureReason {
   if (result.exitCode === 127) return "git-missing";
   if (result.timedOut === true) return "timeout";
   const matched = remoteFailurePhraseMatch(`${result.stdout}\n${result.stderr}`.toLowerCase());
   if (matched !== undefined) return matched;
-  if (result.exitCode === 0) return "none";
-  return result.truncated ? "output-truncated" : "git-error";
+  if (result.truncated) return "output-truncated";
+  return result.exitCode === 0 ? "none" : "git-error";
 }

@@ -8,6 +8,7 @@ import type {
   CodingWorkbenchRuntimeState,
   CodingWorkbenchRuntimeStateAction,
 } from "./coding-workbench-live-state";
+import { clientErrorSummary } from "./client-error-summary";
 
 type RuntimeDispatch = Dispatch<CodingWorkbenchRuntimeStateAction>;
 
@@ -69,7 +70,9 @@ export function useCodingWorkbenchPairingEffect(dispatch: RuntimeDispatch): void
         // from an initial boot in the local console (#2843 review). Same bounded idiom as
         // verified-task-workspace-binding: the caller-visible state stays the sanitized
         // `unknown`, while the underlying failure remains diagnosable.
-        console.warn("[keiko] coding workbench pairing discovery failed", error);
+        console.warn(
+          `[keiko] coding workbench pairing discovery failed: ${clientErrorSummary(error)}`,
+        );
         if (!cancelled) dispatch({ kind: "pairing-set", pairing: "unknown" });
       },
     );

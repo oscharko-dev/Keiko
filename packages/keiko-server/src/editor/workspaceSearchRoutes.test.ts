@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
-import { DEFAULT_SEARCH_LIMITS } from "@oscharko-dev/keiko-workspace";
+import { DEFAULT_SEARCH_LIMITS, detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
 import type { UiStore } from "../store/index.js";
@@ -15,6 +15,7 @@ import {
   handleEditorWorkspaceSearch,
   handleEditorWorkspaceSymbols,
 } from "./workspaceSearchRoutes.js";
+import { readWorkspaceFileForEditing } from "@oscharko-dev/keiko-workspace/internal/editor-read";
 
 function rawPostContext(raw: string, path: string): RouteContext {
   const req = Readable.from([Buffer.from(raw, "utf8")]) as unknown as IncomingMessage;
@@ -121,6 +122,26 @@ beforeEach(async () => {
 afterEach(async () => {
   store.close();
   await rm(root, { recursive: true, force: true });
+});
+
+// Qodo review on #2869: the raw editor read reaches this route through the package's
+// `./internal/editor-read` export subpath, not a relative import, so a broken export map would take
+// the whole replace surface down. The rest of this suite already proves that implicitly — breaking
+// the map makes this file fail to load at all — but that failure reads as "suite did not run"
+// rather than "the export map is broken". This asserts the subpath directly so the diagnosis is in
+// the failure message. Verified by temporarily pointing the subpath at a missing file: without this
+// test the suite reports "no tests"; with it, the cause is named.
+describe("the editor read lane is reachable through its published export subpath", () => {
+  it("resolves and returns raw bytes, not the redacted evidence shape", () => {
+    const workspace = detectWorkspaceAt(root);
+
+    const raw = readWorkspaceFileForEditing(workspace, "src/a.ts");
+
+    // `rawText`, never `text`: the two read lanes are structurally incompatible on purpose, so a
+    // raw read can never be substituted for a redacted evidence read by accident.
+    expect(raw.rawText.length).toBeGreaterThan(0);
+    expect(raw).not.toHaveProperty("text");
+  });
 });
 
 describe("POST /api/editor/workspace-search", () => {
