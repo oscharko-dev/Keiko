@@ -16,6 +16,10 @@ notice; reaching into `dist/` directly is an ADR-0019 violation and is caught by
 
 ### The two read lanes, and why they are separate
 
+The decision, its rejected alternatives, and the exact limit of what the split guarantees are
+recorded in [ADR-0165](../../docs/adr/ADR-0165-editor-raw-read-lane-and-the-redacting-barrel.md),
+which amends ADR-0005 D2. Read it before adding a caller on the raw lane.
+
 `readWorkspaceFile` (on the barrel) returns **redacted** bytes: a secret-shaped value in the file is
 replaced before it reaches the caller. That is the evidence lane, and it is the default on purpose —
 workspace content flows into manifests, diagnostics, and model context, none of which may carry a
@@ -35,9 +39,16 @@ Two properties keep that from becoming a leak:
   field is `rawText`, not `text`, so it cannot be substituted where a redacted `FileContent` is
   expected — the type system refuses it rather than a reviewer having to notice.
 
-A raw read is **not** a relaxed read: it runs the identical security chain (workspace-boundary check,
-deny list, realpath containment, hard-link alias check, size cap) and additionally refuses the
-workspace index and any embedding path, so raw bytes can never reach a lexical index or a provider.
+A raw read is **not** a relaxed read: it runs the identical security chain as the redacted lane —
+workspace-boundary check, deny list, realpath containment, hard-link alias check, size cap. Both
+reads share one `resolveReadableWorkspaceFile`; the raw lane skips `redact()` and nothing else.
+
+What keeps raw bytes out of an index, a manifest, or a grounded answer is therefore **structural,
+not another path check**: the deliberate subpath and the incompatible payload field above. There is
+no deny rule that recognises "an index path" — a caller that imports the raw lane and then persists
+what it read has defeated the boundary, and no runtime guard will stop it. That is why importing
+`./internal/editor-read` is an assertion the reviewer has to accept, and why redaction is required
+at the surface that emits rather than here.
 
 `editorRead.export.test.ts` exercises this subpath through the published export map rather than
 relatively, so an export-map break fails there by name instead of surfacing as a resolution error in

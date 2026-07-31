@@ -1,5 +1,6 @@
 // The editor lane's door out of this package — reachable only through the
-// `@oscharko-dev/keiko-workspace/internal/editor-read` export subpath (ADR-0005 read boundary).
+// `@oscharko-dev/keiko-workspace/internal/editor-read` export subpath (ADR-0165, which amends the
+// single always-redacting workspace read of ADR-0005 D2).
 //
 // The public barrel deliberately exposes exactly ONE read, `readWorkspaceFile`, which redacts at
 // the IO boundary: everything it feeds (context packs, retrieval, evidence atoms, the workspace

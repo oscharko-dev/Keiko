@@ -6,6 +6,8 @@ Accepted
 
 Accepted — module location superseded by ADR-0019 (now `packages/keiko-workspace/`, not `src/workspace/**`; the single-package model was replaced by the modular monorepo package architecture). D1–D5 remain accurate and are actively cited (e.g. by ADR-0023) as live precedent.
 
+D2's "one workspace read, always redacted" is amended by [ADR-0165](ADR-0165-editor-raw-read-lane-and-the-redacting-barrel.md): the redacting read remains the only one on the package barrel and the only lane permitted to feed evidence, manifests, diagnostics, the workspace index, or a grounded answer, but a second, raw lane now exists behind the `./internal/editor-read` subpath for the editor's write-back path, which cannot derive correct offsets from redacted text.
+
 ## Context
 
 Issue #5 delivers the layer that lets Keiko understand a developer's repository: detect the
