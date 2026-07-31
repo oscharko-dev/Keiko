@@ -537,7 +537,7 @@ const COPY_URL_LIKE = /^(?:https?:|file:|mailto:|data:|tel:|\/|\.{1,2}\/|[A-Za-z
 // hundreds of enum members, modes and CSS-ish tokens that sit in these same positions.
 const COPY_LOWER_TOKEN = /^[a-z0-9]+(?:[-_.:][a-z0-9]+)*$/u;
 const COPY_UPPER_CONST = /^[A-Z][A-Z0-9_]*$/u;
-const COPY_NUMERIC_UNIT = /^[0-9]+(?:[.,][0-9]+)?\s*[A-Za-z%]{0,6}$/u;
+const COPY_NUMERIC_UNIT = /^\d+(?:[.,]\d+)?\s*[A-Za-z%]{0,6}$/u;
 const COPY_SENTENCE_START = /^[A-Z][a-z]/u;
 
 function letterCount(text) {
@@ -1092,14 +1092,14 @@ function reportFailure(result) {
 
 function main() {
   const repoRoot = process.cwd();
-  const argv = process.argv.slice(2);
+  const flags = new Set(process.argv.slice(2));
   let result;
   try {
-    if (argv.includes("--write-baseline")) {
+    if (flags.has("--write-baseline")) {
       writeBaselineMode(repoRoot);
       return;
     }
-    result = argv.includes("--all")
+    result = flags.has("--all")
       ? checkUiI18nGuard({ repoRoot, changedFiles: allScopeChangedFiles(repoRoot) })
       : checkUiI18nGuard();
   } catch (error) {
