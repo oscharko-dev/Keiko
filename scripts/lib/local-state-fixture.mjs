@@ -260,6 +260,7 @@ function seedPromptEnhancement(stateDir) {
           selected: true,
         },
       ],
+      candidateRejections: [],
       safety: {
         decision: "accepted",
         verificationStatus: "passed",

@@ -235,15 +235,28 @@ function PreviewReadinessDetails({
         </p>
       ) : null}
       {preview.checks !== undefined ? (
-        <p className="gdas-preview-line" data-testid="gdas-preview-checks">
-          {t("gitDelivery.preview.checks", {
-            status: preview.checks.overallStatus,
-            passing: preview.checks.passing,
-            failing: preview.checks.failing,
-            pending: preview.checks.pending,
-            total: preview.checks.total,
-          })}
-        </p>
+        <>
+          <p className="gdas-preview-line" data-testid="gdas-preview-checks">
+            {t("gitDelivery.preview.checks", {
+              status: preview.checks.overallStatus,
+              passing: preview.checks.passing,
+              failing: preview.checks.failing,
+              pending: preview.checks.pending,
+              total: preview.checks.total,
+            })}
+          </p>
+          {preview.checks.informational !== undefined ? (
+            <p className="gdas-preview-line" data-testid="gdas-preview-informational-checks">
+              {t("gitDelivery.preview.informationalChecks", {
+                status: preview.checks.informational.overallStatus,
+                passing: preview.checks.informational.passing,
+                failing: preview.checks.informational.failing,
+                pending: preview.checks.informational.pending,
+                total: preview.checks.informational.total,
+              })}
+            </p>
+          ) : null}
+        </>
       ) : null}
     </>
   );

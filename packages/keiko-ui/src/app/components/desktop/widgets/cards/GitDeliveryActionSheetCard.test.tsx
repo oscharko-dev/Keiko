@@ -177,6 +177,33 @@ describe("GitDeliveryActionSheetCard", () => {
     expect(screen.getByTestId("gdas-recovery-strategy")).toHaveTextContent("stash and reset");
   });
 
+  it("shows informational check failures separately from required checks", () => {
+    const checks = {
+      total: 1,
+      passing: 1,
+      failing: 0,
+      pending: 0,
+      overallStatus: "passing" as const,
+      informational: {
+        total: 1,
+        passing: 0,
+        failing: 1,
+        pending: 0,
+        overallStatus: "failing" as const,
+      },
+    };
+    render(
+      <GitDeliveryActionSheetCard
+        actionSheet={makeSheet("ready-to-execute", { preview: makePreview({ checks }) })}
+      />,
+    );
+
+    expect(screen.getByTestId("gdas-preview-checks")).toHaveTextContent("Required checks: passing");
+    expect(screen.getByTestId("gdas-preview-informational-checks")).toHaveTextContent(
+      "Informational checks: failing",
+    );
+  });
+
   it("renders the preview manifest: branch, risk, remote impact, and merge readiness (AC2)", () => {
     render(<GitDeliveryActionSheetCard actionSheet={makeSheet("ready-to-execute")} />);
     // feature/x is the affected branch AND (for a push) the remote branch — both are rendered.

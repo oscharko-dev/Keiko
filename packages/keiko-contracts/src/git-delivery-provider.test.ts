@@ -88,6 +88,22 @@ describe("isGitDeliveryChecksState", () => {
         overallStatus: "pending",
       }),
     ).toBe(true);
+    expect(
+      isGitDeliveryChecksState({
+        total: 1,
+        passing: 1,
+        failing: 0,
+        pending: 0,
+        overallStatus: "passing",
+        informational: {
+          total: 1,
+          passing: 0,
+          failing: 1,
+          pending: 0,
+          overallStatus: "failing",
+        },
+      }),
+    ).toBe(true);
   });
 
   it("rejects a bad overallStatus or non-integer counts", () => {
@@ -107,6 +123,16 @@ describe("isGitDeliveryChecksState", () => {
         failing: 0,
         pending: 1,
         overallStatus: "passing",
+      }),
+    ).toBe(false);
+    expect(
+      isGitDeliveryChecksState({
+        total: 1,
+        passing: 1,
+        failing: 0,
+        pending: 0,
+        overallStatus: "passing",
+        informational: { total: 1, passing: 0 },
       }),
     ).toBe(false);
   });

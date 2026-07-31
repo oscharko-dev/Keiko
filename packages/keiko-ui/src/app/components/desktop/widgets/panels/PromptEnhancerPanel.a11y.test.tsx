@@ -70,7 +70,14 @@ function response(): PromptEnhancementWireResponse {
           estimatedTokens: 320,
         },
       ],
-      rejected: [],
+      rejected: [
+        {
+          candidateId: "cand-a11y-rejected",
+          profile: "fast",
+          aggregateScore: null,
+          reason: "safety-validation-failed",
+        },
+      ],
     },
     safety: {
       schemaVersion: "1",
@@ -89,7 +96,7 @@ function response(): PromptEnhancementWireResponse {
       reason: "evidence-recorded",
       runId: "pe-run-a11y",
       manifestUrl: "/api/prompt-enhancement/evidence/pe-run-a11y",
-      peEvidenceSchemaVersion: 2,
+      peEvidenceSchemaVersion: 3,
       recordIntegritySha256: "b".repeat(64),
     },
   } as unknown as PromptEnhancementWireResponse;
@@ -113,6 +120,7 @@ describe("PromptEnhancerPanel a11y", () => {
     fireEvent.change(screen.getByLabelText("Raw prompt"), { target: { value: "Summarize." } });
     fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
     await screen.findByTestId("pe-result");
+    await screen.findByTestId("pe-rejections");
     expect(await axe(container)).toHaveNoViolations();
   });
 

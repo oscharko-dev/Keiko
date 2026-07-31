@@ -16,7 +16,11 @@
 import { randomUUID } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { sortedStrings, type GroundingDirective } from "@oscharko-dev/keiko-contracts";
+import {
+  sortedStrings,
+  type GroundingDirective,
+  type PromptCandidateRejection,
+} from "@oscharko-dev/keiko-contracts";
 import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -88,6 +92,7 @@ export interface PromptEnhancementRecordInput {
   readonly appliedGroundingDirectives: readonly GroundingDirective[];
   readonly assumptions: readonly string[];
   readonly candidateScores: readonly PromptEnhancementCandidateScoreRow[];
+  readonly candidateRejections: readonly PromptCandidateRejection[];
   readonly safety: PromptEnhancementSafetyRecord;
   readonly modelMetadata: PromptEnhancementModelMetadata;
 }
@@ -123,12 +128,14 @@ function buildIntegrityHashes(
     readonly assumptions: readonly string[];
   },
   candidateScores: readonly PromptEnhancementCandidateScoreRow[],
+  candidateRejections: readonly PromptCandidateRejection[],
   record: PromptEnhancementEvidenceManifestWithoutHashes,
 ): PromptEnhancementIntegrityHashes {
   return {
     enhancedOutput: sha256OfJson(enhancedOutput),
     appliedRules: sha256OfJson(appliedRules),
     candidateScores: sha256OfJson(candidateScores),
+    candidateRejections: sha256OfJson(candidateRejections),
     record: sha256OfJson(record),
   };
 }
@@ -147,6 +154,7 @@ function buildManifestIntegrityHashes(
       assumptions: manifest.assumptions,
     },
     manifest.candidateScores,
+    manifest.candidateRejections,
     manifest,
   );
 }
@@ -202,12 +210,24 @@ interface RedactedTextFields {
   readonly modelMetadata: PromptEnhancementModelMetadata;
 }
 
+function projectCandidateRejections(
+  rejections: readonly PromptCandidateRejection[],
+): readonly PromptCandidateRejection[] {
+  return rejections.map(({ candidateId, profile, aggregateScore, reason }) => ({
+    candidateId,
+    profile,
+    aggregateScore,
+    reason,
+  }));
+}
+
 function assembleManifest(
   input: PromptEnhancementRecordInput,
   redacted: RedactedTextFields,
   summary: PromptEnhancementEvidenceManifest["redactionSummary"],
   inputRedactedFingerprintSha256: string,
 ): PromptEnhancementEvidenceManifest {
+  const candidateRejections = projectCandidateRejections(input.candidateRejections);
   const manifestWithoutHashes: PromptEnhancementEvidenceManifestWithoutHashes = {
     peEvidenceSchemaVersion: PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION,
     runId: input.runId,
@@ -222,11 +242,13 @@ function assembleManifest(
     appliedGroundingDirectives: input.appliedGroundingDirectives,
     assumptions: redacted.assumptions,
     candidateScores: input.candidateScores,
+    candidateRejections,
     safety: input.safety,
     modelMetadata: redacted.modelMetadata,
     redactionSummary: summary,
     totals: {
       candidateScores: input.candidateScores.length,
+      candidateRejections: candidateRejections.length,
       appliedSafetyRules: redacted.appliedSafetyRules.length,
       assumptions: redacted.assumptions.length,
       safetyFindings: input.safety.findingCodes.length,
@@ -377,6 +399,11 @@ function assertHashMatches(label: string, expected: string, stored: string): voi
 function assertManifestIntegrity(manifest: PromptEnhancementEvidenceManifest): void {
   const expectations: readonly [string, number, number][] = [
     ["candidateScores", manifest.totals.candidateScores, manifest.candidateScores.length],
+    [
+      "candidateRejections",
+      manifest.totals.candidateRejections,
+      manifest.candidateRejections.length,
+    ],
     ["appliedSafetyRules", manifest.totals.appliedSafetyRules, manifest.appliedSafetyRules.length],
     ["assumptions", manifest.totals.assumptions, manifest.assumptions.length],
     ["safetyFindings", manifest.totals.safetyFindings, manifest.safety.findingCodes.length],
@@ -399,6 +426,11 @@ function assertManifestIntegrity(manifest: PromptEnhancementEvidenceManifest): v
     "candidateScores",
     expected.candidateScores,
     manifest.integrityHashes.candidateScores,
+  );
+  assertHashMatches(
+    "candidateRejections",
+    expected.candidateRejections,
+    manifest.integrityHashes.candidateRejections,
   );
   assertHashMatches("record", expected.record, manifest.integrityHashes.record);
 }

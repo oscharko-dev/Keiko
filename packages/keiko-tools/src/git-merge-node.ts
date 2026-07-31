@@ -24,12 +24,13 @@
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
   GIT_DELIVERY_SCHEMA_VERSION,
+  type GitDeliveryBranchProtection,
   type GitDeliveryChecksState,
   type GitDeliveryExecutionResult,
   type GitDeliveryMergeStrategyHint,
 } from "@oscharko-dev/keiko-contracts";
 import {
-  buildBranchProtectionRequiredReviewsArgv,
+  buildBranchProtectionArgv,
   buildCheckRunsArgv,
   buildDeleteMergedBranchArgv,
   buildMergeArgv,
@@ -230,11 +231,19 @@ function parseJsonArray(stdout: string): readonly Record<string, unknown>[] | un
 const PASSING_CONCLUSIONS: ReadonlySet<string> = new Set(["success", "neutral", "skipped"]);
 
 interface RawCheckRun {
+  readonly id: number;
+  readonly name: string;
+  readonly providerId?: number | undefined;
   readonly status?: unknown;
   readonly conclusion?: unknown;
 }
 
-type CheckRunTally = Omit<GitDeliveryChecksState, "overallStatus">;
+interface RequiredCheck {
+  readonly name: string;
+  readonly providerId?: number | undefined;
+}
+
+type CheckRunTally = Pick<GitDeliveryChecksState, "total" | "passing" | "failing" | "pending">;
 
 // Aggregate verdict precedence, strongest signal first: one failing run fails the head; otherwise one
 // still-running run holds it pending; otherwise a non-empty run list passes. Zero runs is "skipped" —
@@ -268,25 +277,117 @@ function tallyCheckRuns(runs: readonly RawCheckRun[]): CheckRunTally {
 // — replaces the previous single combined "state" string read from the legacy Statuses API
 // (`/commits/{sha}/status`), which could report only one aggregate verdict with no total/pass/fail/
 // pending breakdown.
-function checksStateFromCheckRuns(runs: readonly RawCheckRun[]): GitDeliveryChecksState {
+function checkGroupFromRuns(runs: readonly RawCheckRun[]): GitDeliveryChecksState {
   const tally = tallyCheckRuns(runs);
   return { ...tally, overallStatus: overallChecksStatus(tally) };
 }
 
-function shouldReadHeadChecks(mergeableState: string | undefined): boolean {
+function shouldReadHeadChecks(
+  mergeableState: string | undefined,
+  requiredChecks: readonly RequiredCheck[],
+): boolean {
   return (
-    mergeableState === "blocked" || mergeableState === "unstable" || mergeableState === "unknown"
+    requiredChecks.length > 0 ||
+    mergeableState === "blocked" ||
+    mergeableState === "unstable" ||
+    mergeableState === "unknown"
   );
+}
+
+interface RawCheckRunRecord extends Record<string, unknown> {
+  readonly id: number;
+  readonly name: string;
+  readonly providerId: number | null;
+  readonly status: string;
+  readonly conclusion: string | null;
+}
+
+function isProviderRunId(value: unknown): value is number | null {
+  return value === null || (typeof value === "number" && Number.isSafeInteger(value));
+}
+
+function isRawCheckRunRecord(value: Record<string, unknown>): value is RawCheckRunRecord {
+  return (
+    typeof value.id === "number" &&
+    Number.isSafeInteger(value.id) &&
+    typeof value.name === "string" &&
+    value.name.length > 0 &&
+    isProviderRunId(value.providerId) &&
+    typeof value.status === "string" &&
+    (value.conclusion === null || typeof value.conclusion === "string")
+  );
+}
+
+function rawCheckRun(value: Record<string, unknown>): RawCheckRun | undefined {
+  if (!isRawCheckRunRecord(value)) return undefined;
+  const providerId = value.providerId ?? undefined;
+  return {
+    id: value.id,
+    name: value.name,
+    status: value.status,
+    conclusion: value.conclusion,
+    providerId,
+  };
+}
+
+function checkKey(check: Pick<RawCheckRun, "name" | "providerId">): string {
+  const providerKey = check.providerId === undefined ? "*" : String(check.providerId);
+  return `${check.name}\u0000${providerKey}`;
+}
+
+function latestRuns(runs: readonly RawCheckRun[]): readonly RawCheckRun[] {
+  const latest = new Map<string, RawCheckRun>();
+  for (const run of runs) {
+    const current = latest.get(checkKey(run));
+    if (current === undefined || run.id > current.id) latest.set(checkKey(run), run);
+  }
+  return [...latest.values()];
+}
+
+function selectRequiredRun(
+  requirement: RequiredCheck,
+  runs: readonly RawCheckRun[],
+): RawCheckRun | undefined {
+  const matches = runs.filter(
+    (run) =>
+      run.name === requirement.name &&
+      (requirement.providerId === undefined || run.providerId === requirement.providerId),
+  );
+  return matches.reduce<RawCheckRun | undefined>(
+    (latest, run) => (latest === undefined || run.id > latest.id ? run : latest),
+    undefined,
+  );
+}
+
+function missingRequiredRun(requirement: RequiredCheck): RawCheckRun {
+  return { id: -1, name: requirement.name, providerId: requirement.providerId, status: "queued" };
+}
+
+function classifyChecks(
+  requiredChecks: readonly RequiredCheck[],
+  checkRuns: readonly RawCheckRun[],
+): GitDeliveryChecksState {
+  const uniqueRuns = latestRuns(checkRuns);
+  const selectedKeys = new Set<string>();
+  const requiredRuns = requiredChecks.map((requirement) => {
+    const run = selectRequiredRun(requirement, uniqueRuns);
+    if (run !== undefined) selectedKeys.add(checkKey(run));
+    return run ?? missingRequiredRun(requirement);
+  });
+  const informationalRuns = uniqueRuns.filter((run) => !selectedKeys.has(checkKey(run)));
+  return {
+    ...checkGroupFromRuns(requiredRuns),
+    informational: checkGroupFromRuns(informationalRuns),
+  };
 }
 
 async function readHeadChecks(
   ctx: RunContext,
   ownerAndRepo: string,
   headSha: string | undefined,
+  requiredChecks: readonly RequiredCheck[],
 ): Promise<GitDeliveryChecksState | undefined> {
-  if (headSha === undefined) {
-    return undefined;
-  }
+  if (headSha === undefined) return undefined;
   let argv: readonly string[];
   try {
     argv = buildCheckRunsArgv(ownerAndRepo, headSha);
@@ -298,10 +399,10 @@ async function readHeadChecks(
     return undefined;
   }
   const runs = parseJsonArray(result.stdout);
-  if (runs === undefined) {
-    return undefined;
-  }
-  return checksStateFromCheckRuns(runs);
+  if (runs === undefined) return undefined;
+  const parsedRuns = runs.map(rawCheckRun);
+  if (parsedRuns.some((run) => run === undefined)) return undefined;
+  return classifyChecks(requiredChecks, parsedRuns as readonly RawCheckRun[]);
 }
 
 interface RawReview {
@@ -346,24 +447,83 @@ async function readReceivedApprovalCount(
   return reviews === undefined ? 0 : approvedReviewCountFrom(reviews);
 }
 
-// Best-effort read of the base branch's required-approving-review-count. 404 (unprotected branch) and
-// 403 (no admin on the target repository) both surface as a non-zero exit here and fall back to 0 —
-// "no known requirement" — never a hard failure: the provider's own merge-time enforcement (ADR-0087
-// Force 2) is the actual authority regardless of what this best-effort UI read could see.
-async function readRequiredApprovalCount(
+interface BranchProtectionProjection {
+  readonly protection: GitDeliveryBranchProtection;
+  readonly requiredChecks: readonly RequiredCheck[];
+}
+
+function requiredCheck(value: unknown): RequiredCheck | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.name !== "string" || record.name.length === 0) return undefined;
+  if (record.providerId === null) return { name: record.name };
+  if (typeof record.providerId !== "number" || !Number.isSafeInteger(record.providerId)) {
+    return undefined;
+  }
+  return { name: record.name, providerId: record.providerId };
+}
+
+function uniqueRequiredChecks(values: readonly unknown[]): readonly RequiredCheck[] | undefined {
+  const parsed = values.map(requiredCheck);
+  if (parsed.some((check) => check === undefined)) return undefined;
+  const unique = new Map<string, RequiredCheck>();
+  for (const check of parsed as readonly RequiredCheck[]) unique.set(checkKey(check), check);
+  return [...unique.values()];
+}
+
+function parseBranchProtection(stdout: string): BranchProtectionProjection | undefined {
+  const value = parseJsonObject(stdout);
+  if (
+    value === undefined ||
+    typeof value.deletionAllowed !== "boolean" ||
+    typeof value.forcePushAllowed !== "boolean" ||
+    typeof value.linearHistoryRequired !== "boolean" ||
+    typeof value.requiredReviewCount !== "number" ||
+    !Number.isSafeInteger(value.requiredReviewCount) ||
+    value.requiredReviewCount < 0 ||
+    !Array.isArray(value.requiredChecks)
+  ) {
+    return undefined;
+  }
+  const requiredChecks = uniqueRequiredChecks(value.requiredChecks);
+  if (requiredChecks === undefined) return undefined;
+  return {
+    protection: {
+      deletionAllowed: value.deletionAllowed,
+      forcePushAllowed: value.forcePushAllowed,
+      linearHistoryRequired: value.linearHistoryRequired,
+      requiredReviewCount: value.requiredReviewCount,
+      requiredStatusCheckCount: requiredChecks.length,
+    },
+    requiredChecks,
+  };
+}
+
+type BranchProtectionRead =
+  | { readonly outcome: "protected"; readonly projection: BranchProtectionProjection }
+  | { readonly outcome: "unprotected" }
+  | { readonly outcome: "error" };
+
+function isNotFound(result: CommandResult): boolean {
+  return result.exitCode !== 0 && /(?:HTTP\s+404|\b404\b)/u.test(result.stderr);
+}
+
+async function readBranchProtection(
   ctx: RunContext,
   req: GitMergeReadinessRequest,
-): Promise<number> {
+): Promise<BranchProtectionRead> {
   let argv: readonly string[];
   try {
-    argv = buildBranchProtectionRequiredReviewsArgv(req);
+    argv = buildBranchProtectionArgv(req);
   } catch {
-    return 0;
+    return { outcome: "error" };
   }
   const result = await runGh(ctx, argv);
-  if (result instanceof Error || result.exitCode !== 0) return 0;
-  const n = Number.parseInt(result.stdout.trim(), 10);
-  return Number.isFinite(n) && n >= 0 ? n : 0;
+  if (result instanceof Error) return { outcome: "error" };
+  if (isNotFound(result)) return { outcome: "unprotected" };
+  if (result.exitCode !== 0) return { outcome: "error" };
+  const projection = parseBranchProtection(result.stdout);
+  return projection === undefined ? { outcome: "error" } : { outcome: "protected", projection };
 }
 
 // Reads the PR object (facts only, un-enriched with approval counts). Returns undefined on any
@@ -401,6 +561,42 @@ async function readCapableStrategies(
   return cfgObj !== undefined ? capableStrategiesFrom(cfgObj) : [];
 }
 
+function successfulProviderReadiness(
+  raw: RawMergeReadiness,
+  providerCapableStrategies: readonly GitDeliveryMergeStrategyHint[],
+  checks: GitDeliveryChecksState | undefined,
+  projection: BranchProtectionProjection | undefined,
+): GitMergeProviderReadiness {
+  return {
+    pullRequest: mapRawMergeReadiness(raw),
+    providerCapableStrategies,
+    ...(checks !== undefined ? { checks } : {}),
+    ...(projection !== undefined ? { branchProtection: projection.protection } : {}),
+    ...(raw.headSha !== undefined ? { headRefHash: raw.headSha } : {}),
+  };
+}
+
+async function completeMergeReadiness(
+  ctx: RunContext,
+  req: GitMergeReadinessRequest,
+  factsOnly: RawMergeReadiness,
+  providerCapableStrategies: readonly GitDeliveryMergeStrategyHint[],
+  receivedApprovalCount: number,
+  projection: BranchProtectionProjection | undefined,
+): Promise<GitMergeProviderReadiness> {
+  const requiredApprovalCount = projection?.protection.requiredReviewCount ?? 0;
+  const raw: RawMergeReadiness = { ...factsOnly, receivedApprovalCount, requiredApprovalCount };
+  const requiredChecks = projection?.requiredChecks ?? [];
+  const mustReadChecks = shouldReadHeadChecks(raw.mergeableState, requiredChecks);
+  const checks = mustReadChecks
+    ? await readHeadChecks(ctx, req.ownerAndRepo, raw.headSha, requiredChecks)
+    : undefined;
+  if (mustReadChecks && checks === undefined) {
+    return { providerCapableStrategies, providerError: true };
+  }
+  return successfulProviderReadiness(raw, providerCapableStrategies, checks, projection);
+}
+
 async function readMergeReadiness(
   ctx: RunContext,
   req: GitMergeReadinessRequest,
@@ -413,25 +609,24 @@ async function readMergeReadiness(
 
   // The repo-config, reviews, and branch-protection reads are independent of each other and of the
   // PR object already in hand, so they run concurrently rather than as three sequential round-trips.
-  const [providerCapableStrategies, receivedApprovalCount, requiredApprovalCount] =
-    await Promise.all([
-      readCapableStrategies(ctx, req),
-      readReceivedApprovalCount(ctx, req),
-      readRequiredApprovalCount(ctx, req),
-    ]);
-  const raw: RawMergeReadiness = { ...factsOnly, receivedApprovalCount, requiredApprovalCount };
-  const pullRequest = mapRawMergeReadiness(raw);
-
-  const checks = shouldReadHeadChecks(raw.mergeableState)
-    ? await readHeadChecks(ctx, req.ownerAndRepo, raw.headSha)
-    : undefined;
-
-  return {
-    pullRequest,
+  const [providerCapableStrategies, receivedApprovalCount, branchProtection] = await Promise.all([
+    readCapableStrategies(ctx, req),
+    readReceivedApprovalCount(ctx, req),
+    readBranchProtection(ctx, req),
+  ]);
+  if (branchProtection.outcome === "error") {
+    return { providerCapableStrategies, providerError: true };
+  }
+  const projection =
+    branchProtection.outcome === "protected" ? branchProtection.projection : undefined;
+  return completeMergeReadiness(
+    ctx,
+    req,
+    factsOnly,
     providerCapableStrategies,
-    ...(checks !== undefined ? { checks } : {}),
-    ...(raw.headSha !== undefined ? { headRefHash: raw.headSha } : {}),
-  };
+    receivedApprovalCount,
+    projection,
+  );
 }
 
 // ─── Merge execute (+ guarded, non-fatal branch deletion) ─────────────────────────────────────────────

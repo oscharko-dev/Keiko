@@ -7,6 +7,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildBranchProtectionArgv,
   buildBranchProtectionRequiredReviewsArgv,
   buildCheckRunsArgv,
   buildDeleteMergedBranchArgv,
@@ -209,6 +210,12 @@ describe("merge argv builders", () => {
       "/repos/o/r/branches/main/protection",
       "--jq",
       expect.stringContaining("required_approving_review_count"),
+    ]);
+    expect(buildBranchProtectionArgv(readinessReq)).toEqual([
+      "api",
+      "/repos/o/r/branches/main/protection",
+      "--jq",
+      expect.stringContaining("requiredChecks"),
     ]);
   });
 

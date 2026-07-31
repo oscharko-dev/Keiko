@@ -239,6 +239,19 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "promptEnhancer.scorecards.score": "Score",
   "promptEnhancer.scorecards.tokens": "Tokens",
   "promptEnhancer.scorecards.winner": "Winner",
+  "promptEnhancer.rejections.title": "Rejected candidates",
+  "promptEnhancer.rejections.candidate": "Candidate",
+  "promptEnhancer.rejections.reason": "Reason",
+  "promptEnhancer.rejections.notScored": "Not scored",
+  "promptEnhancer.rejections.reason.lowerAggregateScore": "Ranked below the selected candidate",
+  "promptEnhancer.rejections.reason.lowerTieBreakRank": "Lost the deterministic score tie-break",
+  "promptEnhancer.rejections.reason.exceededTokenBudget": "Exceeded the token budget",
+  "promptEnhancer.rejections.reason.duplicateCandidate": "Duplicate of another candidate",
+  "promptEnhancer.rejections.reason.safetyFloorNotPreserved":
+    "Did not preserve the required safety floor",
+  "promptEnhancer.rejections.reason.safetyValidationFailed": "Rejected by safety validation",
+  "promptEnhancer.rejections.reason.profilePreferenceNotMatched":
+    "Did not match the selected profile preference",
   "promptEnhancer.section.role": "Role",
   "promptEnhancer.section.objective": "Objective",
   "promptEnhancer.section.context": "Context",
@@ -486,7 +499,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gitDelivery.preview.branchProtection":
     "Branch protection: {reviews} required reviews, {checks} required checks",
   "gitDelivery.preview.checks":
-    "Checks: {status} ({passing} passing, {failing} failing, {pending} pending of {total})",
+    "Required checks: {status} ({passing} passing, {failing} failing, {pending} pending of {total})",
+  "gitDelivery.preview.informationalChecks":
+    "Informational checks: {status} ({passing} passing, {failing} failing, {pending} pending of {total})",
   "gitDelivery.preview.ariaLabel": "Action preview",
   "gitDelivery.preview.title": "Preview",
   "gitDelivery.preview.action": "Action",

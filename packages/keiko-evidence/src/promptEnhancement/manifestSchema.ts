@@ -15,6 +15,7 @@
 import type {
   GroundingDirective,
   LeastPrivilegeConstraint,
+  PromptCandidateRejection,
   PromptSafetyDecision,
   PromptSafetyVerificationStatus,
   PromptSafetyViolationCode,
@@ -22,12 +23,17 @@ import type {
 import {
   GROUNDING_DIRECTIVES,
   LEAST_PRIVILEGE_CONSTRAINTS,
+  PROMPT_CANDIDATE_REJECTION_REASONS,
+  PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT,
+  PROMPT_ENHANCEMENT_PROFILE_IDS,
   PROMPT_SAFETY_DECISIONS,
   PROMPT_SAFETY_VERIFICATION_STATUSES,
+  isPromptCandidateRejectionReason,
   isPromptSafetyViolationCode,
+  validatePromptEnhancerIdString,
 } from "@oscharko-dev/keiko-contracts";
 
-export const PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION = 2 as const;
+export const PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION = 3 as const;
 
 // The overall lifecycle outcome of an enhancement run, aligned with the validate-stage decision.
 export type PromptEnhancementEvidenceStatus = "validated" | "requires-human-review" | "rejected";
@@ -79,11 +85,13 @@ export interface PromptEnhancementIntegrityHashes {
   readonly enhancedOutput: string;
   readonly appliedRules: string;
   readonly candidateScores: string;
+  readonly candidateRejections: string;
   readonly record: string;
 }
 
 export interface PromptEnhancementManifestTotals {
   readonly candidateScores: number;
+  readonly candidateRejections: number;
   readonly appliedSafetyRules: number;
   readonly assumptions: number;
   readonly safetyFindings: number;
@@ -123,6 +131,8 @@ export interface PromptEnhancementEvidenceManifest {
   readonly assumptions: readonly string[];
   // Candidate scores (AC4).
   readonly candidateScores: readonly PromptEnhancementCandidateScoreRow[];
+  // Rejected candidates: content-free ids, closed reason codes, and score metadata only.
+  readonly candidateRejections: readonly PromptCandidateRejection[];
   // Verification status (AC4).
   readonly safety: PromptEnhancementSafetyRecord;
   // Model metadata when applicable (AC4).
@@ -149,6 +159,7 @@ const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set<string>([
   "appliedGroundingDirectives",
   "assumptions",
   "candidateScores",
+  "candidateRejections",
   "safety",
   "modelMetadata",
   "redactionSummary",
@@ -208,7 +219,13 @@ function validateRedactionSummary(value: unknown): string | undefined {
 
 function validateIntegrityHashes(value: unknown): string | undefined {
   if (!isRecord(value)) return "integrityHashes must be an object";
-  for (const key of ["enhancedOutput", "appliedRules", "candidateScores", "record"] as const) {
+  for (const key of [
+    "enhancedOutput",
+    "appliedRules",
+    "candidateScores",
+    "candidateRejections",
+    "record",
+  ] as const) {
     if (typeof value[key] !== "string" || !HEX_SHA256.test(value[key])) {
       return `integrityHashes.${key} must be a SHA-256 hex digest`;
     }
@@ -244,6 +261,55 @@ function validateCandidateScoreRows(value: unknown): string | undefined {
     if (error !== undefined) return error;
   }
   return undefined;
+}
+
+const CANDIDATE_REJECTION_KEYS: ReadonlySet<string> = new Set([
+  "candidateId",
+  "profile",
+  "aggregateScore",
+  "reason",
+]);
+
+function validateCandidateRejectionRow(row: unknown, index: number): string | undefined {
+  const label = `candidateRejections[${String(index)}]`;
+  if (!isRecord(row)) return `${label} must be an object`;
+  const unknown = Object.keys(row).find((key) => !CANDIDATE_REJECTION_KEYS.has(key));
+  if (unknown !== undefined) return `${label} contains unknown field ${unknown}`;
+  if (!validatePromptEnhancerIdString(row.candidateId, `${label}.candidateId`).ok) {
+    return `${label}.candidateId must be a bounded, content-free identifier`;
+  }
+  if (
+    typeof row.profile !== "string" ||
+    !PROMPT_ENHANCEMENT_PROFILE_IDS.includes(
+      row.profile as (typeof PROMPT_ENHANCEMENT_PROFILE_IDS)[number],
+    )
+  ) {
+    return `${label}.profile must be a known generation profile`;
+  }
+  if (row.aggregateScore !== null && !isUnitInterval(row.aggregateScore)) {
+    return `${label}.aggregateScore must be null or a number in [0, 1]`;
+  }
+  if (!isPromptCandidateRejectionReason(row.reason)) {
+    return `${label}.reason must be one of ${PROMPT_CANDIDATE_REJECTION_REASONS.join(", ")}`;
+  }
+  return undefined;
+}
+
+function validateCandidateRejections(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return "candidateRejections must be an array";
+  if (value.length > PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT) {
+    return `candidateRejections must contain at most ${String(PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT)} entries`;
+  }
+  for (const [index, row] of value.entries()) {
+    const error = validateCandidateRejectionRow(row, index);
+    if (error !== undefined) return error;
+  }
+  const ids = value.flatMap((row) =>
+    isRecord(row) && typeof row.candidateId === "string" ? [row.candidateId] : [],
+  );
+  return new Set(ids).size === ids.length
+    ? undefined
+    : "candidateRejections candidateId values must be unique";
 }
 
 function validateSafetyRecordScalars(value: Record<string, unknown>): string | undefined {
@@ -355,6 +421,7 @@ function validateTotals(value: unknown): string | undefined {
   if (!isRecord(value)) return "totals must be an object";
   for (const key of [
     "candidateScores",
+    "candidateRejections",
     "appliedSafetyRules",
     "assumptions",
     "safetyFindings",
@@ -422,6 +489,8 @@ function validateManifestNestedFields(
 ): string | undefined {
   const candidateError = validateCandidateScoreRows(record.candidateScores);
   if (candidateError !== undefined) return candidateError;
+  const rejectionError = validateCandidateRejections(record.candidateRejections);
+  if (rejectionError !== undefined) return rejectionError;
   const safetyError = validateSafetyRecord(record.safety, status);
   if (safetyError !== undefined) return safetyError;
   const modelMetadataError = validateModelMetadata(record.modelMetadata);

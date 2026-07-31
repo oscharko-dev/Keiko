@@ -250,6 +250,22 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "promptEnhancer.scorecards.score": "Bewertung",
   "promptEnhancer.scorecards.tokens": "Token",
   "promptEnhancer.scorecards.winner": "Gewinner",
+  "promptEnhancer.rejections.title": "Abgelehnte Kandidaten",
+  "promptEnhancer.rejections.candidate": "Kandidat",
+  "promptEnhancer.rejections.reason": "Grund",
+  "promptEnhancer.rejections.notScored": "Nicht bewertet",
+  "promptEnhancer.rejections.reason.lowerAggregateScore":
+    "Niedriger bewertet als der ausgewählte Kandidat",
+  "promptEnhancer.rejections.reason.lowerTieBreakRank":
+    "Deterministischen Gleichstandsentscheid verloren",
+  "promptEnhancer.rejections.reason.exceededTokenBudget": "Token-Budget überschritten",
+  "promptEnhancer.rejections.reason.duplicateCandidate": "Duplikat eines anderen Kandidaten",
+  "promptEnhancer.rejections.reason.safetyFloorNotPreserved":
+    "Erforderliches Sicherheitsniveau nicht beibehalten",
+  "promptEnhancer.rejections.reason.safetyValidationFailed":
+    "Von der Sicherheitsvalidierung abgelehnt",
+  "promptEnhancer.rejections.reason.profilePreferenceNotMatched":
+    "Entspricht nicht der ausgewählten Profilpräferenz",
   "promptEnhancer.section.role": "Rolle",
   "promptEnhancer.section.objective": "Ziel",
   "promptEnhancer.section.context": "Kontext",
@@ -510,7 +526,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitDelivery.preview.branchProtection":
     "Branch-Schutz: {reviews} erforderliche Reviews, {checks} erforderliche Prüfungen",
   "gitDelivery.preview.checks":
-    "Prüfungen: {status} ({passing} erfolgreich, {failing} fehlgeschlagen, {pending} ausstehend von {total})",
+    "Erforderliche Prüfungen: {status} ({passing} erfolgreich, {failing} fehlgeschlagen, {pending} ausstehend von {total})",
+  "gitDelivery.preview.informationalChecks":
+    "Informative Prüfungen: {status} ({passing} erfolgreich, {failing} fehlgeschlagen, {pending} ausstehend von {total})",
   "gitDelivery.preview.ariaLabel": "Aktionsvorschau",
   "gitDelivery.preview.title": "Vorschau",
   "gitDelivery.preview.action": "Aktion",

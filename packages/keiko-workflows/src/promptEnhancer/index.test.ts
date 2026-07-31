@@ -968,6 +968,8 @@ describe("runPromptEnhancement", () => {
       profile: result.candidates.scorecards[0]?.profile,
     });
     expect(record.candidateScores.some((row) => row.selected)).toBe(true);
+    expect(record.candidateRejections).toEqual(result.candidates.rejected);
+    expect(record.candidateRejections.length).toBeGreaterThan(0);
     expect(record.assumptions.length).toBeGreaterThan(0);
   });
 

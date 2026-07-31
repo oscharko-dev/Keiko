@@ -45,13 +45,18 @@ export const GIT_DELIVERY_CHECKS_OVERALL_STATUSES: readonly GitDeliveryChecksOve
   "skipped",
 ] as const;
 
-// Aggregate check state. No check names, no provider run IDs.
-export interface GitDeliveryChecksState {
+interface GitDeliveryCheckGroupState {
   readonly total: number;
   readonly passing: number;
   readonly failing: number;
   readonly pending: number;
   readonly overallStatus: GitDeliveryChecksOverallStatus;
+}
+
+// Aggregate state of the required checks. Informational checks remain visible in a separate,
+// non-blocking aggregate. No check names and no provider run IDs cross the provider boundary.
+export interface GitDeliveryChecksState extends GitDeliveryCheckGroupState {
+  readonly informational?: GitDeliveryCheckGroupState | undefined;
 }
 
 // ─── Pull request ────────────────────────────────────────────────────────────────
@@ -161,6 +166,18 @@ export function isGitDeliveryBranchProtection(
 }
 
 export function isGitDeliveryChecksState(value: unknown): value is GitDeliveryChecksState {
+  return (
+    isRecord(value) &&
+    isNonNegativeInteger(value.total) &&
+    isNonNegativeInteger(value.passing) &&
+    isNonNegativeInteger(value.failing) &&
+    isNonNegativeInteger(value.pending) &&
+    isGitDeliveryChecksOverallStatus(value.overallStatus) &&
+    isUndefinedOr(isGitDeliveryCheckGroupState)(value.informational)
+  );
+}
+
+function isGitDeliveryCheckGroupState(value: unknown): value is GitDeliveryCheckGroupState {
   return (
     isRecord(value) &&
     isNonNegativeInteger(value.total) &&

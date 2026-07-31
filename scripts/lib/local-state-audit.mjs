@@ -1001,6 +1001,7 @@ function checkPromptEnhancementIntegrity(stateDir, pePaths, findings) {
         assumptions: manifest.assumptions,
       }),
       candidateScores: sha256OfJson(manifest.candidateScores),
+      candidateRejections: sha256OfJson(manifest.candidateRejections),
       record: sha256OfJson(record),
     };
     for (const [field, hash] of Object.entries(expected)) {
