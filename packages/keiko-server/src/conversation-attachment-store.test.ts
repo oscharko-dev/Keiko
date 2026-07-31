@@ -197,7 +197,7 @@ describe("conversation attachment store", () => {
     { label: "a negative value", totalContentBytes: -1 },
     { label: "a fractional byte count", totalContentBytes: 1.5 },
     { label: "an unsafe integer", totalContentBytes: Number.MAX_SAFE_INTEGER + 1 },
-  ])("refuses a $label content-byte quota at construction", ({ totalContentBytes }) => {
+  ])("refuses a $label content-byte quota at construction", ({ totalContentBytes }): void => {
     expect(() =>
       createConversationAttachmentStore({
         runtimeStateDir: "/unused",
@@ -208,7 +208,7 @@ describe("conversation attachment store", () => {
     ).toThrow(ConversationAttachmentStoreError);
   });
 
-  it("accepts an exact positive content-byte quota boundary", () => {
+  it("accepts an exact positive content-byte quota boundary", (): void => {
     const store = createConversationAttachmentStore({
       runtimeStateDir: "/unused",
       env: {},
