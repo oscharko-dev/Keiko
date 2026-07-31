@@ -18,7 +18,16 @@ describe("CapsuleDetailRouteError (F4 route-level safety net)", () => {
       const alert = screen.getByRole("alert");
       expect(alert.textContent).toContain("This Knowledge Pod page hit an error");
       expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
-      expect(warnSpy).toHaveBeenCalledWith("[keiko] local-knowledge capsule route crashed", error);
+      // 0.3.0 audit (Qodo review on #2869): the boundary reports the error's CLASS and nothing
+      // else — a raw Error carries a stack with absolute paths and a message Keiko does not
+      // control. Strengthened, not adapted: both the class and the absence of the object are pinned.
+      expect(warnSpy).toHaveBeenCalledWith("[keiko] local-knowledge capsule route crashed: Error");
+      for (const call of warnSpy.mock.calls) {
+        for (const argument of call) {
+          expect(argument).not.toBeInstanceOf(Error);
+          expect(String(argument)).not.toContain("defect");
+        }
+      }
     } finally {
       warnSpy.mockRestore();
     }
