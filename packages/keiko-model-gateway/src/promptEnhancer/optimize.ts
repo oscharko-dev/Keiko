@@ -328,7 +328,7 @@ function preferredCandidateIndex(
 ): number {
   if (preferredProfile === undefined) return 0;
   const index = ranked.findIndex((card) => card.profile === preferredProfile);
-  return index < 0 ? 0 : index;
+  return Math.max(index, 0);
 }
 
 /**

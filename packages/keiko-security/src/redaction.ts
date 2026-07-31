@@ -125,7 +125,9 @@ function escapeRegExp(value: string): string {
 // carry digits or base64 punctuation; English prose does not, which is what keeps "basic
 // internationalization", "token rotation" and "auth-token-refresh-implementation" out of the match
 // set. Both quantifiers are bounded or applied to one flat class, so matching stays linear.
-const CREDENTIAL_VALUE = String.raw`(?=[A-Za-z0-9._~+/=-]{16,})[A-Za-z-]{0,40}[0-9._~+/=]`;
+// This fragment carries no backslash escape, so it is a plain string; the contexts below
+// interpolate it into String.raw templates that do.
+const CREDENTIAL_VALUE = "(?=[A-Za-z0-9._~+/=-]{16,})[A-Za-z-]{0,40}[0-9._~+/=]";
 
 // The credential-bearing CONTEXTS. Each needs a trigger (an auth scheme, an api-key or cookie
 // header, or a known secret key name) immediately followed by a credential value.
@@ -145,7 +147,7 @@ const CREDENTIAL_CONTEXT_SOURCES: readonly string[] = Object.freeze([
 const UNANCHORED_ISSUER_TOKEN_PATTERNS: readonly RegExp[] = Object.freeze([
   /AKIA[0-9A-Z]{12,}/,
   /gh[pousr]_[A-Za-z0-9]{20,}/,
-  /github_pat_[A-Za-z0-9_]{20,}/,
+  /github_pat_\w{20,}/,
   /xox[baprs]-[A-Za-z0-9-]{10,}/,
 ]);
 
