@@ -20,7 +20,8 @@ paths.
 - Complexity and function size: cyclomatic complexity `<= 10` and `<= 50` non-comment lines per
   function.
 - Package/file coverage: no committed per-file or per-package ratchet regression.
-- CodSpeed CPU-simulation regression: `<= 5%` against the `dev` baseline; above 5% fails.
+- Deterministic performance proxies: governed bundle, latency, and operation-budget regressions fail
+  in repository-owned gates.
 - Automated-review findings: `0` unresolved blocking findings and all conversations resolved.
 
 The 85% coverage floor is constitutional, not aspirational. Per-file floors and package ratchets
@@ -50,23 +51,29 @@ SonarCloud and Socket remain independently required. CodeRabbit is assertive but
 exhausted the review quota on PR #2876 and emitted success without reviewing the current head. It
 therefore has neither required status nor review authority. Findings it does emit are still repaired
 and actual conversations are settled; an absent or quota-paced CodeRabbit review is not merge
-evidence and is not a merge blocker. Greptile and CodSpeed are promoted only after a live pull
-request proves exact-head emission, an observed negative case, repaired recovery, stable producer
-identity, and bounded settlement. CodSpeed additionally requires zero-cost continuity. Greptile may
-be required during its no-payment trial only with a recorded hard expiry and owner-bound automated
-rollback.
+evidence and is not a merge blocker. PR #2878 proved exact-head negative and recovery behavior
+before `CodSpeed Performance Analysis` and `CodSpeed policy` were temporarily promoted.
+Greptile's temporary trial checks also proved negative and recovery behavior, but the final canary
+exhausted its 50-credit limit and received no current-head review. Both Greptile checks were removed
+from branch protection, its App was uninstalled, and its repository integration was retired.
+
+The same final canary proved that native CodSpeed performance comparison is not suitable as a
+required check on shared GitHub runners. Two heads that changed no benchmark or transitive production
+path reported different large regressions; one carried CodSpeed's different-runtime-environment
+warning. The native performance status is therefore advisory. The App-bound `CodSpeed policy`
+context remains required and pins the hosted signal to a blocking 5% dashboard threshold. Actual
+merge authority stays with the deterministic performance, bundle, and latency gates inside `ci`.
 
 CodSpeed benchmark execution uses the exact candidate head. Its dashboard-policy verdict is a
 different, base-trusted context: GitHub loads the validator from protected `dev`, downloads only the
-candidate JSON policy, and never executes pull-request code. The context becomes required only after
-a later canary proves this default-branch activation path.
+candidate JSON policy, and never executes pull-request code. PR #2878 proved this default-branch
+activation path before the context became required.
 
 Hosted products are not described as open-source merely because their service is free for a public
 repository. The merge-critical foundation is repository-owned and implemented with open-source
-tooling. No payment method or paid entitlement may be introduced. Greptile is removed from branch
-protection no later than 24 hours before its trial expires unless the pending free-OSS exception is
-approved and its live probes pass. Active automation `keiko-greptile-trial-rollback` owns that
-deadline and must record successful live removal evidence rather than merely attempt the mutation.
+tooling. No payment method or paid entitlement may be introduced. A future Greptile reactivation
+requires an active durable zero-cost entitlement and a new exact-head canary; a pending application
+does not authorize installation or merge authority.
 
 ## Sonar independence
 

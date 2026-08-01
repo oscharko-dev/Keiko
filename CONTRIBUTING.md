@@ -17,8 +17,7 @@ npm run typecheck  # strict type-checking for src + tests
 ## Pull requests
 
 All required status checks must pass on the current pull-request head before a change can merge into
-`dev`. The stable app-bound set is the ten checks below, plus every external status recorded as
-live-promoted in [`docs/qa/external-quality-gates.md`](docs/qa/external-quality-gates.md):
+`dev`. The stable app-bound set is the eleven checks below:
 
 1. `ci`
 2. `workflow hygiene`
@@ -30,14 +29,28 @@ live-promoted in [`docs/qa/external-quality-gates.md`](docs/qa/external-quality-
 8. `SonarCloud Code Analysis`
 9. `Socket Security: Project Report`
 10. `Socket Security: Pull Request Alerts`
-    `workflow hygiene` runs actionlint, the pinned-SHA verification, zizmor and the OSV lockfile
-    scan as one context (ADR-0159); the tools, pinned versions and rule sets are unchanged.
+11. `CodSpeed policy`
+
+`workflow hygiene` runs actionlint, the pinned-SHA verification, zizmor and the OSV lockfile scan as
+one context (ADR-0159); the tools, pinned versions and rule sets are unchanged. The hosted contexts
+and their bounded zero-cost eligibility are recorded in
+[`docs/qa/external-quality-gates.md`](docs/qa/external-quality-gates.md).
 
 No human approving review or manual merge is required. GitHub native auto-merge integrates only
 after the required checks succeed on the exact current head and every review conversation is
 resolved. CodeRabbit remains an assertive advisory reviewer under `.coderabbit.yaml`; its free-tier
 status can report success when quota omits a current-head review, so neither that status nor its
 review state has merge authority. Agents still repair every finding they receive.
+
+Greptile is retired because its 50-credit trial omitted a final-head review before the calendar
+expiry. Its pending OSS application does not provide merge authority; reactivation requires a
+durable zero-cost entitlement and a new live canary.
+
+CodSpeed performance reports remain advisory because shared GitHub runner variability produced
+large reported regressions on canary heads that changed no benchmark or transitive production path.
+The required `CodSpeed policy` context still pins the hosted signal to a blocking 5% dashboard
+threshold. Deterministic bundle, latency, and performance-proxy gates inside `ci` retain merge
+authority.
 
 Qodo and its Keiko for Quality bridge are retired by
 [ADR-0167](docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md); neither is Sonar evidence.

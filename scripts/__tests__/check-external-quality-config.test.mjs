@@ -8,20 +8,16 @@ import {
 
 const sources = loadExternalQualitySources();
 
-function findings(overrides = {}, pathExists = () => true) {
-  return validateExternalQualitySources({ ...sources, ...overrides }, pathExists);
+function findings(overrides = {}) {
+  return validateExternalQualitySources({ ...sources, ...overrides });
 }
 
 describe("external quality integration configuration", () => {
-  it("accepts the repository-owned CodSpeed, CodeRabbit, and Greptile configuration", () => {
+  it("accepts the repository-owned CodSpeed and CodeRabbit configuration", () => {
     expect(validateExternalQualitySources(sources)).toEqual([]);
   });
 
   it.each([
-    ["greptileConfig", ""],
-    ["greptileConfig", '{"rules": ['],
-    ["greptileFiles", ""],
-    ["greptileFiles", '{"files": ['],
     ["packageJson", ""],
     ["packageJson", '{"devDependencies":'],
   ])("returns a redacted finding for malformed %s input", (key, value) => {
@@ -36,7 +32,6 @@ describe("external quality integration configuration", () => {
         "bench:codspeed must execute the repository-owned benchmark entry point",
         "check:external-quality-config script is missing or redirected",
         "check:codspeed-policy script is missing or redirected",
-        "check:greptile-findings script is missing or redirected",
         "semantic duplication must fail on every changed clone group",
       ]),
     );
@@ -169,94 +164,10 @@ describe("external quality integration configuration", () => {
     );
   });
 
-  it("rejects Greptile drift that omits current-head or status evidence", () => {
-    const config = JSON.parse(sources.greptileConfig);
-    config.triggerOnUpdates = false;
-    config.statusCheck = false;
-    config.fixWithAI = true;
-    config.excludeAuthors = ["dependabot[bot]"];
-    expect(findings({ greptileConfig: JSON.stringify(config) })).toEqual(
-      expect.arrayContaining([
-        "Greptile must review every new head",
-        "Greptile must emit an observable status check",
-        "Greptile must not write pull-request code",
-        "Greptile must not omit bot-authored dev pull requests by configuration",
-      ]),
-    );
-  });
-
-  it("rejects Greptile scope, behavior, and rule drift", () => {
-    const config = JSON.parse(sources.greptileConfig);
-    config.strictness = 1;
-    config.commentTypes = ["style"];
-    config.includeBranches = ["main"];
-    config.fileChangeLimit = 999;
-    config.triggerOnDrafts = true;
-    config.shouldUpdateDescription = true;
-    config.updateExistingSummaryComment = false;
-    config.rules = [null];
-    expect(findings({ greptileConfig: JSON.stringify(config) })).toEqual(
-      expect.arrayContaining([
-        "Greptile strictness must remain at high-signal level 2",
-        "Greptile must leave deterministic style/info findings to repository gates",
-        "Greptile must review pull requests targeting dev",
-        "Greptile fileChangeLimit must remain 1000",
-        "Greptile draft auto-review must remain disabled",
-        "Greptile must not mutate Keiko's load-bearing pull request template",
-        "Greptile must update one summary instead of creating comment churn",
-        "Greptile rules must be JSON objects",
-      ]),
-    );
-  });
-
-  it("rejects malformed Greptile context entries without reflecting their values", () => {
-    expect(findings({ greptileFiles: '{"files":[null]}' })).toContain(
-      ".greptile/files.json entries must be JSON objects",
-    );
-    expect(findings({ greptileFiles: "{}" })).toContain(
-      ".greptile/files.json must carry a files array",
-    );
-  });
-
-  it("rejects a Greptile settlement workflow that executes pull-request code", () => {
-    const untrusted = sources.greptileWorkflow
-      .replace(
-        "QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
-        "QUALITY_BASE_SHA: ${{ github.event.pull_request.head.sha }}",
-      )
-      .replace("pull-requests: read", "pull-requests: write");
-    expect(findings({ greptileWorkflow: untrusted })).toEqual(
-      expect.arrayContaining([
-        "Greptile settlement must bind execution to the immutable protected base",
-        "Greptile settlement must never grant writes or execute pull-request code",
-      ]),
-    );
-  });
-
-  it("rejects alternate pull-request refs and a missing base-owned Greptile gate", () => {
-    const untrusted = sources.greptileWorkflow
-      .replace(
-        "QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
-        "QUALITY_BASE_SHA: ${{ github.head_ref }}",
-      )
-      .replace("run: test -f scripts/check-greptile-findings.mjs", "run: true");
-    expect(findings({ greptileWorkflow: untrusted })).toEqual(
-      expect.arrayContaining([
-        "Greptile settlement must bind execution to the immutable protected base",
-        "Greptile settlement must never grant writes or execute pull-request code",
-        "Greptile settlement must fail closed when the base gate is unavailable",
-      ]),
-    );
-  });
-
-  it("rejects missing reviewer context and missing required-ci wiring", () => {
+  it("rejects missing required-ci wiring", () => {
     const withoutGate = sources.ciWorkflow.replace("npm run check:external-quality-config", "");
-    const pathExists = (path) => !path.endsWith("ADR-0019-modular-package-architecture.md");
-    expect(findings({ ciWorkflow: withoutGate }, pathExists)).toEqual(
-      expect.arrayContaining([
-        "required ci must execute check:external-quality-config",
-        "Greptile context path does not exist: docs/adr/ADR-0019-modular-package-architecture.md",
-      ]),
+    expect(findings({ ciWorkflow: withoutGate })).toContain(
+      "required ci must execute check:external-quality-config",
     );
   });
 
@@ -279,13 +190,13 @@ describe("external quality integration configuration", () => {
   it("returns a testable CLI status and redacted messages", () => {
     const log = vi.fn();
     const error = vi.fn();
-    expect(main(sources, () => true, log, error)).toBe(0);
+    expect(main(sources, log, error)).toBe(0);
     expect(log).toHaveBeenCalledOnce();
     expect(error).not.toHaveBeenCalled();
 
-    expect(main({ ...sources, greptileConfig: "" }, () => true, log, error)).toBe(1);
+    expect(main({ ...sources, packageJson: "" }, log, error)).toBe(1);
     expect(error).toHaveBeenCalledWith(
-      "external-quality-config: greptileConfig must contain a valid JSON object",
+      "external-quality-config: packageJson must contain a valid JSON object",
     );
   });
 });

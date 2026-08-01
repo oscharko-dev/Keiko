@@ -18,10 +18,6 @@ const codspeedPolicy = readFileSync(
   resolve(repoRoot, ".github/workflows/codspeed-policy.yml"),
   "utf8",
 );
-const greptileSettlement = readFileSync(
-  resolve(repoRoot, ".github/workflows/greptile-settlement.yml"),
-  "utf8",
-);
 const windowsNativeQuality = readFileSync(
   resolve(repoRoot, "scripts/check-windows-native-quality.ps1"),
   "utf8",
@@ -223,7 +219,6 @@ describe("CI test/gate wiring guard", () => {
       portableAssetsWorkflow,
       mutationSecurityWorkflow,
       codspeedPolicy,
-      greptileSettlement,
     ].join("\n");
     const nodeSetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
     const verificationCount =
@@ -231,11 +226,10 @@ describe("CI test/gate wiring guard", () => {
     // 17 -> 20 with the three coverage suite jobs Issue #2704 split out of `coverage-sonar`,
     // then 20 -> 22 with the credential-free macOS qualification and protected sealing lanes,
     // then 22 -> 23 with the diff-scoped semantic-duplication lane, 23 -> 24 when the secret scan
-    // adopted the governed runtime, 24 -> 25 with live CodSpeed policy enforcement, and 25 -> 26
-    // with base-trusted exact-head Greptile finding settlement.
+    // adopted the governed runtime, and 24 -> 25 with live CodSpeed policy enforcement.
     // The load-bearing assertion is the pairing below: every Node lane, old or new, verifies the
     // governed toolchain.
-    expect(nodeSetupCount).toBe(26);
+    expect(nodeSetupCount).toBe(25);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
   });
@@ -269,12 +263,6 @@ describe("CI test/gate wiring guard", () => {
     expect(codspeedPolicy).not.toContain("uses: actions/checkout@");
     expect(codspeedPolicy).toContain("run: node scripts/check-codspeed-policy.mjs");
     expect(ci).not.toContain("greptile-findings:");
-    expect(greptileSettlement).toContain("pull_request_target:");
-    expect(greptileSettlement).toContain(
-      "QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
-    );
-    expect(greptileSettlement).not.toContain("uses: actions/checkout@");
-    expect(greptileSettlement).toContain("run: node scripts/check-greptile-findings.mjs");
   });
 
   // GEN-SYNTH-COVERAGE-003: the root suite intentionally excludes keiko-ui (235 files) — they run in

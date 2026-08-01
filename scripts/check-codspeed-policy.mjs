@@ -49,11 +49,20 @@ function extractSettings(payload) {
   return settings;
 }
 
+function extractAllowedRegression(settings) {
+  const value = settings.allowedRegression;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new TypeError("live regression threshold is invalid");
+  }
+  return value;
+}
+
 export function validateLiveSettings(policy, payload) {
   const settings = extractSettings(payload);
+  const allowedRegression = extractAllowedRegression(settings);
   const expectedRegression = policy.regressionThresholdPercent / 100;
   const problems = [];
-  if (settings.allowedRegression !== expectedRegression) {
+  if (allowedRegression !== expectedRegression) {
     problems.push("live regression threshold differs from the repository policy");
   }
   if (settings.informationalCheckOnFailure !== !policy.failOnRegression) {

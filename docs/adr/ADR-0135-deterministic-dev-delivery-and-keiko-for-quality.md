@@ -86,12 +86,17 @@ evidence. They run with the documented ten-sample protocol after merge or on exp
 lanes. Pull requests still require UI build, typecheck, lint, coverage and accessibility tests,
 smoke E2E, editor E2E, package surface, and deterministic budget checks.
 
-### D5 — Unbounded and quota-dependent analysis remains advisory
+### D5 — Historical Qodo/KFQ topology (superseded)
 
 The Qodo and Keiko for Quality topology below is retained only as historical decision context.
 [ADR-0167](ADR-0167-zero-cost-autonomous-quality-gates.md) retires both products and replaces this
-section's activation state with direct CodeRabbit, Greptile, and CodSpeed settlement plus the
-repository-owned OSS gates.
+section's activation state with advisory CodeRabbit and CodSpeed performance reporting, a required
+CodSpeed policy validator, and the repository-owned OSS gates. Greptile's temporary trial activation
+was also retired after quota pacing omitted a canary-head review.
+
+The remainder of this D5 subsection describes the topology at the time of the original decision. It
+is not current operating guidance, cannot satisfy branch protection, and must not be used to restore
+any retired producer.
 
 Qodo Code Review is the advisory review product. It is comment-only: it posts a single summary
 review comment — the Bugs, Rule violations, and Requirement gaps counts — updated in place per head,
