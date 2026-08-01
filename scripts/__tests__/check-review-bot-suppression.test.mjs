@@ -98,7 +98,7 @@ describe("review bot suppression gate", () => {
     );
     log.mockClear();
     error.mockClear();
-    expect(main(undefined, false, log, error)).toBe(0);
+    expect(main("", false, log, error)).toBe(0);
     expect(log).toHaveBeenCalledWith(
       "review-bot-suppression: SKIP — no local GitHub event payload",
     );
