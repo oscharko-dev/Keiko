@@ -19,6 +19,7 @@ on:
       - epic/coding-workbench-opencode-codex
       - "release/**"
   pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, edited]
     branches:
       - dev
       - feat/dev
@@ -240,6 +241,7 @@ jobs:
       - run: npm run check:osv-waiver-scope
       - run: npm run check:knip
       - run: npm run check:external-quality-config
+      - run: npm run check:review-bot-suppression
       - run: npm run check:release-required-workflows
       - run: npm run check:portable-approvals
       - run: npm run check:git-client-evidence

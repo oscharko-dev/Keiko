@@ -27,9 +27,14 @@ the wall clock.
 
 ## Settlement model per producer
 
-- **CodeRabbit:** advisory inline and body-only findings; quota can omit a current-head review.
-  Repair every emitted finding and settle actual conversations. Ignore its status/review state as
-  evidence; never use the provider ignore controls.
+- **CodeRabbit:** conditional request-changes review on every `dev` pull request and new push; quota
+  can omit a current-head review. An omitted review creates no required status, but every emitted
+  inline finding blocks until repaired and its conversation is resolved. Review-body and summary
+  output remains advisory because it has no resolvable native thread. Never use ignore,
+  bulk-resolve, dismissal, or bypass controls.
+- **Greptile:** quota-tolerant review on every eligible `dev` update. Its provider status is not
+  required, so missing review evidence cannot deadlock merge. Every emitted inline finding blocks
+  through GitHub conversation resolution until repaired and resolved.
 - **SonarCloud:** native gate plus issues that may sit below summary thresholds. Query the PR issue
   API, repair all findings, rerun the exact local analyzer, and require both native and repository
   validators to see zero current-head issues.

@@ -414,11 +414,13 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   lockfile scan as serial steps of one job (ADR-0159) — same tools, same pinned versions, same rule
   sets as the four separate contexts it replaced.
 
-  No human approving review is required for `dev`. CodeRabbit is advisory because its free-tier
-  status can report success after quota prevents a current-head review; it is not a required status
-  or review authority. Findings still must be repaired and every actual review conversation remains
-  resolved. Qodo, Keiko for Quality, and Greptile are retired under ADR-0167; Greptile exhausted its
-  50-credit trial and omitted a final-head review. CodSpeed performance reports are advisory because
+  No human approving review is required for `dev`. CodeRabbit reviews every `dev` pull request and
+  every subsequent push without auto-pause. Its status is not required because quota can omit a
+  current-head review, but every emitted inline finding requests changes and blocks until repaired
+  and its conversation is resolved. Qodo and Keiko for Quality remain retired under ADR-0167. Greptile
+  follows the same quota-tolerant model under ADR-0168: it reviews every eligible update, has no
+  required provider status, and every emitted inline finding blocks until repaired and resolved.
+  CodSpeed performance reports are advisory because
   shared-runner variance produced false regressions on unchanged benchmark inputs; its required
   policy context still prevents dashboard threshold drift. Sonar remains independently required and
   revalidated inside `ci`. Full mutation and reference-machine performance evidence run outside the

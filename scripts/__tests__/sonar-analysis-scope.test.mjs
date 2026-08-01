@@ -4,16 +4,22 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  SONAR_TEST_INCLUSION_PATTERNS,
   analysisScopeFailures,
   classifyAnalysisPath,
   coverageDisposition,
   executeAnalysisScopeCli,
+  executeSonarInclusionPartitionCli,
+  executeSonarInclusionSafetyCli,
   isCoverableProductSource,
   isGeneratedOrBinaryPath,
   isTestPath,
   optionValue,
+  partitionSonarInclusions,
   readNativeScope,
   runAnalysisScopeCheck,
+  serializeSonarInclusionPartition,
+  sonarInclusionPathsNeedFullScan,
   sourceEncodingFailures,
   systemGitExecutable,
 } from "../sonar-analysis-scope.mjs";
@@ -43,17 +49,7 @@ const nativeEntries = [
   },
 ];
 const nativeSources = new Set(nativeEntries.map((entry) => entry.path));
-const validProperties = [
-  "sonar.sources=.",
-  "sonar.tests=.",
-  "sonar.sourceEncoding=UTF-8",
-  "sonar.typescript.tsconfigPaths=tsconfig.json,packages/*/tsconfig.json,tests/e2e/servers/tsconfig.json",
-  "sonar.plsql.file.suffixes=-",
-  "sonar.test.inclusions=tests/**",
-  "sonar.test.exclusions=native/portable-launcher/**,scripts/native-quality/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts,**/*.c,**/*.cc,**/*.cxx,**/*.h,**/*.hh,**/*.m,**/*.mm,**/*.cs",
-  "sonar.exclusions=tests/**,native/portable-launcher/**,scripts/native-quality/**,scripts/windows-portable-rfc3161.cs,native/launcher.c,scripts/helper.cs,**/*.c,**/*.cc,**/*.cxx,**/*.h,**/*.hh,**/*.m,**/*.mm,**/*.cs",
-  "sonar.cpd.exclusions=packages/keiko-ui/src/lib/i18n-messages.*.ts,packages/keiko-ui/src/**/*-i18n.ts,packages/keiko-ui/src/**/*-i18n.de.ts,packages/keiko-ui/src/**/*-i18n.en.ts,scripts/__tests__/windows-rfc3161-fixtures.ps1,scripts/__tests__/windows-native-policy-fixtures.ps1",
-].join("\n");
+const validProperties = repositorySonarProperties;
 
 function removePropertyPattern(properties, key, pattern) {
   return properties
@@ -92,6 +88,13 @@ describe("Sonar analysis scope", () => {
     expect(
       classifyAnalysisPath("native/runtime-supervisor/macos/test-protocol.mjs", nativeSources),
     ).toBe("test");
+    expect(classifyAnalysisPath("native/runtime-supervisor/test-protocol.mjs", nativeSources)).toBe(
+      "test",
+    );
+    expect(
+      classifyAnalysisPath("native/secure-workspace-read/test-protocol.mjs", nativeSources),
+    ).toBe("test");
+    expect(classifyAnalysisPath("scripts/test-protocol.mjs", nativeSources)).toBe("source");
     expect(
       classifyAnalysisPath("scripts/native-quality/Keiko.NativeQuality.csproj", nativeSources),
     ).toBe("excluded");
@@ -101,6 +104,84 @@ describe("Sonar analysis scope", () => {
     expect(classifyAnalysisPath("scripts/check.ps1", nativeSources)).toBe("source");
     expect(classifyAnalysisPath("infrastructure/worker.toml", nativeSources)).toBe("source");
     expect(classifyAnalysisPath("LICENSE", nativeSources)).toBe("ignored");
+  });
+
+  it("partitions exact local inclusions without reclassifying production files as tests", () => {
+    expect(
+      partitionSonarInclusions([
+        "scripts/check-reviewer-policy.mjs",
+        "scripts/__tests__/check-reviewer-policy.test.mjs",
+        "tests/e2e/smoke.spec.ts",
+        "scripts/check-reviewer-policy.mjs",
+      ]),
+    ).toEqual({
+      sources: ["scripts/check-reviewer-policy.mjs"],
+      tests: ["scripts/__tests__/check-reviewer-policy.test.mjs", "tests/e2e/smoke.spec.ts"],
+    });
+    expect(partitionSonarInclusions(["scripts/check-reviewer-policy.mjs"]).tests).toEqual([]);
+    expect(
+      partitionSonarInclusions(["scripts/__tests__/check-reviewer-policy.test.mjs"]).sources,
+    ).toEqual([]);
+    const partition = partitionSonarInclusions([
+      "scripts/check-reviewer-policy.mjs",
+      "scripts/__tests__/check-reviewer-policy.test.mjs",
+    ]);
+    expect(new Set([...partition.sources, ...partition.tests])).toEqual(
+      new Set([
+        "scripts/check-reviewer-policy.mjs",
+        "scripts/__tests__/check-reviewer-policy.test.mjs",
+      ]),
+    );
+    expect(partition.sources.some((path) => partition.tests.includes(path))).toBe(false);
+    expect(serializeSonarInclusionPartition('["tests/a.test.ts","src/main.ts"]')).toBe(
+      '{"sources":["src/main.ts"],"tests":["tests/a.test.ts"]}',
+    );
+    const log = vi.fn();
+    const error = vi.fn();
+    expect(
+      executeSonarInclusionPartitionCli({
+        source: '["tests/a.test.ts","src/main.ts"]',
+        log,
+        error,
+      }),
+    ).toBe(0);
+    expect(log).toHaveBeenCalledWith('{"sources":["src/main.ts"],"tests":["tests/a.test.ts"]}');
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the local inclusion inventory is malformed", () => {
+    expect(() => partitionSonarInclusions(["src/main.ts", 42])).toThrow(/array of strings/u);
+    expect(() => partitionSonarInclusions([""])).toThrow(/represented exactly/u);
+    expect(() => partitionSonarInclusions(["src\\literal.ts"])).toThrow(/represented exactly/u);
+    expect(() => partitionSonarInclusions([" src/leading.ts"])).toThrow(/represented exactly/u);
+    expect(() => partitionSonarInclusions(["src/trailing.ts\u001f"])).toThrow(
+      /represented exactly/u,
+    );
+    expect(() => serializeSonarInclusionPartition("not-json")).toThrow(/payload is invalid/u);
+    const log = vi.fn();
+    const error = vi.fn();
+    expect(executeSonarInclusionPartitionCli({ source: "not-json", log, error })).toBe(1);
+    expect(log).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith("sonar-inclusion-partition: FAIL - invalid path inventory");
+  });
+
+  it("routes every inexact inclusion inventory to the full-scan fallback", () => {
+    expect(sonarInclusionPathsNeedFullScan(["src/main.ts"])).toBe(false);
+    for (const path of [
+      " src/leading.ts",
+      "src/trailing.ts ",
+      "src/trailing.ts\u001f",
+      "src\\literal.ts",
+      "src/[dynamic].ts",
+      "src/comma,name.ts",
+    ]) {
+      expect(sonarInclusionPathsNeedFullScan([path])).toBe(true);
+    }
+    const log = vi.fn();
+    expect(
+      executeSonarInclusionSafetyCli({ source: '[" src/leading.ts"]', log, error: vi.fn() }),
+    ).toBe(0);
+    expect(log).toHaveBeenCalledWith("yes");
   });
 
   it("keeps the macOS runtime protocol harness in the Sonar test lane", () => {
@@ -223,7 +304,7 @@ describe("Sonar analysis scope", () => {
           platforms: ["macos"],
         },
       ],
-      properties: validProperties,
+      properties: removePropertyPattern(validProperties, "sonar.exclusions", "**/*.c"),
     });
     expect(failures).toContain(
       "native quality source is not excluded from Sonar analysis: native/other/launcher.c",
@@ -234,12 +315,105 @@ describe("Sonar analysis scope", () => {
     const failures = analysisScopeFailures({
       files: nativeEntries.map((entry) => entry.path),
       nativeEntries,
-      properties: validProperties.replace(
-        "sonar.test.inclusions=tests/**",
-        "sonar.test.inclusions=tests/**,**/__tests__/**",
-      ),
+      properties: removePropertyPattern(validProperties, "sonar.exclusions", "**/__tests__/**"),
     });
     expect(failures).toContain("Sonar test inclusion overlaps source scope: **/__tests__/**");
+  });
+
+  it("fails when configured test inclusions drift from the executable classifier", () => {
+    const missing = removePropertyPattern(validProperties, "sonar.test.inclusions", "**/*.test.*");
+    expect(
+      analysisScopeFailures({
+        files: nativeEntries.map((entry) => entry.path),
+        nativeEntries,
+        properties: missing,
+      }),
+    ).toContain("sonar.test.inclusions is missing classifier pattern **/*.test.*");
+
+    const expectedPatterns = SONAR_TEST_INCLUSION_PATTERNS.join(",");
+    const unexpected = validProperties.replace(
+      `sonar.test.inclusions=${expectedPatterns}`,
+      `sonar.test.inclusions=${expectedPatterns},scripts/test-protocol.mjs`,
+    );
+    expect(
+      analysisScopeFailures({
+        files: nativeEntries.map((entry) => entry.path),
+        nativeEntries,
+        properties: unexpected,
+      }),
+    ).toContain("sonar.test.inclusions has unknown classifier pattern scripts/test-protocol.mjs");
+  });
+
+  it("rejects every scope override plus alternate, escaped, and continued declarations", () => {
+    const duplicate = `${validProperties}\nsonar.test.inclusions:tests/**`;
+    expect(
+      analysisScopeFailures({
+        files: nativeEntries.map((entry) => entry.path),
+        nativeEntries,
+        properties: duplicate,
+      }),
+    ).toContain("sonar.test.inclusions must have exactly one declaration");
+    const bare = `${validProperties}\nsonar.test.inclusions`;
+    expect(
+      analysisScopeFailures({
+        files: nativeEntries.map((entry) => entry.path),
+        nativeEntries,
+        properties: bare,
+      }),
+    ).toContain("sonar.test.inclusions must have exactly one declaration");
+
+    const expectedPatterns = SONAR_TEST_INCLUSION_PATTERNS.join(",");
+    const alternate = validProperties.replace(
+      `sonar.test.inclusions=${expectedPatterns}`,
+      `sonar.test.inclusions ${expectedPatterns}`,
+    );
+    expect(
+      analysisScopeFailures({
+        files: nativeEntries.map((entry) => entry.path),
+        nativeEntries,
+        properties: alternate,
+      }),
+    ).toContain("sonar.test.inclusions must use one canonical key=value declaration");
+
+    for (const declaration of [
+      "sonar.inclusions=.keiko/no-files/**",
+      "sonar.sources=.keiko/no-files",
+      "sonar.exclusions=**/*",
+    ]) {
+      expect(
+        analysisScopeFailures({
+          files: nativeEntries.map((entry) => entry.path),
+          nativeEntries,
+          properties: `${validProperties}\n${declaration}`,
+        }),
+      ).not.toEqual([]);
+    }
+
+    const escaped = `${validProperties}\nsonar.test.inclusion\\u0073=tests/**`;
+    const continued = `${validProperties}\nsonar.projectName=Keiko\\`;
+    expect(
+      analysisScopeFailures({
+        files: nativeEntries.map((entry) => entry.path),
+        nativeEntries,
+        properties: escaped,
+      }),
+    ).toContain("Sonar property keys must not use escapes");
+    expect(
+      analysisScopeFailures({
+        files: nativeEntries.map((entry) => entry.path),
+        nativeEntries,
+        properties: continued,
+      }),
+    ).toContain("Sonar properties must not use continuations");
+
+    const bareCarriageReturn = `${validProperties}\rsonar.test.inclusions=scripts/**`;
+    expect(
+      analysisScopeFailures({
+        files: nativeEntries.map((entry) => entry.path),
+        nativeEntries,
+        properties: bareCarriageReturn,
+      }),
+    ).toContain("sonar.test.inclusions must have exactly one declaration");
   });
 
   it("fails closed when either Sonar lane can analyze a native language", () => {

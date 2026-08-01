@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -31,6 +34,16 @@ function response(payload = SETTINGS, ok = true) {
 }
 
 describe("live CodSpeed policy", () => {
+  it("keeps the base-owned live gate independent from the YAML reviewer parser", () => {
+    const source = readFileSync(
+      resolve(import.meta.dirname, "..", "check-codspeed-policy.mjs"),
+      "utf8",
+    );
+    expect(source).toContain('from "./lib/codspeed-policy-contract.mjs"');
+    expect(source).not.toContain("check-external-quality-config");
+    expect(source).not.toContain('from "yaml"');
+  });
+
   it("loads the workflow-provided candidate policy path as data", () => {
     const read = vi.fn().mockReturnValue(POLICY);
     expect(loadPolicySource({ QUALITY_CODSPEED_POLICY_PATH: "/runner/policy.json" }, read)).toBe(

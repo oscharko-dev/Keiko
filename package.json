@@ -139,6 +139,8 @@
     "check:dependency-hygiene": "node scripts/check-dependency-hygiene.mjs",
     "check:knip": "node scripts/check-knip.mjs",
     "check:external-quality-config": "node scripts/check-external-quality-config.mjs",
+    "check:review-bot-suppression": "node scripts/check-review-bot-suppression.mjs",
+    "check:reviewer-policy": "node scripts/check-reviewer-policy.mjs",
     "check:codspeed-policy": "node scripts/check-codspeed-policy.mjs",
     "check:semantic-duplication": "fallow dupes --mode semantic --min-tokens 100 --min-lines 10 --ignore-imports --format compact --fail-on-issues",
     "check:runtime-toolchain": "node scripts/check-runtime-toolchain.mjs",
@@ -242,7 +244,8 @@
     "knip": "6.27.0",
     "prettier": "^3.0.0",
     "typescript-eslint": "^8.64.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "yaml": "2.9.0"
   },
   "dependencies": {
     "@oscharko-dev/keiko-cli": "0.2.15",

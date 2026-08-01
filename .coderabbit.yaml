@@ -1,9 +1,9 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 #
-# CodeRabbit is a quota-bounded advisory reviewer, never a merge authority or code-writing agent.
-# Its free-tier status is not accepted as gate evidence because it can report success when a review
-# is omitted. Findings are repaired and conversations settled, but no CodeRabbit status or review
-# state may authorize or deny native auto-merge.
+# CodeRabbit is a quota-bounded conditional reviewer, never a code-writing agent. Its status is not
+# accepted as gate evidence because quota can omit a review. When CodeRabbit does emit a finding,
+# its request-changes review and the repository's conversation-resolution rule block native
+# auto-merge until every finding is repaired and every conversation is resolved.
 language: "en-US"
 early_access: false
 enable_free_tier: true
@@ -11,12 +11,14 @@ inheritance: false
 
 reviews:
   profile: "assertive"
-  request_changes_workflow: false
+  request_changes_workflow: true
   commit_status: false
   fail_commit_status: false
   review_status: false
   review_details: true
-  high_level_summary: true
+  # Keep CodeRabbit output in review comments. Editing the PR body retriggers required CI and adds
+  # quota-driven latency without contributing merge evidence.
+  high_level_summary: false
   sequence_diagrams: false
   poem: false
   enable_prompt_for_ai_agents: true
@@ -72,7 +74,8 @@ reviews:
     auto_incremental_review: true
     auto_pause_after_reviewed_commits: 0
     drafts: false
-    base_branches: []
+    base_branches:
+      - "dev"
     ignore_usernames: []
 
   finishing_touches:
@@ -112,7 +115,7 @@ knowledge_base:
         applyTo: "**"
       - files: "docs/qa/review-settlement.md,docs/qa/autonomous-quality-gates.md,docs/qa/external-quality-gates.md"
         applyTo: "**"
-      - files: "docs/adr/ADR-0019-modular-package-architecture.md,docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md,docs/adr/ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md,docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md,docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md"
+      - files: "docs/adr/ADR-0019-modular-package-architecture.md,docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md,docs/adr/ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md,docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md,docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md,docs/adr/ADR-0168-quota-tolerant-review-settlement.md"
         applyTo: "**"
   learnings:
     scope: "local"

@@ -48,3 +48,27 @@ The canary never changes the protected `dev` branch directly, relaxes branch pro
 a finding, acknowledges a performance regression, changes a baseline, or uses an administrator
 bypass. Only the hardened live-value validation, its regression tests, provider rollbacks justified
 by exact-head evidence, and redacted evidence remain in the final diff.
+
+## Owner-directed restoration
+
+ADR-0168 and Issue #2879 supersede only the Greptile rollback's current installation state. On
+2026-08-01 the authenticated provider UI reported 14 days remaining in the no-payment trial. App
+`867647` was reinstalled with access limited to `oscharko-dev/Keiko`, and repository review policy
+was restored. Greptile now follows CodeRabbit's quota-tolerant model: neither provider status is
+required, while every inline review conversation remains merge-blocking until resolved. The stable
+protected set therefore remains eleven App-bound checks.
+
+PR #2880 is the restoration canary. On signed head
+`d61d5692a724f9a2174610c7ecc99b7bc282d619`, Greptile reported the exhausted trial-credit limit and
+created no inline thread; the advisory absence did not satisfy or block a required check. CodeRabbit
+then appended a generated summary to the PR description, which emitted a pull-request `edited`
+event and restarted required CI on the unchanged head. The recovery disables CodeRabbit high-level
+summaries so hosted review output cannot mutate the load-bearing PR template or create avoidable
+same-head CI churn; automatic and incremental inline review remains enabled.
+
+PR #2880 also bootstraps the base-owned reviewer-policy step. GitHub cannot execute a newly added
+`pull_request_target` step from the candidate branch, so this pull request cannot be evidence for
+that step. After merge, a separate canary must first change reviewer policy and its candidate
+validator together and observe `CodSpeed policy` fail, then restore the exact approved blobs on a
+new head and observe success. Until both exact-head results exist, only the CodeRabbit/Greptile
+settlement behavior above is considered proven.

@@ -41,11 +41,14 @@ single MINOR of this class fails the required `ci` context.
    start reuses the cached volumes and takes seconds. Worktrees of one repository share that
    server, its persisted administrator credential, and its cache.
 2. Provisions a local analysis token. There is no account, no secret and no network dependency.
-3. Analyses committed branch changes plus staged, unstaged, and untracked working-tree files under
+3. Partitions committed branch changes plus staged, unstaged, and untracked working-tree files into
+   disjoint main-code and test inventories before analysis. A production path is never also passed
+   through `sonar.test.inclusions`, because that would suppress main-code rules on the file.
+4. Analyses those files under
    a checkout-scoped project key (`keiko-local-<hash>`), so several checkouts or agent sessions on
    one machine can run the lane concurrently without overwriting each other's analysis state or
    revoking each other's in-flight token.
-4. Prints the findings that land **on files this branch changed against `origin/dev`**, and exits
+5. Prints the findings that land **on files this branch changed against `origin/dev`**, and exits
    non-zero if there are any. If a changed path cannot be expressed as an exact Sonar inclusion
    (for example, a Next.js `[capsuleId]` route), analysis safely expands to the whole project while
    the report and verdict remain losslessly filtered to the changed-file set.
@@ -94,10 +97,12 @@ need answered before pushing — and never as _"SonarCloud will be green"_.
 
 ## When it disagrees with CI
 
-If SonarCloud reports something this did not, the cause is almost always the profile difference
-above. Add the rule to the table at the top of this document with the pull request that hit it, so
-the next person knows to check it by hand. If this reports something SonarCloud does not, fix it
-anyway: the rule is real, and the organisation's profile can change.
+If SonarCloud reports something this did not, first compare the scanner's `Included sources` and
+`Included tests` inventories. A changed production path in the test inventory is a local gate defect
+and must be repaired before relying on the scan. Once classification agrees, check the profile
+difference above and add a genuinely cloud-only rule to the table at the top of this document with
+the pull request that hit it. If this reports something SonarCloud does not, fix it anyway: the rule
+is real, and the organisation's profile can change.
 
 ## Troubleshooting
 

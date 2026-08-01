@@ -1,24 +1,52 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { parse as parseYaml } from "yaml";
+
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { validateCodSpeedPolicy } from "./lib/codspeed-policy-contract.mjs";
+
+export { validateCodSpeedPolicy };
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CODSPEED_ACTION = "CodSpeedHQ/action@88472375d0a4572cf70a9f1fe3a4e0ab8da1b924 # v5.0.1";
+const CODERABBIT_POLICY_DIGEST = "2c7b377288aa83799ac4d025b0d6521a69c255ee8d30c878bbcf0f68fedcdaa4";
+const GREPTILE_CONFIG_POLICY_DIGEST =
+  "9b91b199db0bbc311ea037449ebafebf57c789cdb24a4721c2145e1751795e00";
+const GREPTILE_FILES_POLICY_DIGEST =
+  "3f4c83ab4cb2755028d2c6455475bff05f3eb43e1dd997106b300004cdf58179";
+const REQUIRED_GREPTILE_FILES = [
+  "AGENTS.md",
+  "CONTRIBUTING.md",
+  "docs/qa/review-standards.md",
+  "docs/adr/ADR-0019-modular-package-architecture.md",
+  "docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md",
+  "docs/adr/ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md",
+  "docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md",
+  "docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md",
+  "docs/adr/ADR-0168-quota-tolerant-review-settlement.md",
+  "docs/qa/autonomous-quality-gates.md",
+];
 const CODERABBIT_TEXT_CHECKS = [
   ['profile: "assertive"', "CodeRabbit must keep its assertive review profile"],
   [
-    "  request_changes_workflow: false",
-    "CodeRabbit must not regain quota-dependent review authority",
+    "  request_changes_workflow: true",
+    "CodeRabbit findings must request changes until their conversations are resolved",
   ],
   ["  commit_status: false", "CodeRabbit must not emit a quota-dependent merge status"],
   ["  fail_commit_status: false", "CodeRabbit failure status must remain advisory"],
   ["  review_status: false", "CodeRabbit review state must remain advisory"],
   ["review_details: true", "CodeRabbit must disclose incomplete or suppressed review scope"],
+  ["high_level_summary: false", "CodeRabbit must not mutate the pull-request description"],
   ["auto_incremental_review: true", "CodeRabbit must review pull request updates"],
   ["auto_pause_after_reviewed_commits: 0", "CodeRabbit must not silently pause after head updates"],
   ["drafts: false", "CodeRabbit draft auto-review must remain disabled"],
+  ['base_branches:\n      - "dev"', "CodeRabbit must review every pull request targeting dev"],
   ["ignore_usernames: []", "CodeRabbit must not omit bot-authored pull requests"],
   ["web_search:\n    enabled: false", "CodeRabbit must not add untrusted web context to review"],
   [
@@ -45,13 +73,79 @@ const CODERABBIT_TEXT_CHECKS = [
     "CodeRabbit must consume repository governance",
   ],
   [
-    'files: "docs/adr/ADR-0019-modular-package-architecture.md,docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md,docs/adr/ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md,docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md,docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md"',
+    'files: "docs/adr/ADR-0019-modular-package-architecture.md,docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md,docs/adr/ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md,docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md,docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md,docs/adr/ADR-0168-quota-tolerant-review-settlement.md"',
     "CodeRabbit must consume canonical architecture, authority, Sonar, and delivery decisions",
   ],
 ];
 
+const IGNORED_SCAN_DIRECTORIES = new Set([".git"]);
+const ALLOWED_ROOT_GREPTILE_FILES = new Set([".greptile/config.json", ".greptile/files.json"]);
+const GREPTILE_INVENTORY_FAILURE = ".greptile/inventory-unavailable";
+
 function read(repoRoot, path) {
   return readFileSync(join(repoRoot, path), "utf8");
+}
+
+function isGreptilePath(path) {
+  return path.split("/").includes(".greptile");
+}
+
+function findFilesystemPaths(repoRoot, relativeDirectory = "") {
+  const paths = [];
+  for (const entry of readdirSync(join(repoRoot, relativeDirectory), { withFileTypes: true })) {
+    if (IGNORED_SCAN_DIRECTORIES.has(entry.name)) continue;
+    const relativePath = join(relativeDirectory, entry.name);
+    const normalized = relativePath.replaceAll("\\", "/");
+    if (entry.isSymbolicLink()) {
+      if (isGreptilePath(normalized)) paths.push(normalized);
+      continue;
+    }
+    if (entry.isDirectory()) {
+      paths.push(...findFilesystemPaths(repoRoot, relativePath));
+      continue;
+    }
+    paths.push(normalized);
+  }
+  return paths;
+}
+
+function listGitRepositoryPaths(repoRoot) {
+  try {
+    execFileSync(resolveHostExecutable("git"), ["rev-parse", "--is-inside-work-tree"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return undefined;
+  }
+  try {
+    return execFileSync(
+      resolveHostExecutable("git"),
+      ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    )
+      .split("\0")
+      .filter((path) => path.length > 0);
+  } catch {
+    return [GREPTILE_INVENTORY_FAILURE];
+  }
+}
+
+function isReviewedRootGreptileFile(repoRoot, path) {
+  return ALLOWED_ROOT_GREPTILE_FILES.has(path) && isRegularRepositoryFile(repoRoot, path);
+}
+
+export function findUnreviewedGreptilePaths(repoRoot) {
+  const paths = listGitRepositoryPaths(repoRoot) ?? findFilesystemPaths(repoRoot);
+  return paths.filter(
+    (path) => isGreptilePath(path) && !isReviewedRootGreptileFile(repoRoot, path),
+  );
 }
 
 export function loadExternalQualitySources(repoRoot = REPO_ROOT) {
@@ -63,13 +157,21 @@ export function loadExternalQualitySources(repoRoot = REPO_ROOT) {
     codspeedWorkflow: read(repoRoot, ".github/workflows/codspeed.yml"),
     ciWorkflow: read(repoRoot, ".github/workflows/ci.yml"),
     codeRabbitConfig: read(repoRoot, ".coderabbit.yaml"),
+    greptileConfig: read(repoRoot, ".greptile/config.json"),
+    greptileFiles: read(repoRoot, ".greptile/files.json"),
+    unreviewedGreptilePaths: findUnreviewedGreptilePaths(repoRoot),
   };
 }
 
 function validateCodeRabbitConfig(source) {
+  const parsed = parseYamlObject(source, "codeRabbitConfig");
+  if (parsed.value === undefined) return parsed.problems;
   const problems = CODERABBIT_TEXT_CHECKS.flatMap(([expected, finding]) =>
     missingText(source, expected, finding),
   );
+  if (parsed.value.reviews?.auto_review?.enabled !== true) {
+    problems.push("CodeRabbit automatic review must remain enabled");
+  }
   const disabledMutations = [
     "docstrings",
     "unit_tests",
@@ -82,6 +184,9 @@ function validateCodeRabbitConfig(source) {
     const pattern = new RegExp(String.raw`${feature}:\n\s+enabled: false`, "u");
     if (!pattern.test(source)) problems.push(`CodeRabbit ${feature} mutation must remain disabled`);
   }
+  if (semanticDigest(parsed.value) !== CODERABBIT_POLICY_DIGEST) {
+    problems.push("CodeRabbit semantic review policy must match the reviewed configuration");
+  }
   return problems;
 }
 
@@ -91,6 +196,32 @@ function missingText(source, expected, finding) {
 
 function isJsonObject(value) {
   return value !== null && !Array.isArray(value) && typeof value === "object";
+}
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map((entry) => canonicalize(entry));
+  if (!isJsonObject(value)) return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort((left, right) => (left < right ? -1 : Number(left > right)))
+      .map((key) => [key, canonicalize(value[key])]),
+  );
+}
+
+export function semanticDigest(value) {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalize(value)))
+    .digest("hex");
+}
+
+function parseYamlObject(source, label) {
+  try {
+    const value = parseYaml(source, { maxAliasCount: 0 });
+    if (!isJsonObject(value)) throw new Error("parsed value is not a YAML object");
+    return { problems: [], value };
+  } catch {
+    return { problems: [`${label} must contain a valid alias-free YAML object`] };
+  }
 }
 
 function parseJsonObject(source, label) {
@@ -125,6 +256,11 @@ function validatePackage(packageJson) {
   const checks = [
     [parsed.devDependencies?.fallow, "2.104.0", "fallow must be pinned to 2.104.0"],
     [
+      parsed.devDependencies?.yaml,
+      "2.9.0",
+      "yaml must be pinned to 2.9.0 for semantic reviewer-policy validation",
+    ],
+    [
       parsed.scripts?.["bench:codspeed"],
       "node benchmarks/codspeed.mjs",
       "bench:codspeed must execute the repository-owned benchmark entry point",
@@ -133,6 +269,16 @@ function validatePackage(packageJson) {
       parsed.scripts?.["check:external-quality-config"],
       "node scripts/check-external-quality-config.mjs",
       "check:external-quality-config script is missing or redirected",
+    ],
+    [
+      parsed.scripts?.["check:review-bot-suppression"],
+      "node scripts/check-review-bot-suppression.mjs",
+      "check:review-bot-suppression script is missing or redirected",
+    ],
+    [
+      parsed.scripts?.["check:reviewer-policy"],
+      "node scripts/check-reviewer-policy.mjs",
+      "check:reviewer-policy script is missing or redirected",
     ],
     [
       parsed.scripts?.["check:codspeed-policy"],
@@ -197,9 +343,10 @@ function validateCodSpeedWorkflow(source) {
 
 const CODSPEED_POLICY_WORKFLOW_CHECKS = [
   ["  pull_request_target:", "CodSpeed policy must use the base-trusted event"],
+  ["branches: [dev]", "CodSpeed policy must run only for pull requests targeting dev"],
   [
-    "types: [opened, reopened, synchronize, ready_for_review]",
-    "CodSpeed policy must cover every reviewable head",
+    "types: [opened, reopened, synchronize, ready_for_review, edited]",
+    "CodSpeed policy must cover every reviewable head and metadata edit",
   ],
   ["timeout-minutes: 10", "CodSpeed policy must keep its ten-minute runtime bound"],
   ["contents: read", "CodSpeed policy must grant only read access to repository contents"],
@@ -241,6 +388,46 @@ const CODSPEED_POLICY_WORKFLOW_CHECKS = [
     "CodSpeed policy must fail closed when the base gate is unavailable",
   ],
   [
+    "run: test -f scripts/check-reviewer-policy.mjs",
+    "Reviewer policy must fail closed when the base gate is unavailable",
+  ],
+  [
+    '"repos/${QUALITY_REPOSITORY}/contents/.coderabbit.yaml?ref=${QUALITY_HEAD_SHA}"',
+    "Reviewer policy must fetch exact-head CodeRabbit data",
+  ],
+  [
+    '"repos/${QUALITY_REPOSITORY}/contents/.greptile/config.json?ref=${QUALITY_HEAD_SHA}"',
+    "Reviewer policy must fetch exact-head Greptile config data",
+  ],
+  [
+    '"repos/${QUALITY_REPOSITORY}/contents/.greptile/files.json?ref=${QUALITY_HEAD_SHA}"',
+    "Reviewer policy must fetch exact-head Greptile inventory data",
+  ],
+  [
+    "gh api graphql",
+    "Reviewer policy must fetch exact-head commit data with server-side projection",
+  ],
+  [
+    "query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){... on Commit {oid tree {oid}}}}}",
+    "Reviewer policy must request only the exact-head commit and tree identifiers",
+  ],
+  [
+    "--jq '{sha: .data.repository.object.oid, tree: {sha: .data.repository.object.tree.oid}}'",
+    "Reviewer policy must project bounded exact-head commit data",
+  ],
+  [
+    '"repos/${QUALITY_REPOSITORY}/git/trees/${QUALITY_TREE_SHA}?recursive=1"',
+    "Reviewer policy must fetch the complete bound tree",
+  ],
+  [
+    "run: node scripts/check-reviewer-policy.mjs --preflight",
+    "Reviewer policy must preflight tree data before raw downloads",
+  ],
+  [
+    "        run: node scripts/check-reviewer-policy.mjs\n",
+    "Reviewer policy must execute the base-owned validator",
+  ],
+  [
     "run: node scripts/check-codspeed-policy.mjs",
     "CodSpeed policy must execute the base-owned validator",
   ],
@@ -262,26 +449,23 @@ function validateCodSpeedPolicyWorkflow(source) {
   const problems = CODSPEED_POLICY_WORKFLOW_CHECKS.flatMap(([expected, finding]) =>
     missingText(source, expected, finding),
   );
+  const commitQuery = "gh api graphql";
+  if (source.split(commitQuery).length - 1 !== 1) {
+    problems.push("Reviewer policy must fetch the projected exact-head commit exactly once");
+  }
+  const treeFetch = source.indexOf(
+    '"repos/${QUALITY_REPOSITORY}/git/trees/${QUALITY_TREE_SHA}?recursive=1"',
+  );
+  const preflight = source.indexOf("run: node scripts/check-reviewer-policy.mjs --preflight");
+  const rawDownload = source.indexOf(
+    '"repos/${QUALITY_REPOSITORY}/contents/.codspeed-policy.json?ref=${QUALITY_HEAD_SHA}"',
+  );
+  if (treeFetch < 0 || preflight <= treeFetch || rawDownload <= preflight) {
+    problems.push("Reviewer policy must preflight the complete tree before raw policy downloads");
+  }
   if (CODSPEED_POLICY_WORKFLOW_FORBIDDEN.some((entry) => source.includes(entry))) {
     problems.push("CodSpeed policy must never grant writes or execute pull-request code");
   }
-  return problems;
-}
-
-export function validateCodSpeedPolicy(source) {
-  const parsed = parseJsonObject(source, "codspeedPolicy");
-  if (parsed.value === undefined) return parsed.problems;
-  const policy = parsed.value;
-  const checks = [
-    [policy.schemaVersion, 2, "CodSpeed policy schema version must remain 2"],
-    [policy.project, "oscharko-dev/Keiko", "CodSpeed policy must bind the Keiko project"],
-    [policy.regressionThresholdPercent, 5, "CodSpeed regression threshold must remain 5%"],
-    [policy.failOnRegression, true, "CodSpeed regressions must fail their status check"],
-    [policy.pullRequestReport, "always", "CodSpeed must report every pull-request head"],
-  ];
-  const problems = checks
-    .filter(([actual, expected]) => actual !== expected)
-    .map(([, , finding]) => finding);
   return problems;
 }
 
@@ -302,8 +486,167 @@ function validateCodSpeedConfig(source) {
   return problems;
 }
 
+function equalStrings(actual, expected) {
+  return (
+    Array.isArray(actual) &&
+    actual.length === expected.length &&
+    actual.every((value, index) => value === expected[index])
+  );
+}
+
+function validateGreptileRule(rule, ids) {
+  const problems = [];
+  if (!isJsonObject(rule)) {
+    return ["Greptile rules must be JSON objects"];
+  }
+  if (typeof rule.id !== "string" || rule.id.length === 0 || ids.has(rule.id)) {
+    return ["Greptile rules must carry unique, non-empty ids"];
+  }
+  ids.add(rule.id);
+  if (typeof rule.rule !== "string" || rule.rule.length === 0) {
+    problems.push(`Greptile rule ${rule.id} has no instruction`);
+  }
+  if (rule.severity !== "high" && rule.severity !== "medium") {
+    problems.push(`Greptile rule ${rule.id} must be high or medium severity`);
+  }
+  return problems;
+}
+
+function validateGreptileRules(rules) {
+  if (!Array.isArray(rules) || rules.length === 0) return ["Greptile rules must be non-empty"];
+  const problems = [];
+  const ids = new Set();
+  for (const rule of rules) {
+    problems.push(...validateGreptileRule(rule, ids));
+  }
+  return problems;
+}
+
+function validateGreptileScope(config) {
+  const problems = [];
+  if (config.strictness !== 2)
+    problems.push("Greptile strictness must remain at high-signal level 2");
+  if (!equalStrings(config.commentTypes, ["logic", "syntax"])) {
+    problems.push("Greptile must leave deterministic style/info findings to repository gates");
+  }
+  if (!equalStrings(config.includeBranches, ["dev"])) {
+    problems.push("Greptile must review pull requests targeting dev");
+  }
+  if (!equalStrings(config.excludeAuthors, [])) {
+    problems.push("Greptile must not omit bot-authored dev pull requests by configuration");
+  }
+  if (config.fileChangeLimit !== 500) problems.push("Greptile fileChangeLimit must remain 500");
+  return problems;
+}
+
+function validateGreptileBehavior(config) {
+  const problems = [];
+  if (config.triggerOnUpdates !== true) problems.push("Greptile must review every new head");
+  if (config.triggerOnDrafts !== false)
+    problems.push("Greptile draft auto-review must remain disabled");
+  if (config.statusCheck !== true) problems.push("Greptile must emit an observable status check");
+  if (config.statusCommentsEnabled !== false) {
+    problems.push("Greptile status comments must remain disabled");
+  }
+  if (
+    !isJsonObject(config.sequenceDiagramSection) ||
+    config.sequenceDiagramSection.included !== false
+  ) {
+    problems.push("Greptile sequence diagrams must remain disabled");
+  }
+  if (config.fixWithAI !== false) problems.push("Greptile must not write pull-request code");
+  if (config.shouldUpdateDescription !== false) {
+    problems.push("Greptile must not mutate Keiko's load-bearing pull request template");
+  }
+  if (config.updateExistingSummaryComment !== true) {
+    problems.push("Greptile must update one summary instead of creating comment churn");
+  }
+  return problems;
+}
+
+function validateGreptileConfig(source) {
+  const parsed = parseJsonObject(source, "greptileConfig");
+  if (parsed.value === undefined) return parsed.problems;
+  const config = parsed.value;
+  const problems = [
+    ...validateGreptileScope(config),
+    ...validateGreptileBehavior(config),
+    ...validateGreptileRules(config.rules),
+  ];
+  if (semanticDigest(config) !== GREPTILE_CONFIG_POLICY_DIGEST) {
+    problems.push("Greptile semantic review policy must match the reviewed configuration");
+  }
+  return problems;
+}
+
+function isBoundedRepositoryPath(path) {
+  return (
+    typeof path === "string" &&
+    path.length > 0 &&
+    path.length <= 240 &&
+    !path.includes("\\") &&
+    !posix.isAbsolute(path) &&
+    posix.normalize(path) === path &&
+    path !== ".." &&
+    !path.startsWith("../")
+  );
+}
+
+export function isRegularRepositoryFile(repoRoot, path) {
+  if (!isBoundedRepositoryPath(path)) return false;
+  try {
+    const repositoryRoot = realpathSync(repoRoot);
+    const candidate = join(repositoryRoot, path);
+    return (
+      lstatSync(candidate).isFile() && realpathSync(candidate) === resolve(repositoryRoot, path)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function validateGreptileFiles(source, pathExists) {
+  const parsedResult = parseJsonObject(source, "greptileFiles");
+  if (parsedResult.value === undefined) return parsedResult.problems;
+  const parsed = parsedResult.value;
+  if (!Array.isArray(parsed.files)) return [".greptile/files.json must carry a files array"];
+  if (parsed.files.some((entry) => !isJsonObject(entry))) {
+    return [".greptile/files.json entries must be JSON objects"];
+  }
+  const paths = new Set(parsed.files.map((entry) => entry.path));
+  const problems = REQUIRED_GREPTILE_FILES.filter((path) => !paths.has(path)).map(
+    (path) => `Greptile context is missing ${path}`,
+  );
+  for (const [index, entry] of parsed.files.entries()) {
+    if (!isBoundedRepositoryPath(entry.path) || !pathExists(entry.path)) {
+      problems.push(
+        `Greptile context entry ${String(index)} must name an existing repository path`,
+      );
+    }
+    if (typeof entry.description !== "string" || entry.description.length === 0) {
+      problems.push(`Greptile context entry ${String(index)} must carry a description`);
+    }
+  }
+  if (semanticDigest(parsed) !== GREPTILE_FILES_POLICY_DIGEST) {
+    problems.push("Greptile context policy must match the reviewed governance inventory");
+  }
+  return problems;
+}
+
+function validateUnreviewedGreptilePaths(paths) {
+  return Array.isArray(paths) && paths.length === 0
+    ? []
+    : [
+        "Unreviewed Greptile files and nested controls are prohibited because provider rules cascade",
+      ];
+}
+
 function validateCiWorkflow(source) {
   const checks = [
+    [
+      "types: [opened, reopened, synchronize, ready_for_review, edited]",
+      "required ci must rerun when pull-request metadata changes",
+    ],
     ['GITLEAKS_VERSION: "8.30.1"', "Gitleaks must remain pinned to the reviewed OSS release"],
     [
       'GITLEAKS_LINUX_X64_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"',
@@ -320,6 +663,10 @@ function validateCiWorkflow(source) {
       "npm run check:external-quality-config",
       "required ci must execute check:external-quality-config",
     ],
+    [
+      "npm run check:review-bot-suppression",
+      "required ci must reject pull-request metadata that suppresses review bots",
+    ],
   ];
   const problems = checks.flatMap(([expected, finding]) => missingText(source, expected, finding));
   const resolverCalls =
@@ -329,7 +676,10 @@ function validateCiWorkflow(source) {
   return problems;
 }
 
-export function validateExternalQualitySources(sources) {
+export function validateExternalQualitySources(
+  sources,
+  pathExists = (path) => isRegularRepositoryFile(REPO_ROOT, path),
+) {
   return [
     ...validatePackage(sources.packageJson),
     ...validateCodSpeedConfig(sources.codspeedConfig),
@@ -337,21 +687,25 @@ export function validateExternalQualitySources(sources) {
     ...validateCodSpeedPolicyWorkflow(sources.codspeedPolicyWorkflow),
     ...validateCodSpeedWorkflow(sources.codspeedWorkflow),
     ...validateCodeRabbitConfig(sources.codeRabbitConfig),
+    ...validateGreptileConfig(sources.greptileConfig),
+    ...validateGreptileFiles(sources.greptileFiles, pathExists),
+    ...validateUnreviewedGreptilePaths(sources.unreviewedGreptilePaths),
     ...validateCiWorkflow(sources.ciWorkflow),
   ];
 }
 
 export function main(
   qualitySources = loadExternalQualitySources(),
+  pathExists = undefined,
   log = console.log,
   error = console.error,
 ) {
-  const problems = validateExternalQualitySources(qualitySources);
+  const problems = validateExternalQualitySources(qualitySources, pathExists);
   if (problems.length > 0) {
     for (const problem of problems) error(`external-quality-config: ${problem}`);
     return 1;
   }
-  log("external-quality-config: PASS — CodSpeed and CodeRabbit configuration is bound");
+  log("external-quality-config: PASS — CodSpeed, CodeRabbit, and Greptile configuration is bound");
   return 0;
 }
 
