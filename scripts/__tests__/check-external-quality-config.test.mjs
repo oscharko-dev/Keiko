@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,7 @@ import {
   isRegularRepositoryFile,
   loadExternalQualitySources,
   main,
+  semanticDigest,
   validateExternalQualitySources,
 } from "../check-external-quality-config.mjs";
 
@@ -20,6 +22,12 @@ function findings(overrides = {}, pathExists = () => true) {
 }
 
 describe("external quality integration configuration", () => {
+  it("canonicalizes policy keys with locale-independent code-unit ordering", () => {
+    const expected = createHash("sha256").update('{"z":2,"ä":1}').digest("hex");
+    expect(semanticDigest({ ä: 1, z: 2 })).toBe(expected);
+    expect(semanticDigest({ z: 2, ä: 1 })).toBe(expected);
+  });
+
   it("accepts the repository-owned CodSpeed, CodeRabbit, and Greptile configuration", () => {
     expect(validateExternalQualitySources(sources)).toEqual([]);
   });

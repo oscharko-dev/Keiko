@@ -203,12 +203,12 @@ function canonicalize(value) {
   if (!isJsonObject(value)) return value;
   return Object.fromEntries(
     Object.keys(value)
-      .sort((left, right) => left.localeCompare(right))
+      .sort((left, right) => (left < right ? -1 : Number(left > right)))
       .map((key) => [key, canonicalize(value[key])]),
   );
 }
 
-function semanticDigest(value) {
+export function semanticDigest(value) {
   return createHash("sha256")
     .update(JSON.stringify(canonicalize(value)))
     .digest("hex");
