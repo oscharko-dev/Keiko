@@ -64,8 +64,9 @@ The same final canary proved that native CodSpeed performance comparison is not 
 required check on shared GitHub runners. Two heads that changed no benchmark or transitive production
 path reported different large regressions; one carried CodSpeed's different-runtime-environment
 warning. The native performance status is therefore advisory. The App-bound `CodSpeed policy`
-context remains required and pins the hosted signal to a blocking 5% dashboard threshold. Actual
-merge authority stays with the deterministic performance, bundle, and latency gates inside `ci`.
+context remains required and pins the hosted signal to a 5% threshold, always-on reporting, and an
+informational failure status. Actual merge authority stays with the deterministic performance,
+bundle, and latency gates inside `ci`.
 
 CodSpeed benchmark execution uses the exact candidate head. Its dashboard-policy verdict is a
 different, base-trusted context: GitHub loads the validator from protected `dev`, downloads only the

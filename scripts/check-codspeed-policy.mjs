@@ -66,7 +66,7 @@ export function validateLiveSettings(policy, payload) {
     problems.push("live regression threshold differs from the repository policy");
   }
   if (settings.informationalCheckOnFailure !== !policy.failOnRegression) {
-    problems.push("live performance failures are not configured as blocking checks");
+    problems.push("live performance failure mode differs from the repository policy");
   }
   if (settings.commentingCondition !== policy.pullRequestReport.toUpperCase()) {
     problems.push("live pull-request reporting differs from the repository policy");
@@ -106,7 +106,7 @@ export async function main(
     failureFallback: "live policy validation failed",
     failurePrefix: "codspeed-policy",
     log,
-    passMessage: "codspeed-policy: PASS — live project settings match the blocking 5% policy",
+    passMessage: "codspeed-policy: PASS — live project settings match the informational 5% policy",
   });
 }
 

@@ -20,7 +20,7 @@ export function validateCodSpeedPolicy(source) {
     [policy.schemaVersion, 2, "CodSpeed policy schema version must remain 2"],
     [policy.project, "oscharko-dev/Keiko", "CodSpeed policy must bind the Keiko project"],
     [policy.regressionThresholdPercent, 5, "CodSpeed regression threshold must remain 5%"],
-    [policy.failOnRegression, true, "CodSpeed regressions must fail their status check"],
+    [policy.failOnRegression, false, "CodSpeed regressions must remain informational"],
     [policy.pullRequestReport, "always", "CodSpeed must report every pull-request head"],
   ];
   return checks.filter(([actual, expected]) => actual !== expected).map(([, , finding]) => finding);

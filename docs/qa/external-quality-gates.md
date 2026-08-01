@@ -40,8 +40,9 @@ performance gates.
 
 ## Hosted settings
 
-- CodSpeed: CPU simulation; regressions above the 5% global threshold fail; one always-updated pull
-  request report; no repository upload token or pull-request-visible OIDC grant. The dedicated
+- CodSpeed: CPU simulation; regressions above the 5% global threshold remain visible through one
+  always-updated pull-request report and an informational status; no repository upload token or
+  pull-request-visible OIDC grant. The dedicated
   `CodSpeed policy` workflow is loaded from the protected `dev` base, preflights bounded exact-head
   policy, reviewer configuration, commit, and complete-tree data, and fails closed when the live
   threshold, failure behavior, report mode, reviewer approval digest, governance inventory, trust
@@ -153,7 +154,9 @@ Service endpoints and comment bodies are deliberately omitted.
   another improved 7.3%. Both benchmark workflows succeeded. CodSpeed's own variance guidance says
   shared CI runner CPU, cache, and system-library differences can create regressions without code
   changes. The native performance status was removed from branch protection without acknowledging a
-  regression, changing a baseline, or changing the 5% policy. It remains advisory.
+  regression, changing a baseline, or changing the 5% threshold. It remains advisory. ADR-0168
+  subsequently requires the live failure status itself to be informational so runner variance
+  cannot leave an otherwise mergeable pull request `UNSTABLE`.
 - Greptile's native App 867647 and settlement context temporarily proved negative and recovery
   behavior. Native check 91356606358 and settlement job 91356603731 rejected the deliberate head
   with three P1 findings. Native check 91358998906 and settlement job 91358992919 passed the

@@ -11,7 +11,7 @@ import {
 } from "../check-codspeed-policy.mjs";
 
 const POLICY = JSON.stringify({
-  failOnRegression: true,
+  failOnRegression: false,
   project: "oscharko-dev/Keiko",
   pullRequestReport: "always",
   regressionThresholdPercent: 5,
@@ -23,7 +23,7 @@ const SETTINGS = {
       settings: {
         allowedRegression: 0.05,
         commentingCondition: "ALWAYS",
-        informationalCheckOnFailure: false,
+        informationalCheckOnFailure: true,
       },
     },
   },
@@ -58,20 +58,20 @@ describe("live CodSpeed policy", () => {
     expect(read).toHaveBeenCalledWith(expect.stringContaining(".codspeed-policy.json"), "utf8");
   });
 
-  it("accepts the exact blocking five-percent settings", () => {
+  it("accepts the exact informational five-percent settings", () => {
     expect(validateLiveSettings(JSON.parse(POLICY), SETTINGS)).toEqual([]);
   });
 
-  it("rejects a relaxed threshold, informational failure, or omitted report", () => {
+  it("rejects a relaxed threshold, blocking failure, or omitted report", () => {
     const payload = structuredClone(SETTINGS);
     payload.data.repository.settings = {
       allowedRegression: 0.1,
       commentingCondition: "ON_CHANGE",
-      informationalCheckOnFailure: true,
+      informationalCheckOnFailure: false,
     };
     expect(validateLiveSettings(JSON.parse(POLICY), payload)).toEqual([
       "live regression threshold differs from the repository policy",
-      "live performance failures are not configured as blocking checks",
+      "live performance failure mode differs from the repository policy",
       "live pull-request reporting differs from the repository policy",
     ]);
   });

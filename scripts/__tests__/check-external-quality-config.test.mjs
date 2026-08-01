@@ -218,15 +218,15 @@ describe("external quality integration configuration", () => {
     );
   });
 
-  it("rejects drift from the live CodSpeed threshold and failing-check policy", () => {
+  it("rejects drift from the live CodSpeed threshold and informational-check policy", () => {
     const policy = JSON.parse(sources.codspeedPolicy);
     policy.regressionThresholdPercent = 10;
-    policy.failOnRegression = false;
+    policy.failOnRegression = true;
     policy.pullRequestReport = "on-change";
     expect(findings({ codspeedPolicy: JSON.stringify(policy) })).toEqual(
       expect.arrayContaining([
         "CodSpeed regression threshold must remain 5%",
-        "CodSpeed regressions must fail their status check",
+        "CodSpeed regressions must remain informational",
         "CodSpeed must report every pull-request head",
       ]),
     );
