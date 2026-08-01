@@ -92,7 +92,7 @@ describe("review bot suppression gate", () => {
     );
     log.mockClear();
     error.mockClear();
-    expect(main(undefined, true, log, error)).toBe(1);
+    expect(main("", true, log, error)).toBe(1);
     expect(error).toHaveBeenCalledWith(
       "review-bot-suppression: GitHub event payload is unavailable",
     );
