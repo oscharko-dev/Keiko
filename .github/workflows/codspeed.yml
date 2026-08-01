@@ -33,9 +33,11 @@ jobs:
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install locked dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Build production package entry points
         run: npm run build:packages
+      - name: Verify live CodSpeed policy
+        run: npm run check:codspeed-policy
       - name: Run deterministic CPU-simulation benchmarks
         uses: CodSpeedHQ/action@88472375d0a4572cf70a9f1fe3a4e0ab8da1b924 # v5.0.1
         with:

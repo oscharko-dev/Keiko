@@ -25,6 +25,15 @@ reviews:
     # A pull-request author may not ignore a failing CodeRabbit pre-merge check. Keiko does not use
     # manual overrides as a repair path; findings are fixed and the exact current head is re-reviewed.
     override_requested_reviewers_only: true
+    docstrings:
+      mode: "off"
+    title:
+      mode: "error"
+      requirements: "Use an English imperative conventional subject that names the delivered outcome."
+    description:
+      mode: "error"
+    issue_assessment:
+      mode: "off"
 
   path_filters:
     - "!**/dist/**"

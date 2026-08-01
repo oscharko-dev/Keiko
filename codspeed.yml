@@ -1,3 +1,5 @@
+# Benchmark commands live here. The required CI aggregate independently reads CodSpeed's public
+# project settings and rejects drift from the repository policy before a pull request can merge.
 benchmarks:
   - name: security/redact 64 audit lines
     exec: node benchmarks/codspeed.mjs security-redact

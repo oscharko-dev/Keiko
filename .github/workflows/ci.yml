@@ -128,7 +128,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
@@ -164,7 +164,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
@@ -175,7 +175,8 @@ jobs:
         run: |
           set -euo pipefail
           archive="${RUNNER_TEMP}/gitleaks.tar.gz"
-          curl --fail --silent --show-error --location --retry 3 --retry-all-errors \
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            --retry 3 --retry-all-errors \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
             --output "$archive"
           echo "${GITLEAKS_LINUX_X64_SHA256}  ${archive}" | sha256sum --check --strict
@@ -194,6 +195,29 @@ jobs:
         run: |
           "${RUNNER_TEMP}/gitleaks" git --redact=100 --no-banner --timeout=120 \
             --log-opts="${QUALITY_BASE_SHA}..${QUALITY_HEAD_SHA}" .
+
+  # The regression threshold is dashboard-owned, so validate the live public project settings on
+  # every candidate head. Aggregating this job into `ci` prevents a stale repository declaration
+  # or a dashboard relaxation from weakening the protected performance contract.
+  codspeed-policy:
+    name: CodSpeed policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Verify live CodSpeed project settings
+        run: node scripts/check-codspeed-policy.mjs
 
   core-quality:
     name: Core quality
@@ -796,6 +820,7 @@ jobs:
     if: ${{ always() }}
     needs:
       - change-scope
+      - codspeed-policy
       - protected-branch-gate
       - core-quality
       - coverage-sonar
@@ -807,6 +832,7 @@ jobs:
     steps:
       - name: Aggregate required CI results fail closed
         env:
+          CODSPEED_POLICY_RESULT: ${{ needs.codspeed-policy.result }}
           CORE_QUALITY_RESULT: ${{ needs.core-quality.result }}
           COVERAGE_SONAR_RESULT: ${{ needs.coverage-sonar.result }}
           CROSS_PLATFORM_RESULT: ${{ needs.cross-platform-smoke.result }}
@@ -815,7 +841,7 @@ jobs:
           SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
           SEMANTIC_DUPLICATION_RESULT: ${{ needs.semantic-duplication.result }}
         run: |
-          for result in "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT"; do
+          for result in "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$CODSPEED_POLICY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT"; do
             if [ "$result" != "success" ]; then
               echo "Required CI dependency did not succeed: $result"
               exit 1

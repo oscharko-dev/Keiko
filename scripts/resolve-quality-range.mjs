@@ -21,23 +21,60 @@ function requireCommit(sha, git) {
   git(["cat-file", "-e", `${sha}^{commit}`]);
 }
 
-export function resolveQualityRange({ base, head }, git = repositoryGit) {
-  if (!SHA.test(head ?? "")) throw new Error("head must be an immutable commit SHA");
-  requireCommit(head, git);
-  const candidate = SHA.test(base ?? "") && base !== ZERO_SHA ? base : undefined;
-  const resolvedBase = candidate ?? git(["rev-list", "--max-parents=0", head]).split("\n")[0];
-  if (resolvedBase === undefined || !SHA.test(resolvedBase)) {
-    throw new Error("base could not be resolved to an immutable commit SHA");
-  }
-  requireCommit(resolvedBase, git);
-  git(["merge-base", "--is-ancestor", resolvedBase, head]);
-  return { base: resolvedBase, head };
+function requireImmutableSha(value, message) {
+  if (value === undefined || !SHA.test(value)) throw new Error(message);
+  return value;
 }
 
-export function main(env = process.env, git = repositoryGit, write = console.log) {
+function candidateBase(base, head, eventName, git) {
+  if (base !== ZERO_SHA && SHA.test(base ?? "")) return base;
+  if (eventName === "workflow_dispatch") {
+    return requireImmutableSha(
+      git(["rev-parse", "--verify", `${head}^`]),
+      "manual run base could not be resolved to the selected head's parent",
+    );
+  }
+  return requireImmutableSha(
+    git(["rev-list", "--max-parents=0", head]).split("\n")[0],
+    "base could not be resolved to an immutable commit SHA",
+  );
+}
+
+export function resolveQualityRange({ base, head, eventName }, git = repositoryGit) {
+  const immutableHead = requireImmutableSha(head, "head must be an immutable commit SHA");
+  requireCommit(immutableHead, git);
+  const candidate = candidateBase(base, immutableHead, eventName, git);
+  requireCommit(candidate, git);
+  const resolvedBase = requireImmutableSha(
+    git(["merge-base", candidate, immutableHead]).split("\n")[0],
+    "merge base could not be resolved to an immutable commit SHA",
+  );
+  if (resolvedBase !== candidate) requireCommit(resolvedBase, git);
+  git(["merge-base", "--is-ancestor", resolvedBase, immutableHead]);
+  return { base: resolvedBase, head: immutableHead };
+}
+
+function writeOutput(message) {
+  process.stdout.write(`${message}\n`);
+}
+
+function writeDiagnostic(message) {
+  process.stderr.write(`${message}\n`);
+}
+
+export function main(
+  env = process.env,
+  git = repositoryGit,
+  write = writeOutput,
+  diagnose = writeDiagnostic,
+) {
   try {
     const range = resolveQualityRange(
-      { base: env.QUALITY_BASE_SHA, head: env.QUALITY_HEAD_SHA },
+      {
+        base: env.QUALITY_BASE_SHA,
+        eventName: env.GITHUB_EVENT_NAME,
+        head: env.QUALITY_HEAD_SHA,
+      },
       git,
     );
     write(`base=${range.base}`);
@@ -45,7 +82,7 @@ export function main(env = process.env, git = repositoryGit, write = console.log
     return 0;
   } catch (error) {
     const message = error instanceof Error ? error.message : "quality range resolution failed";
-    console.error(`quality-range: FAIL - ${message}`);
+    diagnose(`quality-range: FAIL - ${message}`);
     return 1;
   }
 }

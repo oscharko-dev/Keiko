@@ -35,6 +35,7 @@ describe("external quality integration configuration", () => {
         "fallow must be pinned to 2.104.0",
         "bench:codspeed must execute the repository-owned benchmark entry point",
         "check:external-quality-config script is missing or redirected",
+        "check:codspeed-policy script is missing or redirected",
         "semantic duplication must fail on every changed clone group",
       ]),
     );
@@ -47,12 +48,16 @@ describe("external quality integration configuration", () => {
         "override_requested_reviewers_only: true",
         "override_requested_reviewers_only: false",
       )
+      .replace('title:\n      mode: "error"', 'title:\n      mode: "warning"')
+      .replace('description:\n      mode: "error"', 'description:\n      mode: "warning"')
       .replace("auto_incremental_review: true", "auto_incremental_review: false")
       .replace("autofix:\n      enabled: false", "autofix:\n      enabled: true");
     expect(findings({ codeRabbitConfig: weakened })).toEqual(
       expect.arrayContaining([
         "CodeRabbit findings must block through review state",
         "CodeRabbit pre-merge failures must not be overridable by the pull-request author",
+        "CodeRabbit must fail malformed pull-request titles",
+        "CodeRabbit must fail incomplete pull-request descriptions",
         "CodeRabbit must review pull request updates",
         "CodeRabbit autofix mutation must remain disabled",
       ]),
@@ -86,12 +91,12 @@ describe("external quality integration configuration", () => {
     const policy = JSON.parse(sources.codspeedPolicy);
     policy.regressionThresholdPercent = 10;
     policy.failOnRegression = false;
-    policy.observedAt = "not-a-timestamp";
+    policy.pullRequestReport = "on-change";
     expect(findings({ codspeedPolicy: JSON.stringify(policy) })).toEqual(
       expect.arrayContaining([
         "CodSpeed regression threshold must remain 5%",
         "CodSpeed regressions must fail their status check",
-        "CodSpeed policy must record the live settings observation",
+        "CodSpeed must report every pull-request head",
       ]),
     );
   });

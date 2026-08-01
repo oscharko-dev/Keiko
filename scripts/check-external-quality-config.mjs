@@ -17,6 +17,47 @@ const REQUIRED_GREPTILE_FILES = [
   "docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md",
   "docs/qa/autonomous-quality-gates.md",
 ];
+const CODERABBIT_TEXT_CHECKS = [
+  ['profile: "assertive"', "CodeRabbit must keep its assertive review profile"],
+  ["request_changes_workflow: true", "CodeRabbit findings must block through review state"],
+  ["fail_commit_status: true", "CodeRabbit review failures must remain observable"],
+  ["review_details: true", "CodeRabbit must disclose incomplete or suppressed review scope"],
+  ["auto_incremental_review: true", "CodeRabbit must review pull request updates"],
+  ["auto_pause_after_reviewed_commits: 0", "CodeRabbit must not silently pause after head updates"],
+  ["drafts: false", "CodeRabbit draft auto-review must remain disabled"],
+  ["ignore_usernames: []", "CodeRabbit must not omit bot-authored pull requests"],
+  ["web_search:\n    enabled: false", "CodeRabbit must not add untrusted web context to review"],
+  [
+    "allow_non_org_members: false",
+    "CodeRabbit commands must remain restricted to organization members",
+  ],
+  ["automatic_repository_linking: false", "CodeRabbit must not widen review context automatically"],
+  [
+    "override_requested_reviewers_only: true",
+    "CodeRabbit pre-merge failures must not be overridable by the pull-request author",
+  ],
+  [
+    'docstrings:\n      mode: "off"',
+    "CodeRabbit must not impose a foreign docstring convention on TypeScript",
+  ],
+  ['title:\n      mode: "error"', "CodeRabbit must fail malformed pull-request titles"],
+  [
+    'description:\n      mode: "error"',
+    "CodeRabbit must fail incomplete pull-request descriptions",
+  ],
+  [
+    'issue_assessment:\n      mode: "off"',
+    "CodeRabbit must leave issue-scope enforcement to deterministic repository delivery",
+  ],
+  [
+    'files: "AGENTS.md,CONTRIBUTING.md,docs/qa/review-standards.md"',
+    "CodeRabbit must consume repository governance",
+  ],
+  [
+    'files: "docs/adr/ADR-0019-modular-package-architecture.md,docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md,docs/adr/ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md,docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md,docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md"',
+    "CodeRabbit must consume canonical architecture, authority, Sonar, and delivery decisions",
+  ],
+];
 
 function read(repoRoot, path) {
   return readFileSync(join(repoRoot, path), "utf8");
@@ -36,41 +77,9 @@ export function loadExternalQualitySources(repoRoot = REPO_ROOT) {
 }
 
 function validateCodeRabbitConfig(source) {
-  const checks = [
-    ['profile: "assertive"', "CodeRabbit must keep its assertive review profile"],
-    ["request_changes_workflow: true", "CodeRabbit findings must block through review state"],
-    ["fail_commit_status: true", "CodeRabbit review failures must remain observable"],
-    ["review_details: true", "CodeRabbit must disclose incomplete or suppressed review scope"],
-    ["auto_incremental_review: true", "CodeRabbit must review pull request updates"],
-    [
-      "auto_pause_after_reviewed_commits: 0",
-      "CodeRabbit must not silently pause after head updates",
-    ],
-    ["drafts: false", "CodeRabbit draft auto-review must remain disabled"],
-    ["ignore_usernames: []", "CodeRabbit must not omit bot-authored pull requests"],
-    ["web_search:\n    enabled: false", "CodeRabbit must not add untrusted web context to review"],
-    [
-      "allow_non_org_members: false",
-      "CodeRabbit commands must remain restricted to organization members",
-    ],
-    [
-      "automatic_repository_linking: false",
-      "CodeRabbit must not widen review context automatically",
-    ],
-    [
-      "override_requested_reviewers_only: true",
-      "CodeRabbit pre-merge failures must not be overridable by the pull-request author",
-    ],
-    [
-      'files: "AGENTS.md,CONTRIBUTING.md,docs/qa/review-standards.md"',
-      "CodeRabbit must consume repository governance",
-    ],
-    [
-      'files: "docs/adr/ADR-0019-modular-package-architecture.md,docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md,docs/adr/ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md,docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md,docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md"',
-      "CodeRabbit must consume canonical architecture, authority, Sonar, and delivery decisions",
-    ],
-  ];
-  const problems = checks.flatMap(([expected, finding]) => missingText(source, expected, finding));
+  const problems = CODERABBIT_TEXT_CHECKS.flatMap(([expected, finding]) =>
+    missingText(source, expected, finding),
+  );
   const disabledMutations = [
     "docstrings",
     "unit_tests",
@@ -80,7 +89,7 @@ function validateCodeRabbitConfig(source) {
     "resolve_merge_conflict",
   ];
   for (const feature of disabledMutations) {
-    const pattern = new RegExp(`${feature}:\\n\\s+enabled: false`, "u");
+    const pattern = new RegExp(String.raw`${feature}:\n\s+enabled: false`, "u");
     if (!pattern.test(source)) problems.push(`CodeRabbit ${feature} mutation must remain disabled`);
   }
   return problems;
@@ -97,11 +106,24 @@ function isJsonObject(value) {
 function parseJsonObject(source, label) {
   try {
     const value = JSON.parse(source);
-    if (!isJsonObject(value)) throw new Error();
+    if (!isJsonObject(value)) throw new Error("parsed value is not a JSON object");
     return { problems: [], value };
   } catch {
     return { problems: [`${label} must contain a valid JSON object`] };
   }
+}
+
+function validateCodSpeedDependencies(parsed) {
+  const problems = [];
+  if (parsed.devDependencies?.["@codspeed/tinybench-plugin"] !== undefined) {
+    problems.push(
+      "CodSpeed must not add its telemetry-capable npm runtime to the dependency graph",
+    );
+  }
+  if (parsed.devDependencies?.tinybench !== undefined) {
+    problems.push("CodSpeed CLI mode must not retain an unused Tinybench dependency");
+  }
+  return problems;
 }
 
 function validatePackage(packageJson) {
@@ -123,6 +145,11 @@ function validatePackage(packageJson) {
       "check:external-quality-config script is missing or redirected",
     ],
     [
+      parsed.scripts?.["check:codspeed-policy"],
+      "node scripts/check-codspeed-policy.mjs",
+      "check:codspeed-policy script is missing or redirected",
+    ],
+    [
       parsed.scripts?.["check:semantic-duplication"],
       duplicationCommand,
       "semantic duplication must fail on every changed clone group",
@@ -131,15 +158,7 @@ function validatePackage(packageJson) {
   const problems = checks
     .filter(([actual, expected]) => actual !== expected)
     .map(([, , finding]) => finding);
-  if (parsed.devDependencies?.["@codspeed/tinybench-plugin"] !== undefined) {
-    problems.push(
-      "CodSpeed must not add its telemetry-capable npm runtime to the dependency graph",
-    );
-  }
-  if (parsed.devDependencies?.tinybench !== undefined) {
-    problems.push("CodSpeed CLI mode must not retain an unused Tinybench dependency");
-  }
-  return problems;
+  return [...problems, ...validateCodSpeedDependencies(parsed)];
 }
 
 function validateCodSpeedWorkflow(source) {
@@ -158,6 +177,10 @@ function validateCodSpeedWorkflow(source) {
     [
       "        run: node scripts/check-runtime-toolchain.mjs --exact",
       "CodSpeed must verify the governed Node.js and npm toolchain",
+    ],
+    [
+      "        run: npm run check:codspeed-policy",
+      "CodSpeed must fail when live project settings drift from repository policy",
     ],
     [`        uses: ${CODSPEED_ACTION}`, "CodSpeed action must use the reviewed immutable pin"],
     ["          mode: simulation", "CodSpeed must use deterministic CPU simulation"],
@@ -179,30 +202,20 @@ function validateCodSpeedWorkflow(source) {
   return problems;
 }
 
-function validateCodSpeedPolicy(source) {
+export function validateCodSpeedPolicy(source) {
   const parsed = parseJsonObject(source, "codspeedPolicy");
   if (parsed.value === undefined) return parsed.problems;
   const policy = parsed.value;
   const checks = [
-    [policy.schemaVersion, 1, "CodSpeed policy schema version must remain 1"],
+    [policy.schemaVersion, 2, "CodSpeed policy schema version must remain 2"],
     [policy.project, "oscharko-dev/Keiko", "CodSpeed policy must bind the Keiko project"],
     [policy.regressionThresholdPercent, 5, "CodSpeed regression threshold must remain 5%"],
     [policy.failOnRegression, true, "CodSpeed regressions must fail their status check"],
-    [
-      policy.settingsUrl,
-      "https://app.codspeed.io/oscharko-dev/Keiko/settings",
-      "CodSpeed policy must bind the reviewed settings surface",
-    ],
+    [policy.pullRequestReport, "always", "CodSpeed must report every pull-request head"],
   ];
   const problems = checks
     .filter(([actual, expected]) => actual !== expected)
     .map(([, , finding]) => finding);
-  if (
-    typeof policy.observedAt !== "string" ||
-    !/^2026-08-01T\d{2}:\d{2}:\d{2}Z$/u.test(policy.observedAt)
-  ) {
-    problems.push("CodSpeed policy must record the live settings observation");
-  }
   return problems;
 }
 
@@ -311,8 +324,8 @@ function validateGreptileFiles(source, pathExists) {
   if (parsed.files.some((entry) => !isJsonObject(entry))) {
     return [".greptile/files.json entries must be JSON objects"];
   }
-  const paths = parsed.files.map((entry) => entry.path);
-  const problems = REQUIRED_GREPTILE_FILES.filter((path) => !paths.includes(path)).map(
+  const paths = new Set(parsed.files.map((entry) => entry.path));
+  const problems = REQUIRED_GREPTILE_FILES.filter((path) => !paths.has(path)).map(
     (path) => `Greptile context is missing ${path}`,
   );
   for (const entry of parsed.files) {
@@ -344,6 +357,12 @@ function validateCiWorkflow(source) {
       "npm run check:external-quality-config",
       "required ci must execute check:external-quality-config",
     ],
+    ["  codspeed-policy:", "required ci must validate live CodSpeed settings"],
+    ["      - codspeed-policy", "required ci must aggregate live CodSpeed settings"],
+    [
+      "run: node scripts/check-codspeed-policy.mjs",
+      "required ci must execute the live CodSpeed policy check",
+    ],
   ];
   const problems = checks.flatMap(([expected, finding]) => missingText(source, expected, finding));
   const resolverCalls =
@@ -371,7 +390,7 @@ export function validateExternalQualitySources(
 
 export function main(
   qualitySources = loadExternalQualitySources(),
-  pathExists,
+  pathExists = undefined,
   log = console.log,
   error = console.error,
 ) {

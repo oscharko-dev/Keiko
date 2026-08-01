@@ -8,19 +8,20 @@ The deterministic core remains usable without them.
 
 ## Repository-owned configuration
 
-| Signal     | Durable source                                                               | Role                                                              |
-| ---------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| CodSpeed   | `codspeed.yml`, `.codspeed-policy.json`, `benchmarks/codspeed.mjs`, workflow | CPU-simulation comparison plus live settings audit                |
-| CodeRabbit | `.coderabbit.yaml`                                                           | Assertive blocking review with no code-writing or merge authority |
-| Greptile   | `.greptile/config.json`, `.greptile/files.json`                              | Independent current-head logic/security/architecture review       |
-| Fallow     | root lockfile and `check:semantic-duplication`                               | Zero introduced semantic clone groups                             |
-| Gitleaks   | checksum pin in `.github/workflows/ci.yml`                                   | Zero secrets introduced anywhere in PR history                    |
-| Drift pin  | `scripts/check-external-quality-config.mjs` plus negative tests              | Required-`ci` proof that integration policy did not weaken        |
+| Signal     | Durable source                                                                | Role                                                              |
+| ---------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| CodSpeed   | `codspeed.yml`, `.codspeed-policy.json`, `benchmarks/codspeed.mjs`, workflows | CPU-simulation comparison plus live settings enforcement          |
+| CodeRabbit | `.coderabbit.yaml`                                                            | Assertive blocking review with no code-writing or merge authority |
+| Greptile   | `.greptile/config.json`, `.greptile/files.json`                               | Independent current-head logic/security/architecture review       |
+| Fallow     | root lockfile and `check:semantic-duplication`                                | Zero introduced semantic clone groups                             |
+| Gitleaks   | checksum pin in `.github/workflows/ci.yml`                                    | Zero secrets introduced anywhere in PR history                    |
+| Drift pin  | `scripts/check-external-quality-config.mjs` plus negative tests               | Required-`ci` proof that integration policy did not weaken        |
 
 Local verification:
 
 ```bash
 npm run check:external-quality-config
+npm run check:codspeed-policy
 npm run check:semantic-duplication -- --changed-since origin/dev
 npm run build:packages
 npm run bench:codspeed
@@ -34,8 +35,9 @@ performance gates.
 ## Hosted settings
 
 - CodSpeed: CPU simulation, regressions above the 5% global threshold fail, one always-updated PR
-  report, and no long-lived upload token or pull-request-visible OIDC grant. The signed-in settings
-  surface was observed at the timestamp pinned by `.codspeed-policy.json`.
+  report, and no repository upload token or pull-request-visible OIDC grant. The required `ci`
+  aggregate queries the public project settings on every candidate head and fails closed when the
+  live threshold, failure behavior, or report mode differs from `.codspeed-policy.json`.
 - CodeRabbit: assertive, every ready head including bot authors, request-changes workflow enabled,
   failure status enabled, author override denied, review details visible, and all write/mutation,
   web-search, external command, cross-repository, and post-merge features disabled.
@@ -64,11 +66,21 @@ automate, or fabricate stars.
 
 ## Live promotion ledger
 
-| Producer   | Exact status name               |  App ID | Negative/recovery proof | Zero-cost proof        | Protected |
-| ---------- | ------------------------------- | ------: | ----------------------- | ---------------------- | --------- |
-| CodeRabbit | pending live observation        | pending | pending                 | active OSS entitlement | no        |
-| CodSpeed   | `CodSpeed Performance Analysis` | pending | pending                 | public repository      | no        |
-| Greptile   | pending live observation        | pending | pending                 | exception pending      | no        |
+| Producer   | Exact status name               | App ID | PR #2876 observation                                                                                          | Protected |
+| ---------- | ------------------------------- | -----: | ------------------------------------------------------------------------------------------------------------- | --------- |
+| CodeRabbit | `CodeRabbit`                    | 347564 | Requested changes on `e3c89ce`; repair review on `418aca9` found three additional actionable issues           | pending   |
+| CodSpeed   | `CodSpeed Performance Analysis` | 257293 | Success on `418aca9` at 2026-08-01 06:35:50 UTC; four benchmarks uploaded without a workflow credential grant | pending   |
+| Greptile   | `Greptile Review`               | 867647 | Two P1 findings across `4b91c31` and `418aca9`; both owning files are repaired in the settlement head         | pending   |
+
+The retired `Keiko for Quality` context was removed atomically from `dev` protection at
+2026-08-01 06:28:25 UTC after its producer had been deleted. The other ten app-bound contexts were
+preserved. Qodo and Keiko for Quality remain installed only until PR #2876 merges, so rollback does
+not depend on removing an app before its replacement is live.
+
+Greptile's no-payment trial expires on 2026-08-14. Issue #2877 requires removal of its required
+context and installation by 2026-08-13 unless the free OSS application is accepted. Required
+conversation resolution makes every unresolved inline Greptile finding blocking even though the
+provider's completion status itself reports successful review execution.
 
 Promotion requires all of the following on a live pull request:
 

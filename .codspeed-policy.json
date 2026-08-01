@@ -1,8 +1,7 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "project": "oscharko-dev/Keiko",
   "regressionThresholdPercent": 5,
   "failOnRegression": true,
-  "observedAt": "2026-08-01T05:57:00Z",
-  "settingsUrl": "https://app.codspeed.io/oscharko-dev/Keiko/settings"
+  "pullRequestReport": "always"
 }
