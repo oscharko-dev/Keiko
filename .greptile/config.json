@@ -1,0 +1,71 @@
+{
+  "strictness": 2,
+  "commentTypes": ["logic", "syntax"],
+  "fileChangeLimit": 1000,
+  "includeBranches": ["dev"],
+  "excludeAuthors": [],
+  "triggerOnUpdates": true,
+  "triggerOnDrafts": false,
+  "statusCheck": true,
+  "statusCommentsEnabled": true,
+  "shouldUpdateDescription": false,
+  "updateExistingSummaryComment": true,
+  "fixWithAI": false,
+  "ignorePatterns": "**/dist/**\n**/.next/**\ncoverage/**\nplaywright-report/**\ntest-results/**\nartifacts/**\n**/*.min.js\n**/*.map",
+  "summarySection": {
+    "included": true,
+    "collapsible": true,
+    "defaultOpen": false
+  },
+  "issuesTableSection": {
+    "included": true,
+    "collapsible": false,
+    "defaultOpen": true
+  },
+  "confidenceScoreSection": {
+    "included": true,
+    "collapsible": false,
+    "defaultOpen": true
+  },
+  "sequenceDiagramSection": {
+    "included": false,
+    "collapsible": true,
+    "defaultOpen": false
+  },
+  "instructions": "Review Keiko as an independent blocking reviewer alongside CodeRabbit. Treat the referenced repository governance, contributor contract, quality policy, and ADRs as binding; an ADR overrides all other guidance. Prioritize correctness, security, reliability, architecture boundaries, evidence integrity, and regression coverage. Do not repeat formatting or style findings already enforced deterministically unless they hide a behavioral defect. Never recommend weakening a gate, regression pin, redaction boundary, or human-control invariant. Review the complete changed executable and trust-boundary inventory and explicitly identify any file that was not inspected. Do not approve, merge, write code, or edit the pull request description.",
+  "rules": [
+    {
+      "id": "human-control-invariant",
+      "rule": "Treat any widening of autonomy, authority, deployment ceiling, merge authority, workspace reach, or approval scope beyond the validated human-selected envelope as a high-severity defect.",
+      "severity": "high"
+    },
+    {
+      "id": "fail-closed-trust-boundaries",
+      "rule": "Trust-boundary code must validate hostile input before use, preserve stricter-wins policy and hard denials, bound resources and destinations, and fail closed on invalid, expired, unavailable, or ambiguous state.",
+      "severity": "high"
+    },
+    {
+      "id": "redacted-evidence",
+      "rule": "Evidence, diagnostics, manifests, logs, fixtures, and review output must remain body-free and secret-free; report only bounded counts, statuses, hashes, and redacted summaries.",
+      "severity": "high"
+    },
+    {
+      "id": "package-direction",
+      "rule": "Preserve ADR-0019 dependency direction: contracts is the leaf, provider SDKs stay in keiko-model-gateway, domain packages never depend on server or UI, and cross-package wire types live in contracts.",
+      "scope": ["packages/**/src/**", "src/**"],
+      "severity": "high"
+    },
+    {
+      "id": "regression-proof-integrity",
+      "rule": "A behavioral fix needs a failure-first regression proof over both sides of each guard. Never relax or reword an existing regression pin to bless the behavior it was created to prevent, and derive fixture expectations from production producers instead of duplicating their formulas.",
+      "scope": ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs", "tests/**"],
+      "severity": "high"
+    },
+    {
+      "id": "workflow-supply-chain",
+      "rule": "GitHub Actions must use full 40-hex commit pins with version comments, minimum job permissions, bounded timeouts, locked dependencies, and no secret-bearing or mutable unverified download path.",
+      "scope": [".github/workflows/**"],
+      "severity": "high"
+    }
+  ]
+}

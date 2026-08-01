@@ -14,8 +14,8 @@ The workflow never downloads an unpinned package through `npx`.
 
 The authoritative scope is the `mutate` array in [`stryker.security.conf.json`](../../stryker.security.conf.json).
 It currently covers the security primitives, evidence redaction and integrity checks, memory-vault
-encryption and redaction, model-gateway response redaction, the Figma snapshot host allowlist, and
-the dormant Keiko for Quality evidence evaluator. Governed debugging adds a
+encryption and redaction, model-gateway response redaction, and the Figma snapshot host allowlist.
+Governed debugging adds a
 separate 100-percent configuration in
 [`stryker.debug-launch.security.conf.json`](../../stryker.debug-launch.security.conf.json) for the
 DAP parser, process hardening, capsule isolation, closed launch policy, registry, and teardown

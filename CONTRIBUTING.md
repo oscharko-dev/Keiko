@@ -16,8 +16,9 @@ npm run typecheck  # strict type-checking for src + tests
 
 ## Pull requests
 
-All 11 app-bound required status checks must pass on the current pull-request head before a change
-can merge into `dev`:
+All required status checks must pass on the current pull-request head before a change can merge into
+`dev`. The stable app-bound set is the ten checks below, plus every external status recorded as
+live-promoted in [`docs/qa/external-quality-gates.md`](docs/qa/external-quality-gates.md):
 
 1. `ci`
 2. `workflow hygiene`
@@ -29,24 +30,23 @@ can merge into `dev`:
 8. `SonarCloud Code Analysis`
 9. `Socket Security: Project Report`
 10. `Socket Security: Pull Request Alerts`
-11. `Keiko for Quality`
-
-`workflow hygiene` runs actionlint, the pinned-SHA verification, zizmor and the OSV lockfile
-scan as one context (ADR-0159); the tools, pinned versions and rule sets are unchanged.
+    `workflow hygiene` runs actionlint, the pinned-SHA verification, zizmor and the OSV lockfile
+    scan as one context (ADR-0159); the tools, pinned versions and rule sets are unchanged.
 
 No human approving review or manual merge is required. GitHub native auto-merge integrates only
-after the required checks succeed on the exact current head and every review conversation is
-resolved. `Keiko for Quality` is a required, app-bound check (App id `4290143`) since the
-ADR-0142 cutover on 2026-07-19: all six live-probe conditions in
-[`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md) were proven on live pull requests
-(ledger in
-[`docs/qa/keiko-for-quality-action-evaluation.md`](docs/qa/keiko-for-quality-action-evaluation.md))
-before the maintainer promoted it. Qodo itself remains advisory and comment-only; the KFQ check
-is the gateable bridge for its findings. Full mutation testing runs daily and
-on explicit dispatch; shared-runner performance evidence runs after merge and for releases. Neither
-unbounded workload is part of the pull-request critical path. Qodo configuration, large-PR
-acceptance, safe commands, and boundaries are governed by
-[`docs/qa/qodo-review-policy.md`](docs/qa/qodo-review-policy.md).
+after the required checks succeed on the exact current head, CodeRabbit has no outstanding
+request-changes review, and every review conversation is resolved. Branch protection requires
+review state with zero human approvals: automated findings block, but autonomous delivery does not
+wait for a person. The repository-owned CodeRabbit policy is `.coderabbit.yaml`.
+
+Qodo and its Keiko for Quality bridge are retired by
+[ADR-0167](docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md); neither is Sonar evidence.
+Sonar remains independently enforced by its native required check and the exact-head validator
+inside `ci`. Full mutation runs daily/on demand and reference-machine performance evidence runs
+outside the pull-request critical path. Fast semantic-duplication, secret, coverage, static-analysis,
+and CPU-simulation proxies run in parallel on pull requests. Thresholds and operational details are
+in [`docs/qa/autonomous-quality-gates.md`](docs/qa/autonomous-quality-gates.md) and
+[`docs/qa/external-quality-gates.md`](docs/qa/external-quality-gates.md).
 
 The rationale for the package architecture, workspace gate, bundled publish model, and 0.2.0 baseline is recorded in
 [ADR-0019](docs/adr/ADR-0019-modular-package-architecture.md),

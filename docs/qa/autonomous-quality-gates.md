@@ -1,0 +1,68 @@
+# Autonomous quality gates
+
+Keiko ships autonomously only when independent, exact-current-head evidence proves the candidate
+clean. A missing, skipped, neutral, stale, cancelled, timed-out, quota-paced, or differently
+produced result is blocking. A finding is repaired; acknowledgement, dismissal, admin bypass, and
+threshold relaxation are not repair paths.
+
+## Enforced thresholds
+
+| Surface                                                      | Required threshold                                                  |
+| ------------------------------------------------------------ | ------------------------------------------------------------------- |
+| Sonar unresolved pull-request issues                         | `0`                                                                 |
+| Sonar new violations                                         | `0`                                                                 |
+| Sonar new-code coverage                                      | `>= 85%`                                                            |
+| Sonar new-code duplication                                   | `<= 3%` until Issue #2874 can synchronize a `<= 1%` OSS gate safely |
+| Sonar new-code ratings                                       | Maintainability `A`, reliability `A`, security `A`                  |
+| Sonar security hotspots reviewed                             | `100%` on new code and overall                                      |
+| Semantic clone groups introduced by the diff                 | `0` at `>= 100` tokens and `>= 10` lines                            |
+| Secrets introduced anywhere in the pull-request commit range | `0`                                                                 |
+| TypeScript and lint                                          | strict, no `any`, explicit returns, `0` warnings                    |
+| Complexity and function size                                 | cyclomatic complexity `<= 10`; `<= 50` non-comment lines/function   |
+| Package/file coverage                                        | no committed per-file or per-package ratchet regression             |
+| CodSpeed CPU-simulation regression                           | `< 5%` against the `dev` baseline                                   |
+| Automated-review findings                                    | `0` unresolved blocking findings and all conversations resolved     |
+
+The 85% coverage floor is constitutional, not aspirational. Per-file floors and package ratchets
+prevent a high aggregate from hiding untested changed code. Mutation testing remains the deeper
+scheduled/manual proof for security-critical code; it is not placed on every pull-request critical
+path because its multi-hour runtime would turn availability into merge authority.
+
+## Parallel gate topology
+
+The protected `ci` context aggregates independent jobs and fails closed if any dependency is not
+successful:
+
+- core quality: typecheck, lint, formatting, architecture, contract, package, security, retrieval,
+  evidence, and regression gates;
+- sharded package/UI/script coverage, followed by one Sonar verdict over the reassembled evidence;
+- cross-platform smoke when the change can affect native behavior;
+- Fallow semantic duplicate analysis over changed files only; and
+- Gitleaks over every addition in the pull-request commit range, including intermediate commits.
+
+The jobs run concurrently. Full mutation, extended end-to-end, and reference-machine performance
+measurements remain scheduled or release-owned; fast deterministic proxies and affected-area tests
+stay on every pull request.
+
+## Hosted supplemental checks
+
+SonarCloud and Socket remain independently required. CodeRabbit is configured to request changes
+for findings and to approve only after its own comments and pre-merge checks settle. Its commit
+status proves review liveness; GitHub review state and conversation resolution carry its finding
+verdict. Greptile and CodSpeed are promoted only after a live pull request proves exact-head
+emission, a real negative case, repaired recovery, stable producer identity, and bounded settlement.
+CodSpeed additionally requires zero-cost continuity. Greptile may be required during its no-payment
+trial only with a recorded hard expiry and rollback issue.
+
+Hosted products are not described as open-source merely because their service is free for a public
+repository. The merge-critical foundation is repository-owned and implemented with open-source
+tooling. No payment method or paid entitlement may be introduced. Greptile is removed from branch
+protection no later than 24 hours before its trial expires unless the pending free-OSS exception is
+approved and its live probes pass.
+
+## Sonar independence
+
+The native `SonarCloud Code Analysis` context and `scripts/check-sonar-pr-quality-gate.mjs` enforce
+Sonar independently. The repository validator binds the exact current head, native gate status,
+custom gate definition, metric values, unresolved issue count, and new-violation count. No review
+bot or retired aggregate participates in that decision.

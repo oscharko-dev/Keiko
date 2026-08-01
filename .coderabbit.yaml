@@ -1,0 +1,111 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit is a blocking review producer, but never a merge authority or code-writing agent.
+# It may request changes for its own findings and clear that review after the findings are resolved;
+# only the complete protected gate set on the exact current head may authorize native auto-merge.
+language: "en-US"
+early_access: false
+enable_free_tier: true
+inheritance: false
+
+reviews:
+  profile: "assertive"
+  request_changes_workflow: true
+  commit_status: true
+  fail_commit_status: true
+  review_status: true
+  review_details: true
+  high_level_summary: true
+  sequence_diagrams: false
+  poem: false
+  enable_prompt_for_ai_agents: true
+  abort_on_close: true
+
+  pre_merge_checks:
+    # A pull-request author may not ignore a failing CodeRabbit pre-merge check. Keiko does not use
+    # manual overrides as a repair path; findings are fixed and the exact current head is re-reviewed.
+    override_requested_reviewers_only: true
+
+  path_filters:
+    - "!**/dist/**"
+    - "!**/.next/**"
+    - "!coverage/**"
+    - "!playwright-report/**"
+    - "!test-results/**"
+    - "!artifacts/**"
+    - "!**/*.min.js"
+    - "!**/*.map"
+
+  path_instructions:
+    - path: ".github/workflows/**"
+      instructions: |
+        Treat workflow changes as supply-chain and merge-authority changes. Require full 40-hex
+        action pins with version comments, minimum permissions, bounded timeouts, locked installs,
+        redacted output, and exact-current-head evidence. Never recommend bypassing a gate.
+    - path: "packages/**/src/**"
+      instructions: |
+        Enforce ADR-0019 package direction and the owning trust boundary. Flag provider SDK imports
+        outside keiko-model-gateway, cross-package wire types outside contracts, workspace escape,
+        raw evidence bodies, silent failures, and parallel subsystems that should extend an owner.
+    - path: "**/*.test.{ts,tsx,mjs}"
+      instructions: |
+        A behavioral fix needs a failure-first regression proof that fails without the fix. Cover
+        malformed, hostile, empty, and boundary inputs; never relax a regression pin or duplicate a
+        production formula inside a fixture.
+    - path: "scripts/**"
+      instructions: |
+        Gate and evidence tooling must fail closed, remain deterministic and redacted, and carry
+        negative tests proving that weakened configuration or stale evidence is rejected.
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 0
+    drafts: false
+    base_branches: []
+    ignore_usernames: []
+
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+    simplify:
+      enabled: false
+    autofix:
+      enabled: false
+    fix_ci:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false
+    custom: []
+
+  post_merge_actions: []
+
+chat:
+  art: false
+  allow_non_org_members: false
+  auto_reply: false
+  integrations:
+    jira:
+      usage: "disabled"
+    linear:
+      usage: "disabled"
+
+knowledge_base:
+  web_search:
+    enabled: false
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - files: "AGENTS.md,CONTRIBUTING.md,docs/qa/review-standards.md"
+        applyTo: "**"
+      - files: "docs/qa/review-settlement.md,docs/qa/autonomous-quality-gates.md,docs/qa/external-quality-gates.md"
+        applyTo: "**"
+      - files: "docs/adr/ADR-0019-modular-package-architecture.md,docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md,docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md"
+        applyTo: "**"
+  learnings:
+    scope: "local"
+    approval_delay: 30
+  automatic_repository_linking: false
+  linked_repositories: []

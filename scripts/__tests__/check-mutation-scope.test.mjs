@@ -25,8 +25,6 @@ describe("mutation scope", () => {
     expect(requiresSecurityMutation(["packages/keiko-server/src/editor/processHardening.ts"])).toBe(
       true,
     );
-    expect(requiresSecurityMutation(["scripts/keiko-for-quality-core.mjs"])).toBe(true);
-    expect(requiresSecurityMutation(["scripts/keiko-for-quality-worker.mjs"])).toBe(true);
   });
 
   it("requires mutation testing for every production DAP module", () => {

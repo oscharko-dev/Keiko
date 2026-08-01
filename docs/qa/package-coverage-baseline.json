@@ -585,22 +585,6 @@
       "branches": 85,
       "functions": 90
     },
-    "scripts/keiko-for-quality-core.mjs": {
-      "governance": "absolute",
-      "tolerance": 0,
-      "lines": 90,
-      "statements": 90,
-      "branches": 85,
-      "functions": 90
-    },
-    "scripts/keiko-for-quality-worker.mjs": {
-      "governance": "absolute",
-      "tolerance": 0,
-      "lines": 90,
-      "statements": 90,
-      "branches": 85,
-      "functions": 90
-    },
     "scripts/sonar-analysis-scope.mjs": {
       "governance": "absolute",
       "tolerance": 0,

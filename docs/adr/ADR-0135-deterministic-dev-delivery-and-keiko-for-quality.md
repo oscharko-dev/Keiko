@@ -3,7 +3,8 @@
 ## Status
 
 Accepted (maintainer decision, 2026-07-13); operationally amended after the 2026-07-14 liveness
-incident; amended 2026-07-18 to adopt Qodo as the advisory review product in place of Gitar.
+incident; amended 2026-07-18 to adopt Qodo as the advisory review product in place of Gitar;
+amended 2026-08-01 by ADR-0167 to retire Qodo/KFQ and adopt zero-cost autonomous gates.
 
 ## Amends
 
@@ -140,8 +141,9 @@ uninvestigated product failure.
 
 ## References
 
-- [Keiko quality-gate policy](../qa/keiko-for-quality.md)
-- [Qodo review policy](../qa/qodo-review-policy.md)
+- [Autonomous quality-gate policy](../qa/autonomous-quality-gates.md)
+- [Review standards](../qa/review-standards.md)
+- [ADR-0167 zero-cost autonomous quality gates](ADR-0167-zero-cost-autonomous-quality-gates.md)
 - [Mutation testing policy](../qa/mutation-testing.md)
 - [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md)
 - [ADR-0129](ADR-0129-product-wide-authority-and-autonomy-model.md)

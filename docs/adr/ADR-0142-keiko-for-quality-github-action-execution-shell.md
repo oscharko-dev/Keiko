@@ -2,28 +2,29 @@
 
 ## Status
 
-Accepted as the target execution shell (Issue #2506, Epic #2504, 2026-07-18). The decision is to
+Superseded by [ADR-0167](ADR-0167-zero-cost-autonomous-quality-gates.md) on 2026-08-01. The Qodo
+bridge and all execution/deployment artifacts are retired. Historical decision: the target was to
 **adopt the GitHub Action and retire the Cloudflare Worker**, but the cutover is gated: the Worker
 remains the canonical producer until the Action passes the live-probe equivalence gate defined in
 [ADR-0135](ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md) and
-[`../qa/keiko-for-quality.md`](../qa/keiko-for-quality.md). This ADR records the decision and ships
+the then-current quality policy. This ADR records the decision and shipped
 the proof-of-concept; the scope, cron, and liveness children of Epic #2504 complete the migration.
 
 **Cutover executed 2026-07-19.** All six live-probe conditions were proven on live pull requests
-(ledger: [`../qa/keiko-for-quality-action-evaluation.md`](../qa/keiko-for-quality-action-evaluation.md)
+(ledger formerly stored in `docs/qa/keiko-for-quality-action-evaluation.md`, removed with the bridge;
 "Live-probe gate results"). The Action carries the canonical check name and dashboard marker with
 the opt-in label gate disabled, under the documented `GITHUB_TOKEN` fallback (the aggregate is
 advisory and non-required, so App-bound producer identity is an upgrade path, not a precondition;
 adding `KFQ_APP_ID`/`KFQ_PRIVATE_KEY_PKCS8` restores it without code changes). The Worker cron,
 webhook, D1 database, and deployment are retired; rollback stays `wrangler deploy` from
-[`../../infrastructure/keiko-for-quality/`](../../infrastructure/keiko-for-quality/) plus reverting
+the former `infrastructure/keiko-for-quality/` template plus reverting
 the workflow identity block.
 
 ## Amends
 
 This decision narrowly refines the operational runtime note in
-[ADR-0135](ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md) D5 and the
-[`../../infrastructure/keiko-for-quality/README.md`](../../infrastructure/keiko-for-quality/README.md)
+[ADR-0135](ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md) D5 and the former
+`infrastructure/keiko-for-quality/README.md`
 claim that the aggregate runtime is "deliberately outside GitHub Actions so pull-request code cannot
 mint the required aggregate check." That rationale is correct only for `pull_request`-triggered
 workflows, which run pull-request-controlled code. It is **not** a property of GitHub Actions as
@@ -140,7 +141,7 @@ Worker remains deployed and canonical throughout the evaluation, so no rollback 
   evaluate it with full authority. Keiko's governed flow uses same-repository branches, so this is a
   documented edge, not a regression.
 - **Empirical equivalence:** the shell reproduced the live Worker's verdict byte-for-byte on real
-  open pull requests (see [`../qa/keiko-for-quality-action-evaluation.md`](../qa/keiko-for-quality-action-evaluation.md)).
+  open pull requests (the retired evaluation ledger was removed with the bridge).
 
 ## Verification
 

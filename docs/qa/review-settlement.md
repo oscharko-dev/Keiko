@@ -7,11 +7,10 @@ which lever is left. The measurements behind every claim are in
 
 ## The rule that nothing below may bend
 
-A review conversation is resolved **only** because its finding was fixed, or explicitly dispositioned
-with a rationale written in that thread. No automation, bulk action, timer or scheduled sweep in this
-repository resolves a conversation, and none may be added — that resolution act is an ADR-0135
-merge precondition, and converting it into a process step would turn a settlement guarantee into a
-formality. Everything in this document removes redundant steps around that act. It never performs it.
+A review conversation is resolved **only** after its finding was fixed and the producing reviewer
+accepted the new head. No automation, bulk action, timer, dismissal, override, or scheduled sweep in
+this repository resolves a conversation, and none may be added. Resolution is an ADR-0135 merge
+precondition; converting it into a process step would turn a settlement guarantee into a formality.
 
 ## What the measurement changed about the diagnosis
 
@@ -28,12 +27,13 @@ the wall clock.
 
 ## Settlement model per producer
 
-| Producer              | How a finding appears                                                                               | How it settles                                                                                                                          | What the delivering agent must do                                                                                                                                                                   |
-| --------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **CodeRabbit**        | Inline review comments create threads; **nitpicks live only in the review body and have no thread** | A fix-push auto-resolves thread-anchored findings once CodeRabbit re-reviews the new head                                               | Fix and push. Answer body-only nitpicks with a top-level pull-request comment — no thread exists to reply on. If a thread does not auto-resolve, reply inline with the fix evidence and resolve it. |
-| **Qodo**              | Edits one summary comment in place, with embedded head SHAs                                         | Never resolves by discussion: `Keiko for Quality` requires both the finding count and a changed SHA-normalized body digest across heads | Fix and push. Resolving the thread or changing only embedded SHAs does not turn the check green — Qodo must produce changed review content.                                                         |
-| **Keiko for Quality** | The required check bridging Qodo's advisory review (ADR-0142/0143)                                  | Settles after the app-bound digest chain and the 60 s stability window validate, bounded by a 5 min settle cap                          | Wait for the new head's evaluation. A missing predecessor digest or unchanged normalized body remains pending; do not edit the baseline marker.                                                     |
-| **SonarCloud**        | Quality gate plus issues that can sit **below** the gate's own thresholds                           | Clears when the issues are gone on the current head                                                                                     | Query `api/issues/search?...&pullRequest=<n>&resolved=false` directly. The gate summary hides findings that do not breach it, and those still cost a later round if they surface.                   |
+| Producer            | How a finding appears                                                                  | How it settles                                                              | What the delivering agent must do                                                                       |
+| ------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| **CodeRabbit**      | Inline review threads plus body-only findings and a request-changes review             | Re-review of the repaired current head clears its own request-changes state | Fix every finding, push once, and verify the automatic clear. Never use the ignore/override controls.   |
+| **Greptile**        | Inline comments, summary, and a current-head status                                    | Re-review reports no blocking finding and all conversations are resolved    | Fix every finding before the next head; never treat a passing liveness status as thread settlement.     |
+| **SonarCloud**      | Native quality gate plus issues that may sit below its summary thresholds              | The native gate and repository validator both see zero current-head issues  | Query the PR issue API, repair all findings, and rerun the exact local Sonar analyzer before pushing.   |
+| **CodSpeed**        | A per-benchmark comparison against the `dev` baseline                                  | The repaired head falls below the 5% regression ceiling                     | Reproduce the affected production entry point locally; do not update the baseline to hide a regression. |
+| **Repository `ci`** | Parallel job logs for tests, coverage, secrets, clones, architecture, and supply chain | Every dependency concludes success on the exact candidate                   | Repair the complete failure set locally and push one consolidated new head.                             |
 
 The expensive mistake this table exists to prevent is discovering findings one CI round at a time.
 Enumerate **every** finding from **every** producer above in one pass — failing job logs, the Sonar
@@ -59,16 +59,12 @@ the number the post-adoption report tracks, and it is the honest substitute for 
 "median checks-green-to-merged gap ≤30 minutes" target, which the same measurement shows is already
 met at 0.1 minutes and would pass without anything improving.
 
-## KFQ cadence: reviewed, unchanged
+## Current-head cadence
 
-`STABILITY_WINDOW_MS=60000` and `maxSettleWaitMs=300000` stay as they are. Against a median settlement
-span of 5.6 minutes and a 0.1-minute final gap, the 60-second window is not a measurable contributor,
-and it is load-bearing for a reason the numbers do not show: Qodo edits its summary in place, so a
-same-head re-review can invalidate a just-published verdict. Shrinking the window re-opens exactly
-the stale-verdict class that probes 3 and 6 in [`keiko-for-quality.md`](keiko-for-quality.md)
-negative-tested. Treat that probe suite as a pin — relocate or strengthen, never relax (AGENTS.md §7).
-Any change to either constant requires all six live probes re-run green, in its own commit, with the
-evidence linked.
+Every enabled reviewer is configured to re-run on each ready pull-request update. A prior green
+review does not bind a new SHA. The delivering agent waits for all producers to settle, enumerates
+all new findings together, and repairs the complete set in one head instead of cycling one producer
+at a time.
 
 ## The remaining lever, reserved to the owner
 

@@ -1,0 +1,131 @@
+# ADR-0166: CodSpeed and Greptile quality signals
+
+## Status
+
+Superseded for activation and review topology by
+[ADR-0167](ADR-0167-zero-cost-autonomous-quality-gates.md) on 2026-08-01. Its benchmark design and
+repository-configuration boundaries remain adopted.
+
+## Amends
+
+This decision additively amends the repository-delivery boundary in
+[ADR-0135](ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md) and the measurement/verdict
+separation in [ADR-0156](ADR-0156-measurement-and-verdict-separation.md). It does not change Keiko's
+product runtime authority model, the current 11 required `dev` checks, the Qodo-to-KFQ bridge, or the
+D12 reference environment.
+
+## Context
+
+Keiko already owns deterministic functional, security, architecture, coverage, package, browser,
+and release-performance gates. Qodo and CodeRabbit also provide complementary code-review signals;
+their different findings demonstrate that no single probabilistic reviewer is a complete oracle. Two
+additional hosted products can close different gaps:
+
+- CodSpeed compares stable algorithmic microbenchmarks across pull-request heads.
+- Greptile performs codebase-aware review against repository-specific governance and architecture
+  context.
+
+Neither product is safe to make merge-critical merely because it can emit a status check.
+ADR-0135 requires every protected context to prove exact-head emission, bounded settlement, stable
+producer identity, and a repair path that cannot depend on the failing gate. Greptile is additionally
+quota-dependent until its open-source entitlement is approved. CodSpeed begins without a `dev`
+baseline, so its first pull request cannot yet prove comparison semantics.
+
+## Decision
+
+### D1 — CodSpeed measures synchronous production algorithms through CPU simulation
+
+The repository owns one Tinybench suite at `benchmarks/codspeed.mjs`. It calls public production
+entry points for redaction, prompt-injection detection, context allocation, and editor text-edit
+application over deterministic, secret-free fixtures. It uses `@codspeed/tinybench-plugin` rather
+than forcing CodSpeed's Vitest plugin across Keiko's unsupported Vite 8 peer boundary.
+
+The `CodSpeed` workflow runs on every pull request targeting `dev`, every push to `dev`, and explicit
+dispatch. It builds package entry points before measurement, uses CodSpeed CPU simulation, has a
+20-minute timeout, authenticates with OIDC, persists no checkout credentials, and pins the action to
+a reviewed commit. A long-lived upload token is denied.
+
+CPU simulation measures repeatable synchronous algorithmic work. It does not measure browser
+rendering, process startup, filesystem or network latency, memory growth, or user-perceived wall
+clock. D12 reference-environment evidence, deterministic bundle budgets, retrieval latency, and
+affected end-to-end performance gates retain their existing authority.
+
+### D2 — Greptile and CodeRabbit consume repository-owned policy and remain independent of KFQ
+
+The recommended `.greptile/` format is the source of repository review behavior. The root config:
+
+- reviews every new ready-PR head targeting `dev`, including bot-authored pull requests;
+- limits one review to 1,000 changed files, reports a status check, and updates one summary comment;
+- focuses on `logic` and `syntax`, leaving formatting and style to deterministic repository gates;
+- reads `AGENTS.md`, `CONTRIBUTING.md`, the shared `docs/qa/review-standards.md`, and the relevant ADR/quality
+  policy rather than creating a second standards corpus;
+- treats human control, fail-closed trust boundaries, redacted evidence, package direction,
+  regression-pin integrity, and workflow supply-chain controls as high-severity review rules; and
+- may suggest agent fixes but may not auto-approve, merge, edit the pull-request description, or
+  recommend bypassing a gate.
+
+Greptile is the third complementary reviewer alongside Qodo and CodeRabbit. It remains independently
+observable so one review product cannot suppress or satisfy another product's findings. Qodo remains
+the canonical comment producer consumed by `Keiko for Quality`; Greptile output is not parsed by KFQ
+and cannot satisfy or replace its evidence. Changing that relationship requires a separate decision
+and live negative/positive probes.
+
+CodeRabbit's existing review role is now pinned by `.coderabbit.yaml` instead of mutable dashboard
+defaults. It uses the assertive review profile, reviews every ready pull-request update, discloses
+review details, and consumes the same repository governance and path-specific trust-boundary rules.
+Untrusted web context, commands from non-organization members, automatic repository linking,
+auto-approval, post-merge actions, and every code-writing finishing touch are disabled. CodeRabbit
+remains advisory and independently settled under `docs/qa/review-settlement.md`.
+
+### D3 — Repository configuration is required; hosted verdicts are staged
+
+`npm run check:external-quality-config` is a deterministic required-`ci` configuration gate. It
+pins the CodSpeed dependencies, action identity, simulation mode, triggers, permissions, timeout,
+and benchmark command; CodeRabbit's current-head review, governance context, restricted commands,
+and no-mutation boundary; and Greptile's current-head, status, scope, context-file, and rule
+configuration. This gate proves the repository-owned integrations have not silently weakened. It
+does not claim that a hosted service ran.
+
+The hosted CodSpeed and Greptile checks remain outside branch protection during initial observation.
+CodSpeed regressions are configured to fail their own status at a 10% global threshold; Greptile's
+dashboard confidence floor is 4/5. Informational-on-failure and Greptile auto-approval stay disabled.
+A red advisory result must be investigated, but it does not independently grant or deny merge
+authority during this stage.
+
+### D4 — Promotion requires live availability and failure probes
+
+No CodSpeed or Greptile context may be added to `dev` branch protection until a follow-up change
+records all of the following against live pull requests:
+
+1. every eligible current head receives exactly one attributable check without manual prompting;
+2. two successive head updates settle within the documented runtime bound and stale success cannot
+   satisfy the new head;
+3. an intentionally injected defect produces a failing verdict and its repair produces success;
+4. forks, bot-authored pull requests, drafts becoming ready, large diffs, cancellation, and service
+   errors cannot omit or falsely green the check;
+5. the producer App ID and exact check name are stable and can be pinned by branch protection; and
+6. plan limits, credits, or open-source eligibility cannot pace or omit required evidence.
+
+Promotion is an explicit branch-protection change with an activation ledger and rollback path. A
+service that cannot satisfy all six conditions stays advisory. No hosted-service acknowledgement is
+equivalent to fixing a regression, and acknowledgement cannot be used to bypass a protected gate.
+
+## Consequences
+
+- Keiko gains continuous algorithmic performance comparisons without comparing noisy hosted
+  wall-clock values to D12 evidence.
+- Greptile adds a third independent review perspective beside Qodo and CodeRabbit; both third-party
+  review configurations consume the same repository-owned governance context.
+- The required `ci` context fails on integration drift even when a hosted vendor is unavailable.
+- Branch protection stays at its proven 11 contexts until live evidence justifies a separately
+  reviewed promotion.
+- Greptile's open-source application remains an owner attestation because an Apache license and a
+  public repository do not prove that the project is non-commercial.
+
+## References
+
+- [External quality-gate runbook](../qa/external-quality-gates.md)
+- [Keiko `dev` quality gates](../qa/autonomous-quality-gates.md)
+- [CodSpeed GitHub Actions](https://codspeed.io/docs/integrations/ci/github-actions)
+- [CodSpeed Tinybench integration](https://codspeed.io/docs/benchmarks/nodejs/tinybench)
+- [Greptile `.greptile/` configuration](https://www.greptile.com/docs/code-review/greptile-config)

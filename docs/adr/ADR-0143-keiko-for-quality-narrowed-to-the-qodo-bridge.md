@@ -2,8 +2,9 @@
 
 ## Status
 
-Accepted (Issue #2508, Epic #2504, 2026-07-18; evidence-currency amendment for Issue #2870,
-2026-07-31).
+Superseded by [ADR-0167](ADR-0167-zero-cost-autonomous-quality-gates.md) on 2026-08-01. Historical
+decision accepted for Issue #2508 / Epic #2504 on 2026-07-18 and amended for Issue #2870 on
+2026-07-31.
 
 ## Amends
 
@@ -62,7 +63,8 @@ a subsequent Qodo production changes that digest. The existing stability window 
 The issue allowed an optional lightweight sanity check of the direct contexts; it is deliberately
 not kept. A re-check adds zero enforcement power while re-introducing the API calls, the check-name
 profiles, and the failure modes this decision removes. Branch protection is the single authority
-for those contexts; the enforced list lives in [`../qa/keiko-for-quality.md`](../qa/keiko-for-quality.md).
+for those contexts; the current enforced policy lives in
+[`../qa/autonomous-quality-gates.md`](../qa/autonomous-quality-gates.md).
 
 ### D3 — The Socket comment bridge and its acceptance plumbing are removed
 

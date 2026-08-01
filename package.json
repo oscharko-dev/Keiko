@@ -36,6 +36,7 @@
   "sideEffects": false,
   "scripts": {
     "build:packages": "npm run check:typescript-toolchain && node scripts/build-packages.mjs",
+    "bench:codspeed": "node benchmarks/codspeed.mjs",
     "build": "npm run build:packages && node node_modules/@typescript/native/bin/tsc -p tsconfig.build.json",
     "keiko:start": "node dist/cli/index.js start",
     "keiko:stop": "node dist/cli/index.js stop",
@@ -137,7 +138,8 @@
     "check:error-observability": "node scripts/check-error-observability.mjs",
     "check:dependency-hygiene": "node scripts/check-dependency-hygiene.mjs",
     "check:knip": "node scripts/check-knip.mjs",
-    "check:qodo-config": "node scripts/check-qodo-config.mjs",
+    "check:external-quality-config": "node scripts/check-external-quality-config.mjs",
+    "check:semantic-duplication": "fallow dupes --mode semantic --min-tokens 100 --min-lines 10 --ignore-imports --format compact --fail-on-issues",
     "check:runtime-toolchain": "node scripts/check-runtime-toolchain.mjs",
     "check:typescript-toolchain": "node scripts/check-typescript-toolchain.mjs",
     "check:git-delivery-evidence": "node scripts/check-git-delivery-evidence.mjs",
@@ -219,6 +221,7 @@
   "devDependencies": {
     "@babel/core": "^8.0.1",
     "@babel/preset-env": "^8.0.2",
+    "@codspeed/tinybench-plugin": "5.7.1",
     "@eslint/js": "^9.39.5",
     "@oscharko-dev/keiko-editor": "0.2.15",
     "@playwright/test": "^1.61.1",
@@ -235,8 +238,10 @@
     "eslint": "^9.39.5",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-sonarjs": "^4.2.0",
+    "fallow": "3.10.0",
     "knip": "6.27.0",
     "prettier": "^3.0.0",
+    "tinybench": "6.1.2",
     "typescript-eslint": "^8.64.0",
     "vitest": "^4.1.10"
   },

@@ -119,7 +119,8 @@ const REQUIRED_CI_COMMANDS = [
   // floors present, build-tool script imports declared at root.
   "npm run check:dependency-hygiene",
   "npm run check:knip",
-  "npm run check:qodo-config",
+  "npm run check:external-quality-config",
+  "npm run check:semantic-duplication",
   // Formatting baseline + ADR registry integrity (Step 10, RB-19 / GEN-SYNTH-MISSING-EVIDENCE-001 /
   // GEN-DOC-ADR-002): format:check was unwired while 205 files drifted; check:adr-index guards the
   // ADR numbering-collision fix so a duplicate/unindexed ADR can never silently return.
@@ -218,10 +219,11 @@ describe("CI test/gate wiring guard", () => {
     const verificationCount =
       runtimeWorkflows.match(/node scripts\/check-runtime-toolchain\.mjs --exact/gu)?.length ?? 0;
     // 17 -> 20 with the three coverage suite jobs Issue #2704 split out of `coverage-sonar`,
-    // then 20 -> 22 with the credential-free macOS qualification and protected sealing lanes.
+    // then 20 -> 22 with the credential-free macOS qualification and protected sealing lanes,
+    // then 22 -> 23 with the diff-scoped semantic-duplication lane.
     // The load-bearing assertion is the pairing below: every Node lane, old or new, verifies the
     // governed toolchain.
-    expect(nodeSetupCount).toBe(22);
+    expect(nodeSetupCount).toBe(23);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
   });
