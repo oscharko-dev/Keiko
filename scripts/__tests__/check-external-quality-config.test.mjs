@@ -36,6 +36,7 @@ describe("external quality integration configuration", () => {
         "bench:codspeed must execute the repository-owned benchmark entry point",
         "check:external-quality-config script is missing or redirected",
         "check:codspeed-policy script is missing or redirected",
+        "check:greptile-findings script is missing or redirected",
         "semantic duplication must fail on every changed clone group",
       ]),
     );

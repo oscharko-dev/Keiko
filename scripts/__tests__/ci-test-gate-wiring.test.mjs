@@ -121,6 +121,7 @@ const REQUIRED_CI_COMMANDS = [
   "npm run check:knip",
   "npm run check:external-quality-config",
   "node scripts/check-codspeed-policy.mjs",
+  ".greptile-gate-base/scripts/check-greptile-findings.mjs",
   "npm run check:semantic-duplication",
   // Formatting baseline + ADR registry integrity (Step 10, RB-19 / GEN-SYNTH-MISSING-EVIDENCE-001 /
   // GEN-DOC-ADR-002): format:check was unwired while 205 files drifted; check:adr-index guards the
@@ -222,10 +223,11 @@ describe("CI test/gate wiring guard", () => {
     // 17 -> 20 with the three coverage suite jobs Issue #2704 split out of `coverage-sonar`,
     // then 20 -> 22 with the credential-free macOS qualification and protected sealing lanes,
     // then 22 -> 23 with the diff-scoped semantic-duplication lane, 23 -> 24 when the secret scan
-    // adopted the governed runtime, and 24 -> 25 with live CodSpeed policy enforcement.
+    // adopted the governed runtime, 24 -> 25 with live CodSpeed policy enforcement, and 25 -> 26
+    // with exact-head Greptile finding settlement.
     // The load-bearing assertion is the pairing below: every Node lane, old or new, verifies the
     // governed toolchain.
-    expect(nodeSetupCount).toBe(25);
+    expect(nodeSetupCount).toBe(26);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
   });

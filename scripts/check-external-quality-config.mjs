@@ -150,6 +150,11 @@ function validatePackage(packageJson) {
       "check:codspeed-policy script is missing or redirected",
     ],
     [
+      parsed.scripts?.["check:greptile-findings"],
+      "node scripts/check-greptile-findings.mjs",
+      "check:greptile-findings script is missing or redirected",
+    ],
+    [
       parsed.scripts?.["check:semantic-duplication"],
       duplicationCommand,
       "semantic duplication must fail on every changed clone group",
@@ -362,6 +367,16 @@ function validateCiWorkflow(source) {
     [
       "run: node scripts/check-codspeed-policy.mjs",
       "required ci must execute the live CodSpeed policy check",
+    ],
+    ["  greptile-findings:", "required ci must validate Greptile findings"],
+    ["      - greptile-findings", "required ci must aggregate Greptile findings"],
+    [
+      "ref: ${{ github.event.pull_request.base.sha }}",
+      "Greptile settlement must execute base-trusted gate code",
+    ],
+    [
+      'gate=".greptile-gate-base/scripts/check-greptile-findings.mjs"',
+      "required ci must execute exact-head Greptile settlement",
     ],
   ];
   const problems = checks.flatMap(([expected, finding]) => missingText(source, expected, finding));

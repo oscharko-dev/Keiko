@@ -12,7 +12,7 @@ The deterministic core remains usable without them.
 | ---------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | CodSpeed   | `codspeed.yml`, `.codspeed-policy.json`, `benchmarks/codspeed.mjs`, workflows | CPU-simulation comparison plus live settings enforcement          |
 | CodeRabbit | `.coderabbit.yaml`                                                            | Assertive blocking review with no code-writing or merge authority |
-| Greptile   | `.greptile/config.json`, `.greptile/files.json`                               | Independent current-head logic/security/architecture review       |
+| Greptile   | `.greptile/config.json`, `.greptile/files.json`, settlement job               | Independent current-head review with zero unresolved P0-P2        |
 | Fallow     | root lockfile and `check:semantic-duplication`                                | Zero introduced semantic clone groups                             |
 | Gitleaks   | checksum pin in `.github/workflows/ci.yml`                                    | Zero secrets introduced anywhere in PR history                    |
 | Drift pin  | `scripts/check-external-quality-config.mjs` plus negative tests               | Required-`ci` proof that integration policy did not weaken        |
@@ -66,11 +66,11 @@ automate, or fabricate stars.
 
 ## Live promotion ledger
 
-| Producer   | Exact status name               | App ID | PR #2876 observation                                                                                          | Protected |
-| ---------- | ------------------------------- | -----: | ------------------------------------------------------------------------------------------------------------- | --------- |
-| CodeRabbit | `CodeRabbit`                    | 347564 | Requested changes on `e3c89ce`; repair review on `418aca9` found three additional actionable issues           | pending   |
-| CodSpeed   | `CodSpeed Performance Analysis` | 257293 | Success on `418aca9` at 2026-08-01 06:35:50 UTC; four benchmarks uploaded without a workflow credential grant | pending   |
-| Greptile   | `Greptile Review`               | 867647 | Two P1 findings across `4b91c31` and `418aca9`; both owning files are repaired in the settlement head         | pending   |
+| Producer   | Exact status name               | App ID | [PR #2876](https://github.com/oscharko-dev/Keiko/pull/2876) evidence                                                                                                                                                                                                                                 | Protected |
+| ---------- | ------------------------------- | -----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| CodeRabbit | `CodeRabbit`                    | 347564 | Requested changes on `e3c89ce0eb5a77f44a4d8115be261160709a22d0` at 2026-08-01 05:53:59 UTC; the review on `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 06:39:26 UTC found three additional actionable issues                                                                                        | pending   |
+| CodSpeed   | `CodSpeed Performance Analysis` | 257293 | Success on `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 2026-08-01 06:35:50 UTC; four benchmarks uploaded without a workflow credential grant                                                                                                                                                       | pending   |
+| Greptile   | `Greptile Review`               | 867647 | P1 findings on `4b91c315823160652139a29de0d7a24e4af290c6` at 2026-08-01 05:51:24 UTC and `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 06:31:36 UTC, plus an outside-diff P1 on `e4f981efa67e363b78fd30bc2db36484402c83a2`; `3b9d90e50a74acd90734b3c59bd4aab374da895b` settled clean at 07:08:20 UTC | pending   |
 
 The retired `Keiko for Quality` context was removed atomically from `dev` protection at
 2026-08-01 06:28:25 UTC after its producer had been deleted. The other ten app-bound contexts were
@@ -80,7 +80,9 @@ not depend on removing an app before its replacement is live.
 Greptile's no-payment trial expires on 2026-08-14. Issue #2877 requires removal of its required
 context and installation by 2026-08-13 unless the free OSS application is accepted. Required
 conversation resolution makes every unresolved inline Greptile finding blocking even though the
-provider's completion status itself reports successful review execution.
+provider's completion status itself reports successful review execution. The parallel
+`Greptile findings` CI job also rejects P0-P2 findings that T-Rex can place only in the current
+summary, binds the summary and provider App to the exact head, and never emits comment bodies.
 
 Promotion requires all of the following on a live pull request:
 
