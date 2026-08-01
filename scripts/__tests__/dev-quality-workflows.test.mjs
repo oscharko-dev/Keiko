@@ -125,8 +125,22 @@ describe("dev quality workflows", () => {
       'git -C "${repo_root}" diff -z --name-only --diff-filter=ACMR HEAD',
     );
     expect(localSonar).toContain('git -C "${repo_root}" ls-files -z --others --exclude-standard');
+    expect(localSonar).toContain("--needs-full-scan");
     expect(localSonar).not.toContain("-Dsonar.javascript.node.maxspace=4096");
-    expect(localSonar).toContain('"-Dsonar.test.inclusions=${inclusions}"');
+    expect(localSonar).toContain("--partition-inclusions");
+    expect(localSonar).toContain(
+      '"-Dsonar.inclusions=${source_inclusions:-${empty_source_inclusion}}"',
+    );
+    expect(localSonar).toContain(
+      '"-Dsonar.test.inclusions=${test_inclusions:-${empty_test_inclusion}}"',
+    );
+    expect(localSonar).toContain(
+      'empty_source_inclusion=".keiko/local-sonar-empty-source-${checkout_id}"',
+    );
+    expect(localSonar).toContain(
+      'empty_test_inclusion=".keiko/local-sonar-empty-test-${checkout_id}"',
+    );
+    expect(localSonar).not.toContain('"-Dsonar.test.inclusions=${inclusions}"');
     expect(localSonarCompose).toContain('"127.0.0.1:${KEIKO_LOCAL_SONAR_PORT:-9234}:9000"');
     expect(packageJson.scripts["gates:sonar:stop"]).toBe("./docker/gates/run-sonar.sh --stop");
   });

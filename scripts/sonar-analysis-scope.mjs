@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -105,6 +106,51 @@ const nativeSonarExclusions = Object.freeze([
   "**/*.mm",
   "**/*.cs",
 ]);
+const approvedScopeValueDigests = new Map([
+  ["sonar.sources", "cdb4ee2aea69cc6a83331bbe96dc2caa9a299d21329efb0336fc02a82e1839a8"],
+  ["sonar.tests", "cdb4ee2aea69cc6a83331bbe96dc2caa9a299d21329efb0336fc02a82e1839a8"],
+  ["sonar.exclusions", "ac872116ea08198beaea8352b61e3e3b558c6b30cf8be4525ba9c95458e443c0"],
+  ["sonar.test.inclusions", "3495afcea55c6742c14f79b59f2893c777c5d2326a4739574df3d8ad3f727e4d"],
+  ["sonar.test.exclusions", "5a01270e497c669e4f0abd5cef680f9eb0139bb8b82da51719b443b076fcd638"],
+  [
+    "sonar.typescript.tsconfigPaths",
+    "016c8b1bfc0b97a73ee1b5680a7b1f46ccb5c24206229367ea88a266fe20c0d5",
+  ],
+]);
+const forbiddenScopeProperties = Object.freeze([
+  "sonar.inclusions",
+  "sonar.javascript.exclusions",
+  "sonar.javascript.file.suffixes",
+  "sonar.modules",
+  "sonar.projectBaseDir",
+  "sonar.typescript.file.suffixes",
+]);
+const testScopeRules = Object.freeze([
+  ["tests/**", (path) => path.startsWith("tests/")],
+  ["**/__tests__/**", (path) => path.startsWith("__tests__/") || path.includes("/__tests__/")],
+  ["**/testing/**", (path) => path.startsWith("testing/") || path.includes("/testing/")],
+  ["**/*.test.*", (path) => /\.test\.[^/]+$/u.test(path)],
+  ["**/*.spec.*", (path) => /\.spec\.[^/]+$/u.test(path)],
+  ["**/_support.*", (path) => /(?:^|\/)_support\.[^/]+$/u.test(path)],
+  ["**/test-support.*", (path) => /(?:^|\/)test-support\.[^/]+$/u.test(path)],
+  ["**/test-fixtures.*", (path) => /(?:^|\/)test-fixtures\.[^/]+$/u.test(path)],
+  ["**/testing.*", (path) => /(?:^|\/)testing\.[^/]+$/u.test(path)],
+  [
+    "native/secure-workspace-read/test-protocol.mjs",
+    (path) => path === "native/secure-workspace-read/test-protocol.mjs",
+  ],
+  [
+    "native/runtime-supervisor/test-protocol.mjs",
+    (path) => path === "native/runtime-supervisor/test-protocol.mjs",
+  ],
+  [
+    "native/runtime-supervisor/macos/test-protocol.mjs",
+    (path) => path === "native/runtime-supervisor/macos/test-protocol.mjs",
+  ],
+]);
+export const SONAR_TEST_INCLUSION_PATTERNS = Object.freeze(
+  testScopeRules.map(([pattern]) => pattern),
+);
 
 function normalizePath(path) {
   return path.replaceAll("\\", "/").replace(/^\.\//u, "");
@@ -122,13 +168,67 @@ function nativeEntryPath(entry) {
 
 export function isTestPath(input) {
   const path = normalizePath(input);
-  return (
-    path.startsWith("tests/") ||
-    path.includes("/__tests__/") ||
-    path.includes("/testing/") ||
-    /\.(?:spec|test)\.[^/]+$/u.test(path) ||
-    /\/(?:_support|test-fixtures|test-support|test-protocol|testing)\.[^/]+$/u.test(path)
+  return testScopeRules.some(([, matches]) => matches(path));
+}
+
+export function partitionSonarInclusions(paths) {
+  if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string")) {
+    throw new TypeError("Sonar inclusion paths must be an array of strings");
+  }
+  if (sonarInclusionPathsNeedFullScan(paths)) {
+    throw new TypeError("Sonar inclusion paths cannot be represented exactly");
+  }
+  const partitions = { sources: [], tests: [] };
+  const normalizedPaths = [...new Set(paths.map((path) => normalizePath(path)))].sort(
+    (left, right) => left.localeCompare(right),
   );
+  if (normalizedPaths.includes("")) throw new TypeError("Sonar inclusion paths must not be empty");
+  for (const path of normalizedPaths) {
+    (isTestPath(path) ? partitions.tests : partitions.sources).push(path);
+  }
+  return partitions;
+}
+
+export function sonarInclusionPathsNeedFullScan(paths) {
+  if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string")) return true;
+  return paths.some(
+    (path) =>
+      path.length === 0 ||
+      /[,*?[\]\\\r\n]/u.test(path) ||
+      (path.codePointAt(0) ?? 0) <= 0x20 ||
+      (path.codePointAt(path.length - 1) ?? 0) <= 0x20,
+  );
+}
+
+export function serializeSonarInclusionPartition(source) {
+  try {
+    return JSON.stringify(partitionSonarInclusions(JSON.parse(source)));
+  } catch {
+    throw new TypeError("Sonar inclusion payload is invalid");
+  }
+}
+
+export function executeSonarInclusionPartitionCli(input = {}) {
+  try {
+    const source = input.source ?? readFileSync(0, "utf8");
+    (input.log ?? console.log)(serializeSonarInclusionPartition(source));
+    return 0;
+  } catch {
+    (input.error ?? console.error)("sonar-inclusion-partition: FAIL - invalid path inventory");
+    return 1;
+  }
+}
+
+export function executeSonarInclusionSafetyCli(input = {}) {
+  try {
+    const source = input.source ?? readFileSync(0, "utf8");
+    const paths = JSON.parse(source);
+    (input.log ?? console.log)(sonarInclusionPathsNeedFullScan(paths) ? "yes" : "no");
+    return 0;
+  } catch {
+    (input.error ?? console.error)("sonar-inclusion-safety: FAIL - invalid path inventory");
+    return 1;
+  }
 }
 
 export function isGeneratedOrBinaryPath(input) {
@@ -178,12 +278,60 @@ export function classifyAnalysisPath(input, nativeSources = new Set()) {
 
 function propertyPatterns(properties, key) {
   const prefix = `${key}=`;
-  const line = properties.split(/\r?\n/u).find((candidate) => candidate.startsWith(prefix));
+  const line = properties.split(/\r\n?|\n/u).find((candidate) => candidate.startsWith(prefix));
   return line === undefined ? [] : line.slice(prefix.length).split(",");
+}
+
+function activePropertyLines(properties) {
+  return properties
+    .split(/\r\n?|\n/u)
+    .filter((line) => line.trim().length > 0 && !/^[#!]/u.test(line.trimStart()));
+}
+
+function propertyKey(line) {
+  const trimmed = line.trimStart();
+  return /^([^:=\s]+)(?:\s*[=:]\s*|\s+)/u.exec(trimmed)?.[1] ?? trimmed;
+}
+
+function propertySyntaxFailures(properties) {
+  return activePropertyLines(properties).flatMap((line) => {
+    const key = /^[^:=\s]*/u.exec(line.trimStart())?.[0] ?? "";
+    return [
+      ...(key.includes("\\") ? ["Sonar property keys must not use escapes"] : []),
+      ...(line.trimEnd().endsWith("\\") ? ["Sonar properties must not use continuations"] : []),
+    ];
+  });
+}
+
+function canonicalPropertyDeclarationFailures(properties, key, expectedDigest) {
+  const declarations = activePropertyLines(properties).filter((line) => propertyKey(line) === key);
+  if (declarations.length !== 1) return [`${key} must have exactly one declaration`];
+  const declaration = declarations[0];
+  if (declaration?.startsWith(`${key}=`) !== true) {
+    return [`${key} must use one canonical key=value declaration`];
+  }
+  const valueDigest = createHash("sha256")
+    .update(declaration.slice(key.length + 1))
+    .digest("hex");
+  return valueDigest === expectedDigest ? [] : [`${key} differs from the approved analysis scope`];
+}
+
+function scopePropertyContractFailures(properties) {
+  const lines = activePropertyLines(properties);
+  const failures = [...approvedScopeValueDigests].flatMap(([key, expectedDigest]) =>
+    canonicalPropertyDeclarationFailures(properties, key, expectedDigest),
+  );
+  for (const key of forbiddenScopeProperties) {
+    if (lines.some((line) => propertyKey(line) === key)) {
+      failures.push(`${key} must not be declared in sonar-project.properties`);
+    }
+  }
+  return failures;
 }
 
 function matchesScopePattern(path, pattern) {
   if (pattern.endsWith("/**")) return path.startsWith(pattern.slice(0, -2));
+  if (pattern.startsWith("**/*.")) return path.endsWith(pattern.slice(4));
   return path === pattern;
 }
 
@@ -313,11 +461,29 @@ function sourceTestDisjointnessFailures(properties) {
     .map((pattern) => `Sonar test inclusion overlaps source scope: ${pattern}`);
 }
 
+function testInclusionContractFailures(properties) {
+  const actual = new Set(propertyPatterns(properties, "sonar.test.inclusions"));
+  const expected = new Set(SONAR_TEST_INCLUSION_PATTERNS);
+  return [
+    ...[...expected]
+      .filter((pattern) => !actual.has(pattern))
+      .map((pattern) => `sonar.test.inclusions is missing classifier pattern ${pattern}`),
+    ...[...actual]
+      .filter((pattern) => !expected.has(pattern))
+      .map((pattern) => `sonar.test.inclusions has unknown classifier pattern ${pattern}`),
+  ];
+}
+
 export function analysisScopeFailures({ files, nativeEntries, properties }) {
   const nativeSources = new Set(nativeEntries.map(nativeEntryPath));
   const tracked = new Set(files.map(normalizePath));
-  const failures = requiredPropertyFailures(properties);
+  const failures = [
+    ...requiredPropertyFailures(properties),
+    ...propertySyntaxFailures(properties),
+    ...scopePropertyContractFailures(properties),
+  ];
   failures.push(
+    ...testInclusionContractFailures(properties),
     ...sourceTestDisjointnessFailures(properties),
     ...nativeEntries.flatMap(nativeEntryFailures),
     ...nativeExclusionFailures(nativeEntries, properties),
@@ -414,4 +580,12 @@ export function executeAnalysisScopeCli(input = {}) {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) executeAnalysisScopeCli();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  if (process.argv[2] === "--partition-inclusions") {
+    process.exitCode = executeSonarInclusionPartitionCli();
+  } else if (process.argv[2] === "--needs-full-scan") {
+    process.exitCode = executeSonarInclusionSafetyCli();
+  } else {
+    executeAnalysisScopeCli();
+  }
+}

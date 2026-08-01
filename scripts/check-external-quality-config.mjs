@@ -95,7 +95,7 @@ function findFilesystemPaths(repoRoot, relativeDirectory = "") {
   for (const entry of readdirSync(join(repoRoot, relativeDirectory), { withFileTypes: true })) {
     if (IGNORED_SCAN_DIRECTORIES.has(entry.name)) continue;
     const relativePath = join(relativeDirectory, entry.name);
-    const normalized = relativePath.split("\\").join("/");
+    const normalized = relativePath.replaceAll("\\", "/");
     if (entry.isSymbolicLink()) {
       if (isGreptilePath(normalized)) paths.push(normalized);
       continue;
@@ -203,7 +203,7 @@ function canonicalize(value) {
   if (!isJsonObject(value)) return value;
   return Object.fromEntries(
     Object.keys(value)
-      .sort()
+      .sort((left, right) => left.localeCompare(right))
       .map((key) => [key, canonicalize(value[key])]),
   );
 }

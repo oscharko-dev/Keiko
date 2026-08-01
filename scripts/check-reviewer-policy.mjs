@@ -48,11 +48,17 @@ function diagnostic(message) {
 
 function readBounded(path, maximumBytes, label) {
   try {
-    if (typeof path !== "string" || path.length === 0) throw new Error();
+    if (typeof path !== "string" || path.length === 0) {
+      throw new Error("bounded input path is missing");
+    }
     const stats = lstatSync(path);
-    if (!stats.isFile() || stats.size > maximumBytes) throw new Error();
+    if (!stats.isFile() || stats.size > maximumBytes) {
+      throw new Error("bounded input is not a regular file within the size limit");
+    }
     const source = readFileSync(path, "utf8");
-    if (Buffer.byteLength(source, "utf8") > maximumBytes) throw new Error();
+    if (Buffer.byteLength(source, "utf8") > maximumBytes) {
+      throw new Error("bounded input content exceeds the size limit");
+    }
     return source;
   } catch {
     throw new Error(`${label} is unavailable or exceeds its size limit`);
@@ -89,9 +95,11 @@ export function loadBaseTrustAnchors(repoRoot = REPO_ROOT) {
       .split("\0")
       .filter(Boolean)
       .map((record) => parseAnchorRecord(record));
-    if (records.some((record) => record === undefined)) throw new Error();
+    if (records.includes(undefined)) throw new Error("protected-base trust anchor is invalid");
     const anchors = new Map(records);
-    if (anchors.size !== TRUST_ANCHOR_PATHS.length) throw new Error();
+    if (anchors.size !== TRUST_ANCHOR_PATHS.length) {
+      throw new Error("protected-base trust anchor inventory is incomplete");
+    }
     return anchors;
   } catch {
     throw new Error("protected-base trust anchors are unavailable");
@@ -183,7 +191,9 @@ function validateApprovedPolicy(label, trustedSource, candidateSource) {
 function parseObject(source, label) {
   try {
     const value = JSON.parse(source);
-    if (value === null || Array.isArray(value) || typeof value !== "object") throw new Error();
+    if (value === null || Array.isArray(value) || typeof value !== "object") {
+      throw new Error("parsed value is not an object");
+    }
     return { problems: [], value };
   } catch {
     return { problems: [`${label} must contain a JSON object`], value: undefined };
@@ -359,9 +369,9 @@ function validateCandidateTree(
   }
   problems.push(
     ...validateRegularPaths(indexed.entries, [...REQUIRED_CONTROL_PATHS, ...governancePaths]),
+    ...validateControlSizes(indexed.entries),
+    ...validateTrustAnchors(indexed.entries, trustedAnchors),
   );
-  problems.push(...validateControlSizes(indexed.entries));
-  problems.push(...validateTrustAnchors(indexed.entries, trustedAnchors));
   return problems;
 }
 

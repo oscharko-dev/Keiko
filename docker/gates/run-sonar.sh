@@ -163,7 +163,8 @@ fi
 # analyses ONLY the files this branch changed, which is the pre-push question and takes seconds; the
 # rules this exists to catch (S7755, S7778, S7786, S7776) are single-file rules, so nothing is lost.
 # `--all` analyses and reports everything when a whole-project picture is what you want.
-inclusions=""
+source_inclusions=""
+test_inclusions=""
 changed_json="[]"
 changed_count="0"
 if [[ "${report_scope}" == "${changed_scope}" ]]; then
@@ -195,11 +196,8 @@ process.stdin.on("data", (chunk) => chunks.push(chunk)).on("end", () => {
 process.stdin.on("data", (d) => (s += d)).on("end", () => {
   process.stdout.write(String(JSON.parse(s).length));
 });')"
-    unsafe_path="$(printf '%s' "${changed_json}" | node -e 'let s = "";
-process.stdin.on("data", (d) => (s += d)).on("end", () => {
-  const unsafe = JSON.parse(s).some((path) => /[,*?[\]\r\n]/u.test(path));
-  process.stdout.write(unsafe ? "yes" : "no");
-});')"
+    unsafe_path="$(printf '%s' "${changed_json}" |
+      node "${repo_root}/scripts/sonar-analysis-scope.mjs" --needs-full-scan)"
   fi
 
   if [[ "${report_scope}" == "all" ]]; then
@@ -214,9 +212,15 @@ process.stdin.on("data", (d) => (s += d)).on("end", () => {
       "${changed_count}"
     analysis_scope="all"
   else
-    inclusions="$(printf '%s' "${changed_json}" | node -e 'let s = "";
+    partition_json="$(printf '%s' "${changed_json}" |
+      node "${repo_root}/scripts/sonar-analysis-scope.mjs" --partition-inclusions)"
+    source_inclusions="$(printf '%s' "${partition_json}" | node -e 'let s = "";
 process.stdin.on("data", (d) => (s += d)).on("end", () => {
-  process.stdout.write(JSON.parse(s).join(","));
+  process.stdout.write(JSON.parse(s).sources.join(","));
+});')"
+    test_inclusions="$(printf '%s' "${partition_json}" | node -e 'let s = "";
+process.stdin.on("data", (d) => (s += d)).on("end", () => {
+  process.stdout.write(JSON.parse(s).tests.join(","));
 });')"
     printf '  scoped analysis and verdict to %s changed file(s)\n' "${changed_count}"
   fi
@@ -240,13 +244,15 @@ say "Analysing"
 # An array, not an unquoted expansion: a changed path containing a space would otherwise split into
 # two arguments and silently scan the wrong scope.
 scanner_args=()
-if [[ "${analysis_scope}" == "${changed_scope}" && -n "${inclusions}" ]]; then
-  # Sonar classifies tests separately and does not apply `sonar.inclusions` to them. Bind both
-  # domains to the same exact union or a 100-file diff silently expands into every test in the
-  # monorepo, defeating the local gate's bounded-runtime contract.
+if [[ "${analysis_scope}" == "${changed_scope}" ]]; then
+  # A path present in sonar.test.inclusions is classified as test code. Giving both properties the
+  # same union therefore suppresses main-code rules on production files. Keep the inventories
+  # disjoint and use an excluded sentinel when either side is empty so the scan stays bounded.
+  empty_source_inclusion=".keiko/local-sonar-empty-source-${checkout_id}"
+  empty_test_inclusion=".keiko/local-sonar-empty-test-${checkout_id}"
   scanner_args+=(
-    "-Dsonar.inclusions=${inclusions}"
-    "-Dsonar.test.inclusions=${inclusions}"
+    "-Dsonar.inclusions=${source_inclusions:-${empty_source_inclusion}}"
+    "-Dsonar.test.inclusions=${test_inclusions:-${empty_test_inclusion}}"
   )
 fi
 KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm scanner \
