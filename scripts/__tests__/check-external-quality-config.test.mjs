@@ -106,12 +106,15 @@ describe("external quality integration configuration", () => {
 
   it("rejects a CodSpeed policy workflow that executes pull-request code", () => {
     const untrusted = sources.codspeedPolicyWorkflow
-      .replace("ref: ${{ github.event.pull_request.base.sha }}", "ref: ${{ github.head_ref }}")
+      .replace(
+        "QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+        "QUALITY_BASE_SHA: ${{ github.head_ref }}",
+      )
       .replace("contents: read", "contents: write")
       .replace("run: test -f scripts/check-codspeed-policy.mjs", "run: npm test");
     expect(findings({ codspeedPolicyWorkflow: untrusted })).toEqual(
       expect.arrayContaining([
-        "CodSpeed policy must check out only the immutable base",
+        "CodSpeed policy must bind execution to the immutable protected base",
         "CodSpeed policy must grant only read access to repository contents",
         "CodSpeed policy must fail closed when the base gate is unavailable",
         "CodSpeed policy must never grant writes or execute pull-request code",
@@ -119,10 +122,10 @@ describe("external quality integration configuration", () => {
     );
   });
 
-  it("rejects a second checkout in the base-trusted CodSpeed policy workflow", () => {
+  it("rejects a checkout action in the base-trusted CodSpeed policy workflow", () => {
     const secondCheckout = `${sources.codspeedPolicyWorkflow}\n- uses: actions/checkout@deadbeef`;
     expect(findings({ codspeedPolicyWorkflow: secondCheckout })).toContain(
-      "CodSpeed policy must perform exactly one base checkout",
+      "CodSpeed policy must never grant writes or execute pull-request code",
     );
   });
 
@@ -208,13 +211,13 @@ describe("external quality integration configuration", () => {
   it("rejects a Greptile settlement workflow that executes pull-request code", () => {
     const untrusted = sources.greptileWorkflow
       .replace(
-        "ref: ${{ github.event.pull_request.base.sha }}",
-        "ref: ${{ github.event.pull_request.head.sha }}",
+        "QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+        "QUALITY_BASE_SHA: ${{ github.event.pull_request.head.sha }}",
       )
       .replace("pull-requests: read", "pull-requests: write");
     expect(findings({ greptileWorkflow: untrusted })).toEqual(
       expect.arrayContaining([
-        "Greptile settlement must check out only the immutable base",
+        "Greptile settlement must bind execution to the immutable protected base",
         "Greptile settlement must never grant writes or execute pull-request code",
       ]),
     );
@@ -222,11 +225,14 @@ describe("external quality integration configuration", () => {
 
   it("rejects alternate pull-request refs and a missing base-owned Greptile gate", () => {
     const untrusted = sources.greptileWorkflow
-      .replace("ref: ${{ github.event.pull_request.base.sha }}", "ref: ${{ github.head_ref }}")
+      .replace(
+        "QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+        "QUALITY_BASE_SHA: ${{ github.head_ref }}",
+      )
       .replace("run: test -f scripts/check-greptile-findings.mjs", "run: true");
     expect(findings({ greptileWorkflow: untrusted })).toEqual(
       expect.arrayContaining([
-        "Greptile settlement must check out only the immutable base",
+        "Greptile settlement must bind execution to the immutable protected base",
         "Greptile settlement must never grant writes or execute pull-request code",
         "Greptile settlement must fail closed when the base gate is unavailable",
       ]),

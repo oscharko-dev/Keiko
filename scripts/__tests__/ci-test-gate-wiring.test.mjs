@@ -265,11 +265,15 @@ describe("CI test/gate wiring guard", () => {
     expect(ci).not.toContain("npm run check:qodo-config");
     expect(ci).not.toContain("  codspeed-policy:");
     expect(codspeedPolicy).toContain("pull_request_target:");
-    expect(codspeedPolicy).toContain("ref: ${{ github.event.pull_request.base.sha }}");
+    expect(codspeedPolicy).toContain("QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha }}");
+    expect(codspeedPolicy).not.toContain("uses: actions/checkout@");
     expect(codspeedPolicy).toContain("run: node scripts/check-codspeed-policy.mjs");
     expect(ci).not.toContain("greptile-findings:");
     expect(greptileSettlement).toContain("pull_request_target:");
-    expect(greptileSettlement).toContain("ref: ${{ github.event.pull_request.base.sha }}");
+    expect(greptileSettlement).toContain(
+      "QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+    );
+    expect(greptileSettlement).not.toContain("uses: actions/checkout@");
     expect(greptileSettlement).toContain("run: node scripts/check-greptile-findings.mjs");
   });
 

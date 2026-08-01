@@ -223,10 +223,17 @@ const CODSPEED_POLICY_WORKFLOW_CHECKS = [
   ["timeout-minutes: 10", "CodSpeed policy must keep its ten-minute runtime bound"],
   ["contents: read", "CodSpeed policy must grant only read access to repository contents"],
   [
-    "ref: ${{ github.event.pull_request.base.sha }}",
-    "CodSpeed policy must check out only the immutable base",
+    "QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+    "CodSpeed policy must bind execution to the immutable protected base",
   ],
-  ["persist-credentials: false", "CodSpeed policy checkout must not retain credentials"],
+  [
+    'git fetch --no-tags --depth=1 origin "$QUALITY_BASE_SHA"',
+    "CodSpeed policy must fetch only the immutable protected base",
+  ],
+  [
+    'git checkout --detach "$QUALITY_BASE_SHA"',
+    "CodSpeed policy must execute only the immutable protected base",
+  ],
   [
     "QUALITY_HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
     "CodSpeed policy input must bind the exact pull-request head",
@@ -258,10 +265,12 @@ const CODSPEED_POLICY_WORKFLOW_FORBIDDEN = [
   "contents: write",
   "id-token: write",
   "ref: ${{ github.event.pull_request.head.sha }}",
+  "QUALITY_BASE_SHA: ${{ github.event.pull_request.head.sha }}",
   "github.event.pull_request.head.ref",
   "github.head_ref",
   "refs/pull/",
   "run: npm",
+  "uses: actions/checkout@",
 ];
 
 function validateCodSpeedPolicyWorkflow(source) {
@@ -270,10 +279,6 @@ function validateCodSpeedPolicyWorkflow(source) {
   );
   if (CODSPEED_POLICY_WORKFLOW_FORBIDDEN.some((entry) => source.includes(entry))) {
     problems.push("CodSpeed policy must never grant writes or execute pull-request code");
-  }
-  const checkoutCount = source.match(/uses: actions\/checkout@/gu)?.length ?? 0;
-  if (checkoutCount !== 1) {
-    problems.push("CodSpeed policy must perform exactly one base checkout");
   }
   return problems;
 }
@@ -450,10 +455,17 @@ function validateGreptileWorkflow(source) {
       "Greptile settlement must cover every reviewable head",
     ],
     [
-      "ref: ${{ github.event.pull_request.base.sha }}",
-      "Greptile settlement must check out only the immutable base",
+      "QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+      "Greptile settlement must bind execution to the immutable protected base",
     ],
-    ["persist-credentials: false", "Greptile settlement checkout must not retain credentials"],
+    [
+      'git fetch --no-tags --depth=1 origin "$QUALITY_BASE_SHA"',
+      "Greptile settlement must fetch only the immutable protected base",
+    ],
+    [
+      'git checkout --detach "$QUALITY_BASE_SHA"',
+      "Greptile settlement must execute only the immutable protected base",
+    ],
     [
       "QUALITY_HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
       "Greptile settlement evidence must bind the exact pull-request head",
@@ -474,9 +486,11 @@ function validateGreptileWorkflow(source) {
     "pull-requests: write",
     "id-token: write",
     "ref: ${{ github.event.pull_request.head.sha }}",
+    "QUALITY_BASE_SHA: ${{ github.event.pull_request.head.sha }}",
     "github.event.pull_request.head.ref",
     "github.head_ref",
     "refs/pull/",
+    "uses: actions/checkout@",
   ];
   if (forbidden.some((entry) => source.includes(entry))) {
     problems.push("Greptile settlement must never grant writes or execute pull-request code");

@@ -10,7 +10,7 @@ const [EXPECTED_OWNER, EXPECTED_NAME] = EXPECTED_REPOSITORY.split("/", 2);
 const EXPECTED_APP_ID = 867_647;
 const EXPECTED_CHECK = "Greptile Review";
 const SHA = /^[0-9a-f]{40}$/u;
-const PR_NUMBER = /^[1-9][0-9]*$/u;
+const PR_NUMBER = /^[1-9]\d*$/u;
 const PAGE_SIZE = 100;
 const SETTLEMENT_DEADLINE_MS = 15 * 60_000;
 const TRANSIENT_HTTP_STATUS = new Set([429, 500, 502, 503, 504]);
@@ -151,7 +151,7 @@ function reviewThreadConnection(payload) {
 function nextThreadCursor(connection) {
   if (connection.pageInfo?.hasNextPage !== true) return undefined;
   if (typeof connection.pageInfo.endCursor !== "string") {
-    throw new Error("review thread pagination cursor is missing");
+    throw new TypeError("review thread pagination cursor is missing");
   }
   return connection.pageInfo.endCursor;
 }

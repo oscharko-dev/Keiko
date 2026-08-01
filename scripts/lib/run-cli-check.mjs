@@ -11,8 +11,8 @@ export async function runCliCheck({
     if (problems.length > 0) throw new Error(problems[0]);
     log(passMessage);
     return 0;
-  } catch (caught) {
-    const message = caught instanceof Error ? caught.message : failureFallback;
+  } catch (error_) {
+    const message = error_ instanceof Error ? error_.message : failureFallback;
     error(`${failurePrefix}: FAIL — ${message}`);
     return 1;
   }
