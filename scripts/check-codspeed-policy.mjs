@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { validateCodSpeedPolicy } from "./check-external-quality-config.mjs";
+import { runCliCheck } from "./lib/run-cli-check.mjs";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ENDPOINT = "https://gql.codspeed.io";
@@ -81,16 +82,14 @@ export async function main(
   log = output,
   error = diagnostic,
 ) {
-  try {
-    const problems = await checkCodSpeedPolicy(source, request);
-    if (problems.length > 0) throw new Error(problems[0]);
-    log("codspeed-policy: PASS — live project settings match the blocking 5% policy");
-    return 0;
-  } catch (caught) {
-    const message = caught instanceof Error ? caught.message : "live policy validation failed";
-    error(`codspeed-policy: FAIL — ${message}`);
-    return 1;
-  }
+  return runCliCheck({
+    check: () => checkCodSpeedPolicy(source, request),
+    error,
+    failureFallback: "live policy validation failed",
+    failurePrefix: "codspeed-policy",
+    log,
+    passMessage: "codspeed-policy: PASS — live project settings match the blocking 5% policy",
+  });
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

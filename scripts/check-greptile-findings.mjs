@@ -3,6 +3,8 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { runCliCheck } from "./lib/run-cli-check.mjs";
+
 const EXPECTED_REPOSITORY = "oscharko-dev/Keiko";
 const EXPECTED_APP_ID = 867_647;
 const EXPECTED_CHECK = "Greptile Review";
@@ -237,16 +239,15 @@ export async function main(
   log = output,
   error = diagnostic,
 ) {
-  try {
-    const problems = await checkGreptileFindings(env, request, wait);
-    if (problems.length > 0) throw new Error(problems[0]);
-    log("greptile-findings: PASS — exact-head review completed with zero unresolved findings");
-    return 0;
-  } catch (caught) {
-    const message = caught instanceof Error ? caught.message : "review evidence validation failed";
-    error(`greptile-findings: FAIL — ${message}`);
-    return 1;
-  }
+  return runCliCheck({
+    check: () => checkGreptileFindings(env, request, wait),
+    error,
+    failureFallback: "review evidence validation failed",
+    failurePrefix: "greptile-findings",
+    log,
+    passMessage:
+      "greptile-findings: PASS — exact-head review completed with zero unresolved findings",
+  });
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -115,6 +115,28 @@ function diff(scope: "staged" | "unstaged") {
   };
 }
 
+function cleanGitStatus(
+  root: string,
+  repositoryRoot = root,
+): Awaited<ReturnType<typeof fetchGitStatus>> {
+  return {
+    schemaVersion: "1",
+    root,
+    ...(repositoryRoot === root ? {} : { repositoryRoot }),
+    state: "available",
+    available: true,
+    detached: false,
+    clean: true,
+    stagedCount: 0,
+    unstagedCount: 0,
+    untrackedCount: 0,
+    conflictedCount: 0,
+    changes: [],
+    truncated: false,
+    maxChanges: 500,
+  };
+}
+
 async function renderEditor(content?: string): Promise<ReturnType<typeof render>> {
   vi.mocked(fetchFilesContent).mockResolvedValue(fileResponse(content));
   const rendered = render(
@@ -141,21 +163,7 @@ async function renderEditorWithBlame(onOpenGitCommit = vi.fn()): Promise<ReturnT
 beforeEach(() => {
   vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValue(CAPABILITIES);
   vi.mocked(postEditorAgentSessionSnapshot).mockResolvedValue({ snapshot: null });
-  vi.mocked(fetchGitStatus).mockResolvedValue({
-    schemaVersion: "1",
-    root: "/repo",
-    state: "available",
-    available: true,
-    detached: false,
-    clean: true,
-    stagedCount: 0,
-    unstagedCount: 0,
-    untrackedCount: 0,
-    conflictedCount: 0,
-    changes: [],
-    truncated: false,
-    maxChanges: 500,
-  });
+  vi.mocked(fetchGitStatus).mockResolvedValue(cleanGitStatus("/repo"));
   vi.mocked(fetchGitStructuredDiff).mockImplementation(async ({ scope }) => diff(scope));
   vi.mocked(fetchGitBlame).mockResolvedValue({
     schemaVersion: "1",
@@ -346,22 +354,7 @@ describe("EditorRuntimeWidget Git gutter", () => {
     vi.mocked(fetchFilesContent).mockResolvedValue(
       fileResponse(undefined, "/repo/project", "src/app.ts"),
     );
-    vi.mocked(fetchGitStatus).mockResolvedValue({
-      schemaVersion: "1",
-      root: "/repo/project",
-      repositoryRoot: "/repo",
-      state: "available",
-      available: true,
-      detached: false,
-      clean: true,
-      stagedCount: 0,
-      unstagedCount: 0,
-      untrackedCount: 0,
-      conflictedCount: 0,
-      changes: [],
-      truncated: false,
-      maxChanges: 500,
-    });
+    vi.mocked(fetchGitStatus).mockResolvedValue(cleanGitStatus("/repo/project", "/repo"));
     render(
       <EditorRuntimeWidget windowId="git-invalidation" root="/repo/project" file="src/app.ts" />,
     );
@@ -379,6 +372,12 @@ describe("EditorRuntimeWidget Git gutter", () => {
   });
 
   it("does not match the previous canonical root after switching repositories", async (): Promise<void> => {
+    let resolveRepositoryAStatus!: (status: Awaited<ReturnType<typeof fetchGitStatus>>) => void;
+    const repositoryAStatus = new Promise<Awaited<ReturnType<typeof fetchGitStatus>>>(
+      (resolve): void => {
+        resolveRepositoryAStatus = resolve;
+      },
+    );
     let resolveRepositoryBStatus!: (status: Awaited<ReturnType<typeof fetchGitStatus>>) => void;
     const repositoryBStatus = new Promise<Awaited<ReturnType<typeof fetchGitStatus>>>(
       (resolve): void => {
@@ -391,29 +390,16 @@ describe("EditorRuntimeWidget Git gutter", () => {
     );
     vi.mocked(fetchGitStatus).mockImplementation(
       (requestedRoot): ReturnType<typeof fetchGitStatus> =>
-        requestedRoot === "/repo-a"
-          ? Promise.resolve({
-              schemaVersion: "1",
-              root: "/repo-a",
-              repositoryRoot: "/canonical/repo-a",
-              state: "available",
-              available: true,
-              detached: false,
-              clean: true,
-              stagedCount: 0,
-              unstagedCount: 0,
-              untrackedCount: 0,
-              conflictedCount: 0,
-              changes: [],
-              truncated: false,
-              maxChanges: 500,
-            })
-          : repositoryBStatus,
+        requestedRoot === "/repo-a" ? repositoryAStatus : repositoryBStatus,
     );
     const rendered = render(
       <EditorRuntimeWidget windowId="git-switch" root="/repo-a" file="src/app.ts" />,
     );
     await screen.findByTestId("editor-surface");
+    await act(async (): Promise<void> => {
+      resolveRepositoryAStatus(cleanGitStatus("/repo-a", "/canonical/repo-a"));
+      await repositoryAStatus;
+    });
     const initial = surface.props?.gitGutterRefreshNonce ?? 0;
 
     act((): void => notifyGitRepositoryStateInvalidated("/canonical/repo-a"));
@@ -428,22 +414,7 @@ describe("EditorRuntimeWidget Git gutter", () => {
     expect(surface.props?.gitGutterRefreshNonce).toBe(switched);
 
     await act(async (): Promise<void> => {
-      resolveRepositoryBStatus({
-        schemaVersion: "1",
-        root: "/repo-b",
-        repositoryRoot: "/canonical/repo-b",
-        state: "available",
-        available: true,
-        detached: false,
-        clean: true,
-        stagedCount: 0,
-        unstagedCount: 0,
-        untrackedCount: 0,
-        conflictedCount: 0,
-        changes: [],
-        truncated: false,
-        maxChanges: 500,
-      });
+      resolveRepositoryBStatus(cleanGitStatus("/repo-b", "/canonical/repo-b"));
       await repositoryBStatus;
     });
   });
