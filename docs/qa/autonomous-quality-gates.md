@@ -1,9 +1,11 @@
 # Autonomous quality gates
 
-Keiko ships autonomously only when independent, exact-current-head evidence proves the candidate
-clean. A missing, skipped, neutral, stale, cancelled, timed-out, quota-paced, or differently
-produced result is blocking. A finding is repaired; acknowledgement, dismissal, admin bypass, and
-threshold relaxation are not repair paths.
+Keiko ships autonomously only when repository-owned and live-promoted required checks provide
+independent, exact-current-head evidence that proves the candidate clean. For that required
+evidence, a missing, skipped, neutral, stale, cancelled, timed-out, quota-paced, or differently
+produced result is blocking. Advisory output carries no merge authority; every finding it does emit
+is still repaired. Acknowledgement, dismissal, admin bypass, and threshold relaxation are not repair
+paths.
 
 ## Enforced thresholds
 
@@ -47,8 +49,9 @@ stay on every pull request.
 SonarCloud and Socket remain independently required. CodeRabbit is assertive but advisory: its trial
 exhausted the review quota on PR #2876 and emitted success without reviewing the current head. It
 therefore has neither required status nor review authority. Findings it does emit are still repaired
-and actual conversations are settled. Greptile and CodSpeed are promoted only after a live pull
-request proves exact-head emission, a real negative case, repaired recovery, stable producer
+and actual conversations are settled; an absent or quota-paced CodeRabbit review is not merge
+evidence and is not a merge blocker. Greptile and CodSpeed are promoted only after a live pull
+request proves exact-head emission, an observed negative case, repaired recovery, stable producer
 identity, and bounded settlement. CodSpeed additionally requires zero-cost continuity. Greptile may
 be required during its no-payment trial only with a recorded hard expiry and owner-bound automated
 rollback.

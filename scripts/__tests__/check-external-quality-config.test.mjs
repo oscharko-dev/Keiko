@@ -129,6 +129,16 @@ describe("external quality integration configuration", () => {
     );
   });
 
+  it("rejects a CodSpeed policy workflow without the governed runtime pin", () => {
+    const unpinned = sources.codspeedPolicyWorkflow.replace(
+      "run: node scripts/check-runtime-toolchain.mjs --exact",
+      "run: node --version",
+    );
+    expect(findings({ codspeedPolicyWorkflow: unpinned })).toContain(
+      "CodSpeed policy must verify the governed Node.js and npm toolchain",
+    );
+  });
+
   it("rejects drift from the live CodSpeed threshold and failing-check policy", () => {
     const policy = JSON.parse(sources.codspeedPolicy);
     policy.regressionThresholdPercent = 10;

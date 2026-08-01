@@ -39,6 +39,12 @@ describe("live CodSpeed policy", () => {
     expect(read).toHaveBeenCalledWith("/runner/policy.json", "utf8");
   });
 
+  it("falls back to the repository policy when the workflow override is empty", () => {
+    const read = vi.fn().mockReturnValue(POLICY);
+    expect(loadPolicySource({ QUALITY_CODSPEED_POLICY_PATH: "" }, read)).toBe(POLICY);
+    expect(read).toHaveBeenCalledWith(expect.stringContaining(".codspeed-policy.json"), "utf8");
+  });
+
   it("accepts the exact blocking five-percent settings", () => {
     expect(validateLiveSettings(JSON.parse(POLICY), SETTINGS)).toEqual([]);
   });

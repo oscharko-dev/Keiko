@@ -223,6 +223,10 @@ const CODSPEED_POLICY_WORKFLOW_CHECKS = [
   ["timeout-minutes: 10", "CodSpeed policy must keep its ten-minute runtime bound"],
   ["contents: read", "CodSpeed policy must grant only read access to repository contents"],
   [
+    "run: node scripts/check-runtime-toolchain.mjs --exact",
+    "CodSpeed policy must verify the governed Node.js and npm toolchain",
+  ],
+  [
     "QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
     "CodSpeed policy must bind execution to the immutable protected base",
   ],
