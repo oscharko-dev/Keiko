@@ -408,7 +408,7 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   `ci` · `workflow hygiene` · `Analyze (actions)` · `Analyze (javascript-typescript)` ·
   `Build, scan, SBOM, smoke` · `Review dependency diff (dev/main)` · `ui` ·
   `SonarCloud Code Analysis` · `Socket Security: Project Report` ·
-  `Socket Security: Pull Request Alerts` · `CodSpeed Performance Analysis` · `CodSpeed policy`.
+  `Socket Security: Pull Request Alerts` · `CodSpeed policy`.
 
   `workflow hygiene` is one context running actionlint, the pinned-SHA grep, zizmor and the OSV
   lockfile scan as serial steps of one job (ADR-0159) — same tools, same pinned versions, same rule
@@ -418,9 +418,12 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   status can report success after quota prevents a current-head review; it is not a required status
   or review authority. Findings still must be repaired and every actual review conversation remains
   resolved. Qodo, Keiko for Quality, and Greptile are retired under ADR-0167; Greptile exhausted its
-  50-credit trial and omitted a final-head review. Sonar remains independently required and
+  50-credit trial and omitted a final-head review. CodSpeed performance reports are advisory because
+  shared-runner variance produced false regressions on unchanged benchmark inputs; its required
+  policy context still prevents dashboard threshold drift. Sonar remains independently required and
   revalidated inside `ci`. Full mutation and reference-machine performance evidence run outside the
-  PR critical path; fast OSS duplicate and secret gates run inside `ci` in parallel.
+  PR critical path; fast OSS duplicate, secret, and deterministic performance proxies run inside
+  `ci` in parallel.
 
 - **GitHub Actions are pinned to full 40-hex commit SHAs** with a version comment. A tag or
   branch ref (`@v4`) fails the pinned-SHA step of `workflow hygiene`. Keep the SHA-plus-comment

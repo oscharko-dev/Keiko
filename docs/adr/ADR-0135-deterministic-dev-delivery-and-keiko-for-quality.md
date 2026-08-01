@@ -90,9 +90,9 @@ smoke E2E, editor E2E, package surface, and deterministic budget checks.
 
 The Qodo and Keiko for Quality topology below is retained only as historical decision context.
 [ADR-0167](ADR-0167-zero-cost-autonomous-quality-gates.md) retires both products and replaces this
-section's activation state with advisory CodeRabbit, required CodSpeed settlement, and the
-repository-owned OSS gates. Greptile's temporary trial activation was also retired after quota
-pacing omitted a canary-head review.
+section's activation state with advisory CodeRabbit and CodSpeed performance reporting, a required
+CodSpeed policy validator, and the repository-owned OSS gates. Greptile's temporary trial activation
+was also retired after quota pacing omitted a canary-head review.
 
 Qodo Code Review is the advisory review product. It is comment-only: it posts a single summary
 review comment — the Bugs, Rule violations, and Requirement gaps counts — updated in place per head,

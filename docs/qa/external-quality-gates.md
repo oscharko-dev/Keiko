@@ -56,7 +56,8 @@ Verified 2026-08-01. Terms can change; never add a payment method to preserve a 
   exhausted during migration PR #2876, and it emitted a successful status without reviewing the
   current head. It therefore remains advisory.
 - CodSpeed is active as a public-repository project. No star floor or payment requirement was
-  presented. Its two proven contexts are required.
+  presented. The base-owned `CodSpeed policy` context is required; native performance comparison is
+  advisory after shared-runner variance produced large false regressions on unchanged inputs.
 - Greptile's authenticated eligibility screen required 50 stars while Keiko had 3. Keiko was
   already public and Apache-2.0/OSI licensed, so a license change could not remove that
   provider-specific popularity floor. The pending OSS application did not grant an entitlement.
@@ -88,6 +89,13 @@ Service endpoints and comment bodies are deliberately omitted.
   91357704565, then passed restored head `d86f64250b226e815d66756f31b17e2e79f8c502` in check 91359719104. No regression was acknowledged and no baseline was changed.
 - `CodSpeed policy`, GitHub Actions App 15368, rejected the candidate 10% drift in job 91356603600
   and accepted the restored 5% policy in job 91358992913.
+- Later native CodSpeed checks 91361869877 and 91365139527 failed on heads that changed no benchmark
+  or transitive production path. The first warned that runtime environments differed and reported
+  multiple unrelated regressions; the second reported one unchanged benchmark 27.45% slower while
+  another improved 7.3%. Both benchmark workflows succeeded. CodSpeed's own variance guidance says
+  shared CI runner CPU, cache, and system-library differences can create regressions without code
+  changes. The native performance status was removed from branch protection without acknowledging a
+  regression, changing a baseline, or changing the 5% policy. It remains advisory.
 - Greptile's native App 867647 and settlement context temporarily proved negative and recovery
   behavior. Native check 91356606358 and settlement job 91356603731 rejected the deliberate head
   with three P1 findings. Native check 91358998906 and settlement job 91358992919 passed the
@@ -96,7 +104,8 @@ Service endpoints and comment bodies are deliberately omitted.
   the 50-credit cap. The settlement context failed rather than accepting stale evidence. This
   durability failure triggered the documented rollback early: both Greptile contexts were removed,
   App installation 150407338 was uninstalled, and organization installation verification returned
-  no Greptile installation. The final protected set contains 12 App-bound checks.
+  no Greptile installation. After the separate CodSpeed variance rollback, the final protected set
+  contains 11 App-bound checks.
 - The retired `Keiko for Quality` context was removed after its producer had been deleted. Qodo and
   Keiko for Quality were uninstalled after PR #2876 merged; organization installation verification
   returned no remaining installation for either App.
@@ -115,10 +124,13 @@ A hosted producer may become required only when a live pull request proves all o
 4. bot authors, ready transitions, large diffs, cancellation, and service errors cannot omit or
    falsely green evidence;
 5. exact check name and producer App ID are stable and app-bindable; and
-6. plan limits, credits, or quota do not pace or omit required evidence.
+6. plan limits, credits, or quota do not pace or omit required evidence; and
+7. unchanged benchmark and transitive production inputs cannot fail because the execution
+   environment changed.
 
-CodeRabbit failed conditions 1, 2, and 6. Greptile later failed condition 6. CodSpeed passed the
-promotion probes and remains subject to continuous zero-cost and exact-head observation.
+CodeRabbit failed conditions 1, 2, and 6. Greptile later failed condition 6. Native CodSpeed
+performance comparison failed condition 7. `CodSpeed policy` remains required because it is a
+base-owned exact-head configuration validator rather than a shared-runner measurement.
 
 ## Failure handling
 

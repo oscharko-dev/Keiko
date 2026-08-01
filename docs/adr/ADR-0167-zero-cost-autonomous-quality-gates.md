@@ -5,8 +5,10 @@
 Accepted (owner decision, 2026-08-01). PR #2878 completed the D5 negative-and-recovery proof before
 the App-bound CodSpeed and temporary Greptile settlement contexts were promoted. Greptile later
 exhausted its 50-credit trial on an exact canary head, so its contexts, App installation, and
-repository integration were removed. CodSpeed remained required; repository-owned gates and
-advisory reviewer configuration took effect with the original change.
+repository integration were removed. Native CodSpeed performance comparison then produced large,
+different regressions on two heads with unchanged benchmark inputs because shared-runner provenance
+varied; it became advisory while the exact-head `CodSpeed policy` validator remained required.
+Repository-owned gates and advisory reviewer configuration took effect with the original change.
 
 ## Supersedes and amends
 
@@ -79,8 +81,10 @@ mutation, extended end-to-end, and reference-machine performance measurement rem
 release-owned. This preserves their depth without making multi-hour or hardware-sensitive work a
 per-PR availability dependency.
 
-CodSpeed uses deterministic CPU simulation; regressions above 5% against `dev` fail. It supplements
-but never replaces D12 evidence, bundle budgets, retrieval latency, or end-to-end performance gates.
+CodSpeed uses CPU simulation with a 5% dashboard threshold. Its native comparison is advisory after
+the final canary proved that shared-runner CPU/cache provenance can report large regressions without
+any changed benchmark or transitive production input. It supplements but never replaces required
+D12 evidence integrity, bundle budgets, retrieval latency, or end-to-end performance gates.
 The live dashboard-policy comparison runs in a separate `pull_request_target` workflow loaded from
 the protected base. It downloads only the candidate `.codspeed-policy.json` as exact-head data and
 executes only the base-owned validator. The benchmark workflow remains on the candidate head but
@@ -91,9 +95,10 @@ cannot validate or self-approve its own policy contract.
 A hosted producer may become an app-bound required status only after one live pull request proves:
 exact current-head emission, two successive updates, a deliberate negative case, repaired success,
 stable name and App ID, bounded settlement, and durable zero-cost continuity without quota pacing.
-A status that reports success after omitting review fails promotion. The cutover removes retired
-contexts and adds only proven checks in one branch-protection update; no same-named unbound context
-is accepted.
+A status that reports success after omitting review fails promotion. A measurement status that fails
+unchanged inputs because execution provenance changed also fails promotion. The cutover removes
+retired contexts and adds only proven checks in one branch-protection update; no same-named unbound
+context is accepted.
 
 By explicit owner decision, Greptile was temporarily required during its no-payment trial after the
 technical probes passed. That activation was time-bounded, not continuity proof. When the provider
@@ -110,6 +115,9 @@ relaxation is an accepted continuity mechanism.
 - New semantic copies and secrets are blocked by fast, reproducible OSS tools.
 - Hosted automated review is advisory unless a future producer proves durable, fail-closed,
   zero-cost exact-head evidence; deterministic findings remain blocking in repository-owned gates.
+- Shared-runner CodSpeed comparisons remain visible but cannot block delivery; its required
+  base-owned policy validator prevents silent dashboard weakening while deterministic performance
+  gates retain merge authority.
 - The longest deterministic jobs still dominate pull-request latency; the new gates run alongside
   them instead of serially extending the path.
 - Hosted services remain replaceable supplemental producers and are represented honestly as such.
@@ -119,5 +127,6 @@ relaxation is an accepted continuity mechanism.
 - [Autonomous quality gates](../qa/autonomous-quality-gates.md)
 - [External quality-gate runbook](../qa/external-quality-gates.md)
 - [Review standards](../qa/review-standards.md)
+- [CodSpeed benchmark variance](https://codspeed.io/docs/instruments/cpu/regression-causes)
 - [Quality-gate implementation Issue #2875](https://github.com/oscharko-dev/Keiko/issues/2875)
 - [Sonar OSS migration Issue #2874](https://github.com/oscharko-dev/Keiko/issues/2874)

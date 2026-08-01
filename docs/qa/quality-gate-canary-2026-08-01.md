@@ -31,9 +31,20 @@ trial account had reached its 50-credit limit and omitted the review. Base-owned
 rather than accepting stale evidence. This proved that the trial was not durable even before its
 calendar expiry. The documented zero-cost rollback therefore ran early: both Greptile contexts were
 removed atomically, the organization App was uninstalled, and the repository-owned Greptile config,
-validator, tests, and workflow were retired. The final protected set contains 12 App-bound checks.
+validator, tests, and workflow were retired.
+
+The final canary also exposed native CodSpeed comparison variance. Neither
+`b56de3aedc364a2ac6f5aa34a06ac5b6ba932efc` nor
+`1c10cc44fde5f7695648cb6a708fc38ef6b9e9ef` changed a benchmark or transitive production path, yet
+native checks 91361869877 and 91365139527 reported different large regressions. The first explicitly
+reported different runtime environments; the second reported a 27.45% prompt-injection regression
+while another unchanged benchmark improved 7.3%. The benchmark workflows themselves passed. This
+proved the shared-runner verdict could not distinguish candidate cost from environment variance.
+`CodSpeed Performance Analysis` was therefore removed from branch protection without acknowledging
+a regression, changing a baseline, or relaxing the 5% dashboard policy. It remains advisory;
+`CodSpeed policy` remains required. The final protected set contains 11 App-bound checks.
 
 The canary never changes the protected `dev` branch directly, relaxes branch protection, dismisses
 a finding, acknowledges a performance regression, changes a baseline, or uses an administrator
-bypass. Only the hardened live-value validation, its regression tests, the clean Greptile rollback,
-and redacted evidence remain in the final diff.
+bypass. Only the hardened live-value validation, its regression tests, provider rollbacks justified
+by exact-head evidence, and redacted evidence remain in the final diff.

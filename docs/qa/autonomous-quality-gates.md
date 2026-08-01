@@ -20,7 +20,8 @@ paths.
 - Complexity and function size: cyclomatic complexity `<= 10` and `<= 50` non-comment lines per
   function.
 - Package/file coverage: no committed per-file or per-package ratchet regression.
-- CodSpeed CPU-simulation regression: `<= 5%` against the `dev` baseline; above 5% fails.
+- Deterministic performance proxies: governed bundle, latency, and operation-budget regressions fail
+  in repository-owned gates.
 - Automated-review findings: `0` unresolved blocking findings and all conversations resolved.
 
 The 85% coverage floor is constitutional, not aspirational. Per-file floors and package ratchets
@@ -51,10 +52,17 @@ exhausted the review quota on PR #2876 and emitted success without reviewing the
 therefore has neither required status nor review authority. Findings it does emit are still repaired
 and actual conversations are settled; an absent or quota-paced CodeRabbit review is not merge
 evidence and is not a merge blocker. PR #2878 proved exact-head negative and recovery behavior
-before `CodSpeed Performance Analysis` and `CodSpeed policy` became App-bound required checks.
+before `CodSpeed Performance Analysis` and `CodSpeed policy` were temporarily promoted.
 Greptile's temporary trial checks also proved negative and recovery behavior, but the final canary
 exhausted its 50-credit limit and received no current-head review. Both Greptile checks were removed
 from branch protection, its App was uninstalled, and its repository integration was retired.
+
+The same final canary proved that native CodSpeed performance comparison is not suitable as a
+required check on shared GitHub runners. Two heads that changed no benchmark or transitive production
+path reported different large regressions; one carried CodSpeed's different-runtime-environment
+warning. The native performance status is therefore advisory. The App-bound `CodSpeed policy`
+context remains required and pins the hosted signal to a blocking 5% dashboard threshold. Actual
+merge authority stays with the deterministic performance, bundle, and latency gates inside `ci`.
 
 CodSpeed benchmark execution uses the exact candidate head. Its dashboard-policy verdict is a
 different, base-trusted context: GitHub loads the validator from protected `dev`, downloads only the
