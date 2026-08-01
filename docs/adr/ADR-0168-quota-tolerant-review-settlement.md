@@ -2,17 +2,22 @@
 
 ## Status
 
-Accepted (owner decision, 2026-08-01). Issue #2879 implements the correction. The authenticated
-Greptile dashboard reported 14 days remaining in the no-payment trial when this decision was made;
-the OSS entitlement application remains pending.
+Accepted and amended (owner decisions, 2026-08-01). Issue #2879 implements the reviewer correction.
+The amendment corrects the CodSpeed failure semantics and replaces an absolute, self-locking
+control-plane rule with a bounded owner-authorized migration protocol. The authenticated Greptile
+dashboard reported 14 days remaining in the no-payment trial when this decision was made; the OSS
+entitlement application remains pending.
 
 ## Supersedes and amends
 
 This decision supersedes ADR-0167 D2 where it disabled CodeRabbit's request-changes workflow, and
-supersedes ADR-0167 D5 where it retired Greptile completely. It amends ADR-0135 and ADR-0166
+supersedes ADR-0167 D5 where it retired Greptile completely. It also supersedes ADR-0167's CodSpeed
+failure semantics where a 5% report was treated as a blocking native status despite the same
+decision classifying shared-runner comparisons as advisory. It amends ADR-0135 and ADR-0166
 accordingly. ADR-0167 continues to govern Qodo/KFQ retirement, zero-cost repository gates, Sonar
-independence, CodSpeed policy, and the prohibition on payment, gate bypass, finding dismissal,
-fabricated popularity, and threshold relaxation.
+independence, and the prohibition on payment, finding dismissal, fabricated popularity, regression
+acknowledgement, and threshold relaxation. ADR-0135's no-bypass rule remains the default; D3 defines
+the only separately approved bootstrap for replacing a self-locking base-owned control plane.
 
 ## Context
 
@@ -26,6 +31,15 @@ evidence attached to the pull request. GitHub already protects `dev` with requir
 resolution, and live PR #2878 proves that both Apps create native review threads. The safe boundary
 is therefore conditional settlement: absence does not authorize or deny merge, while every emitted
 inline finding blocks until genuinely repaired and resolved.
+
+Post-merge repair PR #2882 reproduced the CodSpeed defect on an exact head that changed only test
+event isolation. Native check `91411267180` reported one large regression and one larger improvement
+while warning that the runtime environments differed. The immediately preceding `dev` baseline
+check `91408944235` had failed a different unchanged benchmark with the same environment warning.
+All deterministic performance and required checks passed. Because the optional native failure left
+the pull request `UNSTABLE`, GitHub also rejected a late auto-merge request despite all eleven
+required checks being green. The blocking dashboard setting therefore contradicts the already
+advisory status assigned by ADR-0167 and can impede delivery without reproducible candidate evidence.
 
 ## Decision
 
@@ -58,7 +72,7 @@ no resolvable conversation. Request-changes state is informative because `dev` h
 approving-review rule. GitHub cannot infer a repair from a resolved bit, so manual or bulk
 resolution, ignore, dismissal, and bypass remain prohibited rather than accepted settlement.
 
-### D3 — Keep deterministic evidence unconditionally required
+### D3 — Keep deterministic evidence required and the control plane changeable
 
 The eleven existing App-bound checks remain required and exact-head bound. They cover repository
 CI, workflow hygiene, CodeQL, build/SBOM/smoke, dependency review, UI, SonarCloud, Socket, and
@@ -72,18 +86,48 @@ digests, incomplete or non-regular governance inventories, cascading Greptile ru
 and pull-request metadata containing review-suppression or bulk-resolution commands. It reruns when
 that metadata is edited and never executes a candidate validator.
 
-The complete `.github/workflows` tree and every script this workflow executes are an immutable
-interim trust anchor: their candidate Git object IDs and modes must equal the protected-base tree
-and blobs. This prevents a second Actions job with the same required context from racing the
-base-owned producer. Reviewer policies are likewise fixed at the approved digests until Keiko for
-Quality replaces this bridge. A normal pull request therefore cannot first weaken the validator and
-then approve a policy change on a later head. The initial installation is
-necessarily a one-time bootstrap because the old base cannot execute a new `pull_request_target`
-step; a separate post-merge negative/recovery canary must prove the installed base-owned boundary.
-Native PR comments are not an event source for the eleven-check topology; reviewer pause/resolve
-comments are therefore prohibited policy until a base-trusted Keiko for Quality settlement replaces
-this interim boundary. Branch protection continues to require every review conversation to be
-resolved.
+CodSpeed retains a 5% regression threshold and an always-updated pull-request report. Its native
+comparison is informational when the threshold is exceeded: repository policy sets
+`failOnRegression: false`, and the live project must set `informationalCheckOnFailure: true`.
+This does not relax the threshold or acknowledge a regression. It preserves the 5% signal while
+preventing a shared-runner comparison, including one that reports different runtime environments,
+from becoming merge authority. Required deterministic performance, bundle, retrieval, and latency
+gates remain blocking. The required `CodSpeed policy` context validates this exact combination and
+fails if the threshold, report cadence, or informational failure mode drifts.
+
+For ordinary pull requests, the complete `.github/workflows` tree and every script executed by the
+base-owned policy workflow remain protected-base trust anchors: candidate Git object IDs and modes
+must equal the protected-base tree and blobs. Reviewer policies likewise remain fixed at approved
+digests. A candidate therefore cannot weaken a validator, approve its own policy, or race the
+base-owned producer with a same-named Actions job.
+
+Absolute immutability is not a valid lifecycle rule because it makes a defective control plane
+impossible to repair through the delivery process it governs. A trust-anchor migration is therefore
+allowed only through this protocol:
+
+1. An accepted ADR identifies the defect, desired invariant, exact paths, rollback, and canary.
+2. The migration is isolated on a signed non-`dev` branch. All unaffected required checks must pass
+   on the exact head, all review conversations must be resolved, and local required gates must pass.
+3. The old base-owned check must fail only for the documented old contract or protected-anchor
+   difference. Any additional failure blocks the migration.
+4. Immediately before changing branch protection, the owner separately authorizes the exact target
+   head and bounded transition. An ADR alone is not that operational authorization.
+5. The obsolete self-locking context may then be removed from the required set only for that exact
+   migration. No direct push to `dev`, force push, finding dismissal, regression acknowledgement,
+   threshold relaxation, or unrelated merge is permitted. Native auto-merge integrates the recorded
+   head after every remaining requirement succeeds.
+6. As soon as the merge commit becomes the protected base, the updated base-owned context is restored
+   to the required set. A negative head must prove self-authorization is rejected; a byte-restored
+   recovery head must pass. Immutable heads and check/job identifiers are recorded without finding
+   bodies.
+7. If the candidate head changes, another pull request becomes mergeable, the transition cannot be
+   completed atomically, or restoration fails, branch protection returns to its prior state and the
+   migration stops.
+
+The steady-state protected set remains eleven App-bound checks. Native PR comments are not an event
+source for that topology; reviewer pause/resolve comments are therefore prohibited policy until a
+base-trusted Keiko for Quality settlement replaces this interim boundary. Branch protection
+continues to require every review conversation to be resolved.
 
 ### D4 — Preserve the zero-payment boundary and evaluate a durable OSS reviewer
 
@@ -103,6 +147,11 @@ proven. Provider marketing claims or a free trial are not continuity evidence.
 - Every actual inline finding from either bot remains blocking through native review-thread settlement.
 - The required set remains eleven App-bound checks; no probabilistic reviewer can falsely satisfy
   the deterministic quality bar.
+- CodSpeed continues to report changes against the 5% threshold, but shared-runner variance cannot
+  produce a blocking native status.
+- Normal pull requests cannot rewrite their own base-owned gate. A defective trust anchor can be
+  replaced only through an exact-head, separately authorized, reversible migration with a live
+  negative-and-recovery proof.
 - Hosted review stays replaceable, and the long-term path can be genuinely self-hosted OSS.
 
 ## References
@@ -113,3 +162,5 @@ proven. Provider marketing claims or a free trial are not continuity evidence.
 - [Review settlement](../qa/review-settlement.md)
 - [CodeRabbit automatic review controls](https://docs.coderabbit.ai/configuration/auto-review)
 - [CodeRabbit configuration reference](https://docs.coderabbit.ai/reference/configuration)
+- [CodSpeed customization](https://codspeed.io/docs/features/customization)
+- [CodSpeed benchmark variance](https://codspeed.io/docs/instruments/cpu/regression-causes)
