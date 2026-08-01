@@ -112,17 +112,19 @@ allowed only through this protocol:
    difference. Any additional failure blocks the migration.
 4. Immediately before changing branch protection, the owner separately authorizes the exact target
    head and bounded transition. An ADR alone is not that operational authorization.
-5. The obsolete self-locking context may then be removed from the required set only for that exact
-   migration. No direct push to `dev`, force push, finding dismissal, regression acknowledgement,
-   threshold relaxation, or unrelated merge is permitted. Native auto-merge integrates the recorded
-   head after every remaining requirement succeeds.
+5. Before changing the required set, every unrelated open pull request targeting `dev` is frozen:
+   native auto-merge is disabled and the owner verifies that none can merge during the transition.
+   The obsolete self-locking context may then be removed only for the exact migration. No direct push
+   to `dev`, force push, finding dismissal, regression acknowledgement, threshold relaxation, or
+   unrelated merge is permitted. Native auto-merge integrates only the recorded migration head after
+   every remaining requirement succeeds.
 6. As soon as the merge commit becomes the protected base, the updated base-owned context is restored
    to the required set. A negative head must prove self-authorization is rejected; a byte-restored
    recovery head must pass. Immutable heads and check/job identifiers are recorded without finding
    bodies.
-7. If the candidate head changes, another pull request becomes mergeable, the transition cannot be
-   completed atomically, or restoration fails, branch protection returns to its prior state and the
-   migration stops.
+7. If the candidate head changes, an unrelated pull request cannot be frozen, another pull request
+   becomes mergeable, the transition cannot be completed atomically, or restoration fails, branch
+   protection returns to its prior state and the migration stops.
 
 The steady-state protected set remains eleven App-bound checks. Native PR comments are not an event
 source for that topology; reviewer pause/resolve comments are therefore prohibited policy until a
