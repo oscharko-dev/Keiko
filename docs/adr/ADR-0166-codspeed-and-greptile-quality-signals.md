@@ -53,7 +53,11 @@ rendering, process startup, filesystem or network latency, memory growth, or use
 clock. D12 reference-environment evidence, deterministic bundle budgets, retrieval latency, and
 affected end-to-end performance gates retain their existing authority.
 
-### D2 — Greptile and CodeRabbit consume repository-owned policy
+### D2 — Historical Greptile design and retained CodeRabbit policy
+
+The Greptile configuration described in the next two paragraphs records the original design only.
+ADR-0167 retired the App and every repository-owned Greptile surface after the live quota failure;
+none of this historical material is current operating guidance or merge evidence.
 
 The recommended `.greptile/` format is the source of repository review behavior. The root config:
 
@@ -67,9 +71,10 @@ The recommended `.greptile/` format is the source of repository review behavior.
 - may suggest agent fixes but may not auto-approve, merge, edit the pull-request description, or
   recommend bypassing a gate.
 
-Greptile remains independently observable so one review product cannot suppress or satisfy another
-product's findings. ADR-0167 retires the original Qodo/KFQ bridge and makes direct exact-head
-settlement the only current review topology.
+Greptile was designed to remain independently observable so one review product could not suppress or
+satisfy another product's findings. Its temporary direct settlement was later retired. ADR-0167 owns
+the current topology: CodeRabbit is advisory, deterministic repository gates retain merge authority,
+and no hosted review bot currently supplies required evidence.
 
 CodeRabbit's existing review role is now pinned by `.coderabbit.yaml` instead of mutable dashboard
 defaults. It uses the assertive review profile, reviews every ready pull-request update, discloses
@@ -89,13 +94,13 @@ identity, simulation mode, triggers, permissions, timeout, benchmark command, an
 no-mutation boundary. It proves the retained repository-owned integrations have not silently
 weakened. It does not claim that a hosted service ran.
 
-The hosted CodSpeed and Greptile checks remain outside branch protection during initial observation.
-CodSpeed regressions above the 5% global threshold fail their own status; Greptile's
-dashboard confidence floor is 4/5. Informational-on-failure and Greptile auto-approval stay disabled.
-A red advisory result must be investigated, but it does not independently grant or deny merge
-authority during this stage.
+The original staging decision kept hosted CodSpeed and Greptile checks outside branch protection
+during initial observation. CodSpeed used a 5% global threshold and Greptile used a 4/5 dashboard
+confidence floor; informational-on-failure and Greptile auto-approval were disabled. ADR-0167 records
+the later live results: Greptile was removed, native CodSpeed comparison became advisory after
+shared-runner variance, and the base-owned `CodSpeed policy` validator became required.
 
-### D4 — Promotion requires live availability and failure probes
+### D4 — Historical promotion standard retained and extended by ADR-0167
 
 No CodSpeed or Greptile context may be added to `dev` branch protection until a follow-up change
 records all of the following against live pull requests:
@@ -110,20 +115,21 @@ records all of the following against live pull requests:
 6. plan limits, credits, or open-source eligibility cannot pace or omit required evidence.
 
 Promotion is an explicit branch-protection change with an activation ledger and rollback path. A
-service that cannot satisfy all six conditions stays advisory. No hosted-service acknowledgement is
-equivalent to fixing a regression, and acknowledgement cannot be used to bypass a protected gate.
+service that cannot satisfy all six conditions stays advisory. ADR-0167 adds reproducible execution
+provenance to this standard and records that Greptile and native CodSpeed comparison did not retain
+required authority. No hosted-service acknowledgement is equivalent to fixing a regression, and
+acknowledgement cannot be used to bypass a protected gate.
 
 ## Consequences
 
-- Keiko gains continuous algorithmic performance comparisons without comparing noisy hosted
-  wall-clock values to D12 evidence.
-- Greptile adds a third independent review perspective beside Qodo and CodeRabbit; both third-party
-  review configurations consume the same repository-owned governance context.
+- Keiko retains advisory algorithmic performance comparisons without substituting noisy hosted
+  execution for D12 evidence or deterministic pull-request budgets.
+- Greptile provided a temporary third review perspective during the trial; Greptile, Qodo, and KFQ
+  are now retired, while CodeRabbit remains advisory under repository-owned policy.
 - The required `ci` context fails on integration drift even when a hosted vendor is unavailable.
-- Branch protection stays at its proven 11 contexts until live evidence justifies a separately
-  reviewed promotion.
-- Greptile's open-source application remains an owner attestation because an Apache license and a
-  public repository do not prove that the project is non-commercial.
+- ADR-0167 owns the current 11-context branch-protection inventory and any future promotion.
+- Greptile's historical open-source application granted no entitlement; the live trial quota failure
+  triggered full retirement without a payment method.
 
 ## References
 
