@@ -11,8 +11,8 @@ repository-configuration boundaries remain adopted.
 This decision additively amends the repository-delivery boundary in
 [ADR-0135](ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md) and the measurement/verdict
 separation in [ADR-0156](ADR-0156-measurement-and-verdict-separation.md). It does not change Keiko's
-product runtime authority model, the current 11 required `dev` checks, the Qodo-to-KFQ bridge, or the
-D12 reference environment.
+product runtime authority model or the D12 reference environment. Its original Qodo/KFQ topology and
+required-check inventory are historical and superseded by ADR-0167.
 
 ## Context
 
@@ -43,15 +43,16 @@ does not install a telemetry-capable CodSpeed npm runtime into its dependency gr
 
 The `CodSpeed` workflow runs on every pull request targeting `dev`, every push to `dev`, and explicit
 dispatch. It builds package entry points before measurement, uses CodSpeed CPU simulation, has a
-20-minute timeout, authenticates with OIDC, persists no checkout credentials, and pins the action to
-a reviewed commit. A long-lived upload token is denied.
+20-minute timeout, persists no checkout credentials, and pins the action to a reviewed commit. The
+public-repository upload path receives neither a long-lived token nor a pull-request-visible OIDC
+grant.
 
 CPU simulation measures repeatable synchronous algorithmic work. It does not measure browser
 rendering, process startup, filesystem or network latency, memory growth, or user-perceived wall
 clock. D12 reference-environment evidence, deterministic bundle budgets, retrieval latency, and
 affected end-to-end performance gates retain their existing authority.
 
-### D2 — Greptile and CodeRabbit consume repository-owned policy and remain independent of KFQ
+### D2 — Greptile and CodeRabbit consume repository-owned policy
 
 The recommended `.greptile/` format is the source of repository review behavior. The root config:
 
@@ -65,30 +66,30 @@ The recommended `.greptile/` format is the source of repository review behavior.
 - may suggest agent fixes but may not auto-approve, merge, edit the pull-request description, or
   recommend bypassing a gate.
 
-Greptile is the third complementary reviewer alongside Qodo and CodeRabbit. It remains independently
-observable so one review product cannot suppress or satisfy another product's findings. Qodo remains
-the canonical comment producer consumed by `Keiko for Quality`; Greptile output is not parsed by KFQ
-and cannot satisfy or replace its evidence. Changing that relationship requires a separate decision
-and live negative/positive probes.
+Greptile remains independently observable so one review product cannot suppress or satisfy another
+product's findings. ADR-0167 retires the original Qodo/KFQ bridge and makes direct exact-head
+settlement the only current review topology.
 
 CodeRabbit's existing review role is now pinned by `.coderabbit.yaml` instead of mutable dashboard
 defaults. It uses the assertive review profile, reviews every ready pull-request update, discloses
 review details, and consumes the same repository governance and path-specific trust-boundary rules.
 Untrusted web context, commands from non-organization members, automatic repository linking,
-auto-approval, post-merge actions, and every code-writing finishing touch are disabled. CodeRabbit
-remains advisory and independently settled under `docs/qa/review-settlement.md`.
+auto-approval, post-merge actions, and every code-writing finishing touch are disabled. ADR-0167
+supersedes CodeRabbit's original advisory-only activation state; its repository policy and
+independent settlement contract remain applicable.
 
 ### D3 — Repository configuration is required; hosted verdicts are staged
 
 `npm run check:external-quality-config` is a deterministic required-`ci` configuration gate. It
 pins the CodSpeed dependencies, action identity, simulation mode, triggers, permissions, timeout,
-and benchmark command; CodeRabbit's current-head review, governance context, restricted commands,
-and no-mutation boundary; and Greptile's current-head, status, scope, context-file, and rule
-configuration. This gate proves the repository-owned integrations have not silently weakened. It
-does not claim that a hosted service ran.
+benchmark command, and the live-observed 5% failing-status dashboard policy; CodeRabbit's
+current-head review, governance context, restricted commands, and no-mutation boundary; and
+Greptile's current-head, status, scope, context-file, and rule configuration. This gate proves the
+repository-owned integrations have not silently weakened. It does not claim that a hosted service
+ran.
 
 The hosted CodSpeed and Greptile checks remain outside branch protection during initial observation.
-CodSpeed regressions are configured to fail their own status at a 10% global threshold; Greptile's
+CodSpeed regressions above the 5% global threshold fail their own status; Greptile's
 dashboard confidence floor is 4/5. Informational-on-failure and Greptile auto-approval stay disabled.
 A red advisory result must be investigated, but it does not independently grant or deny merge
 authority during this stage.

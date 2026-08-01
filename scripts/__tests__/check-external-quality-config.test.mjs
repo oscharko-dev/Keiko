@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   loadExternalQualitySources,
+  main,
   validateExternalQualitySources,
 } from "../check-external-quality-config.mjs";
 
@@ -14,6 +15,29 @@ function findings(overrides = {}, pathExists = () => true) {
 describe("external quality integration configuration", () => {
   it("accepts the repository-owned CodSpeed, CodeRabbit, and Greptile configuration", () => {
     expect(validateExternalQualitySources(sources)).toEqual([]);
+  });
+
+  it.each([
+    ["greptileConfig", ""],
+    ["greptileConfig", '{"rules": ['],
+    ["greptileFiles", ""],
+    ["greptileFiles", '{"files": ['],
+    ["packageJson", ""],
+    ["packageJson", '{"devDependencies":'],
+  ])("returns a redacted finding for malformed %s input", (key, value) => {
+    expect(() => findings({ [key]: value })).not.toThrow();
+    expect(findings({ [key]: value })).toContain(`${key} must contain a valid JSON object`);
+  });
+
+  it("fails closed when the package manifest omits dependency and script objects", () => {
+    expect(findings({ packageJson: "{}" })).toEqual(
+      expect.arrayContaining([
+        "fallow must be pinned to 2.104.0",
+        "bench:codspeed must execute the repository-owned benchmark entry point",
+        "check:external-quality-config script is missing or redirected",
+        "semantic duplication must fail on every changed clone group",
+      ]),
+    );
   });
 
   it("rejects non-blocking CodeRabbit review, stale-head review, or code mutation", () => {
@@ -48,11 +72,26 @@ describe("external quality integration configuration", () => {
   });
 
   it("rejects a softened or token-authenticated benchmark workflow", () => {
-    const softened = `${sources.codspeedWorkflow}\ncontinue-on-error: true\nCODSPEED_TOKEN: secret`;
+    const softened = `${sources.codspeedWorkflow}\ncontinue-on-error: true\nCODSPEED_TOKEN: secret\nid-token: write`;
     expect(findings({ codspeedWorkflow: softened })).toEqual(
       expect.arrayContaining([
         "CodSpeed execution must not be softened with continue-on-error",
         "CodSpeed must not introduce a long-lived repository upload token",
+        "CodSpeed pull-request benchmarks must not receive an OIDC credential grant",
+      ]),
+    );
+  });
+
+  it("rejects drift from the live CodSpeed threshold and failing-check policy", () => {
+    const policy = JSON.parse(sources.codspeedPolicy);
+    policy.regressionThresholdPercent = 10;
+    policy.failOnRegression = false;
+    policy.observedAt = "not-a-timestamp";
+    expect(findings({ codspeedPolicy: JSON.stringify(policy) })).toEqual(
+      expect.arrayContaining([
+        "CodSpeed regression threshold must remain 5%",
+        "CodSpeed regressions must fail their status check",
+        "CodSpeed policy must record the live settings observation",
       ]),
     );
   });
@@ -89,6 +128,39 @@ describe("external quality integration configuration", () => {
     );
   });
 
+  it("rejects Greptile scope, behavior, and rule drift", () => {
+    const config = JSON.parse(sources.greptileConfig);
+    config.strictness = 1;
+    config.commentTypes = ["style"];
+    config.includeBranches = ["main"];
+    config.fileChangeLimit = 999;
+    config.triggerOnDrafts = true;
+    config.shouldUpdateDescription = true;
+    config.updateExistingSummaryComment = false;
+    config.rules = [null];
+    expect(findings({ greptileConfig: JSON.stringify(config) })).toEqual(
+      expect.arrayContaining([
+        "Greptile strictness must remain at high-signal level 2",
+        "Greptile must leave deterministic style/info findings to repository gates",
+        "Greptile must review pull requests targeting dev",
+        "Greptile fileChangeLimit must remain 1000",
+        "Greptile draft auto-review must remain disabled",
+        "Greptile must not mutate Keiko's load-bearing pull request template",
+        "Greptile must update one summary instead of creating comment churn",
+        "Greptile rules must be JSON objects",
+      ]),
+    );
+  });
+
+  it("rejects malformed Greptile context entries without reflecting their values", () => {
+    expect(findings({ greptileFiles: '{"files":[null]}' })).toContain(
+      ".greptile/files.json entries must be JSON objects",
+    );
+    expect(findings({ greptileFiles: "{}" })).toContain(
+      ".greptile/files.json must carry a files array",
+    );
+  });
+
   it("rejects missing reviewer context and missing required-ci wiring", () => {
     const withoutGate = sources.ciWorkflow.replace("npm run check:external-quality-config", "");
     const pathExists = (path) => !path.endsWith("ADR-0019-modular-package-architecture.md");
@@ -104,13 +176,28 @@ describe("external quality integration configuration", () => {
     const weakened = sources.ciWorkflow
       .replace("--redact=100", "--redact=0")
       .replace("      - secret-scan", "      # secret scan removed")
-      .replace('npm run check:semantic-duplication -- --changed-since "$base"', "true");
+      .replace('npm run check:semantic-duplication -- --changed-since "$QUALITY_BASE_SHA"', "true")
+      .replace('node scripts/resolve-quality-range.mjs >> "$GITHUB_OUTPUT"', "true");
     expect(findings({ ciWorkflow: weakened })).toEqual(
       expect.arrayContaining([
         "Gitleaks output must remain fully redacted",
         "required ci must aggregate the secret scan",
         "required ci must run diff-scoped semantic duplication",
+        "quality gates must share exactly two immutable-range resolver calls",
       ]),
+    );
+  });
+
+  it("returns a testable CLI status and redacted messages", () => {
+    const log = vi.fn();
+    const error = vi.fn();
+    expect(main(sources, () => true, log, error)).toBe(0);
+    expect(log).toHaveBeenCalledOnce();
+    expect(error).not.toHaveBeenCalled();
+
+    expect(main({ ...sources, greptileConfig: "" }, () => true, log, error)).toBe(1);
+    expect(error).toHaveBeenCalledWith(
+      "external-quality-config: greptileConfig must contain a valid JSON object",
     );
   });
 });

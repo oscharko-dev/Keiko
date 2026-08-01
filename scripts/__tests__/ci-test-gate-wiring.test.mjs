@@ -220,10 +220,11 @@ describe("CI test/gate wiring guard", () => {
       runtimeWorkflows.match(/node scripts\/check-runtime-toolchain\.mjs --exact/gu)?.length ?? 0;
     // 17 -> 20 with the three coverage suite jobs Issue #2704 split out of `coverage-sonar`,
     // then 20 -> 22 with the credential-free macOS qualification and protected sealing lanes,
-    // then 22 -> 23 with the diff-scoped semantic-duplication lane.
+    // then 22 -> 23 with the diff-scoped semantic-duplication lane, and 23 -> 24 when the secret
+    // scan began using the shared immutable-range resolver under the governed Node runtime.
     // The load-bearing assertion is the pairing below: every Node lane, old or new, verifies the
     // governed toolchain.
-    expect(nodeSetupCount).toBe(23);
+    expect(nodeSetupCount).toBe(24);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
   });
@@ -246,6 +247,12 @@ describe("CI test/gate wiring guard", () => {
       expect(ci.includes(command), `\`${command}\` is not run by any ci.yml job`).toBe(true);
     });
   }
+
+  it("keeps the replacement quality gates in required ci and the retired bridge out", () => {
+    const aggregate = ci.slice(ci.indexOf("  ci:"), ci.indexOf("\n  build-scan-sbom-smoke:"));
+    expect(aggregate).toContain("      - semantic-duplication");
+    expect(ci).not.toContain("npm run check:qodo-config");
+  });
 
   // GEN-SYNTH-COVERAGE-003: the root suite intentionally excludes keiko-ui (235 files) — they run in
   // jsdom under a dedicated config + CI job. Pin BOTH facts so the exclusion can never become silent

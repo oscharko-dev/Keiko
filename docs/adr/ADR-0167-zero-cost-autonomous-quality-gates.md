@@ -75,7 +75,7 @@ mutation, extended end-to-end, and reference-machine performance measurement rem
 release-owned. This preserves their depth without making multi-hour or hardware-sensitive work a
 per-PR availability dependency.
 
-CodSpeed uses deterministic CPU simulation and a 5% regression ceiling against `dev`. It supplements
+CodSpeed uses deterministic CPU simulation; regressions above 5% against `dev` fail. It supplements
 but never replaces D12 evidence, bundle budgets, retrieval latency, or end-to-end performance gates.
 
 ### D5 — External checks enter branch protection only through an atomic live cutover

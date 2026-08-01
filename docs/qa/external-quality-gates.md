@@ -8,14 +8,14 @@ The deterministic core remains usable without them.
 
 ## Repository-owned configuration
 
-| Signal     | Durable source                                                              | Role                                                              |
-| ---------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| CodSpeed   | `codspeed.yml`, `benchmarks/codspeed.mjs`, `.github/workflows/codspeed.yml` | CPU-simulation comparison of synchronous production APIs          |
-| CodeRabbit | `.coderabbit.yaml`                                                          | Assertive blocking review with no code-writing or merge authority |
-| Greptile   | `.greptile/config.json`, `.greptile/files.json`                             | Independent current-head logic/security/architecture review       |
-| Fallow     | root lockfile and `check:semantic-duplication`                              | Zero introduced semantic clone groups                             |
-| Gitleaks   | checksum pin in `.github/workflows/ci.yml`                                  | Zero secrets introduced anywhere in PR history                    |
-| Drift pin  | `scripts/check-external-quality-config.mjs` plus negative tests             | Required-`ci` proof that integration policy did not weaken        |
+| Signal     | Durable source                                                               | Role                                                              |
+| ---------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| CodSpeed   | `codspeed.yml`, `.codspeed-policy.json`, `benchmarks/codspeed.mjs`, workflow | CPU-simulation comparison plus live settings audit                |
+| CodeRabbit | `.coderabbit.yaml`                                                           | Assertive blocking review with no code-writing or merge authority |
+| Greptile   | `.greptile/config.json`, `.greptile/files.json`                              | Independent current-head logic/security/architecture review       |
+| Fallow     | root lockfile and `check:semantic-duplication`                               | Zero introduced semantic clone groups                             |
+| Gitleaks   | checksum pin in `.github/workflows/ci.yml`                                   | Zero secrets introduced anywhere in PR history                    |
+| Drift pin  | `scripts/check-external-quality-config.mjs` plus negative tests              | Required-`ci` proof that integration policy did not weaken        |
 
 Local verification:
 
@@ -33,8 +33,9 @@ performance gates.
 
 ## Hosted settings
 
-- CodSpeed: CPU simulation, 5% global regression ceiling, failures are non-informational, one
-  always-updated PR report, OIDC only, no upload token.
+- CodSpeed: CPU simulation, regressions above the 5% global threshold fail, one always-updated PR
+  report, and no long-lived upload token or pull-request-visible OIDC grant. The signed-in settings
+  surface was observed at the timestamp pinned by `.codspeed-policy.json`.
 - CodeRabbit: assertive, every ready head including bot authors, request-changes workflow enabled,
   failure status enabled, author override denied, review details visible, and all write/mutation,
   web-search, external command, cross-repository, and post-merge features disabled.

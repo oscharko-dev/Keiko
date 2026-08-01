@@ -20,7 +20,7 @@ threshold relaxation are not repair paths.
 | TypeScript and lint                                          | strict, no `any`, explicit returns, `0` warnings                    |
 | Complexity and function size                                 | cyclomatic complexity `<= 10`; `<= 50` non-comment lines/function   |
 | Package/file coverage                                        | no committed per-file or per-package ratchet regression             |
-| CodSpeed CPU-simulation regression                           | `< 5%` against the `dev` baseline                                   |
+| CodSpeed CPU-simulation regression                           | `<= 5%` against the `dev` baseline; above 5% fails                  |
 | Automated-review findings                                    | `0` unresolved blocking findings and all conversations resolved     |
 
 The 85% coverage floor is constitutional, not aspirational. Per-file floors and package ratchets

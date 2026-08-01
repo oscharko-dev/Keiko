@@ -17,6 +17,14 @@
       "description": "Authoritative package dependency and trust-boundary direction."
     },
     {
+      "path": "docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md",
+      "description": "Canonical human-control and monotonic authority model."
+    },
+    {
+      "path": "docs/adr/ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md",
+      "description": "Canonical Sonar evidence and zero-finding quality-gate policy."
+    },
+    {
       "path": "docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md",
       "description": "Bounded delivery and external quality-gate activation constraints."
     },

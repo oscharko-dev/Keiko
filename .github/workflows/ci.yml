@@ -136,23 +136,16 @@ jobs:
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - run: npm ci --ignore-scripts
-      - name: Reject semantic clone groups introduced by this change
+      - name: Resolve immutable quality range
+        id: quality-range
         env:
           QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           QUALITY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          base="${QUALITY_BASE_SHA:-}"
-          head="${QUALITY_HEAD_SHA:-}"
-          if ! printf '%s' "$head" | grep -Eq '^[0-9a-f]{40}$'; then
-            echo "Semantic-duplication head is not an immutable commit SHA."
-            exit 1
-          fi
-          if ! printf '%s' "$base" | grep -Eq '^[0-9a-f]{40}$' || printf '%s' "$base" | grep -Eq '^0{40}$'; then
-            base="$(git rev-parse "${head}^")"
-          fi
-          git cat-file -e "${base}^{commit}"
-          npm run check:semantic-duplication -- --changed-since "$base"
+        run: node scripts/resolve-quality-range.mjs >> "$GITHUB_OUTPUT"
+      - name: Reject semantic clone groups introduced by this change
+        env:
+          QUALITY_BASE_SHA: ${{ steps.quality-range.outputs.base }}
+        run: npm run check:semantic-duplication -- --changed-since "$QUALITY_BASE_SHA"
 
   # Independent OSS secret detection supplements GitHub push protection. Scanning the complete PR
   # range covers every candidate addition and also catches a credential added and deleted between
@@ -172,6 +165,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install the checksum-pinned Gitleaks OSS binary
         run: |
           set -euo pipefail
@@ -182,24 +181,19 @@ jobs:
           echo "${GITLEAKS_LINUX_X64_SHA256}  ${archive}" | sha256sum --check --strict
           tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks
           "${RUNNER_TEMP}/gitleaks" version
-      - name: Reject secrets introduced anywhere in the pull-request history
+      - name: Resolve immutable quality range
+        id: quality-range
         env:
           QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           QUALITY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/resolve-quality-range.mjs >> "$GITHUB_OUTPUT"
+      - name: Reject secrets introduced anywhere in the pull-request history
+        env:
+          QUALITY_BASE_SHA: ${{ steps.quality-range.outputs.base }}
+          QUALITY_HEAD_SHA: ${{ steps.quality-range.outputs.head }}
         run: |
-          set -euo pipefail
-          base="${QUALITY_BASE_SHA:-}"
-          head="${QUALITY_HEAD_SHA:-}"
-          if ! printf '%s' "$head" | grep -Eq '^[0-9a-f]{40}$'; then
-            echo "Secret-scan head is not an immutable commit SHA."
-            exit 1
-          fi
-          if ! printf '%s' "$base" | grep -Eq '^[0-9a-f]{40}$' || printf '%s' "$base" | grep -Eq '^0{40}$'; then
-            base="$(git rev-list --max-parents=0 "$head" | head -n 1)"
-          fi
-          git cat-file -e "${base}^{commit}"
           "${RUNNER_TEMP}/gitleaks" git --redact=100 --no-banner --timeout=120 \
-            --log-opts="${base}..${head}" .
+            --log-opts="${QUALITY_BASE_SHA}..${QUALITY_HEAD_SHA}" .
 
   core-quality:
     name: Core quality
