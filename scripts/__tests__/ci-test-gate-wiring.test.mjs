@@ -271,7 +271,7 @@ describe("CI test/gate wiring guard", () => {
       '"repos/${QUALITY_REPOSITORY}/git/trees/${QUALITY_TREE_SHA}?recursive=1"',
     );
     expect(codspeedPolicy).toContain("run: node scripts/check-reviewer-policy.mjs --preflight");
-    expect(codspeedPolicy).toContain("run: node scripts/check-reviewer-policy.mjs");
+    expect(codspeedPolicy).toContain("        run: node scripts/check-reviewer-policy.mjs\n");
     expect(codspeedPolicy).toContain("run: node scripts/check-codspeed-policy.mjs");
     expect(ci).not.toContain("greptile-findings:");
   });

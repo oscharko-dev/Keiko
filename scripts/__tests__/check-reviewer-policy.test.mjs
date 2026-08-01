@@ -417,7 +417,7 @@ describe("base-trusted reviewer policy", () => {
 
   it("returns only redacted CLI diagnostics", async () => {
     const secret = "untrusted-private-metadata";
-    const source = await validSources({ githubEvent: `{${secret}` });
+    const source = validSources({ githubEvent: `{${secret}` });
     const log = vi.fn();
     const error = vi.fn();
     await expect(main(source, log, error)).resolves.toBe(1);

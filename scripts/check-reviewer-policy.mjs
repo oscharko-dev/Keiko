@@ -163,11 +163,6 @@ function loadTrustedPolicySources() {
       MAX_CONFIG_BYTES,
       "protected-base Greptile config",
     ),
-    trustedGreptileFiles: readBounded(
-      join(REPO_ROOT, ".greptile/files.json"),
-      MAX_CONFIG_BYTES,
-      "protected-base Greptile inventory",
-    ),
   };
 }
 
