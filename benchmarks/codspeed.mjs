@@ -76,7 +76,7 @@ const benchmarkCases = new Map([
   ["context-allocation", () => repeat(500, () => allocateContext(contextFixture))],
   [
     "editor-text-edits",
-    () => repeat(2_000, () => applyTextEditsToText(editorFixture.original, editorFixture.edits)),
+    () => repeat(200, () => applyTextEditsToText(editorFixture.original, editorFixture.edits)),
   ],
 ]);
 

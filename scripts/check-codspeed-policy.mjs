@@ -53,7 +53,7 @@ export function validateLiveSettings(policy, payload) {
   const settings = extractSettings(payload);
   const expectedRegression = policy.regressionThresholdPercent / 100;
   const problems = [];
-  if (settings.allowedRegression > expectedRegression) {
+  if (settings.allowedRegression !== expectedRegression) {
     problems.push("live regression threshold differs from the repository policy");
   }
   if (settings.informationalCheckOnFailure !== !policy.failOnRegression) {
