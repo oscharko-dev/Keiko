@@ -15,11 +15,7 @@ const criticalPrefixes = [
   "packages/keiko-server/src/editor/dap/",
 ];
 const criticalServerTerms = /\/(coding-runtime|qualityIntelligence)\//u;
-const criticalGateScripts = new Set([
-  "packages/keiko-server/src/editor/processHardening.ts",
-  "scripts/keiko-for-quality-core.mjs",
-  "scripts/keiko-for-quality-worker.mjs",
-]);
+const criticalGateScripts = new Set(["packages/keiko-server/src/editor/processHardening.ts"]);
 const debugLaunchPrefixes = ["packages/keiko-server/src/editor/dap/"];
 const debugLaunchFiles = new Set([
   "packages/keiko-sandbox/src/debug-capsule.ts",

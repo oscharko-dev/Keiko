@@ -14,6 +14,14 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
 
 const ci = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
+const codspeedPolicy = readFileSync(
+  resolve(repoRoot, ".github/workflows/codspeed-policy.yml"),
+  "utf8",
+);
+const greptileSettlement = readFileSync(
+  resolve(repoRoot, ".github/workflows/greptile-settlement.yml"),
+  "utf8",
+);
 const windowsNativeQuality = readFileSync(
   resolve(repoRoot, "scripts/check-windows-native-quality.ps1"),
   "utf8",
@@ -119,7 +127,8 @@ const REQUIRED_CI_COMMANDS = [
   // floors present, build-tool script imports declared at root.
   "npm run check:dependency-hygiene",
   "npm run check:knip",
-  "npm run check:qodo-config",
+  "npm run check:external-quality-config",
+  "npm run check:semantic-duplication",
   // Formatting baseline + ADR registry integrity (Step 10, RB-19 / GEN-SYNTH-MISSING-EVIDENCE-001 /
   // GEN-DOC-ADR-002): format:check was unwired while 205 files drifted; check:adr-index guards the
   // ADR numbering-collision fix so a duplicate/unindexed ADR can never silently return.
@@ -213,15 +222,20 @@ describe("CI test/gate wiring guard", () => {
       releaseWorkflow,
       portableAssetsWorkflow,
       mutationSecurityWorkflow,
+      codspeedPolicy,
+      greptileSettlement,
     ].join("\n");
     const nodeSetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
     const verificationCount =
       runtimeWorkflows.match(/node scripts\/check-runtime-toolchain\.mjs --exact/gu)?.length ?? 0;
     // 17 -> 20 with the three coverage suite jobs Issue #2704 split out of `coverage-sonar`,
-    // then 20 -> 22 with the credential-free macOS qualification and protected sealing lanes.
+    // then 20 -> 22 with the credential-free macOS qualification and protected sealing lanes,
+    // then 22 -> 23 with the diff-scoped semantic-duplication lane, 23 -> 24 when the secret scan
+    // adopted the governed runtime, 24 -> 25 with live CodSpeed policy enforcement, and 25 -> 26
+    // with base-trusted exact-head Greptile finding settlement.
     // The load-bearing assertion is the pairing below: every Node lane, old or new, verifies the
     // governed toolchain.
-    expect(nodeSetupCount).toBe(22);
+    expect(nodeSetupCount).toBe(26);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
   });
@@ -244,6 +258,24 @@ describe("CI test/gate wiring guard", () => {
       expect(ci.includes(command), `\`${command}\` is not run by any ci.yml job`).toBe(true);
     });
   }
+
+  it("keeps the replacement quality gates in required ci and the retired bridge out", () => {
+    const aggregate = ci.slice(ci.indexOf("  ci:"), ci.indexOf("\n  build-scan-sbom-smoke:"));
+    expect(aggregate).toContain("      - semantic-duplication");
+    expect(ci).not.toContain("npm run check:qodo-config");
+    expect(ci).not.toContain("  codspeed-policy:");
+    expect(codspeedPolicy).toContain("pull_request_target:");
+    expect(codspeedPolicy).toContain("QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha }}");
+    expect(codspeedPolicy).not.toContain("uses: actions/checkout@");
+    expect(codspeedPolicy).toContain("run: node scripts/check-codspeed-policy.mjs");
+    expect(ci).not.toContain("greptile-findings:");
+    expect(greptileSettlement).toContain("pull_request_target:");
+    expect(greptileSettlement).toContain(
+      "QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+    );
+    expect(greptileSettlement).not.toContain("uses: actions/checkout@");
+    expect(greptileSettlement).toContain("run: node scripts/check-greptile-findings.mjs");
+  });
 
   // GEN-SYNTH-COVERAGE-003: the root suite intentionally excludes keiko-ui (235 files) — they run in
   // jsdom under a dedicated config + CI job. Pin BOTH facts so the exclusion can never become silent

@@ -44,7 +44,8 @@ describe("required checks come from CONTRIBUTING.md", () => {
 
     expect(checks).toContain("ci");
     expect(checks).toContain("workflow hygiene");
-    expect(checks).toContain("Keiko for Quality");
+    expect(checks).toContain("SonarCloud Code Analysis");
+    expect(checks).not.toContain("Keiko for Quality");
     expect(new Set(checks).size).toBe(checks.length);
     expect(checks.length).toBeGreaterThanOrEqual(10);
   });

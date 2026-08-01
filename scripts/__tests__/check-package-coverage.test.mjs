@@ -23,7 +23,7 @@ import { KEIKO_REPOSITORY_GATE_CONTRACT } from "../sonar-quality-gate-contract.m
 
 const COMMITTED_BASELINE = "docs/qa/package-coverage-baseline.json";
 
-// The ten gate scripts whose per-file floors moved out of the vitest `coverage.thresholds` block
+// The eight gate scripts whose per-file floors moved out of the vitest `coverage.thresholds` block
 // (retired by ADR-0158 D1) into the single floor store. Values are verbatim from the retired block.
 const MIGRATED_GATE_SCRIPT_FLOORS = {
   branches: 85,
@@ -38,8 +38,6 @@ const MIGRATED_GATE_SCRIPTS = [
   "scripts/check-sonar-analysis-log.mjs",
   "scripts/check-sonar-main-quality-gate.mjs",
   "scripts/check-sonar-pr-quality-gate.mjs",
-  "scripts/keiko-for-quality-core.mjs",
-  "scripts/keiko-for-quality-worker.mjs",
   "scripts/sonar-analysis-scope.mjs",
   "scripts/sonar-quality-gate-contract.mjs",
 ];

@@ -170,6 +170,19 @@ export default defineConfig(
       "@typescript-eslint/explicit-function-return-type": "off",
     },
   },
+  // CodSpeed benchmarks are executable Node ESM outside the TypeScript program. They exercise
+  // built package entry points and report local measurements, matching the scripts/ policy above.
+  { files: ["benchmarks/**/*.mjs"], ...tseslint.configs.disableTypeChecked },
+  {
+    files: ["benchmarks/**/*.mjs"],
+    languageOptions: {
+      globals: { console: "readonly" },
+    },
+    rules: {
+      "no-console": "off",
+      "@typescript-eslint/explicit-function-return-type": "off",
+    },
+  },
   // Native protocol harnesses are executable Node ESM outside the TypeScript program.
   { files: ["native/**/*.mjs"], ...tseslint.configs.disableTypeChecked },
   {
@@ -190,48 +203,11 @@ export default defineConfig(
     },
   },
   {
-    files: ["scripts/keiko-for-quality-worker.mjs"],
-    languageOptions: {
-      globals: {
-        AbortSignal: "readonly",
-        Response: "readonly",
-        TextEncoder: "readonly",
-        atob: "readonly",
-        btoa: "readonly",
-        crypto: "readonly",
-        fetch: "readonly",
-      },
-    },
-  },
-  {
-    files: ["scripts/__tests__/keiko-for-quality-worker.test.mjs"],
-    languageOptions: {
-      globals: {
-        Buffer: "readonly",
-        Request: "readonly",
-        Response: "readonly",
-        URL: "readonly",
-      },
-    },
-  },
-  {
-    files: ["scripts/__tests__/keiko-for-quality-action.test.mjs"],
-    languageOptions: {
-      globals: {
-        Buffer: "readonly",
-        Response: "readonly",
-        URL: "readonly",
-      },
-    },
-  },
-  {
     files: [
       "scripts/check-lcov-source-mapping.mjs",
       "scripts/check-mutation-quality.mjs",
       "scripts/check-mutation-scope.mjs",
       "scripts/check-sonar-pr-quality-gate.mjs",
-      "scripts/keiko-for-quality-core.mjs",
-      "scripts/keiko-for-quality-worker.mjs",
     ],
     plugins: { "keiko-sonar": sonarCompatibilityPlugin },
     rules: {

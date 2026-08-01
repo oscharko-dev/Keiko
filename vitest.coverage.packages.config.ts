@@ -36,8 +36,6 @@ export default defineConfig({
       include: [
         "packages/*/src/**/*.{ts,tsx}",
         "src/**/*.{ts,tsx}",
-        "scripts/keiko-for-quality-core.mjs",
-        "scripts/keiko-for-quality-worker.mjs",
         "scripts/check-lcov-source-mapping.mjs",
         "scripts/check-mutation-quality.mjs",
         "scripts/check-mutation-scope.mjs",

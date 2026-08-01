@@ -3,7 +3,8 @@
 ## Status
 
 Accepted (maintainer decision, 2026-07-13); operationally amended after the 2026-07-14 liveness
-incident; amended 2026-07-18 to adopt Qodo as the advisory review product in place of Gitar.
+incident; amended 2026-07-18 to adopt Qodo as the advisory review product in place of Gitar;
+amended 2026-08-01 by ADR-0167 to retire Qodo/KFQ and adopt zero-cost autonomous gates.
 
 ## Amends
 
@@ -87,6 +88,11 @@ smoke E2E, editor E2E, package surface, and deterministic budget checks.
 
 ### D5 — Unbounded and quota-dependent analysis remains advisory
 
+The Qodo and Keiko for Quality topology below is retained only as historical decision context.
+[ADR-0167](ADR-0167-zero-cost-autonomous-quality-gates.md) retires both products and replaces this
+section's activation state with direct CodeRabbit, Greptile, and CodSpeed settlement plus the
+repository-owned OSS gates.
+
 Qodo Code Review is the advisory review product. It is comment-only: it posts a single summary
 review comment — the Bugs, Rule violations, and Requirement gaps counts — updated in place per head,
 and never a check-run or a merge-authority approval. `Keiko for Quality` reads that comment, verifies
@@ -132,16 +138,15 @@ uninvestigated product failure.
   those measurements.
 - A blocked direct quality check leaves the PR open and red; an unavailable orchestration product
   does not masquerade as a product defect.
-- Re-adding an advisory product to branch protection requires explicit live availability and
+- Adding an external review product to branch protection requires explicit live availability and
   negative/positive activation evidence.
-- The advisory review product is Qodo (comment-only, app-id-verified, head-SHA-bound); Gitar is
-  retained only until Qodo proves green on live pull requests, then retired, and the swap changes no
-  required check.
+- ADR-0167 retires the historical Qodo/KFQ path; no retired producer can satisfy a current gate.
 
 ## References
 
-- [Keiko quality-gate policy](../qa/keiko-for-quality.md)
-- [Qodo review policy](../qa/qodo-review-policy.md)
+- [Autonomous quality-gate policy](../qa/autonomous-quality-gates.md)
+- [Review standards](../qa/review-standards.md)
+- [ADR-0167 zero-cost autonomous quality gates](ADR-0167-zero-cost-autonomous-quality-gates.md)
 - [Mutation testing policy](../qa/mutation-testing.md)
 - [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md)
 - [ADR-0129](ADR-0129-product-wide-authority-and-autonomy-model.md)

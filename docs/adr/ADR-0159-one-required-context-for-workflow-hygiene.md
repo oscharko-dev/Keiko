@@ -170,9 +170,10 @@ required context.
 3. **Phase 3 (the follow-up pull request).** The three micro-jobs are removed; the bundled job moves
    to its own workflow file with the union trigger surface (D2), taking the `osv-scanner.yml`
    pull-request and merge-queue lanes with it; and the required-check list is updated in
-   `CONTRIBUTING.md`, `AGENTS.md` §10, `docs/qa/keiko-for-quality.md`, `RELEASE_REQUIRED_CHECKS` in
+   `CONTRIBUTING.md`, `AGENTS.md` §10, `docs/qa/autonomous-quality-gates.md`,
+   `RELEASE_REQUIRED_CHECKS` in
    `release.yml` and `portable-assets.yml`, and `reevaluationCheckNames` in
-   `scripts/keiko-for-quality-action.mjs`. Four structural pins are relocated, none relaxed: the
+   the then-active external aggregate. Four structural pins are relocated, none relaxed: the
    `ci` aggregate slice in `dev-quality-workflows.test.mjs` moves to the generic
    next-top-level-key bound; `zizmor-workflow.test.mjs` re-anchors its four assertions on the
    bundled step; `osv-scanner-workflow.test.mjs` re-points its branch-coverage property at whichever

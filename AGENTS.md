@@ -408,19 +408,19 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   `ci` · `workflow hygiene` · `Analyze (actions)` · `Analyze (javascript-typescript)` ·
   `Build, scan, SBOM, smoke` · `Review dependency diff (dev/main)` · `ui` ·
   `SonarCloud Code Analysis` · `Socket Security: Project Report` ·
-  `Socket Security: Pull Request Alerts` · `Keiko for Quality`
+  `Socket Security: Pull Request Alerts`, plus every external status recorded as live-promoted in
+  [`docs/qa/external-quality-gates.md`](docs/qa/external-quality-gates.md).
 
   `workflow hygiene` is one context running actionlint, the pinned-SHA grep, zizmor and the OSV
   lockfile scan as serial steps of one job (ADR-0159) — same tools, same pinned versions, same rule
   sets as the four separate contexts it replaced.
 
-  No human approving review is required for `dev`. `Keiko for Quality` is required and app-bound
-  (App id `4290143`) since the ADR-0142 cutover (2026-07-19), after all six live probes in
-  [`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md) passed on live pull requests; it
-  bridges the comment-only Qodo review (which itself stays advisory) into the gate. If that check
-  sits `in_progress`, the usual cause is a Qodo review that has not yet settled on the exact
-  current head. Full mutation and hosted-runner performance evidence run outside the PR critical
-  path.
+  No human approving review is required for `dev`. CodeRabbit is advisory because its free-tier
+  status can report success after quota prevents a current-head review; it is not a required status
+  or review authority. Findings still must be repaired and every actual review conversation remains
+  resolved. Qodo and Keiko for Quality are retired under ADR-0167. Sonar remains independently
+  required and revalidated inside `ci`. Full mutation and reference-machine performance evidence
+  run outside the PR critical path; fast OSS duplicate and secret gates run inside `ci` in parallel.
 
 - **GitHub Actions are pinned to full 40-hex commit SHAs** with a version comment. A tag or
   branch ref (`@v4`) fails the pinned-SHA step of `workflow hygiene`. Keep the SHA-plus-comment

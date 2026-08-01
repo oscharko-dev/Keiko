@@ -94,7 +94,7 @@ Named evidence rows:
 
 All four occurrences of the zero-step signature in the observable history landed in lanes the initial
 eligible set excludes. **As scoped, this observer would not have avoided the three manual re-runs of
-2026-07-25** — those were `keiko-for-quality-action.yml` runs, and that lane is a required external
+2026-07-25** — those were `keiko-for-quality-action.yml` runs, and that lane was a required external
 aggregate whose eligibility is a separate decision (ADR-0161 D4, Consequences). The mechanism, its
 bounds and its proof are complete; the eligible set is the initial one Issue #2707 names. Widen it
 only with evidence, and record the widening here.

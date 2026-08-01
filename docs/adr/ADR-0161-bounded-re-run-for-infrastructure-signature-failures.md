@@ -65,7 +65,7 @@ the observer is idempotent even if it fires twice, and a run it re-ran cannot be
 second attempt's own completion event classifies `already-attempted`. A persistent outage therefore
 still ends red and human-visible, which is exactly ADR-0139 D6's persistent-outage semantics one
 layer out, and matches the repository's existing "one explicit rerun, then report it as an incident"
-rule in [`docs/qa/qodo-review-policy.md`](../qa/qodo-review-policy.md).
+rule now generalized in [`docs/qa/review-standards.md`](../qa/review-standards.md).
 
 **D4 — Eligibility is keyed on workflow file path; observation is keyed on display name.** Two lists
 do two different jobs. `RERUN_ELIGIBLE_WORKFLOW_PATHS` in the classifier decides what may be

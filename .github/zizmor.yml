@@ -33,14 +33,26 @@ rules:
       # before removal: `zizmor` reports zero cache-poisoning findings for the pre-#2704 ci.yml with
       # no ignore list at all.
       # USearch runtime: coverage-packages, coverage-ui, coverage-scripts
-      - ci.yml:310
-      - ci.yml:400
-      - ci.yml:466
+      - ci.yml:393
+      - ci.yml:483
+      - ci.yml:549
       # coverage-sonar: npm download cache (the one job that saves it), Sonar Scanner CLI archive
-      - ci.yml:545
-      - ci.yml:631
+      - ci.yml:628
+      - ci.yml:714
   dangerous-triggers:
     ignore:
+      # The CodSpeed policy workflow uses the same base-trusted pattern as Greptile settlement.
+      # It executes only the immutable base, downloads one exact-head JSON file through the GitHub
+      # contents API, and treats that file only as validator input. Read-only permissions, strict
+      # SHA validation, and the external-quality negative tests prohibit pull-request execution.
+      - codspeed-policy.yml:3
+      # The Greptile settlement workflow uses `pull_request_target` specifically so GitHub loads
+      # the workflow from the protected base rather than the pull-request head. It checks out the
+      # immutable base SHA, executes only the base-owned settlement script, has read-only
+      # permissions, and consumes the pull-request number/head only as validated GitHub API lookup
+      # keys. The workflow contains an explicit prohibition on checking out or executing PR code,
+      # and `check:external-quality-config` pins all of those properties with a negative test.
+      - greptile-settlement.yml:3
       # ADR-0161: the infrastructure-signature observer must see runs that have already completed, and
       # `workflow_run` is the only trigger GitHub offers for that. zizmor's warning is about the
       # classic misuse - a `workflow_run` workflow that checks out the triggering run's head and
