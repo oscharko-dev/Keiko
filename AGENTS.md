@@ -408,8 +408,8 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   `ci` · `workflow hygiene` · `Analyze (actions)` · `Analyze (javascript-typescript)` ·
   `Build, scan, SBOM, smoke` · `Review dependency diff (dev/main)` · `ui` ·
   `SonarCloud Code Analysis` · `Socket Security: Project Report` ·
-  `Socket Security: Pull Request Alerts`, plus every external status recorded as live-promoted in
-  [`docs/qa/external-quality-gates.md`](docs/qa/external-quality-gates.md).
+  `Socket Security: Pull Request Alerts` · `Greptile Review` · `Greptile findings` ·
+  `CodSpeed Performance Analysis` · `CodSpeed policy`.
 
   `workflow hygiene` is one context running actionlint, the pinned-SHA grep, zizmor and the OSV
   lockfile scan as serial steps of one job (ADR-0159) — same tools, same pinned versions, same rule

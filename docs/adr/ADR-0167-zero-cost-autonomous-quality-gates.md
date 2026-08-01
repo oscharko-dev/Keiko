@@ -2,8 +2,9 @@
 
 ## Status
 
-Accepted (owner decision, 2026-08-01). Hosted-check promotion remains subject to the live proof in
-D5; repository-owned gates and reviewer configuration take effect with this change.
+Accepted (owner decision, 2026-08-01). PR #2878 completed the D5 negative-and-recovery proof before
+the App-bound CodSpeed and Greptile settlement contexts were promoted; repository-owned gates and
+reviewer configuration took effect with the original change.
 
 ## Supersedes and amends
 

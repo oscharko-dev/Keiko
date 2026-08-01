@@ -62,7 +62,9 @@ Verified 2026-08-01. Terms can change; never add a payment method to preserve a 
   disabled. No paid continuation is accepted. The review quota was exhausted during PR #2876.
 - CodSpeed is active as a public-repository project. No star floor was presented.
 - Greptile has a 14-day no-payment trial and a pending free-OSS exception. Its published
-  application requires 50 stars while Keiko has 2. The temporary requirement is allowed only with
+  application requires 50 stars while its authenticated eligibility screen reports Keiko has 3.
+  The repository is already Apache-2.0/OSI licensed, so changing licenses cannot remove that
+  provider-specific popularity floor. The temporary requirement is allowed only with
   the enforced rollback below.
 - Socket is active; its existing free GitHub App checks remain direct and app-bound.
 - SonarCloud is on the Free plan. Issue #2874 tracks a non-destructive migration to the stronger
@@ -74,7 +76,8 @@ automate, or fabricate stars.
 
 ## Live promotion ledger
 
-Evidence source: [PR #2876](https://github.com/oscharko-dev/Keiko/pull/2876).
+Evidence sources: migration [PR #2876](https://github.com/oscharko-dev/Keiko/pull/2876) and canary
+[PR #2878](https://github.com/oscharko-dev/Keiko/pull/2878).
 
 - CodeRabbit — `CodeRabbit`, App 347564, not protected. It requested changes on
   `e3c89ce0eb5a77f44a4d8115be261160709a22d0` at 2026-08-01 05:53:59 UTC. Its review on
@@ -83,17 +86,31 @@ Evidence source: [PR #2876](https://github.com/oscharko-dev/Keiko/pull/2876).
   emitted a success status. By 2026-08-01 08:46 UTC, live branch protection had removed its
   App-bound status and the quota-dependent native review rule while preserving all other checks
   and conversation resolution.
-- CodSpeed — `CodSpeed Performance Analysis`, App 257293, protection pending. It succeeded on
-  `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 2026-08-01 06:35:50 UTC and uploaded four
-  benchmarks without a workflow credential grant.
-- CodSpeed — `CodSpeed policy`, GitHub Actions App 15368, protection pending. The base-trusted
-  workflow first becomes eligible after this migration reaches `dev`; the subsequent canary must
-  prove exact-head candidate-data validation before protection.
+- CodSpeed — `CodSpeed Performance Analysis`, App 257293, protected after PR #2878. It failed the
+  deliberate `1069aa9a7a75d7e3e19489a197af4671402de3a0` slowdown at 2026-08-01 10:21:21 UTC with
+  a 51.48% aggregate regression ([check 91357704565](https://github.com/oscharko-dev/Keiko/runs/91357704565)),
+  then passed the restored `d86f64250b226e815d66756f31b17e2e79f8c502` head at 10:45:04 UTC
+  ([check 91359719104](https://github.com/oscharko-dev/Keiko/runs/91359719104)). No regression was
+  acknowledged and no baseline was changed.
+- CodSpeed — `CodSpeed policy`, GitHub Actions App 15368, protected after PR #2878. The base-trusted
+  exact-head validator rejected the candidate 10% drift
+  ([job 91356603600](https://github.com/oscharko-dev/Keiko/actions/runs/30695136576/job/91356603600))
+  and accepted the restored 5% policy
+  ([job 91358992913](https://github.com/oscharko-dev/Keiko/actions/runs/30696038720/job/91358992913)).
 - Greptile — `Greptile Review`, App 867647, protected during the bounded trial. It emitted P1
   findings on `4b91c315823160652139a29de0d7a24e4af290c6` at 2026-08-01 05:51:24 UTC and
   `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 06:31:36 UTC, plus an outside-diff P1 on
   `e4f981efa67e363b78fd30bc2db36484402c83a2`. Head
   `3b9d90e50a74acd90734b3c59bd4aab374da895b` settled clean at 07:08:20 UTC.
+- Greptile — `Greptile findings`, GitHub Actions App 15368, protected during the same bounded trial.
+  On PR #2878 the native review rejected the deliberate head with three P1 findings
+  ([check 91356606358](https://github.com/oscharko-dev/Keiko/runs/91356606358)); the base-owned
+  settlement independently failed
+  ([job 91356603731](https://github.com/oscharko-dev/Keiko/actions/runs/30695136580/job/91356603731)).
+  The restored exact head then passed both native review
+  ([check 91358998906](https://github.com/oscharko-dev/Keiko/runs/91358998906)) and settlement
+  ([job 91358992919](https://github.com/oscharko-dev/Keiko/actions/runs/30696038726/job/91358992919))
+  with zero unresolved Greptile findings.
 - Greptile billing evidence observed 2026-08-01 states “until Aug 14, 2026” and shows no payment
   method. The conservative expiry ceiling is `2026-08-14T00:00:00Z`; rollback
   [#2877](https://github.com/oscharko-dev/Keiko/issues/2877) is due by
@@ -101,8 +118,8 @@ Evidence source: [PR #2876](https://github.com/oscharko-dev/Keiko/pull/2876).
 
 The retired `Keiko for Quality` context was removed atomically from `dev` protection at
 2026-08-01 06:28:25 UTC after its producer had been deleted. The other ten app-bound contexts were
-preserved. Qodo and Keiko for Quality remain installed only until PR #2876 merges, so rollback does
-not depend on removing an app before its replacement is live.
+preserved. Qodo and Keiko for Quality were uninstalled after PR #2876 merged; the organization
+installation API returned no remaining installation for either App.
 
 Greptile's UI exposes only the calendar-date expiry, 2026-08-14, rather than a time zone. Keiko
 therefore fails safe at the earlier normalized ceiling `2026-08-14T00:00:00Z`. Issue #2877 requires
@@ -117,9 +134,8 @@ though the provider's completion status itself reports successful review executi
 `Greptile findings` `pull_request_target` workflow separately rejects P0-P2 findings that T-Rex can
 place only in the current summary, binds the summary and provider App to the exact head, and never
 emits comment bodies. It checks out and executes only the immutable base revision, has read-only
-permissions, and cannot run pull-request code. Its context becomes eligible for protection only
-after this migration is on `dev` and a subsequent pull request proves exact-head failure and
-recovery.
+permissions, and cannot run pull-request code. PR #2878 proved exact-head failure and recovery
+before this context became required.
 
 Promotion requires all of the following on a live pull request:
 

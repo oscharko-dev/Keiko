@@ -50,16 +50,16 @@ SonarCloud and Socket remain independently required. CodeRabbit is assertive but
 exhausted the review quota on PR #2876 and emitted success without reviewing the current head. It
 therefore has neither required status nor review authority. Findings it does emit are still repaired
 and actual conversations are settled; an absent or quota-paced CodeRabbit review is not merge
-evidence and is not a merge blocker. Greptile and CodSpeed are promoted only after a live pull
-request proves exact-head emission, an observed negative case, repaired recovery, stable producer
-identity, and bounded settlement. CodSpeed additionally requires zero-cost continuity. Greptile may
-be required during its no-payment trial only with a recorded hard expiry and owner-bound automated
-rollback.
+evidence and is not a merge blocker. PR #2878 proved exact-head negative and recovery behavior
+before `Greptile Review`, `Greptile findings`, `CodSpeed Performance Analysis`, and `CodSpeed
+policy` became App-bound required checks. CodSpeed additionally requires zero-cost continuity.
+Greptile may remain required during its no-payment trial only with a recorded hard expiry and
+owner-bound automated rollback.
 
 CodSpeed benchmark execution uses the exact candidate head. Its dashboard-policy verdict is a
 different, base-trusted context: GitHub loads the validator from protected `dev`, downloads only the
-candidate JSON policy, and never executes pull-request code. The context becomes required only after
-a later canary proves this default-branch activation path.
+candidate JSON policy, and never executes pull-request code. PR #2878 proved this default-branch
+activation path before the context became required.
 
 Hosted products are not described as open-source merely because their service is free for a public
 repository. The merge-critical foundation is repository-owned and implemented with open-source

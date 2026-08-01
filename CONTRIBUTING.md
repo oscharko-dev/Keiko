@@ -17,8 +17,7 @@ npm run typecheck  # strict type-checking for src + tests
 ## Pull requests
 
 All required status checks must pass on the current pull-request head before a change can merge into
-`dev`. The stable app-bound set is the ten checks below, plus every external status recorded as
-live-promoted in [`docs/qa/external-quality-gates.md`](docs/qa/external-quality-gates.md):
+`dev`. The stable app-bound set is the fourteen checks below:
 
 1. `ci`
 2. `workflow hygiene`
@@ -30,8 +29,15 @@ live-promoted in [`docs/qa/external-quality-gates.md`](docs/qa/external-quality-
 8. `SonarCloud Code Analysis`
 9. `Socket Security: Project Report`
 10. `Socket Security: Pull Request Alerts`
-    `workflow hygiene` runs actionlint, the pinned-SHA verification, zizmor and the OSV lockfile
-    scan as one context (ADR-0159); the tools, pinned versions and rule sets are unchanged.
+11. `Greptile Review`
+12. `Greptile findings`
+13. `CodSpeed Performance Analysis`
+14. `CodSpeed policy`
+
+`workflow hygiene` runs actionlint, the pinned-SHA verification, zizmor and the OSV lockfile scan as
+one context (ADR-0159); the tools, pinned versions and rule sets are unchanged. The hosted contexts
+and their bounded zero-cost eligibility are recorded in
+[`docs/qa/external-quality-gates.md`](docs/qa/external-quality-gates.md).
 
 No human approving review or manual merge is required. GitHub native auto-merge integrates only
 after the required checks succeed on the exact current head and every review conversation is
