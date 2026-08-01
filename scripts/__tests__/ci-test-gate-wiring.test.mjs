@@ -14,6 +14,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
 
 const ci = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
+const codspeedPolicy = readFileSync(
+  resolve(repoRoot, ".github/workflows/codspeed-policy.yml"),
+  "utf8",
+);
 const greptileSettlement = readFileSync(
   resolve(repoRoot, ".github/workflows/greptile-settlement.yml"),
   "utf8",
@@ -124,7 +128,6 @@ const REQUIRED_CI_COMMANDS = [
   "npm run check:dependency-hygiene",
   "npm run check:knip",
   "npm run check:external-quality-config",
-  "node scripts/check-codspeed-policy.mjs",
   "npm run check:semantic-duplication",
   // Formatting baseline + ADR registry integrity (Step 10, RB-19 / GEN-SYNTH-MISSING-EVIDENCE-001 /
   // GEN-DOC-ADR-002): format:check was unwired while 205 files drifted; check:adr-index guards the
@@ -219,6 +222,7 @@ describe("CI test/gate wiring guard", () => {
       releaseWorkflow,
       portableAssetsWorkflow,
       mutationSecurityWorkflow,
+      codspeedPolicy,
       greptileSettlement,
     ].join("\n");
     const nodeSetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
@@ -259,6 +263,10 @@ describe("CI test/gate wiring guard", () => {
     const aggregate = ci.slice(ci.indexOf("  ci:"), ci.indexOf("\n  build-scan-sbom-smoke:"));
     expect(aggregate).toContain("      - semantic-duplication");
     expect(ci).not.toContain("npm run check:qodo-config");
+    expect(ci).not.toContain("  codspeed-policy:");
+    expect(codspeedPolicy).toContain("pull_request_target:");
+    expect(codspeedPolicy).toContain("ref: ${{ github.event.pull_request.base.sha }}");
+    expect(codspeedPolicy).toContain("run: node scripts/check-codspeed-policy.mjs");
     expect(ci).not.toContain("greptile-findings:");
     expect(greptileSettlement).toContain("pull_request_target:");
     expect(greptileSettlement).toContain("ref: ${{ github.event.pull_request.base.sha }}");

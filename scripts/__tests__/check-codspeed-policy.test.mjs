@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { checkCodSpeedPolicy, main, validateLiveSettings } from "../check-codspeed-policy.mjs";
+import {
+  checkCodSpeedPolicy,
+  loadPolicySource,
+  main,
+  validateLiveSettings,
+} from "../check-codspeed-policy.mjs";
 
 const POLICY = JSON.stringify({
   failOnRegression: true,
@@ -26,6 +31,14 @@ function response(payload = SETTINGS, ok = true) {
 }
 
 describe("live CodSpeed policy", () => {
+  it("loads the workflow-provided candidate policy path as data", () => {
+    const read = vi.fn().mockReturnValue(POLICY);
+    expect(loadPolicySource({ QUALITY_CODSPEED_POLICY_PATH: "/runner/policy.json" }, read)).toBe(
+      POLICY,
+    );
+    expect(read).toHaveBeenCalledWith("/runner/policy.json", "utf8");
+  });
+
   it("accepts the exact blocking five-percent settings", () => {
     expect(validateLiveSettings(JSON.parse(POLICY), SETTINGS)).toEqual([]);
   });

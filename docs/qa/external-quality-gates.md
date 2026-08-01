@@ -8,8 +8,9 @@ The deterministic core remains usable without them.
 
 ## Repository-owned configuration
 
-- CodSpeed: `codspeed.yml`, `.codspeed-policy.json`, the repository benchmark, and its workflow
-  provide CPU-simulation comparison plus live settings enforcement.
+- CodSpeed: `codspeed.yml`, `.codspeed-policy.json`, the repository benchmark, and separate
+  benchmark/policy workflows provide CPU-simulation comparison plus base-trusted settings
+  enforcement.
 - CodeRabbit: `.coderabbit.yaml` configures assertive blocking review without code-writing or
   merge authority.
 - Greptile: `.greptile/config.json`, `.greptile/files.json`, and the base-owned settlement workflow
@@ -38,9 +39,10 @@ performance gates.
 ## Hosted settings
 
 - CodSpeed: CPU simulation, regressions above the 5% global threshold fail, one always-updated PR
-  report, and no repository upload token or pull-request-visible OIDC grant. The required `ci`
-  aggregate queries the public project settings on every candidate head and fails closed when the
-  live threshold, failure behavior, or report mode differs from `.codspeed-policy.json`.
+  report, and no repository upload token or pull-request-visible OIDC grant. The dedicated
+  `CodSpeed policy` workflow is loaded from the protected base, fetches only the exact-head
+  `.codspeed-policy.json` as untrusted data, and fails closed when the live threshold, failure
+  behavior, or report mode differs. Candidate code cannot execute in that workflow.
 - CodeRabbit: assertive, every ready head including bot authors, request-changes workflow enabled,
   failure status enabled, author override denied, review details visible, and all write/mutation,
   web-search, external command, cross-repository, and post-merge features disabled.
@@ -79,6 +81,9 @@ Evidence source: [PR #2876](https://github.com/oscharko-dev/Keiko/pull/2876).
 - CodSpeed — `CodSpeed Performance Analysis`, App 257293, protection pending. It succeeded on
   `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 2026-08-01 06:35:50 UTC and uploaded four
   benchmarks without a workflow credential grant.
+- CodSpeed — `CodSpeed policy`, GitHub Actions App 15368, protection pending. The base-trusted
+  workflow first becomes eligible after this migration reaches `dev`; the subsequent canary must
+  prove exact-head candidate-data validation before protection.
 - Greptile — `Greptile Review`, App 867647, protected during the bounded trial. It emitted P1
   findings on `4b91c315823160652139a29de0d7a24e4af290c6` at 2026-08-01 05:51:24 UTC and
   `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 06:31:36 UTC, plus an outside-diff P1 on

@@ -132,6 +132,17 @@ describe("Greptile finding settlement", () => {
     expect(request.mock.calls[2][0]).toBe("https://api.github.com/graphql");
   });
 
+  it("accepts GitHub's case-insensitive canonical repository slug", async () => {
+    const request = requestSequence(
+      response({ check_runs: [CHECK] }),
+      response([SUMMARY]),
+      response(THREAD_CONNECTION),
+    );
+    await expect(
+      checkGreptileFindings({ ...ENV, GITHUB_REPOSITORY: "oscharko-dev/keiko" }, request, vi.fn()),
+    ).resolves.toEqual([]);
+  });
+
   it("waits for exact-head completion and for a lagging summary update", async () => {
     const stale = { ...SUMMARY, body: "<h3>Greptile Summary</h3> stale" };
     const request = requestSequence(

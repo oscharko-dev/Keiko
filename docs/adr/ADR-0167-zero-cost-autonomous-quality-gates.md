@@ -77,6 +77,10 @@ per-PR availability dependency.
 
 CodSpeed uses deterministic CPU simulation; regressions above 5% against `dev` fail. It supplements
 but never replaces D12 evidence, bundle budgets, retrieval latency, or end-to-end performance gates.
+The live dashboard-policy comparison runs in a separate `pull_request_target` workflow loaded from
+the protected base. It downloads only the candidate `.codspeed-policy.json` as exact-head data and
+executes only the base-owned validator. The benchmark workflow remains on the candidate head but
+cannot validate or self-approve its own policy contract.
 
 ### D5 — External checks enter branch protection only through an atomic live cutover
 
@@ -90,10 +94,11 @@ same-named unbound context is accepted.
 
 By explicit owner decision, Greptile may be required during its no-payment trial after the same
 technical probes pass. This is a time-bounded activation, not continuity proof: the promotion ledger
-must record the provider-reported expiry and a rollback issue, and branch protection must remove the
-check no later than 24 hours before expiry unless the pending zero-cost OSS exception is approved and
-verified. No payment method, star purchase, fabricated popularity, admin bypass, finding dismissal,
-or threshold relaxation is an accepted continuity mechanism.
+must record the provider-reported expiry and an active owner-bound rollback automation. Unless the
+pending zero-cost OSS exception is approved and verified, that automation removes and verifies the
+required contexts and installation no later than 24 hours before expiry. No generic approval,
+payment method, star purchase, fabricated popularity, admin bypass, finding dismissal, or threshold
+relaxation is an accepted continuity mechanism.
 
 ## Consequences
 

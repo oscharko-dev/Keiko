@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { runCliCheck } from "./lib/run-cli-check.mjs";
 
-const EXPECTED_REPOSITORY = "oscharko-dev/Keiko";
+const EXPECTED_REPOSITORY = "oscharko-dev/keiko";
 const [EXPECTED_OWNER, EXPECTED_NAME] = EXPECTED_REPOSITORY.split("/", 2);
 const EXPECTED_APP_ID = 867_647;
 const EXPECTED_CHECK = "Greptile Review";
@@ -75,7 +75,10 @@ async function requestJson(request, url, token, options = {}, wait = pause) {
 }
 
 function validateContext(env) {
-  if (env.GITHUB_REPOSITORY !== EXPECTED_REPOSITORY) {
+  if (
+    typeof env.GITHUB_REPOSITORY !== "string" ||
+    env.GITHUB_REPOSITORY.toLowerCase() !== EXPECTED_REPOSITORY
+  ) {
     throw new Error("repository identity does not match the governed project");
   }
   if (!PR_NUMBER.test(env.QUALITY_PULL_REQUEST ?? "")) {

@@ -98,6 +98,28 @@ describe("external quality integration configuration", () => {
     );
   });
 
+  it("rejects a CodSpeed policy workflow that executes pull-request code", () => {
+    const untrusted = sources.codspeedPolicyWorkflow
+      .replace("ref: ${{ github.event.pull_request.base.sha }}", "ref: ${{ github.head_ref }}")
+      .replace("contents: read", "contents: write")
+      .replace("run: test -f scripts/check-codspeed-policy.mjs", "run: npm test");
+    expect(findings({ codspeedPolicyWorkflow: untrusted })).toEqual(
+      expect.arrayContaining([
+        "CodSpeed policy must check out only the immutable base",
+        "CodSpeed policy must grant only read access to repository contents",
+        "CodSpeed policy must fail closed when the base gate is unavailable",
+        "CodSpeed policy must never grant writes or execute pull-request code",
+      ]),
+    );
+  });
+
+  it("rejects a second checkout in the base-trusted CodSpeed policy workflow", () => {
+    const secondCheckout = `${sources.codspeedPolicyWorkflow}\n- uses: actions/checkout@deadbeef`;
+    expect(findings({ codspeedPolicyWorkflow: secondCheckout })).toContain(
+      "CodSpeed policy must perform exactly one base checkout",
+    );
+  });
+
   it("rejects drift from the live CodSpeed threshold and failing-check policy", () => {
     const policy = JSON.parse(sources.codspeedPolicy);
     policy.regressionThresholdPercent = 10;

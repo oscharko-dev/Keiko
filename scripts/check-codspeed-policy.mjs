@@ -23,6 +23,15 @@ function diagnostic(message) {
   process.stderr.write(`${message}\n`);
 }
 
+export function loadPolicySource(env = process.env, read = readFileSync) {
+  const path =
+    typeof env.QUALITY_CODSPEED_POLICY_PATH === "string" &&
+    env.QUALITY_CODSPEED_POLICY_PATH.length > 0
+      ? env.QUALITY_CODSPEED_POLICY_PATH
+      : join(REPO_ROOT, ".codspeed-policy.json");
+  return read(path, "utf8");
+}
+
 function parsePolicy(source) {
   const problems = validateCodSpeedPolicy(source);
   if (problems.length > 0) throw new Error(problems[0]);
@@ -77,7 +86,7 @@ export async function checkCodSpeedPolicy(source, request = globalThis.fetch) {
 }
 
 export async function main(
-  source = readFileSync(join(REPO_ROOT, ".codspeed-policy.json"), "utf8"),
+  source = loadPolicySource(),
   request = globalThis.fetch,
   log = output,
   error = diagnostic,

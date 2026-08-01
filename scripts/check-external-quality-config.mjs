@@ -68,6 +68,7 @@ export function loadExternalQualitySources(repoRoot = REPO_ROOT) {
     packageJson: read(repoRoot, "package.json"),
     codspeedConfig: read(repoRoot, "codspeed.yml"),
     codspeedPolicy: read(repoRoot, ".codspeed-policy.json"),
+    codspeedPolicyWorkflow: read(repoRoot, ".github/workflows/codspeed-policy.yml"),
     codspeedWorkflow: read(repoRoot, ".github/workflows/codspeed.yml"),
     ciWorkflow: read(repoRoot, ".github/workflows/ci.yml"),
     codeRabbitConfig: read(repoRoot, ".coderabbit.yaml"),
@@ -188,10 +189,6 @@ function validateCodSpeedWorkflow(source) {
       "        run: node scripts/check-runtime-toolchain.mjs --exact",
       "CodSpeed must verify the governed Node.js and npm toolchain",
     ],
-    [
-      "        run: npm run check:codspeed-policy",
-      "CodSpeed must fail when live project settings drift from repository policy",
-    ],
     [`        uses: ${CODSPEED_ACTION}`, "CodSpeed action must use the reviewed immutable pin"],
     ["          mode: simulation", "CodSpeed must use deterministic CPU simulation"],
   ];
@@ -205,9 +202,76 @@ function validateCodSpeedWorkflow(source) {
   if (source.includes("continue-on-error")) {
     problems.push("CodSpeed execution must not be softened with continue-on-error");
   }
+  if (source.includes("check:codspeed-policy")) {
+    problems.push("CodSpeed benchmarks must not execute a pull-request-controlled policy gate");
+  }
   const actionStep = source.slice(source.indexOf(`        uses: ${CODSPEED_ACTION}`));
   if (/^\s{10}run:/mu.test(actionStep)) {
     problems.push("CodSpeed action must discover codspeed.yml instead of a framework plugin run");
+  }
+  return problems;
+}
+
+const CODSPEED_POLICY_WORKFLOW_CHECKS = [
+  ["  pull_request_target:", "CodSpeed policy must use the base-trusted event"],
+  [
+    "types: [opened, reopened, synchronize, ready_for_review]",
+    "CodSpeed policy must cover every reviewable head",
+  ],
+  ["timeout-minutes: 10", "CodSpeed policy must keep its ten-minute runtime bound"],
+  ["contents: read", "CodSpeed policy must grant only read access to repository contents"],
+  [
+    "ref: ${{ github.event.pull_request.base.sha }}",
+    "CodSpeed policy must check out only the immutable base",
+  ],
+  ["persist-credentials: false", "CodSpeed policy checkout must not retain credentials"],
+  [
+    "QUALITY_HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
+    "CodSpeed policy input must bind the exact pull-request head",
+  ],
+  [
+    "QUALITY_CODSPEED_POLICY_PATH: ${{ runner.temp }}/codspeed-policy.json",
+    "CodSpeed policy data must use a fixed runner-temporary path",
+  ],
+  [
+    '"repos/${QUALITY_REPOSITORY}/contents/.codspeed-policy.json?ref=${QUALITY_HEAD_SHA}"',
+    "CodSpeed policy must fetch only the exact-head policy file",
+  ],
+  ['"" | *[!0-9a-f]* )', "CodSpeed policy must reject non-hexadecimal head references"],
+  [
+    'if [ "${#QUALITY_HEAD_SHA}" -ne 40 ]; then',
+    "CodSpeed policy must reject non-SHA-length head references",
+  ],
+  [
+    "run: test -f scripts/check-codspeed-policy.mjs",
+    "CodSpeed policy must fail closed when the base gate is unavailable",
+  ],
+  [
+    "run: node scripts/check-codspeed-policy.mjs",
+    "CodSpeed policy must execute the base-owned validator",
+  ],
+];
+
+const CODSPEED_POLICY_WORKFLOW_FORBIDDEN = [
+  "contents: write",
+  "id-token: write",
+  "ref: ${{ github.event.pull_request.head.sha }}",
+  "github.event.pull_request.head.ref",
+  "github.head_ref",
+  "refs/pull/",
+  "run: npm",
+];
+
+function validateCodSpeedPolicyWorkflow(source) {
+  const problems = CODSPEED_POLICY_WORKFLOW_CHECKS.flatMap(([expected, finding]) =>
+    missingText(source, expected, finding),
+  );
+  if (CODSPEED_POLICY_WORKFLOW_FORBIDDEN.some((entry) => source.includes(entry))) {
+    problems.push("CodSpeed policy must never grant writes or execute pull-request code");
+  }
+  const checkoutCount = source.match(/uses: actions\/checkout@/gu)?.length ?? 0;
+  if (checkoutCount !== 1) {
+    problems.push("CodSpeed policy must perform exactly one base checkout");
   }
   return problems;
 }
@@ -367,12 +431,6 @@ function validateCiWorkflow(source) {
       "npm run check:external-quality-config",
       "required ci must execute check:external-quality-config",
     ],
-    ["  codspeed-policy:", "required ci must validate live CodSpeed settings"],
-    ["      - codspeed-policy", "required ci must aggregate live CodSpeed settings"],
-    [
-      "run: node scripts/check-codspeed-policy.mjs",
-      "required ci must execute the live CodSpeed policy check",
-    ],
   ];
   const problems = checks.flatMap(([expected, finding]) => missingText(source, expected, finding));
   const resolverCalls =
@@ -432,6 +490,7 @@ export function validateExternalQualitySources(
     ...validatePackage(sources.packageJson),
     ...validateCodSpeedConfig(sources.codspeedConfig),
     ...validateCodSpeedPolicy(sources.codspeedPolicy),
+    ...validateCodSpeedPolicyWorkflow(sources.codspeedPolicyWorkflow),
     ...validateCodSpeedWorkflow(sources.codspeedWorkflow),
     ...validateCodeRabbitConfig(sources.codeRabbitConfig),
     ...validateGreptileConfig(sources.greptileConfig),

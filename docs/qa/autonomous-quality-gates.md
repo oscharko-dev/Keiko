@@ -7,21 +7,19 @@ threshold relaxation are not repair paths.
 
 ## Enforced thresholds
 
-| Surface                                                      | Required threshold                                                  |
-| ------------------------------------------------------------ | ------------------------------------------------------------------- |
-| Sonar unresolved pull-request issues                         | `0`                                                                 |
-| Sonar new violations                                         | `0`                                                                 |
-| Sonar new-code coverage                                      | `>= 85%`                                                            |
-| Sonar new-code duplication                                   | `<= 3%` until Issue #2874 can synchronize a `<= 1%` OSS gate safely |
-| Sonar new-code ratings                                       | Maintainability `A`, reliability `A`, security `A`                  |
-| Sonar security hotspots reviewed                             | `100%` on new code and overall                                      |
-| Semantic clone groups introduced by the diff                 | `0` at `>= 100` tokens and `>= 10` lines                            |
-| Secrets introduced anywhere in the pull-request commit range | `0`                                                                 |
-| TypeScript and lint                                          | strict, no `any`, explicit returns, `0` warnings                    |
-| Complexity and function size                                 | cyclomatic complexity `<= 10`; `<= 50` non-comment lines/function   |
-| Package/file coverage                                        | no committed per-file or per-package ratchet regression             |
-| CodSpeed CPU-simulation regression                           | `<= 5%` against the `dev` baseline; above 5% fails                  |
-| Automated-review findings                                    | `0` unresolved blocking findings and all conversations resolved     |
+- Sonar unresolved pull-request issues and new violations: `0`.
+- Sonar new-code coverage: `>= 85%`.
+- Sonar new-code duplication: `<= 3%` until Issue #2874 can safely synchronize a `<= 1%` OSS gate.
+- Sonar new-code ratings: maintainability `A`, reliability `A`, and security `A`.
+- Sonar security hotspots reviewed: `100%` on new code and overall.
+- Semantic clone groups introduced by the diff: `0` at `>= 100` tokens and `>= 10` lines.
+- Secrets introduced anywhere in the pull-request commit range: `0`.
+- TypeScript and lint: strict, no `any`, explicit returns, and `0` warnings.
+- Complexity and function size: cyclomatic complexity `<= 10` and `<= 50` non-comment lines per
+  function.
+- Package/file coverage: no committed per-file or per-package ratchet regression.
+- CodSpeed CPU-simulation regression: `<= 5%` against the `dev` baseline; above 5% fails.
+- Automated-review findings: `0` unresolved blocking findings and all conversations resolved.
 
 The 85% coverage floor is constitutional, not aspirational. Per-file floors and package ratchets
 prevent a high aggregate from hiding untested changed code. Mutation testing remains the deeper
@@ -52,13 +50,19 @@ status proves review liveness; GitHub review state and conversation resolution c
 verdict. Greptile and CodSpeed are promoted only after a live pull request proves exact-head
 emission, a real negative case, repaired recovery, stable producer identity, and bounded settlement.
 CodSpeed additionally requires zero-cost continuity. Greptile may be required during its no-payment
-trial only with a recorded hard expiry and rollback issue.
+trial only with a recorded hard expiry and owner-bound automated rollback.
+
+CodSpeed benchmark execution uses the exact candidate head. Its dashboard-policy verdict is a
+different, base-trusted context: GitHub loads the validator from protected `dev`, downloads only the
+candidate JSON policy, and never executes pull-request code. The context becomes required only after
+a later canary proves this default-branch activation path.
 
 Hosted products are not described as open-source merely because their service is free for a public
 repository. The merge-critical foundation is repository-owned and implemented with open-source
 tooling. No payment method or paid entitlement may be introduced. Greptile is removed from branch
 protection no later than 24 hours before its trial expires unless the pending free-OSS exception is
-approved and its live probes pass.
+approved and its live probes pass. Active automation `keiko-greptile-trial-rollback` owns that
+deadline and must record successful live removal evidence rather than merely attempt the mutation.
 
 ## Sonar independence
 
