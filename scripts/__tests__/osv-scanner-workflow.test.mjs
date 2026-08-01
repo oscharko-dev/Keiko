@@ -19,9 +19,10 @@ const hygiene = readFileSync(resolve(repoRoot, ".github/workflows/workflow-hygie
 // target they do — leaving release/** or an integration branch out means shipping a release
 // candidate whose tooling was never scanned at all.
 function branchList(source, event, label) {
-  const block = new RegExp(`\\n {2}${event}:\\n {4}branches:\\n((?: {6}- .*\\n)+)`, "u").exec(
-    source,
-  );
+  const block = new RegExp(
+    `\\n {2}${event}:\\n(?: {4}(?!branches:)[^\\n]*\\n)* {4}branches:\\n((?: {6}- .*\\n)+)`,
+    "u",
+  ).exec(source);
   if (block === null) throw new Error(`${label} ${event} branch list not found`);
   return block[1]
     .split("\n")
@@ -37,8 +38,8 @@ function branchList(source, event, label) {
 describe("OSV Scanner workflow", () => {
   it("always emits a scan for pull requests targeting dev", () => {
     // Relocated to the bundled context, which is where the pull-request execution lives now. The
-    // `ready_for_review` type is the reason the bundle owns its own workflow file: ci.yml takes
-    // GitHub's default types, so hosting the job there would have dropped this trigger entirely.
+    // The bundled lane keeps its explicit reviewable-head event set. CI now carries its own
+    // explicit set as well, including `edited` for review-suppression metadata checks.
     expect(hygiene).toMatch(/pull_request:\n\s+branches:\n\s+- dev/u);
     expect(hygiene).toMatch(
       /types:\n\s+- opened\n\s+- ready_for_review\n\s+- reopened\n\s+- synchronize/u,

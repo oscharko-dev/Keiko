@@ -33,12 +33,12 @@ rules:
       # before removal: `zizmor` reports zero cache-poisoning findings for the pre-#2704 ci.yml with
       # no ignore list at all.
       # USearch runtime: coverage-packages, coverage-ui, coverage-scripts
-      - ci.yml:393
-      - ci.yml:483
-      - ci.yml:549
+      - ci.yml:395
+      - ci.yml:485
+      - ci.yml:551
       # coverage-sonar: npm download cache (the one job that saves it), Sonar Scanner CLI archive
-      - ci.yml:628
-      - ci.yml:714
+      - ci.yml:630
+      - ci.yml:716
   dangerous-triggers:
     ignore:
       # The CodSpeed policy workflow uses a base-trusted validation pattern.

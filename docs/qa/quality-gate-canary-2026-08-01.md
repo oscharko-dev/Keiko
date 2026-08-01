@@ -48,3 +48,12 @@ The canary never changes the protected `dev` branch directly, relaxes branch pro
 a finding, acknowledges a performance regression, changes a baseline, or uses an administrator
 bypass. Only the hardened live-value validation, its regression tests, provider rollbacks justified
 by exact-head evidence, and redacted evidence remain in the final diff.
+
+## Owner-directed restoration
+
+ADR-0168 and Issue #2879 supersede only the Greptile rollback's current installation state. On
+2026-08-01 the authenticated provider UI reported 14 days remaining in the no-payment trial. App
+`867647` was reinstalled with access limited to `oscharko-dev/Keiko`, and repository review policy
+was restored. Greptile now follows CodeRabbit's quota-tolerant model: neither provider status is
+required, while every inline review conversation remains merge-blocking until resolved. The stable
+protected set therefore remains eleven App-bound checks.

@@ -9,6 +9,8 @@ repository integration were removed. Native CodSpeed performance comparison then
 different regressions on two heads with unchanged benchmark inputs because shared-runner provenance
 varied; it became advisory while the exact-head `CodSpeed policy` validator remained required.
 Repository-owned gates and advisory reviewer configuration took effect with the original change.
+ADR-0168 later supersedes the Greptile retirement state and CodeRabbit request-changes setting while
+leaving this decision's Qodo/KFQ retirement, deterministic gates, and zero-payment boundary intact.
 
 ## Supersedes and amends
 
@@ -46,6 +48,9 @@ the free OSS plan and a synchronized reduction of duplication to 1%; deletion/re
 intermediate check gap are prohibited.
 
 ### D2 — Keep quota-paced CodeRabbit evidence advisory
+
+This subsection records the original rollout state. ADR-0168 now enables request-changes settlement
+for emitted findings while keeping CodeRabbit's quota-dependent status outside branch protection.
 
 CodeRabbit runs the assertive profile on every ready pull-request update, including bot authors. Its
 repository policy keeps all code-writing and merge features disabled. Findings are repaired and
@@ -108,6 +113,10 @@ uninstalled, and the repository integration was retired. A future activation req
 durable zero-cost entitlement plus a new live canary. No pending application, generic approval,
 payment method, star purchase, fabricated popularity, admin bypass, finding dismissal, or threshold
 relaxation is an accepted continuity mechanism.
+
+ADR-0168 supersedes only the rollback's installation state: Greptile is active again as a
+quota-tolerant reviewer while the OSS application is pending. Its provider status is not required;
+every inline finding it emits remains blocking through GitHub conversation resolution.
 
 ## Consequences
 

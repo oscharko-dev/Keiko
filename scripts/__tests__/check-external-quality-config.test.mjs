@@ -1,6 +1,13 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  findUnreviewedGreptilePaths,
+  isRegularRepositoryFile,
   loadExternalQualitySources,
   main,
   validateExternalQualitySources,
@@ -8,16 +15,20 @@ import {
 
 const sources = loadExternalQualitySources();
 
-function findings(overrides = {}) {
-  return validateExternalQualitySources({ ...sources, ...overrides });
+function findings(overrides = {}, pathExists = () => true) {
+  return validateExternalQualitySources({ ...sources, ...overrides }, pathExists);
 }
 
 describe("external quality integration configuration", () => {
-  it("accepts the repository-owned CodSpeed and CodeRabbit configuration", () => {
+  it("accepts the repository-owned CodSpeed, CodeRabbit, and Greptile configuration", () => {
     expect(validateExternalQualitySources(sources)).toEqual([]);
   });
 
   it.each([
+    ["greptileConfig", ""],
+    ["greptileConfig", '{"rules": ['],
+    ["greptileFiles", ""],
+    ["greptileFiles", '{"files": ['],
     ["packageJson", ""],
     ["packageJson", '{"devDependencies":'],
   ])("returns a redacted finding for malformed %s input", (key, value) => {
@@ -29,17 +40,19 @@ describe("external quality integration configuration", () => {
     expect(findings({ packageJson: "{}" })).toEqual(
       expect.arrayContaining([
         "fallow must be pinned to 2.104.0",
+        "yaml must be pinned to 2.9.0 for semantic reviewer-policy validation",
         "bench:codspeed must execute the repository-owned benchmark entry point",
         "check:external-quality-config script is missing or redirected",
+        "check:review-bot-suppression script is missing or redirected",
         "check:codspeed-policy script is missing or redirected",
         "semantic duplication must fail on every changed clone group",
       ]),
     );
   });
 
-  it("rejects quota-dependent CodeRabbit authority, stale-head review, or code mutation", () => {
+  it("rejects disabled CodeRabbit settlement, stale-head review, or code mutation", () => {
     const weakened = sources.codeRabbitConfig
-      .replace("request_changes_workflow: false", "request_changes_workflow: true")
+      .replace("request_changes_workflow: true", "request_changes_workflow: false")
       .replace("commit_status: false", "commit_status: true")
       .replace("fail_commit_status: false", "fail_commit_status: true")
       .replace("review_status: false", "review_status: true")
@@ -50,10 +63,11 @@ describe("external quality integration configuration", () => {
       .replace('title:\n      mode: "warning"', 'title:\n      mode: "error"')
       .replace('description:\n      mode: "warning"', 'description:\n      mode: "error"')
       .replace("auto_incremental_review: true", "auto_incremental_review: false")
+      .replace('base_branches:\n      - "dev"', "base_branches: []")
       .replace("autofix:\n      enabled: false", "autofix:\n      enabled: true");
     expect(findings({ codeRabbitConfig: weakened })).toEqual(
       expect.arrayContaining([
-        "CodeRabbit must not regain quota-dependent review authority",
+        "CodeRabbit findings must request changes until their conversations are resolved",
         "CodeRabbit must not emit a quota-dependent merge status",
         "CodeRabbit failure status must remain advisory",
         "CodeRabbit review state must remain advisory",
@@ -61,9 +75,32 @@ describe("external quality integration configuration", () => {
         "CodeRabbit title feedback must remain advisory",
         "CodeRabbit description feedback must remain advisory",
         "CodeRabbit must review pull request updates",
+        "CodeRabbit must review every pull request targeting dev",
         "CodeRabbit autofix mutation must remain disabled",
       ]),
     );
+  });
+
+  it("parses CodeRabbit YAML so decoy text cannot hide disabled automatic review", () => {
+    const disabled = `${sources.codeRabbitConfig.replace(
+      "  auto_review:\n    enabled: true",
+      "  auto_review:\n    enabled: false",
+    )}\nreview_policy_note: |\n  auto_review:\n    enabled: true\n`;
+    expect(findings({ codeRabbitConfig: disabled })).toEqual(
+      expect.arrayContaining([
+        "CodeRabbit automatic review must remain enabled",
+        "CodeRabbit semantic review policy must match the reviewed configuration",
+      ]),
+    );
+  });
+
+  it("rejects malformed or aliased CodeRabbit YAML", () => {
+    expect(findings({ codeRabbitConfig: "reviews: [" })).toContain(
+      "codeRabbitConfig must contain a valid alias-free YAML object",
+    );
+    expect(
+      findings({ codeRabbitConfig: "defaults: &defaults {}\nreviews: *defaults\n" }),
+    ).toContain("codeRabbitConfig must contain a valid alias-free YAML object");
   });
 
   it("rejects a mutable CodSpeed action ref or non-simulation mode", () => {
@@ -164,10 +201,144 @@ describe("external quality integration configuration", () => {
     );
   });
 
-  it("rejects missing required-ci wiring", () => {
-    const withoutGate = sources.ciWorkflow.replace("npm run check:external-quality-config", "");
-    expect(findings({ ciWorkflow: withoutGate })).toContain(
-      "required ci must execute check:external-quality-config",
+  it("rejects Greptile drift that omits current-head or status evidence", () => {
+    const config = JSON.parse(sources.greptileConfig);
+    config.triggerOnUpdates = false;
+    config.statusCheck = false;
+    config.statusCommentsEnabled = true;
+    config.sequenceDiagramSection.included = true;
+    config.fixWithAI = true;
+    config.excludeAuthors = ["dependabot[bot]"];
+    expect(findings({ greptileConfig: JSON.stringify(config) })).toEqual(
+      expect.arrayContaining([
+        "Greptile must review every new head",
+        "Greptile must emit an observable status check",
+        "Greptile status comments must remain disabled",
+        "Greptile sequence diagrams must remain disabled",
+        "Greptile must not write pull-request code",
+        "Greptile must not omit bot-authored dev pull requests by configuration",
+      ]),
+    );
+  });
+
+  it("rejects Greptile scope, behavior, and rule drift", () => {
+    const config = JSON.parse(sources.greptileConfig);
+    config.strictness = 1;
+    config.commentTypes = ["style"];
+    config.includeBranches = ["main"];
+    config.fileChangeLimit = 999;
+    config.triggerOnDrafts = true;
+    config.shouldUpdateDescription = true;
+    config.updateExistingSummaryComment = false;
+    config.rules = [null];
+    expect(findings({ greptileConfig: JSON.stringify(config) })).toEqual(
+      expect.arrayContaining([
+        "Greptile strictness must remain at high-signal level 2",
+        "Greptile must leave deterministic style/info findings to repository gates",
+        "Greptile must review pull requests targeting dev",
+        "Greptile fileChangeLimit must remain 500",
+        "Greptile draft auto-review must remain disabled",
+        "Greptile must not mutate Keiko's load-bearing pull request template",
+        "Greptile must update one summary instead of creating comment churn",
+        "Greptile rules must be JSON objects",
+      ]),
+    );
+  });
+
+  it.each([
+    ["automatic skip", (config) => (config.skipReview = "AUTOMATIC")],
+    ["summary-only mode", (config) => (config.updateSummaryOnly = true)],
+    ["global ignore", (config) => (config.ignorePatterns = "**/*")],
+    ["missing instructions", (config) => (config.instructions = "")],
+    [
+      "replacement rules",
+      (config) =>
+        (config.rules = [{ id: "noop", rule: "Leave a friendly comment.", severity: "high" }]),
+    ],
+  ])("rejects Greptile semantic suppression through %s", (_label, mutate) => {
+    const config = JSON.parse(sources.greptileConfig);
+    mutate(config);
+    expect(findings({ greptileConfig: JSON.stringify(config) })).toContain(
+      "Greptile semantic review policy must match the reviewed configuration",
+    );
+  });
+
+  it("rejects unreviewed and nested Greptile files because provider rules cascade", () => {
+    expect(
+      findings({ unreviewedGreptilePaths: ["packages/example/.greptile/rules.md"] }),
+    ).toContain(
+      "Unreviewed Greptile files and nested controls are prohibited because provider rules cascade",
+    );
+  });
+
+  it("discovers tracked ignored, root, nested, and symlink controls", () => {
+    const repository = mkdtempSync(join(tmpdir(), "keiko-greptile-inventory-"));
+    mkdirSync(join(repository, ".greptile"));
+    mkdirSync(join(repository, "packages", "example", ".greptile"), { recursive: true });
+    mkdirSync(join(repository, "node_modules", "tracked", ".greptile"), { recursive: true });
+    writeFileSync(join(repository, ".gitignore"), "node_modules/\n");
+    writeFileSync(join(repository, ".greptile", "config.json"), "{}");
+    writeFileSync(join(repository, ".greptile", "files.json"), "{}");
+    writeFileSync(join(repository, ".greptile", "rules.md"), "unreviewed");
+    writeFileSync(join(repository, "packages", "example", ".greptile", "rules.md"), "nested");
+    writeFileSync(
+      join(repository, "node_modules", "tracked", ".greptile", "rules.md"),
+      "tracked ignored control",
+    );
+    symlinkSync("rules.md", join(repository, ".greptile", "linked-rules.md"));
+    execFileSync("git", ["init", "--quiet"], { cwd: repository });
+    execFileSync("git", ["add", "--force", "node_modules/tracked/.greptile/rules.md"], {
+      cwd: repository,
+    });
+    expect(findUnreviewedGreptilePaths(repository).sort()).toEqual([
+      ".greptile/linked-rules.md",
+      ".greptile/rules.md",
+      "node_modules/tracked/.greptile/rules.md",
+      "packages/example/.greptile/rules.md",
+    ]);
+    rmSync(repository, { recursive: true, force: true });
+  });
+
+  it("accepts only regular repository-bounded reviewer context files", () => {
+    const repository = mkdtempSync(join(tmpdir(), "keiko-greptile-context-"));
+    writeFileSync(join(repository, "governance.md"), "reviewed");
+    mkdirSync(join(repository, "directory.md"));
+    symlinkSync("governance.md", join(repository, "linked.md"));
+    expect(isRegularRepositoryFile(repository, "governance.md")).toBe(true);
+    expect(isRegularRepositoryFile(repository, "directory.md")).toBe(false);
+    expect(isRegularRepositoryFile(repository, "linked.md")).toBe(false);
+    expect(isRegularRepositoryFile(repository, "../outside.md")).toBe(false);
+    rmSync(repository, { recursive: true, force: true });
+  });
+
+  it("rejects malformed Greptile context entries without reflecting their values", () => {
+    expect(findings({ greptileFiles: '{"files":[null]}' })).toContain(
+      ".greptile/files.json entries must be JSON objects",
+    );
+    expect(findings({ greptileFiles: "{}" })).toContain(
+      ".greptile/files.json must carry a files array",
+    );
+    const traversal = "../../../../../../../sensitive-host-path";
+    const context = JSON.parse(sources.greptileFiles);
+    context.files.push({ path: traversal, description: "untrusted" });
+    const problems = findings({ greptileFiles: JSON.stringify(context) });
+    expect(problems).toContain("Greptile context entry 10 must name an existing repository path");
+    expect(problems.join("\n")).not.toContain(traversal);
+  });
+
+  it("rejects missing reviewer context and missing required-ci wiring", () => {
+    const withoutGate = sources.ciWorkflow
+      .replace("types: [opened, reopened, synchronize, ready_for_review, edited]", "")
+      .replace("npm run check:external-quality-config", "")
+      .replace("npm run check:review-bot-suppression", "");
+    const pathExists = (path) => !path.endsWith("ADR-0019-modular-package-architecture.md");
+    expect(findings({ ciWorkflow: withoutGate }, pathExists)).toEqual(
+      expect.arrayContaining([
+        "required ci must rerun when pull-request metadata changes",
+        "required ci must execute check:external-quality-config",
+        "required ci must reject pull-request metadata that suppresses review bots",
+        "Greptile context entry 3 must name an existing repository path",
+      ]),
     );
   });
 
@@ -190,13 +361,13 @@ describe("external quality integration configuration", () => {
   it("returns a testable CLI status and redacted messages", () => {
     const log = vi.fn();
     const error = vi.fn();
-    expect(main(sources, log, error)).toBe(0);
+    expect(main(sources, () => true, log, error)).toBe(0);
     expect(log).toHaveBeenCalledOnce();
     expect(error).not.toHaveBeenCalled();
 
-    expect(main({ ...sources, packageJson: "" }, log, error)).toBe(1);
+    expect(main({ ...sources, greptileConfig: "" }, () => true, log, error)).toBe(1);
     expect(error).toHaveBeenCalledWith(
-      "external-quality-config: packageJson must contain a valid JSON object",
+      "external-quality-config: greptileConfig must contain a valid JSON object",
     );
   });
 });

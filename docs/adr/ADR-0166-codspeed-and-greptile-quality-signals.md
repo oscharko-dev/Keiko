@@ -4,8 +4,9 @@
 
 Superseded for activation and review topology by
 [ADR-0167](ADR-0167-zero-cost-autonomous-quality-gates.md) on 2026-08-01. Its CodSpeed benchmark
-design and general configuration boundaries remain adopted. The Greptile repository integration is
-historical and retired after the canary exhausted its 50-credit trial.
+design and general configuration boundaries remain adopted. ADR-0168 reactivates the Greptile
+repository integration and makes emitted Greptile and CodeRabbit inline findings conditionally
+blocking.
 
 ## Amends
 
@@ -53,16 +54,15 @@ rendering, process startup, filesystem or network latency, memory growth, or use
 clock. D12 reference-environment evidence, deterministic bundle budgets, retrieval latency, and
 affected end-to-end performance gates retain their existing authority.
 
-### D2 — Historical Greptile design and retained CodeRabbit policy
+### D2 — Greptile design and retained CodeRabbit policy
 
-The Greptile configuration described in the next two paragraphs records the original design only.
-ADR-0167 retired the App and every repository-owned Greptile surface after the live quota failure;
-none of this historical material is current operating guidance or merge evidence.
+ADR-0167 records the earlier Greptile rollback. ADR-0168 restores this design as current operating
+guidance for the active no-payment trial and adds conditional CodeRabbit request-changes settlement.
 
 The recommended `.greptile/` format is the source of repository review behavior. The root config:
 
 - reviews every new ready-PR head targeting `dev`, including bot-authored pull requests;
-- limits one review to 1,000 changed files, reports a status check, and updates one summary comment;
+- limits one review to 500 changed files, reports a status check, and updates one summary comment;
 - focuses on `logic` and `syntax`, leaving formatting and style to deterministic repository gates;
 - reads `AGENTS.md`, `CONTRIBUTING.md`, the shared `docs/qa/review-standards.md`, and the relevant ADR/quality
   policy rather than creating a second standards corpus;
@@ -71,18 +71,18 @@ The recommended `.greptile/` format is the source of repository review behavior.
 - may suggest agent fixes but may not auto-approve, merge, edit the pull-request description, or
   recommend bypassing a gate.
 
-Greptile was designed to remain independently observable so one review product could not suppress or
-satisfy another product's findings. Its temporary direct settlement was later retired. ADR-0167 owns
-the current topology: CodeRabbit is advisory, deterministic repository gates retain merge authority,
-and no hosted review bot currently supplies required evidence.
+Greptile remains independently observable so one review product cannot suppress or satisfy another
+product's findings. Under ADR-0168, neither review bot has a required provider status, but every
+inline finding either emits remains blocking through GitHub conversation resolution.
 
 CodeRabbit's existing review role is now pinned by `.coderabbit.yaml` instead of mutable dashboard
 defaults. It uses the assertive review profile, reviews every ready pull-request update, discloses
 review details, and consumes the same repository governance and path-specific trust-boundary rules.
 Untrusted web context, commands from non-organization members, automatic repository linking,
 auto-approval, post-merge actions, and every code-writing finishing touch are disabled. ADR-0167
-records the later live quota/false-green evidence and keeps CodeRabbit advisory; its repository
-policy remains applicable without granting status or review authority.
+records the live quota/false-green evidence; ADR-0168 therefore keeps its status optional while
+granting merge authority only to unresolved native inline conversations. Request-changes review
+state is informative because `dev` does not require approving reviews.
 
 ### D3 — Repository configuration is required; hosted verdicts are staged
 
@@ -90,9 +90,11 @@ policy remains applicable without granting status or review authority.
 originally pinned CodSpeed, CodeRabbit, and Greptile integration boundaries. ADR-0167 later retired
 the Greptile integration after quota pacing; the current gate pins CodSpeed dependencies, action
 identity, simulation mode, triggers, permissions, timeout, benchmark command, and the live-observed
-5% failing-status dashboard policy, plus CodeRabbit's governance context, restricted commands, and
-no-mutation boundary. It proves the retained repository-owned integrations have not silently
-weakened. It does not claim that a hosted service ran.
+5% failing-status dashboard policy, plus the semantically parsed CodeRabbit and Greptile review
+policies, restricted commands, no-mutation boundaries, the reviewed Greptile context inventory, and
+the prohibition on cascading nested Greptile controls. The same required lane rejects PR metadata
+that suppresses either reviewer. It proves the retained repository-owned integrations have not
+silently weakened. It does not claim that a hosted service ran.
 
 The original staging decision kept hosted CodSpeed and Greptile checks outside branch protection
 during initial observation. CodSpeed used a 5% global threshold and Greptile used a 4/5 dashboard
@@ -124,12 +126,11 @@ acknowledgement cannot be used to bypass a protected gate.
 
 - Keiko retains advisory algorithmic performance comparisons without substituting noisy hosted
   execution for D12 evidence or deterministic pull-request budgets.
-- Greptile provided a temporary third review perspective during the trial; Greptile, Qodo, and KFQ
-  are now retired, while CodeRabbit remains advisory under repository-owned policy.
+- Greptile supplies an independent review perspective during the active trial; Qodo and KFQ remain
+  retired, while both active review bots conditionally block only findings they actually emit.
 - The required `ci` context fails on integration drift even when a hosted vendor is unavailable.
-- ADR-0167 owns the current 11-context branch-protection inventory and any future promotion.
-- Greptile's historical open-source application granted no entitlement; the live trial quota failure
-  triggered full retirement without a payment method.
+- ADR-0168 preserves the current 11-context branch-protection set and owns review settlement.
+- Greptile's OSS application remains pending; no payment method is introduced.
 
 ## References
 

@@ -47,15 +47,18 @@ stay on every pull request.
 
 ## Hosted supplemental checks
 
-SonarCloud and Socket remain independently required. CodeRabbit is assertive but advisory: its trial
-exhausted the review quota on PR #2876 and emitted success without reviewing the current head. It
-therefore has neither required status nor review authority. Findings it does emit are still repaired
-and actual conversations are settled; an absent or quota-paced CodeRabbit review is not merge
-evidence and is not a merge blocker. PR #2878 proved exact-head negative and recovery behavior
-before `CodSpeed Performance Analysis` and `CodSpeed policy` were temporarily promoted.
-Greptile's temporary trial checks also proved negative and recovery behavior, but the final canary
-exhausted its 50-credit limit and received no current-head review. Both Greptile checks were removed
-from branch protection, its App was uninstalled, and its repository integration was retired.
+SonarCloud and Socket remain independently required. CodeRabbit uses the assertive profile on every
+`dev` pull request and every subsequent push with auto-pause disabled. Its status is not required
+because PR #2876 proved quota can omit a review while reporting success. When CodeRabbit emits an
+inline finding, GitHub's conversation-resolution requirement blocks merge until the thread is
+resolved. Repair remains mandatory policy, but GitHub's resolved bit alone is not proof of a code
+change in this quota-tolerant interim topology.
+
+Greptile is restored under the same quota-tolerant settlement model while Keiko's free OSS
+application is pending. It reviews every eligible head and leaves native inline conversations, but
+its provider status is not required. Any conversation it opens blocks merge until repaired and
+resolved; quota-based absence creates no dead check. PR #2878 proves both Greptile and CodeRabbit
+create native review threads, and Issue #2879 records the reinstallation.
 
 The same final canary proved that native CodSpeed performance comparison is not suitable as a
 required check on shared GitHub runners. Two heads that changed no benchmark or transitive production
@@ -71,9 +74,8 @@ activation path before the context became required.
 
 Hosted products are not described as open-source merely because their service is free for a public
 repository. The merge-critical foundation is repository-owned and implemented with open-source
-tooling. No payment method or paid entitlement may be introduced. A future Greptile reactivation
-requires an active durable zero-cost entitlement and a new exact-head canary; a pending application
-does not authorize installation or merge authority.
+tooling. No payment method or paid entitlement may be introduced. Greptile's current activation is
+opportunistic review during the trial, not a claim of durable entitlement or merge authority.
 
 ## Sonar independence
 

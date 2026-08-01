@@ -38,13 +38,16 @@ and their bounded zero-cost eligibility are recorded in
 
 No human approving review or manual merge is required. GitHub native auto-merge integrates only
 after the required checks succeed on the exact current head and every review conversation is
-resolved. CodeRabbit remains an assertive advisory reviewer under `.coderabbit.yaml`; its free-tier
-status can report success when quota omits a current-head review, so neither that status nor its
-review state has merge authority. Agents still repair every finding they receive.
+resolved. CodeRabbit reviews every pull request targeting `dev` and every subsequent push with no
+auto-pause. Its status is not required because quota can omit a current-head review. When CodeRabbit
+does emit an inline finding, GitHub's required conversation-resolution rule blocks merge until its
+conversation is resolved. Policy additionally requires the underlying defect to be repaired; the
+quota-tolerant interim topology cannot infer code repair merely from GitHub's resolved bit.
 
-Greptile is retired because its 50-credit trial omitted a final-head review before the calendar
-expiry. Its pending OSS application does not provide merge authority; reactivation requires a
-durable zero-cost entitlement and a new live canary.
+Greptile follows the same quota-tolerant model: it reviews every eligible update but its provider
+status is not required. Every inline finding it emits is merge-blocking through GitHub's required
+conversation-resolution rule. Missing review evidence caused by quota is neither a pass nor a
+blocker. No payment method, finding dismissal, or gate bypass is an accepted repair path (ADR-0168).
 
 CodSpeed performance reports remain advisory because shared GitHub runner variability produced
 large reported regressions on canary heads that changed no benchmark or transitive production path.
