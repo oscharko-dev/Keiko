@@ -33,6 +33,7 @@ const RETIRED_PATHS = [
   `scripts/check-${CODSPEED}-policy.mjs`,
   "scripts/check-reviewer-policy.mjs",
   `scripts/lib/${CODSPEED}-policy-contract.mjs`,
+  "scripts/lib/run-cli-check.mjs",
 ];
 const HISTORICAL_PATH_PREFIXES = ["docs/adr/", "docs/qa/"];
 
@@ -49,6 +50,7 @@ function trackedRepositoryPaths() {
 function activeProviderFindings() {
   return trackedRepositoryPaths()
     .filter((path) => !HISTORICAL_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)))
+    .filter((path) => existsSync(resolve(REPO_ROOT, path)))
     .flatMap((path) => {
       const findings = [];
       if (RETIRED_PROVIDER_NAME_PATTERN.test(path)) findings.push(`provider-named path: ${path}`);
