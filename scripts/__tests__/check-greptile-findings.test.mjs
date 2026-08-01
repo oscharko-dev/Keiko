@@ -38,8 +38,13 @@ const THREAD_CONNECTION = {
   },
 };
 
-function response(payload, ok = true) {
-  return { json: vi.fn().mockResolvedValue(payload), ok };
+function response(payload, ok = true, status = ok ? 200 : 400, headers = {}) {
+  return {
+    headers: { get: vi.fn((name) => headers[name.toLowerCase()] ?? null) },
+    json: vi.fn().mockResolvedValue(payload),
+    ok,
+    status,
+  };
 }
 
 function requestSequence(...responses) {
@@ -51,6 +56,13 @@ describe("Greptile finding settlement", () => {
     expect(
       validateGreptileEvidence({ check: CHECK, comments: [SUMMARY], head: HEAD, threads: [] }),
     ).toEqual([]);
+  });
+
+  it("ignores a forged summary posted by a non-Greptile author", () => {
+    const forged = { ...SUMMARY, user: { login: "pull-request-author" } };
+    expect(
+      validateGreptileEvidence({ check: CHECK, comments: [forged], head: HEAD, threads: [] }),
+    ).toEqual(["latest Greptile summary is not bound to the exact head"]);
   });
 
   it("rejects the wrong producer, incomplete review, stale summary, and open thread", () => {
@@ -136,6 +148,65 @@ describe("Greptile finding settlement", () => {
     expect(wait).toHaveBeenNthCalledWith(2, 5_000);
   });
 
+  it("retries a transient GitHub response with bounded backoff", async () => {
+    const request = requestSequence(
+      response({}, false, 503),
+      response({ check_runs: [CHECK] }),
+      response([SUMMARY]),
+      response(THREAD_CONNECTION),
+    );
+    const wait = vi.fn().mockResolvedValue(undefined);
+    await expect(checkGreptileFindings(ENV, request, wait)).resolves.toEqual([]);
+    expect(wait).toHaveBeenCalledWith(1_000);
+  });
+
+  it("fails closed when the exact-head review never completes", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValue(response({ check_runs: [{ ...CHECK, status: "in_progress" }] }));
+    const wait = vi.fn().mockResolvedValue(undefined);
+    await expect(checkGreptileFindings(ENV, request, wait)).rejects.toThrow(
+      "did not complete within ten minutes",
+    );
+    expect(request).toHaveBeenCalledTimes(60);
+    expect(wait).toHaveBeenCalledTimes(60);
+  });
+
+  it("returns every final problem when a stale summary exhausts settlement", async () => {
+    const stale = { ...SUMMARY, body: '<h3>Greptile Summary</h3> <img alt="P1"> stale' };
+    const request = vi.fn().mockImplementation((url) => {
+      if (url.includes("check-runs")) return Promise.resolve(response({ check_runs: [CHECK] }));
+      if (url.includes("graphql")) {
+        return Promise.resolve(
+          response({
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    nodes: [
+                      {
+                        comments: { nodes: [{ author: { login: "greptile-apps" } }] },
+                        isResolved: false,
+                      },
+                    ],
+                    pageInfo: { endCursor: null, hasNextPage: false },
+                  },
+                },
+              },
+            },
+          }),
+        );
+      }
+      return Promise.resolve(response([stale]));
+    });
+    const wait = vi.fn().mockResolvedValue(undefined);
+    await expect(checkGreptileFindings(ENV, request, wait)).resolves.toEqual([
+      "latest Greptile summary is not bound to the exact head",
+      "Greptile has unresolved inline review conversations",
+    ]);
+    expect(wait).toHaveBeenCalledTimes(12);
+  });
+
   it("paginates comments and review threads without dropping evidence", async () => {
     const fullCommentPage = Array.from({ length: 100 }, (_, id) => ({ id }));
     const firstThreads = structuredClone(THREAD_CONNECTION);
@@ -152,6 +223,50 @@ describe("Greptile finding settlement", () => {
     );
     await expect(checkGreptileFindings(ENV, request, vi.fn())).resolves.toEqual([]);
     expect(request).toHaveBeenCalledTimes(5);
+  });
+
+  it("fails closed when comment evidence exceeds fifty pages", async () => {
+    const fullPage = Array.from({ length: 100 }, (_, id) => ({ id }));
+    const request = vi.fn().mockImplementation((url) => {
+      if (url.includes("check-runs")) return Promise.resolve(response({ check_runs: [CHECK] }));
+      if (url.includes("graphql")) return Promise.resolve(response(THREAD_CONNECTION));
+      return Promise.resolve(response(fullPage));
+    });
+    await expect(checkGreptileFindings(ENV, request, vi.fn())).rejects.toThrow(
+      "comment evidence exceeds the bounded audit scope",
+    );
+  });
+
+  it("fails closed when review-thread evidence exceeds fifty pages", async () => {
+    const paginated = structuredClone(THREAD_CONNECTION);
+    paginated.data.repository.pullRequest.reviewThreads.pageInfo = {
+      endCursor: "next",
+      hasNextPage: true,
+    };
+    const request = vi.fn().mockImplementation((url) => {
+      if (url.includes("check-runs")) return Promise.resolve(response({ check_runs: [CHECK] }));
+      if (url.includes("graphql")) return Promise.resolve(response(paginated));
+      return Promise.resolve(response([SUMMARY]));
+    });
+    await expect(checkGreptileFindings(ENV, request, vi.fn())).rejects.toThrow(
+      "thread evidence exceeds the bounded audit scope",
+    );
+  });
+
+  it("rejects a missing review-thread pagination cursor", async () => {
+    const missingCursor = structuredClone(THREAD_CONNECTION);
+    missingCursor.data.repository.pullRequest.reviewThreads.pageInfo = {
+      endCursor: null,
+      hasNextPage: true,
+    };
+    const request = requestSequence(
+      response({ check_runs: [CHECK] }),
+      response([SUMMARY]),
+      response(missingCursor),
+    );
+    await expect(checkGreptileFindings(ENV, request, vi.fn())).rejects.toThrow(
+      "pagination cursor is missing",
+    );
   });
 
   it("fails closed on malformed or unavailable GitHub evidence", async () => {

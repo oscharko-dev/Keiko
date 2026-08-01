@@ -66,19 +66,21 @@ automate, or fabricate stars.
 
 ## Live promotion ledger
 
-| Producer   | Exact status name               | App ID | [PR #2876](https://github.com/oscharko-dev/Keiko/pull/2876) evidence                                                                                                                                                                                                                                 | Protected |
-| ---------- | ------------------------------- | -----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| CodeRabbit | `CodeRabbit`                    | 347564 | Requested changes on `e3c89ce0eb5a77f44a4d8115be261160709a22d0` at 2026-08-01 05:53:59 UTC; the review on `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 06:39:26 UTC found three additional actionable issues                                                                                        | pending   |
-| CodSpeed   | `CodSpeed Performance Analysis` | 257293 | Success on `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 2026-08-01 06:35:50 UTC; four benchmarks uploaded without a workflow credential grant                                                                                                                                                       | pending   |
-| Greptile   | `Greptile Review`               | 867647 | P1 findings on `4b91c315823160652139a29de0d7a24e4af290c6` at 2026-08-01 05:51:24 UTC and `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 06:31:36 UTC, plus an outside-diff P1 on `e4f981efa67e363b78fd30bc2db36484402c83a2`; `3b9d90e50a74acd90734b3c59bd4aab374da895b` settled clean at 07:08:20 UTC | pending   |
+| Producer   | Exact status name               | App ID | [PR #2876](https://github.com/oscharko-dev/Keiko/pull/2876) evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Protected |
+| ---------- | ------------------------------- | -----: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
+| CodeRabbit | `CodeRabbit`                    | 347564 | Requested changes on `e3c89ce0eb5a77f44a4d8115be261160709a22d0` at 2026-08-01 05:53:59 UTC; the review on `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 06:39:26 UTC found three additional actionable issues                                                                                                                                                                                                                                                                                                                                          | pending   |
+| CodSpeed   | `CodSpeed Performance Analysis` | 257293 | Success on `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 2026-08-01 06:35:50 UTC; four benchmarks uploaded without a workflow credential grant                                                                                                                                                                                                                                                                                                                                                                                                         | pending   |
+| Greptile   | `Greptile Review`               | 867647 | P1 findings on `4b91c315823160652139a29de0d7a24e4af290c6` at 2026-08-01 05:51:24 UTC and `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 06:31:36 UTC, plus an outside-diff P1 on `e4f981efa67e363b78fd30bc2db36484402c83a2`; `3b9d90e50a74acd90734b3c59bd4aab374da895b` settled clean at 07:08:20 UTC. Billing UI observed 2026-08-01: trial “until Aug 14, 2026”, no payment method; conservative expiry ceiling `2026-08-14T00:00:00Z`; rollback [#2877](https://github.com/oscharko-dev/Keiko/issues/2877); removal deadline `2026-08-13T00:00:00Z`. | pending   |
 
 The retired `Keiko for Quality` context was removed atomically from `dev` protection at
 2026-08-01 06:28:25 UTC after its producer had been deleted. The other ten app-bound contexts were
 preserved. Qodo and Keiko for Quality remain installed only until PR #2876 merges, so rollback does
 not depend on removing an app before its replacement is live.
 
-Greptile's no-payment trial expires on 2026-08-14. Issue #2877 requires removal of its required
-context and installation by 2026-08-13 unless the free OSS application is accepted. Required
+Greptile's UI exposes only the calendar-date expiry, 2026-08-14, rather than a time zone. Keiko
+therefore fails safe at the earlier normalized ceiling `2026-08-14T00:00:00Z`. Issue #2877 requires
+removal of its required context and installation by `2026-08-13T00:00:00Z` unless the free OSS
+application is accepted. Required
 conversation resolution makes every unresolved inline Greptile finding blocking even though the
 provider's completion status itself reports successful review execution. The `Greptile findings`
 `pull_request_target` workflow also rejects P0-P2 findings that T-Rex can place only in the current
@@ -98,9 +100,10 @@ Promotion requires all of the following on a live pull request:
 6. plan limits, credits, or quota do not pace or omit required evidence.
 
 Condition 6 is the durability rule for CodSpeed and CodeRabbit. By owner decision, Greptile may be
-promoted during its no-payment trial after conditions 1–5 pass only when the ledger records the exact
-provider expiry and a rollback issue that removes the context at least 24 hours beforehand. A trial
-is never represented as zero-cost continuity.
+promoted during its no-payment trial after conditions 1–5 pass only when the ledger records the
+provider-exposed expiry, a conservative time-zone-normalized ceiling, and a rollback issue that
+removes the context at least 24 hours beforehand. A trial is never represented as zero-cost
+continuity.
 
 CodeRabbit additionally must prove request-changes blocking and automatic clearing with GitHub
 configured for zero human approvals. The atomic cutover removes the retired bridge and adds only
