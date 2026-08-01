@@ -8,9 +8,14 @@ import { fileURLToPath } from "node:url";
 
 import { parse as parseYaml } from "yaml";
 
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { validateCodSpeedPolicy } from "./lib/codspeed-policy-contract.mjs";
+
+export { validateCodSpeedPolicy };
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CODSPEED_ACTION = "CodSpeedHQ/action@88472375d0a4572cf70a9f1fe3a4e0ab8da1b924 # v5.0.1";
-const CODERABBIT_POLICY_DIGEST = "17fdcd6d9fdfd12b243835de3965644f9f3fc8e1cc08eaff46b862a733d5d554";
+const CODERABBIT_POLICY_DIGEST = "2c7b377288aa83799ac4d025b0d6521a69c255ee8d30c878bbcf0f68fedcdaa4";
 const GREPTILE_CONFIG_POLICY_DIGEST =
   "9b91b199db0bbc311ea037449ebafebf57c789cdb24a4721c2145e1751795e00";
 const GREPTILE_FILES_POLICY_DIGEST =
@@ -37,7 +42,7 @@ const CODERABBIT_TEXT_CHECKS = [
   ["  fail_commit_status: false", "CodeRabbit failure status must remain advisory"],
   ["  review_status: false", "CodeRabbit review state must remain advisory"],
   ["review_details: true", "CodeRabbit must disclose incomplete or suppressed review scope"],
-  ["auto_review:\n    enabled: true", "CodeRabbit automatic review must remain enabled"],
+  ["high_level_summary: false", "CodeRabbit must not mutate the pull-request description"],
   ["auto_incremental_review: true", "CodeRabbit must review pull request updates"],
   ["auto_pause_after_reviewed_commits: 0", "CodeRabbit must not silently pause after head updates"],
   ["drafts: false", "CodeRabbit draft auto-review must remain disabled"],
@@ -106,7 +111,7 @@ function findFilesystemPaths(repoRoot, relativeDirectory = "") {
 
 function listGitRepositoryPaths(repoRoot) {
   try {
-    execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+    execFileSync(resolveHostExecutable("git"), ["rev-parse", "--is-inside-work-tree"], {
       cwd: repoRoot,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
@@ -115,12 +120,16 @@ function listGitRepositoryPaths(repoRoot) {
     return undefined;
   }
   try {
-    return execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    })
+    return execFileSync(
+      resolveHostExecutable("git"),
+      ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    )
       .split("\0")
       .filter((path) => path.length > 0);
   } catch {
@@ -267,6 +276,11 @@ function validatePackage(packageJson) {
       "check:review-bot-suppression script is missing or redirected",
     ],
     [
+      parsed.scripts?.["check:reviewer-policy"],
+      "node scripts/check-reviewer-policy.mjs",
+      "check:reviewer-policy script is missing or redirected",
+    ],
+    [
       parsed.scripts?.["check:codspeed-policy"],
       "node scripts/check-codspeed-policy.mjs",
       "check:codspeed-policy script is missing or redirected",
@@ -329,9 +343,10 @@ function validateCodSpeedWorkflow(source) {
 
 const CODSPEED_POLICY_WORKFLOW_CHECKS = [
   ["  pull_request_target:", "CodSpeed policy must use the base-trusted event"],
+  ["branches: [dev]", "CodSpeed policy must run only for pull requests targeting dev"],
   [
-    "types: [opened, reopened, synchronize, ready_for_review]",
-    "CodSpeed policy must cover every reviewable head",
+    "types: [opened, reopened, synchronize, ready_for_review, edited]",
+    "CodSpeed policy must cover every reviewable head and metadata edit",
   ],
   ["timeout-minutes: 10", "CodSpeed policy must keep its ten-minute runtime bound"],
   ["contents: read", "CodSpeed policy must grant only read access to repository contents"],
@@ -373,6 +388,46 @@ const CODSPEED_POLICY_WORKFLOW_CHECKS = [
     "CodSpeed policy must fail closed when the base gate is unavailable",
   ],
   [
+    "run: test -f scripts/check-reviewer-policy.mjs",
+    "Reviewer policy must fail closed when the base gate is unavailable",
+  ],
+  [
+    '"repos/${QUALITY_REPOSITORY}/contents/.coderabbit.yaml?ref=${QUALITY_HEAD_SHA}"',
+    "Reviewer policy must fetch exact-head CodeRabbit data",
+  ],
+  [
+    '"repos/${QUALITY_REPOSITORY}/contents/.greptile/config.json?ref=${QUALITY_HEAD_SHA}"',
+    "Reviewer policy must fetch exact-head Greptile config data",
+  ],
+  [
+    '"repos/${QUALITY_REPOSITORY}/contents/.greptile/files.json?ref=${QUALITY_HEAD_SHA}"',
+    "Reviewer policy must fetch exact-head Greptile inventory data",
+  ],
+  [
+    "gh api graphql",
+    "Reviewer policy must fetch exact-head commit data with server-side projection",
+  ],
+  [
+    "query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){... on Commit {oid tree {oid}}}}}",
+    "Reviewer policy must request only the exact-head commit and tree identifiers",
+  ],
+  [
+    "--jq '{sha: .data.repository.object.oid, tree: {sha: .data.repository.object.tree.oid}}'",
+    "Reviewer policy must project bounded exact-head commit data",
+  ],
+  [
+    '"repos/${QUALITY_REPOSITORY}/git/trees/${QUALITY_TREE_SHA}?recursive=1"',
+    "Reviewer policy must fetch the complete bound tree",
+  ],
+  [
+    "run: node scripts/check-reviewer-policy.mjs --preflight",
+    "Reviewer policy must preflight tree data before raw downloads",
+  ],
+  [
+    "        run: node scripts/check-reviewer-policy.mjs\n",
+    "Reviewer policy must execute the base-owned validator",
+  ],
+  [
     "run: node scripts/check-codspeed-policy.mjs",
     "CodSpeed policy must execute the base-owned validator",
   ],
@@ -394,26 +449,23 @@ function validateCodSpeedPolicyWorkflow(source) {
   const problems = CODSPEED_POLICY_WORKFLOW_CHECKS.flatMap(([expected, finding]) =>
     missingText(source, expected, finding),
   );
+  const commitQuery = "gh api graphql";
+  if (source.split(commitQuery).length - 1 !== 1) {
+    problems.push("Reviewer policy must fetch the projected exact-head commit exactly once");
+  }
+  const treeFetch = source.indexOf(
+    '"repos/${QUALITY_REPOSITORY}/git/trees/${QUALITY_TREE_SHA}?recursive=1"',
+  );
+  const preflight = source.indexOf("run: node scripts/check-reviewer-policy.mjs --preflight");
+  const rawDownload = source.indexOf(
+    '"repos/${QUALITY_REPOSITORY}/contents/.codspeed-policy.json?ref=${QUALITY_HEAD_SHA}"',
+  );
+  if (treeFetch < 0 || preflight <= treeFetch || rawDownload <= preflight) {
+    problems.push("Reviewer policy must preflight the complete tree before raw policy downloads");
+  }
   if (CODSPEED_POLICY_WORKFLOW_FORBIDDEN.some((entry) => source.includes(entry))) {
     problems.push("CodSpeed policy must never grant writes or execute pull-request code");
   }
-  return problems;
-}
-
-export function validateCodSpeedPolicy(source) {
-  const parsed = parseJsonObject(source, "codspeedPolicy");
-  if (parsed.value === undefined) return parsed.problems;
-  const policy = parsed.value;
-  const checks = [
-    [policy.schemaVersion, 2, "CodSpeed policy schema version must remain 2"],
-    [policy.project, "oscharko-dev/Keiko", "CodSpeed policy must bind the Keiko project"],
-    [policy.regressionThresholdPercent, 5, "CodSpeed regression threshold must remain 5%"],
-    [policy.failOnRegression, true, "CodSpeed regressions must fail their status check"],
-    [policy.pullRequestReport, "always", "CodSpeed must report every pull-request head"],
-  ];
-  const problems = checks
-    .filter(([actual, expected]) => actual !== expected)
-    .map(([, , finding]) => finding);
   return problems;
 }
 

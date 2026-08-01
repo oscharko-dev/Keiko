@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 
 import {
   findUnreviewedGreptilePaths,
@@ -44,6 +44,7 @@ describe("external quality integration configuration", () => {
         "bench:codspeed must execute the repository-owned benchmark entry point",
         "check:external-quality-config script is missing or redirected",
         "check:review-bot-suppression script is missing or redirected",
+        "check:reviewer-policy script is missing or redirected",
         "check:codspeed-policy script is missing or redirected",
         "semantic duplication must fail on every changed clone group",
       ]),
@@ -56,6 +57,7 @@ describe("external quality integration configuration", () => {
       .replace("commit_status: false", "commit_status: true")
       .replace("fail_commit_status: false", "fail_commit_status: true")
       .replace("review_status: false", "review_status: true")
+      .replace("high_level_summary: false", "high_level_summary: true")
       .replace(
         "override_requested_reviewers_only: true",
         "override_requested_reviewers_only: false",
@@ -71,6 +73,7 @@ describe("external quality integration configuration", () => {
         "CodeRabbit must not emit a quota-dependent merge status",
         "CodeRabbit failure status must remain advisory",
         "CodeRabbit review state must remain advisory",
+        "CodeRabbit must not mutate the pull-request description",
         "CodeRabbit pre-merge failures must not be overridable by the pull-request author",
         "CodeRabbit title feedback must remain advisory",
         "CodeRabbit description feedback must remain advisory",
@@ -138,7 +141,7 @@ describe("external quality integration configuration", () => {
 
   it("rejects a CodSpeed policy workflow that executes pull-request code", () => {
     const untrusted = sources.codspeedPolicyWorkflow
-      .replace(
+      .replaceAll(
         "QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
         "QUALITY_BASE_SHA: ${{ github.head_ref }}",
       )
@@ -168,6 +171,43 @@ describe("external quality integration configuration", () => {
     );
     expect(findings({ codspeedPolicyWorkflow: unpinned })).toContain(
       "CodSpeed policy must verify the governed Node.js and npm toolchain",
+    );
+  });
+
+  it("rejects a policy workflow that omits base-trusted reviewer data validation", () => {
+    const weakened = sources.codspeedPolicyWorkflow
+      .replace(
+        "types: [opened, reopened, synchronize, ready_for_review, edited]",
+        "types: [opened, reopened, synchronize, ready_for_review]",
+      )
+      .replace("branches: [dev]", "branches: [main]")
+      .replace("run: test -f scripts/check-reviewer-policy.mjs", "run: true")
+      .replaceAll("run: node scripts/check-reviewer-policy.mjs", "run: true");
+    expect(findings({ codspeedPolicyWorkflow: weakened })).toEqual(
+      expect.arrayContaining([
+        "CodSpeed policy must cover every reviewable head and metadata edit",
+        "CodSpeed policy must run only for pull requests targeting dev",
+        "Reviewer policy must fail closed when the base gate is unavailable",
+        "Reviewer policy must preflight tree data before raw downloads",
+        "Reviewer policy must execute the base-owned validator",
+      ]),
+    );
+  });
+
+  it("rejects duplicate commit fetches or raw downloads before reviewer preflight", () => {
+    const duplicateCommit = `${sources.codspeedPolicyWorkflow}\ngh api graphql`;
+    expect(findings({ codspeedPolicyWorkflow: duplicateCommit })).toContain(
+      "Reviewer policy must fetch the projected exact-head commit exactly once",
+    );
+    const reordered = sources.codspeedPolicyWorkflow.replace(
+      "run: node scripts/check-reviewer-policy.mjs --preflight",
+      "run: true",
+    );
+    expect(findings({ codspeedPolicyWorkflow: reordered })).toEqual(
+      expect.arrayContaining([
+        "Reviewer policy must preflight tree data before raw downloads",
+        "Reviewer policy must preflight the complete tree before raw policy downloads",
+      ]),
     );
   });
 
@@ -273,6 +313,7 @@ describe("external quality integration configuration", () => {
 
   it("discovers tracked ignored, root, nested, and symlink controls", () => {
     const repository = mkdtempSync(join(tmpdir(), "keiko-greptile-inventory-"));
+    onTestFinished(() => rmSync(repository, { recursive: true, force: true }));
     mkdirSync(join(repository, ".greptile"));
     mkdirSync(join(repository, "packages", "example", ".greptile"), { recursive: true });
     mkdirSync(join(repository, "node_modules", "tracked", ".greptile"), { recursive: true });
@@ -296,11 +337,11 @@ describe("external quality integration configuration", () => {
       "node_modules/tracked/.greptile/rules.md",
       "packages/example/.greptile/rules.md",
     ]);
-    rmSync(repository, { recursive: true, force: true });
   });
 
   it("accepts only regular repository-bounded reviewer context files", () => {
     const repository = mkdtempSync(join(tmpdir(), "keiko-greptile-context-"));
+    onTestFinished(() => rmSync(repository, { recursive: true, force: true }));
     writeFileSync(join(repository, "governance.md"), "reviewed");
     mkdirSync(join(repository, "directory.md"));
     symlinkSync("governance.md", join(repository, "linked.md"));
@@ -308,7 +349,6 @@ describe("external quality integration configuration", () => {
     expect(isRegularRepositoryFile(repository, "directory.md")).toBe(false);
     expect(isRegularRepositoryFile(repository, "linked.md")).toBe(false);
     expect(isRegularRepositoryFile(repository, "../outside.md")).toBe(false);
-    rmSync(repository, { recursive: true, force: true });
   });
 
   it("rejects malformed Greptile context entries without reflecting their values", () => {
@@ -321,8 +361,11 @@ describe("external quality integration configuration", () => {
     const traversal = "../../../../../../../sensitive-host-path";
     const context = JSON.parse(sources.greptileFiles);
     context.files.push({ path: traversal, description: "untrusted" });
+    const traversalIndex = context.files.length - 1;
     const problems = findings({ greptileFiles: JSON.stringify(context) });
-    expect(problems).toContain("Greptile context entry 10 must name an existing repository path");
+    expect(problems).toContain(
+      `Greptile context entry ${String(traversalIndex)} must name an existing repository path`,
+    );
     expect(problems.join("\n")).not.toContain(traversal);
   });
 
@@ -332,12 +375,16 @@ describe("external quality integration configuration", () => {
       .replace("npm run check:external-quality-config", "")
       .replace("npm run check:review-bot-suppression", "");
     const pathExists = (path) => !path.endsWith("ADR-0019-modular-package-architecture.md");
+    const context = JSON.parse(sources.greptileFiles);
+    const missingIndex = context.files.findIndex((entry) =>
+      entry.path.endsWith("ADR-0019-modular-package-architecture.md"),
+    );
     expect(findings({ ciWorkflow: withoutGate }, pathExists)).toEqual(
       expect.arrayContaining([
         "required ci must rerun when pull-request metadata changes",
         "required ci must execute check:external-quality-config",
         "required ci must reject pull-request metadata that suppresses review bots",
-        "Greptile context entry 3 must name an existing repository path",
+        `Greptile context entry ${String(missingIndex)} must name an existing repository path`,
       ]),
     );
   });

@@ -57,3 +57,18 @@ ADR-0168 and Issue #2879 supersede only the Greptile rollback's current installa
 was restored. Greptile now follows CodeRabbit's quota-tolerant model: neither provider status is
 required, while every inline review conversation remains merge-blocking until resolved. The stable
 protected set therefore remains eleven App-bound checks.
+
+PR #2880 is the restoration canary. On signed head
+`d61d5692a724f9a2174610c7ecc99b7bc282d619`, Greptile reported the exhausted trial-credit limit and
+created no inline thread; the advisory absence did not satisfy or block a required check. CodeRabbit
+then appended a generated summary to the PR description, which emitted a pull-request `edited`
+event and restarted required CI on the unchanged head. The recovery disables CodeRabbit high-level
+summaries so hosted review output cannot mutate the load-bearing PR template or create avoidable
+same-head CI churn; automatic and incremental inline review remains enabled.
+
+PR #2880 also bootstraps the base-owned reviewer-policy step. GitHub cannot execute a newly added
+`pull_request_target` step from the candidate branch, so this pull request cannot be evidence for
+that step. After merge, a separate canary must first change reviewer policy and its candidate
+validator together and observe `CodSpeed policy` fail, then restore the exact approved blobs on a
+new head and observe success. Until both exact-head results exist, only the CodeRabbit/Greptile
+settlement behavior above is considered proven.

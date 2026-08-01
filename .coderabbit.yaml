@@ -16,7 +16,9 @@ reviews:
   fail_commit_status: false
   review_status: false
   review_details: true
-  high_level_summary: true
+  # Keep CodeRabbit output in review comments. Editing the PR body retriggers required CI and adds
+  # quota-driven latency without contributing merge evidence.
+  high_level_summary: false
   sequence_diagrams: false
   poem: false
   enable_prompt_for_ai_agents: true

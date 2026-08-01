@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { validateCodSpeedPolicy } from "./check-external-quality-config.mjs";
+import { validateCodSpeedPolicy } from "./lib/codspeed-policy-contract.mjs";
 import { runCliCheck } from "./lib/run-cli-check.mjs";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");

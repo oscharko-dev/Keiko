@@ -18,8 +18,10 @@ deterministic core remains usable when a hosted producer is unavailable.
   group.
 - Gitleaks: the checksum pin in `.github/workflows/ci.yml` rejects secrets anywhere in pull-request
   history.
-- Drift pin: `scripts/check-external-quality-config.mjs` and its negative tests make integration
-  weakening fail required `ci`.
+- Drift pin: required `ci` validates the parsed local policy, while the protected-base
+  `CodSpeed policy` workflow validates exact-head reviewer controls, inventory, and pull-request
+  metadata without executing candidate code. The complete workflow tree and its base-executed
+  scripts are pinned to the protected-base Git object IDs and modes.
 
 Local verification:
 
@@ -40,26 +42,32 @@ performance gates.
 
 - CodSpeed: CPU simulation; regressions above the 5% global threshold fail; one always-updated pull
   request report; no repository upload token or pull-request-visible OIDC grant. The dedicated
-  `CodSpeed policy` workflow is loaded from the protected base, fetches only the exact-head policy as
-  untrusted data, and fails closed when the live threshold, failure behavior, or report mode differs.
-  Candidate code cannot execute in that workflow.
+  `CodSpeed policy` workflow is loaded from the protected `dev` base, preflights bounded exact-head
+  policy, reviewer configuration, commit, and complete-tree data, and fails closed when the live
+  threshold, failure behavior, report mode, reviewer approval digest, governance inventory, trust
+  anchor, or PR metadata differs. Candidate code and candidate validators cannot execute in that
+  workflow.
 - CodeRabbit: assertive, automatic on `dev`, incremental on every push, and never auto-paused.
   Request-changes is enabled so actual inline findings remain blocking; commit and general review
-  statuses remain disabled so quota omission cannot deadlock merge. All write/mutation, web-search, external
-  command, cross-repository, and post-merge features are disabled.
+  statuses remain disabled so quota omission cannot deadlock merge. PR-description summaries and
+  all write/mutation, web-search, external-command, cross-repository, and post-merge features are
+  disabled.
 - Greptile: logic/syntax review at strictness 2, automatic on every eligible `dev` update, 500-file
   cap, one updated summary, observable advisory status, and native inline comments. Description
   mutation, code writing, draft review, and author exclusions are disabled.
 
 Repository configuration overrides dashboard settings where the provider supports it.
 Dashboard-only thresholds and entitlement state are verified in each activation audit.
-Required `ci` semantically parses the complete reviewer policy, rejects nested cascading Greptile
-control files, and rejects pull-request metadata that asks either bot to ignore, pause, or bulk
-resolve review. It reruns on pull-request metadata edits. Comment commands and manual thread
-resolution are forbidden by policy but cannot be distinguished from a genuine repair by native
-conversation resolution; the future base-trusted Keiko for Quality settlement owns that closure.
-The semantic digests are candidate-checkout drift pins, not a base-trusted hostile-PR boundary:
-changes to a reviewer policy and its validator remain review-visible in the same pull request.
+Required `ci` semantically parses the complete reviewer policy. The protected-base policy job also
+rejects policy drift, truncated trees, oversized controls, non-regular governance paths, nested
+cascading controls, trust-anchor mutation, and pull-request metadata that asks either bot to ignore, pause, or
+bulk resolve review. It reruns on pull-request metadata edits and logs only redacted reason codes.
+The interim reviewer policy, complete workflow tree, and base-executed script anchors are immutable
+through normal pull requests until Keiko for Quality supersedes them; changing candidate policy and
+validator together or adding a same-named Actions producer cannot self-approve. Comment commands
+and manual thread resolution are forbidden by policy but
+cannot be distinguished from a genuine repair by native conversation resolution; the future
+base-trusted Keiko for Quality settlement owns that closure.
 
 ## Zero-cost eligibility snapshot
 
@@ -134,6 +142,11 @@ Service endpoints and comment bodies are deliberately omitted.
   91357704565, then passed restored head `d86f64250b226e815d66756f31b17e2e79f8c502` in check 91359719104. No regression was acknowledged and no baseline was changed.
 - `CodSpeed policy`, GitHub Actions App 15368, rejected the candidate 10% drift in job 91356603600
   and accepted the restored 5% policy in job 91358992913.
+- PR #2702 proves that App binding alone does not identify an Actions producer. On exact head
+  `3c52db4e2ba09accd8a5ef064810072e0f31ea4c`, App 15368 emitted two
+  `Analyze (javascript-typescript)` checks: job 89678420586 failed, job 89678489596 later succeeded,
+  and the pull request merged. The base reviewer gate therefore pins the complete workflow-tree
+  object ID; a candidate cannot add a later same-named `CodSpeed policy` producer.
 - Later native CodSpeed checks 91361869877 and 91365139527 failed on heads that changed no benchmark
   or transitive production path. The first warned that runtime environments differed and reported
   multiple unrelated regressions; the second reported one unchanged benchmark 27.45% slower while

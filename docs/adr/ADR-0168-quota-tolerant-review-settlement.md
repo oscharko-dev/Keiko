@@ -47,7 +47,8 @@ threads and their resolved state without retaining finding bodies.
 Configure CodeRabbit App `347564` with the assertive profile, automatic review for `dev`, incremental
 review on every new push, no commit auto-pause, no excluded authors, and `request_changes_workflow:
 true`. Keep CodeRabbit commit statuses, general review statuses, code-writing features, external web
-search, and cross-repository context disabled.
+search, cross-repository context, and pull-request-description summaries disabled. Description
+mutation retriggers required CI without adding merge evidence.
 
 CodeRabbit has no required provider status. If quota prevents a review, no absent result deadlocks
 the pull request. If CodeRabbit opens a finding, its request-changes review and GitHub's required
@@ -65,11 +66,24 @@ CodSpeed policy. Bot availability never replaces or weakens those deterministic 
 
 The repository's required `ci` context validates both bot configurations semantically: target
 branch, update trigger, no auto-pause or author omission, governance context, and no code-writing
-capability. It rejects cascading Greptile rule/config files and pull-request metadata containing
-review-suppression or bulk-resolution commands, and reruns when that metadata is edited. Native PR
-comments are not an event source for the eleven-check topology; reviewer pause/resolve comments are
-therefore prohibited policy until a base-trusted Keiko for Quality settlement replaces this interim
-boundary. Branch protection continues to require every review conversation to be resolved.
+capability. The required, base-owned `CodSpeed policy` workflow independently evaluates only `dev`
+pull requests and treats the exact candidate head as data. It rejects unapproved reviewer-policy
+digests, incomplete or non-regular governance inventories, cascading Greptile rule/config files,
+and pull-request metadata containing review-suppression or bulk-resolution commands. It reruns when
+that metadata is edited and never executes a candidate validator.
+
+The complete `.github/workflows` tree and every script this workflow executes are an immutable
+interim trust anchor: their candidate Git object IDs and modes must equal the protected-base tree
+and blobs. This prevents a second Actions job with the same required context from racing the
+base-owned producer. Reviewer policies are likewise fixed at the approved digests until Keiko for
+Quality replaces this bridge. A normal pull request therefore cannot first weaken the validator and
+then approve a policy change on a later head. The initial installation is
+necessarily a one-time bootstrap because the old base cannot execute a new `pull_request_target`
+step; a separate post-merge negative/recovery canary must prove the installed base-owned boundary.
+Native PR comments are not an event source for the eleven-check topology; reviewer pause/resolve
+comments are therefore prohibited policy until a base-trusted Keiko for Quality settlement replaces
+this interim boundary. Branch protection continues to require every review conversation to be
+resolved.
 
 ### D4 — Preserve the zero-payment boundary and evaluate a durable OSS reviewer
 

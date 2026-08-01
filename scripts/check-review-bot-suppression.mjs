@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MAX_EVENT_BYTES = 1_048_576;
+export const MAX_EVENT_BYTES = 1_048_576;
 const SUPPRESSION_COMMANDS = [
   /@coderabbitai\s+(?:ignore|pause|resolve)\b/iu,
   /@greptileai\s+(?:disable|ignore|pause)\b/iu,
@@ -15,9 +15,11 @@ function isObject(value) {
   return value !== null && !Array.isArray(value) && typeof value === "object";
 }
 
-export function validateReviewBotSuppression(event) {
+export function validateReviewBotSuppression(event, requirePullRequest = false) {
   if (!isObject(event)) return ["GitHub event payload must be a JSON object"];
-  if (event.pull_request === undefined) return [];
+  if (event.pull_request === undefined) {
+    return requirePullRequest ? ["pull-request metadata must be a JSON object"] : [];
+  }
   if (!isObject(event.pull_request)) return ["pull-request metadata must be a JSON object"];
   return validatePullRequestMetadata(event.pull_request);
 }
@@ -51,9 +53,9 @@ function handleMissingEvent(githubActions, log, error) {
   return 0;
 }
 
-function evaluateEvent(eventPath, log, error) {
+function evaluateEvent(eventPath, requirePullRequest, log, error) {
   try {
-    const problems = validateReviewBotSuppression(readEvent(eventPath));
+    const problems = validateReviewBotSuppression(readEvent(eventPath), requirePullRequest);
     for (const problem of problems) error(`review-bot-suppression: ${problem}`);
     if (problems.length > 0) return 1;
   } catch {
@@ -90,7 +92,7 @@ export function main(
   if (eventPath === undefined || eventPath.length === 0) {
     return handleMissingEvent(githubActions, log, error);
   }
-  return evaluateEvent(eventPath, log, error);
+  return evaluateEvent(eventPath, githubActions || eventName === "pull_request", log, error);
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

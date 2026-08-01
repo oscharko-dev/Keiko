@@ -73,7 +73,7 @@ The recommended `.greptile/` format is the source of repository review behavior.
 
 Greptile remains independently observable so one review product cannot suppress or satisfy another
 product's findings. Under ADR-0168, neither review bot has a required provider status, but every
-inline finding either emits remains blocking through GitHub conversation resolution.
+inline finding emitted by either reviewer remains blocking through GitHub conversation resolution.
 
 CodeRabbit's existing review role is now pinned by `.coderabbit.yaml` instead of mutable dashboard
 defaults. It uses the assertive review profile, reviews every ready pull-request update, discloses
