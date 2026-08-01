@@ -73,6 +73,7 @@ export function loadExternalQualitySources(repoRoot = REPO_ROOT) {
     codeRabbitConfig: read(repoRoot, ".coderabbit.yaml"),
     greptileConfig: read(repoRoot, ".greptile/config.json"),
     greptileFiles: read(repoRoot, ".greptile/files.json"),
+    greptileWorkflow: read(repoRoot, ".github/workflows/greptile-settlement.yml"),
   };
 }
 
@@ -368,22 +369,47 @@ function validateCiWorkflow(source) {
       "run: node scripts/check-codspeed-policy.mjs",
       "required ci must execute the live CodSpeed policy check",
     ],
-    ["  greptile-findings:", "required ci must validate Greptile findings"],
-    ["      - greptile-findings", "required ci must aggregate Greptile findings"],
-    [
-      "ref: ${{ github.event.pull_request.base.sha }}",
-      "Greptile settlement must execute base-trusted gate code",
-    ],
-    [
-      'gate=".greptile-gate-base/scripts/check-greptile-findings.mjs"',
-      "required ci must execute exact-head Greptile settlement",
-    ],
   ];
   const problems = checks.flatMap(([expected, finding]) => missingText(source, expected, finding));
   const resolverCalls =
     source.match(/node scripts\/resolve-quality-range\.mjs >> "\$GITHUB_OUTPUT"/gu)?.length ?? 0;
   if (resolverCalls !== 2)
     problems.push("quality gates must share exactly two immutable-range resolver calls");
+  return problems;
+}
+
+function validateGreptileWorkflow(source) {
+  const checks = [
+    ["  pull_request_target:", "Greptile settlement must use the base-trusted event"],
+    [
+      "types: [opened, reopened, synchronize, ready_for_review]",
+      "Greptile settlement must cover every reviewable head",
+    ],
+    [
+      "ref: ${{ github.event.pull_request.base.sha }}",
+      "Greptile settlement must check out only the immutable base",
+    ],
+    ["persist-credentials: false", "Greptile settlement checkout must not retain credentials"],
+    [
+      "QUALITY_HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
+      "Greptile settlement evidence must bind the exact pull-request head",
+    ],
+    [
+      "run: node scripts/check-greptile-findings.mjs",
+      "Greptile settlement must execute the base-owned evidence gate",
+    ],
+  ];
+  const problems = checks.flatMap(([expected, finding]) => missingText(source, expected, finding));
+  const forbidden = [
+    "contents: write",
+    "issues: write",
+    "pull-requests: write",
+    "id-token: write",
+    "ref: ${{ github.event.pull_request.head.sha }}",
+  ];
+  if (forbidden.some((entry) => source.includes(entry))) {
+    problems.push("Greptile settlement must never grant writes or execute pull-request code");
+  }
   return problems;
 }
 
@@ -399,6 +425,7 @@ export function validateExternalQualitySources(
     ...validateCodeRabbitConfig(sources.codeRabbitConfig),
     ...validateGreptileConfig(sources.greptileConfig),
     ...validateGreptileFiles(sources.greptileFiles, pathExists),
+    ...validateGreptileWorkflow(sources.greptileWorkflow),
     ...validateCiWorkflow(sources.ciWorkflow),
   ];
 }

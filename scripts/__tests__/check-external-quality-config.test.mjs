@@ -167,6 +167,21 @@ describe("external quality integration configuration", () => {
     );
   });
 
+  it("rejects a Greptile settlement workflow that executes pull-request code", () => {
+    const untrusted = sources.greptileWorkflow
+      .replace(
+        "ref: ${{ github.event.pull_request.base.sha }}",
+        "ref: ${{ github.event.pull_request.head.sha }}",
+      )
+      .replace("pull-requests: read", "pull-requests: write");
+    expect(findings({ greptileWorkflow: untrusted })).toEqual(
+      expect.arrayContaining([
+        "Greptile settlement must check out only the immutable base",
+        "Greptile settlement must never grant writes or execute pull-request code",
+      ]),
+    );
+  });
+
   it("rejects missing reviewer context and missing required-ci wiring", () => {
     const withoutGate = sources.ciWorkflow.replace("npm run check:external-quality-config", "");
     const pathExists = (path) => !path.endsWith("ADR-0019-modular-package-architecture.md");

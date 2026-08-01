@@ -14,6 +14,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
 
 const ci = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
+const greptileSettlement = readFileSync(
+  resolve(repoRoot, ".github/workflows/greptile-settlement.yml"),
+  "utf8",
+);
 const windowsNativeQuality = readFileSync(
   resolve(repoRoot, "scripts/check-windows-native-quality.ps1"),
   "utf8",
@@ -121,7 +125,6 @@ const REQUIRED_CI_COMMANDS = [
   "npm run check:knip",
   "npm run check:external-quality-config",
   "node scripts/check-codspeed-policy.mjs",
-  ".greptile-gate-base/scripts/check-greptile-findings.mjs",
   "npm run check:semantic-duplication",
   // Formatting baseline + ADR registry integrity (Step 10, RB-19 / GEN-SYNTH-MISSING-EVIDENCE-001 /
   // GEN-DOC-ADR-002): format:check was unwired while 205 files drifted; check:adr-index guards the
@@ -216,6 +219,7 @@ describe("CI test/gate wiring guard", () => {
       releaseWorkflow,
       portableAssetsWorkflow,
       mutationSecurityWorkflow,
+      greptileSettlement,
     ].join("\n");
     const nodeSetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
     const verificationCount =
@@ -224,7 +228,7 @@ describe("CI test/gate wiring guard", () => {
     // then 20 -> 22 with the credential-free macOS qualification and protected sealing lanes,
     // then 22 -> 23 with the diff-scoped semantic-duplication lane, 23 -> 24 when the secret scan
     // adopted the governed runtime, 24 -> 25 with live CodSpeed policy enforcement, and 25 -> 26
-    // with exact-head Greptile finding settlement.
+    // with base-trusted exact-head Greptile finding settlement.
     // The load-bearing assertion is the pairing below: every Node lane, old or new, verifies the
     // governed toolchain.
     expect(nodeSetupCount).toBe(26);
@@ -255,6 +259,10 @@ describe("CI test/gate wiring guard", () => {
     const aggregate = ci.slice(ci.indexOf("  ci:"), ci.indexOf("\n  build-scan-sbom-smoke:"));
     expect(aggregate).toContain("      - semantic-duplication");
     expect(ci).not.toContain("npm run check:qodo-config");
+    expect(ci).not.toContain("greptile-findings:");
+    expect(greptileSettlement).toContain("pull_request_target:");
+    expect(greptileSettlement).toContain("ref: ${{ github.event.pull_request.base.sha }}");
+    expect(greptileSettlement).toContain("run: node scripts/check-greptile-findings.mjs");
   });
 
   // GEN-SYNTH-COVERAGE-003: the root suite intentionally excludes keiko-ui (235 files) — they run in

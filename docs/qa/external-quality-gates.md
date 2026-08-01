@@ -12,7 +12,7 @@ The deterministic core remains usable without them.
 | ---------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | CodSpeed   | `codspeed.yml`, `.codspeed-policy.json`, `benchmarks/codspeed.mjs`, workflows | CPU-simulation comparison plus live settings enforcement          |
 | CodeRabbit | `.coderabbit.yaml`                                                            | Assertive blocking review with no code-writing or merge authority |
-| Greptile   | `.greptile/config.json`, `.greptile/files.json`, settlement job               | Independent current-head review with zero unresolved P0-P2        |
+| Greptile   | `.greptile/config.json`, `.greptile/files.json`, settlement workflow          | Independent current-head review with zero unresolved P0-P2        |
 | Fallow     | root lockfile and `check:semantic-duplication`                                | Zero introduced semantic clone groups                             |
 | Gitleaks   | checksum pin in `.github/workflows/ci.yml`                                    | Zero secrets introduced anywhere in PR history                    |
 | Drift pin  | `scripts/check-external-quality-config.mjs` plus negative tests               | Required-`ci` proof that integration policy did not weaken        |
@@ -80,9 +80,12 @@ not depend on removing an app before its replacement is live.
 Greptile's no-payment trial expires on 2026-08-14. Issue #2877 requires removal of its required
 context and installation by 2026-08-13 unless the free OSS application is accepted. Required
 conversation resolution makes every unresolved inline Greptile finding blocking even though the
-provider's completion status itself reports successful review execution. The parallel
-`Greptile findings` CI job also rejects P0-P2 findings that T-Rex can place only in the current
-summary, binds the summary and provider App to the exact head, and never emits comment bodies.
+provider's completion status itself reports successful review execution. The `Greptile findings`
+`pull_request_target` workflow also rejects P0-P2 findings that T-Rex can place only in the current
+summary, binds the summary and provider App to the exact head, and never emits comment bodies. It
+checks out and executes only the immutable base revision, has read-only permissions, and cannot run
+pull-request code. Its context becomes eligible for protection only after this migration is on
+`dev` and a subsequent pull request proves exact-head failure and recovery.
 
 Promotion requires all of the following on a live pull request:
 

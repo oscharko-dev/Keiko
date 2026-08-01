@@ -219,56 +219,6 @@ jobs:
       - name: Verify live CodSpeed project settings
         run: node scripts/check-codspeed-policy.mjs
 
-  # Greptile's provider status proves completion, not absence of findings: T-Rex can report a P1
-  # only in the mutable PR summary while the status remains successful. Bind the exact App/head,
-  # current summary severities, and native unresolved threads before the required `ci` aggregate.
-  greptile-findings:
-    name: Greptile findings
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      checks: read
-      contents: read
-      issues: read
-      pull-requests: read
-    steps:
-      - name: Mark non-pull-request runs not applicable
-        if: ${{ github.event_name != 'pull_request' }}
-        run: echo "Greptile finding settlement applies only to pull requests."
-      - if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha }}
-      - if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          path: .greptile-gate-base
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.base.sha }}
-      - if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.18.0"
-          package-manager-cache: false
-      - name: Verify governed Node.js and npm toolchain
-        if: ${{ github.event_name == 'pull_request' }}
-        run: node scripts/check-runtime-toolchain.mjs --exact
-      - name: Require exact-head Greptile settlement
-        if: ${{ github.event_name == 'pull_request' }}
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          QUALITY_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          QUALITY_PULL_REQUEST: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          gate=".greptile-gate-base/scripts/check-greptile-findings.mjs"
-          if [ ! -f "$gate" ]; then
-            echo "Bootstrap: the immutable base predates the settlement gate."
-            gate="scripts/check-greptile-findings.mjs"
-          fi
-          node "$gate"
-
   core-quality:
     name: Core quality
     runs-on: ubuntu-latest
@@ -875,7 +825,6 @@ jobs:
       - core-quality
       - coverage-sonar
       - cross-platform-smoke
-      - greptile-findings
       - secret-scan
       - semantic-duplication
     runs-on: ubuntu-latest
@@ -888,12 +837,11 @@ jobs:
           COVERAGE_SONAR_RESULT: ${{ needs.coverage-sonar.result }}
           CROSS_PLATFORM_RESULT: ${{ needs.cross-platform-smoke.result }}
           DOCUMENTATION_ONLY: ${{ needs.change-scope.outputs.documentation-only }}
-          GREPTILE_FINDINGS_RESULT: ${{ needs.greptile-findings.result }}
           PROTECTED_BRANCH_RESULT: ${{ needs.protected-branch-gate.result }}
           SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
           SEMANTIC_DUPLICATION_RESULT: ${{ needs.semantic-duplication.result }}
         run: |
-          for result in "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$CODSPEED_POLICY_RESULT" "$GREPTILE_FINDINGS_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT"; do
+          for result in "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$CODSPEED_POLICY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT"; do
             if [ "$result" != "success" ]; then
               echo "Required CI dependency did not succeed: $result"
               exit 1
