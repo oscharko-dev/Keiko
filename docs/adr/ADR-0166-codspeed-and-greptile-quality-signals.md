@@ -35,10 +35,11 @@ baseline, so its first pull request cannot yet prove comparison semantics.
 
 ### D1 — CodSpeed measures synchronous production algorithms through CPU simulation
 
-The repository owns one Tinybench suite at `benchmarks/codspeed.mjs`. It calls public production
-entry points for redaction, prompt-injection detection, context allocation, and editor text-edit
-application over deterministic, secret-free fixtures. It uses `@codspeed/tinybench-plugin` rather
-than forcing CodSpeed's Vitest plugin across Keiko's unsupported Vite 8 peer boundary.
+The repository owns one CodSpeed CLI manifest at `codspeed.yml` and one Node.js harness at
+`benchmarks/codspeed.mjs`. Four separately named commands call public production entry points for
+redaction, prompt-injection detection, context allocation, and editor text-edit application over
+deterministic, secret-free fixtures. The action discovers the manifest directly, so the repository
+does not install a telemetry-capable CodSpeed npm runtime into its dependency graph.
 
 The `CodSpeed` workflow runs on every pull request targeting `dev`, every push to `dev`, and explicit
 dispatch. It builds package entry points before measurement, uses CodSpeed CPU simulation, has a
@@ -127,5 +128,5 @@ equivalent to fixing a regression, and acknowledgement cannot be used to bypass 
 - [External quality-gate runbook](../qa/external-quality-gates.md)
 - [Keiko `dev` quality gates](../qa/autonomous-quality-gates.md)
 - [CodSpeed GitHub Actions](https://codspeed.io/docs/integrations/ci/github-actions)
-- [CodSpeed Tinybench integration](https://codspeed.io/docs/benchmarks/nodejs/tinybench)
+- [CodSpeed CLI](https://codspeed.io/docs/cli)
 - [Greptile `.greptile/` configuration](https://www.greptile.com/docs/code-review/greptile-config)

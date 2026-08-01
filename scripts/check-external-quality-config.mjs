@@ -23,6 +23,7 @@ function read(repoRoot, path) {
 export function loadExternalQualitySources(repoRoot = REPO_ROOT) {
   return {
     packageJson: read(repoRoot, "package.json"),
+    codspeedConfig: read(repoRoot, "codspeed.yml"),
     codspeedWorkflow: read(repoRoot, ".github/workflows/codspeed.yml"),
     ciWorkflow: read(repoRoot, ".github/workflows/ci.yml"),
     codeRabbitConfig: read(repoRoot, ".coderabbit.yaml"),
@@ -87,13 +88,7 @@ function validatePackage(packageJson) {
   const duplicationCommand =
     "fallow dupes --mode semantic --min-tokens 100 --min-lines 10 --ignore-imports --format compact --fail-on-issues";
   const checks = [
-    [
-      parsed.devDependencies?.["@codspeed/tinybench-plugin"],
-      "5.7.1",
-      "@codspeed/tinybench-plugin must be pinned to 5.7.1",
-    ],
-    [parsed.devDependencies?.tinybench, "6.1.2", "tinybench must be pinned to 6.1.2"],
-    [parsed.devDependencies?.fallow, "3.10.0", "fallow must be pinned to 3.10.0"],
+    [parsed.devDependencies?.fallow, "2.104.0", "fallow must be pinned to 2.104.0"],
     [
       parsed.scripts?.["bench:codspeed"],
       "node benchmarks/codspeed.mjs",
@@ -110,7 +105,18 @@ function validatePackage(packageJson) {
       "semantic duplication must fail on every changed clone group",
     ],
   ];
-  return checks.filter(([actual, expected]) => actual !== expected).map(([, , finding]) => finding);
+  const problems = checks
+    .filter(([actual, expected]) => actual !== expected)
+    .map(([, , finding]) => finding);
+  if (parsed.devDependencies?.["@codspeed/tinybench-plugin"] !== undefined) {
+    problems.push(
+      "CodSpeed must not add its telemetry-capable npm runtime to the dependency graph",
+    );
+  }
+  if (parsed.devDependencies?.tinybench !== undefined) {
+    problems.push("CodSpeed CLI mode must not retain an unused Tinybench dependency");
+  }
+  return problems;
 }
 
 function validateCodSpeedWorkflow(source) {
@@ -133,7 +139,6 @@ function validateCodSpeedWorkflow(source) {
     ],
     [`        uses: ${CODSPEED_ACTION}`, "CodSpeed action must use the reviewed immutable pin"],
     ["          mode: simulation", "CodSpeed must use deterministic CPU simulation"],
-    ["          run: npm run bench:codspeed", "CodSpeed must run the owned benchmark suite"],
   ];
   const problems = checks.flatMap(([expected, finding]) => missingText(source, expected, finding));
   if (source.includes("CODSPEED_TOKEN")) {
@@ -141,6 +146,27 @@ function validateCodSpeedWorkflow(source) {
   }
   if (source.includes("continue-on-error")) {
     problems.push("CodSpeed execution must not be softened with continue-on-error");
+  }
+  const actionStep = source.slice(source.indexOf(`        uses: ${CODSPEED_ACTION}`));
+  if (/^\s{10}run:/mu.test(actionStep)) {
+    problems.push("CodSpeed action must discover codspeed.yml instead of a framework plugin run");
+  }
+  return problems;
+}
+
+function validateCodSpeedConfig(source) {
+  const commands = [
+    "node benchmarks/codspeed.mjs security-redact",
+    "node benchmarks/codspeed.mjs security-prompt-injection",
+    "node benchmarks/codspeed.mjs context-allocation",
+    "node benchmarks/codspeed.mjs editor-text-edits",
+  ];
+  const problems = commands.flatMap((command) =>
+    missingText(source, `    exec: ${command}`, `CodSpeed CLI manifest is missing ${command}`),
+  );
+  const benchmarkCount = source.match(/^\s{2}- name:/gmu)?.length ?? 0;
+  if (benchmarkCount !== commands.length) {
+    problems.push("CodSpeed CLI manifest must define exactly four governed benchmarks");
   }
   return problems;
 }
@@ -266,6 +292,7 @@ export function validateExternalQualitySources(
 ) {
   return [
     ...validatePackage(sources.packageJson),
+    ...validateCodSpeedConfig(sources.codspeedConfig),
     ...validateCodSpeedWorkflow(sources.codspeedWorkflow),
     ...validateCodeRabbitConfig(sources.codeRabbitConfig),
     ...validateGreptileConfig(sources.greptileConfig),

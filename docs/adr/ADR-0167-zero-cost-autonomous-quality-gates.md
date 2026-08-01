@@ -54,7 +54,7 @@ disabled. CodeRabbit does not merge, push, or dismiss findings.
 
 ### D3 — Add zero-tolerance OSS gates for semantic clones and secrets
 
-Fallow 3.10.0 is exact-version locked and runs semantic duplicate analysis only over the changed
+Fallow 2.104.0 is exact-version locked and runs semantic duplicate analysis only over the changed
 surface. Any introduced semantic clone group of at least 100 tokens and 10 lines fails. Ignoring
 imports avoids punishing required module boilerplate while still detecting renamed-variable and
 restructured copy/paste that text-only duplication misses.

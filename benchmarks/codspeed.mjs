@@ -1,13 +1,13 @@
-// CodSpeed microbenchmarks exercise synchronous, deterministic production entry points only.
-// Hosted CPU simulation complements Keiko's D12 reference-environment evidence; it does not
-// replace wall-clock, memory, browser, or end-to-end performance qualification (ADR-0166).
+// CodSpeed CLI benchmarks exercise synchronous, deterministic production entry points only.
+// Each CLI-configured case repeats one operation until its cost dominates Node.js process startup.
+// Hosted CPU simulation complements D12 reference-environment evidence; it does not replace it.
 
-import { withCodSpeed } from "@codspeed/tinybench-plugin";
+import { argv } from "node:process";
+
 import { CONTEXT_LANE_IDS, DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts";
 import { applyTextEditsToText } from "@oscharko-dev/keiko-editor";
 import { detectPromptInjectionSignals, redact } from "@oscharko-dev/keiko-security";
 import { allocateContext, DEFAULT_CONTEXT_BUDGET } from "@oscharko-dev/keiko-workflows";
-import { Bench } from "tinybench";
 
 const CONTEXT_ITEMS_PER_LANE = 80;
 const EDITOR_LINE_COUNT = 4_096;
@@ -58,20 +58,37 @@ function buildEditorFixture() {
   return { original, edits };
 }
 
+function repeat(iterations, operation) {
+  let lastResult;
+  for (let index = 0; index < iterations; index += 1) lastResult = operation();
+  return JSON.stringify(lastResult).length;
+}
+
 const securityFixture = buildSecurityFixture();
 const contextFixture = buildContextFixture();
 const editorFixture = buildEditorFixture();
-const bench = withCodSpeed(new Bench({ time: 500, warmupTime: 100 }));
+const benchmarkCases = new Map([
+  ["security-redact", () => repeat(2_000, () => redact(securityFixture))],
+  [
+    "security-prompt-injection",
+    () => repeat(20, () => detectPromptInjectionSignals(securityFixture)),
+  ],
+  ["context-allocation", () => repeat(500, () => allocateContext(contextFixture))],
+  [
+    "editor-text-edits",
+    () => repeat(200, () => applyTextEditsToText(editorFixture.original, editorFixture.edits)),
+  ],
+]);
 
-bench
-  .add("security/redact 64 audit lines", () => redact(securityFixture))
-  .add("security/detect prompt injection in 64 tool lines", () =>
-    detectPromptInjectionSignals(securityFixture),
-  )
-  .add("context/allocate 640 scored items", () => allocateContext(contextFixture))
-  .add("editor/apply 128 edits to 4096 lines", () =>
-    applyTextEditsToText(editorFixture.original, editorFixture.edits),
-  );
+function runBenchmark(name) {
+  const operation = benchmarkCases.get(name);
+  if (operation === undefined) throw new TypeError(`Unknown CodSpeed benchmark: ${name}`);
+  console.log(`codspeed/${name}: checksum ${String(operation())}`);
+}
 
-bench.runSync();
-console.table(bench.table());
+const requestedCase = argv[2] ?? "all";
+if (requestedCase === "all") {
+  for (const name of benchmarkCases.keys()) runBenchmark(name);
+} else {
+  runBenchmark(requestedCase);
+}

@@ -1,0 +1,9 @@
+benchmarks:
+  - name: security/redact 64 audit lines
+    exec: node benchmarks/codspeed.mjs security-redact
+  - name: security/detect prompt injection in 64 tool lines
+    exec: node benchmarks/codspeed.mjs security-prompt-injection
+  - name: context/allocate 640 scored items
+    exec: node benchmarks/codspeed.mjs context-allocation
+  - name: editor/apply 128 edits to 4096 lines
+    exec: node benchmarks/codspeed.mjs editor-text-edits

@@ -8,14 +8,14 @@ The deterministic core remains usable without them.
 
 ## Repository-owned configuration
 
-| Signal     | Durable source                                                             | Role                                                              |
-| ---------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| CodSpeed   | `benchmarks/codspeed.mjs`, `.github/workflows/codspeed.yml`, root lockfile | CPU-simulation comparison of synchronous production APIs          |
-| CodeRabbit | `.coderabbit.yaml`                                                         | Assertive blocking review with no code-writing or merge authority |
-| Greptile   | `.greptile/config.json`, `.greptile/files.json`                            | Independent current-head logic/security/architecture review       |
-| Fallow     | root lockfile and `check:semantic-duplication`                             | Zero introduced semantic clone groups                             |
-| Gitleaks   | checksum pin in `.github/workflows/ci.yml`                                 | Zero secrets introduced anywhere in PR history                    |
-| Drift pin  | `scripts/check-external-quality-config.mjs` plus negative tests            | Required-`ci` proof that integration policy did not weaken        |
+| Signal     | Durable source                                                              | Role                                                              |
+| ---------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| CodSpeed   | `codspeed.yml`, `benchmarks/codspeed.mjs`, `.github/workflows/codspeed.yml` | CPU-simulation comparison of synchronous production APIs          |
+| CodeRabbit | `.coderabbit.yaml`                                                          | Assertive blocking review with no code-writing or merge authority |
+| Greptile   | `.greptile/config.json`, `.greptile/files.json`                             | Independent current-head logic/security/architecture review       |
+| Fallow     | root lockfile and `check:semantic-duplication`                              | Zero introduced semantic clone groups                             |
+| Gitleaks   | checksum pin in `.github/workflows/ci.yml`                                  | Zero secrets introduced anywhere in PR history                    |
+| Drift pin  | `scripts/check-external-quality-config.mjs` plus negative tests             | Required-`ci` proof that integration policy did not weaken        |
 
 Local verification:
 

@@ -57,6 +57,22 @@ describe("external quality integration configuration", () => {
     );
   });
 
+  it("rejects plugin execution or an incomplete CodSpeed CLI manifest", () => {
+    const pluginExecution = `${sources.codspeedWorkflow}\n          run: npm run bench:codspeed`;
+    const incompleteManifest = sources.codspeedConfig.replace(
+      "    exec: node benchmarks/codspeed.mjs editor-text-edits",
+      "",
+    );
+    expect(
+      findings({ codspeedWorkflow: pluginExecution, codspeedConfig: incompleteManifest }),
+    ).toEqual(
+      expect.arrayContaining([
+        "CodSpeed action must discover codspeed.yml instead of a framework plugin run",
+        "CodSpeed CLI manifest is missing node benchmarks/codspeed.mjs editor-text-edits",
+      ]),
+    );
+  });
+
   it("rejects Greptile drift that omits current-head or status evidence", () => {
     const config = JSON.parse(sources.greptileConfig);
     config.triggerOnUpdates = false;
