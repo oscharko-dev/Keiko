@@ -5,7 +5,8 @@
 Accepted (maintainer decision, 2026-07-13); operationally amended after the 2026-07-14 liveness
 incident; amended 2026-07-18 to adopt Qodo as the advisory review product in place of Gitar;
 amended 2026-08-01 by ADR-0167 to retire Qodo/KFQ and adopt zero-cost autonomous gates; amended by
-ADR-0168 to restore quota-tolerant Greptile and conditional CodeRabbit settlement.
+ADR-0168 for conditional CodeRabbit settlement; and amended 2026-08-02 by ADR-0169 to retire
+CodSpeed and Greptile and fix the protected set at ten checks.
 
 ## Amends
 
@@ -91,9 +92,9 @@ smoke E2E, editor E2E, package surface, and deterministic budget checks.
 
 The Qodo and Keiko for Quality topology below is retained only as historical decision context.
 [ADR-0167](ADR-0167-zero-cost-autonomous-quality-gates.md) retires both products and replaces this
-section's Qodo/KFQ activation state with the repository-owned OSS gates and CodSpeed policy.
-[ADR-0168](ADR-0168-quota-tolerant-review-settlement.md) owns the current review topology: Greptile
-and CodeRabbit have no required provider status, while every emitted inline finding blocks until its
+section's Qodo/KFQ activation state with repository-owned OSS gates. ADR-0169 retires CodSpeed and
+Greptile. [ADR-0168](ADR-0168-quota-tolerant-review-settlement.md) continues to own CodeRabbit
+settlement: it has no required provider status, while every emitted inline finding blocks until its
 conversation is resolved.
 
 The remainder of this D5 subsection describes the topology at the time of the original decision. It
@@ -147,8 +148,8 @@ uninvestigated product failure.
   does not masquerade as a product defect.
 - Adding an external review product to branch protection requires explicit live availability and
   negative/positive activation evidence.
-- ADR-0167 retires the historical Qodo/KFQ path; ADR-0168 owns current Greptile and CodeRabbit
-  settlement. No retired producer can satisfy a current gate.
+- ADR-0167 retires the historical Qodo/KFQ path; ADR-0168 owns current CodeRabbit settlement; and
+  ADR-0169 retires CodSpeed and Greptile. No retired producer can satisfy a current gate.
 
 ## References
 
@@ -156,6 +157,7 @@ uninvestigated product failure.
 - [Review standards](../qa/review-standards.md)
 - [ADR-0167 zero-cost autonomous quality gates](ADR-0167-zero-cost-autonomous-quality-gates.md)
 - [ADR-0168 quota-tolerant review settlement](ADR-0168-quota-tolerant-review-settlement.md)
+- [ADR-0169 retire CodSpeed and Greptile](ADR-0169-retire-codspeed-and-greptile.md)
 - [Mutation testing policy](../qa/mutation-testing.md)
 - [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md)
 - [ADR-0129](ADR-0129-product-wide-authority-and-autonomy-model.md)

@@ -109,27 +109,33 @@ describe("Sonar analysis scope", () => {
   it("partitions exact local inclusions without reclassifying production files as tests", () => {
     expect(
       partitionSonarInclusions([
-        "scripts/check-reviewer-policy.mjs",
-        "scripts/__tests__/check-reviewer-policy.test.mjs",
+        "scripts/check-external-quality-config.mjs",
+        "scripts/__tests__/check-external-quality-config.test.mjs",
         "tests/e2e/smoke.spec.ts",
-        "scripts/check-reviewer-policy.mjs",
+        "scripts/check-external-quality-config.mjs",
       ]),
     ).toEqual({
-      sources: ["scripts/check-reviewer-policy.mjs"],
-      tests: ["scripts/__tests__/check-reviewer-policy.test.mjs", "tests/e2e/smoke.spec.ts"],
+      sources: ["scripts/check-external-quality-config.mjs"],
+      tests: [
+        "scripts/__tests__/check-external-quality-config.test.mjs",
+        "tests/e2e/smoke.spec.ts",
+      ],
     });
-    expect(partitionSonarInclusions(["scripts/check-reviewer-policy.mjs"]).tests).toEqual([]);
+    expect(partitionSonarInclusions(["scripts/check-external-quality-config.mjs"]).tests).toEqual(
+      [],
+    );
     expect(
-      partitionSonarInclusions(["scripts/__tests__/check-reviewer-policy.test.mjs"]).sources,
+      partitionSonarInclusions(["scripts/__tests__/check-external-quality-config.test.mjs"])
+        .sources,
     ).toEqual([]);
     const partition = partitionSonarInclusions([
-      "scripts/check-reviewer-policy.mjs",
-      "scripts/__tests__/check-reviewer-policy.test.mjs",
+      "scripts/check-external-quality-config.mjs",
+      "scripts/__tests__/check-external-quality-config.test.mjs",
     ]);
     expect(new Set([...partition.sources, ...partition.tests])).toEqual(
       new Set([
-        "scripts/check-reviewer-policy.mjs",
-        "scripts/__tests__/check-reviewer-policy.test.mjs",
+        "scripts/check-external-quality-config.mjs",
+        "scripts/__tests__/check-external-quality-config.test.mjs",
       ]),
     );
     expect(partition.sources.some((path) => partition.tests.includes(path))).toBe(false);

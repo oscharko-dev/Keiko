@@ -2,6 +2,10 @@
 
 ## Status
 
+Accepted and amended. ADR-0169 supersedes every active CodSpeed and Greptile provision as of
+2026-08-02. The Qodo/KFQ retirement, deterministic OSS gates, Sonar independence, and zero-payment
+boundary remain current.
+
 Accepted (owner decision, 2026-08-01). PR #2878 completed the D5 negative-and-recovery proof before
 the App-bound CodSpeed and temporary Greptile settlement contexts were promoted. Greptile later
 exhausted its 50-credit trial on an exact canary head, so its contexts, App installation, and

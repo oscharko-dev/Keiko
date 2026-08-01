@@ -4,6 +4,10 @@ PR #2878 is the post-migration canary for the repository-owned quality surface i
 PR #2876. Evidence below is redacted to immutable heads and check/job identifiers; service
 endpoints and finding bodies are omitted.
 
+This is historical evidence, not the current topology. ADR-0169 permanently retired CodSpeed and
+Greptile on 2026-08-02 after their live results proved they added no dependable merge evidence. The
+current protected set contains ten App-bound checks.
+
 Its first signed commit, `1069aa9a7a75d7e3e19489a197af4671402de3a0`, deliberately contained a
 slower benchmark, policy drift, and a weakened fail-closed comparison. Exact-head negative evidence:
 
@@ -49,7 +53,7 @@ a finding, acknowledges a performance regression, changes a baseline, or uses an
 bypass. Only the hardened live-value validation, its regression tests, provider rollbacks justified
 by exact-head evidence, and redacted evidence remain in the final diff.
 
-## Owner-directed restoration
+## Superseded owner-directed restoration
 
 ADR-0168 and Issue #2879 supersede only the Greptile rollback's current installation state. On
 2026-08-01 the authenticated provider UI reported 14 days remaining in the no-payment trial. App
@@ -72,3 +76,15 @@ that step. After merge, a separate canary must first change reviewer policy and 
 validator together and observe `CodSpeed policy` fail, then restore the exact approved blobs on a
 new head and observe success. Until both exact-head results exist, only the CodeRabbit/Greptile
 settlement behavior above is considered proven.
+
+## Final retirement — 2026-08-02
+
+PR #2918 exposed that `CodSpeed policy` byte-pinned the complete workflow tree and its own validator
+scripts, so the required check rejected the pull request needed to repair or remove it. The policy
+context itself measured no product behavior. The owner uninstalled both CodSpeed and Greptile, and
+ADR-0169 removed their workflows, policies, configuration, validators, tests, and package commands.
+
+`CodSpeed policy` is permanently removed from branch protection rather than restored after a
+temporary bypass. The resulting protected set contains ten App-bound checks. Deterministic
+repository performance gates remain merge-critical; no Greptile or CodSpeed result participates in
+delivery.

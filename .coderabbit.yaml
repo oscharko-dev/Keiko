@@ -115,7 +115,7 @@ knowledge_base:
         applyTo: "**"
       - files: "docs/qa/review-settlement.md,docs/qa/autonomous-quality-gates.md,docs/qa/external-quality-gates.md"
         applyTo: "**"
-      - files: "docs/adr/ADR-0019-modular-package-architecture.md,docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md,docs/adr/ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md,docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md,docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md,docs/adr/ADR-0168-quota-tolerant-review-settlement.md"
+      - files: "docs/adr/ADR-0019-modular-package-architecture.md,docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md,docs/adr/ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md,docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md,docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md,docs/adr/ADR-0168-quota-tolerant-review-settlement.md,docs/adr/ADR-0169-retire-codspeed-and-greptile.md"
         applyTo: "**"
   learnings:
     scope: "local"

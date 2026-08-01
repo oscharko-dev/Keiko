@@ -54,29 +54,18 @@ inline finding, GitHub's conversation-resolution requirement blocks merge until 
 resolved. Repair remains mandatory policy, but GitHub's resolved bit alone is not proof of a code
 change in this quota-tolerant interim topology.
 
-Greptile is restored under the same quota-tolerant settlement model while Keiko's free OSS
-application is pending. It reviews every eligible head and leaves native inline conversations, but
-its provider status is not required. Any conversation it opens blocks merge until repaired and
-resolved; quota-based absence creates no dead check. PR #2878 proves both Greptile and CodeRabbit
-create native review threads, and Issue #2879 records the reinstallation.
+CodSpeed and Greptile are retired under ADR-0169. Their Apps, workflows, policies, validators, and
+protected contexts are absent. The canaries proved that Greptile quota could omit current-head
+review and that shared-runner CodSpeed comparisons could report materially different regressions
+for unchanged inputs. Neither provider produced dependable merge evidence.
 
-The same final canary proved that native CodSpeed performance comparison is not suitable as a
-required check on shared GitHub runners. Two heads that changed no benchmark or transitive production
-path reported different large regressions; one carried CodSpeed's different-runtime-environment
-warning. The native performance status is therefore advisory. The App-bound `CodSpeed policy`
-context remains required and pins the hosted signal to a 5% threshold, always-on reporting, and an
-informational failure status. Actual merge authority stays with the deterministic performance,
-bundle, and latency gates inside `ci`.
-
-CodSpeed benchmark execution uses the exact candidate head. Its dashboard-policy verdict is a
-different, base-trusted context: GitHub loads the validator from protected `dev`, downloads only the
-candidate JSON policy, and never executes pull-request code. PR #2878 proved this default-branch
-activation path before the context became required.
+Actual performance merge authority stays with deterministic bundle, latency, retrieval, operation-
+budget, affected end-to-end, and D12 evidence gates. The stable protected set contains ten
+App-bound checks and no hosted performance dashboard or quota-paced reviewer status.
 
 Hosted products are not described as open-source merely because their service is free for a public
 repository. The merge-critical foundation is repository-owned and implemented with open-source
-tooling. No payment method or paid entitlement may be introduced. Greptile's current activation is
-opportunistic review during the trial, not a claim of durable entitlement or merge authority.
+tooling. No payment method or paid entitlement may be introduced to restore a retired provider.
 
 ## Sonar independence
 

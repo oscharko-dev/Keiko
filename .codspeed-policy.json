@@ -1,7 +1,0 @@
-{
-  "schemaVersion": 2,
-  "project": "oscharko-dev/Keiko",
-  "regressionThresholdPercent": 5,
-  "failOnRegression": false,
-  "pullRequestReport": "always"
-}

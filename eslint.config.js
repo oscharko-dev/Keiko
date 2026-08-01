@@ -170,19 +170,6 @@ export default defineConfig(
       "@typescript-eslint/explicit-function-return-type": "off",
     },
   },
-  // CodSpeed benchmarks are executable Node ESM outside the TypeScript program. They exercise
-  // built package entry points and report local measurements, matching the scripts/ policy above.
-  { files: ["benchmarks/**/*.mjs"], ...tseslint.configs.disableTypeChecked },
-  {
-    files: ["benchmarks/**/*.mjs"],
-    languageOptions: {
-      globals: { console: "readonly" },
-    },
-    rules: {
-      "no-console": "off",
-      "@typescript-eslint/explicit-function-return-type": "off",
-    },
-  },
   // Native protocol harnesses are executable Node ESM outside the TypeScript program.
   { files: ["native/**/*.mjs"], ...tseslint.configs.disableTypeChecked },
   {

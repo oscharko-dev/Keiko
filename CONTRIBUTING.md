@@ -17,7 +17,7 @@ npm run typecheck  # strict type-checking for src + tests
 ## Pull requests
 
 All required status checks must pass on the current pull-request head before a change can merge into
-`dev`. The stable app-bound set is the eleven checks below:
+`dev`. The stable app-bound set is the ten checks below:
 
 1. `ci`
 2. `workflow hygiene`
@@ -29,7 +29,6 @@ All required status checks must pass on the current pull-request head before a c
 8. `SonarCloud Code Analysis`
 9. `Socket Security: Project Report`
 10. `Socket Security: Pull Request Alerts`
-11. `CodSpeed policy`
 
 `workflow hygiene` runs actionlint, the pinned-SHA verification, zizmor and the OSV lockfile scan as
 one context (ADR-0159); the tools, pinned versions and rule sets are unchanged. The hosted contexts
@@ -44,23 +43,17 @@ does emit an inline finding, GitHub's required conversation-resolution rule bloc
 conversation is resolved. Policy additionally requires the underlying defect to be repaired; the
 quota-tolerant interim topology cannot infer code repair merely from GitHub's resolved bit.
 
-Greptile follows the same quota-tolerant model: it reviews every eligible update but its provider
-status is not required. Every inline finding it emits is merge-blocking through GitHub's required
-conversation-resolution rule. Missing review evidence caused by quota is neither a pass nor a
-blocker. No payment method, finding dismissal, or gate bypass is an accepted repair path (ADR-0168).
-
-CodSpeed performance reports remain advisory because shared GitHub runner variability produced
-large reported regressions on canary heads that changed no benchmark or transitive production path.
-The required `CodSpeed policy` context still pins the hosted signal to a blocking 5% dashboard
-threshold. Deterministic bundle, latency, and performance-proxy gates inside `ci` retain merge
-authority.
+CodSpeed and Greptile are retired under ADR-0169. Neither has repository configuration, an installed
+App, a workflow, or a protected context. Deterministic bundle, latency, retrieval, and performance
+gates inside `ci` retain merge authority. No payment method, finding dismissal, or gate bypass is an
+accepted repair path.
 
 Qodo and its Keiko for Quality bridge are retired by
 [ADR-0167](docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md); neither is Sonar evidence.
 Sonar remains independently enforced by its native required check and the exact-head validator
 inside `ci`. Full mutation runs daily/on demand and reference-machine performance evidence runs
 outside the pull-request critical path. Fast semantic-duplication, secret, coverage, static-analysis,
-and CPU-simulation proxies run in parallel on pull requests. Thresholds and operational details are
+and deterministic performance proxies run in parallel on pull requests. Thresholds and operational details are
 in [`docs/qa/autonomous-quality-gates.md`](docs/qa/autonomous-quality-gates.md) and
 [`docs/qa/external-quality-gates.md`](docs/qa/external-quality-gates.md).
 
