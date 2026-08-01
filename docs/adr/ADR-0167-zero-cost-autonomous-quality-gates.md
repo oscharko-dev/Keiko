@@ -40,17 +40,18 @@ new-code duplication, A ratings, and 100% hotspot review. Issue #2874 owns a sup
 the free OSS plan and a synchronized reduction of duplication to 1%; deletion/recreation and an
 intermediate check gap are prohibited.
 
-### D2 — Make CodeRabbit findings block through native review state
+### D2 — Keep quota-paced CodeRabbit evidence advisory
 
 CodeRabbit runs the assertive profile on every ready pull-request update, including bot authors. Its
-request-changes workflow is enabled: findings create a blocking review and the bot clears only its
-own review after all comments and pre-merge checks settle. GitHub branch protection requires review
-state but zero human approvals, preserving autonomous delivery. Conversation resolution remains
-required. The liveness commit status is additionally app-bound after its live identity is observed.
+repository policy keeps all code-writing and merge features disabled. Findings are repaired and
+actual review conversations remain subject to conversation resolution.
 
-The pull-request author cannot override a pre-merge failure. Web search, non-organization commands,
-automatic repository linking, post-merge actions, and every code-writing finishing touch remain
-disabled. CodeRabbit does not merge, push, or dismiss findings.
+Live PR #2876 proved that the Pro Plus trial can exhaust its review limit and then publish a success
+status without reviewing the current head. The billing UI also records a scheduled downgrade to the
+Free tier on 2026-08-02. That evidence fails D5's no-quota-pacing and exact-head requirements.
+CodeRabbit's status and native review rule are therefore removed from branch protection; its
+request-changes and status emission are disabled in `.coderabbit.yaml`. It remains advisory and may
+be reconsidered only after a later live probe proves durable zero-cost, fail-closed review delivery.
 
 ### D3 — Add zero-tolerance OSS gates for semantic clones and secrets
 
@@ -87,10 +88,9 @@ cannot validate or self-approve its own policy contract.
 CodSpeed, Greptile, and CodeRabbit may become app-bound required statuses only after one live pull
 request proves, for each producer: exact current-head emission, two successive updates, a deliberate
 negative case, repaired success, stable name and App ID, and bounded settlement. CodSpeed and
-CodeRabbit additionally require proven zero-cost continuity without quota pacing. CodeRabbit also
-requires a live request-changes/automatic-clear probe with zero human approvals configured. The
-cutover removes the retired bridge and adds only proven checks in one branch-protection update; no
-same-named unbound context is accepted.
+CodeRabbit additionally require proven zero-cost continuity without quota pacing. A status that
+reports success after omitting review fails promotion. The cutover removes the retired bridge and
+adds only proven checks in one branch-protection update; no same-named unbound context is accepted.
 
 By explicit owner decision, Greptile may be required during its no-payment trial after the same
 technical probes pass. This is a time-bounded activation, not continuity proof: the promotion ledger

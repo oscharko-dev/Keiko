@@ -75,8 +75,8 @@ defaults. It uses the assertive review profile, reviews every ready pull-request
 review details, and consumes the same repository governance and path-specific trust-boundary rules.
 Untrusted web context, commands from non-organization members, automatic repository linking,
 auto-approval, post-merge actions, and every code-writing finishing touch are disabled. ADR-0167
-supersedes CodeRabbit's original advisory-only activation state; its repository policy and
-independent settlement contract remain applicable.
+records the later live quota/false-green evidence and keeps CodeRabbit advisory; its repository
+policy remains applicable without granting status or review authority.
 
 ### D3 — Repository configuration is required; hosted verdicts are staged
 

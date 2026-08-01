@@ -415,10 +415,11 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   lockfile scan as serial steps of one job (ADR-0159) — same tools, same pinned versions, same rule
   sets as the four separate contexts it replaced.
 
-  No human approving review is required for `dev`. Branch protection requires review state with
-  zero human approvals so CodeRabbit's request-changes review blocks until its findings settle.
-  Qodo and Keiko for Quality are retired under ADR-0167. Sonar remains independently required and
-  independently revalidated inside `ci`. Full mutation and reference-machine performance evidence
+  No human approving review is required for `dev`. CodeRabbit is advisory because its free-tier
+  status can report success after quota prevents a current-head review; it is not a required status
+  or review authority. Findings still must be repaired and every actual review conversation remains
+  resolved. Qodo and Keiko for Quality are retired under ADR-0167. Sonar remains independently
+  required and revalidated inside `ci`. Full mutation and reference-machine performance evidence
   run outside the PR critical path; fast OSS duplicate and secret gates run inside `ci` in parallel.
 
 - **GitHub Actions are pinned to full 40-hex commit SHAs** with a version comment. A tag or

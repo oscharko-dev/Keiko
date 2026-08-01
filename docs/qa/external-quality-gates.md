@@ -11,8 +11,8 @@ The deterministic core remains usable without them.
 - CodSpeed: `codspeed.yml`, `.codspeed-policy.json`, the repository benchmark, and separate
   benchmark/policy workflows provide CPU-simulation comparison plus base-trusted settings
   enforcement.
-- CodeRabbit: `.coderabbit.yaml` configures assertive blocking review without code-writing or
-  merge authority.
+- CodeRabbit: `.coderabbit.yaml` configures assertive advisory review without status, review,
+  code-writing, or merge authority.
 - Greptile: `.greptile/config.json`, `.greptile/files.json`, and the base-owned settlement workflow
   require an exact-head review, zero unresolved inline findings, and zero P0-P2 summary findings.
 - Fallow: the root lockfile and `check:semantic-duplication` reject every introduced semantic clone
@@ -43,9 +43,9 @@ performance gates.
   `CodSpeed policy` workflow is loaded from the protected base, fetches only the exact-head
   `.codspeed-policy.json` as untrusted data, and fails closed when the live threshold, failure
   behavior, or report mode differs. Candidate code cannot execute in that workflow.
-- CodeRabbit: assertive, every ready head including bot authors, request-changes workflow enabled,
-  failure status enabled, author override denied, review details visible, and all write/mutation,
-  web-search, external command, cross-repository, and post-merge features disabled.
+- CodeRabbit: assertive and advisory, with request-changes and every commit/review status disabled.
+  Review details remain visible; all write/mutation, web-search, external command,
+  cross-repository, and post-merge features are disabled.
 - Greptile: strictness 2, logic/syntax comments, 4/5 confidence floor, every ready head including
   bot authors, 1,000-file ceiling, status plus one summary, and no code writing, approval, merge, or
   PR-description mutation.
@@ -57,8 +57,9 @@ thresholds and entitlement state are verified in each activation audit.
 
 Verified 2026-08-01. Terms can change; never add a payment method to preserve a gate.
 
-- CodeRabbit is active on OSS Pro Plus. No star floor was presented for the public-repository
-  entitlement; rate limits still require live proof.
+- CodeRabbit is on a Pro Plus free trial scheduled to downgrade to Free on 2026-08-02. Its billing
+  UI says the organization will be downgraded when the trial ends, and the cancel control is already
+  disabled. No paid continuation is accepted. The review quota was exhausted during PR #2876.
 - CodSpeed is active as a public-repository project. No star floor was presented.
 - Greptile has a 14-day no-payment trial and a pending free-OSS exception. Its published
   application requires 50 stars while Keiko has 2. The temporary requirement is allowed only with
@@ -75,9 +76,13 @@ automate, or fabricate stars.
 
 Evidence source: [PR #2876](https://github.com/oscharko-dev/Keiko/pull/2876).
 
-- CodeRabbit — `CodeRabbit`, App 347564, protected. It requested changes on
+- CodeRabbit — `CodeRabbit`, App 347564, not protected. It requested changes on
   `e3c89ce0eb5a77f44a4d8115be261160709a22d0` at 2026-08-01 05:53:59 UTC. Its review on
   `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 06:39:26 UTC found three more actionable issues.
+  On `fc56da5acd526cbd6408a47b08793d25024d4e1d`, CodeRabbit reported “Review limit reached” yet
+  emitted a success status. By 2026-08-01 08:46 UTC, live branch protection had removed its
+  App-bound status and the quota-dependent native review rule while preserving all other checks
+  and conversation resolution.
 - CodSpeed — `CodSpeed Performance Analysis`, App 257293, protection pending. It succeeded on
   `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 2026-08-01 06:35:50 UTC and uploaded four
   benchmarks without a workflow credential grant.
@@ -126,17 +131,16 @@ Promotion requires all of the following on a live pull request:
 5. exact check name and producer App ID are stable and app-bindable; and
 6. plan limits, credits, or quota do not pace or omit required evidence.
 
-Condition 6 is the durability rule for CodSpeed and CodeRabbit. By owner decision, Greptile may be
-promoted during its no-payment trial after conditions 1–5 pass only when the ledger records the
-provider-exposed expiry, a conservative time-zone-normalized ceiling, and an active owner-bound
-rollback automation that removes and verifies both contexts and the installation before the
-deadline. A pending OSS application or generic approval never disables that rollback. A trial is
-never represented as zero-cost continuity.
+Condition 6 is the durability rule for CodSpeed and CodeRabbit. CodeRabbit failed conditions 1, 2,
+and 6 when quota omission produced a false-green status, so it remains advisory. A future promotion
+would require a new live request-changes/automatic-clear probe plus durable zero-cost evidence.
 
-CodeRabbit additionally must prove request-changes blocking and automatic clearing with GitHub
-configured for zero human approvals. The atomic cutover removes the retired bridge and adds only
-the proven contexts. The ledger is updated with pull-request URL, head SHAs, timestamps, App IDs,
-and rollback before branch protection changes.
+By owner decision, Greptile may be promoted during its no-payment trial after conditions 1–5 pass
+only when the ledger records the provider-exposed expiry, a conservative time-zone-normalized
+ceiling, and an active owner-bound rollback automation that removes and verifies both contexts and
+the installation before the deadline. A pending OSS application or generic approval never disables
+that rollback. A trial is never represented as zero-cost continuity. The ledger records pull-request
+URLs, head SHAs, timestamps, App IDs, and rollback before branch-protection changes.
 
 ## Failure handling
 

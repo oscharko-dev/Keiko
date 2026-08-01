@@ -19,8 +19,13 @@ const REQUIRED_GREPTILE_FILES = [
 ];
 const CODERABBIT_TEXT_CHECKS = [
   ['profile: "assertive"', "CodeRabbit must keep its assertive review profile"],
-  ["request_changes_workflow: true", "CodeRabbit findings must block through review state"],
-  ["fail_commit_status: true", "CodeRabbit review failures must remain observable"],
+  [
+    "  request_changes_workflow: false",
+    "CodeRabbit must not regain quota-dependent review authority",
+  ],
+  ["  commit_status: false", "CodeRabbit must not emit a quota-dependent merge status"],
+  ["  fail_commit_status: false", "CodeRabbit failure status must remain advisory"],
+  ["  review_status: false", "CodeRabbit review state must remain advisory"],
   ["review_details: true", "CodeRabbit must disclose incomplete or suppressed review scope"],
   ["auto_incremental_review: true", "CodeRabbit must review pull request updates"],
   ["auto_pause_after_reviewed_commits: 0", "CodeRabbit must not silently pause after head updates"],
@@ -40,11 +45,8 @@ const CODERABBIT_TEXT_CHECKS = [
     'docstrings:\n      mode: "off"',
     "CodeRabbit must not impose a foreign docstring convention on TypeScript",
   ],
-  ['title:\n      mode: "error"', "CodeRabbit must fail malformed pull-request titles"],
-  [
-    'description:\n      mode: "error"',
-    "CodeRabbit must fail incomplete pull-request descriptions",
-  ],
+  ['title:\n      mode: "warning"', "CodeRabbit title feedback must remain advisory"],
+  ['description:\n      mode: "warning"', "CodeRabbit description feedback must remain advisory"],
   [
     'issue_assessment:\n      mode: "off"',
     "CodeRabbit must leave issue-scope enforcement to deterministic repository delivery",

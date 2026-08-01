@@ -34,10 +34,10 @@ live-promoted in [`docs/qa/external-quality-gates.md`](docs/qa/external-quality-
     scan as one context (ADR-0159); the tools, pinned versions and rule sets are unchanged.
 
 No human approving review or manual merge is required. GitHub native auto-merge integrates only
-after the required checks succeed on the exact current head, CodeRabbit has no outstanding
-request-changes review, and every review conversation is resolved. Branch protection requires
-review state with zero human approvals: automated findings block, but autonomous delivery does not
-wait for a person. The repository-owned CodeRabbit policy is `.coderabbit.yaml`.
+after the required checks succeed on the exact current head and every review conversation is
+resolved. CodeRabbit remains an assertive advisory reviewer under `.coderabbit.yaml`; its free-tier
+status can report success when quota omits a current-head review, so neither that status nor its
+review state has merge authority. Agents still repair every finding they receive.
 
 Qodo and its Keiko for Quality bridge are retired by
 [ADR-0167](docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md); neither is Sonar evidence.

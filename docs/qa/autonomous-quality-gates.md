@@ -44,13 +44,14 @@ stay on every pull request.
 
 ## Hosted supplemental checks
 
-SonarCloud and Socket remain independently required. CodeRabbit is configured to request changes
-for findings and to approve only after its own comments and pre-merge checks settle. Its commit
-status proves review liveness; GitHub review state and conversation resolution carry its finding
-verdict. Greptile and CodSpeed are promoted only after a live pull request proves exact-head
-emission, a real negative case, repaired recovery, stable producer identity, and bounded settlement.
-CodSpeed additionally requires zero-cost continuity. Greptile may be required during its no-payment
-trial only with a recorded hard expiry and owner-bound automated rollback.
+SonarCloud and Socket remain independently required. CodeRabbit is assertive but advisory: its trial
+exhausted the review quota on PR #2876 and emitted success without reviewing the current head. It
+therefore has neither required status nor review authority. Findings it does emit are still repaired
+and actual conversations are settled. Greptile and CodSpeed are promoted only after a live pull
+request proves exact-head emission, a real negative case, repaired recovery, stable producer
+identity, and bounded settlement. CodSpeed additionally requires zero-cost continuity. Greptile may
+be required during its no-payment trial only with a recorded hard expiry and owner-bound automated
+rollback.
 
 CodSpeed benchmark execution uses the exact candidate head. Its dashboard-policy verdict is a
 different, base-trusted context: GitHub loads the validator from protected `dev`, downloads only the

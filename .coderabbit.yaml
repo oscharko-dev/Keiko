@@ -1,8 +1,9 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 #
-# CodeRabbit is a blocking review producer, but never a merge authority or code-writing agent.
-# It may request changes for its own findings and clear that review after the findings are resolved;
-# only the complete protected gate set on the exact current head may authorize native auto-merge.
+# CodeRabbit is a quota-bounded advisory reviewer, never a merge authority or code-writing agent.
+# Its free-tier status is not accepted as gate evidence because it can report success when a review
+# is omitted. Findings are repaired and conversations settled, but no CodeRabbit status or review
+# state may authorize or deny native auto-merge.
 language: "en-US"
 early_access: false
 enable_free_tier: true
@@ -10,10 +11,10 @@ inheritance: false
 
 reviews:
   profile: "assertive"
-  request_changes_workflow: true
-  commit_status: true
-  fail_commit_status: true
-  review_status: true
+  request_changes_workflow: false
+  commit_status: false
+  fail_commit_status: false
+  review_status: false
   review_details: true
   high_level_summary: true
   sequence_diagrams: false
@@ -22,16 +23,16 @@ reviews:
   abort_on_close: true
 
   pre_merge_checks:
-    # A pull-request author may not ignore a failing CodeRabbit pre-merge check. Keiko does not use
-    # manual overrides as a repair path; findings are fixed and the exact current head is re-reviewed.
+    # These checks remain advisory. Deterministic repository gates own title and description
+    # enforcement because CodeRabbit can omit a free-tier review after its quota is exhausted.
     override_requested_reviewers_only: true
     docstrings:
       mode: "off"
     title:
-      mode: "error"
+      mode: "warning"
       requirements: "Use an English imperative conventional subject that names the delivered outcome."
     description:
-      mode: "error"
+      mode: "warning"
     issue_assessment:
       mode: "off"
 

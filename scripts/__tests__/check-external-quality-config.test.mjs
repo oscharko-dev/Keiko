@@ -42,23 +42,29 @@ describe("external quality integration configuration", () => {
     );
   });
 
-  it("rejects non-blocking CodeRabbit review, stale-head review, or code mutation", () => {
+  it("rejects quota-dependent CodeRabbit authority, stale-head review, or code mutation", () => {
     const weakened = sources.codeRabbitConfig
-      .replace("request_changes_workflow: true", "request_changes_workflow: false")
+      .replace("request_changes_workflow: false", "request_changes_workflow: true")
+      .replace("commit_status: false", "commit_status: true")
+      .replace("fail_commit_status: false", "fail_commit_status: true")
+      .replace("review_status: false", "review_status: true")
       .replace(
         "override_requested_reviewers_only: true",
         "override_requested_reviewers_only: false",
       )
-      .replace('title:\n      mode: "error"', 'title:\n      mode: "warning"')
-      .replace('description:\n      mode: "error"', 'description:\n      mode: "warning"')
+      .replace('title:\n      mode: "warning"', 'title:\n      mode: "error"')
+      .replace('description:\n      mode: "warning"', 'description:\n      mode: "error"')
       .replace("auto_incremental_review: true", "auto_incremental_review: false")
       .replace("autofix:\n      enabled: false", "autofix:\n      enabled: true");
     expect(findings({ codeRabbitConfig: weakened })).toEqual(
       expect.arrayContaining([
-        "CodeRabbit findings must block through review state",
+        "CodeRabbit must not regain quota-dependent review authority",
+        "CodeRabbit must not emit a quota-dependent merge status",
+        "CodeRabbit failure status must remain advisory",
+        "CodeRabbit review state must remain advisory",
         "CodeRabbit pre-merge failures must not be overridable by the pull-request author",
-        "CodeRabbit must fail malformed pull-request titles",
-        "CodeRabbit must fail incomplete pull-request descriptions",
+        "CodeRabbit title feedback must remain advisory",
+        "CodeRabbit description feedback must remain advisory",
         "CodeRabbit must review pull request updates",
         "CodeRabbit autofix mutation must remain disabled",
       ]),

@@ -27,13 +27,21 @@ the wall clock.
 
 ## Settlement model per producer
 
-| Producer            | How a finding appears                                                                  | How it settles                                                              | What the delivering agent must do                                                                       |
-| ------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| **CodeRabbit**      | Inline review threads plus body-only findings and a request-changes review             | Re-review of the repaired current head clears its own request-changes state | Fix every finding, push once, and verify the automatic clear. Never use the ignore/override controls.   |
-| **Greptile**        | Inline comments, summary, and a current-head status                                    | Re-review reports no blocking finding and all conversations are resolved    | Fix every finding before the next head; never treat a passing liveness status as thread settlement.     |
-| **SonarCloud**      | Native quality gate plus issues that may sit below its summary thresholds              | The native gate and repository validator both see zero current-head issues  | Query the PR issue API, repair all findings, and rerun the exact local Sonar analyzer before pushing.   |
-| **CodSpeed**        | A per-benchmark comparison against the `dev` baseline                                  | The repaired head is no more than 5% slower than the baseline               | Reproduce the affected production entry point locally; do not update the baseline to hide a regression. |
-| **Repository `ci`** | Parallel job logs for tests, coverage, secrets, clones, architecture, and supply chain | Every dependency concludes success on the exact candidate                   | Repair the complete failure set locally and push one consolidated new head.                             |
+- **CodeRabbit:** advisory inline and body-only findings; quota can omit a current-head review.
+  Repair every emitted finding and settle actual conversations. Ignore its status/review state as
+  evidence; never use the provider ignore controls.
+- **Greptile:** inline comments, summary, and a current-head status. Repair every finding before the
+  next head; settlement requires a clean re-review and every conversation resolved. A passing
+  liveness status alone is insufficient.
+- **SonarCloud:** native gate plus issues that may sit below summary thresholds. Query the PR issue
+  API, repair all findings, rerun the exact local analyzer, and require both native and repository
+  validators to see zero current-head issues.
+- **CodSpeed:** per-benchmark comparison against the `dev` baseline. Reproduce the affected
+  production entry point and repair until the head is no more than 5% slower. Never move the
+  baseline to hide a regression.
+- **Repository `ci`:** parallel tests, coverage, secret, clone, architecture, and supply-chain
+  evidence. Repair the complete failure set locally, push one consolidated head, and require every
+  dependency to conclude success on that exact candidate.
 
 The expensive mistake this table exists to prevent is discovering findings one CI round at a time.
 Enumerate **every** finding from **every** producer above in one pass — failing job logs, the Sonar
