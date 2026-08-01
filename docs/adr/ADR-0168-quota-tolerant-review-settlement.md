@@ -122,9 +122,18 @@ allowed only through this protocol:
    to the required set. A negative head must prove self-authorization is rejected; a byte-restored
    recovery head must pass. Immutable heads and check/job identifiers are recorded without finding
    bodies.
-7. If the candidate head changes, an unrelated pull request cannot be frozen, another pull request
-   becomes mergeable, the transition cannot be completed atomically, or restoration fails, branch
-   protection returns to its prior state and the migration stops.
+7. Before integration, a changed candidate head, an unrelated pull request that cannot be frozen, a
+   second mergeable pull request, or a non-atomic transition restores the complete recorded
+   required-context set and stops the migration.
+8. After integration, any restoration or validation failure freezes all `dev` delivery. Recovery
+   requires separate owner authorization bound to one signed exact-head revert or repair branch; it
+   follows this same bounded transition and never uses a direct push. Recovery is complete only when
+   branch protection contains the recorded eleven App-bound contexts with their expected producers,
+   every base-owned check passes from the new protected base, and the negative and byte-restored
+   recovery heads prove rejection and recovery. The canary must cover post-merge restoration failure,
+   wrong-head authorization, an incomplete required-context set, and a failing base-owned check. If
+   those conditions cannot be validated, delivery remains blocked and the required set must not be
+   weakened or rebound to an obsolete self-locking implementation.
 
 The steady-state protected set remains eleven App-bound checks. Native PR comments are not an event
 source for that topology; reviewer pause/resolve comments are therefore prohibited policy until a
