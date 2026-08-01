@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,7 +22,7 @@ function findings(overrides = {}, pathExists = () => true) {
 
 describe("external quality integration configuration", () => {
   it("canonicalizes policy keys with locale-independent code-unit ordering", () => {
-    const expected = createHash("sha256").update('{"z":2,"ä":1}').digest("hex");
+    const expected = "896b8dd27b9b539d56c30c96acce8910a2293d7bef3fc3ef87195bc2eb778073";
     expect(semanticDigest({ ä: 1, z: 2 })).toBe(expected);
     expect(semanticDigest({ z: 2, ä: 1 })).toBe(expected);
   });
