@@ -12,6 +12,7 @@ const EXPECTED_CHECK = "Greptile Review";
 const SHA = /^[0-9a-f]{40}$/u;
 const PR_NUMBER = /^[1-9][0-9]*$/u;
 const PAGE_SIZE = 100;
+const SETTLEMENT_DEADLINE_MS = 15 * 60_000;
 const TRANSIENT_HTTP_STATUS = new Set([429, 500, 502, 503, 504]);
 
 function output(message) {
@@ -263,10 +264,31 @@ async function waitForSettledEvidence(context, check, request, wait) {
   return problems;
 }
 
-export async function checkGreptileFindings(env, request = globalThis.fetch, wait = pause) {
+function executionDeadline() {
+  let timer;
+  const expired = new Promise((_resolve, reject) => {
+    timer = globalThis.setTimeout(
+      () => reject(new Error("Greptile settlement exceeded its fifteen-minute execution budget")),
+      SETTLEMENT_DEADLINE_MS,
+    );
+    timer.unref?.();
+  });
+  return { cancel: () => globalThis.clearTimeout(timer), expired };
+}
+
+async function collectGreptileFindings(env, request, wait) {
   const context = validateContext(env);
   const check = await waitForCheck(context, request, wait);
   return waitForSettledEvidence(context, check, request, wait);
+}
+
+export async function checkGreptileFindings(env, request = globalThis.fetch, wait = pause) {
+  const deadline = executionDeadline();
+  try {
+    return await Promise.race([collectGreptileFindings(env, request, wait), deadline.expired]);
+  } finally {
+    deadline.cancel();
+  }
 }
 
 export async function main(

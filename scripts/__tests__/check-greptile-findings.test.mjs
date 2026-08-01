@@ -160,6 +160,40 @@ describe("Greptile finding settlement", () => {
     expect(wait).toHaveBeenCalledWith(1_000);
   });
 
+  it("does not retry a permission-denied 403", async () => {
+    const request = vi.fn().mockResolvedValue(response({}, false, 403));
+    const wait = vi.fn().mockResolvedValue(undefined);
+    await expect(checkGreptileFindings(ENV, request, wait)).rejects.toThrow(
+      "GitHub evidence request did not succeed",
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("retries a rate-limited 403", async () => {
+    const request = requestSequence(
+      response({}, false, 403, { "x-ratelimit-remaining": "0" }),
+      response({ check_runs: [CHECK] }),
+      response([SUMMARY]),
+      response(THREAD_CONNECTION),
+    );
+    const wait = vi.fn().mockResolvedValue(undefined);
+    await expect(checkGreptileFindings(ENV, request, wait)).resolves.toEqual([]);
+    expect(wait).toHaveBeenCalledWith(1_000);
+  });
+
+  it("reports its own deadline before the workflow timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = checkGreptileFindings(ENV, () => new Promise(() => undefined), vi.fn());
+      const assertion = expect(pending).rejects.toThrow("fifteen-minute execution budget");
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails closed when the exact-head review never completes", async () => {
     const request = vi
       .fn()

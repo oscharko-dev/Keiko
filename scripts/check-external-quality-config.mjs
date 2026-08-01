@@ -175,6 +175,10 @@ function validateCodSpeedWorkflow(source) {
     ["    timeout-minutes: 20", "CodSpeed must keep its 20-minute runtime bound"],
     ["      contents: read", "CodSpeed must grant only read access to repository contents"],
     ["          persist-credentials: false", "CodSpeed checkout credentials must not persist"],
+    [
+      "          ref: ${{ github.event.pull_request.head.sha || github.sha }}",
+      "CodSpeed checkout must bind pull requests to the exact head",
+    ],
     ["        run: npm ci", "CodSpeed must install the committed dependency graph"],
     [
       "        run: npm run build:packages",
@@ -398,6 +402,10 @@ function validateGreptileWorkflow(source) {
       "run: node scripts/check-greptile-findings.mjs",
       "Greptile settlement must execute the base-owned evidence gate",
     ],
+    [
+      "run: test -f scripts/check-greptile-findings.mjs",
+      "Greptile settlement must fail closed when the base gate is unavailable",
+    ],
   ];
   const problems = checks.flatMap(([expected, finding]) => missingText(source, expected, finding));
   const forbidden = [
@@ -406,6 +414,9 @@ function validateGreptileWorkflow(source) {
     "pull-requests: write",
     "id-token: write",
     "ref: ${{ github.event.pull_request.head.sha }}",
+    "github.event.pull_request.head.ref",
+    "github.head_ref",
+    "refs/pull/",
   ];
   if (forbidden.some((entry) => source.includes(entry))) {
     problems.push("Greptile settlement must never grant writes or execute pull-request code");

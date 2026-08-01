@@ -4,6 +4,10 @@ on:
   pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review]
 
+# GitHub loads pull_request_target only from the default branch. The migration PR that introduces
+# this file cannot run it; the first eligible event is a later PR, when both workflow and script
+# already exist on the immutable base. Never replace this activation boundary with head execution.
+
 concurrency:
   group: greptile-settlement-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -18,7 +22,7 @@ jobs:
   settlement:
     name: Greptile findings
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       # pull_request_target is deliberate: checkout only the immutable base and execute its gate.
       # Never check out, import, or execute pull-request code in this privileged workflow.
@@ -32,6 +36,8 @@ jobs:
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Require the base-owned settlement gate
+        run: test -f scripts/check-greptile-findings.mjs
       - name: Require exact-head Greptile settlement
         env:
           GITHUB_TOKEN: ${{ github.token }}

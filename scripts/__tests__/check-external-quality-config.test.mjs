@@ -88,6 +88,16 @@ describe("external quality integration configuration", () => {
     );
   });
 
+  it("rejects a CodSpeed checkout that is not bound to the pull-request head", () => {
+    const mergeCommit = sources.codspeedWorkflow.replace(
+      "ref: ${{ github.event.pull_request.head.sha || github.sha }}",
+      "ref: ${{ github.sha }}",
+    );
+    expect(findings({ codspeedWorkflow: mergeCommit })).toContain(
+      "CodSpeed checkout must bind pull requests to the exact head",
+    );
+  });
+
   it("rejects drift from the live CodSpeed threshold and failing-check policy", () => {
     const policy = JSON.parse(sources.codspeedPolicy);
     policy.regressionThresholdPercent = 10;
@@ -178,6 +188,19 @@ describe("external quality integration configuration", () => {
       expect.arrayContaining([
         "Greptile settlement must check out only the immutable base",
         "Greptile settlement must never grant writes or execute pull-request code",
+      ]),
+    );
+  });
+
+  it("rejects alternate pull-request refs and a missing base-owned Greptile gate", () => {
+    const untrusted = sources.greptileWorkflow
+      .replace("ref: ${{ github.event.pull_request.base.sha }}", "ref: ${{ github.head_ref }}")
+      .replace("run: test -f scripts/check-greptile-findings.mjs", "run: true");
+    expect(findings({ greptileWorkflow: untrusted })).toEqual(
+      expect.arrayContaining([
+        "Greptile settlement must check out only the immutable base",
+        "Greptile settlement must never grant writes or execute pull-request code",
+        "Greptile settlement must fail closed when the base gate is unavailable",
       ]),
     );
   });
