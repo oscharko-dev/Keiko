@@ -90,14 +90,11 @@ mutation, extended end-to-end, and reference-machine performance measurement rem
 release-owned. This preserves their depth without making multi-hour or hardware-sensitive work a
 per-PR availability dependency.
 
-CodSpeed uses CPU simulation with a 5% dashboard threshold. Its native comparison is advisory after
-the final canary proved that shared-runner CPU/cache provenance can report large regressions without
-any changed benchmark or transitive production input. It supplements but never replaces required
-D12 evidence integrity, bundle budgets, retrieval latency, or end-to-end performance gates.
-The live dashboard-policy comparison runs in a separate `pull_request_target` workflow loaded from
-the protected base. It downloads only the candidate `.codspeed-policy.json` as exact-head data and
-executes only the base-owned validator. The benchmark workflow remains on the candidate head but
-cannot validate or self-approve its own policy contract.
+The original rollout used CPU simulation with a 5% dashboard threshold and later made the native
+comparison advisory after shared-runner provenance produced false regressions. ADR-0169 supersedes
+that complete provider-specific design: the benchmark workflow, dashboard policy, validator,
+configuration, and required context are removed. Required D12 evidence integrity, bundle budgets,
+retrieval latency, and end-to-end performance gates remain repository-owned.
 
 ### D5 — External checks enter branch protection only through an atomic live cutover
 
@@ -118,9 +115,9 @@ durable zero-cost entitlement plus a new live canary. No pending application, ge
 payment method, star purchase, fabricated popularity, admin bypass, finding dismissal, or threshold
 relaxation is an accepted continuity mechanism.
 
-ADR-0168 supersedes only the rollback's installation state: Greptile is active again as a
-quota-tolerant reviewer while the OSS application is pending. Its provider status is not required;
-every inline finding it emits remains blocking through GitHub conversation resolution.
+ADR-0168 temporarily superseded the rollback's installation state and restored Greptile as a
+quota-tolerant reviewer. ADR-0169 supersedes that later state as well: the provider, App,
+configuration, and review authority are fully retired.
 
 ## Consequences
 
@@ -128,9 +125,8 @@ every inline finding it emits remains blocking through GitHub conversation resol
 - New semantic copies and secrets are blocked by fast, reproducible OSS tools.
 - Hosted automated review is advisory unless a future producer proves durable, fail-closed,
   zero-cost exact-head evidence; deterministic findings remain blocking in repository-owned gates.
-- Shared-runner CodSpeed comparisons remain visible but cannot block delivery; its required
-  base-owned policy validator prevents silent dashboard weakening while deterministic performance
-  gates retain merge authority.
+- CodSpeed and Greptile no longer participate in delivery; deterministic performance and review
+  settlement gates retain merge authority.
 - The longest deterministic jobs still dominate pull-request latency; the new gates run alongside
   them instead of serially extending the path.
 - Hosted services remain replaceable supplemental producers and are represented honestly as such.

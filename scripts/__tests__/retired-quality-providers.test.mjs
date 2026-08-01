@@ -1,28 +1,62 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..", "..");
-const ACTIVE_PROVIDER_PATTERN =
-  /CodSpeedHQ|gql\.codspeed|\.codspeed-policy|\.greptile|@greptileai|check-codspeed-policy|bench:codspeed/iu;
+const CODSPEED = ["cod", "speed"].join("");
+const GREPTILE = ["grep", "tile"].join("");
+const RETIRED_PROVIDER_NAME_PATTERN = new RegExp(`${CODSPEED}|${GREPTILE}`, "iu");
+const ACTIVE_PROVIDER_PATTERN = new RegExp(
+  [
+    `${CODSPEED}HQ`,
+    `gql\\.${CODSPEED}`,
+    `${CODSPEED}-policy`,
+    `\\.${GREPTILE}`,
+    `@${GREPTILE}ai`,
+    `check-${CODSPEED}-policy`,
+    `bench:${CODSPEED}`,
+  ].join("|"),
+  "iu",
+);
 const RETIRED_PATHS = [
-  ".codspeed-policy.json",
-  ".github/workflows/codspeed-policy.yml",
-  ".github/workflows/codspeed.yml",
-  ".greptile/config.json",
-  ".greptile/files.json",
-  "benchmarks/codspeed.mjs",
-  "codspeed.yml",
-  "scripts/__tests__/check-codspeed-policy.test.mjs",
+  `.${CODSPEED}-policy.json`,
+  `.github/workflows/${CODSPEED}-policy.yml`,
+  `.github/workflows/${CODSPEED}.yml`,
+  `.${GREPTILE}/config.json`,
+  `.${GREPTILE}/files.json`,
+  `benchmarks/${CODSPEED}.mjs`,
+  `${CODSPEED}.yml`,
+  `scripts/__tests__/check-${CODSPEED}-policy.test.mjs`,
   "scripts/__tests__/check-reviewer-policy.test.mjs",
-  "scripts/check-codspeed-policy.mjs",
+  `scripts/check-${CODSPEED}-policy.mjs`,
   "scripts/check-reviewer-policy.mjs",
-  "scripts/lib/codspeed-policy-contract.mjs",
+  `scripts/lib/${CODSPEED}-policy-contract.mjs`,
 ];
+const HISTORICAL_PATH_PREFIXES = ["docs/adr/", "docs/qa/"];
 
 function repositoryFile(path) {
   return readFileSync(resolve(REPO_ROOT, path), "utf8");
+}
+
+function trackedRepositoryPaths() {
+  return execFileSync("git", ["ls-files", "-z"], { cwd: REPO_ROOT, encoding: "utf8" })
+    .split("\0")
+    .filter(Boolean);
+}
+
+function activeProviderFindings() {
+  return trackedRepositoryPaths()
+    .filter((path) => !HISTORICAL_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)))
+    .flatMap((path) => {
+      const findings = [];
+      if (RETIRED_PROVIDER_NAME_PATTERN.test(path)) findings.push(`provider-named path: ${path}`);
+      if (ACTIVE_PROVIDER_PATTERN.test(repositoryFile(path))) {
+        findings.push(`active provider token: ${path}`);
+      }
+      return findings;
+    });
 }
 
 describe("retired hosted quality providers", () => {
@@ -30,17 +64,18 @@ describe("retired hosted quality providers", () => {
     expect(existsSync(resolve(REPO_ROOT, path))).toBe(false);
   });
 
-  it("does not retain CodSpeed scripts in the package command surface", () => {
+  it("does not retain the retired provider configuration directory", () => {
+    expect(existsSync(resolve(REPO_ROOT, `.${GREPTILE}`))).toBe(false);
+  });
+
+  it("does not retain provider scripts in the package command surface", () => {
     const scripts = JSON.parse(repositoryFile("package.json")).scripts;
-    expect(scripts).not.toHaveProperty("bench:codspeed");
-    expect(scripts).not.toHaveProperty("check:codspeed-policy");
+    expect(scripts).not.toHaveProperty(`bench:${CODSPEED}`);
+    expect(scripts).not.toHaveProperty(`check:${CODSPEED}-policy`);
     expect(scripts).not.toHaveProperty("check:reviewer-policy");
   });
 
-  it.each([
-    "scripts/check-external-quality-config.mjs",
-    "scripts/check-review-bot-suppression.mjs",
-  ])("does not retain active CodSpeed or Greptile logic in %s", (path) => {
-    expect(repositoryFile(path)).not.toMatch(ACTIVE_PROVIDER_PATTERN);
+  it("does not retain provider-named paths or active provider tokens in tracked files", () => {
+    expect(activeProviderFindings()).toEqual([]);
   });
 });

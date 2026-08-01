@@ -248,12 +248,10 @@ describe("CI test/gate wiring guard", () => {
     });
   }
 
-  it("keeps the replacement quality gates in required ci and the retired bridge out", () => {
+  it("keeps the replacement quality gates in required ci", () => {
     const aggregate = ci.slice(ci.indexOf("  ci:"), ci.indexOf("\n  build-scan-sbom-smoke:"));
     expect(aggregate).toContain("      - semantic-duplication");
     expect(ci).not.toContain("npm run check:qodo-config");
-    expect(ci).not.toContain("  codspeed-policy:");
-    expect(ci).not.toMatch(/codspeed|greptile/iu);
   });
 
   // GEN-SYNTH-COVERAGE-003: the root suite intentionally excludes keiko-ui (235 files) — they run in

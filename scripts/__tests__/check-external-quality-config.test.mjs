@@ -101,6 +101,19 @@ describe("external quality integration configuration", () => {
     );
   });
 
+  it("fails closed when redaction or the immutable quality range drifts", () => {
+    expect(findings({ ciWorkflow: sources.ciWorkflow.replace("--redact=100", "") })).toContain(
+      "Gitleaks output must remain fully redacted",
+    );
+    const singleResolver = sources.ciWorkflow.replace(
+      'node scripts/resolve-quality-range.mjs >> "$GITHUB_OUTPUT"',
+      "true",
+    );
+    expect(findings({ ciWorkflow: singleResolver })).toContain(
+      "quality gates must share exactly two immutable-range resolver calls",
+    );
+  });
+
   it("returns testable, redacted CLI outcomes", () => {
     const log = vi.fn();
     const error = vi.fn();

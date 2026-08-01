@@ -37,8 +37,9 @@ workflow, validator, package command, or protected context.
   emits fully redacted diagnostics.
 - Strict TypeScript, ESLint, formatting, architecture, contract, coverage, package, security,
   retrieval, and affected-area test gates run in required `ci`.
-- Deterministic bundle, retrieval latency, context quality, operation-budget, affected end-to-end,
-  and D12 evidence gates retain performance merge authority.
+- The canonical `check:retrieval-latency`, `check:retrieval-quality`,
+  `check:grounded-retrieval-quality`, `check:context-quality`, deterministic bundle, and D12
+  evidence gates retain performance merge authority.
 - `check:external-quality-config` semantically validates CodeRabbit's no-write, every-update,
   no-excluded-author policy and verifies that required `ci` still runs the repository-owned gates.
 - `check:review-bot-suppression` rejects pull-request metadata that asks CodeRabbit to ignore,
@@ -53,6 +54,7 @@ npm run check:semantic-duplication -- --changed-since origin/dev
 npm run typecheck
 npm run lint
 npm run format:check
+npm run gates:sonar
 npm test
 npm run arch:check
 npm run arch:check:negative

@@ -59,9 +59,10 @@ protected contexts are absent. The canaries proved that Greptile quota could omi
 review and that shared-runner CodSpeed comparisons could report materially different regressions
 for unchanged inputs. Neither provider produced dependable merge evidence.
 
-Actual performance merge authority stays with deterministic bundle, latency, retrieval, operation-
-budget, affected end-to-end, and D12 evidence gates. The stable protected set contains ten
-App-bound checks and no hosted performance dashboard or quota-paced reviewer status.
+Actual performance merge authority stays with the canonical `check:retrieval-latency`,
+`check:retrieval-quality`, `check:grounded-retrieval-quality`, `check:context-quality`, deterministic
+bundle, and D12 evidence gates. The stable protected set contains ten App-bound checks and no
+hosted performance dashboard or quota-paced reviewer status.
 
 Hosted products are not described as open-source merely because their service is free for a public
 repository. The merge-critical foundation is repository-owned and implemented with open-source
