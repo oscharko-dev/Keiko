@@ -3,8 +3,10 @@
 ## Status
 
 Accepted (owner decision, 2026-08-01). PR #2878 completed the D5 negative-and-recovery proof before
-the App-bound CodSpeed and Greptile settlement contexts were promoted; repository-owned gates and
-reviewer configuration took effect with the original change.
+the App-bound CodSpeed and temporary Greptile settlement contexts were promoted. Greptile later
+exhausted its 50-credit trial on an exact canary head, so its contexts, App installation, and
+repository integration were removed. CodSpeed remained required; repository-owned gates and
+advisory reviewer configuration took effect with the original change.
 
 ## Supersedes and amends
 
@@ -86,18 +88,19 @@ cannot validate or self-approve its own policy contract.
 
 ### D5 — External checks enter branch protection only through an atomic live cutover
 
-CodSpeed, Greptile, and CodeRabbit may become app-bound required statuses only after one live pull
-request proves, for each producer: exact current-head emission, two successive updates, a deliberate
-negative case, repaired success, stable name and App ID, and bounded settlement. CodSpeed and
-CodeRabbit additionally require proven zero-cost continuity without quota pacing. A status that
-reports success after omitting review fails promotion. The cutover removes the retired bridge and
-adds only proven checks in one branch-protection update; no same-named unbound context is accepted.
+A hosted producer may become an app-bound required status only after one live pull request proves:
+exact current-head emission, two successive updates, a deliberate negative case, repaired success,
+stable name and App ID, bounded settlement, and durable zero-cost continuity without quota pacing.
+A status that reports success after omitting review fails promotion. The cutover removes retired
+contexts and adds only proven checks in one branch-protection update; no same-named unbound context
+is accepted.
 
-By explicit owner decision, Greptile may be required during its no-payment trial after the same
-technical probes pass. This is a time-bounded activation, not continuity proof: the promotion ledger
-must record the provider-reported expiry and an active owner-bound rollback automation. Unless the
-pending zero-cost OSS exception is approved and verified, that automation removes and verifies the
-required contexts and installation no later than 24 hours before expiry. No generic approval,
+By explicit owner decision, Greptile was temporarily required during its no-payment trial after the
+technical probes passed. That activation was time-bounded, not continuity proof. When the provider
+omitted final-head review after the trial account reached its 50-credit cap, the base-owned
+settlement failed closed and the rollback ran early: both contexts were removed, the App was
+uninstalled, and the repository integration was retired. A future activation requires an active,
+durable zero-cost entitlement plus a new live canary. No pending application, generic approval,
 payment method, star purchase, fabricated popularity, admin bypass, finding dismissal, or threshold
 relaxation is an accepted continuity mechanism.
 
@@ -105,7 +108,8 @@ relaxation is an accepted continuity mechanism.
 
 - A stopped review subscription can no longer deadlock or falsely satisfy Keiko's core quality bar.
 - New semantic copies and secrets are blocked by fast, reproducible OSS tools.
-- Automated review findings can block agent delivery without adding a human approval bottleneck.
+- Hosted automated review is advisory unless a future producer proves durable, fail-closed,
+  zero-cost exact-head evidence; deterministic findings remain blocking in repository-owned gates.
 - The longest deterministic jobs still dominate pull-request latency; the new gates run alongside
   them instead of serially extending the path.
 - Hosted services remain replaceable supplemental producers and are represented honestly as such.

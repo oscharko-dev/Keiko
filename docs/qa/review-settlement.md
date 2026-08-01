@@ -30,9 +30,6 @@ the wall clock.
 - **CodeRabbit:** advisory inline and body-only findings; quota can omit a current-head review.
   Repair every emitted finding and settle actual conversations. Ignore its status/review state as
   evidence; never use the provider ignore controls.
-- **Greptile:** inline comments, summary, and a current-head status. Repair every finding before the
-  next head; settlement requires a clean re-review and every conversation resolved. A passing
-  liveness status alone is insufficient.
 - **SonarCloud:** native gate plus issues that may sit below summary thresholds. Query the PR issue
   API, repair all findings, rerun the exact local analyzer, and require both native and repository
   validators to see zero current-head issues.

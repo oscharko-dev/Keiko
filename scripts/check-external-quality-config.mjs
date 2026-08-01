@@ -1,22 +1,11 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CODSPEED_ACTION = "CodSpeedHQ/action@88472375d0a4572cf70a9f1fe3a4e0ab8da1b924 # v5.0.1";
-const REQUIRED_GREPTILE_FILES = [
-  "AGENTS.md",
-  "CONTRIBUTING.md",
-  "docs/qa/review-standards.md",
-  "docs/adr/ADR-0019-modular-package-architecture.md",
-  "docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md",
-  "docs/adr/ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md",
-  "docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md",
-  "docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md",
-  "docs/qa/autonomous-quality-gates.md",
-];
 const CODERABBIT_TEXT_CHECKS = [
   ['profile: "assertive"', "CodeRabbit must keep its assertive review profile"],
   [
@@ -74,9 +63,6 @@ export function loadExternalQualitySources(repoRoot = REPO_ROOT) {
     codspeedWorkflow: read(repoRoot, ".github/workflows/codspeed.yml"),
     ciWorkflow: read(repoRoot, ".github/workflows/ci.yml"),
     codeRabbitConfig: read(repoRoot, ".coderabbit.yaml"),
-    greptileConfig: read(repoRoot, ".greptile/config.json"),
-    greptileFiles: read(repoRoot, ".greptile/files.json"),
-    greptileWorkflow: read(repoRoot, ".github/workflows/greptile-settlement.yml"),
   };
 }
 
@@ -152,11 +138,6 @@ function validatePackage(packageJson) {
       parsed.scripts?.["check:codspeed-policy"],
       "node scripts/check-codspeed-policy.mjs",
       "check:codspeed-policy script is missing or redirected",
-    ],
-    [
-      parsed.scripts?.["check:greptile-findings"],
-      "node scripts/check-greptile-findings.mjs",
-      "check:greptile-findings script is missing or redirected",
     ],
     [
       parsed.scripts?.["check:semantic-duplication"],
@@ -321,109 +302,6 @@ function validateCodSpeedConfig(source) {
   return problems;
 }
 
-function equalStrings(actual, expected) {
-  return (
-    Array.isArray(actual) &&
-    actual.length === expected.length &&
-    actual.every((value, index) => value === expected[index])
-  );
-}
-
-function validateGreptileRule(rule, ids) {
-  const problems = [];
-  if (!isJsonObject(rule)) {
-    return ["Greptile rules must be JSON objects"];
-  }
-  if (typeof rule.id !== "string" || rule.id.length === 0 || ids.has(rule.id)) {
-    return ["Greptile rules must carry unique, non-empty ids"];
-  }
-  ids.add(rule.id);
-  if (typeof rule.rule !== "string" || rule.rule.length === 0) {
-    problems.push(`Greptile rule ${rule.id} has no instruction`);
-  }
-  if (rule.severity !== "high" && rule.severity !== "medium") {
-    problems.push(`Greptile rule ${rule.id} must be high or medium severity`);
-  }
-  return problems;
-}
-
-function validateGreptileRules(rules) {
-  if (!Array.isArray(rules) || rules.length === 0) return ["Greptile rules must be non-empty"];
-  const problems = [];
-  const ids = new Set();
-  for (const rule of rules) {
-    problems.push(...validateGreptileRule(rule, ids));
-  }
-  return problems;
-}
-
-function validateGreptileScope(config) {
-  const problems = [];
-  if (config.strictness !== 2)
-    problems.push("Greptile strictness must remain at high-signal level 2");
-  if (!equalStrings(config.commentTypes, ["logic", "syntax"])) {
-    problems.push("Greptile must leave deterministic style/info findings to repository gates");
-  }
-  if (!equalStrings(config.includeBranches, ["dev"])) {
-    problems.push("Greptile must review pull requests targeting dev");
-  }
-  if (!equalStrings(config.excludeAuthors, [])) {
-    problems.push("Greptile must not omit bot-authored dev pull requests by configuration");
-  }
-  if (config.fileChangeLimit !== 1000) problems.push("Greptile fileChangeLimit must remain 1000");
-  return problems;
-}
-
-function validateGreptileBehavior(config) {
-  const problems = [];
-  if (config.triggerOnUpdates !== true) problems.push("Greptile must review every new head");
-  if (config.triggerOnDrafts !== false)
-    problems.push("Greptile draft auto-review must remain disabled");
-  if (config.statusCheck !== true) problems.push("Greptile must emit an observable status check");
-  if (config.fixWithAI !== false) problems.push("Greptile must not write pull-request code");
-  if (config.shouldUpdateDescription !== false) {
-    problems.push("Greptile must not mutate Keiko's load-bearing pull request template");
-  }
-  if (config.updateExistingSummaryComment !== true) {
-    problems.push("Greptile must update one summary instead of creating comment churn");
-  }
-  return problems;
-}
-
-function validateGreptileConfig(source) {
-  const parsed = parseJsonObject(source, "greptileConfig");
-  if (parsed.value === undefined) return parsed.problems;
-  const config = parsed.value;
-  return [
-    ...validateGreptileScope(config),
-    ...validateGreptileBehavior(config),
-    ...validateGreptileRules(config.rules),
-  ];
-}
-
-function validateGreptileFiles(source, pathExists) {
-  const parsedResult = parseJsonObject(source, "greptileFiles");
-  if (parsedResult.value === undefined) return parsedResult.problems;
-  const parsed = parsedResult.value;
-  if (!Array.isArray(parsed.files)) return [".greptile/files.json must carry a files array"];
-  if (parsed.files.some((entry) => !isJsonObject(entry))) {
-    return [".greptile/files.json entries must be JSON objects"];
-  }
-  const paths = new Set(parsed.files.map((entry) => entry.path));
-  const problems = REQUIRED_GREPTILE_FILES.filter((path) => !paths.has(path)).map(
-    (path) => `Greptile context is missing ${path}`,
-  );
-  for (const entry of parsed.files) {
-    if (typeof entry.path !== "string" || !pathExists(entry.path)) {
-      problems.push(`Greptile context path does not exist: ${String(entry.path)}`);
-    }
-    if (typeof entry.description !== "string" || entry.description.length === 0) {
-      problems.push(`Greptile context path lacks a description: ${String(entry.path)}`);
-    }
-  }
-  return problems;
-}
-
 function validateCiWorkflow(source) {
   const checks = [
     ['GITLEAKS_VERSION: "8.30.1"', "Gitleaks must remain pinned to the reviewed OSS release"],
@@ -451,61 +329,7 @@ function validateCiWorkflow(source) {
   return problems;
 }
 
-function validateGreptileWorkflow(source) {
-  const checks = [
-    ["  pull_request_target:", "Greptile settlement must use the base-trusted event"],
-    [
-      "types: [opened, reopened, synchronize, ready_for_review]",
-      "Greptile settlement must cover every reviewable head",
-    ],
-    [
-      "QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha }}",
-      "Greptile settlement must bind execution to the immutable protected base",
-    ],
-    [
-      'git fetch --no-tags --depth=1 origin "$QUALITY_BASE_SHA"',
-      "Greptile settlement must fetch only the immutable protected base",
-    ],
-    [
-      'git checkout --detach "$QUALITY_BASE_SHA"',
-      "Greptile settlement must execute only the immutable protected base",
-    ],
-    [
-      "QUALITY_HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
-      "Greptile settlement evidence must bind the exact pull-request head",
-    ],
-    [
-      "run: node scripts/check-greptile-findings.mjs",
-      "Greptile settlement must execute the base-owned evidence gate",
-    ],
-    [
-      "run: test -f scripts/check-greptile-findings.mjs",
-      "Greptile settlement must fail closed when the base gate is unavailable",
-    ],
-  ];
-  const problems = checks.flatMap(([expected, finding]) => missingText(source, expected, finding));
-  const forbidden = [
-    "contents: write",
-    "issues: write",
-    "pull-requests: write",
-    "id-token: write",
-    "ref: ${{ github.event.pull_request.head.sha }}",
-    "QUALITY_BASE_SHA: ${{ github.event.pull_request.head.sha }}",
-    "github.event.pull_request.head.ref",
-    "github.head_ref",
-    "refs/pull/",
-    "uses: actions/checkout@",
-  ];
-  if (forbidden.some((entry) => source.includes(entry))) {
-    problems.push("Greptile settlement must never grant writes or execute pull-request code");
-  }
-  return problems;
-}
-
-export function validateExternalQualitySources(
-  sources,
-  pathExists = (path) => existsSync(join(REPO_ROOT, path)),
-) {
+export function validateExternalQualitySources(sources) {
   return [
     ...validatePackage(sources.packageJson),
     ...validateCodSpeedConfig(sources.codspeedConfig),
@@ -513,25 +337,21 @@ export function validateExternalQualitySources(
     ...validateCodSpeedPolicyWorkflow(sources.codspeedPolicyWorkflow),
     ...validateCodSpeedWorkflow(sources.codspeedWorkflow),
     ...validateCodeRabbitConfig(sources.codeRabbitConfig),
-    ...validateGreptileConfig(sources.greptileConfig),
-    ...validateGreptileFiles(sources.greptileFiles, pathExists),
-    ...validateGreptileWorkflow(sources.greptileWorkflow),
     ...validateCiWorkflow(sources.ciWorkflow),
   ];
 }
 
 export function main(
   qualitySources = loadExternalQualitySources(),
-  pathExists = undefined,
   log = console.log,
   error = console.error,
 ) {
-  const problems = validateExternalQualitySources(qualitySources, pathExists);
+  const problems = validateExternalQualitySources(qualitySources);
   if (problems.length > 0) {
     for (const problem of problems) error(`external-quality-config: ${problem}`);
     return 1;
   }
-  log("external-quality-config: PASS — CodSpeed, CodeRabbit, and Greptile configuration is bound");
+  log("external-quality-config: PASS — CodSpeed and CodeRabbit configuration is bound");
   return 0;
 }
 

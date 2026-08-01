@@ -51,10 +51,10 @@ exhausted the review quota on PR #2876 and emitted success without reviewing the
 therefore has neither required status nor review authority. Findings it does emit are still repaired
 and actual conversations are settled; an absent or quota-paced CodeRabbit review is not merge
 evidence and is not a merge blocker. PR #2878 proved exact-head negative and recovery behavior
-before `Greptile Review`, `Greptile findings`, `CodSpeed Performance Analysis`, and `CodSpeed
-policy` became App-bound required checks. CodSpeed additionally requires zero-cost continuity.
-Greptile may remain required during its no-payment trial only with a recorded hard expiry and
-owner-bound automated rollback.
+before `CodSpeed Performance Analysis` and `CodSpeed policy` became App-bound required checks.
+Greptile's temporary trial checks also proved negative and recovery behavior, but the final canary
+exhausted its 50-credit limit and received no current-head review. Both Greptile checks were removed
+from branch protection, its App was uninstalled, and its repository integration was retired.
 
 CodSpeed benchmark execution uses the exact candidate head. Its dashboard-policy verdict is a
 different, base-trusted context: GitHub loads the validator from protected `dev`, downloads only the
@@ -63,10 +63,9 @@ activation path before the context became required.
 
 Hosted products are not described as open-source merely because their service is free for a public
 repository. The merge-critical foundation is repository-owned and implemented with open-source
-tooling. No payment method or paid entitlement may be introduced. Greptile is removed from branch
-protection no later than 24 hours before its trial expires unless the pending free-OSS exception is
-approved and its live probes pass. Active automation `keiko-greptile-trial-rollback` owns that
-deadline and must record successful live removal evidence rather than merely attempt the mutation.
+tooling. No payment method or paid entitlement may be introduced. A future Greptile reactivation
+requires an active durable zero-cost entitlement and a new exact-head canary; a pending application
+does not authorize installation or merge authority.
 
 ## Sonar independence
 

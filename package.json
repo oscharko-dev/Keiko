@@ -140,7 +140,6 @@
     "check:knip": "node scripts/check-knip.mjs",
     "check:external-quality-config": "node scripts/check-external-quality-config.mjs",
     "check:codspeed-policy": "node scripts/check-codspeed-policy.mjs",
-    "check:greptile-findings": "node scripts/check-greptile-findings.mjs",
     "check:semantic-duplication": "fallow dupes --mode semantic --min-tokens 100 --min-lines 10 --ignore-imports --format compact --fail-on-issues",
     "check:runtime-toolchain": "node scripts/check-runtime-toolchain.mjs",
     "check:typescript-toolchain": "node scripts/check-typescript-toolchain.mjs",

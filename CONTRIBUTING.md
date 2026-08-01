@@ -17,7 +17,7 @@ npm run typecheck  # strict type-checking for src + tests
 ## Pull requests
 
 All required status checks must pass on the current pull-request head before a change can merge into
-`dev`. The stable app-bound set is the fourteen checks below:
+`dev`. The stable app-bound set is the twelve checks below:
 
 1. `ci`
 2. `workflow hygiene`
@@ -29,10 +29,8 @@ All required status checks must pass on the current pull-request head before a c
 8. `SonarCloud Code Analysis`
 9. `Socket Security: Project Report`
 10. `Socket Security: Pull Request Alerts`
-11. `Greptile Review`
-12. `Greptile findings`
-13. `CodSpeed Performance Analysis`
-14. `CodSpeed policy`
+11. `CodSpeed Performance Analysis`
+12. `CodSpeed policy`
 
 `workflow hygiene` runs actionlint, the pinned-SHA verification, zizmor and the OSV lockfile scan as
 one context (ADR-0159); the tools, pinned versions and rule sets are unchanged. The hosted contexts
@@ -44,6 +42,10 @@ after the required checks succeed on the exact current head and every review con
 resolved. CodeRabbit remains an assertive advisory reviewer under `.coderabbit.yaml`; its free-tier
 status can report success when quota omits a current-head review, so neither that status nor its
 review state has merge authority. Agents still repair every finding they receive.
+
+Greptile is retired because its 50-credit trial omitted a final-head review before the calendar
+expiry. Its pending OSS application does not provide merge authority; reactivation requires a
+durable zero-cost entitlement and a new live canary.
 
 Qodo and its Keiko for Quality bridge are retired by
 [ADR-0167](docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md); neither is Sonar evidence.

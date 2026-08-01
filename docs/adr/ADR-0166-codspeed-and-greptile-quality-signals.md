@@ -3,8 +3,9 @@
 ## Status
 
 Superseded for activation and review topology by
-[ADR-0167](ADR-0167-zero-cost-autonomous-quality-gates.md) on 2026-08-01. Its benchmark design and
-repository-configuration boundaries remain adopted.
+[ADR-0167](ADR-0167-zero-cost-autonomous-quality-gates.md) on 2026-08-01. Its CodSpeed benchmark
+design and general configuration boundaries remain adopted. The Greptile repository integration is
+historical and retired after the canary exhausted its 50-credit trial.
 
 ## Amends
 
@@ -81,12 +82,12 @@ policy remains applicable without granting status or review authority.
 ### D3 — Repository configuration is required; hosted verdicts are staged
 
 `npm run check:external-quality-config` is a deterministic required-`ci` configuration gate. It
-pins the CodSpeed dependencies, action identity, simulation mode, triggers, permissions, timeout,
-benchmark command, and the live-observed 5% failing-status dashboard policy; CodeRabbit's
-current-head review, governance context, restricted commands, and no-mutation boundary; and
-Greptile's current-head, status, scope, context-file, and rule configuration. This gate proves the
-repository-owned integrations have not silently weakened. It does not claim that a hosted service
-ran.
+originally pinned CodSpeed, CodeRabbit, and Greptile integration boundaries. ADR-0167 later retired
+the Greptile integration after quota pacing; the current gate pins CodSpeed dependencies, action
+identity, simulation mode, triggers, permissions, timeout, benchmark command, and the live-observed
+5% failing-status dashboard policy, plus CodeRabbit's governance context, restricted commands, and
+no-mutation boundary. It proves the retained repository-owned integrations have not silently
+weakened. It does not claim that a hosted service ran.
 
 The hosted CodSpeed and Greptile checks remain outside branch protection during initial observation.
 CodSpeed regressions above the 5% global threshold fail their own status; Greptile's

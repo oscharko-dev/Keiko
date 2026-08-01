@@ -72,7 +72,7 @@ describe("live CodSpeed policy", () => {
     },
   );
 
-  it.each([undefined, null, "0.05", Number.NaN, -0.01])(
+  it.each([undefined, null, "", "0.05", {}, [], Number.NaN, Number.POSITIVE_INFINITY, -0.01])(
     "rejects malformed live regression threshold %s",
     (allowedRegression) => {
       const payload = structuredClone(SETTINGS);
@@ -82,6 +82,14 @@ describe("live CodSpeed policy", () => {
       );
     },
   );
+
+  it("accepts zero as the finite lower boundary before comparing policy", () => {
+    const payload = structuredClone(SETTINGS);
+    payload.data.repository.settings.allowedRegression = 0;
+    expect(validateLiveSettings(JSON.parse(POLICY), payload)).toContain(
+      "live regression threshold differs from the repository policy",
+    );
+  });
 
   it("fails closed on a GraphQL error without reflecting provider content", () => {
     expect(() =>

@@ -2,22 +2,20 @@
 
 This runbook separates repository-owned OSS enforcement from hosted supplemental services. A free
 hosted entitlement is not called open-source software. Hosted checks become merge-critical only
-after their live exact-head behavior is proven. Durable checks additionally require zero-cost
-continuity; the explicit, time-bounded Greptile trial exception below requires a hard rollback.
-The deterministic core remains usable without them.
+after exact-head failure and recovery are proven and durable zero-cost continuity is verified. The
+deterministic core remains usable when a hosted producer is unavailable.
 
-## Repository-owned configuration
+## Repository-owned enforcement
 
 - CodSpeed: `codspeed.yml`, `.codspeed-policy.json`, the repository benchmark, and separate
   benchmark/policy workflows provide CPU-simulation comparison plus base-trusted settings
   enforcement.
 - CodeRabbit: `.coderabbit.yaml` configures assertive advisory review without status, review,
   code-writing, or merge authority.
-- Greptile: `.greptile/config.json`, `.greptile/files.json`, and the base-owned settlement workflow
-  require an exact-head review, zero unresolved inline findings, and zero P0-P2 summary findings.
 - Fallow: the root lockfile and `check:semantic-duplication` reject every introduced semantic clone
   group.
-- Gitleaks: the checksum pin in `.github/workflows/ci.yml` rejects secrets anywhere in PR history.
+- Gitleaks: the checksum pin in `.github/workflows/ci.yml` rejects secrets anywhere in pull-request
+  history.
 - Drift pin: `scripts/check-external-quality-config.mjs` and its negative tests make integration
   weakening fail required `ci`.
 
@@ -38,106 +36,78 @@ performance gates.
 
 ## Hosted settings
 
-- CodSpeed: CPU simulation, regressions above the 5% global threshold fail, one always-updated PR
-  report, and no repository upload token or pull-request-visible OIDC grant. The dedicated
-  `CodSpeed policy` workflow is loaded from the protected base, fetches only the exact-head
-  `.codspeed-policy.json` as untrusted data, and fails closed when the live threshold, failure
-  behavior, or report mode differs. Candidate code cannot execute in that workflow.
+- CodSpeed: CPU simulation; regressions above the 5% global threshold fail; one always-updated pull
+  request report; no repository upload token or pull-request-visible OIDC grant. The dedicated
+  `CodSpeed policy` workflow is loaded from the protected base, fetches only the exact-head policy as
+  untrusted data, and fails closed when the live threshold, failure behavior, or report mode differs.
+  Candidate code cannot execute in that workflow.
 - CodeRabbit: assertive and advisory, with request-changes and every commit/review status disabled.
-  Review details remain visible; all write/mutation, web-search, external command,
-  cross-repository, and post-merge features are disabled.
-- Greptile: strictness 2, logic/syntax comments, 4/5 confidence floor, every ready head including
-  bot authors, 1,000-file ceiling, status plus one summary, and no code writing, approval, merge, or
-  PR-description mutation.
+  Review details remain visible; all write/mutation, web-search, external command, cross-repository,
+  and post-merge features are disabled.
 
-Repository config overrides dashboard settings where the provider supports it. Dashboard-only
-thresholds and entitlement state are verified in each activation audit.
+Repository configuration overrides dashboard settings where the provider supports it.
+Dashboard-only thresholds and entitlement state are verified in each activation audit.
 
 ## Zero-cost eligibility snapshot
 
 Verified 2026-08-01. Terms can change; never add a payment method to preserve a gate.
 
-- CodeRabbit is on a Pro Plus free trial scheduled to downgrade to Free on 2026-08-02. Its billing
-  UI says the organization will be downgraded when the trial ends, and the cancel control is already
-  disabled. No paid continuation is accepted. The review quota was exhausted during PR #2876.
-- CodSpeed is active as a public-repository project. No star floor was presented.
-- Greptile has a 14-day no-payment trial and a pending free-OSS exception. Its published
-  application requires 50 stars while its authenticated eligibility screen reports Keiko has 3.
-  The repository is already Apache-2.0/OSI licensed, so changing licenses cannot remove that
-  provider-specific popularity floor. The temporary requirement is allowed only with
-  the enforced rollback below.
-- Socket is active; its existing free GitHub App checks remain direct and app-bound.
-- SonarCloud is on the Free plan. Issue #2874 tracks a non-destructive migration to the stronger
-  free OSS plan.
+- CodeRabbit was scheduled to downgrade from trial to Free on 2026-08-02. Its review quota was
+  exhausted during migration PR #2876, and it emitted a successful status without reviewing the
+  current head. It therefore remains advisory.
+- CodSpeed is active as a public-repository project. No star floor or payment requirement was
+  presented. Its two proven contexts are required.
+- Greptile's authenticated eligibility screen required 50 stars while Keiko had 3. Keiko was
+  already public and Apache-2.0/OSI licensed, so a license change could not remove that
+  provider-specific popularity floor. The pending OSS application did not grant an entitlement.
+  The 50-credit trial was exhausted on final canary head
+  `b56de3aedc364a2ac6f5aa34a06ac5b6ba932efc`; Greptile omitted review and reported the credit cap.
+  Both Greptile contexts were atomically removed from branch protection and the organization App
+  was uninstalled. Repository configuration and the settlement workflow were then removed so the
+  retired integration cannot consume CI time or produce dead checks.
+- Socket remains active through its existing free GitHub App checks.
+- SonarCloud remains on the Free plan. Issue #2874 tracks a non-destructive migration to the
+  stronger free OSS plan.
 
-Qodo is retired: its review stopped after trial and its separate OSS program requires 100 stars.
-Popularity floors are vendor eligibility rules, not engineering quality gates. Never buy, exchange,
-automate, or fabricate stars.
+Qodo and Keiko for Quality are retired and uninstalled. Qodo stopped after trial and its separate
+OSS program required 100 stars. Popularity floors are vendor eligibility rules, not engineering
+quality gates. Never buy, exchange, automate, or fabricate stars.
 
-## Live promotion ledger
+## Redacted live evidence ledger
 
-Evidence sources: migration [PR #2876](https://github.com/oscharko-dev/Keiko/pull/2876) and canary
-[PR #2878](https://github.com/oscharko-dev/Keiko/pull/2878).
+Evidence is identified by immutable head, check/job identifier, timestamp, App ID, and outcome.
+Service endpoints and comment bodies are deliberately omitted.
 
-- CodeRabbit — `CodeRabbit`, App 347564, not protected. It requested changes on
-  `e3c89ce0eb5a77f44a4d8115be261160709a22d0` at 2026-08-01 05:53:59 UTC. Its review on
-  `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 06:39:26 UTC found three more actionable issues.
-  On `fc56da5acd526cbd6408a47b08793d25024d4e1d`, CodeRabbit reported “Review limit reached” yet
-  emitted a success status. By 2026-08-01 08:46 UTC, live branch protection had removed its
-  App-bound status and the quota-dependent native review rule while preserving all other checks
-  and conversation resolution.
-- CodSpeed — `CodSpeed Performance Analysis`, App 257293, protected after PR #2878. It failed the
-  deliberate `1069aa9a7a75d7e3e19489a197af4671402de3a0` slowdown at 2026-08-01 10:21:21 UTC with
-  a 51.48% aggregate regression ([check 91357704565](https://github.com/oscharko-dev/Keiko/runs/91357704565)),
-  then passed the restored `d86f64250b226e815d66756f31b17e2e79f8c502` head at 10:45:04 UTC
-  ([check 91359719104](https://github.com/oscharko-dev/Keiko/runs/91359719104)). No regression was
-  acknowledged and no baseline was changed.
-- CodSpeed — `CodSpeed policy`, GitHub Actions App 15368, protected after PR #2878. The base-trusted
-  exact-head validator rejected the candidate 10% drift
-  ([job 91356603600](https://github.com/oscharko-dev/Keiko/actions/runs/30695136576/job/91356603600))
-  and accepted the restored 5% policy
-  ([job 91358992913](https://github.com/oscharko-dev/Keiko/actions/runs/30696038720/job/91358992913)).
-- Greptile — `Greptile Review`, App 867647, protected during the bounded trial. It emitted P1
-  findings on `4b91c315823160652139a29de0d7a24e4af290c6` at 2026-08-01 05:51:24 UTC and
-  `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 06:31:36 UTC, plus an outside-diff P1 on
-  `e4f981efa67e363b78fd30bc2db36484402c83a2`. Head
-  `3b9d90e50a74acd90734b3c59bd4aab374da895b` settled clean at 07:08:20 UTC.
-- Greptile — `Greptile findings`, GitHub Actions App 15368, protected during the same bounded trial.
-  On PR #2878 the native review rejected the deliberate head with three P1 findings
-  ([check 91356606358](https://github.com/oscharko-dev/Keiko/runs/91356606358)); the base-owned
-  settlement independently failed
-  ([job 91356603731](https://github.com/oscharko-dev/Keiko/actions/runs/30695136580/job/91356603731)).
-  The restored exact head then passed both native review
-  ([check 91358998906](https://github.com/oscharko-dev/Keiko/runs/91358998906)) and settlement
-  ([job 91358992919](https://github.com/oscharko-dev/Keiko/actions/runs/30696038726/job/91358992919))
-  with zero unresolved Greptile findings.
-- Greptile billing evidence observed 2026-08-01 states “until Aug 14, 2026” and shows no payment
-  method. The conservative expiry ceiling is `2026-08-14T00:00:00Z`; rollback
-  [#2877](https://github.com/oscharko-dev/Keiko/issues/2877) is due by
-  `2026-08-13T00:00:00Z`.
+- CodeRabbit, App 347564, is not protected. It requested changes on
+  `e3c89ce0eb5a77f44a4d8115be261160709a22d0` at 05:53:59 UTC and found three additional issues on
+  `418aca9d78d9f9c8c3e1ac7d83696923e5c849bc` at 06:39:26 UTC. On
+  `fc56da5acd526cbd6408a47b08793d25024d4e1d` it reported the review limit reached while emitting
+  success. Branch protection removed its status and quota-dependent review authority.
+- `CodSpeed Performance Analysis`, App 257293, failed deliberate slowdown head
+  `1069aa9a7a75d7e3e19489a197af4671402de3a0` with a 51.48% aggregate regression in check
+  91357704565, then passed restored head `d86f64250b226e815d66756f31b17e2e79f8c502` in check 91359719104. No regression was acknowledged and no baseline was changed.
+- `CodSpeed policy`, GitHub Actions App 15368, rejected the candidate 10% drift in job 91356603600
+  and accepted the restored 5% policy in job 91358992913.
+- Greptile's native App 867647 and settlement context temporarily proved negative and recovery
+  behavior. Native check 91356606358 and settlement job 91356603731 rejected the deliberate head
+  with three P1 findings. Native check 91358998906 and settlement job 91358992919 passed the
+  restored head with zero unresolved Greptile findings.
+- On later exact head `b56de3aedc364a2ac6f5aa34a06ac5b6ba932efc`, Greptile omitted review after its trial account hit
+  the 50-credit cap. The settlement context failed rather than accepting stale evidence. This
+  durability failure triggered the documented rollback early: both Greptile contexts were removed,
+  App installation 150407338 was uninstalled, and organization installation verification returned
+  no Greptile installation. The final protected set contains 12 App-bound checks.
+- The retired `Keiko for Quality` context was removed after its producer had been deleted. Qodo and
+  Keiko for Quality were uninstalled after PR #2876 merged; organization installation verification
+  returned no remaining installation for either App.
 
-The retired `Keiko for Quality` context was removed atomically from `dev` protection at
-2026-08-01 06:28:25 UTC after its producer had been deleted. The other ten app-bound contexts were
-preserved. Qodo and Keiko for Quality were uninstalled after PR #2876 merged; the organization
-installation API returned no remaining installation for either App.
+Greptile can be reconsidered only after a durable zero-cost entitlement is actually active and a new
+live canary proves exact-head negative, recovery, quota independence, stable App identity, and
+bounded settlement. A pending application is not authority to reinstall or require it.
 
-Greptile's UI exposes only the calendar-date expiry, 2026-08-14, rather than a time zone. Keiko
-therefore fails safe at the earlier normalized ceiling `2026-08-14T00:00:00Z`. Issue #2877 requires
-removal of both Greptile contexts and the installation by `2026-08-13T00:00:00Z` unless the free OSS
-application is accepted. Owner-bound automation `keiko-greptile-trial-rollback` is active for
-2026-08-12 20:00 Europe/Berlin (18:00 UTC). It must apply and verify the removal, then record
-redacted evidence on #2877. A generic approval or admin bypass cannot waive the deadline, and an
-attempt without successful live verification is not evidence.
+## Promotion requirements
 
-Required conversation resolution makes every unresolved inline Greptile finding blocking even
-though the provider's completion status itself reports successful review execution. The
-`Greptile findings` `pull_request_target` workflow separately rejects P0-P2 findings that T-Rex can
-place only in the current summary, binds the summary and provider App to the exact head, and never
-emits comment bodies. It checks out and executes only the immutable base revision, has read-only
-permissions, and cannot run pull-request code. PR #2878 proved exact-head failure and recovery
-before this context became required.
-
-Promotion requires all of the following on a live pull request:
+A hosted producer may become required only when a live pull request proves all of the following:
 
 1. every eligible current head receives exactly one attributable status without prompting;
 2. two successive updates prove stale success cannot satisfy a new head;
@@ -147,21 +117,13 @@ Promotion requires all of the following on a live pull request:
 5. exact check name and producer App ID are stable and app-bindable; and
 6. plan limits, credits, or quota do not pace or omit required evidence.
 
-Condition 6 is the durability rule for CodSpeed and CodeRabbit. CodeRabbit failed conditions 1, 2,
-and 6 when quota omission produced a false-green status, so it remains advisory. A future promotion
-would require a new live request-changes/automatic-clear probe plus durable zero-cost evidence.
-
-By owner decision, Greptile may be promoted during its no-payment trial after conditions 1–5 pass
-only when the ledger records the provider-exposed expiry, a conservative time-zone-normalized
-ceiling, and an active owner-bound rollback automation that removes and verifies both contexts and
-the installation before the deadline. A pending OSS application or generic approval never disables
-that rollback. A trial is never represented as zero-cost continuity. The ledger records pull-request
-URLs, head SHAs, timestamps, App IDs, and rollback before branch-protection changes.
+CodeRabbit failed conditions 1, 2, and 6. Greptile later failed condition 6. CodSpeed passed the
+promotion probes and remains subject to continuous zero-cost and exact-head observation.
 
 ## Failure handling
 
 Missing, skipped, stale, quota-paced, or still-running output is an availability failure, not a
 pass. Fix all findings from all producers in one repair head. A baseline update, ignore command,
 thread dismissal, admin bypass, or threshold relaxation is not a repair. If a hosted service loses
-its zero-cost continuity, remove it through a reviewed atomic branch-protection update while the OSS
+zero-cost continuity, remove it through a reviewed atomic branch-protection update while the OSS
 core remains enforced.
