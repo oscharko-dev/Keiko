@@ -86,26 +86,26 @@ describe("review bot suppression gate", () => {
     );
     const log = vi.fn();
     const error = vi.fn();
-    expect(main(eventPath, true, log, error)).toBe(1);
+    expect(main(eventPath, true, log, error, "pull_request")).toBe(1);
     expect(error).toHaveBeenCalledWith(
       "review-bot-suppression: pull-request metadata must not suppress an automatic review bot",
     );
     log.mockClear();
     error.mockClear();
-    expect(main("", true, log, error)).toBe(1);
+    expect(main("", true, log, error, "pull_request")).toBe(1);
     expect(error).toHaveBeenCalledWith(
       "review-bot-suppression: GitHub event payload is unavailable",
     );
     log.mockClear();
     error.mockClear();
-    expect(main("", false, log, error)).toBe(0);
+    expect(main("", false, log, error, "")).toBe(0);
     expect(log).toHaveBeenCalledWith(
       "review-bot-suppression: SKIP — no local GitHub event payload",
     );
     log.mockClear();
     error.mockClear();
     writeFileSync(eventPath, "not-json");
-    expect(main(eventPath, true, log, error)).toBe(1);
+    expect(main(eventPath, true, log, error, "pull_request")).toBe(1);
     expect(error).toHaveBeenCalledWith("review-bot-suppression: GitHub event payload is invalid");
     log.mockClear();
     error.mockClear();
@@ -120,7 +120,7 @@ describe("review bot suppression gate", () => {
     expect(Buffer.byteLength(overBound, "utf8")).toBe(MAX_EVENT_BYTES + 1);
     expect(() => JSON.parse(overBound)).not.toThrow();
     writeFileSync(eventPath, overBound);
-    expect(main(eventPath, true, log, error)).toBe(1);
+    expect(main(eventPath, true, log, error, "pull_request")).toBe(1);
     expect(error).toHaveBeenCalledWith("review-bot-suppression: GitHub event payload is invalid");
     log.mockClear();
     error.mockClear();
