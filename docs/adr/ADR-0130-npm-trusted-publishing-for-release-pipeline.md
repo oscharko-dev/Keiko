@@ -91,8 +91,10 @@ successfully with zero registry credentials configured.
 ### D4 — One-time npmjs.com configuration, and secret retirement, are manual maintainer actions
 
 Configuring the Trusted Publisher on npmjs.com (package Settings → Trusted Publishers → GitHub
-Actions → this repository + the exact workflow filename `.github/workflows/release.yml` + the
-GitHub Actions **environment `npm-publish`**) is a one-time action on npmjs.com's own UI. The
+Actions → this repository + the workflow filename **`release.yml`** — npm's form takes the
+BASENAME, not the `.github/workflows/` path, and a full path entered there will not match the
+OIDC claim — + the GitHub Actions **environment `npm-publish`**) is a one-time action on
+npmjs.com's own UI. The
 environment binding was added on 2026-08-02 (ADR-0170 D3): the workflow-dispatch API takes a
 caller-chosen ref, so a dispatched candidate-branch `release.yml` variant could omit the
 environment declaration and its human-approval gate entirely — with the publisher bound to the
@@ -120,8 +122,9 @@ that secret.
 
 ### Negative / Neutral
 
-- The workflow filename `.github/workflows/release.yml` **and the `npm-publish` environment name**
-  are load-bearing identifiers: the publisher entry is bound to both (D4), so renaming or moving
+- The workflow file `.github/workflows/release.yml` — registered with npm by its basename
+  `release.yml` — **and the `npm-publish` environment name** are load-bearing identifiers: the
+  publisher entry is bound to both (D4), so renaming or moving
   the file, wrapping the publish job behind `workflow_call`, or renaming the environment would
   silently break trusted publishing (npm does not re-validate the saved configuration; publishing
   would simply start failing auth). Changing either must come with updating the npmjs.com Trusted

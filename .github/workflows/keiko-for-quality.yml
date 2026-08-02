@@ -150,7 +150,9 @@ jobs:
           # Review step's `uses:` value because GitHub forbids an expression there, so a literal
           # is unavoidable; ADVANCE BOTH TOGETHER. The consistency check below is what makes that
           # duplication safe.
-          ACTION_PIN: 3e458cdc86eb102b3a06a7dfb161d3c0f12e8364 # keep in sync with Review's uses:
+          # Quoted: a hypothetical all-digit sha would otherwise parse as a YAML number and reach
+          # the shell in a normalized form, defeating the length check below.
+          ACTION_PIN: "3e458cdc86eb102b3a06a7dfb161d3c0f12e8364" # keep in sync with Review's uses:
         run: |
           # The pin partitions the store because a wrapper release can change review or
           # sanitization SEMANTICS without changing the store's format. Three earlier rounds
@@ -515,6 +517,10 @@ jobs:
           TOTAL="$(printf '%s\n' "${LISTING}" | awk 'END { print $1 }')"
           ENTRIES="$(printf '%s\n' "${LISTING}" | awk 'END { print $2 }')"
           case "${TOTAL}${ENTRIES}" in *[!0-9]*|"") TOTAL=99999999999; ENTRIES=999 ;; esac
+          # The concatenation cannot see a MISSING field: an empty ENTRIES beside a numeric TOTAL
+          # still looks all-digit, and `[ "" -gt 8 ]` inside the || chain below is a test ERROR —
+          # non-zero, which that chain reads as "no violation". Same guard as the restore path.
+          { [ -n "${TOTAL}" ] && [ -n "${ENTRIES}" ]; } || { TOTAL=99999999999; ENTRIES=999; }
           # Here-strings, not producer pipelines: grep -q's early exit SIGPIPEs a producer and
           # pipefail turns a FOUND violation into a clean-looking 141 (same repair as the restore
           # path; Codex, round 31).
