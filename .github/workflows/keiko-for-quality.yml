@@ -22,9 +22,10 @@ on:
     types:
       [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed, edited]
 
-# Empty at workflow level on purpose, even with a single job: the job declares exactly what it
-# needs, and a future second job added to this file starts from nothing instead of inheriting
-# review-grade authority by default.
+# Empty at workflow level on purpose. Two jobs run here and they need different authority:
+# `review` holds actions/contents read plus pull-requests write, `sign-store` holds only
+# actions: read. Neither inherits anything — each declares exactly what it needs, and a future
+# third job starts from nothing instead of inheriting review-grade authority by default.
 permissions: {}
 
 concurrency:
@@ -317,7 +318,10 @@ jobs:
           # gigabytes. Extraction therefore runs under kernel-enforced limits — ulimit -f caps any
           # single written file at 25 MiB (unzip dies on SIGXFSZ past it), timeout caps wall time —
           # and the result is re-measured with du afterwards; any breach discards the store.
-          ( ulimit -f 51200; timeout 60 unzip -o -q store.zip -d keiko-review-store ) 2>/dev/null \
+          # 25600 is 25 MiB because BASH counts -f in 1024-byte blocks (verified: 51200 capped a
+          # write at 50 MiB under bash, at 25 MiB under zsh's 512-byte blocks — the shell
+          # difference hid this). Actions runs bash; do not "restore" the doubled value.
+          ( ulimit -f 25600; timeout 60 unzip -o -q store.zip -d keiko-review-store ) 2>/dev/null \
             || { echo "::notice::extraction failed or exceeded limits — full review"; rm -rf keiko-review-store; mkdir -p keiko-review-store; }
           USED_KB="$(du -sk keiko-review-store 2>/dev/null | cut -f1)"
           case "${USED_KB}" in *[!0-9]*|"") USED_KB=99999999 ;; esac
@@ -453,9 +457,12 @@ jobs:
   # guarantees is the narrower property that actually matters: the key never exists in any
   # process AFTER externally governed code has run. A compromised action can leave a detached
   # process that outlives its step on that runner (Codex, #2931 round 25) — so signing happens
-  # here, on a fresh runner where every step is base-controlled shell (gh, unzip, openssl), no
-  # third-party action, no checkout of anything. It declares the keiko-for-quality environment
-  # solely for the key; the deployment branch policy confines that declaration to protected-ref
+  # here, on a fresh runner. The precise property is ordering, not absence: NO EXTERNAL ACTION
+  # RUNS BEFORE THE KEY IS USED. Every step up to and including the signing step is
+  # base-controlled shell (gh, unzip, openssl) with no checkout; the only third-party action in
+  # this job is the upload-artifact step that persists the result AFTER the key has been used
+  # and the shell that held it has exited. It declares the keiko-for-quality environment solely
+  # for the key; the deployment branch policy confines that declaration to protected-ref
   # workflow files, which is what keeps the signature meaningful.
   sign-store:
     name: sign review store
@@ -521,7 +528,8 @@ jobs:
             rm -f store.zip; exit 0
           fi
           mkdir -p keiko-review-store
-          ( ulimit -f 51200; timeout 60 unzip -o -q store.zip -d keiko-review-store ) 2>/dev/null \
+          # 25600 = 25 MiB under bash's 1024-byte blocks; see the restore path's note.
+          ( ulimit -f 25600; timeout 60 unzip -o -q store.zip -d keiko-review-store ) 2>/dev/null \
             || { echo "::warning::unsigned store extraction exceeded limits — skipping signing"; rm -rf keiko-review-store; rm -f store.zip; exit 0; }
           rm -f store.zip
           USED_KB="$(du -sk keiko-review-store 2>/dev/null | cut -f1)"
