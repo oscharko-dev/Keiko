@@ -56,6 +56,14 @@ const VERSION_PATH = "/json/version";
 const CHROME_USER_DATA_DIR_SWITCH = "--user-data-dir";
 const EPHEMERAL_PROFILE_PREFIXES = ["keiko-browser-", "keiko-cdp-"] as const;
 
+function snapshotIterable<T>(values: Iterable<T>): readonly T[] {
+  const snapshot: T[] = [];
+  for (const value of values) {
+    snapshot.push(value);
+  }
+  return snapshot;
+}
+
 export type BrowserEventKind =
   | "session-opened"
   | "navigated"
@@ -1009,7 +1017,7 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
   };
 
   public readonly dispose = async (): Promise<void> => {
-    for (const id of this.sessions.keys()) {
+    for (const id of snapshotIterable(this.sessions.keys())) {
       const record = this.sessions.get(id);
       if (record !== undefined) {
         await this.closeRecord(record, "process-exit", true);
@@ -1063,7 +1071,7 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
   private fanout(event: BrowserEventEnvelope): void {
     const set = this.subscribers.get(event.sessionId);
     if (set === undefined) return;
-    for (const listener of set) {
+    for (const listener of snapshotIterable(set)) {
       try {
         listener(event);
       } catch {

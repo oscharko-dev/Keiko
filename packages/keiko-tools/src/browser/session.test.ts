@@ -754,6 +754,26 @@ describe("subscribe", () => {
     expect(a.some((e) => e.kind === "session-closed")).toBe(false);
     expect(b.some((e) => e.kind === "session-closed")).toBe(true);
   });
+
+  it("dispatches each event to a stable subscriber snapshot", async () => {
+    const fixture = await withFixture();
+    const meta = await fixture.manager.openSession(9222);
+    const deliveries: string[] = [];
+    fixture.manager.subscribe(meta.sessionId, (event) => {
+      if (event.kind !== "navigated") return;
+      deliveries.push("existing");
+      fixture.manager.subscribe(meta.sessionId, (laterEvent) => {
+        if (laterEvent.kind === "navigated") deliveries.push("added-during-dispatch");
+      });
+    });
+    setTimeout(() => {
+      fixture.client.emitFrameNavigated("http://127.0.0.1:5173/");
+    }, 5);
+
+    await fixture.manager.navigate(meta.sessionId, "http://127.0.0.1:5173/");
+
+    expect(deliveries).toEqual(["existing"]);
+  });
 });
 
 describe("webSocketDebuggerUrl host validation (H1)", () => {
