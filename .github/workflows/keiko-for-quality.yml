@@ -270,13 +270,21 @@ PYEXTRACT
           fi
           TOTAL="$(printf '%s\n' "${LISTING}" | awk 'END { print $1 }')"
           ENTRIES="$(printf '%s\n' "${LISTING}" | awk 'END { print $2 }')"
-          case "${TOTAL}${ENTRIES}" in *[!0-9]*) TOTAL=99999999999; ENTRIES=999 ;; esac
+          case "${TOTAL}${ENTRIES}" in *[!0-9]*|"") TOTAL=99999999999; ENTRIES=999 ;; esac
+          { [ -n "${TOTAL}" ] && [ -n "${ENTRIES}" ]; } || { TOTAL=99999999999; ENTRIES=999; }
           if [ "${TOTAL}" -gt 26214400 ] || [ "${ENTRIES}" -gt 8 ]; then
             echo "::warning::store artifact expands beyond the allowed bound — discarding it"
             rm -f store.zip; exit 0
           fi
           if printf '%s\n' "${LISTING}" | grep -q '\.\./'; then
             echo "::warning::store artifact carries traversal paths — discarding it"
+            rm -f store.zip; exit 0
+          fi
+          # A name-based traversal check misses symlink entries: a link `s -> /tmp` followed by a
+          # regular entry under `s/…` writes THROUGH the link, outside the store directory, with
+          # no `../` anywhere in the listing. zipinfo mode strings expose links as a leading 'l'.
+          if unzip -Z store.zip 2>/dev/null | grep -q '^l'; then
+            echo "::warning::store artifact carries symlink entries — discarding it"
             rm -f store.zip; exit 0
           fi
           # unzip -l trusts attacker-controlled central-directory lengths, so the listing gate
@@ -288,8 +296,8 @@ PYEXTRACT
             || { echo "::notice::extraction failed or exceeded limits — full review"; rm -rf keiko-review-store; mkdir -p keiko-review-store; }
           USED_KB="$(du -sk keiko-review-store 2>/dev/null | cut -f1)"
           case "${USED_KB}" in *[!0-9]*|"") USED_KB=99999999 ;; esac
-          if [ "${USED_KB}" -gt 25600 ]; then
-            echo "::warning::extracted store exceeds the size bound — discarding it"
+          if [ "${USED_KB}" -gt 25600 ] || [ -n "$(find keiko-review-store -type l -print -quit 2>/dev/null)" ]; then
+            echo "::warning::extracted store exceeds bounds or contains links — discarding it"
             rm -rf keiko-review-store; mkdir -p keiko-review-store
           fi
           rm -f store.zip
@@ -456,7 +464,8 @@ PYEXTRACT
           ENTRIES="$(printf '%s\n' "${LISTING}" | awk 'END { print $2 }')"
           case "${TOTAL}${ENTRIES}" in *[!0-9]*|"") TOTAL=99999999999; ENTRIES=999 ;; esac
           if [ -z "${LISTING}" ] || [ "${TOTAL}" -gt 26214400 ] || [ "${ENTRIES}" -gt 8 ] \
-             || printf '%s\n' "${LISTING}" | grep -q '\.\./'; then
+             || printf '%s\n' "${LISTING}" | grep -q '\.\./' \
+             || unzip -Z store.zip 2>/dev/null | grep -q '^l'; then
             echo "::warning::unsigned store failed the archive gate — skipping signing"
             rm -f store.zip; exit 0
           fi
@@ -466,7 +475,8 @@ PYEXTRACT
           rm -f store.zip
           USED_KB="$(du -sk keiko-review-store 2>/dev/null | cut -f1)"
           case "${USED_KB}" in *[!0-9]*|"") USED_KB=99999999 ;; esac
-          if [ "${USED_KB}" -gt 25600 ] || [ ! -f keiko-review-store/store.json ]; then
+          if [ "${USED_KB}" -gt 25600 ] || [ ! -f keiko-review-store/store.json ] \
+             || [ -n "$(find keiko-review-store -type l -print -quit 2>/dev/null)" ]; then
             echo "::warning::unsigned store failed post-extraction checks — skipping signing"
             rm -rf keiko-review-store; exit 0
           fi
