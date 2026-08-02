@@ -100,6 +100,19 @@ fleet is the same hazard as an undisarmed one, and the only safe response to a f
 leave the reviewer off. The same hold applies to the re-enable instruction in the disable section
 below.
 
+**Lock `dev` first, and be clear about why.** The hold is a _snapshot_, and no number of snapshots
+closes a race against arrivals: a pull request opened, marked ready, or armed between two runs — or
+after the last run but before the retrigger loop reaches it — is outside every hold that has been
+taken, and integrates on green required checks because this reviewer publishes none. Only an
+authoritative gate closes that window. Enable **Lock branch** on `dev` in branch protection for the
+duration of activation, and release it only after the confirmation step below passes. Activation is
+a one-time operation; a bounded merge freeze is the honest price of being able to say afterwards
+that every eligible head was reviewed.
+
+If you choose not to freeze, say so in the delivery-policy record rather than to yourself. The two
+holds still narrow the window substantially, but the claim "every eligible open pull request was
+reviewed before delivery resumed" is then not one this procedure can support.
+
 Save this as `hold.sh` — it is run **twice**, and the second run is not optional. See below.
 
 ```bash
@@ -164,6 +177,15 @@ marked ready between the first run and the variable change was never disarmed _a
 event fired while the reviewer was still off, so it has neither a review nor a hold — and it can
 integrate while the retrigger loop below is still working through the list. The second run disarms
 those newcomers; the retrigger loop then covers them like everything else.
+
+**If the second run aborts, roll back — do not continue.** By then the variable is already `true`,
+so "do not enable" is no longer available and the failure needs an action rather than a decision.
+In order: set `KEIKO_QUALITY_ENABLED` to something other than `true`, cancel every nonterminal
+reviewer run using the containment loop in the disable section, run `hold.sh` until it reports a
+clean hold, and record the failure as a delivery-policy event. Do **not** retrigger and do **not**
+re-arm: retriggering starts credential-bearing runs over a fleet whose armed state is unknown, which
+is the one combination this whole procedure exists to prevent. Start again from the top once the
+cause is understood.
 
 Re-arm only once each current head has a terminated review under the ADR-0170 D5 interlock.
 
