@@ -314,7 +314,6 @@ interface CoreGatewayFields {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
-  readonly workflowEligibleModelIdsConfigured: boolean;
 }
 
 function hasCoreGatewayFieldInput(
@@ -329,8 +328,7 @@ function hasCoreGatewayFieldInput(
     fields.apiKey.trim() !== "" ||
     fields.apiKeyHeaderName.trim() !== "" ||
     derived.parsedDeploymentNames.length > 0 ||
-    derived.parsedImageInputModelIds.length > 0 ||
-    fields.workflowEligibleModelIdsConfigured
+    derived.parsedImageInputModelIds.length > 0
   );
 }
 
@@ -755,7 +753,9 @@ async function performGatewaySubmission(
   const submittedGatewayCredentials =
     !fields.preserveExisting || hasCoreGatewayFieldInput(fields, derived);
   const submittedGatewaySettings =
-    submittedGatewayCredentials || derived.parsedTimeoutMs !== undefined;
+    submittedGatewayCredentials ||
+    derived.parsedTimeoutMs !== undefined ||
+    fields.workflowEligibleModelIdsConfigured;
   const submittedFigmaCredential = fields.figmaAccessToken.trim() !== "";
   const result = await setupGateway(
     buildSetupGatewayPayload(fields, derived, voiceCredentialFields),

@@ -39,7 +39,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function okBody(): unknown {
+function okBody(): Record<string, unknown> {
   return {
     ok: true,
     status: "ok",

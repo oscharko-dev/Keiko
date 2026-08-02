@@ -540,6 +540,9 @@ describe("GatewaySetupDialog", () => {
       preserveExisting: true,
       workflowEligibleModelIds: [],
     });
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent(/updated model gateway settings/i);
+    expect(status).not.toHaveTextContent(/verified/i);
   });
 
   it("preserves the stored workflow approval list without requiring an edit", async () => {

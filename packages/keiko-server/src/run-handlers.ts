@@ -368,6 +368,8 @@ export async function handleCreateRun(
   if ("code" in parsed) {
     return { status: 400, body: errorBody(parsed.code, parsed.message) };
   }
+  const verifyAuthority = requireVerifyAppSession(ctx, deps, parsed);
+  if (verifyAuthority !== undefined) return verifyAuthority;
   const governed = applyVoiceGovernance(parsed, deps);
   if ("status" in governed) {
     return governed;
@@ -376,8 +378,6 @@ export async function handleCreateRun(
   if (unregistered !== null) {
     return unregistered;
   }
-  const verifyAuthority = requireVerifyAppSession(ctx, deps, governed);
-  if (verifyAuthority !== undefined) return verifyAuthority;
   const model = resolveRunModel(governed, deps);
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
