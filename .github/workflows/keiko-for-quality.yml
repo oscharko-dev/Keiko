@@ -19,7 +19,12 @@ permissions:
 
 concurrency:
   group: keiko-for-quality-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # Cancel a superseded review — but NOT for a metadata-only `edited` event. Concurrency is
+  # evaluated when the workflow is triggered, not when the job decides to run, so an unconditional
+  # `true` lets a title or description edit cancel an in-flight review and leave the current head
+  # unreviewed until the arming interlock expires.
+  cancel-in-progress: >-
+    ${{ github.event.action != 'edited' || github.event.changes.base != null }}
 
 jobs:
   review:
@@ -32,8 +37,10 @@ jobs:
     # every head that does reach it, which is what decides the base-retarget `edited` case and what
     # protects the boundary if this condition is ever relaxed.
     #
-    # The endpoint check keeps the reviewer inert until an operator has provisioned the model
-    # variables, the credential, and the App installation. Without it, merging this workflow would
+    # The enable switch keeps the reviewer inert until an operator has provisioned the model
+    # secrets, the credential, and the App installation. It is a separate non-sensitive variable
+    # rather than the endpoint itself, because a job condition cannot read a secret. Without it,
+    # merging this workflow would
     # make every `dev` pull request carry a failing job that no contributor can fix. An inert
     # reviewer is visibly absent rather than noisily broken — and version 0.1 publishes no required
     # status context, so its absence blocks nothing either way (ADR-0170 D6).
@@ -41,7 +48,8 @@ jobs:
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.base.ref == 'dev' &&
-      vars.KEIKO_QUALITY_MODEL_ENDPOINT != ''
+      (github.event.action != 'edited' || github.event.changes.base != null) &&
+      vars.KEIKO_QUALITY_ENABLED == 'true'
     environment: keiko-for-quality
     steps:
       # Check out the TRUSTED BASE. Never `github.event.pull_request.head.sha`: under
@@ -62,14 +70,16 @@ jobs:
         run: git fetch --no-tags --no-recurse-submodules origin "pull/${PR_NUMBER}/head"
 
       - name: Review
-        uses: oscharko-dev/Keiko-for-Quality@11076583041ecaae4e87afb604c1d4fac0b7d3e6 # v0.1.1
+        uses: oscharko-dev/Keiko-for-Quality@2f8a34705ec3260bf884b1d2f03540654ad9707d # v0.1.2
         env:
           # Passed by variable NAME to the action, never as an input value: an input appears in the
           # step context that every other action in the job can read.
           KEIKO_QUALITY_MODEL_TOKEN: ${{ secrets.KEIKO_QUALITY_MODEL_TOKEN }}
         with:
           profile: .github/keiko-for-quality.json
-          model_endpoint: ${{ vars.KEIKO_QUALITY_MODEL_ENDPOINT }}
+          # Secret, not a variable: repository variables are not masked, and an endpoint can be a
+          # private provider address. A secret passed as an input is masked in logs.
+          model_endpoint: ${{ secrets.KEIKO_QUALITY_MODEL_ENDPOINT }}
           model_id: ${{ vars.KEIKO_QUALITY_MODEL_ID }}
           model_protocol: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
           model_token_env: KEIKO_QUALITY_MODEL_TOKEN

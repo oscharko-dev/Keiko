@@ -8,6 +8,9 @@
     "**/*.{plist,entitlements,rc,csproj,props,targets}",
     "docker/**/*.{yml,yaml}",
     "docs/qa/*.json",
+    "tests/**",
+    "scripts/**",
+    "portable-runtime-approvals.json",
     "**/Dockerfile*",
     "**/Makefile",
     "**/package.json",
@@ -46,7 +49,8 @@
     "osv-scanner.toml",
     ".coderabbit.yaml",
     "**/*.{plist,entitlements,rc,csproj,props,targets}",
-    "docs/qa/*.json"
+    "docs/qa/*.json",
+    "portable-runtime-approvals.json"
   ],
   "generated": [
     "**/dist/**",

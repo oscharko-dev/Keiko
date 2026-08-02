@@ -50,21 +50,45 @@ workflow's OIDC identity would close the gap absolutely and is tracked as follow
 
 ### 3. Set variables and secrets
 
-Repository **variables**:
+Repository **variables** — non-sensitive only. Variables are **not** masked in logs, so nothing
+that could identify a private endpoint belongs here:
 
-| Name                           | Example                     |
-| ------------------------------ | --------------------------- |
-| `KEIKO_QUALITY_MODEL_ENDPOINT` | `https://api.anthropic.com` |
-| `KEIKO_QUALITY_MODEL_ID`       | `claude-sonnet-5`           |
-| `KEIKO_QUALITY_MODEL_PROTOCOL` | `anthropic`                 |
+| Name                           | Example   |
+| ------------------------------ | --------- |
+| `KEIKO_QUALITY_ENABLED`        | `true`    |
+| `KEIKO_QUALITY_MODEL_ID`       | `gpt-5.4` |
+| `KEIKO_QUALITY_MODEL_PROTOCOL` | `openai`  |
+
+`KEIKO_QUALITY_ENABLED` is a separate switch rather than the endpoint itself because a job condition
+cannot read a secret.
 
 Environment **secrets** on `keiko-for-quality`:
 
-| Name                            | Value                       |
-| ------------------------------- | --------------------------- |
-| `KEIKO_QUALITY_MODEL_TOKEN`     | model provider credential   |
-| `KEIKO_QUALITY_APP_ID`          | the App's numeric id        |
-| `KEIKO_QUALITY_APP_PRIVATE_KEY` | the App's private key (PEM) |
+| Name                            | Value                                                |
+| ------------------------------- | ---------------------------------------------------- |
+| `KEIKO_QUALITY_MODEL_ENDPOINT`  | e.g. `https://<resource>.openai.azure.com/openai/v1` |
+| `KEIKO_QUALITY_MODEL_TOKEN`     | model provider credential                            |
+| `KEIKO_QUALITY_APP_ID`          | the App's numeric id                                 |
+| `KEIKO_QUALITY_APP_PRIVATE_KEY` | the App's private key (PEM)                          |
+
+The endpoint is a secret, not a variable: it can be a private provider address, and this repository's
+redaction contract states that logs carry no endpoints.
+
+### 4. Retrigger the pull requests that are already open
+
+Setting a variable emits **no** pull-request activity event. Every eligible `dev` pull request that
+is already open with an unchanged head therefore still has no reviewer run, and the delivery policy
+only waits for runs that actually started. Provisioning is not finished until those heads have been
+reviewed:
+
+```bash
+gh pr list --base dev --state open --json number --jq '.[].number' | while read -r n; do
+  gh pr ready "$n" --undo && gh pr ready "$n"   # emits ready_for_review on the current head
+done
+```
+
+Then confirm every eligible open pull request has a `keiko-for-quality` run on its **current** head
+before treating the reviewer as active.
 
 Pin a provider snapshot in `KEIKO_QUALITY_MODEL_ID` where the provider offers one. Behaviour drifts
 behind a stable identifier, and the qualification evidence is bound to the identifier that produced
