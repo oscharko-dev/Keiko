@@ -338,8 +338,9 @@ branch-protection change.
    ```
 
 Reversing it is the provisioning sequence again, not a single variable change, and in the same
-order: **run the delivery hold from provisioning step 4 first** and do not set the variable if it
-aborts, then set `KEIKO_QUALITY_ENABLED` back to `true`, then retrigger the open pull requests, then
+order — **including both runs of the hold**: run `hold.sh` and do not set the variable if it aborts,
+set `KEIKO_QUALITY_ENABLED` back to `true`, **run `hold.sh` a second time** to catch anything that
+opened or became ready while the reviewer was still off, then retrigger the open pull requests, then
 re-arm each one only after its current-head review has terminated under the ADR-0170 D5 interlock.
 Re-enabling emits no pull-request event either, so an already-armed pull request whose last required
 check turns green in that window is integrated unreviewed — the same hazard as the initial
