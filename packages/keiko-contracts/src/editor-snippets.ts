@@ -666,6 +666,11 @@ function globEpsilonClosure(seed: ReadonlySet<number>, tokens: readonly GlobToke
   return closure;
 }
 
+function advanceGlobstarDirectory(state: number, char: string, nextStates: Set<number>): void {
+  nextStates.add(state + 1);
+  if (char === "/") nextStates.add(state + 2);
+}
+
 function advanceGlobState(
   tokens: readonly GlobToken[],
   state: number,
@@ -684,7 +689,7 @@ function advanceGlobState(
       nextStates.add(state);
       return;
     case "globstar-directory":
-      nextStates.add(state + 1);
+      advanceGlobstarDirectory(state, char, nextStates);
       return;
     case "globstar-directory-tail":
       nextStates.add(state);
