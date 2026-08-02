@@ -4,6 +4,10 @@ name: keiko-for-quality
 # review conversations. This workflow adds no required status context: blocking comes solely from
 # GitHub's existing Required Conversation Resolution rule acting on what the reviewer publishes.
 #
+# `pull-requests: write` is enough to submit an APPROVE review, so the platform does not withhold
+# approval — only the pinned action's behaviour does, and that is pinned by a test upstream
+# (ADR-0170 D3). Treat the capability as present when assessing a compromised action.
+#
 # `pull_request_target` is deliberate and is what makes this safe rather than what makes it risky:
 # GitHub takes the workflow definition from the protected base, so a candidate cannot alter what
 # runs. The candidate is never checked out — see the two checkout steps below.

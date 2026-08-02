@@ -29,6 +29,7 @@
     "**/*.messages.json",
     "**/*i18n*.json",
     "docs/qa/**/*.md",
+    "docs/security-and-audit-boundaries.md",
     "**/Dockerfile*",
     "**/Makefile",
     "**/package.json",
@@ -80,7 +81,8 @@
     ".github/**",
     "CLAUDE.md",
     "CODEX.md",
-    "docs/qa/**/*.md"
+    "docs/qa/**/*.md",
+    "docs/security-and-audit-boundaries.md"
   ],
   "generated": [
     "**/dist/**",

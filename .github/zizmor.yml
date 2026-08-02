@@ -67,9 +67,11 @@ rules:
       # a full commit SHA, so the executed implementation is immutable and outside candidate reach -
       # deliberately NOT a digest pin over this repository's own tree, which ADR-0169 D4 prohibits.
       # The model credential is environment-scoped and passed by variable name, never as an input.
-      # Verified with the pinned scanner version: zizmor 1.27.0 reports this one finding for this
-      # file and nothing else.
-      - keiko-for-quality.yml:10
+      # Verified with the version the required job actually pins — zizmor 1.26.1, per
+      # workflow-hygiene.yml — which reports this one finding for this file and nothing else.
+      # This anchor is a LINE NUMBER: adding a comment above the trigger silently invalidates it and
+      # turns the required context red. That happened once already, on this very entry.
+      - keiko-for-quality.yml:14
   misfeature:
     ignore:
       # Windows MSVC toolchain setup must call vswhere.exe and vcvars64.bat, which are

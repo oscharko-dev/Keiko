@@ -14,8 +14,13 @@ It reads the exact change on an eligible `dev` pull request, runs a model over i
 findings as native review conversations. Each unresolved conversation blocks the merge through the
 existing Required Conversation Resolution rule.
 
-It publishes **no required status check**. It cannot write code, commit, push, merge, change branch
-protection, or approve. The ten App-bound required checks from ADR-0169 D3 are untouched.
+It publishes **no required status check**. It cannot write code, commit, push, merge, or change
+branch protection. The ten App-bound required checks from ADR-0169 D3 are untouched.
+
+Approval is a different case and ADR-0170 D3 states it precisely: GitHub accepts an `APPROVE` review
+from any token holding `pull-requests: write`, which both the App token and `GITHUB_TOKEN` hold. The
+platform does not withhold it — the pinned action's behaviour does, and that behaviour is pinned by
+a test upstream. When assessing a compromised or defective action, assume the capability exists.
 
 ## Provisioning
 
@@ -85,13 +90,20 @@ reviewed:
 ```bash
 # Non-draft, same-repository heads only, and an explicit limit — `gh pr list` returns 30 by default.
 # The draft filter is not cosmetic: `gh pr ready` on a draft would PUBLISH someone else's draft.
+# Abort on the first failure rather than continuing: a pull request whose `--undo` succeeded and
+# whose `ready` failed is left AS A DRAFT, which is exactly the state that makes it ineligible.
+set -euo pipefail
 gh pr list --base dev --state open --limit 200 \
   --json number,isDraft,headRepositoryOwner,headRepository \
   --jq '.[] | select(.isDraft == false)
             | select(.headRepositoryOwner.login == "oscharko-dev" and .headRepository.name == "Keiko")
             | .number' |
 while read -r n; do
-  gh pr ready "$n" --undo && gh pr ready "$n"   # emits ready_for_review on the current head
+  gh pr ready "$n" --undo || { echo "FAILED to unset ready on #$n" >&2; exit 1; }
+  if ! gh pr ready "$n"; then
+    echo "FAILED to restore ready on #$n — it is STILL A DRAFT, fix it before continuing" >&2
+    exit 1
+  fi
 done
 ```
 
@@ -126,9 +138,15 @@ only by adding a language, which is rarer and more visible. Entitlement property
 configuration (`sonar-project.properties`, `osv-scanner.toml`, `.coderabbit.yaml`), and the
 `docs/qa/*.json` ratchet baselines are named explicitly because each is a way to weaken a gate.
 
-Verify a profile change the same way: enumerate every tracked file, classify it, and confirm that no
-code-like path lands in the catch-all. Sampling recent commits is not enough — it was exactly what
-missed all three gaps above.
+Verify a profile change the same way: enumerate every tracked file, classify it, and confirm that
+none is unclassified and no code-like path is excluded. There is no catch-all to audit against —
+that is the point. Sampling recent commits is not enough; it was exactly what missed all three gaps
+above.
+
+**A new file type cannot be classified by the pull request that introduces it.** The review reads
+the profile from the protected base, so a profile edit in the same head has no effect on that run —
+every rerun stays `inventory.unclassified_path` and publishes a blocking incomplete-review notice.
+Land a profile-only pull request first, then rebase the change onto it.
 
 **There is no benign-warning allowlist.** `context_truncated` was allowlisted at first, with a
 justification admitting the file was reviewed only in part. That permitted a clean verdict over a
@@ -179,24 +197,33 @@ branch-protection change.
    during a precision failure that is exactly the window that matters.
 
    ```bash
-   # Fails closed. A query failure must not read as "no runs left", and a failed cancellation must
-   # not be skipped — during a precision incident both would leave credentialed runs publishing.
-   # Each cancellable status is queried separately: a single --limit over mixed statuses can push
-   # an older active run outside the newest results.
+   # Fails closed for real. Two Bash behaviours defeat the obvious version of this loop:
+   # `set -e` does not apply inside a command substitution, and a `for` compound returns the
+   # status of its LAST iteration — so an early failed query followed by a successful one would
+   # yield a short list and the loop would exit reporting containment it never achieved.
+   # Each query's status is therefore checked on its own line.
    set -euo pipefail
    while :; do
-     ids=$(for st in queued in_progress requested waiting pending; do
-       gh run list --workflow keiko-for-quality.yml --status "$st" --limit 100 \
-         --json databaseId --jq '.[].databaseId'
-     done | sort -u)
-     [ -z "$ids" ] && break
-     failed=0
-     for id in $ids; do
-       gh run cancel "$id" || { echo "FAILED to cancel run $id" >&2; failed=1; }
+     ids=""
+     for st in queued in_progress requested waiting pending; do
+       if ! page=$(gh run list --workflow keiko-for-quality.yml --status "$st" \
+                     --limit 100 --json databaseId --jq '.[].databaseId'); then
+         echo "FAILED to list $st runs — containment NOT established" >&2
+         exit 1
+       fi
+       ids="${ids}${page}"$'\n'
      done
-     [ "$failed" -eq 1 ] && { echo "cancel incomplete — do not proceed" >&2; exit 1; }
+     ids=$(printf '%s' "$ids" | grep -v '^$' | sort -u || true)
+     [ -z "$ids" ] && break
+     for id in $ids; do
+       if ! gh run cancel "$id"; then
+         echo "FAILED to cancel run $id — containment NOT established" >&2
+         exit 1
+       fi
+     done
      sleep 5
    done
+   echo "no cancellable reviewer runs remain"
    ```
 
 Reverse it by setting `KEIKO_QUALITY_ENABLED` back to `true`, then retrigger the open pull
