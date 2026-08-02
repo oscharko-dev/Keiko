@@ -325,6 +325,7 @@ describe("handleGatewaySetup", () => {
             modelId: "model/one",
             baseUrl: "https://llm-gateway.example.com/v1",
             apiKey: "example-secret-token",
+            timeoutMs: 45_678,
             capability: {
               kind: "chat",
               toolCalling: true,
@@ -368,12 +369,45 @@ describe("handleGatewaySetup", () => {
     const persisted = readFileSync(gatewayConfig.storagePath, "utf8");
     expect(persisted).toContain('"toolCalling": false');
     expect(persisted).toContain('"supportsResponseFormat": false');
+    expect(JSON.parse(persisted)).toMatchObject({
+      providers: [expect.objectContaining({ timeoutMs: 45_678 })],
+    });
     expect(persisted).not.toContain("example-secret-token");
     const replay = await handleApplyGatewayVerifiedCapabilities(
       { ...ctx({ fields: { toolCalling: false } }), params: { modelId: "model%2Fone" } },
       deps,
     );
     expect(replay.status).toBe(409);
+    deps.store.close();
+  });
+
+  it("replaces an older partial capability observation instead of refreshing its fields", async () => {
+    const uiDir = await tempDir("keiko-gw-capability-replace-observation-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-capability-replace-observation-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    gatewayConfig.recordVerifiedCapability(
+      "model-one",
+      { toolCalling: true },
+      "2026-08-02T08:00:00.000Z",
+    );
+    gatewayConfig.recordVerifiedCapability(
+      "model-one",
+      { streaming: true },
+      "2026-08-02T08:01:00.000Z",
+    );
+
+    expect(gatewayConfig.verifiedCapability("model-one")).toEqual({
+      modelId: "model-one",
+      generation: 0,
+      checkedAt: "2026-08-02T08:01:00.000Z",
+      fields: { streaming: true },
+    });
     deps.store.close();
   });
 

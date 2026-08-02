@@ -1054,12 +1054,11 @@ function createRuntimeGatewayConfig(
       verifiedCapabilities.get(modelId),
     recordVerifiedCapability: (modelId, fields, checkedAt, observedGeneration): void => {
       if (observedGeneration !== undefined && observedGeneration !== generation) return;
-      const previous = verifiedCapabilities.get(modelId);
       verifiedCapabilities.set(modelId, {
         modelId,
         generation,
         checkedAt,
-        fields: { ...(previous?.generation === generation ? previous.fields : {}), ...fields },
+        fields: { ...fields },
       });
     },
     clearVerifiedCapability: (modelId, observedGeneration): boolean => {

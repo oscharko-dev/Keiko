@@ -291,6 +291,15 @@ WHERE (scope_kind, scope_coordinate) IN (${scopePredicate(scopes)})
 `;
 }
 
+function ledgerCursorScopeSql(scopes: readonly MemoryScope[]): string {
+  return `
+SELECT 1 FROM memory_tombstones
+WHERE id = ? AND forgotten_at = ?
+  AND (scope_kind, scope_coordinate) IN (${scopePredicate(scopes)})
+LIMIT 1
+`;
+}
+
 function compareLedgerRows(left: TombstoneRow, right: TombstoneRow): number {
   return right.forgotten_at - left.forgotten_at || left.id.localeCompare(right.id);
 }
@@ -314,6 +323,21 @@ function ledgerCountForScopes(db: DatabaseSync, scopes: readonly MemoryScope[]):
   const row = cachedPrepare(db, ledgerCountSql(scopes)).get(...scopeBindings(scopes)) as
     { readonly count: number } | undefined;
   return row?.count ?? 0;
+}
+
+export function tombstoneLedgerCursorBelongsToScopes(
+  db: DatabaseSync,
+  scopes: readonly MemoryScope[],
+  cursor: MemoryTombstoneLedgerCursor,
+): boolean {
+  return scopeChunks(scopes).some((chunk) => {
+    const row = cachedPrepare(db, ledgerCursorScopeSql(chunk)).get(
+      cursor.id,
+      cursor.forgottenAt,
+      ...scopeBindings(chunk),
+    );
+    return row !== undefined;
+  });
 }
 
 export function listTombstonesPageRows(

@@ -59,6 +59,7 @@ import {
   listTombstonesPageRows,
   listTombstonesByScopeRows,
   selectForgetSuppressionBodyHashPresence,
+  tombstoneLedgerCursorBelongsToScopes,
   updateTombstoneBodyHashByScopeRows,
 } from "./tombstones.js";
 import {
@@ -640,6 +641,22 @@ function gateTombstonePageLimit(limit: number): number {
   return limit;
 }
 
+function gateTombstoneLedgerCursor(
+  db: DatabaseSync,
+  scopes: readonly MemoryScope[],
+  after: MemoryTombstoneLedgerCursor | undefined,
+): void {
+  if (after === undefined) return;
+  const shapeIsValid =
+    Number.isSafeInteger(after.forgottenAt) &&
+    after.forgottenAt >= 0 &&
+    after.id.length > 0 &&
+    after.id.length <= 200;
+  if (!shapeIsValid || !tombstoneLedgerCursorBelongsToScopes(db, scopes, after)) {
+    throw new MemoryStorageValidationError("Invalid tombstone page cursor.", []);
+  }
+}
+
 function validatedTombstonePage(
   db: DatabaseSync,
   opts: ResolvedOptions,
@@ -648,7 +665,9 @@ function validatedTombstonePage(
   after: MemoryTombstoneLedgerCursor | undefined,
 ): MemoryTombstonePage {
   for (const scope of scopes) gateMemoryScope(scope);
-  return listTombstonesPageRows(db, scopes, opts.cipher, gateTombstonePageLimit(limit), after);
+  const boundedLimit = gateTombstonePageLimit(limit);
+  gateTombstoneLedgerCursor(db, scopes, after);
+  return listTombstonesPageRows(db, scopes, opts.cipher, boundedLimit, after);
 }
 
 function buildEdgeOps(db: DatabaseSync, opts: ResolvedOptions): EdgeOps {

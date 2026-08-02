@@ -69,6 +69,34 @@ describe("tombstones", () => {
     }
   });
 
+  it("rejects a continuation cursor from outside the requested scope set", () => {
+    const dir = freshFactoryDir();
+    const vault = createMemoryVault({
+      memoryDir: dir,
+      env: { KEIKO_MEMORY_DIR: dir },
+      vaultKey: TEST_VAULT_KEY,
+      newTombstoneId: () => "foreign-scope-cursor",
+    });
+    try {
+      const record = happyRecord("foreign-scope-memory");
+      vault.insertMemory(record);
+      vault.deleteMemory(record.id, {
+        tombstone: true,
+        forgetterSurface: "test",
+        nowMs: 1_700_000_000_001,
+      });
+
+      expect(() =>
+        vault.listTombstonesPage([workspaceScope], 10, {
+          forgottenAt: 1_700_000_000_001,
+          id: "foreign-scope-cursor",
+        }),
+      ).toThrow(MemoryStorageValidationError);
+    } finally {
+      vault.close();
+    }
+  });
+
   it("finds an older semantic refusal through bounded indexed pages", () => {
     const db = openTestDb();
     for (let index = 0; index < 250; index += 1) {
