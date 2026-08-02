@@ -24,9 +24,9 @@ import {
   gitDeliveryBranchNameMatchesAny,
   gitDeliveryTargetIsProtectedBranch,
   isGitDeliveryActionKind,
-  isGitDeliveryConstraint,
+  isGitDeliveryNonEmptyConstraints,
 } from "./git-delivery.js";
-export { isGitDeliveryProviderCapability } from "./git-delivery.js";
+export { isGitDeliveryConstraint, isGitDeliveryProviderCapability } from "./git-delivery.js";
 
 export const GIT_DELIVERY_POLICY_SCHEMA_VERSION = "1" as const;
 
@@ -235,10 +235,10 @@ export interface GitDeliveryEffectivePolicyContext {
   readonly activeProviderCapabilities: readonly GitDeliveryProviderCapability[];
 }
 
-export interface GitDeliveryEffectivePolicy {
-  readonly outcome: "allowed" | "blocked" | "approval-gated";
-  readonly blockReason?: GitDeliveryBlockReason | undefined;
-}
+export type GitDeliveryEffectivePolicy =
+  | { readonly outcome: "allowed" }
+  | { readonly outcome: "approval-gated" }
+  | { readonly outcome: "blocked"; readonly blockReason: GitDeliveryBlockReason };
 
 /** Maps ONE unsatisfied constraint to its typed block reason; a satisfied constraint yields undefined. */
 export function gitDeliveryConstraintBlockReason(
@@ -314,14 +314,6 @@ function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T
   return (v: unknown): v is T | undefined => v === undefined || check(v);
 }
 
-function isConstraintArray(value: unknown): value is readonly GitDeliveryConstraint[] {
-  if (!Array.isArray(value) || value.length === 0) return false;
-  for (const constraint of value) {
-    if (!isGitDeliveryConstraint(constraint)) return false;
-  }
-  return true;
-}
-
 function isRuleDecision(value: unknown): value is GitDeliveryRuleDecision {
   return (
     typeof value === "string" && (GIT_DELIVERY_RULE_DECISIONS as readonly string[]).includes(value)
@@ -329,8 +321,6 @@ function isRuleDecision(value: unknown): value is GitDeliveryRuleDecision {
 }
 
 // ─── Guards ──────────────────────────────────────────────────────────────────────
-
-export { isGitDeliveryConstraint };
 
 function isActionKind(value: unknown): boolean {
   return isGitDeliveryActionKind(value);
@@ -344,7 +334,7 @@ function decisionShapeValid(value: Record<string, unknown>): boolean {
     return isUndefinedOr(isStringArray)(value.requiredApprovers);
   }
   if (value.decision === "constrained") {
-    return isConstraintArray(value.constraints);
+    return isGitDeliveryNonEmptyConstraints(value.constraints);
   }
   return true;
 }

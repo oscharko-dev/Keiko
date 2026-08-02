@@ -233,7 +233,7 @@ function deriveMergePreviewParts(
   const requiresApproval = effective.outcome === "approval-gated";
   return {
     effectiveOutcome: effective.outcome,
-    ...(effective.blockReason !== undefined ? { blockReason: effective.blockReason } : {}),
+    ...(effective.outcome === "blocked" ? { blockReason: effective.blockReason } : {}),
     requiresApproval,
     eligibleStrategies: eligibility.eligible,
     ...(eligibility.selectedDefault !== undefined

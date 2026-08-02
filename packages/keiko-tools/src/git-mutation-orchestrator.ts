@@ -18,7 +18,6 @@ import type {
   GitDeliveryActionPreview,
   GitDeliveryApprovalRequirement,
   GitDeliveryBlockReason,
-  GitDeliveryConstraint,
   GitDeliveryExecutionResult,
   GitDeliveryOrgPolicyPack,
   GitDeliveryPolicyContext,
@@ -29,9 +28,9 @@ import type {
   GitDeliveryResolvedInputs,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  evaluateGitDeliveryEffectivePolicy,
   evaluateGitPolicy,
   GIT_DELIVERY_SCHEMA_VERSION,
-  gitDeliveryConstraintBlockReason,
   gitDeliveryRiskClassForInputs,
 } from "@oscharko-dev/keiko-contracts";
 import type { GitLocalMutationAdapter } from "./git-mutation-adapter.js";
@@ -336,37 +335,8 @@ function resolveApprovalGate(
   return { proceed: false, status: "approval-required", requiredApprovers: approvers };
 }
 
-// Maps an unsatisfied constraint to its typed block reason. A satisfied constraint returns undefined.
-// Delegates to the contract-owned resolver so this gate and every preview surface resolve a
-// `constrained` decision identically.
-function constraintBlockReason(
-  constraint: GitDeliveryConstraint,
-  inputs: GitDeliveryResolvedInputs,
-  target: string | undefined,
-  capabilities: readonly GitDeliveryProviderCapability[],
-): GitDeliveryBlockReason | undefined {
-  return gitDeliveryConstraintBlockReason(constraint, {
-    riskClass: gitDeliveryRiskClassForInputs(inputs),
-    targetBranchName: target,
-    activeProviderCapabilities: capabilities,
-  });
-}
-
-function resolveConstrainedGate(
-  constraints: readonly GitDeliveryConstraint[],
-  inputs: GitDeliveryResolvedInputs,
-  target: string | undefined,
-  capabilities: readonly GitDeliveryProviderCapability[],
-): PolicyGate {
-  for (const constraint of constraints) {
-    const reason = constraintBlockReason(constraint, inputs, target, capabilities);
-    if (reason !== undefined) {
-      return { proceed: false, status: "policy-block", blockReason: reason };
-    }
-  }
-  return { proceed: true };
-}
-
+// Delegates effective constraint resolution to the contract-owned evaluator so every execution and
+// preview surface applies the same first-block-reason semantics.
 function resolvePolicyGate(
   decision: GitDeliveryPolicyDecision,
   inputs: GitDeliveryResolvedInputs,
@@ -375,17 +345,22 @@ function resolvePolicyGate(
   capabilities: readonly GitDeliveryProviderCapability[],
   now: number,
 ): PolicyGate {
-  if (decision.outcome === "allowed") {
+  const effective = evaluateGitDeliveryEffectivePolicy(decision, {
+    riskClass: gitDeliveryRiskClassForInputs(inputs),
+    targetBranchName: target,
+    activeProviderCapabilities: capabilities,
+  });
+  if (effective.outcome === "allowed") {
     return { proceed: true };
   }
-  if (decision.outcome === "blocked") {
-    return { proceed: false, status: "policy-block", blockReason: decision.reason };
+  if (effective.outcome === "blocked") {
+    return { proceed: false, status: "policy-block", blockReason: effective.blockReason };
   }
-  const constraints =
-    decision.outcome === "approval-gated" ? (decision.constraints ?? []) : decision.constraints;
-  const constraintGate = resolveConstrainedGate(constraints, inputs, target, capabilities);
-  if (!constraintGate.proceed || decision.outcome === "constrained") return constraintGate;
-  return resolveApprovalGate(decision.requiredApprovers, request.approval, now);
+  return resolveApprovalGate(
+    decision.outcome === "approval-gated" ? decision.requiredApprovers : [],
+    request.approval,
+    now,
+  );
 }
 
 // ─── Phase 5: execution dispatch ─────────────────────────────────────────────────────────────

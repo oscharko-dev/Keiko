@@ -7,7 +7,10 @@ import { describe, expect, it, vi } from "vitest";
 import { redact } from "@oscharko-dev/keiko-security";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { GitDeliveryEvidenceRecord } from "@oscharko-dev/keiko-contracts";
+import {
+  GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION,
+  type GitDeliveryEvidenceRecord,
+} from "@oscharko-dev/keiko-contracts";
 import {
   gitDeliveryEvidenceRunIdFor,
   recordGitDeliveryMutationEvidence,
@@ -24,7 +27,7 @@ const BEARER_FAKE = ["Bearer ", "abcdef0123456789ABCDEF0123456789abcd"].join("")
 
 function record(overrides: Partial<GitDeliveryEvidenceRecord> = {}): GitDeliveryEvidenceRecord {
   return {
-    schemaVersion: "1",
+    schemaVersion: GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION,
     evidenceId: "gde-fixture-0000000000000000000000000000",
     actionKind: "commit",
     riskClass: "local-mutation",

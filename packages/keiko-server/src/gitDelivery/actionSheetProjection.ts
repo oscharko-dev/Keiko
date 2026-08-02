@@ -121,7 +121,7 @@ function effectivePolicyDecision(
   // A constrained decision whose constraints all pass is genuinely allowed; one that fails is blocked
   // with the gate's own reason. Reporting the raw "constrained" here is what let the sheet look ready.
   return effective.outcome === "blocked"
-    ? { outcome: "blocked", reason: effective.blockReason ?? "policy-pack-blocked" }
+    ? { outcome: "blocked", reason: effective.blockReason }
     : decision;
 }
 

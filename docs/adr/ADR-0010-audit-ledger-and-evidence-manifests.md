@@ -339,6 +339,8 @@ export interface EvidenceStore {
   readonly list: () => readonly string[];
   // Load one manifest's raw JSON by runId, or undefined if absent.
   readonly get: (runId: string) => string | undefined;
+  // Atomically transform one manifest when the adapter supports serialized append/update.
+  readonly update?: (runId: string, transform: (current: string | undefined) => string) => string;
   // Return the manifest location used in reports.
   readonly location?: ((runId: string) => string) | undefined;
   // Delete one ledger-created manifest by runId (used by retention, D6). No-op if absent.
@@ -578,7 +580,7 @@ store, the redactor, the index API, or the retention logic. This is flagged for 
 | `aggregate.ts` | `aggregateUsage(events): EvidenceUsageTotals` — pure fold (D7); `resolveCostClass(modelId): CostClass \| "unknown"` via `findCapability`. |
 | `build.ts` | `buildEvidenceManifest(input, deps): EvidenceManifest` — the redacted-by-construction builder mapping a `RunResult`/`RunManifest` (+ optional verification/context summaries) into the manifest, applying the per-event field map (D2/D3/D7/D8). |
 | `runid.ts` | `assertValidRunId(runId): void` (pure, bounded char-class validation — D4 iii). |
-| `store.ts` | `EvidenceStore` port; `createNodeEvidenceStore(baseDir, fs?)` (atomic temp+rename, realpath-contained, no-symlink-follow); `createInMemoryEvidenceStore()` for tests. |
+| `store.ts` | `EvidenceStore` port (`put`, optional atomic `update`, `get`, `list`, `location`, `delete`); `createNodeEvidenceStore(baseDir, fs?)` (atomic temp+rename, realpath-contained, no-symlink-follow); `createInMemoryEvidenceStore()` for tests. |
 | `index-api.ts` | `listEvidence`, `loadEvidence`, `EvidenceListEntry` (D5). |
 | `retention.ts` | `applyRetention(store, policy)` — bounded, deletion-safe (D6). |
 | `report.ts` | `buildEvidenceReport(manifest, location)`, `renderEvidenceReport(report)` (D9). Pure. |

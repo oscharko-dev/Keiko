@@ -138,6 +138,9 @@ describe("isCommandAllowed — deny-by-default", () => {
   it("denies npm audit fix because it mutates the dependency tree and lockfile", () => {
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["audit", "fix"]).allowed).toBe(false);
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["audit", "--fix"]).allowed).toBe(false);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["audit", "--fix=true"]).allowed).toBe(
+      false,
+    );
     expect(
       isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["audit", "--fix", "--force"]).allowed,
     ).toBe(false);

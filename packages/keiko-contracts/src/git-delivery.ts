@@ -486,7 +486,9 @@ function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every(isString);
 }
 
-function isNonEmptyConstraintArray(value: unknown): value is GitDeliveryNonEmptyConstraints {
+export function isGitDeliveryNonEmptyConstraints(
+  value: unknown,
+): value is GitDeliveryNonEmptyConstraints {
   return Array.isArray(value) && value.length > 0 && value.every(isGitDeliveryConstraint);
 }
 
@@ -637,11 +639,11 @@ export function isGitDeliveryPolicyDecision(value: unknown): value is GitDeliver
   if (value.outcome === "approval-gated") {
     return (
       isStringArray(value.requiredApprovers) &&
-      (value.constraints === undefined || isNonEmptyConstraintArray(value.constraints))
+      (value.constraints === undefined || isGitDeliveryNonEmptyConstraints(value.constraints))
     );
   }
   if (value.outcome === "constrained") {
-    return isNonEmptyConstraintArray(value.constraints);
+    return isGitDeliveryNonEmptyConstraints(value.constraints);
   }
   return false;
 }

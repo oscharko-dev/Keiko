@@ -214,4 +214,67 @@ describe("applyRetention — robustness", () => {
     }).not.toThrow();
     expect(store.list()).toContain("good");
   });
+
+  it("retains manifests whose task type is inherited, empty, or malformed", () => {
+    const store = createInMemoryEvidenceStore();
+    store.put("valid-old", JSON.stringify(manifest("valid-old", 90, 100)));
+    store.put("valid-new", JSON.stringify(manifest("valid-new", 190, 200)));
+    for (const [runId, taskType] of [
+      ["hostile-constructor", "constructor"],
+      ["hostile-to-string", "toString"],
+      ["hostile-proto", "__proto__"],
+      ["empty-task", ""],
+      ["malformed-task", null],
+    ] as const) {
+      store.put(runId, JSON.stringify({ run: { finishedAt: 300, taskType } }));
+    }
+
+    applyRetention(store, { maxRuns: 1 });
+
+    expect(store.get("valid-old")).toBeUndefined();
+    expect(store.get("valid-new")).toBeDefined();
+    for (const runId of [
+      "hostile-constructor",
+      "hostile-to-string",
+      "hostile-proto",
+      "empty-task",
+      "malformed-task",
+    ]) {
+      expect(store.get(runId)).toBeDefined();
+    }
+  });
+
+  it("retains non-record and non-finite headers without sacrificing valid evidence", () => {
+    const store = createInMemoryEvidenceStore();
+    store.put("valid-old", JSON.stringify(manifest("valid-old", 90, 100)));
+    store.put("valid-new", JSON.stringify(manifest("valid-new", 190, 200)));
+    const invalidRows: readonly (readonly [string, string])[] = [
+      ["null-root", "null"],
+      ["array-root", "[]"],
+      ["null-run", '{"run":null}'],
+      ["array-run", '{"run":[]}'],
+      ["missing-header", '{"run":{}}'],
+      ["infinite-header", '{"run":{"finishedAt":1e400,"taskType":"verify"}}'],
+    ];
+    for (const [runId, json] of invalidRows) store.put(runId, json);
+
+    applyRetention(store, { maxRuns: 1 });
+
+    expect(store.get("valid-old")).toBeUndefined();
+    expect(store.get("valid-new")).toBeDefined();
+    for (const [runId] of invalidRows) expect(store.get(runId)).toBeDefined();
+  });
+
+  it("accepts finite boundary timestamps for known task types", () => {
+    const store = createInMemoryEvidenceStore();
+    store.put("zero", JSON.stringify(manifest("zero", 0, 0, "generate-unit-tests")));
+    store.put(
+      "maximum",
+      JSON.stringify(manifest("maximum", Number.MAX_SAFE_INTEGER - 1, Number.MAX_SAFE_INTEGER)),
+    );
+
+    applyRetention(store, { maxRuns: 1 });
+
+    expect(store.list()).toEqual(["maximum"]);
+  });
 });

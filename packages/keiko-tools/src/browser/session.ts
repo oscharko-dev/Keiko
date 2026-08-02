@@ -662,6 +662,12 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
   }
 
   public readonly openSession = async (cdpPort: number): Promise<BrowserSessionMeta> => {
+    if (this.opts.evidenceStore !== undefined && this.evidenceManifestWriter === undefined) {
+      throw new BrowserToolError(
+        "EVIDENCE_MANIFEST_WRITER_MISSING",
+        "Evidence manifest writer is unavailable.",
+      );
+    }
     normalizeCdpPort(cdpPort);
     // M2: reserve the slot synchronously before any await, closing the TOCTOU window where
     // concurrent calls could each pass the size check and then all succeed.

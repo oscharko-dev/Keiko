@@ -112,6 +112,11 @@ function hasNul(value: string): boolean {
   return value.includes("\u0000");
 }
 
+function argumentName(argument: string): string {
+  const equalsIndex = argument.indexOf("=");
+  return equalsIndex === -1 ? argument : argument.slice(0, equalsIndex);
+}
+
 // Resolves the subcommand: the first non-flag token, skipping leading flags AND the value of any
 // value-taking flag (`--prefix DIR`, `-C DIR`). This is the S-H2 fix — a value can no longer
 // masquerade as the subcommand. `--flag=value` carries its value inline, so only the flag token is
@@ -142,10 +147,7 @@ function hasDeniedFlag(rule: CommandRule, args: readonly string[]): boolean {
   if (denied === undefined) {
     return false;
   }
-  return args.some((arg) => {
-    const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
-    return denied.includes(flag);
-  });
+  return args.some((argument) => denied.includes(argumentName(argument)));
 }
 
 function hasDeniedSubcommandArgument(
@@ -157,7 +159,7 @@ function hasDeniedSubcommandArgument(
   const bySubcommand = rule.deniedArgumentsBySubcommand;
   if (bySubcommand === undefined || !Object.hasOwn(bySubcommand, subcommand)) return false;
   const denied = bySubcommand[subcommand];
-  return denied !== undefined && args.some((argument) => denied.includes(argument));
+  return denied !== undefined && args.some((argument) => denied.includes(argumentName(argument)));
 }
 
 function hasRequiredLeadingFlags(rule: CommandRule, args: readonly string[]): boolean {

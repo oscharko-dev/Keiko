@@ -13,6 +13,7 @@ import type {
   GitDeliveryAuditPacket,
   GitDeliveryEvidenceRecord,
 } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
@@ -27,7 +28,7 @@ const SK_FAKE = ["sk", "-live-", "ZYXWVUTSRQPONMLK9876543210"].join("");
 
 function record(overrides: Partial<GitDeliveryEvidenceRecord> = {}): GitDeliveryEvidenceRecord {
   return {
-    schemaVersion: "1",
+    schemaVersion: GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION,
     evidenceId: "gde-route-00000000000000000000000000000000",
     actionKind: "commit",
     riskClass: "local-mutation",
@@ -173,7 +174,7 @@ describe("GET /api/git-delivery/evidence — defence in depth (AC5)", () => {
     });
     store.put(
       gitDeliveryEvidenceRunIdFor(NOW),
-      JSON.stringify({ schemaVersion: "1", records: [raw] }),
+      JSON.stringify({ schemaVersion: GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION, records: [raw] }),
     );
     const result = handler(ctx(), deps({}, store));
     const json = JSON.stringify(result.body);
@@ -185,7 +186,10 @@ describe("GET /api/git-delivery/evidence — defence in depth (AC5)", () => {
     const store = createInMemoryEvidenceStore();
     store.put(
       gitDeliveryEvidenceRunIdFor(NOW),
-      JSON.stringify({ schemaVersion: "1", records: [record(), { not: "a record" }] }),
+      JSON.stringify({
+        schemaVersion: GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION,
+        records: [record(), { not: "a record" }],
+      }),
     );
     const result = handler(ctx(), deps({}, store));
     const packet = result.body as GitDeliveryAuditPacket;
@@ -199,5 +203,20 @@ describe("GET /api/git-delivery/evidence — defence in depth (AC5)", () => {
     const result = handler(ctx(), deps({}, store));
     expect(result.status).toBe(200);
     expect((result.body as GitDeliveryAuditPacket).recordCount).toBe(0);
+  });
+
+  it("exports legacy constrained records that predate constraint binding", () => {
+    const store = createInMemoryEvidenceStore();
+    const legacy = record({ schemaVersion: "1", policyOutcome: "constrained" });
+    store.put(
+      gitDeliveryEvidenceRunIdFor(NOW),
+      JSON.stringify({ schemaVersion: "1", records: [legacy] }),
+    );
+
+    const result = handler(ctx(), deps({}, store));
+    const packet = result.body as GitDeliveryAuditPacket;
+
+    expect(packet.recordCount).toBe(1);
+    expect(packet.records[0]?.schemaVersion).toBe("1");
   });
 });

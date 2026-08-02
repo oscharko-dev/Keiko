@@ -670,9 +670,10 @@ describe("evaluateGitMergeEffectivePolicy — capability + ceiling constraints",
       outcome: "constrained",
       constraints: [{ kind: "provider-capability", capability: "merge-queue" }],
     };
-    expect(evaluateGitMergeEffectivePolicy(decision, "main", []).blockReason).toBe(
-      "provider-capability-absent",
-    );
+    expect(evaluateGitMergeEffectivePolicy(decision, "main", [])).toEqual({
+      outcome: "blocked",
+      blockReason: "provider-capability-absent",
+    });
     expect(evaluateGitMergeEffectivePolicy(decision, "main", ["merge-queue"]).outcome).toBe(
       "allowed",
     );
@@ -683,9 +684,10 @@ describe("evaluateGitMergeEffectivePolicy — capability + ceiling constraints",
       outcome: "constrained",
       constraints: [{ kind: "risk-class-ceiling", maxRiskClass: "local-mutation" }],
     };
-    expect(evaluateGitMergeEffectivePolicy(tooLow, "main", []).blockReason).toBe(
-      "risk-class-ceiling",
-    );
+    expect(evaluateGitMergeEffectivePolicy(tooLow, "main", [])).toEqual({
+      outcome: "blocked",
+      blockReason: "risk-class-ceiling",
+    });
     const atCeiling: GitDeliveryPolicyDecision = {
       outcome: "constrained",
       constraints: [{ kind: "risk-class-ceiling", maxRiskClass: "protected-or-merge" }],

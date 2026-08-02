@@ -20,9 +20,9 @@ import type {
   GitDeliveryActionPreview,
   GitDeliveryApprovalRequirement,
   GitDeliveryBlockReason,
-  GitDeliveryConstraint,
   GitDeliveryExecutionErrorCode,
   GitDeliveryExecutionResult,
+  GitDeliveryEffectivePolicy,
   GitDeliveryOrgPolicyPack,
   GitDeliveryPolicyContext,
   GitDeliveryPolicyDecision,
@@ -33,9 +33,9 @@ import type {
   GitDeliveryRepoPolicyPack,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  evaluateGitDeliveryEffectivePolicy,
   evaluateGitPolicy,
   GIT_DELIVERY_SCHEMA_VERSION,
-  gitDeliveryConstraintBlockReason,
   gitDeliveryPolicyTargetBranchName,
   gitDeliveryRiskClassForInputs,
 } from "@oscharko-dev/keiko-contracts";
@@ -436,31 +436,12 @@ function approvalState(
   return "valid";
 }
 
-// Delegates to the contract-owned resolver so this gate and every preview surface resolve a
-// `constrained` decision identically. The FORCE-AWARE risk class (a force push escalates to
-// recovery-or-rewrite, so the publish ceiling blocks it — AC4) is derived there from the same inputs.
-function constraintBlock(
-  constraint: GitDeliveryConstraint,
-  target: string | undefined,
-  capabilities: readonly GitDeliveryProviderCapability[],
-  pushInputs: GitDeliveryPushInputs,
-): GitDeliveryBlockReason | undefined {
-  return gitDeliveryConstraintBlockReason(constraint, {
-    riskClass: gitDeliveryRiskClassForInputs(pushInputs),
-    targetBranchName: target,
-    activeProviderCapabilities: capabilities,
-  });
-}
-
 // The EFFECTIVE policy outcome for a specific push target, evaluating a `constrained` decision's
 // constraints against the target (which `evaluateGitPolicy` deliberately leaves to the caller). The
 // read-only preview reuses this so it predicts the execute outcome exactly: a constrained-but-passing
 // target reads as "allowed", a failing one as "blocked" with the precise reason. Approval state is not
 // considered (the preview has no approval), so an approval-gated decision reads as "approval-gated".
-export interface GitPublishEffectivePolicy {
-  readonly outcome: "allowed" | "blocked" | "approval-gated";
-  readonly blockReason?: GitDeliveryBlockReason | undefined;
-}
+export type GitPublishEffectivePolicy = GitDeliveryEffectivePolicy;
 
 export function evaluateGitPublishEffectivePolicy(
   decision: GitDeliveryPolicyDecision,
@@ -468,23 +449,11 @@ export function evaluateGitPublishEffectivePolicy(
   capabilities: readonly GitDeliveryProviderCapability[],
   pushInputs: GitDeliveryPushInputs,
 ): GitPublishEffectivePolicy {
-  if (decision.outcome === "allowed") {
-    return { outcome: "allowed" };
-  }
-  if (decision.outcome === "blocked") {
-    return { outcome: "blocked", blockReason: decision.reason };
-  }
-  const constraints =
-    decision.outcome === "approval-gated" ? (decision.constraints ?? []) : decision.constraints;
-  for (const constraint of constraints) {
-    const reason = constraintBlock(constraint, target, capabilities, pushInputs);
-    if (reason !== undefined) {
-      return { outcome: "blocked", blockReason: reason };
-    }
-  }
-  return decision.outcome === "constrained"
-    ? { outcome: "allowed" }
-    : { outcome: "approval-gated" };
+  return evaluateGitDeliveryEffectivePolicy(decision, {
+    riskClass: gitDeliveryRiskClassForInputs(pushInputs),
+    targetBranchName: target,
+    activeProviderCapabilities: capabilities,
+  });
 }
 
 function resolvePublishGate(
@@ -495,27 +464,23 @@ function resolvePublishGate(
   pushInputs: GitDeliveryPushInputs,
   now: number,
 ): PublishGate {
-  if (decision.outcome === "allowed") {
+  const effective = evaluateGitPublishEffectivePolicy(decision, target, capabilities, pushInputs);
+  if (effective.outcome === "allowed") {
     return { proceed: true };
   }
-  if (decision.outcome === "blocked") {
-    return { proceed: false, status: "policy-block", reason: decision.reason };
+  if (effective.outcome === "blocked") {
+    return { proceed: false, status: "policy-block", reason: effective.blockReason };
   }
-  const constraints =
-    decision.outcome === "approval-gated" ? (decision.constraints ?? []) : decision.constraints;
-  for (const constraint of constraints) {
-    const reason = constraintBlock(constraint, target, capabilities, pushInputs);
-    if (reason !== undefined) {
-      return { proceed: false, status: "policy-block", reason };
-    }
-  }
-  if (decision.outcome === "constrained") return { proceed: true };
   const state = approvalState(approval, now);
   if (state === "valid") return { proceed: true };
   if (state === "expired") {
     return { proceed: false, status: "policy-block", reason: "approval-expired" };
   }
-  return { proceed: false, status: "approval-required", approvers: decision.requiredApprovers };
+  return {
+    proceed: false,
+    status: "approval-required",
+    approvers: decision.outcome === "approval-gated" ? decision.requiredApprovers : [],
+  };
 }
 
 // ─── Execution outcome mapping (reuses the taxonomy) ─────────────────────────────────────────

@@ -8,6 +8,11 @@ working, clean, secure code before correcting the affected ADR text in the same 
 identify defects and verify repairs, but never write to the pull-request branch, approve a gate
 bypass, dismiss a finding to obtain green status, or merge.
 
+This correction rule never authorizes weakening human control, authorization, trust boundaries,
+package direction, or release gates. A safe repair must preserve those controls and pass their
+unchanged gates; uncertainty about the intended control is escalated to the maintainer rather than
+resolved by silently widening authority.
+
 Canonical governance:
 
 - `AGENTS.md` and `CONTRIBUTING.md` define the contributor and agent contract.

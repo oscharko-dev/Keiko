@@ -152,7 +152,10 @@ Allowing later policy decisions to back-mutate an earlier audit row's payload. R
 ### Negative
 
 - The dual-surface placement adds a per-mutation branch in the audit writer; the branch is deterministic and tested but requires discipline.
-- Audit retention is decoupled from evidence retention (sibling table uses `maxAuditEntriesPerWorkspace`, manifest uses `maxRuns`), so two settings exist. The default values are picked conservatively.
+- Audit retention is decoupled from evidence retention: the sibling table uses
+  `maxAuditEntriesPerWorkspace`, while manifest defaults use `maxRunsByPartition` so chat/RAG
+  evidence cannot evict regulated evidence. `maxRuns` remains available only as an explicit global
+  cap for deployments that deliberately want cross-partition retention.
 - Operators expecting a persistent activity timeline will need to consult audit rows instead. The inspector surface re-derives the live view; the audit view answers the durable question.
 
 ### Risks and mitigations

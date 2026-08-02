@@ -56,6 +56,9 @@ describe("auxiliary branded-id and domain predicates", () => {
   it("accepts public domains and rejects ip literals, loopback, and schemes", () => {
     expect(isCodeTaskPublicDomain("developer.mozilla.org")).toBe(true);
     expect(isCodeTaskPublicDomain("localhost")).toBe(false);
+    expect(isCodeTaskPublicDomain("api.localhost")).toBe(false);
+    expect(isCodeTaskPublicDomain("localhost.localdomain")).toBe(false);
+    expect(isCodeTaskPublicDomain("api.localhost.localdomain")).toBe(false);
     expect(isCodeTaskPublicDomain("127.0.0.1")).toBe(false);
     expect(isCodeTaskPublicDomain("::1")).toBe(false);
     expect(isCodeTaskPublicDomain("169.254.169.254")).toBe(false);

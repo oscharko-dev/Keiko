@@ -41,18 +41,23 @@ import type {
 import {
   isGitDeliveryActionKind,
   isGitDeliveryBlockReason,
-  isGitDeliveryConstraint,
   isGitDeliveryEvidenceRef,
   isGitDeliveryExecutionErrorCode,
   isGitDeliveryExecutionOutcome,
+  isGitDeliveryNonEmptyConstraints,
   isGitDeliveryRecoveryStrategyHint,
   isGitDeliveryRiskClass,
 } from "./git-delivery.js";
 import type { GitDeliveryRecoveryActionHint } from "./git-delivery-action-sheet.js";
 import { isGitDeliveryRecoveryActionHint } from "./git-delivery-action-sheet.js";
 
-// Pinned schema version. A breaking change adds a NEW literal member; this one is never mutated.
-export const GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION = "1" as const;
+// Current write schema. Readers continue to accept schema 1 records because early constrained
+// records did not bind their constraints; schema 2 makes that binding mandatory without erasing
+// historical governed attempts from audit exports.
+const GIT_DELIVERY_LEGACY_EVIDENCE_SCHEMA_VERSION = "1" as const;
+export const GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION = "2" as const;
+type GitDeliveryEvidenceSchemaVersion =
+  typeof GIT_DELIVERY_LEGACY_EVIDENCE_SCHEMA_VERSION | typeof GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION;
 
 // ─── Outcome class (AC1) ──────────────────────────────────────────────────────────────
 // The terminal disposition every governed mutation attempt is recorded under. Successful, blocked,
@@ -172,7 +177,7 @@ export interface GitDeliveryEvidenceRepoContext {
 // ─── Evidence record (AC1/AC2/AC3) ────────────────────────────────────────────────────────
 
 export interface GitDeliveryEvidenceRecord {
-  readonly schemaVersion: typeof GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION;
+  readonly schemaVersion: GitDeliveryEvidenceSchemaVersion;
   readonly evidenceId: string; // deterministic, content-free (SHA-256 derived)
   readonly actionKind: GitDeliveryActionKind;
   readonly riskClass: GitDeliveryRiskClass;
@@ -335,10 +340,6 @@ function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every(isString);
 }
 
-function isConstraintArray(value: unknown): value is GitDeliveryNonEmptyConstraints {
-  return Array.isArray(value) && value.length > 0 && value.every(isGitDeliveryConstraint);
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -442,7 +443,8 @@ function isEvidenceRepoContext(value: unknown): value is GitDeliveryEvidenceRepo
 // the complexity ceiling).
 function hasValidEvidenceIdentity(value: Record<string, unknown>): boolean {
   return (
-    value.schemaVersion === GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION &&
+    (value.schemaVersion === GIT_DELIVERY_LEGACY_EVIDENCE_SCHEMA_VERSION ||
+      value.schemaVersion === GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION) &&
     isString(value.evidenceId) &&
     isGitDeliveryActionKind(value.actionKind) &&
     isGitDeliveryRiskClass(value.riskClass) &&
@@ -452,9 +454,17 @@ function hasValidEvidenceIdentity(value: Record<string, unknown>): boolean {
 }
 
 function hasOutcomeCompatibleConstraints(value: Record<string, unknown>): boolean {
-  if (value.policyOutcome === "constrained") return isConstraintArray(value.constraints);
+  if (value.policyOutcome === "constrained") {
+    if (
+      value.schemaVersion === GIT_DELIVERY_LEGACY_EVIDENCE_SCHEMA_VERSION &&
+      value.constraints === undefined
+    ) {
+      return true;
+    }
+    return isGitDeliveryNonEmptyConstraints(value.constraints);
+  }
   if (value.policyOutcome === "approval-gated") {
-    return isUndefinedOr(isConstraintArray)(value.constraints);
+    return isUndefinedOr(isGitDeliveryNonEmptyConstraints)(value.constraints);
   }
   return value.constraints === undefined;
 }

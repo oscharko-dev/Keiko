@@ -263,7 +263,7 @@ describe("buildGitDeliveryEvidenceRecord — AC1 every outcome is correlatable",
       expect(record.correlation.workflowRunIdHash).toBe(sha256Hex(WORKFLOW_RUN_ID));
       expect(record.evidenceId.startsWith("gde-")).toBe(true);
       expect(record.recordedAtMs).toBe(NOW);
-      expect(record.schemaVersion).toBe("1");
+      expect(record.schemaVersion).toBe("2");
     });
   }
 

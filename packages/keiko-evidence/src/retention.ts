@@ -32,8 +32,14 @@ interface Candidate {
   readonly partition: EvidenceRetentionPartition;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function retentionPartition(taskType: unknown): EvidenceRetentionPartition | undefined {
-  if (typeof taskType !== "string") return undefined;
+  if (typeof taskType !== "string" || !Object.hasOwn(RETENTION_PARTITION_BY_TASK_TYPE, taskType)) {
+    return undefined;
+  }
   const partitions: Readonly<Record<string, EvidenceRetentionPartition | undefined>> =
     RETENTION_PARTITION_BY_TASK_TYPE;
   return partitions[taskType];
@@ -42,10 +48,12 @@ function retentionPartition(taskType: unknown): EvidenceRetentionPartition | und
 function readHeader(json: string): Omit<Candidate, "runId"> | undefined {
   try {
     const parsed: unknown = JSON.parse(json);
-    const run = (parsed as { run?: { finishedAt?: unknown; taskType?: unknown } }).run;
-    const finishedAt = run?.finishedAt;
-    const partition = retentionPartition(run?.taskType);
-    if (typeof finishedAt !== "number" || partition === undefined) return undefined;
+    if (!isRecord(parsed) || !isRecord(parsed.run)) return undefined;
+    const finishedAt = parsed.run.finishedAt;
+    const partition = retentionPartition(parsed.run.taskType);
+    if (typeof finishedAt !== "number" || !Number.isFinite(finishedAt) || partition === undefined) {
+      return undefined;
+    }
     return { finishedAt, bytes: Buffer.byteLength(json, "utf8"), partition };
   } catch {
     return undefined;

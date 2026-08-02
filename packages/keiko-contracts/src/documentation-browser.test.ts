@@ -88,6 +88,7 @@ describe("classifyDocumentationTarget — accepted", () => {
       "http://10.1.2.3/manual",
       "https://172.16.5.9/handbook",
       "https://192.168.1.20/docs",
+      "https://[fd00::1]/manual",
       "http://intranet/handbook",
       "https://wiki.corp/page",
     ]) {

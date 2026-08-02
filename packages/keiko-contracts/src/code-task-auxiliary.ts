@@ -77,6 +77,12 @@ function isCanonicalUrlHostname(value: string): boolean {
   }
 }
 
+function isReservedDomainName(value: string): boolean {
+  return RESERVED_DOMAIN_NAMES.some(
+    (reserved) => value === reserved || value.endsWith(`.${reserved}`),
+  );
+}
+
 export function isCodeTaskPublicDomain(value: unknown): value is string {
   if (typeof value !== "string" || !PUBLIC_DOMAIN_PATTERN.test(value)) return false;
   // WHATWG canonicalizes every legacy IPv4 spelling (for example 127.1, octal 0177.0.0.1,
@@ -84,7 +90,7 @@ export function isCodeTaskPublicDomain(value: unknown): value is string {
   // the canonical hostname; otherwise a numeric loopback/private target could masquerade as DNS.
   if (!isCanonicalUrlHostname(value)) return false;
   if (IP_LITERAL_PATTERN.test(value)) return false;
-  return !RESERVED_DOMAIN_NAMES.includes(value);
+  return !isReservedDomainName(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
