@@ -111,6 +111,17 @@ something: only a run executing a protected ref's own workflow file can hold the
 that, the action still re-derives every entry's digests on load — integrity on top of
 authenticity, not instead of it.
 
+The artifact is also an untrusted byte stream until proven otherwise, so both extraction sites —
+the consumer's restore step and the detached signer's fetch — gate the archive itself, not only
+its provenance: central-directory bounds first (25 MiB expanded total, at most eight entries),
+rejection of traversal names and of symlink entries (a link followed by a regular entry beneath
+it would otherwise write through the link, outside the store directory, with no `../` in any
+listing), then extraction under kernel-enforced limits (a 25 MiB per-file write cap and a
+wall-clock timeout, because listing metadata is attacker-declared), and a `du` re-measurement
+plus a link scan of the extracted tree afterwards. Every violation degrades to an empty store
+and one full-price review; nothing in the gate can fail the job, so the archive path never
+becomes a lever over integration.
+
 Two containments hold independently of this workflow's scopes, because other token holders
 retain `actions: write` (infra-failure-retry):
 
@@ -122,8 +133,10 @@ retain `actions: write` (infra-failure-retry):
    `gh api repos/<owner>/<repo>/environments/npm-publish` — the `required_reviewers` rule must
    be present). Because a dispatched candidate-branch `release.yml` variant could omit the
    environment declaration entirely, the npm Trusted Publisher (ADR-0130) must additionally be
-   bound to the `npm-publish` environment on npmjs.com — an operator-side setting; until it is
-   set, that residual path is a stated fail-open window, not a closed one.
+   bound to the `npm-publish` environment on npmjs.com — an operator-side setting that no
+   repository configuration or gate can verify: confirmation lives only in the npmjs.com
+   publisher settings, and ADR-0130 D4 records the operator step. Until it is set, that
+   residual path is a stated fail-open window, not a closed one.
 
 State the approval case precisely rather than in that list. GitHub's create-review API accepts an
 `APPROVE` event from any token holding `pull-requests: write`, so the platform does **not** withhold

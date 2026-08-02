@@ -149,23 +149,18 @@ jobs:
           # place it cannot drift from what actually executes; a dedicated env would reintroduce
           # exactly that drift (env says A, uses: executes B, stores partition under A). It
           # partitions the store because a wrapper release can change review or sanitization
-          # SEMANTICS without changing the store's format. Parsed STRUCTURALLY (YAML, not grep),
-          # so reformatting the uses: line cannot break the derivation; only genuinely removing
-          # the pinned step can, and that fails loudly.
-          ACTION_SHA="$(python3 - <<'PYEXTRACT'
-import yaml
-doc = yaml.safe_load(open(".github/workflows/keiko-for-quality.yml"))
-for step in doc["jobs"]["review"]["steps"]:
-    uses = step.get("uses", "")
-    if uses.startswith("oscharko-dev/Keiko-for-Quality@"):
-        sha = uses.split("@", 1)[1].split()[0]
-        if len(sha) == 40 and all(c in "0123456789abcdef" for c in sha):
-            print(sha)
-        break
-PYEXTRACT
-          )"
-          if [ -z "${ACTION_SHA}" ]; then
-            echo "::error::no 40-hex Keiko-for-Quality pin found in the review job — the pinned step moved or lost its SHA"
+          # SEMANTICS without changing the store's format. Extracted with POSIX awk anchored on
+          # the uncommented `uses:` key; a YAML-parsing variant was reverted in review, because
+          # python3+PyYAML is an undeclared runner-image dependency whose loss would turn every
+          # review into an outage on the common path (and a column-zero heredoc cannot live
+          # inside this block scalar at all). The length guard below turns any formatting drift
+          # into a loud failure instead of a silent identity shift — maintain the extractor
+          # together with the `uses:` line.
+          ACTION_SHA="$(awk '$0 !~ /^[[:space:]]*#/ && /uses:.*oscharko-dev\/Keiko-for-Quality@/ {
+              sub(/.*oscharko-dev\/Keiko-for-Quality@/, ""); sub(/[^0-9a-f].*$/, ""); print; exit
+            }' .github/workflows/keiko-for-quality.yml)"
+          if [ "${#ACTION_SHA}" -ne 40 ]; then
+            echo "::error::no 40-hex Keiko-for-Quality pin found in this workflow — the uses: line changed shape; fix the extractor alongside it"
             exit 1
           fi
           IDENTITY="$(printf 'profile=%s model=%s protocol=%s action=%s' \
