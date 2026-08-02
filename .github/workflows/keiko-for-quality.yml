@@ -119,27 +119,42 @@ jobs:
       - name: Ensure review-store directory exists
         run: mkdir -p keiko-review-store
 
-      # Finds the newest store artifact an EARLIER RUN OF THIS WORKFLOW uploaded for this pull
-      # request. The event filter is the trust boundary, not the artifact name: artifacts are
-      # repo-wide, so a candidate's own `pull_request` workflow could upload a same-named one —
-      # but a candidate workflow file can never produce a `pull_request_target` run (that trigger
-      # always executes the protected base's file), so requiring the producing run's event to be
-      # `pull_request_target` excludes every candidate-authored artifact structurally. On top of
-      # that boundary, the action itself re-derives every entry's digests and rejects mismatches:
-      # a replayed entry is exactly as untrusted as the run that produced it (pinned upstream).
-      # No match — first push, expired retention, or nothing complete yet — means an empty store
-      # and a normal full review; memoization is an optimization, never a dependency.
+      # Finds the newest store artifact an EARLIER RUN OF THIS WORKFLOW uploaded FOR THIS PULL
+      # REQUEST. Three producer checks, because the artifact name alone proves nothing (names are
+      # repository-wide and attacker-choosable): the producing run's event must be
+      # `pull_request_target` — a candidate workflow file can never generate that event, since
+      # the trigger always executes the protected base's file; its workflow path must be this
+      # workflow — so a future second pull_request_target workflow cannot cross-feed stores; and
+      # it must belong to this pull request — matched against the run's `pull_requests` list,
+      # falling back to its head branch (the API omits the list on some runs), so another PR's
+      # store can never replay per-file decisions against unrelated content. The name additionally
+      # partitions by profile hash and model id, so a configuration change starts from an empty
+      # store even before these checks run. Beneath all of that, the action re-derives every
+      # entry's digests on load and rejects mismatches: a replayed entry is exactly as untrusted
+      # as the run that produced it (pinned upstream). No match — first push, expired retention,
+      # nothing complete yet, or a config change — means an empty store and a normal full review;
+      # memoization is an optimization, never a dependency.
       - name: Locate previous review store
         id: locate
         env:
           GH_TOKEN: ${{ github.token }}
-          ARTIFACT_NAME: keiko-review-store-pr${{ github.event.pull_request.number }}
+          ARTIFACT_NAME: >-
+            keiko-review-store-pr${{ github.event.pull_request.number }}-${{
+              hashFiles('.github/keiko-for-quality.json') }}-${{ vars.KEIKO_QUALITY_MODEL_ID }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          WORKFLOW_PATH: .github/workflows/keiko-for-quality.yml
         run: |
           MATCH="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${ARTIFACT_NAME}&per_page=20" \
             --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | reverse | .[].workflow_run.id' \
             | while read -r RUN_ID; do
-                EVENT="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq .event)"
-                if [ "${EVENT}" = "pull_request_target" ]; then echo "${RUN_ID}"; break; fi
+                OK="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '
+                  select(.event == "pull_request_target")
+                  | select(.path == env.WORKFLOW_PATH)
+                  | select((([.pull_requests[]?.number] | index(env.PR_NUMBER | tonumber)) != null)
+                           or ((.pull_requests | length) == 0 and .head_branch == env.HEAD_REF))
+                  | "ok"' 2>/dev/null)"
+                if [ "${OK}" = "ok" ]; then echo "${RUN_ID}"; break; fi
               done)"
           echo "run-id=${MATCH}" >> "${GITHUB_OUTPUT}"
 
@@ -147,7 +162,9 @@ jobs:
         if: steps.locate.outputs.run-id != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: keiko-review-store-pr${{ github.event.pull_request.number }}
+          name: >-
+            keiko-review-store-pr${{ github.event.pull_request.number }}-${{
+              hashFiles('.github/keiko-for-quality.json') }}-${{ vars.KEIKO_QUALITY_MODEL_ID }}
           path: keiko-review-store
           run-id: ${{ steps.locate.outputs.run-id }}
           github-token: ${{ github.token }}
@@ -188,15 +205,21 @@ jobs:
       # Persists the store for the next push — as an artifact, which needs no write scope at all
       # (`actions: write` is deliberately absent from this workflow; see the permissions note).
       # Only a complete settlement produces an updated store upstream, and a Review step that
-      # threw leaves `outcome` unset, so the condition skips both cases. A fixed name per pull
-      # request keeps the locate step's query one-lined; runs each own their artifact, and the
-      # locate step picks the newest eligible one. Seven days comfortably outlives any push gap
-      # on an active pull request; an expired store just means one full-price review.
+      # threw leaves `outcome` unset, so the condition skips both cases. The name partitions by
+      # pull request, profile hash, and model id — the invalidation boundary the retired cache
+      # key carried: after a profile or model change the locate step finds nothing and the next
+      # review runs full-price rather than replaying decisions produced under the old
+      # configuration (the action-version dimension lives in the store's own schema and key
+      # derivation, which reject foreign entries regardless of what the name says). Runs each own
+      # their artifact; the locate step picks the newest eligible one. Seven days comfortably
+      # outlives any push gap on an active pull request.
       - name: Persist review store
         if: steps.review.outputs.outcome == 'complete'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: keiko-review-store-pr${{ github.event.pull_request.number }}
+          name: >-
+            keiko-review-store-pr${{ github.event.pull_request.number }}-${{
+              hashFiles('.github/keiko-for-quality.json') }}-${{ vars.KEIKO_QUALITY_MODEL_ID }}
           path: keiko-review-store
           retention-days: 7
           if-no-files-found: error
