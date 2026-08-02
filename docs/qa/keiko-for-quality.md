@@ -197,22 +197,26 @@ branch-protection change.
    during a precision failure that is exactly the window that matters.
 
    ```bash
-   # Fails closed for real. Two Bash behaviours defeat the obvious version of this loop:
+   # Fails closed for real. Three things defeat the obvious version of this loop:
+   #
    # `set -e` does not apply inside a command substitution, and a `for` compound returns the
    # status of its LAST iteration — so an early failed query followed by a successful one would
-   # yield a short list and the loop would exit reporting containment it never achieved.
-   # Each query's status is therefore checked on its own line.
+   # yield a short list and the loop would exit reporting containment it never achieved. The
+   # query's status is therefore checked on its own line.
+   #
+   # And `--status` filters per invocation, so one query per status is five non-atomic snapshots
+   # of a moving target: a run that goes from `requested` to `queued` after the `queued` query but
+   # before the `requested` one appears in neither, and the loop declares containment over a run
+   # that is still holding the credential. Ask once, filter locally.
    set -euo pipefail
    while :; do
-     ids=""
-     for st in queued in_progress requested waiting pending; do
-       if ! page=$(gh run list --workflow keiko-for-quality.yml --status "$st" \
-                     --limit 100 --json databaseId --jq '.[].databaseId'); then
-         echo "FAILED to list $st runs — containment NOT established" >&2
-         exit 1
-       fi
-       ids="${ids}${page}"$'\n'
-     done
+     if ! ids=$(gh run list --workflow keiko-for-quality.yml --limit 200 \
+                  --json databaseId,status \
+                  --jq '["queued","in_progress","requested","waiting","pending"] as $live
+                        | .[] | select(.status as $s | $live | index($s)) | .databaseId'); then
+       echo "FAILED to list reviewer runs — containment NOT established" >&2
+       exit 1
+     fi
      ids=$(printf '%s' "$ids" | grep -v '^$' | sort -u || true)
      [ -z "$ids" ] && break
      for id in $ids; do
@@ -229,9 +233,26 @@ branch-protection change.
 Reverse it by setting `KEIKO_QUALITY_ENABLED` back to `true`, then retrigger the open pull
 requests as in provisioning step 4 — re-enabling emits no pull-request event either.
 
-**Durable:** open a pull request removing `.github/workflows/keiko-for-quality.yml`, its zizmor
-anchor in `.github/zizmor.yml`, and the profile. Re-run `npm run check:zizmor-anchors` afterwards,
-because the anchors below the removed entry shift.
+**Durable:** removing the files is only half of it. Deleting the workflow removes the only
+legitimate consumer of the credentials, not the credentials — and an identity that outlives its
+consumer is a standing hazard, because any later protected-base workflow that declares the retained
+environment can mint it. Do both halves:
+
+1. Open a pull request removing `.github/workflows/keiko-for-quality.yml`, its zizmor anchor in
+   `.github/zizmor.yml`, and the profile. Re-run `npm run check:zizmor-anchors` afterwards, because
+   the anchors below the removed entry shift.
+2. Deprovision, after that pull request merges:
+   - uninstall the Keiko for Quality GitHub App from this repository and revoke its private key —
+     while the App is installed and the key is valid, the marker-authoring identity can still be
+     minted;
+   - delete `KEIKO_QUALITY_APP_ID`, `KEIKO_QUALITY_APP_PRIVATE_KEY`, `KEIKO_QUALITY_MODEL_ENDPOINT`,
+     and `KEIKO_QUALITY_MODEL_TOKEN` from the `keiko-for-quality` environment, then delete the
+     environment itself;
+   - delete the `KEIKO_QUALITY_ENABLED`, `KEIKO_QUALITY_MODEL_ID`, and
+     `KEIKO_QUALITY_MODEL_PROTOCOL` variables.
+
+   Order matters: revoke before deleting the environment, or the key stays valid with nothing left
+   in the repository pointing at it.
 
 **Do not** disable it by dismissing findings, resolving conversations without repair, or relaxing
 Required Conversation Resolution.

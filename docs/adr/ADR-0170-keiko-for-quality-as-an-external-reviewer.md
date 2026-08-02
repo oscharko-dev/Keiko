@@ -50,13 +50,22 @@ Reviewer product code does not enter this repository. A reviewer defect is fixed
 here by advancing the pin. This keeps the reviewer's release cadence independent of Keiko's and keeps
 Keiko's gate surface free of a subsystem that is not about Keiko.
 
+**What this decision is scoped to.** Every guarantee below is a property of *this adoption* — the
+trigger, what is checked out, the granted permissions, the absence of a required status context, the
+fork rule, and the environment binding — and not of any particular upstream release number.
+Advancing the pin is ordinary maintenance for as long as those properties still hold. A release that
+changes any of them may not be adopted until this ADR is amended in the same pull request that
+advances the pin. Stating it this way is deliberate: an earlier draft scoped the guarantees to
+"version 0.1", and the pin then moved to v0.2.0 while the accepted decision still named a release
+that was no longer running.
+
 ### D2 — No trust-anchor mechanism is reconstructed
 
 The ADR-0168 D3 freeze is **not** reinstated, in any form. No Keiko gate byte-pins the workflows
 tree, the reviewer's implementation, or its own validator.
 
 This is safe because the threat the freeze addressed is out of scope by construction rather than by
-mitigation. The freeze existed to prevent a forged **required** status context. Version 0.1
+mitigation. The freeze existed to prevent a forged **required** status context. This adoption
 introduces no required check, so there is no context to forge. What remains is ordinary
 `pull_request_target` semantics — GitHub takes the workflow definition from the protected base — plus
 an action reference that is immutable because it is a commit SHA in a repository the candidate cannot
@@ -84,7 +93,7 @@ It checks out the protected base and fetches the candidate head as Git objects o
 tree is never checked out, symlink-followed, or submodule-initialized, and no candidate script, hook,
 action, package manager, or repository command is executed.
 
-Fork-originated heads receive no model review in version 0.1. Model budget and the credential-bearing
+Fork-originated heads receive no model review. Model budget and the credential-bearing
 execution path are not exposed to arbitrary external heads, and a per-review budget bounds one review,
 not an attacker opening many pull requests.
 
@@ -133,7 +142,7 @@ therefore not "no other workflow can assume this identity" in an absolute sense 
 *existing* workflow does, and adding one requires a reviewed, merged change to the protected base,
 which is the same trust boundary that protects every other gate here. Binding issuance to this
 workflow's OIDC identity would make the guarantee absolute and is the correct follow-up; it is not
-part of version 0.1.
+part of this adoption.
 
 ### D5 — Bounded auto-merge arming interlock
 
@@ -155,7 +164,7 @@ outage may delay integration, never block it indefinitely.
 
 ### D6 — The required-check set is unchanged
 
-The ten App-bound checks fixed by ADR-0169 D3 remain exactly as they are. Version 0.1 adds no
+The ten App-bound checks fixed by ADR-0169 D3 remain exactly as they are. This adoption adds no
 required context, replaces nothing, and aggregates nothing. Blocking comes solely from GitHub's
 existing Required Conversation Resolution rule acting on the reviewer's published conversations.
 
@@ -203,8 +212,8 @@ what missed the earlier gaps.
 - The reviewer's trust boundary is an immutable commit SHA in a separate repository, not a mutable
   digest pin over Keiko's own tree — so it cannot deadlock on its own repair.
 - A reviewer defect is fixed once, upstream, and adopted by advancing one SHA.
-- Reviewer availability is not merge-blocking, which is a deliberate, stated limitation of version
-  0.1 rather than an oversight.
+- Reviewer availability is not merge-blocking, which is a deliberate, stated limitation of this
+  adoption rather than an oversight.
 - The workflow uses `pull_request_target`, which `workflow hygiene` flags through zizmor's
   `dangerous-triggers` rule. That acceptance is line-anchored and justified in `.github/zizmor.yml`,
   and `npm run check:zizmor-anchors` must be re-run whenever nearby lines move.

@@ -13,14 +13,19 @@ name: keiko-for-quality
 # runs. The candidate is never checked out — see the two checkout steps below.
 on:
   pull_request_target:
-    # `converted_to_draft` produces no review of its own — the job condition rejects drafts. It is
-    # listed so the trigger fires at all: that starts a replacement run whose concurrency group
-    # cancels the review already in flight. Without it, a pull request pulled back to draft keeps a
-    # credential-bearing review running that can publish findings against a draft.
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited]
+    # `converted_to_draft` and `closed` produce no review of their own — the job condition rejects
+    # both. They are listed so the trigger fires at all: that starts a replacement run whose
+    # concurrency group cancels the review already in flight. Without them, a pull request pulled
+    # back to draft or closed outright keeps a credential-bearing review running, still holding the
+    # environment secrets, still spending model budget, and still able to publish findings onto a
+    # draft or an abandoned pull request until it finishes or hits the job timeout.
+    types:
+      [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed, edited]
 
 # The reviewer needs to read the repository and write review comments. Nothing else. It has no
-# contents-write, checks-write, actions-write, commit, push, approval, or merge authority.
+# contents-write, checks-write, actions-write, commit, push, or merge authority. Approval is
+# deliberately NOT in that list: as the note above says, `pull-requests: write` can submit an
+# APPROVE review, and only the pinned action's behaviour declines to.
 permissions:
   contents: read
   pull-requests: write
@@ -57,9 +62,13 @@ jobs:
     # rather than the endpoint itself, because a job condition cannot read a secret. Without it,
     # merging this workflow would
     # make every `dev` pull request carry a failing job that no contributor can fix. An inert
-    # reviewer is visibly absent rather than noisily broken — and version 0.1 publishes no required
-    # status context, so its absence blocks nothing either way (ADR-0170 D6).
+    # reviewer is visibly absent rather than noisily broken — and this reviewer publishes no
+    # required status context, so its absence blocks nothing either way (ADR-0170 D6).
+    #
+    # `state == 'open'` is what makes the `closed` trigger a pure cancellation: the event fires, the
+    # concurrency group evicts the running review, and this job then declines to start a new one.
     if: >-
+      github.event.pull_request.state == 'open' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.base.ref == 'dev' &&

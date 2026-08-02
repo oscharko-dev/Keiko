@@ -62,8 +62,11 @@ rules:
       # Git objects (`git fetch pull/N/head`), so no candidate file is ever written to the working
       # tree, no candidate script/hook/action/package manager runs, and `--no-recurse-submodules`
       # keeps submodules uninitialised. Its only write grant is `pull-requests: write`; it holds no
-      # contents-write, checks-write, actions-write, commit, push, approval, or merge authority, and
-      # it publishes no required status context. The reviewer itself is an external action pinned to
+      # contents-write, checks-write, actions-write, commit, push, or merge authority, and it
+      # publishes no required status context. Approval is deliberately absent from that list:
+      # `pull-requests: write` can submit an APPROVE review, so a compromised action could, and only
+      # the pinned action's behaviour declines to (ADR-0170 D3).
+      # The reviewer itself is an external action pinned to
       # a full commit SHA, so the executed implementation is immutable and outside candidate reach -
       # deliberately NOT a digest pin over this repository's own tree, which ADR-0169 D4 prohibits.
       # The model credential is environment-scoped and passed by variable name, never as an input.
