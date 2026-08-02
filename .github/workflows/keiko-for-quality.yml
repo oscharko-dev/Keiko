@@ -110,19 +110,38 @@ jobs:
       - name: Ensure review-store directory exists
         run: mkdir -p .keiko-review-store
 
+      # Derives the review-store cache key exactly once; the restore and save steps below consume
+      # the outputs, so the two can never drift apart byte-wise. A step, not job-level env, on
+      # purpose: `hashFiles` evaluated in job env would run before the checkout above and hash
+      # nothing. The prefix is scoped to this pull request, this action version, this profile
+      # (hashFiles reads the trusted-base checkout), and this model identity — model id and
+      # protocol are non-secret repository variables; the endpoint is a secret and must never
+      # appear in a cache key the Actions UI displays in plain text.
+      - name: Derive review-store cache key
+        id: store-key
+        env:
+          PREFIX: >-
+            keiko-quality-review-store-v1-${{ github.event.pull_request.number }}-${{
+              env.KEIKO_QUALITY_ACTION_VERSION }}-${{
+              hashFiles('.github/keiko-for-quality.json') }}-${{
+              vars.KEIKO_QUALITY_MODEL_ID }}-${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}-
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          {
+            echo "prefix=${PREFIX}"
+            echo "key=${PREFIX}${HEAD_SHA}"
+          } >> "${GITHUB_OUTPUT}"
+
       # Restores the cross-run review store (v0.9.0): per-file review outcomes keyed by content
       # digests, so a push that leaves most files untouched replays their prior results instead of
       # re-paying the model for them. Trust note: a restored entry is exactly as untrusted on
       # replay as it was the run it was produced — the action re-derives every key and re-sanitizes
       # every finding, and rejects the whole store on any mismatch (pinned by tests upstream).
       #
-      # The key is scoped to this pull request, this action version, this profile (hashFiles reads
-      # the trusted-base checkout), and this model identity — model id and protocol are non-secret
-      # repository variables; the endpoint is a secret and must never appear in a cache key the
-      # Actions UI displays in plain text. The key ends in the head SHA, so the exact key misses on
-      # every new push — intentional: `restore-keys` is the same prefix without the head SHA and
-      # falls through to the newest store from an earlier push to this same pull request. A store
-      # from a different pull request, profile, model, or action version never matches the prefix.
+      # The exact key ends in the head SHA, so it misses on every new push — intentional:
+      # `restore-keys` is the same prefix without the head SHA and falls through to the newest
+      # store from an earlier push to this same pull request. A store from a different pull
+      # request, profile, model, or action version never matches the prefix.
       #
       # Poisoning scope: this run's ref is the protected base, so the caches it can restore were
       # created either by base-branch runs or by this same base-controlled workflow — a candidate's
@@ -131,17 +150,8 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .keiko-review-store
-          key: >-
-            keiko-quality-review-store-v1-${{ github.event.pull_request.number }}-${{
-              env.KEIKO_QUALITY_ACTION_VERSION }}-${{
-              hashFiles('.github/keiko-for-quality.json') }}-${{
-              vars.KEIKO_QUALITY_MODEL_ID }}-${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}-${{
-              github.event.pull_request.head.sha }}
-          restore-keys: >-
-            keiko-quality-review-store-v1-${{ github.event.pull_request.number }}-${{
-              env.KEIKO_QUALITY_ACTION_VERSION }}-${{
-              hashFiles('.github/keiko-for-quality.json') }}-${{
-              vars.KEIKO_QUALITY_MODEL_ID }}-${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}-
+          key: ${{ steps.store-key.outputs.key }}
+          restore-keys: ${{ steps.store-key.outputs.prefix }}
 
       - name: Review
         id: review
@@ -179,16 +189,11 @@ jobs:
       # Persist the store only when the run settled complete: an incomplete or abandoned run never
       # produces an updated store upstream, and a Review step that threw leaves `outcome` unset —
       # the explicit comparison skips this step in every one of those cases. Saving under the
-      # head-SHA key means each push archives its own store at most once; the next push restores
-      # it through the prefix fallback above.
+      # head-SHA key (same derived output the restore uses) means each push archives its own store
+      # at most once; the next push restores it through the prefix fallback above.
       - name: Save review store
         if: steps.review.outputs.outcome == 'complete'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .keiko-review-store
-          key: >-
-            keiko-quality-review-store-v1-${{ github.event.pull_request.number }}-${{
-              env.KEIKO_QUALITY_ACTION_VERSION }}-${{
-              hashFiles('.github/keiko-for-quality.json') }}-${{
-              vars.KEIKO_QUALITY_MODEL_ID }}-${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}-${{
-              github.event.pull_request.head.sha }}
+          key: ${{ steps.store-key.outputs.key }}
