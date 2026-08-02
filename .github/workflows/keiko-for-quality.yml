@@ -176,9 +176,20 @@ jobs:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           WORKFLOW_PATH: .github/workflows/keiko-for-quality.yml
         run: |
-          MATCH="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/artifacts" -f "name=${ARTIFACT_NAME}" -F per_page=100 \
+          # Every API failure in here degrades to "no previous store" — a transient artifacts-API
+          # error or rate limit must cost one full-price review, never fail this step: a failed
+          # job before Review publishes no blocking conversation, and after the arming interlock
+          # expires the pull request could integrate unreviewed. Same class as the
+          # continue-on-error on the download step, one layer earlier.
+          CANDIDATES="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/artifacts" -f "name=${ARTIFACT_NAME}" -F per_page=100 \
             --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | reverse | .[].workflow_run.id' \
+            2>/dev/null || true)"
+          if [ -z "${CANDIDATES}" ]; then
+            echo "::notice::no prior store located (none exists, or the lookup failed) — full review"
+          fi
+          MATCH="$(printf '%s\n' "${CANDIDATES}" \
             | while read -r RUN_ID; do
+                [ -n "${RUN_ID}" ] || continue
                 OK="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '
                   select(.event == "pull_request_target")
                   | select(.path == env.WORKFLOW_PATH)
@@ -186,9 +197,9 @@ jobs:
                            or ((.pull_requests | length) == 0
                                and .head_branch == env.HEAD_REF
                                and .head_repository.full_name == env.HEAD_REPO))
-                  | "ok"' 2>/dev/null)"
+                  | "ok"' 2>/dev/null || true)"
                 if [ "${OK}" = "ok" ]; then echo "${RUN_ID}"; break; fi
-              done)"
+              done || true)"
           echo "run-id=${MATCH}" >> "${GITHUB_OUTPUT}"
 
       # continue-on-error is load-bearing: a deleted artifact, a corrupt archive, or a transient

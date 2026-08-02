@@ -91,9 +91,16 @@ successfully with zero registry credentials configured.
 ### D4 — One-time npmjs.com configuration, and secret retirement, are manual maintainer actions
 
 Configuring the Trusted Publisher on npmjs.com (package Settings → Trusted Publishers → GitHub
-Actions → this repository + the exact workflow filename `.github/workflows/release.yml`) is a
-one-time action on npmjs.com's own UI. Nothing in this repository or its CI can perform or verify
-it — npm does not validate the configuration until the first real publish attempt. Retiring the
+Actions → this repository + the exact workflow filename `.github/workflows/release.yml` + the
+GitHub Actions **environment `npm-publish`**) is a one-time action on npmjs.com's own UI. The
+environment binding was added on 2026-08-02 (ADR-0170 D3): the workflow-dispatch API takes a
+caller-chosen ref, so a dispatched candidate-branch `release.yml` variant could omit the
+environment declaration and its human-approval gate entirely — with the publisher bound to the
+environment, npm rejects the OIDC token of any run that did not pass through it, which closes
+that path at the registry. A Trusted Publisher configured with repository and filename but
+WITHOUT the environment is an incomplete provisioning state and, until corrected, a stated
+fail-open window. Nothing in this repository or its CI can perform or verify the npm-side
+setting — npm does not validate the configuration until the first real publish attempt. Retiring the
 existing `NPM_TOKEN` GitHub Actions secret (rotating or deleting it, and optionally disallowing
 classic tokens on the package per npm's own recommendation) is a separate manual follow-up once a
 maintainer has confirmed a real trusted-publishing run succeeds; this ADR does not itself delete
