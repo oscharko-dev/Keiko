@@ -9,7 +9,7 @@
 //
 // Foundations: docs/relationship-engine/taxonomy.md (object kinds, relationship types,
 // per-type metadata), docs/relationship-engine/compatibility-matrix.md (source × target
-// pairs), docs/relationship-engine/denial-reasons.md (the 18-code catalog and resolution
+// pairs), docs/relationship-engine/denial-reasons.md (the 19-code catalog and resolution
 // order), docs/relationship-engine/lifecycle.md (the 7-state machine), and
 // docs/relationship-engine/activity-state.md (the 9 transient activity states derived from
 // existing event streams — durable on the lifecycle column, never persisted on their own).
@@ -113,10 +113,10 @@ export const RELATIONSHIP_ACTIVITY_STATES = [
 export type RelationshipActivityState = (typeof RELATIONSHIP_ACTIVITY_STATES)[number];
 
 // ─── Denial codes ─────────────────────────────────────────────────────────────
-// Closed enumeration of the 18 denial codes (denial-reasons.md §"Catalog"). Tuple order
-// matches the normative "Resolution order" so the validator and reviewers can keep the
-// two views in lock-step. Adding a new code follows the additive-evolution rule from
-// taxonomy.md §3.2 (append, document in denial-reasons.md, slot into resolution order).
+// Closed enumeration of the 19 denial codes (denial-reasons.md §"Catalog"). Existing tuple entries
+// retain their stable order and additive codes append. The validator's semantic resolution order is
+// documented separately in denial-reasons.md. Adding a code follows taxonomy.md §3.2: append here,
+// document it in the catalog, and slot it into the semantic resolution order.
 export const RELATIONSHIP_DENIAL_CODES = [
   "denied/non-existent-source",
   "denied/non-existent-target",
@@ -136,6 +136,7 @@ export const RELATIONSHIP_DENIAL_CODES = [
   "denied/payload-content-not-permitted",
   "denied/authority-insufficient",
   "denied/schema-version-unsupported",
+  "denied/invalid-structure",
 ] as const;
 
 export type RelationshipDenialCode = (typeof RELATIONSHIP_DENIAL_CODES)[number];

@@ -119,7 +119,7 @@ describe("RELATIONSHIP_ACTIVITY_STATES", () => {
 });
 
 describe("RELATIONSHIP_DENIAL_CODES", () => {
-  it("contains the 18 denial codes in the denial-reasons.md resolution order", () => {
+  it("contains the 19 denial codes in stable additive catalog order", () => {
     // The tuple order MUST match the normative "Resolution order" so the validator
     // and reviewers can keep the two views in lock-step.
     expect([...RELATIONSHIP_DENIAL_CODES]).toEqual([
@@ -141,6 +141,7 @@ describe("RELATIONSHIP_DENIAL_CODES", () => {
       "denied/payload-content-not-permitted",
       "denied/authority-insufficient",
       "denied/schema-version-unsupported",
+      "denied/invalid-structure",
     ]);
   });
 

@@ -271,6 +271,12 @@ describe("classifier — deterministic, fail-closed, ordered precedence", () => 
     expect(classifySpokenActionEffect("send the report")).toBe("external-effect");
     expect(classifySpokenActionEffect("the settlement was finalized")).toBe("unknown");
   });
+
+  it("does not let punctuation hide a higher-impact marker behind a read-only word", () => {
+    expect(classifySpokenActionEffect("delete, then show the record")).toBe("destructive");
+    expect(classifySpokenActionEffect("update: then show the config")).toBe("mutating");
+    expect(classifySpokenActionEffect("send; then display the report")).toBe("external-effect");
+  });
 });
 
 describe("AC4 — confirmation binding canonicalization", () => {

@@ -678,6 +678,11 @@ describe("isContainedAgentPath (Issue #1394)", () => {
     expect(isContainedAgentPath("Z:/secret")).toBe(false);
   });
 
+  it("returns false for a backslash-rooted path", () => {
+    expect(isContainedAgentPath("\\windows\\system32")).toBe(false);
+    expect(isContainedAgentPath("\\\\server\\share\\file.ts")).toBe(false);
+  });
+
   it("returns false for a path containing '..' as a segment", () => {
     expect(isContainedAgentPath("src/../../../etc")).toBe(false);
     expect(isContainedAgentPath("../sibling")).toBe(false);

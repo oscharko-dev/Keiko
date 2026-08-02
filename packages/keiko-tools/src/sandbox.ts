@@ -148,6 +148,18 @@ function hasDeniedFlag(rule: CommandRule, args: readonly string[]): boolean {
   });
 }
 
+function hasDeniedSubcommandArgument(
+  rule: CommandRule,
+  subcommand: string | undefined,
+  args: readonly string[],
+): boolean {
+  if (subcommand === undefined) return false;
+  const bySubcommand = rule.deniedArgumentsBySubcommand;
+  if (bySubcommand === undefined || !Object.hasOwn(bySubcommand, subcommand)) return false;
+  const denied = bySubcommand[subcommand];
+  return denied !== undefined && args.some((argument) => denied.includes(argument));
+}
+
 function hasRequiredLeadingFlags(rule: CommandRule, args: readonly string[]): boolean {
   const required = rule.requiredLeadingFlags;
   if (required === undefined || required.length === 0) {
@@ -190,10 +202,16 @@ function checkSubcommand(rule: CommandRule, args: readonly string[]): CommandDec
   if (hasDeniedFlag(rule, args)) {
     return { allowed: false, reason: `denied flag for ${rule.executable}` };
   }
+  if (rule.forbidLeadingFlags === true && args[0]?.startsWith("-")) {
+    return { allowed: false, reason: `leading flags denied for ${rule.executable}` };
+  }
   if (!hasRequiredLeadingFlags(rule, args)) {
     return { allowed: false, reason: `missing required leading flag for ${rule.executable}` };
   }
   const sub = resolveSubcommand(rule, args);
+  if (hasDeniedSubcommandArgument(rule, sub, args)) {
+    return { allowed: false, reason: `denied argument for ${rule.executable} ${sub ?? ""}` };
+  }
   if (rule.allowedSubcommands !== undefined) {
     return checkAllowlistMode(rule, rule.allowedSubcommands, sub);
   }

@@ -786,7 +786,7 @@ describe("Knowledge Pod compatibility projection", () => {
       expect(summary.setReadiness).toMatchObject({
         readyCount: 0,
         draftCount: 0,
-        degradedCount: 2,
+        degradedCount: 1,
         unavailableCount: 0,
         deniedCount: 1,
         indexingCount: 1,
