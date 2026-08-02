@@ -78,8 +78,22 @@ action, package manager, or repository command is executed.
 
 Fork-originated heads receive no model review in version 0.1. Model budget and the credential-bearing
 execution path are not exposed to arbitrary external heads, and a per-review budget bounds one review,
-not an attacker opening many pull requests. Ineligible heads record a redacted skipped-eligibility
-outcome rather than being filtered silently.
+not an attacker opening many pull requests.
+
+Eligibility is enforced twice, and the two layers report differently:
+
+1. **The workflow's job condition** rejects drafts, fork heads, and wrong-base heads before a runner
+   starts. This is the security-relevant layer: a job that never starts never has the environment's
+   secrets materialized. Its evidence is the skipped job in the Actions run — GitHub's own record,
+   not a redacted diagnostic, because no process runs to emit one.
+2. **The action's own eligibility check** covers every head that reaches it and emits a redacted
+   skipped-eligibility reason code. It is the authoritative check — it also decides the base-retarget
+   `edited` case, which the job condition cannot distinguish — and it is what protects a consumer who
+   relaxes the job condition.
+
+The earlier draft of this decision claimed that fork and draft heads record a redacted outcome. They
+do not, because the workflow deliberately never starts for them. Starting a secret-bearing job in
+order to produce a nicer diagnostic would trade the actual security property for a cosmetic one.
 
 The model credential is environment-scoped to this workflow and passed to the action by variable
 **name**, never as an input value.
@@ -95,6 +109,15 @@ a public string in a public comment, so anyone able to comment can reproduce one
 `github-actions[bot]` identity, any other workflow in this repository could author a comment carrying
 a valid marker and permanently silence a real finding. A dedicated identity is what makes the
 authorship check meaningful.
+
+State the limit of that guarantee precisely. A GitHub environment scopes its secrets to jobs that
+**declare** it, not to one workflow: another job declaring `environment: keiko-for-quality` could
+reference the same App credentials and mint the same installation identity. The protection is
+therefore not "no other workflow can assume this identity" in an absolute sense — it is that no
+*existing* workflow does, and adding one requires a reviewed, merged change to the protected base,
+which is the same trust boundary that protects every other gate here. Binding issuance to this
+workflow's OIDC identity would make the guarantee absolute and is the correct follow-up; it is not
+part of version 0.1.
 
 ### D5 — Bounded auto-merge arming interlock
 

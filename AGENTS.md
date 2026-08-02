@@ -398,6 +398,14 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   are green on the exact current head and every review conversation is resolved (ADR-0135). Green
   gates plus settled review threads ARE the merge decision; there is no human review step and no
   waiting for a person.
+- **Bounded reviewer arming interlock (ADR-0170 D5).** When the Keiko for Quality reviewer is
+  active — that is, when `vars.KEIKO_QUALITY_MODEL_ENDPOINT` is set and its workflow runs on the
+  pull request — arm auto-merge only after that run for the **current head** has terminated:
+  published its result or failed. If it has not terminated within **20 minutes** of the last
+  required check going green, arm anyway and record the expiry in the PR as a delivery-policy
+  event. The wait is bounded on purpose: a reviewer outage may delay integration, never block it
+  indefinitely. An expired wait is never described as a clean review. When the reviewer is inert
+  the interlock does not apply and nothing changes.
 - **Branch naming** follows `type/short-slug` — e.g. `feat/…`, `fix/…`, `issue/<n>-…`,
   `codex/…`, `claude/…`, `release/…`. Never work directly on `dev`.
 - **Commit subjects** are imperative and conventional-ish (`feat(scope): …`, `fix: …`,
@@ -417,7 +425,11 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   No human approving review is required for `dev`. CodeRabbit reviews every `dev` pull request and
   every subsequent push without auto-pause. Its status is not required because quota can omit a
   current-head review, but every emitted inline finding requests changes and blocks until repaired
-  and its conversation is resolved. Qodo and Keiko for Quality remain retired under ADR-0167.
+  and its conversation is resolved. Qodo remains retired under ADR-0167. **Keiko for Quality is
+  reintroduced by [ADR-0170](docs/adr/ADR-0170-keiko-for-quality-as-an-external-reviewer.md) as an
+  external, SHA-pinned reviewer** — it publishes no required status, its findings block only
+  through conversation resolution, and its product code lives in
+  [oscharko-dev/Keiko-for-Quality](https://github.com/oscharko-dev/Keiko-for-Quality), never here.
   The hosted performance dashboard and quota-paced reviewer evaluated in ADR-0169 are fully
   retired: neither has repository configuration, an installed App, a workflow, or a protected
   context. Sonar remains independently required and revalidated inside `ci`. Full mutation and

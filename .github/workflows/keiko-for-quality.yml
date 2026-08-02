@@ -26,8 +26,11 @@ jobs:
     name: review
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Draft and fork heads are also rejected inside the action, which records a redacted
-    # skipped-eligibility reason. This condition only avoids starting a runner for them.
+    # This condition is the security-relevant eligibility layer: a job that never starts never has
+    # the environment's secrets materialized. Its evidence is the skipped job in the Actions run,
+    # not a redacted diagnostic — no process runs to emit one. The action re-checks eligibility for
+    # every head that does reach it, which is what decides the base-retarget `edited` case and what
+    # protects the boundary if this condition is ever relaxed.
     #
     # The endpoint check keeps the reviewer inert until an operator has provisioned the model
     # variables, the credential, and the App installation. Without it, merging this workflow would

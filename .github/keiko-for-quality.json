@@ -1,28 +1,32 @@
 {
   "version": 1,
   "reviewRelevant": [
-    "packages/**/*.{ts,tsx}",
-    "src/**/*.{ts,tsx}",
-    "tests/**/*.{ts,tsx}",
-    "scripts/**/*.mjs",
+    "packages/**/*.{ts,tsx,mts,cts,js,mjs,cjs}",
+    "src/**/*.{ts,tsx,mts,cts,js,mjs,cjs}",
+    "tests/**",
+    "scripts/**",
+    "native/**",
+    "docker/**",
     ".github/workflows/**/*.{yml,yaml}",
-    ".github/actions/**/*.{yml,yaml}",
+    ".github/actions/**",
     ".github/*.{json,yml,yaml}",
     "package.json",
     "package-lock.json",
     "packages/*/package.json",
     "docs/adr/*.md",
-    "*.config.{ts,js,mjs}",
-    "packages/*/*.config.{ts,js,mjs}",
+    "*.config.{ts,js,mjs,cjs}",
+    "packages/*/*.config.{ts,js,mjs,cjs}",
     "tsconfig*.json",
     "eslint.config.*",
     ".dependency-cruiser.*"
   ],
   "deletionCritical": [
-    "**/*.test.{ts,tsx}",
+    "**/*.test.{ts,tsx,mts,js,mjs}",
     "**/__tests__/**",
     "tests/**",
     "scripts/**",
+    "native/**",
+    "docker/**",
     ".github/workflows/**",
     ".github/actions/**",
     "docs/adr/**",
@@ -44,20 +48,20 @@
       "reason": "prose documentation outside docs/adr; reviewed by people, not by the model"
     },
     {
-      "pattern": "**/*.{png,jpg,jpeg,gif,svg,ico,webp,woff,woff2,ttf,pdf,zip,wasm}",
-      "reason": "binary or vector assets carry no reviewable source"
+      "pattern": "**/*.{png,jpg,jpeg,gif,svg,ico,icns,webp,woff,woff2,ttf,pdf,zip,wasm,plist}",
+      "reason": "binary, vector, or property-list assets carry no reviewable source"
     },
     {
       "pattern": "**/*.{css,scss}",
       "reason": "styling is gated by the SHA-pinned visual-proof and axe gates, not by model review"
     },
     {
-      "pattern": "**/*.{md,mdx,txt,csv,json,yml,yaml,html,sh,sql,toml,lock,snap,map}",
+      "pattern": "**/*.{md,mdx,txt,csv,json,yml,yaml,html,sql,toml,lock,snap,map}",
       "reason": "data, prose, and config outside the review-relevant set above; covered by deterministic gates"
     },
     {
       "pattern": "**/*",
-      "reason": "catch-all: every remaining path is deliberately outside model review for this repository"
+      "reason": "catch-all: every remaining path is deliberately outside model review for this repository. It is the last resort, not the routine answer — an executable or trust-boundary tree that lands here is a profile gap, not an exclusion. Inclusion is evaluated before exclusion, so an entry in reviewRelevant always wins over this rule."
     }
   ],
   "benignWarnings": [

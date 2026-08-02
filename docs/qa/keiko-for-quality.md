@@ -38,8 +38,15 @@ reviewer itself. A marker is a public string in a public comment; under the shar
 
 ### 2. Create the environment
 
-Create a repository environment named `keiko-for-quality`. Scoping the credential to that
-environment rather than to the whole repository keeps it out of every other workflow.
+Create a repository environment named `keiko-for-quality`. This keeps the credential out of every
+workflow that does not ask for it.
+
+Be precise about what that buys. An environment scopes secrets to jobs that **declare** it, not to
+one workflow: another job declaring `environment: keiko-for-quality` could reference the same
+credentials and mint the same App identity — which would let it pre-post deduplication markers. The
+protection is that no such workflow exists and adding one requires a reviewed, merged change to the
+protected base, the same boundary that protects every other gate here. Binding issuance to this
+workflow's OIDC identity would close the gap absolutely and is tracked as follow-up.
 
 ### 3. Set variables and secrets
 
@@ -131,5 +138,5 @@ Stated plainly, per ADR-0170 D6.
    publication cannot be made fail-closed by review conversations alone.
 2. **A late review can publish after integration.** The bounded arming interlock reduces this window
    but must not create an unbounded wait, so an expired wait is recorded and delivery proceeds.
-3. **Fork heads are not reviewed.** They record a redacted skipped-eligibility outcome.
+3. **Fork heads are not reviewed.** The workflow's job condition refuses them before a runner starts, so the credential is never materialized — the evidence is the skipped job in the Actions run, not a redacted diagnostic. The action re-checks eligibility for every head that does reach it.
 4. **Findings are model output** — claims to evaluate, not verdicts to obey.

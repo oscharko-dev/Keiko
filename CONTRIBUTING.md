@@ -48,8 +48,18 @@ Neither has repository configuration, an installed App, a workflow, or a protect
 Deterministic bundle, latency, retrieval, and performance gates inside `ci` retain merge authority.
 No payment method, finding dismissal, or gate bypass is an accepted repair path.
 
-Qodo and its Keiko for Quality bridge are retired by
-[ADR-0167](docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md); neither is Sonar evidence.
+Keiko for Quality is reintroduced by
+[ADR-0170](docs/adr/ADR-0170-keiko-for-quality-as-an-external-reviewer.md) as an external,
+SHA-pinned reviewer whose product code lives in
+[oscharko-dev/Keiko-for-Quality](https://github.com/oscharko-dev/Keiko-for-Quality). It publishes no
+required status; its findings block only through conversation resolution. **While it is active,
+arm auto-merge only after its run for the current head has terminated, or after a bounded 20-minute
+wait has expired — recording the expiry as a delivery-policy event.** It stays inert until
+`KEIKO_QUALITY_MODEL_ENDPOINT` is set; see
+[`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md).
+
+Qodo is retired by
+[ADR-0167](docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md); it is not Sonar evidence.
 Sonar remains independently enforced by its native required check and the exact-head validator
 inside `ci`. Full mutation runs daily/on demand and reference-machine performance evidence runs
 outside the pull-request critical path. Fast semantic-duplication, secret, coverage, static-analysis,
