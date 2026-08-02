@@ -22,7 +22,14 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: keiko-for-quality-${{ github.event.pull_request.number }}
+  # Metadata-only edits get their own group. `cancel-in-progress: false` protects only the RUNNING
+  # member of a group — GitHub still evicts a *pending* run when a newer one enters it. Without the
+  # split, a title edit arriving while a synchronize run is still queued would replace that queued
+  # review with a run whose job then skips, leaving the current head unreviewed.
+  group: >-
+    keiko-for-quality-${{ github.event.pull_request.number }}-${{
+      (github.event.action == 'edited' && github.event.changes.base == null) && 'meta' || 'review'
+    }}
   # Cancel a superseded review — but NOT for a metadata-only `edited` event. Concurrency is
   # evaluated when the workflow is triggered, not when the job decides to run, so an unconditional
   # `true` lets a title or description edit cancel an in-flight review and leave the current head

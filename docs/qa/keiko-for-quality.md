@@ -111,9 +111,12 @@ it.
 review-relevant, which deletions are review-critical, which are generated, and every other exclusion
 with its justification.
 
-A changed path matching none of the lists is **unclassified**, which fails the run. The profile
-therefore ends with a catch-all exclusion so that every path is described. Inclusion is evaluated
-before exclusion, so the catch-all never overrides a specific review-relevant entry.
+A changed path matching none of the lists is **unclassified**, which fails the run. That is the
+intended fail-closed behaviour and the profile deliberately has **no catch-all**: an earlier `**/*`
+exclusion made `inventory.unclassified_path` unreachable, so an unknown executable type would have
+been silently excluded and the review reported clean. The last entry is an explicit list of tooling
+ignore files, not a wildcard. Inclusion is evaluated before exclusion, so a review-relevant entry
+always wins.
 
 **The relevant list is keyed by file type, not by directory — deliberately.** An earlier
 location-keyed version silently left `native/` (including the endpoint-security system extension and
@@ -179,8 +182,10 @@ branch-protection change.
    # --limit is required: `gh run list` returns 20 by default, so a mass incident with more
    # in-flight runs would leave the rest alive. The loop repeats until none remain.
    while :; do
-     ids=$(gh run list --workflow keiko-for-quality.yml --status in_progress \
-       --limit 200 --json databaseId --jq '.[].databaseId')
+     # Both statuses: a QUEUED run already read KEIKO_QUALITY_ENABLED at queue time, so it can
+     # still start with the old value, materialize the credentials and publish after this loop.
+     ids=$(gh run list --workflow keiko-for-quality.yml --limit 200 \
+       --json databaseId,status --jq '.[] | select(.status=="in_progress" or .status=="queued") | .databaseId')
      [ -z "$ids" ] && break
      echo "$ids" | xargs -r -n1 gh run cancel
    done

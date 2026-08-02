@@ -402,12 +402,17 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   active — that is, when `vars.KEIKO_QUALITY_ENABLED` is `true` and its workflow runs on the pull
   request — arm auto-merge only after that run for the **current head** has terminated:
   published its result or failed. If it has not terminated within **35 minutes** of the last
-  required check going green, arm anyway and record the expiry in the PR as a delivery-policy
-  event. The wait deliberately exceeds the workflow's own `timeout-minutes: 30`: a shorter wait
-  would expire while a perfectly healthy review is still running, which is the outcome the
-  interlock exists to prevent. If that timeout changes, this number must change with it. The wait is bounded on purpose: a reviewer outage may delay integration, never block it
+  required check going green, **cancel the run**, then arm and record the expiry in the PR as a
+  delivery-policy event.
+
+  Cancelling is the load-bearing part, not the duration. `timeout-minutes` bounds how long a job
+  runs _after it starts_ and says nothing about queue time, so no wall-clock number can guarantee a
+  healthy review has finished. Cancelling at expiry makes publication-after-integration impossible
+  by construction instead of by an argument the queue defeats. A cancelled review is recorded as
+  such and is never described as clean. The wait is bounded on purpose: a reviewer outage may delay integration, never block it
   indefinitely. An expired wait is never described as a clean review. When `KEIKO_QUALITY_ENABLED`
   is not `true` the job never starts, the interlock does not apply, and nothing changes.
+
 - **Branch naming** follows `type/short-slug` — e.g. `feat/…`, `fix/…`, `issue/<n>-…`,
   `codex/…`, `claude/…`, `release/…`. Never work directly on `dev`.
 - **Commit subjects** are imperative and conventional-ish (`feat(scope): …`, `fix: …`,

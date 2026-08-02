@@ -69,8 +69,16 @@ already behaves.
 ### D3 — Least privilege, candidate as data
 
 The consumer workflow holds exactly `contents: read` and `pull-requests: write`. It receives no
-contents-write, checks-write, actions-write, administration, branch-protection, commit, push,
-approval, or merge authority.
+contents-write, checks-write, actions-write, administration, branch-protection, commit, push, or
+merge authority.
+
+State the approval case precisely rather than in that list. GitHub's create-review API accepts an
+`APPROVE` event from any token holding `pull-requests: write`, so the platform does **not** withhold
+approval from either the App installation token or `GITHUB_TOKEN`. What withholds it is the pinned
+action's behaviour: it creates review comments and never a review event. That is a behavioural
+guarantee bound to an immutable commit SHA, not a permission boundary, and the product repository
+pins it with a test. Approval is not required for `dev`, so the coupling costs nothing here — but
+describing the capability as absent would misstate the trust model.
 
 It checks out the protected base and fetches the candidate head as Git objects only. The candidate
 tree is never checked out, symlink-followed, or submodule-initialized, and no candidate script, hook,
@@ -171,8 +179,14 @@ previous one was patched. A type-keyed list cannot be defeated by adding a direc
 property lists, gate configuration, and the `docs/qa/*.json` ratchet baselines are named explicitly,
 because each is a way to weaken a gate rather than to change product behaviour.
 
-A profile change is verified by enumerating every tracked file and confirming that no code-like path
-lands in the catch-all. Sampling recent commits is not sufficient and is what missed all three gaps.
+The profile has **no catch-all**. An earlier `**/*` exclusion made `inventory.unclassified_path`
+unreachable — the fail-closed behaviour this decision relies on — so an unknown executable type would
+have been silently excluded and the review reported clean. The final entry is an explicit list of
+tooling ignore files.
+
+A profile change is verified by enumerating every tracked file and confirming that none is
+unclassified and no code-like path is excluded. Sampling recent commits is not sufficient and is
+what missed the earlier gaps.
 
 ## Consequences
 
