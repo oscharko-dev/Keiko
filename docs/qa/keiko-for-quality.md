@@ -26,13 +26,23 @@ a test upstream. When assessing a compromised or defective action, assume the ca
 
 Activated on 2026-08-02 against Keiko for Quality `v0.4.0`
 (`80bda11eec1e113573c09878b91a885981211009`), model `gpt-5.4` over an OpenAI-compatible endpoint.
+Repinned the same day to `v0.5.0`, then `v0.7.0`.
 
-The delivery freeze in step 4 was **not** applied, and the reason is recorded rather than left to
-inference: at the moment of activation there were zero open pull requests against `dev`. The freeze
-and both `hold.sh` runs exist to stop an already-armed pull request integrating unreviewed in the
-window around the switch; with no open pull request there was nothing to hold, nothing to disarm and
-nothing to retrigger. The procedure below remains the required one for every later activation or
-re-enable, when that will not be true.
+**The delivery freeze in step 4 was not applied, and coverage for that window was therefore not
+established.** Recorded as a shortfall rather than as an exception, because the reasoning that
+justified skipping it was wrong.
+
+The observation was that zero pull requests were open against `dev`, and the conclusion drawn was
+that there was nothing to hold. That conclusion only covers _already-armed_ pull requests. It says
+nothing about the arrival race, which is the reason step 4 locks the branch in the first place: the
+count was taken before the variable was set, so a same-repository pull request opening or becoming
+ready in between would have fired its event while the reviewer was still off, and gone unreviewed
+with nothing holding it. An empty list at one instant is not an empty window.
+
+No such pull request is known to have arrived, and that is a statement about luck rather than about
+the procedure. Every later activation or re-enable follows step 4 as written, including when the
+initial list is empty — the lock is what closes the race, and the emptiness of a snapshot has no
+bearing on it.
 
 ## Provisioning
 
