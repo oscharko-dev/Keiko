@@ -20,8 +20,8 @@ paths.
 - Complexity and function size: cyclomatic complexity `<= 10` and `<= 50` non-comment lines per
   function.
 - Package/file coverage: no committed per-file or per-package ratchet regression.
-- Deterministic performance proxies: governed bundle, latency, and operation-budget regressions fail
-  in repository-owned gates.
+- Deterministic performance proxies: every governed bundle, retrieval-latency, retrieval-quality,
+  context-quality, and immutable performance-evidence regression fails in repository-owned gates.
 - Automated-review findings: `0` unresolved blocking findings and all conversations resolved.
 
 The 85% coverage floor is constitutional, not aspirational. Per-file floors and package ratchets
@@ -59,10 +59,14 @@ protected contexts are absent. The canaries proved that Greptile quota could omi
 review and that shared-runner CodSpeed comparisons could report materially different regressions
 for unchanged inputs. Neither provider produced dependable merge evidence.
 
-Actual performance merge authority stays with the canonical `check:retrieval-latency`,
-`check:retrieval-quality`, `check:grounded-retrieval-quality`, `check:context-quality`, deterministic
-bundle, and D12 evidence gates. The stable protected set contains ten App-bound checks and no
-hosted performance dashboard or quota-paced reviewer status.
+Actual performance merge authority stays with `npm run check:retrieval-latency`,
+`npm run check:retrieval-quality`, `npm run check:grounded-retrieval-quality`,
+`npm run check:context-quality`, `npm run check:editor-bundle-size`,
+`npm run check:editor-release-evidence`, `npm run check:perf-evidence:editor`, and
+`npm run check:perf-evidence`. The exact pull-request E2E checks are `npm run test:e2e:smoke`,
+`npm run test:e2e:editor-run-verification-2215`, `npm run test:e2e:editor-debugging-2348`, and
+`npm run test:e2e:editor-m11-closeout-2533`. The stable protected set contains ten App-bound checks
+and no hosted performance dashboard or quota-paced reviewer status.
 
 Hosted products are not described as open-source merely because their service is free for a public
 repository. The merge-critical foundation is repository-owned and implemented with open-source

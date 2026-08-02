@@ -37,9 +37,13 @@ workflow, validator, package command, or protected context.
   emits fully redacted diagnostics.
 - Strict TypeScript, ESLint, formatting, architecture, contract, coverage, package, security,
   retrieval, and affected-area test gates run in required `ci`.
-- The canonical `check:retrieval-latency`, `check:retrieval-quality`,
-  `check:grounded-retrieval-quality`, `check:context-quality`, deterministic bundle, and D12
-  evidence gates retain performance merge authority.
+- Performance merge authority belongs to `npm run check:retrieval-latency`,
+  `npm run check:retrieval-quality`, `npm run check:grounded-retrieval-quality`,
+  `npm run check:context-quality`, `npm run check:editor-bundle-size`,
+  `npm run check:editor-release-evidence`, `npm run check:perf-evidence:editor`, and
+  `npm run check:perf-evidence`. The exact pull-request E2E checks are `npm run test:e2e:smoke`,
+  `npm run test:e2e:editor-run-verification-2215`, `npm run test:e2e:editor-debugging-2348`, and
+  `npm run test:e2e:editor-m11-closeout-2533`.
 - `check:external-quality-config` semantically validates CodeRabbit's no-write, every-update,
   no-excluded-author policy and verifies that required `ci` still runs the repository-owned gates.
 - `check:review-bot-suppression` rejects pull-request metadata that asks CodeRabbit to ignore,

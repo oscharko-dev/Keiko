@@ -43,10 +43,10 @@ does emit an inline finding, GitHub's required conversation-resolution rule bloc
 conversation is resolved. Policy additionally requires the underlying defect to be repaired; the
 quota-tolerant interim topology cannot infer code repair merely from GitHub's resolved bit.
 
-CodSpeed and Greptile are retired under ADR-0169. Neither has repository configuration, an installed
-App, a workflow, or a protected context. Deterministic bundle, latency, retrieval, and performance
-gates inside `ci` retain merge authority. No payment method, finding dismissal, or gate bypass is an
-accepted repair path.
+The hosted performance dashboard and quota-paced reviewer evaluated in ADR-0169 are retired.
+Neither has repository configuration, an installed App, a workflow, or a protected context.
+Deterministic bundle, latency, retrieval, and performance gates inside `ci` retain merge authority.
+No payment method, finding dismissal, or gate bypass is an accepted repair path.
 
 Qodo and its Keiko for Quality bridge are retired by
 [ADR-0167](docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md); neither is Sonar evidence.
