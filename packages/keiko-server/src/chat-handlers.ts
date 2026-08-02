@@ -49,6 +49,7 @@ import type {
 import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
+  isMaintenanceDue,
   maybeRunAutoMaintenance,
   memoryMaintenanceAuditSink,
   memorySemanticizationMultipliers,
@@ -1042,6 +1043,9 @@ const memoryMaintenanceCursor: AutoMaintenanceState = {};
 // deployment ceiling. In "Ask for approval" it promotes nothing; an unresolvable posture fails
 // closed to exactly that.
 function maybeRunChatAutoMaintenance(deps: UiHandlerDeps, vault: MemoryVaultStore): void {
+  if (deps.env.KEIKO_MEMORY_AUTO_MAINTAIN === "0") return;
+  const nowMs = Date.now();
+  if (!isMaintenanceDue(memoryMaintenanceCursor.lastRunAtMs, nowMs)) return;
   const multipliers = memorySemanticizationMultipliers(deps.env);
   const retention = resolveMemoryRetentionPolicy(deps);
   // Invalid retention configuration fails the entire unattended pass closed. Running every other
@@ -1050,8 +1054,8 @@ function maybeRunChatAutoMaintenance(deps: UiHandlerDeps, vault: MemoryVaultStor
   if (!retention.ok) return;
   const retentionPolicy = retention.policy;
   maybeRunAutoMaintenance(vault, memoryMaintenanceAuditSink(deps), memoryMaintenanceCursor, {
-    nowMs: Date.now(),
-    enabled: deps.env.KEIKO_MEMORY_AUTO_MAINTAIN !== "0",
+    nowMs,
+    enabled: true,
     autonomyMode: resolveMaintenanceAutonomyMode(deps),
     ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
     ...(retentionPolicy !== undefined ? { retentionPolicy } : {}),

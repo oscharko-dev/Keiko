@@ -736,6 +736,7 @@ export function rawConfigFromCurrent(
       ? {}
       : { capabilities: config.capabilities.map(stripDerivedVoicePersonas) }),
     ...(config.grounding === undefined ? {} : { grounding: config.grounding }),
+    ...(config.reranker === undefined ? {} : { reranker: config.reranker }),
     ...(figmaAccessToken === undefined ? {} : { figma: { accessToken: figmaAccessToken } }),
   };
 }

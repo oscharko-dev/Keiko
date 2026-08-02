@@ -564,6 +564,7 @@ describe("handleMemoryCaptureFromConversation", () => {
       memoryVault: vault,
       codingRuntimeDeploymentCeiling: "supervised-coding",
     });
+    deps.store.updateMemoryAutonomyPolicy("supervised-coding", 0);
     const chat = registerChat(deps, "capture-supervised-accepted");
 
     const result = await handleMemoryCaptureFromConversation(
@@ -583,6 +584,29 @@ describe("handleMemoryCaptureFromConversation", () => {
     expect(outcomes[0]).toMatchObject({ kind: "candidate", status: "accepted" });
     const proposalId = outcomes[0]?.proposal?.proposalId;
     expect(vault.getMemory(proposalId as unknown as MemoryId)?.status).toBe("accepted");
+  });
+
+  it("honors a governed-assist memory posture below the deployment ceiling", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({
+      memoryVault: vault,
+      codingRuntimeDeploymentCeiling: "autonomous-delivery",
+    });
+    deps.store.updateMemoryAutonomyPolicy("governed-assist", 0);
+    const chat = registerChat(deps, "capture-governed-assist");
+
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: "remember that release checks use vitest",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(asJson(result).outcomes).toEqual([
+      expect.objectContaining({ kind: "candidate", status: "proposed" }),
+    ]);
   });
 
   // eslint-disable-next-line complexity

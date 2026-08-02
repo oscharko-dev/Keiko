@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import type {
   ReleaseImpactRemediation,
@@ -53,6 +61,8 @@ interface ManagerContext {
   readonly stateDir: string;
   readonly now: () => number;
   readonly idFactory: () => string;
+  readonly remediationLeaseStaleMs: number;
+  readonly pidAlive: (pid: number) => boolean;
 }
 
 type AuditEventInput = Partial<
@@ -83,6 +93,8 @@ export interface UpdateLocalStateManagerOptions {
   readonly stateDir: string;
   readonly now?: (() => number) | undefined;
   readonly idFactory?: (() => string) | undefined;
+  readonly remediationLeaseStaleMs?: number | undefined;
+  readonly pidAlive?: ((pid: number) => boolean) | undefined;
 }
 
 export type { UpdateLocalStateRepairResult } from "./update-local-state-repair.js";
@@ -90,6 +102,7 @@ export type { UpdateLocalStateRepairResult } from "./update-local-state-repair.j
 const RUNTIME_STATE_FILE = "runtime-state.json";
 const AUDIT_LOG_FILE = "update-audit.jsonl";
 const REMEDIATION_LEASE_DIR = "remediation-leases";
+const DEFAULT_REMEDIATION_LEASE_STALE_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_FILE_MODE = 0o600;
 const SNAPSHOT_DIR_MODE = 0o700;
 
@@ -260,6 +273,7 @@ function auditLogPath(stateDir: string): string {
 interface RemediationLeaseRecord {
   readonly pid: number;
   readonly token: string;
+  readonly acquiredAt: string;
 }
 
 function remediationLeasePath(stateDir: string, actionId: string): string {
@@ -270,8 +284,11 @@ function remediationLeasePath(stateDir: string, actionId: string): string {
 function parseRemediationLease(value: unknown): RemediationLeaseRecord | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  return Number.isInteger(record.pid) && typeof record.token === "string"
-    ? { pid: record.pid as number, token: record.token }
+  return Number.isInteger(record.pid) &&
+    typeof record.token === "string" &&
+    typeof record.acquiredAt === "string" &&
+    Number.isFinite(Date.parse(record.acquiredAt))
+    ? { pid: record.pid as number, token: record.token, acquiredAt: record.acquiredAt }
     : undefined;
 }
 
@@ -289,6 +306,49 @@ function processIsAlive(pid: number): boolean {
     return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+function remediationLeaseStaleMs(value: number | undefined): number {
+  return value !== undefined && Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_REMEDIATION_LEASE_STALE_MS;
+}
+
+function remediationLeaseAgeMs(
+  path: string,
+  record: RemediationLeaseRecord | undefined,
+  now: () => number,
+): number | undefined {
+  try {
+    const timestamp = record === undefined ? statSync(path).mtimeMs : Date.parse(record.acquiredAt);
+    return Math.max(0, now() - timestamp);
+  } catch {
+    return undefined;
+  }
+}
+
+function remediationLeaseReclaimable(
+  path: string,
+  record: RemediationLeaseRecord | undefined,
+  context: ManagerContext,
+): boolean {
+  if (record !== undefined && !context.pidAlive(record.pid)) return true;
+  const ageMs = remediationLeaseAgeMs(path, record, context.now);
+  return ageMs !== undefined && ageMs >= context.remediationLeaseStaleMs;
+}
+
+function discardRemediationLease(path: string, malformed: boolean, now: () => number): boolean {
+  try {
+    if (malformed) {
+      const suffix = new Date(now()).toISOString().replace(/[:.]/g, "-");
+      renameSync(path, `${path}.corrupt.${suffix}`);
+    } else {
+      unlinkSync(path);
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -310,11 +370,15 @@ function acquireRemediationLease(
   const token = randomUUID();
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      writeFileSync(path, JSON.stringify({ pid: process.pid, token }), {
-        encoding: "utf8",
-        flag: "wx",
-        mode: SNAPSHOT_FILE_MODE,
-      });
+      writeFileSync(
+        path,
+        JSON.stringify({ pid: process.pid, token, acquiredAt: nowIso(context.now) }),
+        {
+          encoding: "utf8",
+          flag: "wx",
+          mode: SNAPSHOT_FILE_MODE,
+        },
+      );
       return (): void => {
         releaseRemediationLease(path, token);
       };
@@ -322,10 +386,8 @@ function acquireRemediationLease(
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== "EEXIST") throw error;
       const existing = readRemediationLease(path);
-      if (existing === undefined || processIsAlive(existing.pid)) return undefined;
-      try {
-        unlinkSync(path);
-      } catch {
+      if (!remediationLeaseReclaimable(path, existing, context)) return undefined;
+      if (!discardRemediationLease(path, existing === undefined, context.now)) {
         return undefined;
       }
     }
@@ -445,6 +507,8 @@ export function createUpdateLocalStateManager(
     stateDir: options.stateDir,
     now: options.now ?? Date.now,
     idFactory: options.idFactory ?? randomUUID,
+    remediationLeaseStaleMs: remediationLeaseStaleMs(options.remediationLeaseStaleMs),
+    pidAlive: options.pidAlive ?? processIsAlive,
   };
   return {
     scanCompatibility: (impact): UpdateCompatibilityScan => scanCompatibility(context, impact),

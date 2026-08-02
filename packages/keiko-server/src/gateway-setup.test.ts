@@ -4151,4 +4151,21 @@ describe("rawConfigFromCurrent — voice persona persistence round-trip", () => 
       reloaded.capabilities?.find((c) => c.id === "keiko-tts")?.supportedVoicePersonas,
     ).toEqual(["male", "neutral"]);
   });
+
+  it("preserves the provider-backed reranker on reload", () => {
+    const config = parseGatewayConfig({
+      ...voiceRaw,
+      reranker: {
+        modelId: "qwen3-reranker",
+        baseUrl: "https://reranker.example.invalid/v1",
+        apiKey: "reranker-fixture-key",
+        apiKeyHeaderName: "x-litellm-key",
+        timeoutMs: 12_000,
+      },
+    });
+
+    const reloaded = parseGatewayConfig(rawConfigFromCurrent(config, undefined));
+
+    expect(reloaded.reranker).toEqual(config.reranker);
+  });
 });

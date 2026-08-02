@@ -106,18 +106,28 @@ export interface VoiceSessionRecapEvidenceSummary {
 
 // ─── Content-free audit record ────────────────────────────────────────────────
 // Mirrors the SpokenActionAuditRecord posture: enums, counts, booleans, and a duration only.
-export interface VoiceSessionRecapAuditRecord {
-  readonly schemaVersion: VoiceSessionRecapSchemaVersion;
+interface VoiceSessionRecapAuditRecordBase {
   readonly profile: VoiceProfile;
   readonly committedSegmentCount: number;
   readonly committedChars: number;
   readonly candidatesExtracted: number;
   readonly candidatesRejected: number;
   readonly candidatesProposed: number;
-  readonly candidatesAccepted: number;
   readonly triggeredByUser: boolean;
   readonly durationMs: number;
 }
+
+export type VoiceSessionRecapAuditRecord = VoiceSessionRecapAuditRecordBase &
+  (
+    | {
+        readonly schemaVersion: typeof LEGACY_VOICE_SESSION_RECAP_SCHEMA_VERSION;
+        readonly candidatesAccepted?: number;
+      }
+    | {
+        readonly schemaVersion: typeof VOICE_SESSION_RECAP_SCHEMA_VERSION;
+        readonly candidatesAccepted: number;
+      }
+  );
 
 // ─── Validation ───────────────────────────────────────────────────────────────
 function isRecord(value: unknown): value is Record<string, unknown> {

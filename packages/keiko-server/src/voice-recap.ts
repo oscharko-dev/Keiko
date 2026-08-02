@@ -53,7 +53,7 @@ import {
   memoryCaptureAutoAcceptEligible,
   memoryCapturePolicyForDeps,
   promoteEligibleMemoryRecord,
-  resolveMemoryCaptureAutonomyMode,
+  resolvePersistedMemoryAutonomyMode,
 } from "./memory-capture-policy.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
@@ -268,7 +268,7 @@ async function persistRecapOutcomes(
 ): Promise<RecapPersistResult> {
   const proposed: { id: MemoryId; scope: MemoryScope }[] = [];
   const accepted: { id: MemoryId; scope: MemoryScope }[] = [];
-  const mode = resolveMemoryCaptureAutonomyMode(deps);
+  const mode = resolvePersistedMemoryAutonomyMode(deps);
   let rejected = 0;
   for (const outcome of outcomes) {
     if (!isPersistableMemoryCandidate(outcome)) {

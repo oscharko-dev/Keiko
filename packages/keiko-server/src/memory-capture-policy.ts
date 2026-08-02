@@ -165,11 +165,17 @@ export function resolveMemoryCaptureAutonomyMode(
 // projection already reports as `governed-assist` — so the sweep behaves exactly as the mode the UI
 // is showing. This may throw if the UI store is unreadable; callers that must not fail a chat turn
 // wrap it and fall closed (see resolveMaintenanceAutonomyMode in memory-maintenance-handlers.ts).
-export function resolveMemoryMaintenanceAutonomyMode(
+export function resolvePersistedMemoryAutonomyMode(
   deps: Pick<UiHandlerDeps, "codingRuntimeDeploymentCeiling" | "store">,
 ): CodingWorkbenchMode {
   const requestedMode = deps.store.readMemoryAutonomyPolicy()?.requestedMode;
   return resolveMemoryCaptureAutonomyMode(deps, requestedMode ?? DEFAULT_MEMORY_AUTONOMY_MODE);
+}
+
+export function resolveMemoryMaintenanceAutonomyMode(
+  deps: Pick<UiHandlerDeps, "codingRuntimeDeploymentCeiling" | "store">,
+): CodingWorkbenchMode {
+  return resolvePersistedMemoryAutonomyMode(deps);
 }
 
 // THE lever for "may Keiko make a memory retrievable without the local human accepting it?".

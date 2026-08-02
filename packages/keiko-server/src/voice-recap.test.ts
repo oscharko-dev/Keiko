@@ -243,6 +243,7 @@ describe("handleBuildVoiceRecap", () => {
 
   it("reports and audits mode-eligible recap memories as accepted", async () => {
     const chat = createChat();
+    store.updateMemoryAutonomyPolicy("supervised-coding", 0);
     const result = await handleBuildVoiceRecap(
       ctx(recapBody(chat, ["remember that I prefer dark mode"])),
       deps({ mode: "supervised-coding" }),
@@ -278,6 +279,19 @@ describe("handleBuildVoiceRecap", () => {
       });
     expect(auditEvents.filter((event) => event.kind === "memory:accepted")).toHaveLength(1);
     expect(auditEvents.filter((event) => event.kind === "memory:proposed")).toHaveLength(0);
+  });
+
+  it("honors a governed-assist memory posture below the deployment ceiling", async () => {
+    const chat = createChat();
+    store.updateMemoryAutonomyPolicy("governed-assist", 0);
+
+    const result = await handleBuildVoiceRecap(
+      ctx(recapBody(chat, ["remember that release checks use vitest"])),
+      deps({ mode: "autonomous-delivery" }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ candidatesAccepted: 0, candidatesProposed: 1 });
   });
 
   it("rejects a secret in committed text before it reaches the vault (AC6)", async () => {

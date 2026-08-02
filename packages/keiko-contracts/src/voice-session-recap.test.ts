@@ -70,8 +70,17 @@ describe("voice-session-recap contract", () => {
   });
 
   it("accepts a legacy v1 audit record without the v2 accepted count", () => {
-    const legacy = validAuditRecord({ schemaVersion: "1" }) as Record<string, unknown>;
-    Reflect.deleteProperty(legacy, "candidatesAccepted");
+    const legacy: VoiceSessionRecapAuditRecord = {
+      schemaVersion: "1",
+      profile: "full-realtime",
+      committedSegmentCount: 3,
+      committedChars: 120,
+      candidatesExtracted: 4,
+      candidatesRejected: 1,
+      candidatesProposed: 3,
+      triggeredByUser: true,
+      durationMs: 42,
+    };
 
     expect(validateVoiceSessionRecapAuditRecord(legacy)).toEqual({ ok: true });
   });

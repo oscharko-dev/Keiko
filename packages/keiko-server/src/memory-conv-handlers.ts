@@ -62,7 +62,7 @@ import {
   memoryCaptureAutoAcceptEligible,
   memoryCapturePolicyForDeps,
   promoteEligibleMemoryRecord,
-  resolveMemoryCaptureAutonomyMode,
+  resolvePersistedMemoryAutonomyMode,
   SENSITIVE_MEMORY_ACTION_BODY,
 } from "./memory-capture-policy.js";
 import { isSuppressedByForgetTombstone } from "./memory-suppression.js";
@@ -479,7 +479,7 @@ function persistCandidateOutcomes(
   outcomes: readonly CaptureOutcome[],
 ): readonly PersistedCaptureOutcome[] {
   const persisted: PersistedCaptureOutcome[] = [];
-  const mode = resolveMemoryCaptureAutonomyMode(deps);
+  const mode = resolvePersistedMemoryAutonomyMode(deps);
   for (const outcome of outcomes) {
     if (!isPersistableMemoryCandidate(outcome)) {
       persisted.push(outcome);
