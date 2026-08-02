@@ -67,7 +67,9 @@ jobs:
       - name: Fetch candidate head as Git objects
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: git fetch --no-tags --no-recurse-submodules origin "pull/${PR_NUMBER}/head"
+        # --quiet: this step runs before the reviewer, and its output is ordinary Actions output
+        # rather than redacted diagnostics. Keeping it minimal narrows what the job log carries.
+        run: git fetch --quiet --no-tags --no-recurse-submodules origin "pull/${PR_NUMBER}/head"
 
       - name: Review
         uses: oscharko-dev/Keiko-for-Quality@2f8a34705ec3260bf884b1d2f03540654ad9707d # v0.1.2

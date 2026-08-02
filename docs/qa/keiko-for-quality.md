@@ -127,9 +127,16 @@ reports an incomplete run with `inventory.unclassified_path`, that is what happe
 
 ## Reading the diagnostics
 
-Job logs contain only redacted JSON lines: a reason code from a closed vocabulary, the head SHA,
-counts, digests, and durations. There is no field that can carry source, prompts, model output, or
-finding bodies.
+**The reviewer's own output** is redacted JSON lines and nothing else: a reason code from a closed
+vocabulary, the head SHA, counts, digests, and durations. There is no field that can carry source,
+prompts, model output, or finding bodies — that is a property of the diagnostic sink's types, not a
+convention.
+
+Be precise about the scope. The _job_ log is not entirely the reviewer's: the checkout and
+`git fetch` steps that run before it emit ordinary Actions output — setup lines, the fetched ref, and
+commit ids. Those are public facts about the pull request, not review material, and `git fetch` runs
+quiet so the ref line is all it contributes. But the guarantee is about what the reviewer writes, not
+about every line the runner produces, and reading it more broadly would be wrong.
 
 | Reason code family | What to do                                                             |
 | ------------------ | ---------------------------------------------------------------------- |
