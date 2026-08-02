@@ -451,6 +451,14 @@ function hasValidEvidenceIdentity(value: Record<string, unknown>): boolean {
   );
 }
 
+function hasOutcomeCompatibleConstraints(value: Record<string, unknown>): boolean {
+  if (value.policyOutcome === "constrained") return isConstraintArray(value.constraints);
+  if (value.policyOutcome === "approval-gated") {
+    return isUndefinedOr(isConstraintArray)(value.constraints);
+  }
+  return value.constraints === undefined;
+}
+
 // Classification fields of a record.
 function hasValidEvidenceClassification(value: Record<string, unknown>): boolean {
   return (
@@ -459,7 +467,7 @@ function hasValidEvidenceClassification(value: Record<string, unknown>): boolean
     isGitDeliveryPolicyOutcome(value.policyOutcome) &&
     isUndefinedOr(isGitDeliveryBlockReason)(value.blockReason) &&
     isUndefinedOr(isStringArray)(value.requiredApprovers) &&
-    isUndefinedOr(isConstraintArray)(value.constraints)
+    hasOutcomeCompatibleConstraints(value)
   );
 }
 

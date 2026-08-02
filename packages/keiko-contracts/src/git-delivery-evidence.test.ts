@@ -198,6 +198,21 @@ describe("evidence record guard (on-read tamper gate)", () => {
     expect(isGitDeliveryEvidenceRecord({ ...baseRecord(), constraints: [] })).toBe(false);
   });
 
+  it("correlates recorded constraints with the policy outcome", () => {
+    const constraints = [{ kind: "risk-class-ceiling", maxRiskClass: "publish" }] as const;
+
+    expect(
+      isGitDeliveryEvidenceRecord(baseRecord({ policyOutcome: "constrained", constraints })),
+    ).toBe(true);
+    expect(isGitDeliveryEvidenceRecord(baseRecord({ policyOutcome: "constrained" }))).toBe(false);
+    expect(isGitDeliveryEvidenceRecord(baseRecord({ constraints }))).toBe(false);
+    expect(
+      isGitDeliveryEvidenceRecord(
+        baseRecord({ policyOutcome: "blocked", blockReason: "risk-class-ceiling", constraints }),
+      ),
+    ).toBe(false);
+  });
+
   it("rejects a wrong schema version", () => {
     expect(isGitDeliveryEvidenceRecord({ ...baseRecord(), schemaVersion: "2" })).toBe(false);
   });

@@ -309,6 +309,7 @@ describe("regexSafetyIssue adjacent quantified atoms", () => {
 
   it("ignores group and quantifier characters inside character classes", () => {
     expect(regexSafetyIssue("([(+])([*])")).toBeUndefined();
+    expect(regexSafetyIssue("[(a+)(b+)]")).toBeUndefined();
   });
 
   it.each(["(a+)(b+)", "^(a{2,})(b*)$", String.raw`(\d+)(\w*)`])(

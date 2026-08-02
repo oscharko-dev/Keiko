@@ -276,11 +276,24 @@ function scanGroup(source: string, start: number): GroupScan | undefined {
 }
 
 function hasConcatenatedQuantifiedGroups(source: string): boolean {
-  for (let start = 0; start < source.length; start += 1) {
+  let start = 0;
+  while (start < source.length) {
+    if (source[start] === "\\") {
+      start += 2;
+      continue;
+    }
+    if (source[start] === "[") {
+      const end = characterClassEnd(source, start);
+      if (end === undefined) return false;
+      start = end;
+      continue;
+    }
     const first = scanGroup(source, start);
-    if (first?.containsRepetition !== true) continue;
-    const second = scanGroup(source, first.end);
-    if (second?.containsRepetition === true) return true;
+    if (first?.containsRepetition === true) {
+      const second = scanGroup(source, first.end);
+      if (second?.containsRepetition === true) return true;
+    }
+    start += 1;
   }
   return false;
 }
