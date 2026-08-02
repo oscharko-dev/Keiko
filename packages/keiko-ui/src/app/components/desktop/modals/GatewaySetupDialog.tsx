@@ -978,20 +978,26 @@ function GatewayImageInputModelsField({
   );
 }
 
+interface GatewayWorkflowEligibleModelsFieldProps extends GatewayImageInputModelsFieldProps {
+  readonly t: I18nTranslate;
+}
+
 function GatewayWorkflowEligibleModelsField({
+  t,
   value,
   disabled,
   onChange,
-}: GatewayImageInputModelsFieldProps): ReactNode {
+}: GatewayWorkflowEligibleModelsFieldProps): ReactNode {
   return (
     <label className="gw-field">
       <span>
-        Coding-safe workflow models <span className="dlg-opt">optional</span>
+        {t("gatewaySetup.workflowEligibleModels")}{" "}
+        <span className="dlg-opt">{t("common.optional")}</span>
       </span>
       <textarea
         className="gw-input gw-textarea mono"
         value={value}
-        placeholder="Paste explicitly approved coding model names, one per line"
+        placeholder={t("gatewaySetup.workflowEligibleModelsPlaceholder")}
         autoComplete="off"
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
@@ -1001,6 +1007,7 @@ function GatewayWorkflowEligibleModelsField({
 }
 
 interface GatewayFieldsSectionProps {
+  readonly t: I18nTranslate;
   readonly preserveExisting: boolean;
   readonly busy: boolean;
   readonly success: string | undefined;
@@ -1061,6 +1068,7 @@ function GatewayFieldsSection(props: GatewayFieldsSectionProps): ReactNode {
         onChange={props.setImageInputModelIds}
       />
       <GatewayWorkflowEligibleModelsField
+        t={props.t}
         value={props.workflowEligibleModelIds}
         disabled={disabled}
         onChange={props.setWorkflowEligibleModelIds}
@@ -2356,6 +2364,7 @@ export function GatewaySetupDialog({
   const voiceModelNames = storedVoiceModels(storedModels);
   const gatewayFields = (
     <GatewayFieldsSection
+      t={t}
       preserveExisting={preserveExisting}
       busy={busy}
       success={success}

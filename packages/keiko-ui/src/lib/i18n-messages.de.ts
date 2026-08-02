@@ -232,6 +232,9 @@ export const DE_MESSAGES = {
   "gatewaySetup.loading.description":
     "Die lokalen Einrichtungsfelder werden geladen. Es wurde noch keine Anbieteranfrage gestartet.",
   "gatewaySetup.loading.error": "Die Einrichtungsfelder konnten nicht geladen werden.",
+  "gatewaySetup.workflowEligibleModels": "Für Coding-Workflows freigegebene Modelle",
+  "gatewaySetup.workflowEligibleModelsPlaceholder":
+    "Ausdrücklich freigegebene Coding-Modellnamen einfügen, einen pro Zeile",
   "gatewaySetup.voice.title": "Audio & Digital Voice",
   "gatewaySetup.voice.description":
     "Optionale Modelle für Diktat, Live-Unterhaltungen und vorgelesene Antworten.",

@@ -222,6 +222,9 @@ export const EN_MESSAGES = {
   "gatewaySetup.loading.description":
     "Loading the local setup controls. No provider request has been started.",
   "gatewaySetup.loading.error": "The setup controls could not be loaded.",
+  "gatewaySetup.workflowEligibleModels": "Coding-safe workflow models",
+  "gatewaySetup.workflowEligibleModelsPlaceholder":
+    "Paste explicitly approved coding model names, one per line",
   "gatewaySetup.voice.title": "Audio & Digital Voice",
   "gatewaySetup.voice.description":
     "Optional models for dictation, live conversation, and spoken answers.",
