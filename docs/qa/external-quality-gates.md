@@ -34,8 +34,11 @@ publishes **no required status** — its findings block solely through conversat
 does not appear in the protected set above and adding it there requires its own decision.
 
 It stays inert until the repository variable `KEIKO_QUALITY_ENABLED` is `true`. While active, the
-delivering agent arms auto-merge only after the run for the current head has terminated or a bounded
-wait longer than the workflow's job timeout has expired (ADR-0170 D5). Operating detail —
+delivering agent arms auto-merge only after the run for the current head has terminated. If it has
+not terminated within **35 minutes** of the last required check going green, the agent **cancels the
+run first**, then arms, and records the expiry as a delivery-policy event (ADR-0170 D5). Cancelling
+narrows the window in which a review can publish after integration; it does not close it, and
+ADR-0170 D6 keeps that as a stated fail-open window. An expired review is never described as clean. Operating detail —
 provisioning, diagnostics, the disable path, and mass disposition — is in
 [`keiko-for-quality.md`](keiko-for-quality.md).
 
