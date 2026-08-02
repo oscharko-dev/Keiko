@@ -464,7 +464,7 @@ export function runMemoryMaintenance(
     });
     counts.retentionForgotten += retention.forgotten.length;
     counts.forgotten += retention.forgotten.length;
-    counts.tombstonesPurged += retention.forgottenPurgeBacklog;
+    counts.tombstonesPurged += retention.tombstonesPurged;
   }
   return counts;
 }

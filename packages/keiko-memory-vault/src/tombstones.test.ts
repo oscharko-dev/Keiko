@@ -150,6 +150,28 @@ describe("tombstones", () => {
     db.close();
   });
 
+  it("pages a large authorized scope set without exceeding SQLite bind limits", () => {
+    const db = openTestDb();
+    const scopes = Array.from({ length: 20_000 }, (_, index): MemoryScope => ({
+      kind: "user",
+      userId: `authorized-user-${String(index)}` as UserId,
+    }));
+    insertTombstoneRow(
+      db,
+      makeTombstone({
+        id: "large-scope-ledger",
+        memoryId: "large-scope-memory" as MemoryId,
+        scopeCoordinate: "authorized-user-19999",
+      }),
+      TEST_CIPHER,
+    );
+
+    expect(listTombstonesPageRows(db, scopes, TEST_CIPHER, 2)).toMatchObject({
+      total: 1,
+      tombstones: [{ id: "large-scope-ledger" }],
+    });
+  });
+
   it("inserts and lists in forgotten_at ASC order", () => {
     const db = openTestDb();
     insertTombstoneRow(

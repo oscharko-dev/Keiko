@@ -360,6 +360,9 @@ function inlineOutcomeFromGenerated(
 // gateway through the injected chat factory, and filters the output. A failure throws to the caller,
 // which degrades.
 async function runElectedInlineModel(ctx: ElectedInlineModelContext): Promise<InlineModelOutcome> {
+  // Pin provider state before context assembly yields: selection and invocation must describe the
+  // same runtime-config generation when gateway setup completes concurrently.
+  const chat = ctx.chatFactory(ctx.config, ctx.modelId);
   const pack = await assembleCodingContext(buildContextRequest(ctx.request), {
     deps: ctx.deps,
     realRoot: ctx.realRoot,
@@ -378,11 +381,7 @@ async function runElectedInlineModel(ctx: ElectedInlineModelContext): Promise<In
   if (reservation === undefined) {
     return noItemOutcome(ctx.selection.mode, undefined, ctx.modelId, ctx.selection.latencyClass);
   }
-  const generated = await generateInlineCompletion(
-    generationInput,
-    ctx.chatFactory(ctx.config, ctx.modelId),
-    ctx.signal,
-  );
+  const generated = await generateInlineCompletion(generationInput, chat, ctx.signal);
   settleModelUsage(reservation, generated.usage);
   recordInlineModelEvidence(ctx, generated);
   return inlineOutcomeFromGenerated(ctx, pack, generated);

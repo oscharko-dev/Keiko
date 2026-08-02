@@ -242,22 +242,8 @@ const NO_CONNECTOR: CodeContextConnector = {
 function fallbackJiraPort(
   deps: UiHandlerDeps,
 ): ReturnType<typeof createJiraCodeContextHttpPort> | undefined {
-  try {
-    const config = parseJiraCodeContextPortConfig(deps.env);
-    return config === undefined ? undefined : createJiraCodeContextHttpPort(config);
-  } catch (error) {
-    emitServerDiagnostic(
-      deps.diagnostics,
-      serverDiagnosticFromError({
-        correlationId: randomUUID(),
-        operation: "coding-context.connector.configure",
-        source: "coding-context.fallbackJiraPort",
-        error,
-        redact: (): string => "The server operation failed.",
-      }),
-    );
-    return undefined;
-  }
+  const config = parseJiraCodeContextPortConfig(deps.env);
+  return config === undefined ? undefined : createJiraCodeContextHttpPort(config);
 }
 
 export function composeCodingContextConnectors(deps: UiHandlerDeps): ComposedConnectors {
@@ -297,8 +283,8 @@ export async function handleCodingContextPack(
   if (!read.ok) return read.result;
   const request = parseRequest(read.value, deps);
   if (request === undefined) return badRequest();
-  const composed = composeCodingContextConnectors(deps);
   try {
+    const composed = composeCodingContextConnectors(deps);
     const pack = await buildCodeContextPack(request, {
       connectors: composed.connectors,
       connectorConfig: composed.connectorConfig,

@@ -591,6 +591,16 @@ describe("UpdateSessionManager", () => {
       await spawned.promise;
       const authority = JSON.parse(await readFile(lockPath, "utf8")) as Record<string, unknown>;
       expect(authority).not.toHaveProperty("childPid");
+      const childSidecar = (await readdir(tempDir)).find((entry) => entry.endsWith(".child"));
+      expect(childSidecar).toBeDefined();
+      const childAuthority = JSON.parse(
+        await readFile(join(tempDir, childSidecar ?? "missing-child-sidecar"), "utf8"),
+      ) as Record<string, unknown>;
+      expect(childAuthority).toMatchObject({
+        sessionId: authority.sessionId,
+        childPid,
+      });
+      expect(childAuthority.lockIdentity).toEqual(expect.any(String));
 
       const restarted = createUpdateSessionManager({
         detector: () => supportedMode(),
@@ -679,6 +689,34 @@ describe("UpdateSessionManager", () => {
 
       expect(lock.isLocked()).toBe(true);
       expect(lock.acquire(lockRecord("replacement"))).toBe(false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("expires orphaned child-PID ownership after the bounded grace window", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-expired-child-pid-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      await writeFile(
+        lockPath,
+        `${JSON.stringify({
+          sessionId: "abandoned",
+          targetVersion: "0.2.10",
+          startedAt: "2026-06-30T00:00:00.000Z",
+          pid: 111,
+          childPid: 222,
+        })}\n`,
+        { mode: 0o600 },
+      );
+      const lock = createFileUpdateSessionLock(lockPath, {
+        staleMs: 1_000,
+        now: () => Date.parse("2026-06-30T00:00:02.001Z"),
+        pidAlive: (pid) => pid === 222,
+      });
+
+      expect(lock.isLocked()).toBe(false);
+      expect(lock.acquire(lockRecord("replacement"))).toBe(true);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

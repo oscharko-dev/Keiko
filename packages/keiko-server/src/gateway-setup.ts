@@ -2824,8 +2824,7 @@ function setupRequiresGatewayVerification(
     hasNonBlankStringField(raw, "apiKey") ||
     hasNonBlankStringField(raw, "apiKeyHeaderName") ||
     hasNonEmptyListField(raw, "deploymentNames") ||
-    hasNonEmptyListField(raw, "imageInputModelIds") ||
-    hasNonEmptyListField(raw, "workflowEligibleModelIds")
+    hasNonEmptyListField(raw, "imageInputModelIds")
   );
 }
 

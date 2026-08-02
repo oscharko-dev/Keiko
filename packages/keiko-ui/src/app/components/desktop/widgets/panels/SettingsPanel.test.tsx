@@ -697,6 +697,7 @@ describe("SettingsPanel gateway readiness checks", () => {
     readinessButton.focus();
     view.rerender(<SettingsPanel />);
     expect(screen.getByRole("button", { name: "Run readiness check" })).toHaveFocus();
+    fetchModelsMock.mockResolvedValue({ models: [updated] });
     fireEvent.click(screen.getByRole("button", { name: "Apply values" }));
     await waitFor(() => {
       expect(applyGatewayVerifiedCapabilitiesMock).toHaveBeenCalledWith("test-chat-1", {
@@ -705,6 +706,9 @@ describe("SettingsPanel gateway readiness checks", () => {
     });
     await waitFor(() => {
       expect(screen.queryByTestId("capability-disagreements")).toBeNull();
+    });
+    await waitFor(() => {
+      expect(fetchModelsMock).toHaveBeenCalledTimes(2);
     });
   });
 

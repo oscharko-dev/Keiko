@@ -251,6 +251,24 @@ function scopeBindings(scopes: readonly MemoryScope[]): readonly string[] {
   return scopes.flatMap((scope) => [scopeKindOf(scope), scopeCoordinateOf(scope)]);
 }
 
+const LEDGER_SCOPE_CHUNK_SIZE = 100;
+
+function scopeChunks(scopes: readonly MemoryScope[]): readonly (readonly MemoryScope[])[] {
+  const unique = [
+    ...new Map(
+      scopes.map((scope) => [
+        JSON.stringify([scopeKindOf(scope), scopeCoordinateOf(scope)]),
+        scope,
+      ]),
+    ).values(),
+  ];
+  const chunks: MemoryScope[][] = [];
+  for (let offset = 0; offset < unique.length; offset += LEDGER_SCOPE_CHUNK_SIZE) {
+    chunks.push(unique.slice(offset, offset + LEDGER_SCOPE_CHUNK_SIZE));
+  }
+  return chunks;
+}
+
 function ledgerPageSql(scopes: readonly MemoryScope[], after: boolean): string {
   const cursor = after
     ? `AND (
@@ -273,6 +291,31 @@ WHERE (scope_kind, scope_coordinate) IN (${scopePredicate(scopes)})
 `;
 }
 
+function compareLedgerRows(left: TombstoneRow, right: TombstoneRow): number {
+  return right.forgotten_at - left.forgotten_at || left.id.localeCompare(right.id);
+}
+
+function ledgerRowsForScopes(
+  db: DatabaseSync,
+  scopes: readonly MemoryScope[],
+  limit: number,
+  after: MemoryTombstoneLedgerCursor | undefined,
+): readonly TombstoneRow[] {
+  const cursorBindings =
+    after === undefined ? [] : [after.forgottenAt, after.forgottenAt, after.id];
+  return cachedPrepare(db, ledgerPageSql(scopes, after !== undefined)).all(
+    ...scopeBindings(scopes),
+    ...cursorBindings,
+    limit,
+  ) as unknown as readonly TombstoneRow[];
+}
+
+function ledgerCountForScopes(db: DatabaseSync, scopes: readonly MemoryScope[]): number {
+  const row = cachedPrepare(db, ledgerCountSql(scopes)).get(...scopeBindings(scopes)) as
+    { readonly count: number } | undefined;
+  return row?.count ?? 0;
+}
+
 export function listTombstonesPageRows(
   db: DatabaseSync,
   scopes: readonly MemoryScope[],
@@ -281,19 +324,17 @@ export function listTombstonesPageRows(
   after?: MemoryTombstoneLedgerCursor,
 ): MemoryTombstonePage {
   if (scopes.length === 0) return { tombstones: [], total: 0 };
-  const bindings = scopeBindings(scopes);
-  const cursorBindings =
-    after === undefined ? [] : [after.forgottenAt, after.forgottenAt, after.id];
-  const rows = cachedPrepare(db, ledgerPageSql(scopes, after !== undefined)).all(
-    ...bindings,
-    ...cursorBindings,
-    limit,
-  ) as unknown as readonly TombstoneRow[];
-  const countRow = cachedPrepare(db, ledgerCountSql(scopes)).get(...bindings) as
-    { readonly count: number } | undefined;
+  let rows: readonly TombstoneRow[] = [];
+  let total = 0;
+  for (const chunk of scopeChunks(scopes)) {
+    rows = [...rows, ...ledgerRowsForScopes(db, chunk, limit, after)]
+      .sort(compareLedgerRows)
+      .slice(0, limit);
+    total += ledgerCountForScopes(db, chunk);
+  }
   return {
     tombstones: rows.map((row) => rowToTombstone(row, cipher)),
-    total: countRow?.count ?? 0,
+    total,
   };
 }
 

@@ -42,10 +42,12 @@ class GatewayInstanceCache {
       return existing.gateway;
     }
     // A runtime generation change invalidates circuit-breaker and request state even when a caller
-    // reused the same parsed config object. Only the first runtime resolution may share a directly
-    // created config-keyed gateway; every subsequent runtime invalidation starts fresh without
-    // replacing the independent config-keyed instance.
-    const gateway = existing === undefined ? this.forConfig(config) : new Gateway(config);
+    // reused the same parsed config object. A config change inside the SAME generation is not an
+    // invalidation, so it must still converge with direct callers on the config-keyed instance.
+    const lifecycleReset =
+      existing?.kind === "unavailable" ||
+      (existing !== undefined && existing.generation !== generation);
+    const gateway = lifecycleReset ? new Gateway(config) : this.forConfig(config);
     this.byRuntimeConfig.set(source, { kind: "available", config, gateway, generation });
     return gateway;
   }

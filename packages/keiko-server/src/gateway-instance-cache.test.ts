@@ -55,6 +55,19 @@ describe("gateway instance cache", () => {
     expect(gatewayForConfig(current)).toBe(direct);
   });
 
+  it("shares a replacement config at the same generation with direct callers", () => {
+    let current = config();
+    const source = {
+      current: (): GatewayConfig => current,
+      generation: (): number => 0,
+    };
+    gatewayForRuntimeConfig(source);
+    current = config();
+    const direct = gatewayForConfig(current);
+
+    expect(gatewayForRuntimeConfig(source)).toBe(direct);
+  });
+
   it("invalidates the runtime gateway when the current config becomes unavailable", () => {
     const current = config();
     let available: GatewayConfig | undefined = current;

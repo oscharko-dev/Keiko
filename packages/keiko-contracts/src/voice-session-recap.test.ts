@@ -20,6 +20,7 @@ import {
   VOICE_SESSION_RECAP_SCHEMA_VERSION,
   voiceRecapAllowed,
   type VoiceSessionRecapAuditRecord,
+  type VoiceSessionRecapEvidenceSummary,
 } from "./voice-session-recap.js";
 
 const FORBIDDEN_SUBSTRINGS = [
@@ -60,6 +61,29 @@ function validAuditRecord(
 }
 
 describe("voice-session-recap contract", () => {
+  it("keeps legacy v1 evidence summaries source-compatible without the v2 accepted count", () => {
+    const legacy: VoiceSessionRecapEvidenceSummary = {
+      schemaVersion: "1",
+      transcript: {
+        schemaVersion: "1",
+        segmentCount: 1,
+        committedCount: 1,
+        correctedCount: 0,
+        discardedCount: 0,
+        redactedCount: 0,
+        providerErrorCount: 0,
+        committedChars: 12,
+        highestSeq: 1,
+      },
+      candidatesExtracted: 1,
+      candidatesRejected: 0,
+      candidatesProposed: 1,
+      triggeredByUser: true,
+    };
+
+    expect(legacy.candidatesAccepted).toBeUndefined();
+  });
+
   it("pins the schema version and rejects every other value", () => {
     expect(VOICE_SESSION_RECAP_SCHEMA_VERSION).toBe("2");
     expect(isVoiceSessionRecapSchemaVersionSupported("1")).toBe(true);

@@ -237,10 +237,11 @@ function reclaimableValidRecord(
   record: UpdateSessionLockRecord,
   options: ResolvedFileUpdateSessionLockOptions,
 ): boolean {
-  if (!options.pidAlive(record.pid)) {
-    return record.childPid === undefined || !options.pidAlive(record.childPid);
-  }
   const ageMs = lockAgeMs(record, options.now);
+  if (!options.pidAlive(record.pid)) {
+    if (record.childPid === undefined || !options.pidAlive(record.childPid)) return true;
+    return ageMs !== undefined && ageMs > options.staleMs * 2;
+  }
   if (ageMs === undefined || ageMs < options.staleMs) return false;
   return ageMs >= options.staleMs * 2;
 }

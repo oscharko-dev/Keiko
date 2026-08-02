@@ -3326,6 +3326,49 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("updates a non-empty workflow list without rerunning provider verification", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-coding-update-");
+    let verificationCalls = 0;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-coding-update-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => {
+        verificationCalls += 1;
+        if (verificationCalls > 1) {
+          return Promise.reject(new Error("gateway is temporarily unavailable"));
+        }
+        return Promise.resolve(modelIds);
+      },
+    });
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({
+            baseUrl: "https://llm-gateway.example.com/v1",
+            apiKey: "first-secret-token",
+            deploymentNames: ["coding-chat", "general-chat"],
+            workflowEligibleModelIds: ["coding-chat"],
+          }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+
+    const updated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, workflowEligibleModelIds: ["general-chat"] }),
+      deps,
+    );
+
+    expect(updated.status).toBe(200);
+    expect(verificationCalls).toBe(1);
+    expect(
+      currentGatewayConfig(deps)?.capabilities?.filter((capability) => capability.workflowEligible),
+    ).toMatchObject([{ id: "general-chat" }]);
+    deps.store.close();
+  });
+
   it("uses LiteLLM model info to persist embeddings while smoke-testing only chat models", async () => {
     const uiDir = await tempDir("keiko-gw-ui-litellm-");
     const evidenceDir = await tempDir("keiko-gw-ev-litellm-");

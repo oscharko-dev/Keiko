@@ -695,21 +695,22 @@ export function handleListMemoryTombstones(ctx: RouteContext, deps: UiHandlerDep
   const last = tombstones.at(-1);
   const nextCursor =
     page.tombstones.length > limit && last !== undefined ? tombstoneCursor(last) : null;
+  const projection = tombstones.map((tombstone) => ({
+    id: tombstone.id,
+    memoryId: tombstone.memoryId,
+    scopeKind: tombstone.scopeKind,
+    scopeCoordinate: tombstone.scopeCoordinate,
+    type: tombstone.type,
+    forgottenAt: tombstone.forgottenAt,
+    forgetterSurface: tombstone.forgetterSurface,
+    reviewerId: tombstone.reviewerId,
+    originalStatus: tombstone.originalStatus,
+    reason: tombstone.reason,
+  }));
   return {
     status: 200,
     body: {
-      tombstones: tombstones.map((tombstone) => ({
-        id: tombstone.id,
-        memoryId: tombstone.memoryId,
-        scopeKind: tombstone.scopeKind,
-        scopeCoordinate: tombstone.scopeCoordinate,
-        type: tombstone.type,
-        forgottenAt: tombstone.forgottenAt,
-        forgetterSurface: tombstone.forgetterSurface,
-        reviewerId: tombstone.reviewerId,
-        originalStatus: tombstone.originalStatus,
-        reason: tombstone.reason,
-      })),
+      tombstones: deps.redactor(projection),
       total: page.total,
       limit,
       nextCursor,

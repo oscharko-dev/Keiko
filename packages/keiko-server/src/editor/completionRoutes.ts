@@ -359,6 +359,9 @@ function modelOutcomeFromGenerated(
 // Runs the elected model: assembles coding context (#1211), records content-free evidence, and calls
 // the gateway through the injected chat factory. A failure throws to the caller, which degrades.
 async function runElectedModel(ctx: ElectedModelContext): Promise<ModelTierOutcome> {
+  // Resolve the gateway before the first await so model selection and provider state belong to one
+  // runtime-config generation even if setup replaces the live configuration during context intake.
+  const chat = ctx.chatFactory(ctx.config, ctx.modelId);
   const pack = await assembleCodingContext(buildContextRequest(ctx.request), {
     deps: ctx.deps,
     realRoot: ctx.realRoot,
@@ -382,11 +385,7 @@ async function runElectedModel(ctx: ElectedModelContext): Promise<ModelTierOutco
       ctx.selection.latencyClass,
     );
   }
-  const generated = await generateModelCompletions(
-    generationInput,
-    ctx.chatFactory(ctx.config, ctx.modelId),
-    ctx.signal,
-  );
+  const generated = await generateModelCompletions(generationInput, chat, ctx.signal);
   settleModelUsage(reservation, generated.usage);
   recordModelEvidence({
     deps: ctx.deps,

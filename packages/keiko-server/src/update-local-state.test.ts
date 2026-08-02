@@ -205,6 +205,30 @@ describe("update recovery snapshots", () => {
 });
 
 describe("update runtime state and audit events", () => {
+  it("keeps a fresh remediation lease when PID liveness is temporarily unavailable", () => {
+    const stateDir = makeStateDir();
+    const actionId = "local-state-repair:memory-vault";
+    const digest = createHash("sha256").update(actionId, "utf8").digest("hex");
+    const leasePath = join(stateDir, "updates", "remediation-leases", `${digest}.json`);
+    touch(
+      leasePath,
+      JSON.stringify({
+        pid: 42_424,
+        token: "current-lease",
+        acquiredAt: "2026-06-30T11:59:59.500Z",
+      }),
+    );
+    const localState = createUpdateLocalStateManager({
+      stateDir,
+      now: () => NOW,
+      pidAlive: () => false,
+      remediationLeaseStaleMs: 1_000,
+    });
+
+    expect(localState.acquireRemediationLease(actionId)).toBeUndefined();
+    expect(existsSync(leasePath)).toBe(true);
+  });
+
   it("reclaims an aged remediation lease even when its pid was reused", () => {
     const stateDir = makeStateDir();
     const actionId = "local-state-repair:memory-vault";

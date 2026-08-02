@@ -334,9 +334,12 @@ function remediationLeaseReclaimable(
   record: RemediationLeaseRecord | undefined,
   context: ManagerContext,
 ): boolean {
-  if (record !== undefined && !context.pidAlive(record.pid)) return true;
   const ageMs = remediationLeaseAgeMs(path, record, context.now);
-  return ageMs !== undefined && ageMs >= context.remediationLeaseStaleMs;
+  if (ageMs === undefined || ageMs < context.remediationLeaseStaleMs) return false;
+  if (record === undefined || !context.pidAlive(record.pid)) return true;
+  // A live PID may be a reused process identity. Give a genuine owner a second full lease window,
+  // then bound the orphan instead of blocking remediation forever.
+  return ageMs >= context.remediationLeaseStaleMs * 2;
 }
 
 function discardRemediationLease(path: string, malformed: boolean, now: () => number): boolean {

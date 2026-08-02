@@ -26,6 +26,7 @@ import {
 import * as api from "@/lib/api";
 import type { Chat, ChatMessage, DesktopChatSendResponse, ModelCapability } from "@/lib/types";
 import type { StreamHandlers } from "@/lib/api";
+import { notifyGatewayConfigUpdated } from "./widgets/shared/gatewaySetupBus";
 
 // ─── UI test helpers ──────────────────────────────────────────────────────────
 
@@ -1042,6 +1043,29 @@ describe("useChatSession bootstrap eligibility filter (Issue #144 AC #1/#2)", ()
     expect(modelIds).not.toContain("test-embed-only");
     expect(modelIds).not.toContain("test-ocr-only");
     expect(view.result.current.models.every((m) => m.kind === "chat")).toBe(true);
+  });
+
+  it("refreshes the shared conversation model state after capability reconciliation", async () => {
+    const before = { ...chatModelCapability("example-chat-model"), streaming: false };
+    const after = { ...before, streaming: true, supportsImageInput: true };
+    vi.spyOn(api, "fetchModels")
+      .mockResolvedValueOnce({ models: [before] })
+      .mockResolvedValueOnce({ models: [after] });
+    vi.spyOn(api, "fetchProjects").mockResolvedValue({ projects: [] });
+
+    const view = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => {
+      expect(view.result.current.models).toEqual([before]);
+    });
+
+    act(() => {
+      notifyGatewayConfigUpdated();
+    });
+
+    await waitFor(() => {
+      expect(view.result.current.models).toEqual([after]);
+    });
+    expect(view.result.current.selectedModel).toBe("example-chat-model");
   });
 
   it("surfaces model bootstrap failures instead of treating them as an empty configured gateway", async () => {

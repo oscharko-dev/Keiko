@@ -233,6 +233,45 @@ describe("memory handlers", () => {
     expect(JSON.stringify(result.body)).not.toContain("bodyHash");
   });
 
+  it("redacts tombstone scope and reviewer identifiers before the BFF response", () => {
+    const vault = makeVault();
+    const scope = {
+      kind: "user" as const,
+      userId: userId("customer-secret-scope"),
+    };
+    vault.insertMemory(makeMemory("redacted-tombstone", "private body", { scope }));
+    vault.deleteMemory(memoryId("redacted-tombstone"), {
+      tombstone: true,
+      forgetterSurface: "memory-center",
+      reviewerId: reviewerId("customer-secret-reviewer"),
+      nowMs: 200,
+    });
+    const redactCustomerSecret = (value: unknown): unknown =>
+      JSON.parse(JSON.stringify(value).replaceAll("customer-secret", "[REDACTED]")) as unknown;
+
+    const result = handleListMemoryTombstones(
+      makeCtx("/api/memory/tombstones?limit=10", {}),
+      makeDeps({
+        memoryVault: vault,
+        redactor: redactCustomerSecret,
+        memoryAuthorization: {
+          reviewerId: reviewerId("customer-secret-auditor"),
+          authorizedScopes: () => [scope],
+        },
+      }),
+    );
+
+    expect(JSON.stringify(result.body)).not.toContain("customer-secret");
+    expect(result.body).toMatchObject({
+      tombstones: [
+        {
+          scopeCoordinate: "[REDACTED]-scope",
+          reviewerId: "[REDACTED]-reviewer",
+        },
+      ],
+    });
+  });
+
   it("paginates the complete tombstone ledger with an opaque continuation cursor", () => {
     const vault = makeVault();
     const scope = { kind: "user" as const, userId: userId("u-1") };

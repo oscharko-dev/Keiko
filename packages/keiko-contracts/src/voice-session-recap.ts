@@ -94,15 +94,25 @@ export interface VoiceRecapAssistantTurnDescriptor {
 // voice-transcript.ts) plus the extraction outcome counts. "Rejected" means "extracted but not
 // surfaced as a proposed candidate" — it counts scanner-rejected, sensitivity-gated, and
 // governance-action outcomes alike (ADR-0109 D3).
-export interface VoiceSessionRecapEvidenceSummary {
-  readonly schemaVersion: VoiceSessionRecapSchemaVersion;
+interface VoiceSessionRecapEvidenceSummaryBase {
   readonly transcript: VoiceTranscriptEvidenceSummary;
   readonly candidatesExtracted: number;
   readonly candidatesRejected: number;
   readonly candidatesProposed: number;
-  readonly candidatesAccepted: number;
   readonly triggeredByUser: boolean;
 }
+
+export type VoiceSessionRecapEvidenceSummary = VoiceSessionRecapEvidenceSummaryBase &
+  (
+    | {
+        readonly schemaVersion: typeof LEGACY_VOICE_SESSION_RECAP_SCHEMA_VERSION;
+        readonly candidatesAccepted?: number;
+      }
+    | {
+        readonly schemaVersion: typeof VOICE_SESSION_RECAP_SCHEMA_VERSION;
+        readonly candidatesAccepted: number;
+      }
+  );
 
 // ─── Content-free audit record ────────────────────────────────────────────────
 // Mirrors the SpokenActionAuditRecord posture: enums, counts, booleans, and a duration only.

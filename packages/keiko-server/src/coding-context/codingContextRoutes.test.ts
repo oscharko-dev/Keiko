@@ -137,7 +137,7 @@ describe("coding context pack route", () => {
     expect(blocked[0]).toMatchObject({ source: "jira", reason: "missing-credentials" });
   });
 
-  it("does not authorize configured flags when no usable connector port exists", async () => {
+  it("fails closed when an authorized connector has unusable complete configuration", async () => {
     const result = await handleCodingContextPack(
       ctxFor(packRequest()),
       depsFor({
@@ -154,11 +154,10 @@ describe("coding context pack route", () => {
       }),
     );
 
-    expect(result.status).toBe(200);
-    expect(bodyOf(result).blocked).toMatchObject([
-      { source: "github", reason: "missing-credentials" },
-      { source: "jira", reason: "missing-credentials" },
-    ]);
+    expect(result).toMatchObject({
+      status: 502,
+      body: { error: { code: "CODING_CONTEXT_UPSTREAM_FAILED" } },
+    });
   });
 
   it("composes the governed GitHub fallback for an authorized launch project", () => {
@@ -173,10 +172,11 @@ describe("coding context pack route", () => {
     expect(composed.connectorConfig.github_connector_authorized).toBe(true);
   });
 
-  it("records a redacted diagnostic when fallback Jira configuration is invalid", () => {
+  it("fails closed with a redacted diagnostic when fallback Jira configuration is invalid", async () => {
     const diagnostics: unknown[] = [];
 
-    const composed = composeCodingContextConnectors(
+    const result = await handleCodingContextPack(
+      ctxFor(packRequest()),
       depsFor({
         codingContextJiraPort: undefined,
         diagnostics: { record: (record) => diagnostics.push(record) },
@@ -189,11 +189,14 @@ describe("coding context pack route", () => {
       }),
     );
 
-    expect(composed.connectorConfig.jira_connector_authorized).toBe(false);
+    expect(result.status).toBe(502);
+    const responseError = bodyOf(result).error as Record<string, unknown>;
+    expect(responseError.code).toBe("CODING_CONTEXT_UPSTREAM_FAILED");
+    expect(typeof responseError.correlationId).toBe("string");
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]).toMatchObject({
-      operation: "coding-context.connector.configure",
-      source: "coding-context.fallbackJiraPort",
+      operation: "coding-context.pack",
+      source: "coding-context.handleCodingContextPack",
     });
     expect(JSON.stringify(diagnostics)).not.toContain("invalid.example.com");
     expect(JSON.stringify(diagnostics)).not.toContain("operator@example.com");

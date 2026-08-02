@@ -1709,6 +1709,7 @@ export function SettingsPanel({
                 clearReadinessRun(ledger, ledger.generation, updatedModel.id),
               );
               notifyGatewayConfigUpdated();
+              setReloadTick((tick) => tick + 1);
             }}
           />
         )}

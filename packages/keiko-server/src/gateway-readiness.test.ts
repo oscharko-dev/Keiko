@@ -783,6 +783,36 @@ describe("gateway readiness route", () => {
     deps.store.close();
   });
 
+  it("does not record negative capabilities for probes the request did not execute", async () => {
+    const config = gatewayConfig();
+    const recordVerifiedCapability = vi.fn();
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchForDefaultSuccess()),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        verification: () => UNVERIFIED_GATEWAY,
+        generation: () => 0,
+        recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability,
+        clearVerifiedCapability: () => false,
+      },
+    };
+
+    await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
+
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      {},
+      expect.any(String),
+      0,
+    );
+    deps.store.close();
+  });
+
   it("records a failed chat probe as a failed verification, never as unverified", async () => {
     const recorded: string[] = [];
     const config = gatewayConfig();

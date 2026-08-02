@@ -47,6 +47,7 @@ import {
   loadMemoryAutonomyMode,
   rejectMemoryProposal,
 } from "@/lib/memory-api";
+import { GATEWAY_CONFIG_UPDATED_EVENT } from "../widgets/shared/gatewaySetupBus";
 import { sortProjects } from "@/lib/sidebar-sort";
 import {
   classifyRunReport,
@@ -1735,6 +1736,35 @@ function sharedBootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   return pending.then(cloneSessionPatch);
 }
 
+function refreshSessionModels(
+  previous: SessionState,
+  capabilities: readonly ModelCapability[],
+): SessionState {
+  const models = capabilities.filter(isConversationEligibleModel);
+  return {
+    ...previous,
+    models,
+    selectedModel: resolveSelectedModelId(previous.selectedModel, models),
+  };
+}
+
+interface SessionModelRefreshContext {
+  readonly isCancelled: () => boolean;
+  readonly setError: Dispatch<SetStateAction<string | undefined>>;
+  readonly setState: Dispatch<SetStateAction<SessionState>>;
+}
+
+async function loadRefreshedSessionModels(context: SessionModelRefreshContext): Promise<void> {
+  try {
+    const { models } = await fetchModels();
+    if (!context.isCancelled()) {
+      context.setState((previous) => refreshSessionModels(previous, models));
+    }
+  } catch (error_) {
+    if (!context.isCancelled()) context.setError(errorMessage(error_));
+  }
+}
+
 // Sonar S2004 — extracted out of streamUngrounded's `.catch` handler (itself already nested
 // inside a `new Promise` executor inside the useCallback body) so this setState updater is not
 // a fifth level of nested function. Takes the specific dispatchers/values it needs rather than
@@ -2492,6 +2522,23 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       cancelled = true;
     };
   }, [autoCreate, canonicalVoiceProjectionRef]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refreshModels = (): void => {
+      invalidateSharedBootstrap();
+      void loadRefreshedSessionModels({
+        isCancelled: () => cancelled,
+        setError,
+        setState,
+      });
+    };
+    window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshModels);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshModels);
+    };
+  }, []);
 
   useEffect(() => {
     return subscribeChatMutations((mutation) => {
