@@ -64,6 +64,12 @@ describe("auxiliary branded-id and domain predicates", () => {
     expect(isCodeTaskPublicDomain("example")).toBe(false);
     expect(isCodeTaskPublicDomain("EXAMPLE.com")).toBe(false);
   });
+
+  it("rejects non-canonical IPv4 shorthand and octal forms", () => {
+    for (const host of ["127.1", "127.0.1", "0177.0.0.1", "0x7f.0.0.1", "0x7f.1"]) {
+      expect(isCodeTaskPublicDomain(host)).toBe(false);
+    }
+  });
 });
 
 describe("validateAuxiliaryCapabilityRequestV1", () => {

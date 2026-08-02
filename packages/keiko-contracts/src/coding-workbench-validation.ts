@@ -1,5 +1,6 @@
 import { isCodeTaskChildRunId, isCodeTaskSkillId } from "./code-task-auxiliary.js";
 import { isCodingWorkbenchEvidenceSafeText } from "./coding-workbench-evidence.js";
+import { validateStrictUtcInstant } from "./coding-workbench-runtime-api-validation.js";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_APPROVAL_RISKS,
@@ -31,7 +32,6 @@ import {
 } from "./coding-workbench.js";
 
 const HEX_64_PATTERN = /^[a-f0-9]{64}$/u;
-const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
 const CODING_WORKBENCH_PERMISSION_REQUEST_KIND_TO_ACTION_CLASS: Readonly<
   Record<
     (typeof CODING_WORKBENCH_PERMISSION_REQUEST_KINDS)[number],
@@ -62,9 +62,9 @@ function isSafeIntegerOrZero(value: unknown): value is number {
 }
 
 function isIsoInstant(value: unknown): value is string {
-  return (
-    typeof value === "string" && ISO_INSTANT_PATTERN.test(value) && !Number.isNaN(Date.parse(value))
-  );
+  const errors: string[] = [];
+  validateStrictUtcInstant(value, "instant", errors);
+  return errors.length === 0;
 }
 
 function validateAllowedKeys(

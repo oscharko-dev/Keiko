@@ -118,6 +118,26 @@ describe("workspace search wire validators", () => {
     );
   });
 
+  it("rejects Windows drive-prefixed paths on every relative-path input", () => {
+    for (const scopePath of ["C:/workspace/src", "c:workspace/src"]) {
+      expectInvalidWithReason(
+        validateWorkspaceSearchRequest(searchRequest({ scopePath })),
+        "scopePath",
+      );
+      expectInvalidWithReason(
+        validateWorkspaceSymbolSearchRequest(symbolRequest({ scopePath })),
+        "scopePath",
+      );
+      expectInvalidWithReason(
+        validateWorkspaceReplaceApplyRequest({
+          ...applyRequest(),
+          files: [{ ...applyRequest().files[0], path: scopePath }],
+        }),
+        "file path",
+      );
+    }
+  });
+
   it("rejects empty and whitespace-only queries", () => {
     expectInvalidWithReason(validateWorkspaceSearchRequest(searchRequest({ query: "" })), "query");
     expectInvalidWithReason(
@@ -286,4 +306,11 @@ describe("regexSafetyIssue adjacent quantified atoms", () => {
   it.each(["a+b", "a{2}b", String.raw`\+a*`])("preserves safe pattern %s", (source) => {
     expect(regexSafetyIssue(source)).toBeUndefined();
   });
+
+  it.each(["(a+)(b+)", "^(a{2,})(b*)$", String.raw`(\d+)(\w*)`])(
+    "rejects concatenated groups containing quantified atoms: %s",
+    (source) => {
+      expect(regexSafetyIssue(source)).toBe("query regex unsafe");
+    },
+  );
 });

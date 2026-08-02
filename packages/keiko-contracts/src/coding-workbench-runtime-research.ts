@@ -10,6 +10,7 @@ import {
   validateStrictUtcInstant,
 } from "./coding-workbench-runtime-api-validation.js";
 import { CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS } from "./coding-workbench-runtime-api.js";
+import { stripUnsafeFormatChars } from "./text-safety.js";
 
 /** A DNS name can never exceed 253 characters; anything longer is not a host we would fetch. */
 export const CODING_WORKBENCH_RESEARCH_HOST_MAX_CHARS = 253;
@@ -122,6 +123,8 @@ function validatePendingResearch(value: unknown, errors: string[]): void {
     value.requestLine.length > CODING_WORKBENCH_RESEARCH_REQUEST_LINE_MAX_CHARS
   ) {
     errors.push("pendingResearch.requestLine must be a bounded string");
+  } else if (stripUnsafeFormatChars(value.requestLine) !== value.requestLine) {
+    errors.push("pendingResearch.requestLine contains unsafe format characters");
   }
   validateStrictUtcInstant(value.expiresAt, "pendingResearch.expiresAt", errors);
 }

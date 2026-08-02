@@ -69,8 +69,20 @@ export function isCodeTaskChildRunId(value: unknown): value is CodeTaskChildRunI
   return typeof value === "string" && CHILD_RUN_ID_PATTERN.test(value);
 }
 
+function isCanonicalUrlHostname(value: string): boolean {
+  try {
+    return new URL(`http://${value}`).hostname === value;
+  } catch {
+    return false;
+  }
+}
+
 export function isCodeTaskPublicDomain(value: unknown): value is string {
   if (typeof value !== "string" || !PUBLIC_DOMAIN_PATTERN.test(value)) return false;
+  // WHATWG canonicalizes every legacy IPv4 spelling (for example 127.1, octal 0177.0.0.1,
+  // and hexadecimal 0x7f.1) to dotted decimal. A public-domain grant must preserve its input as
+  // the canonical hostname; otherwise a numeric loopback/private target could masquerade as DNS.
+  if (!isCanonicalUrlHostname(value)) return false;
   if (IP_LITERAL_PATTERN.test(value)) return false;
   return !RESERVED_DOMAIN_NAMES.includes(value);
 }
