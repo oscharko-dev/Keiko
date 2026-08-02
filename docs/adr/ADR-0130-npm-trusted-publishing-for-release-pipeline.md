@@ -91,9 +91,18 @@ successfully with zero registry credentials configured.
 ### D4 — One-time npmjs.com configuration, and secret retirement, are manual maintainer actions
 
 Configuring the Trusted Publisher on npmjs.com (package Settings → Trusted Publishers → GitHub
-Actions → this repository + the exact workflow filename `.github/workflows/release.yml`) is a
-one-time action on npmjs.com's own UI. Nothing in this repository or its CI can perform or verify
-it — npm does not validate the configuration until the first real publish attempt. Retiring the
+Actions → this repository + the workflow filename **`release.yml`** — npm's form takes the
+BASENAME, not the `.github/workflows/` path, and a full path entered there will not match the
+OIDC claim — + the GitHub Actions **environment `npm-publish`**) is a one-time action on
+npmjs.com's own UI. The
+environment binding was added on 2026-08-02 (ADR-0170 D3): the workflow-dispatch API takes a
+caller-chosen ref, so a dispatched candidate-branch `release.yml` variant could omit the
+environment declaration and its human-approval gate entirely — with the publisher bound to the
+environment, npm rejects the OIDC token of any run that did not pass through it, which closes
+that path at the registry. A Trusted Publisher configured with repository and filename but
+WITHOUT the environment is an incomplete provisioning state and, until corrected, a stated
+fail-open window. Nothing in this repository or its CI can perform or verify the npm-side
+setting — npm does not validate the configuration until the first real publish attempt. Retiring the
 existing `NPM_TOKEN` GitHub Actions secret (rotating or deleting it, and optionally disallowing
 classic tokens on the package per npm's own recommendation) is a separate manual follow-up once a
 maintainer has confirmed a real trusted-publishing run succeeds; this ADR does not itself delete
@@ -113,11 +122,15 @@ that secret.
 
 ### Negative / Neutral
 
-- The workflow filename `.github/workflows/release.yml` is now a load-bearing identifier: renaming
-  or moving it, or wrapping the publish job behind `workflow_call`, would silently break trusted
-  publishing (npm does not re-validate the saved configuration; publishing would simply start
-  failing auth). Renaming that file must come with updating the npmjs.com Trusted Publisher entry
-  in the same change.
+- The workflow file `.github/workflows/release.yml` — registered with npm by its basename
+  `release.yml` — **and the `npm-publish` environment name** are load-bearing identifiers: the
+  publisher entry is bound to both (D4), so renaming or moving
+  the file, wrapping the publish job behind `workflow_call`, or renaming the environment would
+  silently break trusted publishing (npm does not re-validate the saved configuration; publishing
+  would simply start failing auth). Changing either must come with updating the npmjs.com Trusted
+  Publisher entry in the same change. Neither half is verifiable from this repository — the
+  binding lives only in the npmjs.com publisher settings — so the obligation is stated here
+  rather than enforced by a gate.
 - Trusted publishing requires GitHub-hosted runners; self-hosted runners cannot use it. The
   `publish` job already runs on `ubuntu-latest`, so this is not a present constraint, only a
   future one to remember if that job is ever moved.

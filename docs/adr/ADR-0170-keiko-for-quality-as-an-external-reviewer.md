@@ -67,9 +67,13 @@ tree, the reviewer's implementation, or its own validator.
 This is safe because the threat the freeze addressed is out of scope by construction rather than by
 mitigation. The freeze existed to prevent a forged **required** status context. This adoption
 introduces no required check, so there is no context to forge. What remains is ordinary
-`pull_request_target` semantics — GitHub takes the workflow definition from the protected base — plus
-an action reference that is immutable because it is a commit SHA in a repository the candidate cannot
-write to.
+`pull_request_target` semantics — GitHub takes the workflow definition from the BASE ref's file,
+which for the eligible runs this decision governs (base `dev`, a protected branch) is the protected
+one a candidate cannot alter — plus an action reference that is immutable because it is a commit SHA
+in a repository the candidate cannot write to. Stated precisely because D3's later analysis proved
+the unscoped form wrong: a pull request opened against a contributor-controlled base executes that
+base's own workflow copy under the same trigger, which is exactly why the D3 containments
+(environment deployment branch policy, context-bound store MAC) never lean on the trigger alone.
 
 The consequence is that a new reviewer workflow takes effect only after it is merged to `dev`. That
 is not a bootstrap problem requiring special handling; it is how every workflow in this repository
@@ -77,9 +81,71 @@ already behaves.
 
 ### D3 — Least privilege, candidate as data
 
-The consumer workflow holds exactly `contents: read` and `pull-requests: write`. It receives no
+The consumer workflow holds exactly `actions: read`, `contents: read`, and `pull-requests:
+write`. It receives no write scope beyond the review conversations themselves: no
 contents-write, checks-write, actions-write, administration, branch-protection, commit, push, or
-merge authority.
+merge authority — and `actions: write` exists nowhere in the workflow.
+
+That absence is the durable answer to a three-round review escalation on the adopting pull
+request. The review store first persisted through `actions/cache`, whose service demands
+`actions: write`; that scope also satisfies the workflow-dispatch endpoint, and dispatch takes a
+caller-chosen ref — so any holder could start a dispatchable workflow from a candidate branch,
+whose workflow file the candidate controls, up to and including a `release.yml` variant that
+drops its own approval environment. Fencing the scope (separate job, environment approvals)
+narrowed but could not close that class. Removing it did: the store now persists as a run
+artifact, which needs no write scope to upload, and the previous push's store is located and
+downloaded with `actions: read` — a scope that can neither cancel, re-run, nor dispatch.
+
+Artifacts carry their own poisoning model, and the review escalation on the adopting pull
+request sharpened it to its final form: digest validation is not authentication. Every input of
+the store's public key formula is candidate-visible, so a fabricated store with valid digests
+and empty findings could mark files "reviewed clean" — and the metadata predicates (producing
+event, workflow path, pull-request association) narrow but cannot decide, because a pull request
+opened against a contributor-controlled base receives `pull_request_target` with that base's
+candidate-authored workflow copy, which can upload a matching artifact before the pull request
+is retargeted to `dev`. Authenticity therefore rests on cryptography: the producing run signs
+the store with an HMAC whose key (`KEIKO_QUALITY_STORE_HMAC`) is a keiko-for-quality environment
+secret, and the consuming run verifies before use, discarding anything unsigned or mismatched.
+The environment's protected-branches-only deployment policy is what makes the signature mean
+something: only a run executing a protected ref's own workflow file can hold the key. Beneath
+that, the action still re-derives every entry's digests on load — integrity on top of
+authenticity, not instead of it.
+
+Store identity carries a fourth dimension beside pull request, profile hash, and model identity:
+the reviewer's pinned commit, because a wrapper release can change review or sanitization
+semantics without changing the store's format. GitHub forbids an expression in `uses:`, so the
+pin is necessarily a literal and the workflow declares it once as the source of truth; a
+best-effort parse of the pinned step cross-checks that declaration. Neither may fail the job.
+A disagreement, or a pin the parse cannot confirm, disables the STORE for that run — a
+full-price review with the reviewer intact — because an outage of the reviewer costs more than
+a lost cache, and replaying under an unconfirmed identity costs more than not replaying at all.
+
+The artifact is also an untrusted byte stream until proven otherwise, so both extraction sites —
+the consumer's restore step and the detached signer's fetch — gate the archive itself, not only
+its provenance: central-directory bounds first (25 MiB expanded total, at most eight entries),
+rejection of traversal names and of symlink entries (a link followed by a regular entry beneath
+it would otherwise write through the link, outside the store directory, with no `../` in any
+listing), then extraction under kernel-enforced limits (a 25 MiB per-file write cap and a
+wall-clock timeout, because listing metadata is attacker-declared), and a `du` re-measurement
+plus a link scan of the extracted tree afterwards. Every violation degrades to an empty store
+and one full-price review; nothing in the gate can fail the job, so the archive path never
+becomes a lever over integration.
+
+Two containments hold independently of this workflow's scopes, because other token holders
+retain `actions: write` (infra-failure-retry):
+
+1. The `keiko-for-quality` environment carries a protected-branches-only deployment branch
+   policy, so a job running a candidate branch's workflow file cannot declare the environment
+   and its secrets never materialize there.
+2. `release.yml`'s publish job runs behind the `npm-publish` environment, whose required human
+   reviewer is a provisioned operating prerequisite (verify with
+   `gh api repos/<owner>/<repo>/environments/npm-publish` — the `required_reviewers` rule must
+   be present). Because a dispatched candidate-branch `release.yml` variant could omit the
+   environment declaration entirely, the npm Trusted Publisher (ADR-0130) must additionally be
+   bound to the `npm-publish` environment on npmjs.com — an operator-side setting that no
+   repository configuration or gate can verify: confirmation lives only in the npmjs.com
+   publisher settings, and ADR-0130 D4 records the operator step. Until it is set, that
+   residual path is a stated fail-open window, not a closed one.
 
 State the approval case precisely rather than in that list. GitHub's create-review API accepts an
 `APPROVE` event from any token holding `pull-requests: write`, so the platform does **not** withhold
@@ -138,11 +204,13 @@ authorship check meaningful.
 State the limit of that guarantee precisely. A GitHub environment scopes its secrets to jobs that
 **declare** it, not to one workflow: another job declaring `environment: keiko-for-quality` could
 reference the same App credentials and mint the same installation identity. The protection is
-therefore not "no other workflow can assume this identity" in an absolute sense — it is that no
-*existing* workflow does, and adding one requires a reviewed, merged change to the protected base,
-which is the same trust boundary that protects every other gate here. Binding issuance to this
-workflow's OIDC identity would make the guarantee absolute and is the correct follow-up; it is not
-part of this adoption.
+therefore not "no other workflow can assume this identity" in an absolute sense — it is twofold:
+no *existing* workflow does, and adding one requires a reviewed, merged change to the protected
+base; and the environment's protected-branches-only deployment policy (D3) refuses the
+declaration to any run executing a candidate ref's workflow file, which closes the
+caller-chosen-ref dispatch path that a reviewed-base-only boundary leaves open. Binding issuance
+to this workflow's OIDC identity would make the guarantee absolute and is the correct follow-up;
+it is not part of this adoption.
 
 ### D5 — Bounded auto-merge arming interlock
 
