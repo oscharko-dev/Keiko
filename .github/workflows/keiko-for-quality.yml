@@ -412,6 +412,13 @@ jobs:
             exit 1
           fi
 
+      # The unsigned artifact was produced on the runner that already EXECUTED the external
+      # reviewer action — a compromised action can hand this job a zip bomb or a traversal
+      # archive. The signer therefore applies the exact same gate as the restore path: listing
+      # bounds first (cheap filter over attacker-influenceable metadata), kernel-enforced limits
+      # during extraction, du re-measurement after. Every violation degrades to not-signing —
+      # one lost store, one future full-price review, a warning in the log — never a red job an
+      # attacker can ring for free, and never a byte written outside the store directory.
       - name: Fetch unsigned store from this run
         env:
           GH_TOKEN: ${{ github.token }}
@@ -422,16 +429,34 @@ jobs:
           ARTIFACT_ID="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" \
             -f "name=${UNSIGNED_NAME}" --jq '.artifacts[0].id' 2>/dev/null)"
           if [ -z "${ARTIFACT_ID}" ] || [ "${ARTIFACT_ID}" = "null" ]; then
-            echo "::error::unsigned store artifact not found in this run"
-            exit 1
+            echo "::warning::unsigned store artifact not found — skipping signing"; exit 0
           fi
-          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > store.zip || exit 1
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > store.zip 2>/dev/null
+          if [ ! -s store.zip ]; then
+            echo "::warning::unsigned store download failed — skipping signing"; rm -f store.zip; exit 0
+          fi
+          LISTING="$(unzip -l store.zip 2>/dev/null)"
+          TOTAL="$(printf '%s\n' "${LISTING}" | awk 'END { print $1 }')"
+          ENTRIES="$(printf '%s\n' "${LISTING}" | awk 'END { print $2 }')"
+          case "${TOTAL}${ENTRIES}" in *[!0-9]*|"") TOTAL=99999999999; ENTRIES=999 ;; esac
+          if [ -z "${LISTING}" ] || [ "${TOTAL}" -gt 26214400 ] || [ "${ENTRIES}" -gt 8 ] \
+             || printf '%s\n' "${LISTING}" | grep -q '\.\./'; then
+            echo "::warning::unsigned store failed the archive gate — skipping signing"
+            rm -f store.zip; exit 0
+          fi
           mkdir -p keiko-review-store
-          ( ulimit -f 51200; timeout 60 unzip -o -q store.zip -d keiko-review-store ) || exit 1
+          ( ulimit -f 51200; timeout 60 unzip -o -q store.zip -d keiko-review-store ) 2>/dev/null \
+            || { echo "::warning::unsigned store extraction exceeded limits — skipping signing"; rm -rf keiko-review-store; rm -f store.zip; exit 0; }
           rm -f store.zip
-          test -f keiko-review-store/store.json
+          USED_KB="$(du -sk keiko-review-store 2>/dev/null | cut -f1)"
+          case "${USED_KB}" in *[!0-9]*|"") USED_KB=99999999 ;; esac
+          if [ "${USED_KB}" -gt 25600 ] || [ ! -f keiko-review-store/store.json ]; then
+            echo "::warning::unsigned store failed post-extraction checks — skipping signing"
+            rm -rf keiko-review-store; exit 0
+          fi
 
       - name: Sign review store
+        id: sign
         env:
           STORE_HMAC: ${{ secrets.KEIKO_QUALITY_STORE_HMAC }}
           STORE_PR: ${{ github.event.pull_request.number }}
@@ -440,14 +465,21 @@ jobs:
           STORE_MODEL_PROTOCOL: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
           STORE_ACTION_SHA: ${{ needs.review.outputs.action-sha }}
         run: |
+          if [ ! -f keiko-review-store/store.json ]; then
+            echo "::notice::no store to sign (gate skipped it) — nothing persisted"
+            echo "signed=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
           printf 'pr=%s profile=%s model=%s protocol=%s action=%s\n' \
             "${STORE_PR}" "${STORE_PROFILE_HASH}" "${STORE_MODEL_ID}" "${STORE_MODEL_PROTOCOL}" "${STORE_ACTION_SHA}" \
             > keiko-review-store/store.context
           cat keiko-review-store/store.context keiko-review-store/store.json \
             | openssl dgst -sha256 -hmac "${STORE_HMAC}" -r \
             > keiko-review-store/store.json.hmac
+          echo "signed=true" >> "${GITHUB_OUTPUT}"
 
       - name: Persist review store
+        if: steps.sign.outputs.signed == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ needs.review.outputs.store-name }}
