@@ -138,10 +138,20 @@ jobs:
           MODEL_ID: ${{ vars.KEIKO_QUALITY_MODEL_ID }}
           MODEL_PROTOCOL: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
         run: |
-          IDENTITY="$(printf 'profile=%s model=%s protocol=%s' \
-              "${PROFILE_HASH}" "${MODEL_ID}" "${MODEL_PROTOCOL}" \
+          # The action pin is read from THIS workflow file in the trusted-base checkout — the one
+          # place it cannot drift from what actually executes. It partitions the store because a
+          # wrapper release can change review or sanitization SEMANTICS without changing the
+          # store's format: schema and key re-derivation catch deliberate field changes, not
+          # meaning changes, so an upgrade must start from an empty store.
+          ACTION_SHA="$(grep -oE 'Keiko-for-Quality@[0-9a-f]{40}' \
+            .github/workflows/keiko-for-quality.yml | head -1 | cut -d@ -f2)"
+          IDENTITY="$(printf 'profile=%s model=%s protocol=%s action=%s' \
+              "${PROFILE_HASH}" "${MODEL_ID}" "${MODEL_PROTOCOL}" "${ACTION_SHA}" \
             | openssl dgst -sha256 -r | cut -c1-16)"
-          echo "name=keiko-review-store-pr${PR_NUMBER}-${IDENTITY}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "name=keiko-review-store-pr${PR_NUMBER}-${IDENTITY}"
+            echo "action-sha=${ACTION_SHA}"
+          } >> "${GITHUB_OUTPUT}"
 
       # The directory the store lives in. NOT dot-prefixed: actions/upload-artifact excludes
       # hidden paths unless told otherwise, and a hidden directory here would upload nothing and
@@ -188,13 +198,13 @@ jobs:
           # store is a few hundred kilobytes; 25 MiB is far above any legitimate size and far
           # below harm.
           CANDIDATES="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/artifacts" -f "name=${ARTIFACT_NAME}" -F per_page=100 \
-            --jq '[.artifacts[] | select(.expired == false) | select(.size_in_bytes <= 26214400)] | sort_by(.created_at) | reverse | .[].workflow_run.id' \
+            --jq '[.artifacts[] | select(.expired == false) | select(.size_in_bytes <= 26214400)] | sort_by(.created_at) | reverse | .[] | "\(.id):\(.workflow_run.id)"' \
             2>/dev/null || true)"
           if [ -z "${CANDIDATES}" ]; then
             echo "::notice::no prior store located (none exists, or the lookup failed) — full review"
           fi
           MATCH="$(printf '%s\n' "${CANDIDATES}" \
-            | while read -r RUN_ID; do
+            | while IFS=: read -r ARTIFACT_ID RUN_ID; do
                 [ -n "${RUN_ID}" ] || continue
                 OK="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '
                   select(.event == "pull_request_target")
@@ -204,25 +214,50 @@ jobs:
                                and .head_branch == env.HEAD_REF
                                and .head_repository.full_name == env.HEAD_REPO))
                   | "ok"' 2>/dev/null || true)"
-                if [ "${OK}" = "ok" ]; then echo "${RUN_ID}"; break; fi
+                if [ "${OK}" = "ok" ]; then echo "${ARTIFACT_ID}"; break; fi
               done || true)"
-          echo "run-id=${MATCH}" >> "${GITHUB_OUTPUT}"
+          echo "artifact-id=${MATCH}" >> "${GITHUB_OUTPUT}"
 
-      # continue-on-error is load-bearing: a deleted artifact, a corrupt archive, or a transient
-      # artifact-service failure must degrade to a full-price review — a failed job here would
-      # mean the Review step never runs, no blocking conversation exists, and after the arming
-      # interlock expires the pull request could integrate unreviewed. Memoization must never be
-      # able to fail the reviewer open. The verify step below treats missing files as
-      # discard-and-continue, which covers every partial-download shape.
+      # Fetches the artifact ZIP through the API and inspects the central directory BEFORE any
+      # extraction: `size_in_bytes` in the locate step bounds only the compressed archive, and a
+      # candidate-base run could upload a highly compressible bomb whose expansion eats runner
+      # disk or the job timeout — a failure mode continue-on-error cannot catch, reopening the
+      # unreviewed-merge window through resources instead of exit codes. `unzip -l` reads the
+      # UNCOMPRESSED sizes without expanding anything; the gate enforces the same 25 MiB on the
+      # expanded total, at most 8 entries, and no path-traversal names. Every failure in this
+      # step — download, malformed archive, gate refusal — degrades to an empty store and a
+      # full-price review; nothing here can fail the job.
       - name: Restore review store
-        if: steps.locate.outputs.run-id != ''
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ steps.store-identity.outputs.name }}
-          path: keiko-review-store
-          run-id: ${{ steps.locate.outputs.run-id }}
-          github-token: ${{ github.token }}
+        if: steps.locate.outputs.artifact-id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ steps.locate.outputs.artifact-id }}
+        run: |
+          set +e
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > store.zip 2>/dev/null
+          if [ ! -s store.zip ]; then
+            echo "::notice::store artifact download failed — full review"
+            rm -f store.zip; exit 0
+          fi
+          LISTING="$(unzip -l store.zip 2>/dev/null)"
+          if [ -z "${LISTING}" ]; then
+            echo "::notice::store artifact is not a readable archive — full review"
+            rm -f store.zip; exit 0
+          fi
+          TOTAL="$(printf '%s\n' "${LISTING}" | awk 'END { print $1 }')"
+          ENTRIES="$(printf '%s\n' "${LISTING}" | awk 'END { print $2 }')"
+          case "${TOTAL}${ENTRIES}" in *[!0-9]*) TOTAL=99999999999; ENTRIES=999 ;; esac
+          if [ "${TOTAL}" -gt 26214400 ] || [ "${ENTRIES}" -gt 8 ]; then
+            echo "::warning::store artifact expands beyond the allowed bound — discarding it"
+            rm -f store.zip; exit 0
+          fi
+          if printf '%s\n' "${LISTING}" | grep -q '\.\./'; then
+            echo "::warning::store artifact carries traversal paths — discarding it"
+            rm -f store.zip; exit 0
+          fi
+          unzip -o -q store.zip -d keiko-review-store 2>/dev/null \
+            || { echo "::notice::extraction failed — full review"; rm -rf keiko-review-store; mkdir -p keiko-review-store; }
+          rm -f store.zip
 
       # The producer checks above NARROW; this MAC DECIDES. Digest validation inside the store is
       # not authentication — every input of the public key formula is candidate-visible, so a
@@ -236,13 +271,14 @@ jobs:
       # executing dev's own workflow file can have produced a store that verifies. An unsigned or
       # mismatched store is discarded — one full-price review, never a poisoned replay.
       - name: Verify restored store authenticity
-        if: steps.locate.outputs.run-id != ''
+        if: steps.locate.outputs.artifact-id != ''
         env:
           STORE_HMAC: ${{ secrets.KEIKO_QUALITY_STORE_HMAC }}
           STORE_PR: ${{ github.event.pull_request.number }}
           STORE_PROFILE_HASH: ${{ hashFiles('.github/keiko-for-quality.json') }}
           STORE_MODEL_ID: ${{ vars.KEIKO_QUALITY_MODEL_ID }}
           STORE_MODEL_PROTOCOL: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
+          STORE_ACTION_SHA: ${{ steps.store-identity.outputs.action-sha }}
         run: |
           # An absent environment secret arrives as an empty string, and openssl happily HMACs
           # with an empty — publicly known — key, which would silently void this entire boundary.
@@ -258,8 +294,8 @@ jobs:
             # valid pair copied verbatim from another pull request or configuration fails on the
             # first differing dimension, because those bytes were signed under a different
             # context line. The store.context file inside the artifact is informational only.
-            EXPECTED="$(printf 'pr=%s profile=%s model=%s protocol=%s\n' \
-                "${STORE_PR}" "${STORE_PROFILE_HASH}" "${STORE_MODEL_ID}" "${STORE_MODEL_PROTOCOL}" \
+            EXPECTED="$(printf 'pr=%s profile=%s model=%s protocol=%s action=%s\n' \
+                "${STORE_PR}" "${STORE_PROFILE_HASH}" "${STORE_MODEL_ID}" "${STORE_MODEL_PROTOCOL}" "${STORE_ACTION_SHA}" \
               | cat - "${STORE}" | openssl dgst -sha256 -hmac "${STORE_HMAC}" -r | cut -d' ' -f1)"
             ACTUAL="$(cut -d' ' -f1 < "${SIG}")"
             if [ "${EXPECTED}" = "${ACTUAL}" ]; then
@@ -328,6 +364,7 @@ jobs:
           STORE_PROFILE_HASH: ${{ hashFiles('.github/keiko-for-quality.json') }}
           STORE_MODEL_ID: ${{ vars.KEIKO_QUALITY_MODEL_ID }}
           STORE_MODEL_PROTOCOL: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
+          STORE_ACTION_SHA: ${{ steps.store-identity.outputs.action-sha }}
         run: |
           if [ "${#STORE_HMAC}" -lt 32 ]; then
             echo "::error::KEIKO_QUALITY_STORE_HMAC is missing or too short — refusing to sign with a weak or empty key"
@@ -337,8 +374,8 @@ jobs:
           # verbatim from another pull request or configuration must not verify here. The context
           # line carries every partition dimension; verification recomputes it from this run's
           # own values, so a replayed pair fails on the first differing dimension.
-          printf 'pr=%s profile=%s model=%s protocol=%s\n' \
-            "${STORE_PR}" "${STORE_PROFILE_HASH}" "${STORE_MODEL_ID}" "${STORE_MODEL_PROTOCOL}" \
+          printf 'pr=%s profile=%s model=%s protocol=%s action=%s\n' \
+            "${STORE_PR}" "${STORE_PROFILE_HASH}" "${STORE_MODEL_ID}" "${STORE_MODEL_PROTOCOL}" "${STORE_ACTION_SHA}" \
             > keiko-review-store/store.context
           cat keiko-review-store/store.context keiko-review-store/store.json \
             | openssl dgst -sha256 -hmac "${STORE_HMAC}" -r \
