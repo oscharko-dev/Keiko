@@ -33,6 +33,7 @@ import type {
   GitDeliveryExecutionErrorCode,
   GitDeliveryExecutionOutcome,
   GitDeliveryEvidenceRef,
+  GitDeliveryNonEmptyConstraints,
   GitDeliveryPolicyDecision,
   GitDeliveryRecoveryStrategyHint,
   GitDeliveryRiskClass,
@@ -43,14 +44,20 @@ import {
   isGitDeliveryEvidenceRef,
   isGitDeliveryExecutionErrorCode,
   isGitDeliveryExecutionOutcome,
+  isGitDeliveryNonEmptyConstraints,
   isGitDeliveryRecoveryStrategyHint,
   isGitDeliveryRiskClass,
 } from "./git-delivery.js";
 import type { GitDeliveryRecoveryActionHint } from "./git-delivery-action-sheet.js";
 import { isGitDeliveryRecoveryActionHint } from "./git-delivery-action-sheet.js";
 
-// Pinned schema version. A breaking change adds a NEW literal member; this one is never mutated.
-export const GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION = "1" as const;
+// Current write schema. Readers continue to accept schema 1 records because early constrained
+// records did not bind their constraints; schema 2 makes that binding mandatory without erasing
+// historical governed attempts from audit exports.
+const GIT_DELIVERY_LEGACY_EVIDENCE_SCHEMA_VERSION = "1" as const;
+export const GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION = "2" as const;
+type GitDeliveryEvidenceSchemaVersion =
+  typeof GIT_DELIVERY_LEGACY_EVIDENCE_SCHEMA_VERSION | typeof GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION;
 
 // ─── Outcome class (AC1) ──────────────────────────────────────────────────────────────
 // The terminal disposition every governed mutation attempt is recorded under. Successful, blocked,
@@ -170,7 +177,7 @@ export interface GitDeliveryEvidenceRepoContext {
 // ─── Evidence record (AC1/AC2/AC3) ────────────────────────────────────────────────────────
 
 export interface GitDeliveryEvidenceRecord {
-  readonly schemaVersion: typeof GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION;
+  readonly schemaVersion: GitDeliveryEvidenceSchemaVersion;
   readonly evidenceId: string; // deterministic, content-free (SHA-256 derived)
   readonly actionKind: GitDeliveryActionKind;
   readonly riskClass: GitDeliveryRiskClass;
@@ -180,6 +187,7 @@ export interface GitDeliveryEvidenceRecord {
   readonly policyOutcome: GitDeliveryPolicyDecision["outcome"];
   readonly blockReason?: GitDeliveryBlockReason | undefined;
   readonly requiredApprovers?: readonly string[] | undefined;
+  readonly constraints?: GitDeliveryNonEmptyConstraints | undefined;
   readonly correlation: GitDeliveryEvidenceCorrelation;
   readonly approval: GitDeliveryEvidenceApproval;
   readonly preview?: GitDeliveryEvidencePreviewSummary | undefined;
@@ -435,13 +443,30 @@ function isEvidenceRepoContext(value: unknown): value is GitDeliveryEvidenceRepo
 // the complexity ceiling).
 function hasValidEvidenceIdentity(value: Record<string, unknown>): boolean {
   return (
-    value.schemaVersion === GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION &&
+    (value.schemaVersion === GIT_DELIVERY_LEGACY_EVIDENCE_SCHEMA_VERSION ||
+      value.schemaVersion === GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION) &&
     isString(value.evidenceId) &&
     isGitDeliveryActionKind(value.actionKind) &&
     isGitDeliveryRiskClass(value.riskClass) &&
     isFiniteNumber(value.riskSeverity) &&
     isFiniteNumber(value.recordedAtMs)
   );
+}
+
+function hasOutcomeCompatibleConstraints(value: Record<string, unknown>): boolean {
+  if (value.policyOutcome === "constrained") {
+    if (
+      value.schemaVersion === GIT_DELIVERY_LEGACY_EVIDENCE_SCHEMA_VERSION &&
+      value.constraints === undefined
+    ) {
+      return true;
+    }
+    return isGitDeliveryNonEmptyConstraints(value.constraints);
+  }
+  if (value.policyOutcome === "approval-gated") {
+    return isUndefinedOr(isGitDeliveryNonEmptyConstraints)(value.constraints);
+  }
+  return value.constraints === undefined;
 }
 
 // Classification fields of a record.
@@ -451,7 +476,8 @@ function hasValidEvidenceClassification(value: Record<string, unknown>): boolean
     isGitDeliveryEvidenceLifecyclePhase(value.phaseReached) &&
     isGitDeliveryPolicyOutcome(value.policyOutcome) &&
     isUndefinedOr(isGitDeliveryBlockReason)(value.blockReason) &&
-    isUndefinedOr(isStringArray)(value.requiredApprovers)
+    isUndefinedOr(isStringArray)(value.requiredApprovers) &&
+    hasOutcomeCompatibleConstraints(value)
   );
 }
 

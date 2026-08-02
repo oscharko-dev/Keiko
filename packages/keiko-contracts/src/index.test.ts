@@ -239,8 +239,10 @@ describe("keiko-contracts package surface", () => {
     expect(EVIDENCE_SCHEMA_VERSION).toBe("1");
   });
 
-  it("DEFAULT_RETENTION.maxRuns is 50", () => {
-    expect(DEFAULT_RETENTION.maxRuns).toBe(50);
+  it("DEFAULT_RETENTION bounds chat/RAG evidence within its own partition", () => {
+    expect(DEFAULT_RETENTION).toEqual({
+      maxRunsByPartition: { "chat-rag": 50, regulated: 50 },
+    });
   });
 
   it("DEFAULT_PATCH_LIMITS has a positive maxFilesChanged", () => {

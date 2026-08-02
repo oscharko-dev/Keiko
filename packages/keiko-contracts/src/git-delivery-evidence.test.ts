@@ -53,7 +53,7 @@ function baseRecord(overrides: Partial<GitDeliveryEvidenceRecord> = {}): GitDeli
 
 describe("git-delivery-evidence vocabularies", () => {
   it("pins the schema version and the closed enums", () => {
-    expect(GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION).toBe("1");
+    expect(GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION).toBe("2");
     expect([...GIT_DELIVERY_EVIDENCE_OUTCOME_CLASSES]).toStrictEqual([
       "succeeded",
       "blocked",
@@ -175,12 +175,54 @@ describe("audit packet (AC4)", () => {
 });
 
 describe("evidence record guard (on-read tamper gate)", () => {
+  it("models recorded constraints as non-empty when present", () => {
+    // @ts-expect-error persisted constraints must contain at least one typed constraint.
+    const emptyConstraints: GitDeliveryEvidenceRecord["constraints"] = [];
+
+    expect(isGitDeliveryEvidenceRecord({ ...baseRecord(), constraints: emptyConstraints })).toBe(
+      false,
+    );
+  });
+
   it("accepts a well-formed record", () => {
     expect(isGitDeliveryEvidenceRecord(baseRecord())).toBe(true);
+    expect(
+      isGitDeliveryEvidenceRecord(
+        baseRecord({
+          policyOutcome: "approval-gated",
+          requiredApprovers: ["lead"],
+          constraints: [{ kind: "risk-class-ceiling", maxRiskClass: "publish" }],
+        }),
+      ),
+    ).toBe(true);
+    expect(isGitDeliveryEvidenceRecord({ ...baseRecord(), constraints: [] })).toBe(false);
+  });
+
+  it("correlates recorded constraints with the policy outcome", () => {
+    const constraints = [{ kind: "risk-class-ceiling", maxRiskClass: "publish" }] as const;
+
+    expect(
+      isGitDeliveryEvidenceRecord(baseRecord({ policyOutcome: "constrained", constraints })),
+    ).toBe(true);
+    expect(isGitDeliveryEvidenceRecord(baseRecord({ policyOutcome: "constrained" }))).toBe(false);
+    expect(isGitDeliveryEvidenceRecord(baseRecord({ constraints }))).toBe(false);
+    expect(
+      isGitDeliveryEvidenceRecord(
+        baseRecord({ policyOutcome: "blocked", blockReason: "risk-class-ceiling", constraints }),
+      ),
+    ).toBe(false);
+  });
+
+  it("preserves legacy schema-1 constrained records without weakening current writes", () => {
+    const legacy = baseRecord({ schemaVersion: "1", policyOutcome: "constrained" });
+
+    expect(isGitDeliveryEvidenceRecord(legacy)).toBe(true);
+    expect(isGitDeliveryAuditPacket(buildGitDeliveryAuditPacket([legacy], 2))).toBe(true);
+    expect(isGitDeliveryEvidenceRecord(baseRecord({ policyOutcome: "constrained" }))).toBe(false);
   });
 
   it("rejects a wrong schema version", () => {
-    expect(isGitDeliveryEvidenceRecord({ ...baseRecord(), schemaVersion: "2" })).toBe(false);
+    expect(isGitDeliveryEvidenceRecord({ ...baseRecord(), schemaVersion: "3" })).toBe(false);
   });
 
   it("rejects an unknown outcome class", () => {

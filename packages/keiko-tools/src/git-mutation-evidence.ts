@@ -28,6 +28,7 @@ import type {
   GitDeliveryEvidenceRecord,
   GitDeliveryEvidenceRef,
   GitDeliveryEvidenceRepoContext,
+  GitDeliveryNonEmptyConstraints,
   GitDeliveryExecutionErrorCode,
   GitDeliveryExecutionResult,
   GitDeliveryRecoveryActionHint,
@@ -329,6 +330,7 @@ function repoContextFor(
 interface PolicyFields {
   readonly blockReason?: GitDeliveryBlockReason | undefined;
   readonly requiredApprovers?: readonly string[] | undefined;
+  readonly constraints?: GitDeliveryNonEmptyConstraints | undefined;
 }
 
 function effectiveBlockReason(
@@ -360,15 +362,26 @@ function effectiveApprovers(
   return outcome.status === "approval-required" ? outcome.requiredApprovers : undefined;
 }
 
+function effectiveConstraints(
+  envelope: GitDeliveryActionEnvelope,
+): GitDeliveryNonEmptyConstraints | undefined {
+  const decision = envelope.policyDecision;
+  if (decision.outcome === "allowed" || decision.outcome === "blocked") return undefined;
+  const [first, ...remaining] = decision.constraints ?? [];
+  return first === undefined ? undefined : [first, ...remaining];
+}
+
 function policyFieldsFor(
   envelope: GitDeliveryActionEnvelope,
   outcome: GitMutationOutcome,
 ): PolicyFields {
   const blockReason = effectiveBlockReason(envelope, outcome);
   const requiredApprovers = effectiveApprovers(envelope, outcome);
+  const constraints = effectiveConstraints(envelope);
   return {
     ...(blockReason !== undefined ? { blockReason } : {}),
     ...(requiredApprovers !== undefined ? { requiredApprovers } : {}),
+    ...(constraints !== undefined ? { constraints } : {}),
   };
 }
 

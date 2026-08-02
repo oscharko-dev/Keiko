@@ -161,6 +161,7 @@ describe("legacy fail-closed parity for mode-aware capture", () => {
         body: "The platform team ships releases on a fortnightly cadence.",
         scopeLabel: "Project memory",
         requiresApproval: false,
+        status: "proposed",
       },
       {
         kind: "candidate",
@@ -168,6 +169,7 @@ describe("legacy fail-closed parity for mode-aware capture", () => {
         body: "The build pipeline runs on self-hosted runners.",
         scopeLabel: "User memory",
         requiresApproval: false,
+        status: "proposed",
       },
     ]);
     const records = readMemories(vault, ctx);

@@ -127,6 +127,19 @@ describe("coding workbench runtime research channel payload", () => {
     ).toBe(false);
   });
 
+  it("rejects bidi and zero-width spoofing in the operator-visible request line", () => {
+    for (const codePoint of [0x200b, 0x202e, 0x2066]) {
+      expect(
+        validateCodingWorkbenchRuntimeResearchChannelPayload({
+          session: "active",
+          pending: pending({
+            requestLine: `/docs/${String.fromCodePoint(codePoint)}approved.example/path`,
+          }),
+        }).ok,
+      ).toBe(false);
+    }
+  });
+
   it("rejects malformed request ids and non-public research hosts", () => {
     for (const candidate of [
       pending({ requestId: "not safe" }),

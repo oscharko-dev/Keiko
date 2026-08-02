@@ -546,7 +546,12 @@ function hasForbiddenControl(value: string): boolean {
 }
 
 function safeDocumentPath(value: unknown): value is string {
-  if (!safeRouteString(value, 4_096) || value.startsWith("/") || value.startsWith("\\")) {
+  if (
+    !safeRouteString(value, 4_096) ||
+    value.startsWith("/") ||
+    value.startsWith("\\") ||
+    /^[A-Za-z]:/u.test(value)
+  ) {
     return false;
   }
   return !value.split(/[\\/]/u).some((segment) => segment === ".." || segment.length === 0);

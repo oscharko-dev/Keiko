@@ -119,9 +119,9 @@ describe("RELATIONSHIP_ACTIVITY_STATES", () => {
 });
 
 describe("RELATIONSHIP_DENIAL_CODES", () => {
-  it("contains the 18 denial codes in the denial-reasons.md resolution order", () => {
-    // The tuple order MUST match the normative "Resolution order" so the validator
-    // and reviewers can keep the two views in lock-step.
+  it("contains the 19 denial codes in stable additive catalog order", () => {
+    // Catalog order is append-only for stable public iteration. Validation precedence is specified
+    // independently by the relationship validator and must not reorder this public catalog.
     expect([...RELATIONSHIP_DENIAL_CODES]).toEqual([
       "denied/non-existent-source",
       "denied/non-existent-target",
@@ -141,10 +141,11 @@ describe("RELATIONSHIP_DENIAL_CODES", () => {
       "denied/payload-content-not-permitted",
       "denied/authority-insufficient",
       "denied/schema-version-unsupported",
+      "denied/invalid-structure",
     ]);
   });
 
-  it("has 18 unique entries", () => {
+  it("has 19 unique entries", () => {
     expect(new Set(RELATIONSHIP_DENIAL_CODES).size).toBe(RELATIONSHIP_DENIAL_CODES.length);
   });
 });

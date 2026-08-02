@@ -2295,6 +2295,7 @@ describe("ChatWindow memory controls", () => {
               body: "Deploy after the green CI run.",
               scopeLabel: "User memory",
               requiresApproval: true,
+              status: "proposed",
             },
           ],
         },
@@ -2335,6 +2336,7 @@ describe("ChatWindow memory controls", () => {
               body: "Remember the rejected deployment note.",
               scopeLabel: "Conversation memory",
               requiresApproval: true,
+              status: "proposed",
             },
           ],
         },
@@ -2346,6 +2348,44 @@ describe("ChatWindow memory controls", () => {
     expect(screen.getByText("Remember the rejected deployment note.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Reject" }));
     await waitFor(() => expect(rejectMemoryCandidate).toHaveBeenCalledWith("prop-reject-1"));
+  });
+
+  it("does not offer accept or reject when the server reports an auto-accepted candidate", async () => {
+    const acceptMemoryCandidate = vi.fn().mockResolvedValue(undefined);
+    const rejectMemoryCandidate = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "",
+            memories: [],
+            budget: { tokens: 1200, used: 0 },
+          },
+          actions: [
+            {
+              kind: "candidate",
+              proposalId: "prop-auto-1",
+              body: "Remember the verified release preference.",
+              scopeLabel: "Project memory",
+              requiresApproval: false,
+              status: "accepted",
+            },
+          ],
+        },
+        acceptMemoryCandidate,
+        rejectMemoryCandidate,
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /no memories included/i }));
+    expect(screen.getByText("Remember the verified release preference.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reject" })).toBeNull();
+    expect(acceptMemoryCandidate).not.toHaveBeenCalled();
+    expect(rejectMemoryCandidate).not.toHaveBeenCalled();
   });
 
   it("surfaces explicit update intents returned by governed memory operations", async () => {

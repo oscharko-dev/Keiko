@@ -31,7 +31,9 @@ import {
 import { MEMORY_STRUCTURED_PAYLOAD_KINDS } from "./memory-records.js";
 import {
   FORBIDDEN_CONTROL_RE,
+  MEMORY_BODY_MAX_CHARS,
   MEMORY_RATIONALE_MAX_CHARS,
+  MEMORY_TAG_MAX_CHARS,
   isFiniteNonNegativeNumber,
   isMember,
   isNonEmptyTrimmedString,
@@ -40,6 +42,8 @@ import {
   isUnitInterval,
   validateOptionalReference,
 } from "./memory-internal.js";
+
+const MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES = 128;
 
 // ─── Result types ─────────────────────────────────────────────────────────────
 export interface MemoryValidationOk<T> {
@@ -270,12 +274,33 @@ function validateStringListPayload(input: Record<string, unknown>, errors: strin
     errors.push("payload.items must be an array for kind=string-list");
     return;
   }
+  if (input.items.length > MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES) {
+    errors.push("payload.items exceeds the maximum entry count");
+    return;
+  }
   for (const item of input.items) {
-    if (typeof item !== "string" || item.length === 0 || FORBIDDEN_CONTROL_RE.test(item)) {
-      errors.push("payload.items entry must be a non-empty control-free string");
+    if (
+      typeof item !== "string" ||
+      item.length === 0 ||
+      item.length > MEMORY_BODY_MAX_CHARS ||
+      FORBIDDEN_CONTROL_RE.test(item)
+    ) {
+      errors.push("payload.items entry must be a non-empty bounded control-free string");
       return;
     }
   }
+}
+
+function isValidKeyValuePayloadEntry(entry: unknown): boolean {
+  return (
+    isRecord(entry) &&
+    isNonEmptyTrimmedString(entry.key) &&
+    entry.key.length <= MEMORY_TAG_MAX_CHARS &&
+    !FORBIDDEN_CONTROL_RE.test(entry.key) &&
+    typeof entry.value === "string" &&
+    entry.value.length <= MEMORY_BODY_MAX_CHARS &&
+    !FORBIDDEN_CONTROL_RE.test(entry.value)
+  );
 }
 
 function validateKeyValuePayload(input: Record<string, unknown>, errors: string[]): void {
@@ -283,16 +308,13 @@ function validateKeyValuePayload(input: Record<string, unknown>, errors: string[
     errors.push("payload.entries must be an array for kind=key-value");
     return;
   }
+  if (input.entries.length > MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES) {
+    errors.push("payload.entries exceeds the maximum entry count");
+    return;
+  }
   for (const entry of input.entries) {
-    if (
-      !isRecord(entry) ||
-      !isNonEmptyTrimmedString(entry.key) ||
-      typeof entry.value !== "string" ||
-      FORBIDDEN_CONTROL_RE.test(entry.value)
-    ) {
-      errors.push(
-        "payload.entries entry must have a non-empty key and a control-free string value",
-      );
+    if (!isValidKeyValuePayloadEntry(entry)) {
+      errors.push("payload.entries entry must have a bounded control-free key and string value");
       return;
     }
   }

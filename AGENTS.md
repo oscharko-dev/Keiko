@@ -4,9 +4,16 @@ Guidance for AI coding agents (Claude Code, Codex, Cursor, Copilot, …) and the
 reviewing their output. This file is the shared, checked-in contract: every contributor and
 every agent works from the same rules. Read it before you touch code.
 
-If anything here conflicts with an [Architecture Decision Record](docs/adr/), the ADR wins —
-tell the human and stop. If it conflicts with [`CONTRIBUTING.md`](CONTRIBUTING.md), they should
-agree; flag the drift.
+**Working, clean, secure, verified code is authoritative.** Architecture Decision Records are
+guardrails and the repository's architectural memory; they are not executable truth and must never
+be used to defend broken, unsafe, or contradictory behavior. Agents must decide in favour of
+working, clean, secure code. When implementation requirements or verified safe behavior conflict
+with an ADR, do not stop merely because the text disagrees. Fix the code and update the affected ADR
+sections in the same change so the documentation reflects the corrected reality. Do not create a
+new or "superseding" ADR merely to repair outdated or contradictory text; reserve new ADRs for
+genuinely new architectural decisions. `AGENTS.md`,
+[`CONTRIBUTING.md`](CONTRIBUTING.md), and the ADRs must converge in the resulting change; flag any
+remaining drift.
 
 ---
 
@@ -464,9 +471,13 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 
 ## 11. Decisions and docs
 
-- **ADRs (`docs/adr/`) are the source of truth for architecture.** Read the relevant ones before
-  changing a boundary. There is a machine-checked index (`check:adr-index`) — a new ADR must be
-  added with the next free number and registered in the index. Do not renumber existing ADRs.
+- **ADRs (`docs/adr/`) are architectural guardrails, not authority over working code.** Read the
+  relevant ones before changing a boundary, use them to understand intent and constraints, and
+  update their affected sections when a repair proves the recorded behavior outdated,
+  contradictory, or unsafe. An ADR mismatch alone is not a stop condition and must not preserve a
+  defect. There is a machine-checked index
+  (`check:adr-index`) — a genuinely new ADR must be added with the next free number and registered
+  in the index. Do not renumber existing ADRs.
 - There is intentionally **no root `CHANGELOG.md`**; release notes live in GitHub Releases and the
   release-impact catalog.
 - Operator failure modes go in [`docs/troubleshooting/`](docs/troubleshooting/) using the template
@@ -477,6 +488,8 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 ## 12. When you are unsure
 
 Stop and ask the human rather than guessing across a trust boundary, a governance gate, a release
-process, or the human-control invariant. A blocked gate is a signal, not an obstacle: understand
-_why_ it exists (usually an ADR) before you try to move it. Reuse beats rebuild; redaction beats
-disclosure; failing closed beats a convenient bypass.
+process, or the human-control invariant. Do not stop solely because an ADR contradicts a verified
+requirement or safe product behavior: repair the code and bring the affected ADR text into line in
+the same change. A blocked gate is a signal, not an obstacle: understand _why_ it exists before you
+try to move it. Reuse beats rebuild; redaction beats disclosure; failing closed beats a convenient
+bypass.

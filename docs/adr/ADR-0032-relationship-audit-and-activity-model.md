@@ -83,7 +83,12 @@ Each activity state carries four descriptors: stable text label, semantic ARIA d
 
 `RelationshipEvidenceRef` (per [`docs/relationship-engine/evidence-references.md §2`](../relationship-engine/evidence-references.md)) remains the intended pointer shape for a follow-up implementation seam. It never inlines evidence content. Current `dev` does not yet ship that type on relationship rows or in `GET /api/relationships/:id/explain`; when added, the API should return refs rather than proxying evidence bytes.
 
-Deleting a relationship that has active evidence refs creates a tombstone (the row transitions to `lifecycle = "revoked"`; the row is retained until the last referencing manifest ages out under `DEFAULT_RETENTION: { maxRuns: 50 }`). This mirrors the memory-vault tombstone pattern at [`packages/keiko-memory-vault/src/tombstones.ts`](../../packages/keiko-memory-vault/src/tombstones.ts) but applied at the index layer: the relationship row IS the tombstone.
+Deleting a relationship that has active evidence refs creates a tombstone (the row transitions to
+`lifecycle = "revoked"`; the row is retained until the last referencing manifest ages out under its
+applicable explicit or partition policy). The default partition caps prevent chat/RAG evidence from
+evicting regulated manifests and retain unknown manifests fail-safe. This mirrors the memory-vault tombstone pattern at
+[`packages/keiko-memory-vault/src/tombstones.ts`](../../packages/keiko-memory-vault/src/tombstones.ts)
+but applied at the index layer: the relationship row IS the tombstone.
 
 ### 7. Local-only, no telemetry
 
@@ -147,7 +152,10 @@ Allowing later policy decisions to back-mutate an earlier audit row's payload. R
 ### Negative
 
 - The dual-surface placement adds a per-mutation branch in the audit writer; the branch is deterministic and tested but requires discipline.
-- Audit retention is decoupled from evidence retention (sibling table uses `maxAuditEntriesPerWorkspace`, manifest uses `maxRuns`), so two settings exist. The default values are picked conservatively.
+- Audit retention is decoupled from evidence retention: the sibling table uses
+  `maxAuditEntriesPerWorkspace`, while manifest defaults use `maxRunsByPartition` so chat/RAG
+  evidence cannot evict regulated evidence. `maxRuns` remains available only as an explicit global
+  cap for deployments that deliberately want cross-partition retention.
 - Operators expecting a persistent activity timeline will need to consult audit rows instead. The inspector surface re-derives the live view; the audit view answers the durable question.
 
 ### Risks and mitigations

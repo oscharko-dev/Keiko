@@ -14,8 +14,8 @@ import {
 import { redactContextAssemblyDiagnostics } from "./context-assembly-redaction.js";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
 import { buildEvidenceReport, type EvidenceReport } from "./report.js";
-import { createAuditRedactor, deepRedactStrings } from "./redaction.js";
-import { applyRetention } from "./retention.js";
+import { persistEvidenceManifest } from "./persist.js";
+import { createAuditRedactor } from "./redaction.js";
 import {
   DEFAULT_RETENTION,
   EVIDENCE_SCHEMA_VERSION,
@@ -332,8 +332,14 @@ export function persistConnectedContextEvidence(
 ): ConnectedContextEvidencePersistResult {
   const redactor = createAuditRedactor({ additionalSecrets: ctx.additionalSecrets ?? [] }, ctx.env);
   const manifest = buildConnectedContextEvidenceManifest(input, ctx.costClassResolver, redactor);
-  const safeManifest = deepRedactStrings(manifest, redactor) as EvidenceManifest;
-  const location = ctx.store.put(safeManifest.run.runId, JSON.stringify(safeManifest, null, 2));
-  applyRetention(ctx.store, ctx.retention ?? DEFAULT_RETENTION);
-  return { manifest: safeManifest, location, report: buildEvidenceReport(safeManifest, location) };
+  const persisted = persistEvidenceManifest(
+    manifest,
+    ctx.store,
+    redactor,
+    ctx.retention ?? DEFAULT_RETENTION,
+  );
+  return {
+    ...persisted,
+    report: buildEvidenceReport(persisted.manifest, persisted.location),
+  };
 }

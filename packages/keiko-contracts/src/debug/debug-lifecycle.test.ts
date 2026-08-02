@@ -163,4 +163,10 @@ describe("debug lifecycle evidence", () => {
     const callable = Object.assign((): void => undefined, valid);
     expect(isDebugLifecycleEvidence(callable)).toBe(false);
   });
+
+  it("rejects evidence inherited entirely through the prototype chain", () => {
+    const inherited = Object.create(valid) as unknown;
+    expect(Object.keys(inherited as object)).toEqual([]);
+    expect(isDebugLifecycleEvidence(inherited)).toBe(false);
+  });
 });

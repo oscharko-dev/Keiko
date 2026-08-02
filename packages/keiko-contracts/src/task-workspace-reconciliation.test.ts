@@ -306,6 +306,13 @@ describe("status/health/recovery-flag derivations", () => {
     ).toBe("recovery-required");
     expect(
       reconciliationStatusFromInstance({
+        lifecycleState: "recovery-required",
+        health: "degraded",
+        driftMarkers: ["lock-stale"],
+      }),
+    ).toBe("recovery-required");
+    expect(
+      reconciliationStatusFromInstance({
         lifecycleState: "active",
         health: "healthy",
         driftMarkers: [],

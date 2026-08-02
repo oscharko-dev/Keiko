@@ -80,4 +80,23 @@ describe("appendCommandRunEvidence", () => {
     expect(raw).toContain("npm-[REDACTED]");
     expect(raw).not.toContain("npm-SECRET");
   });
+
+  it("applies the declared regulated partition after every direct manifest write", () => {
+    const store = createInMemoryEvidenceStore();
+    const retainOne = { maxRunsByPartition: { regulated: 1 } } as const;
+    appendCommandRunEvidence(
+      store,
+      buildCommandRunEvidenceEntry(baseInput({ runId: "run-old" })),
+      (value) => value,
+      retainOne,
+    );
+    appendCommandRunEvidence(
+      store,
+      buildCommandRunEvidenceEntry(baseInput({ runId: "run-new", startedAt: 1700000000100 })),
+      (value) => value,
+      retainOne,
+    );
+
+    expect(store.list()).toEqual(["run-new"]);
+  });
 });

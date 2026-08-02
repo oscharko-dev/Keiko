@@ -93,6 +93,13 @@ describe("isGitDeliveryPolicyRule", () => {
     ).toBe(false);
     expect(isGitDeliveryPolicyRule(null)).toBe(false);
   });
+
+  it("rejects constrained rules that carry no effective constraint", () => {
+    expect(isGitDeliveryPolicyRule({ actionKind: "push", decision: "constrained" })).toBe(false);
+    expect(
+      isGitDeliveryPolicyRule({ actionKind: "push", decision: "constrained", constraints: [] }),
+    ).toBe(false);
+  });
 });
 
 describe("evaluateGitPolicy precedence matrix", () => {
@@ -140,6 +147,75 @@ describe("evaluateGitPolicy precedence matrix", () => {
     expect(decision).toEqual({ outcome: "approval-gated", requiredApprovers: ["repo-lead"] });
   });
 
+  it("preserves an org protected-branch constraint beside repo approval requirements", () => {
+    const protectedBranch: GitDeliveryConstraint = {
+      kind: "protected-branch",
+      patterns: [{ matchKind: "exact", value: "dev" }],
+    };
+    const decision = evaluateGitPolicy(
+      orgPack({
+        rules: [{ actionKind: "push", decision: "constrained", constraints: [protectedBranch] }],
+      }),
+      repoPack({
+        rules: [
+          { actionKind: "push", decision: "approval-gated", requiredApprovers: ["repo-lead"] },
+        ],
+      }),
+      CTX,
+    );
+
+    expect(decision).toEqual({
+      outcome: "approval-gated",
+      requiredApprovers: ["repo-lead"],
+      constraints: [protectedBranch],
+    });
+  });
+
+  it("preserves repo constraints beside org approval requirements", () => {
+    const repoConstraint: GitDeliveryConstraint = {
+      kind: "risk-class-ceiling",
+      maxRiskClass: "publish",
+    };
+    const decision = evaluateGitPolicy(
+      orgPack({
+        rules: [
+          { actionKind: "push", decision: "approval-gated", requiredApprovers: ["org-lead"] },
+        ],
+      }),
+      repoPack({
+        rules: [{ actionKind: "push", decision: "constrained", constraints: [repoConstraint] }],
+      }),
+      CTX,
+    );
+
+    expect(decision).toEqual({
+      outcome: "approval-gated",
+      requiredApprovers: ["org-lead"],
+      constraints: [repoConstraint],
+    });
+  });
+
+  it("retains the established org approval selector when both scopes require approval", () => {
+    const decision = evaluateGitPolicy(
+      orgPack({
+        rules: [
+          { actionKind: "push", decision: "approval-gated", requiredApprovers: ["org-lead"] },
+        ],
+      }),
+      repoPack({
+        rules: [
+          { actionKind: "push", decision: "approval-gated", requiredApprovers: ["repo-lead"] },
+        ],
+      }),
+      CTX,
+    );
+
+    expect(decision).toEqual({
+      outcome: "approval-gated",
+      requiredApprovers: ["org-lead"],
+    });
+  });
+
   it("4. constrained unions org constraints first, then repo constraints", () => {
     const orgConstraint: GitDeliveryConstraint = {
       kind: "provider-capability",
@@ -177,6 +253,17 @@ describe("evaluateGitPolicy precedence matrix", () => {
       CTX,
     );
     expect(decision).toEqual({ outcome: "constrained", constraints: [repoConstraint] });
+  });
+
+  it("fails closed if a trusted in-process caller bypasses parsing with an empty constraint set", () => {
+    const decision = evaluateGitPolicy(
+      undefined,
+      repoPack({
+        rules: [{ actionKind: "push", decision: "constrained", constraints: [] }],
+      }),
+      CTX,
+    );
+    expect(decision).toEqual({ outcome: "blocked", reason: "policy-pack-blocked" });
   });
 
   it("5. allowed when either level allows and neither tightens", () => {
@@ -318,6 +405,29 @@ describe("policy-pack parsers", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errors.some((e) => e.includes("defaultRule"))).toBe(true);
+    }
+  });
+
+  it("rejects empty constrained rules and defaults instead of evaluating them as allowed", () => {
+    for (const constrained of [
+      { decision: "constrained" },
+      { decision: "constrained", constraints: [] },
+    ]) {
+      expect(
+        parseGitRepoPolicyPack({
+          schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+          repoId: "r",
+          rules: [{ actionKind: "push", ...constrained }],
+        }).ok,
+      ).toBe(false);
+      expect(
+        parseGitRepoPolicyPack({
+          schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+          repoId: "r",
+          rules: [],
+          defaultRule: constrained,
+        }).ok,
+      ).toBe(false);
     }
   });
 
@@ -546,7 +656,23 @@ describe("evaluateGitDeliveryEffectivePolicy", () => {
     ).toEqual({ outcome: "allowed" });
   });
 
-  it("reports the FIRST failing constraint and admits a decision with no constraints", () => {
+  it("enforces composite constraints before retaining the approval requirement", () => {
+    const decision = {
+      outcome: "approval-gated",
+      requiredApprovers: ["repo-lead"],
+      constraints: [{ kind: "protected-branch", patterns: [{ matchKind: "exact", value: "dev" }] }],
+    } as const;
+
+    expect(evaluateGitDeliveryEffectivePolicy(decision, context)).toEqual({
+      outcome: "blocked",
+      blockReason: "protected-branch",
+    });
+    expect(
+      evaluateGitDeliveryEffectivePolicy(decision, { ...context, targetBranchName: "feat/x" }),
+    ).toEqual({ outcome: "approval-gated" });
+  });
+
+  it("reports the FIRST failing constraint", () => {
     const decision = {
       outcome: "constrained",
       constraints: [
@@ -558,8 +684,5 @@ describe("evaluateGitDeliveryEffectivePolicy", () => {
       outcome: "blocked",
       blockReason: "risk-class-ceiling",
     });
-    expect(
-      evaluateGitDeliveryEffectivePolicy({ outcome: "constrained", constraints: [] }, context),
-    ).toEqual({ outcome: "allowed" });
   });
 });

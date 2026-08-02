@@ -3960,6 +3960,16 @@ type MemoryActionRunner = (
   errorMessage: string,
 ) => void;
 
+function memoryCandidateStatusLabel(
+  action: Extract<ConversationMemoryActionWire, { readonly kind: "candidate" }>,
+  t: I18nTranslate,
+): string {
+  if (action.status === "accepted") return t("chat.memory.accepted");
+  return action.requiresApproval
+    ? t("chat.memory.approvalRequired")
+    : t("chat.memory.proposedMemory");
+}
+
 // Extracted from MemoryActionCard (SonarCloud S3776) — the "candidate" kind's card.
 function MemoryActionCandidateCard({
   action,
@@ -3983,49 +3993,49 @@ function MemoryActionCandidateCard({
     <article className="chat-memory-action">
       <div className="chat-memory-action-head">
         <strong>{action.scopeLabel}</strong>
-        <span>
-          {action.requiresApproval
-            ? t("chat.memory.approvalRequired")
-            : t("chat.memory.proposedMemory")}
-        </span>
+        <span>{memoryCandidateStatusLabel(action, t)}</span>
       </div>
       <p>{action.body}</p>
-      <div className="chat-memory-action-buttons">
-        <button
-          type="button"
-          aria-disabled={busy}
-          aria-busy={busy}
-          onClick={() => {
-            runAction(
-              () => acceptCandidate(action.proposalId),
-              t("chat.memory.accepted"),
-              t("chat.memory.acceptError"),
-            );
-          }}
-        >
-          {t("chat.memory.accept")}
-        </button>
-        <button
-          type="button"
-          aria-disabled={busy}
-          aria-busy={busy}
-          onClick={() => {
-            runAction(
-              () => rejectCandidate(action.proposalId),
-              t("chat.memory.rejected"),
-              t("chat.memory.rejectError"),
-            );
-          }}
-        >
-          {t("chat.memory.reject")}
-        </button>
-      </div>
-      {error !== undefined ? (
-        <ErrorNoticeFromError
-          error={error}
-          fallback={t("chat.error.memoryUpdate")}
-          onDismiss={onDismissError}
-        />
+      {action.status === "proposed" ? (
+        <>
+          <div className="chat-memory-action-buttons">
+            <button
+              type="button"
+              aria-disabled={busy}
+              aria-busy={busy}
+              onClick={() => {
+                runAction(
+                  () => acceptCandidate(action.proposalId),
+                  t("chat.memory.accepted"),
+                  t("chat.memory.acceptError"),
+                );
+              }}
+            >
+              {t("chat.memory.accept")}
+            </button>
+            <button
+              type="button"
+              aria-disabled={busy}
+              aria-busy={busy}
+              onClick={() => {
+                runAction(
+                  () => rejectCandidate(action.proposalId),
+                  t("chat.memory.rejected"),
+                  t("chat.memory.rejectError"),
+                );
+              }}
+            >
+              {t("chat.memory.reject")}
+            </button>
+          </div>
+          {error !== undefined ? (
+            <ErrorNoticeFromError
+              error={error}
+              fallback={t("chat.error.memoryUpdate")}
+              onDismiss={onDismissError}
+            />
+          ) : null}
+        </>
       ) : null}
     </article>
   );

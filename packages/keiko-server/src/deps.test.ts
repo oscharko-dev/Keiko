@@ -45,6 +45,7 @@ import {
   currentGatewayEgressConfig,
   currentRedactionSecrets,
   ensureManagedTaskWorkspaceIdentity,
+  redactEvidenceString,
   reconcileTaskWorkspacesAtStartup,
   type UiHandlerDeps,
 } from "./deps.js";
@@ -68,6 +69,16 @@ import { buildBinding } from "./task-workspace/binding.js";
 import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
 
 const tmpDirs: string[] = [];
+
+describe("redactEvidenceString", () => {
+  it("fails closed when the evidence redactor returns a non-string value", () => {
+    expect(() => redactEvidenceString(() => ({ raw: true }), "secret-value")).toThrow(TypeError);
+  });
+
+  it("returns the validated redacted string", () => {
+    expect(redactEvidenceString(() => "[REDACTED]", "secret-value")).toBe("[REDACTED]");
+  });
+});
 
 afterEach(() => {
   for (const d of tmpDirs.splice(0)) {

@@ -169,7 +169,7 @@ describe("validateKnowledgePodSummary", () => {
       },
       counts: {
         ...happySummary().counts,
-        capsuleCount: 3,
+        capsuleCount: 4,
       },
       setReadiness: {
         readyCount: 1,
@@ -183,6 +183,30 @@ describe("validateKnowledgePodSummary", () => {
         missingCount: 0,
         reasonCodes: ["member-indexing", "member-degraded", "policy-denied"],
       },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("includes policy-denied members in the pod-set member total", () => {
+    const base = happySummary();
+    const result = validateKnowledgePodSummary({
+      ...base,
+      kind: "pod-set",
+      counts: { ...base.counts, capsuleCount: 3 },
+      setReadiness: {
+        readyCount: 0,
+        draftCount: 0,
+        degradedCount: 0,
+        unavailableCount: 0,
+        deniedCount: 3,
+        indexingCount: 0,
+        staleCount: 0,
+        errorCount: 0,
+        missingCount: 0,
+        reasonCodes: ["policy-denied"],
+      },
+      compatibility: { ...base.compatibility, backingKind: "capsule-set" },
     });
 
     expect(result.ok).toBe(true);

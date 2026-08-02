@@ -387,6 +387,7 @@ function candidateWireAction(
         : inserted.body,
     scopeLabel: scopeLabel(inserted.scope),
     requiresApproval: outcome.requiresApproval,
+    status: inserted.status === "accepted" ? "accepted" : "proposed",
   };
 }
 

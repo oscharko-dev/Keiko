@@ -1419,12 +1419,12 @@ export function reconciliationStatusFromInstance(input: {
   if (
     markers.includes("branch-deleted") ||
     markers.includes("head-moved") ||
-    markers.includes("uncommitted-changes") ||
-    markers.includes("lock-stale")
+    markers.includes("uncommitted-changes")
   ) {
     return "drifted";
   }
   if (input.lifecycleState === "recovery-required") return "recovery-required";
+  if (markers.includes("lock-stale")) return "drifted";
   return "healthy";
 }
 

@@ -852,6 +852,7 @@ function validateSetReadinessMemberTotal(
     Number(value.draftCount) +
     Number(value.degradedCount) +
     Number(value.unavailableCount) +
+    Number(value.deniedCount) +
     Number(value.indexingCount) +
     Number(value.staleCount) +
     Number(value.errorCount) +

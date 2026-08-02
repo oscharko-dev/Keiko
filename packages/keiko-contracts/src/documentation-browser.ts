@@ -210,7 +210,11 @@ function classifyIpv4(octets: readonly number[]): DocumentationTargetClass {
 // Classify a named (non-IPv4) host: unique-local/link-local IPv6 prefixes, single-label names, and
 // *.local/*.internal/… suffixes are intranet-class; every other dotted public name is external.
 function classifyNamedHost(lower: string): DocumentationTargetClass {
-  if (lower.startsWith("fc") || lower.startsWith("fd") || lower.startsWith("fe80")) {
+  const ipv6Literal = lower.includes(":");
+  if (
+    ipv6Literal &&
+    (lower.startsWith("fc") || lower.startsWith("fd") || lower.startsWith("fe80"))
+  ) {
     return "intranet-http";
   }
   if (!lower.includes(".")) return "intranet-http";

@@ -16,6 +16,7 @@ export type {
   EvidenceReasoningEntry,
   EvidenceFailure,
   EvidenceTaskType,
+  EvidenceRetentionPartition,
   EvidenceBrowserViewportPx,
   EvidenceBrowserEventType,
   EvidenceBrowserEvent,

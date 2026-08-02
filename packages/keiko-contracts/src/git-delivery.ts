@@ -311,6 +311,11 @@ export type GitDeliveryConstraint =
   | GitDeliveryProviderCapabilityConstraint
   | GitDeliveryRiskClassCeilingConstraint;
 
+export type GitDeliveryNonEmptyConstraints = readonly [
+  GitDeliveryConstraint,
+  ...GitDeliveryConstraint[],
+];
+
 // ─── Policy decision ────────────────────────────────────────────────────────────
 
 export type GitDeliveryBlockReason =
@@ -350,8 +355,12 @@ export const GIT_DELIVERY_MERGE_BLOCK_REASONS: readonly GitDeliveryMergeBlockRea
 export type GitDeliveryPolicyDecision =
   | { readonly outcome: "allowed" }
   | { readonly outcome: "blocked"; readonly reason: GitDeliveryBlockReason }
-  | { readonly outcome: "approval-gated"; readonly requiredApprovers: readonly string[] }
-  | { readonly outcome: "constrained"; readonly constraints: readonly GitDeliveryConstraint[] };
+  | {
+      readonly outcome: "approval-gated";
+      readonly requiredApprovers: readonly string[];
+      readonly constraints?: GitDeliveryNonEmptyConstraints | undefined;
+    }
+  | { readonly outcome: "constrained"; readonly constraints: GitDeliveryNonEmptyConstraints };
 
 // ─── Preview and result (content-free) ──────────────────────────────────────────
 // Content-free preview descriptor: counts, flags, affected branch name only. Never carries diff
@@ -475,6 +484,12 @@ function isBoolean(value: unknown): value is boolean {
 
 function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every(isString);
+}
+
+export function isGitDeliveryNonEmptyConstraints(
+  value: unknown,
+): value is GitDeliveryNonEmptyConstraints {
+  return Array.isArray(value) && value.length > 0 && value.every(isGitDeliveryConstraint);
 }
 
 function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T | undefined {
@@ -622,10 +637,13 @@ export function isGitDeliveryPolicyDecision(value: unknown): value is GitDeliver
     return isGitDeliveryBlockReason(value.reason);
   }
   if (value.outcome === "approval-gated") {
-    return isStringArray(value.requiredApprovers);
+    return (
+      isStringArray(value.requiredApprovers) &&
+      (value.constraints === undefined || isGitDeliveryNonEmptyConstraints(value.constraints))
+    );
   }
   if (value.outcome === "constrained") {
-    return Array.isArray(value.constraints) && value.constraints.every(isGitDeliveryConstraint);
+    return isGitDeliveryNonEmptyConstraints(value.constraints);
   }
   return false;
 }

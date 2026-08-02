@@ -3,6 +3,10 @@
 Keiko is built to a production-ready, enterprise quality bar: strict TypeScript (no `any`), tested behavior,
 minimal runtime dependencies, and reviewable, evidence-backed changes. The architecture and release constraints
 are recorded in the [Architecture Decision Records](docs/adr/); read the current decisions before opening a pull request.
+Working, clean, secure, verified code is authoritative. ADRs are architectural guardrails and
+memory, not executable truth: if a repair exposes outdated, contradictory, or unsafe ADR text, fix
+the code and update the affected ADR sections together. Do not preserve a defect merely because an
+ADR recorded it, and do not create a new ADR merely to correct existing text.
 
 ## Local development
 

@@ -535,30 +535,33 @@ function addMemberReadiness(
   member: CapsuleProjectionInput,
 ): void {
   const readiness = capsuleReadiness(member.capsule.lifecycleState, member.degradationReasons);
-  addPolicyReadinessReason(counts, reasonCodes, member.capsule);
+  const policyDenied = addPolicyReadinessReason(counts, reasonCodes, member.capsule);
   addContentReadinessReasons(reasonCodes, member);
+  if (policyDenied) return;
   const bucket = MEMBER_READINESS_BUCKETS[readiness];
   counts[bucket.countKey] += 1;
   if (bucket.reason !== undefined) reasonCodes.add(bucket.reason);
 }
 
-// Pod-set-only policy-denied signal. See the comment on capsuleDegradationReasons() above for why
-// the single-pod path intentionally does not derive an equivalent reason from the same policy
-// check.
+// Pod-set-only, exclusive policy-denied readiness bucket. See the comment on
+// capsuleDegradationReasons() above for why the single-pod path intentionally does not derive an
+// equivalent reason from the same policy check. Content reasons are still collected before the
+// caller skips the ordinary lifecycle/readiness bucket.
 function addPolicyReadinessReason(
   counts: SetReadinessCounts,
   reasonCodes: Set<KnowledgePodSetReadinessReasonCode>,
   capsule: KnowledgeCapsule,
-): void {
+): boolean {
   const policy = capsuleModelUsePolicySummary(capsule);
   if (
     policy.operations.answerSynthesis !== "deny" &&
     policy.operations.rawContentRelease !== "deny"
   ) {
-    return;
+    return false;
   }
   counts.deniedCount += 1;
   reasonCodes.add("policy-denied");
+  return true;
 }
 
 function addContentReadinessReasons(

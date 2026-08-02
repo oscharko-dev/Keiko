@@ -263,6 +263,35 @@ const PUSH_TO_DEV: GitDeliveryResolvedInputs = {
   setUpstreamTracking: false,
 };
 
+const ORG_PROTECT_DEV: GitDeliveryOrgPolicyPack = {
+  schemaVersion: "1",
+  orgId: "org",
+  rules: [
+    {
+      actionKind: "push",
+      decision: "constrained",
+      constraints: [
+        {
+          kind: "protected-branch",
+          patterns: [{ matchKind: "exact", value: "dev" }],
+        },
+      ],
+    },
+  ],
+};
+
+const REPO_GATE_PUSH: GitDeliveryRepoPolicyPack = {
+  schemaVersion: "1",
+  repoId: "repo",
+  rules: [
+    {
+      actionKind: "push",
+      decision: "approval-gated",
+      requiredApprovers: ["lead"],
+    },
+  ],
+};
+
 const PR_ONTO_UNLISTED_BASE: GitDeliveryResolvedInputs = {
   kind: "pr-create",
   headBranchName: "feat/x",
@@ -282,6 +311,32 @@ describe("policy target branch agreement with the executing gates", () => {
     );
     expect(sheet.policyExplanation.decision).toBe("blocked");
     expect(sheet.state).toBe("blocked");
+  });
+
+  it("shows an org protected-branch block even when the repo requires approval", () => {
+    const sheet = buildActionSheetFromFacts(
+      facts({
+        resolvedInputs: PUSH_TO_DEV,
+        policyPacks: { orgPack: ORG_PROTECT_DEV, repoPack: REPO_GATE_PUSH },
+      }),
+    );
+
+    expect(sheet.policyExplanation.decision).toBe("blocked");
+    expect(sheet.policyExplanation.blockReason).toBe("protected-branch");
+    expect(sheet.state).toBe("blocked");
+  });
+
+  it("waits for approval only after the carried constraint passes", () => {
+    const sheet = buildActionSheetFromFacts(
+      facts({
+        resolvedInputs: { ...PUSH_TO_DEV, remoteBranchName: "feat/x" },
+        policyPacks: { orgPack: ORG_PROTECT_DEV, repoPack: REPO_GATE_PUSH },
+      }),
+    );
+
+    expect(sheet.policyExplanation.decision).toBe("approval-gated");
+    expect(sheet.policyExplanation.constraints).toEqual(ORG_PROTECT_DEV.rules[0]?.constraints);
+    expect(sheet.state).toBe("waiting-for-approval");
   });
 
   it("keeps a preview of a push to an allow-listed remote branch executable", () => {

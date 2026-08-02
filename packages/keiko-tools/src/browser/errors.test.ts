@@ -27,6 +27,7 @@ const EXPECTED_STATUS: Readonly<Record<BrowserErrorCode, number>> = {
   NO_PENDING_SCREENSHOT: 409,
   PAYLOAD_TOO_LARGE: 413,
   SIDE_FILE_WRITER_MISSING: 500,
+  EVIDENCE_MANIFEST_WRITER_MISSING: 500,
 };
 
 describe("BrowserToolError (GEN-DUP-NEAR-008)", () => {

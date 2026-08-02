@@ -603,30 +603,99 @@ function dedupeSnippetCompletions(
 }
 
 function globMatches(pattern: string, relativePath: string): boolean {
-  return new RegExp(`^${globToRegex(pattern)}$`, "u").test(relativePath);
+  const tokens = tokenizeGlob(pattern);
+  let states = globEpsilonClosure(new Set([0]), tokens);
+  for (const char of Array.from(relativePath)) {
+    const nextStates = new Set<number>();
+    for (const state of states) {
+      advanceGlobState(tokens, state, char, nextStates);
+    }
+    states = globEpsilonClosure(nextStates, tokens);
+    if (states.size === 0) return false;
+  }
+  return globEpsilonClosure(states, tokens).has(tokens.length);
 }
 
-function globToRegex(pattern: string): string {
-  let output = "";
-  for (let index = 0; index < pattern.length; index += 1) {
-    const char = pattern[index];
-    const next = pattern[index + 1];
-    const after = pattern[index + 2];
-    if (char === "*" && next === "*" && after === "/") {
-      output += "(?:.*/)?";
+type GlobTokenKind =
+  "literal" | "segment-star" | "globstar" | "globstar-directory" | "globstar-directory-tail";
+
+interface GlobToken {
+  readonly kind: GlobTokenKind;
+  readonly value?: string | undefined;
+}
+
+function tokenizeGlob(pattern: string): readonly GlobToken[] {
+  const chars = Array.from(pattern);
+  const tokens: GlobToken[] = [];
+  for (let index = 0; index < chars.length; index += 1) {
+    if (chars[index] !== "*") {
+      tokens.push({ kind: "literal", value: chars[index] });
+      continue;
+    }
+    if (chars[index + 1] !== "*") {
+      tokens.push({ kind: "segment-star" });
+      continue;
+    }
+    if (chars[index + 2] === "/") {
+      tokens.push({ kind: "globstar-directory" }, { kind: "globstar-directory-tail" });
       index += 2;
-    } else if (char === "*" && next === "*") {
-      output += ".*";
-      index += 1;
-    } else if (char === "*") {
-      output += "[^/]*";
-    } else {
-      output += escapeRegexChar(char ?? "");
+      continue;
+    }
+    tokens.push({ kind: "globstar" });
+    index += 1;
+  }
+  return tokens;
+}
+
+function globEpsilonClosure(seed: ReadonlySet<number>, tokens: readonly GlobToken[]): Set<number> {
+  const closure = new Set(seed);
+  const pending = [...seed];
+  for (const state of pending) {
+    const token = tokens[state];
+    const next = token?.kind === "globstar-directory" ? state + 2 : state + 1;
+    if (
+      token !== undefined &&
+      token.kind !== "literal" &&
+      token.kind !== "globstar-directory-tail" &&
+      !closure.has(next)
+    ) {
+      closure.add(next);
+      pending.push(next);
     }
   }
-  return output;
+  return closure;
 }
 
-function escapeRegexChar(char: string): string {
-  return /[.+^${}()|[\]\\]/u.test(char) ? `\\${char}` : char;
+function advanceGlobstarDirectory(state: number, char: string, nextStates: Set<number>): void {
+  nextStates.add(state + 1);
+  if (char === "/") nextStates.add(state + 2);
+}
+
+function advanceGlobState(
+  tokens: readonly GlobToken[],
+  state: number,
+  char: string,
+  nextStates: Set<number>,
+): void {
+  const token = tokens[state];
+  switch (token?.kind) {
+    case "literal":
+      if (token.value === char) nextStates.add(state + 1);
+      return;
+    case "segment-star":
+      if (char !== "/") nextStates.add(state);
+      return;
+    case "globstar":
+      nextStates.add(state);
+      return;
+    case "globstar-directory":
+      advanceGlobstarDirectory(state, char, nextStates);
+      return;
+    case "globstar-directory-tail":
+      nextStates.add(state);
+      if (char === "/") nextStates.add(state + 1);
+      return;
+    default:
+      return;
+  }
 }

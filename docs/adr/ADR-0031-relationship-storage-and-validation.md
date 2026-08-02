@@ -99,7 +99,10 @@ Restated normatively for the issue acceptance criterion:
 - **Connectors / capsules**: a relationship row does not pin a capsule from retirement. The capsule lifecycle in `keiko-local-knowledge` is canonical.
 - **Workflows**: a relationship row does not start, mutate, or apply a run. The workflow handlers are the only run-mutation surface.
 - **Patches**: a relationship row carries no diff. The patch gate is the only apply path.
-- **Evidence**: a relationship row does not pin an evidence manifest from retention. Retention defaults to `maxRuns: 50` per [`packages/keiko-contracts/src/evidence.ts:315`](../../packages/keiko-contracts/src/evidence.ts).
+- **Evidence**: a relationship row does not pin an evidence manifest from retention. The default
+  policy caps the chat/RAG and regulated partitions independently; unknown evidence is retained
+  unless an explicit applicable policy governs it (see
+  [`packages/keiko-contracts/src/evidence.ts`](../../packages/keiko-contracts/src/evidence.ts)).
 - **Local knowledge / connectors**: relationships reference identities only.
 - **Memory**: a relationship row does not bypass `keiko-memory-governance`. Tombstones still cascade.
 

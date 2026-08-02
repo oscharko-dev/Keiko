@@ -60,7 +60,7 @@ Per [audit-events.md §5.5](audit-events.md):
 Per [evidence-references.md §5.4](evidence-references.md):
 
 - The section is part of the parent `EvidenceManifest` and inherits the manifest's retention.
-- Default retention is `DEFAULT_RETENTION: { maxRuns: 50 }` ([`packages/keiko-contracts/src/evidence.ts:315`](../../packages/keiko-contracts/src/evidence.ts)).
+- `DEFAULT_RETENTION` independently caps chat/RAG and regulated manifests at 50, so neither recognised partition can evict the other; unknown manifests remain untouched ([`packages/keiko-contracts/src/evidence.ts`](../../packages/keiko-contracts/src/evidence.ts)). Explicit global or partition limits may govern recognised evidence.
 - The manifest is never partially evicted; the entire manifest is retained or evicted as a unit by `applyRetention` ([`packages/keiko-evidence/src/persist.ts:57`](../../packages/keiko-evidence/src/persist.ts)).
 - A relationship `revoked` row is pinned until the **last** referencing manifest ages out (per §3.1 and [evidence-references.md §5](evidence-references.md)).
 

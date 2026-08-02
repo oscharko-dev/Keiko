@@ -32,6 +32,7 @@ When more than one denial code applies to the same structurally valid proposal, 
 16. `denied/payload-content-not-permitted`
 17. `denied/authority-insufficient`
 18. `denied/schema-version-unsupported`
+19. `denied/invalid-structure`
 
 A single `RelationshipPolicyDecision` MAY include more than one reason. The validator first rejects malformed or unsupported envelopes (`schemaVersion`, unknown type/kind/lifecycle, missing required fields). For structurally valid proposals, it short-circuits only when endpoint identity fails (`denied/non-existent-source` / `denied/non-existent-target`); other resolver liveness codes remain in the ordered accumulation list above.
 
@@ -118,7 +119,7 @@ A single `RelationshipPolicyDecision` MAY include more than one reason. The vali
 ### `denied/endpoint-retired`
 
 - **User-facing message**: "An endpoint has been retired by retention and is no longer available."
-- **When it fires**: The endpoint-resolver returns `status: "retired"`. Typical for `evidence-run` endpoints that aged past `DEFAULT_RETENTION: maxRuns: 50` ([`evidence.ts:315`](../../packages/keiko-contracts/src/evidence.ts)).
+- **When it fires**: The endpoint-resolver returns `status: "retired"`. Typical for `evidence-run` endpoints that aged past their declared global or partition retention policy ([`evidence.ts`](../../packages/keiko-contracts/src/evidence.ts)).
 - **Audit-event implication**: Yes.
 
 ### `denied/endpoint-unavailable`
@@ -144,6 +145,12 @@ A single `RelationshipPolicyDecision` MAY include more than one reason. The vali
 - **User-facing message**: "The relationship envelope uses a schema version the engine does not support."
 - **When it fires**: A client submits a relationship record whose `schemaVersion` literal is unknown to the running engine. Forward-only: a `"1"` engine rejects a `"2"` envelope. Mirrors the typed `SchemaError` shape in [`packages/keiko-evidence/src/index-api.ts`](../../packages/keiko-evidence/src/index-api.ts) (Issue #10 memory entry).
 - **Audit-event implication**: Yes. Schema-version mismatches are operationally interesting; the audit ledger records them.
+
+### `denied/invalid-structure`
+
+- **User-facing message**: "The relationship envelope is malformed."
+- **When it fires**: A relationship record is not an object, omits a required field, supplies a required field with the wrong primitive shape, or names an unknown relationship type, object kind, or lifecycle state. It never stands in for `denied/schema-version-unsupported`; an otherwise inspectable envelope with an unknown `schemaVersion` continues to receive that dedicated code.
+- **Audit-event implication**: Yes. The audit entry records only the stable denial code and bounded structural field name, never the rejected value or endpoint content.
 
 ## Cross-cutting invariants
 
