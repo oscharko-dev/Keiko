@@ -15,6 +15,7 @@ import {
   resolveCodingSafeSidecarGatewayProfile,
   resolveOutboundHttpEgressConfig,
   selectConfiguredModel,
+  Gateway,
   GatewayError,
   resolveCostClass,
   type EnvSource,
@@ -72,7 +73,7 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:pa
 import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
-import { gatewayForRuntimeConfig } from "./gateway-instance-cache.js";
+import { gatewayForConfig, gatewayForRuntimeConfig } from "./gateway-instance-cache.js";
 import {
   createConversationAttachmentStore,
   type ConversationAttachmentStore,
@@ -1070,6 +1071,14 @@ function createRuntimeGatewayConfig(
 
 export function currentGatewayConfig(deps: UiHandlerDeps): GatewayConfig | undefined {
   return deps.gatewayConfig?.current() ?? deps.config;
+}
+
+/** Resolves the process-shared gateway while honoring live runtime-config generations. */
+export function currentGateway(deps: UiHandlerDeps): Gateway | undefined {
+  if (deps.gatewayConfig !== undefined) {
+    return gatewayForRuntimeConfig(deps.gatewayConfig);
+  }
+  return deps.config === undefined ? undefined : gatewayForConfig(deps.config);
 }
 
 /**

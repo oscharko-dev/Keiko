@@ -32,7 +32,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { currentGatewayConfig } from "../deps.js";
+import { currentGateway, currentGatewayConfig } from "../deps.js";
 import {
   normaliseQiModelPolicy,
   recommendQiModelPolicy,
@@ -45,7 +45,6 @@ import {
   tryParseJudgeVerdict,
   withQiJudgeStageFailure,
 } from "./judgePort.js";
-import { gatewayForConfig } from "../gateway-instance-cache.js";
 
 const QI_POLICY_DIR = "quality-intelligence";
 const QI_POLICY_FILE = "model-policy.json";
@@ -369,9 +368,9 @@ async function preflightStage(
     };
   }
   try {
-    const response = await gatewayForConfig(config).chat(
-      requestForPreflight(stage, modelId, capability),
-    );
+    const gateway = currentGateway(deps);
+    if (gateway === undefined) throw new TypeError("Model gateway is unavailable.");
+    const response = await gateway.chat(requestForPreflight(stage, modelId, capability));
     if (stage === "judge" && tryParseJudgeVerdict(response.content) === null) {
       return {
         stage,

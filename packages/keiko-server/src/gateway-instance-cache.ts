@@ -5,11 +5,14 @@ export interface RuntimeGatewayConfigSource {
   generation(): number;
 }
 
-interface RuntimeGatewayEntry {
-  readonly config: GatewayConfig;
-  readonly gateway: Gateway;
-  readonly generation: number;
-}
+type RuntimeGatewayEntry =
+  | {
+      readonly kind: "available";
+      readonly config: GatewayConfig;
+      readonly gateway: Gateway;
+      readonly generation: number;
+    }
+  | { readonly kind: "unavailable"; readonly generation: number };
 
 class GatewayInstanceCache {
   private readonly byConfig = new WeakMap<GatewayConfig, Gateway>();
@@ -26,26 +29,24 @@ class GatewayInstanceCache {
   forRuntimeConfig(source: RuntimeGatewayConfigSource): Gateway | undefined {
     const config = source.current();
     if (config === undefined) {
-      const previous = this.byRuntimeConfig.get(source);
-      if (previous !== undefined) {
-        this.byRuntimeConfig.delete(source);
-        if (this.byConfig.get(previous.config) === previous.gateway) {
-          this.byConfig.delete(previous.config);
-        }
-      }
+      this.byRuntimeConfig.set(source, { kind: "unavailable", generation: source.generation() });
       return undefined;
     }
     const generation = source.generation();
     const existing = this.byRuntimeConfig.get(source);
-    if (existing?.generation === generation && existing.config === config) {
+    if (
+      existing?.kind === "available" &&
+      existing.generation === generation &&
+      existing.config === config
+    ) {
       return existing.gateway;
     }
     // A runtime generation change invalidates circuit-breaker and request state even when a caller
     // reused the same parsed config object. Only the first runtime resolution may share a directly
-    // created config-keyed gateway; every subsequent runtime invalidation starts fresh.
+    // created config-keyed gateway; every subsequent runtime invalidation starts fresh without
+    // replacing the independent config-keyed instance.
     const gateway = existing === undefined ? this.forConfig(config) : new Gateway(config);
-    this.byConfig.set(config, gateway);
-    this.byRuntimeConfig.set(source, { config, gateway, generation });
+    this.byRuntimeConfig.set(source, { kind: "available", config, gateway, generation });
     return gateway;
   }
 }

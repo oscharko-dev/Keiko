@@ -263,13 +263,19 @@ describe("handleBuildVoiceRecap", () => {
     expect(accepted).toHaveLength(1);
     expect(body.acceptedIds).toEqual(accepted.map(({ id }) => String(id)));
 
-    const entries = evidenceStore.list().map((runId) => evidenceStore.get(runId) ?? "");
-    const rollup = entries.find((entry) => entry.includes('"candidatesAccepted"')) ?? "{}";
-    expect(JSON.parse(rollup)).toMatchObject({ candidatesAccepted: 1, candidatesProposed: 0 });
-    const auditEvents = entries.flatMap((entry) => {
-      const parsed = JSON.parse(entry) as unknown;
-      return Array.isArray(parsed) ? (parsed as readonly { kind?: string }[]) : [];
+    const entries = evidenceStore.list().map((runId) => ({ runId, raw: evidenceStore.get(runId) }));
+    const rollupEntry = entries.find((entry) => entry.runId.startsWith("voice-recap-"));
+    expect(rollupEntry).toBeDefined();
+    expect(JSON.parse(rollupEntry?.raw ?? "{}")).toMatchObject({
+      candidatesAccepted: 1,
+      candidatesProposed: 0,
     });
+    const auditEvents = entries
+      .filter((entry) => !entry.runId.startsWith("voice-recap-"))
+      .flatMap((entry) => {
+        const parsed = JSON.parse(entry.raw ?? "[]") as unknown;
+        return Array.isArray(parsed) ? (parsed as readonly { kind?: string }[]) : [];
+      });
     expect(auditEvents.filter((event) => event.kind === "memory:accepted")).toHaveLength(1);
     expect(auditEvents.filter((event) => event.kind === "memory:proposed")).toHaveLength(0);
   });

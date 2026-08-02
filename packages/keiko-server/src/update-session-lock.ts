@@ -238,9 +238,7 @@ function reclaimableValidRecord(
   options: ResolvedFileUpdateSessionLockOptions,
 ): boolean {
   if (!options.pidAlive(record.pid)) {
-    if (record.childPid === undefined || !options.pidAlive(record.childPid)) return true;
-    const ageMs = lockAgeMs(record, options.now);
-    return ageMs !== undefined && ageMs >= options.staleMs;
+    return record.childPid === undefined || !options.pidAlive(record.childPid);
   }
   const ageMs = lockAgeMs(record, options.now);
   if (ageMs === undefined || ageMs < options.staleMs) return false;

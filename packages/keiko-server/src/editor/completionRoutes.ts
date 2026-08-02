@@ -44,12 +44,11 @@ import {
 import { selectCompletionModel } from "@oscharko-dev/keiko-model-gateway";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
-import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
+import { currentGateway, currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
 import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
 import { assembleCodingContext } from "./codingContext.js";
 import { recordCodingContextEvidence } from "./codingContextEvidence.js";
 import { recordEditorCompletionModelEvidence } from "./completionModelEvidence.js";
-import { gatewayForConfig } from "../gateway-instance-cache.js";
 import {
   clientAbortSignal,
   resolveOverlayPath,
@@ -100,18 +99,21 @@ export interface EditorCompletionRouteOptions {
 }
 
 // Default chat seam: route the elected model through the Model Gateway, server-side only.
-function defaultChatFactory(config: GatewayConfig, modelId: string): ModelChatFn {
-  const gateway = gatewayForConfig(config);
-  return async (chatRequest, chatSignal) => {
-    const response = await gateway.chat({
-      modelId,
-      messages: [
-        { role: "system", content: chatRequest.system },
-        { role: "user", content: chatRequest.user },
-      ],
-      cancellationSignal: chatSignal,
-    });
-    return { content: response.content, usage: response.usage };
+function defaultChatFactoryFor(deps: UiHandlerDeps): CompletionChatFactory {
+  return (_config, modelId): ModelChatFn => {
+    const gateway = currentGateway(deps);
+    if (gateway === undefined) throw new TypeError("Model gateway is unavailable.");
+    return async (chatRequest, chatSignal) => {
+      const response = await gateway.chat({
+        modelId,
+        messages: [
+          { role: "system", content: chatRequest.system },
+          { role: "user", content: chatRequest.user },
+        ],
+        cancellationSignal: chatSignal,
+      });
+      return { content: response.content, usage: response.usage };
+    };
   };
 }
 
@@ -648,7 +650,7 @@ export async function handleEditorCompletion(
       root.realRoot,
       signal,
       deps,
-      options.chatFactory ?? defaultChatFactory,
+      options.chatFactory ?? defaultChatFactoryFor(deps),
       options.tokenBudget ?? sharedEditorModelTokenBudget,
       options.now ?? Date.now,
     );

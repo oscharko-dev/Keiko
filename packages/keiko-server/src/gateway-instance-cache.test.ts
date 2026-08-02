@@ -47,10 +47,12 @@ describe("gateway instance cache", () => {
       generation: (): number => generation,
     };
     const initial = gatewayForRuntimeConfig(source);
+    const direct = gatewayForConfig(current);
 
     generation += 1;
 
     expect(gatewayForRuntimeConfig(source)).not.toBe(initial);
+    expect(gatewayForConfig(current)).toBe(direct);
   });
 
   it("invalidates the runtime gateway when the current config becomes unavailable", () => {
@@ -61,10 +63,12 @@ describe("gateway instance cache", () => {
       generation: (): number => 0,
     };
     const initial = gatewayForRuntimeConfig(source);
+    const direct = gatewayForConfig(current);
 
     available = undefined;
 
     expect(gatewayForRuntimeConfig(source)).toBeUndefined();
+    expect(gatewayForConfig(current)).toBe(direct);
     available = current;
     expect(gatewayForRuntimeConfig(source)).not.toBe(initial);
   });

@@ -15,14 +15,18 @@ import {
   type CodingWorkbenchSidecarGatewayRunMetadata,
   type CodingWorkbenchSidecarGatewayResult,
 } from "@oscharko-dev/keiko-contracts";
-import { currentGatewayConfig, currentGatewayVerification, type UiHandlerDeps } from "./deps.js";
+import {
+  currentGateway,
+  currentGatewayConfig,
+  currentGatewayVerification,
+  type UiHandlerDeps,
+} from "./deps.js";
 import { OPENCODE_RUNTIME_MODEL_ALIAS } from "./coding-runtime/opencodeLaunchProfile.js";
 import { hasExactOpenCodeVisibleToolContract } from "./coding-runtime/opencodeToolSchemas.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { readJsonObject } from "./files.js";
 import { STREAMING, errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import { startSseHeartbeat } from "./sse.js";
-import { gatewayForConfig } from "./gateway-instance-cache.js";
 
 const ENABLE_TOKENS = new Set(["1", "true", "on", "yes", "enabled"]);
 const CODING_SIDECAR_DISABLED_ENV = "KEIKO_CODING_SIDECAR_DISABLED";
@@ -166,27 +170,27 @@ function isCodingSidecarGatewayChatRole(
 }
 
 function chatFactoryFor(deps: UiHandlerDeps): CodingSidecarGatewayChatFactory {
-  return deps.codingSidecarGatewayChatFactory ?? defaultChatFactory;
+  return deps.codingSidecarGatewayChatFactory ?? defaultChatFactoryFor(deps);
 }
 
-function defaultChatFactory(
-  config: GatewayConfig,
-  modelId: string,
-): (request: GatewayRequest) => Promise<NormalizedResponse> {
-  const gateway = gatewayForConfig(config);
-  return (request: GatewayRequest) => gateway.chat({ ...request, modelId });
+function defaultChatFactoryFor(deps: UiHandlerDeps): CodingSidecarGatewayChatFactory {
+  return (_config, modelId) => {
+    const gateway = currentGateway(deps);
+    if (gateway === undefined) throw new TypeError("Model gateway is unavailable.");
+    return (request: GatewayRequest) => gateway.chat({ ...request, modelId });
+  };
 }
 
-function defaultChatStreamFactory(
-  config: GatewayConfig,
-  modelId: string,
-): (request: GatewayRequest) => AsyncIterable<GatewayStreamChunk> {
-  const gateway = gatewayForConfig(config);
-  return (request: GatewayRequest) => gateway.chatStream({ ...request, modelId });
+function defaultChatStreamFactoryFor(deps: UiHandlerDeps): CodingSidecarGatewayChatStreamFactory {
+  return (_config, modelId) => {
+    const gateway = currentGateway(deps);
+    if (gateway === undefined) throw new TypeError("Model gateway is unavailable.");
+    return (request: GatewayRequest) => gateway.chatStream({ ...request, modelId });
+  };
 }
 
 function chatStreamFactoryFor(deps: UiHandlerDeps): CodingSidecarGatewayChatStreamFactory {
-  return deps.codingSidecarGatewayChatStreamFactory ?? defaultChatStreamFactory;
+  return deps.codingSidecarGatewayChatStreamFactory ?? defaultChatStreamFactoryFor(deps);
 }
 
 function unavailableError(): RouteResult {

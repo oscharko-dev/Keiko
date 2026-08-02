@@ -45,7 +45,7 @@ import {
 import { selectCompletionModel } from "@oscharko-dev/keiko-model-gateway";
 import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
-import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
+import { currentGateway, currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
 import { newCorrelationId } from "../correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
@@ -53,7 +53,6 @@ import { assembleCodingContext } from "./codingContext.js";
 import { recordCodingContextEvidence } from "./codingContextEvidence.js";
 import { recordEditorCompletionModelEvidence } from "./completionModelEvidence.js";
 import { recordInlineCompletionTelemetryEvidence } from "./inlineCompletionTelemetryEvidence.js";
-import { gatewayForConfig } from "../gateway-instance-cache.js";
 import { clientAbortSignal, resolveOverlayPath } from "./languageRoutes.js";
 import type { ModelChatFn } from "./editorCompletionModel.js";
 import {
@@ -112,18 +111,21 @@ export interface EditorInlineCompletionRouteOptions {
 const sharedRateLimiter: InlineCompletionRateLimiter = createInlineCompletionRateLimiter();
 
 // Default chat seam: route the elected model through the Model Gateway, server-side only.
-function defaultChatFactory(config: GatewayConfig, modelId: string): ModelChatFn {
-  const gateway = gatewayForConfig(config);
-  return async (chatRequest, chatSignal) => {
-    const response = await gateway.chat({
-      modelId,
-      messages: [
-        { role: "system", content: chatRequest.system },
-        { role: "user", content: chatRequest.user },
-      ],
-      cancellationSignal: chatSignal,
-    });
-    return { content: response.content, usage: response.usage };
+function defaultChatFactoryFor(deps: UiHandlerDeps): InlineCompletionChatFactory {
+  return (_config, modelId): ModelChatFn => {
+    const gateway = currentGateway(deps);
+    if (gateway === undefined) throw new TypeError("Model gateway is unavailable.");
+    return async (chatRequest, chatSignal) => {
+      const response = await gateway.chat({
+        modelId,
+        messages: [
+          { role: "system", content: chatRequest.system },
+          { role: "user", content: chatRequest.user },
+        ],
+        cancellationSignal: chatSignal,
+      });
+      return { content: response.content, usage: response.usage };
+    };
   };
 }
 
@@ -503,7 +505,7 @@ async function runInlineModelTier(
       deps,
       selection,
       modelId,
-      chatFactory: options.chatFactory ?? defaultChatFactory,
+      chatFactory: options.chatFactory ?? defaultChatFactoryFor(deps),
       config,
       nowMs: now(),
       tokenBudget,

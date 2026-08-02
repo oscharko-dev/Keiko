@@ -569,7 +569,7 @@ describe("UpdateSessionManager", () => {
       const childPid = 43_210;
       const lockOptions = {
         staleMs: 10 * 60_000,
-        now: (): number => Date.parse("2026-06-30T00:00:01.000Z"),
+        now: (): number => Date.parse("2026-06-30T01:00:00.000Z"),
         pidAlive: (pid: number): boolean => pid === childPid,
       };
       const firstLock = createFileUpdateSessionLock(lockPath, lockOptions);
@@ -656,7 +656,7 @@ describe("UpdateSessionManager", () => {
     await waitForPhase(manager, "restart-required");
   });
 
-  it("caps child-PID-only lock ownership after the parent disappears", async () => {
+  it("keeps child-PID-only lock ownership after the parent disappears", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-reused-child-pid-"));
     try {
       const lockPath = join(tempDir, "update.lock");
@@ -677,8 +677,8 @@ describe("UpdateSessionManager", () => {
         pidAlive: (pid) => pid === 222,
       });
 
-      expect(lock.isLocked()).toBe(false);
-      expect(lock.acquire(lockRecord("replacement"))).toBe(true);
+      expect(lock.isLocked()).toBe(true);
+      expect(lock.acquire(lockRecord("replacement"))).toBe(false);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

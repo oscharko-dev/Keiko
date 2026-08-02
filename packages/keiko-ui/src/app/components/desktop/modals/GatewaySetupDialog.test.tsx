@@ -560,13 +560,11 @@ describe("GatewaySetupDialog", () => {
     await userEvent.type(screen.getByLabelText(/^api token/i), "rotated-token");
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
-    expect(setupGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preserveExisting: true,
-        apiKey: "rotated-token",
-        workflowEligibleModelIds: ["coding-chat"],
-      }),
+    const submitted = vi.mocked(setupGateway).mock.lastCall?.[0];
+    expect(submitted).toEqual(
+      expect.objectContaining({ preserveExisting: true, apiKey: "rotated-token" }),
     );
+    expect(submitted).not.toHaveProperty("workflowEligibleModelIds");
   });
 
   it("submits optional voice dictation credentials from update mode", async () => {
@@ -609,7 +607,6 @@ describe("GatewaySetupDialog", () => {
       voiceApiKey: "voice-token",
       voiceApiKeyHeaderName: "api-key",
       voiceSpeechToTextModelId: "keiko-stt",
-      workflowEligibleModelIds: ["internal-chat"],
     });
     expect(await screen.findByRole("status")).toHaveTextContent(
       /updated audio and digital voice settings/i,
