@@ -338,13 +338,7 @@ describe("handleGatewaySetup", () => {
     );
     gatewayConfig.recordVerifiedCapability(
       "model/one",
-      { streaming: true },
-      "2026-08-02T07:59:00.000Z",
-      gatewayConfig.generation(),
-    );
-    gatewayConfig.recordVerifiedCapability(
-      "model/one",
-      { toolCalling: false, structuredOutput: false },
+      { streaming: true, toolCalling: false, structuredOutput: false },
       "2026-08-02T08:00:00.000Z",
       gatewayConfig.generation(),
     );

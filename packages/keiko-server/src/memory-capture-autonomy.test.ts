@@ -354,7 +354,12 @@ describe("mode-aware memory capture journey", () => {
     const replay = await collectMemoryActions(deps, request, ctx);
 
     expect(actions).toContainEqual(
-      expect.objectContaining({ kind: "candidate", requiresApproval: false, status: "accepted" }),
+      expect.objectContaining({
+        kind: "candidate",
+        body: "release hardening uses vitest",
+        requiresApproval: false,
+        status: "accepted",
+      }),
     );
     expect(replay).toContainEqual(expect.objectContaining({ status: "accepted" }));
     expect(readByStatus(vault, ctx, "accepted")).toHaveLength(1);

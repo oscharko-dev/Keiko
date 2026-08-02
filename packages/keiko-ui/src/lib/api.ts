@@ -926,8 +926,9 @@ export interface CreateProjectInput {
 
 export function projectResponseWarningMessage(response: ProjectResponse): string | undefined {
   const warning = response.warning;
-  return warning === undefined
-    ? undefined
+  if (warning === undefined) return undefined;
+  return warning.correlationId === undefined
+    ? warning.message
     : `${warning.message} Support ID: ${warning.correlationId}`;
 }
 

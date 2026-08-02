@@ -265,13 +265,17 @@ async function executeDraft(
   return "failed";
 }
 
-function recordDraftFailure(options: UpdateRemediationManagerOptions, error: unknown): void {
+function recordDraftFailure(
+  options: UpdateRemediationManagerOptions,
+  error: unknown,
+  source = "update-remediation.executeDraft",
+): void {
   emitServerDiagnostic(
     options.diagnostics,
     serverDiagnosticFromError({
       correlationId: randomUUID(),
       operation: "update.remediation.execute",
-      source: "update-remediation.executeDraft",
+      source,
       error,
       redact: options.redactString ?? ((message): string => message),
     }),
@@ -306,6 +310,46 @@ function persistDraftStatus(
     ...(status === "failed" ? { warningCode: "remediation-execution-failed" } : {}),
   });
   recordRemediationAudit(options, request, draft, status);
+}
+
+function persistFailureAfterPersistenceError(
+  options: UpdateRemediationManagerOptions,
+  now: () => number,
+  request: UpdateRemediationActionRequest,
+  draft: ActionDraft,
+): void {
+  try {
+    upsertRuntimeAction({
+      localState: options.localState,
+      targetVersion: request.targetVersion,
+      draft,
+      status: "failed",
+      now,
+      warningCode: "remediation-execution-failed",
+    });
+  } catch (error) {
+    recordDraftFailure(options, error, "update-remediation.persistFailureState");
+  }
+  try {
+    recordRemediationAudit(options, request, draft, "failed");
+  } catch (error) {
+    recordDraftFailure(options, error, "update-remediation.persistFailureAudit");
+  }
+}
+
+function persistDraftStatusSafely(
+  options: UpdateRemediationManagerOptions,
+  now: () => number,
+  request: UpdateRemediationActionRequest,
+  draft: ActionDraft,
+  status: RuntimeRemediationStatus,
+): void {
+  try {
+    persistDraftStatus(options, now, request, draft, status);
+  } catch (error) {
+    recordDraftFailure(options, error, "update-remediation.persistDraftStatus");
+    persistFailureAfterPersistenceError(options, now, request, draft);
+  }
 }
 
 function findDraftOrThrow(drafts: readonly ActionDraft[], actionIdValue: string): ActionDraft {
@@ -404,7 +448,13 @@ async function runDraft(
       status: "running",
       now,
     });
-    persistDraftStatus(options, now, request, draft, await executeDraftStatus(options, draft));
+    persistDraftStatusSafely(
+      options,
+      now,
+      request,
+      draft,
+      await executeDraftStatus(options, draft),
+    );
   } finally {
     runningActions.delete(draft.actionId);
     releaseLease();

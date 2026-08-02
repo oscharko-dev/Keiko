@@ -695,7 +695,7 @@ describe("UpdateSessionManager", () => {
     }
   });
 
-  it("keeps a lock while its owning parent is alive beyond the stale interval", async () => {
+  it("expires a stale pre-spawn lock even while its server parent remains alive", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-live-parent-"));
     try {
       const lockPath = join(tempDir, "update.lock");
@@ -715,8 +715,8 @@ describe("UpdateSessionManager", () => {
         pidAlive: (pid) => pid === 111,
       });
 
-      expect(lock.isLocked()).toBe(true);
-      expect(lock.acquire(lockRecord("replacement"))).toBe(false);
+      expect(lock.isLocked()).toBe(false);
+      expect(lock.acquire(lockRecord("replacement"))).toBe(true);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

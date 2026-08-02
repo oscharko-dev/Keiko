@@ -589,6 +589,7 @@ describe("handleMemoryCaptureFromConversation", () => {
       kind: "candidate",
       requiresApproval: false,
       status: "accepted",
+      proposal: { body: "release checks use vitest" },
     });
     const proposalId = outcomes[0]?.proposal?.proposalId;
     expect(vault.getMemory(proposalId as unknown as MemoryId)?.status).toBe("accepted");

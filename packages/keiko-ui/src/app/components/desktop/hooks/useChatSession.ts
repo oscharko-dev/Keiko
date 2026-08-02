@@ -2527,11 +2527,14 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   useEffect(() => {
     let cancelled = false;
+    let refreshGeneration = 0;
     const refreshModels = (): void => {
+      refreshGeneration += 1;
+      const generation = refreshGeneration;
       invalidateSharedBootstrap();
       resetModelRequestCache();
       void loadRefreshedSessionModels({
-        isCancelled: () => cancelled,
+        isCancelled: () => cancelled || generation !== refreshGeneration,
         setError,
         setState,
       });

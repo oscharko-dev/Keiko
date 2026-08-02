@@ -34,7 +34,11 @@ import {
   type CaptureContext,
   type CaptureOutcome,
 } from "@oscharko-dev/keiko-memory-capture";
-import { MEMORY_TYPES, type CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import {
+  MEMORY_TYPES,
+  type CodingWorkbenchMode,
+  type ConversationMemoryCaptureOutcomeWire,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   MemoryAuditEvent,
   MemoryId,
@@ -65,6 +69,7 @@ import {
   promoteEligibleMemoryRecord,
   resolvePersistedMemoryAutonomyMode,
   SENSITIVE_MEMORY_ACTION_BODY,
+  SENSITIVE_MEMORY_REJECTION_REASON,
 } from "./memory-capture-policy.js";
 import { isSuppressedByForgetTombstone } from "./memory-suppression.js";
 import {
@@ -489,10 +494,12 @@ function persistCandidateOutcome(
   mode: CodingWorkbenchMode,
   outcome: CaptureOutcome,
 ): PersistedCaptureOutcome {
-  if (!isPersistableMemoryCandidate(outcome)) return outcome;
+  if (outcome.kind !== "candidate") return outcome;
+  if (!isPersistableMemoryCandidate(outcome)) {
+    return { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON };
+  }
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
-  if (record === null) return outcome;
   if (isSuppressedByForgetTombstone(vault, record)) {
     return { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON };
   }
@@ -504,16 +511,12 @@ function persistCandidateOutcome(
   if (accepted) recordAutoAcceptedMemoryCaptureDecision(deps, mode, "desktop", candidate);
   return {
     ...outcome,
-    requiresApproval: accepted ? false : outcome.requiresApproval,
+    requiresApproval: outcome.requiresApproval,
     status: accepted ? "accepted" : "proposed",
   };
 }
 
-type PersistedCaptureOutcome =
-  | CaptureOutcome
-  | (Extract<CaptureOutcome, { readonly kind: "candidate" }> & {
-      readonly status: "proposed" | "accepted";
-    });
+type PersistedCaptureOutcome = ConversationMemoryCaptureOutcomeWire;
 
 function redactCaptureOutcome(deps: UiHandlerDeps, outcome: PersistedCaptureOutcome): unknown {
   if (

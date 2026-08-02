@@ -344,18 +344,57 @@ function remediationLeaseReclaimable(
   return ageMs >= context.remediationLeaseStaleMs * 2;
 }
 
-function discardRemediationLease(path: string, malformed: boolean, now: () => number): boolean {
+function restoreClaimedRemediationLease(claimedPath: string, path: string): void {
   try {
-    if (malformed) {
-      const suffix = new Date(now()).toISOString().replace(/[:.]/g, "-");
-      renameSync(path, `${path}.corrupt.${suffix}`);
-    } else {
-      unlinkSync(path);
-    }
-    return true;
+    linkSync(claimedPath, path);
+    unlinkSync(claimedPath);
+  } catch {
+    // A newer canonical owner wins. Preserve the displaced inode for diagnosis.
+  }
+}
+
+function remediationLeaseMatches(
+  claimed: RemediationLeaseRecord | undefined,
+  expected: RemediationLeaseRecord | undefined,
+): boolean {
+  if (expected === undefined) return claimed === undefined;
+  return claimed?.token === expected.token;
+}
+
+function discardRemediationLease(
+  path: string,
+  expected: RemediationLeaseRecord | undefined,
+  now: () => number,
+): boolean {
+  const claimedPath = `${path}.reclaim.${randomUUID()}`;
+  try {
+    renameSync(path, claimedPath);
   } catch {
     return false;
   }
+  let matches = false;
+  try {
+    matches = remediationLeaseMatches(readRemediationLease(claimedPath), expected);
+  } catch {
+    restoreClaimedRemediationLease(claimedPath, path);
+    return false;
+  }
+  if (!matches) {
+    restoreClaimedRemediationLease(claimedPath, path);
+    return false;
+  }
+  try {
+    if (expected === undefined) {
+      const suffix = new Date(now()).toISOString().replace(/[:.]/g, "-");
+      renameSync(claimedPath, `${path}.corrupt.${suffix}`);
+    } else {
+      unlinkSync(claimedPath);
+    }
+  } catch {
+    restoreClaimedRemediationLease(claimedPath, path);
+    return false;
+  }
+  return true;
 }
 
 function releaseRemediationLease(path: string, token: string): void {
@@ -428,7 +467,7 @@ function acquireRemediationLease(
       if (code !== "EEXIST") throw error;
       const existing = readRemediationLease(path);
       if (!remediationLeaseReclaimable(path, existing, context)) return undefined;
-      if (!discardRemediationLease(path, existing === undefined, context.now)) {
+      if (!discardRemediationLease(path, existing, context.now)) {
         return undefined;
       }
     }

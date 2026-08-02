@@ -37,6 +37,12 @@ import type {
 import type { HtmlManualSourceKind } from "./html-manual-source.js";
 import type { KnowledgePodRetrievalActivity } from "./local-knowledge-retrieval-activity.js";
 import type { MemorySensitivity, MemorySourceKind, MemoryStatus } from "./memory.js";
+import type {
+  MemoryForget,
+  MemoryProposal,
+  MemorySupersession,
+  MemoryUpdate,
+} from "./memory-operations.js";
 import type { DiscussionMode } from "./discussion-intelligence.js";
 import { isCodingWorkbenchMode, type CodingWorkbenchMode } from "./coding-workbench.js";
 // Path-free aggregate of the deterministic context-assembly pass (ADR-0052 / ADR-0057 D1).
@@ -474,6 +480,28 @@ export type ConversationMemoryActionWire =
       readonly requiresConfirmation: boolean;
     }
   | { readonly kind: "rejected"; readonly reason: string };
+
+export type ConversationMemoryCaptureOutcomeWire =
+  | {
+      readonly kind: "candidate";
+      readonly proposal: MemoryProposal;
+      readonly requiresApproval: boolean;
+      // The proposal envelope is immutable and therefore retains initialStatus="proposed". This
+      // server-owned field is the authoritative persisted state after the capture policy ran.
+      readonly status: Extract<MemoryStatus, "proposed" | "accepted">;
+    }
+  | { readonly kind: "update"; readonly operation: MemoryUpdate }
+  | {
+      readonly kind: "forget";
+      readonly operation: MemoryForget;
+      readonly requiresConfirmation: boolean;
+    }
+  | { readonly kind: "supersession"; readonly operation: MemorySupersession }
+  | { readonly kind: "rejected"; readonly reason: string };
+
+export interface ConversationMemoryCaptureResponseWire {
+  readonly outcomes: readonly ConversationMemoryCaptureOutcomeWire[];
+}
 
 export interface ConversationMemoryResultWire {
   readonly context: ConversationMemoryContextWire;
@@ -1717,6 +1745,10 @@ export interface GatewayReadinessProbeResult {
   readonly latencyMs: number;
   readonly evidence: string;
   readonly warning?: string | undefined;
+  // Present only when transport-level evidence conclusively proves a capability value. A semantic
+  // sentinel mismatch remains unsupported in the report but must not rewrite durable capability
+  // configuration as false.
+  readonly capabilityObservation?: boolean | undefined;
 }
 
 export interface GatewayReadinessVerifiedCapabilities {

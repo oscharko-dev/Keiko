@@ -1,6 +1,7 @@
 import {
   chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -238,8 +239,7 @@ function reclaimableValidRecord(
   options: ResolvedFileUpdateSessionLockOptions,
 ): boolean {
   const ageMs = lockAgeMs(record, options.now);
-  if (ageMs === undefined || options.pidAlive(record.pid)) return false;
-  if (ageMs < options.staleMs) return false;
+  if (ageMs === undefined || ageMs < options.staleMs) return false;
   if (record.childPid === undefined || !options.pidAlive(record.childPid)) return true;
   return ageMs > options.staleMs * 2;
 }
@@ -253,26 +253,64 @@ function reclaimable(
   return reclaimableValidRecord(inspection.record, options);
 }
 
-function quarantineCorruptLock(lockPath: string, now: () => number): void {
+function corruptQuarantinePath(lockPath: string, now: () => number): string {
   const stamp = new Date(now()).toISOString().replace(/[:.]/g, "-");
+  return `${lockPath}.corrupt.${stamp}`;
+}
+
+function restoreClaimedLock(claimedPath: string, lockPath: string): void {
   try {
-    renameSync(lockPath, `${lockPath}.corrupt.${stamp}`);
+    linkSync(claimedPath, lockPath);
+    unlinkSync(claimedPath);
   } catch {
-    unlinkSync(lockPath);
+    // A newer canonical owner wins. Preserve the displaced inode for diagnosis.
   }
 }
 
-function removeReclaimableLock(
+function claimedInspectionMatches(claimedPath: string, inspection: LockInspection): boolean {
+  const claimed = readLock(claimedPath);
+  if (inspection.status === "corrupt") return claimed === undefined;
+  return (
+    inspection.status === "valid" &&
+    claimed !== undefined &&
+    lockIdentity(claimed) === lockIdentity(inspection.record)
+  );
+}
+
+function claimReclaimableLock(
   lockPath: string,
   inspection: LockInspection,
   now: () => number,
-): void {
-  if (inspection.status === "corrupt") {
-    quarantineCorruptLock(lockPath, now);
-    return;
+): boolean {
+  const claimedPath = `${lockPath}.reclaim.${randomUUID()}`;
+  try {
+    renameSync(lockPath, claimedPath);
+  } catch {
+    return false;
   }
-  unlinkSync(lockPath);
-  if (inspection.status === "valid") removeChildPid(lockPath, inspection.record.sessionId);
+  let matches = false;
+  try {
+    matches = claimedInspectionMatches(claimedPath, inspection);
+  } catch {
+    restoreClaimedLock(claimedPath, lockPath);
+    return false;
+  }
+  if (!matches) {
+    restoreClaimedLock(claimedPath, lockPath);
+    return false;
+  }
+  try {
+    if (inspection.status === "corrupt") {
+      renameSync(claimedPath, corruptQuarantinePath(lockPath, now));
+    } else {
+      if (inspection.status === "valid") removeChildPid(lockPath, inspection.record.sessionId);
+      unlinkSync(claimedPath);
+    }
+  } catch {
+    restoreClaimedLock(claimedPath, lockPath);
+    return false;
+  }
+  return true;
 }
 
 function removeChildPid(lockPath: string, sessionId: string): void {
@@ -314,7 +352,7 @@ function acquireFileLock(
     try {
       const inspection = inspectLock(lockPath);
       if (!reclaimable(inspection, options)) return false;
-      removeReclaimableLock(lockPath, inspection, options.now);
+      if (!claimReclaimableLock(lockPath, inspection, options.now)) return false;
       writeLock(lockPath, record);
     } catch {
       return false;
@@ -352,14 +390,32 @@ function updateFileLockChildPid(lockPath: string, sessionId: string, childPid: n
 }
 
 function releaseFileLock(lockPath: string, sessionId: string): void {
+  const claimedPath = `${lockPath}.release.${randomUUID()}`;
   try {
-    const record = readLock(lockPath);
-    if (record?.sessionId === sessionId) {
-      unlinkSync(lockPath);
-      removeChildPid(lockPath, sessionId);
+    renameSync(lockPath, claimedPath);
+  } catch {
+    return;
+  }
+  try {
+    const record = readLock(claimedPath);
+    if (record?.sessionId !== sessionId) {
+      restoreClaimedLock(claimedPath, lockPath);
+      return;
     }
   } catch {
-    // Malformed or inaccessible locks fail closed; only the owner session may remove the lock.
+    restoreClaimedLock(claimedPath, lockPath);
+    return;
+  }
+  try {
+    unlinkSync(claimedPath);
+  } catch {
+    restoreClaimedLock(claimedPath, lockPath);
+    return;
+  }
+  try {
+    removeChildPid(lockPath, sessionId);
+  } catch {
+    // The canonical owner is already released; a stale identity-bound sidecar is inert.
   }
 }
 

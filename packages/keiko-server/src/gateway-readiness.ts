@@ -383,6 +383,7 @@ function result(
   start: number,
   evidence: string,
   warning?: string,
+  capabilityObservation?: boolean,
 ): GatewayReadinessProbeResult {
   return {
     name,
@@ -390,7 +391,25 @@ function result(
     latencyMs: Math.max(0, Date.now() - start),
     evidence,
     ...(warning !== undefined ? { warning } : {}),
+    ...(capabilityObservation === undefined ? {} : { capabilityObservation }),
   };
+}
+
+function rejectedCapabilityResult(
+  name: GatewayReadinessProbeName,
+  status: ProbeStatus,
+  start: number,
+  evidence: string,
+  warning?: string,
+): GatewayReadinessProbeResult {
+  return result(
+    name,
+    status,
+    start,
+    evidence,
+    warning,
+    status === "unsupported" ? false : undefined,
+  );
 }
 
 function skipped(name: GatewayReadinessProbeName, evidence: string): GatewayReadinessProbeResult {
@@ -570,10 +589,7 @@ async function probeStreaming(
       },
       { stream: true },
     );
-    if (!response.ok) {
-      const status = unsupportedStatus(response) ? "unsupported" : "failed";
-      return result("streaming", status, start, "Streaming was not accepted by the endpoint.");
-    }
+    if (!response.ok) return rejectedStreamingResult(response, start);
     let text = "";
     for await (const chunk of readSseStream(response, MAX_PROVIDER_RESPONSE_BYTES)) {
       text += deltaContent(chunk);
@@ -597,6 +613,16 @@ async function probeStreaming(
       probeError,
     );
   }
+}
+
+function rejectedStreamingResult(response: Response, start: number): GatewayReadinessProbeResult {
+  const status = unsupportedStatus(response) ? "unsupported" : "failed";
+  return rejectedCapabilityResult(
+    "streaming",
+    status,
+    start,
+    "Streaming was not accepted by the endpoint.",
+  );
 }
 
 async function probeToolCalling(
@@ -655,7 +681,7 @@ function toolCallingResult(
   status: ProbeStatus,
   start: number,
 ): GatewayReadinessProbeResult {
-  return result(
+  return rejectedCapabilityResult(
     "tool_calling",
     status,
     start,
@@ -736,7 +762,7 @@ function jsonSchemaBody(): Readonly<Record<string, unknown>> {
 }
 
 function jsonSchemaResult(status: ProbeStatus, start: number): GatewayReadinessProbeResult {
-  return result(
+  return rejectedCapabilityResult(
     "json_schema",
     status,
     start,
@@ -832,7 +858,12 @@ async function probeImageInput(
     });
     if (!response.ok) {
       const status = unsupportedStatus(response) ? "unsupported" : "failed";
-      return result("image_input", status, start, "Image input was not accepted by the endpoint.");
+      return rejectedCapabilityResult(
+        "image_input",
+        status,
+        start,
+        "Image input was not accepted by the endpoint.",
+      );
     }
     const passed = /\bred\b/iu.test(assistantText(await readProviderJson(response)));
     return result(
@@ -902,7 +933,7 @@ function documentInputBody(): Readonly<Record<string, unknown>> {
 }
 
 function documentInputResult(status: ProbeStatus, start: number): GatewayReadinessProbeResult {
-  return result(
+  return rejectedCapabilityResult(
     "document_input",
     status,
     start,
@@ -1110,9 +1141,9 @@ function categoricalProbeValue(
   probes: readonly GatewayReadinessProbeResult[],
   name: GatewayReadinessProbeName,
 ): boolean | undefined {
-  const status = probes.find((probe) => probe.name === name)?.status;
-  if (status === "passed") return true;
-  if (status === "unsupported") return false;
+  const probe = probes.find((candidate) => candidate.name === name);
+  if (probe?.status === "passed") return true;
+  if (probe?.status === "unsupported" && probe.capabilityObservation === false) return false;
   return undefined;
 }
 

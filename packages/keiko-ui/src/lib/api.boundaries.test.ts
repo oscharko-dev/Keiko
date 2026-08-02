@@ -104,6 +104,29 @@ describe("API BFF boundary helpers", () => {
     );
   });
 
+  it("preserves a project trust warning that has no support id", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse({
+            ...okBody(),
+            warning: {
+              code: "PROJECT_TRUST_GRANT_FAILED",
+              message: "The project was registered but remains restricted.",
+            },
+          }),
+        ),
+      ),
+    );
+
+    const response = await createProject({ path: "/repo" });
+
+    expect(projectResponseWarningMessage(response)).toBe(
+      "The project was registered but remains restricted.",
+    );
+  });
+
   it("encodes high-risk chat, project, run, and evidence routes with CSRF on mutations", async () => {
     const responses = Array.from({ length: 24 }, () => jsonResponse(okBody()));
     const fetchMock = vi.fn(() => Promise.resolve(responses.shift() ?? jsonResponse(okBody())));

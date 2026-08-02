@@ -577,6 +577,38 @@ describe("useChatSession bootstrap", () => {
     expect(fetchModels).toHaveBeenCalledTimes(2);
   });
 
+  it("ignores an older gateway model refresh that resolves after the latest one", async () => {
+    vi.mocked(fetchModels).mockResolvedValueOnce({ models: [model({ id: "chat-before" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    const older = deferred<{ readonly models: readonly ModelCapability[] }>();
+    const latest = deferred<{ readonly models: readonly ModelCapability[] }>();
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() =>
+      expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-before"]),
+    );
+    vi.mocked(fetchModels)
+      .mockImplementationOnce(() => older.promise)
+      .mockImplementationOnce(() => latest.promise);
+
+    act(() => {
+      notifyGatewayConfigUpdated();
+      notifyGatewayConfigUpdated();
+    });
+    await act(async () => {
+      latest.resolve({ models: [model({ id: "chat-latest" })] });
+      await latest.promise;
+    });
+    expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-latest"]);
+
+    await act(async () => {
+      older.resolve({ models: [model({ id: "chat-stale" })] });
+      await older.promise;
+    });
+    expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-latest"]);
+  });
+
   // 0.3.0 release audit — the chat list carries trashed (status "closed") conversations so the
   // Chat History "Deleted" tab can offer Restore, but the resume path took `sorted[0]` with no
   // status filter. A user who trashed their most recent conversation was dropped back into it:

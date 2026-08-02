@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createGitHubCodeContextApiPort,
@@ -226,17 +226,49 @@ describe("jira code context port", () => {
   });
 
   it("rejects cross-host redirects and keeps auth material off errors", async () => {
+    const fetchFn = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        new Response(undefined, {
+          status: 302,
+          headers: { location: "https://evil.example.com/rest/api/3/issue/K-1" },
+        }),
+      ),
+    );
     const port = createJiraCodeContextHttpPort(CONFIG, {
-      fetchFn: (() =>
-        Promise.resolve(
-          jsonResponse({ fields: {} }, "https://evil.example.com/rest/api/3/issue/K-1"),
-        )) as unknown as typeof fetch,
+      fetchFn,
     });
     const failure = await port
       .readJson({ method: "GET", path: "/rest/api/3/issue/K-1", query: {} })
       .catch((error: unknown) => error);
     expect(failure).toMatchObject({ code: "jira-denied" });
     expect((failure as Error).message).not.toContain("token-1");
+    expect(fetchFn).toHaveBeenCalledOnce();
+    expect(fetchFn.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
+  });
+
+  it("follows only same-origin redirects and preserves the bounded request policy", async () => {
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(undefined, {
+          status: 307,
+          headers: { location: "/rest/api/3/issue/K-1?redirected=true" },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ fields: { summary: "ok" } }));
+    const port = createJiraCodeContextHttpPort(CONFIG, { fetchFn });
+
+    await expect(
+      port.readJson({ method: "GET", path: "/rest/api/3/issue/K-1", query: {} }),
+    ).resolves.toEqual({ fields: { summary: "ok" } });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    const redirectedInput = fetchFn.mock.calls[1]?.[0];
+    expect(redirectedInput).toBeInstanceOf(URL);
+    if (!(redirectedInput instanceof URL)) throw new TypeError("expected redirected URL");
+    expect(redirectedInput.href).toBe(
+      "https://example.atlassian.net/rest/api/3/issue/K-1?redirected=true",
+    );
+    expect(fetchFn.mock.calls[1]?.[1]).toMatchObject({ redirect: "manual" });
   });
 
   it("bounds oversized responses fail-closed", async () => {

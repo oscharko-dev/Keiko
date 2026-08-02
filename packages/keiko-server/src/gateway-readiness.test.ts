@@ -618,6 +618,46 @@ describe("gateway readiness route", () => {
     deps.store.close();
   });
 
+  it("does not persist a negative capability from an inconclusive semantic probe", async () => {
+    const config = gatewayConfig();
+    const recordVerifiedCapability = vi.fn();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
+      .mockResolvedValueOnce(sseResponse("different-answer")) as typeof fetch;
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        generation: () => 0,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability,
+        clearVerifiedCapability: () => false,
+      },
+    };
+
+    const report = await runGatewayReadiness({ options: { probes: ["chat", "streaming"] } }, deps);
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    expect(report.probes.find((probe) => probe.name === "streaming")).toMatchObject({
+      status: "unsupported",
+    });
+    expect(recordVerifiedCapability).toHaveBeenCalledOnce();
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      {},
+      expect.any(String),
+      0,
+    );
+    deps.store.close();
+  });
+
   it("detects reasoning output without persisting raw reasoning text", async () => {
     const fetchImpl = vi
       .fn()
@@ -810,6 +850,7 @@ describe("gateway readiness route", () => {
       expect.any(String),
       0,
     );
+    expect(recordVerifiedCapability).toHaveBeenCalledTimes(1);
     deps.store.close();
   });
 

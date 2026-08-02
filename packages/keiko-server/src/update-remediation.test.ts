@@ -20,7 +20,10 @@ import type {
   LocalKnowledgeRemediationRunResult,
   LocalKnowledgeRemediationScope,
 } from "./local-knowledge-remediation.js";
-import { createUpdateLocalStateManager } from "./update-local-state.js";
+import {
+  createUpdateLocalStateManager,
+  type UpdateLocalStateManager,
+} from "./update-local-state.js";
 import {
   createUpdateRemediationManager,
   overallStatus,
@@ -511,6 +514,44 @@ describe("update remediation manager", () => {
       }),
     );
     expect(JSON.stringify(diagnostics)).not.toContain("denied source");
+  });
+
+  it("downgrades a completed side effect when terminal audit persistence fails", async () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const localKnowledge = fakeLocalKnowledge();
+    const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });
+    let rejectCompletionAudit = true;
+    const unreliable: UpdateLocalStateManager = {
+      ...durable,
+      recordAuditEvent: (eventType, payload) => {
+        if (eventType === "remediation-completed" && rejectCompletionAudit) {
+          rejectCompletionAudit = false;
+          throw new Error("terminal audit unavailable");
+        }
+        return durable.recordAuditEvent(eventType, payload);
+      },
+    };
+    const subject = createUpdateRemediationManager({
+      localState: unreliable,
+      localKnowledge,
+      now: () => NOW,
+      diagnostics: { record: (record) => diagnostics.push(record) },
+    });
+
+    const result = await subject.runAction({
+      actionId: "local-knowledge-reindex:local-knowledge",
+      targetVersion: TARGET,
+      impact: localKnowledgeImpact,
+    });
+
+    expect(localKnowledge.runs()).toBe(1);
+    expect(result.actions[0]).toMatchObject({
+      status: "failed",
+      failure: "remediation-execution-failed",
+    });
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({ source: "update-remediation.persistDraftStatus" }),
+    );
   });
 
   it("treats unsupported owned runtime entries as manual review", (ctx) => {

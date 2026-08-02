@@ -1281,7 +1281,6 @@ async function candidateActionFromOutcome(
   }
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
-  if (record === null) return null;
   if (isSuppressedByForgetTombstone(deps.memoryVault, record)) {
     return { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON };
   }
@@ -1300,7 +1299,7 @@ async function candidateActionFromOutcome(
     proposalId: String(inserted.id),
     body: capturedMemoryBody(outcome, inserted),
     scopeLabel: scopeLabel(inserted.scope),
-    requiresApproval: inserted.status === "accepted" ? false : outcome.requiresApproval,
+    requiresApproval: outcome.requiresApproval,
     status: inserted.status === "accepted" ? "accepted" : "proposed",
   };
 }

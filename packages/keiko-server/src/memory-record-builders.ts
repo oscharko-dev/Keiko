@@ -3,6 +3,14 @@ import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memor
 
 export function buildMemoryRecordFromProposal(
   proposalId: MemoryId,
+  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+): MemoryRecord;
+export function buildMemoryRecordFromProposal(
+  proposalId: MemoryId,
+  outcome: CaptureOutcome,
+): MemoryRecord | null;
+export function buildMemoryRecordFromProposal(
+  proposalId: MemoryId,
   outcome: CaptureOutcome,
 ): MemoryRecord | null {
   if (outcome.kind !== "candidate") return null;
