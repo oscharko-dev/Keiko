@@ -96,7 +96,7 @@ jobs:
         run: git fetch --quiet --no-tags --no-recurse-submodules origin "pull/${PR_NUMBER}/head"
 
       - name: Review
-        uses: oscharko-dev/Keiko-for-Quality@be392820f2839ba9b9711c1a5a4ccceaa465e6d6 # v0.5.0
+        uses: oscharko-dev/Keiko-for-Quality@688e34f077f3aec328614e77212e8cfd486d84ab # v0.7.0
         env:
           # Passed by variable NAME to the action, never as an input value: an input appears in the
           # step context that every other action in the job can read.
