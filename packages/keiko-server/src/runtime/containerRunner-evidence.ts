@@ -5,8 +5,16 @@
 // workspace path, never any container output (ADR-0048 content-free invariant). Mirrors
 // command-runner-evidence.ts.
 
-import { deepRedactStrings, EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-evidence";
-import type { EvidenceManifest, EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import {
+  DEFAULT_RETENTION,
+  EVIDENCE_SCHEMA_VERSION,
+  persistEvidenceManifest,
+} from "@oscharko-dev/keiko-evidence";
+import type {
+  EvidenceManifest,
+  EvidenceStore,
+  RetentionPolicy,
+} from "@oscharko-dev/keiko-evidence";
 import { HARNESS_VERSION } from "@oscharko-dev/keiko-harness";
 import type { RunOutcome } from "@oscharko-dev/keiko-harness";
 import type {
@@ -107,7 +115,7 @@ export function appendContainerRunEvidence(
   store: EvidenceStore,
   entry: ContainerRunEvidenceEntry,
   redact: (input: string) => string,
+  retention: RetentionPolicy = DEFAULT_RETENTION,
 ): string {
-  const safe = deepRedactStrings(entry, redact) as ContainerRunEvidenceEntry;
-  return store.put(safe.run.runId, JSON.stringify(safe, null, 2));
+  return persistEvidenceManifest(entry, store, redact, retention).location;
 }

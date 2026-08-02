@@ -24,8 +24,8 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
 import { buildEvidenceReport, type EvidenceReport } from "./report.js";
-import { createAuditRedactor, deepRedactStrings } from "./redaction.js";
-import { applyRetention } from "./retention.js";
+import { persistEvidenceManifest } from "./persist.js";
+import { createAuditRedactor } from "./redaction.js";
 import { assertValidRunId } from "./runid.js";
 import {
   DEFAULT_RETENTION,
@@ -375,8 +375,14 @@ export function persistCompactionEvidence(
   assertValidRunId(input.runId);
   const redactor = createAuditRedactor({ additionalSecrets: ctx.additionalSecrets ?? [] }, ctx.env);
   const manifest = buildCompactionManifest(input, redactor, ctx.costClassResolver);
-  const safeJson = JSON.stringify(deepRedactStrings(manifest, redactor), null, 2);
-  const location = ctx.store.put(manifest.run.runId, safeJson);
-  applyRetention(ctx.store, ctx.retention ?? DEFAULT_RETENTION);
-  return { manifest, location, report: buildEvidenceReport(manifest, location) };
+  const persisted = persistEvidenceManifest(
+    manifest,
+    ctx.store,
+    redactor,
+    ctx.retention ?? DEFAULT_RETENTION,
+  );
+  return {
+    ...persisted,
+    report: buildEvidenceReport(persisted.manifest, persisted.location),
+  };
 }

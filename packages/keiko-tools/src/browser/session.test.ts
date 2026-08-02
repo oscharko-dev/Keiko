@@ -194,6 +194,7 @@ async function makeFixture(overrides?: {
   readonly redactor?: (v: unknown) => unknown;
   readonly fetchVersion?: (url: string) => Promise<unknown>;
   readonly useRealFetchVersion?: boolean;
+  readonly omitEvidenceManifestWriter?: boolean;
 }): Promise<ManagerFixture> {
   const evidenceDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-browser-")));
   const evidenceStore = createInMemoryEvidenceStore();
@@ -212,6 +213,12 @@ async function makeFixture(overrides?: {
   const manager = createBrowserSessionManager({
     evidenceDir,
     evidenceStore,
+    ...(overrides?.omitEvidenceManifestWriter === true
+      ? {}
+      : {
+          evidenceManifestWriter: (manifest: EvidenceManifest): string =>
+            evidenceStore.put(manifest.run.runId, JSON.stringify(manifest, null, 2)),
+        }),
     redactor:
       overrides?.redactor ??
       ((value: unknown): unknown =>
@@ -299,6 +306,14 @@ function requireBrowserManifest(
 }
 
 describe("openSession", () => {
+  it("fails closed when evidence storage has no governed manifest writer", async () => {
+    const fixture = await withFixture({ omitEvidenceManifestWriter: true });
+
+    await expect(fixture.manager.openSession(9222)).rejects.toMatchObject({
+      code: "EVIDENCE_MANIFEST_WRITER_MISSING",
+    });
+  });
+
   it("opens, creates a fresh target, attaches, and emits session-opened", async () => {
     const fixture = await withFixture();
     const meta = await fixture.manager.openSession(9222);

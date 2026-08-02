@@ -8,16 +8,21 @@ import {
   createNodeEvidenceStore,
   type EvidenceStore,
 } from "./store.js";
-import type { EvidenceManifest } from "./types.js";
+import { DEFAULT_RETENTION, type EvidenceManifest, type EvidenceTaskType } from "./types.js";
 
-function manifest(runId: string, startedAt: number, finishedAt: number): EvidenceManifest {
+function manifest(
+  runId: string,
+  startedAt: number,
+  finishedAt: number,
+  taskType: EvidenceTaskType = "explain-plan",
+): EvidenceManifest {
   return {
     evidenceSchemaVersion: "1",
     run: {
       runId,
       fingerprint: "fp",
       harnessVersion: "0.1.5",
-      taskType: "explain-plan",
+      taskType,
       outcome: "completed",
       startedAt,
       finishedAt,
@@ -29,6 +34,14 @@ function manifest(runId: string, startedAt: number, finishedAt: number): Evidenc
     toolCalls: [],
     commandExecutions: [],
   };
+}
+
+function manifestWithUnknownTaskType(runId: string, startedAt: number, finishedAt: number): string {
+  const known = manifest(runId, startedAt, finishedAt);
+  return JSON.stringify({
+    ...known,
+    run: { ...known.run, taskType: "future-regulated-task" },
+  });
 }
 
 // runId -> finishedAt; persisted in arbitrary insertion order so "oldest" is computed from the
@@ -78,6 +91,68 @@ describe("applyRetention — maxRuns", () => {
     ]);
     applyRetention(store, { maxRuns: 5 });
     expect([...store.list()].sort()).toEqual(["run-a", "run-b"]);
+  });
+});
+
+describe("applyRetention — default partition isolation", () => {
+  it("bounds chat/RAG evidence without evicting regulated or unknown manifests", () => {
+    const store = createInMemoryEvidenceStore();
+    store.put("regulated-old", JSON.stringify(manifest("regulated-old", 0, 1, "verify")));
+    store.put("unknown-old", manifestWithUnknownTaskType("unknown-old", 1, 2));
+    for (let index = 0; index <= 50; index += 1) {
+      const runId = `chat-${String(index).padStart(2, "0")}`;
+      store.put(
+        runId,
+        JSON.stringify(manifest(runId, index + 10, index + 11, "connected-context")),
+      );
+    }
+
+    applyRetention(store, DEFAULT_RETENTION);
+
+    expect(store.get("regulated-old")).toBeDefined();
+    expect(store.get("unknown-old")).toBeDefined();
+    expect(store.get("chat-00")).toBeUndefined();
+    expect(store.list()).toHaveLength(52);
+  });
+
+  it("bounds regulated evidence without evicting chat/RAG or unknown manifests", () => {
+    const store = createInMemoryEvidenceStore();
+    store.put("regulated-old", JSON.stringify(manifest("regulated-old", 0, 1, "verify")));
+    store.put("chat-old", JSON.stringify(manifest("chat-old", 1, 2, "connected-context")));
+    store.put("unknown-old", manifestWithUnknownTaskType("unknown-old", 2, 3));
+    for (let index = 0; index < 50; index += 1) {
+      const runId = `regulated-${String(index).padStart(2, "0")}`;
+      store.put(runId, JSON.stringify(manifest(runId, index + 10, index + 11, "verify")));
+    }
+
+    applyRetention(store, DEFAULT_RETENTION);
+
+    expect(store.get("regulated-old")).toBeUndefined();
+    expect(store.get("chat-old")).toBeDefined();
+    expect(store.get("unknown-old")).toBeDefined();
+    expect(store.list()).toHaveLength(52);
+  });
+
+  it("honours a declared partition cap without affecting another partition", () => {
+    const store = createInMemoryEvidenceStore();
+    store.put("regulated-old", JSON.stringify(manifest("regulated-old", 0, 1, "verify")));
+    store.put("regulated-new", JSON.stringify(manifest("regulated-new", 1, 2, "verify")));
+    store.put("chat-old", JSON.stringify(manifest("chat-old", 0, 1, "connected-context")));
+    store.put("unknown-old", manifestWithUnknownTaskType("unknown-old", 0, 1));
+
+    applyRetention(store, { maxRunsByPartition: { regulated: 1 } });
+
+    expect([...store.list()].sort()).toEqual(["chat-old", "regulated-new", "unknown-old"]);
+  });
+
+  it("preserves the explicit global maxRuns migration path for recognised evidence", () => {
+    const store = createInMemoryEvidenceStore();
+    store.put("regulated-old", JSON.stringify(manifest("regulated-old", 0, 1, "verify")));
+    store.put("chat-new", JSON.stringify(manifest("chat-new", 1, 2, "connected-context")));
+
+    applyRetention(store, { maxRuns: 1 });
+
+    expect(store.list()).toEqual(["chat-new"]);
   });
 });
 

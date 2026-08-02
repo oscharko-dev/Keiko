@@ -92,6 +92,9 @@ export type BrowserSideFileWriter = (
 export interface BrowserSessionManagerOptions {
   readonly evidenceDir: string;
   readonly evidenceStore?: EvidenceStore | undefined;
+  // The BFF-owned writer composes deep redaction, atomic persistence, and retention. Required when
+  // evidenceStore is present so the tools layer cannot create an unrotated manifest lane.
+  readonly evidenceManifestWriter?: ((manifest: EvidenceManifest) => string) | undefined;
   readonly redactor?: (value: unknown) => unknown;
   readonly cdpClientFactory?: (url: string, opts: CdpClientOptions) => CdpClient;
   readonly fetchVersion?: (url: string) => Promise<unknown>;
@@ -437,6 +440,7 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
   // Optional — applyScreenshot fails closed (BrowserToolError code SIDE_FILE_WRITER_MISSING)
   // when evidenceStore is set but no writer was injected; preserves the audit invariant.
   private readonly sideFileWriter: BrowserSideFileWriter | undefined;
+  private readonly evidenceManifestWriter: ((manifest: EvidenceManifest) => string) | undefined;
   private readonly idleTtlMs: number;
   private readonly nowMs: () => number;
   private readonly sessions = new Map<string, SessionRecord>();
@@ -451,6 +455,7 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
     this.fetchVersion = opts.fetchVersion ?? fetchVersionJson;
     this.costClassResolver = opts.costClassResolver ?? ((): CostClass | "unknown" => "unknown");
     this.sideFileWriter = opts.sideFileWriter;
+    this.evidenceManifestWriter = opts.evidenceManifestWriter;
     this.idleTtlMs = opts.idleTtlMs ?? SESSION_IDLE_TTL_MS;
     this.nowMs = opts.nowMs ?? ((): number => Date.now());
   }
@@ -522,8 +527,14 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
   private persistRecord(record: SessionRecord): void {
     const store = this.opts.evidenceStore;
     if (store === undefined) return;
+    if (this.evidenceManifestWriter === undefined) {
+      throw new BrowserToolError(
+        "EVIDENCE_MANIFEST_WRITER_MISSING",
+        "Evidence manifest writer is unavailable.",
+      );
+    }
     const manifest = this.buildManifest(record);
-    store.put(record.runId, JSON.stringify(manifest, null, 2));
+    this.evidenceManifestWriter(manifest);
   }
 
   private emitRecord(
@@ -998,7 +1009,7 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
   };
 
   public readonly dispose = async (): Promise<void> => {
-    for (const id of [...this.sessions.keys()]) {
+    for (const id of this.sessions.keys()) {
       const record = this.sessions.get(id);
       if (record !== undefined) {
         await this.closeRecord(record, "process-exit", true);
@@ -1052,7 +1063,7 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
   private fanout(event: BrowserEventEnvelope): void {
     const set = this.subscribers.get(event.sessionId);
     if (set === undefined) return;
-    for (const listener of [...set]) {
+    for (const listener of set) {
       try {
         listener(event);
       } catch {

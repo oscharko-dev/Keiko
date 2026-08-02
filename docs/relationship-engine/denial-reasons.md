@@ -119,7 +119,7 @@ A single `RelationshipPolicyDecision` MAY include more than one reason. The vali
 ### `denied/endpoint-retired`
 
 - **User-facing message**: "An endpoint has been retired by retention and is no longer available."
-- **When it fires**: The endpoint-resolver returns `status: "retired"`. Typical for `evidence-run` endpoints that aged past `DEFAULT_RETENTION: maxRuns: 50` ([`evidence.ts:315`](../../packages/keiko-contracts/src/evidence.ts)).
+- **When it fires**: The endpoint-resolver returns `status: "retired"`. Typical for `evidence-run` endpoints that aged past their declared global or partition retention policy ([`evidence.ts`](../../packages/keiko-contracts/src/evidence.ts)).
 - **Audit-event implication**: Yes.
 
 ### `denied/endpoint-unavailable`

@@ -94,7 +94,9 @@ describe("keiko-evidence public surface", () => {
     expect(typeof evidence.EvidenceSchemaError).toBe("function");
     // Frozen schema + retention constants (re-exported from keiko-contracts):
     expect(evidence.EVIDENCE_SCHEMA_VERSION).toBe("1");
-    expect(evidence.DEFAULT_RETENTION).toEqual({ maxRuns: 50 });
+    expect(evidence.DEFAULT_RETENTION).toEqual({
+      maxRunsByPartition: { "chat-rag": 50, regulated: 50 },
+    });
   });
 
   it("every type-only re-export is reachable by name at compile time", () => {

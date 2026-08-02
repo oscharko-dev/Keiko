@@ -370,14 +370,22 @@ export interface AuditRedactionConfig {
 
 // ─── Retention policy (D6) ────────────────────────────────────────────────────────
 
+export type EvidenceRetentionPartition = "chat-rag" | "regulated";
+
 export interface RetentionPolicy {
+  // Legacy/global cap for callers that deliberately govern every recognised evidence class.
+  // DEFAULT_RETENTION does not use it: one partition must not evict another partition's runs.
   readonly maxRuns?: number | undefined;
+  readonly maxRunsByPartition?:
+    Readonly<Partial<Record<EvidenceRetentionPartition, number>>> | undefined;
   readonly maxAgeMs?: number | undefined;
   readonly maxTotalBytes?: number | undefined;
   readonly disabled?: boolean | undefined;
 }
 
-export const DEFAULT_RETENTION: RetentionPolicy = { maxRuns: 50 } as const;
+export const DEFAULT_RETENTION: RetentionPolicy = {
+  maxRunsByPartition: { "chat-rag": 50, regulated: 50 },
+} as const;
 
 // ─── Build input + injectable deps (D10) ──────────────────────────────────────────
 

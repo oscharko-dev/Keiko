@@ -215,7 +215,7 @@ Hard-delete sweeps may evict `revoked` rows older than a threshold to prevent un
 
 ### 5.3 Evidence-reference invariant
 
-**Never delete a `revoked` row that still appears in an evidence manifest.** Restated normatively for issue #543's hardening pass: the retention sweep MUST consult the evidence store ([`packages/keiko-evidence/src/store.ts`](../../packages/keiko-evidence/src/store.ts)) to check whether the relationship id appears in any non-retired `EvidenceManifest.relationships?` section (per the audit-section design in [gap-analysis.md Gap 7](gap-analysis.md) and ADR-0032). If yes, the row is retained until the evidence manifest itself ages out under `DEFAULT_RETENTION: maxRuns: 50` ([`packages/keiko-contracts/src/evidence.ts:315`](../../packages/keiko-contracts/src/evidence.ts)).
+**Never delete a `revoked` row that still appears in an evidence manifest.** Restated normatively for issue #543's hardening pass: the retention sweep MUST consult the evidence store ([`packages/keiko-evidence/src/store.ts`](../../packages/keiko-evidence/src/store.ts)) to check whether the relationship id appears in any non-retired `EvidenceManifest.relationships?` section (per the audit-section design in [gap-analysis.md Gap 7](gap-analysis.md) and ADR-0032). If yes, the row is retained until the evidence manifest itself ages out under its applicable global or partition policy ([`packages/keiko-contracts/src/evidence.ts`](../../packages/keiko-contracts/src/evidence.ts)).
 
 This is the storage-side enforcement of the rule "evidence retains its referenced relationship rows": the evidence ledger is the canonical lineage record; the relationship table is the index.
 

@@ -410,14 +410,27 @@ loads one without bypassing redaction or the workspace boundary.
 
 ### D6 — Retention and rotation
 
-Default policy: **keep the most-recent N manifests** (`DEFAULT_RETENTION = { maxRuns: 50 }`),
-applied after each successful `put`. We choose a count cap over a byte/age cap as the default
-because it is the simplest predictable bound and a developer's local evidence dir grows by run
-count; byte and age caps are offered as configurable alternatives but not the default.
+Default policy: **keep the most-recent 50 manifests independently in each recognised partition**
+(`DEFAULT_RETENTION = { maxRunsByPartition: { "chat-rag": 50, regulated: 50 } }`), applied after
+each successful `put`. `connected-context` (including grounded-context and chat-compaction
+evidence) is the `chat-rag` partition; every other currently recognised `EvidenceTaskType` is
+`regulated`. High-frequency per-turn evidence therefore remains bounded without evicting
+verification, workflow, command, browser, or other regulated manifests from the shared store, and
+the regulated lane remains independently bounded. A missing or future-unknown task type is left
+untouched: retention fails safe rather than guessing that an unrecognised manifest is disposable.
+
+The legacy `maxRuns` field remains an explicit global cap across recognised partitions for callers
+that deliberately configure that migration-compatible behaviour. `maxRunsByPartition` composes
+with the global count/age/byte limits by unioning their delete sets; an explicit stricter policy
+therefore still governs regulated evidence. The default selects independent bounded counts for
+both recognised partitions, while byte and age caps remain available as explicit alternatives.
 
 ```typescript
 export interface RetentionPolicy {
-  readonly maxRuns?: number | undefined;   // delete oldest beyond this count
+  readonly maxRuns?: number | undefined;   // explicit global cap across recognised partitions
+  readonly maxRunsByPartition?: Readonly<
+    Partial<Record<EvidenceRetentionPartition, number>>
+  > | undefined;
   readonly maxAgeMs?: number | undefined;  // delete manifests older than this (by finishedAt)
   readonly maxTotalBytes?: number | undefined; // delete oldest until under this byte cap
   // Explicit opt-out: when disabled, the ledger never deletes.
@@ -432,7 +445,9 @@ set; it does not recurse), it never follows symlinks (the node adapter `lstat`s 
 entry that is a symlink), and it never operates on a path outside the base dir. "Oldest" is
 determined by reading the `startedAt`/`finishedAt` header from each manifest, not by filesystem
 mtime (which a developer touch could perturb). When `disabled`, deletion is a no-op. The policy and
-the configuration knobs are documented in the evidence-boundaries doc.
+the configuration knobs are documented in the evidence-boundaries doc. A manifest with an
+unrecognised or malformed `taskType` never enters a delete candidate set, matching the existing
+fail-safe treatment of an unparseable manifest.
 
 ### D7 — Usage/cost aggregation
 
@@ -567,15 +582,16 @@ store, the redactor, the index API, or the retention logic. This is flagged for 
 | `index-api.ts` | `listEvidence`, `loadEvidence`, `EvidenceListEntry` (D5). |
 | `retention.ts` | `applyRetention(store, policy)` — bounded, deletion-safe (D6). |
 | `report.ts` | `buildEvidenceReport(manifest, location)`, `renderEvidenceReport(report)` (D9). Pure. |
-| `persist.ts` | `persistEvidence(input, deps): { manifest, location, report }` — the top-level orchestration: build → store.put → applyRetention → buildEvidenceReport. The single entry the CLI/SDK call. |
+| `persist.ts` | `persistEvidenceManifest(manifest, store, redact, retention)` owns deep redaction → store.put → applyRetention for every standard manifest writer; `persistEvidence(input, deps)` adds build/report orchestration for CLI/SDK callers. |
 | `index.ts` | Barrel re-exporting the public surface. |
 
 **Public export list** (surfaced via `src/index.ts` and `src/sdk/index.ts` explicit blocks):
-`buildEvidenceManifest`, `persistEvidence`, `createAuditRedactor`, `createNodeEvidenceStore`,
+`buildEvidenceManifest`, `persistEvidenceManifest`, `persistEvidence`, `createAuditRedactor`, `createNodeEvidenceStore`,
 `createInMemoryEvidenceStore`, `aggregateUsage`, `resolveCostClass`, `listEvidence`,
 `loadEvidence`, `applyRetention`, `buildEvidenceReport`, `renderEvidenceReport`,
 `assertValidRunId`, `EVIDENCE_SCHEMA_VERSION`, `DEFAULT_RETENTION`, and the types
 `EvidenceManifest`, `EvidenceStore`, `EvidenceReport`, `EvidenceListEntry`, `RetentionPolicy`,
+`EvidenceRetentionPartition`,
 `AuditRedactionConfig`, `EvidenceDeps`, `EvidenceRunIdentity`, `EvidenceModel`,
 `EvidenceUsageTotals`, `EvidenceStateTransition`, `EvidenceToolCall`,
 `EvidenceCommandExecution`, `EvidencePatch`, `EvidenceReasoningEntry`.
@@ -592,9 +608,11 @@ store, the redactor, the index API, or the retention logic. This is flagged for 
   case (redacting twice equals redacting once).
 - **Unit — aggregation** (`aggregate.test.ts`): multiple `model:call:completed` events → assert the
   four totals; `resolveCostClass` returns the registry value and `"unknown"` for an unregistered id.
-- **Unit — retention deletion-safety** (`retention.test.ts`): `maxRuns` deletes the oldest beyond
-  the cap and only `<runId>.json` files; a symlink entry in the base dir is never followed/deleted;
-  `disabled` is a no-op; `maxAgeMs`/`maxTotalBytes` variants.
+- **Unit — retention deletion-safety** (`retention.test.ts`): default retention evicts only the
+  oldest `chat-rag` entry beyond 50 while preserving older regulated and unknown manifests;
+  explicit `maxRuns` retains its global recognised-evidence behaviour; deletion targets only
+  `<runId>.json` files; a symlink entry is never followed/deleted; `disabled` is a no-op;
+  `maxAgeMs`/`maxTotalBytes` variants.
 - **Unit — path containment / traversal** (`runid.test.ts`, `store.test.ts`): `assertValidRunId`
   rejects `..`, `/`, `\`, NUL, leading dot, over-length, and accepts a normal id; the node store
   refuses to write/delete outside the base dir.

@@ -48,7 +48,8 @@ open after PR5:
 - `chat-stream-handlers.ts:163` — streaming path calls `buildGatewayMessages` identically.
 - `compaction-evidence.ts:322` — `persistCompactionEvidence(input, ctx)` accepts `runId`, `records`, `startedAt`, `finishedAt`, `chatIdHash?`.
 - `runid.ts:9,21` — `MAX_RUN_ID_LENGTH = 256`, charset `[A-Za-z0-9._-]`, no leading dot.
-- `types.ts:200` (keiko-evidence) — `DEFAULT_RETENTION = { maxRuns: 50 }`.
+- `evidence.ts` (keiko-contracts) — `DEFAULT_RETENTION` independently caps the `chat-rag` and
+  `regulated` partitions at 50 runs.
 
 ## Decision
 
@@ -193,9 +194,11 @@ the same turn count have distinct sha256 prefixes).
 The `chatIdHash` field in `CompactionEvidenceInput` (compaction-evidence.ts:48) is populated with
 `sha256Hex(request.chatId)` — the raw chatId never enters the evidence manifest.
 
-**Retention**: `DEFAULT_RETENTION` (`maxRuns: 50`). Chat-compaction evidence is of the same
-sensitivity class as grounded-context evidence (already using `DEFAULT_RETENTION`). No
-dedicated bounded profile is needed.
+**Retention**: `DEFAULT_RETENTION` independently caps the `chat-rag` and `regulated` partitions at
+50 runs. Chat-compaction and grounded-context evidence both use `taskType: "connected-context"`, so
+ordinary per-turn writes compete only within that partition and cannot evict regulated or
+future-unknown evidence from the shared ledger. No second chat-specific retention subsystem is
+introduced.
 
 **Timing**: `startedAt` is captured from `Date.now()` before the model call; `finishedAt` is
 captured after. The helper is passed through an existing timing boundary — no new timer.

@@ -83,7 +83,12 @@ Each activity state carries four descriptors: stable text label, semantic ARIA d
 
 `RelationshipEvidenceRef` (per [`docs/relationship-engine/evidence-references.md §2`](../relationship-engine/evidence-references.md)) remains the intended pointer shape for a follow-up implementation seam. It never inlines evidence content. Current `dev` does not yet ship that type on relationship rows or in `GET /api/relationships/:id/explain`; when added, the API should return refs rather than proxying evidence bytes.
 
-Deleting a relationship that has active evidence refs creates a tombstone (the row transitions to `lifecycle = "revoked"`; the row is retained until the last referencing manifest ages out under `DEFAULT_RETENTION: { maxRuns: 50 }`). This mirrors the memory-vault tombstone pattern at [`packages/keiko-memory-vault/src/tombstones.ts`](../../packages/keiko-memory-vault/src/tombstones.ts) but applied at the index layer: the relationship row IS the tombstone.
+Deleting a relationship that has active evidence refs creates a tombstone (the row transitions to
+`lifecycle = "revoked"`; the row is retained until the last referencing manifest ages out under its
+applicable explicit or partition policy). The default partition caps prevent chat/RAG evidence from
+evicting regulated manifests and retain unknown manifests fail-safe. This mirrors the memory-vault tombstone pattern at
+[`packages/keiko-memory-vault/src/tombstones.ts`](../../packages/keiko-memory-vault/src/tombstones.ts)
+but applied at the index layer: the relationship row IS the tombstone.
 
 ### 7. Local-only, no telemetry
 

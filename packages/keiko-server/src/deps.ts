@@ -44,6 +44,7 @@ import {
   writeSideFile,
   deepRedactStrings,
   createNodeEvidenceStore,
+  persistEvidenceManifest,
   resolveEvidenceDir,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
@@ -1529,6 +1530,11 @@ function buildBrowserManager(options: {
     evidenceDir: options.evidenceDir,
     evidenceStore: options.evidenceStore,
     redactor: options.redactor,
+    evidenceManifestWriter: (manifest) =>
+      persistEvidenceManifest(manifest, options.evidenceStore, (value): string => {
+        const redacted = options.redactor(value);
+        return typeof redacted === "string" ? redacted : value;
+      }).location,
     costClassResolver: resolveCostClass,
     sideFileWriter: (basename, bytes, runId) =>
       writeSideFile(options.evidenceDir, runId, basename, bytes, { fs: nodeWorkspaceFs }),

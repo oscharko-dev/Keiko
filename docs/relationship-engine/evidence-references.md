@@ -84,7 +84,7 @@ When a relationship is deleted (soft-delete via `DELETE /api/relationships/:id`,
 1. The relationship row transitions to `lifecycle = "revoked"` per [storage.md §5.1](storage.md). The row is **not** removed.
 2. A `relationship.deleted` audit row is written per [audit-events.md §4.3](audit-events.md), with `tombstoned: true`.
 3. If `EvidenceManifest.relationships?` is added, the retention sweep at [storage.md §5.3](storage.md) MUST NOT evict the `revoked` row while any non-retired entry references it.
-4. The relationship row is retained until **the last referencing evidence manifest itself ages out** under the evidence retention policy (`DEFAULT_RETENTION: maxRuns: 50` at [`packages/keiko-contracts/src/evidence.ts:315`](../../packages/keiko-contracts/src/evidence.ts)).
+4. The relationship row is retained until **the last referencing evidence manifest itself ages out** under its applicable global or partition retention policy ([`packages/keiko-contracts/src/evidence.ts`](../../packages/keiko-contracts/src/evidence.ts)). The default caps chat/RAG and regulated manifests independently and retains unknown manifests fail-safe.
 5. Once the last referencing manifest is evicted, the next retention sweep evicts the row.
 
 This mirrors the memory-vault tombstone pattern at [`packages/keiko-memory-vault/src/tombstones.ts`](../../packages/keiko-memory-vault/src/tombstones.ts) (memory tombstones outlive the underlying memory row to preserve the audit trail) applied at a different layer: the relationship row IS the tombstone-bearing record, retained while evidence still names it.
@@ -95,7 +95,7 @@ Removing the row would leave dangling refs in evidence manifests. The evidence l
 
 ### 5.2 Hard-delete only via retention
 
-There is no operator-facing hard-delete API. The only path that removes a `revoked` row from disk is the retention sweep, and the sweep is gated by the rule above. This is by design: the evidence retention envelope (`maxRuns: 50` default) is the canonical lifetime contract.
+There is no operator-facing hard-delete API. The only path that removes a `revoked` row from disk is the retention sweep, and the sweep is gated by the rule above. This is by design: the evidence manifest's partition plus any explicit global/partition limits are the canonical lifetime contract.
 
 ## 6. Query API obligation
 

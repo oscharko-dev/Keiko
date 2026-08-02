@@ -4,25 +4,49 @@
 // EvidenceStore.delete. It computes the delete set then deletes that set (no recursion). "Oldest" is
 // read from each manifest's finishedAt header — never filesystem mtime, which a developer touch
 // could perturb. When disabled, deletion is a no-op. An unparseable manifest is left untouched
-// rather than risking deletion of a file we cannot read a header from.
+// rather than risking deletion of a file we cannot read a header from. Recognised task types map to
+// one of two closed, contract-owned partitions. Unknown task types are likewise retained fail-safe.
 
 import type { EvidenceStore } from "./store.js";
-import type { RetentionPolicy } from "./types.js";
+import type { EvidenceRetentionPartition, EvidenceTaskType, RetentionPolicy } from "./types.js";
+
+const RETENTION_PARTITIONS = ["chat-rag", "regulated"] as const;
+const RETENTION_PARTITION_BY_TASK_TYPE = Object.freeze({
+  "generate-unit-tests": "regulated",
+  "investigate-bug": "regulated",
+  "explain-plan": "regulated",
+  verify: "regulated",
+  "editor-agent-turn": "regulated",
+  "browser-capture": "regulated",
+  "terminal-execution": "regulated",
+  "command-run": "regulated",
+  "container-run": "regulated",
+  "connected-context": "chat-rag",
+  "editor-verification-run": "regulated",
+} as const satisfies Readonly<Record<EvidenceTaskType, EvidenceRetentionPartition>>);
 
 interface Candidate {
   readonly runId: string;
   readonly finishedAt: number;
   readonly bytes: number;
+  readonly partition: EvidenceRetentionPartition;
 }
 
-function readHeader(json: string): { finishedAt: number; bytes: number } | undefined {
+function retentionPartition(taskType: unknown): EvidenceRetentionPartition | undefined {
+  if (typeof taskType !== "string") return undefined;
+  const partitions: Readonly<Record<string, EvidenceRetentionPartition | undefined>> =
+    RETENTION_PARTITION_BY_TASK_TYPE;
+  return partitions[taskType];
+}
+
+function readHeader(json: string): Omit<Candidate, "runId"> | undefined {
   try {
     const parsed: unknown = JSON.parse(json);
-    const finishedAt = (parsed as { run?: { finishedAt?: unknown } }).run?.finishedAt;
-    if (typeof finishedAt !== "number") {
-      return undefined;
-    }
-    return { finishedAt, bytes: Buffer.byteLength(json, "utf8") };
+    const run = (parsed as { run?: { finishedAt?: unknown; taskType?: unknown } }).run;
+    const finishedAt = run?.finishedAt;
+    const partition = retentionPartition(run?.taskType);
+    if (typeof finishedAt !== "number" || partition === undefined) return undefined;
+    return { finishedAt, bytes: Buffer.byteLength(json, "utf8"), partition };
   } catch {
     return undefined;
   }
@@ -40,7 +64,7 @@ function collectCandidates(store: EvidenceStore): readonly Candidate[] {
     if (header === undefined) {
       continue;
     }
-    candidates.push({ runId, finishedAt: header.finishedAt, bytes: header.bytes });
+    candidates.push({ runId, ...header });
   }
   candidates.sort((a, b) => b.finishedAt - a.finishedAt || a.runId.localeCompare(b.runId));
   return candidates;
@@ -48,6 +72,20 @@ function collectCandidates(store: EvidenceStore): readonly Candidate[] {
 
 function beyondMaxRuns(sorted: readonly Candidate[], maxRuns: number): readonly string[] {
   return sorted.slice(Math.max(maxRuns, 0)).map((c) => c.runId);
+}
+
+function beyondPartitionMaxRuns(
+  sorted: readonly Candidate[],
+  policy: RetentionPolicy,
+): readonly string[] {
+  const doomed: string[] = [];
+  for (const partition of RETENTION_PARTITIONS) {
+    const maxRuns = policy.maxRunsByPartition?.[partition];
+    if (maxRuns === undefined) continue;
+    const candidates = sorted.filter((candidate) => candidate.partition === partition);
+    doomed.push(...beyondMaxRuns(candidates, maxRuns));
+  }
+  return doomed;
 }
 
 function olderThanAge(sorted: readonly Candidate[], maxAgeMs: number): readonly string[] {
@@ -88,6 +126,9 @@ function computeDeleteSet(
     for (const id of beyondMaxRuns(sorted, policy.maxRuns)) {
       doomed.add(id);
     }
+  }
+  for (const id of beyondPartitionMaxRuns(sorted, policy)) {
+    doomed.add(id);
   }
   if (policy.maxAgeMs !== undefined) {
     for (const id of olderThanAge(sorted, policy.maxAgeMs)) {

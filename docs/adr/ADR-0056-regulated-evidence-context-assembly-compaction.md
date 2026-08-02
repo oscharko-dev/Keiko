@@ -244,9 +244,11 @@ Both new fields enter the manifest before `applyRetention` is called. `applyRete
 the run level (deletes whole manifest files by age or count). It does not parse or inspect manifest
 content fields. No new retention logic is needed for `contextAssembly?` or `compaction?`.
 
-`DEFAULT_RETENTION` (`maxRuns: 50`, evidence.ts:353) applies to the grounded evidence manifest that
-now carries `contextAssembly?`. The same policy applies to the `persistCompactionEvidence`-produced
-manifests when they are wired in PR6.
+`DEFAULT_RETENTION` applies independent 50-run caps to the `chat-rag` and `regulated` partitions.
+Grounded evidence and `persistCompactionEvidence` both emit `taskType: "connected-context"`, so they
+share the chat/RAG cap without entering a generic FIFO with regulated workflow, verification,
+command, or browser evidence. Unknown future task types are retained fail-safe until their
+classification or an explicit policy is declared.
 
 ### D8 — Measurable acceptance gates
 
