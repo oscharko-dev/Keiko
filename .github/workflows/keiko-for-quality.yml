@@ -22,13 +22,11 @@ on:
     types:
       [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed, edited]
 
-# The reviewer needs to read the repository and write review comments. Nothing else. It has no
-# contents-write, checks-write, actions-write, commit, push, or merge authority. Approval is
-# deliberately NOT in that list: as the note above says, `pull-requests: write` can submit an
-# APPROVE review, and only the pinned action's behaviour declines to.
-permissions:
-  contents: read
-  pull-requests: write
+# Empty at workflow level on purpose. Two jobs run here and they need different authority:
+# `review` holds actions/contents read plus pull-requests write, `sign-store` holds only
+# actions: read. Neither inherits anything — each declares exactly what it needs, and a future
+# third job starts from nothing instead of inheriting review-grade authority by default.
+permissions: {}
 
 concurrency:
   # Metadata-only edits get their own group. `cancel-in-progress: false` protects only the RUNNING
@@ -74,13 +72,34 @@ jobs:
       github.event.pull_request.base.ref == 'dev' &&
       (github.event.action != 'edited' || github.event.changes.base != null) &&
       vars.KEIKO_QUALITY_ENABLED == 'true'
+    # What the review needs and nothing more. No write scope beyond the review conversations
+    # themselves: no contents-write, checks-write, actions-write, commit, push, or merge
+    # authority. Approval is deliberately IN the threat model: `pull-requests: write` can submit
+    # an APPROVE review, and only the pinned action's behaviour declines to (ADR-0170 D3).
+    #
+    # There is deliberately NO `actions: write` anywhere in this workflow. The store persists as
+    # a run ARTIFACT: uploading one needs no extra scope at all, and locating/downloading the
+    # previous push's store needs only `actions: read` — which cannot cancel, re-run, or DISPATCH
+    # anything. Dispatch was the sharp edge: its API takes a caller-chosen ref, so any write-
+    # scoped token here could have started a dispatchable workflow from a candidate branch, whose
+    # workflow file the candidate controls (raised by the Codex reviewer on #2931, in three
+    # escalating rounds — the durable answer was removing the scope, not fencing it).
+    # Independent containments stay: the keiko-for-quality environment carries a
+    # protected-branches-only deployment policy, and release.yml's publish job sits behind the
+    # npm-publish environment's required human reviewer.
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
     environment: keiko-for-quality
-    env:
-      # One component of the review-store cache-key identity below (the others are the profile
-      # hash and the model identity). Bump in lockstep with the `uses:` pin: a new action version
-      # may change what a store entry means, and a stale store must miss rather than mislead. The
-      # store's own per-entry digests are the hard guarantee — this key is the cheap partition.
-      KEIKO_QUALITY_ACTION_VERSION: v0.9.0
+    outputs:
+      # Consumed by sign-store: everything the detached signer needs, none of it secret. The
+      # signing itself deliberately does NOT happen in this job — see sign-store's note.
+      outcome: ${{ steps.review.outputs.outcome }}
+      store-name: ${{ steps.store-identity.outputs.name }}
+      action-sha: ${{ steps.store-identity.outputs.action-sha }}
+      profile-hash: ${{ steps.store-identity.outputs.profile-hash }}
+      store-enabled: ${{ steps.store-identity.outputs.store-enabled }}
     steps:
       # Check out the TRUSTED BASE. Never `github.event.pull_request.head.sha`: under
       # pull_request_target that would place candidate-controlled files on disk in a job that holds
@@ -101,57 +120,287 @@ jobs:
         # rather than redacted diagnostics. Keeping it minimal narrows what the job log carries.
         run: git fetch --quiet --no-tags --no-recurse-submodules origin "pull/${PR_NUMBER}/head"
 
-      # The directory the review-store cache below restores into and saves from. Created ahead of
-      # the restore so a first-ever run still has a real, existing (empty) directory — the save
-      # step treats a missing path as an error, an empty one as a legitimate archive. The path is
-      # workspace-relative on purpose: the action reads `review_store_path` with plain Node file
-      # I/O, which does not expand `~`, so a home-relative path would silently name a different
-      # location than the cache steps archive.
-      - name: Ensure review-store directory exists
-        run: mkdir -p .keiko-review-store
-
-      # Derives the review-store cache key exactly once; the restore and save steps below consume
-      # the outputs, so the two can never drift apart byte-wise. A step, not job-level env, on
-      # purpose: `hashFiles` evaluated in job env would run before the checkout above and hash
-      # nothing. The prefix is scoped to this pull request, this action version, this profile
-      # (hashFiles reads the trusted-base checkout), and this model identity — model id and
-      # protocol are non-secret repository variables; the endpoint is a secret and must never
-      # appear in a cache key the Actions UI displays in plain text.
-      - name: Derive review-store cache key
-        id: store-key
+      # Unconditional, and deliberately BEFORE anything that costs money: the sign and verify
+      # steps guard the key too, but verify only runs when a prior store was located — on a fresh
+      # installation, after retention expiry, or after a configuration change, the first key check
+      # would otherwise be the signing step, AFTER the reviewer has spent up to its token ceiling.
+      # A provisioning error must fail in the first seconds, not after the bill.
+      - name: Assert store signing key is provisioned
         env:
-          PREFIX: >-
-            keiko-quality-review-store-v1-${{ github.event.pull_request.number }}-${{
-              env.KEIKO_QUALITY_ACTION_VERSION }}-${{
-              hashFiles('.github/keiko-for-quality.json') }}-${{
-              vars.KEIKO_QUALITY_MODEL_ID }}-${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}-
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          STORE_HMAC: ${{ secrets.KEIKO_QUALITY_STORE_HMAC }}
         run: |
+          if [ "${#STORE_HMAC}" -lt 32 ]; then
+            echo "::error::KEIKO_QUALITY_STORE_HMAC is missing or too short — provision it in the keiko-for-quality environment"
+            exit 1
+          fi
+
+      # Derives the store's artifact name exactly once. The configuration identity is HASH-encoded
+      # rather than interpolated raw: a legitimate provider-qualified model id can contain '/' or
+      # ':' — both invalid in artifact names — and a raw value would fail the upload only AFTER
+      # the paid review, leaving every later push with an empty store. The MAC context (see the
+      # sign step) keeps the raw values; only the NAME needs artifact-safe encoding.
+      - name: Derive store identity
+        id: store-identity
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PROFILE_HASH: ${{ hashFiles('.github/keiko-for-quality.json') }}
+          MODEL_ID: ${{ vars.KEIKO_QUALITY_MODEL_ID }}
+          MODEL_PROTOCOL: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
+          # The declared pin — the single source of truth for store identity. It duplicates the
+          # Review step's `uses:` value because GitHub forbids an expression there, so a literal
+          # is unavoidable; ADVANCE BOTH TOGETHER. The consistency check below is what makes that
+          # duplication safe.
+          # Quoted: a hypothetical all-digit sha would otherwise parse as a YAML number and reach
+          # the shell in a normalized form, defeating the length check below.
+          ACTION_PIN: "3e458cdc86eb102b3a06a7dfb161d3c0f12e8364" # keep in sync with Review's uses:
+        run: |
+          # The pin partitions the store because a wrapper release can change review or
+          # sanitization SEMANTICS without changing the store's format. Three earlier rounds
+          # derived it by reading this file (grep, then a YAML parse, then awk); two independent
+          # reviewers converged on the same objection, and they are right: an extraction tied to
+          # text layout makes a benign reformat — or moving the call into a reusable workflow —
+          # an OUTAGE OF THE REVIEWER, which costs far more than a lost cache. Identity therefore
+          # comes from the declared value above, and the parse survives only as a best-effort
+          # CROSS-CHECK against the drift the declaration reintroduces (env says A, uses: runs B).
+          # Neither path may fail the job: a disagreement or an unreadable pin disables the STORE
+          # for this run — full-price review, reviewer intact — and never blocks integration.
+          STORE_ENABLED=true
+          if [ "${#ACTION_PIN}" -ne 40 ]; then
+            echo "::warning::declared ACTION_PIN is not a 40-hex sha — running without the review store"
+            STORE_ENABLED=false
+          fi
+          PARSED="$(awk '$0 !~ /^[[:space:]]*#/ && /uses:.*oscharko-dev\/Keiko-for-Quality@/ {
+              sub(/.*oscharko-dev\/Keiko-for-Quality@/, ""); sub(/[^0-9a-f].*$/, ""); print; exit
+            }' .github/workflows/keiko-for-quality.yml || true)"
+          if [ -z "${PARSED}" ]; then
+            # Cannot confirm the declaration against what executes. Replaying under a possibly
+            # stale identity is the one outcome worse than not replaying at all.
+            echo "::warning::could not read the pinned uses: line to confirm ACTION_PIN — running without the review store"
+            STORE_ENABLED=false
+          elif [ "${PARSED}" != "${ACTION_PIN}" ]; then
+            echo "::warning::ACTION_PIN disagrees with the pinned uses: line — advance both together; running without the review store"
+            STORE_ENABLED=false
+          fi
+          IDENTITY="$(printf 'profile=%s model=%s protocol=%s action=%s' \
+              "${PROFILE_HASH}" "${MODEL_ID}" "${MODEL_PROTOCOL}" "${ACTION_PIN}" \
+            | openssl dgst -sha256 -r | cut -c1-16)"
           {
-            echo "prefix=${PREFIX}"
-            echo "key=${PREFIX}${HEAD_SHA}"
+            echo "name=keiko-review-store-pr${PR_NUMBER}-${IDENTITY}"
+            echo "action-sha=${ACTION_PIN}"
+            echo "profile-hash=${PROFILE_HASH}"
+            echo "store-enabled=${STORE_ENABLED}"
           } >> "${GITHUB_OUTPUT}"
 
-      # Restores the cross-run review store (v0.9.0): per-file review outcomes keyed by content
-      # digests, so a push that leaves most files untouched replays their prior results instead of
-      # re-paying the model for them. Trust note: a restored entry is exactly as untrusted on
-      # replay as it was the run it was produced — the action re-derives every key and re-sanitizes
-      # every finding, and rejects the whole store on any mismatch (pinned by tests upstream).
-      #
-      # The exact key ends in the head SHA, so it misses on every new push — intentional:
-      # `restore-keys` is the same prefix without the head SHA and falls through to the newest
-      # store from an earlier push to this same pull request. A store from a different pull
-      # request, profile, model, or action version never matches the prefix.
-      #
-      # Poisoning scope: this run's ref is the protected base, so the caches it can restore were
-      # created either by base-branch runs or by this same base-controlled workflow — a candidate's
-      # own `pull_request` workflows save into their merge-ref scope and cannot plant a cache here.
+      # The directory the store lives in. NOT dot-prefixed: actions/upload-artifact excludes
+      # hidden paths unless told otherwise, and a hidden directory here would upload nothing and
+      # fail the hand-off (`if-no-files-found: error`) on every complete review. Workspace-
+      # relative on purpose: the action reads `review_store_path` with plain Node file I/O, which
+      # does not expand `~`.
+      - name: Ensure review-store directory exists
+        run: mkdir -p keiko-review-store
+
+      # Finds the newest store artifact an EARLIER RUN OF THIS WORKFLOW uploaded FOR THIS PULL
+      # REQUEST. These producer checks NARROW the candidate set; none of them authenticates it —
+      # a pull request opened against a contributor-controlled base receives pull_request_target
+      # with that base's candidate-authored copy of this very file (same event, same path), and a
+      # retarget to dev keeps its artifacts name-eligible. Authentication is the HMAC verify step
+      # after the download: only runs holding the keiko-for-quality environment (protected
+      # branches only) can sign, so a store that verifies was produced by dev's own workflow
+      # file. The predicates still earn their keep as cheap selection: same workflow path (no
+      # cross-feed from other pull_request_target workflows), membership in this pull request
+      # (pull_requests list, head branch+repository as fallback where the API omits it), and a
+      # name partitioned by profile hash and model identity so a configuration change starts
+      # empty. Beneath both layers the action re-derives every entry's digests on load —
+      # integrity under authenticity. No match, or a store that fails the MAC — first push,
+      # expired retention, config change, tampering — means an empty store and a normal
+      # full review; memoization is an optimization, never a dependency.
+      - name: Locate previous review store
+        id: locate
+        if: steps.store-identity.outputs.store-enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: ${{ steps.store-identity.outputs.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          WORKFLOW_PATH: .github/workflows/keiko-for-quality.yml
+        run: |
+          # Every API failure in here degrades to "no previous store" — a transient artifacts-API
+          # error or rate limit must cost one full-price review, never fail this step: a failed
+          # job before Review publishes no blocking conversation, and after the arming interlock
+          # expires the pull request could integrate unreviewed. Same class as the
+          # continue-on-error on the download step, one layer earlier.
+          # The size bound is part of the poisoning model: a candidate-base run can upload a
+          # same-named artifact of arbitrary size, and a huge download would eat runner disk or
+          # the 30-minute job timeout — which continue-on-error cannot catch, reopening the
+          # unreviewed-merge window through resource exhaustion instead of an exit code. A real
+          # store is a few hundred kilobytes; 25 MiB is far above any legitimate size and far
+          # below harm.
+          CANDIDATES="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/artifacts" -f "name=${ARTIFACT_NAME}" -F per_page=100 \
+            --jq '[.artifacts[] | select(.name == env.ARTIFACT_NAME) | select(.expired == false) | select(.size_in_bytes <= 26214400)] | sort_by(.created_at) | reverse | .[] | "\(.id):\(.workflow_run.id)"' \
+            2>/dev/null || true)"
+          if [ -z "${CANDIDATES}" ]; then
+            echo "::notice::no prior store located (none exists, or the lookup failed) — full review"
+          fi
+          MATCH="$(printf '%s\n' "${CANDIDATES}" \
+            | while IFS=: read -r ARTIFACT_ID RUN_ID; do
+                [ -n "${RUN_ID}" ] || continue
+                OK="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '
+                  select(.event == "pull_request_target")
+                  | select(.path == env.WORKFLOW_PATH)
+                  | select((([.pull_requests[]?.number] | index(env.PR_NUMBER | tonumber)) != null)
+                           or ((.pull_requests | length) == 0
+                               and .head_branch == env.HEAD_REF
+                               and .head_repository.full_name == env.HEAD_REPO))
+                  | "ok"' 2>/dev/null || true)"
+                if [ "${OK}" = "ok" ]; then echo "${ARTIFACT_ID}"; break; fi
+              done || true)"
+          echo "artifact-id=${MATCH}" >> "${GITHUB_OUTPUT}"
+
+      # Fetches the artifact ZIP through the API and inspects the central directory BEFORE any
+      # extraction: `size_in_bytes` in the locate step bounds only the compressed archive, and a
+      # candidate-base run could upload a highly compressible bomb whose expansion eats runner
+      # disk or the job timeout — a failure mode continue-on-error cannot catch, reopening the
+      # unreviewed-merge window through resources instead of exit codes. `unzip -l` reads the
+      # UNCOMPRESSED sizes without expanding anything; the gate enforces the same 25 MiB on the
+      # expanded total, at most 8 entries, and no path-traversal names. Every failure in this
+      # step — download, malformed archive, gate refusal — degrades to an empty store and a
+      # full-price review; nothing here can fail the job.
       - name: Restore review store
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .keiko-review-store
-          key: ${{ steps.store-key.outputs.key }}
-          restore-keys: ${{ steps.store-key.outputs.prefix }}
+        if: steps.locate.outputs.artifact-id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ steps.locate.outputs.artifact-id }}
+        run: |
+          set +e
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > store.zip 2>/dev/null
+          if [ ! -s store.zip ]; then
+            echo "::notice::store artifact download failed — full review"
+            rm -f store.zip; exit 0
+          fi
+          LISTING="$(unzip -l store.zip 2>/dev/null)"
+          if [ -z "${LISTING}" ]; then
+            echo "::notice::store artifact is not a readable archive — full review"
+            rm -f store.zip; exit 0
+          fi
+          TOTAL="$(printf '%s\n' "${LISTING}" | awk 'END { print $1 }')"
+          ENTRIES="$(printf '%s\n' "${LISTING}" | awk 'END { print $2 }')"
+          case "${TOTAL}${ENTRIES}" in *[!0-9]*|"") TOTAL=99999999999; ENTRIES=999 ;; esac
+          { [ -n "${TOTAL}" ] && [ -n "${ENTRIES}" ]; } || { TOTAL=99999999999; ENTRIES=999; }
+          if [ "${TOTAL}" -gt 26214400 ] || [ "${ENTRIES}" -gt 8 ]; then
+            echo "::warning::store artifact expands beyond the allowed bound — discarding it"
+            rm -f store.zip; exit 0
+          fi
+          # Listings are checked via here-strings, never producer pipelines: grep -q exits on its
+          # first match, the producer takes SIGPIPE, and under the Actions shell's pipefail the
+          # pipeline reports 141 — an if would then read a FOUND violation as a clean pass. Eight
+          # entries with long names are enough to overrun the pipe buffer (Codex, round 31).
+          if grep -q '\.\./' <<< "${LISTING}"; then
+            echo "::warning::store artifact carries traversal paths — discarding it"
+            rm -f store.zip; exit 0
+          fi
+          # The symlink and absolute-path checks below read zipinfo, so an archive whose central
+          # directory `unzip -l` parses but `unzip -Z` chokes on would leave BOTH greps searching
+          # an empty string and BOTH passing vacuously. A gate that cannot enumerate names has
+          # not validated anything: no enumeration, no extraction.
+          ZIPINFO="$(unzip -Z store.zip 2>/dev/null || true)"
+          NAMES="$(unzip -Z1 store.zip 2>/dev/null || true)"
+          if [ -z "${ZIPINFO}" ] || [ -z "${NAMES}" ]; then
+            echo "::warning::store artifact entry names could not be enumerated — discarding it"
+            rm -f store.zip; exit 0
+          fi
+          # A name-based traversal check misses symlink entries: a link `s -> /tmp` followed by a
+          # regular entry under `s/…` writes THROUGH the link, outside the store directory, with
+          # no `../` anywhere in the listing. zipinfo mode strings expose links as a leading 'l'.
+          if grep -q '^l' <<< "${ZIPINFO}"; then
+            echo "::warning::store artifact carries symlink entries — discarding it"
+            rm -f store.zip; exit 0
+          fi
+          # unzip implementations differ on absolute entry names — some strip the leading slash,
+          # some honor it and write outside -d. The gate must not depend on extractor behaviour:
+          # absolute names are rejected outright, like traversal segments and links.
+          if grep -q '^/' <<< "${NAMES}"; then
+            echo "::warning::store artifact carries absolute-path entries — discarding it"
+            rm -f store.zip; exit 0
+          fi
+          # unzip -l trusts attacker-controlled central-directory lengths, so the listing gate
+          # above is only a cheap first filter: a crafted entry can declare one byte and DEFLATE
+          # gigabytes. Extraction therefore runs under kernel-enforced limits — ulimit -f caps any
+          # single written file at 25 MiB (unzip dies on SIGXFSZ past it), timeout caps wall time —
+          # and the result is re-measured with du afterwards; any breach discards the store.
+          # 25600 is 25 MiB because BASH counts -f in 1024-byte blocks (verified: 51200 capped a
+          # write at 50 MiB under bash, at 25 MiB under zsh's 512-byte blocks — the shell
+          # difference hid this). Actions runs bash; do not "restore" the doubled value.
+          ( ulimit -f 25600; timeout 60 unzip -o -q store.zip -d keiko-review-store ) 2>/dev/null \
+            || { echo "::notice::extraction failed or exceeded limits — full review"; rm -rf keiko-review-store; mkdir -p keiko-review-store; }
+          USED_KB="$(du -sk keiko-review-store 2>/dev/null | cut -f1)"
+          case "${USED_KB}" in *[!0-9]*|"") USED_KB=99999999 ;; esac
+          if [ "${USED_KB}" -gt 25600 ] || [ -n "$(find keiko-review-store -type l -print -quit 2>/dev/null)" ]; then
+            echo "::warning::extracted store exceeds bounds or contains links — discarding it"
+            rm -rf keiko-review-store; mkdir -p keiko-review-store
+          fi
+          rm -f store.zip
+
+      # The producer checks above NARROW; this MAC DECIDES. Digest validation inside the store is
+      # not authentication — every input of the public key formula is candidate-visible, so a
+      # fabricated store with valid digests and empty findings could mark files "reviewed clean"
+      # and route them around the model. The concrete chain (Codex, #2931 round eleven): open a
+      # pull request against a contributor-controlled base, whose candidate-authored workflow COPY
+      # receives pull_request_target and uploads an artifact under this PR's number; retarget the
+      # pull request to dev; event, path, and PR predicates all pass. What that chain can never
+      # obtain is this signature: the HMAC key lives in the keiko-for-quality environment, whose
+      # protected-branches-only deployment policy refuses candidate-base runs, so only a run
+      # executing dev's own workflow file can have produced a store that verifies. An unsigned or
+      # mismatched store is discarded — one full-price review, never a poisoned replay.
+      - name: Verify restored store authenticity
+        if: steps.locate.outputs.artifact-id != ''
+        env:
+          STORE_HMAC: ${{ secrets.KEIKO_QUALITY_STORE_HMAC }}
+          STORE_PR: ${{ github.event.pull_request.number }}
+          STORE_PROFILE_HASH: ${{ hashFiles('.github/keiko-for-quality.json') }}
+          STORE_MODEL_ID: ${{ vars.KEIKO_QUALITY_MODEL_ID }}
+          STORE_MODEL_PROTOCOL: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
+          STORE_ACTION_SHA: ${{ steps.store-identity.outputs.action-sha }}
+        run: |
+          # An absent environment secret arrives as an empty string, and openssl happily HMACs
+          # with an empty — publicly known — key, which would silently void this entire boundary.
+          # A missing key is a provisioning failure and must be loud, not a quiet degrade.
+          if [ "${#STORE_HMAC}" -lt 32 ]; then
+            echo "::error::KEIKO_QUALITY_STORE_HMAC is missing or too short — provision it in the keiko-for-quality environment"
+            exit 1
+          fi
+          # From here on nothing may fail this step: the artifact is still UNAUTHENTICATED input,
+          # and a candidate-base producer can ship entries with mode 000, which unzip preserves.
+          # Under the default errexit an unreadable file would kill this job BEFORE Review runs —
+          # a failed job publishes no blocking conversation, and past the arming interlock that
+          # is an unreviewed integration path. Every read or MAC failure below degrades to an
+          # empty store and one full-price review instead (Codex, round 31).
+          set +e
+          STORE="keiko-review-store/store.json"
+          SIG="keiko-review-store/store.json.hmac"
+          chmod -R u+rw keiko-review-store 2>/dev/null
+          if [ -r "${STORE}" ] && [ -r "${SIG}" ]; then
+            # The context is rebuilt from THIS run's own values, never read from the artifact: a
+            # valid pair copied verbatim from another pull request or configuration fails on the
+            # first differing dimension, because those bytes were signed under a different
+            # context line. The store.context file inside the artifact is informational only.
+            EXPECTED="$(printf 'pr=%s profile=%s model=%s protocol=%s action=%s\n' \
+                "${STORE_PR}" "${STORE_PROFILE_HASH}" "${STORE_MODEL_ID}" "${STORE_MODEL_PROTOCOL}" "${STORE_ACTION_SHA}" \
+              | cat - "${STORE}" 2>/dev/null | openssl dgst -sha256 -hmac "${STORE_HMAC}" -r 2>/dev/null | cut -d' ' -f1)"
+            ACTUAL="$(cut -d' ' -f1 < "${SIG}" 2>/dev/null)"
+            # EXPECTED must be non-empty: if both reads failed, comparing empty to empty would
+            # authenticate a store nobody could read — the exact inversion of this boundary.
+            if [ -n "${EXPECTED}" ] && [ "${EXPECTED}" = "${ACTUAL}" ]; then
+              echo "store authenticated for this pull request and configuration"
+              exit 0
+            fi
+            echo "::warning::restored review store failed context-bound HMAC verification — discarding it"
+          else
+            echo "restored artifact carries no readable signature — discarding it"
+          fi
+          rm -rf keiko-review-store
+          mkdir -p keiko-review-store
+          exit 0
 
       - name: Review
         id: review
@@ -181,19 +430,173 @@ jobs:
           # 2M default starved an 87-file pull request in production (#2926); the formula narrows
           # small runs far below this ceiling on its own, so raising it does not raise small-PR cost.
           token_budget: "6000000"
-          # Enables per-file memoization (v0.9.0). Relative to the workspace; the file lives
-          # inside the directory the cache steps above and below carry between runs. Without this
-          # input the store layer is fully inert — that property is pinned by a test upstream.
-          review_store_path: .keiko-review-store/store.json
+          # Enables per-file memoization (v0.9.0). Relative to the workspace; the file lives in
+          # the directory the locate/upload steps carry between runs. Without this input the
+          # store layer is fully inert — that property is pinned by a test upstream.
+          review_store_path: keiko-review-store/store.json
 
-      # Persist the store only when the run settled complete: an incomplete or abandoned run never
-      # produces an updated store upstream, and a Review step that threw leaves `outcome` unset —
-      # the explicit comparison skips this step in every one of those cases. Saving under the
-      # head-SHA key (same derived output the restore uses) means each push archives its own store
-      # at most once; the next push restores it through the prefix fallback above.
-      - name: Save review store
-        if: steps.review.outputs.outcome == 'complete'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Persists the store for the next push — as an artifact, which needs no write scope at all
+      # (`actions: write` is deliberately absent from this workflow; see the permissions note).
+      # Only a complete settlement produces an updated store upstream, and a Review step that
+      # threw leaves `outcome` unset, so the condition skips both cases. The name partitions by
+      # pull request, profile hash, and model id — the invalidation boundary the retired cache
+      # key carried: after a profile or model change the locate step finds nothing and the next
+      # review runs full-price rather than replaying decisions produced under the old
+      # configuration. The action pin is a fourth partition dimension: hashed into the artifact
+      # name and bound into the MAC context, so advancing the reviewer release starts a fresh
+      # partition even when the store format stays compatible — and beneath that, schema and key
+      # derivation still reject foreign entries. Runs each own
+      # their artifact; the locate step picks the newest eligible one. Seven days comfortably
+      # outlives any push gap on an active pull request.
+      # Hands the UNSIGNED store to the sign-store job. Signing must not happen here: the
+      # external reviewer action executed above, and a compromised action can leave a detached
+      # process on this runner that outlives its step — materializing the HMAC key in any later
+      # step of THIS job would expose it to that process. The unsigned artifact is worthless to
+      # an attacker (they can fabricate unsigned stores anyway) and lives one day.
+      - name: Hand off unsigned store
+        if: steps.review.outputs.outcome == 'complete' && steps.store-identity.outputs.store-enabled == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          path: .keiko-review-store
-          key: ${{ steps.store-key.outputs.key }}
+          name: keiko-review-store-unsigned-${{ github.run_id }}
+          path: keiko-review-store
+          retention-days: 1
+          if-no-files-found: error
+
+  # The signing key also materializes in the review job — in the provisioning assert and the
+  # restore verify, both of which run BEFORE the external reviewer action. What this job
+  # guarantees is the narrower property that actually matters: the key never exists in any
+  # process AFTER externally governed code has run. A compromised action can leave a detached
+  # process that outlives its step on that runner (Codex, #2931 round 25) — so signing happens
+  # here, on a fresh runner. The precise property is ordering, not absence: NO EXTERNAL ACTION
+  # RUNS BEFORE THE KEY IS USED. Every step up to and including the signing step is
+  # base-controlled shell (gh, unzip, openssl) with no checkout; the only third-party action in
+  # this job is the upload-artifact step that persists the result AFTER the key has been used
+  # and the shell that held it has exited. It declares the keiko-for-quality environment solely
+  # for the key; the deployment branch policy confines that declaration to protected-ref
+  # workflow files, which is what keeps the signature meaningful.
+  sign-store:
+    name: sign review store
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: review
+    if: needs.review.outputs.outcome == 'complete' && needs.review.outputs.store-enabled == 'true'
+    permissions:
+      actions: read
+    environment: keiko-for-quality
+    steps:
+      - name: Assert store signing key is provisioned
+        env:
+          STORE_HMAC: ${{ secrets.KEIKO_QUALITY_STORE_HMAC }}
+        run: |
+          if [ "${#STORE_HMAC}" -lt 32 ]; then
+            echo "::error::KEIKO_QUALITY_STORE_HMAC is missing or too short — provision it in the keiko-for-quality environment"
+            exit 1
+          fi
+
+      # The unsigned artifact was produced on the runner that already EXECUTED the external
+      # reviewer action — a compromised action can hand this job a zip bomb or a traversal
+      # archive. The signer therefore applies the exact same gate as the restore path: listing
+      # bounds first (cheap filter over attacker-influenceable metadata), kernel-enforced limits
+      # during extraction, du re-measurement after. Every violation degrades to not-signing —
+      # one lost store, one future full-price review, a warning in the log — never a red job an
+      # attacker can ring for free, and never a byte written outside the store directory.
+      - name: Fetch unsigned store from this run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UNSIGNED_NAME: keiko-review-store-unsigned-${{ github.run_id }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set +e
+          # The name filter is a server-side narrowing (measured: this endpoint honors it — a
+          # nonexistent name returns total_count 0 for a run holding eight artifacts). The jq
+          # select re-asserts it locally anyway, so picking the right artifact never depends on
+          # the API continuing to honor the parameter.
+          ARTIFACT_ID="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" \
+            -f "name=${UNSIGNED_NAME}" -F per_page=100 \
+            --jq '[.artifacts[] | select(.name == env.UNSIGNED_NAME)][0].id' 2>/dev/null)"
+          if [ -z "${ARTIFACT_ID}" ] || [ "${ARTIFACT_ID}" = "null" ]; then
+            echo "::warning::unsigned store artifact not found — skipping signing"; exit 0
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > store.zip 2>/dev/null
+          if [ ! -s store.zip ]; then
+            echo "::warning::unsigned store download failed — skipping signing"; rm -f store.zip; exit 0
+          fi
+          LISTING="$(unzip -l store.zip 2>/dev/null)"
+          TOTAL="$(printf '%s\n' "${LISTING}" | awk 'END { print $1 }')"
+          ENTRIES="$(printf '%s\n' "${LISTING}" | awk 'END { print $2 }')"
+          case "${TOTAL}${ENTRIES}" in *[!0-9]*|"") TOTAL=99999999999; ENTRIES=999 ;; esac
+          # The concatenation cannot see a MISSING field: an empty ENTRIES beside a numeric TOTAL
+          # still looks all-digit, and `[ "" -gt 8 ]` inside the || chain below is a test ERROR —
+          # non-zero, which that chain reads as "no violation". Same guard as the restore path.
+          { [ -n "${TOTAL}" ] && [ -n "${ENTRIES}" ]; } || { TOTAL=99999999999; ENTRIES=999; }
+          # Here-strings, not producer pipelines: grep -q's early exit SIGPIPEs a producer and
+          # pipefail turns a FOUND violation into a clean-looking 141 (same repair as the restore
+          # path; Codex, round 31).
+          # Empty zipinfo output fails the gate rather than passing it silently: a grep over an
+          # empty string finds nothing, so an archive that defeats name enumeration would clear
+          # both the symlink and the absolute-path check. Same repair as the restore path.
+          ZIPINFO="$(unzip -Z store.zip 2>/dev/null || true)"
+          NAMES="$(unzip -Z1 store.zip 2>/dev/null || true)"
+          if [ -z "${LISTING}" ] || [ -z "${ZIPINFO}" ] || [ -z "${NAMES}" ] \
+             || [ "${TOTAL}" -gt 26214400 ] || [ "${ENTRIES}" -gt 8 ] \
+             || grep -q '\.\./' <<< "${LISTING}" \
+             || grep -q '^l' <<< "${ZIPINFO}" \
+             || grep -q '^/' <<< "${NAMES}"; then
+            echo "::warning::unsigned store failed the archive gate — skipping signing"
+            rm -f store.zip; exit 0
+          fi
+          mkdir -p keiko-review-store
+          # 25600 = 25 MiB under bash's 1024-byte blocks; see the restore path's note.
+          ( ulimit -f 25600; timeout 60 unzip -o -q store.zip -d keiko-review-store ) 2>/dev/null \
+            || { echo "::warning::unsigned store extraction exceeded limits — skipping signing"; rm -rf keiko-review-store; rm -f store.zip; exit 0; }
+          rm -f store.zip
+          USED_KB="$(du -sk keiko-review-store 2>/dev/null | cut -f1)"
+          case "${USED_KB}" in *[!0-9]*|"") USED_KB=99999999 ;; esac
+          if [ "${USED_KB}" -gt 25600 ] || [ ! -f keiko-review-store/store.json ] \
+             || [ -n "$(find keiko-review-store -type l -print -quit 2>/dev/null)" ]; then
+            echo "::warning::unsigned store failed post-extraction checks — skipping signing"
+            rm -rf keiko-review-store; exit 0
+          fi
+
+      - name: Sign review store
+        id: sign
+        env:
+          STORE_HMAC: ${{ secrets.KEIKO_QUALITY_STORE_HMAC }}
+          STORE_PR: ${{ github.event.pull_request.number }}
+          STORE_PROFILE_HASH: ${{ needs.review.outputs.profile-hash }}
+          STORE_MODEL_ID: ${{ vars.KEIKO_QUALITY_MODEL_ID }}
+          STORE_MODEL_PROTOCOL: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
+          STORE_ACTION_SHA: ${{ needs.review.outputs.action-sha }}
+        run: |
+          # Tolerant on purpose: the unsigned artifact came from the runner that executed the
+          # external action, which can ship an unreadable (mode 000) store.json. A red job here
+          # blocks nothing but is a bell an attacker can ring for free — every failure degrades
+          # to signed=false and one lost store instead.
+          set +e
+          chmod -R u+rw keiko-review-store 2>/dev/null
+          if [ ! -r keiko-review-store/store.json ]; then
+            echo "::notice::no readable store to sign (gate skipped or withheld it) — nothing persisted"
+            echo "signed=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          printf 'pr=%s profile=%s model=%s protocol=%s action=%s\n' \
+            "${STORE_PR}" "${STORE_PROFILE_HASH}" "${STORE_MODEL_ID}" "${STORE_MODEL_PROTOCOL}" "${STORE_ACTION_SHA}" \
+            > keiko-review-store/store.context
+          if cat keiko-review-store/store.context keiko-review-store/store.json 2>/dev/null \
+              | openssl dgst -sha256 -hmac "${STORE_HMAC}" -r \
+              > keiko-review-store/store.json.hmac 2>/dev/null \
+              && [ -s keiko-review-store/store.json.hmac ]; then
+            echo "signed=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "::warning::store signing failed — nothing persisted"
+            echo "signed=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Persist review store
+        if: steps.sign.outputs.signed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ needs.review.outputs.store-name }}
+          path: keiko-review-store
+          retention-days: 7
+          if-no-files-found: error
