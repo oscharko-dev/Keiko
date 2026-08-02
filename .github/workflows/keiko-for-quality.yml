@@ -1,0 +1,117 @@
+name: keiko-for-quality
+
+# ADR-0170. Model-backed review by the external Keiko for Quality bot, published as native
+# review conversations. This workflow adds no required status context: blocking comes solely from
+# GitHub's existing Required Conversation Resolution rule acting on what the reviewer publishes.
+#
+# `pull-requests: write` is enough to submit an APPROVE review, so the platform does not withhold
+# approval — only the pinned action's behaviour does, and that is pinned by a test upstream
+# (ADR-0170 D3). Treat the capability as present when assessing a compromised action.
+#
+# `pull_request_target` is deliberate and is what makes this safe rather than what makes it risky:
+# GitHub takes the workflow definition from the protected base, so a candidate cannot alter what
+# runs. The candidate is never checked out — see the two checkout steps below.
+on:
+  pull_request_target:
+    # `converted_to_draft` and `closed` produce no review of their own — the job condition rejects
+    # both. They are listed so the trigger fires at all: that starts a replacement run whose
+    # concurrency group cancels the review already in flight. Without them, a pull request pulled
+    # back to draft or closed outright keeps a credential-bearing review running, still holding the
+    # environment secrets, still spending model budget, and still able to publish findings onto a
+    # draft or an abandoned pull request until it finishes or hits the job timeout.
+    types:
+      [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed, edited]
+
+# The reviewer needs to read the repository and write review comments. Nothing else. It has no
+# contents-write, checks-write, actions-write, commit, push, or merge authority. Approval is
+# deliberately NOT in that list: as the note above says, `pull-requests: write` can submit an
+# APPROVE review, and only the pinned action's behaviour declines to.
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  # Metadata-only edits get their own group. `cancel-in-progress: false` protects only the RUNNING
+  # member of a group — GitHub still evicts a *pending* run when a newer one enters it. Without the
+  # split, a title edit arriving while a synchronize run is still queued would replace that queued
+  # review with a run whose job then skips, leaving the current head unreviewed.
+  group: >-
+    keiko-for-quality-${{ github.event.pull_request.number }}-${{
+      (github.event.action == 'edited' && github.event.changes.base == null) && 'meta' || 'review'
+    }}
+  # Cancel a superseded review — but NOT for a metadata-only `edited` event. Concurrency is
+  # evaluated when the workflow is triggered, not when the job decides to run, so an unconditional
+  # `true` lets a title or description edit cancel an in-flight review and leave the current head
+  # unreviewed until the arming interlock expires.
+  cancel-in-progress: >-
+    ${{ github.event.action != 'edited' || github.event.changes.base != null }}
+
+jobs:
+  review:
+    name: review
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # This condition is the security-relevant eligibility layer: a job that never starts never has
+    # the environment's secrets materialized. Its evidence is the skipped job in the Actions run,
+    # not a redacted diagnostic — no process runs to emit one. The action re-checks eligibility for
+    # every head that does reach it, which is what decides the base-retarget `edited` case and what
+    # protects the boundary if this condition is ever relaxed.
+    #
+    # The enable switch keeps the reviewer inert until an operator has provisioned the model
+    # secrets, the credential, and the App installation. It is a separate non-sensitive variable
+    # rather than the endpoint itself, because a job condition cannot read a secret. Without it,
+    # merging this workflow would
+    # make every `dev` pull request carry a failing job that no contributor can fix. An inert
+    # reviewer is visibly absent rather than noisily broken — and this reviewer publishes no
+    # required status context, so its absence blocks nothing either way (ADR-0170 D6).
+    #
+    # `state == 'open'` is what makes the `closed` trigger a pure cancellation: the event fires, the
+    # concurrency group evicts the running review, and this job then declines to start a new one.
+    if: >-
+      github.event.pull_request.state == 'open' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == 'dev' &&
+      (github.event.action != 'edited' || github.event.changes.base != null) &&
+      vars.KEIKO_QUALITY_ENABLED == 'true'
+    environment: keiko-for-quality
+    steps:
+      # Check out the TRUSTED BASE. Never `github.event.pull_request.head.sha`: under
+      # pull_request_target that would place candidate-controlled files on disk in a job that holds
+      # a credential.
+      - name: Check out protected base
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Fetch the candidate as Git objects only. Its content becomes readable through plumbing
+      # without ever being written to the working tree.
+      - name: Fetch candidate head as Git objects
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        # --quiet: this step runs before the reviewer, and its output is ordinary Actions output
+        # rather than redacted diagnostics. Keeping it minimal narrows what the job log carries.
+        run: git fetch --quiet --no-tags --no-recurse-submodules origin "pull/${PR_NUMBER}/head"
+
+      - name: Review
+        uses: oscharko-dev/Keiko-for-Quality@4d2238d2a8a616568270d15f08189ab4ec2e5600 # v0.2.0
+        env:
+          # Passed by variable NAME to the action, never as an input value: an input appears in the
+          # step context that every other action in the job can read.
+          KEIKO_QUALITY_MODEL_TOKEN: ${{ secrets.KEIKO_QUALITY_MODEL_TOKEN }}
+        with:
+          profile: .github/keiko-for-quality.json
+          # Secret, not a variable: repository variables are not masked, and an endpoint can be a
+          # private provider address. A secret passed as an input is masked in logs.
+          model_endpoint: ${{ secrets.KEIKO_QUALITY_MODEL_ENDPOINT }}
+          model_id: ${{ vars.KEIKO_QUALITY_MODEL_ID }}
+          model_protocol: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
+          model_token_env: KEIKO_QUALITY_MODEL_TOKEN
+          # A dedicated App identity is what makes marker-based deduplication sound: a marker is a
+          # public string, so suppressing on one authored by anyone else would let a contributor
+          # silence a finding by posting its fingerprint first.
+          app_id: ${{ secrets.KEIKO_QUALITY_APP_ID }}
+          app_private_key: ${{ secrets.KEIKO_QUALITY_APP_PRIVATE_KEY }}
+          target_branches: dev

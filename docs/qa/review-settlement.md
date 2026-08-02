@@ -38,6 +38,13 @@ the wall clock.
 - **Repository `ci`:** parallel tests, coverage, secret, clone, architecture, and supply-chain
   evidence. Repair the complete failure set locally, push one consolidated head, and require every
   dependency to conclude success on that exact candidate.
+- **Keiko for Quality (ADR-0170), when `vars.KEIKO_QUALITY_ENABLED` is `true`:** external
+  SHA-pinned reviewer, no required status. Every published finding blocks until repaired and its
+  conversation is resolved. Settlement is by the run for the **current head**, not by the presence
+  of comments: a run can be absent, cancelled, or expired, and none of those is a clean review —
+  say so rather than treating silence as approval. Its incomplete-review notice is itself a
+  blocking conversation and is resolved by re-running a complete review, never by resolving the
+  thread. Arming interlock and cancellation are ADR-0170 D5.
 
 The expensive mistake this table exists to prevent is discovering findings one CI round at a time.
 Enumerate **every** finding from **every** active producer above in one pass — failing job logs, the Sonar

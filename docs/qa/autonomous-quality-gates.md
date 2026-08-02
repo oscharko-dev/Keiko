@@ -54,6 +54,12 @@ inline finding, GitHub's conversation-resolution requirement blocks merge until 
 resolved. Repair remains mandatory policy, but GitHub's resolved bit alone is not proof of a code
 change in this quota-tolerant interim topology.
 
+Keiko for Quality (ADR-0170) is an external, SHA-pinned reviewer that publishes model-backed review
+conversations when `vars.KEIKO_QUALITY_ENABLED` is `true`. It publishes no required status context,
+so like CodeRabbit it blocks only through conversation resolution — but unlike CodeRabbit its
+absence is silent, because an inert or failed run produces nothing at all. When it is enabled it is
+an active producer and its findings belong in the same single-pass enumeration as every other one.
+
 CodSpeed and Greptile are retired under ADR-0169. Their Apps, workflows, policies, validators, and
 protected contexts are absent. The canaries proved that Greptile quota could omit current-head
 review and that shared-runner CodSpeed comparisons could report materially different regressions

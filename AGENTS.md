@@ -405,6 +405,31 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   are green on the exact current head and every review conversation is resolved (ADR-0135). Green
   gates plus settled review threads ARE the merge decision; there is no human review step and no
   waiting for a person.
+- **Bounded reviewer arming interlock (ADR-0170 D5).** When the Keiko for Quality reviewer is
+  active — that is, when `vars.KEIKO_QUALITY_ENABLED` is `true` and its workflow runs on the pull
+  request — arm auto-merge only after that run for the **current head** has terminated:
+  published its result or failed. If it has not terminated within **35 minutes** of the last
+  required check going green, **cancel the run**, then arm and record the expiry in the PR as a
+  delivery-policy event.
+
+  Cancelling is the load-bearing part, not the duration. `timeout-minutes` bounds how long a job
+  runs _after it starts_ and says nothing about queue time, so no wall-clock number can guarantee a
+  healthy review has finished. Cancelling at expiry **narrows** the window in which a review can
+  publish after integration — it does not close it, because a run mid-publish can complete an
+  in-flight call, and ADR-0170 D6 keeps that as a stated fail-open window.
+
+  A cancellation that fails is not an expiry. If any run for the current head that has not reached a
+  terminal conclusion — queued, requested, waiting on environment protection, or pending, not only
+  in-progress — cannot be cancelled, containment was not established, so auto-merge stays disarmed
+  and the failed
+  cancellation is recorded — arming anyway would restore the full late-publication window the
+  cancellation exists to narrow.
+
+  The wait is bounded on purpose: a reviewer outage may delay integration, never block it
+  indefinitely. A cancelled or expired review is recorded as such and is never described as clean.
+  When `KEIKO_QUALITY_ENABLED` is not `true` the job never starts, the interlock does not apply,
+  and nothing changes.
+
 - **Branch naming** follows `type/short-slug` — e.g. `feat/…`, `fix/…`, `issue/<n>-…`,
   `codex/…`, `claude/…`, `release/…`. Never work directly on `dev`.
 - **Commit subjects** are imperative and conventional-ish (`feat(scope): …`, `fix: …`,
@@ -424,7 +449,11 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   No human approving review is required for `dev`. CodeRabbit reviews every `dev` pull request and
   every subsequent push without auto-pause. Its status is not required because quota can omit a
   current-head review, but every emitted inline finding requests changes and blocks until repaired
-  and its conversation is resolved. Qodo and Keiko for Quality remain retired under ADR-0167.
+  and its conversation is resolved. Qodo remains retired under ADR-0167. **Keiko for Quality is
+  reintroduced by [ADR-0170](docs/adr/ADR-0170-keiko-for-quality-as-an-external-reviewer.md) as an
+  external, SHA-pinned reviewer** — it publishes no required status, its findings block only
+  through conversation resolution, and its product code lives in
+  [oscharko-dev/Keiko-for-Quality](https://github.com/oscharko-dev/Keiko-for-Quality), never here.
   The hosted performance dashboard and quota-paced reviewer evaluated in ADR-0169 are fully
   retired: neither has repository configuration, an installed App, a workflow, or a protected
   context. Sonar remains independently required and revalidated inside `ci`. Full mutation and
