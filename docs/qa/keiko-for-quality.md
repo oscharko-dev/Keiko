@@ -222,8 +222,24 @@ done
 The toggle briefly marks each pull request as a draft. That is visible to watchers, so do it once,
 deliberately, at provisioning time — not as a routine operation.
 
-Then confirm every eligible open pull request has a `keiko-for-quality` run on its **current** head
-before treating the reviewer as active.
+### 5. Confirm coverage, then release the freeze
+
+This is the condition on which `dev` gets unlocked, so state it exactly. For **every** eligible open
+pull request, a `keiko-for-quality` run must exist for that pull request's **current head** and must
+have terminated — published or failed. A run against an earlier head does not count, and neither
+does the absence of findings: a clean review and a run that never started look identical from the
+outside, which is the whole reason this step exists.
+
+If any eligible pull request lacks such a run, the freeze stays on. Retrigger that pull request and
+check again. Do not release on "it probably ran".
+
+There is deliberately **no script here**, and the reason is worth knowing before you write one.
+Under `pull_request_target` the workflow runs against the base, so a run's `head_sha` and
+`head_branch` are `dev`'s — not the pull request's. Matching runs to heads the obvious way
+therefore silently matches nothing, and a check that silently matches nothing reports success. The
+association lives in the run's `pull_requests` array; confirm the query shape against a real run on
+first activation, and only then commit it here. Two shell snippets in this document have already
+shipped with a fail-open defect, and this one gates a branch unlock.
 
 Pin a provider snapshot in `KEIKO_QUALITY_MODEL_ID` where the provider offers one. Behaviour drifts
 behind a stable identifier, and the qualification evidence is bound to the identifier that produced
