@@ -411,8 +411,10 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   publish after integration — it does not close it, because a run mid-publish can complete an
   in-flight call, and ADR-0170 D6 keeps that as a stated fail-open window.
 
-  A cancellation that fails is not an expiry. If any queued or in-progress run for the current head
-  cannot be cancelled, containment was not established, so auto-merge stays disarmed and the failed
+  A cancellation that fails is not an expiry. If any run for the current head that has not reached a
+  terminal conclusion — queued, requested, waiting on environment protection, or pending, not only
+  in-progress — cannot be cancelled, containment was not established, so auto-merge stays disarmed
+  and the failed
   cancellation is recorded — arming anyway would restore the full late-publication window the
   cancellation exists to narrow.
 

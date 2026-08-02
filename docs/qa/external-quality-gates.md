@@ -36,9 +36,10 @@ does not appear in the protected set above and adding it there requires its own 
 It stays inert until the repository variable `KEIKO_QUALITY_ENABLED` is `true`. While active, the
 delivering agent arms auto-merge only after the run for the current head has terminated. If it has
 not terminated within **35 minutes** of the last required check going green, the agent **cancels the
-run first**, then arms, and records the expiry as a delivery-policy event (ADR-0170 D5). If any
-cancellation fails, containment was not established: auto-merge stays disarmed and the failure is
-recorded. Cancelling
+run first** — every run for that head that has not reached a terminal conclusion, not only the ones
+already executing — then arms, and records the expiry as a delivery-policy event (ADR-0170 D5). If
+any cancellation fails, containment was not established: auto-merge stays disarmed and the failure
+is recorded. Cancelling
 narrows the window in which a review can publish after integration; it does not close it, and
 ADR-0170 D6 keeps that as a stated fail-open window. An expired review is never described as clean. Operating detail —
 provisioning, diagnostics, the disable path, and mass disposition — is in

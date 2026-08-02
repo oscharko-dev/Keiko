@@ -100,43 +100,70 @@ fleet is the same hazard as an undisarmed one, and the only safe response to a f
 leave the reviewer off. The same hold applies to the re-enable instruction in the disable section
 below.
 
+Save this as `hold.sh` — it is run **twice**, and the second run is not optional. See below.
+
 ```bash
+#!/usr/bin/env bash
+# Establishes the delivery hold: no eligible pull request may have auto-merge armed.
+#
+# Every loop here is a plain `for` over the main shell, not a `while` fed by a pipe. A `while` at
+# the end of a pipeline runs in a subshell, and `set -e` does not apply inside a command
+# substitution either — so a query that fails for any pull request except the last one lets the
+# compound return a later success, and an empty result then reads as "nothing armed". That is the
+# same defect this repository already fixed once in the cancellation loop; it does not get to
+# reappear in the procedure that guards activation.
 set -euo pipefail
 LIMIT=200
+
 total=$(gh pr list --base dev --state open --limit "$LIMIT" --json number --jq 'length')
 if [ "$total" -ge "$LIMIT" ]; then
   echo "open pull requests reached the query limit ($LIMIT) — raise it; hold NOT established" >&2
   exit 1
 fi
-eligible=$(gh pr list --base dev --state open --limit "$LIMIT" \
+
+if ! eligible=$(gh pr list --base dev --state open --limit "$LIMIT" \
   --json number,isDraft,headRepositoryOwner,headRepository \
   --jq '.[] | select(.isDraft == false)
             | select(.headRepositoryOwner.login == "oscharko-dev" and .headRepository.name == "Keiko")
-            | .number')
-
-# Disarm every one of them. Abort on the first failure: continuing past one leaves an armed pull
-# request behind while the rest of the procedure reports success.
-printf '%s\n' "$eligible" | sed '/^$/d' |
-while read -r n; do
-  gh pr merge --disable-auto "$n" || {
-    echo "FAILED to disable auto-merge on #$n — hold NOT established" >&2
-    exit 1
-  }
-done
-
-# Then verify, rather than trust the loop. A disable that silently no-ops, or a pull request armed
-# between the list and the loop, is exactly what this catches.
-armed=$(printf '%s\n' "$eligible" | sed '/^$/d' |
-  while read -r n; do
-    gh pr view "$n" --json number,autoMergeRequest \
-      --jq 'select(.autoMergeRequest != null) | .number'
-  done)
-if [ -n "$armed" ]; then
-  echo "still armed after disarm: $armed — hold NOT established, do NOT enable" >&2
+            | .number'); then
+  echo "FAILED to list eligible pull requests — hold NOT established" >&2
   exit 1
 fi
-echo "hold established: no eligible pull request has auto-merge armed"
+
+# Disarm. Abort on the first failure: continuing past one leaves an armed pull request behind
+# while the rest of the procedure reports success.
+for n in $eligible; do
+  if ! gh pr merge --disable-auto "$n"; then
+    echo "FAILED to disable auto-merge on #$n — hold NOT established" >&2
+    exit 1
+  fi
+done
+
+# Verify, rather than trust the loop above. This catches a disable that silently no-ops and a pull
+# request armed between the listing and the loop. Each query is checked on its own line.
+armed=""
+for n in $eligible; do
+  if ! state=$(gh pr view "$n" --json autoMergeRequest \
+                 --jq 'if .autoMergeRequest == null then "off" else "on" end'); then
+    echo "FAILED to read the auto-merge state of #$n — hold NOT established" >&2
+    exit 1
+  fi
+  if [ "$state" = "on" ]; then
+    armed="$armed #$n"
+  fi
+done
+if [ -n "$armed" ]; then
+  echo "still armed after disarm:$armed — hold NOT established, do NOT enable" >&2
+  exit 1
+fi
+echo "hold established over $(printf '%s\n' "$eligible" | sed '/^$/d' | wc -l | tr -d ' ') pull request(s)"
 ```
+
+**Run it again after setting the variable, before releasing the hold.** A pull request opened or
+marked ready between the first run and the variable change was never disarmed _and_ its activity
+event fired while the reviewer was still off, so it has neither a review nor a hold — and it can
+integrate while the retrigger loop below is still working through the list. The second run disarms
+those newcomers; the retrigger loop then covers them like everything else.
 
 Re-arm only once each current head has a terminated review under the ADR-0170 D5 interlock.
 

@@ -48,6 +48,7 @@
     "eslint.config.*",
     "**/{.prettierrc*,prettier.config.*,.prettierignore}",
     "**/*.sql",
+    ".gitignore",
     ".env.example",
     "docs/adr/*.md"
   ],
@@ -85,7 +86,8 @@
     "CODEX.md",
     "docs/qa/**/*.md",
     "docs/security-and-audit-boundaries.md",
-    "**/*.sql"
+    "**/*.sql",
+    ".gitignore"
   ],
   "generated": [
     "**/dist/**",
@@ -107,7 +109,7 @@
     },
     {
       "pattern": "**/*.{png,jpg,jpeg,gif,ico,icns,webp,woff,woff2,ttf,pdf,zip,wasm}",
-      "reason": "binary assets carry no reviewable source. SVG is deliberately NOT here: it is text and can carry <script>, so it is review-relevant above. Property lists likewise \u2014 a macOS entitlements plist is a privilege boundary."
+      "reason": "binary assets carry no reviewable source. SVG is deliberately NOT here: it is text and can carry <script>, so it is review-relevant above. Property lists likewise — a macOS entitlements plist is a privilege boundary."
     },
     {
       "pattern": "**/*.{md,mdx,txt,csv,lock,snap,map,yml,yaml,json,toml,properties}",
@@ -115,7 +117,7 @@
     },
     {
       "pattern": "**/{.gitignore,.editorconfig,.npmignore,.dockerignore}",
-      "reason": "tooling ignore and editor files. Deliberately the LAST entry rather than a catch-all: an unmatched path must reach inventory.unclassified_path and fail the run, which a `**/*` rule made unreachable. Note .gitattributes is NOT here \u2014 it can mark sources binary and hide them from review. Nor are the Prettier controls: `prettier --check .` is a required gate, and both its rule file and its ignore file steer that gate's own verdict, so they are review-relevant above."
+      "reason": "package-level tooling ignore and editor files. Three things are deliberately NOT here. The ROOT .gitignore: its entries protect .keiko/ audit evidence and /only-for-internal-use/, and no deterministic gate pins them. .gitattributes: it can mark sources binary and hide them from review. The Prettier controls: they steer a required gate's own verdict. Also LAST rather than a catch-all, so an unmatched path reaches inventory.unclassified_path and fails the run."
     }
   ],
   "benignWarnings": []

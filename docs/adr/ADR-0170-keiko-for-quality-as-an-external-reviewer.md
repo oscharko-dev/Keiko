@@ -148,8 +148,13 @@ part of this adoption.
 
 ADR-0135 is amended. The delivering agent arms GitHub native auto-merge only after the Keiko for
 Quality run for the current head has terminated — published its result or failed — or after a
-documented bounded wait has expired **and every queued or in-progress run for that head has been
-cancelled**.
+documented bounded wait has expired **and every run for that head that has not reached a terminal conclusion has been cancelled**.
+
+"Not terminal" is the whole set, not two named statuses. A run can be `queued`, `requested`,
+`waiting` on environment protection, or `pending` — none of those has produced a result, and each
+can still start and publish after integration. Naming only `queued` and `in_progress` would let an
+agent satisfy the wording while leaving a run waiting on the very environment gate that holds the
+model credential.
 
 Cancellation before arming is part of the decision, not an operating convenience. Without it the
 expiry branch arms while a review is still running, so the reviewer can publish a binding
