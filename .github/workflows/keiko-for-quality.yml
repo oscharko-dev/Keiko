@@ -120,20 +120,20 @@ jobs:
         run: mkdir -p keiko-review-store
 
       # Finds the newest store artifact an EARLIER RUN OF THIS WORKFLOW uploaded FOR THIS PULL
-      # REQUEST. Three producer checks, because the artifact name alone proves nothing (names are
-      # repository-wide and attacker-choosable): the producing run's event must be
-      # `pull_request_target` — a candidate workflow file can never generate that event, since
-      # the trigger always executes the protected base's file; its workflow path must be this
-      # workflow — so a future second pull_request_target workflow cannot cross-feed stores; and
-      # it must belong to this pull request — matched against the run's `pull_requests` list,
-      # falling back to its head branch (the API omits the list on some runs), so another PR's
-      # store can never replay per-file decisions against unrelated content. The name additionally
-      # partitions by profile hash and model id, so a configuration change starts from an empty
-      # store even before these checks run. Beneath all of that, the action re-derives every
-      # entry's digests on load and rejects mismatches: a replayed entry is exactly as untrusted
-      # as the run that produced it (pinned upstream). No match — first push, expired retention,
-      # nothing complete yet, or a config change — means an empty store and a normal full review;
-      # memoization is an optimization, never a dependency.
+      # REQUEST. These producer checks NARROW the candidate set; none of them authenticates it —
+      # a pull request opened against a contributor-controlled base receives pull_request_target
+      # with that base's candidate-authored copy of this very file (same event, same path), and a
+      # retarget to dev keeps its artifacts name-eligible. Authentication is the HMAC verify step
+      # after the download: only runs holding the keiko-for-quality environment (protected
+      # branches only) can sign, so a store that verifies was produced by dev's own workflow
+      # file. The predicates still earn their keep as cheap selection: same workflow path (no
+      # cross-feed from other pull_request_target workflows), membership in this pull request
+      # (pull_requests list, head branch+repository as fallback where the API omits it), and a
+      # name partitioned by profile hash and model identity so a configuration change starts
+      # empty. Beneath both layers the action re-derives every entry's digests on load —
+      # integrity under authenticity. No match, or a store that fails the MAC — first push,
+      # expired retention, config change, tampering — means an empty store and a normal
+      # full review; memoization is an optimization, never a dependency.
       - name: Locate previous review store
         id: locate
         env:
@@ -190,6 +190,13 @@ jobs:
         env:
           STORE_HMAC: ${{ secrets.KEIKO_QUALITY_STORE_HMAC }}
         run: |
+          # An absent environment secret arrives as an empty string, and openssl happily HMACs
+          # with an empty — publicly known — key, which would silently void this entire boundary.
+          # A missing key is a provisioning failure and must be loud, not a quiet degrade.
+          if [ "${#STORE_HMAC}" -lt 32 ]; then
+            echo "::error::KEIKO_QUALITY_STORE_HMAC is missing or too short — provision it in the keiko-for-quality environment"
+            exit 1
+          fi
           STORE="keiko-review-store/store.json"
           SIG="keiko-review-store/store.json.hmac"
           if [ -f "${STORE}" ] && [ -f "${SIG}" ]; then
@@ -257,9 +264,13 @@ jobs:
         if: steps.review.outputs.outcome == 'complete'
         env:
           STORE_HMAC: ${{ secrets.KEIKO_QUALITY_STORE_HMAC }}
-        run: >-
-          openssl dgst -sha256 -hmac "${STORE_HMAC}" -r keiko-review-store/store.json
-          > keiko-review-store/store.json.hmac
+        run: |
+          if [ "${#STORE_HMAC}" -lt 32 ]; then
+            echo "::error::KEIKO_QUALITY_STORE_HMAC is missing or too short — refusing to sign with a weak or empty key"
+            exit 1
+          fi
+          openssl dgst -sha256 -hmac "${STORE_HMAC}" -r keiko-review-store/store.json \
+            > keiko-review-store/store.json.hmac
 
       - name: Persist review store
         if: steps.review.outputs.outcome == 'complete'
