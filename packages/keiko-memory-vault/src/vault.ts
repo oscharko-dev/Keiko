@@ -69,7 +69,11 @@ import {
   gateMemoryScope,
 } from "./validate.js";
 import { redactMemoryEdge, redactMemoryRecord, redactTombstone } from "./redact-record.js";
-import { MemoryStorageError, MemoryStoragePreconditionError } from "./errors.js";
+import {
+  MemoryStorageError,
+  MemoryStoragePreconditionError,
+  MemoryStorageValidationError,
+} from "./errors.js";
 import {
   memoryBodySuppressionHash,
   memoryBodySuppressionHashForVault,
@@ -625,6 +629,17 @@ type TombstoneAndAccessOps = Pick<
   | "getAccessStats"
 >;
 
+// The public route requests one look-ahead row beyond its maximum 200-item response page so it can
+// issue a continuation cursor without an unbounded count/materialization read.
+const MAX_TOMBSTONE_LEDGER_PAGE_ROWS = 201;
+
+function gateTombstonePageLimit(limit: number): number {
+  if (!Number.isSafeInteger(limit) || limit <= 0 || limit > MAX_TOMBSTONE_LEDGER_PAGE_ROWS) {
+    throw new MemoryStorageValidationError("Invalid tombstone page limit.", []);
+  }
+  return limit;
+}
+
 function validatedTombstonePage(
   db: DatabaseSync,
   opts: ResolvedOptions,
@@ -633,7 +648,7 @@ function validatedTombstonePage(
   after: MemoryTombstoneLedgerCursor | undefined,
 ): MemoryTombstonePage {
   for (const scope of scopes) gateMemoryScope(scope);
-  return listTombstonesPageRows(db, scopes, opts.cipher, limit, after);
+  return listTombstonesPageRows(db, scopes, opts.cipher, gateTombstonePageLimit(limit), after);
 }
 
 function buildEdgeOps(db: DatabaseSync, opts: ResolvedOptions): EdgeOps {

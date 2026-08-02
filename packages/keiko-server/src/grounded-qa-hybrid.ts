@@ -1005,8 +1005,8 @@ function folderCitationCount(
 
 function hashString32(value: string): string {
   let hash = 0x811c9dc5;
-  for (const character of value) {
-    hash ^= character.codePointAt(0) ?? 0;
+  for (const codeUnit of value.split("")) {
+    hash ^= codeUnit.codePointAt(0) ?? 0;
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
@@ -1669,19 +1669,9 @@ async function assembleHybridNoEvidenceRoute(
     ids: { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
     sourceEvidenceAvailable: false,
   });
-  const finalAnswer =
-    ctx.answerOnlyContextAvailable === true
-      ? await applyHybridEntailment(
-          ctx,
-          answer,
-          assistant.content,
-          meta.folderResult.retrieved,
-          meta.connectorResult.retrieved,
-        )
-      : answer;
   const previewCitations = selectedConnectorPreviewCitations(store, selected, ctx.deps.redactor);
-  ctx.deps.store.attachGroundedAnswer(assistantMessage.id, finalAnswer, previewCitations);
-  return { status: 200, body: finalAnswer };
+  ctx.deps.store.attachGroundedAnswer(assistantMessage.id, answer, previewCitations);
+  return { status: 200, body: answer };
 }
 
 export async function runHybridGroundedAsk(ctx: HybridGroundedAskCtx): Promise<RouteResult> {

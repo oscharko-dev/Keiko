@@ -363,7 +363,7 @@ function reportProjectTrustGrantFailure(
   deps: UiHandlerDeps,
   correlationId: string,
   error: unknown,
-): void {
+): string {
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
@@ -378,6 +378,7 @@ function reportProjectTrustGrantFailure(
       },
     }),
   );
+  return correlationId;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -412,7 +413,19 @@ export async function handleCreateProject(
     try {
       deps.workspaceScriptTrust?.grant(project.path);
     } catch (error) {
-      reportProjectTrustGrantFailure(deps, ctx.correlationId ?? randomUUID(), error);
+      const correlationId = reportProjectTrustGrantFailure(
+        deps,
+        ctx.correlationId ?? randomUUID(),
+        error,
+      );
+      return {
+        status: 500,
+        body: errorBody(
+          "PROJECT_TRUST_GRANT_FAILED",
+          "The project was registered but remains restricted; retry to repair workspace trust.",
+          correlationId,
+        ),
+      };
     }
     return {
       status: 201,

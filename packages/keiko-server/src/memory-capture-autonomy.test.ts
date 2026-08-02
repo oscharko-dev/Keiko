@@ -364,7 +364,7 @@ describe("mode-aware memory capture journey", () => {
       tombstone: true,
       forgetterSurface: "test",
       reason: "user-request",
-      nowMs: Date.now() + 1,
+      nowMs: existing.updatedAt + 1,
     });
 
     const actions = await collectMemoryActions(deps, request, ctx);

@@ -401,7 +401,7 @@ interface FetchConfigResponse {
 
 let configRequest: Promise<FetchConfigResponse> | undefined;
 
-export function clearConfigCacheForTests(): void {
+export function resetConfigRequestCacheForTests(): void {
   configRequest = undefined;
 }
 
@@ -430,7 +430,7 @@ export type { FetchConfigResponse };
 
 let modelsRequest: Promise<{ models: ModelCapability[] }> | undefined;
 
-export function clearModelCacheForTests(): void {
+export function resetModelRequestCacheForTests(): void {
   modelsRequest = undefined;
 }
 
@@ -641,8 +641,8 @@ export async function setupGateway(body: GatewaySetupInput): Promise<GatewaySetu
     method: "POST",
     body: JSON.stringify(body),
   });
-  clearConfigCacheForTests();
-  clearModelCacheForTests();
+  resetConfigRequestCacheForTests();
+  resetModelRequestCacheForTests();
   invalidateVoiceCapability();
   return response;
 }
@@ -668,7 +668,6 @@ export type VerifiedGatewayCapabilityFields = Partial<
     | "structuredOutput"
     | "supportsImageInput"
     | "supportsDocumentInput"
-    | "contextWindow"
   >
 >;
 
@@ -680,8 +679,8 @@ export async function applyGatewayVerifiedCapabilities(
     `/api/gateway/capabilities/${encodeURIComponent(modelId)}`,
     { method: "PATCH", body: JSON.stringify({ fields }) },
   );
-  clearConfigCacheForTests();
-  clearModelCacheForTests();
+  resetConfigRequestCacheForTests();
+  resetModelRequestCacheForTests();
   invalidateVoiceCapability();
   return response;
 }

@@ -795,6 +795,24 @@ describe("FIX G/H — oversized request body returns 413 PAYLOAD_TOO_LARGE", () 
 });
 
 describe("Security #1 — workflow workspaceRoot project-allowlist check", () => {
+  it("requires a live paired app session before launching verify", async () => {
+    await start(fakeModel("noop"), { appSessionPaired: false });
+    const res = await fetch(`${base()}/api/runs`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        taskType: "verify",
+        input: { workspaceRoot: workspace },
+        modelId: "m",
+      }),
+    });
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      error: { code: "VERIFY_AUTHORITY_REQUIRED" },
+    });
+  });
+
   it("returns 403 WORKSPACE_NOT_REGISTERED for verify with an unregistered workspaceRoot", async () => {
     await start(fakeModel("noop"), { registerWorkspace: false });
     const res = await fetch(`${base()}/api/runs`, {

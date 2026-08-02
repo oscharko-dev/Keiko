@@ -45,5 +45,16 @@ describe("workspace root object identity", () => {
       digest: undefined,
       unsupported: true,
     });
+    expect(workspaceRootObjectIdentityFor({ dev: 7n, ino: 11n, birthtimeNs: -1n })).toEqual({
+      digest: undefined,
+      unsupported: true,
+    });
+  });
+
+  it("marks a positive creation identity as supported", () => {
+    const identity = workspaceRootObjectIdentityFor({ dev: 7n, ino: 11n, birthtimeNs: 1n });
+
+    expect(identity.unsupported).toBe(false);
+    expect(identity.digest).toMatch(/^[0-9a-f]{64}$/u);
   });
 });

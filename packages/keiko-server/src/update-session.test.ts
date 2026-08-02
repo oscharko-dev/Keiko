@@ -606,6 +606,34 @@ describe("UpdateSessionManager", () => {
     }
   });
 
+  it("caps child-PID-only lock ownership after the parent disappears", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-reused-child-pid-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      await writeFile(
+        lockPath,
+        `${JSON.stringify({
+          sessionId: "abandoned",
+          targetVersion: "0.2.10",
+          startedAt: "2026-06-30T00:00:00.000Z",
+          pid: 111,
+          childPid: 222,
+        })}\n`,
+        { mode: 0o600 },
+      );
+      const lock = createFileUpdateSessionLock(lockPath, {
+        staleMs: 1_000,
+        now: () => Date.parse("2026-06-30T00:00:02.000Z"),
+        pidAlive: (pid) => pid === 222,
+      });
+
+      expect(lock.isLocked()).toBe(false);
+      expect(lock.acquire(lockRecord("replacement"))).toBe(true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("namespaces file locks under the Keiko state directory", async () => {
     const firstStateDir = await mkdtemp(join(tmpdir(), "keiko-update-state-a-"));
     const secondStateDir = await mkdtemp(join(tmpdir(), "keiko-update-state-b-"));

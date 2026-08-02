@@ -1210,7 +1210,6 @@ function memoryCaptureProjection(record: MemoryRecord): string {
     payload: record.payload ?? null,
     provenance: { ...record.provenance, capturedAt: 0 },
     validity: { ...record.validity, validFrom: 0 },
-    status: record.status,
     pinned: record.pinned,
     staleReason: record.staleReason ?? null,
     retentionHint: record.retentionHint ?? null,

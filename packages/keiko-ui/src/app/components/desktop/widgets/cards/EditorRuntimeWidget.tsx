@@ -6591,7 +6591,10 @@ function EditorRuntimeWidget({
   );
 
   const localHistoryProtectionGuidance = (
-    reason: "workspace-unavailable" | "filesystem-identity-unsupported" | "history-unavailable",
+    reason: Extract<
+      NonNullable<FilesContentResponse["localHistoryProtection"]>,
+      { readonly status: "degraded" }
+    >["reason"],
   ): string => {
     switch (reason) {
       case "workspace-unavailable":

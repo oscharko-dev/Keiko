@@ -572,23 +572,47 @@ export function resolveMaintenanceAutonomyMode(deps: UiHandlerDeps): CodingWorkb
   }
 }
 
+function reportRetentionPolicyFailure(deps: UiHandlerDeps, error: unknown): string {
+  const correlationId = randomUUID();
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation: "memory.maintenance.retention-policy",
+      source: "memory-maintenance-handlers.resolveMemoryRetentionPolicy",
+      error,
+      redact: (summary): string => String(deps.redactor(summary)),
+    }),
+  );
+  return correlationId;
+}
+
 export function resolveMemoryRetentionPolicy(
   deps: UiHandlerDeps,
 ): MemoryRetentionPolicy | undefined {
   try {
     return memoryRetentionPolicy(deps.env);
   } catch (error) {
-    emitServerDiagnostic(
-      deps.diagnostics,
-      serverDiagnosticFromError({
-        correlationId: randomUUID(),
-        operation: "memory.maintenance.retention-policy",
-        source: "memory-maintenance-handlers.resolveMemoryRetentionPolicy",
-        error,
-        redact: (summary): string => String(deps.redactor(summary)),
-      }),
-    );
+    reportRetentionPolicyFailure(deps, error);
     return undefined;
+  }
+}
+
+function manualRetentionPolicy(
+  deps: UiHandlerDeps,
+): MemoryRetentionPolicy | undefined | RouteResult {
+  try {
+    return memoryRetentionPolicy(deps.env);
+  } catch (error) {
+    const correlationId = reportRetentionPolicyFailure(deps, error);
+    return {
+      status: 500,
+      body: errorBody(
+        "MEMORY_RETENTION_CONFIG_INVALID",
+        "Memory retention configuration is invalid.",
+        correlationId,
+      ),
+    };
   }
 }
 
@@ -597,7 +621,8 @@ export function handleRunMaintenance(_ctx: RouteContext, deps: UiHandlerDeps): R
   if (isRouteResult(vault)) return vault;
   try {
     const multipliers = memorySemanticizationMultipliers(deps.env);
-    const retentionPolicy = resolveMemoryRetentionPolicy(deps);
+    const retentionPolicy = manualRetentionPolicy(deps);
+    if (isRouteResult(retentionPolicy)) return retentionPolicy;
     const counts = runMemoryMaintenance(vault, memoryMaintenanceAuditSink(deps), {
       autonomyMode: resolveMaintenanceAutonomyMode(deps),
       ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),

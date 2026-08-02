@@ -344,7 +344,7 @@ function workflowCapabilityFields(
   if (!workflowEligibleModelIds.includes(modelId)) {
     return {
       workflowEligible: false,
-      preferredUseCases: baseCapability.preferredUseCases,
+      preferredUseCases: (existing ?? baseCapability).preferredUseCases,
     };
   }
   return {
@@ -353,15 +353,23 @@ function workflowCapabilityFields(
   };
 }
 
-function applyMistralSetupDefaults(modelId: string, capability: ModelCapability): ModelCapability {
+const MISTRAL_TOOL_CALLING_LIMITATION =
+  "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it";
+
+function applyMistralSetupDefaults(
+  modelId: string,
+  capability: ModelCapability,
+  toolCallingKnown: boolean,
+): ModelCapability {
   if (!modelId.toLowerCase().includes("mistral")) return capability;
+  const knownLimitations = capability.knownLimitations.filter(
+    (limitation) => limitation !== MISTRAL_TOOL_CALLING_LIMITATION,
+  );
+  if (toolCallingKnown) return { ...capability, knownLimitations };
   return {
     ...capability,
     toolCalling: false,
-    knownLimitations: [
-      ...capability.knownLimitations,
-      "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it",
-    ],
+    knownLimitations: [...knownLimitations, MISTRAL_TOOL_CALLING_LIMITATION],
   };
 }
 
@@ -376,10 +384,11 @@ function createDefaultSetupCapability(
       ? createDefaultEmbeddingCapability(modelId)
       : createDefaultChatCapability(modelId);
   const existing = existingCapabilityForSetup(options.current, modelId, baseUrl);
+  const discovered = options.modelMetadata?.[modelId];
   const capability: ModelCapability = {
     ...baseCapability,
     ...existing,
-    ...discoveredCapabilityFields(options.modelMetadata?.[modelId]),
+    ...discoveredCapabilityFields(discovered),
     id: modelId,
     kind: baseCapability.kind,
     ...workflowCapabilityFields(
@@ -389,7 +398,11 @@ function createDefaultSetupCapability(
       options.workflowEligibleModelIds,
     ),
   };
-  return applyMistralSetupDefaults(modelId, capability);
+  return applyMistralSetupDefaults(
+    modelId,
+    capability,
+    existing !== undefined || discovered?.toolCalling !== undefined,
+  );
 }
 
 function providerRaw(
@@ -571,7 +584,7 @@ function numberFieldFromRecords(
   for (const record of records) {
     for (const field of fields) {
       const value = record[field];
-      if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+      if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
     }
   }
   return undefined;
@@ -579,8 +592,8 @@ function numberFieldFromRecords(
 
 function metadataFromDiscoveryItem(item: Record<string, unknown>): GatewayDiscoveredModelMetadata {
   const records = discoveryRecords(item);
-  const contextWindow = numberFieldFromRecords(records, ["max_input_tokens", "max_tokens"]);
-  const maxOutputTokens = numberFieldFromRecords(records, ["max_output_tokens"]);
+  const contextWindow = numberFieldFromRecords(records, ["max_input_tokens"]);
+  const maxOutputTokens = numberFieldFromRecords(records, ["max_output_tokens", "max_tokens"]);
   const toolCalling = optionalBooleanFieldFromRecords(records, [
     "supports_function_calling",
     "supportsFunctionCalling",
@@ -3491,19 +3504,13 @@ const VERIFIED_CAPABILITY_FIELDS = new Set<keyof VerifiedModelCapabilityFields>(
   "structuredOutput",
   "supportsImageInput",
   "supportsDocumentInput",
-  "contextWindow",
 ]);
 
 interface CapabilityApplyRequest {
   readonly fields: VerifiedModelCapabilityFields;
 }
 
-function verifiedFieldValue(value: unknown, field: string): boolean | number | undefined {
-  if (field === "contextWindow") {
-    return typeof value === "number" && Number.isSafeInteger(value) && value > 0
-      ? value
-      : undefined;
-  }
+function verifiedFieldValue(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
@@ -3529,7 +3536,7 @@ function parseCapabilityApplyRequest(value: unknown): CapabilityApplyRequest | R
         body: errorBody("BAD_REQUEST", "An unsupported capability field was supplied."),
       };
     }
-    const parsed = verifiedFieldValue(rawValue, field);
+    const parsed = verifiedFieldValue(rawValue);
     if (parsed === undefined) {
       return { status: 400, body: errorBody("BAD_REQUEST", "A capability value is invalid.") };
     }
@@ -3562,15 +3569,65 @@ function replaceModelCapability(
   modelId: string,
   fields: VerifiedModelCapabilityFields,
 ): GatewayConfig | undefined {
-  const capabilities = listConfiguredCapabilities(config);
-  const current = capabilities.find((capability) => capability.id === modelId);
+  const current = findConfiguredCapability(config, modelId);
   if (current === undefined) return undefined;
+  const capabilities = [...(config.capabilities ?? [])];
+  const explicitIndex = capabilities.findIndex((capability) => capability.id === modelId);
+  const knownLimitations =
+    current.id.toLowerCase().includes("mistral") && fields.toolCalling === true
+      ? current.knownLimitations.filter(
+          (limitation) => limitation !== MISTRAL_TOOL_CALLING_LIMITATION,
+        )
+      : current.knownLimitations;
+  const replacement = { ...current, ...fields, knownLimitations };
+  if (explicitIndex === -1) capabilities.push(replacement);
+  else capabilities[explicitIndex] = replacement;
   return {
     ...config,
-    capabilities: capabilities.map((capability) =>
-      capability.id === modelId ? { ...capability, ...fields } : capability,
+    capabilities,
+  };
+}
+
+function staleCapabilityObservationResult(): RouteResult {
+  return {
+    status: 409,
+    body: errorBody(
+      "GATEWAY_CAPABILITY_OBSERVATION_STALE",
+      "Run readiness again before applying verified capability values.",
     ),
   };
+}
+
+function capabilityObservationMatches(
+  gatewayConfig: RuntimeGatewayConfig,
+  modelId: string,
+  fields: VerifiedModelCapabilityFields,
+  generation: number,
+  current: GatewayConfig,
+): boolean {
+  const observation = gatewayConfig.verifiedCapability(modelId);
+  return (
+    observation?.generation === generation &&
+    fieldsMatchObservation(fields, observation.fields) &&
+    gatewayConfig.generation() === generation &&
+    gatewayConfig.current() === current
+  );
+}
+
+function persistVerifiedCapabilityUpdate(
+  gatewayConfig: RuntimeGatewayConfig,
+  deps: UiHandlerDeps,
+  modelId: string,
+  generation: number,
+  updated: GatewayConfig,
+): RouteResult {
+  if (gatewayConfig.clearVerifiedCapability?.(modelId, generation) !== true) {
+    return staleCapabilityObservationResult();
+  }
+  const raw = rawConfigFromCurrent(updated, updated.figma?.accessToken);
+  persistGatewayConfig(raw, gatewayConfig.storagePath, deps);
+  gatewayConfig.set(updated, true);
+  return { status: 200, body: { ok: true, model: findConfiguredCapability(updated, modelId) } };
 }
 
 /** Applies only generation-current live observations after an explicit, human-confirmed request. */
@@ -3580,25 +3637,17 @@ export async function handleApplyGatewayVerifiedCapabilities(
 ): Promise<RouteResult> {
   const modelId = decodeModelId(ctx.params.modelId);
   const gatewayConfig = deps.gatewayConfig;
-  const current = currentGatewayConfig(deps);
   if (modelId === undefined) {
     return { status: 400, body: errorBody("BAD_REQUEST", "A valid model id is required.") };
   }
-  if (gatewayConfig === undefined || current === undefined) return gatewayUnavailableResult();
+  if (gatewayConfig === undefined) return gatewayUnavailableResult();
+  const current = gatewayConfig.current();
+  const generation = gatewayConfig.generation();
+  if (current === undefined) return gatewayUnavailableResult();
   const bodyResult = await readJsonSetupBody(ctx);
   if ("status" in bodyResult) return bodyResult;
   const request = parseCapabilityApplyRequest(bodyResult.parsed);
   if ("status" in request) return request;
-  const observation = gatewayConfig.verifiedCapability(modelId);
-  if (observation === undefined || !fieldsMatchObservation(request.fields, observation.fields)) {
-    return {
-      status: 409,
-      body: errorBody(
-        "GATEWAY_CAPABILITY_OBSERVATION_STALE",
-        "Run readiness again before applying verified capability values.",
-      ),
-    };
-  }
   const updated = replaceModelCapability(current, modelId, request.fields);
   if (updated === undefined) {
     return {
@@ -3606,8 +3655,8 @@ export async function handleApplyGatewayVerifiedCapabilities(
       body: errorBody("MODEL_NOT_FOUND", "The configured model was not found."),
     };
   }
-  const raw = rawConfigFromCurrent(updated, updated.figma?.accessToken);
-  persistGatewayConfig(raw, gatewayConfig.storagePath, deps);
-  gatewayConfig.set(updated, true);
-  return { status: 200, body: { ok: true, model: findConfiguredCapability(updated, modelId) } };
+  if (!capabilityObservationMatches(gatewayConfig, modelId, request.fields, generation, current)) {
+    return staleCapabilityObservationResult();
+  }
+  return persistVerifiedCapabilityUpdate(gatewayConfig, deps, modelId, generation, updated);
 }

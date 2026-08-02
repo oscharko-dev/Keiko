@@ -50,6 +50,7 @@ import {
 } from "./agent-run-governance.js";
 import { QueueEventSink } from "./sink.js";
 import { executeVerificationEnforced } from "./editor/verificationExecution.js";
+import type { ExecuteVerificationResult } from "./editor/verificationExecution.js";
 import type { AppliableSnapshot, RunRegistry, RunStatus } from "./runs.js";
 import {
   persistWorkflowEvidence,
@@ -90,6 +91,11 @@ interface EngineContext {
   readonly memoryVault?: MemoryVaultStore | undefined;
   readonly memoryAuditRedactString?: ((input: string) => string) | undefined;
   readonly memoryCustomerIdentifierMatchers?: readonly RegExp[] | undefined;
+  readonly verificationExecutor?:
+    | ((
+        args: Parameters<typeof executeVerificationEnforced>[0],
+      ) => Promise<ExecuteVerificationResult>)
+    | undefined;
 }
 
 // Assembles the workflow/task input by overlaying the request-level fields onto the client `input`
@@ -422,7 +428,8 @@ async function runVerify(
   const plan = buildVerificationPlan(workspace, catalog, {
     ...(targetFiles === undefined ? {} : { changedFiles: targetFiles }),
   });
-  const { report } = await executeVerificationEnforced({ plan, workspace, signal });
+  const execute = ctx.verificationExecutor ?? executeVerificationEnforced;
+  const { report } = await execute({ plan, workspace, signal });
   return report;
 }
 

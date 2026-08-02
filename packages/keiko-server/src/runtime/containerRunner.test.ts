@@ -403,7 +403,7 @@ describe("ContainerRunnerManager — governance", () => {
     });
 
     const catalog = await manager.listCatalog(workspaceRoot);
-    expect(catalog).toMatchObject({ engineAvailable: false, tasks: [] });
+    expect(catalog).toMatchObject({ engineAvailable: true, tasks: [] });
     await expect(
       manager.execute({ projectId: workspaceRoot, taskId: PILOT_ID }),
     ).rejects.toMatchObject({ code: "CONTAINER_ENGINE_UNAVAILABLE" });

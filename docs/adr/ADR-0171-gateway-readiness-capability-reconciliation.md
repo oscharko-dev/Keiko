@@ -22,10 +22,14 @@ downgrade every consumer and violate the human-control invariant.
 ### D1 — Readiness observations are separate from configured capability
 
 `RuntimeGatewayConfig` owns a per-model, per-field observation ledger alongside its existing coarse
-verification state. Passed probes record `true`; only the categorical `unsupported` result records
-`false`. Failed and skipped probes record no field value. A successful long-context probe may record
-the tested token count. Observations contain no response body, endpoint, credential, or customer
-content.
+verification state. Passed categorical probes record `true`; only the categorical `unsupported`
+result records `false`. Failed and skipped probes record no field value. Repeated observations in
+the same generation merge by field so probing one capability does not erase another current result.
+Observations contain no response body, endpoint, credential, or customer content.
+
+A successful long-context probe proves only that the model accepted at least the tested token count.
+It does not establish the exact context window and is therefore displayed as readiness evidence but
+is never recorded or offered as a configurable `contextWindow` replacement.
 
 Configured `GatewayConfig.capabilities` remains the durable product configuration and is never
 mutated merely because readiness ran.
@@ -41,14 +45,19 @@ becoming durable configuration truth.
 
 ### D3 — Reconciliation is explicit and server-validated
 
-Settings compares the current model capability with the readiness report, renders each disagreement,
-and offers an explicit **Apply verified values** action. The UI asks the local human for confirmation.
-The PATCH request contains only disagreeing fields.
+Settings compares the current model capability with the readiness report, renders each categorical
+disagreement, and offers an explicit **Apply verified values** action. The UI asks the local human
+for confirmation in an accessible in-app dialog. The PATCH request contains only the selected
+disagreeing fields; it cannot expand an inherited/default capability set into unrelated explicit
+overrides.
 
 The server accepts a field only when its exact value exists in the current generation's observation
-ledger for that model. Missing, stale, invented, or mismatched values fail closed. A successful apply
-persists the sealed gateway configuration through the existing credential-safe writer, replaces the
-runtime generation, and consequently clears the observations it consumed.
+ledger for that model and both the configuration object and generation still match the state captured
+before the request body was read. Missing, stale, invented, mismatched, or concurrently superseded
+values fail closed. The server atomically claims and consumes that model's observation before it
+persists the sealed gateway configuration through the existing credential-safe writer. A persistence
+failure does not restore replayable evidence; the operator reruns readiness before retrying. A
+successful write replaces the runtime generation and clears every remaining observation.
 
 ### D4 — Whole-gateway verification remains independent
 
@@ -62,6 +71,8 @@ were specifically observed.
 - Capability consumers keep using deliberate persisted configuration rather than transient traffic.
 - Operators can see and reconcile contradictions without editing local files.
 - A stale browser or delayed probe cannot apply values measured against another configuration.
+- A failed persistence attempt cannot replay a previously authorized observation.
+- A context-window lower bound cannot silently shrink a correctly configured model capacity.
 - Readiness must be rerun after restart or configuration replacement, which is intentional because
   no current live observation exists then.
 

@@ -259,6 +259,7 @@ describe("handleBuildVoiceRecap", () => {
       includeExpired: true,
     });
     expect(accepted).toHaveLength(1);
+    expect(body.acceptedIds).toEqual(accepted.map(({ id }) => String(id)));
 
     const entries = evidenceStore.list().map((runId) => evidenceStore.get(runId) ?? "");
     const rollup = entries.find((entry) => entry.includes('"candidatesAccepted"')) ?? "{}";

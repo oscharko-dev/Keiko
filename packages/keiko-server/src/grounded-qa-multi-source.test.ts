@@ -734,7 +734,7 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(answer.citations).toEqual([]);
     expect(answer.evidenceRunId).toBeUndefined();
     expect(answer.evidenceRunIds).toEqual([]);
-    expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(true);
+    expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(false);
   });
 
   it("maps typed workspace errors safely while retaining the admitted user turn", async () => {

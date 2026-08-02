@@ -28,6 +28,9 @@ import { handleCreateRun } from "./run-handlers.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext } from "./routes.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import { contentFreeCodingAppSessionChannelSnapshot } from "./coding-app-session/channelContract.js";
+import type { CodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
+import type { AppSession } from "./coding-app-session/sessionRegistry.js";
 import {
   createSpokenActionDigest,
   evaluateSpokenActionGovernance,
@@ -382,7 +385,7 @@ describe("evaluateSpokenActionGovernance — audit records are content-free (AC5
 let ROUTE_WORKSPACE = "";
 
 function fakeReq(body: string): IncomingMessage {
-  return Readable.from([Buffer.from(body)]) as unknown as IncomingMessage;
+  return Object.assign(Readable.from([Buffer.from(body)]), { headers: {} }) as IncomingMessage;
 }
 
 function fakeRes(): RouteContext["res"] {
@@ -449,6 +452,30 @@ const VOICE_REALTIME_CONFIG: GatewayConfig = {
   })),
 };
 
+const ROUTE_APP_SESSION: AppSession = {
+  sessionId: "sess_0123456789abcdef01234567",
+  principalLabel: "local-user",
+  issuedAtMs: 1,
+  lastSeenAtMs: 1,
+  rotationCount: 0,
+};
+
+function pairedRouteAppSessionChannel(): CodingAppSessionChannel {
+  return {
+    pair: () => ({ paired: false }),
+    snapshot: () => contentFreeCodingAppSessionChannelSnapshot(),
+    rotate: () => ({ rotated: false }),
+    signOut: () => undefined,
+    sessionCount: () => 1,
+    verifySession: () => ROUTE_APP_SESSION,
+    subscribe: () => ({
+      snapshot: contentFreeCodingAppSessionChannelSnapshot(),
+      live: false,
+      detach: () => undefined,
+    }),
+  };
+}
+
 interface RouteHandoffOptions {
   readonly voiceOrigin?: Record<string, unknown>;
 }
@@ -488,6 +515,7 @@ describe("handleCreateRun — voiceOrigin wiring (Issue #503)", () => {
       modelPortFactory: (): ModelPort => ({
         call: () => Promise.reject(new Error("unused")),
       }),
+      codingAppSessionChannel: pairedRouteAppSessionChannel(),
       store,
     };
   }

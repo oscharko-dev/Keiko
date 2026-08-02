@@ -21,6 +21,7 @@ import { mockRequest, mockResponse } from "./_support.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { STREAMING, type RouteContext, type RouteResult } from "./routes.js";
+import { resetGatewayInstanceCacheForTests } from "./gateway-instance-cache.js";
 
 function provider(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
   return {
@@ -540,6 +541,7 @@ describe("coding-sidecar gateway", () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     } finally {
       vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
     }
   });
 

@@ -25,12 +25,17 @@ import type { VoiceTranscriptEvidenceSummary, VoiceTranscriptSource } from "./vo
 import { voiceTranscriptCaptureAllowed } from "./voice-transcript.js";
 
 // ─── Schema version ───────────────────────────────────────────────────────────
-export const VOICE_SESSION_RECAP_SCHEMA_VERSION = "1" as const;
+const LEGACY_VOICE_SESSION_RECAP_SCHEMA_VERSION = "1" as const;
+export const VOICE_SESSION_RECAP_SCHEMA_VERSION = "2" as const;
 
-export type VoiceSessionRecapSchemaVersion = typeof VOICE_SESSION_RECAP_SCHEMA_VERSION;
+export type VoiceSessionRecapSchemaVersion =
+  typeof LEGACY_VOICE_SESSION_RECAP_SCHEMA_VERSION | typeof VOICE_SESSION_RECAP_SCHEMA_VERSION;
 
 export function isVoiceSessionRecapSchemaVersionSupported(version: unknown): boolean {
-  return version === VOICE_SESSION_RECAP_SCHEMA_VERSION;
+  return (
+    version === LEGACY_VOICE_SESSION_RECAP_SCHEMA_VERSION ||
+    version === VOICE_SESSION_RECAP_SCHEMA_VERSION
+  );
 }
 
 // ─── Capability gating (AC1) ──────────────────────────────────────────────────
@@ -42,9 +47,9 @@ export function voiceRecapAllowed(profile: VoiceProfile): boolean {
 }
 
 // ─── Recap candidate lifecycle ────────────────────────────────────────────────
-// Maps onto the existing memory status lifecycle: "proposed" is the ONLY initial state a recap may
-// produce; the terminal transitions (accept / reject / forget) are delegated to the existing memory
-// review surface — the recap itself never mutates beyond the initial proposal (ADR-0109 D4).
+// Maps onto the existing memory status lifecycle. Governance may initially persist an eligible
+// public candidate as "accepted"; every other persistable candidate begins as "proposed" and uses
+// the existing review surface for later transitions (ADR-0109 D4 / ADR-0146 D2).
 export type VoiceRecapCandidateStatus = "proposed" | "accepted" | "rejected" | "forgotten";
 
 export const VOICE_RECAP_CANDIDATE_STATUSES: readonly VoiceRecapCandidateStatus[] = [
@@ -144,24 +149,35 @@ const AUDIT_COUNT_FIELDS = [
   "durationMs",
 ] as const;
 
+function normalizeLegacyAuditRecord(value: Record<string, unknown>): Record<string, unknown> {
+  if (
+    value.schemaVersion === LEGACY_VOICE_SESSION_RECAP_SCHEMA_VERSION &&
+    value.candidatesAccepted === undefined
+  ) {
+    return { ...value, candidatesAccepted: 0 };
+  }
+  return value;
+}
+
 export function validateVoiceSessionRecapAuditRecord(
   value: unknown,
 ): { ok: true } | { ok: false; reason: string } {
   if (!isRecord(value)) {
     return { ok: false, reason: "audit: must be an object" };
   }
-  if (!isVoiceSessionRecapSchemaVersionSupported(value.schemaVersion)) {
+  const normalized = normalizeLegacyAuditRecord(value);
+  if (!isVoiceSessionRecapSchemaVersionSupported(normalized.schemaVersion)) {
     return { ok: false, reason: "schemaVersion: unsupported" };
   }
-  if (!isVoiceProfile(value.profile)) {
+  if (!isVoiceProfile(normalized.profile)) {
     return { ok: false, reason: "profile: unknown voice profile" };
   }
   for (const field of AUDIT_COUNT_FIELDS) {
-    if (!isNonNegativeInteger(value[field])) {
+    if (!isNonNegativeInteger(normalized[field])) {
       return { ok: false, reason: `${field}: must be a non-negative integer` };
     }
   }
-  if (value.triggeredByUser !== true) {
+  if (normalized.triggeredByUser !== true) {
     // The recap is user-triggered by design (ADR-0109 D2); an audit record claiming otherwise is
     // structurally invalid, which makes the "never automatic" invariant machine-checkable.
     return { ok: false, reason: "triggeredByUser: must be true (recap is user-triggered only)" };

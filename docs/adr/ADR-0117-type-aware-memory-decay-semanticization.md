@@ -86,7 +86,10 @@ inspectable without materializing or decrypting the complete ledger.
 Semantic forget suppression is deletion-grade across the complete retained tombstone ledger. Sealed
 vectors are traversed in fixed-size pages through the scope/time/id index and compared exactly,
 short-circuiting on a match. The implementation deliberately does not persist a plaintext ANN
-sidecar for forgotten content and never drops older refusals merely to cap an in-memory array.
+sidecar for forgotten content and never drops older refusals merely to cap an in-memory array. A
+no-match scan is therefore linear in retained vector-bearing tombstones; operators with high-volume
+forget activity should configure `KEIKO_MEMORY_RETENTION_PURGE_FORGOTTEN_AFTER_DAYS` to bound that
+cost according to their retention obligations.
 
 ## Consequences
 

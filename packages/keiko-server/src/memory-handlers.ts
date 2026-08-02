@@ -678,6 +678,15 @@ export function handleListMemories(ctx: RouteContext, deps: UiHandlerDeps): Rout
 export function handleListMemoryTombstones(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
+  if (deps.memoryAuthorization === undefined) {
+    return {
+      status: 403,
+      body: errorBody(
+        "MEMORY_AUTHORIZATION_REQUIRED",
+        "Memory tombstone access requires an authorized caller.",
+      ),
+    };
+  }
   const limit = parseIntQuery(
     ctx.url.searchParams.get("limit"),
     DEFAULT_LIST_LIMIT,

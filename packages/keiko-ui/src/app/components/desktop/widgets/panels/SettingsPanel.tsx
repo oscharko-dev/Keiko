@@ -89,6 +89,8 @@ import {
   readWorkspaceGridStrength,
 } from "../../workspace-appearance";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
+import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
+import editorStyles from "./EditorSettingsPanel.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CopyIcon = Icons.copy;
@@ -288,6 +290,17 @@ function recordReadinessRun(
   return { generation: observedGeneration, runs: { ...runs, [modelId]: state } };
 }
 
+function clearReadinessRun(
+  ledger: ReadinessLedger,
+  generation: number,
+  modelId: string,
+): ReadinessLedger {
+  if (ledger.generation !== generation || ledger.runs[modelId] === undefined) return ledger;
+  const runs = { ...ledger.runs };
+  Reflect.deleteProperty(runs, modelId);
+  return { generation, runs };
+}
+
 /**
  * A value identity for the configuration the panel currently holds. Credential-free by construction
  * (the safe projection carries no key or base URL), so a rotated credential is invisible here and
@@ -394,14 +407,6 @@ function capabilityDisagreements(
       disagreements.push({ field, configured, observed });
     }
   }
-  const observedContext = report.verifiedCapabilities.testedContextTokens;
-  if (observedContext !== undefined && model.contextWindow !== observedContext) {
-    disagreements.push({
-      field: "contextWindow",
-      configured: model.contextWindow,
-      observed: observedContext,
-    });
-  }
   return disagreements;
 }
 
@@ -410,13 +415,64 @@ function capabilityFieldLabel(field: ObservableCapabilityField, t: I18nTranslate
   if (field === "structuredOutput") return t("settings.models.capabilityJson");
   if (field === "supportsImageInput") return t("settings.models.capabilityImage");
   if (field === "supportsDocumentInput") return t("settings.models.capabilityPdf");
-  if (field === "contextWindow") return t("settings.models.capabilityContextWindow");
   return t("settings.models.capabilityStreaming");
 }
 
 function displayCapabilityValue(value: boolean | number, t: I18nTranslate): string {
   if (typeof value === "number") return value.toLocaleString();
   return value ? t("settings.models.yes") : t("settings.models.no");
+}
+
+function CapabilityApplyConfirmDialog({
+  onAccept,
+  onDecline,
+}: {
+  readonly onAccept: () => void;
+  readonly onDecline: () => void;
+}): ReactNode {
+  const t = useTranslate();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogTabTrap(dialogRef);
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    dialogRef.current?.focus();
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === "Escape") onDecline();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      if (opener?.isConnected === true) opener.focus();
+    };
+  }, [onDecline]);
+  return (
+    <div className={editorStyles.confirmBackdrop}>
+      <div
+        ref={dialogRef}
+        className={editorStyles.confirmDialog}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="capability-apply-confirm-title"
+        aria-describedby="capability-apply-confirm-body"
+        tabIndex={-1}
+      >
+        <h4 className={editorStyles.confirmTitle} id="capability-apply-confirm-title">
+          {t("settings.models.applyVerifiedConfirmTitle")}
+        </h4>
+        <p className={editorStyles.confirmBody} id="capability-apply-confirm-body">
+          {t("settings.models.applyVerifiedConfirm")}
+        </p>
+        <div className={editorStyles.confirmActions}>
+          <button type="button" className={editorStyles.button} onClick={onDecline}>
+            {t("settings.models.applyVerifiedDecline")}
+          </button>
+          <button type="button" className={editorStyles.button} onClick={onAccept}>
+            {t("settings.models.applyVerifiedAccept")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function CapabilityDisagreementActions({
@@ -430,21 +486,21 @@ function CapabilityDisagreementActions({
 }): ReactNode {
   const t = useTranslate();
   const [applying, setApplying] = useState(false);
-  const [applyError, setApplyError] = useState(false);
+  const [applyError, setApplyError] = useState<string | undefined>();
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const disagreements = capabilityDisagreements(model, report);
   if (disagreements.length === 0) return null;
   const apply = async (): Promise<void> => {
-    if (!window.confirm(t("settings.models.applyVerifiedConfirm"))) return;
     setApplying(true);
-    setApplyError(false);
+    setApplyError(undefined);
     try {
       const fields = Object.fromEntries(
         disagreements.map(({ field, observed }) => [field, observed]),
       ) as VerifiedGatewayCapabilityFields;
       const response = await applyGatewayVerifiedCapabilities(model.id, fields);
       onApplied(response.model);
-    } catch {
-      setApplyError(true);
+    } catch (error) {
+      setApplyError(readinessErrorMessage(error, t));
     } finally {
       setApplying(false);
     }
@@ -465,13 +521,26 @@ function CapabilityDisagreementActions({
         type="button"
         className="ml-check secondary"
         disabled={applying}
-        onClick={() => void apply()}
+        onClick={() => setConfirmOpen(true)}
       >
         {applying
           ? t("settings.models.applyingVerified")
           : t("settings.models.applyVerifiedValues")}
       </button>
-      {applyError ? <div role="alert">{t("settings.models.applyVerifiedFailed")}</div> : null}
+      {applyError === undefined ? null : (
+        <div role="alert">
+          {t("settings.models.applyVerifiedFailed")} {applyError}
+        </div>
+      )}
+      {confirmOpen ? (
+        <CapabilityApplyConfirmDialog
+          onAccept={() => {
+            setConfirmOpen(false);
+            void apply();
+          }}
+          onDecline={() => setConfirmOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1624,6 +1693,9 @@ export function SettingsPanel({
             onCapabilityApplied={(updatedModel) => {
               setModels((current) =>
                 current.map((model) => (model.id === updatedModel.id ? updatedModel : model)),
+              );
+              setReadinessLedger((ledger) =>
+                clearReadinessRun(ledger, configGeneration, updatedModel.id),
               );
               notifyGatewayConfigUpdated();
             }}

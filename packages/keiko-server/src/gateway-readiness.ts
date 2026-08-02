@@ -1118,7 +1118,6 @@ function categoricalProbeValue(
 
 function verifiedCapabilityObservation(
   probes: readonly GatewayReadinessProbeResult[],
-  report: GatewayReadinessReport,
 ): VerifiedModelCapabilityFields {
   const values = [
     ["streaming", categoricalProbeValue(probes, "streaming")],
@@ -1126,11 +1125,8 @@ function verifiedCapabilityObservation(
     ["structuredOutput", categoricalProbeValue(probes, "json_schema")],
     ["supportsImageInput", categoricalProbeValue(probes, "image_input")],
     ["supportsDocumentInput", categoricalProbeValue(probes, "document_input")],
-    ["contextWindow", report.verifiedCapabilities.testedContextTokens],
   ] as const;
-  return Object.fromEntries(
-    values.filter(([, value]) => value !== undefined),
-  ) as VerifiedModelCapabilityFields;
+  return Object.fromEntries(values.filter(([, value]) => value !== undefined));
 }
 
 export async function runGatewayReadiness(
@@ -1181,7 +1177,7 @@ export async function runGatewayReadiness(
   );
   deps.gatewayConfig?.recordVerifiedCapability(
     report.modelId,
-    verifiedCapabilityObservation(probes, report),
+    verifiedCapabilityObservation(probes),
     report.checkedAt,
     observedGeneration,
   );

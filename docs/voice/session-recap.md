@@ -30,12 +30,12 @@ hook and component described by the original issue are not present in the curren
 > exclusively from the committed voice transcript projection for the entire session, using the
 > **existing** governed memory capture path (`extractCandidatesFromUserText`). The recap preserves
 > all governance: secrets are redacted, scope inference fails closed, sensitivity classification
-> applies. Candidates surface in the existing review queue as proposals (`status: "proposed"`) for
-> explicit user approval, edit, or rejection.
+> applies, and the product-wide memory autonomy posture selects accepted versus proposed status.
+> Proposed candidates surface in the existing review queue for explicit user action.
 >
 > No raw audio, no unreviewed transcript text, and no assistant claims are stored. The user controls
-> what enters permanent memory through two deliberate actions: triggering recap, then accepting
-> candidates in the review queue.
+> whether recap runs through an explicit trigger; candidates not eligible for shared mode-aware
+> acceptance remain in the review queue.
 
 ## 1. Scope and data-retention contract
 
@@ -46,8 +46,9 @@ hook and component described by the original issue are not present in the curren
 - **Out of scope (deferred to later issues):** visible session transcript display before recap trigger
   (see §10).
 
-**Versioning:** `VOICE_SESSION_RECAP_SCHEMA_VERSION = "1"`. A breaking change introduces a new
-literal rather than mutating `"1"`. It is independent of `VOICE_TRANSCRIPT_SCHEMA_VERSION`,
+**Versioning:** `VOICE_SESSION_RECAP_SCHEMA_VERSION = "2"`. Version 2 adds the accepted-candidate
+count. The validator keeps persisted schema-1 audit records readable by normalizing a missing
+`candidatesAccepted` field to zero. It is independent of `VOICE_TRANSCRIPT_SCHEMA_VERSION`,
 `VOICE_ACTION_INTENT_SCHEMA_VERSION`, and `CONVERSATION_CAPABILITY_CONTRACT_VERSION`.
 
 ## 2. Legacy recap-route data-retention contract
@@ -57,16 +58,18 @@ persists the settled final user message and its governed chat metadata under ADR
 
 ### Retained locally (with explicit user control)
 
-After a user triggers recap and **approves candidates in the review queue:**
+After a user triggers recap and capture governance accepts a candidate, either through the current
+mode or explicit review:
 
 - **Governed memory candidates** (in the vault under `status: "accepted"`): key phrases, facts,
   corrections, and preferences extracted from the user's committed voice transcript via
   `extractCandidatesFromUserText`. These are never raw transcript excerpts; they are structured
   facts classified by sensitivity (public, sensitive, credentials redacted) and scope (project,
-  workspace, user). Approval requires explicit user action in the review queue.
+  workspace, user). Proposed records require review; mode-eligible public records may be accepted at
+  capture time through the same policy as typed chat.
 - **Content-free audit records** (in the evidence store): record that a recap was triggered, how many
-  candidates were extracted, how many were rejected by policy, and the aggregate character count of
-  the committed transcript — no transcript text, no audio, no assistant claims.
+  candidates were extracted, proposed, accepted, or rejected by policy, and the aggregate character
+  count of the committed transcript — no transcript text, no audio, no assistant claims.
 
 ### Never stored by default
 
@@ -82,9 +85,8 @@ After a user triggers recap and **approves candidates in the review queue:**
   and never submitted to the memory extraction engine. `VoiceRecapAssistantTurnDescriptor` records
   only that an assistant turn occurred, not what was said.
 - **Unreviewed proposals** — recap candidates with `status: "proposed"` remain in the vault pending
-  explicit user action (accept, reject, or forget). They are not marked as facts or preferences until
-  the user approves them. A user who triggers recap but then closes the tab without reviewing
-  candidates leaves them in a proposed state, never auto-promoting them to accepted.
+  explicit user action or the same mode-aware governed maintenance promotion used by other memory
+  capture surfaces. They are not presented as accepted while still proposed.
 
 ### Historical UI dormancy design when voice is unavailable
 
@@ -128,6 +130,9 @@ Memory candidates are derived by calling `extractCandidatesFromUserText()` from
 - Sensitivity classification: each candidate is classified (public, sensitive, credentials required).
 - `buildProposal`: produces a `MemoryProposal` with `initialStatus: "proposed"`.
 
+The extractor's initial status is an input to governance. Before insertion, eligible records use the
+shared mode-aware promotion predicate and may therefore persist as `accepted`.
+
 ### Input source: committed transcript only
 
 The recap input is **exclusively** `selectCommittedVoiceTranscript(segments).text` — the projection
@@ -145,11 +150,11 @@ The original planned product flow was:
 1. The user would press the "Review session" button in the recap control.
 2. The UI hook would send `POST /api/voice/recap/build` with the committed text and transcript counts.
 3. The server would invoke `extractCandidatesFromUserText` once per committed span.
-4. For each `CaptureOutcome` of kind `"candidate"` that passed the
-   `isPersistableMemoryCandidate` filter (public, no required approval), the server would insert a vault
-   proposal with `initialStatus: "proposed"`.
-5. The server would count non-persistable outcomes and return the proposal count and vault ids.
-6. The candidates would appear in the existing memory review queue.
+4. For each persistable candidate, the server resolves the same memory autonomy posture as chat and
+   applies the canonical promotion predicate before insertion.
+5. The server returns separate proposed, accepted, and rejected counts plus the corresponding ids.
+6. Proposed candidates appear in the existing memory review queue; accepted candidates are
+   immediately retrievable.
 
 The route still implements the bounded server portion of this flow for an explicit caller, but there
 is no current product UI caller or legacy transcript-segment feed.
@@ -163,10 +168,12 @@ leak into memory via voice recap.
 
 ## 5. Memory review and deduplication
 
-### Candidates surface in the existing review queue
+### Proposed candidates surface in the existing review queue
 
-Recap proposals enter the vault as `status: "proposed"` and are automatically included in the
-response of `GET /api/memory/review-queue`, which filters for `status: ["proposed", "conflicted", "expired"]`.
+Recap records that remain `proposed` are automatically included in the response of
+`GET /api/memory/review-queue`, which filters for
+`status: ["proposed", "conflicted", "expired"]`. Mode-eligible accepted records do not appear as
+false proposals.
 
 The user reviews, edits, accepts, or rejects candidates using the existing endpoints:
 
@@ -175,9 +182,9 @@ The user reviews, edits, accepts, or rejects candidates using the existing endpo
 - Edit: `PATCH /api/memory/:id`
 - Forget (remove): `POST /api/memory/:id/forget`
 
-**No new governance endpoints, no new mutation surface.** The recap only writes new proposals to the
-vault; it does not modify, accept, or reject existing ones. The user is the sole authority to
-transition candidates from proposed to accepted.
+**No new governance endpoints, no new mutation surface.** The recap only inserts new governed
+candidates; it does not modify, accept, or reject existing records. Status selection reuses the
+product-wide memory policy rather than a recap-specific authority rule.
 
 ### Deduplication for STT dictation
 
@@ -219,13 +226,13 @@ That component and hook are absent from the current tree.
 
 In the historical UI design, after recap completed:
 
-- The client would receive `{ candidatesProposed: number; candidatesRejected: number }` (counts only, no
-  text).
+- The client would receive proposed, accepted, and rejected counts plus proposal and accepted ids
+  (no candidate or transcript text).
 - The UI would navigate to the review queue with a filter or highlight showing the newly proposed
   candidates.
 - The user could accept, reject, or edit candidates using the existing review UI.
-- Closing the review queue without action would leave candidates in `status: "proposed"` until the user
-  acts on them.
+- Closing the review queue without action leaves candidates governed as `proposed`; any later
+  unattended promotion still requires the same configured product posture as other memory records.
 
 ### Design-system tokens
 
@@ -242,7 +249,7 @@ Every type and boundary in the recap feature is content-free by construction:
 | `VoiceRecapCommittedSpanDescriptor`        | spanIndex, charCount, segmentCount, seq                          | transcript text          |
 | `VoiceRecapAssistantTurnDescriptor`        | turnIndex, source enum                                           | assistant text, audio    |
 | `POST /api/voice/recap/build` request body | committedSpans, transcript roll-up (transient, extraction input) | —                        |
-| `POST /api/voice/recap/build` response     | candidatesProposed, candidatesRejected, proposalIds              | transcript text, audio   |
+| `POST /api/voice/recap/build` response     | proposed/accepted/rejected counts and proposal/accepted ids      | transcript text, audio   |
 | Memory audit record in evidence store      | counts, timestamps, effect enum                                  | raw transcript           |
 
 The contract module is scanned for forbidden substrings as a test invariant: apikey, secret,
@@ -346,25 +353,28 @@ This preserves the privacy-first principle (ADR-0100).
 
 1. For each committed span, call `extractCandidatesFromUserText(span, buildCaptureContext(...), policy)`.
 2. Union all resulting `CaptureOutcome[]`.
-3. For each outcome of kind `"candidate"` that passes `isPersistableMemoryCandidate` (public, no required
-   approval): insert into vault as `initialStatus: "proposed"`. Collect the inserted vault ids.
+3. For each persistable candidate, resolve the effective memory autonomy posture and apply
+   `promoteEligibleMemoryRecord` when eligible. Insert the resulting record and collect ids by its
+   actual stored status.
 4. Count every other extracted outcome (sensitive, approval-gated, rejected, update/forget/supersession) as
    `candidatesRejected`.
 5. Recompute `committedChars` server-side from the submitted spans; build and store `VoiceSessionRecapAuditRecord`
    via the evidence store with the server-authoritative character count.
-6. Return `{ candidatesProposed: number; candidatesRejected: number; proposalIds: string[] }`.
+6. Return proposed, accepted, and rejected counts plus `proposalIds` and `acceptedIds`.
 
 **Response:**
 
 ```json
 {
   "candidatesProposed": "number",
+  "candidatesAccepted": "number",
   "candidatesRejected": "number",
-  "proposalIds": ["string (vault ids)"]
+  "proposalIds": ["string (proposed vault ids)"],
+  "acceptedIds": ["string (accepted vault ids)"]
 }
 ```
 
-No transcript text in request or response. Counts only.
+No transcript text appears in the response; it contains only counts and opaque vault ids.
 
 ## 13. Current integration status
 
@@ -381,7 +391,7 @@ transcript handoff (ADR-0154 D1/D5).
 | --- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | AC1 | Recap is dormant when voice is unavailable              | `voiceRecapAllowed(profile)` false for `none`/`speech-output`; empty spans → no-op                                               | Contract predicate and server-handler tests; there is no current UI caller  |
 | AC2 | Route input is bounded committed spans                  | Server parser accepts only the closed, bounded recap request shape; callers remain responsible for the committed-only projection | Contract, parser, and handler tests                                         |
-| AC3 | Candidates enter existing review queue as proposed      | `extractCandidatesFromUserText` → `vault.insertMemory(initialStatus:"proposed")`                                                 | Review queue integration; existing memory endpoints unchanged               |
+| AC3 | Candidates follow shared memory autonomy governance     | Canonical promotion selects accepted vs proposed; proposals use the existing queue                                               | Accepted/proposed server tests; existing memory endpoints unchanged         |
 | AC4 | No raw audio / transcript text stored beyond extraction | Transient committedSpans; server never persists them; audit record is content-free                                               | Module forbidden-substring scan; server handler tests                       |
 | AC5 | Canonical text-chat authority remains unchanged         | Recap remains an additive review route and does not create an assistant-answer or message-persistence path                       | Canonical chat and route-boundary tests; exact PR-head run is authoritative |
 | AC6 | Secrets rejected before vault insert                    | `extractCandidatesFromUserText` runs `scanForSecrets` internally                                                                 | Eval fixture with credential string; rejected candidates not proposed       |

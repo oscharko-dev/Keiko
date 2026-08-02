@@ -85,6 +85,16 @@ function makeDeps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   };
 }
 
+function tombstoneDeps(vault: MemoryVaultStore): UiHandlerDeps {
+  return makeDeps({
+    memoryVault: vault,
+    memoryAuthorization: {
+      reviewerId: reviewerId("tombstone-auditor"),
+      authorizedScopes: () => vault.listMemoryScopes(),
+    },
+  });
+}
+
 let activeVaults: MemoryVaultStore[] = [];
 let tmpDirs: string[] = [];
 
@@ -202,7 +212,7 @@ describe("memory handlers", () => {
 
     const result = handleListMemoryTombstones(
       makeCtx("/api/memory/tombstones?limit=10", {}),
-      makeDeps({ memoryVault: vault }),
+      tombstoneDeps(vault),
     );
 
     expect(result.status).toBe(200);
@@ -242,7 +252,7 @@ describe("memory handlers", () => {
 
     const first = handleListMemoryTombstones(
       makeCtx("/api/memory/tombstones?limit=2", {}),
-      makeDeps({ memoryVault: vault }),
+      tombstoneDeps(vault),
     );
     const firstBody = asJson(first);
     expect(firstBody).toMatchObject({ total: 3, limit: 2 });
@@ -254,7 +264,7 @@ describe("memory handlers", () => {
 
     const second = handleListMemoryTombstones(
       makeCtx(`/api/memory/tombstones?limit=2&cursor=${String(firstBody.nextCursor)}`, {}),
-      makeDeps({ memoryVault: vault }),
+      tombstoneDeps(vault),
     );
     expect(second.body).toMatchObject({
       total: 3,
@@ -267,10 +277,55 @@ describe("memory handlers", () => {
   it("rejects a malformed tombstone continuation cursor", () => {
     const result = handleListMemoryTombstones(
       makeCtx("/api/memory/tombstones?cursor=not.valid", {}),
-      makeDeps({ memoryVault: makeVault() }),
+      tombstoneDeps(makeVault()),
     );
 
     expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+  });
+
+  it("fails closed when tombstone audit authorization is unavailable", () => {
+    const result = handleListMemoryTombstones(
+      makeCtx("/api/memory/tombstones", {}),
+      makeDeps({ memoryVault: makeVault() }),
+    );
+
+    expect(result).toMatchObject({
+      status: 403,
+      body: { error: { code: "MEMORY_AUTHORIZATION_REQUIRED" } },
+    });
+  });
+
+  it("lists tombstones only from the caller's authorized scopes", () => {
+    const vault = makeVault();
+    const allowedScope = { kind: "user" as const, userId: userId("allowed-user") };
+    const deniedScope = { kind: "user" as const, userId: userId("denied-user") };
+    for (const [id, scope] of [
+      ["allowed-memory", allowedScope],
+      ["denied-memory", deniedScope],
+    ] as const) {
+      vault.insertMemory(makeMemory(id, `private-${id}`, { scope }));
+      vault.deleteMemory(memoryId(id), {
+        tombstone: true,
+        forgetterSurface: "memory-center",
+        nowMs: 200,
+      });
+    }
+    const result = handleListMemoryTombstones(
+      makeCtx("/api/memory/tombstones", {}),
+      makeDeps({
+        memoryVault: vault,
+        memoryAuthorization: {
+          reviewerId: reviewerId("scope-auditor"),
+          authorizedScopes: () => [allowedScope],
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: { total: 1, tombstones: [{ memoryId: "allowed-memory" }] },
+    });
+    expect(JSON.stringify(result.body)).not.toContain("denied-memory");
   });
 
   it("lists memories across scopes and paginates after filtering", () => {

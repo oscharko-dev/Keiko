@@ -382,7 +382,7 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
     return {
       schemaVersion: CONTAINER_RUNTIME_SCHEMA_VERSION,
       projectId,
-      engineAvailable: tasks.length > 0,
+      engineAvailable: capability.anyAvailable,
       tasks,
     };
   };

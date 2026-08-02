@@ -352,6 +352,8 @@ export interface RuntimeGatewayConfig {
     checkedAt: string,
     observedGeneration?: number,
   ): void;
+  readonly clearVerifiedCapability?:
+    ((modelId: string, observedGeneration?: number) => boolean) | undefined;
 }
 
 export type VerifiedModelCapabilityFields = Partial<
@@ -362,7 +364,6 @@ export type VerifiedModelCapabilityFields = Partial<
     | "structuredOutput"
     | "supportsImageInput"
     | "supportsDocumentInput"
-    | "contextWindow"
   >
 >;
 
@@ -1053,7 +1054,17 @@ function createRuntimeGatewayConfig(
       verifiedCapabilities.get(modelId),
     recordVerifiedCapability: (modelId, fields, checkedAt, observedGeneration): void => {
       if (observedGeneration !== undefined && observedGeneration !== generation) return;
-      verifiedCapabilities.set(modelId, { modelId, generation, checkedAt, fields });
+      const previous = verifiedCapabilities.get(modelId);
+      verifiedCapabilities.set(modelId, {
+        modelId,
+        generation,
+        checkedAt,
+        fields: { ...(previous?.generation === generation ? previous.fields : {}), ...fields },
+      });
+    },
+    clearVerifiedCapability: (modelId, observedGeneration): boolean => {
+      if (observedGeneration !== undefined && observedGeneration !== generation) return false;
+      return verifiedCapabilities.delete(modelId);
     },
   };
 }
@@ -2111,6 +2122,8 @@ function buildUpdateRemediation(options: {
   readonly runtimeStateDir: string;
   readonly runtimeConfig: RuntimeGatewayConfig;
   readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly redactString: (value: string) => string;
 }): UpdateRemediationManager {
   if (options.injected !== undefined) return options.injected;
   const localKnowledge = buildLocalKnowledgeRemediation({
@@ -2121,6 +2134,8 @@ function buildUpdateRemediation(options: {
   return createUpdateRemediationManager({
     localState: options.updateLocalState,
     localKnowledge,
+    diagnostics: options.diagnostics,
+    redactString: options.redactString,
   });
 }
 
@@ -2585,6 +2600,8 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
     runtimeStateDir: args.runtimeStateDir,
     runtimeConfig: args.runtimeConfig,
     localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
+    diagnostics: args.options.diagnostics,
+    redactString: args.redactString,
   });
   const memoryVault = buildMemoryVault(args.redactString, args.evidenceStore, args.options.env);
   const { workspaceScriptTrust, managedLspControl, disposeTrustLspBridge } =
@@ -3566,6 +3583,7 @@ function buildCodingContextPortsDependency(
   args: UiHandlerDepsAssemblyArgs,
 ): Pick<UiHandlerDeps, "codingContextGitHubPort" | "codingContextJiraPort"> {
   const githubPort =
+    args.options.env.GITHUB_CONNECTOR_AUTHORIZED !== "true" ||
     args.bundle.preferredProjectPath === undefined
       ? undefined
       : createGitHubCodeContextApiPort({
@@ -3581,8 +3599,18 @@ function buildCodingContextPortsDependency(
           },
           processEnv: process.env,
         });
-  const jiraConfig = parseJiraCodeContextPortConfig(args.options.env);
-  const jiraPort = jiraConfig === undefined ? undefined : createJiraCodeContextHttpPort(jiraConfig);
+  let jiraPort: JiraCodeContextHttpPort | undefined;
+  try {
+    const jiraConfig = parseJiraCodeContextPortConfig(args.options.env);
+    jiraPort = jiraConfig === undefined ? undefined : createJiraCodeContextHttpPort(jiraConfig);
+  } catch (error) {
+    emitCompositionDiagnostic(
+      args.options.diagnostics,
+      "deps.codingContextJiraPort",
+      "server-operation-failed",
+      error,
+    );
+  }
   return {
     ...(githubPort === undefined ? {} : { codingContextGitHubPort: githubPort }),
     ...(jiraPort === undefined ? {} : { codingContextJiraPort: jiraPort }),

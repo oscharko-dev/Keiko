@@ -251,6 +251,18 @@
     "en": "Apply the live-verified values to this model's stored capability settings?",
     "de": "Die live verifizierten Werte in die gespeicherten Fähigkeitseinstellungen dieses Modells übernehmen?"
   },
+  "settings.models.applyVerifiedConfirmTitle": {
+    "en": "Apply verified model capabilities?",
+    "de": "Verifizierte Modellfähigkeiten übernehmen?"
+  },
+  "settings.models.applyVerifiedAccept": {
+    "en": "Apply values",
+    "de": "Werte übernehmen"
+  },
+  "settings.models.applyVerifiedDecline": {
+    "en": "Cancel",
+    "de": "Abbrechen"
+  },
   "settings.models.applyVerifiedFailed": {
     "en": "The verified values were not applied. Run readiness again and retry.",
     "de": "Die verifizierten Werte wurden nicht übernommen. Führe die Bereitschaftsprüfung erneut aus und versuche es noch einmal."

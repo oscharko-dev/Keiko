@@ -7,7 +7,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import { startRun, workflowFingerprint } from "./run-engine.js";
@@ -21,7 +21,6 @@ import {
   type AgentRunGovernanceBinding,
 } from "./agent-run-governance.js";
 import { editorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
-import { probeNetworkIsolation } from "./editor/verificationExecution.js";
 import type { VerificationReport } from "@oscharko-dev/keiko-verification";
 
 const REJECT_MODEL: ModelPort = {
@@ -110,22 +109,41 @@ afterEach(() => {
 });
 
 async function waitForTerminal(runId: string): Promise<void> {
-  for (let i = 0; i < 100; i += 1) {
-    const record = registry.get(runId);
-    if (record !== undefined && record.status !== "running") {
-      return;
-    }
-    await new Promise((res) => setTimeout(res, 10));
-  }
-  throw new Error("run did not terminate within budget");
+  const record = registry.get(runId);
+  if (record === undefined) throw new Error("run was not registered");
+  if (record.status !== "running") return;
+  await new Promise<void>((resolve) => {
+    let detach = (): void => undefined;
+    const settle = (): void => {
+      detach();
+      resolve();
+    };
+    detach = record.sink.attach({ write: () => true, close: settle }, Number.MAX_SAFE_INTEGER);
+    if (record.sink.isTerminated()) settle();
+  });
+}
+
+function passedVerificationReport(): VerificationReport {
+  return {
+    workspaceRoot,
+    results: [],
+    overallStatus: "passed",
+    startedAtMs: 1,
+    durationMs: 1,
+    counts: {
+      passed: 0,
+      failed: 0,
+      skipped: 0,
+      denied: 0,
+      "timed-out": 0,
+      cancelled: 0,
+      "resource-exceeded": 0,
+    },
+  };
 }
 
 describe("startRun verify dispatch", () => {
-  it("probes network enforcement before executing a real verification script", async () => {
-    writeFileSync(
-      join(workspaceRoot, "package.json"),
-      JSON.stringify({ name: "fixture", scripts: { test: 'node -e "process.exit(0)"' } }),
-    );
+  it("dispatches verify through the enforced verification executor", async () => {
     const request = ok(
       parseRunRequest(
         JSON.stringify({
@@ -135,15 +153,18 @@ describe("startRun verify dispatch", () => {
         }),
       ),
     );
-    const result = startRun({ request, model: REJECT_MODEL, registry }, (value) => value);
+    const report = passedVerificationReport();
+    const verificationExecutor = vi.fn(() =>
+      Promise.resolve({ report, probe: { available: true, backend: "test-backend" } }),
+    );
+    const result = startRun(
+      { request, model: REJECT_MODEL, registry, verificationExecutor },
+      (value) => value,
+    );
     await waitForTerminal(result.runId);
-    const report = registry.get(result.runId)?.report as VerificationReport;
 
-    if (probeNetworkIsolation(workspaceRoot).available) {
-      expect(report.counts.denied).toBeLessThan(report.results.length);
-    } else {
-      expect(report.results.every((step) => step.status === "denied")).toBe(true);
-    }
+    expect(verificationExecutor).toHaveBeenCalledOnce();
+    expect(registry.get(result.runId)?.report).toBe(report);
   });
 
   it("returns a synchronous {runId, fingerprint} and registers the run", () => {

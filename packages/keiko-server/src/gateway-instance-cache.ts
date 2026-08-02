@@ -31,14 +31,13 @@ class GatewayInstanceCache {
     if (existing?.generation === generation && existing.config === config) {
       return existing.gateway;
     }
-    const gateway = new Gateway(config);
+    const gateway = this.forConfig(config);
     this.byRuntimeConfig.set(source, { config, gateway, generation });
-    this.byConfig.set(config, gateway);
     return gateway;
   }
 }
 
-const sharedGateways = new GatewayInstanceCache();
+let sharedGateways = new GatewayInstanceCache();
 
 export function gatewayForConfig(config: GatewayConfig): Gateway {
   return sharedGateways.forConfig(config);
@@ -46,4 +45,9 @@ export function gatewayForConfig(config: GatewayConfig): Gateway {
 
 export function gatewayForRuntimeConfig(source: RuntimeGatewayConfigSource): Gateway | undefined {
   return sharedGateways.forRuntimeConfig(source);
+}
+
+/** Clears the process-wide cache between tests that exercise gateway instance isolation. */
+export function resetGatewayInstanceCacheForTests(): void {
+  sharedGateways = new GatewayInstanceCache();
 }

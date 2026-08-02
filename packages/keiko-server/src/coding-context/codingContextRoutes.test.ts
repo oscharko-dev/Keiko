@@ -137,6 +137,30 @@ describe("coding context pack route", () => {
     expect(blocked[0]).toMatchObject({ source: "jira", reason: "missing-credentials" });
   });
 
+  it("does not authorize configured flags when no usable connector port exists", async () => {
+    const result = await handleCodingContextPack(
+      ctxFor(packRequest()),
+      depsFor({
+        codingContextGitHubPort: undefined,
+        codingContextJiraPort: undefined,
+        preferredProjectPath: undefined,
+        env: {
+          GITHUB_CONNECTOR_AUTHORIZED: "true",
+          JIRA_CONNECTOR_AUTHORIZED: "true",
+          KEIKO_JIRA_BASE_URL: "http://invalid.example.com",
+          KEIKO_JIRA_EMAIL: "operator@example.com",
+          KEIKO_JIRA_API_TOKEN: "secret-token",
+        },
+      }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(bodyOf(result).blocked).toMatchObject([
+      { source: "github", reason: "missing-credentials" },
+      { source: "jira", reason: "missing-credentials" },
+    ]);
+  });
+
   it("rejects malformed bodies, unknown keys, hostile refs, and bad bounds", async () => {
     const cases: readonly Record<string, unknown>[] = [
       packRequest({ extra: true }),

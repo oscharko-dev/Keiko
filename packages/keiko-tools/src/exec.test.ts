@@ -149,6 +149,27 @@ describe("runCommand — allowlist guard (before spawn)", () => {
     await expect(pending).resolves.toMatchObject({ exitCode: 0 });
   });
 
+  it("continues safely when the spawned child does not expose a pid", async () => {
+    const spawn = recordingSpawn();
+    (spawn.child as { pid: number | undefined }).pid = undefined;
+    const onSpawn = vi.fn();
+    const pending = runCommand(
+      {
+        command: "node",
+        args: ["-e", "1"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+        onSpawn,
+      },
+      fakeDeps(spawn.fn),
+    );
+
+    spawn.child.emit("close", 0, null);
+    await expect(pending).resolves.toMatchObject({ exitCode: 0 });
+    expect(onSpawn).not.toHaveBeenCalled();
+  });
+
   it("retains ownership until a child is terminated when the spawn callback fails", async () => {
     vi.useFakeTimers();
     const spawn = recordingSpawn();

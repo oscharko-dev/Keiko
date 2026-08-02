@@ -19,12 +19,15 @@ import {
   runMemoryMaintenance,
   MEMORY_AUTO_MAINTENANCE_MIN_INTERVAL_MS,
   memoryRetentionPolicy,
+  resolveMemoryRetentionPolicy,
   type AutoMaintenanceState,
 } from "./memory-maintenance-handlers.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 
 const DAY = 864e5;
+const RETENTION_NOW = Date.parse("2026-08-02T08:00:00.000Z");
 
 function makeCtx(): RouteContext {
   const socket = new Socket();
@@ -251,7 +254,7 @@ describe("handleRunMaintenance", () => {
 
   it("runs configured age retention and tombstoning inside the bounded maintenance pass", () => {
     const vault = makeVault();
-    const now = Date.now();
+    const now = RETENTION_NOW;
     insert(vault, { id: "old-accepted", status: "accepted", createdAt: now - 40 * DAY });
 
     const result = runMemoryMaintenance(vault, undefined, {
@@ -282,6 +285,61 @@ describe("handleRunMaintenance", () => {
       expireProposalsAfterMs: 14 * DAY,
       purgeForgottenAfterMs: 365 * DAY,
     });
+  });
+
+  it.each(["0", "-1", "1.5", "not-a-number", "9007199254740992"])(
+    "rejects invalid retention configuration value %s",
+    (raw) => {
+      expect(() => memoryRetentionPolicy({ KEIKO_MEMORY_RETENTION_MAX_AGE_DAYS: raw })).toThrow(
+        TypeError,
+      );
+    },
+  );
+
+  it("reports invalid retention configuration without exposing its raw value", () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const raw = "customer-secret-invalid-value";
+    const policy = resolveMemoryRetentionPolicy(
+      makeDeps({
+        env: { KEIKO_MEMORY_RETENTION_MAX_AGE_DAYS: raw },
+        diagnostics: { record: (record) => diagnostics.push(record) },
+      }),
+    );
+
+    expect(policy).toBeUndefined();
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        operation: "memory.maintenance.retention-policy",
+        source: "memory-maintenance-handlers.resolveMemoryRetentionPolicy",
+      }),
+    );
+    expect(JSON.stringify(diagnostics)).not.toContain(raw);
+  });
+
+  it("fails an explicit maintenance request when retention configuration is invalid", () => {
+    const vault = makeVault();
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const raw = "customer-secret-invalid-retention";
+    const result = handleRunMaintenance(
+      makeCtx(),
+      makeDeps({
+        memoryVault: vault,
+        env: { KEIKO_MEMORY_RETENTION_MAX_AGE_DAYS: raw },
+        diagnostics: { record: (record) => diagnostics.push(record) },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 500,
+      body: {
+        error: {
+          code: "MEMORY_RETENTION_CONFIG_INVALID",
+        },
+      },
+    });
+    expect(result).toHaveProperty("body.error.correlationId", expect.any(String));
+    expect(diagnostics).toHaveLength(1);
+    expect(JSON.stringify({ result, diagnostics })).not.toContain(raw);
   });
 
   it("returns a review item instead of auto-superseding a pairwise correction conflict", () => {

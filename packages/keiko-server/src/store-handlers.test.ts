@@ -344,7 +344,7 @@ describe("GET /api/projects", () => {
 
 // ─── Route 14: POST /api/projects ────────────────────────────────────────────
 describe("POST /api/projects", () => {
-  it("keeps a committed project when the trailing trust grant fails", async () => {
+  it("keeps a committed project but surfaces a failed trailing trust grant", async () => {
     const diagnostic = vi.fn();
     await restartWithDeps({
       workspaceScriptTrust: {
@@ -361,7 +361,14 @@ describe("POST /api/projects", () => {
       body: JSON.stringify({ path: projDir }),
     });
 
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(500);
+    const body: unknown = await res.json();
+    expect(body).toMatchObject({
+      error: {
+        code: "PROJECT_TRUST_GRANT_FAILED",
+      },
+    });
+    expect(body).toHaveProperty("error.correlationId", expect.any(String));
     expect(store.listProjects()).toContainEqual(expect.objectContaining({ path: projDir }));
     expect(diagnostic).toHaveBeenCalledWith(
       expect.objectContaining({ operation: "project.create.trust.grant" }),

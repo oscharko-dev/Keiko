@@ -861,12 +861,11 @@ function assembleMultiSourceAnswer(
     // GEN-AI-GROUNDING-002/-003 (RB-4): the multi-source path abstained (no usable evidence across
     // any source). Suppress citations and skip per-source evidence persistence.
     readonly abstained: boolean;
-    readonly modelInvoked: boolean;
   },
 ): GroundedAnswer {
   const { redactor } = ctx.deps;
   const citationBundles = sourceCitationBundles(sources, redactor, assistant.content);
-  const citations = ids.modelInvoked ? mergedCitations(citationBundles) : [];
+  const citations = ids.abstained ? [] : mergedCitations(citationBundles);
   const summaries = citationBundles.map(({ source: src, citations: sourceCitations }) =>
     buildGroundedAnswerContextPackSummary(
       src.pack,
@@ -881,9 +880,9 @@ function assembleMultiSourceAnswer(
     : persistPerSourceEvidence(ctx, citationBundles);
   // GEN-AI-GROUNDING-001/-008 (RB-4): reconcile the model's inline citations against the merged
   // evidence packs the model actually received; flag references to un-retrieved files.
-  const reconciliationUncertainty = ids.modelInvoked
-    ? buildMultiSourceReconciliationUncertainty(assistant, sources, redactor)
-    : [];
+  const reconciliationUncertainty = ids.abstained
+    ? []
+    : buildMultiSourceReconciliationUncertainty(assistant, sources, redactor);
   return {
     groundingKind: "connected-context",
     userMessageId: ids.userMessageId,
@@ -949,9 +948,9 @@ async function applyMultiSourceEntailment(
   assembled: GroundedAnswer,
   assistant: GroundedAnswerResult,
   retrieved: readonly RetrievedSource[],
-  modelInvoked: boolean,
+  abstained: boolean,
 ): Promise<GroundedAnswer> {
-  if (!modelInvoked) {
+  if (abstained) {
     return assembled;
   }
   const stage = createEntailmentStage(
@@ -984,7 +983,6 @@ function persistMultiSourceAnswer(
   skipped: readonly SkippedScope[],
   assistant: GroundedAnswerResult,
   abstained: boolean,
-  modelInvoked: boolean,
 ): PersistedMultiSourceAnswer {
   const [userMessage, assistantMessage] = persistGroundedExchange(
     ctx.deps,
@@ -998,7 +996,6 @@ function persistMultiSourceAnswer(
       userMessageId: userMessage.id,
       assistantMessageId: assistantMessage.id,
       abstained,
-      modelInvoked,
     }),
     assistantMessageId: assistantMessage.id,
   };
@@ -1043,26 +1040,18 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
   // evidence — the folders path must not answer confidently over zero evidence, and no grounded
   // evidence manifest may be persisted.
   const abstained = !packsHaveUsableEvidence(retrieved.map((s) => s.pack));
-  const modelInvoked = !abstained || ctx.answerOnlyContextAvailable === true;
   const assistant = await answerMultiSource(ctx, retrieved, abstained);
   if (isRouteResult(assistant)) {
     return assistant;
   }
   ensureNotCancelled(ctx.signal);
-  const persisted = persistMultiSourceAnswer(
-    ctx,
-    retrieved,
-    skipped,
-    assistant,
-    abstained,
-    modelInvoked,
-  );
+  const persisted = persistMultiSourceAnswer(ctx, retrieved, skipped, assistant, abstained);
   const answer = await applyMultiSourceEntailment(
     ctx,
     persisted.assembled,
     assistant,
     retrieved,
-    modelInvoked,
+    abstained,
   );
   ensureNotCancelled(ctx.signal);
   recordMultiSourceAnswer(ctx, retrieved, answer, persisted.assistantMessageId, abstained);

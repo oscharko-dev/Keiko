@@ -1270,13 +1270,12 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
   const userContent = redactString(deps.redactor, content);
   const assistantContent = redactString(deps.redactor, output.assistantContent);
   // GEN-AI-GROUNDING-002/-003 (RB-4): when the folder path abstained (no usable evidence), the model
-  // was never called. Personal-only context can invoke the model without source evidence, while
-  // older/injected runners omit modelInvoked for ordinary evidence-backed answers.
+  // was never called. Suppress citations and do NOT persist grounded evidence or a grounded memory
+  // turn — there is nothing to ground, so no grounded-evidence manifest may be written.
   const abstained = output.noEvidence === true;
-  const modelInvoked = output.modelInvoked === true || !abstained;
-  const citations = modelInvoked
-    ? buildAnswerCitations(output.pack, output.assistantContent, deps.redactor)
-    : [];
+  const citations = abstained
+    ? []
+    : buildAnswerCitations(output.pack, output.assistantContent, deps.redactor);
   const evidenceRunId = abstained
     ? undefined
     : persistGroundedAuditEvidence(workerCtx, output, citations.length);

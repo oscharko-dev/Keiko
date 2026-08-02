@@ -319,6 +319,80 @@ describe("POST /api/relationships (create + validate-before-persist)", () => {
     ).toHaveLength(1);
   });
 
+  it("rolls back a lifecycle transition when its audit entry cannot commit", () => {
+    const { store, db } = freshStoreBundle();
+    const created = store.createRelationship(
+      {
+        workspaceId: "ws-a",
+        scope: { kind: "workspace", workspaceId: "ws-a" },
+        type: "depends-on",
+        source: { kind: "capsule", id: "cap-a" },
+        target: { kind: "capsule", id: "cap-b" },
+        lifecycleState: "active",
+      },
+      testMutationAudit,
+    );
+    db.exec(`
+      CREATE TRIGGER reject_relationship_audit_update
+      BEFORE INSERT ON relationship_audit_entries
+      BEGIN
+        SELECT RAISE(FAIL, 'synthetic update audit failure');
+      END
+    `);
+
+    expect(() =>
+      store.updateLifecycle(
+        {
+          workspaceId: "ws-a",
+          id: created.relationship.id,
+          currentEtag: created.etag,
+          to: "blocked",
+        },
+        testMutationAudit,
+      ),
+    ).toThrow("synthetic update audit failure");
+    expect(store.getRelationship("ws-a", created.relationship.id)?.lifecycleState).toBe("active");
+  });
+
+  it("rolls back a reconnect when its audit entry cannot commit", () => {
+    const { store, db } = freshStoreBundle();
+    const created = store.createRelationship(
+      {
+        workspaceId: "ws-a",
+        scope: { kind: "workspace", workspaceId: "ws-a" },
+        type: "depends-on",
+        source: { kind: "capsule", id: "cap-a" },
+        target: { kind: "capsule", id: "cap-b" },
+        lifecycleState: "active",
+      },
+      testMutationAudit,
+    );
+    db.exec(`
+      CREATE TRIGGER reject_relationship_audit_reconnect
+      BEFORE INSERT ON relationship_audit_entries
+      BEGIN
+        SELECT RAISE(FAIL, 'synthetic reconnect audit failure');
+      END
+    `);
+
+    expect(() =>
+      store.reconnect(
+        {
+          workspaceId: "ws-a",
+          id: created.relationship.id,
+          currentEtag: created.etag,
+          target: { kind: "capsule", id: "cap-c" },
+        },
+        testMutationAudit,
+      ),
+    ).toThrow("synthetic reconnect audit failure");
+    expect(store.getRelationship("ws-a", created.relationship.id)?.target).toEqual({
+      kind: "capsule",
+      id: "cap-b",
+      workspaceId: "ws-a",
+    });
+  });
+
   it("rejects without Idempotency-Key (400)", async () => {
     const store = freshStore();
     const { redactor } = trackingRedactor();

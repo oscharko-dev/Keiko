@@ -27,6 +27,7 @@ import {
   UpdateRemediationError,
   type UpdateRemediationManager,
 } from "./update-remediation.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 
 const tempRoots: string[] = [];
 const NOW = Date.parse("2026-06-30T12:00:00.000Z");
@@ -395,7 +396,7 @@ describe("update remediation manager", () => {
     expect(status.updateCanComplete).toBe(false);
   });
 
-  it("reruns an interrupted local-state repair after restart", async (ctx) => {
+  it("blocks an interrupted local-state repair after restart until it is reconciled", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const stateDir = makeStateDir();
     const memoryDb = join(stateDir, "memory", "keiko-memory.db");
@@ -418,23 +419,24 @@ describe("update remediation manager", () => {
     });
     const subject = createUpdateRemediationManager({ localState, now: () => NOW });
 
-    const result = await subject.runAction({
-      actionId: "local-state-repair:memory-vault",
-      targetVersion: TARGET,
-      impact: {
-        stateImpact: [
-          {
-            store: "memory",
-            description: "Memory store permissions require repair.",
-            remediation: "repair-required",
-            userActionRequired: true,
-          },
-        ],
-      },
-    });
+    await expect(
+      subject.runAction({
+        actionId: "local-state-repair:memory-vault",
+        targetVersion: TARGET,
+        impact: {
+          stateImpact: [
+            {
+              store: "memory",
+              description: "Memory store permissions require repair.",
+              remediation: "repair-required",
+              userActionRequired: true,
+            },
+          ],
+        },
+      }),
+    ).rejects.toMatchObject({ code: "UPDATE_REMEDIATION_RUNNING" });
 
-    expect(result.actions[0]?.status).toBe("completed");
-    expect(statSync(memoryDb).mode & 0o777).toBe(0o600);
+    expect(statSync(memoryDb).mode & 0o777).toBe(0o644);
   });
 
   it("records failed remediation and keeps update completion blocked", async () => {
@@ -452,7 +454,14 @@ describe("update remediation manager", () => {
   });
 
   it("records thrown remediation failures instead of resuming stale running state", async () => {
-    const subject = manager(makeStateDir(), throwingLocalKnowledge());
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const subject = createUpdateRemediationManager({
+      localState: createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW }),
+      localKnowledge: throwingLocalKnowledge(),
+      now: () => NOW,
+      diagnostics: { record: (record) => diagnostics.push(record) },
+      redactString: (value) => value,
+    });
 
     const failed = await subject.runAction({
       actionId: "local-knowledge-reindex:local-knowledge",
@@ -468,6 +477,13 @@ describe("update remediation manager", () => {
     expect(
       subject.getStatus({ targetVersion: TARGET, impact: localKnowledgeImpact }).actions[0]?.status,
     ).toBe("failed");
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        operation: "update.remediation.execute",
+        source: "update-remediation.executeDraft",
+      }),
+    );
+    expect(JSON.stringify(diagnostics)).not.toContain("denied source");
   });
 
   it("treats unsupported owned runtime entries as manual review", (ctx) => {

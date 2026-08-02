@@ -7,8 +7,8 @@ import {
   applyWorkspaceReplace,
   applyGatewayVerifiedCapabilities,
   cloneRepository,
-  clearConfigCacheForTests,
-  clearModelCacheForTests,
+  resetConfigRequestCacheForTests,
+  resetModelRequestCacheForTests,
   clearVoiceCapabilityCacheForTests,
   clearProjectRequestForTests,
   deleteChat,
@@ -1836,7 +1836,7 @@ describe("files API helpers", () => {
 
 describe("fetchModels", () => {
   afterEach(() => {
-    clearModelCacheForTests();
+    resetModelRequestCacheForTests();
     vi.unstubAllGlobals();
   });
 
@@ -1879,7 +1879,7 @@ describe("fetchModels", () => {
 
 describe("fetchConfig", () => {
   afterEach(() => {
-    clearConfigCacheForTests();
+    resetConfigRequestCacheForTests();
     vi.unstubAllGlobals();
   });
 

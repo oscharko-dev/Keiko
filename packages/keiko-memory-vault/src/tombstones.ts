@@ -71,26 +71,6 @@ WHERE scope_kind = ? AND scope_coordinate = ?
 ORDER BY forgotten_at ASC
 `;
 
-const LIST_PAGE_BY_SCOPE_SQL = `
-SELECT * FROM memory_tombstones
-WHERE scope_kind = ? AND scope_coordinate = ?
-ORDER BY forgotten_at DESC, id ASC
-LIMIT ?
-`;
-
-const LIST_PAGE_AFTER_BY_SCOPE_SQL = `
-SELECT * FROM memory_tombstones
-WHERE scope_kind = ? AND scope_coordinate = ?
-  AND (forgotten_at < ? OR (forgotten_at = ? AND id > ?))
-ORDER BY forgotten_at DESC, id ASC
-LIMIT ?
-`;
-
-const COUNT_BY_SCOPE_SQL = `
-SELECT COUNT(*) AS count FROM memory_tombstones
-WHERE scope_kind = ? AND scope_coordinate = ?
-`;
-
 const DELETE_BY_SCOPE_BEFORE_SQL = `
 DELETE FROM memory_tombstones
 WHERE scope_kind = ? AND scope_coordinate = ? AND forgotten_at < ?
@@ -261,33 +241,6 @@ export function listTombstonesByScopeRows(
     scopeCoordinateOf(scope),
   ) as unknown as readonly TombstoneRow[];
   return rows.map((row) => rowToTombstone(row, cipher));
-}
-
-export function listTombstonesByScopePageRows(
-  db: DatabaseSync,
-  scope: MemoryScope,
-  cipher: MemoryContentCipher,
-  limit: number,
-  after?: MemoryTombstoneCursor,
-): MemoryTombstonePage {
-  const scopeKind = scopeKindOf(scope);
-  const coordinate = scopeCoordinateOf(scope);
-  const rows = (after === undefined
-    ? cachedPrepare(db, LIST_PAGE_BY_SCOPE_SQL).all(scopeKind, coordinate, limit)
-    : cachedPrepare(db, LIST_PAGE_AFTER_BY_SCOPE_SQL).all(
-        scopeKind,
-        coordinate,
-        after.forgottenAt,
-        after.forgottenAt,
-        after.id,
-        limit,
-      )) as unknown as readonly TombstoneRow[];
-  const countRow = cachedPrepare(db, COUNT_BY_SCOPE_SQL).get(scopeKind, coordinate) as
-    { readonly count: number } | undefined;
-  return {
-    tombstones: rows.map((row) => rowToTombstone(row, cipher)),
-    total: countRow?.count ?? 0,
-  };
 }
 
 function scopePredicate(scopes: readonly MemoryScope[]): string {

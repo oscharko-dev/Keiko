@@ -1,7 +1,7 @@
 // Voice session recap contract tests (ADR-0109). Pinned behaviours:
 //   AC1 — recap capability derives from the committed-transcript predicate (dormant for
 //         "none" / "speech-output"; allowed for "speech-to-text" / "full-realtime").
-//   AC3 — candidate lifecycle vocabulary: "proposed" first, terminal states delegated.
+//   AC3 — candidate lifecycle vocabulary supports governed initial acceptance and review states.
 //   AC4 — the audit record is content-free by validation; a non-user-triggered audit record is
 //         structurally invalid, making the "never automatic" invariant machine-checkable.
 //   D8  — the module source carries no forbidden sensitive vocabulary (same scan posture as
@@ -61,11 +61,19 @@ function validAuditRecord(
 
 describe("voice-session-recap contract", () => {
   it("pins the schema version and rejects every other value", () => {
-    expect(VOICE_SESSION_RECAP_SCHEMA_VERSION).toBe("1");
+    expect(VOICE_SESSION_RECAP_SCHEMA_VERSION).toBe("2");
     expect(isVoiceSessionRecapSchemaVersionSupported("1")).toBe(true);
-    for (const other of ["0", "2", 1, undefined, null, ""]) {
+    expect(isVoiceSessionRecapSchemaVersionSupported("2")).toBe(true);
+    for (const other of ["0", "3", 1, undefined, null, ""]) {
       expect(isVoiceSessionRecapSchemaVersionSupported(other)).toBe(false);
     }
+  });
+
+  it("accepts a legacy v1 audit record without the v2 accepted count", () => {
+    const legacy = validAuditRecord({ schemaVersion: "1" }) as Record<string, unknown>;
+    Reflect.deleteProperty(legacy, "candidatesAccepted");
+
+    expect(validateVoiceSessionRecapAuditRecord(legacy)).toEqual({ ok: true });
   });
 
   it("derives recap capability from the committed-transcript predicate (AC1)", () => {
@@ -102,7 +110,7 @@ describe("voice-session-recap contract", () => {
   it("rejects malformed audit records with a precise reason", () => {
     const cases: readonly [unknown, string][] = [
       [null, "audit: must be an object"],
-      [validAuditRecord({ schemaVersion: "2" }), "schemaVersion: unsupported"],
+      [validAuditRecord({ schemaVersion: "3" }), "schemaVersion: unsupported"],
       [validAuditRecord({ profile: "loud" }), "profile: unknown voice profile"],
       [validAuditRecord({ committedChars: -1 }), "committedChars: must be a non-negative integer"],
       [
