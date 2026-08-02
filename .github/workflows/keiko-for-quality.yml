@@ -287,6 +287,14 @@ jobs:
             echo "::warning::store artifact carries symlink entries — discarding it"
             rm -f store.zip; exit 0
           fi
+          # unzip implementations differ on absolute entry names — some strip the leading slash,
+          # some honor it and write outside -d. The gate must not depend on extractor behaviour:
+          # absolute names are rejected outright, like traversal segments and links.
+          NAMES="$(unzip -Z1 store.zip 2>/dev/null || true)"
+          if grep -q '^/' <<< "${NAMES}"; then
+            echo "::warning::store artifact carries absolute-path entries — discarding it"
+            rm -f store.zip; exit 0
+          fi
           # unzip -l trusts attacker-controlled central-directory lengths, so the listing gate
           # above is only a cheap first filter: a crafted entry can declare one byte and DEFLATE
           # gigabytes. Extraction therefore runs under kernel-enforced limits — ulimit -f caps any
@@ -482,9 +490,11 @@ jobs:
           # pipefail turns a FOUND violation into a clean-looking 141 (same repair as the restore
           # path; Codex, round 31).
           ZIPINFO="$(unzip -Z store.zip 2>/dev/null || true)"
+          NAMES="$(unzip -Z1 store.zip 2>/dev/null || true)"
           if [ -z "${LISTING}" ] || [ "${TOTAL}" -gt 26214400 ] || [ "${ENTRIES}" -gt 8 ] \
              || grep -q '\.\./' <<< "${LISTING}" \
-             || grep -q '^l' <<< "${ZIPINFO}"; then
+             || grep -q '^l' <<< "${ZIPINFO}" \
+             || grep -q '^/' <<< "${NAMES}"; then
             echo "::warning::unsigned store failed the archive gate — skipping signing"
             rm -f store.zip; exit 0
           fi
