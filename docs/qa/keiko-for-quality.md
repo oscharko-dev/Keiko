@@ -250,7 +250,11 @@ branch-protection change.
        echo "FAILED to list reviewer runs — containment NOT established" >&2
        exit 1
      fi
-     ids=$(printf '%s' "$ids" | grep -v '^$' | sort -u || true)
+     # `sed`, not `grep -v`. `grep -v '^$'` exits 1 when nothing remains, which is the ordinary
+     # "no live runs" case, so it needed `|| true` — and that also swallowed a real grep or sort
+     # failure, after which an empty `ids` read as containment. `sed` exits 0 either way, so the
+     # suppression can go and `pipefail` still catches a genuine failure.
+     ids=$(printf '%s\n' "$ids" | sed '/^$/d' | sort -u)
      [ -z "$ids" ] && break
      for id in $ids; do
        if ! gh run cancel "$id"; then
