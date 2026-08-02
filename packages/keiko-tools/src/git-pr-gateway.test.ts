@@ -7,6 +7,7 @@ import {
   GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   type GitDeliveryApprovalRequirement,
   type GitDeliveryOrgPolicyPack,
+  type GitDeliveryPolicyDecision,
   type GitDeliveryRepoPolicyPack,
 } from "@oscharko-dev/keiko-contracts";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
@@ -269,12 +270,12 @@ describe("gitPullRequestRejectionFor", () => {
 
 describe("evaluateGitPullRequestEffectivePolicy", () => {
   it("resolves a constrained decision against the base branch target", () => {
-    const constrained = {
-      outcome: "constrained" as const,
+    const constrained: GitDeliveryPolicyDecision = {
+      outcome: "constrained",
       constraints: [
         {
-          kind: "branch-pattern" as const,
-          patterns: [{ matchKind: "exact" as const, value: "dev" }],
+          kind: "branch-pattern",
+          patterns: [{ matchKind: "exact", value: "dev" }],
         },
       ],
     };

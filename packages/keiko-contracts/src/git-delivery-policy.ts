@@ -12,6 +12,7 @@ import type {
   GitDeliveryActionKind,
   GitDeliveryBlockReason,
   GitDeliveryConstraint,
+  GitDeliveryNonEmptyConstraints,
   GitDeliveryParseResult,
   GitDeliveryPolicyDecision,
   GitDeliveryProviderCapability,
@@ -88,7 +89,7 @@ type ResolvedLevel =
   | { readonly kind: "allowed" }
   | { readonly kind: "blocked" }
   | { readonly kind: "approval-gated"; readonly approvers: readonly string[] }
-  | { readonly kind: "constrained"; readonly constraints: readonly GitDeliveryConstraint[] }
+  | { readonly kind: "constrained"; readonly constraints: GitDeliveryNonEmptyConstraints }
   | { readonly kind: "none" };
 
 function resolveRuleToLevel(
@@ -104,7 +105,10 @@ function resolveRuleToLevel(
     return { kind: "approval-gated", approvers: rule.requiredApprovers ?? [] };
   }
   const constraints = rule.constraints ?? [];
-  return constraints.length === 0 ? { kind: "blocked" } : { kind: "constrained", constraints };
+  const firstConstraint = constraints[0];
+  return firstConstraint === undefined
+    ? { kind: "blocked" }
+    : { kind: "constrained", constraints: [firstConstraint, ...constraints.slice(1)] };
 }
 
 function resolveLevel(
@@ -158,7 +162,9 @@ function combineDecisions(org: ResolvedLevel, repo: ResolvedLevel): GitDeliveryP
   if (requiresApproval) {
     return { outcome: "approval-gated", requiredApprovers: selectedApprovers(org, repo) };
   }
-  if (constraints.length > 0) return { outcome: "constrained", constraints };
+  if (firstConstraint !== undefined) {
+    return { outcome: "constrained", constraints: [firstConstraint, ...constraints.slice(1)] };
+  }
   if (org.kind === "allowed" || repo.kind === "allowed") {
     return { outcome: "allowed" };
   }

@@ -672,7 +672,7 @@ describe("evaluateGitDeliveryEffectivePolicy", () => {
     ).toEqual({ outcome: "approval-gated" });
   });
 
-  it("reports the FIRST failing constraint and admits a decision with no constraints", () => {
+  it("reports the FIRST failing constraint", () => {
     const decision = {
       outcome: "constrained",
       constraints: [
@@ -684,8 +684,5 @@ describe("evaluateGitDeliveryEffectivePolicy", () => {
       outcome: "blocked",
       blockReason: "risk-class-ceiling",
     });
-    expect(
-      evaluateGitDeliveryEffectivePolicy({ outcome: "constrained", constraints: [] }, context),
-    ).toEqual({ outcome: "allowed" });
   });
 });

@@ -151,8 +151,10 @@ describe("git-delivery branch-pattern and constraint guards", () => {
 describe("git-delivery approval / policy-decision / evidence / execution-result guards", () => {
   it("models composite decision constraints as non-empty when present", () => {
     type ApprovalDecision = Extract<GitDeliveryPolicyDecision, { outcome: "approval-gated" }>;
+    type ConstrainedDecision = Extract<GitDeliveryPolicyDecision, { outcome: "constrained" }>;
     // @ts-expect-error optional composite constraints must contain at least one typed constraint.
     const emptyConstraints: ApprovalDecision["constraints"] = [];
+    const runtimeEmptyConstraints: readonly [] = [];
 
     expect(
       isGitDeliveryPolicyDecision({
@@ -161,6 +163,20 @@ describe("git-delivery approval / policy-decision / evidence / execution-result 
         constraints: emptyConstraints,
       }),
     ).toBe(false);
+
+    expect(
+      isGitDeliveryPolicyDecision({
+        outcome: "constrained",
+        constraints: runtimeEmptyConstraints,
+      }),
+    ).toBe(false);
+
+    const invalidConstrainedDecision: ConstrainedDecision = {
+      outcome: "constrained",
+      // @ts-expect-error constrained decisions must contain at least one typed constraint.
+      constraints: runtimeEmptyConstraints,
+    };
+    expect(invalidConstrainedDecision.constraints).toEqual([]);
   });
 
   it("isGitDeliveryApprovalRequirement accepts both discriminants", () => {
@@ -501,6 +517,17 @@ describe("parseGitDeliveryActionEnvelope (soundness: kind === resolvedInputs.kin
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errors.some((e) => e.includes("policyDecision"))).toBe(true);
+    }
+  });
+
+  it("rejects a constrained envelope without an enforceable constraint", () => {
+    const result = parseGitDeliveryActionEnvelope({
+      ...baseEnvelope(),
+      policyDecision: { outcome: "constrained", constraints: [] },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((error) => error.includes("policyDecision"))).toBe(true);
     }
   });
 

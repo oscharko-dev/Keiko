@@ -360,7 +360,7 @@ export type GitDeliveryPolicyDecision =
       readonly requiredApprovers: readonly string[];
       readonly constraints?: GitDeliveryNonEmptyConstraints | undefined;
     }
-  | { readonly outcome: "constrained"; readonly constraints: readonly GitDeliveryConstraint[] };
+  | { readonly outcome: "constrained"; readonly constraints: GitDeliveryNonEmptyConstraints };
 
 // ─── Preview and result (content-free) ──────────────────────────────────────────
 // Content-free preview descriptor: counts, flags, affected branch name only. Never carries diff
@@ -641,7 +641,7 @@ export function isGitDeliveryPolicyDecision(value: unknown): value is GitDeliver
     );
   }
   if (value.outcome === "constrained") {
-    return Array.isArray(value.constraints) && value.constraints.every(isGitDeliveryConstraint);
+    return isNonEmptyConstraintArray(value.constraints);
   }
   return false;
 }

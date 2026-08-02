@@ -226,7 +226,10 @@ describe("gitDeliveryApprovalNecessityForDecision", () => {
   it("maps each policy outcome to a necessity", () => {
     expect(gitDeliveryApprovalNecessityForDecision({ outcome: "allowed" })).toBe("not-required");
     expect(
-      gitDeliveryApprovalNecessityForDecision({ outcome: "constrained", constraints: [] }),
+      gitDeliveryApprovalNecessityForDecision({
+        outcome: "constrained",
+        constraints: [{ kind: "risk-class-ceiling", maxRiskClass: "publish" }],
+      }),
     ).toBe("not-required");
     expect(
       gitDeliveryApprovalNecessityForDecision({
