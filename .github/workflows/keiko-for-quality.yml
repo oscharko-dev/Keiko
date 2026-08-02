@@ -143,6 +143,7 @@ jobs:
               hashFiles('.github/keiko-for-quality.json') }}-${{ vars.KEIKO_QUALITY_MODEL_ID }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           WORKFLOW_PATH: .github/workflows/keiko-for-quality.yml
         run: |
           MATCH="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${ARTIFACT_NAME}&per_page=20" \
@@ -152,7 +153,9 @@ jobs:
                   select(.event == "pull_request_target")
                   | select(.path == env.WORKFLOW_PATH)
                   | select((([.pull_requests[]?.number] | index(env.PR_NUMBER | tonumber)) != null)
-                           or ((.pull_requests | length) == 0 and .head_branch == env.HEAD_REF))
+                           or ((.pull_requests | length) == 0
+                               and .head_branch == env.HEAD_REF
+                               and .head_repository.full_name == env.HEAD_REPO))
                   | "ok"' 2>/dev/null)"
                 if [ "${OK}" = "ok" ]; then echo "${RUN_ID}"; break; fi
               done)"
