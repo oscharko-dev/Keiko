@@ -96,7 +96,7 @@ jobs:
         run: git fetch --quiet --no-tags --no-recurse-submodules origin "pull/${PR_NUMBER}/head"
 
       - name: Review
-        uses: oscharko-dev/Keiko-for-Quality@688e34f077f3aec328614e77212e8cfd486d84ab # v0.7.0
+        uses: oscharko-dev/Keiko-for-Quality@3721f42e9b58ef8bce23879a74a0adcc67232614 # v0.8.0
         env:
           # Passed by variable NAME to the action, never as an input value: an input appears in the
           # step context that every other action in the job can read.
@@ -115,3 +115,10 @@ jobs:
           app_id: ${{ secrets.KEIKO_QUALITY_APP_ID }}
           app_private_key: ${{ secrets.KEIKO_QUALITY_APP_PRIVATE_KEY }}
           target_branches: dev
+          # Ceiling, not the spend. Since v0.8.0 the action allots
+          # min(ceiling, clamp(1.3 x (files x 40k + lines x 60), 80k, 6M)) per run and passes it to
+          # the engine's own --max-tokens-budget, which stops dispatching new files at the limit
+          # instead of reviewing everything first and confessing afterwards. The previous implicit
+          # 2M default starved an 87-file pull request in production (#2926); the formula narrows
+          # small runs far below this ceiling on its own, so raising it does not raise small-PR cost.
+          token_budget: "6000000"
