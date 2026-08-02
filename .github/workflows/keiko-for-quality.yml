@@ -22,21 +22,10 @@ on:
     types:
       [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed, edited]
 
-# The reviewer needs to read the repository, write review comments, and persist its review-store
-# cache. It has no contents-write, checks-write, commit, push, or merge authority. Approval is
-# deliberately NOT in that list: as the note above says, `pull-requests: write` can submit an
-# APPROVE review, and only the pinned action's behaviour declines to.
-#
-# `actions: write` exists ONLY for the cache: the cache service refuses writes without it
-# ("cache write denied: token has no writable scopes" — actions/cache/save fails soft, so the
-# first production run reviewed 105 files, reported success, and persisted nothing). The widening
-# is accepted deliberately: the scope also permits run cancellation/re-run via API, but this job
-# executes no candidate code — the token only ever runs inside the base-controlled workflow and
-# the SHA-pinned action, and the alternative is no cross-run memoization at all.
-permissions:
-  actions: write
-  contents: read
-  pull-requests: write
+# Empty at workflow level on purpose: the two jobs below need disjoint authority, and either
+# job holding the other's grant is exactly the coupling this file exists to avoid. Each job
+# declares precisely its own — see the notes on both.
+permissions: {}
 
 concurrency:
   # Metadata-only edits get their own group. `cancel-in-progress: false` protects only the RUNNING
@@ -82,7 +71,28 @@ jobs:
       github.event.pull_request.base.ref == 'dev' &&
       (github.event.action != 'edited' || github.event.changes.base != null) &&
       vars.KEIKO_QUALITY_ENABLED == 'true'
+    # What the review needs and nothing more. No contents-write, checks-write, actions-write,
+    # commit, push, or merge authority. Approval is deliberately NOT absent from the threat
+    # model: `pull-requests: write` can submit an APPROVE review, and only the pinned action's
+    # behaviour declines to (ADR-0170 D3).
+    #
+    # `actions: write` — needed only so the review store can persist — is deliberately NOT here:
+    # on this job it would sit in the same token that runs the external reviewer, and the
+    # dispatch API it satisfies takes a caller-chosen ref, so a compromised reviewer could start
+    # a dispatchable workflow FROM A CANDIDATE BRANCH, whose workflow file the candidate
+    # controls. The scope lives on persist-store below (no secrets, no environment, SHA-pinned
+    # actions/* only). Independent containments: the keiko-for-quality environment carries a
+    # protected-branches-only deployment policy, and release.yml's publish job sits behind the
+    # npm-publish environment's required human reviewer.
+    permissions:
+      contents: read
+      pull-requests: write
     environment: keiko-for-quality
+    outputs:
+      # Consumed by persist-store: the settlement outcome gates the save, and the derived cache
+      # key crosses jobs as an output so the two jobs can never derive different keys.
+      outcome: ${{ steps.review.outputs.outcome }}
+      store-key: ${{ steps.store-key.outputs.key }}
     env:
       # One component of the review-store cache-key identity below (the others are the profile
       # hash and the model identity). Bump in lockstep with the `uses:` pin: a new action version
@@ -194,14 +204,42 @@ jobs:
           # input the store layer is fully inert — that property is pinned by a test upstream.
           review_store_path: .keiko-review-store/store.json
 
-      # Persist the store only when the run settled complete: an incomplete or abandoned run never
-      # produces an updated store upstream, and a Review step that threw leaves `outcome` unset —
-      # the explicit comparison skips this step in every one of those cases. Saving under the
-      # head-SHA key (same derived output the restore uses) means each push archives its own store
-      # at most once; the next push restores it through the prefix fallback above.
-      - name: Save review store
+      # Hands the store to the persist-store job. An artifact, not a cache save, on purpose: the
+      # save needs `actions: write`, and that scope must never share a token with the job that
+      # runs the external reviewer (see the workflow-level permissions note). Uploading an
+      # artifact requires no extra permission. One-day retention: the artifact's only consumer
+      # runs seconds later in this same workflow run.
+      - name: Hand off review store
         if: steps.review.outputs.outcome == 'complete'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: review-store-${{ github.run_id }}
+          path: .keiko-review-store
+          retention-days: 1
+          if-no-files-found: error
+
+  # The ONLY holder of `actions: write` in this workflow, and deliberately the most boring job in
+  # it: no secrets, no environment, no checkout, no candidate data beyond the store the review job
+  # produced — every step is a SHA-pinned first-party action. Persisting under the head-SHA key
+  # (the exact output the restore derived) means each push archives its own store at most once;
+  # the next push restores it through the prefix fallback in the review job.
+  persist-store:
+    name: persist review store
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: review
+    if: needs.review.outputs.outcome == 'complete'
+    permissions:
+      actions: write
+    steps:
+      - name: Fetch handed-off store
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: review-store-${{ github.run_id }}
+          path: .keiko-review-store
+
+      - name: Save review store
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .keiko-review-store
-          key: ${{ steps.store-key.outputs.key }}
+          key: ${{ needs.review.outputs.store-key }}

@@ -85,10 +85,21 @@ workflow that does not ask for it.
 
 Be precise about what that buys. An environment scopes secrets to jobs that **declare** it, not to
 one workflow: another job declaring `environment: keiko-for-quality` could reference the same
-credentials and mint the same App identity — which would let it pre-post deduplication markers. The
-protection is that no such workflow exists and adding one requires a reviewed, merged change to the
-protected base, the same boundary that protects every other gate here. Binding issuance to this
+credentials and mint the same App identity — which would let it pre-post deduplication markers.
+Two boundaries hold together. First, no such workflow exists on the protected base, and adding one
+requires a reviewed, merged change. Second — because `workflow_dispatch` runs execute the workflow
+file of a **caller-chosen ref**, so "reviewed base" alone does not bind a dispatched run — the
+environment carries a protected-branches-only deployment branch policy: a job running a candidate
+branch's workflow file cannot declare this environment at all (raised by the Codex reviewer on
+#2931). Verify with `gh api repos/<owner>/<repo>/environments/keiko-for-quality` — the
+`deployment_branch_policy.protected_branches` flag must be `true`. Binding issuance to this
 workflow's OIDC identity would close the gap absolutely and is tracked as follow-up.
+
+The same review also made a second environment an operating prerequisite: `npm-publish`, with a
+required human reviewer, in front of `release.yml`'s publish job — because any job token holding
+`actions: write` (the reviewer's persist-store job, infra-failure-retry) can dispatch that
+workflow. Verify its protection the same way; a missing `required_reviewers` rule there reopens a
+production-publish path and must be treated as a provisioning failure, not a nicety.
 
 ### 3. Set variables and secrets
 

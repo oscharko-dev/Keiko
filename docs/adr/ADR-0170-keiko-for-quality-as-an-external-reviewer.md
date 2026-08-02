@@ -77,28 +77,34 @@ already behaves.
 
 ### D3 — Least privilege, candidate as data
 
-The consumer workflow holds exactly `actions: write`, `contents: read`, and `pull-requests:
-write`. It receives no contents-write, checks-write, administration, branch-protection, commit,
-push, or merge authority.
+The review job holds exactly `contents: read` and `pull-requests: write`. It receives no
+contents-write, checks-write, actions-write, administration, branch-protection, commit, push, or
+merge authority.
 
-`actions: write` was added on 2026-08-02, when the first production run of the v0.9.0 review
-store proved the cache service refuses writes without it (`cache write denied: token has no
-writable scopes` — `actions/cache/save` fails soft, so the run reviewed 105 files, reported step
-success, and persisted nothing). The grant exists solely so the review store can persist between
-runs, and it carries a named residual risk accepted deliberately: the scope permits cancelling
-and re-running workflow runs through the API, and it also satisfies the workflow-dispatch
-endpoint. Dispatch is the sharper edge: a dispatchable workflow whose jobs hold privileged
-scopes would let this token initiate that privilege indirectly — the concrete case was
-`release.yml`, whose publish job holds `contents: write` and `id-token: write`. That path is
-closed at the owning layer, not by narrowing this grant: the publish job runs behind the
-`npm-publish` environment, which requires a human approval before any step executes, so a
-dispatch from any token — this one included — stops at a person. What remains accepted is CI
-disruption (cancel/re-run/dispatch of unprivileged, approval-gated, or same-tree workflows), not
-code or content integrity. It is accepted because this job executes no candidate code — the
-token only ever runs inside the base-controlled workflow and the SHA-pinned action — and because
-the alternative is no cross-run memoization at all. A compromised pinned action holding this
-scope could disrupt CI runs; it still could not commit, push, merge, alter checks, publish, or
-widen its own authority.
+The review store's persistence needs `actions: write` (the cache service refuses writes without
+it — measured on 2026-08-02, when `actions/cache/save` failed soft and the first production
+store run reviewed 105 files, reported step success, and persisted nothing). That scope is
+deliberately NOT on the review job: it also satisfies the workflow-dispatch endpoint, and
+dispatch takes a caller-chosen ref, so on the token that runs the external reviewer it would let
+a compromised action start a dispatchable workflow from a candidate branch — a workflow file the
+candidate controls. Instead, a separate `persist-store` job holds `actions: write` alone: no
+secrets, no environment, no checkout, and a supply chain of exactly the SHA-pinned first-party
+`actions/*` steps; the store crosses jobs as a run artifact.
+
+Three containments hold independently of any token holder:
+
+1. The `keiko-for-quality` environment carries a protected-branches-only deployment branch
+   policy, so a job running a candidate branch's workflow file cannot declare the environment
+   and its secrets never materialize there — the environment's protection no longer rests solely
+   on "adding a workflow requires a reviewed merge".
+2. `release.yml`'s publish job runs behind the `npm-publish` environment, whose required human
+   reviewer is a provisioned operating prerequisite of this decision (verify with
+   `gh api repos/<owner>/<repo>/environments/npm-publish` — the `required_reviewers` protection
+   rule must be present); a dispatch with `publish: true` stops at a person.
+3. The persist-store job's residual `actions: write` surface is CI disruption
+   (cancel/re-run/dispatch of unprivileged, approval-gated, or protected-ref workflows), not code
+   or content integrity — accepted because the job executes nothing a candidate can influence
+   and the alternative is no cross-run memoization at all.
 
 State the approval case precisely rather than in that list. GitHub's create-review API accepts an
 `APPROVE` event from any token holding `pull-requests: write`, so the platform does **not** withhold
