@@ -77,34 +77,41 @@ already behaves.
 
 ### D3 — Least privilege, candidate as data
 
-The review job holds exactly `contents: read` and `pull-requests: write`. It receives no
+The consumer workflow holds exactly `actions: read`, `contents: read`, and `pull-requests:
+write`. It receives no write scope beyond the review conversations themselves: no
 contents-write, checks-write, actions-write, administration, branch-protection, commit, push, or
-merge authority.
+merge authority — and `actions: write` exists nowhere in the workflow.
 
-The review store's persistence needs `actions: write` (the cache service refuses writes without
-it — measured on 2026-08-02, when `actions/cache/save` failed soft and the first production
-store run reviewed 105 files, reported step success, and persisted nothing). That scope is
-deliberately NOT on the review job: it also satisfies the workflow-dispatch endpoint, and
-dispatch takes a caller-chosen ref, so on the token that runs the external reviewer it would let
-a compromised action start a dispatchable workflow from a candidate branch — a workflow file the
-candidate controls. Instead, a separate `persist-store` job holds `actions: write` alone: no
-secrets, no environment, no checkout, and a supply chain of exactly the SHA-pinned first-party
-`actions/*` steps; the store crosses jobs as a run artifact.
+That absence is the durable answer to a three-round review escalation on the adopting pull
+request. The review store first persisted through `actions/cache`, whose service demands
+`actions: write`; that scope also satisfies the workflow-dispatch endpoint, and dispatch takes a
+caller-chosen ref — so any holder could start a dispatchable workflow from a candidate branch,
+whose workflow file the candidate controls, up to and including a `release.yml` variant that
+drops its own approval environment. Fencing the scope (separate job, environment approvals)
+narrowed but could not close that class. Removing it did: the store now persists as a run
+artifact, which needs no write scope to upload, and the previous push's store is located and
+downloaded with `actions: read` — a scope that can neither cancel, re-run, nor dispatch.
 
-Three containments hold independently of any token holder:
+Artifacts carry their own poisoning model, bounded structurally: they are repository-wide, so a
+candidate's `pull_request` workflow could upload a same-named artifact — but the locate step
+accepts only artifacts whose producing run's event is `pull_request_target`, which a
+candidate-authored workflow file can never generate (that trigger always executes the protected
+base's file). Beneath that boundary, the action re-derives every entry's digests on load and
+rejects mismatches: a replayed entry is exactly as untrusted as the run that produced it.
+
+Two containments hold independently of this workflow's scopes, because other token holders
+retain `actions: write` (infra-failure-retry):
 
 1. The `keiko-for-quality` environment carries a protected-branches-only deployment branch
    policy, so a job running a candidate branch's workflow file cannot declare the environment
-   and its secrets never materialize there — the environment's protection no longer rests solely
-   on "adding a workflow requires a reviewed merge".
+   and its secrets never materialize there.
 2. `release.yml`'s publish job runs behind the `npm-publish` environment, whose required human
-   reviewer is a provisioned operating prerequisite of this decision (verify with
-   `gh api repos/<owner>/<repo>/environments/npm-publish` — the `required_reviewers` protection
-   rule must be present); a dispatch with `publish: true` stops at a person.
-3. The persist-store job's residual `actions: write` surface is CI disruption
-   (cancel/re-run/dispatch of unprivileged, approval-gated, or protected-ref workflows), not code
-   or content integrity — accepted because the job executes nothing a candidate can influence
-   and the alternative is no cross-run memoization at all.
+   reviewer is a provisioned operating prerequisite (verify with
+   `gh api repos/<owner>/<repo>/environments/npm-publish` — the `required_reviewers` rule must
+   be present). Because a dispatched candidate-branch `release.yml` variant could omit the
+   environment declaration entirely, the npm Trusted Publisher (ADR-0130) must additionally be
+   bound to the `npm-publish` environment on npmjs.com — an operator-side setting; until it is
+   set, that residual path is a stated fail-open window, not a closed one.
 
 State the approval case precisely rather than in that list. GitHub's create-review API accepts an
 `APPROVE` event from any token holding `pull-requests: write`, so the platform does **not** withhold

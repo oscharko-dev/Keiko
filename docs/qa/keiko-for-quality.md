@@ -99,7 +99,12 @@ The same review also made a second environment an operating prerequisite: `npm-p
 required human reviewer, in front of `release.yml`'s publish job — because any job token holding
 `actions: write` (the reviewer's persist-store job, infra-failure-retry) can dispatch that
 workflow. Verify its protection the same way; a missing `required_reviewers` rule there reopens a
-production-publish path and must be treated as a provisioning failure, not a nicety.
+production-publish path and must be treated as a provisioning failure, not a nicety. The
+environment declaration alone is not sufficient either: a dispatched candidate-branch
+`release.yml` variant could omit it, so the npm Trusted Publisher (ADR-0130) must also be bound
+to the `npm-publish` environment in the package's Trusted Publisher settings on npmjs.com — an
+operator-only step; until it is done, ADR-0170 D3 records that residual path as a stated
+fail-open window.
 
 ### 3. Set variables and secrets
 

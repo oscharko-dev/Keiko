@@ -61,13 +61,12 @@ rules:
       # it checks out `github.event.pull_request.base.sha` explicitly and fetches the head only as
       # Git objects (`git fetch pull/N/head`), so no candidate file is ever written to the working
       # tree, no candidate script/hook/action/package manager runs, and `--no-recurse-submodules`
-      # keeps submodules uninitialised. The review job's only write grant is
-      # `pull-requests: write`; `actions: write` — which the cache service demands for persisting
-      # the review store — lives on the separate persist-store job, which holds no secrets, no
-      # environment, and runs only SHA-pinned actions/* steps (ADR-0170 D3 records the split, the
-      # protected-branches-only policy on the keiko-for-quality environment, and the npm-publish
-      # required-reviewer boundary in front of the one privileged dispatch target). The review
-      # job holds no contents-write,
+      # keeps submodules uninitialised. Its only write grant is `pull-requests: write`;
+      # `actions: write` exists nowhere in the workflow — the review store persists as a run
+      # artifact (upload needs no scope; the cross-run lookup needs only `actions: read`, which
+      # cannot dispatch). ADR-0170 D3 records the artifact poisoning bound (event-filtered
+      # locate), the protected-branches-only policy on the keiko-for-quality environment, and
+      # the npm-publish required-reviewer boundary. It holds no contents-write,
       # checks-write, commit, push, or merge authority, and it
       # publishes no required status context. Approval is deliberately absent from that list:
       # `pull-requests: write` can submit an APPROVE review, so a compromised action could, and only

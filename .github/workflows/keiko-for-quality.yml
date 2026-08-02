@@ -71,34 +71,26 @@ jobs:
       github.event.pull_request.base.ref == 'dev' &&
       (github.event.action != 'edited' || github.event.changes.base != null) &&
       vars.KEIKO_QUALITY_ENABLED == 'true'
-    # What the review needs and nothing more. No contents-write, checks-write, actions-write,
-    # commit, push, or merge authority. Approval is deliberately NOT absent from the threat
-    # model: `pull-requests: write` can submit an APPROVE review, and only the pinned action's
-    # behaviour declines to (ADR-0170 D3).
+    # What the review needs and nothing more. No write scope beyond the review conversations
+    # themselves: no contents-write, checks-write, actions-write, commit, push, or merge
+    # authority. Approval is deliberately IN the threat model: `pull-requests: write` can submit
+    # an APPROVE review, and only the pinned action's behaviour declines to (ADR-0170 D3).
     #
-    # `actions: write` — needed only so the review store can persist — is deliberately NOT here:
-    # on this job it would sit in the same token that runs the external reviewer, and the
-    # dispatch API it satisfies takes a caller-chosen ref, so a compromised reviewer could start
-    # a dispatchable workflow FROM A CANDIDATE BRANCH, whose workflow file the candidate
-    # controls. The scope lives on persist-store below (no secrets, no environment, SHA-pinned
-    # actions/* only). Independent containments: the keiko-for-quality environment carries a
+    # There is deliberately NO `actions: write` anywhere in this workflow. The store persists as
+    # a run ARTIFACT: uploading one needs no extra scope at all, and locating/downloading the
+    # previous push's store needs only `actions: read` — which cannot cancel, re-run, or DISPATCH
+    # anything. Dispatch was the sharp edge: its API takes a caller-chosen ref, so any write-
+    # scoped token here could have started a dispatchable workflow from a candidate branch, whose
+    # workflow file the candidate controls (raised by the Codex reviewer on #2931, in three
+    # escalating rounds — the durable answer was removing the scope, not fencing it).
+    # Independent containments stay: the keiko-for-quality environment carries a
     # protected-branches-only deployment policy, and release.yml's publish job sits behind the
     # npm-publish environment's required human reviewer.
     permissions:
+      actions: read
       contents: read
       pull-requests: write
     environment: keiko-for-quality
-    outputs:
-      # Consumed by persist-store: the settlement outcome gates the save, and the derived cache
-      # key crosses jobs as an output so the two jobs can never derive different keys.
-      outcome: ${{ steps.review.outputs.outcome }}
-      store-key: ${{ steps.store-key.outputs.key }}
-    env:
-      # One component of the review-store cache-key identity below (the others are the profile
-      # hash and the model identity). Bump in lockstep with the `uses:` pin: a new action version
-      # may change what a store entry means, and a stale store must miss rather than mislead. The
-      # store's own per-entry digests are the hard guarantee — this key is the cheap partition.
-      KEIKO_QUALITY_ACTION_VERSION: v0.9.0
     steps:
       # Check out the TRUSTED BASE. Never `github.event.pull_request.head.sha`: under
       # pull_request_target that would place candidate-controlled files on disk in a job that holds
@@ -119,57 +111,46 @@ jobs:
         # rather than redacted diagnostics. Keeping it minimal narrows what the job log carries.
         run: git fetch --quiet --no-tags --no-recurse-submodules origin "pull/${PR_NUMBER}/head"
 
-      # The directory the review-store cache below restores into and saves from. Created ahead of
-      # the restore so a first-ever run still has a real, existing (empty) directory — the save
-      # step treats a missing path as an error, an empty one as a legitimate archive. The path is
-      # workspace-relative on purpose: the action reads `review_store_path` with plain Node file
-      # I/O, which does not expand `~`, so a home-relative path would silently name a different
-      # location than the cache steps archive.
+      # The directory the store lives in. NOT dot-prefixed: actions/upload-artifact excludes
+      # hidden paths unless told otherwise, and a hidden directory here would upload nothing and
+      # fail the hand-off (`if-no-files-found: error`) on every complete review. Workspace-
+      # relative on purpose: the action reads `review_store_path` with plain Node file I/O, which
+      # does not expand `~`.
       - name: Ensure review-store directory exists
-        run: mkdir -p .keiko-review-store
+        run: mkdir -p keiko-review-store
 
-      # Derives the review-store cache key exactly once; the restore and save steps below consume
-      # the outputs, so the two can never drift apart byte-wise. A step, not job-level env, on
-      # purpose: `hashFiles` evaluated in job env would run before the checkout above and hash
-      # nothing. The prefix is scoped to this pull request, this action version, this profile
-      # (hashFiles reads the trusted-base checkout), and this model identity — model id and
-      # protocol are non-secret repository variables; the endpoint is a secret and must never
-      # appear in a cache key the Actions UI displays in plain text.
-      - name: Derive review-store cache key
-        id: store-key
+      # Finds the newest store artifact an EARLIER RUN OF THIS WORKFLOW uploaded for this pull
+      # request. The event filter is the trust boundary, not the artifact name: artifacts are
+      # repo-wide, so a candidate's own `pull_request` workflow could upload a same-named one —
+      # but a candidate workflow file can never produce a `pull_request_target` run (that trigger
+      # always executes the protected base's file), so requiring the producing run's event to be
+      # `pull_request_target` excludes every candidate-authored artifact structurally. On top of
+      # that boundary, the action itself re-derives every entry's digests and rejects mismatches:
+      # a replayed entry is exactly as untrusted as the run that produced it (pinned upstream).
+      # No match — first push, expired retention, or nothing complete yet — means an empty store
+      # and a normal full review; memoization is an optimization, never a dependency.
+      - name: Locate previous review store
+        id: locate
         env:
-          PREFIX: >-
-            keiko-quality-review-store-v1-${{ github.event.pull_request.number }}-${{
-              env.KEIKO_QUALITY_ACTION_VERSION }}-${{
-              hashFiles('.github/keiko-for-quality.json') }}-${{
-              vars.KEIKO_QUALITY_MODEL_ID }}-${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}-
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: keiko-review-store-pr${{ github.event.pull_request.number }}
         run: |
-          {
-            echo "prefix=${PREFIX}"
-            echo "key=${PREFIX}${HEAD_SHA}"
-          } >> "${GITHUB_OUTPUT}"
+          MATCH="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${ARTIFACT_NAME}&per_page=20" \
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | reverse | .[].workflow_run.id' \
+            | while read -r RUN_ID; do
+                EVENT="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq .event)"
+                if [ "${EVENT}" = "pull_request_target" ]; then echo "${RUN_ID}"; break; fi
+              done)"
+          echo "run-id=${MATCH}" >> "${GITHUB_OUTPUT}"
 
-      # Restores the cross-run review store (v0.9.0): per-file review outcomes keyed by content
-      # digests, so a push that leaves most files untouched replays their prior results instead of
-      # re-paying the model for them. Trust note: a restored entry is exactly as untrusted on
-      # replay as it was the run it was produced — the action re-derives every key and re-sanitizes
-      # every finding, and rejects the whole store on any mismatch (pinned by tests upstream).
-      #
-      # The exact key ends in the head SHA, so it misses on every new push — intentional:
-      # `restore-keys` is the same prefix without the head SHA and falls through to the newest
-      # store from an earlier push to this same pull request. A store from a different pull
-      # request, profile, model, or action version never matches the prefix.
-      #
-      # Poisoning scope: this run's ref is the protected base, so the caches it can restore were
-      # created either by base-branch runs or by this same base-controlled workflow — a candidate's
-      # own `pull_request` workflows save into their merge-ref scope and cannot plant a cache here.
       - name: Restore review store
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.locate.outputs.run-id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: .keiko-review-store
-          key: ${{ steps.store-key.outputs.key }}
-          restore-keys: ${{ steps.store-key.outputs.prefix }}
+          name: keiko-review-store-pr${{ github.event.pull_request.number }}
+          path: keiko-review-store
+          run-id: ${{ steps.locate.outputs.run-id }}
+          github-token: ${{ github.token }}
 
       - name: Review
         id: review
@@ -199,47 +180,23 @@ jobs:
           # 2M default starved an 87-file pull request in production (#2926); the formula narrows
           # small runs far below this ceiling on its own, so raising it does not raise small-PR cost.
           token_budget: "6000000"
-          # Enables per-file memoization (v0.9.0). Relative to the workspace; the file lives
-          # inside the directory the cache steps above and below carry between runs. Without this
-          # input the store layer is fully inert — that property is pinned by a test upstream.
-          review_store_path: .keiko-review-store/store.json
+          # Enables per-file memoization (v0.9.0). Relative to the workspace; the file lives in
+          # the directory the locate/upload steps carry between runs. Without this input the
+          # store layer is fully inert — that property is pinned by a test upstream.
+          review_store_path: keiko-review-store/store.json
 
-      # Hands the store to the persist-store job. An artifact, not a cache save, on purpose: the
-      # save needs `actions: write`, and that scope must never share a token with the job that
-      # runs the external reviewer (see the workflow-level permissions note). Uploading an
-      # artifact requires no extra permission. One-day retention: the artifact's only consumer
-      # runs seconds later in this same workflow run.
-      - name: Hand off review store
+      # Persists the store for the next push — as an artifact, which needs no write scope at all
+      # (`actions: write` is deliberately absent from this workflow; see the permissions note).
+      # Only a complete settlement produces an updated store upstream, and a Review step that
+      # threw leaves `outcome` unset, so the condition skips both cases. A fixed name per pull
+      # request keeps the locate step's query one-lined; runs each own their artifact, and the
+      # locate step picks the newest eligible one. Seven days comfortably outlives any push gap
+      # on an active pull request; an expired store just means one full-price review.
+      - name: Persist review store
         if: steps.review.outputs.outcome == 'complete'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: review-store-${{ github.run_id }}
-          path: .keiko-review-store
-          retention-days: 1
+          name: keiko-review-store-pr${{ github.event.pull_request.number }}
+          path: keiko-review-store
+          retention-days: 7
           if-no-files-found: error
-
-  # The ONLY holder of `actions: write` in this workflow, and deliberately the most boring job in
-  # it: no secrets, no environment, no checkout, no candidate data beyond the store the review job
-  # produced — every step is a SHA-pinned first-party action. Persisting under the head-SHA key
-  # (the exact output the restore derived) means each push archives its own store at most once;
-  # the next push restores it through the prefix fallback in the review job.
-  persist-store:
-    name: persist review store
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: review
-    if: needs.review.outputs.outcome == 'complete'
-    permissions:
-      actions: write
-    steps:
-      - name: Fetch handed-off store
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: review-store-${{ github.run_id }}
-          path: .keiko-review-store
-
-      - name: Save review store
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .keiko-review-store
-          key: ${{ needs.review.outputs.store-key }}
