@@ -26,6 +26,19 @@ defect must be repaired and GitHub's required conversation-resolution rule block
 thread is resolved. Ignore, pause, bulk-resolution, dismissal, threshold relaxation, and admin
 bypass are not repair paths.
 
+Keiko for Quality is an external, SHA-pinned reviewer adopted by
+[ADR-0170](../adr/ADR-0170-keiko-for-quality-as-an-external-reviewer.md). Its product code lives in
+[oscharko-dev/Keiko-for-Quality](https://github.com/oscharko-dev/Keiko-for-Quality); this repository
+owns only the consumer workflow, the review profile, and the credentials. Like CodeRabbit it
+publishes **no required status** — its findings block solely through conversation resolution — so it
+does not appear in the protected set above and adding it there requires its own decision.
+
+It stays inert until the repository variable `KEIKO_QUALITY_ENABLED` is `true`. While active, the
+delivering agent arms auto-merge only after the run for the current head has terminated or a bounded
+wait longer than the workflow's job timeout has expired (ADR-0170 D5). Operating detail —
+provisioning, diagnostics, the disable path, and mass disposition — is in
+[`keiko-for-quality.md`](keiko-for-quality.md).
+
 CodSpeed and Greptile are retired under ADR-0169. Neither has an installed App, repository config,
 workflow, validator, package command, or protected context.
 

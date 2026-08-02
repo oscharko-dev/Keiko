@@ -23,6 +23,9 @@
     "CLAUDE.md",
     "CONTRIBUTING.md",
     "AGENTS.md",
+    ".github/**",
+    "**/*.svg",
+    "**/*.html",
     "**/Dockerfile*",
     "**/Makefile",
     "**/package.json",
@@ -70,7 +73,8 @@
     ".github/CODEOWNERS",
     ".gitattributes",
     "**/LICENSE",
-    "SECURITY.md"
+    "SECURITY.md",
+    ".github/**"
   ],
   "generated": [
     "**/dist/**",
@@ -91,12 +95,12 @@
       "reason": "prose and acceptance data outside docs/adr; reviewed by people and by deterministic gates, not by the model"
     },
     {
-      "pattern": "**/*.{png,jpg,jpeg,gif,svg,ico,icns,webp,woff,woff2,ttf,pdf,zip,wasm}",
-      "reason": "binary and vector assets carry no reviewable source. Property lists are deliberately NOT here: a macOS entitlements plist is a privilege boundary, so it is review-relevant above."
+      "pattern": "**/*.{png,jpg,jpeg,gif,ico,icns,webp,woff,woff2,ttf,pdf,zip,wasm}",
+      "reason": "binary assets carry no reviewable source. SVG is deliberately NOT here: it is text and can carry <script>, so it is review-relevant above. Property lists likewise \u2014 a macOS entitlements plist is a privilege boundary."
     },
     {
-      "pattern": "**/*.{md,mdx,txt,csv,html,sql,lock,snap,map,yml,yaml,json,toml,properties}",
-      "reason": "remaining prose, data, and configuration not named as review-relevant above; covered by deterministic gates"
+      "pattern": "**/*.{md,mdx,txt,csv,sql,lock,snap,map,yml,yaml,json,toml,properties}",
+      "reason": "remaining prose, data, and configuration not named as review-relevant above; covered by deterministic gates. HTML is deliberately NOT here: 27 design-system pages carry inline <script>, so HTML is review-relevant above."
     },
     {
       "pattern": "**/{.gitignore,.editorconfig,.prettierignore,.npmignore,.dockerignore}",

@@ -5,8 +5,11 @@
 Accepted (maintainer decision, 2026-07-13); operationally amended after the 2026-07-14 liveness
 incident; amended 2026-07-18 to adopt Qodo as the advisory review product in place of Gitar;
 amended 2026-08-01 by ADR-0167 to retire Qodo/KFQ and adopt zero-cost autonomous gates; amended by
-ADR-0168 for conditional CodeRabbit settlement; and amended 2026-08-02 by ADR-0169 to retire
-CodSpeed and Greptile and fix the protected set at ten checks.
+ADR-0168 for conditional CodeRabbit settlement; amended 2026-08-02 by ADR-0169 to retire
+CodSpeed and Greptile and fix the protected set at ten checks; and amended 2026-08-02 by
+[ADR-0170](ADR-0170-keiko-for-quality-as-an-external-reviewer.md), which reintroduces Keiko for
+Quality as an external SHA-pinned reviewer and adds the bounded auto-merge arming interlock (D5)
+to this decision's delivery rules. The protected set is unchanged by that amendment.
 
 ## Amends
 

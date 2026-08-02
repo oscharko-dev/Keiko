@@ -401,9 +401,11 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 - **Bounded reviewer arming interlock (ADR-0170 D5).** When the Keiko for Quality reviewer is
   active — that is, when `vars.KEIKO_QUALITY_ENABLED` is `true` and its workflow runs on the pull
   request — arm auto-merge only after that run for the **current head** has terminated:
-  published its result or failed. If it has not terminated within **20 minutes** of the last
+  published its result or failed. If it has not terminated within **35 minutes** of the last
   required check going green, arm anyway and record the expiry in the PR as a delivery-policy
-  event. The wait is bounded on purpose: a reviewer outage may delay integration, never block it
+  event. The wait deliberately exceeds the workflow's own `timeout-minutes: 30`: a shorter wait
+  would expire while a perfectly healthy review is still running, which is the outcome the
+  interlock exists to prevent. If that timeout changes, this number must change with it. The wait is bounded on purpose: a reviewer outage may delay integration, never block it
   indefinitely. An expired wait is never described as a clean review. When `KEIKO_QUALITY_ENABLED`
   is not `true` the job never starts, the interlock does not apply, and nothing changes.
 - **Branch naming** follows `type/short-slug` — e.g. `feat/…`, `fix/…`, `issue/<n>-…`,
