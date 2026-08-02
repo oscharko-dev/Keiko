@@ -146,14 +146,26 @@ jobs:
           MODEL_PROTOCOL: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
         run: |
           # The action pin is read from THIS workflow file in the trusted-base checkout — the one
-          # place it cannot drift from what actually executes. It partitions the store because a
-          # wrapper release can change review or sanitization SEMANTICS without changing the
-          # store's format: schema and key re-derivation catch deliberate field changes, not
-          # meaning changes, so an upgrade must start from an empty store.
-          ACTION_SHA="$(grep -oE 'Keiko-for-Quality@[0-9a-f]{40}' \
-            .github/workflows/keiko-for-quality.yml | head -1 | cut -d@ -f2)"
+          # place it cannot drift from what actually executes; a dedicated env would reintroduce
+          # exactly that drift (env says A, uses: executes B, stores partition under A). It
+          # partitions the store because a wrapper release can change review or sanitization
+          # SEMANTICS without changing the store's format. Parsed STRUCTURALLY (YAML, not grep),
+          # so reformatting the uses: line cannot break the derivation; only genuinely removing
+          # the pinned step can, and that fails loudly.
+          ACTION_SHA="$(python3 - <<'PYEXTRACT'
+import yaml
+doc = yaml.safe_load(open(".github/workflows/keiko-for-quality.yml"))
+for step in doc["jobs"]["review"]["steps"]:
+    uses = step.get("uses", "")
+    if uses.startswith("oscharko-dev/Keiko-for-Quality@"):
+        sha = uses.split("@", 1)[1].split()[0]
+        if len(sha) == 40 and all(c in "0123456789abcdef" for c in sha):
+            print(sha)
+        break
+PYEXTRACT
+          )"
           if [ -z "${ACTION_SHA}" ]; then
-            echo "::error::failed to derive the action pin from the workflow text — the uses: line changed shape; fix the grep alongside it"
+            echo "::error::no 40-hex Keiko-for-Quality pin found in the review job — the pinned step moved or lost its SHA"
             exit 1
           fi
           IDENTITY="$(printf 'profile=%s model=%s protocol=%s action=%s' \
