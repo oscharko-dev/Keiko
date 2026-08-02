@@ -67,9 +67,13 @@ tree, the reviewer's implementation, or its own validator.
 This is safe because the threat the freeze addressed is out of scope by construction rather than by
 mitigation. The freeze existed to prevent a forged **required** status context. This adoption
 introduces no required check, so there is no context to forge. What remains is ordinary
-`pull_request_target` semantics — GitHub takes the workflow definition from the protected base — plus
-an action reference that is immutable because it is a commit SHA in a repository the candidate cannot
-write to.
+`pull_request_target` semantics — GitHub takes the workflow definition from the BASE ref's file,
+which for the eligible runs this decision governs (base `dev`, a protected branch) is the protected
+one a candidate cannot alter — plus an action reference that is immutable because it is a commit SHA
+in a repository the candidate cannot write to. Stated precisely because D3's later analysis proved
+the unscoped form wrong: a pull request opened against a contributor-controlled base executes that
+base's own workflow copy under the same trigger, which is exactly why the D3 containments
+(environment deployment branch policy, context-bound store MAC) never lean on the trigger alone.
 
 The consequence is that a new reviewer workflow takes effect only after it is merged to `dev`. That
 is not a bootstrap problem requiring special handling; it is how every workflow in this repository
