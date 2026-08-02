@@ -82,10 +82,20 @@ only waits for runs that actually started. Provisioning is not finished until th
 reviewed:
 
 ```bash
-gh pr list --base dev --state open --json number --jq '.[].number' | while read -r n; do
+# Non-draft, same-repository heads only, and an explicit limit — `gh pr list` returns 30 by default.
+# The draft filter is not cosmetic: `gh pr ready` on a draft would PUBLISH someone else's draft.
+gh pr list --base dev --state open --limit 200 \
+  --json number,isDraft,headRepositoryOwner,headRepository \
+  --jq '.[] | select(.isDraft == false)
+            | select(.headRepositoryOwner.login == "oscharko-dev" and .headRepository.name == "Keiko")
+            | .number' |
+while read -r n; do
   gh pr ready "$n" --undo && gh pr ready "$n"   # emits ready_for_review on the current head
 done
 ```
+
+The toggle briefly marks each pull request as a draft. That is visible to watchers, so do it once,
+deliberately, at provisioning time — not as a routine operation.
 
 Then confirm every eligible open pull request has a `keiko-for-quality` run on its **current** head
 before treating the reviewer as active.
@@ -156,8 +166,9 @@ branch-protection change.
 
 **Fastest, no merge required — two steps, both required:**
 
-1. Delete or rename the `KEIKO_QUALITY_MODEL_ENDPOINT` repository variable. The job's `if:`
-   condition stops matching, so no _new_ runner starts.
+1. Set the `KEIKO_QUALITY_ENABLED` repository variable to anything other than `true`, or delete
+   it. That is the value the job condition tests, so no _new_ runner starts. Removing the endpoint
+   secret instead would let the job start and then fail — noisy, and slower to take effect.
 2. **Cancel every in-progress `keiko-for-quality` run.** Step 1 does not stop a runner that already
    started: it has its inputs and credentials and will keep publishing findings until it finishes or
    hits the 30-minute job timeout. Treating step 1 alone as "nothing new is published" is wrong, and
@@ -168,7 +179,8 @@ branch-protection change.
      --jq '.[].databaseId' | xargs -r -n1 gh run cancel
    ```
 
-Reverse it by setting the variable again.
+Reverse it by setting `KEIKO_QUALITY_ENABLED` back to `true`, then retrigger the open pull
+requests as in provisioning step 4 — re-enabling emits no pull-request event either.
 
 **Durable:** open a pull request removing `.github/workflows/keiko-for-quality.yml`, its zizmor
 anchor in `.github/zizmor.yml`, and the profile. Re-run `npm run check:zizmor-anchors` afterwards,
@@ -181,8 +193,9 @@ Required Conversation Resolution.
 
 If a bad model or configuration publishes many wrong findings:
 
-1. Disable via the variable **and cancel every in-progress run** (both steps above). Step one alone
-   leaves an already-running review publishing for up to 30 more minutes.
+1. Set `KEIKO_QUALITY_ENABLED` to something other than `true` **and cancel every in-progress run**
+   (both steps above). Step one alone leaves an already-running review publishing for up to 30 more
+   minutes.
 2. Do **not** bulk-resolve conversations to clear the board. A resolved conversation is a claim that
    the defect was repaired or technically dispositioned, and a false one is worse than the noise.
 3. Triage the published findings. Repair the real ones; on each false one, reply stating why it is

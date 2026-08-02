@@ -31,6 +31,7 @@
     "docs/adr/*.md"
   ],
   "deletionCritical": [
+    ".github/keiko-for-quality.json",
     "**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
     "**/*.{c,h,m,mm,cpp,hpp,cc,cs}",
     "**/*.{sh,bash,zsh,ps1,psm1,bat,cmd}",
