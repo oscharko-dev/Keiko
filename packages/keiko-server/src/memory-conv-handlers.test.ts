@@ -16,6 +16,7 @@ import type { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { Readable } from "node:stream";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type {
   MemoryEdge,
   MemoryId,
@@ -560,8 +561,10 @@ describe("handleMemoryCaptureFromConversation", () => {
 
   it("returns the accepted status that supervised capture persisted", async () => {
     const vault = makeVault();
+    const evidenceStore = createInMemoryEvidenceStore();
     const deps = makeDeps({
       memoryVault: vault,
+      evidenceStore,
       codingRuntimeDeploymentCeiling: "supervised-coding",
     });
     deps.store.updateMemoryAutonomyPolicy("supervised-coding", 0);
@@ -578,12 +581,23 @@ describe("handleMemoryCaptureFromConversation", () => {
     expect(result.status).toBe(200);
     const outcomes = asJson(result).outcomes as readonly {
       readonly kind: string;
+      readonly requiresApproval?: boolean;
       readonly status?: string;
       readonly proposal?: { readonly proposalId: string };
     }[];
-    expect(outcomes[0]).toMatchObject({ kind: "candidate", status: "accepted" });
+    expect(outcomes[0]).toMatchObject({
+      kind: "candidate",
+      requiresApproval: false,
+      status: "accepted",
+    });
     const proposalId = outcomes[0]?.proposal?.proposalId;
     expect(vault.getMemory(proposalId as unknown as MemoryId)?.status).toBe("accepted");
+    const ledger = evidenceStore
+      .list()
+      .map((runId) => evidenceStore.get(runId) ?? "")
+      .join("\n");
+    expect(ledger).toContain("governance-auto-accepted");
+    expect(ledger).not.toContain("release checks use vitest");
   });
 
   it("honors a governed-assist memory posture below the deployment ceiling", async () => {

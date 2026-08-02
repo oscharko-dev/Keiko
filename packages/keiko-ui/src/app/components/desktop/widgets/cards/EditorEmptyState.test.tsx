@@ -10,6 +10,12 @@ const { createProjectMock, pickMock, capability } = vi.hoisted(() => ({
 
 vi.mock("../../../../../lib/api", () => ({
   createProject: createProjectMock,
+  projectResponseWarningMessage: (response: {
+    readonly warning?: { readonly message: string; readonly correlationId: string };
+  }): string | undefined =>
+    response.warning === undefined
+      ? undefined
+      : `${response.warning.message} Support ID: ${response.warning.correlationId}`,
 }));
 vi.mock("../../../../../lib/native-file-dialog", () => ({
   pickWithNativeDialog: pickMock,
@@ -121,6 +127,30 @@ describe("EditorEmptyState", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(
       "The saved workspace identity is no longer current.",
     );
+    expect(onOpenRoot).not.toHaveBeenCalled();
+  });
+
+  it("keeps the editor unbound and exposes a trust-grant warning", async () => {
+    createProjectMock.mockResolvedValueOnce({
+      project: {
+        path: "/abs/project",
+        workspaceAvailable: true,
+      },
+      warning: {
+        code: "PROJECT_TRUST_GRANT_FAILED",
+        message: "The project was registered but remains restricted.",
+        correlationId: "editor-trust-correlation",
+      },
+    });
+    const onOpenRoot = vi.fn();
+    render(<EditorEmptyState onOpenRoot={onOpenRoot} />);
+
+    fireEvent.change(screen.getByLabelText("Project folder path"), {
+      target: { value: "/abs/project" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("editor-trust-correlation");
     expect(onOpenRoot).not.toHaveBeenCalled();
   });
 

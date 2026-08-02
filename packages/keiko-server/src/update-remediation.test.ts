@@ -474,7 +474,10 @@ describe("update remediation manager", () => {
 
     expect(failed.overallStatus).toBe("failed");
     expect(failed.updateCanComplete).toBe(false);
-    expect(failed.actions[0]?.status).toBe("failed");
+    expect(failed.actions[0]).toMatchObject({
+      status: "failed",
+      failure: "remediation-execution-failed",
+    });
   });
 
   it("records thrown remediation failures instead of resuming stale running state", async () => {
@@ -496,7 +499,7 @@ describe("update remediation manager", () => {
     expect(failed.overallStatus).toBe("failed");
     expect(failed.actions[0]).toMatchObject({
       status: "failed",
-      failure: "manual-review-required",
+      failure: "remediation-execution-failed",
     });
     expect(
       subject.getStatus({ targetVersion: TARGET, impact: localKnowledgeImpact }).actions[0]?.status,

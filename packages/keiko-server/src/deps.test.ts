@@ -1034,6 +1034,41 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     }
   });
 
+  it("runs the GitHub connector with the composed environment", async () => {
+    const injectedBin = tmp("coding-context-injected-bin-");
+    const ambientBin = tmp("coding-context-ambient-bin-");
+    const writeGhStub = (directory: string, source: string): void => {
+      const executable = join(directory, "gh");
+      writeFileSync(executable, `#!/bin/sh\nprintf '{"source":"${source}"}'\n`, "utf8");
+      chmodSync(executable, 0o700);
+    };
+    writeGhStub(injectedBin, "injected");
+    writeGhStub(ambientBin, "ambient");
+    const originalPath = process.env.PATH;
+    process.env.PATH = ambientBin;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("coding-context-env-evidence-"),
+      env: {
+        GITHUB_CONNECTOR_AUTHORIZED: "true",
+        GH_TOKEN: "test-injected-token",
+        HOME: tmp("coding-context-env-home-"),
+        PATH: injectedBin,
+      },
+      initialProjectPath: tmp("coding-context-env-project-"),
+    });
+
+    try {
+      await expect(
+        deps.codingContextGitHubPort?.readJson(["api", "repos/example/project/issues/1"]),
+      ).resolves.toEqual({ source: "injected" });
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      await deps.dispose?.();
+    }
+  });
+
   it("does not compose the connected-context GitHub port without authorization", async () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,

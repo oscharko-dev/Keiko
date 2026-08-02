@@ -34,7 +34,7 @@ import {
   type CaptureContext,
   type CaptureOutcome,
 } from "@oscharko-dev/keiko-memory-capture";
-import { MEMORY_TYPES } from "@oscharko-dev/keiko-contracts";
+import { MEMORY_TYPES, type CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import type {
   MemoryAuditEvent,
   MemoryId,
@@ -54,6 +54,7 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
+import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import {
   enforcePersistableMemoryOutcome,
@@ -478,33 +479,34 @@ function persistCandidateOutcomes(
   vault: MemoryVaultStore,
   outcomes: readonly CaptureOutcome[],
 ): readonly PersistedCaptureOutcome[] {
-  const persisted: PersistedCaptureOutcome[] = [];
   const mode = resolvePersistedMemoryAutonomyMode(deps);
-  for (const outcome of outcomes) {
-    if (!isPersistableMemoryCandidate(outcome)) {
-      persisted.push(outcome);
-      continue;
-    }
-    const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
-    const record = buildMemoryRecordFromProposal(proposalId, outcome);
-    if (record !== null) {
-      if (isSuppressedByForgetTombstone(vault, record)) {
-        persisted.push({ kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON });
-        continue;
-      }
-      const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
-        ? promoteEligibleMemoryRecord(record)
-        : record;
-      vault.insertMemory(candidate);
-      persisted.push({
-        ...outcome,
-        status: candidate.status === "accepted" ? "accepted" : "proposed",
-      });
-      continue;
-    }
-    persisted.push(outcome);
+  return outcomes.map((outcome) => persistCandidateOutcome(deps, vault, mode, outcome));
+}
+
+function persistCandidateOutcome(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  mode: CodingWorkbenchMode,
+  outcome: CaptureOutcome,
+): PersistedCaptureOutcome {
+  if (!isPersistableMemoryCandidate(outcome)) return outcome;
+  const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
+  const record = buildMemoryRecordFromProposal(proposalId, outcome);
+  if (record === null) return outcome;
+  if (isSuppressedByForgetTombstone(vault, record)) {
+    return { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON };
   }
-  return persisted;
+  const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
+    ? promoteEligibleMemoryRecord(record)
+    : record;
+  vault.insertMemory(candidate);
+  const accepted = candidate.status === "accepted";
+  if (accepted) recordAutoAcceptedMemoryCaptureDecision(deps, mode, "desktop", candidate);
+  return {
+    ...outcome,
+    requiresApproval: accepted ? false : outcome.requiresApproval,
+    status: accepted ? "accepted" : "proposed",
+  };
 }
 
 type PersistedCaptureOutcome =

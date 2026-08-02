@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState, type KeyboardEvent, type ReactNode } from "react";
-import { createProject } from "../../../../../lib/api";
+import { createProject, projectResponseWarningMessage } from "../../../../../lib/api";
 import { useTranslate } from "../../../../../lib/i18n";
 import { pickWithNativeDialog } from "../../../../../lib/native-file-dialog";
 import { useNativeFileDialogCapability } from "../../hooks/useNativeFileDialogCapability";
@@ -33,6 +33,11 @@ export function EditorEmptyState({
       setConnecting(true);
       try {
         const response = await createProject({ path: selectedPath });
+        const warning = projectResponseWarningMessage(response);
+        if (warning !== undefined) {
+          setNotice(warning);
+          return;
+        }
         if (response.project.workspaceAvailable !== true) {
           setNotice(t("editor.empty.workspaceUnavailable"));
           return;

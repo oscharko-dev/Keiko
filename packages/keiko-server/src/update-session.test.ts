@@ -528,7 +528,7 @@ describe("UpdateSessionManager", () => {
     }
   });
 
-  it("recovers a file lock from a dead process before the stale timeout", async () => {
+  it("keeps a fresh file lock after its owner dies so child metadata can be published", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-dead-"));
     try {
       const now = Date.parse("2026-06-30T00:00:01.000Z");
@@ -554,9 +554,10 @@ describe("UpdateSessionManager", () => {
         runCommandImpl: () => Promise.resolve(commandResult()),
       });
 
-      expect(lock.isLocked()).toBe(false);
-      expect(manager.start({ targetVersion: "0.2.12" }).session.phase).toBe("preparing");
-      await waitForPhase(manager, "restart-required");
+      expect(lock.isLocked()).toBe(true);
+      expect(() => manager.start({ targetVersion: "0.2.12" })).toThrow(
+        expect.objectContaining({ code: "UPDATE_SESSION_ACTIVE" }),
+      );
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -685,6 +686,33 @@ describe("UpdateSessionManager", () => {
         staleMs: 1_000,
         now: () => Date.parse("2026-06-30T00:00:02.000Z"),
         pidAlive: (pid) => pid === 222,
+      });
+
+      expect(lock.isLocked()).toBe(true);
+      expect(lock.acquire(lockRecord("replacement"))).toBe(false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a lock while its owning parent is alive beyond the stale interval", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-live-parent-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      await writeFile(
+        lockPath,
+        `${JSON.stringify({
+          sessionId: "live-parent",
+          targetVersion: "0.2.10",
+          startedAt: "2026-06-30T00:00:00.000Z",
+          pid: 111,
+        })}\n`,
+        { mode: 0o600 },
+      );
+      const lock = createFileUpdateSessionLock(lockPath, {
+        staleMs: 1_000,
+        now: () => Date.parse("2026-06-30T00:00:02.001Z"),
+        pidAlive: (pid) => pid === 111,
       });
 
       expect(lock.isLocked()).toBe(true);

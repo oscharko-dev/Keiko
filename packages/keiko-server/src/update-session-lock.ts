@@ -238,12 +238,10 @@ function reclaimableValidRecord(
   options: ResolvedFileUpdateSessionLockOptions,
 ): boolean {
   const ageMs = lockAgeMs(record, options.now);
-  if (!options.pidAlive(record.pid)) {
-    if (record.childPid === undefined || !options.pidAlive(record.childPid)) return true;
-    return ageMs !== undefined && ageMs > options.staleMs * 2;
-  }
-  if (ageMs === undefined || ageMs < options.staleMs) return false;
-  return ageMs >= options.staleMs * 2;
+  if (ageMs === undefined || options.pidAlive(record.pid)) return false;
+  if (ageMs < options.staleMs) return false;
+  if (record.childPid === undefined || !options.pidAlive(record.childPid)) return true;
+  return ageMs > options.staleMs * 2;
 }
 
 function reclaimable(

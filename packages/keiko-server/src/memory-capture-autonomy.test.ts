@@ -337,19 +337,30 @@ async function waitForCount(
 describe("mode-aware memory capture journey", () => {
   it("auto-accepts explicit remember intent under autonomous delivery", async () => {
     const vault = makeVault();
-    const deps = makeDeps({ vault, model: "[]", mode: "autonomous-delivery" });
+    const evidence = capturingEvidenceStore();
+    const deps = makeDeps({
+      vault,
+      model: "[]",
+      mode: "autonomous-delivery",
+      evidenceStore: evidence.store,
+    });
     const ctx = context();
+    const request = {
+      ...turnRequest("Remember that release hardening uses vitest"),
+      clientTurnId: "canonical-auto-accept",
+    };
 
-    const actions = await collectMemoryActions(
-      deps,
-      turnRequest("Remember that release hardening uses vitest"),
-      ctx,
-    );
+    const actions = await collectMemoryActions(deps, request, ctx);
+    const replay = await collectMemoryActions(deps, request, ctx);
 
     expect(actions).toContainEqual(
-      expect.objectContaining({ kind: "candidate", status: "accepted" }),
+      expect.objectContaining({ kind: "candidate", requiresApproval: false, status: "accepted" }),
     );
+    expect(replay).toContainEqual(expect.objectContaining({ status: "accepted" }));
     expect(readByStatus(vault, ctx, "accepted")).toHaveLength(1);
+    const ledger = evidence.serialized();
+    expect(ledger.match(/governance-auto-accepted/gu)).toHaveLength(1);
+    expect(ledger).not.toContain("release hardening uses vitest");
   });
 
   it("rejects explicit recapture of a forgotten body", async () => {

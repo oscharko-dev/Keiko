@@ -30,6 +30,7 @@ import {
   MAX_DESKTOP_CHAT_INPUT_CHARS,
   isConversationMemoryCaptureSurfaceWire,
   isGroundingScopeIdentity,
+  type ConversationMemoryCaptureSurfaceWire,
   type ConversationMemoryActionWire,
   type ConversationMemoryRequestWire,
   type ConversationMemoryResultWire,
@@ -114,6 +115,7 @@ import {
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
+import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.js";
 import { scheduleMemorySalienceCapture } from "./memory-salience.js";
 import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
 import {
@@ -1048,11 +1050,10 @@ function maybeRunChatAutoMaintenance(deps: UiHandlerDeps, vault: MemoryVaultStor
   if (!isMaintenanceDue(memoryMaintenanceCursor.lastRunAtMs, nowMs)) return;
   const multipliers = memorySemanticizationMultipliers(deps.env);
   const retention = resolveMemoryRetentionPolicy(deps);
-  // Invalid retention configuration fails the entire unattended pass closed. Running every other
-  // phase while silently omitting expiry/purge would turn a configuration error into unbounded
-  // vault growth. The diagnostic was emitted by the resolver; chat delivery remains unaffected.
-  if (!retention.ok) return;
-  const retentionPolicy = retention.policy;
+  // A malformed retention setting disables only the retention phase. The resolver already emits a
+  // diagnostic; promotion, consolidation, supersession, and fade must keep running so one invalid
+  // optional setting cannot silently suspend all pre-existing vault maintenance.
+  const retentionPolicy = retention.ok ? retention.policy : undefined;
   maybeRunAutoMaintenance(vault, memoryMaintenanceAuditSink(deps), memoryMaintenanceCursor, {
     nowMs,
     enabled: true,
@@ -1261,6 +1262,7 @@ async function candidateActionFromOutcome(
   outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
   deps: UiHandlerDeps,
   mode: CodingWorkbenchMode,
+  surface: ConversationMemoryCaptureSurfaceWire,
   canonicalCapture: boolean,
 ): Promise<ConversationMemoryActionWire | null> {
   if (deps.memoryVault === undefined) return null;
@@ -1278,6 +1280,9 @@ async function candidateActionFromOutcome(
     : record;
   const persisted = persistCapturedMemory(deps.memoryVault, candidate, canonicalCapture);
   const inserted = persisted.memory;
+  if (persisted.inserted && inserted.status === "accepted") {
+    recordAutoAcceptedMemoryCaptureDecision(deps, mode, surface, inserted);
+  }
   // Best-effort embed-on-capture (#204): swallowed on failure / no model — never breaks capture.
   if (persisted.inserted) {
     await embedAndStoreMemory(deps, deps.memoryVault, inserted.id, inserted.body);
@@ -1287,7 +1292,7 @@ async function candidateActionFromOutcome(
     proposalId: String(inserted.id),
     body: capturedMemoryBody(outcome, inserted),
     scopeLabel: scopeLabel(inserted.scope),
-    requiresApproval: outcome.requiresApproval,
+    requiresApproval: inserted.status === "accepted" ? false : outcome.requiresApproval,
     status: inserted.status === "accepted" ? "accepted" : "proposed",
   };
 }
@@ -1296,11 +1301,12 @@ async function captureActionFromOutcome(
   outcome: CaptureOutcome,
   deps: UiHandlerDeps,
   mode: CodingWorkbenchMode,
+  surface: ConversationMemoryCaptureSurfaceWire,
   canonicalCapture = false,
 ): Promise<ConversationMemoryActionWire | null> {
   switch (outcome.kind) {
     case "candidate":
-      return candidateActionFromOutcome(outcome, deps, mode, canonicalCapture);
+      return candidateActionFromOutcome(outcome, deps, mode, surface, canonicalCapture);
     case "update":
       return {
         kind: "update",
@@ -1339,11 +1345,13 @@ async function captureMemoryActions(
   );
   const actions: ConversationMemoryActionWire[] = [];
   const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory.mode);
+  const surface = request.memory.surface ?? "desktop";
   for (const outcome of outcomes) {
     const action = await captureActionFromOutcome(
       outcome,
       deps,
       mode,
+      surface,
       request.clientTurnId !== undefined,
     );
     if (action !== null) actions.push(action);
@@ -2209,6 +2217,7 @@ async function collectCanonicalTurnLocalMemoryActions(
         outcome,
         deps,
         mode,
+        request.memory.surface ?? "desktop",
         request.clientTurnId !== undefined,
       );
       if (action !== null) actions.push(action);

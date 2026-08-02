@@ -3605,7 +3605,7 @@ function buildCodingContextPortsDependency(
             languages: [],
             ignoreLines: [],
           },
-          processEnv: process.env,
+          processEnv: args.options.env,
         });
   let jiraPort: JiraCodeContextHttpPort | undefined;
   try {

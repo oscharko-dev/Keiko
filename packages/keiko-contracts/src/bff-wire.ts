@@ -313,8 +313,15 @@ export interface ProjectsResponse {
   readonly projects: readonly ProjectWithAvailability[];
 }
 
+export interface ProjectResponseWarning {
+  readonly code: "PROJECT_TRUST_GRANT_FAILED";
+  readonly message: string;
+  readonly correlationId: string;
+}
+
 export interface ProjectResponse {
   readonly project: ProjectWithAvailability;
+  readonly warning?: ProjectResponseWarning | undefined;
 }
 
 export interface ChatsResponse {

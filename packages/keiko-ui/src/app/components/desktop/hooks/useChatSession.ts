@@ -33,6 +33,7 @@ import {
   fetchModels,
   fetchProjects,
   patchChatMessage,
+  projectResponseWarningMessage,
   regenerateDesktopChat,
   sendDesktopChat,
   sendDesktopChatStream,
@@ -2861,6 +2862,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const projectPayload = await fetchProjects();
         setState((previous) => ({ ...previous, projects: Array.from(projectPayload.projects) }));
         await openProject(created.project);
+        setError(projectResponseWarningMessage(created));
         return created.project;
       } catch (error_) {
         setError(errorMessage(error_));

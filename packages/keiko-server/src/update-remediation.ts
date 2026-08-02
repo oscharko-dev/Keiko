@@ -8,6 +8,7 @@ import type {
   UpdateRemediationStatusRequest,
   UpdateRemediationStatus as RuntimeRemediationStatus,
   UpdateRuntimeEventType,
+  UpdateRuntimeWarningCode,
 } from "@oscharko-dev/keiko-contracts";
 import { UPDATE_REMEDIATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 import type { LocalKnowledgeRemediationPort } from "./local-knowledge-remediation.js";
@@ -181,7 +182,7 @@ function upsertRuntimeAction(input: {
   readonly draft: ActionDraft;
   readonly status: RuntimeRemediationStatus;
   readonly now: () => number;
-  readonly warningCode?: "manual-review-required" | undefined;
+  readonly warningCode?: UpdateRuntimeWarningCode | undefined;
 }): void {
   const current = input.localState.readRuntimeState();
   const next = current.remediations.filter(
@@ -302,7 +303,7 @@ function persistDraftStatus(
     draft,
     status,
     now,
-    ...(status === "failed" ? { warningCode: "manual-review-required" } : {}),
+    ...(status === "failed" ? { warningCode: "remediation-execution-failed" } : {}),
   });
   recordRemediationAudit(options, request, draft, status);
 }
@@ -338,7 +339,7 @@ function recordRemediationAudit(
     store: draft.store,
     remediation: draft.remediation,
     status,
-    ...(status === "failed" ? { warningCode: "manual-review-required" } : {}),
+    ...(status === "failed" ? { warningCode: "remediation-execution-failed" } : {}),
   });
 }
 

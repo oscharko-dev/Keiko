@@ -924,6 +924,13 @@ export interface CreateProjectInput {
   name?: string;
 }
 
+export function projectResponseWarningMessage(response: ProjectResponse): string | undefined {
+  const warning = response.warning;
+  return warning === undefined
+    ? undefined
+    : `${warning.message} Support ID: ${warning.correlationId}`;
+}
+
 export async function createProject(input: CreateProjectInput): Promise<ProjectResponse> {
   const response = await fetchJson<ProjectResponse>("/api/projects", {
     method: "POST",

@@ -68,6 +68,12 @@ vi.mock("@/lib/api", () => ({
   askGrounded: vi.fn(),
   createDesktopChat: vi.fn(),
   createProject: vi.fn(),
+  projectResponseWarningMessage: (response: {
+    readonly warning?: { readonly message: string; readonly correlationId: string };
+  }): string | undefined =>
+    response.warning === undefined
+      ? undefined
+      : `${response.warning.message} Support ID: ${response.warning.correlationId}`,
   fetchChatMessages: vi.fn(),
   fetchChats: vi.fn(),
   fetchEvidenceManifest: vi.fn(),
@@ -409,7 +415,14 @@ describe("useChatSession bootstrap", () => {
       .mockResolvedValueOnce({ projects: [initial] })
       .mockResolvedValueOnce({ projects: [initial, added] });
     vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
-    vi.mocked(createProject).mockResolvedValue({ project: added });
+    vi.mocked(createProject).mockResolvedValue({
+      project: added,
+      warning: {
+        code: "PROJECT_TRUST_GRANT_FAILED",
+        message: "The project was registered but remains restricted.",
+        correlationId: "chat-project-trust-correlation",
+      },
+    });
     const rendered = renderHook(() => useChatSession({ autoCreate: false }));
     await waitFor(() => expect(rendered.result.current.loading).toBe(false));
 
@@ -420,6 +433,7 @@ describe("useChatSession bootstrap", () => {
 
     expect(selected).toEqual(added);
     expect(rendered.result.current.activeProject?.path).toBe(selectedRoot);
+    expect(rendered.result.current.error).toContain("chat-project-trust-correlation");
     expect(createDesktopChat).not.toHaveBeenCalled();
   });
 
