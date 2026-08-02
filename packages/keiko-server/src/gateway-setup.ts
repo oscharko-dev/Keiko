@@ -719,6 +719,9 @@ export function rawConfigFromCurrent(
         apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
         ...(provider.endpointStyle === undefined ? {} : { endpointStyle: provider.endpointStyle }),
         ...(provider.apiVersion === undefined ? {} : { apiVersion: provider.apiVersion }),
+        ...(provider.outputTokenParameter === undefined
+          ? {}
+          : { outputTokenParameter: provider.outputTokenParameter }),
         ...(provider.realtimeAuthMode === undefined
           ? {}
           : { realtimeAuthMode: provider.realtimeAuthMode }),

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -640,6 +640,26 @@ describe("UpdateSessionManager", () => {
       );
 
       expect(lock.isLocked()).toBe(false);
+      expect(lock.acquire(lockRecord("replacement-session"))).toBe(true);
+      expect((await readdir(tempDir)).filter((name) => name.endsWith(".child"))).toEqual([]);
+      lock.release("replacement-session");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("removes the session child sidecar when the authoritative lock is already absent", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-orphaned-sidecar-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      const lock = createFileUpdateSessionLock(lockPath);
+      expect(lock.acquire(lockRecord("released-session"))).toBe(true);
+      expect(lock.updateChildPid("released-session", 43_210)).toBe(true);
+      await unlink(lockPath);
+
+      lock.release("released-session");
+
+      expect((await readdir(tempDir)).filter((name) => name.endsWith(".child"))).toEqual([]);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

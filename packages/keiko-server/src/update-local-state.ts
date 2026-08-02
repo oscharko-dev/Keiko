@@ -398,10 +398,11 @@ function discardRemediationLease(
 }
 
 function releaseRemediationLease(path: string, token: string): void {
+  // Do not vacate the canonical name until ownership has been established. In particular, an old
+  // callback must never move a replacement lease out of the way merely to discover its token.
+  if (readRemediationLease(path)?.token !== token) return;
   const claimedPath = `${path}.release.${token}`;
   try {
-    // Atomically remove the canonical name before inspecting ownership. A replacement lease may be
-    // created after this rename, but it can never be unlinked by this older release callback.
     renameSync(path, claimedPath);
   } catch {
     return;

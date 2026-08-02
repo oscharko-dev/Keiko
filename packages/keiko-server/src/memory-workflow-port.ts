@@ -222,10 +222,8 @@ function persistWorkflowCandidates(
     }
     const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
     const record = buildMemoryRecordFromProposal(proposalId, outcome);
-    if (record !== null) {
-      options.vault.insertMemory(record);
-      proposedMemoryIds.push(record.id);
-    }
+    options.vault.insertMemory(record);
+    proposedMemoryIds.push(record.id);
   }
   return proposedMemoryIds;
 }

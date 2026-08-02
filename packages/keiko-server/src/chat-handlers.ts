@@ -1230,22 +1230,31 @@ function memoryCaptureProjection(record: MemoryRecord): string {
 function insertOrReuseCanonicalMemory(
   vault: MemoryVaultStore,
   record: MemoryRecord,
-): { readonly memory: MemoryRecord; readonly inserted: boolean } {
+): { readonly memory: MemoryRecord; readonly inserted: boolean; readonly promoted: boolean } {
   const existing = vault.getMemory(record.id);
-  if (existing === undefined) return { memory: vault.insertMemory(record), inserted: true };
+  if (existing === undefined) {
+    return { memory: vault.insertMemory(record), inserted: true, promoted: false };
+  }
   if (memoryCaptureProjection(existing) !== memoryCaptureProjection(record)) {
     throw new Error("Canonical memory capture conflicted.");
   }
-  return { memory: existing, inserted: false };
+  if (existing.status === "proposed" && record.status === "accepted") {
+    return {
+      memory: vault.updateMemory(existing.id, { status: "accepted" }, record.updatedAt),
+      inserted: false,
+      promoted: true,
+    };
+  }
+  return { memory: existing, inserted: false, promoted: false };
 }
 
 function persistCapturedMemory(
   vault: MemoryVaultStore,
   candidate: MemoryRecord,
   canonicalCapture: boolean,
-): { readonly memory: MemoryRecord; readonly inserted: boolean } {
+): { readonly memory: MemoryRecord; readonly inserted: boolean; readonly promoted: boolean } {
   if (canonicalCapture) return insertOrReuseCanonicalMemory(vault, candidate);
-  return { memory: vault.insertMemory(candidate), inserted: true };
+  return { memory: vault.insertMemory(candidate), inserted: true, promoted: false };
 }
 
 function capturedMemoryBody(
@@ -1287,7 +1296,7 @@ async function candidateActionFromOutcome(
   const candidate = captureCandidateForMode(record, mode, outcome);
   const persisted = persistCapturedMemory(deps.memoryVault, candidate, canonicalCapture);
   const inserted = persisted.memory;
-  if (persisted.inserted && inserted.status === "accepted") {
+  if ((persisted.inserted || persisted.promoted) && inserted.status === "accepted") {
     recordAutoAcceptedMemoryCaptureDecision(deps, mode, surface, inserted);
   }
   // Best-effort embed-on-capture (#204): swallowed on failure / no model — never breaks capture.

@@ -2202,6 +2202,9 @@ export function GatewaySetupDialog({
   };
 
   useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) return undefined;
+    if (!dialog.open) dialog.showModal();
     const root = document.documentElement;
     bumpDatasetOpenCounter(root, "keikoModalOpenCount", "data-keiko-modal-open");
     bumpDatasetOpenCounter(root, "keikoGatewaySetupOpenCount", "data-keiko-gateway-setup-open");
@@ -2217,6 +2220,7 @@ export function GatewaySetupDialog({
       }
       dropDatasetOpenCounter(root, "keikoModalOpenCount", "data-keiko-modal-open");
       dropDatasetOpenCounter(root, "keikoGatewaySetupOpenCount", "data-keiko-gateway-setup-open");
+      if (dialog.open) dialog.close();
       triggerRef.current?.focus?.();
     };
   }, [preserveExisting]);
@@ -2446,7 +2450,6 @@ export function GatewaySetupDialog({
       <dialog
         ref={dialogRef}
         className="gw-setup"
-        open
         aria-modal="true"
         aria-labelledby="gw-setup-title"
         aria-describedby="gw-setup-desc"

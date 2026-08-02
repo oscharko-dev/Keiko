@@ -39,6 +39,7 @@ describe("GatewaySetupDialog", () => {
 
     const dialog = screen.getByRole("dialog", { name: /connect keiko to your internal llms/i });
     expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dialog).toHaveAttribute("open");
 
     const baseUrl = screen.getByLabelText(/base url/i);
     await waitFor(() => expect(baseUrl).toHaveFocus());

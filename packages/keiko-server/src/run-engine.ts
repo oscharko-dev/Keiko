@@ -429,7 +429,7 @@ async function runVerify(
     ...(targetFiles === undefined ? {} : { changedFiles: targetFiles }),
   });
   const execute = ctx.verificationExecutor ?? executeVerificationEnforced;
-  const { report } = await execute({ plan, workspace, signal });
+  const { report } = await execute({ plan, workspace, signal, probeCwd: root });
   return report;
 }
 

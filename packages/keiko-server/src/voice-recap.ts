@@ -279,7 +279,7 @@ async function persistRecapOutcomes(
     const record = buildMemoryRecordFromProposal(proposalId, outcome);
     // Recap capture is model-inferred, so it honours BOTH governed refusals: a forgotten body and a
     // body the operator rejected in the review queue are equally "do not deduce this again".
-    if (record === null || exactCaptureSuppressionReason(vault, record) !== null) {
+    if (exactCaptureSuppressionReason(vault, record) !== null) {
       rejected += 1;
       continue;
     }

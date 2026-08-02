@@ -574,7 +574,9 @@ describe("coding-sidecar gateway", () => {
           }),
         );
 
-        await pending;
+        const result = await pending;
+        if (stream) expect(result).toBe(STREAMING);
+        else expect(result).toMatchObject({ status: 503 });
         expect(requestedUrl).toContain("initial-gateway.example");
         expect(requestedUrl).not.toContain("replacement-gateway.example");
       } finally {

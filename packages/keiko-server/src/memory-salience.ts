@@ -409,9 +409,6 @@ async function persistCandidate(
   }
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
-  if (record === null) {
-    return { action: null, disposition: "none" };
-  }
   const exactSuppression = exactCaptureSuppressionReason(vault, record);
   if (exactSuppression !== null) {
     return rejectedCandidate(deps, mode, surface, outcome, exactSuppression);

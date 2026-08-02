@@ -1130,7 +1130,7 @@ describe("desktop chat routes", () => {
       expect(listAllMemories(memoryVault).map((memory) => memory.id)).toEqual(
         memoryIdsAfterFailure,
       );
-      expect(listAllMemories(memoryVault).every((memory) => memory.status === "proposed")).toBe(
+      expect(listAllMemories(memoryVault).every((memory) => memory.status === "accepted")).toBe(
         true,
       );
       expect(store.listMessages(created.chat.id)).toHaveLength(2);

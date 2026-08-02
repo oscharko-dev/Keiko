@@ -164,6 +164,9 @@ describe("startRun verify dispatch", () => {
     await waitForTerminal(result.runId);
 
     expect(verificationExecutor).toHaveBeenCalledOnce();
+    expect(verificationExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({ probeCwd: workspaceRoot }),
+    );
     expect(registry.get(result.runId)?.report).toBe(report);
   });
 

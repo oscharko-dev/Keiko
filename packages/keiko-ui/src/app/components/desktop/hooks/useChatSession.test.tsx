@@ -581,8 +581,8 @@ describe("useChatSession bootstrap", () => {
     vi.mocked(fetchModels).mockResolvedValueOnce({ models: [model({ id: "chat-before" })] });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
     vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
-    const older = deferred<{ readonly models: readonly ModelCapability[] }>();
-    const latest = deferred<{ readonly models: readonly ModelCapability[] }>();
+    const older = deferred<{ models: ModelCapability[] }>();
+    const latest = deferred<{ models: ModelCapability[] }>();
 
     const { result } = renderHook(() => useChatSession({ autoCreate: false }));
     await waitFor(() =>

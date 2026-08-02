@@ -54,6 +54,21 @@ if (typeof window !== "undefined" && !HTMLElement.prototype.scrollIntoView) {
   HTMLElement.prototype.scrollIntoView = function () {};
 }
 
+// jsdom does not implement the native dialog top-layer API. Model its observable open state so
+// modal components exercise the same showModal()/close() lifecycle as browsers.
+if (typeof HTMLDialogElement !== "undefined") {
+  if (typeof HTMLDialogElement.prototype.showModal !== "function") {
+    HTMLDialogElement.prototype.showModal = function showModal(): void {
+      this.setAttribute("open", "");
+    };
+  }
+  if (typeof HTMLDialogElement.prototype.close !== "function") {
+    HTMLDialogElement.prototype.close = function close(): void {
+      this.removeAttribute("open");
+    };
+  }
+}
+
 // Monaco probes the legacy clipboard command API during module initialization. jsdom deliberately
 // omits that API, so expose the browser's conservative "unsupported" answer for component tests.
 if (typeof document !== "undefined" && !("queryCommandSupported" in document)) {

@@ -389,20 +389,44 @@ function updateFileLockChildPid(lockPath: string, sessionId: string, childPid: n
   }
 }
 
+function lockOwnedForRelease(
+  lockPath: string,
+  sessionId: string,
+): UpdateSessionLockRecord | undefined {
+  try {
+    const current = readLock(lockPath);
+    return current?.sessionId === sessionId ? current : undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      try {
+        removeChildPid(lockPath, sessionId);
+      } catch {
+        // The authoritative lock is absent; an identity-bound sidecar is inert if cleanup fails.
+      }
+    }
+    return undefined;
+  }
+}
+
+function claimedLockMatches(claimedPath: string, expected: UpdateSessionLockRecord): boolean {
+  try {
+    const record = readLock(claimedPath);
+    return record !== undefined && lockIdentity(record) === lockIdentity(expected);
+  } catch {
+    return false;
+  }
+}
+
 function releaseFileLock(lockPath: string, sessionId: string): void {
+  const expected = lockOwnedForRelease(lockPath, sessionId);
+  if (expected === undefined) return;
   const claimedPath = `${lockPath}.release.${randomUUID()}`;
   try {
     renameSync(lockPath, claimedPath);
   } catch {
     return;
   }
-  try {
-    const record = readLock(claimedPath);
-    if (record?.sessionId !== sessionId) {
-      restoreClaimedLock(claimedPath, lockPath);
-      return;
-    }
-  } catch {
+  if (!claimedLockMatches(claimedPath, expected)) {
     restoreClaimedLock(claimedPath, lockPath);
     return;
   }

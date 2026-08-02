@@ -370,6 +370,32 @@ describe("update remediation manager", () => {
     await expect(first).resolves.toMatchObject({ overallStatus: "completed" });
   });
 
+  it("persists running state before acquiring the durable remediation lease", async () => {
+    const stateDir = makeStateDir();
+    const localState = createUpdateLocalStateManager({ stateDir, now: () => NOW });
+    let observedStatus: string | undefined;
+    const inspectingLocalState: UpdateLocalStateManager = {
+      ...localState,
+      acquireRemediationLease: (actionId) => {
+        observedStatus = localState.readRuntimeState().remediations[0]?.status;
+        return localState.acquireRemediationLease(actionId);
+      },
+    };
+    const subject = createUpdateRemediationManager({
+      localState: inspectingLocalState,
+      localKnowledge: fakeLocalKnowledge(),
+      now: () => NOW,
+    });
+
+    await subject.runAction({
+      actionId: "local-knowledge-reindex:local-knowledge",
+      targetVersion: TARGET,
+      impact: localKnowledgeImpact,
+    });
+
+    expect(observedStatus).toBe("running");
+  });
+
   it("rejects the same remediation from a second manager while the durable lease is live", async () => {
     const stateDir = makeStateDir();
     const localKnowledge = deferredLocalKnowledge();

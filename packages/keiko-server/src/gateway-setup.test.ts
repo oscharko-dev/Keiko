@@ -4247,4 +4247,20 @@ describe("rawConfigFromCurrent — voice persona persistence round-trip", () => 
 
     expect(reloaded.reranker).toEqual(config.reranker);
   });
+
+  it("preserves an explicit output-token parameter override on reload", () => {
+    const config = parseGatewayConfig({
+      ...voiceRaw,
+      providers: [
+        {
+          ...voiceRaw.providers[0],
+          outputTokenParameter: "max_completion_tokens",
+        },
+      ],
+    });
+
+    const reloaded = parseGatewayConfig(rawConfigFromCurrent(config, undefined));
+
+    expect(reloaded.providers[0]?.outputTokenParameter).toBe("max_completion_tokens");
+  });
 });
