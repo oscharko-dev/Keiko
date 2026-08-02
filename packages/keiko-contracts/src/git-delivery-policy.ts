@@ -103,7 +103,8 @@ function resolveRuleToLevel(
   if (rule.decision === "approval-gated") {
     return { kind: "approval-gated", approvers: rule.requiredApprovers ?? [] };
   }
-  return { kind: "constrained", constraints: rule.constraints ?? [] };
+  const constraints = rule.constraints ?? [];
+  return constraints.length === 0 ? { kind: "blocked" } : { kind: "constrained", constraints };
 }
 
 function resolveLevel(
@@ -293,7 +294,11 @@ function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T
 }
 
 function isConstraintArray(value: unknown): value is readonly GitDeliveryConstraint[] {
-  return Array.isArray(value) && value.every(isGitDeliveryConstraint);
+  if (!Array.isArray(value) || value.length === 0) return false;
+  for (const constraint of value) {
+    if (!isGitDeliveryConstraint(constraint)) return false;
+  }
+  return true;
 }
 
 function isRuleDecision(value: unknown): value is GitDeliveryRuleDecision {
@@ -311,13 +316,14 @@ function isActionKind(value: unknown): boolean {
 }
 
 // A decision's per-decision required fields must validate. approval-gated requires a string-array
-// (possibly empty); constrained requires a valid constraint array. allowed/blocked carry neither.
+// (possibly empty); constrained requires at least one valid constraint. An empty constrained rule
+// would otherwise resolve to allowed after its no-op constraint list was evaluated.
 function decisionShapeValid(value: Record<string, unknown>): boolean {
   if (value.decision === "approval-gated") {
     return isUndefinedOr(isStringArray)(value.requiredApprovers);
   }
   if (value.decision === "constrained") {
-    return isUndefinedOr(isConstraintArray)(value.constraints);
+    return isConstraintArray(value.constraints);
   }
   return true;
 }

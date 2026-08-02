@@ -537,9 +537,7 @@ function isBreakpointKindConsistent(value: UnknownRecord): boolean {
   }
   return (
     value.kind === "logpoint" &&
-    isBoundedText(value.logMessage, DEFAULT_DEBUG_PAYLOAD_LIMITS.maxLogMessageBytes) &&
-    (value.condition === undefined ||
-      isBoundedText(value.condition, DEFAULT_DEBUG_PAYLOAD_LIMITS.maxConditionBytes))
+    isBoundedText(value.logMessage, DEFAULT_DEBUG_PAYLOAD_LIMITS.maxLogMessageBytes)
   );
 }
 
@@ -557,6 +555,8 @@ function hasValidBreakpointVocabulary(value: UnknownRecord): boolean {
   return (
     memberOf(value.kind, SOURCE_BREAKPOINT_KINDS) &&
     memberOf(value.verification, BREAKPOINT_VERIFICATIONS) &&
+    (value.condition === undefined ||
+      isBoundedText(value.condition, DEFAULT_DEBUG_PAYLOAD_LIMITS.maxConditionBytes)) &&
     (value.hitCondition === undefined ||
       isBoundedText(value.hitCondition, DEFAULT_DEBUG_PAYLOAD_LIMITS.maxHitConditionBytes)) &&
     isBreakpointKindConsistent(value)

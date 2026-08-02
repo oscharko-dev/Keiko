@@ -452,6 +452,9 @@ export type ConversationMemoryActionWire =
       readonly body: string;
       readonly scopeLabel: string;
       readonly requiresApproval: boolean;
+      // Server-owned persistence result. UI consumers must never infer reviewability from mode or
+      // requiresApproval: an accepted candidate has already passed the unattended promotion gate.
+      readonly status: Extract<MemoryStatus, "proposed" | "accepted">;
     }
   | {
       readonly kind: "update";

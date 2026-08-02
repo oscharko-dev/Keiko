@@ -420,4 +420,21 @@ describe("editor workspace snippets — rejection and diagnostic paths", () => {
       }),
     ).toHaveLength(1);
   });
+
+  it("matches hostile wildcard patterns within a bounded runtime", () => {
+    const parsed = parseEditorM7WorkspaceSnippetCollection(
+      rawCollection([rawSnippet({ include: [`${"a*".repeat(14)}b`] })]),
+    );
+    if (!parsed.ok) throw new Error("expected valid collection");
+    const startedAt = performance.now();
+    const matches = matchingEditorM7Snippets({
+      collection: parsed.value,
+      languageId: "typescript",
+      relativePath: "a".repeat(30),
+      prefix: "kte",
+      insertionSafe: true,
+    });
+    expect(matches).toEqual([]);
+    expect(performance.now() - startedAt).toBeLessThan(100);
+  });
 });

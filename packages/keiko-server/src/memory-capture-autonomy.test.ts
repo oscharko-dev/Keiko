@@ -356,7 +356,7 @@ describe("mode-aware memory capture journey", () => {
     const vault = makeVault();
     const deps = makeDeps({ vault, model: publicFact(0.7), mode: "supervised-coding" });
     const ctx = context();
-    await runTurn(deps, ctx, USER_TEXT);
+    const actions = await runTurn(deps, ctx, USER_TEXT);
     await waitForCount(vault, ctx, 1);
     const [record] = readMemories(vault, ctx);
     expect(record?.status).toBe("accepted");
@@ -365,6 +365,9 @@ describe("mode-aware memory capture journey", () => {
     // AC complement: an auto-accepted fact is NOT surfaced in the review queue (accepted is not a
     // review-queue status), so the operator sees nothing pending for it.
     expect(reviewQueueProjection(deps).total).toBe(0);
+    expect(actions).toContainEqual(
+      expect.objectContaining({ kind: "candidate", status: "accepted" }),
+    );
   });
 
   it("auto-accepts a routine public fact under autonomous-delivery", async () => {

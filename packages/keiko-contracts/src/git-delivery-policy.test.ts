@@ -93,6 +93,13 @@ describe("isGitDeliveryPolicyRule", () => {
     ).toBe(false);
     expect(isGitDeliveryPolicyRule(null)).toBe(false);
   });
+
+  it("rejects constrained rules that carry no effective constraint", () => {
+    expect(isGitDeliveryPolicyRule({ actionKind: "push", decision: "constrained" })).toBe(false);
+    expect(
+      isGitDeliveryPolicyRule({ actionKind: "push", decision: "constrained", constraints: [] }),
+    ).toBe(false);
+  });
 });
 
 describe("evaluateGitPolicy precedence matrix", () => {
@@ -177,6 +184,17 @@ describe("evaluateGitPolicy precedence matrix", () => {
       CTX,
     );
     expect(decision).toEqual({ outcome: "constrained", constraints: [repoConstraint] });
+  });
+
+  it("fails closed if a trusted in-process caller bypasses parsing with an empty constraint set", () => {
+    const decision = evaluateGitPolicy(
+      undefined,
+      repoPack({
+        rules: [{ actionKind: "push", decision: "constrained", constraints: [] }],
+      }),
+      CTX,
+    );
+    expect(decision).toEqual({ outcome: "blocked", reason: "policy-pack-blocked" });
   });
 
   it("5. allowed when either level allows and neither tightens", () => {
@@ -318,6 +336,29 @@ describe("policy-pack parsers", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errors.some((e) => e.includes("defaultRule"))).toBe(true);
+    }
+  });
+
+  it("rejects empty constrained rules and defaults instead of evaluating them as allowed", () => {
+    for (const constrained of [
+      { decision: "constrained" },
+      { decision: "constrained", constraints: [] },
+    ]) {
+      expect(
+        parseGitRepoPolicyPack({
+          schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+          repoId: "r",
+          rules: [{ actionKind: "push", ...constrained }],
+        }).ok,
+      ).toBe(false);
+      expect(
+        parseGitRepoPolicyPack({
+          schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+          repoId: "r",
+          rules: [],
+          defaultRule: constrained,
+        }).ok,
+      ).toBe(false);
     }
   });
 

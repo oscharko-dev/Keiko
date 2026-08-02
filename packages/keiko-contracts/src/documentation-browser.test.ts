@@ -105,6 +105,16 @@ describe("classifyDocumentationTarget — accepted", () => {
     expect(result.targetClass).toBe("external-http");
   });
 
+  it.each(["fda.gov", "fdroid.org", "fcc.gov"])(
+    "does not apply IPv6 private-prefix rules to public named host %s",
+    (host) => {
+      const result = classifyDocumentationTarget(`https://${host}/manual`);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.targetClass).toBe("external-http");
+    },
+  );
+
   it("classifies punycode/IDN homograph hosts as external, not intranet (AUDIT-E1852-004)", () => {
     for (const raw of [
       // Punycode-encoded host, already in the WHATWG-normalized ASCII form.

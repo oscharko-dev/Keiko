@@ -526,6 +526,44 @@ describe("validateMemoryStructuredPayload", () => {
       }).ok,
     ).toBe(false);
   });
+
+  it("rejects oversized structured payload arrays and strings", () => {
+    expect(
+      validateMemoryStructuredPayload({
+        kind: "string-list",
+        items: Array.from({ length: 129 }, () => "item"),
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateMemoryStructuredPayload({ kind: "string-list", items: ["x".repeat(4097)] }).ok,
+    ).toBe(false);
+    expect(
+      validateMemoryStructuredPayload({
+        kind: "key-value",
+        entries: Array.from({ length: 129 }, (_, index) => ({
+          key: `key-${String(index)}`,
+          value: "value",
+        })),
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateMemoryStructuredPayload({
+        kind: "key-value",
+        entries: [{ key: "key", value: "x".repeat(4097) }],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects control characters and oversized text in key-value keys", () => {
+    for (const key of ["unsafe\u0007key", "x".repeat(65)]) {
+      expect(
+        validateMemoryStructuredPayload({
+          kind: "key-value",
+          entries: [{ key, value: "value" }],
+        }).ok,
+      ).toBe(false);
+    }
+  });
 });
 
 // ─── validateMemoryEdge ──────────────────────────────────────────────────────

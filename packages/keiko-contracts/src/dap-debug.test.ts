@@ -473,6 +473,35 @@ describe("DAP debug leaf contracts", () => {
     ).toMatchObject({ ok: false });
   });
 
+  it("rejects non-string and oversized conditional breakpoint conditions", () => {
+    const request = {
+      schemaVersion,
+      workspaceId,
+      expectedRevision: 0,
+      fileId,
+      breakpoints: [{ ...breakpoint, kind: "conditional", condition: "count > 1" }],
+    };
+    expect(parseSetBreakpointsRequest(request)).toMatchObject({ ok: true });
+    expect(
+      parseSetBreakpointsRequest({
+        ...request,
+        breakpoints: [{ ...breakpoint, kind: "conditional", condition: { expression: "x" } }],
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      parseSetBreakpointsRequest({
+        ...request,
+        breakpoints: [
+          {
+            ...breakpoint,
+            kind: "conditional",
+            condition: "x".repeat(DEFAULT_DEBUG_PAYLOAD_LIMITS.maxConditionBytes + 1),
+          },
+        ],
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
   it.each(validRequests)("catches a throwing proxy for %s without throwing", (_name, parser) => {
     const hostile = new Proxy(
       {},
