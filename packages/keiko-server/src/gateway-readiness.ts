@@ -1160,6 +1160,29 @@ function verifiedCapabilityObservation(
   return Object.fromEntries(values.filter(([, value]) => value !== undefined));
 }
 
+function recordReadinessObservation(
+  deps: UiHandlerDeps,
+  report: GatewayReadinessReport,
+  observedGeneration: number | undefined,
+): void {
+  deps.gatewayConfig?.recordVerification(
+    gatewayVerificationFromProbeOutcome(report.overallStatus),
+    observedGeneration,
+  );
+  if (report.overallStatus === "failed") {
+    deps.gatewayConfig?.clearVerifiedCapability(report.modelId, observedGeneration);
+    return;
+  }
+  const observation = verifiedCapabilityObservation(report.probes);
+  if (Object.keys(observation).length === 0) return;
+  deps.gatewayConfig?.recordVerifiedCapability(
+    report.modelId,
+    observation,
+    report.checkedAt,
+    observedGeneration,
+  );
+}
+
 export async function runGatewayReadiness(
   request: GatewayReadinessRequest,
   deps: UiHandlerDeps,
@@ -1202,20 +1225,7 @@ export async function runGatewayReadiness(
   // config holder so the surfaces that used to infer readiness from configuration alone (the editor
   // AI-assist badge, the Coding Workbench source projection) report what was actually observed.
   // Content-free: one state word, no probe bodies, no endpoints, no credentials.
-  deps.gatewayConfig?.recordVerification(
-    gatewayVerificationFromProbeOutcome(report.overallStatus),
-    observedGeneration,
-  );
-  if (report.overallStatus === "failed") {
-    deps.gatewayConfig?.clearVerifiedCapability(report.modelId, observedGeneration);
-  } else {
-    deps.gatewayConfig?.recordVerifiedCapability(
-      report.modelId,
-      verifiedCapabilityObservation(probes),
-      report.checkedAt,
-      observedGeneration,
-    );
-  }
+  recordReadinessObservation(deps, report, observedGeneration);
   return report;
 }
 

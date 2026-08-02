@@ -294,31 +294,6 @@ async function executeDraftStatus(
   }
 }
 
-function persistFailureAfterPersistenceError(
-  options: UpdateRemediationManagerOptions,
-  now: () => number,
-  request: UpdateRemediationActionRequest,
-  draft: ActionDraft,
-): void {
-  try {
-    upsertRuntimeAction({
-      localState: options.localState,
-      targetVersion: request.targetVersion,
-      draft,
-      status: "failed",
-      now,
-      warningCode: "remediation-execution-failed",
-    });
-  } catch (error) {
-    recordDraftFailure(options, error, "update-remediation.persistFailureState");
-  }
-  try {
-    recordRemediationAudit(options, request, draft, "failed");
-  } catch (error) {
-    recordDraftFailure(options, error, "update-remediation.persistFailureAudit");
-  }
-}
-
 function persistDraftStatusSafely(
   options: UpdateRemediationManagerOptions,
   now: () => number,
@@ -337,7 +312,11 @@ function persistDraftStatusSafely(
     });
   } catch (error) {
     recordDraftFailure(options, error, "update-remediation.persistDraftStatus");
-    persistFailureAfterPersistenceError(options, now, request, draft);
+    try {
+      recordRemediationAudit(options, request, draft, status);
+    } catch (auditError) {
+      recordDraftFailure(options, auditError, "update-remediation.persistDraftAudit");
+    }
     return;
   }
   try {

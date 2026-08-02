@@ -440,6 +440,11 @@ describe("useChatSession bootstrap", () => {
     expect(rendered.result.current.error).not.toContain("chat-project-trust-correlation");
     expect(rendered.result.current.notice).toContain("chat-project-trust-correlation");
     expect(createDesktopChat).not.toHaveBeenCalled();
+
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    await act(() => rendered.result.current.openChat(chat({ id: "other-chat" })));
+
+    expect(rendered.result.current.notice).toBeUndefined();
   });
 
   it("surfaces bootstrap and navigation mutation failures without stale state", async () => {

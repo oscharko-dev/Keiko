@@ -2724,6 +2724,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return undefined;
       }
       setError(undefined);
+      setNotice(undefined);
       setStreamingAssistantMessage(undefined);
       // 0.3.0 release audit — a new conversation is a different conversation: whatever was staged
       // for the previous one must not be carried into it.
@@ -2767,6 +2768,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const openProject = useCallback(
     async (project: ProjectWithAvailability): Promise<void> => {
       setError(undefined);
+      setNotice(undefined);
       setStreamingAssistantMessage(undefined);
       // 0.3.0 release audit — a project switch changes the active conversation, so the one
       // app-wide composer must not carry the previous project's draft or staged files into it.
@@ -2811,6 +2813,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     async (chat: Chat): Promise<void> => {
       if (activeChatIdRef.current === chat.id && state.activeChat?.id === chat.id) return;
       setError(undefined);
+      setNotice(undefined);
       setStreamingAssistantMessage(undefined);
       // Issue #152 — opening a different chat must abort any in-flight send so
       // a late response from the prior chat never lands here.

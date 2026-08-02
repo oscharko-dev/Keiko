@@ -629,6 +629,46 @@ describe("update remediation manager", () => {
     );
   });
 
+  it("does not fabricate an execution failure when terminal state persistence fails", async () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const auditEvents: string[] = [];
+    const localKnowledge = fakeLocalKnowledge();
+    const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });
+    let stateWrites = 0;
+    const unreliable: UpdateLocalStateManager = {
+      ...durable,
+      writeRuntimeState: (state) => {
+        stateWrites += 1;
+        if (stateWrites === 2) throw new Error("terminal state unavailable");
+        return durable.writeRuntimeState(state);
+      },
+      recordAuditEvent: (eventType, payload) => {
+        auditEvents.push(eventType);
+        return durable.recordAuditEvent(eventType, payload);
+      },
+    };
+    const subject = createUpdateRemediationManager({
+      localState: unreliable,
+      localKnowledge,
+      now: () => NOW,
+      diagnostics: { record: (record) => diagnostics.push(record) },
+    });
+
+    const result = await subject.runAction({
+      actionId: "local-knowledge-reindex:local-knowledge",
+      targetVersion: TARGET,
+      impact: localKnowledgeImpact,
+    });
+
+    expect(localKnowledge.runs()).toBe(1);
+    expect(result.actions[0]?.status).toBe("pending");
+    expect(auditEvents).toContain("remediation-completed");
+    expect(auditEvents).not.toContain("remediation-failed");
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({ source: "update-remediation.persistDraftStatus" }),
+    );
+  });
+
   it("diagnoses a non-throwing terminal audit persistence warning", async () => {
     const diagnostics: ServerDiagnosticRecord[] = [];
     const localKnowledge = fakeLocalKnowledge();

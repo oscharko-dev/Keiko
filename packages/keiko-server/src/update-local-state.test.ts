@@ -293,7 +293,7 @@ describe("update runtime state and audit events", () => {
     release?.();
   });
 
-  it("never reclaims an aged remediation lease owned by this live process", () => {
+  it("trusts same-process lease ownership over a failed liveness probe", () => {
     const stateDir = makeStateDir();
     const actionId = "local-state-repair:memory-vault";
     const digest = createHash("sha256").update(actionId, "utf8").digest("hex");
@@ -309,7 +309,7 @@ describe("update runtime state and audit events", () => {
     const localState = createUpdateLocalStateManager({
       stateDir,
       now: () => NOW,
-      pidAlive: () => true,
+      pidAlive: () => false,
       remediationLeaseStaleMs: 1_000,
     });
 

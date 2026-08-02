@@ -23,9 +23,12 @@ downgrade every consumer and violate the human-control invariant.
 
 `RuntimeGatewayConfig` owns a per-model, per-field observation ledger alongside its existing coarse
 verification state. Passed categorical probes record `true`; only the categorical `unsupported`
-result records `false`. Failed and skipped probes record no field value. Repeated observations in
-the same generation merge by field so probing one capability does not erase another current result.
-Observations contain no response body, endpoint, credential, or customer content.
+result records `false`. Failed and skipped probes record no field value. A run with categorical
+evidence replaces the model's complete usable observation set for that generation, so an omitted
+field cannot survive a narrower categorical result as stale evidence. A chat-only or wholly
+inconclusive run produces no categorical evidence and leaves the last same-generation observation
+unchanged; a failed readiness run clears it. Observations contain no response body, endpoint,
+credential, or customer content.
 
 A successful long-context probe proves only that the model accepted at least the tested token count.
 It does not establish the exact context window and is therefore displayed as readiness evidence but

@@ -648,13 +648,7 @@ describe("gateway readiness route", () => {
     expect(report.probes.find((probe) => probe.name === "streaming")).toMatchObject({
       status: "unsupported",
     });
-    expect(recordVerifiedCapability).toHaveBeenCalledOnce();
-    expect(recordVerifiedCapability).toHaveBeenCalledWith(
-      "test-chat-model",
-      {},
-      expect.any(String),
-      0,
-    );
+    expect(recordVerifiedCapability).not.toHaveBeenCalled();
     deps.store.close();
   });
 
@@ -844,13 +838,7 @@ describe("gateway readiness route", () => {
 
     await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
 
-    expect(recordVerifiedCapability).toHaveBeenCalledWith(
-      "test-chat-model",
-      {},
-      expect.any(String),
-      0,
-    );
-    expect(recordVerifiedCapability).toHaveBeenCalledTimes(1);
+    expect(recordVerifiedCapability).not.toHaveBeenCalled();
     deps.store.close();
   });
 

@@ -339,8 +339,8 @@ function remediationLeaseReclaimable(
   const ageMs = remediationLeaseAgeMs(path, record, context.now);
   if (ageMs === undefined || ageMs < context.remediationLeaseStaleMs) return false;
   if (record === undefined) return true;
-  if (!context.pidAlive(record.pid)) return true;
   if (record.pid === process.pid) return false;
+  if (!context.pidAlive(record.pid)) return true;
   // A live PID may be a reused process identity. Give a genuine owner a second full lease window,
   // then bound the orphan instead of blocking remediation forever.
   return ageMs >= context.remediationLeaseStaleMs * 2;
