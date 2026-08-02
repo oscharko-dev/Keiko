@@ -105,6 +105,14 @@ function approvalGateRepoPack(): GitDeliveryRepoPolicyPack {
   };
 }
 
+function approvalGateOrgPack(): GitDeliveryOrgPolicyPack {
+  return {
+    schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+    orgId: "org",
+    rules: [{ actionKind: "push", decision: "approval-gated", requiredApprovers: ["org-lead"] }],
+  };
+}
+
 function fakeAdapter(result: GitPublishExecResult): {
   adapter: GitRemotePublishAdapter;
   publish: ReturnType<typeof vi.fn>;
@@ -129,7 +137,7 @@ describe("evaluateGitPublishEffectivePolicy", () => {
         patterns: [{ matchKind: "exact" as const, value: "dev" }],
       },
     ],
-  };
+  } as const;
 
   it("blocks a protected target and keeps an ordinary target approval-gated", () => {
     expect(evaluateGitPublishEffectivePolicy(decision, "dev", [], command())).toMatchObject({
@@ -399,6 +407,34 @@ describe("runGitPublish — policy gate (AC2/AC4)", () => {
       requiredApprovers: ["release"],
     });
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("keeps org approval metadata and accepts one fresh grant when both scopes gate", async () => {
+    const approval: GitDeliveryApprovalRequirement = {
+      required: true,
+      approvalTokenHash: "a".repeat(64),
+      approvedByUserId: "org-lead",
+      approvedAtMs: 0,
+    };
+    const { adapter, publish } = fakeAdapter(SUCCESS);
+    const result = await runGitPublish(
+      { command: command(), approval },
+      {
+        adapter,
+        snapshot: snapshot(),
+        orgPolicyPack: approvalGateOrgPack(),
+        repoPolicyPack: approvalGateRepoPack(),
+        now: () => 1,
+        newActionId: () => "a1",
+      },
+    );
+
+    expect(result.lifecycle.envelope.policyDecision).toEqual({
+      outcome: "approval-gated",
+      requiredApprovers: ["org-lead"],
+    });
+    expect(result.lifecycle.outcome.status).toBe("succeeded");
+    expect(publish).toHaveBeenCalledOnce();
   });
 
   it("keeps an org protected-branch denial when the repo adds an approval gate", async () => {

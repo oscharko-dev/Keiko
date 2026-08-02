@@ -133,29 +133,30 @@ function unionConstraints(
   return [...orgConstraints, ...repoConstraints];
 }
 
-function unionApprovers(org: ResolvedLevel, repo: ResolvedLevel): readonly string[] {
-  const orgApprovers = org.kind === "approval-gated" ? org.approvers : [];
-  const repoApprovers = repo.kind === "approval-gated" ? repo.approvers : [];
-  return [...orgApprovers, ...repoApprovers];
+function selectedApprovers(org: ResolvedLevel, repo: ResolvedLevel): readonly string[] {
+  if (org.kind === "approval-gated") return org.approvers;
+  return repo.kind === "approval-gated" ? repo.approvers : [];
 }
 
-// Combine org (O) and repo (R) decisions monotonically: blocks dominate, while every approval and
-// constraint requirement survives. Either level can tighten; both `none` fails closed.
+// Combine org (O) and repo (R) decisions monotonically: blocks dominate and every constraint
+// survives. Approval metadata retains the established org-first selection because the execution
+// contract carries one approval grant. Either level can tighten; both `none` fails closed.
 function combineDecisions(org: ResolvedLevel, repo: ResolvedLevel): GitDeliveryPolicyDecision {
   if (org.kind === "blocked" || repo.kind === "blocked") {
     return { outcome: "blocked", reason: "policy-pack-blocked" };
   }
   const requiresApproval = org.kind === "approval-gated" || repo.kind === "approval-gated";
   const constraints = unionConstraints(org, repo);
-  if (requiresApproval && constraints.length > 0) {
+  const firstConstraint = constraints[0];
+  if (requiresApproval && firstConstraint !== undefined) {
     return {
       outcome: "approval-gated",
-      requiredApprovers: unionApprovers(org, repo),
-      constraints,
+      requiredApprovers: selectedApprovers(org, repo),
+      constraints: [firstConstraint, ...constraints.slice(1)],
     };
   }
   if (requiresApproval) {
-    return { outcome: "approval-gated", requiredApprovers: unionApprovers(org, repo) };
+    return { outcome: "approval-gated", requiredApprovers: selectedApprovers(org, repo) };
   }
   if (constraints.length > 0) return { outcome: "constrained", constraints };
   if (org.kind === "allowed" || repo.kind === "allowed") {

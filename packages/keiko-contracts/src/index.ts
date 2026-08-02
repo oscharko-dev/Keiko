@@ -3589,6 +3589,7 @@ export type {
   GitDeliveryProviderCapabilityConstraint,
   GitDeliveryRiskClassCeilingConstraint,
   GitDeliveryConstraint,
+  GitDeliveryNonEmptyConstraints,
   GitDeliveryBlockReason,
   GitDeliveryMergeBlockReason,
   GitDeliveryExecutionOutcome,

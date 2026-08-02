@@ -38,6 +38,7 @@ import {
 } from "./git-delivery.js";
 import type {
   GitDeliveryBranchPattern,
+  GitDeliveryPolicyDecision,
   GitDeliveryPushInputs,
   GitDeliveryResolvedInputs,
 } from "./git-delivery.js";
@@ -148,6 +149,20 @@ describe("git-delivery branch-pattern and constraint guards", () => {
 });
 
 describe("git-delivery approval / policy-decision / evidence / execution-result guards", () => {
+  it("models composite decision constraints as non-empty when present", () => {
+    type ApprovalDecision = Extract<GitDeliveryPolicyDecision, { outcome: "approval-gated" }>;
+    // @ts-expect-error optional composite constraints must contain at least one typed constraint.
+    const emptyConstraints: ApprovalDecision["constraints"] = [];
+
+    expect(
+      isGitDeliveryPolicyDecision({
+        outcome: "approval-gated",
+        requiredApprovers: ["lead"],
+        constraints: emptyConstraints,
+      }),
+    ).toBe(false);
+  });
+
   it("isGitDeliveryApprovalRequirement accepts both discriminants", () => {
     expect(isGitDeliveryApprovalRequirement({ required: false })).toBe(true);
     expect(

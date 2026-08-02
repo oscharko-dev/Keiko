@@ -311,6 +311,11 @@ export type GitDeliveryConstraint =
   | GitDeliveryProviderCapabilityConstraint
   | GitDeliveryRiskClassCeilingConstraint;
 
+export type GitDeliveryNonEmptyConstraints = readonly [
+  GitDeliveryConstraint,
+  ...GitDeliveryConstraint[],
+];
+
 // ─── Policy decision ────────────────────────────────────────────────────────────
 
 export type GitDeliveryBlockReason =
@@ -353,7 +358,7 @@ export type GitDeliveryPolicyDecision =
   | {
       readonly outcome: "approval-gated";
       readonly requiredApprovers: readonly string[];
-      readonly constraints?: readonly GitDeliveryConstraint[] | undefined;
+      readonly constraints?: GitDeliveryNonEmptyConstraints | undefined;
     }
   | { readonly outcome: "constrained"; readonly constraints: readonly GitDeliveryConstraint[] };
 
@@ -479,6 +484,10 @@ function isBoolean(value: unknown): value is boolean {
 
 function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every(isString);
+}
+
+function isNonEmptyConstraintArray(value: unknown): value is GitDeliveryNonEmptyConstraints {
+  return Array.isArray(value) && value.length > 0 && value.every(isGitDeliveryConstraint);
 }
 
 function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T | undefined {
@@ -628,10 +637,7 @@ export function isGitDeliveryPolicyDecision(value: unknown): value is GitDeliver
   if (value.outcome === "approval-gated") {
     return (
       isStringArray(value.requiredApprovers) &&
-      (value.constraints === undefined ||
-        (Array.isArray(value.constraints) &&
-          value.constraints.length > 0 &&
-          value.constraints.every(isGitDeliveryConstraint)))
+      (value.constraints === undefined || isNonEmptyConstraintArray(value.constraints))
     );
   }
   if (value.outcome === "constrained") {

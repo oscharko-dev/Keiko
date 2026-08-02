@@ -296,7 +296,7 @@ describe("evaluateGitPullRequestEffectivePolicy", () => {
           patterns: [{ matchKind: "exact" as const, value: "main" }],
         },
       ],
-    };
+    } as const;
 
     expect(evaluateGitPullRequestEffectivePolicy(composite, "main", [], "pr-create")).toMatchObject(
       { outcome: "blocked", blockReason: "protected-branch" },

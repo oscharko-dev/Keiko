@@ -30,10 +30,10 @@
 import type {
   GitDeliveryActionKind,
   GitDeliveryBlockReason,
-  GitDeliveryConstraint,
   GitDeliveryExecutionErrorCode,
   GitDeliveryExecutionOutcome,
   GitDeliveryEvidenceRef,
+  GitDeliveryNonEmptyConstraints,
   GitDeliveryPolicyDecision,
   GitDeliveryRecoveryStrategyHint,
   GitDeliveryRiskClass,
@@ -182,7 +182,7 @@ export interface GitDeliveryEvidenceRecord {
   readonly policyOutcome: GitDeliveryPolicyDecision["outcome"];
   readonly blockReason?: GitDeliveryBlockReason | undefined;
   readonly requiredApprovers?: readonly string[] | undefined;
-  readonly constraints?: readonly GitDeliveryConstraint[] | undefined;
+  readonly constraints?: GitDeliveryNonEmptyConstraints | undefined;
   readonly correlation: GitDeliveryEvidenceCorrelation;
   readonly approval: GitDeliveryEvidenceApproval;
   readonly preview?: GitDeliveryEvidencePreviewSummary | undefined;
@@ -335,7 +335,7 @@ function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every(isString);
 }
 
-function isConstraintArray(value: unknown): value is readonly GitDeliveryConstraint[] {
+function isConstraintArray(value: unknown): value is GitDeliveryNonEmptyConstraints {
   return Array.isArray(value) && value.length > 0 && value.every(isGitDeliveryConstraint);
 }
 

@@ -47,7 +47,7 @@ nothing more.
 | `outcomeClass`                                                     | One of `succeeded`, `blocked`, `rejected`, `failed`, `recovery-required`, `approval-required` (AC1).           |
 | `phaseReached`                                                     | The furthest lifecycle phase the attempt reached (`resolve`→`result`).                                         |
 | `actionKind`, `riskClass`, `riskSeverity`                          | The action intent and its data-driven risk classification.                                                     |
-| `policyOutcome`, `blockReason`, `requiredApprovers`, `constraints` | What the policy decided, including every accumulated typed requirement.                                        |
+| `policyOutcome`, `blockReason`, `requiredApprovers`, `constraints` | What policy decided: effective approval-request metadata and accumulated typed constraints.                    |
 | `approval`                                                         | Approval provenance — the approval token **hash** (never the token), approver id, timestamps.                  |
 | `preview`                                                          | The content-free preview summary (counts, flags, affected branch).                                             |
 | `execution`                                                        | Present only when the action executed: outcome, duration, error code, partial-unit counts, hashed external id. |

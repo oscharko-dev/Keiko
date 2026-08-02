@@ -175,6 +175,15 @@ describe("audit packet (AC4)", () => {
 });
 
 describe("evidence record guard (on-read tamper gate)", () => {
+  it("models recorded constraints as non-empty when present", () => {
+    // @ts-expect-error persisted constraints must contain at least one typed constraint.
+    const emptyConstraints: GitDeliveryEvidenceRecord["constraints"] = [];
+
+    expect(isGitDeliveryEvidenceRecord({ ...baseRecord(), constraints: emptyConstraints })).toBe(
+      false,
+    );
+  });
+
   it("accepts a well-formed record", () => {
     expect(isGitDeliveryEvidenceRecord(baseRecord())).toBe(true);
     expect(

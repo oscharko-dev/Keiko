@@ -195,7 +195,7 @@ describe("evaluateGitPolicy precedence matrix", () => {
     });
   });
 
-  it("accumulates org and repo approval requirements in stable scope order", () => {
+  it("retains the established org approval selector when both scopes require approval", () => {
     const decision = evaluateGitPolicy(
       orgPack({
         rules: [
@@ -212,7 +212,7 @@ describe("evaluateGitPolicy precedence matrix", () => {
 
     expect(decision).toEqual({
       outcome: "approval-gated",
-      requiredApprovers: ["org-lead", "repo-lead"],
+      requiredApprovers: ["org-lead"],
     });
   });
 

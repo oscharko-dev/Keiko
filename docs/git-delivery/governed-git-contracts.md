@@ -119,7 +119,9 @@ kind without a specific rule is denied at that level.
 then `none`) and combines them monotonically:
 
 1. A block at either level wins (`policy-pack-blocked`).
-2. Org and repo approval requirements accumulate in that order.
+2. Approval gating retains established org-first selection when both levels gate. The decision's
+   `requiredApprovers` is request metadata for the single approval grant the contract represents;
+   it does not imply one independently enforced grant per listed identity.
 3. Org and repo constraints accumulate in that order.
 4. When both kinds of requirement exist, the effective `approval-gated` decision also carries
    `constraints`; they are evaluated first and a grant cannot override one.
@@ -129,7 +131,8 @@ then `none`) and combines them monotonically:
 
 Either level can tighten, empty packs fail closed, and adding a repo approval gate cannot discard an
 org constraint. The fail-closed `no-applicable-rule` is distinct from an explicit `approval-gated`
-rule with empty approvers.
+rule with empty approvers. Optional composite constraints use the non-empty
+`GitDeliveryNonEmptyConstraints` tuple, so omission is the only representation of no constraints.
 
 ### Worked examples
 

@@ -166,10 +166,11 @@ not a free string, and carries an optional `partialDetail` (attempted/succeeded 
 
 - `{ outcome: "allowed" }` — action may proceed.
 - `{ outcome: "blocked"; reason: GitDeliveryBlockReason }` — typed block reason (not a free string).
-- `{ outcome: "approval-gated"; requiredApprovers: readonly string[]; constraints?: readonly
-  GitDeliveryConstraint[] }` — lists opaque approver ids; execution is held until approval is
-  recorded. When monotonic org/repo composition also contributes constraints, the same decision
-  carries them and every constraint must pass before approval is considered.
+- `{ outcome: "approval-gated"; requiredApprovers: readonly string[]; constraints?:
+  GitDeliveryNonEmptyConstraints }` — lists opaque approval-request metadata; execution is held
+  until one recorded approval is present and fresh. When org/repo composition also contributes
+  constraints, the same decision carries them and every constraint must pass before approval is
+  considered. This contract carries one approval grant, not one grant per listed identity.
 - `{ outcome: "constrained"; constraints: readonly GitDeliveryConstraint[] }` — action may
   proceed only after listed typed constraints are satisfied.
 
@@ -238,20 +239,23 @@ per-decision required fields as a normal rule.
 **Monotonic combination matrix (org = O, repo = R).** `evaluateGitPolicy(orgPack, repoPack,
 context)` is a pure function (no IO, no clock) implemented via the `resolveLevel` +
 `combineDecisions` helpers. `A` means approval-gated, `C` constrained, and `A+C` an approval-gated
-decision carrying constraints. Parentheses identify the accumulated scope(s); org entries always
-precede repo entries in the resulting arrays.
+decision carrying constraints. Parentheses identify the contributing scope. Constraint arrays keep
+org entries before repo entries; approval metadata retains the established org-first selection
+because the execution contract carries one approval grant.
 
 | O / R | `none` | `allowed` | `blocked` | `A(R)` | `C(R)` |
 |---|---|---|---|---|---|
 | `none` | `blocked(no-applicable-rule)` | `allowed` | `blocked` | `A(R)` | `C(R)` |
 | `allowed` | `allowed` | `allowed` | `blocked` | `A(R)` | `C(R)` |
 | `blocked` | `blocked` | `blocked` | `blocked` | `blocked` | `blocked` |
-| `A(O)` | `A(O)` | `A(O)` | `blocked` | `A(O+R)` | `A(O)+C(R)` |
+| `A(O)` | `A(O)` | `A(O)` | `blocked` | `A(O)` | `A(O)+C(R)` |
 | `C(O)` | `C(O)` | `C(O)` | `blocked` | `A(R)+C(O)` | `C(O+R)` |
 
-Composition follows three invariants: an explicit block always wins; approval requirements and
-constraints accumulate instead of replacing one another; and `allowed` is returned only when at
-least one level allows and neither level contributes a stronger requirement. Both `none` remains
+Composition follows three invariants: an explicit block always wins; every constraint accumulates
+instead of being replaced by an approval gate; and `allowed` is returned only when at least one
+level allows and neither level contributes a stronger requirement. When both levels require
+approval, org approval-request metadata retains its established precedence rather than falsely
+describing two grants that the contract cannot represent. Both `none` remains
 `blocked/no-applicable-rule`. Thus either level can tighten, a repo approval gate cannot erase an org
 protected-branch constraint, and empty packs fail closed.
 `requiredApprovers: []` on an **explicit** `approval-gated` rule means "at least one approver of any

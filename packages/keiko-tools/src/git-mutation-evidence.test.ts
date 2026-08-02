@@ -7,10 +7,15 @@
 
 import { describe, expect, it } from "vitest";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
-import type {
-  GitDeliveryActionEnvelope,
-  GitDeliveryExecutionResult,
-  GitDeliveryResolvedInputs,
+import {
+  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+  evaluateGitPolicy,
+  type GitDeliveryActionEnvelope,
+  type GitDeliveryExecutionResult,
+  type GitDeliveryOrgPolicyPack,
+  type GitDeliveryPolicyDecision,
+  type GitDeliveryRepoPolicyPack,
+  type GitDeliveryResolvedInputs,
 } from "@oscharko-dev/keiko-contracts";
 import { buildGitDeliveryEvidenceRecord } from "./git-mutation-evidence.js";
 import type {
@@ -42,6 +47,23 @@ const SNAPSHOT: GitDeliveryEvidenceSnapshot = {
 };
 
 const EMPTY_PREFLIGHT = { ok: true, findings: [], blocking: [], advisory: [] } as const;
+
+function composedApprovalDecision(): GitDeliveryPolicyDecision {
+  const orgPack: GitDeliveryOrgPolicyPack = {
+    schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+    orgId: "org",
+    rules: [{ actionKind: "commit", decision: "approval-gated", requiredApprovers: ["org-lead"] }],
+  };
+  const repoPack: GitDeliveryRepoPolicyPack = {
+    schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+    repoId: "repo",
+    rules: [{ actionKind: "commit", decision: "approval-gated", requiredApprovers: ["repo-lead"] }],
+  };
+  return evaluateGitPolicy(orgPack, repoPack, {
+    actionKind: "commit",
+    activeProviderCapabilities: [],
+  });
+}
 
 function envelope(overrides: Partial<GitDeliveryActionEnvelope> = {}): GitDeliveryActionEnvelope {
   return {
@@ -261,6 +283,18 @@ describe("buildGitDeliveryEvidenceRecord — AC1 every outcome is correlatable",
     const record = build(result);
     expect(record.requiredApprovers).toEqual(["lead"]);
     expect(record.constraints).toEqual([{ kind: "risk-class-ceiling", maxRiskClass: "publish" }]);
+  });
+
+  it("records the effective org approval selector instead of implying two grants", () => {
+    const decision = composedApprovalDecision();
+    const result = lifecycle(
+      { status: "approval-required", requiredApprovers: ["org-lead"] },
+      "policy",
+      { policyDecision: decision },
+    );
+
+    const record = build(result);
+    expect(record.requiredApprovers).toEqual(["org-lead"]);
   });
 });
 
