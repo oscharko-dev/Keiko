@@ -91,6 +91,13 @@ jobs:
       contents: read
       pull-requests: write
     environment: keiko-for-quality
+    outputs:
+      # Consumed by sign-store: everything the detached signer needs, none of it secret. The
+      # signing itself deliberately does NOT happen in this job — see sign-store's note.
+      outcome: ${{ steps.review.outputs.outcome }}
+      store-name: ${{ steps.store-identity.outputs.name }}
+      action-sha: ${{ steps.store-identity.outputs.action-sha }}
+      profile-hash: ${{ steps.store-identity.outputs.profile-hash }}
     steps:
       # Check out the TRUSTED BASE. Never `github.event.pull_request.head.sha`: under
       # pull_request_target that would place candidate-controlled files on disk in a job that holds
@@ -151,6 +158,7 @@ jobs:
           {
             echo "name=keiko-review-store-pr${PR_NUMBER}-${IDENTITY}"
             echo "action-sha=${ACTION_SHA}"
+            echo "profile-hash=${PROFILE_HASH}"
           } >> "${GITHUB_OUTPUT}"
 
       # The directory the store lives in. NOT dot-prefixed: actions/upload-artifact excludes
@@ -255,8 +263,19 @@ jobs:
             echo "::warning::store artifact carries traversal paths — discarding it"
             rm -f store.zip; exit 0
           fi
-          unzip -o -q store.zip -d keiko-review-store 2>/dev/null \
-            || { echo "::notice::extraction failed — full review"; rm -rf keiko-review-store; mkdir -p keiko-review-store; }
+          # unzip -l trusts attacker-controlled central-directory lengths, so the listing gate
+          # above is only a cheap first filter: a crafted entry can declare one byte and DEFLATE
+          # gigabytes. Extraction therefore runs under kernel-enforced limits — ulimit -f caps any
+          # single written file at 25 MiB (unzip dies on SIGXFSZ past it), timeout caps wall time —
+          # and the result is re-measured with du afterwards; any breach discards the store.
+          ( ulimit -f 51200; timeout 60 unzip -o -q store.zip -d keiko-review-store ) 2>/dev/null \
+            || { echo "::notice::extraction failed or exceeded limits — full review"; rm -rf keiko-review-store; mkdir -p keiko-review-store; }
+          USED_KB="$(du -sk keiko-review-store 2>/dev/null | cut -f1)"
+          case "${USED_KB}" in *[!0-9]*|"") USED_KB=99999999 ;; esac
+          if [ "${USED_KB}" -gt 25600 ]; then
+            echo "::warning::extracted store exceeds the size bound — discarding it"
+            rm -rf keiko-review-store; mkdir -p keiko-review-store
+          fi
           rm -f store.zip
 
       # The producer checks above NARROW; this MAC DECIDES. Digest validation inside the store is
@@ -353,27 +372,74 @@ jobs:
       # derivation, which reject foreign entries regardless of what the name says). Runs each own
       # their artifact; the locate step picks the newest eligible one. Seven days comfortably
       # outlives any push gap on an active pull request.
-      # Signs what the persist step uploads — the counterpart of the verification above. Only a
-      # job holding the keiko-for-quality environment can compute this MAC, and the environment's
-      # branch policy confines that to runs executing a protected ref's workflow file.
-      - name: Sign review store
+      # Hands the UNSIGNED store to the sign-store job. Signing must not happen here: the
+      # external reviewer action executed above, and a compromised action can leave a detached
+      # process on this runner that outlives its step — materializing the HMAC key in any later
+      # step of THIS job would expose it to that process. The unsigned artifact is worthless to
+      # an attacker (they can fabricate unsigned stores anyway) and lives one day.
+      - name: Hand off unsigned store
         if: steps.review.outputs.outcome == 'complete'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: keiko-review-store-unsigned-${{ github.run_id }}
+          path: keiko-review-store
+          retention-days: 1
+          if-no-files-found: error
+
+  # The ONLY place the signing key materializes — on a fresh runner where no externally governed
+  # code has ever executed: every step below is base-controlled shell (gh, unzip, openssl), no
+  # third-party action, no checkout of anything. Raised by the Codex reviewer (#2931 round 25):
+  # step-level env does not isolate processes on a shared runner, so a compromised reviewer
+  # action could have read the key from a later signing step's /proc. It declares the
+  # keiko-for-quality environment solely for the key; the deployment branch policy confines that
+  # declaration to protected-ref workflow files, which is what keeps the signature meaningful.
+  sign-store:
+    name: sign review store
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: review
+    if: needs.review.outputs.outcome == 'complete'
+    permissions:
+      actions: read
+    environment: keiko-for-quality
+    steps:
+      - name: Assert store signing key is provisioned
+        env:
+          STORE_HMAC: ${{ secrets.KEIKO_QUALITY_STORE_HMAC }}
+        run: |
+          if [ "${#STORE_HMAC}" -lt 32 ]; then
+            echo "::error::KEIKO_QUALITY_STORE_HMAC is missing or too short — provision it in the keiko-for-quality environment"
+            exit 1
+          fi
+
+      - name: Fetch unsigned store from this run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UNSIGNED_NAME: keiko-review-store-unsigned-${{ github.run_id }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set +e
+          ARTIFACT_ID="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" \
+            -f "name=${UNSIGNED_NAME}" --jq '.artifacts[0].id' 2>/dev/null)"
+          if [ -z "${ARTIFACT_ID}" ] || [ "${ARTIFACT_ID}" = "null" ]; then
+            echo "::error::unsigned store artifact not found in this run"
+            exit 1
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > store.zip || exit 1
+          mkdir -p keiko-review-store
+          ( ulimit -f 51200; timeout 60 unzip -o -q store.zip -d keiko-review-store ) || exit 1
+          rm -f store.zip
+          test -f keiko-review-store/store.json
+
+      - name: Sign review store
         env:
           STORE_HMAC: ${{ secrets.KEIKO_QUALITY_STORE_HMAC }}
           STORE_PR: ${{ github.event.pull_request.number }}
-          STORE_PROFILE_HASH: ${{ hashFiles('.github/keiko-for-quality.json') }}
+          STORE_PROFILE_HASH: ${{ needs.review.outputs.profile-hash }}
           STORE_MODEL_ID: ${{ vars.KEIKO_QUALITY_MODEL_ID }}
           STORE_MODEL_PROTOCOL: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
-          STORE_ACTION_SHA: ${{ steps.store-identity.outputs.action-sha }}
+          STORE_ACTION_SHA: ${{ needs.review.outputs.action-sha }}
         run: |
-          if [ "${#STORE_HMAC}" -lt 32 ]; then
-            echo "::error::KEIKO_QUALITY_STORE_HMAC is missing or too short — refusing to sign with a weak or empty key"
-            exit 1
-          fi
-          # The MAC binds the CONTEXT, not just the bytes: a valid store/signature pair copied
-          # verbatim from another pull request or configuration must not verify here. The context
-          # line carries every partition dimension; verification recomputes it from this run's
-          # own values, so a replayed pair fails on the first differing dimension.
           printf 'pr=%s profile=%s model=%s protocol=%s action=%s\n' \
             "${STORE_PR}" "${STORE_PROFILE_HASH}" "${STORE_MODEL_ID}" "${STORE_MODEL_PROTOCOL}" "${STORE_ACTION_SHA}" \
             > keiko-review-store/store.context
@@ -382,10 +448,9 @@ jobs:
             > keiko-review-store/store.json.hmac
 
       - name: Persist review store
-        if: steps.review.outputs.outcome == 'complete'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ steps.store-identity.outputs.name }}
+          name: ${{ needs.review.outputs.store-name }}
           path: keiko-review-store
           retention-days: 7
           if-no-files-found: error
