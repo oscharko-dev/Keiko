@@ -310,8 +310,13 @@ branch-protection change.
    echo "no cancellable reviewer runs remain"
    ```
 
-Reverse it by setting `KEIKO_QUALITY_ENABLED` back to `true`, then retrigger the open pull
-requests as in provisioning step 4 — re-enabling emits no pull-request event either.
+Reversing it is the provisioning sequence again, not a single variable change, and in the same
+order: **run the delivery hold from provisioning step 4 first** and do not set the variable if it
+aborts, then set `KEIKO_QUALITY_ENABLED` back to `true`, then retrigger the open pull requests, then
+re-arm each one only after its current-head review has terminated under the ADR-0170 D5 interlock.
+Re-enabling emits no pull-request event either, so an already-armed pull request whose last required
+check turns green in that window is integrated unreviewed — the same hazard as the initial
+activation, reached by a different door.
 
 **Durable:** removing the files is only half of it. Deleting the workflow removes the only
 legitimate consumer of the credentials, not the credentials — and an identity that outlives its
