@@ -61,12 +61,17 @@ that could identify a private endpoint belongs here:
 
 | Name                           | Example   |
 | ------------------------------ | --------- |
-| `KEIKO_QUALITY_ENABLED`        | `true`    |
 | `KEIKO_QUALITY_MODEL_ID`       | `gpt-5.4` |
 | `KEIKO_QUALITY_MODEL_PROTOCOL` | `openai`  |
 
-`KEIKO_QUALITY_ENABLED` is a separate switch rather than the endpoint itself because a job condition
-cannot read a secret.
+**`KEIKO_QUALITY_ENABLED` is deliberately not in that table.** It is the switch, and setting it here
+would defeat the hold that step 4 establishes: between this step and that lock, an already-armed
+pull request whose final required check turns green integrates unreviewed, because enabling emits no
+review event and this reviewer publishes no required status. Set it in step 4, after `dev` is locked
+and the first hold has succeeded — and nowhere else.
+
+It is a separate variable rather than the endpoint itself because a job condition cannot read a
+secret.
 
 Environment **secrets** on `keiko-for-quality`:
 
@@ -172,7 +177,10 @@ fi
 echo "hold established over $(printf '%s\n' "$eligible" | sed '/^$/d' | wc -l | tr -d ' ') pull request(s)"
 ```
 
-**Run it again after setting the variable, before releasing the hold.** A pull request opened or
+**Now set the switch.** With `dev` locked and the first hold reporting clean, set the repository
+variable `KEIKO_QUALITY_ENABLED` to `true`. This is the only place in the procedure where it is set.
+
+**Run `hold.sh` again after setting the variable, before releasing the hold.** A pull request opened or
 marked ready between the first run and the variable change was never disarmed _and_ its activity
 event fired while the reviewer was still off, so it has neither a review nor a hold — and it can
 integrate while the retrigger loop below is still working through the list. The second run disarms
