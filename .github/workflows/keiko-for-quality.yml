@@ -426,10 +426,24 @@ jobs:
           # Ceiling, not the spend. Since v0.8.0 the action allots
           # min(ceiling, clamp(1.3 x (files x 40k + lines x 60), 80k, 6M)) per run and passes it to
           # the engine's own --max-tokens-budget, which stops dispatching new files at the limit
-          # instead of reviewing everything first and confessing afterwards. The previous implicit
-          # 2M default starved an 87-file pull request in production (#2926); the formula narrows
-          # small runs far below this ceiling on its own, so raising it does not raise small-PR cost.
-          token_budget: "6000000"
+          # instead of reviewing everything first and confessing afterwards.
+          #
+          # Lowered from 6M to 2M by owner decision under budget pressure. What that buys and what
+          # it costs, stated plainly: the formula already keeps ordinary pull requests far below
+          # either number, so this changes nothing for them. It binds exactly the large ones — a
+          # 135-file pull request would otherwise be allotted the full ceiling, and with the review
+          # store inert every push spent it again (#2930: twenty-one full re-reviews of 133 files in
+          # one day). The store fix in v0.10.0 is the structural answer; this ceiling is the
+          # backstop while credit is tight.
+          #
+          # The cost is real and must not be described as free: a pull request whose review needs
+          # more than 2M tokens now stops dispatching files partway and settles INCOMPLETE. That is
+          # visible and honest rather than silent — an incomplete settlement says so — but it does
+          # mean the tail of a very large change goes unreviewed. Raising the ceiling was the
+          # response to exactly that starvation on an 87-file pull request (#2926), so this is a
+          # deliberate re-trade, not a correction of that decision. Revisit once memoization is
+          # confirmed working in production and the credit position allows.
+          token_budget: "2000000"
           # Enables per-file memoization (v0.9.0). Relative to the workspace; the file lives in
           # the directory the locate/upload steps carry between runs. Without this input the
           # store layer is fully inert — that property is pinned by a test upstream.
