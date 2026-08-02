@@ -335,6 +335,44 @@ async function waitForCount(
 }
 
 describe("mode-aware memory capture journey", () => {
+  it("auto-accepts explicit remember intent under autonomous delivery", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ vault, model: "[]", mode: "autonomous-delivery" });
+    const ctx = context();
+
+    const actions = await collectMemoryActions(
+      deps,
+      turnRequest("Remember that release hardening uses vitest"),
+      ctx,
+    );
+
+    expect(actions).toContainEqual(
+      expect.objectContaining({ kind: "candidate", status: "accepted" }),
+    );
+    expect(readByStatus(vault, ctx, "accepted")).toHaveLength(1);
+  });
+
+  it("rejects explicit recapture of a forgotten body", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ vault, model: "[]" });
+    const ctx = context();
+    const request = turnRequest("Remember that release hardening uses vitest");
+    await collectMemoryActions(deps, request, ctx);
+    const existing = readMemories(vault, ctx)[0];
+    if (existing === undefined) throw new Error("expected captured memory");
+    vault.deleteMemory(existing.id, {
+      tombstone: true,
+      forgetterSurface: "test",
+      reason: "user-request",
+      nowMs: existing.updatedAt + 1,
+    });
+
+    const actions = await collectMemoryActions(deps, request, ctx);
+
+    expect(actions).toEqual([{ kind: "rejected", reason: "suppressed-by-forget" }]);
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
   it("keeps a routine public fact proposed under governed-assist (legacy default deps)", async () => {
     const vault = makeVault();
     const deps = makeDeps({ vault, model: publicFact(0.7) });

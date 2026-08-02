@@ -1544,7 +1544,8 @@ export interface FilesContentResponse extends FilesPreviewBase {
       }
     | {
         readonly status: "degraded";
-        readonly reason: "workspace-unavailable" | "history-unavailable";
+        readonly reason:
+          "workspace-unavailable" | "filesystem-identity-unsupported" | "history-unavailable";
         readonly correlationId: string;
       };
 }

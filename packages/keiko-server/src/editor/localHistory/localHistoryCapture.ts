@@ -84,12 +84,19 @@ function degradedProtection(
   error: unknown,
   correlationId: string,
 ): EditorLocalHistoryCaptureProtection {
+  let reason: "filesystem-identity-unsupported" | "workspace-unavailable" | "history-unavailable" =
+    "history-unavailable";
+  if (
+    error instanceof EditorLocalHistoryError &&
+    error.detail === "FILESYSTEM_IDENTITY_UNSUPPORTED"
+  ) {
+    reason = "filesystem-identity-unsupported";
+  } else if (error instanceof EditorLocalHistoryError && error.code === "INVALID_CAPTURE") {
+    reason = "workspace-unavailable";
+  }
   return {
     status: "degraded",
-    reason:
-      error instanceof EditorLocalHistoryError && error.code === "INVALID_CAPTURE"
-        ? "workspace-unavailable"
-        : "history-unavailable",
+    reason,
     correlationId,
   };
 }

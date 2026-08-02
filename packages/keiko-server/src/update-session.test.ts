@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -148,6 +148,12 @@ class MemoryUpdateSessionLock implements UpdateSessionLock {
   public readonly acquire = (record: UpdateSessionLockRecord): boolean => {
     if (this.record !== undefined) return false;
     this.record = record;
+    return true;
+  };
+
+  public readonly updateChildPid = (sessionId: string, childPid: number): boolean => {
+    if (this.record?.sessionId !== sessionId) return false;
+    this.record = { ...this.record, childPid };
     return true;
   };
 
@@ -551,6 +557,128 @@ describe("UpdateSessionManager", () => {
       expect(lock.isLocked()).toBe(false);
       expect(manager.start({ targetVersion: "0.2.12" }).session.phase).toBe("preparing");
       await waitForPhase(manager, "restart-required");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a restarted server while the detached mutation child is still alive", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-child-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      const childPid = 43_210;
+      const lockOptions = {
+        staleMs: 10 * 60_000,
+        now: (): number => Date.parse("2026-06-30T00:00:01.000Z"),
+        pidAlive: (pid: number): boolean => pid === childPid,
+      };
+      const firstLock = createFileUpdateSessionLock(lockPath, lockOptions);
+      const spawned = deferred();
+      let settle!: (result: CommandResult) => void;
+      const running = new Promise<CommandResult>((resolve) => {
+        settle = resolve;
+      });
+      const first = createUpdateSessionManager({
+        detector: () => supportedMode(),
+        lock: firstLock,
+        runCommandImpl: (input) => {
+          input.onSpawn?.(childPid);
+          spawned.resolve();
+          return running;
+        },
+      });
+      first.start({ targetVersion: "0.2.12" });
+      await spawned.promise;
+      const authority = JSON.parse(await readFile(lockPath, "utf8")) as Record<string, unknown>;
+      expect(authority).not.toHaveProperty("childPid");
+
+      const restarted = createUpdateSessionManager({
+        detector: () => supportedMode(),
+        lock: createFileUpdateSessionLock(lockPath, lockOptions),
+        runCommandImpl: () => Promise.resolve(commandResult()),
+      });
+      expect(() => restarted.start({ targetVersion: "0.2.13" })).toThrow(
+        expect.objectContaining({ code: "UPDATE_SESSION_ACTIVE" }),
+      );
+
+      settle(commandResult());
+      await waitForPhase(first, "restart-required");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not attach a child sidecar to a reused session id with different lock ownership", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-identity-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      const lock = createFileUpdateSessionLock(lockPath, {
+        pidAlive: (pid) => pid === 43_210,
+      });
+      expect(lock.acquire(lockRecord("reused-session"))).toBe(true);
+      expect(lock.updateChildPid("reused-session", 43_210)).toBe(true);
+      await writeFile(
+        lockPath,
+        `${JSON.stringify({
+          ...lockRecord("reused-session"),
+          targetVersion: "0.2.13",
+          startedAt: "2026-07-01T00:00:00.000Z",
+          pid: 999_999,
+        })}\n`,
+        { mode: 0o600 },
+      );
+
+      expect(lock.isLocked()).toBe(false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("continues an already-spawned update when child-PID metadata cannot be published", async () => {
+    const authority = new MemoryUpdateSessionLock();
+    const lock: UpdateSessionLock = {
+      isLocked: authority.isLocked,
+      acquire: authority.acquire,
+      updateChildPid: () => false,
+      release: authority.release,
+    };
+    const manager = createUpdateSessionManager({
+      detector: () => supportedMode(),
+      lock,
+      runCommandImpl: (input) => {
+        input.onSpawn?.(43_210);
+        return Promise.resolve(commandResult());
+      },
+    });
+
+    manager.start({ targetVersion: "0.2.12" });
+
+    await waitForPhase(manager, "restart-required");
+  });
+
+  it("caps child-PID-only lock ownership after the parent disappears", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-reused-child-pid-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      await writeFile(
+        lockPath,
+        `${JSON.stringify({
+          sessionId: "abandoned",
+          targetVersion: "0.2.10",
+          startedAt: "2026-06-30T00:00:00.000Z",
+          pid: 111,
+          childPid: 222,
+        })}\n`,
+        { mode: 0o600 },
+      );
+      const lock = createFileUpdateSessionLock(lockPath, {
+        staleMs: 1_000,
+        now: () => Date.parse("2026-06-30T00:00:02.000Z"),
+        pidAlive: (pid) => pid === 222,
+      });
+
+      expect(lock.isLocked()).toBe(false);
+      expect(lock.acquire(lockRecord("replacement"))).toBe(true);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

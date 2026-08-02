@@ -59,6 +59,7 @@ import {
 import { handleCloneRepository } from "./gitRepositoryRoutes.js";
 import {
   handleListMemories,
+  handleListMemoryTombstones,
   handleMemoryReviewQueue,
   handleGetMemory,
   handleEditMemory,
@@ -92,7 +93,7 @@ import {
 import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleBuildVoiceRecap } from "./voice-recap.js";
 import { handleGatewayReadiness } from "./gateway-readiness.js";
-import { handleGatewaySetup } from "./gateway-setup.js";
+import { handleApplyGatewayVerifiedCapabilities, handleGatewaySetup } from "./gateway-setup.js";
 import {
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
@@ -449,6 +450,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/voice/speak/stream", handler: handleVoiceSpeakStream },
   { method: "POST", pattern: "/api/gateway/readiness", handler: handleGatewayReadiness },
   { method: "POST", pattern: "/api/gateway/setup", handler: handleGatewaySetup },
+  {
+    method: "PATCH",
+    pattern: "/api/gateway/capabilities/:modelId",
+    handler: handleApplyGatewayVerifiedCapabilities,
+  },
   {
     method: "GET",
     pattern: "/api/coding-sidecar/gateway/profile",
@@ -1174,6 +1180,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   },
   { method: "GET", pattern: "/api/memory/review-queue", handler: handleMemoryReviewQueue },
   { method: "GET", pattern: "/api/memory/health-scan", handler: handleGetMemoryHealthScan },
+  { method: "GET", pattern: "/api/memory/tombstones", handler: handleListMemoryTombstones },
   { method: "POST", pattern: "/api/memory/forget", handler: handleForgetMemories },
   {
     method: "POST",

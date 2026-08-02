@@ -8,7 +8,7 @@ import type { GitProcessResult } from "@oscharko-dev/keiko-git";
 import { classifyCloneOutcome, createCloneRepositoryHandler } from "./gitRepositoryRoutes.js";
 import type { RouteContext } from "./routes.js";
 import { createRunRegistry, type UiHandlerDeps } from "./index.js";
-import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import { createInMemoryUiStore, UiStoreError, type UiStore } from "./store/index.js";
 import { writeNodeExecutableFixture } from "./editor/lsp/testing/executableFixture.js";
 
 let tmp: string;
@@ -256,6 +256,37 @@ describe("git repository routes", () => {
       error: { code: "BAD_REQUEST" },
     });
     expect(cloneRunner).not.toHaveBeenCalled();
+  });
+
+  it("preserves PROJECT_EXISTS after a successful clone", async () => {
+    const destination = join(tmp, "registered-app");
+    const cloneRunner = vi.fn((_repositoryUrl: string, destinationPath: string) => {
+      mkdirSync(destinationPath);
+      return Promise.resolve(null);
+    });
+    const baseDeps = deps();
+    const failingStore = new Proxy(baseDeps.store, {
+      get(target, property, receiver): unknown {
+        if (property === "createProject") {
+          return (): never => {
+            throw new UiStoreError("PROJECT_EXISTS", "Project already registered.", 409);
+          };
+        }
+        const value: unknown = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+
+    const result = await createCloneRepositoryHandler(cloneRunner)(
+      ctx({
+        repositoryUrl: "https://github.com/acme/app.git",
+        destinationPath: destination,
+      }),
+      { ...baseDeps, store: failingStore },
+    );
+
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({ error: { code: "PROJECT_EXISTS" } });
   });
 });
 

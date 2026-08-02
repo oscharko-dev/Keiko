@@ -25,7 +25,7 @@ import { Readable, PassThrough } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { UNVERIFIED_GATEWAY, type GatewayVerificationState } from "@oscharko-dev/keiko-contracts";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
-import type { RuntimeGatewayConfig } from "./deps.js";
+import type { RuntimeGatewayConfig, VerifiedModelCapabilityObservation } from "./deps.js";
 
 /**
  * An onboarded gateway whose last readiness probe succeeded (F-01).
@@ -46,6 +46,7 @@ export function probeVerifiedGatewayConfig(config: GatewayConfig): RuntimeGatewa
   let present = true;
   let verification: GatewayVerificationState = "verified";
   let generation = 0;
+  const observations = new Map<string, VerifiedModelCapabilityObservation>();
   return {
     storagePath: "/dev/null",
     current: () => current,
@@ -54,6 +55,7 @@ export function probeVerifiedGatewayConfig(config: GatewayConfig): RuntimeGatewa
       current = next;
       present = nextPresent;
       verification = UNVERIFIED_GATEWAY;
+      observations.clear();
       generation += 1;
     },
     generation: () => generation,
@@ -61,6 +63,21 @@ export function probeVerifiedGatewayConfig(config: GatewayConfig): RuntimeGatewa
     recordVerification: (state: GatewayVerificationState, observedGeneration?: number): void => {
       if (observedGeneration !== undefined && observedGeneration !== generation) return;
       verification = state;
+    },
+    verifiedCapability: (modelId) => observations.get(modelId),
+    recordVerifiedCapability: (modelId, fields, checkedAt, observedGeneration): void => {
+      if (observedGeneration !== undefined && observedGeneration !== generation) return;
+      const previous = observations.get(modelId);
+      observations.set(modelId, {
+        modelId,
+        generation,
+        checkedAt,
+        fields: { ...(previous?.generation === generation ? previous.fields : {}), ...fields },
+      });
+    },
+    clearVerifiedCapability: (modelId, observedGeneration): boolean => {
+      if (observedGeneration !== undefined && observedGeneration !== generation) return false;
+      return observations.delete(modelId);
     },
   };
 }

@@ -146,6 +146,8 @@ describe("runMigrations", () => {
       "idx_tombstones_memory_id",
       "idx_tombstones_scope",
       "idx_tombstones_scope_body_hash",
+      "idx_tombstones_scope_forgotten",
+      "idx_tombstones_scope_forgotten_vector",
     ]);
     db.close();
   });

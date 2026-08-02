@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-  Gateway,
   resolveCodingSafeSidecarGatewayProfile,
   type GatewayConfig,
   type GatewayRequest,
@@ -23,6 +22,7 @@ import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-l
 import { readJsonObject } from "./files.js";
 import { STREAMING, errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import { startSseHeartbeat } from "./sse.js";
+import { gatewayForConfig } from "./gateway-instance-cache.js";
 
 const ENABLE_TOKENS = new Set(["1", "true", "on", "yes", "enabled"]);
 const CODING_SIDECAR_DISABLED_ENV = "KEIKO_CODING_SIDECAR_DISABLED";
@@ -173,7 +173,7 @@ function defaultChatFactory(
   config: GatewayConfig,
   modelId: string,
 ): (request: GatewayRequest) => Promise<NormalizedResponse> {
-  const gateway = new Gateway(config);
+  const gateway = gatewayForConfig(config);
   return (request: GatewayRequest) => gateway.chat({ ...request, modelId });
 }
 
@@ -181,7 +181,7 @@ function defaultChatStreamFactory(
   config: GatewayConfig,
   modelId: string,
 ): (request: GatewayRequest) => AsyncIterable<GatewayStreamChunk> {
-  const gateway = new Gateway(config);
+  const gateway = gatewayForConfig(config);
   return (request: GatewayRequest) => gateway.chatStream({ ...request, modelId });
 }
 

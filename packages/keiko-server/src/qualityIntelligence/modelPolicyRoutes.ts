@@ -15,7 +15,6 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
-  Gateway,
   listConfiguredCapabilities,
   findConfiguredCapability,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -46,6 +45,7 @@ import {
   tryParseJudgeVerdict,
   withQiJudgeStageFailure,
 } from "./judgePort.js";
+import { gatewayForConfig } from "../gateway-instance-cache.js";
 
 const QI_POLICY_DIR = "quality-intelligence";
 const QI_POLICY_FILE = "model-policy.json";
@@ -369,7 +369,7 @@ async function preflightStage(
     };
   }
   try {
-    const response = await new Gateway(config).chat(
+    const response = await gatewayForConfig(config).chat(
       requestForPreflight(stage, modelId, capability),
     );
     if (stage === "judge" && tryParseJudgeVerdict(response.content) === null) {

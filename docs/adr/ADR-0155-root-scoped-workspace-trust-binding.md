@@ -5,6 +5,8 @@
   binding dimensions only; every other ADR-0147 decision stands)
 - Amended by: Issue #2772 (Epic #2285, 2026-07-27), adding the server-private filesystem-object
   binding while preserving the public V1 root identity.
+- Amended by: Issue #2885 (2026-08-02), distinguishing filesystems without durable birth identity
+  from transient state failure while preserving fail-closed authority.
 - Related: [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md),
   [ADR-0138](ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md)
 
@@ -80,6 +82,10 @@ removed dimensions protected is now unprotected. Enumerated:
   and therefore invalidates, fail closed.
 - **Manifest record corrupt, unreadable, or absent** — resolution raises a coded
   `WORKSPACE_STATE_UNAVAILABLE` and status projects restricted/`state-unavailable` (ADR-0147 D9).
+- **Filesystem cannot report positive birth identity** — resolution raises the distinct
+  `FILESYSTEM_IDENTITY_UNSUPPORTED` code and local history projects
+  `filesystem-identity-unsupported`. Trust remains restricted; no synthetic digest or path fallback
+  is accepted. The operator must relocate the root to a filesystem that supplies durable birthtime.
 
 What is no longer invalidated is exactly the set of mutations that change neither the root nor its
 approved basis: focus and order. Those carry no authority, which is why root-scoped dispatch

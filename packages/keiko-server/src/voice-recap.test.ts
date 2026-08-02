@@ -14,6 +14,7 @@ import { Readable } from "node:stream";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { VOICE_SESSION_RECAP_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 import { createRunRegistry } from "./runs.js";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext } from "./routes.js";
@@ -102,7 +103,13 @@ function chatOnlyConfig(): GatewayConfig {
   };
 }
 
-function deps(options: { config?: GatewayConfig; includeVault?: boolean } = {}): UiHandlerDeps {
+function deps(
+  options: {
+    config?: GatewayConfig;
+    includeVault?: boolean;
+    mode?: UiHandlerDeps["codingRuntimeDeploymentCeiling"];
+  } = {},
+): UiHandlerDeps {
   return {
     config: options.config ?? realtimeConfig(),
     configPresent: true,
@@ -112,6 +119,7 @@ function deps(options: { config?: GatewayConfig; includeVault?: boolean } = {}):
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
+    ...(options.mode === undefined ? {} : { codingRuntimeDeploymentCeiling: options.mode }),
     ...(options.includeVault === false ? {} : { memoryVault: vault }),
   };
 }
@@ -175,7 +183,13 @@ describe("handleBuildVoiceRecap", () => {
     const result = await handleBuildVoiceRecap(ctx(recapBody(chat, [])), deps());
     expect(result.status).toBe(200);
     const body = result.body as RecapResponseBody;
-    expect(body).toMatchObject({ candidatesProposed: 0, candidatesExtracted: 0, proposalIds: [] });
+    expect(body).toMatchObject({
+      candidatesProposed: 0,
+      candidatesAccepted: 0,
+      candidatesExtracted: 0,
+      proposalIds: [],
+      acceptedIds: [],
+    });
     expect(proposedCount()).toBe(0);
   });
 
@@ -210,6 +224,7 @@ describe("handleBuildVoiceRecap", () => {
     const rollupEntry = entries.find((entry) => entry.runId.startsWith("voice-recap-"));
     expect(rollupEntry).toBeDefined();
     const rollup = JSON.parse(rollupEntry?.raw ?? "{}") as Record<string, unknown>;
+    expect(rollup.schemaVersion).toBe(VOICE_SESSION_RECAP_SCHEMA_VERSION);
     expect(rollup.candidatesProposed).toBe(2);
     expect(rollup.triggeredByUser).toBe(true);
     // Content-free: the committed transcript text never enters the audit artifact.
@@ -224,6 +239,39 @@ describe("handleBuildVoiceRecap", () => {
       })
       .filter((event) => event.kind === "memory:proposed");
     expect(proposedEvents).toHaveLength(2);
+  });
+
+  it("reports and audits mode-eligible recap memories as accepted", async () => {
+    const chat = createChat();
+    const result = await handleBuildVoiceRecap(
+      ctx(recapBody(chat, ["remember that I prefer dark mode"])),
+      deps({ mode: "supervised-coding" }),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as RecapResponseBody;
+    expect(body).toMatchObject({
+      candidatesAccepted: 1,
+      candidatesProposed: 0,
+      proposalIds: [],
+    });
+    expect(body.acceptedIds).toHaveLength(1);
+    const accepted = vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), {
+      status: ["accepted"],
+      includeExpired: true,
+    });
+    expect(accepted).toHaveLength(1);
+    expect(body.acceptedIds).toEqual(accepted.map(({ id }) => String(id)));
+
+    const entries = evidenceStore.list().map((runId) => evidenceStore.get(runId) ?? "");
+    const rollup = entries.find((entry) => entry.includes('"candidatesAccepted"')) ?? "{}";
+    expect(JSON.parse(rollup)).toMatchObject({ candidatesAccepted: 1, candidatesProposed: 0 });
+    const auditEvents = entries.flatMap((entry) => {
+      const parsed = JSON.parse(entry) as unknown;
+      return Array.isArray(parsed) ? (parsed as readonly { kind?: string }[]) : [];
+    });
+    expect(auditEvents.filter((event) => event.kind === "memory:accepted")).toHaveLength(1);
+    expect(auditEvents.filter((event) => event.kind === "memory:proposed")).toHaveLength(0);
   });
 
   it("rejects a secret in committed text before it reaches the vault (AC6)", async () => {

@@ -20,6 +20,7 @@ import {
   isCodingWorkbenchMode,
   DEFAULT_CONTEXT_PROFILE,
   type ConversationDocumentContextWire,
+  type CodingWorkbenchMode,
   type DiscussionMode,
   type ChatMessageContentPart,
 } from "@oscharko-dev/keiko-contracts";
@@ -52,6 +53,7 @@ import {
   memoryMaintenanceAuditSink,
   memorySemanticizationMultipliers,
   resolveMaintenanceAutonomyMode,
+  resolveMemoryRetentionPolicy,
   type AutoMaintenanceState,
 } from "./memory-maintenance-handlers.js";
 import {
@@ -92,11 +94,16 @@ import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
 import {
+  FORGOTTEN_MEMORY_SUPPRESSION_REASON,
   isPersistableMemoryCandidate,
+  memoryCaptureAutoAcceptEligible,
   memoryCapturePolicyForDeps,
+  promoteEligibleMemoryRecord,
+  resolveMemoryCaptureAutonomyMode,
   SENSITIVE_MEMORY_ACTION_BODY,
   SENSITIVE_MEMORY_REJECTION_REASON,
 } from "./memory-capture-policy.js";
+import { isSuppressedByForgetTombstone } from "./memory-suppression.js";
 import { vaultAsQueryPort } from "./memory-conv-handlers.js";
 import {
   conversationMemoryScopes,
@@ -1036,11 +1043,18 @@ const memoryMaintenanceCursor: AutoMaintenanceState = {};
 // closed to exactly that.
 function maybeRunChatAutoMaintenance(deps: UiHandlerDeps, vault: MemoryVaultStore): void {
   const multipliers = memorySemanticizationMultipliers(deps.env);
+  const retention = resolveMemoryRetentionPolicy(deps);
+  // Invalid retention configuration fails the entire unattended pass closed. Running every other
+  // phase while silently omitting expiry/purge would turn a configuration error into unbounded
+  // vault growth. The diagnostic was emitted by the resolver; chat delivery remains unaffected.
+  if (!retention.ok) return;
+  const retentionPolicy = retention.policy;
   maybeRunAutoMaintenance(vault, memoryMaintenanceAuditSink(deps), memoryMaintenanceCursor, {
     nowMs: Date.now(),
     enabled: deps.env.KEIKO_MEMORY_AUTO_MAINTAIN !== "0",
     autonomyMode: resolveMaintenanceAutonomyMode(deps),
     ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
+    ...(retentionPolicy !== undefined ? { retentionPolicy } : {}),
   });
 }
 
@@ -1201,7 +1215,6 @@ function memoryCaptureProjection(record: MemoryRecord): string {
     payload: record.payload ?? null,
     provenance: { ...record.provenance, capturedAt: 0 },
     validity: { ...record.validity, validFrom: 0 },
-    status: record.status,
     pinned: record.pinned,
     staleReason: record.staleReason ?? null,
     retentionHint: record.retentionHint ?? null,
@@ -1221,9 +1234,29 @@ function insertOrReuseCanonicalMemory(
   return { memory: existing, inserted: false };
 }
 
+function persistCapturedMemory(
+  vault: MemoryVaultStore,
+  candidate: MemoryRecord,
+  canonicalCapture: boolean,
+): { readonly memory: MemoryRecord; readonly inserted: boolean } {
+  if (canonicalCapture) return insertOrReuseCanonicalMemory(vault, candidate);
+  return { memory: vault.insertMemory(candidate), inserted: true };
+}
+
+function capturedMemoryBody(
+  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+  memory: MemoryRecord,
+): string {
+  if (outcome.requiresApproval || memory.provenance.sensitivity !== "public") {
+    return SENSITIVE_MEMORY_ACTION_BODY;
+  }
+  return memory.body;
+}
+
 async function candidateActionFromOutcome(
   outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
   deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
   canonicalCapture: boolean,
 ): Promise<ConversationMemoryActionWire | null> {
   if (deps.memoryVault === undefined) return null;
@@ -1233,9 +1266,13 @@ async function candidateActionFromOutcome(
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
   if (record === null) return null;
-  const persisted = canonicalCapture
-    ? insertOrReuseCanonicalMemory(deps.memoryVault, record)
-    : { memory: deps.memoryVault.insertMemory(record), inserted: true };
+  if (isSuppressedByForgetTombstone(deps.memoryVault, record)) {
+    return { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON };
+  }
+  const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
+    ? promoteEligibleMemoryRecord(record)
+    : record;
+  const persisted = persistCapturedMemory(deps.memoryVault, candidate, canonicalCapture);
   const inserted = persisted.memory;
   // Best-effort embed-on-capture (#204): swallowed on failure / no model — never breaks capture.
   if (persisted.inserted) {
@@ -1244,10 +1281,7 @@ async function candidateActionFromOutcome(
   return {
     kind: "candidate",
     proposalId: String(inserted.id),
-    body:
-      outcome.requiresApproval || inserted.provenance.sensitivity !== "public"
-        ? SENSITIVE_MEMORY_ACTION_BODY
-        : inserted.body,
+    body: capturedMemoryBody(outcome, inserted),
     scopeLabel: scopeLabel(inserted.scope),
     requiresApproval: outcome.requiresApproval,
     status: inserted.status === "accepted" ? "accepted" : "proposed",
@@ -1257,11 +1291,12 @@ async function candidateActionFromOutcome(
 async function captureActionFromOutcome(
   outcome: CaptureOutcome,
   deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
   canonicalCapture = false,
 ): Promise<ConversationMemoryActionWire | null> {
   switch (outcome.kind) {
     case "candidate":
-      return candidateActionFromOutcome(outcome, deps, canonicalCapture);
+      return candidateActionFromOutcome(outcome, deps, mode, canonicalCapture);
     case "update":
       return {
         kind: "update",
@@ -1299,10 +1334,12 @@ async function captureMemoryActions(
     },
   );
   const actions: ConversationMemoryActionWire[] = [];
+  const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory.mode);
   for (const outcome of outcomes) {
     const action = await captureActionFromOutcome(
       outcome,
       deps,
+      mode,
       request.clientTurnId !== undefined,
     );
     if (action !== null) actions.push(action);
@@ -2151,6 +2188,7 @@ async function collectCanonicalTurnLocalMemoryActions(
     return [];
   }
   const actions: ConversationMemoryActionWire[] = [];
+  const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory.mode);
   for (const [messageOrdinal, message] of request.messages.entries()) {
     if (message.role !== "user") continue;
     const outcomes = extractCandidatesFromUserText(
@@ -2166,6 +2204,7 @@ async function collectCanonicalTurnLocalMemoryActions(
       const action = await captureActionFromOutcome(
         outcome,
         deps,
+        mode,
         request.clientTurnId !== undefined,
       );
       if (action !== null) actions.push(action);

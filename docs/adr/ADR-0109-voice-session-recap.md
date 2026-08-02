@@ -11,7 +11,17 @@ the route is not the productive Twin memory path.
 
 ## Version
 
-0.3.1
+0.3.2
+
+## 2026-08-02 amendment — persisted status is authoritative
+
+The product-wide memory autonomy posture also governs explicit recap capture. A public,
+non-approval-gated candidate may therefore be persisted directly as `accepted` in supervised or
+autonomous mode through the same canonical promotion predicate used by every other capture surface.
+The recap response and content-free audit record report `candidatesAccepted` separately from
+`candidatesProposed`; accepted record ids are returned as `acceptedIds`, while `proposalIds` contains
+only records that actually entered the review queue. The per-record audit kind likewise matches the
+persisted status (`memory:accepted` or `memory:proposed`).
 
 ## 2026-07-21 amendment — per-turn capture is canonical; recap is aggregation only
 
@@ -75,10 +85,14 @@ that derives memory candidates exclusively from the committed transcript project
 3. Governed by the existing `extractCandidatesFromUserText` capture path — not a new extraction
    mechanism. The existing `scanForSecrets`, scope inference, sensitivity classification, and
    `buildProposal` logic applies unchanged.
-4. Surfaced in the existing review queue (`status: "proposed"`) — no new mutation surface, no new
-   governance endpoints.
+4. Persisted through the existing governed capture policy: eligible records may be accepted in
+   supervised or autonomous mode; proposals surface in the existing review queue. No new mutation
+   surface or governance endpoint is introduced.
 5. Content-free in every contract boundary: no raw audio, no transcript text, no provider URLs.
-6. Additive and backward-compatible: the text-chat path and per-turn capture path are untouched.
+6. Additive at the route and request/response boundaries. Recap and per-turn chat capture share the
+   same mode-aware persistence policy, including eligible promotion to `accepted`. Recap audit schema
+   v2 adds the accepted count while its validator continues to read legacy v1 audit records as zero
+   accepted.
 
 The five-artifact plan follows the established pattern of ADR-0105 through ADR-0108:
 
@@ -103,9 +117,11 @@ NOT import `./memory-records.js` or any memory-domain types — the leaf contrac
 memory domain. The server (Artifact B) is the site that imports both `keiko-contracts/voice-session-recap`
 and `@oscharko-dev/keiko-memory-capture` and wires them together.
 
-`VOICE_SESSION_RECAP_SCHEMA_VERSION = "1" as const` follows the same evolution rule as prior contract
-schema versions: a breaking change introduces a new literal, never a mutation of `"1"`. It is
-independent of `VOICE_TRANSCRIPT_SCHEMA_VERSION`, `VOICE_ACTION_INTENT_SCHEMA_VERSION`, and
+`VOICE_SESSION_RECAP_SCHEMA_VERSION = "2" as const` follows the same evolution rule as prior contract
+schema versions. Version 2 adds the required `candidatesAccepted` count. Validation explicitly
+normalizes a persisted version-1 audit record that lacks that field to zero accepted, while newly
+emitted descriptors, summaries, and audit records use version 2. The version remains independent of
+`VOICE_TRANSCRIPT_SCHEMA_VERSION`, `VOICE_ACTION_INTENT_SCHEMA_VERSION`, and
 `CONVERSATION_CAPABILITY_CONTRACT_VERSION`.
 
 The capability predicate `voiceRecapAllowed(profile: VoiceProfile): boolean` is derived from
@@ -118,16 +134,15 @@ This makes AC1 dormancy a one-line derivation — the same pattern `voiceCanProp
 
 ```typescript
 // Schema version
-export const VOICE_SESSION_RECAP_SCHEMA_VERSION = "1" as const;
-export type VoiceSessionRecapSchemaVersion = typeof VOICE_SESSION_RECAP_SCHEMA_VERSION;
+export const VOICE_SESSION_RECAP_SCHEMA_VERSION = "2" as const;
+export type VoiceSessionRecapSchemaVersion = "1" | "2";
 export function isVoiceSessionRecapSchemaVersionSupported(version: unknown): boolean;
 
 // Capability gating (AC1) — derived from voiceTranscriptCaptureAllowed
 export function voiceRecapAllowed(profile: VoiceProfile): boolean;
 
 // Recap candidate lifecycle — maps onto existing memory status lifecycle
-// proposed → accepted | rejected | forgotten
-// "proposed" is the only initial state; terminal transitions delegate to existing memory endpoints
+// proposed → accepted | rejected | forgotten; eligible captures may initially persist as accepted
 export type VoiceRecapCandidateStatus = "proposed" | "accepted" | "rejected" | "forgotten";
 export const VOICE_RECAP_CANDIDATE_STATUSES: readonly VoiceRecapCandidateStatus[];
 export function isVoiceRecapCandidateStatus(value: unknown): value is VoiceRecapCandidateStatus;
@@ -161,6 +176,7 @@ export interface VoiceSessionRecapEvidenceSummary {
   readonly candidatesExtracted: number;   // CaptureOutcome[] length from extraction
   readonly candidatesRejected: number;    // how many were rejected by scanForSecrets / policy
   readonly candidatesProposed: number;    // how many reached status "proposed" in the vault
+  readonly candidatesAccepted: number;    // how many governance accepted at capture time
   readonly triggeredByUser: boolean;      // always true (recap is user-triggered, never automatic)
 }
 
@@ -174,6 +190,7 @@ export interface VoiceSessionRecapAuditRecord {
   readonly candidatesExtracted: number;
   readonly candidatesRejected: number;
   readonly candidatesProposed: number;
+  readonly candidatesAccepted: number;
   readonly triggeredByUser: boolean;
   readonly durationMs: number;             // extraction + vault write duration
 }
@@ -224,16 +241,19 @@ THE existing governed entry point for user-text-derived candidates. It automatic
 - Sensitivity classification: classifies the candidate text.
 - `buildProposal`: produces a `MemoryProposal` with `initialStatus: "proposed"`.
 
+That extractor status is the governance input, not necessarily the persisted result: the shared
+mode-aware promotion predicate may change an eligible record to `accepted` before insertion.
+
 The recap server function does not implement a new extractor, a new policy interpreter, or a new
 secret-scanner. It calls the existing API **once per committed span** and collects the union of the
 resulting `CaptureOutcome[]`. This per-span call mirrors the per-turn chat path (one
 `extractCandidatesFromUserText` call per user utterance) so a session can yield several candidates and
 the governance behaviour is identical to typed chat. Only outcomes of kind `"candidate"` that pass the
-existing `isPersistableMemoryCandidate` filter (public sensitivity, no required approval) are written
-to the vault as `"proposed"` records — exactly the filter the chat handler applies. Every other outcome
-(`"rejected"`, sensitive/approval-gated candidates, and the governance-action kinds `"update"`,
-`"forget"`, `"supersession"`) is counted but never written; these are surfaced as `candidatesRejected`
-in the content-free audit, where "rejected" means "extracted but not surfaced as a proposed candidate".
+existing `isPersistableMemoryCandidate` filter are written to the vault. The same product-wide mode
+and canonical promotion predicate as chat capture determines whether each inserted record is
+`"accepted"` or `"proposed"`. Every other outcome (`"rejected"`, non-persistable candidates, and the
+governance-action kinds `"update"`, `"forget"`, `"supersession"`) is counted but never written; these
+are surfaced as `candidatesRejected` in the content-free audit.
 
 **Boundary distinction from per-turn capture:** `collectMemoryActions` (chat-handlers.ts) runs
 `extractCandidatesFromUserText` on `request.content` — the user's typed message or the STT
@@ -250,12 +270,12 @@ closed union that does not include `"voice-recap"`. Recap candidates are therefo
 provenance-classified identically to per-turn candidates; differentiation relies on the existing vault
 dedup and review-queue visibility (D6), not on a new provenance tag.
 
-### D4 — Candidates surface in the existing review queue; no new mutation surface (AC3)
+### D4 — Proposed candidates use the existing review queue; no new mutation surface (AC3)
 
-Recap candidates with `initialStatus: "proposed"` are inserted into the vault via the existing
-`vault.insertMemory` path. Once inserted, they appear in `GET /api/memory/review-queue` automatically
-because that endpoint queries `status: ["proposed", "conflicted", "expired"]` (verified in
-memory-handlers.ts:72, `REVIEW_QUEUE_STATUSES`).
+Recap candidates are inserted through the existing `vault.insertMemory` path. A record that remains
+`proposed` appears in `GET /api/memory/review-queue` automatically because that endpoint queries
+`status: ["proposed", "conflicted", "expired"]`. A mode-eligible record persisted as `accepted` is
+immediately retrievable and does not masquerade as a review-queue proposal.
 
 The user reviews, approves, edits, or rejects candidates using existing review UI:
 - Accept: `POST /api/memory/proposals/:id/accept` (`handleAcceptMemoryProposal`)
@@ -267,14 +287,16 @@ The user reviews, approves, edits, or rejects candidates using existing review U
 actions call these existing `memory-api.ts` functions: `acceptMemoryProposal`, `rejectMemoryProposal`,
 `editMemory`, `forgetMemory`. The UI client has no direct vault access.
 
-The recap endpoint is a new additive route (see D5) that produces proposals. It does not accept,
-reject, or modify existing memories — its only write is `vault.insertMemory` for newly proposed
-candidates.
+The recap endpoint is an additive route (see D5) that produces governed capture outcomes. It does
+not accept, reject, or modify existing memories — its only memory write is `vault.insertMemory` for
+new candidates, with status selected by the shared capture policy.
 
-### D5 — Additive server route; text-chat path and per-turn capture are byte-identical (AC5)
+### D5 — Additive server route; shared capture policy governs every capture surface (AC5)
 
 The server ships one new capability-gated route: `POST /api/voice/recap/build`. All existing routes
-are byte-identical.
+retain their request and response contracts. The recap route and per-turn chat capture intentionally
+reuse the same mode-aware persistence policy; a policy correction therefore applies consistently to
+both surfaces rather than preserving divergent behavior for the sake of textual identity.
 
 **Handler logic (authoritative spec for implementers):**
 
@@ -289,19 +311,24 @@ are byte-identical.
    `committedSpans` makes the route dormant (no extraction, no side effect — AC1).
 3. For each span, call `extractCandidatesFromUserText(span, captureContext, policy)` and union the
    `CaptureOutcome[]`.
-4. Persist only `"candidate"` outcomes that pass `isPersistableMemoryCandidate` (the existing chat-path
-   filter) into the vault as `initialStatus: "proposed"`. `candidatesProposed` counts the inserted
-   records; `candidatesRejected` counts every other extracted outcome (see D3).
+4. Persist only `"candidate"` outcomes that pass `isPersistableMemoryCandidate` (the existing
+   chat-path filter). Resolve the same memory autonomy mode as the other capture surfaces and pass
+   eligible records through `promoteEligibleMemoryRecord`. Count the final stored states separately
+   as `candidatesProposed` and `candidatesAccepted`; count every non-persisted extraction outcome as
+   `candidatesRejected` (see D3).
 5. Build and persist the content-free `VoiceSessionRecapAuditRecord` via the evidence store. The
    transcript roll-up's segment-state counts (corrected/discarded/highest-seq) come from the client's
    content-free `transcript` summary; `segmentCount` and `committedChars` are recomputed server-side
    from `committedSpans` so the audit's character count matches exactly what was extracted.
-6. Return `{ candidatesProposed: number, candidatesRejected: number, proposalIds: string[] }` — counts
-   and vault ids only; no transcript text in the response.
+6. Emit `memory:proposed` or `memory:accepted` per inserted record according to its stored status.
+   Return `{ candidatesProposed, candidatesAccepted, candidatesRejected, proposalIds, acceptedIds }`
+   — counts and vault ids only; no transcript text in the response. `proposalIds` contains only
+   review-queue records and `acceptedIds` contains only accepted records.
 
-**The text-chat path (`captureMemoryActions`) is untouched.** The recap route is invoked only by
-explicit user action. It does not modify the chat request/response cycle, does not intercept
-`collectMemoryActions`, and does not change `CONVERSATION_SYSTEM_PROMPT`.
+**The text-chat request/response path remains independent.** The recap route is invoked only by
+explicit user action. It does not intercept `collectMemoryActions` or change
+`CONVERSATION_SYSTEM_PROMPT`; both capture surfaces converge only at the shared governed persistence
+policy, including mode-aware promotion and suppression.
 
 The assistant's response text (`assistantText` in `collectMemoryActions`) is used as context-only in
 per-turn salience capture (`captureSalientFromTurn`); it is never stored as a user fact. The recap
@@ -346,10 +373,9 @@ The hook at
 - Dormant when `voiceRecapAllowed(profile) === false`: no observer fires, no network call is made,
   no state is mutated (AC1).
 - `trigger()` method: sends the committed text to `POST /api/voice/recap/build` and returns the
-  content-free `{ candidatesProposed, candidatesRejected }` response. Text is transmitted once for
-  extraction and never cached in the hook after the response.
-- Content-free observer: `onTriggered?(e: { candidatesProposed: number; candidatesRejected: number }): void`
-  — only counts, no text.
+  content-free proposed, accepted, and rejected counts plus their corresponding ids. Text is
+  transmitted once for extraction and never cached in the hook after the response.
+- Content-free observers carry counts and ids only, never transcript or memory bodies.
 
 `VoiceRecap.tsx` is the visible component wired into `ChatWindow` behind a `voiceRecapVisible`
 boolean (same pattern as `voiceDictationVisible`, `voiceRealtimeVisible`). `voiceRecapVisible` is
@@ -373,7 +399,8 @@ fixed schema version string.
 - `VoiceSessionRecapAuditRecord`: counts, booleans, duration, profile enum — no text.
 - `VoiceRecapCommittedSpanDescriptor`: `charCount`, `segmentCount` — no text.
 - `VoiceRecapAssistantTurnDescriptor`: `turnIndex`, `"text-response"` enum — no text.
-- Server response to `POST /api/voice/recap/build`: `{ candidatesProposed, candidatesRejected }` — no text.
+- Server response to `POST /api/voice/recap/build`: proposed, accepted, and rejected counts plus
+  proposal/accepted ids — no text.
 
 The contract module is scanned for forbidden substrings as a test invariant (same as
 `voice-action-intent.ts`): apikey, secret, password, credential, bearer, baseurl, endpoint,
@@ -394,7 +421,7 @@ The scorer covers seven dimensions:
 | `corrections-excluded`           | Corrected/superseded segments excluded from recap input by construction (AC2).            |
 | `raw-audio-never-stored`         | No audio, no text persisted beyond the extraction call (AC4).                             |
 | `secrets-redacted`               | Candidates containing secrets rejected by `scanForSecrets` before vault insert (AC6).    |
-| `candidate-governed`             | All candidates reach vault as `status: "proposed"` via existing review queue (AC3).      |
+| `candidate-governed`             | Candidate status matches shared mode-aware governance; proposals use the review queue (AC3). |
 | `assistant-claims-not-user-fact` | Assistant response text never submitted to `extractCandidatesFromUserText` (AC5).        |
 | `content-free-audit`             | Audit record carries only counts/enums/bools; no transcript text (AC4).                  |
 
@@ -437,10 +464,11 @@ voice turns to review" without surfacing the raw transcript in the component.
   reject, edit, and forget actions use existing endpoints (AC3).
 - AC1 dormancy is structural: the hook short-circuits at the predicate before reading the transcript
   store; no observer fires; no network call is made in `none` or `speech-output` profiles.
-- The text-chat path and per-turn memory capture (`collectMemoryActions`) are byte-identical (AC5).
+- The text-chat request/response path is unchanged, while shared capture persistence semantics stay
+  consistent across chat and recap (AC5).
 - Content-free invariant is verifiable by module scanning (AC4).
-- The user retains full control: nothing is stored until the user presses the recap button and then
-  explicitly accepts candidates in the review queue (two deliberate user actions required).
+- The user retains control: recap never runs until explicitly triggered; any candidate not eligible
+  for shared mode-aware acceptance remains in the existing review queue.
 
 ### Negative
 
@@ -554,7 +582,7 @@ for the user to review and tag manually.
 | ---- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | AC1  | Voice recap is fully dormant when voice is unavailable         | `voiceRecapAllowed(profile)` returns `false` for `none`/`speech-output`; hook short-circuits before any state read or call  | Contract test + eval `dormant-no-voice` fixture; no observer fires            |
 | AC2  | Recap input is committed transcript only                       | `selectCommittedVoiceTranscript(segments)` is the sole input; partial/stable/discarded/redacted excluded by construction    | By construction in `voice-transcript.ts`; eval `corrections-excluded` fixture |
-| AC3  | Candidates enter existing review queue as `"proposed"`         | `extractCandidatesFromUserText` → `vault.insertMemory(initialStatus:"proposed")`; reviewed via existing endpoints           | Server tests on recap handler; review-queue integration test                  |
+| AC3  | Candidates follow shared capture governance                    | Extraction builds proposals; the shared mode-aware promotion predicate selects accepted vs review-queue status             | Server tests on accepted and proposed recap outcomes                          |
 | AC4  | No raw audio, no transcript text stored beyond extraction call | Contract types carry only counts/enums; server never persists `committedText`; audit record is content-free                 | Module forbidden-substring scan; eval `raw-audio-never-stored` fixture        |
 | AC5  | Text-chat path and per-turn capture untouched at the #504 head | Historical new-route-only mechanism; ADR-0154 later changed canonical chat and per-turn capture intentionally               | Archived #504 evidence only; current exact-head canonical chat tests are authoritative |
 | AC6  | Secrets in transcript are rejected before vault insert         | `extractCandidatesFromUserText` runs `scanForSecrets` internally; `"rejected"` outcomes counted but never stored as records | eval `secret-in-transcript` fixture; server test with credential string input |

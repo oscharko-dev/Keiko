@@ -510,7 +510,7 @@ async function bootChatHook() {
 describe("setSelectedModel PATCH persistence (AC #3 integration)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    api.clearModelCacheForTests();
+    api.resetModelRequestCache();
     mockBootstrapModels(["model-a", "model-b"]);
   });
   afterEach(() => {

@@ -1521,26 +1521,26 @@ function symbolFileAnchorTerms(plan: ExplorationPlan): readonly string[] {
 }
 
 function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
 }
 
 function symbolDefinitionPatterns(term: string): readonly RegExp[] {
   const escaped = escapeRegex(term);
   return [
-    new RegExp(`\\b(?:export\\s+)?(?:async\\s+)?function\\s+${escaped}\\b`, "iu"),
-    new RegExp(`\\b(?:export\\s+)?(?:class|interface|type|enum)\\s+${escaped}\\b`, "iu"),
-    new RegExp(`\\b(?:export\\s+)?(?:const|let|var)\\s+${escaped}\\b`, "iu"),
+    new RegExp(String.raw`\b(?:export\s+)?(?:async\s+)?function\s+${escaped}\b`, "iu"),
+    new RegExp(String.raw`\b(?:export\s+)?(?:class|interface|type|enum)\s+${escaped}\b`, "iu"),
+    new RegExp(String.raw`\b(?:export\s+)?(?:const|let|var)\s+${escaped}\b`, "iu"),
     new RegExp(
-      `\\b(?:public\\s+|private\\s+|protected\\s+|abstract\\s+|final\\s+|data\\s+)*(?:class|interface|record|enum)\\s+${escaped}\\b`,
+      String.raw`\b(?:public\s+|private\s+|protected\s+|abstract\s+|final\s+|data\s+)*(?:class|interface|record|enum)\s+${escaped}\b`,
       "iu",
     ),
     new RegExp(
-      `\\b(?:public\\s+|private\\s+|protected\\s+|static\\s+|final\\s+)*[A-Za-z_$][\\w$<>, ?.[\\]]+\\s+${escaped}\\s*\\(`,
+      String.raw`\b(?:public\s+|private\s+|protected\s+|static\s+|final\s+)*[A-Za-z_$][\w$<>, ?.[\]]+\s+${escaped}\s*\(`,
       "iu",
     ),
-    new RegExp(`\\b(?:def|func|fn|fun)\\s+${escaped}\\s*\\(`, "iu"),
-    new RegExp(`\\btype\\s+${escaped}\\s+(?:struct|interface)\\b`, "iu"),
-    new RegExp(`\\b(?:struct|trait|enum|class)\\s+${escaped}\\b`, "iu"),
+    new RegExp(String.raw`\b(?:def|func|fn|fun)\s+${escaped}\s*\(`, "iu"),
+    new RegExp(String.raw`\btype\s+${escaped}\s+(?:struct|interface)\b`, "iu"),
+    new RegExp(String.raw`\b(?:struct|trait|enum|class)\s+${escaped}\b`, "iu"),
   ];
 }
 

@@ -21,6 +21,7 @@ import { mockRequest, mockResponse } from "./_support.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { STREAMING, type RouteContext, type RouteResult } from "./routes.js";
+import { resetGatewayInstanceCacheForTests } from "./gateway-instance-cache.js";
 
 function provider(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
   return {
@@ -518,6 +519,33 @@ async function* streamedResponse(response: NormalizedResponse): AsyncGenerator<G
 }
 
 describe("coding-sidecar gateway", () => {
+  it("keeps circuit-breaker failures across separate production gateway requests", async () => {
+    resetGatewayInstanceCacheForTests();
+    const fetchMock = vi.fn(() => Promise.reject(new Error("provider unavailable")));
+    vi.stubGlobal("fetch", fetchMock);
+    const config = {
+      ...configValue(provider({ maxRetries: 0 }), capability()),
+      circuitBreaker: { failureThreshold: 2, cooldownMs: 30_000, halfOpenProbes: 1 },
+    };
+    const deps = depsValue(config);
+    const request = (): RouteContext =>
+      authenticatedContext({
+        model: "azure-coding-model",
+        messages: [{ role: "user", content: "continue" }],
+        tools: [],
+      });
+
+    try {
+      await handleCodingSidecarGatewayChatCompletions(request(), deps);
+      await handleCodingSidecarGatewayChatCompletions(request(), deps);
+      await handleCodingSidecarGatewayChatCompletions(request(), deps);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
   it("fails closed when a runtime gateway route has no capability authenticator", async () => {
     const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
     const deps = { ...depsValue(configValue(provider(), capability()), () => chat) } as Record<
@@ -1894,6 +1922,9 @@ describe("coding-sidecar gateway", () => {
         generation: () => 0,
         verification: () => "verified",
         recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
       },
     });
 

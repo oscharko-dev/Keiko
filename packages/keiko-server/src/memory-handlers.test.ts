@@ -33,6 +33,7 @@ import {
   handleArchiveMemory,
   handleEditMemory,
   handleListMemories,
+  handleListMemoryTombstones,
   handleMemoryReviewQueue,
   handleAcceptMemoryProposal,
   handleCorrectMemory,
@@ -82,6 +83,16 @@ function makeDeps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     store: createInMemoryUiStore(),
     ...overrides,
   };
+}
+
+function tombstoneDeps(vault: MemoryVaultStore): UiHandlerDeps {
+  return makeDeps({
+    memoryVault: vault,
+    memoryAuthorization: {
+      reviewerId: reviewerId("tombstone-auditor"),
+      authorizedScopes: () => vault.listMemoryScopes(),
+    },
+  });
 }
 
 let activeVaults: MemoryVaultStore[] = [];
@@ -188,6 +199,167 @@ function readAllAuditEvents(store: EvidenceStore): readonly MemoryAuditEvent[] {
 }
 
 describe("memory handlers", () => {
+  it("lists the bounded, content-free tombstone audit ledger for authorized scopes", () => {
+    const vault = makeVault();
+    const scope = { kind: "user" as const, userId: userId("u-1") };
+    vault.insertMemory(makeMemory("forgotten-1", "secret body", { scope }));
+    vault.deleteMemory(memoryId("forgotten-1"), {
+      tombstone: true,
+      forgetterSurface: "memory-center",
+      reason: "user-request",
+      nowMs: 200,
+    });
+
+    const result = handleListMemoryTombstones(
+      makeCtx("/api/memory/tombstones?limit=10", {}),
+      tombstoneDeps(vault),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      total: 1,
+      limit: 10,
+      nextCursor: null,
+      tombstones: [
+        {
+          memoryId: "forgotten-1",
+          scopeKind: "user",
+          scopeCoordinate: "u-1",
+          forgetterSurface: "memory-center",
+        },
+      ],
+    });
+    expect(JSON.stringify(result.body)).not.toContain("secret body");
+    expect(JSON.stringify(result.body)).not.toContain("bodyHash");
+  });
+
+  it("paginates the complete tombstone ledger with an opaque continuation cursor", () => {
+    const vault = makeVault();
+    const scope = { kind: "user" as const, userId: userId("u-1") };
+    for (const [id, nowMs] of [
+      ["forgotten-newest", 300],
+      ["forgotten-middle", 200],
+      ["forgotten-oldest", 100],
+    ] as const) {
+      vault.insertMemory(makeMemory(id, `secret-${id}`, { scope }));
+      vault.deleteMemory(memoryId(id), {
+        tombstone: true,
+        forgetterSurface: "memory-center",
+        reason: "user-request",
+        nowMs,
+      });
+    }
+
+    const first = handleListMemoryTombstones(
+      makeCtx("/api/memory/tombstones?limit=2", {}),
+      tombstoneDeps(vault),
+    );
+    const firstBody = asJson(first);
+    expect(firstBody).toMatchObject({ total: 3, limit: 2 });
+    expect(firstBody.nextCursor).toEqual(expect.any(String));
+    expect(firstBody.tombstones).toMatchObject([
+      { memoryId: "forgotten-newest" },
+      { memoryId: "forgotten-middle" },
+    ]);
+
+    const second = handleListMemoryTombstones(
+      makeCtx(`/api/memory/tombstones?limit=2&cursor=${String(firstBody.nextCursor)}`, {}),
+      tombstoneDeps(vault),
+    );
+    expect(second.body).toMatchObject({
+      total: 3,
+      limit: 2,
+      nextCursor: null,
+      tombstones: [{ memoryId: "forgotten-oldest" }],
+    });
+  });
+
+  it("round-trips a tombstone cursor for a valid long scope coordinate", () => {
+    const vault = makeVault();
+    const scope = { kind: "user" as const, userId: userId(`user-${"x".repeat(2_000)}`) };
+    for (const [id, nowMs] of [
+      ["long-scope-newest", 200],
+      ["long-scope-oldest", 100],
+    ] as const) {
+      vault.insertMemory(makeMemory(id, `secret-${id}`, { scope }));
+      vault.deleteMemory(memoryId(id), {
+        tombstone: true,
+        forgetterSurface: "memory-center",
+        nowMs,
+      });
+    }
+
+    const first = handleListMemoryTombstones(
+      makeCtx("/api/memory/tombstones?limit=1", {}),
+      tombstoneDeps(vault),
+    );
+    const cursor = String(asJson(first).nextCursor);
+    expect(cursor.length).toBeLessThanOrEqual(1_024);
+
+    const second = handleListMemoryTombstones(
+      makeCtx(`/api/memory/tombstones?limit=1&cursor=${cursor}`, {}),
+      tombstoneDeps(vault),
+    );
+    expect(second).toMatchObject({
+      status: 200,
+      body: { nextCursor: null, tombstones: [{ memoryId: "long-scope-oldest" }] },
+    });
+  });
+
+  it("rejects a malformed tombstone continuation cursor", () => {
+    const result = handleListMemoryTombstones(
+      makeCtx("/api/memory/tombstones?cursor=not.valid", {}),
+      tombstoneDeps(makeVault()),
+    );
+
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+  });
+
+  it("fails closed when tombstone audit authorization is unavailable", () => {
+    const result = handleListMemoryTombstones(
+      makeCtx("/api/memory/tombstones", {}),
+      makeDeps({ memoryVault: makeVault() }),
+    );
+
+    expect(result).toMatchObject({
+      status: 403,
+      body: { error: { code: "MEMORY_AUTHORIZATION_REQUIRED" } },
+    });
+  });
+
+  it("lists tombstones only from the caller's authorized scopes", () => {
+    const vault = makeVault();
+    const allowedScope = { kind: "user" as const, userId: userId("allowed-user") };
+    const deniedScope = { kind: "user" as const, userId: userId("denied-user") };
+    for (const [id, scope] of [
+      ["allowed-memory", allowedScope],
+      ["denied-memory", deniedScope],
+    ] as const) {
+      vault.insertMemory(makeMemory(id, `private-${id}`, { scope }));
+      vault.deleteMemory(memoryId(id), {
+        tombstone: true,
+        forgetterSurface: "memory-center",
+        nowMs: 200,
+      });
+    }
+    const result = handleListMemoryTombstones(
+      makeCtx("/api/memory/tombstones", {}),
+      makeDeps({
+        memoryVault: vault,
+        memoryAuthorization: {
+          reviewerId: reviewerId("scope-auditor"),
+          authorizedScopes: () => [allowedScope],
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: { total: 1, tombstones: [{ memoryId: "allowed-memory" }] },
+    });
+    expect(JSON.stringify(result.body)).not.toContain("denied-memory");
+  });
+
   it("lists memories across scopes and paginates after filtering", () => {
     const vault = makeVault();
     vault.insertMemory(makeMemory("global-1", "global"));

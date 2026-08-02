@@ -1084,7 +1084,11 @@ describe("desktop chat routes", () => {
         modelId: CHAT_MODEL,
         content: "Remember that I am a software developer.",
         clientTurnId: "memory-after-capture-completion-retry",
-        memory: { enabled: true, budgetTokens: 900, context: {} },
+        memory: {
+          enabled: true,
+          budgetTokens: 900,
+          context: {},
+        },
       };
 
       const failed = await fetch(`${base()}/api/desktop/chat`, {
@@ -1092,12 +1096,19 @@ describe("desktop chat routes", () => {
         headers: POST_JSON_HEADERS,
         body: JSON.stringify(request),
       });
-      const memoryIdsAfterFailure = listAllMemories(memoryVault).map((memory) => memory.id);
+      const memoriesAfterFailure = listAllMemories(memoryVault);
+      const memoryIdsAfterFailure = memoriesAfterFailure.map((memory) => memory.id);
       expect(failed.status).toBe(500);
       expect(memoryIdsAfterFailure.length).toBeGreaterThan(0);
+      expect(memoriesAfterFailure.every((memory) => memory.status === "proposed")).toBe(true);
       expect(store.listMessages(created.chat.id)).toHaveLength(1);
 
-      await restartWithDeps(deps(fakeModel("Recovered captured answer."), { memoryVault }));
+      await restartWithDeps(
+        deps(fakeModel("Recovered captured answer."), {
+          memoryVault,
+          codingRuntimeDeploymentCeiling: "autonomous-delivery",
+        }),
+      );
       const retried = await fetch(`${base()}/api/desktop/chat`, {
         method: "POST",
         headers: POST_JSON_HEADERS,
@@ -1118,6 +1129,9 @@ describe("desktop chat routes", () => {
       );
       expect(listAllMemories(memoryVault).map((memory) => memory.id)).toEqual(
         memoryIdsAfterFailure,
+      );
+      expect(listAllMemories(memoryVault).every((memory) => memory.status === "proposed")).toBe(
+        true,
       );
       expect(store.listMessages(created.chat.id)).toHaveLength(2);
     } finally {

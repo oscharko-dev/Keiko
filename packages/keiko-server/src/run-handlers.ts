@@ -333,6 +333,20 @@ function launchRun(
   }
 }
 
+function requireVerifyAppSession(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  request: RunRequest,
+): RouteResult | undefined {
+  if (request.kind !== "verify" || resolveAppSessionReadAuthority(deps, ctx.req) !== undefined) {
+    return undefined;
+  }
+  return {
+    status: 403,
+    body: errorBody("VERIFY_AUTHORITY_REQUIRED", "The local app session is not paired."),
+  };
+}
+
 // Route 5 — POST /api/runs. Validates the body, resolves the ModelPort, starts the run, returns 202.
 export async function handleCreateRun(
   ctx: RouteContext,
@@ -362,6 +376,8 @@ export async function handleCreateRun(
   if (unregistered !== null) {
     return unregistered;
   }
+  const verifyAuthority = requireVerifyAppSession(ctx, deps, governed);
+  if (verifyAuthority !== undefined) return verifyAuthority;
   const model = resolveRunModel(governed, deps);
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };

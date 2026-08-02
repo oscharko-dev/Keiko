@@ -558,6 +558,33 @@ describe("handleMemoryCaptureFromConversation", () => {
     expect((outcomes[0]?.proposal?.body ?? "").length).toBeGreaterThan(0);
   });
 
+  it("returns the accepted status that supervised capture persisted", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({
+      memoryVault: vault,
+      codingRuntimeDeploymentCeiling: "supervised-coding",
+    });
+    const chat = registerChat(deps, "capture-supervised-accepted");
+
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: "remember that release checks use vitest",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const outcomes = asJson(result).outcomes as readonly {
+      readonly kind: string;
+      readonly status?: string;
+      readonly proposal?: { readonly proposalId: string };
+    }[];
+    expect(outcomes[0]).toMatchObject({ kind: "candidate", status: "accepted" });
+    const proposalId = outcomes[0]?.proposal?.proposalId;
+    expect(vault.getMemory(proposalId as unknown as MemoryId)?.status).toBe("accepted");
+  });
+
   // eslint-disable-next-line complexity
   it("captures an ambient identity statement as a reviewable user-scoped candidate", async () => {
     const vault = makeVault();

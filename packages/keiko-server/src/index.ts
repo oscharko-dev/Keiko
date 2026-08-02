@@ -172,7 +172,9 @@ export {
 export { TerminalToolError, type TerminalErrorCode } from "./terminal-errors.js";
 export {
   runMemoryMaintenance,
+  memoryRetentionPolicy,
   memorySemanticizationMultipliers,
+  resolveMemoryRetentionPolicy,
   type MaintenanceCounts,
 } from "./memory-maintenance-handlers.js";
 export {

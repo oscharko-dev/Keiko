@@ -366,6 +366,7 @@ function buildSttRequest(
   provider: ModelProviderConfig,
   validated: ValidatedAudio,
   deps: UiHandlerDeps,
+  signal: AbortSignal,
 ): SpeechToTextRequest {
   const egress = provider.egress ?? currentGatewayEgressConfig(deps);
   return {
@@ -384,6 +385,7 @@ function buildSttRequest(
     // correctly. Always present so a stock dictation still benefits from the domain vocabulary.
     prompt: validated.prompt ?? DEFAULT_DICTATION_PROMPT,
     ...(egress !== undefined ? { egress } : {}),
+    signal,
     timeoutMs: provider.timeoutMs,
   };
 }
@@ -403,6 +405,10 @@ function transcriptResult(deps: UiHandlerDeps, value: SpeechToTextSuccess): Rout
   };
 }
 
+function voiceRequestCancelledResult(): RouteResult {
+  return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
+}
+
 export async function handleVoiceTranscribe(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -420,10 +426,21 @@ export async function handleVoiceTranscribe(
     return validated;
   }
   const transcribe = deps.voiceTranscriptionRequest ?? requestSpeechToText;
-  const outcome = await transcribe(buildSttRequest(provider, validated, deps));
-  return outcome.ok
-    ? transcriptResult(deps, outcome.value)
-    : providerErrorResult(deps, outcome.kind);
+  const cancellation = createRequestCancellation(ctx, "voice transcription request cancelled");
+  try {
+    const outcome = await transcribe(
+      buildSttRequest(provider, validated, deps, cancellation.signal),
+    );
+    if (cancellation.signal.aborted) return voiceRequestCancelledResult();
+    return outcome.ok
+      ? transcriptResult(deps, outcome.value)
+      : providerErrorResult(deps, outcome.kind);
+  } catch (error) {
+    if (cancellation.signal.aborted) return voiceRequestCancelledResult();
+    throw error;
+  } finally {
+    cancellation.dispose();
+  }
 }
 
 // ---------------------------------------------------------------------------

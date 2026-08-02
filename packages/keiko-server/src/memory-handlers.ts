@@ -20,6 +20,8 @@ import {
   createMemoryVault,
   MemoryStorageError,
   type MemoryBatchUpdate,
+  type MemoryTombstone,
+  type MemoryTombstoneLedgerCursor,
   type MemoryVaultStore,
 } from "@oscharko-dev/keiko-memory-vault";
 import {
@@ -86,6 +88,8 @@ const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_QUERY_CHARS = 200;
 const MAX_RECENT_SINCE_CHARS = 13;
 const MAX_MEMORY_EXCERPT_CHARS = 240;
+const MAX_TOMBSTONE_CURSOR_CHARS = 1_024;
+const MAX_TOMBSTONE_ID_CHARS = 200;
 const REVIEW_QUEUE_STATUSES: readonly MemoryStatus[] = ["proposed", "conflicted", "expired"];
 
 // ─── Type guards / helpers ─────────────────────────────────────────────────────
@@ -138,6 +142,46 @@ function parseIntQuery(raw: string | null, defaultValue: number, max: number): n
   const n = Number.parseInt(raw, 10);
   if (!Number.isFinite(n) || n < 1) return defaultValue;
   return Math.min(n, max);
+}
+
+function invalidTombstoneCursorResult(): RouteResult {
+  return { status: 400, body: errorBody("BAD_REQUEST", "Tombstone cursor is invalid.") };
+}
+
+function isBoundedCursorString(value: unknown, max: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= max;
+}
+
+function isTombstoneCursorRecord(value: unknown): value is MemoryTombstoneLedgerCursor {
+  if (!isRecord(value)) return false;
+  if (!Number.isSafeInteger(value.forgottenAt) || (value.forgottenAt as number) < 0) return false;
+  return isBoundedCursorString(value.id, MAX_TOMBSTONE_ID_CHARS);
+}
+
+function parseTombstoneCursor(
+  raw: string | null,
+): MemoryTombstoneLedgerCursor | RouteResult | undefined {
+  if (raw === null) return undefined;
+  if (raw.length === 0 || raw.length > MAX_TOMBSTONE_CURSOR_CHARS || !/^[\w-]+$/u.test(raw)) {
+    return invalidTombstoneCursorResult();
+  }
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as unknown;
+    if (!isTombstoneCursorRecord(parsed)) {
+      return invalidTombstoneCursorResult();
+    }
+    return parsed;
+  } catch {
+    return invalidTombstoneCursorResult();
+  }
+}
+
+function tombstoneCursor(tombstone: MemoryTombstone): string {
+  const cursor: MemoryTombstoneLedgerCursor = {
+    forgottenAt: tombstone.forgottenAt,
+    id: tombstone.id,
+  };
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
 }
 
 function splitComma(raw: string | null): string[] {
@@ -625,6 +669,52 @@ export function handleListMemories(ctx: RouteContext, deps: UiHandlerDeps): Rout
     }
     throw err;
   }
+}
+
+export function handleListMemoryTombstones(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  const vault = resolveVault(deps);
+  if (isRouteResult(vault)) return vault;
+  if (deps.memoryAuthorization === undefined) {
+    return {
+      status: 403,
+      body: errorBody(
+        "MEMORY_AUTHORIZATION_REQUIRED",
+        "Memory tombstone access requires an authorized caller.",
+      ),
+    };
+  }
+  const limit = parseIntQuery(
+    ctx.url.searchParams.get("limit"),
+    DEFAULT_LIST_LIMIT,
+    MAX_LIST_LIMIT,
+  );
+  const after = parseTombstoneCursor(ctx.url.searchParams.get("cursor"));
+  if (isRouteResult(after)) return after;
+  const page = vault.listTombstonesPage(authorizedMemoryScopes(deps, vault), limit + 1, after);
+  const tombstones = page.tombstones.slice(0, limit);
+  const last = tombstones.at(-1);
+  const nextCursor =
+    page.tombstones.length > limit && last !== undefined ? tombstoneCursor(last) : null;
+  return {
+    status: 200,
+    body: {
+      tombstones: tombstones.map((tombstone) => ({
+        id: tombstone.id,
+        memoryId: tombstone.memoryId,
+        scopeKind: tombstone.scopeKind,
+        scopeCoordinate: tombstone.scopeCoordinate,
+        type: tombstone.type,
+        forgottenAt: tombstone.forgottenAt,
+        forgetterSurface: tombstone.forgetterSurface,
+        reviewerId: tombstone.reviewerId,
+        originalStatus: tombstone.originalStatus,
+        reason: tombstone.reason,
+      })),
+      total: page.total,
+      limit,
+      nextCursor,
+    },
+  };
 }
 
 // ─── Handler: GET /api/memory/review-queue ────────────────────────────────────

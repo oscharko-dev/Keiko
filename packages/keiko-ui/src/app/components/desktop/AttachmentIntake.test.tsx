@@ -270,7 +270,7 @@ describe("AC #3 — pending attachment removal", () => {
   });
 
   beforeEach(() => {
-    api.clearModelCacheForTests();
+    api.resetModelRequestCache();
   });
 
   it("renders a remove button for each pending attachment", () => {

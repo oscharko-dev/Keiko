@@ -105,6 +105,13 @@ function storedSemanticTurnDetection(models: readonly ModelCapability[]): boolea
   return storedSemanticRealtimeModelId(models) !== undefined;
 }
 
+function storedWorkflowEligibleModelIds(models: readonly ModelCapability[]): string {
+  return models
+    .filter((model) => model.kind === "chat" && model.workflowEligible === true)
+    .map((model) => model.id)
+    .join("\n");
+}
+
 function semanticTurnDetectionForIdentity(
   preserveExisting: boolean,
   storedModels: readonly ModelCapability[],
@@ -296,6 +303,7 @@ function hasExplicitVoiceDeployment(fields: VoiceCredentialInputFields): boolean
 interface DerivedSubmitFields {
   readonly parsedDeploymentNames: readonly string[];
   readonly parsedImageInputModelIds: readonly string[];
+  readonly parsedWorkflowEligibleModelIds: readonly string[];
   readonly parsedTimeoutMs: number | undefined;
   readonly parsedVoiceTimeoutMs: number | undefined;
 }
@@ -306,18 +314,23 @@ interface CoreGatewayFields {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
+  readonly workflowEligibleModelIdsConfigured: boolean;
 }
 
 function hasCoreGatewayFieldInput(
   fields: CoreGatewayFields,
-  derived: Pick<DerivedSubmitFields, "parsedDeploymentNames" | "parsedImageInputModelIds">,
+  derived: Pick<
+    DerivedSubmitFields,
+    "parsedDeploymentNames" | "parsedImageInputModelIds" | "parsedWorkflowEligibleModelIds"
+  >,
 ): boolean {
   return (
     fields.baseUrl.trim() !== "" ||
     fields.apiKey.trim() !== "" ||
     fields.apiKeyHeaderName.trim() !== "" ||
     derived.parsedDeploymentNames.length > 0 ||
-    derived.parsedImageInputModelIds.length > 0
+    derived.parsedImageInputModelIds.length > 0 ||
+    fields.workflowEligibleModelIdsConfigured
   );
 }
 
@@ -328,6 +341,8 @@ interface AnyGatewayCredentialFields {
   readonly timeoutMs: string;
   readonly parsedDeploymentNames: readonly string[];
   readonly parsedImageInputModelIds: readonly string[];
+  readonly parsedWorkflowEligibleModelIds: readonly string[];
+  readonly workflowEligibleModelIdsConfigured: boolean;
   readonly voiceCredentialInput: boolean;
 }
 
@@ -339,6 +354,7 @@ function hasAnyGatewayCredentialInput(fields: AnyGatewayCredentialFields): boole
     fields.timeoutMs.trim() !== "" ||
     fields.parsedDeploymentNames.length > 0 ||
     fields.parsedImageInputModelIds.length > 0 ||
+    fields.workflowEligibleModelIdsConfigured ||
     fields.voiceCredentialInput
   );
 }
@@ -403,10 +419,10 @@ function parseSubmitTimeouts(timeoutMs: string, voiceTimeoutMs: string): SubmitT
       timeoutMs: timeoutMsFromInput(timeoutMs),
       voiceTimeoutMs: timeoutMsFromInput(voiceTimeoutMs, "Voice request timeout"),
     };
-  } catch (caught) {
+  } catch (error_) {
     return {
       ok: false,
-      message: caught instanceof Error ? caught.message : "Request timeout is invalid.",
+      message: error_ instanceof Error ? error_.message : "Request timeout is invalid.",
     };
   }
 }
@@ -485,6 +501,8 @@ interface GatewayFormFields {
   readonly timeoutMs: string;
   readonly deploymentNames: string;
   readonly imageInputModelIds: string;
+  readonly workflowEligibleModelIds: string;
+  readonly workflowEligibleModelIdsConfigured: boolean;
   readonly voiceBaseUrl: string;
   readonly voiceApiKey: string;
   readonly voiceApiKeyHeaderName: string;
@@ -544,6 +562,9 @@ function buildSetupGatewayPayload(
     ...(derived.parsedImageInputModelIds.length === 0
       ? {}
       : { imageInputModelIds: derived.parsedImageInputModelIds }),
+    ...(!fields.workflowEligibleModelIdsConfigured
+      ? {}
+      : { workflowEligibleModelIds: derived.parsedWorkflowEligibleModelIds }),
     ...voiceCredentialFields,
     ...(fields.figmaAccessToken.trim() === ""
       ? {}
@@ -725,6 +746,7 @@ async function performGatewaySubmission(
   const derived: DerivedSubmitFields = {
     parsedDeploymentNames,
     parsedImageInputModelIds: deploymentNamesFromInput(fields.imageInputModelIds),
+    parsedWorkflowEligibleModelIds: deploymentNamesFromInput(fields.workflowEligibleModelIds),
     parsedTimeoutMs: timeoutsResult.timeoutMs,
     parsedVoiceTimeoutMs: timeoutsResult.voiceTimeoutMs,
   };
@@ -966,7 +988,36 @@ function GatewayImageInputModelsField({
   );
 }
 
+interface GatewayWorkflowEligibleModelsFieldProps extends GatewayImageInputModelsFieldProps {
+  readonly t: I18nTranslate;
+}
+
+function GatewayWorkflowEligibleModelsField({
+  t,
+  value,
+  disabled,
+  onChange,
+}: GatewayWorkflowEligibleModelsFieldProps): ReactNode {
+  return (
+    <label className="gw-field">
+      <span>
+        {t("gatewaySetup.workflowEligibleModels")}{" "}
+        <span className="dlg-opt">{t("common.optional")}</span>
+      </span>
+      <textarea
+        className="gw-input gw-textarea mono"
+        value={value}
+        placeholder={t("gatewaySetup.workflowEligibleModelsPlaceholder")}
+        autoComplete="off"
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
 interface GatewayFieldsSectionProps {
+  readonly t: I18nTranslate;
   readonly preserveExisting: boolean;
   readonly busy: boolean;
   readonly success: string | undefined;
@@ -983,6 +1034,8 @@ interface GatewayFieldsSectionProps {
   readonly setDeploymentNames: Dispatch<SetStateAction<string>>;
   readonly imageInputModelIds: string;
   readonly setImageInputModelIds: Dispatch<SetStateAction<string>>;
+  readonly workflowEligibleModelIds: string;
+  readonly setWorkflowEligibleModelIds: Dispatch<SetStateAction<string>>;
 }
 
 function GatewayFieldsSection(props: GatewayFieldsSectionProps): ReactNode {
@@ -1023,6 +1076,12 @@ function GatewayFieldsSection(props: GatewayFieldsSectionProps): ReactNode {
         value={props.imageInputModelIds}
         disabled={disabled}
         onChange={props.setImageInputModelIds}
+      />
+      <GatewayWorkflowEligibleModelsField
+        t={props.t}
+        value={props.workflowEligibleModelIds}
+        disabled={disabled}
+        onChange={props.setWorkflowEligibleModelIds}
       />
     </div>
   );
@@ -1240,7 +1299,9 @@ function VoiceRealtimeTranscriptionDeploymentField({
   disabled,
   requiredForRealtime,
   onChange,
-}: VoiceRealtimeDeploymentFieldProps & { readonly requiredForRealtime: boolean }): ReactNode {
+}: Omit<VoiceRealtimeDeploymentFieldProps, "onBlur"> & {
+  readonly requiredForRealtime: boolean;
+}): ReactNode {
   return (
     <label className="gw-field">
       <span>
@@ -1964,7 +2025,7 @@ export function GatewaySetupDialog({
 }): ReactNode {
   const t = useTranslate();
   const { theme, toggle: toggleTheme } = useTheme();
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const voiceProviderLocalityLabelId = useId();
   const baseUrlRef = useRef<HTMLInputElement>(null);
   const figmaAccessTokenRef = useRef<HTMLInputElement>(null);
@@ -1976,6 +2037,11 @@ export function GatewaySetupDialog({
   const [timeoutMs, setTimeoutMs] = useState("");
   const [deploymentNames, setDeploymentNames] = useState("");
   const [imageInputModelIds, setImageInputModelIds] = useState("");
+  const [workflowEligibleModelIds, setWorkflowEligibleModelIds] = useState(() =>
+    preserveExisting ? storedWorkflowEligibleModelIds(storedModels) : "",
+  );
+  const [workflowEligibleModelIdsConfigured, setWorkflowEligibleModelIdsConfigured] =
+    useState(false);
   const [voiceBaseUrl, setVoiceBaseUrl] = useState("");
   const [voiceApiKey, setVoiceApiKey] = useState("");
   const [voiceApiKeyHeaderName, setVoiceApiKeyHeaderName] = useState("");
@@ -2216,6 +2282,12 @@ export function GatewaySetupDialog({
           timeoutMs,
           deploymentNames,
           imageInputModelIds,
+          workflowEligibleModelIds,
+          workflowEligibleModelIdsConfigured:
+            workflowEligibleModelIdsConfigured ||
+            (preserveExisting &&
+              hasGatewayCredentialInput &&
+              parsedWorkflowEligibleModelIds.length > 0),
           voiceBaseUrl,
           voiceApiKey,
           voiceApiKeyHeaderName,
@@ -2269,6 +2341,7 @@ export function GatewaySetupDialog({
   // regardless of where the dialog is mounted in the React tree.
   const parsedDeploymentNames = deploymentNamesFromInput(deploymentNames);
   const parsedImageInputModelIds = deploymentNamesFromInput(imageInputModelIds);
+  const parsedWorkflowEligibleModelIds = deploymentNamesFromInput(workflowEligibleModelIds);
   const voiceCredentialInput = hasVoiceCredentialInput({
     voiceBaseUrl,
     voiceApiKey,
@@ -2290,6 +2363,8 @@ export function GatewaySetupDialog({
     timeoutMs,
     parsedDeploymentNames,
     parsedImageInputModelIds,
+    parsedWorkflowEligibleModelIds,
+    workflowEligibleModelIdsConfigured,
     voiceCredentialInput,
   });
   const hasFigmaCredentialInput = figmaAccessToken.trim() !== "";
@@ -2309,6 +2384,7 @@ export function GatewaySetupDialog({
   const voiceModelNames = storedVoiceModels(storedModels);
   const gatewayFields = (
     <GatewayFieldsSection
+      t={t}
       preserveExisting={preserveExisting}
       busy={busy}
       success={success}
@@ -2325,6 +2401,11 @@ export function GatewaySetupDialog({
       setDeploymentNames={setDeploymentNames}
       imageInputModelIds={imageInputModelIds}
       setImageInputModelIds={setImageInputModelIds}
+      workflowEligibleModelIds={workflowEligibleModelIds}
+      setWorkflowEligibleModelIds={(value): void => {
+        setWorkflowEligibleModelIdsConfigured(true);
+        setWorkflowEligibleModelIds(value);
+      }}
     />
   );
 
@@ -2365,11 +2446,11 @@ export function GatewaySetupDialog({
   );
 
   const dialogTree = (
-    <div className="gw-setup-backdrop" role="presentation">
-      <div
+    <div className="gw-setup-backdrop">
+      <dialog
         ref={dialogRef}
         className="gw-setup"
-        role="dialog"
+        open
         aria-modal="true"
         aria-labelledby="gw-setup-title"
         aria-describedby="gw-setup-desc"
@@ -2443,7 +2524,7 @@ export function GatewaySetupDialog({
             canSubmit={canSubmit}
           />
         </form>
-      </div>
+      </dialog>
     </div>
   );
 

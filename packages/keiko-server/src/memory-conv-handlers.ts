@@ -59,7 +59,10 @@ import {
   enforcePersistableMemoryOutcome,
   FORGOTTEN_MEMORY_SUPPRESSION_REASON,
   isPersistableMemoryCandidate,
+  memoryCaptureAutoAcceptEligible,
   memoryCapturePolicyForDeps,
+  promoteEligibleMemoryRecord,
+  resolveMemoryCaptureAutonomyMode,
   SENSITIVE_MEMORY_ACTION_BODY,
 } from "./memory-capture-policy.js";
 import { isSuppressedByForgetTombstone } from "./memory-suppression.js";
@@ -462,7 +465,7 @@ export async function handleMemoryCaptureFromConversation(
   // /api/memory/proposals/:id/accept route can find it by the returned proposalId. Uses the
   // shared `buildMemoryRecordFromProposal` builder for parity with chat-handlers.ts.
   const persistableOutcomes = outcomes.map(enforcePersistableMemoryOutcome);
-  const persistedOutcomes = persistCandidateOutcomes(vault, persistableOutcomes);
+  const persistedOutcomes = persistCandidateOutcomes(deps, vault, persistableOutcomes);
   // Redact every outcome (proposal bodies may carry user text that needs scrubbing).
   return {
     status: 200,
@@ -471,10 +474,12 @@ export async function handleMemoryCaptureFromConversation(
 }
 
 function persistCandidateOutcomes(
+  deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   outcomes: readonly CaptureOutcome[],
-): readonly CaptureOutcome[] {
-  const persisted: CaptureOutcome[] = [];
+): readonly PersistedCaptureOutcome[] {
+  const persisted: PersistedCaptureOutcome[] = [];
+  const mode = resolveMemoryCaptureAutonomyMode(deps);
   for (const outcome of outcomes) {
     if (!isPersistableMemoryCandidate(outcome)) {
       persisted.push(outcome);
@@ -487,14 +492,28 @@ function persistCandidateOutcomes(
         persisted.push({ kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON });
         continue;
       }
-      vault.insertMemory(record);
+      const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
+        ? promoteEligibleMemoryRecord(record)
+        : record;
+      vault.insertMemory(candidate);
+      persisted.push({
+        ...outcome,
+        status: candidate.status === "accepted" ? "accepted" : "proposed",
+      });
+      continue;
     }
     persisted.push(outcome);
   }
   return persisted;
 }
 
-function redactCaptureOutcome(deps: UiHandlerDeps, outcome: CaptureOutcome): unknown {
+type PersistedCaptureOutcome =
+  | CaptureOutcome
+  | (Extract<CaptureOutcome, { readonly kind: "candidate" }> & {
+      readonly status: "proposed" | "accepted";
+    });
+
+function redactCaptureOutcome(deps: UiHandlerDeps, outcome: PersistedCaptureOutcome): unknown {
   if (
     outcome.kind === "candidate" &&
     (outcome.requiresApproval || outcome.proposal.provenance.sensitivity !== "public")

@@ -89,7 +89,6 @@ import {
   EMBEDDING_INSTRUCTION_VERSION,
   EMBEDDING_NORMALIZATION,
   findConfiguredCapability,
-  Gateway,
   requestOpenAIEmbedding,
   requestOpenAIEmbeddingBatch,
   selectConfiguredModel,
@@ -105,6 +104,7 @@ import {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-registry.js";
+import { gatewayForConfig } from "./gateway-instance-cache.js";
 
 const MAX_BODY_BYTES = 32_000;
 // F4 (Epic #189): cap unbounded BFF response collections so a worst-case capsule with
@@ -1920,7 +1920,7 @@ function contextualRetrievalChatGateway(
   if (config === undefined || modelId === undefined || !contextModelCanChat(config, modelId)) {
     return undefined;
   }
-  return deps.localKnowledgeContextualRetrievalChatGateway ?? new Gateway(config);
+  return deps.localKnowledgeContextualRetrievalChatGateway ?? gatewayForConfig(config);
 }
 
 function contextualRetrievalMaxContextChars(

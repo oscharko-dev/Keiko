@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   UpdateRemediationAction,
   UpdateRemediationActionRequest,
@@ -17,6 +18,11 @@ import {
   type ActionDraft,
 } from "./update-remediation-drafts.js";
 import type { UpdateLocalStateManager } from "./update-local-state.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
 
 export interface UpdateRemediationManager {
   readonly getStatus: (request?: UpdateRemediationStatusRequest) => UpdateRemediationStatusReport;
@@ -31,6 +37,8 @@ export interface UpdateRemediationManagerOptions {
   readonly localState: UpdateLocalStateManager;
   readonly localKnowledge?: LocalKnowledgeRemediationPort | undefined;
   readonly now?: (() => number) | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly redactString?: ((value: string) => string) | undefined;
 }
 
 export class UpdateRemediationError extends Error {
@@ -256,6 +264,49 @@ async function executeDraft(
   return "failed";
 }
 
+function recordDraftFailure(options: UpdateRemediationManagerOptions, error: unknown): void {
+  emitServerDiagnostic(
+    options.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: randomUUID(),
+      operation: "update.remediation.execute",
+      source: "update-remediation.executeDraft",
+      error,
+      redact: options.redactString ?? ((message): string => message),
+    }),
+  );
+}
+
+async function executeDraftStatus(
+  options: UpdateRemediationManagerOptions,
+  draft: ActionDraft,
+): Promise<RuntimeRemediationStatus> {
+  try {
+    return await executeDraft(options, draft);
+  } catch (error) {
+    recordDraftFailure(options, error);
+    return "failed";
+  }
+}
+
+function persistDraftStatus(
+  options: UpdateRemediationManagerOptions,
+  now: () => number,
+  request: UpdateRemediationActionRequest,
+  draft: ActionDraft,
+  status: RuntimeRemediationStatus,
+): void {
+  upsertRuntimeAction({
+    localState: options.localState,
+    targetVersion: request.targetVersion,
+    draft,
+    status,
+    now,
+    ...(status === "failed" ? { warningCode: "manual-review-required" } : {}),
+  });
+  recordRemediationAudit(options, request, draft, status);
+}
+
 function findDraftOrThrow(drafts: readonly ActionDraft[], actionIdValue: string): ActionDraft {
   const draft = drafts.find((item) => item.actionId === actionIdValue);
   if (draft !== undefined) return draft;
@@ -317,6 +368,7 @@ function deferDraft(
 async function runDraft(
   options: UpdateRemediationManagerOptions,
   now: () => number,
+  runningActions: Set<string>,
   request: UpdateRemediationActionRequest,
   draft: ActionDraft,
 ): Promise<void> {
@@ -327,40 +379,41 @@ async function runDraft(
       409,
     );
   }
-  if (persistedStatus(options.localState, draft) === "running") {
+  if (runningActions.has(draft.actionId)) {
     throw new UpdateRemediationError(
       "UPDATE_REMEDIATION_RUNNING",
       "This remediation action is already running.",
       409,
     );
   }
-  upsertRuntimeAction({
-    localState: options.localState,
-    targetVersion: request.targetVersion,
-    draft,
-    status: "running",
-    now,
-  });
-  let status: RuntimeRemediationStatus;
-  try {
-    status = await executeDraft(options, draft);
-  } catch {
-    status = "failed";
+  const releaseLease = options.localState.acquireRemediationLease(draft.actionId);
+  if (releaseLease === undefined) {
+    throw new UpdateRemediationError(
+      "UPDATE_REMEDIATION_RUNNING",
+      "This remediation action is already running.",
+      409,
+    );
   }
-  upsertRuntimeAction({
-    localState: options.localState,
-    targetVersion: request.targetVersion,
-    draft,
-    status,
-    now,
-    ...(status === "failed" ? { warningCode: "manual-review-required" } : {}),
-  });
-  recordRemediationAudit(options, request, draft, status);
+  runningActions.add(draft.actionId);
+  try {
+    upsertRuntimeAction({
+      localState: options.localState,
+      targetVersion: request.targetVersion,
+      draft,
+      status: "running",
+      now,
+    });
+    persistDraftStatus(options, now, request, draft, await executeDraftStatus(options, draft));
+  } finally {
+    runningActions.delete(draft.actionId);
+    releaseLease();
+  }
 }
 
 async function runRemediationAction(
   options: UpdateRemediationManagerOptions,
   now: () => number,
+  runningActions: Set<string>,
   request: UpdateRemediationActionRequest,
 ): Promise<UpdateRemediationStatusReport> {
   const drafts = draftsForImpact(options.localState, request.impact, options.localKnowledge);
@@ -368,7 +421,7 @@ async function runRemediationAction(
   if (request.decision === "defer") {
     deferDraft(options, now, request, draft);
   } else {
-    await runDraft(options, now, request, draft);
+    await runDraft(options, now, runningActions, request, draft);
   }
   return statusFor(options, now, { ...request, persist: false });
 }
@@ -404,10 +457,11 @@ export function createUpdateRemediationManager(
   options: UpdateRemediationManagerOptions,
 ): UpdateRemediationManager {
   const now = options.now ?? Date.now;
+  const runningActions = new Set<string>();
   return {
     getStatus: (request): UpdateRemediationStatusReport => statusFor(options, now, request),
     runAction: (request): Promise<UpdateRemediationStatusReport> =>
-      runRemediationAction(options, now, request),
+      runRemediationAction(options, now, runningActions, request),
     completeRestart: (targetVersion): UpdateRemediationStatusReport =>
       completeRestartAction(options, now, targetVersion),
     updateCanComplete: (targetVersion): boolean =>

@@ -394,6 +394,9 @@ describe("gateway readiness route", () => {
         generation: () => 0,
         verification: () => UNVERIFIED_GATEWAY,
         recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
       },
     };
 
@@ -561,13 +564,30 @@ describe("gateway readiness route", () => {
 
   it("marks a single unsupported feature as partial without mutating the model config", async () => {
     const config = gatewayConfig("qwen3-coder-test");
+    let observedToolCalling: boolean | undefined;
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
       .mockResolvedValueOnce(sseResponse("stream-ok"))
       .mockResolvedValueOnce(jsonResponse({ error: { message: "tools unavailable" } }, 400))
       .mockResolvedValueOnce(jsonResponse(chatPayload('{"status":"json-ok"}'))) as typeof fetch;
-    const deps = depsWith(config, fetchImpl);
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        generation: () => 0,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: (_modelId, fields) => {
+          observedToolCalling = fields.toolCalling;
+        },
+        clearVerifiedCapability: () => false,
+      },
+    };
     const report = await runGatewayReadiness({ modelId: "qwen3-coder-test" }, deps);
 
     expect("status" in report).toBe(false);
@@ -577,6 +597,7 @@ describe("gateway readiness route", () => {
     expect(toolProbe?.status).toBe("unsupported");
     expect(toolProbe?.warning).toMatch(/qwen3_coder tool parser/i);
     expect(config.capabilities?.[0]?.toolCalling).toBe(true);
+    expect(observedToolCalling).toBe(false);
     deps.store.close();
   });
 
@@ -730,6 +751,9 @@ describe("gateway readiness route", () => {
         recordVerification: (state) => {
           recorded.push(state);
         },
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
       },
     };
 
@@ -760,6 +784,9 @@ describe("gateway readiness route", () => {
         recordVerification: (state) => {
           recorded.push(state);
         },
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
       },
     };
 

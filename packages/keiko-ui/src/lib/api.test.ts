@@ -5,9 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   askGrounded,
   applyWorkspaceReplace,
+  applyGatewayVerifiedCapabilities,
   cloneRepository,
-  clearConfigCacheForTests,
-  clearModelCacheForTests,
+  resetConfigRequestCache,
+  resetModelRequestCache,
   clearVoiceCapabilityCacheForTests,
   clearProjectRequestForTests,
   deleteChat,
@@ -1835,7 +1836,7 @@ describe("files API helpers", () => {
 
 describe("fetchModels", () => {
   afterEach(() => {
-    clearModelCacheForTests();
+    resetModelRequestCache();
     vi.unstubAllGlobals();
   });
 
@@ -1878,7 +1879,7 @@ describe("fetchModels", () => {
 
 describe("fetchConfig", () => {
   afterEach(() => {
-    clearConfigCacheForTests();
+    resetConfigRequestCache();
     vi.unstubAllGlobals();
   });
 
@@ -2087,6 +2088,23 @@ describe("runGatewayReadiness", () => {
           modelId: "test-chat-model",
           options: { includeDeepProbes: true },
         }),
+      }),
+    );
+  });
+
+  it("encodes the model id and patches only the explicitly confirmed verified fields", async () => {
+    const model = { id: "model/one", toolCalling: false };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: true, model }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      applyGatewayVerifiedCapabilities("model/one", { toolCalling: false }),
+    ).resolves.toEqual({ ok: true, model });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/gateway/capabilities/model%2Fone",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ fields: { toolCalling: false } }),
       }),
     );
   });

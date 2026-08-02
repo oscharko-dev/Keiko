@@ -34,6 +34,7 @@ import {
   handleRelationshipValidate,
   _resetIdempotencyStoreForTests,
   type RelationshipHandlerDeps,
+  type RelationshipMutationAuditFactory,
 } from "./relationship-handlers.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -174,6 +175,15 @@ function freshStore(opts?: {
   return freshStoreBundle(opts).store;
 }
 
+const testMutationAudit: RelationshipMutationAuditFactory = ({ relationship, etag }) => ({
+  workspaceId: relationship.workspaceId,
+  kind: "relationship.updated",
+  relationshipId: relationship.id,
+  actor: { surface: "system", redactedActorId: "test" },
+  summary: "test mutation",
+  payload: { changedFields: [], newEtag: etag },
+});
+
 const validProposalBody = JSON.stringify({
   schemaVersion: "1",
   proposal: {
@@ -274,6 +284,115 @@ describe("workspace scope (acceptance criterion)", () => {
 });
 
 describe("POST /api/relationships (create + validate-before-persist)", () => {
+  it("rolls back the relationship when its audit entry cannot commit", async () => {
+    const { store, db } = freshStoreBundle();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    db.exec(`
+      CREATE TRIGGER reject_relationship_audit
+      BEFORE INSERT ON relationship_audit_entries
+      BEGIN
+        SELECT RAISE(FAIL, 'synthetic audit failure');
+      END
+    `);
+    const request = (): ReturnType<typeof makeReq> =>
+      makeReq({
+        method: "POST",
+        url: "/api/relationships",
+        headers: { "idempotency-key": "atomic-audit-create" },
+        body: validProposalBody,
+      });
+
+    await expect(handleRelationshipCreate(makeCtx(request()), deps)).rejects.toThrow(
+      "synthetic audit failure",
+    );
+    expect(
+      store.listRelationships({ workspaceId: "ws-a", type: "depends-on", limit: 16 }).entries,
+    ).toHaveLength(0);
+
+    db.exec("DROP TRIGGER reject_relationship_audit");
+    await expect(handleRelationshipCreate(makeCtx(request()), deps)).resolves.toMatchObject({
+      status: 201,
+    });
+    expect(
+      store.listRelationships({ workspaceId: "ws-a", type: "depends-on", limit: 16 }).entries,
+    ).toHaveLength(1);
+  });
+
+  it("rolls back a lifecycle transition when its audit entry cannot commit", () => {
+    const { store, db } = freshStoreBundle();
+    const created = store.createRelationship(
+      {
+        workspaceId: "ws-a",
+        scope: { kind: "workspace", workspaceId: "ws-a" },
+        type: "depends-on",
+        source: { kind: "capsule", id: "cap-a" },
+        target: { kind: "capsule", id: "cap-b" },
+        lifecycleState: "active",
+      },
+      testMutationAudit,
+    );
+    db.exec(`
+      CREATE TRIGGER reject_relationship_audit_update
+      BEFORE INSERT ON relationship_audit_entries
+      BEGIN
+        SELECT RAISE(FAIL, 'synthetic update audit failure');
+      END
+    `);
+
+    expect(() =>
+      store.updateLifecycle(
+        {
+          workspaceId: "ws-a",
+          id: created.relationship.id,
+          currentEtag: created.etag,
+          to: "blocked",
+        },
+        testMutationAudit,
+      ),
+    ).toThrow("synthetic update audit failure");
+    expect(store.getRelationship("ws-a", created.relationship.id)?.lifecycleState).toBe("active");
+  });
+
+  it("rolls back a reconnect when its audit entry cannot commit", () => {
+    const { store, db } = freshStoreBundle();
+    const created = store.createRelationship(
+      {
+        workspaceId: "ws-a",
+        scope: { kind: "workspace", workspaceId: "ws-a" },
+        type: "depends-on",
+        source: { kind: "capsule", id: "cap-a" },
+        target: { kind: "capsule", id: "cap-b" },
+        lifecycleState: "active",
+      },
+      testMutationAudit,
+    );
+    db.exec(`
+      CREATE TRIGGER reject_relationship_audit_reconnect
+      BEFORE INSERT ON relationship_audit_entries
+      BEGIN
+        SELECT RAISE(FAIL, 'synthetic reconnect audit failure');
+      END
+    `);
+
+    expect(() =>
+      store.reconnect(
+        {
+          workspaceId: "ws-a",
+          id: created.relationship.id,
+          currentEtag: created.etag,
+          target: { kind: "capsule", id: "cap-c" },
+        },
+        testMutationAudit,
+      ),
+    ).toThrow("synthetic reconnect audit failure");
+    expect(store.getRelationship("ws-a", created.relationship.id)?.target).toEqual({
+      kind: "capsule",
+      id: "cap-b",
+      workspaceId: "ws-a",
+    });
+  });
+
   it("rejects without Idempotency-Key (400)", async () => {
     const store = freshStore();
     const { redactor } = trackingRedactor();
@@ -643,14 +762,17 @@ describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () 
     const store = freshStore();
     const { redactor } = trackingRedactor();
     const deps = buildDeps("ws-a", store, redactor);
-    const seeded = store.createRelationship({
-      workspaceId: "ws-a",
-      scope: { kind: "workspace", workspaceId: "ws-a" },
-      type: "depends-on",
-      source: { kind: "capsule", id: "cap-stale-1" },
-      target: { kind: "capsule", id: "cap-stale-2" },
-      lifecycleState: "stale",
-    });
+    const seeded = store.createRelationship(
+      {
+        workspaceId: "ws-a",
+        scope: { kind: "workspace", workspaceId: "ws-a" },
+        type: "depends-on",
+        source: { kind: "capsule", id: "cap-stale-1" },
+        target: { kind: "capsule", id: "cap-stale-2" },
+        lifecycleState: "stale",
+      },
+      testMutationAudit,
+    );
     const id = seeded.relationship.id;
     const patch = makeReq({
       method: "PATCH",
@@ -703,14 +825,17 @@ describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () 
     });
     expect((await handleRelationshipCreate(makeCtx(reverseReq), deps)).status).toBe(201);
 
-    const seeded = store.createRelationship({
-      workspaceId: "ws-a",
-      scope: { kind: "workspace", workspaceId: "ws-a" },
-      type: "depends-on",
-      source: { kind: "capsule", id: "cap-a" },
-      target: { kind: "capsule", id: "cap-b" },
-      lifecycleState: "blocked",
-    });
+    const seeded = store.createRelationship(
+      {
+        workspaceId: "ws-a",
+        scope: { kind: "workspace", workspaceId: "ws-a" },
+        type: "depends-on",
+        source: { kind: "capsule", id: "cap-a" },
+        target: { kind: "capsule", id: "cap-b" },
+        lifecycleState: "blocked",
+      },
+      testMutationAudit,
+    );
     const patch = makeReq({
       method: "PATCH",
       url: `/api/relationships/${seeded.relationship.id}`,
@@ -735,14 +860,17 @@ describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () 
     });
     expect((await handleRelationshipCreate(makeCtx(liveReq), deps)).status).toBe(201);
 
-    const seeded = store.createRelationship({
-      workspaceId: "ws-a",
-      scope: { kind: "workspace", workspaceId: "ws-a" },
-      type: "starts-workflow",
-      source: { kind: "chat", id: "chat-blocked" },
-      target: { kind: "workflow-run", id: "run-shared" },
-      lifecycleState: "blocked",
-    });
+    const seeded = store.createRelationship(
+      {
+        workspaceId: "ws-a",
+        scope: { kind: "workspace", workspaceId: "ws-a" },
+        type: "starts-workflow",
+        source: { kind: "chat", id: "chat-blocked" },
+        target: { kind: "workflow-run", id: "run-shared" },
+        lifecycleState: "blocked",
+      },
+      testMutationAudit,
+    );
     const patch = makeReq({
       method: "PATCH",
       url: `/api/relationships/${seeded.relationship.id}`,
@@ -864,6 +992,56 @@ describe("PATCH /api/relationships/:id reconnect contract", () => {
 });
 
 describe("DELETE /api/relationships/:id soft-deletes to revoked", () => {
+  it("rejects superseded to revoked and preserves the stored lifecycle", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const created = await handleRelationshipCreate(
+      makeCtx(
+        makeReq({
+          method: "POST",
+          url: "/api/relationships",
+          headers: { "idempotency-key": "delete-illegal-create" },
+          body: validProposalBody,
+        }),
+      ),
+      deps,
+    );
+    const id = (created.body as { relationship: { id: string } }).relationship.id;
+    const createEtag = (created.body as { etag: string }).etag;
+    const patched = await handleRelationshipPatch(
+      makeCtx(
+        makeReq({
+          method: "PATCH",
+          url: `/api/relationships/${id}`,
+          headers: { "idempotency-key": "delete-illegal-patch", "if-match": createEtag },
+          body: JSON.stringify({ schemaVersion: "1", transition: { to: "superseded" } }),
+        }),
+        { id },
+      ),
+      deps,
+    );
+    expect(patched.status).toBe(200);
+    const patchEtag = (patched.body as { etag: string }).etag;
+
+    const deleted = await handleRelationshipDelete(
+      makeCtx(
+        makeReq({
+          method: "DELETE",
+          url: `/api/relationships/${id}`,
+          headers: { "idempotency-key": "delete-illegal-delete", "if-match": patchEtag },
+        }),
+        { id },
+      ),
+      deps,
+    );
+
+    expect(deleted.status).toBe(422);
+    const reasons = (deleted.body as { reasons: readonly { code: string }[] }).reasons;
+    expect(reasons.map((reason) => reason.code)).toContain("denied/lifecycle-illegal-transition");
+    expect(store.getRelationship("ws-a", id)?.lifecycleState).toBe("superseded");
+  });
+
   // #543 hardening: same root cause as the PATCH counterpart — read the opaque etag from
   // the TOP-LEVEL `body.etag`, not `body.relationship.etag` (legacy numeric field).
   it("transitions lifecycle to revoked and emits an audit row", async () => {
@@ -892,6 +1070,47 @@ describe("DELETE /api/relationships/:id soft-deletes to revoked", () => {
     const auditEntries = listRelationshipAuditEntries(db, "ws-a", 16);
     const revokeEntry = auditEntries.find((r) => r.kind === "relationship.deleted");
     expect(revokeEntry, "DELETE must emit a relationship.deleted audit entry").toBeDefined();
+  });
+
+  it("rolls back DELETE when its relationship audit entry cannot commit", async () => {
+    const { store, db } = freshStoreBundle();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const created = await handleRelationshipCreate(
+      makeCtx(
+        makeReq({
+          method: "POST",
+          url: "/api/relationships",
+          headers: { "idempotency-key": "delete-audit-seed" },
+          body: validProposalBody,
+        }),
+      ),
+      deps,
+    );
+    const id = (created.body as { relationship: { id: string } }).relationship.id;
+    const etag = (created.body as { etag: string }).etag;
+    db.exec(`
+      CREATE TRIGGER reject_relationship_audit_delete
+      BEFORE INSERT ON relationship_audit_entries
+      BEGIN
+        SELECT RAISE(FAIL, 'synthetic delete audit failure');
+      END
+    `);
+
+    await expect(
+      handleRelationshipDelete(
+        makeCtx(
+          makeReq({
+            method: "DELETE",
+            url: `/api/relationships/${id}`,
+            headers: { "idempotency-key": "delete-audit-failure", "if-match": etag },
+          }),
+          { id },
+        ),
+        deps,
+      ),
+    ).rejects.toThrow("synthetic delete audit failure");
+    expect(store.getRelationship("ws-a", id)?.lifecycleState).toBe("active");
   });
 });
 
@@ -1510,30 +1729,39 @@ describe("Issue #539 audit regressions", () => {
         return (): string => `rel-pinned-${String(++i).padStart(4, "0")}`;
       })(),
     });
-    const { relationship } = pinned.createRelationship({
-      workspaceId: "ws-a",
-      scope: { kind: "workspace", workspaceId: "ws-a" },
-      type: "depends-on",
-      source: { kind: "capsule", id: "cap-x" },
-      target: { kind: "capsule", id: "cap-y" },
-      lifecycleState: "active",
-    });
+    const { relationship } = pinned.createRelationship(
+      {
+        workspaceId: "ws-a",
+        scope: { kind: "workspace", workspaceId: "ws-a" },
+        type: "depends-on",
+        source: { kind: "capsule", id: "cap-x" },
+        target: { kind: "capsule", id: "cap-y" },
+        lifecycleState: "active",
+      },
+      testMutationAudit,
+    );
     // Two lifecycle changes under the SAME clock — both must succeed.
     expect(() =>
-      pinned.updateLifecycle({
-        workspaceId: "ws-a",
-        id: relationship.id,
-        currentEtag: "ignored", // store does not check here
-        to: "archived",
-      }),
+      pinned.updateLifecycle(
+        {
+          workspaceId: "ws-a",
+          id: relationship.id,
+          currentEtag: "ignored", // store does not check here
+          to: "archived",
+        },
+        testMutationAudit,
+      ),
     ).not.toThrow();
     expect(() =>
-      pinned.updateLifecycle({
-        workspaceId: "ws-a",
-        id: relationship.id,
-        currentEtag: "ignored",
-        to: "superseded",
-      }),
+      pinned.updateLifecycle(
+        {
+          workspaceId: "ws-a",
+          id: relationship.id,
+          currentEtag: "ignored",
+          to: "superseded",
+        },
+        testMutationAudit,
+      ),
     ).not.toThrow();
   });
 });

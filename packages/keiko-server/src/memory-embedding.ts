@@ -505,12 +505,10 @@ export type NoveltyInsertOutcome =
 // Both are governed refusals, so both must survive a paraphrase — an exact body_hash match is
 // already handled upstream by `exactCaptureSuppressionReason` (memory-suppression.ts); this catches
 // the cosine-similar re-derivation whose normalized body differs.
-function refusedScopeVectors(
+function rejectedScopeVectors(
   vault: MemoryVaultStore,
   scope: MemoryRecord["scope"],
-  reason: MemoryCaptureSuppressionReason,
 ): readonly Float32Array[] {
-  if (reason === FORGOTTEN_MEMORY_SUPPRESSION_REASON) return vault.forgetTombstoneVectors(scope);
   const ids = vault
     .listMemoriesByScope(scope, {
       status: ["rejected"],
@@ -520,6 +518,21 @@ function refusedScopeVectors(
     .map((record) => record.id);
   if (ids.length === 0) return [];
   return [...vault.getEmbeddings(ids).values()].map((row) => row.vector);
+}
+
+function refusalMatchesCandidate(
+  vault: MemoryVaultStore,
+  scope: MemoryRecord["scope"],
+  candidate: Float32Array,
+  threshold: number,
+  reason: MemoryCaptureSuppressionReason,
+): boolean {
+  if (reason === FORGOTTEN_MEMORY_SUPPRESSION_REASON) {
+    return vault.hasSemanticallySimilarForgetTombstone(scope, candidate, threshold);
+  }
+  return rejectedScopeVectors(vault, scope).some(
+    (vector) => cosineSimilarity(candidate, vector) >= threshold,
+  );
 }
 
 // Pure over the vault reads: returns the refusal reason iff some refused vector in scope is at/above
@@ -533,8 +546,7 @@ function semanticSuppressionReason(
 ): MemoryCaptureSuppressionReason | null {
   if (candidate === null) return null;
   for (const reason of SEMANTIC_SUPPRESSION_REASONS) {
-    const refused = refusedScopeVectors(vault, scope, reason);
-    if (refused.some((vector) => cosineSimilarity(candidate.vector, vector) >= threshold)) {
+    if (refusalMatchesCandidate(vault, scope, candidate.vector, threshold, reason)) {
       return reason;
     }
   }

@@ -48,6 +48,7 @@ import {
   memoryUnattendedAcceptanceAllowed,
   resolveMemoryMaintenanceAutonomyMode,
 } from "./memory-capture-policy.js";
+import { applyMemoryRetention, type MemoryRetentionPolicy } from "./memory-retention.js";
 
 export interface MaintenanceCounts {
   promoted: number;
@@ -58,6 +59,8 @@ export interface MaintenanceCounts {
   edgesCreated: number;
   clustersInspected: number;
   reviewItemsCreated: number;
+  retentionForgotten: number;
+  tombstonesPurged: number;
 }
 
 export interface MaintenanceResult extends MaintenanceCounts {
@@ -78,6 +81,8 @@ function emptyCounts(): MaintenanceAccumulator {
     edgesCreated: 0,
     clustersInspected: 0,
     reviewItemsCreated: 0,
+    retentionForgotten: 0,
+    tombstonesPurged: 0,
     reviewItems: [],
   };
 }
@@ -336,6 +341,38 @@ export interface RunMaintenanceOptions {
   // single flat half-life for every type (byte-identical to the pre-semanticization behaviour), so
   // the effect is strictly opt-in. Resolve it from the environment via `memorySemanticizationMultipliers`.
   readonly decayHalfLifeMultiplierByType?: Partial<Record<MemoryType, number>>;
+  // Explicit operator policy. Absent means no absolute-age/count retention phase; the existing
+  // strength-based maintenance remains unchanged. Server callers resolve this from env.
+  readonly retentionPolicy?: MemoryRetentionPolicy;
+}
+
+const MILLIS_PER_DAY = 24 * 60 * 60 * 1000;
+const RETENTION_ENV_FIELDS = {
+  maxAgeMs: ["KEIKO_MEMORY_RETENTION_MAX_AGE_DAYS", MILLIS_PER_DAY],
+  maxRecordsPerScope: ["KEIKO_MEMORY_RETENTION_MAX_RECORDS_PER_SCOPE", 1],
+  expireProposalsAfterMs: ["KEIKO_MEMORY_RETENTION_EXPIRE_PROPOSALS_AFTER_DAYS", MILLIS_PER_DAY],
+  purgeForgottenAfterMs: ["KEIKO_MEMORY_RETENTION_PURGE_FORGOTTEN_AFTER_DAYS", MILLIS_PER_DAY],
+} as const satisfies Readonly<
+  Record<keyof MemoryRetentionPolicy, readonly [envName: string, multiplier: number]>
+>;
+
+function positiveIntegerEnv(env: EnvSource, name: string, multiplier: number): number | undefined {
+  const raw = env[name];
+  if (raw === undefined || raw.trim().length === 0) return undefined;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0 || !Number.isSafeInteger(value * multiplier)) {
+    throw new TypeError(`${name} must be a positive safe integer.`);
+  }
+  return value * multiplier;
+}
+
+/** Resolves the operator-owned retention policy; no arbitrary deletion defaults are invented. */
+export function memoryRetentionPolicy(env: EnvSource): MemoryRetentionPolicy | undefined {
+  const entries = Object.entries(RETENTION_ENV_FIELDS).flatMap(([field, [name, multiplier]]) => {
+    const value = positiveIntegerEnv(env, name, multiplier);
+    return value === undefined ? [] : [[field, value] as const];
+  });
+  return entries.length === 0 ? undefined : Object.fromEntries(entries);
 }
 
 // Env-gated rollout of type-aware decay (semanticization), mirroring the KEIKO_MEMORY_FUSION
@@ -416,6 +453,19 @@ export function runMemoryMaintenance(
   const accessStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
   const plan = planMemoryMaintenance(all, accessStats, { nowMs, policy: planPolicy });
   applyFadeEffects(vault, auditSink, nowMs, plan, recordsById(all), counts);
+  // Phase 4 — explicit retention and tombstone purge. It shares this bounded pass, scope snapshot,
+  // and deterministic clock; there is deliberately no timer or hidden background loop.
+  if (options?.retentionPolicy !== undefined) {
+    const retention = applyMemoryRetention({
+      vault,
+      scopes,
+      policy: options.retentionPolicy,
+      nowMs,
+    });
+    counts.retentionForgotten += retention.forgotten.length;
+    counts.forgotten += retention.forgotten.length;
+    counts.tombstonesPurged += retention.forgottenPurgeBacklog;
+  }
   return counts;
 }
 
@@ -454,6 +504,7 @@ export interface MaybeRunAutoMaintenanceOptions {
   // Optional type-aware decay multipliers (semanticization). Forwarded verbatim to the pass; absent
   // keeps the flat single half-life. Resolve from the env via `memorySemanticizationMultipliers`.
   readonly decayHalfLifeMultiplierByType?: Partial<Record<MemoryType, number>>;
+  readonly retentionPolicy?: MemoryRetentionPolicy;
 }
 
 // Runs ONE bounded maintenance pass iff enabled AND due, advancing the cursor BEFORE running so a
@@ -475,6 +526,9 @@ export function maybeRunAutoMaintenance(
       ...(options.autonomyMode !== undefined ? { autonomyMode: options.autonomyMode } : {}),
       ...(options.decayHalfLifeMultiplierByType !== undefined
         ? { decayHalfLifeMultiplierByType: options.decayHalfLifeMultiplierByType }
+        : {}),
+      ...(options.retentionPolicy !== undefined
+        ? { retentionPolicy: options.retentionPolicy }
         : {}),
     });
   } catch {
@@ -518,14 +572,63 @@ export function resolveMaintenanceAutonomyMode(deps: UiHandlerDeps): CodingWorkb
   }
 }
 
+function reportRetentionPolicyFailure(deps: UiHandlerDeps, error: unknown): string {
+  const correlationId = randomUUID();
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation: "memory.maintenance.retention-policy",
+      source: "memory-maintenance-handlers.resolveMemoryRetentionPolicy",
+      error,
+      redact: (summary): string => String(deps.redactor(summary)),
+    }),
+  );
+  return correlationId;
+}
+
+export type MemoryRetentionPolicyResolution =
+  | { readonly ok: true; readonly policy: MemoryRetentionPolicy | undefined }
+  | { readonly ok: false };
+
+export function resolveMemoryRetentionPolicy(deps: UiHandlerDeps): MemoryRetentionPolicyResolution {
+  try {
+    return { ok: true, policy: memoryRetentionPolicy(deps.env) };
+  } catch (error) {
+    reportRetentionPolicyFailure(deps, error);
+    return { ok: false };
+  }
+}
+
+function manualRetentionPolicy(
+  deps: UiHandlerDeps,
+): MemoryRetentionPolicy | undefined | RouteResult {
+  try {
+    return memoryRetentionPolicy(deps.env);
+  } catch (error) {
+    const correlationId = reportRetentionPolicyFailure(deps, error);
+    return {
+      status: 500,
+      body: errorBody(
+        "MEMORY_RETENTION_CONFIG_INVALID",
+        "Memory retention configuration is invalid.",
+        correlationId,
+      ),
+    };
+  }
+}
+
 export function handleRunMaintenance(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
   try {
     const multipliers = memorySemanticizationMultipliers(deps.env);
+    const retentionPolicy = manualRetentionPolicy(deps);
+    if (isRouteResult(retentionPolicy)) return retentionPolicy;
     const counts = runMemoryMaintenance(vault, memoryMaintenanceAuditSink(deps), {
       autonomyMode: resolveMaintenanceAutonomyMode(deps),
       ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
+      ...(retentionPolicy !== undefined ? { retentionPolicy } : {}),
     });
     return { status: 200, body: counts };
   } catch {

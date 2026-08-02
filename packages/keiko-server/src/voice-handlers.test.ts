@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { handleVoiceTranscribe } from "./voice-handlers.js";
@@ -91,13 +92,35 @@ function b64(text: string): string {
 
 const VALID_AUDIO = b64("keiko-dictation-audio-bytes");
 
-function ctx(body: unknown): RouteContext {
+class FakeResponse extends EventEmitter {
+  readonly destroyed = false;
+  readonly closed = false;
+  readonly writableEnded = false;
+}
+
+function voiceContext(body: unknown): {
+  readonly context: RouteContext;
+  readonly request: IncomingMessage;
+  readonly response: FakeResponse;
+} {
+  const request = Readable.from([Buffer.from(JSON.stringify(body), "utf8")], {
+    autoDestroy: false,
+  }) as IncomingMessage;
+  const response = new FakeResponse();
   return {
-    req: Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage,
-    res: {} as RouteContext["res"],
-    params: {},
-    url: new URL("http://127.0.0.1/api/voice/transcribe"),
+    request,
+    response,
+    context: {
+      req: request,
+      res: response as unknown as RouteContext["res"],
+      params: {},
+      url: new URL("http://127.0.0.1/api/voice/transcribe"),
+    },
   };
+}
+
+function ctx(body: unknown): RouteContext {
+  return voiceContext(body).context;
 }
 
 function spyingStore(): { store: EvidenceStore; put: ReturnType<typeof vi.fn> } {
@@ -135,6 +158,14 @@ function stubTranscribe(outcome: SpeechToTextOutcome): {
     },
     seen,
   };
+}
+
+function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function sttDeps(
@@ -226,6 +257,70 @@ describe("POST /api/voice/transcribe — capability gate (AC1/AC2)", () => {
 });
 
 describe("POST /api/voice/transcribe — successful dictation (AC3/AC4/AC6)", () => {
+  it("aborts transcription and removes lifecycle listeners on client disconnect", async () => {
+    const fixture = voiceContext({ audio: VALID_AUDIO, mimeType: "audio/webm" });
+    const captured = deferred<SpeechToTextRequest>();
+    const deps = depsWith({
+      config: VOICE_STT_CONFIG,
+      configPresent: true,
+      voiceTranscriptionRequest: (request): Promise<SpeechToTextOutcome> => {
+        captured.resolve(request);
+        return new Promise((resolve) => {
+          request.signal?.addEventListener(
+            "abort",
+            () => {
+              resolve({ ok: false, kind: "cancelled" });
+            },
+            { once: true },
+          );
+        });
+      },
+    });
+
+    const handling = handleVoiceTranscribe(fixture.context, deps);
+    const request = await captured.promise;
+    expect(request.signal).toBeDefined();
+    expect(request.signal?.aborted).toBe(false);
+    fixture.response.emit("close");
+    expect(request.signal?.aborted).toBe(true);
+    await expect(handling).resolves.toMatchObject({
+      status: 499,
+      body: { error: { code: "REQUEST_CANCELLED" } },
+    });
+    expect(fixture.request.listenerCount("aborted")).toBe(0);
+    expect(fixture.response.listenerCount("close")).toBe(0);
+  });
+
+  it("maps a provider rejection after disconnect to request cancellation", async () => {
+    const fixture = voiceContext({ audio: VALID_AUDIO, mimeType: "audio/webm" });
+    const captured = deferred<SpeechToTextRequest>();
+    const deps = depsWith({
+      config: VOICE_STT_CONFIG,
+      configPresent: true,
+      voiceTranscriptionRequest: (request): Promise<SpeechToTextOutcome> => {
+        captured.resolve(request);
+        return new Promise((_resolve, reject) => {
+          request.signal?.addEventListener(
+            "abort",
+            () => {
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+      },
+    });
+
+    const handling = handleVoiceTranscribe(fixture.context, deps);
+    await captured.promise;
+    fixture.response.emit("close");
+
+    await expect(handling).resolves.toMatchObject({
+      status: 499,
+      body: { error: { code: "REQUEST_CANCELLED" } },
+    });
+  });
+
   it("transcribes against the configured keiko-stt provider and returns the transcript (AC6)", async () => {
     const { deps, seen } = sttDeps();
     const result = await handleVoiceTranscribe(

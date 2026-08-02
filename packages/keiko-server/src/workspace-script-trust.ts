@@ -60,6 +60,7 @@ const MAX_TRUST_RECORDS = 4_096;
 export const WORKSPACE_SCRIPT_TRUST_ERROR_CODES = {
   PROJECT_NOT_FOUND: "PROJECT_NOT_FOUND",
   PACKAGE_MANIFEST_UNAVAILABLE: "PACKAGE_MANIFEST_UNAVAILABLE",
+  FILESYSTEM_IDENTITY_UNSUPPORTED: "FILESYSTEM_IDENTITY_UNSUPPORTED",
   WORKSPACE_STATE_UNAVAILABLE: "WORKSPACE_STATE_UNAVAILABLE",
 } as const;
 
@@ -69,6 +70,7 @@ export type WorkspaceScriptTrustErrorCode =
 const STATUS_MAP: Readonly<Record<WorkspaceScriptTrustErrorCode, number>> = {
   PROJECT_NOT_FOUND: 404,
   PACKAGE_MANIFEST_UNAVAILABLE: 422,
+  FILESYSTEM_IDENTITY_UNSUPPORTED: 422,
   // The project is registered but its workspace state cannot be read (ADR-0147 D9 fail-closed).
   WORKSPACE_STATE_UNAVAILABLE: 503,
 };
@@ -210,6 +212,7 @@ function manifestForCanonicalRoot(store: UiStore, canonicalRoot: string): Manife
 interface CurrentTrustContext {
   readonly binding: WorkspaceTrustBinding;
   readonly objectIdentityMatches: boolean;
+  readonly objectIdentityUnsupported: boolean;
 }
 
 function currentTrustContext(
@@ -247,11 +250,18 @@ function currentTrustContext(
     objectIdentityMatches:
       liveIdentity.objectIdentityDigest !== undefined &&
       liveIdentity.objectIdentityDigest === storedObjectIdentity,
+    objectIdentityUnsupported: liveIdentity.objectIdentityUnsupported,
   };
 }
 
 function requireCurrentObjectIdentity(context: CurrentTrustContext): WorkspaceTrustBinding {
   if (context.objectIdentityMatches) return context.binding;
+  if (context.objectIdentityUnsupported) {
+    throw new WorkspaceScriptTrustError(
+      "FILESYSTEM_IDENTITY_UNSUPPORTED",
+      "The workspace filesystem cannot provide a durable root identity.",
+    );
+  }
   throw new WorkspaceScriptTrustError(
     "WORKSPACE_STATE_UNAVAILABLE",
     "The workspace state for this project is unavailable.",
