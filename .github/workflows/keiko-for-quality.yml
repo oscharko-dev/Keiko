@@ -22,11 +22,19 @@ on:
     types:
       [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed, edited]
 
-# The reviewer needs to read the repository and write review comments. Nothing else. It has no
-# contents-write, checks-write, actions-write, commit, push, or merge authority. Approval is
+# The reviewer needs to read the repository, write review comments, and persist its review-store
+# cache. It has no contents-write, checks-write, commit, push, or merge authority. Approval is
 # deliberately NOT in that list: as the note above says, `pull-requests: write` can submit an
 # APPROVE review, and only the pinned action's behaviour declines to.
+#
+# `actions: write` exists ONLY for the cache: the cache service refuses writes without it
+# ("cache write denied: token has no writable scopes" — actions/cache/save fails soft, so the
+# first production run reviewed 105 files, reported success, and persisted nothing). The widening
+# is accepted deliberately: the scope also permits run cancellation/re-run via API, but this job
+# executes no candidate code — the token only ever runs inside the base-controlled workflow and
+# the SHA-pinned action, and the alternative is no cross-run memoization at all.
 permissions:
+  actions: write
   contents: read
   pull-requests: write
 
