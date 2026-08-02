@@ -587,14 +587,16 @@ function reportRetentionPolicyFailure(deps: UiHandlerDeps, error: unknown): stri
   return correlationId;
 }
 
-export function resolveMemoryRetentionPolicy(
-  deps: UiHandlerDeps,
-): MemoryRetentionPolicy | undefined {
+export type MemoryRetentionPolicyResolution =
+  | { readonly ok: true; readonly policy: MemoryRetentionPolicy | undefined }
+  | { readonly ok: false };
+
+export function resolveMemoryRetentionPolicy(deps: UiHandlerDeps): MemoryRetentionPolicyResolution {
   try {
-    return memoryRetentionPolicy(deps.env);
+    return { ok: true, policy: memoryRetentionPolicy(deps.env) };
   } catch (error) {
     reportRetentionPolicyFailure(deps, error);
-    return undefined;
+    return { ok: false };
   }
 }
 

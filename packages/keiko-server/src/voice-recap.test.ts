@@ -14,6 +14,7 @@ import { Readable } from "node:stream";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { VOICE_SESSION_RECAP_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 import { createRunRegistry } from "./runs.js";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext } from "./routes.js";
@@ -223,6 +224,7 @@ describe("handleBuildVoiceRecap", () => {
     const rollupEntry = entries.find((entry) => entry.runId.startsWith("voice-recap-"));
     expect(rollupEntry).toBeDefined();
     const rollup = JSON.parse(rollupEntry?.raw ?? "{}") as Record<string, unknown>;
+    expect(rollup.schemaVersion).toBe(VOICE_SESSION_RECAP_SCHEMA_VERSION);
     expect(rollup.candidatesProposed).toBe(2);
     expect(rollup.triggeredByUser).toBe(true);
     // Content-free: the committed transcript text never enters the audit artifact.

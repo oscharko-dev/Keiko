@@ -3,7 +3,7 @@ import type { IncomingMessage } from "node:http";
 import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { handleCodingContextPack } from "./codingContextRoutes.js";
+import { composeCodingContextConnectors, handleCodingContextPack } from "./codingContextRoutes.js";
 import type { GitHubCodeContextApiPort } from "./githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./jiraCodeContextConnector.js";
 import type { RouteContext, RouteResult } from "../routes.js";
@@ -159,6 +159,45 @@ describe("coding context pack route", () => {
       { source: "github", reason: "missing-credentials" },
       { source: "jira", reason: "missing-credentials" },
     ]);
+  });
+
+  it("composes the governed GitHub fallback for an authorized launch project", () => {
+    const composed = composeCodingContextConnectors(
+      depsFor({
+        codingContextGitHubPort: undefined,
+        preferredProjectPath: "/workspace/project",
+        env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+      }),
+    );
+
+    expect(composed.connectorConfig.github_connector_authorized).toBe(true);
+  });
+
+  it("records a redacted diagnostic when fallback Jira configuration is invalid", () => {
+    const diagnostics: unknown[] = [];
+
+    const composed = composeCodingContextConnectors(
+      depsFor({
+        codingContextJiraPort: undefined,
+        diagnostics: { record: (record) => diagnostics.push(record) },
+        env: {
+          JIRA_CONNECTOR_AUTHORIZED: "true",
+          KEIKO_JIRA_BASE_URL: "http://invalid.example.com",
+          KEIKO_JIRA_EMAIL: "operator@example.com",
+          KEIKO_JIRA_API_TOKEN: "secret-token",
+        },
+      }),
+    );
+
+    expect(composed.connectorConfig.jira_connector_authorized).toBe(false);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      operation: "coding-context.connector.configure",
+      source: "coding-context.fallbackJiraPort",
+    });
+    expect(JSON.stringify(diagnostics)).not.toContain("invalid.example.com");
+    expect(JSON.stringify(diagnostics)).not.toContain("operator@example.com");
+    expect(JSON.stringify(diagnostics)).not.toContain("secret-token");
   });
 
   it("rejects malformed bodies, unknown keys, hostile refs, and bad bounds", async () => {

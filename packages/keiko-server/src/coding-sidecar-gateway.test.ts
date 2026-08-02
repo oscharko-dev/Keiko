@@ -520,6 +520,7 @@ async function* streamedResponse(response: NormalizedResponse): AsyncGenerator<G
 
 describe("coding-sidecar gateway", () => {
   it("keeps circuit-breaker failures across separate production gateway requests", async () => {
+    resetGatewayInstanceCacheForTests();
     const fetchMock = vi.fn(() => Promise.reject(new Error("provider unavailable")));
     vi.stubGlobal("fetch", fetchMock);
     const config = {
@@ -1923,6 +1924,7 @@ describe("coding-sidecar gateway", () => {
         recordVerification: () => undefined,
         verifiedCapability: () => undefined,
         recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
       },
     });
 

@@ -683,7 +683,7 @@ describe("SettingsPanel gateway readiness checks", () => {
     });
     applyGatewayVerifiedCapabilitiesMock.mockResolvedValue({ ok: true, model: updated });
 
-    render(<SettingsPanel />);
+    const view = render(<SettingsPanel />);
     fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
 
     expect(await screen.findByTestId("capability-disagreements")).toHaveTextContent(
@@ -693,6 +693,10 @@ describe("SettingsPanel gateway readiness checks", () => {
     expect(
       screen.getByRole("alertdialog", { name: "Apply verified model capabilities?" }),
     ).toBeInTheDocument();
+    const readinessButton = screen.getByRole("button", { name: "Run readiness check" });
+    readinessButton.focus();
+    view.rerender(<SettingsPanel />);
+    expect(readinessButton).toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: "Apply values" }));
     await waitFor(() => {
       expect(applyGatewayVerifiedCapabilitiesMock).toHaveBeenCalledWith("test-chat-1", {

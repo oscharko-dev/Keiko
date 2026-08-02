@@ -346,10 +346,11 @@ describe("GET /api/projects", () => {
 describe("POST /api/projects", () => {
   it("keeps a committed project but surfaces a failed trailing trust grant", async () => {
     const diagnostic = vi.fn();
+    const sensitiveFailure = `${projDir}/package.json contained secret-token`;
     await restartWithDeps({
       workspaceScriptTrust: {
         grant: () => {
-          throw new Error("manifest unavailable");
+          throw new Error(sensitiveFailure);
         },
       } as unknown as UiHandlerDeps["workspaceScriptTrust"],
       diagnostics: { record: diagnostic },
@@ -361,18 +362,61 @@ describe("POST /api/projects", () => {
       body: JSON.stringify({ path: projDir }),
     });
 
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(201);
     const body: unknown = await res.json();
     expect(body).toMatchObject({
-      error: {
+      warning: {
         code: "PROJECT_TRUST_GRANT_FAILED",
       },
     });
-    expect(body).toHaveProperty("error.correlationId", expect.any(String));
+    expect(body).toHaveProperty("warning.correlationId", expect.any(String));
+    expect(body).toHaveProperty("project.path", projDir);
+    const correlationId = (body as { warning: { correlationId: string } }).warning.correlationId;
     expect(store.listProjects()).toContainEqual(expect.objectContaining({ path: projDir }));
     expect(diagnostic).toHaveBeenCalledWith(
-      expect.objectContaining({ operation: "project.create.trust.grant" }),
+      expect.objectContaining({
+        correlationId,
+        operation: "project.create.trust.grant",
+        message: "server-operation-failed",
+      }),
     );
+    expect(JSON.stringify(body)).not.toContain("secret-token");
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("secret-token");
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain(projDir);
+  });
+
+  it("keeps the opaque trust-grant failure response stable when diagnostics are unavailable", async () => {
+    const fallbackProject = join(projDir, "fallback-project");
+    mkdirSync(fallbackProject);
+    await restartWithDeps({
+      workspaceScriptTrust: {
+        grant: () => {
+          throw new Error("foreign manifest body");
+        },
+      } as unknown as UiHandlerDeps["workspaceScriptTrust"],
+      diagnostics: {
+        record: () => {
+          throw new Error("diagnostic sink unavailable");
+        },
+      },
+    });
+
+    const res = await fetch(url("/api/projects"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({ path: fallbackProject }),
+    });
+
+    expect(res.status).toBe(201);
+    const body: unknown = await res.json();
+    expect(body).toMatchObject({
+      project: { path: fallbackProject },
+      warning: {
+        code: "PROJECT_TRUST_GRANT_FAILED",
+      },
+    });
+    expect(body).toHaveProperty("warning.correlationId", expect.any(String));
+    expect(store.listProjects()).toContainEqual(expect.objectContaining({ path: fallbackProject }));
   });
 
   it("records the explicit folder selection as the exact root trust grant", async () => {

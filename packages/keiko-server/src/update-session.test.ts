@@ -608,6 +608,54 @@ describe("UpdateSessionManager", () => {
     }
   });
 
+  it("does not attach a child sidecar to a reused session id with different lock ownership", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-identity-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      const lock = createFileUpdateSessionLock(lockPath, {
+        pidAlive: (pid) => pid === 43_210,
+      });
+      expect(lock.acquire(lockRecord("reused-session"))).toBe(true);
+      expect(lock.updateChildPid("reused-session", 43_210)).toBe(true);
+      await writeFile(
+        lockPath,
+        `${JSON.stringify({
+          ...lockRecord("reused-session"),
+          targetVersion: "0.2.13",
+          startedAt: "2026-07-01T00:00:00.000Z",
+          pid: 999_999,
+        })}\n`,
+        { mode: 0o600 },
+      );
+
+      expect(lock.isLocked()).toBe(false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("continues an already-spawned update when child-PID metadata cannot be published", async () => {
+    const authority = new MemoryUpdateSessionLock();
+    const lock: UpdateSessionLock = {
+      isLocked: authority.isLocked,
+      acquire: authority.acquire,
+      updateChildPid: () => false,
+      release: authority.release,
+    };
+    const manager = createUpdateSessionManager({
+      detector: () => supportedMode(),
+      lock,
+      runCommandImpl: (input) => {
+        input.onSpawn?.(43_210);
+        return Promise.resolve(commandResult());
+      },
+    });
+
+    manager.start({ targetVersion: "0.2.12" });
+
+    await waitForPhase(manager, "restart-required");
+  });
+
   it("caps child-PID-only lock ownership after the parent disappears", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-reused-child-pid-"));
     try {

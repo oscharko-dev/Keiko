@@ -89,8 +89,10 @@ that derives memory candidates exclusively from the committed transcript project
    supervised or autonomous mode; proposals surface in the existing review queue. No new mutation
    surface or governance endpoint is introduced.
 5. Content-free in every contract boundary: no raw audio, no transcript text, no provider URLs.
-6. Additive for the text-chat path and per-turn capture path. Recap audit schema v2 adds the accepted
-   count while its validator continues to read legacy v1 audit records as zero accepted.
+6. Additive at the route and request/response boundaries. Recap and per-turn chat capture share the
+   same mode-aware persistence policy, including eligible promotion to `accepted`. Recap audit schema
+   v2 adds the accepted count while its validator continues to read legacy v1 audit records as zero
+   accepted.
 
 The five-artifact plan follows the established pattern of ADR-0105 through ADR-0108:
 
@@ -289,10 +291,12 @@ The recap endpoint is an additive route (see D5) that produces governed capture 
 not accept, reject, or modify existing memories — its only memory write is `vault.insertMemory` for
 new candidates, with status selected by the shared capture policy.
 
-### D5 — Additive server route; text-chat path and per-turn capture are byte-identical (AC5)
+### D5 — Additive server route; shared capture policy governs every capture surface (AC5)
 
 The server ships one new capability-gated route: `POST /api/voice/recap/build`. All existing routes
-are byte-identical.
+retain their request and response contracts. The recap route and per-turn chat capture intentionally
+reuse the same mode-aware persistence policy; a policy correction therefore applies consistently to
+both surfaces rather than preserving divergent behavior for the sake of textual identity.
 
 **Handler logic (authoritative spec for implementers):**
 
@@ -321,9 +325,10 @@ are byte-identical.
    — counts and vault ids only; no transcript text in the response. `proposalIds` contains only
    review-queue records and `acceptedIds` contains only accepted records.
 
-**The text-chat path (`captureMemoryActions`) is untouched.** The recap route is invoked only by
-explicit user action. It does not modify the chat request/response cycle, does not intercept
-`collectMemoryActions`, and does not change `CONVERSATION_SYSTEM_PROMPT`.
+**The text-chat request/response path remains independent.** The recap route is invoked only by
+explicit user action. It does not intercept `collectMemoryActions` or change
+`CONVERSATION_SYSTEM_PROMPT`; both capture surfaces converge only at the shared governed persistence
+policy, including mode-aware promotion and suppression.
 
 The assistant's response text (`assistantText` in `collectMemoryActions`) is used as context-only in
 per-turn salience capture (`captureSalientFromTurn`); it is never stored as a user fact. The recap
@@ -459,7 +464,8 @@ voice turns to review" without surfacing the raw transcript in the component.
   reject, edit, and forget actions use existing endpoints (AC3).
 - AC1 dormancy is structural: the hook short-circuits at the predicate before reading the transcript
   store; no observer fires; no network call is made in `none` or `speech-output` profiles.
-- The text-chat path and per-turn memory capture (`collectMemoryActions`) are byte-identical (AC5).
+- The text-chat request/response path is unchanged, while shared capture persistence semantics stay
+  consistent across chat and recap (AC5).
 - Content-free invariant is verifiable by module scanning (AC4).
 - The user retains control: recap never runs until explicitly triggered; any candidate not eligible
   for shared mode-aware acceptance remains in the existing review queue.

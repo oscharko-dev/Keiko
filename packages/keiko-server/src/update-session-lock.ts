@@ -110,6 +110,7 @@ function readLock(lockPath: string): UpdateSessionLockRecord | undefined {
 
 interface ChildPidRecord {
   readonly sessionId: string;
+  readonly lockIdentity: string;
   readonly childPid: number;
 }
 
@@ -118,24 +119,48 @@ function childPidPath(lockPath: string, sessionId: string): string {
   return `${lockPath}.${sessionKey}.child`;
 }
 
-function parseChildPidRecord(value: string, sessionId: string): ChildPidRecord | undefined {
+function lockIdentity(record: UpdateSessionLockRecord): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        sessionId: record.sessionId,
+        targetVersion: record.targetVersion,
+        startedAt: record.startedAt,
+        pid: record.pid,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+}
+
+function parseChildPidRecord(
+  value: string,
+  record: UpdateSessionLockRecord,
+): ChildPidRecord | undefined {
   try {
     const parsed: unknown = JSON.parse(value);
-    if (!isRecord(parsed) || parsed.sessionId !== sessionId || !isPositivePid(parsed.childPid)) {
+    if (
+      !isRecord(parsed) ||
+      parsed.sessionId !== record.sessionId ||
+      parsed.lockIdentity !== lockIdentity(record) ||
+      !isPositivePid(parsed.childPid)
+    ) {
       return undefined;
     }
-    return { sessionId, childPid: parsed.childPid };
+    return {
+      sessionId: record.sessionId,
+      lockIdentity: lockIdentity(record),
+      childPid: parsed.childPid,
+    };
   } catch {
     return undefined;
   }
 }
 
-function readChildPid(lockPath: string, sessionId: string): number | undefined {
-  const path = childPidPath(lockPath, sessionId);
+function readChildPid(lockPath: string, record: UpdateSessionLockRecord): number | undefined {
+  const path = childPidPath(lockPath, record.sessionId);
   try {
-    const record = parseChildPidRecord(readFileSync(path, "utf8"), sessionId);
-    if (record === undefined) throw new TypeError("Update-session child lock is invalid.");
-    return record.childPid;
+    return parseChildPidRecord(readFileSync(path, "utf8"), record)?.childPid;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
@@ -146,7 +171,7 @@ function recordWithChildPid(
   lockPath: string,
   record: UpdateSessionLockRecord,
 ): UpdateSessionLockRecord {
-  const childPid = readChildPid(lockPath, record.sessionId);
+  const childPid = readChildPid(lockPath, record);
   return childPid === undefined ? record : { ...record, childPid };
 }
 
@@ -312,8 +337,18 @@ function updateFileLockChildPid(lockPath: string, sessionId: string, childPid: n
   try {
     const record = readLock(lockPath);
     if (record?.sessionId !== sessionId) return false;
-    replaceJsonFile(childPidPath(lockPath, sessionId), { sessionId, childPid });
-    return readLock(lockPath)?.sessionId === sessionId;
+    const identity = lockIdentity(record);
+    replaceJsonFile(childPidPath(lockPath, sessionId), {
+      sessionId,
+      lockIdentity: identity,
+      childPid,
+    });
+    const current = readLock(lockPath);
+    if (current?.sessionId === sessionId && lockIdentity(current) === identity) return true;
+    const sidecarPath = childPidPath(lockPath, sessionId);
+    const published = parseChildPidRecord(readFileSync(sidecarPath, "utf8"), record);
+    if (published?.lockIdentity === identity) unlinkSync(sidecarPath);
+    return false;
   } catch {
     return false;
   }

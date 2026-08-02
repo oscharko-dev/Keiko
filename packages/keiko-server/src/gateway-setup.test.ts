@@ -325,7 +325,12 @@ describe("handleGatewaySetup", () => {
             modelId: "model/one",
             baseUrl: "https://llm-gateway.example.com/v1",
             apiKey: "example-secret-token",
-            capability: { kind: "chat", toolCalling: true },
+            capability: {
+              kind: "chat",
+              toolCalling: true,
+              structuredOutput: true,
+              supportsResponseFormat: true,
+            },
           },
         ],
       }),
@@ -339,7 +344,7 @@ describe("handleGatewaySetup", () => {
     );
     gatewayConfig.recordVerifiedCapability(
       "model/one",
-      { toolCalling: false },
+      { toolCalling: false, structuredOutput: false },
       "2026-08-02T08:00:00.000Z",
       gatewayConfig.generation(),
     );
@@ -353,7 +358,7 @@ describe("handleGatewaySetup", () => {
 
     const result = await handleApplyGatewayVerifiedCapabilities(
       {
-        ...ctx({ fields: { streaming: true, toolCalling: false } }),
+        ...ctx({ fields: { streaming: true, toolCalling: false, structuredOutput: false } }),
         params: { modelId: "model%2Fone" },
       },
       deps,
@@ -361,9 +366,14 @@ describe("handleGatewaySetup", () => {
 
     expect(result.status).toBe(200);
     expect(requiredCapability(requiredGatewayConfig(deps), "model/one").toolCalling).toBe(false);
+    expect(requiredCapability(requiredGatewayConfig(deps), "model/one")).toMatchObject({
+      structuredOutput: false,
+      supportsResponseFormat: false,
+    });
     expect(gatewayConfig.verifiedCapability("model/one")).toBeUndefined();
     const persisted = readFileSync(gatewayConfig.storagePath, "utf8");
     expect(persisted).toContain('"toolCalling": false');
+    expect(persisted).toContain('"supportsResponseFormat": false');
     expect(persisted).not.toContain("example-secret-token");
     const replay = await handleApplyGatewayVerifiedCapabilities(
       { ...ctx({ fields: { toolCalling: false } }), params: { modelId: "model%2Fone" } },
@@ -500,7 +510,7 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
-  it("consumes the live observation even when capability persistence fails", async () => {
+  it("retains the live observation when capability persistence fails", async () => {
     const uiDir = await tempDir("keiko-gw-capability-persist-failure-ui-");
     const deps = buildUiHandlerDeps({
       configPath: undefined,
@@ -532,7 +542,9 @@ describe("handleGatewaySetup", () => {
         { ...deps, gatewayConfig: failingGatewayConfig },
       ),
     ).rejects.toThrow();
-    expect(gatewayConfig.verifiedCapability("model-one")).toBeUndefined();
+    expect(gatewayConfig.verifiedCapability("model-one")).toMatchObject({
+      fields: { toolCalling: false },
+    });
     expect(gatewayConfig.current()?.providers[0]?.baseUrl).toBe("https://gateway.example.com/v1");
     deps.store.close();
   });

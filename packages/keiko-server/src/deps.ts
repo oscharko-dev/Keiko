@@ -352,8 +352,7 @@ export interface RuntimeGatewayConfig {
     checkedAt: string,
     observedGeneration?: number,
   ): void;
-  readonly clearVerifiedCapability?:
-    ((modelId: string, observedGeneration?: number) => boolean) | undefined;
+  readonly clearVerifiedCapability: (modelId: string, observedGeneration?: number) => boolean;
 }
 
 export type VerifiedModelCapabilityFields = Partial<

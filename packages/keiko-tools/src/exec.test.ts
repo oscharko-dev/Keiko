@@ -151,7 +151,7 @@ describe("runCommand — allowlist guard (before spawn)", () => {
 
   it("continues safely when the spawned child does not expose a pid", async () => {
     const spawn = recordingSpawn();
-    (spawn.child as { pid: number | undefined }).pid = undefined;
+    spawn.child.pid = undefined;
     const onSpawn = vi.fn();
     const pending = runCommand(
       {

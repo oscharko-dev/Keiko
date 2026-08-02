@@ -3597,7 +3597,13 @@ function replaceModelCapability(
           (limitation) => limitation !== MISTRAL_TOOL_CALLING_LIMITATION,
         )
       : current.knownLimitations;
-  const replacement = { ...current, ...fields, knownLimitations };
+  // The json_schema readiness probe verifies the strict response_format request shape used by QI.
+  // Keep the public structured-output field and the provider request-capability flag in lockstep.
+  const responseFormatFields =
+    fields.structuredOutput === undefined
+      ? {}
+      : { supportsResponseFormat: fields.structuredOutput };
+  const replacement = { ...current, ...fields, ...responseFormatFields, knownLimitations };
   if (explicitIndex === -1) capabilities.push(replacement);
   else capabilities[explicitIndex] = replacement;
   return {
@@ -3639,11 +3645,14 @@ function persistVerifiedCapabilityUpdate(
   generation: number,
   updated: GatewayConfig,
 ): RouteResult {
-  if (gatewayConfig.clearVerifiedCapability?.(modelId, generation) !== true) {
-    return staleCapabilityObservationResult();
-  }
   const raw = rawConfigFromCurrent(updated, updated.figma?.accessToken);
   persistGatewayConfig(raw, gatewayConfig.storagePath, deps);
+  // Persistence is synchronous, so no configuration mutation can interleave between the
+  // generation check in the handler and this consumption. Keep the live observation available
+  // when durable storage fails, allowing the operator to retry the exact verified update.
+  if (!gatewayConfig.clearVerifiedCapability(modelId, generation)) {
+    return staleCapabilityObservationResult();
+  }
   gatewayConfig.set(updated, true);
   return { status: 200, body: { ok: true, model: findConfiguredCapability(updated, modelId) } };
 }
@@ -3659,13 +3668,15 @@ export async function handleApplyGatewayVerifiedCapabilities(
     return { status: 400, body: errorBody("BAD_REQUEST", "A valid model id is required.") };
   }
   if (gatewayConfig === undefined) return gatewayUnavailableResult();
-  const current = gatewayConfig.current();
-  const generation = gatewayConfig.generation();
-  if (current === undefined) return gatewayUnavailableResult();
   const bodyResult = await readJsonSetupBody(ctx);
   if ("status" in bodyResult) return bodyResult;
   const request = parseCapabilityApplyRequest(bodyResult.parsed);
   if ("status" in request) return request;
+  // Capture the configuration only after the asynchronous body read. From here through durable
+  // persistence and the in-memory update the path is synchronous and generation-atomic.
+  const current = gatewayConfig.current();
+  const generation = gatewayConfig.generation();
+  if (current === undefined) return gatewayUnavailableResult();
   const updated = replaceModelCapability(current, modelId, request.fields);
   if (updated === undefined) {
     return {

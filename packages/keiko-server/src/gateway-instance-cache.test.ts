@@ -38,4 +38,34 @@ describe("gateway instance cache", () => {
 
     expect(gatewayForConfig(current)).toBe(runtime);
   });
+
+  it("invalidates the runtime gateway when the generation advances for the same config object", () => {
+    const current = config();
+    let generation = 0;
+    const source = {
+      current: (): GatewayConfig => current,
+      generation: (): number => generation,
+    };
+    const initial = gatewayForRuntimeConfig(source);
+
+    generation += 1;
+
+    expect(gatewayForRuntimeConfig(source)).not.toBe(initial);
+  });
+
+  it("invalidates the runtime gateway when the current config becomes unavailable", () => {
+    const current = config();
+    let available: GatewayConfig | undefined = current;
+    const source = {
+      current: (): GatewayConfig | undefined => available,
+      generation: (): number => 0,
+    };
+    const initial = gatewayForRuntimeConfig(source);
+
+    available = undefined;
+
+    expect(gatewayForRuntimeConfig(source)).toBeUndefined();
+    available = current;
+    expect(gatewayForRuntimeConfig(source)).not.toBe(initial);
+  });
 });

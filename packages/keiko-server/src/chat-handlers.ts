@@ -1043,7 +1043,12 @@ const memoryMaintenanceCursor: AutoMaintenanceState = {};
 // closed to exactly that.
 function maybeRunChatAutoMaintenance(deps: UiHandlerDeps, vault: MemoryVaultStore): void {
   const multipliers = memorySemanticizationMultipliers(deps.env);
-  const retentionPolicy = resolveMemoryRetentionPolicy(deps);
+  const retention = resolveMemoryRetentionPolicy(deps);
+  // Invalid retention configuration fails the entire unattended pass closed. Running every other
+  // phase while silently omitting expiry/purge would turn a configuration error into unbounded
+  // vault growth. The diagnostic was emitted by the resolver; chat delivery remains unaffected.
+  if (!retention.ok) return;
+  const retentionPolicy = retention.policy;
   maybeRunAutoMaintenance(vault, memoryMaintenanceAuditSink(deps), memoryMaintenanceCursor, {
     nowMs: Date.now(),
     enabled: deps.env.KEIKO_MEMORY_AUTO_MAINTAIN !== "0",

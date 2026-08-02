@@ -25,13 +25,26 @@ class GatewayInstanceCache {
 
   forRuntimeConfig(source: RuntimeGatewayConfigSource): Gateway | undefined {
     const config = source.current();
-    if (config === undefined) return undefined;
+    if (config === undefined) {
+      const previous = this.byRuntimeConfig.get(source);
+      if (previous !== undefined) {
+        this.byRuntimeConfig.delete(source);
+        if (this.byConfig.get(previous.config) === previous.gateway) {
+          this.byConfig.delete(previous.config);
+        }
+      }
+      return undefined;
+    }
     const generation = source.generation();
     const existing = this.byRuntimeConfig.get(source);
     if (existing?.generation === generation && existing.config === config) {
       return existing.gateway;
     }
-    const gateway = this.forConfig(config);
+    // A runtime generation change invalidates circuit-breaker and request state even when a caller
+    // reused the same parsed config object. Only the first runtime resolution may share a directly
+    // created config-keyed gateway; every subsequent runtime invalidation starts fresh.
+    const gateway = existing === undefined ? this.forConfig(config) : new Gateway(config);
+    this.byConfig.set(config, gateway);
     this.byRuntimeConfig.set(source, { config, gateway, generation });
     return gateway;
   }

@@ -61,6 +61,7 @@ function rerankingDeps(
       recordVerification: () => undefined,
       verifiedCapability: () => undefined,
       recordVerifiedCapability: () => undefined,
+      clearVerifiedCapability: () => false,
     },
     rerankRequest,
   };

@@ -542,6 +542,33 @@ describe("GatewaySetupDialog", () => {
     });
   });
 
+  it("preserves the stored workflow approval list without requiring an edit", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "coding-chat",
+      testedModelIds: ["coding-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog preserveExisting storedModels={[modelCapability("coding-chat")]} />);
+
+    await userEvent.click(screen.getByText("Replace model gateway settings"));
+    await userEvent.type(screen.getByLabelText(/^api token/i), "rotated-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preserveExisting: true,
+        apiKey: "rotated-token",
+        workflowEligibleModelIds: ["coding-chat"],
+      }),
+    );
+  });
+
   it("submits optional voice dictation credentials from update mode", async () => {
     vi.mocked(setupGateway).mockResolvedValueOnce({
       ok: true,
@@ -582,6 +609,7 @@ describe("GatewaySetupDialog", () => {
       voiceApiKey: "voice-token",
       voiceApiKeyHeaderName: "api-key",
       voiceSpeechToTextModelId: "keiko-stt",
+      workflowEligibleModelIds: ["internal-chat"],
     });
     expect(await screen.findByRole("status")).toHaveTextContent(
       /updated audio and digital voice settings/i,

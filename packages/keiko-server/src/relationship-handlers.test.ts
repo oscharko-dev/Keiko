@@ -1071,6 +1071,47 @@ describe("DELETE /api/relationships/:id soft-deletes to revoked", () => {
     const revokeEntry = auditEntries.find((r) => r.kind === "relationship.deleted");
     expect(revokeEntry, "DELETE must emit a relationship.deleted audit entry").toBeDefined();
   });
+
+  it("rolls back DELETE when its relationship audit entry cannot commit", async () => {
+    const { store, db } = freshStoreBundle();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const created = await handleRelationshipCreate(
+      makeCtx(
+        makeReq({
+          method: "POST",
+          url: "/api/relationships",
+          headers: { "idempotency-key": "delete-audit-seed" },
+          body: validProposalBody,
+        }),
+      ),
+      deps,
+    );
+    const id = (created.body as { relationship: { id: string } }).relationship.id;
+    const etag = (created.body as { etag: string }).etag;
+    db.exec(`
+      CREATE TRIGGER reject_relationship_audit_delete
+      BEFORE INSERT ON relationship_audit_entries
+      BEGIN
+        SELECT RAISE(FAIL, 'synthetic delete audit failure');
+      END
+    `);
+
+    await expect(
+      handleRelationshipDelete(
+        makeCtx(
+          makeReq({
+            method: "DELETE",
+            url: `/api/relationships/${id}`,
+            headers: { "idempotency-key": "delete-audit-failure", "if-match": etag },
+          }),
+          { id },
+        ),
+        deps,
+      ),
+    ).rejects.toThrow("synthetic delete audit failure");
+    expect(store.getRelationship("ws-a", id)?.lifecycleState).toBe("active");
+  });
 });
 
 describe("GET /api/relationships (bounded query)", () => {

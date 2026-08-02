@@ -52,12 +52,14 @@ disagreeing fields; it cannot expand an inherited/default capability set into un
 overrides.
 
 The server accepts a field only when its exact value exists in the current generation's observation
-ledger for that model and both the configuration object and generation still match the state captured
-before the request body was read. Missing, stale, invented, mismatched, or concurrently superseded
-values fail closed. The server atomically claims and consumes that model's observation before it
-persists the sealed gateway configuration through the existing credential-safe writer. A persistence
-failure does not restore replayable evidence; the operator reruns readiness before retrying. A
-successful write replaces the runtime generation and clears every remaining observation.
+ledger for that model. The handler parses the asynchronous request body first, then captures and
+re-checks the current configuration object and generation immediately before the synchronous durable
+write and runtime replacement. Missing, stale, invented, mismatched, or concurrently superseded
+values fail closed. The `json_schema` observation reconciles both `structuredOutput` and the
+provider-facing `supportsResponseFormat` flag because both describe the same verified request shape.
+The observation is consumed only after the credential-safe atomic writer succeeds, so a storage
+failure remains retryable without another provider call. A successful write replaces the runtime
+generation and clears every remaining observation.
 
 ### D4 — Whole-gateway verification remains independent
 
@@ -71,7 +73,8 @@ were specifically observed.
 - Capability consumers keep using deliberate persisted configuration rather than transient traffic.
 - Operators can see and reconcile contradictions without editing local files.
 - A stale browser or delayed probe cannot apply values measured against another configuration.
-- A failed persistence attempt cannot replay a previously authorized observation.
+- A failed persistence attempt leaves the generation-bound observation available for an identical
+  retry; it can never cross a configuration replacement.
 - A context-window lower bound cannot silently shrink a correctly configured model capacity.
 - Readiness must be rerun after restart or configuration replacement, which is intentional because
   no current live observation exists then.

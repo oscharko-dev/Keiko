@@ -419,12 +419,15 @@ export async function handleCreateProject(
         error,
       );
       return {
-        status: 500,
-        body: errorBody(
-          "PROJECT_TRUST_GRANT_FAILED",
-          "The project was registered but remains restricted; retry to repair workspace trust.",
-          correlationId,
-        ),
+        status: 201,
+        body: {
+          project: projectWithWorkspaceAvailability(deps.store, project),
+          warning: {
+            code: "PROJECT_TRUST_GRANT_FAILED",
+            message: "The project was registered but remains restricted.",
+            correlationId,
+          },
+        },
       };
     }
     return {

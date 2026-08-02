@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { chmodSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type {
   ReleaseImpactRemediation,
@@ -72,6 +72,7 @@ export interface UpdateLocalStateManager {
   readonly repairStores: (stores: readonly UpdateStateStore[]) => UpdateLocalStateRepairResult;
   readonly readRuntimeState: () => UpdateRuntimeState;
   readonly writeRuntimeState: (state: UpdateRuntimeState) => UpdateRuntimeState;
+  readonly acquireRemediationLease: (actionId: string) => (() => void) | undefined;
   readonly recordAuditEvent: (
     type: UpdateRuntimeEventType,
     input?: AuditEventInput,
@@ -88,6 +89,7 @@ export type { UpdateLocalStateRepairResult } from "./update-local-state-repair.j
 
 const RUNTIME_STATE_FILE = "runtime-state.json";
 const AUDIT_LOG_FILE = "update-audit.jsonl";
+const REMEDIATION_LEASE_DIR = "remediation-leases";
 const SNAPSHOT_FILE_MODE = 0o600;
 const SNAPSHOT_DIR_MODE = 0o700;
 
@@ -255,6 +257,82 @@ function auditLogPath(stateDir: string): string {
   return join(stateDir, UPDATE_DIR, AUDIT_LOG_FILE);
 }
 
+interface RemediationLeaseRecord {
+  readonly pid: number;
+  readonly token: string;
+}
+
+function remediationLeasePath(stateDir: string, actionId: string): string {
+  const digest = createHash("sha256").update(actionId, "utf8").digest("hex");
+  return join(stateDir, UPDATE_DIR, REMEDIATION_LEASE_DIR, `${digest}.json`);
+}
+
+function parseRemediationLease(value: unknown): RemediationLeaseRecord | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  return Number.isInteger(record.pid) && typeof record.token === "string"
+    ? { pid: record.pid as number, token: record.token }
+    : undefined;
+}
+
+function readRemediationLease(path: string): RemediationLeaseRecord | undefined {
+  try {
+    return parseRemediationLease(JSON.parse(readFileSync(path, "utf8")));
+  } catch {
+    return undefined;
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+function releaseRemediationLease(path: string, token: string): void {
+  if (readRemediationLease(path)?.token !== token) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    // A settled lease may already have been removed by shutdown cleanup.
+  }
+}
+
+function acquireRemediationLease(
+  context: ManagerContext,
+  actionId: string,
+): (() => void) | undefined {
+  const path = remediationLeasePath(context.stateDir, actionId);
+  mkdirPrivate(dirname(path));
+  const token = randomUUID();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      writeFileSync(path, JSON.stringify({ pid: process.pid, token }), {
+        encoding: "utf8",
+        flag: "wx",
+        mode: SNAPSHOT_FILE_MODE,
+      });
+      return (): void => {
+        releaseRemediationLease(path, token);
+      };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") throw error;
+      const existing = readRemediationLease(path);
+      if (existing === undefined || processIsAlive(existing.pid)) return undefined;
+      try {
+        unlinkSync(path);
+      } catch {
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
 function overallHealth(stores: readonly UpdateStoreHealth[]): UpdateHealthState {
   return stores.reduce<UpdateHealthState>(
     (worst, item) => (healthRank(item.health) > healthRank(worst) ? item.health : worst),
@@ -377,6 +455,8 @@ export function createUpdateLocalStateManager(
     repairStores: (stores): UpdateLocalStateRepairResult => repairStores(context, stores),
     readRuntimeState: (): UpdateRuntimeState => readRuntimeState(context),
     writeRuntimeState: (state): UpdateRuntimeState => writeRuntimeState(context, state),
+    acquireRemediationLease: (actionId): (() => void) | undefined =>
+      acquireRemediationLease(context, actionId),
     recordAuditEvent: (type, input): AuditEventRecord => recordAuditEvent(context, type, input),
   };
 }

@@ -1069,6 +1069,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       );
       expect(JSON.stringify(diagnostics)).not.toContain("secret-token");
       expect(JSON.stringify(diagnostics)).not.toContain("invalid.example.com");
+      expect(JSON.stringify(diagnostics)).not.toContain("operator@example.com");
     } finally {
       await deps.dispose?.();
     }

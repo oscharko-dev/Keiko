@@ -396,6 +396,7 @@ describe("gateway readiness route", () => {
         recordVerification: () => undefined,
         verifiedCapability: () => undefined,
         recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
       },
     };
 
@@ -584,6 +585,7 @@ describe("gateway readiness route", () => {
         recordVerifiedCapability: (_modelId, fields) => {
           observedToolCalling = fields.toolCalling;
         },
+        clearVerifiedCapability: () => false,
       },
     };
     const report = await runGatewayReadiness({ modelId: "qwen3-coder-test" }, deps);
@@ -751,6 +753,7 @@ describe("gateway readiness route", () => {
         },
         verifiedCapability: () => undefined,
         recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
       },
     };
 
@@ -783,6 +786,7 @@ describe("gateway readiness route", () => {
         },
         verifiedCapability: () => undefined,
         recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
       },
     };
 

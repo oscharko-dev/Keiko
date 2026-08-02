@@ -2283,7 +2283,11 @@ export function GatewaySetupDialog({
           deploymentNames,
           imageInputModelIds,
           workflowEligibleModelIds,
-          workflowEligibleModelIdsConfigured,
+          workflowEligibleModelIdsConfigured:
+            workflowEligibleModelIdsConfigured ||
+            (preserveExisting &&
+              hasGatewayCredentialInput &&
+              parsedWorkflowEligibleModelIds.length > 0),
           voiceBaseUrl,
           voiceApiKey,
           voiceApiKeyHeaderName,

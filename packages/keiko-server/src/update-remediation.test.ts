@@ -367,6 +367,30 @@ describe("update remediation manager", () => {
     await expect(first).resolves.toMatchObject({ overallStatus: "completed" });
   });
 
+  it("rejects the same remediation from a second manager while the durable lease is live", async () => {
+    const stateDir = makeStateDir();
+    const localKnowledge = deferredLocalKnowledge();
+    const firstManager = manager(stateDir, localKnowledge);
+    const secondManager = manager(stateDir, localKnowledge);
+    const request = {
+      actionId: "local-knowledge-reindex:local-knowledge",
+      targetVersion: TARGET,
+      impact: localKnowledgeImpact,
+    } as const;
+
+    const first = firstManager.runAction(request);
+    await Promise.resolve();
+
+    await expect(secondManager.runAction(request)).rejects.toMatchObject({
+      code: "UPDATE_REMEDIATION_RUNNING",
+      status: 409,
+    });
+    expect(localKnowledge.runs()).toBe(1);
+
+    localKnowledge.complete();
+    await expect(first).resolves.toMatchObject({ overallStatus: "completed" });
+  });
+
   it("resumes an interrupted running remediation as pending after restart", () => {
     const stateDir = makeStateDir();
     const localState = createUpdateLocalStateManager({ stateDir, now: () => NOW });
@@ -396,7 +420,7 @@ describe("update remediation manager", () => {
     expect(status.updateCanComplete).toBe(false);
   });
 
-  it("blocks an interrupted local-state repair after restart until it is reconciled", async (ctx) => {
+  it("resumes an interrupted local-state repair after restart when no live lease remains", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const stateDir = makeStateDir();
     const memoryDb = join(stateDir, "memory", "keiko-memory.db");
@@ -434,9 +458,9 @@ describe("update remediation manager", () => {
           ],
         },
       }),
-    ).rejects.toMatchObject({ code: "UPDATE_REMEDIATION_RUNNING" });
+    ).resolves.toMatchObject({ overallStatus: "completed" });
 
-    expect(statSync(memoryDb).mode & 0o777).toBe(0o644);
+    expect(statSync(memoryDb).mode & 0o777).toBe(0o600);
   });
 
   it("records failed remediation and keeps update completion blocked", async () => {

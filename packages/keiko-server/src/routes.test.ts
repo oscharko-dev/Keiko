@@ -350,6 +350,18 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
+  it("includes the verified gateway-capability mutation route", () => {
+    expect(matchRoute("PATCH", "/api/gateway/capabilities/model-one")).toMatchObject({
+      definition: { method: "PATCH", pattern: "/api/gateway/capabilities/:modelId" },
+    });
+  });
+
+  it("includes the bounded memory-tombstone enumeration route", () => {
+    expect(matchRoute("GET", "/api/memory/tombstones")).toMatchObject({
+      definition: { method: "GET", pattern: "/api/memory/tombstones" },
+    });
+  });
+
   it("includes the coding-sidecar gateway profile and chat routes", () => {
     expect(
       API_ROUTES.find(

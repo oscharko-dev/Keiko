@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import {
   gatewayVerificationContradictsReadiness,
@@ -432,19 +432,20 @@ function CapabilityApplyConfirmDialog({
 }): ReactNode {
   const t = useTranslate();
   const dialogRef = useRef<HTMLDivElement>(null);
+  const decline = useEffectEvent(onDecline);
   useDialogTabTrap(dialogRef);
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
     dialogRef.current?.focus();
     const onKeyDown = (event: globalThis.KeyboardEvent): void => {
-      if (event.key === "Escape") onDecline();
+      if (event.key === "Escape") decline();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
       if (opener?.isConnected === true) opener.focus();
     };
-  }, [onDecline]);
+  }, []);
   return (
     <div className={editorStyles.confirmBackdrop}>
       <div
@@ -1695,7 +1696,7 @@ export function SettingsPanel({
                 current.map((model) => (model.id === updatedModel.id ? updatedModel : model)),
               );
               setReadinessLedger((ledger) =>
-                clearReadinessRun(ledger, configGeneration, updatedModel.id),
+                clearReadinessRun(ledger, ledger.generation, updatedModel.id),
               );
               notifyGatewayConfigUpdated();
             }}

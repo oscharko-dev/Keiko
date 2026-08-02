@@ -20,6 +20,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import type { UiHandlerDeps } from "../deps.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import {
   GitDeliveryBodyTooLargeError,
@@ -244,12 +245,22 @@ function fallbackJiraPort(
   try {
     const config = parseJiraCodeContextPortConfig(deps.env);
     return config === undefined ? undefined : createJiraCodeContextHttpPort(config);
-  } catch {
+  } catch (error) {
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: randomUUID(),
+        operation: "coding-context.connector.configure",
+        source: "coding-context.fallbackJiraPort",
+        error,
+        redact: (): string => "The server operation failed.",
+      }),
+    );
     return undefined;
   }
 }
 
-function composeConnectors(deps: UiHandlerDeps): ComposedConnectors {
+export function composeCodingContextConnectors(deps: UiHandlerDeps): ComposedConnectors {
   const githubPort =
     deps.codingContextGitHubPort ??
     (deps.env.GITHUB_CONNECTOR_AUTHORIZED !== "true" || deps.preferredProjectPath === undefined
@@ -286,7 +297,7 @@ export async function handleCodingContextPack(
   if (!read.ok) return read.result;
   const request = parseRequest(read.value, deps);
   if (request === undefined) return badRequest();
-  const composed = composeConnectors(deps);
+  const composed = composeCodingContextConnectors(deps);
   try {
     const pack = await buildCodeContextPack(request, {
       connectors: composed.connectors,
@@ -294,10 +305,20 @@ export async function handleCodingContextPack(
       nowIso: (): string => new Date().toISOString(),
     });
     return { status: 200, body: { schemaVersion: "1", ...pack } };
-  } catch {
+  } catch (error) {
     // Port failures stay opaque: content-free code + correlation id only. The
     // connector layer never places endpoints, credentials, or bodies on errors.
     const correlationId = randomUUID();
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "coding-context.pack",
+        source: "coding-context.handleCodingContextPack",
+        error,
+        redact: (): string => "The server operation failed.",
+      }),
+    );
     return {
       status: 502,
       body: errBody(

@@ -169,6 +169,7 @@ describe("rerankSelection", () => {
         recordVerification: () => undefined,
         verifiedCapability: () => undefined,
         recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
       },
     };
 
@@ -209,6 +210,7 @@ describe("rerankSelection", () => {
         recordVerification: () => undefined,
         verifiedCapability: () => undefined,
         recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
       },
     };
 

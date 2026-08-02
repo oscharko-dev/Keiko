@@ -198,6 +198,7 @@ describe("QI model-policy routes", () => {
       recordVerification: () => undefined,
       verifiedCapability: () => undefined,
       recordVerifiedCapability: () => undefined,
+      clearVerifiedCapability: () => false,
     };
     const deps: UiHandlerDeps = {
       ...initialDeps,

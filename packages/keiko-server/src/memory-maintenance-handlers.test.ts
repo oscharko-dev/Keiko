@@ -306,7 +306,7 @@ describe("handleRunMaintenance", () => {
       }),
     );
 
-    expect(policy).toBeUndefined();
+    expect(policy).toEqual({ ok: false });
     expect(diagnostics).toContainEqual(
       expect.objectContaining({
         operation: "memory.maintenance.retention-policy",

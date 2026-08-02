@@ -29,6 +29,7 @@ import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext } from "./routes.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { contentFreeCodingAppSessionChannelSnapshot } from "./coding-app-session/channelContract.js";
+import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
 import type { CodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
 import type { AppSession } from "./coding-app-session/sessionRegistry.js";
 import {
@@ -384,8 +385,10 @@ describe("evaluateSpokenActionGovernance — audit records are content-free (AC5
 // chat-handoff endpoints.
 let ROUTE_WORKSPACE = "";
 
-function fakeReq(body: string): IncomingMessage {
-  return Object.assign(Readable.from([Buffer.from(body)]), { headers: {} }) as IncomingMessage;
+function fakeReq(body: string, cookie: string | undefined): IncomingMessage {
+  return Object.assign(Readable.from([Buffer.from(body)]), {
+    headers: cookie === undefined ? {} : { cookie },
+  }) as IncomingMessage;
 }
 
 function fakeRes(): RouteContext["res"] {
@@ -394,9 +397,12 @@ function fakeRes(): RouteContext["res"] {
   return res;
 }
 
-function routeCtx(body: string): RouteContext {
+const ROUTE_APP_SESSION_COOKIE_TOKEN = "sess_0123456789abcdef01234567.fixture-secret";
+const ROUTE_APP_SESSION_COOKIE = `${APP_SESSION_COOKIE_NAME}=${ROUTE_APP_SESSION_COOKIE_TOKEN}`;
+
+function routeCtx(body: string, cookie: string | null = ROUTE_APP_SESSION_COOKIE): RouteContext {
   return {
-    req: fakeReq(body),
+    req: fakeReq(body, cookie ?? undefined),
     res: fakeRes(),
     params: {},
     url: new URL("http://localhost/api/runs"),
@@ -467,7 +473,8 @@ function pairedRouteAppSessionChannel(): CodingAppSessionChannel {
     rotate: () => ({ rotated: false }),
     signOut: () => undefined,
     sessionCount: () => 1,
-    verifySession: () => ROUTE_APP_SESSION,
+    verifySession: (cookieToken) =>
+      cookieToken === ROUTE_APP_SESSION_COOKIE_TOKEN ? ROUTE_APP_SESSION : undefined,
     subscribe: () => ({
       snapshot: contentFreeCodingAppSessionChannelSnapshot(),
       live: false,
@@ -523,6 +530,27 @@ describe("handleCreateRun — voiceOrigin wiring (Issue #503)", () => {
   afterEach((): void => {
     store.close();
     rmSync(ROUTE_WORKSPACE, { recursive: true, force: true });
+  });
+
+  it("rejects verify runs without the paired app-session cookie", async () => {
+    const result = await handleCreateRun(routeCtx(routeHandoffBody(), null), deps);
+
+    expect(result).toMatchObject({
+      status: 403,
+      body: { error: { code: "VERIFY_AUTHORITY_REQUIRED" } },
+    });
+  });
+
+  it("rejects verify runs with an invalid app-session cookie", async () => {
+    const result = await handleCreateRun(
+      routeCtx(routeHandoffBody(), `${APP_SESSION_COOKIE_NAME}=invalid-session`),
+      deps,
+    );
+
+    expect(result).toMatchObject({
+      status: 403,
+      body: { error: { code: "VERIFY_AUTHORITY_REQUIRED" } },
+    });
   });
 
   it("denies a confirmation-requiring voice action with no digest (403 VOICE_ACTION_DENIED)", async () => {

@@ -25,6 +25,7 @@ import {
   type VoiceCapabilityResolution,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
+  VOICE_SESSION_RECAP_SCHEMA_VERSION,
   validateVoiceSessionRecapAuditRecord,
   voiceRecapAllowed,
   type MemoryAuditEvent,
@@ -319,7 +320,7 @@ function recordRecapAudits(
   // non-user-triggered flag) fails loud instead of persisting a spec-violating audit artifact.
   const committedChars = request.committedSpans.reduce((sum, span) => sum + span.length, 0);
   const auditRecord: VoiceSessionRecapAuditRecord = {
-    schemaVersion: "1",
+    schemaVersion: VOICE_SESSION_RECAP_SCHEMA_VERSION,
     profile,
     committedSegmentCount: request.committedSpans.length,
     committedChars,

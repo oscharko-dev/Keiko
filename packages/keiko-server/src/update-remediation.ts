@@ -379,10 +379,15 @@ async function runDraft(
       409,
     );
   }
-  if (
-    runningActions.has(draft.actionId) ||
-    persistedStatus(options.localState, draft) === "running"
-  ) {
+  if (runningActions.has(draft.actionId)) {
+    throw new UpdateRemediationError(
+      "UPDATE_REMEDIATION_RUNNING",
+      "This remediation action is already running.",
+      409,
+    );
+  }
+  const releaseLease = options.localState.acquireRemediationLease(draft.actionId);
+  if (releaseLease === undefined) {
     throw new UpdateRemediationError(
       "UPDATE_REMEDIATION_RUNNING",
       "This remediation action is already running.",
@@ -401,6 +406,7 @@ async function runDraft(
     persistDraftStatus(options, now, request, draft, await executeDraftStatus(options, draft));
   } finally {
     runningActions.delete(draft.actionId);
+    releaseLease();
   }
 }
 
