@@ -413,7 +413,23 @@ describe("gateway readiness route", () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(chatPayload("unexpected-answer"))) as typeof fetch;
-    const deps = depsWith(gatewayConfig(), fetchImpl);
+    const config = gatewayConfig();
+    const clearVerifiedCapability = vi.fn(() => true);
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        generation: () => 0,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability,
+      },
+    };
     const report = await runGatewayReadiness(
       { options: { probes: ["streaming", "json_schema", "tool_calling"] } },
       deps,
@@ -429,6 +445,7 @@ describe("gateway readiness route", () => {
       expect.objectContaining({ name: "json_schema", status: "skipped" }),
       expect.objectContaining({ name: "tool_calling", status: "skipped" }),
     ]);
+    expect(clearVerifiedCapability).toHaveBeenCalledWith("test-chat-model", 0);
     deps.store.close();
   });
 

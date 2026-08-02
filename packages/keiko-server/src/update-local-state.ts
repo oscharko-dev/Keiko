@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
+  linkSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -353,11 +354,30 @@ function discardRemediationLease(path: string, malformed: boolean, now: () => nu
 }
 
 function releaseRemediationLease(path: string, token: string): void {
-  if (readRemediationLease(path)?.token !== token) return;
+  const claimedPath = `${path}.release.${token}`;
   try {
-    unlinkSync(path);
+    // Atomically remove the canonical name before inspecting ownership. A replacement lease may be
+    // created after this rename, but it can never be unlinked by this older release callback.
+    renameSync(path, claimedPath);
   } catch {
-    // A settled lease may already have been removed by shutdown cleanup.
+    return;
+  }
+  if (readRemediationLease(claimedPath)?.token === token) {
+    try {
+      unlinkSync(claimedPath);
+    } catch {
+      // A settled lease may already have been removed by shutdown cleanup.
+    }
+    return;
+  }
+  try {
+    // Restore a lease claimed by the wrong callback only when the canonical path is still free.
+    // `link` is the no-replace operation that `rename` does not provide portably.
+    linkSync(claimedPath, path);
+    unlinkSync(claimedPath);
+  } catch {
+    // A newer canonical lease wins. Preserve the displaced record for diagnosis instead of
+    // deleting a lease this callback does not own.
   }
 }
 

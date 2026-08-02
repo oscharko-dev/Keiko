@@ -1003,7 +1003,7 @@ function folderCitationCount(
     .filter((candidate) => availableIds.has(candidate.payload.stableId)).length;
 }
 
-function hashString32(value: string): string {
+export function hashString32(value: string): string {
   let hash = 0x811c9dc5;
   for (const codeUnit of value.split("")) {
     hash ^= codeUnit.codePointAt(0) ?? 0;

@@ -1175,12 +1175,16 @@ export async function runGatewayReadiness(
     gatewayVerificationFromProbeOutcome(report.overallStatus),
     observedGeneration,
   );
-  deps.gatewayConfig?.recordVerifiedCapability(
-    report.modelId,
-    verifiedCapabilityObservation(probes),
-    report.checkedAt,
-    observedGeneration,
-  );
+  if (report.overallStatus === "failed") {
+    deps.gatewayConfig?.clearVerifiedCapability(report.modelId, observedGeneration);
+  } else {
+    deps.gatewayConfig?.recordVerifiedCapability(
+      report.modelId,
+      verifiedCapabilityObservation(probes),
+      report.checkedAt,
+      observedGeneration,
+    );
+  }
   return report;
 }
 

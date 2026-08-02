@@ -1556,6 +1556,7 @@ export function SettingsPanel({
   // configuration changes; a run tagged with an older one is evidence about a replaced gateway.
   const [readinessLedger, setReadinessLedger] = useState<ReadinessLedger>(INITIAL_READINESS_LEDGER);
   const [configGeneration, setConfigGeneration] = useState(0);
+  const configGenerationRef = useRef(0);
   const measuredConfigIdentity = useRef(gatewayConfigIdentity(null, false));
   const [setupOpen, setSetupOpen] = useState(false);
   // Issue #1399: a PAT error in the Figma Snapshot window can deep-link here to open the
@@ -1603,14 +1604,22 @@ export function SettingsPanel({
   // first-run dialog) must not leave this panel presenting the old gateway's verdict as current
   // verification. It happens in the same commit as the config itself so that a readiness run started
   // from the very first render of that configuration is attributed to it, not to its predecessor.
-  const applyConfig = useCallback((next: SafeGatewayConfig | null, present: boolean): void => {
-    setConfig(next);
-    setConfigPresent(present);
-    const identity = gatewayConfigIdentity(next, present);
-    if (measuredConfigIdentity.current === identity) return;
-    measuredConfigIdentity.current = identity;
-    setConfigGeneration((generation) => generation + 1);
+  const advanceConfigGeneration = useCallback((): void => {
+    configGenerationRef.current += 1;
+    setConfigGeneration(configGenerationRef.current);
   }, []);
+
+  const applyConfig = useCallback(
+    (next: SafeGatewayConfig | null, present: boolean): void => {
+      setConfig(next);
+      setConfigPresent(present);
+      const identity = gatewayConfigIdentity(next, present);
+      if (measuredConfigIdentity.current === identity) return;
+      measuredConfigIdentity.current = identity;
+      advanceConfigGeneration();
+    },
+    [advanceConfigGeneration],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -1634,13 +1643,13 @@ export function SettingsPanel({
   // all it takes: every remembered run is tagged with the generation it measured.
   useEffect(() => {
     const onConfigUpdated = (): void => {
-      setConfigGeneration((generation) => generation + 1);
+      advanceConfigGeneration();
     };
     window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
     return () => {
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
     };
-  }, []);
+  }, [advanceConfigGeneration]);
 
   const voicePersonas = useMemo(() => voicePersonasFromModels(models), [models]);
   const gatewayConfigured = configPresent;
@@ -1692,6 +1701,7 @@ export function SettingsPanel({
               void handleRunReadiness(modelId, deep);
             }}
             onCapabilityApplied={(updatedModel) => {
+              if (configGenerationRef.current !== configGeneration) return;
               setModels((current) =>
                 current.map((model) => (model.id === updatedModel.id ? updatedModel : model)),
               );

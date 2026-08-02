@@ -696,7 +696,7 @@ describe("SettingsPanel gateway readiness checks", () => {
     const readinessButton = screen.getByRole("button", { name: "Run readiness check" });
     readinessButton.focus();
     view.rerender(<SettingsPanel />);
-    expect(readinessButton).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Run readiness check" })).toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: "Apply values" }));
     await waitFor(() => {
       expect(applyGatewayVerifiedCapabilitiesMock).toHaveBeenCalledWith("test-chat-1", {
