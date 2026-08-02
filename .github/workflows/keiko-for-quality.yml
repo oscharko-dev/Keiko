@@ -152,7 +152,7 @@ jobs:
           # duplication safe.
           # Quoted: a hypothetical all-digit sha would otherwise parse as a YAML number and reach
           # the shell in a normalized form, defeating the length check below.
-          ACTION_PIN: "3e458cdc86eb102b3a06a7dfb161d3c0f12e8364" # keep in sync with Review's uses:
+          ACTION_PIN: "ec48db94d70d9a07d729d814ea405157652530be" # keep in sync with Review's uses:
         run: |
           # The pin partitions the store because a wrapper release can change review or
           # sanitization SEMANTICS without changing the store's format. Three earlier rounds
@@ -404,7 +404,7 @@ jobs:
 
       - name: Review
         id: review
-        uses: oscharko-dev/Keiko-for-Quality@3e458cdc86eb102b3a06a7dfb161d3c0f12e8364 # v0.9.0
+        uses: oscharko-dev/Keiko-for-Quality@ec48db94d70d9a07d729d814ea405157652530be # v0.10.0
         env:
           # Passed by variable NAME to the action, never as an input value: an input appears in the
           # step context that every other action in the job can read.
