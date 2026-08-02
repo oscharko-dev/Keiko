@@ -22,6 +22,39 @@ from any token holding `pull-requests: write`, which both the App token and `GIT
 platform does not withhold it — the pinned action's behaviour does, and that behaviour is pinned by
 a test upstream. When assessing a compromised or defective action, assume the capability exists.
 
+## Activation record
+
+Activated on 2026-08-02 against Keiko for Quality `v0.4.0`
+(`80bda11eec1e113573c09878b91a885981211009`), model `gpt-5.4` over an OpenAI-compatible endpoint.
+
+Repinned twice the same day, each time because a live run exposed a defect no fixture had:
+
+| pin                                                 | why                                                                                                                                                                            |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `v0.4.0` `80bda11eec1e113573c09878b91a885981211009` | activation                                                                                                                                                                     |
+| `v0.5.0` `be392820f2839ba9b9711c1a5a4ccceaa465e6d6` | v0.4.0 passed the profile's exclusions to the engine, whose filter resolves an overlap the opposite way to the inventory. Every documentation pull request settled incomplete. |
+| `v0.7.0` `688e34f077f3aec328614e77212e8cfd486d84ab` | v0.6.0 lets the reviewer search the repository before making a claim; v0.7.0 publishes the findings a partial run did produce instead of discarding them.                      |
+
+The pin in [`keiko-for-quality.yml`](../../.github/workflows/keiko-for-quality.yml) is the
+authoritative one; this table is history, and a disagreement between them means the table is
+stale.
+
+**The delivery freeze in step 4 was not applied, and coverage for that window was therefore not
+established.** Recorded as a shortfall rather than as an exception, because the reasoning that
+justified skipping it was wrong.
+
+The observation was that zero pull requests were open against `dev`, and the conclusion drawn was
+that there was nothing to hold. That conclusion only covers _already-armed_ pull requests. It says
+nothing about the arrival race, which is the reason step 4 locks the branch in the first place: the
+count was taken before the variable was set, so a same-repository pull request opening or becoming
+ready in between would have fired its event while the reviewer was still off, and gone unreviewed
+with nothing holding it. An empty list at one instant is not an empty window.
+
+No such pull request is known to have arrived, and that is a statement about luck rather than about
+the procedure. Every later activation or re-enable follows step 4 as written, including when the
+initial list is empty — the lock is what closes the race, and the emptiness of a snapshot has no
+bearing on it.
+
 ## Provisioning
 
 Until `KEIKO_QUALITY_ENABLED` is `true`, the job does not run at all — that variable, not the
