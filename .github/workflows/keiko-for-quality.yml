@@ -234,7 +234,7 @@ jobs:
           # store is a few hundred kilobytes; 25 MiB is far above any legitimate size and far
           # below harm.
           CANDIDATES="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/artifacts" -f "name=${ARTIFACT_NAME}" -F per_page=100 \
-            --jq '[.artifacts[] | select(.expired == false) | select(.size_in_bytes <= 26214400)] | sort_by(.created_at) | reverse | .[] | "\(.id):\(.workflow_run.id)"' \
+            --jq '[.artifacts[] | select(.name == env.ARTIFACT_NAME) | select(.expired == false) | select(.size_in_bytes <= 26214400)] | sort_by(.created_at) | reverse | .[] | "\(.id):\(.workflow_run.id)"' \
             2>/dev/null || true)"
           if [ -z "${CANDIDATES}" ]; then
             echo "::notice::no prior store located (none exists, or the lookup failed) — full review"
@@ -490,8 +490,13 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         run: |
           set +e
+          # The name filter is a server-side narrowing (measured: this endpoint honors it — a
+          # nonexistent name returns total_count 0 for a run holding eight artifacts). The jq
+          # select re-asserts it locally anyway, so picking the right artifact never depends on
+          # the API continuing to honor the parameter.
           ARTIFACT_ID="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" \
-            -f "name=${UNSIGNED_NAME}" --jq '.artifacts[0].id' 2>/dev/null)"
+            -f "name=${UNSIGNED_NAME}" -F per_page=100 \
+            --jq '[.artifacts[] | select(.name == env.UNSIGNED_NAME)][0].id' 2>/dev/null)"
           if [ -z "${ARTIFACT_ID}" ] || [ "${ARTIFACT_ID}" = "null" ]; then
             echo "::warning::unsigned store artifact not found — skipping signing"; exit 0
           fi
