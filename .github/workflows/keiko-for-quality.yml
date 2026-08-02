@@ -181,8 +181,14 @@ jobs:
           # job before Review publishes no blocking conversation, and after the arming interlock
           # expires the pull request could integrate unreviewed. Same class as the
           # continue-on-error on the download step, one layer earlier.
+          # The size bound is part of the poisoning model: a candidate-base run can upload a
+          # same-named artifact of arbitrary size, and a huge download would eat runner disk or
+          # the 30-minute job timeout — which continue-on-error cannot catch, reopening the
+          # unreviewed-merge window through resource exhaustion instead of an exit code. A real
+          # store is a few hundred kilobytes; 25 MiB is far above any legitimate size and far
+          # below harm.
           CANDIDATES="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/artifacts" -f "name=${ARTIFACT_NAME}" -F per_page=100 \
-            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | reverse | .[].workflow_run.id' \
+            --jq '[.artifacts[] | select(.expired == false) | select(.size_in_bytes <= 26214400)] | sort_by(.created_at) | reverse | .[].workflow_run.id' \
             2>/dev/null || true)"
           if [ -z "${CANDIDATES}" ]; then
             echo "::notice::no prior store located (none exists, or the lookup failed) — full review"

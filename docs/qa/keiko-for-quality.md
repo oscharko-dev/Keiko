@@ -134,12 +134,13 @@ secret.
 
 Environment **secrets** on `keiko-for-quality`:
 
-| Name                            | Value                                                |
-| ------------------------------- | ---------------------------------------------------- |
-| `KEIKO_QUALITY_MODEL_ENDPOINT`  | e.g. `https://<resource>.openai.azure.com/openai/v1` |
-| `KEIKO_QUALITY_MODEL_TOKEN`     | model provider credential                            |
-| `KEIKO_QUALITY_APP_ID`          | the App's numeric id                                 |
-| `KEIKO_QUALITY_APP_PRIVATE_KEY` | the App's private key (PEM)                          |
+| Name                            | Value                                                                                                                                                          |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `KEIKO_QUALITY_MODEL_ENDPOINT`  | e.g. `https://<resource>.openai.azure.com/openai/v1`                                                                                                           |
+| `KEIKO_QUALITY_MODEL_TOKEN`     | model provider credential                                                                                                                                      |
+| `KEIKO_QUALITY_APP_ID`          | the App's numeric id                                                                                                                                           |
+| `KEIKO_QUALITY_APP_PRIVATE_KEY` | the App's private key (PEM)                                                                                                                                    |
+| `KEIKO_QUALITY_STORE_HMAC`      | store-authenticity key: ≥32 random bytes, generated once, never read again — a run refuses to start without it (the workflow asserts it before any model cost) |
 
 The endpoint is a secret, not a variable: it can be a private provider address, and this repository's
 redaction contract states that logs carry no endpoints.
