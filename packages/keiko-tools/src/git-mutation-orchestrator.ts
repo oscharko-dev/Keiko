@@ -381,10 +381,11 @@ function resolvePolicyGate(
   if (decision.outcome === "blocked") {
     return { proceed: false, status: "policy-block", blockReason: decision.reason };
   }
-  if (decision.outcome === "approval-gated") {
-    return resolveApprovalGate(decision.requiredApprovers, request.approval, now);
-  }
-  return resolveConstrainedGate(decision.constraints, inputs, target, capabilities);
+  const constraints =
+    decision.outcome === "approval-gated" ? (decision.constraints ?? []) : decision.constraints;
+  const constraintGate = resolveConstrainedGate(constraints, inputs, target, capabilities);
+  if (!constraintGate.proceed || decision.outcome === "constrained") return constraintGate;
+  return resolveApprovalGate(decision.requiredApprovers, request.approval, now);
 }
 
 // ─── Phase 5: execution dispatch ─────────────────────────────────────────────────────────────

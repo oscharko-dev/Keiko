@@ -177,6 +177,16 @@ describe("audit packet (AC4)", () => {
 describe("evidence record guard (on-read tamper gate)", () => {
   it("accepts a well-formed record", () => {
     expect(isGitDeliveryEvidenceRecord(baseRecord())).toBe(true);
+    expect(
+      isGitDeliveryEvidenceRecord(
+        baseRecord({
+          policyOutcome: "approval-gated",
+          requiredApprovers: ["lead"],
+          constraints: [{ kind: "risk-class-ceiling", maxRiskClass: "publish" }],
+        }),
+      ),
+    ).toBe(true);
+    expect(isGitDeliveryEvidenceRecord({ ...baseRecord(), constraints: [] })).toBe(false);
   });
 
   it("rejects a wrong schema version", () => {

@@ -7,12 +7,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   type GitDeliveryApprovalRequirement,
+  type GitDeliveryOrgPolicyPack,
   type GitDeliveryRepoPolicyPack,
 } from "@oscharko-dev/keiko-contracts";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import {
   buildPushArgv,
   classifyGitPublishRejection,
+  evaluateGitPublishEffectivePolicy,
   GIT_PUBLISH_ALLOWED_SUBCOMMANDS,
   GIT_PUBLISH_COMMAND_RULES,
   GIT_PUBLISH_REJECTION_REASONS,
@@ -76,6 +78,33 @@ function safePack(): GitDeliveryRepoPolicyPack {
   };
 }
 
+function protectedDevOrgPack(): GitDeliveryOrgPolicyPack {
+  return {
+    schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+    orgId: "org",
+    rules: [
+      {
+        actionKind: "push",
+        decision: "constrained",
+        constraints: [
+          {
+            kind: "protected-branch",
+            patterns: [{ matchKind: "exact", value: "dev" }],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function approvalGateRepoPack(): GitDeliveryRepoPolicyPack {
+  return {
+    schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+    repoId: "repo",
+    rules: [{ actionKind: "push", decision: "approval-gated", requiredApprovers: ["lead"] }],
+  };
+}
+
 function fakeAdapter(result: GitPublishExecResult): {
   adapter: GitRemotePublishAdapter;
   publish: ReturnType<typeof vi.fn>;
@@ -89,6 +118,29 @@ const SUCCESS: GitPublishExecResult = {
   outcome: "succeeded",
   durationMs: 5,
 };
+
+describe("evaluateGitPublishEffectivePolicy", () => {
+  const decision = {
+    outcome: "approval-gated" as const,
+    requiredApprovers: ["lead"],
+    constraints: [
+      {
+        kind: "protected-branch" as const,
+        patterns: [{ matchKind: "exact" as const, value: "dev" }],
+      },
+    ],
+  };
+
+  it("blocks a protected target and keeps an ordinary target approval-gated", () => {
+    expect(evaluateGitPublishEffectivePolicy(decision, "dev", [], command())).toMatchObject({
+      outcome: "blocked",
+      blockReason: "protected-branch",
+    });
+    expect(evaluateGitPublishEffectivePolicy(decision, "feat/x", [], command()).outcome).toBe(
+      "approval-gated",
+    );
+  });
+});
 
 describe("buildPushArgv", () => {
   it("builds an explicit refspec push", () => {
@@ -347,6 +399,76 @@ describe("runGitPublish — policy gate (AC2/AC4)", () => {
       requiredApprovers: ["release"],
     });
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("keeps an org protected-branch denial when the repo adds an approval gate", async () => {
+    const approval: GitDeliveryApprovalRequirement = {
+      required: true,
+      approvalTokenHash: "a".repeat(64),
+      approvedByUserId: "lead",
+      approvedAtMs: 0,
+    };
+    const { adapter, publish } = fakeAdapter(SUCCESS);
+    const result = await runGitPublish(
+      { command: command({ remoteBranchName: "dev" }), approval },
+      {
+        adapter,
+        snapshot: snapshot(),
+        orgPolicyPack: protectedDevOrgPack(),
+        repoPolicyPack: approvalGateRepoPack(),
+        now: () => 1,
+        newActionId: () => "a1",
+      },
+    );
+
+    expect(result.lifecycle.outcome).toMatchObject({
+      status: "blocked",
+      category: "policy-block",
+      blockReason: "protected-branch",
+    });
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("requires a fresh approval after composite constraints pass", async () => {
+    const first = fakeAdapter(SUCCESS);
+    const missing = await runGitPublish(
+      { command: command(), approval: NO_APPROVAL },
+      {
+        adapter: first.adapter,
+        snapshot: snapshot(),
+        orgPolicyPack: protectedDevOrgPack(),
+        repoPolicyPack: approvalGateRepoPack(),
+        now: () => 1_000,
+        newActionId: () => "a1",
+      },
+    );
+    const expiredApproval: GitDeliveryApprovalRequirement = {
+      required: true,
+      approvalTokenHash: "a".repeat(64),
+      approvedByUserId: "lead",
+      approvedAtMs: 1,
+      expiresAtMs: 500,
+    };
+    const second = fakeAdapter(SUCCESS);
+    const expired = await runGitPublish(
+      { command: command(), approval: expiredApproval },
+      {
+        adapter: second.adapter,
+        snapshot: snapshot(),
+        orgPolicyPack: protectedDevOrgPack(),
+        repoPolicyPack: approvalGateRepoPack(),
+        now: () => 1_000,
+        newActionId: () => "a2",
+      },
+    );
+
+    expect(missing.lifecycle.outcome).toMatchObject({ status: "approval-required" });
+    expect(expired.lifecycle.outcome).toMatchObject({
+      status: "blocked",
+      blockReason: "approval-expired",
+    });
+    expect(first.publish).not.toHaveBeenCalled();
+    expect(second.publish).not.toHaveBeenCalled();
   });
 });
 

@@ -4,6 +4,7 @@ import {
   GIT_DELIVERY_SCHEMA_VERSION,
   type GitDeliveryApprovalRequirement,
   type GitDeliveryExecutionResult,
+  type GitDeliveryOrgPolicyPack,
   type GitDeliveryRepoPolicyPack,
   type GitDeliveryRuleDecision,
   type GitDeliveryConstraint,
@@ -353,6 +354,37 @@ describe("orchestrator — approval-gated policy", () => {
     );
     expect(result.outcome.status).toBe("succeeded");
     expect(fake.callCount()).toBe(1);
+  });
+
+  it("does not let a valid repo approval override an unsatisfied org constraint", async () => {
+    const orgPolicyPack: GitDeliveryOrgPolicyPack = {
+      schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+      orgId: "org",
+      rules: [
+        {
+          actionKind: "commit",
+          decision: "constrained",
+          constraints: [{ kind: "provider-capability", capability: "required-checks" }],
+        },
+      ],
+    };
+    const approval: GitDeliveryApprovalRequirement = {
+      required: true,
+      approvalTokenHash: "a".repeat(64),
+      approvedByUserId: "alice",
+      approvedAtMs: 900,
+    };
+    const fake = fakeAdapter(exec("succeeded"));
+    const result = await runGitMutation(
+      request(COMMIT, approval),
+      deps(fake.adapter, { orgPolicyPack, repoPolicyPack: APPROVAL_GATED }),
+    );
+
+    expect(result.outcome).toMatchObject({
+      status: "blocked",
+      blockReason: "provider-capability-absent",
+    });
+    expect(fake.callCount()).toBe(0);
   });
 
   it("blocks with approval-expired when the approval has lapsed", async () => {

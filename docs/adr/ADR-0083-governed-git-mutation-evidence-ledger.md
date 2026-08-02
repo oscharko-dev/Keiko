@@ -94,9 +94,10 @@ evidence schema the other two layers consume. It exports:
   `GitDeliveryRecoveryStrategyHint` for the concrete governed recovery strategy.
 - `GitDeliveryEvidenceRecord` — the top-level content-free record: `recordId`, `schemaVersion`,
   `outcomeClass`, `phaseReached` (as `GitDeliveryEvidenceLifecyclePhase`), `actionKind`,
-  `riskClass`, `correlation` (see D4), `recovery` (as `GitDeliveryRecoveryMetadata`), `timestamp`
-  (epoch ms integer, content-free), and the hashed identifiers from D3. No diff, path, command
-  string, secret, or raw subprocess output appears in any field.
+  `riskClass`, the accumulated typed policy requirements (`requiredApprovers`, `constraints`),
+  `correlation` (see D4), `recovery` (as `GitDeliveryRecoveryMetadata`), `timestamp` (epoch ms
+  integer, content-free), and the hashed identifiers from D3. No diff, path, command string, secret,
+  or raw subprocess output appears in any field.
 - `GitDeliveryAuditPacket` — the export envelope: a bounded array of `GitDeliveryEvidenceRecord`,
   a `generatedAt` timestamp, a `count`, and a `schemaVersion`. Used by the GET route.
 - Total pure derivation functions: `gitDeliveryRecoveryDispositionForExecutionError` (maps the

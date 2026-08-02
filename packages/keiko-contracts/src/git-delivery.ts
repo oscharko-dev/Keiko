@@ -350,7 +350,11 @@ export const GIT_DELIVERY_MERGE_BLOCK_REASONS: readonly GitDeliveryMergeBlockRea
 export type GitDeliveryPolicyDecision =
   | { readonly outcome: "allowed" }
   | { readonly outcome: "blocked"; readonly reason: GitDeliveryBlockReason }
-  | { readonly outcome: "approval-gated"; readonly requiredApprovers: readonly string[] }
+  | {
+      readonly outcome: "approval-gated";
+      readonly requiredApprovers: readonly string[];
+      readonly constraints?: readonly GitDeliveryConstraint[] | undefined;
+    }
   | { readonly outcome: "constrained"; readonly constraints: readonly GitDeliveryConstraint[] };
 
 // ─── Preview and result (content-free) ──────────────────────────────────────────
@@ -622,7 +626,13 @@ export function isGitDeliveryPolicyDecision(value: unknown): value is GitDeliver
     return isGitDeliveryBlockReason(value.reason);
   }
   if (value.outcome === "approval-gated") {
-    return isStringArray(value.requiredApprovers);
+    return (
+      isStringArray(value.requiredApprovers) &&
+      (value.constraints === undefined ||
+        (Array.isArray(value.constraints) &&
+          value.constraints.length > 0 &&
+          value.constraints.every(isGitDeliveryConstraint)))
+    );
   }
   if (value.outcome === "constrained") {
     return Array.isArray(value.constraints) && value.constraints.every(isGitDeliveryConstraint);

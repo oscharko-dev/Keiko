@@ -107,7 +107,12 @@ function effectivePolicyDecision(
     targetBranchName,
     activeProviderCapabilities: capabilities,
   });
-  if (decision.outcome !== "constrained") return decision;
+  const hasConstraints =
+    decision.outcome === "constrained" ||
+    (decision.outcome === "approval-gated" && (decision.constraints?.length ?? 0) > 0);
+  if (!hasConstraints) {
+    return decision;
+  }
   const effective = evaluateGitDeliveryEffectivePolicy(decision, {
     riskClass: gitDeliveryRiskClassForInputs(inputs),
     targetBranchName,

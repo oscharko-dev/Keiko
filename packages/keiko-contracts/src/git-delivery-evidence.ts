@@ -30,6 +30,7 @@
 import type {
   GitDeliveryActionKind,
   GitDeliveryBlockReason,
+  GitDeliveryConstraint,
   GitDeliveryExecutionErrorCode,
   GitDeliveryExecutionOutcome,
   GitDeliveryEvidenceRef,
@@ -40,6 +41,7 @@ import type {
 import {
   isGitDeliveryActionKind,
   isGitDeliveryBlockReason,
+  isGitDeliveryConstraint,
   isGitDeliveryEvidenceRef,
   isGitDeliveryExecutionErrorCode,
   isGitDeliveryExecutionOutcome,
@@ -180,6 +182,7 @@ export interface GitDeliveryEvidenceRecord {
   readonly policyOutcome: GitDeliveryPolicyDecision["outcome"];
   readonly blockReason?: GitDeliveryBlockReason | undefined;
   readonly requiredApprovers?: readonly string[] | undefined;
+  readonly constraints?: readonly GitDeliveryConstraint[] | undefined;
   readonly correlation: GitDeliveryEvidenceCorrelation;
   readonly approval: GitDeliveryEvidenceApproval;
   readonly preview?: GitDeliveryEvidencePreviewSummary | undefined;
@@ -332,6 +335,10 @@ function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every(isString);
 }
 
+function isConstraintArray(value: unknown): value is readonly GitDeliveryConstraint[] {
+  return Array.isArray(value) && value.length > 0 && value.every(isGitDeliveryConstraint);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -451,7 +458,8 @@ function hasValidEvidenceClassification(value: Record<string, unknown>): boolean
     isGitDeliveryEvidenceLifecyclePhase(value.phaseReached) &&
     isGitDeliveryPolicyOutcome(value.policyOutcome) &&
     isUndefinedOr(isGitDeliveryBlockReason)(value.blockReason) &&
-    isUndefinedOr(isStringArray)(value.requiredApprovers)
+    isUndefinedOr(isStringArray)(value.requiredApprovers) &&
+    isUndefinedOr(isConstraintArray)(value.constraints)
   );
 }
 

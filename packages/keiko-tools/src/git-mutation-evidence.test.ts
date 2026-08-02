@@ -244,6 +244,24 @@ describe("buildGitDeliveryEvidenceRecord — AC1 every outcome is correlatable",
       expect(record.schemaVersion).toBe("1");
     });
   }
+
+  it("retains approvers from a composite policy decision", () => {
+    const result = lifecycle(
+      { status: "approval-required", requiredApprovers: ["lead"] },
+      "policy",
+      {
+        policyDecision: {
+          outcome: "approval-gated",
+          requiredApprovers: ["lead"],
+          constraints: [{ kind: "risk-class-ceiling", maxRiskClass: "publish" }],
+        },
+      },
+    );
+
+    const record = build(result);
+    expect(record.requiredApprovers).toEqual(["lead"]);
+    expect(record.constraints).toEqual([{ kind: "risk-class-ceiling", maxRiskClass: "publish" }]);
+  });
 });
 
 describe("buildGitDeliveryEvidenceRecord — AC3 recovery disposition + hint", () => {

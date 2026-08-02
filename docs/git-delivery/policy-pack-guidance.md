@@ -14,6 +14,8 @@ They are illustrative configuration guidance, not a committed runtime config fil
 - Prefer branch-pattern constraints over operator instructions for protected/shared targets.
 - Use `approval-gated` for actions a human may permit case by case.
 - Use `constrained` when the action can proceed automatically only inside explicit typed bounds.
+- Org and repo requirements compose monotonically: blocks win, while approvals and constraints
+  accumulate. A repo approval gate never relaxes an org protected-branch constraint.
 - Keep force push blocked unless a future governed force-push feature adds separate controls.
 
 ## Example 1: strict protected-branch governance

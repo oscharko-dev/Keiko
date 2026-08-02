@@ -93,12 +93,14 @@ kept **distinct** from a hard block because it is resolvable by approving, not b
   granted-but-expired approval surfaces as `waiting-for-approval`, not as satisfied.
 - `riskClass` / `riskSeverity` — from the same DATA-driven taxonomy (`gitDeliveryRiskClassForInputs`,
   `GIT_DELIVERY_RISK_CLASS_SEVERITY`) used by the contract and kernel.
-- `requiredApprovers` — present only for an `approval-gated` decision.
+- `requiredApprovers` — present for an `approval-gated` decision, including one that also carries
+  constraints.
 
 `GitDeliveryPolicyExplanation` mirrors the trusted decision so the policy reason is visible without
 re-derivation: `decision` (the policy `outcome`), `requiredApprovers`, `constraints` (present for a
-`constrained` outcome), and `blockReason` (present for a `blocked` outcome). The UI confirm affordance
-is gated on `state === "ready-to-execute"`; it never re-evaluates policy.
+`constrained` outcome or an approval gate carrying constraints), and `blockReason` (present for a
+`blocked` outcome). The UI confirm affordance is gated on `state === "ready-to-execute"`; it never
+re-evaluates policy.
 
 ### 2.3 Preview manifest
 

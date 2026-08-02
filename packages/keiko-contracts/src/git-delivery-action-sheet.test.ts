@@ -236,6 +236,13 @@ describe("gitDeliveryApprovalNecessityForDecision", () => {
     ).toBe("required");
     expect(
       gitDeliveryApprovalNecessityForDecision({
+        outcome: "approval-gated",
+        requiredApprovers: ["u"],
+        constraints: [{ kind: "risk-class-ceiling", maxRiskClass: "publish" }],
+      }),
+    ).toBe("required");
+    expect(
+      gitDeliveryApprovalNecessityForDecision({
         outcome: "blocked",
         reason: "policy-pack-blocked",
       }),
@@ -393,6 +400,24 @@ describe("buildGitDeliveryActionSheet", () => {
     expect(sheet.approval.requiredApprovers).toEqual(["lead"]);
     expect(sheet.blocked).toBeUndefined();
     expect(sheet.recovery[0]?.actionHint).toBe("request-approval");
+  });
+
+  it("retains both approval and constraint detail for a composite decision", () => {
+    const constraint = { kind: "risk-class-ceiling", maxRiskClass: "publish" } as const;
+    const sheet = buildGitDeliveryActionSheet(
+      baseInput({
+        resolvedInputs: PR_CREATE_INPUTS,
+        policyDecision: {
+          outcome: "approval-gated",
+          requiredApprovers: ["lead"],
+          constraints: [constraint],
+        },
+      }),
+    );
+
+    expect(sheet.state).toBe("waiting-for-approval");
+    expect(sheet.approval.requiredApprovers).toEqual(["lead"]);
+    expect(sheet.policyExplanation.constraints).toEqual([constraint]);
   });
 
   it("produces a blocked sheet with a preflight cause and the blockers attached", () => {

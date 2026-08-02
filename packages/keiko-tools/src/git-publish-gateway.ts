@@ -474,16 +474,17 @@ export function evaluateGitPublishEffectivePolicy(
   if (decision.outcome === "blocked") {
     return { outcome: "blocked", blockReason: decision.reason };
   }
-  if (decision.outcome === "approval-gated") {
-    return { outcome: "approval-gated" };
-  }
-  for (const constraint of decision.constraints) {
+  const constraints =
+    decision.outcome === "approval-gated" ? (decision.constraints ?? []) : decision.constraints;
+  for (const constraint of constraints) {
     const reason = constraintBlock(constraint, target, capabilities, pushInputs);
     if (reason !== undefined) {
       return { outcome: "blocked", blockReason: reason };
     }
   }
-  return { outcome: "allowed" };
+  return decision.outcome === "constrained"
+    ? { outcome: "allowed" }
+    : { outcome: "approval-gated" };
 }
 
 function resolvePublishGate(
@@ -500,21 +501,21 @@ function resolvePublishGate(
   if (decision.outcome === "blocked") {
     return { proceed: false, status: "policy-block", reason: decision.reason };
   }
-  if (decision.outcome === "approval-gated") {
-    const state = approvalState(approval, now);
-    if (state === "valid") return { proceed: true };
-    if (state === "expired") {
-      return { proceed: false, status: "policy-block", reason: "approval-expired" };
-    }
-    return { proceed: false, status: "approval-required", approvers: decision.requiredApprovers };
-  }
-  for (const constraint of decision.constraints) {
+  const constraints =
+    decision.outcome === "approval-gated" ? (decision.constraints ?? []) : decision.constraints;
+  for (const constraint of constraints) {
     const reason = constraintBlock(constraint, target, capabilities, pushInputs);
     if (reason !== undefined) {
       return { proceed: false, status: "policy-block", reason };
     }
   }
-  return { proceed: true };
+  if (decision.outcome === "constrained") return { proceed: true };
+  const state = approvalState(approval, now);
+  if (state === "valid") return { proceed: true };
+  if (state === "expired") {
+    return { proceed: false, status: "policy-block", reason: "approval-expired" };
+  }
+  return { proceed: false, status: "approval-required", approvers: decision.requiredApprovers };
 }
 
 // ─── Execution outcome mapping (reuses the taxonomy) ─────────────────────────────────────────

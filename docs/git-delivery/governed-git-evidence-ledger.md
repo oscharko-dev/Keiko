@@ -42,18 +42,18 @@ preserves action intent, policy outcome, approval provenance, preview summary, e
 repository context, recovery metadata, and a workflow correlation — every field the audit needs and
 nothing more.
 
-| Field                                               | Purpose                                                                                                        |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `outcomeClass`                                      | One of `succeeded`, `blocked`, `rejected`, `failed`, `recovery-required`, `approval-required` (AC1).           |
-| `phaseReached`                                      | The furthest lifecycle phase the attempt reached (`resolve`→`result`).                                         |
-| `actionKind`, `riskClass`, `riskSeverity`           | The action intent and its data-driven risk classification.                                                     |
-| `policyOutcome`, `blockReason`, `requiredApprovers` | What the policy decided.                                                                                       |
-| `approval`                                          | Approval provenance — the approval token **hash** (never the token), approver id, timestamps.                  |
-| `preview`                                           | The content-free preview summary (counts, flags, affected branch).                                             |
-| `execution`                                         | Present only when the action executed: outcome, duration, error code, partial-unit counts, hashed external id. |
-| `repoContext`                                       | Content-free repository context: local branch name, counts, and hashed repo / remote identifiers.              |
-| `recovery`                                          | The recovery metadata (see §4).                                                                                |
-| `correlation`                                       | The hashed triggering-workflow run id, the action id, and an optional attempt sequence (AC1).                  |
+| Field                                                              | Purpose                                                                                                        |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `outcomeClass`                                                     | One of `succeeded`, `blocked`, `rejected`, `failed`, `recovery-required`, `approval-required` (AC1).           |
+| `phaseReached`                                                     | The furthest lifecycle phase the attempt reached (`resolve`→`result`).                                         |
+| `actionKind`, `riskClass`, `riskSeverity`                          | The action intent and its data-driven risk classification.                                                     |
+| `policyOutcome`, `blockReason`, `requiredApprovers`, `constraints` | What the policy decided, including every accumulated typed requirement.                                        |
+| `approval`                                                         | Approval provenance — the approval token **hash** (never the token), approver id, timestamps.                  |
+| `preview`                                                          | The content-free preview summary (counts, flags, affected branch).                                             |
+| `execution`                                                        | Present only when the action executed: outcome, duration, error code, partial-unit counts, hashed external id. |
+| `repoContext`                                                      | Content-free repository context: local branch name, counts, and hashed repo / remote identifiers.              |
+| `recovery`                                                         | The recovery metadata (see §4).                                                                                |
+| `correlation`                                                      | The hashed triggering-workflow run id, the action id, and an optional attempt sequence (AC1).                  |
 
 ### Outcome classes (AC1)
 

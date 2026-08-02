@@ -104,6 +104,8 @@ Typed constraints (`GitDeliveryConstraint`) have no free-form strings:
 - `branch-pattern` — the target branch must match at least one structured pattern. A pattern is
   `{ matchKind: "exact" | "prefix", value }`. Glob is intentionally excluded to keep the leaf
   parse-free; use `gitDeliveryBranchNameMatchesAny` to evaluate.
+- `protected-branch` — the target branch must not match any protected pattern; an unknown target
+  fails closed.
 - `provider-capability` — the active provider must advertise the named capability.
 - `risk-class-ceiling` — actions whose default severity exceeds `maxRiskClass` are out of bounds.
 
@@ -114,18 +116,20 @@ kind without a specific rule is denied at that level.
 
 `evaluateGitPolicy(orgPack, repoPack, context)` resolves each level to one of
 `allowed / blocked / approval-gated / constrained / none` (matching rule first, then `defaultRule`,
-then `none`), and combines them by this total matrix (first match wins; O = org, R = repo):
+then `none`) and combines them monotonically:
 
-1. `O == blocked` or `R == blocked` → **blocked** (`policy-pack-blocked`).
-2. `O == approval-gated` → **approval-gated** with org approvers.
-3. `R == approval-gated` → **approval-gated** with repo approvers.
-4. `O == constrained` or `R == constrained` → **constrained** (org constraints first, then repo).
-5. `O == allowed` or `R == allowed` → **allowed**.
-6. else (both `none`) → **blocked** (`no-applicable-rule`) — fail-closed.
+1. A block at either level wins (`policy-pack-blocked`).
+2. Org and repo approval requirements accumulate in that order.
+3. Org and repo constraints accumulate in that order.
+4. When both kinds of requirement exist, the effective `approval-gated` decision also carries
+   `constraints`; they are evaluated first and a grant cannot override one.
+5. `allowed` is returned only when at least one level allows and neither contributes a stronger
+   requirement.
+6. Both `none` is blocked (`no-applicable-rule`) — fail-closed.
 
-Either level can tighten; org tightening dominates a repo loosen; empty packs fail closed. The
-fail-closed `no-applicable-rule` is distinct from an explicit `approval-gated` rule with empty
-approvers.
+Either level can tighten, empty packs fail closed, and adding a repo approval gate cannot discard an
+org constraint. The fail-closed `no-applicable-rule` is distinct from an explicit `approval-gated`
+rule with empty approvers.
 
 ### Worked examples
 
@@ -140,6 +144,10 @@ approvers.
 **Constrained (union).** Org constrains `push` with a `provider-capability` constraint; repo
 constrains `push` with a `risk-class-ceiling` constraint → `{ outcome: "constrained", constraints:
 [<org>, <repo>] }`.
+
+**Approval-gated and constrained.** Org protects direct pushes to `dev`; repo gates `push` on a
+repo approver → `{ outcome: "approval-gated", requiredApprovers: [<repo>], constraints: [<org>] }`.
+A push to `dev` remains blocked even after approval; an unprotected target still requires approval.
 
 **Deny-by-default.** Org `defaultRule: { decision: "blocked" }` and no `merge` rule → any `merge`
 context resolves to blocked.

@@ -32,6 +32,7 @@ import {
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import type {
   GitDeliveryApprovalRequirement,
+  GitDeliveryOrgPolicyPack,
   GitDeliveryPolicyDecision,
   GitDeliveryRepoPolicyPack,
 } from "@oscharko-dev/keiko-contracts";
@@ -350,6 +351,25 @@ describe("evaluateGitMergeEffectivePolicy", () => {
       ).outcome,
     ).toBe("approval-gated");
   });
+
+  it("retains approval only after every composite constraint passes", () => {
+    const decision: GitDeliveryPolicyDecision = {
+      outcome: "approval-gated",
+      requiredApprovers: ["lead"],
+      constraints: [
+        {
+          kind: "protected-branch",
+          patterns: [{ matchKind: "exact", value: "main" }],
+        },
+      ],
+    };
+
+    expect(evaluateGitMergeEffectivePolicy(decision, "main", [])).toMatchObject({
+      outcome: "blocked",
+      blockReason: "protected-branch",
+    });
+    expect(evaluateGitMergeEffectivePolicy(decision, "feat/x", []).outcome).toBe("approval-gated");
+  });
 });
 
 describe("runGitMerge gates (AC1/AC4/AC5)", () => {
@@ -363,6 +383,42 @@ describe("runGitMerge gates (AC1/AC4/AC5)", () => {
     expect(result.lifecycle.outcome.status).toBe("approval-required");
     expect(adapter.mergeCalls()).toHaveLength(0);
     expect(readSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not let repo approval override an org protected-base constraint", async () => {
+    const adapter = fakeAdapter(readyProvider(), SUCCEEDED);
+    const orgPolicyPack: GitDeliveryOrgPolicyPack = {
+      schemaVersion: "1",
+      orgId: "org",
+      rules: [
+        {
+          actionKind: "merge",
+          decision: "constrained",
+          constraints: [
+            {
+              kind: "protected-branch",
+              patterns: [{ matchKind: "exact", value: "main" }],
+            },
+          ],
+        },
+      ],
+    };
+    const approval: GitDeliveryApprovalRequirement = {
+      required: true,
+      approvalTokenHash: "a".repeat(64),
+      approvedByUserId: "lead",
+      approvedAtMs: 1,
+    };
+    const result = await runGitMerge(
+      { command: COMMAND, approval },
+      { ...deps(adapter, APPROVAL_GATED_PACK), orgPolicyPack },
+    );
+
+    expect(result.lifecycle.outcome).toMatchObject({
+      status: "blocked",
+      blockReason: "protected-branch",
+    });
+    expect(adapter.mergeCalls()).toHaveLength(0);
   });
 
   it("blocks at the readiness gate when not mergeable, NEVER calling merge (AC1)", async () => {

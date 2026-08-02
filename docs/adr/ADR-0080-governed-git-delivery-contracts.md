@@ -166,8 +166,10 @@ not a free string, and carries an optional `partialDetail` (attempted/succeeded 
 
 - `{ outcome: "allowed" }` — action may proceed.
 - `{ outcome: "blocked"; reason: GitDeliveryBlockReason }` — typed block reason (not a free string).
-- `{ outcome: "approval-gated"; requiredApprovers: readonly string[] }` — lists opaque approver
-  ids; execution is held until approval is recorded.
+- `{ outcome: "approval-gated"; requiredApprovers: readonly string[]; constraints?: readonly
+  GitDeliveryConstraint[] }` — lists opaque approver ids; execution is held until approval is
+  recorded. When monotonic org/repo composition also contributes constraints, the same decision
+  carries them and every constraint must pass before approval is considered.
 - `{ outcome: "constrained"; constraints: readonly GitDeliveryConstraint[] }` — action may
   proceed only after listed typed constraints are satisfied.
 
@@ -179,6 +181,9 @@ not a free string, and carries an optional `partialDetail` (attempted/succeeded 
   excluded** to keep the leaf parse-free; `gitDeliveryBranchNameMatchesPattern` /
   `gitDeliveryBranchNameMatchesAny` are the deterministic matchers. If a later issue needs glob, it
   adds a third `matchKind` with its own matcher, never an embedded mini-language.
+- `{ kind: "protected-branch"; patterns: readonly GitDeliveryBranchPattern[] }` — deny when the
+  target matches a protected pattern; an unknown target fails closed because it cannot be proven
+  unprotected.
 - `{ kind: "provider-capability"; capability: GitDeliveryProviderCapability }` — the active
   provider must advertise the required capability (see D5).
 - `{ kind: "risk-class-ceiling"; maxRiskClass: GitDeliveryRiskClass }` — a genuine ceiling: an
@@ -230,18 +235,25 @@ per-decision required fields as a normal rule.
 `actionKind` matches wins; otherwise the level's `defaultRule` applies; otherwise the level is
 `none`.
 
-**Combination matrix (first match wins; org = O, repo = R).** `evaluateGitPolicy(orgPack, repoPack,
-context)` is a pure function (no IO, no clock) implemented via the `resolveLevel` + `combineDecisions`
-helpers:
+**Monotonic combination matrix (org = O, repo = R).** `evaluateGitPolicy(orgPack, repoPack,
+context)` is a pure function (no IO, no clock) implemented via the `resolveLevel` +
+`combineDecisions` helpers. `A` means approval-gated, `C` constrained, and `A+C` an approval-gated
+decision carrying constraints. Parentheses identify the accumulated scope(s); org entries always
+precede repo entries in the resulting arrays.
 
-1. `O == blocked` **or** `R == blocked` → `{ outcome: "blocked", reason: "policy-pack-blocked" }`.
-2. `O == approval-gated` → `{ outcome: "approval-gated", requiredApprovers: <O approvers> }`.
-3. `R == approval-gated` → `{ outcome: "approval-gated", requiredApprovers: <R approvers> }`.
-4. `O == constrained` **or** `R == constrained` → `{ outcome: "constrained", constraints: <O constraints first, then R> }`.
-5. `O == allowed` **or** `R == allowed` → `{ outcome: "allowed" }`.
-6. else (both `none`) → `{ outcome: "blocked", reason: "no-applicable-rule" }` — fail-closed.
+| O / R | `none` | `allowed` | `blocked` | `A(R)` | `C(R)` |
+|---|---|---|---|---|---|
+| `none` | `blocked(no-applicable-rule)` | `allowed` | `blocked` | `A(R)` | `C(R)` |
+| `allowed` | `allowed` | `allowed` | `blocked` | `A(R)` | `C(R)` |
+| `blocked` | `blocked` | `blocked` | `blocked` | `blocked` | `blocked` |
+| `A(O)` | `A(O)` | `A(O)` | `blocked` | `A(O+R)` | `A(O)+C(R)` |
+| `C(O)` | `C(O)` | `C(O)` | `blocked` | `A(R)+C(O)` | `C(O+R)` |
 
-Either level can tighten; org tightening dominates a repo loosen; empty packs fail closed.
+Composition follows three invariants: an explicit block always wins; approval requirements and
+constraints accumulate instead of replacing one another; and `allowed` is returned only when at
+least one level allows and neither level contributes a stronger requirement. Both `none` remains
+`blocked/no-applicable-rule`. Thus either level can tighten, a repo approval gate cannot erase an org
+protected-branch constraint, and empty packs fail closed.
 `requiredApprovers: []` on an **explicit** `approval-gated` rule means "at least one approver of any
 identity" and is NOT the fail-closed case — the fail-closed case is `no-applicable-rule` blocked.
 

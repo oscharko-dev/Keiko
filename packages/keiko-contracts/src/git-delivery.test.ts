@@ -200,6 +200,13 @@ describe("git-delivery approval / policy-decision / evidence / execution-result 
     ).toBe(true);
     expect(
       isGitDeliveryPolicyDecision({
+        outcome: "approval-gated",
+        requiredApprovers: ["lead"],
+        constraints: [{ kind: "protected-branch", patterns: [] }],
+      }),
+    ).toBe(true);
+    expect(
+      isGitDeliveryPolicyDecision({
         outcome: "constrained",
         constraints: [{ kind: "provider-capability", capability: "merge-queue" }],
       }),
@@ -208,6 +215,20 @@ describe("git-delivery approval / policy-decision / evidence / execution-result 
     expect(isGitDeliveryPolicyDecision({ outcome: "approval-gated", requiredApprovers: [1] })).toBe(
       false,
     );
+    expect(
+      isGitDeliveryPolicyDecision({
+        outcome: "approval-gated",
+        requiredApprovers: ["lead"],
+        constraints: [],
+      }),
+    ).toBe(false);
+    expect(
+      isGitDeliveryPolicyDecision({
+        outcome: "approval-gated",
+        requiredApprovers: ["lead"],
+        constraints: [{ kind: "unknown" }],
+      }),
+    ).toBe(false);
     expect(
       isGitDeliveryPolicyDecision({ outcome: "constrained", constraints: [{ kind: "x" }] }),
     ).toBe(false);

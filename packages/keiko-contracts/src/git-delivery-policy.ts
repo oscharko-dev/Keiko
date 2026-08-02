@@ -133,21 +133,31 @@ function unionConstraints(
   return [...orgConstraints, ...repoConstraints];
 }
 
-// Combine org (O) and repo (R) decisions by a total, deterministic precedence matrix (first match
-// wins). Either level can tighten; org tightening dominates a repo loosen; both `none` fails closed.
+function unionApprovers(org: ResolvedLevel, repo: ResolvedLevel): readonly string[] {
+  const orgApprovers = org.kind === "approval-gated" ? org.approvers : [];
+  const repoApprovers = repo.kind === "approval-gated" ? repo.approvers : [];
+  return [...orgApprovers, ...repoApprovers];
+}
+
+// Combine org (O) and repo (R) decisions monotonically: blocks dominate, while every approval and
+// constraint requirement survives. Either level can tighten; both `none` fails closed.
 function combineDecisions(org: ResolvedLevel, repo: ResolvedLevel): GitDeliveryPolicyDecision {
   if (org.kind === "blocked" || repo.kind === "blocked") {
     return { outcome: "blocked", reason: "policy-pack-blocked" };
   }
-  if (org.kind === "approval-gated") {
-    return { outcome: "approval-gated", requiredApprovers: org.approvers };
+  const requiresApproval = org.kind === "approval-gated" || repo.kind === "approval-gated";
+  const constraints = unionConstraints(org, repo);
+  if (requiresApproval && constraints.length > 0) {
+    return {
+      outcome: "approval-gated",
+      requiredApprovers: unionApprovers(org, repo),
+      constraints,
+    };
   }
-  if (repo.kind === "approval-gated") {
-    return { outcome: "approval-gated", requiredApprovers: repo.approvers };
+  if (requiresApproval) {
+    return { outcome: "approval-gated", requiredApprovers: unionApprovers(org, repo) };
   }
-  if (org.kind === "constrained" || repo.kind === "constrained") {
-    return { outcome: "constrained", constraints: unionConstraints(org, repo) };
-  }
+  if (constraints.length > 0) return { outcome: "constrained", constraints };
   if (org.kind === "allowed" || repo.kind === "allowed") {
     return { outcome: "allowed" };
   }
@@ -257,7 +267,8 @@ export function gitDeliveryConstraintBlockReason(
  * The EFFECTIVE outcome of a policy decision for one concrete action: a `constrained` decision is
  * resolved against the action's operands, so a constrained-but-passing action reads as "allowed" and a
  * failing one as "blocked" with the precise reason. Approval state is NOT considered — an
- * approval-gated decision stays approval-gated, and the caller decides whether a grant satisfies it.
+ * approval-bearing decision stays approval-gated after every constraint passes, and the caller
+ * decides whether a grant satisfies it.
  */
 export function evaluateGitDeliveryEffectivePolicy(
   decision: GitDeliveryPolicyDecision,
@@ -267,12 +278,15 @@ export function evaluateGitDeliveryEffectivePolicy(
   if (decision.outcome === "blocked") {
     return { outcome: "blocked", blockReason: decision.reason };
   }
-  if (decision.outcome === "approval-gated") return { outcome: "approval-gated" };
-  for (const constraint of decision.constraints) {
+  const constraints =
+    decision.outcome === "approval-gated" ? (decision.constraints ?? []) : decision.constraints;
+  for (const constraint of constraints) {
     const reason = gitDeliveryConstraintBlockReason(constraint, context);
     if (reason !== undefined) return { outcome: "blocked", blockReason: reason };
   }
-  return { outcome: "allowed" };
+  return decision.outcome === "approval-gated"
+    ? { outcome: "approval-gated" }
+    : { outcome: "allowed" };
 }
 
 // ─── Private predicate helpers ───────────────────────────────────────────────────
