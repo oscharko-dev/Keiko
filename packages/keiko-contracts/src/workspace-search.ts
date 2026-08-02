@@ -226,11 +226,14 @@ interface GroupScan {
 }
 
 function characterClassEnd(source: string, start: number): number | undefined {
-  for (let cursor = start + 1; cursor < source.length; cursor += 1) {
+  let cursor = start + 1;
+  while (cursor < source.length) {
     if (source[cursor] === "\\") {
-      cursor += 1;
+      cursor += 2;
     } else if (source[cursor] === "]") {
       return cursor + 1;
+    } else {
+      cursor += 1;
     }
   }
   return undefined;
@@ -251,21 +254,23 @@ function scanGroup(source: string, start: number): GroupScan | undefined {
   if (source[start] !== "(") return undefined;
   let depth = 1;
   let containsRepetition = false;
-  for (let cursor = start + 1; cursor < source.length; cursor += 1) {
+  let cursor = start + 1;
+  while (cursor < source.length) {
     const char = source[cursor];
     if (char === "\\") {
-      cursor += 1;
+      cursor += 2;
       continue;
     }
     if (char === "[") {
       const end = characterClassEnd(source, cursor);
       if (end === undefined) return undefined;
-      cursor = end - 1;
+      cursor = end;
       continue;
     }
     depth = adjustedGroupDepth(depth, char);
     if (depth === 0) return { end: cursor + 1, containsRepetition };
     if (isRepetitionStart(source, cursor)) containsRepetition = true;
+    cursor += 1;
   }
   return undefined;
 }
