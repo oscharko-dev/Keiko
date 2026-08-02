@@ -1,0 +1,78 @@
+name: keiko-for-quality
+
+# ADR-0170. Model-backed review by the external Keiko for Quality bot, published as native
+# review conversations. This workflow adds no required status context: blocking comes solely from
+# GitHub's existing Required Conversation Resolution rule acting on what the reviewer publishes.
+#
+# `pull_request_target` is deliberate and is what makes this safe rather than what makes it risky:
+# GitHub takes the workflow definition from the protected base, so a candidate cannot alter what
+# runs. The candidate is never checked out — see the two checkout steps below.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+# The reviewer needs to read the repository and write review comments. Nothing else. It has no
+# contents-write, checks-write, actions-write, commit, push, approval, or merge authority.
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: keiko-for-quality-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: review
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Draft and fork heads are also rejected inside the action, which records a redacted
+    # skipped-eligibility reason. This condition only avoids starting a runner for them.
+    #
+    # The endpoint check keeps the reviewer inert until an operator has provisioned the model
+    # variables, the credential, and the App installation. Without it, merging this workflow would
+    # make every `dev` pull request carry a failing job that no contributor can fix. An inert
+    # reviewer is visibly absent rather than noisily broken — and version 0.1 publishes no required
+    # status context, so its absence blocks nothing either way (ADR-0170 D6).
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == 'dev' &&
+      vars.KEIKO_QUALITY_MODEL_ENDPOINT != ''
+    environment: keiko-for-quality
+    steps:
+      # Check out the TRUSTED BASE. Never `github.event.pull_request.head.sha`: under
+      # pull_request_target that would place candidate-controlled files on disk in a job that holds
+      # a credential.
+      - name: Check out protected base
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Fetch the candidate as Git objects only. Its content becomes readable through plumbing
+      # without ever being written to the working tree.
+      - name: Fetch candidate head as Git objects
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: git fetch --no-tags --no-recurse-submodules origin "pull/${PR_NUMBER}/head"
+
+      - name: Review
+        uses: oscharko-dev/Keiko-for-Quality@acade30442d9524c56f05fd98f2013c36e984d51 # v0.1.0
+        env:
+          # Passed by variable NAME to the action, never as an input value: an input appears in the
+          # step context that every other action in the job can read.
+          KEIKO_QUALITY_MODEL_TOKEN: ${{ secrets.KEIKO_QUALITY_MODEL_TOKEN }}
+        with:
+          profile: .github/keiko-for-quality.json
+          model_endpoint: ${{ vars.KEIKO_QUALITY_MODEL_ENDPOINT }}
+          model_id: ${{ vars.KEIKO_QUALITY_MODEL_ID }}
+          model_protocol: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
+          model_token_env: KEIKO_QUALITY_MODEL_TOKEN
+          # A dedicated App identity is what makes marker-based deduplication sound: a marker is a
+          # public string, so suppressing on one authored by anyone else would let a contributor
+          # silence a finding by posting its fingerprint first.
+          app_id: ${{ secrets.KEIKO_QUALITY_APP_ID }}
+          app_private_key: ${{ secrets.KEIKO_QUALITY_APP_PRIVATE_KEY }}
+          target_branches: dev

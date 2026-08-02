@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "reviewRelevant": [
+    "packages/**/*.{ts,tsx}",
+    "src/**/*.{ts,tsx}",
+    "tests/**/*.{ts,tsx}",
+    "scripts/**/*.mjs",
+    ".github/workflows/**/*.{yml,yaml}",
+    ".github/actions/**/*.{yml,yaml}",
+    ".github/*.{json,yml,yaml}",
+    "package.json",
+    "package-lock.json",
+    "packages/*/package.json",
+    "docs/adr/*.md",
+    "*.config.{ts,js,mjs}",
+    "packages/*/*.config.{ts,js,mjs}",
+    "tsconfig*.json",
+    "eslint.config.*",
+    ".dependency-cruiser.*"
+  ],
+  "deletionCritical": [
+    "**/*.test.{ts,tsx}",
+    "**/__tests__/**",
+    "tests/**",
+    "scripts/**",
+    ".github/workflows/**",
+    ".github/actions/**",
+    "docs/adr/**",
+    "docs/qa/**",
+    "packages/**/*.{ts,tsx}",
+    "src/**/*.{ts,tsx}"
+  ],
+  "generated": [
+    "**/dist/**",
+    "**/build/**",
+    "**/coverage/**",
+    "**/.next/**",
+    "**/*.tsbuildinfo",
+    "**/__snapshots__/**"
+  ],
+  "excluded": [
+    {
+      "pattern": "docs/**/*.md",
+      "reason": "prose documentation outside docs/adr; reviewed by people, not by the model"
+    },
+    {
+      "pattern": "**/*.{png,jpg,jpeg,gif,svg,ico,webp,woff,woff2,ttf,pdf,zip,wasm}",
+      "reason": "binary or vector assets carry no reviewable source"
+    },
+    {
+      "pattern": "**/*.{css,scss}",
+      "reason": "styling is gated by the SHA-pinned visual-proof and axe gates, not by model review"
+    },
+    {
+      "pattern": "**/*.{md,mdx,txt,csv,json,yml,yaml,html,sh,sql,toml,lock,snap,map}",
+      "reason": "data, prose, and config outside the review-relevant set above; covered by deterministic gates"
+    },
+    {
+      "pattern": "**/*",
+      "reason": "catch-all: every remaining path is deliberately outside model review for this repository"
+    }
+  ],
+  "benignWarnings": [
+    {
+      "type": "context_truncated",
+      "justification": "expected on files larger than the model context window; the file is still reviewed in part, and the deterministic gates cover it in full"
+    }
+  ]
+}
