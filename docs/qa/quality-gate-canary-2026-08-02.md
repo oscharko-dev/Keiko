@@ -1,0 +1,17 @@
+# Post-retirement quality-gate canary — 2026-08-02
+
+This redacted marker is the sole candidate change in the fresh pull-request canary required by
+ADR-0169 D5. It does not alter product behavior or gate configuration. Its purpose is to make the
+post-retirement branch-protection topology prove itself on a new exact head.
+
+The canary succeeds only when all of the following are true:
+
+- the candidate commit and resulting squash merge are validly signed;
+- the exact ten App-bound checks in ADR-0169 D3 succeed on the current head;
+- no CodSpeed or Greptile workflow, status, configuration, or App participates;
+- every review conversation is resolved without a human approving review; and
+- GitHub native auto-merge performs the squash after the checks settle.
+
+GitHub's check-run, review-thread, branch-protection, and merge records are the authoritative
+evidence. This file intentionally does not copy mutable provider output or finding bodies into the
+repository.
