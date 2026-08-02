@@ -19,8 +19,9 @@ protection, or approve. The ten App-bound required checks from ADR-0169 D3 are u
 
 ## Provisioning
 
-Until the model endpoint variable is set, the job does not run at all. This is deliberate: an
-unconfigured reviewer is visibly absent rather than a failing job on every pull request.
+Until `KEIKO_QUALITY_ENABLED` is `true`, the job does not run at all — that variable, not the
+endpoint, is what the job condition tests. This is deliberate: an unconfigured reviewer is visibly
+absent rather than a failing job on every pull request.
 
 ### 1. Register the GitHub App
 

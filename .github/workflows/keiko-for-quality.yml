@@ -9,7 +9,11 @@ name: keiko-for-quality
 # runs. The candidate is never checked out — see the two checkout steps below.
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, edited]
+    # `converted_to_draft` produces no review of its own — the job condition rejects drafts. It is
+    # listed so the trigger fires at all: that starts a replacement run whose concurrency group
+    # cancels the review already in flight. Without it, a pull request pulled back to draft keeps a
+    # credential-bearing review running that can publish findings against a draft.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited]
 
 # The reviewer needs to read the repository and write review comments. Nothing else. It has no
 # contents-write, checks-write, actions-write, commit, push, approval, or merge authority.

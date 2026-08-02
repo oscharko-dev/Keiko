@@ -13,6 +13,16 @@
     "portable-runtime-approvals.json",
     "**/*.{css,scss}",
     "release-impact.catalog.json",
+    "**/*.webmanifest",
+    "SECURITY.md",
+    "NOTICE",
+    "**/LICENSE",
+    ".gitattributes",
+    ".github/CODEOWNERS",
+    "CODEX.md",
+    "CLAUDE.md",
+    "CONTRIBUTING.md",
+    "AGENTS.md",
     "**/Dockerfile*",
     "**/Makefile",
     "**/package.json",
@@ -54,7 +64,13 @@
     "**/*.{plist,entitlements,rc,csproj,props,targets}",
     "docs/qa/*.json",
     "portable-runtime-approvals.json",
-    "release-impact.catalog.json"
+    "release-impact.catalog.json",
+    "AGENTS.md",
+    "CONTRIBUTING.md",
+    ".github/CODEOWNERS",
+    ".gitattributes",
+    "**/LICENSE",
+    "SECURITY.md"
   ],
   "generated": [
     "**/dist/**",
@@ -83,8 +99,8 @@
       "reason": "remaining prose, data, and configuration not named as review-relevant above; covered by deterministic gates"
     },
     {
-      "pattern": "**/*",
-      "reason": "catch-all: every remaining path is deliberately outside model review. It is the last resort, not the routine answer \u2014 an executable or trust-boundary path landing here is a profile gap, not an exclusion. Inclusion wins over exclusion, and the relevant list is keyed by file type rather than directory on purpose; see docs/qa/keiko-for-quality.md."
+      "pattern": "**/{.gitignore,.editorconfig,.prettierignore,.npmignore,.dockerignore}",
+      "reason": "tooling ignore and editor files. Deliberately the LAST entry rather than a catch-all: an unmatched path must reach inventory.unclassified_path and fail the run, which a `**/*` rule made unreachable. Note .gitattributes is NOT here \u2014 it can mark sources binary and hide them from review."
     }
   ],
   "benignWarnings": []
