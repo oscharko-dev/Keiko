@@ -299,10 +299,19 @@ jobs:
             echo "::warning::store artifact carries traversal paths — discarding it"
             rm -f store.zip; exit 0
           fi
+          # The symlink and absolute-path checks below read zipinfo, so an archive whose central
+          # directory `unzip -l` parses but `unzip -Z` chokes on would leave BOTH greps searching
+          # an empty string and BOTH passing vacuously. A gate that cannot enumerate names has
+          # not validated anything: no enumeration, no extraction.
+          ZIPINFO="$(unzip -Z store.zip 2>/dev/null || true)"
+          NAMES="$(unzip -Z1 store.zip 2>/dev/null || true)"
+          if [ -z "${ZIPINFO}" ] || [ -z "${NAMES}" ]; then
+            echo "::warning::store artifact entry names could not be enumerated — discarding it"
+            rm -f store.zip; exit 0
+          fi
           # A name-based traversal check misses symlink entries: a link `s -> /tmp` followed by a
           # regular entry under `s/…` writes THROUGH the link, outside the store directory, with
           # no `../` anywhere in the listing. zipinfo mode strings expose links as a leading 'l'.
-          ZIPINFO="$(unzip -Z store.zip 2>/dev/null || true)"
           if grep -q '^l' <<< "${ZIPINFO}"; then
             echo "::warning::store artifact carries symlink entries — discarding it"
             rm -f store.zip; exit 0
@@ -310,7 +319,6 @@ jobs:
           # unzip implementations differ on absolute entry names — some strip the leading slash,
           # some honor it and write outside -d. The gate must not depend on extractor behaviour:
           # absolute names are rejected outright, like traversal segments and links.
-          NAMES="$(unzip -Z1 store.zip 2>/dev/null || true)"
           if grep -q '^/' <<< "${NAMES}"; then
             echo "::warning::store artifact carries absolute-path entries — discarding it"
             rm -f store.zip; exit 0
@@ -524,9 +532,13 @@ jobs:
           # Here-strings, not producer pipelines: grep -q's early exit SIGPIPEs a producer and
           # pipefail turns a FOUND violation into a clean-looking 141 (same repair as the restore
           # path; Codex, round 31).
+          # Empty zipinfo output fails the gate rather than passing it silently: a grep over an
+          # empty string finds nothing, so an archive that defeats name enumeration would clear
+          # both the symlink and the absolute-path check. Same repair as the restore path.
           ZIPINFO="$(unzip -Z store.zip 2>/dev/null || true)"
           NAMES="$(unzip -Z1 store.zip 2>/dev/null || true)"
-          if [ -z "${LISTING}" ] || [ "${TOTAL}" -gt 26214400 ] || [ "${ENTRIES}" -gt 8 ] \
+          if [ -z "${LISTING}" ] || [ -z "${ZIPINFO}" ] || [ -z "${NAMES}" ] \
+             || [ "${TOTAL}" -gt 26214400 ] || [ "${ENTRIES}" -gt 8 ] \
              || grep -q '\.\./' <<< "${LISTING}" \
              || grep -q '^l' <<< "${ZIPINFO}" \
              || grep -q '^/' <<< "${NAMES}"; then
