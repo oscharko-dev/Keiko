@@ -225,13 +225,25 @@ deliberately, at provisioning time — not as a routine operation.
 ### 5. Confirm coverage, then release the freeze
 
 This is the condition on which `dev` gets unlocked, so state it exactly. For **every** eligible open
-pull request, a `keiko-for-quality` run must exist for that pull request's **current head** and must
-have terminated — published or failed. A run against an earlier head does not count, and neither
-does the absence of findings: a clean review and a run that never started look identical from the
-outside, which is the whole reason this step exists.
+pull request, its **current head** must carry one of two things:
 
-If any eligible pull request lacks such a run, the freeze stays on. Retrigger that pull request and
-check again. Do not release on "it probably ran".
+- a completed review — the run reached settlement and published its result; or
+- a published incomplete-review conversation, which is itself blocking and therefore visible.
+
+A run against an earlier head does not count. Neither does the absence of findings: a clean review
+and a run that never started look identical from the outside, which is the whole reason this step
+exists.
+
+**A failed run is not coverage.** "Terminated" is the right word for the arming interlock in
+ADR-0170 D5, where the question is whether a review can still publish; it is the wrong word here,
+where the question is whether one _did_. A run that dies at `settlement.*` or `publish.*` — or
+before either — leaves the head with no reviewer output at all, so treat it exactly as if no run had
+happened: keep the freeze, retrigger, and escalate if it fails again.
+
+This is deliberately stricter than steady state. ADR-0170 D6 accepts, as a stated fail-open window,
+that a run which never publishes cannot be made fail-closed by review conversations alone. During
+activation that window is closable, because the freeze is holding — so close it. If any eligible
+pull request lacks a published result, the freeze stays on. Do not release on "it probably ran".
 
 There is deliberately **no script here**, and the reason is worth knowing before you write one.
 Under `pull_request_target` the workflow runs against the base, so a run's `head_sha` and
