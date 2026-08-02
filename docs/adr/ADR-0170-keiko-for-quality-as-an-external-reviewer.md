@@ -77,9 +77,21 @@ already behaves.
 
 ### D3 — Least privilege, candidate as data
 
-The consumer workflow holds exactly `contents: read` and `pull-requests: write`. It receives no
-contents-write, checks-write, actions-write, administration, branch-protection, commit, push, or
-merge authority.
+The consumer workflow holds exactly `actions: write`, `contents: read`, and `pull-requests:
+write`. It receives no contents-write, checks-write, administration, branch-protection, commit,
+push, or merge authority.
+
+`actions: write` was added on 2026-08-02, when the first production run of the v0.9.0 review
+store proved the cache service refuses writes without it (`cache write denied: token has no
+writable scopes` — `actions/cache/save` fails soft, so the run reviewed 105 files, reported step
+success, and persisted nothing). The grant exists solely so the review store can persist between
+runs, and it carries a named residual risk accepted deliberately: the scope also permits
+cancelling and re-running workflow runs through the API, a denial-of-service surface, not a code
+or content-integrity surface. It is accepted because this job executes no candidate code — the
+token only ever runs inside the base-controlled workflow and the SHA-pinned action — and because
+the alternative is no cross-run memoization at all. A compromised pinned action holding this
+scope could disrupt CI runs; it still could not commit, push, merge, alter checks, or widen its
+own authority.
 
 State the approval case precisely rather than in that list. GitHub's create-review API accepts an
 `APPROVE` event from any token holding `pull-requests: write`, so the platform does **not** withhold
