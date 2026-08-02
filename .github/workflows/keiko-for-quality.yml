@@ -22,9 +22,9 @@ on:
     types:
       [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed, edited]
 
-# Empty at workflow level on purpose: the two jobs below need disjoint authority, and either
-# job holding the other's grant is exactly the coupling this file exists to avoid. Each job
-# declares precisely its own — see the notes on both.
+# Empty at workflow level on purpose, even with a single job: the job declares exactly what it
+# needs, and a future second job added to this file starts from nothing instead of inheriting
+# review-grade authority by default.
 permissions: {}
 
 concurrency:
@@ -162,8 +162,15 @@ jobs:
               done)"
           echo "run-id=${MATCH}" >> "${GITHUB_OUTPUT}"
 
+      # continue-on-error is load-bearing: a deleted artifact, a corrupt archive, or a transient
+      # artifact-service failure must degrade to a full-price review — a failed job here would
+      # mean the Review step never runs, no blocking conversation exists, and after the arming
+      # interlock expires the pull request could integrate unreviewed. Memoization must never be
+      # able to fail the reviewer open. The verify step below treats missing files as
+      # discard-and-continue, which covers every partial-download shape.
       - name: Restore review store
         if: steps.locate.outputs.run-id != ''
+        continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: >-
@@ -189,6 +196,10 @@ jobs:
         if: steps.locate.outputs.run-id != ''
         env:
           STORE_HMAC: ${{ secrets.KEIKO_QUALITY_STORE_HMAC }}
+          STORE_PR: ${{ github.event.pull_request.number }}
+          STORE_PROFILE_HASH: ${{ hashFiles('.github/keiko-for-quality.json') }}
+          STORE_MODEL_ID: ${{ vars.KEIKO_QUALITY_MODEL_ID }}
+          STORE_MODEL_PROTOCOL: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
         run: |
           # An absent environment secret arrives as an empty string, and openssl happily HMACs
           # with an empty — publicly known — key, which would silently void this entire boundary.
@@ -200,13 +211,19 @@ jobs:
           STORE="keiko-review-store/store.json"
           SIG="keiko-review-store/store.json.hmac"
           if [ -f "${STORE}" ] && [ -f "${SIG}" ]; then
-            EXPECTED="$(openssl dgst -sha256 -hmac "${STORE_HMAC}" -r "${STORE}" | cut -d' ' -f1)"
+            # The context is rebuilt from THIS run's own values, never read from the artifact: a
+            # valid pair copied verbatim from another pull request or configuration fails on the
+            # first differing dimension, because those bytes were signed under a different
+            # context line. The store.context file inside the artifact is informational only.
+            EXPECTED="$(printf 'pr=%s profile=%s model=%s protocol=%s\n' \
+                "${STORE_PR}" "${STORE_PROFILE_HASH}" "${STORE_MODEL_ID}" "${STORE_MODEL_PROTOCOL}" \
+              | cat - "${STORE}" | openssl dgst -sha256 -hmac "${STORE_HMAC}" -r | cut -d' ' -f1)"
             ACTUAL="$(cut -d' ' -f1 < "${SIG}")"
             if [ "${EXPECTED}" = "${ACTUAL}" ]; then
-              echo "store authenticated"
+              echo "store authenticated for this pull request and configuration"
               exit 0
             fi
-            echo "::warning::restored review store failed HMAC verification — discarding it"
+            echo "::warning::restored review store failed context-bound HMAC verification — discarding it"
           else
             echo "restored artifact carries no signature — discarding it"
           fi
@@ -264,12 +281,24 @@ jobs:
         if: steps.review.outputs.outcome == 'complete'
         env:
           STORE_HMAC: ${{ secrets.KEIKO_QUALITY_STORE_HMAC }}
+          STORE_PR: ${{ github.event.pull_request.number }}
+          STORE_PROFILE_HASH: ${{ hashFiles('.github/keiko-for-quality.json') }}
+          STORE_MODEL_ID: ${{ vars.KEIKO_QUALITY_MODEL_ID }}
+          STORE_MODEL_PROTOCOL: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
         run: |
           if [ "${#STORE_HMAC}" -lt 32 ]; then
             echo "::error::KEIKO_QUALITY_STORE_HMAC is missing or too short — refusing to sign with a weak or empty key"
             exit 1
           fi
-          openssl dgst -sha256 -hmac "${STORE_HMAC}" -r keiko-review-store/store.json \
+          # The MAC binds the CONTEXT, not just the bytes: a valid store/signature pair copied
+          # verbatim from another pull request or configuration must not verify here. The context
+          # line carries every partition dimension; verification recomputes it from this run's
+          # own values, so a replayed pair fails on the first differing dimension.
+          printf 'pr=%s profile=%s model=%s protocol=%s\n' \
+            "${STORE_PR}" "${STORE_PROFILE_HASH}" "${STORE_MODEL_ID}" "${STORE_MODEL_PROTOCOL}" \
+            > keiko-review-store/store.context
+          cat keiko-review-store/store.context keiko-review-store/store.json \
+            | openssl dgst -sha256 -hmac "${STORE_HMAC}" -r \
             > keiko-review-store/store.json.hmac
 
       - name: Persist review store

@@ -178,11 +178,13 @@ authorship check meaningful.
 State the limit of that guarantee precisely. A GitHub environment scopes its secrets to jobs that
 **declare** it, not to one workflow: another job declaring `environment: keiko-for-quality` could
 reference the same App credentials and mint the same installation identity. The protection is
-therefore not "no other workflow can assume this identity" in an absolute sense — it is that no
-*existing* workflow does, and adding one requires a reviewed, merged change to the protected base,
-which is the same trust boundary that protects every other gate here. Binding issuance to this
-workflow's OIDC identity would make the guarantee absolute and is the correct follow-up; it is not
-part of this adoption.
+therefore not "no other workflow can assume this identity" in an absolute sense — it is twofold:
+no *existing* workflow does, and adding one requires a reviewed, merged change to the protected
+base; and the environment's protected-branches-only deployment policy (D3) refuses the
+declaration to any run executing a candidate ref's workflow file, which closes the
+caller-chosen-ref dispatch path that a reviewed-base-only boundary leaves open. Binding issuance
+to this workflow's OIDC identity would make the guarantee absolute and is the correct follow-up;
+it is not part of this adoption.
 
 ### D5 — Bounded auto-merge arming interlock
 
