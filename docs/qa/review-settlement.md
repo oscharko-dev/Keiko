@@ -32,21 +32,15 @@ the wall clock.
   inline finding blocks until repaired and its conversation is resolved. Review-body and summary
   output remains advisory because it has no resolvable native thread. Never use ignore,
   bulk-resolve, dismissal, or bypass controls.
-- **Greptile:** quota-tolerant review on every eligible `dev` update. Its provider status is not
-  required, so missing review evidence cannot deadlock merge. Every emitted inline finding blocks
-  through GitHub conversation resolution until repaired and resolved.
 - **SonarCloud:** native gate plus issues that may sit below summary thresholds. Query the PR issue
   API, repair all findings, rerun the exact local analyzer, and require both native and repository
   validators to see zero current-head issues.
-- **CodSpeed:** per-benchmark comparison against the `dev` baseline. Reproduce the affected
-  production entry point and repair until the head is no more than 5% slower. Never move the
-  baseline to hide a regression.
 - **Repository `ci`:** parallel tests, coverage, secret, clone, architecture, and supply-chain
   evidence. Repair the complete failure set locally, push one consolidated head, and require every
   dependency to conclude success on that exact candidate.
 
 The expensive mistake this table exists to prevent is discovering findings one CI round at a time.
-Enumerate **every** finding from **every** producer above in one pass — failing job logs, the Sonar
+Enumerate **every** finding from **every** active producer above in one pass — failing job logs, the Sonar
 issues API, every unresolved thread — and then work the whole list into a single new head. The
 baseline's 15-, 17- and 19-round pull requests are what round-at-a-time costs.
 

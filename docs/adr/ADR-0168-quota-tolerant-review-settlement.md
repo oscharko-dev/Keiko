@@ -2,6 +2,9 @@
 
 ## Status
 
+Superseded in part by ADR-0169 on 2026-08-02. D2 remains current for CodeRabbit. Every CodSpeed and
+Greptile provision is retired and must not be used operationally.
+
 Accepted (owner decision, 2026-08-01). Issue #2879 implements the correction. The authenticated
 Greptile dashboard reported 14 days remaining in the no-payment trial when this decision was made;
 the OSS entitlement application remains pending.

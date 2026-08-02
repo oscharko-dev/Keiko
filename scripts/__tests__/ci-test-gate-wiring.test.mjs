@@ -14,10 +14,6 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
 
 const ci = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
-const codspeedPolicy = readFileSync(
-  resolve(repoRoot, ".github/workflows/codspeed-policy.yml"),
-  "utf8",
-);
 const windowsNativeQuality = readFileSync(
   resolve(repoRoot, "scripts/check-windows-native-quality.ps1"),
   "utf8",
@@ -218,7 +214,6 @@ describe("CI test/gate wiring guard", () => {
       releaseWorkflow,
       portableAssetsWorkflow,
       mutationSecurityWorkflow,
-      codspeedPolicy,
     ].join("\n");
     const nodeSetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
     const verificationCount =
@@ -226,10 +221,10 @@ describe("CI test/gate wiring guard", () => {
     // 17 -> 20 with the three coverage suite jobs Issue #2704 split out of `coverage-sonar`,
     // then 20 -> 22 with the credential-free macOS qualification and protected sealing lanes,
     // then 22 -> 23 with the diff-scoped semantic-duplication lane, 23 -> 24 when the secret scan
-    // adopted the governed runtime, and 24 -> 25 with live CodSpeed policy enforcement.
+    // adopted the governed runtime. The retired hosted performance policy no longer adds a lane.
     // The load-bearing assertion is the pairing below: every Node lane, old or new, verifies the
     // governed toolchain.
-    expect(nodeSetupCount).toBe(25);
+    expect(nodeSetupCount).toBe(24);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
   });
@@ -253,27 +248,10 @@ describe("CI test/gate wiring guard", () => {
     });
   }
 
-  it("keeps the replacement quality gates in required ci and the retired bridge out", () => {
+  it("keeps the replacement quality gates in required ci", () => {
     const aggregate = ci.slice(ci.indexOf("  ci:"), ci.indexOf("\n  build-scan-sbom-smoke:"));
     expect(aggregate).toContain("      - semantic-duplication");
     expect(ci).not.toContain("npm run check:qodo-config");
-    expect(ci).not.toContain("  codspeed-policy:");
-    expect(codspeedPolicy).toContain("pull_request_target:");
-    expect(codspeedPolicy).toContain("branches: [dev]");
-    expect(codspeedPolicy).toContain(
-      "types: [opened, reopened, synchronize, ready_for_review, edited]",
-    );
-    expect(codspeedPolicy).toContain("QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha }}");
-    expect(codspeedPolicy).not.toContain("uses: actions/checkout@");
-    expect(codspeedPolicy).toContain("gh api graphql");
-    expect(codspeedPolicy).toContain("object(oid:$oid){... on Commit {oid tree {oid}}}");
-    expect(codspeedPolicy).toContain(
-      '"repos/${QUALITY_REPOSITORY}/git/trees/${QUALITY_TREE_SHA}?recursive=1"',
-    );
-    expect(codspeedPolicy).toContain("run: node scripts/check-reviewer-policy.mjs --preflight");
-    expect(codspeedPolicy).toContain("        run: node scripts/check-reviewer-policy.mjs\n");
-    expect(codspeedPolicy).toContain("run: node scripts/check-codspeed-policy.mjs");
-    expect(ci).not.toContain("greptile-findings:");
   });
 
   // GEN-SYNTH-COVERAGE-003: the root suite intentionally excludes keiko-ui (235 files) — they run in

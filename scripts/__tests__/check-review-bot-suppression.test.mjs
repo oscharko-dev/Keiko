@@ -47,12 +47,6 @@ describe("review bot suppression gate", () => {
       title: "Quality update",
     },
     { body: "@coderabbitai resolve", command: "@coderabbitai resolve", title: "Quality update" },
-    { body: "@greptileai disable", command: "@greptileai disable", title: "Quality update" },
-    {
-      body: "@greptileai ignore this pull request",
-      command: "@greptileai ignore this pull request",
-      title: "Quality update",
-    },
     { body: "Normal body", command: "@coderabbitai ignore", title: "@coderabbitai ignore" },
   ])("rejects review-suppression command $command without reflecting metadata", (metadata) => {
     const problems = validateReviewBotSuppression({

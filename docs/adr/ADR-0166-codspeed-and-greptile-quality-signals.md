@@ -2,11 +2,13 @@
 
 ## Status
 
+Superseded by ADR-0169 on 2026-08-02. This document is retained as historical evaluation evidence;
+none of its CodSpeed or Greptile integration surfaces remain active.
+
 Superseded for activation and review topology by
-[ADR-0167](ADR-0167-zero-cost-autonomous-quality-gates.md) on 2026-08-01. Its CodSpeed benchmark
-design and general configuration boundaries remain adopted. ADR-0168 reactivates the Greptile
-repository integration and makes emitted Greptile and CodeRabbit inline findings conditionally
-blocking.
+[ADR-0167](ADR-0167-zero-cost-autonomous-quality-gates.md) on 2026-08-01. ADR-0168 later reactivated
+Greptile and changed review settlement. ADR-0169 supersedes both states and removes every CodSpeed
+and Greptile integration surface.
 
 ## Amends
 

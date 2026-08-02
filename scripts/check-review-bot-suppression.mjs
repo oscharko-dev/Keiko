@@ -6,10 +6,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const MAX_EVENT_BYTES = 1_048_576;
-const SUPPRESSION_COMMANDS = [
-  /@coderabbitai\s+(?:ignore|pause|resolve)\b/iu,
-  /@greptileai\s+(?:disable|ignore|pause)\b/iu,
-];
+const SUPPRESSION_COMMAND = /@coderabbitai\s+(?:ignore|pause|resolve)\b/iu;
 
 function isObject(value) {
   return value !== null && !Array.isArray(value) && typeof value === "object";
@@ -39,7 +36,7 @@ function validatePullRequestMetadata(pullRequest) {
   const title = pullRequest.title ?? "";
   const body = pullRequest.body ?? "";
   const metadata = `${title}\n${body}`;
-  return SUPPRESSION_COMMANDS.some((pattern) => pattern.test(metadata))
+  return SUPPRESSION_COMMAND.test(metadata)
     ? ["pull-request metadata must not suppress an automatic review bot"]
     : [];
 }

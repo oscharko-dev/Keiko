@@ -36,7 +36,6 @@
   "sideEffects": false,
   "scripts": {
     "build:packages": "npm run check:typescript-toolchain && node scripts/build-packages.mjs",
-    "bench:codspeed": "node benchmarks/codspeed.mjs",
     "build": "npm run build:packages && node node_modules/@typescript/native/bin/tsc -p tsconfig.build.json",
     "keiko:start": "node dist/cli/index.js start",
     "keiko:stop": "node dist/cli/index.js stop",
@@ -140,8 +139,6 @@
     "check:knip": "node scripts/check-knip.mjs",
     "check:external-quality-config": "node scripts/check-external-quality-config.mjs",
     "check:review-bot-suppression": "node scripts/check-review-bot-suppression.mjs",
-    "check:reviewer-policy": "node scripts/check-reviewer-policy.mjs",
-    "check:codspeed-policy": "node scripts/check-codspeed-policy.mjs",
     "check:semantic-duplication": "fallow dupes --mode semantic --min-tokens 100 --min-lines 10 --ignore-imports --format compact --fail-on-issues",
     "check:runtime-toolchain": "node scripts/check-runtime-toolchain.mjs",
     "check:typescript-toolchain": "node scripts/check-typescript-toolchain.mjs",

@@ -408,7 +408,7 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   `ci` · `workflow hygiene` · `Analyze (actions)` · `Analyze (javascript-typescript)` ·
   `Build, scan, SBOM, smoke` · `Review dependency diff (dev/main)` · `ui` ·
   `SonarCloud Code Analysis` · `Socket Security: Project Report` ·
-  `Socket Security: Pull Request Alerts` · `CodSpeed policy`.
+  `Socket Security: Pull Request Alerts`.
 
   `workflow hygiene` is one context running actionlint, the pinned-SHA grep, zizmor and the OSV
   lockfile scan as serial steps of one job (ADR-0159) — same tools, same pinned versions, same rule
@@ -417,15 +417,12 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   No human approving review is required for `dev`. CodeRabbit reviews every `dev` pull request and
   every subsequent push without auto-pause. Its status is not required because quota can omit a
   current-head review, but every emitted inline finding requests changes and blocks until repaired
-  and its conversation is resolved. Qodo and Keiko for Quality remain retired under ADR-0167. Greptile
-  follows the same quota-tolerant model under ADR-0168: it reviews every eligible update, has no
-  required provider status, and every emitted inline finding blocks until repaired and resolved.
-  CodSpeed performance reports are advisory because
-  shared-runner variance produced false regressions on unchanged benchmark inputs; its required
-  policy context still prevents dashboard threshold drift. Sonar remains independently required and
-  revalidated inside `ci`. Full mutation and reference-machine performance evidence run outside the
-  PR critical path; fast OSS duplicate, secret, and deterministic performance proxies run inside
-  `ci` in parallel.
+  and its conversation is resolved. Qodo and Keiko for Quality remain retired under ADR-0167.
+  The hosted performance dashboard and quota-paced reviewer evaluated in ADR-0169 are fully
+  retired: neither has repository configuration, an installed App, a workflow, or a protected
+  context. Sonar remains independently required and revalidated inside `ci`. Full mutation and
+  reference-machine performance evidence run outside the PR critical path; fast OSS duplicate,
+  secret, and deterministic performance proxies run inside `ci` in parallel.
 
 - **GitHub Actions are pinned to full 40-hex commit SHAs** with a version comment. A tag or
   branch ref (`@v4`) fails the pinned-SHA step of `workflow hygiene`. Keep the SHA-plus-comment
