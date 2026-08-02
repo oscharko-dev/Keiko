@@ -111,6 +111,15 @@ something: only a run executing a protected ref's own workflow file can hold the
 that, the action still re-derives every entry's digests on load — integrity on top of
 authenticity, not instead of it.
 
+Store identity carries a fourth dimension beside pull request, profile hash, and model identity:
+the reviewer's pinned commit, because a wrapper release can change review or sanitization
+semantics without changing the store's format. GitHub forbids an expression in `uses:`, so the
+pin is necessarily a literal and the workflow declares it once as the source of truth; a
+best-effort parse of the pinned step cross-checks that declaration. Neither may fail the job.
+A disagreement, or a pin the parse cannot confirm, disables the STORE for that run — a
+full-price review with the reviewer intact — because an outage of the reviewer costs more than
+a lost cache, and replaying under an unconfirmed identity costs more than not replaying at all.
+
 The artifact is also an untrusted byte stream until proven otherwise, so both extraction sites —
 the consumer's restore step and the detached signer's fetch — gate the archive itself, not only
 its provenance: central-directory bounds first (25 MiB expanded total, at most eight entries),

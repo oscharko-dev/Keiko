@@ -98,6 +98,7 @@ jobs:
       store-name: ${{ steps.store-identity.outputs.name }}
       action-sha: ${{ steps.store-identity.outputs.action-sha }}
       profile-hash: ${{ steps.store-identity.outputs.profile-hash }}
+      store-enabled: ${{ steps.store-identity.outputs.store-enabled }}
     steps:
       # Check out the TRUSTED BASE. Never `github.event.pull_request.head.sha`: under
       # pull_request_target that would place candidate-controlled files on disk in a job that holds
@@ -144,32 +145,47 @@ jobs:
           PROFILE_HASH: ${{ hashFiles('.github/keiko-for-quality.json') }}
           MODEL_ID: ${{ vars.KEIKO_QUALITY_MODEL_ID }}
           MODEL_PROTOCOL: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
+          # The declared pin — the single source of truth for store identity. It duplicates the
+          # Review step's `uses:` value because GitHub forbids an expression there, so a literal
+          # is unavoidable; ADVANCE BOTH TOGETHER. The consistency check below is what makes that
+          # duplication safe.
+          ACTION_PIN: 3e458cdc86eb102b3a06a7dfb161d3c0f12e8364 # keep in sync with Review's uses:
         run: |
-          # The action pin is read from THIS workflow file in the trusted-base checkout — the one
-          # place it cannot drift from what actually executes; a dedicated env would reintroduce
-          # exactly that drift (env says A, uses: executes B, stores partition under A). It
-          # partitions the store because a wrapper release can change review or sanitization
-          # SEMANTICS without changing the store's format. Extracted with POSIX awk anchored on
-          # the uncommented `uses:` key; a YAML-parsing variant was reverted in review, because
-          # python3+PyYAML is an undeclared runner-image dependency whose loss would turn every
-          # review into an outage on the common path (and a column-zero heredoc cannot live
-          # inside this block scalar at all). The length guard below turns any formatting drift
-          # into a loud failure instead of a silent identity shift — maintain the extractor
-          # together with the `uses:` line.
-          ACTION_SHA="$(awk '$0 !~ /^[[:space:]]*#/ && /uses:.*oscharko-dev\/Keiko-for-Quality@/ {
+          # The pin partitions the store because a wrapper release can change review or
+          # sanitization SEMANTICS without changing the store's format. Three earlier rounds
+          # derived it by reading this file (grep, then a YAML parse, then awk); two independent
+          # reviewers converged on the same objection, and they are right: an extraction tied to
+          # text layout makes a benign reformat — or moving the call into a reusable workflow —
+          # an OUTAGE OF THE REVIEWER, which costs far more than a lost cache. Identity therefore
+          # comes from the declared value above, and the parse survives only as a best-effort
+          # CROSS-CHECK against the drift the declaration reintroduces (env says A, uses: runs B).
+          # Neither path may fail the job: a disagreement or an unreadable pin disables the STORE
+          # for this run — full-price review, reviewer intact — and never blocks integration.
+          STORE_ENABLED=true
+          if [ "${#ACTION_PIN}" -ne 40 ]; then
+            echo "::warning::declared ACTION_PIN is not a 40-hex sha — running without the review store"
+            STORE_ENABLED=false
+          fi
+          PARSED="$(awk '$0 !~ /^[[:space:]]*#/ && /uses:.*oscharko-dev\/Keiko-for-Quality@/ {
               sub(/.*oscharko-dev\/Keiko-for-Quality@/, ""); sub(/[^0-9a-f].*$/, ""); print; exit
-            }' .github/workflows/keiko-for-quality.yml)"
-          if [ "${#ACTION_SHA}" -ne 40 ]; then
-            echo "::error::no 40-hex Keiko-for-Quality pin found in this workflow — the uses: line changed shape; fix the extractor alongside it"
-            exit 1
+            }' .github/workflows/keiko-for-quality.yml || true)"
+          if [ -z "${PARSED}" ]; then
+            # Cannot confirm the declaration against what executes. Replaying under a possibly
+            # stale identity is the one outcome worse than not replaying at all.
+            echo "::warning::could not read the pinned uses: line to confirm ACTION_PIN — running without the review store"
+            STORE_ENABLED=false
+          elif [ "${PARSED}" != "${ACTION_PIN}" ]; then
+            echo "::warning::ACTION_PIN disagrees with the pinned uses: line — advance both together; running without the review store"
+            STORE_ENABLED=false
           fi
           IDENTITY="$(printf 'profile=%s model=%s protocol=%s action=%s' \
-              "${PROFILE_HASH}" "${MODEL_ID}" "${MODEL_PROTOCOL}" "${ACTION_SHA}" \
+              "${PROFILE_HASH}" "${MODEL_ID}" "${MODEL_PROTOCOL}" "${ACTION_PIN}" \
             | openssl dgst -sha256 -r | cut -c1-16)"
           {
             echo "name=keiko-review-store-pr${PR_NUMBER}-${IDENTITY}"
-            echo "action-sha=${ACTION_SHA}"
+            echo "action-sha=${ACTION_PIN}"
             echo "profile-hash=${PROFILE_HASH}"
+            echo "store-enabled=${STORE_ENABLED}"
           } >> "${GITHUB_OUTPUT}"
 
       # The directory the store lives in. NOT dot-prefixed: actions/upload-artifact excludes
@@ -197,6 +213,7 @@ jobs:
       # full review; memoization is an optimization, never a dependency.
       - name: Locate previous review store
         id: locate
+        if: steps.store-identity.outputs.store-enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_NAME: ${{ steps.store-identity.outputs.name }}
@@ -423,7 +440,7 @@ jobs:
       # step of THIS job would expose it to that process. The unsigned artifact is worthless to
       # an attacker (they can fabricate unsigned stores anyway) and lives one day.
       - name: Hand off unsigned store
-        if: steps.review.outputs.outcome == 'complete'
+        if: steps.review.outputs.outcome == 'complete' && steps.store-identity.outputs.store-enabled == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: keiko-review-store-unsigned-${{ github.run_id }}
@@ -445,7 +462,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: review
-    if: needs.review.outputs.outcome == 'complete'
+    if: needs.review.outputs.outcome == 'complete' && needs.review.outputs.store-enabled == 'true'
     permissions:
       actions: read
     environment: keiko-for-quality
