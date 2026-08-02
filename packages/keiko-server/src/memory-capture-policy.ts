@@ -214,5 +214,7 @@ export function promoteEligibleMemoryRecord(record: MemoryRecord): MemoryRecord 
   const plan = planMemoryMaintenance([record], EMPTY_CAPTURE_ACCESS_STATS, {
     nowMs: record.createdAt,
   });
-  return plan.promote.includes(record.id) ? { ...record, status: "accepted" } : record;
+  return plan.promote.includes(record.id)
+    ? { ...record, status: "accepted", updatedAt: record.createdAt }
+    : record;
 }

@@ -1005,8 +1005,8 @@ function folderCitationCount(
 
 export function hashString32(value: string): string {
   let hash = 0x811c9dc5;
-  for (const codeUnit of value.split("")) {
-    hash ^= codeUnit.codePointAt(0) ?? 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.at(index)?.codePointAt(0) ?? 0;
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");

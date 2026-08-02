@@ -43,6 +43,12 @@ function makeTombstone(
 const userScope: MemoryScope = { kind: "user", userId: "u-1" as UserId };
 const workspaceScope: MemoryScope = { kind: "workspace", workspaceId: "u-1" as WorkspaceId };
 
+function requiredFirstTombstone(page: ReturnType<typeof listTombstonesPageRows>): MemoryTombstone {
+  const tombstone = page.tombstones[0];
+  if (tombstone === undefined) throw new Error("expected a tombstone page row");
+  return tombstone;
+}
+
 describe("tombstones", () => {
   it("rejects unbounded public tombstone page limits before SQL", () => {
     const dir = freshFactoryDir();
@@ -170,6 +176,47 @@ describe("tombstones", () => {
       total: 1,
       tombstones: [{ id: "large-scope-ledger" }],
     });
+    db.close();
+  });
+
+  it("keeps global keyset order across independently queried scope chunks", () => {
+    const db = openTestDb();
+    const scopes = Array.from({ length: 201 }, (_, index): MemoryScope => ({
+      kind: "user",
+      userId: `chunked-user-${String(index)}` as UserId,
+    }));
+    for (const [id, scopeCoordinate, forgottenAt] of [
+      ["newest-later-chunk", "chunked-user-150", 300],
+      ["middle-first-chunk", "chunked-user-50", 200],
+      ["oldest-final-chunk", "chunked-user-200", 100],
+    ] as const) {
+      insertTombstoneRow(
+        db,
+        makeTombstone({
+          id,
+          memoryId: `${id}-memory` as MemoryId,
+          scopeCoordinate,
+          forgottenAt,
+        }),
+        TEST_CIPHER,
+      );
+    }
+
+    const first = listTombstonesPageRows(db, scopes, TEST_CIPHER, 1);
+    const firstRow = requiredFirstTombstone(first);
+    expect(firstRow.id).toBe("newest-later-chunk");
+    const second = listTombstonesPageRows(db, scopes, TEST_CIPHER, 1, {
+      forgottenAt: firstRow.forgottenAt,
+      id: firstRow.id,
+    });
+    const secondRow = requiredFirstTombstone(second);
+    expect(secondRow.id).toBe("middle-first-chunk");
+    const third = listTombstonesPageRows(db, scopes, TEST_CIPHER, 1, {
+      forgottenAt: secondRow.forgottenAt,
+      id: secondRow.id,
+    });
+    expect(third.tombstones.map((row) => row.id)).toEqual(["oldest-final-chunk"]);
+    db.close();
   });
 
   it("inserts and lists in forgotten_at ASC order", () => {

@@ -355,8 +355,8 @@ function releaseFileLock(lockPath: string, sessionId: string): void {
   try {
     const record = readLock(lockPath);
     if (record?.sessionId === sessionId) {
-      removeChildPid(lockPath, sessionId);
       unlinkSync(lockPath);
+      removeChildPid(lockPath, sessionId);
     }
   } catch {
     // Malformed or inaccessible locks fail closed; only the owner session may remove the lock.

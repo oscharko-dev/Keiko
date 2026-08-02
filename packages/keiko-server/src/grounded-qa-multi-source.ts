@@ -972,16 +972,15 @@ async function applyMultiSourceEntailment(
   );
 }
 
-interface PersistedMultiSourceAnswer {
-  readonly answer: GroundedAnswer;
+interface PersistedMultiSourceExchange {
+  readonly userMessageId: string;
   readonly assistantMessageId: string;
 }
 
-function persistMultiSourceAnswer(
+function persistMultiSourceExchange(
   ctx: MultiSourceAskInput,
   assistant: GroundedAnswerResult,
-  answer: GroundedAnswer,
-): PersistedMultiSourceAnswer {
+): PersistedMultiSourceExchange {
   const [userMessage, assistantMessage] = persistGroundedExchange(
     ctx.deps,
     ctx.chat.id,
@@ -990,27 +989,9 @@ function persistMultiSourceAnswer(
     ctx.userMessage,
   );
   return {
-    answer: {
-      ...answer,
-      userMessageId: userMessage.id,
-      assistantMessageId: assistantMessage.id,
-    },
+    userMessageId: userMessage.id,
     assistantMessageId: assistantMessage.id,
   };
-}
-
-function assembleUnpersistedMultiSourceAnswer(
-  ctx: MultiSourceAskInput,
-  retrieved: readonly RetrievedSource[],
-  skipped: readonly SkippedScope[],
-  assistant: GroundedAnswerResult,
-  abstained: boolean,
-): GroundedAnswer {
-  return assembleMultiSourceAnswer(ctx, retrieved, skipped, assistant, {
-    userMessageId: "pending",
-    assistantMessageId: "pending",
-    abstained,
-  });
 }
 
 function recordMultiSourceAnswer(
@@ -1057,23 +1038,20 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
     return assistant;
   }
   ensureNotCancelled(ctx.signal);
+  const persisted = persistMultiSourceExchange(ctx, assistant);
   const answer = await applyMultiSourceEntailment(
     ctx,
-    assembleUnpersistedMultiSourceAnswer(ctx, retrieved, skipped, assistant, abstained),
+    assembleMultiSourceAnswer(ctx, retrieved, skipped, assistant, {
+      ...persisted,
+      abstained,
+    }),
     assistant,
     retrieved,
     abstained,
   );
   ensureNotCancelled(ctx.signal);
-  const persisted = persistMultiSourceAnswer(ctx, assistant, answer);
-  recordMultiSourceAnswer(
-    ctx,
-    retrieved,
-    persisted.answer,
-    persisted.assistantMessageId,
-    abstained,
-  );
-  return { status: 200, body: persisted.answer };
+  recordMultiSourceAnswer(ctx, retrieved, answer, persisted.assistantMessageId, abstained);
+  return { status: 200, body: answer };
 }
 
 function isRouteResult(

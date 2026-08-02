@@ -479,11 +479,13 @@ function CapabilityApplyConfirmDialog({
 function CapabilityDisagreementActions({
   model,
   report,
+  observedGeneration,
   onApplied,
 }: {
   readonly model: ModelCapability;
   readonly report: GatewayReadinessReport;
-  readonly onApplied: (model: ModelCapability) => void;
+  readonly observedGeneration: number;
+  readonly onApplied: (model: ModelCapability, observedGeneration: number) => void;
 }): ReactNode {
   const t = useTranslate();
   const [applying, setApplying] = useState(false);
@@ -499,7 +501,7 @@ function CapabilityDisagreementActions({
         disagreements.map(({ field, observed }) => [field, observed]),
       ) as VerifiedGatewayCapabilityFields;
       const response = await applyGatewayVerifiedCapabilities(model.id, fields);
-      onApplied(response.model);
+      onApplied(response.model, observedGeneration);
     } catch (error) {
       setApplyError(readinessErrorMessage(error, t));
     } finally {
@@ -597,11 +599,13 @@ function ReadinessReportCopyButton({
 function ReadinessSummary({
   model,
   state,
+  observedGeneration,
   onCapabilityApplied,
 }: {
   readonly model: ModelCapability;
   readonly state: ReadinessRunState | undefined;
-  readonly onCapabilityApplied: (model: ModelCapability) => void;
+  readonly observedGeneration: number;
+  readonly onCapabilityApplied: (model: ModelCapability, observedGeneration: number) => void;
 }): ReactNode {
   const t = useTranslate();
   if (state === undefined || state.status === "idle") return null;
@@ -674,6 +678,7 @@ function ReadinessSummary({
           <CapabilityDisagreementActions
             model={model}
             report={report}
+            observedGeneration={observedGeneration}
             onApplied={onCapabilityApplied}
           />
         </div>
@@ -700,13 +705,15 @@ function modelStatusTitle(
 function ModelCapabilityRow({
   model,
   readiness,
+  observedGeneration,
   onRunReadiness,
   onCapabilityApplied,
 }: {
   readonly model: ModelCapability;
   readonly readiness: ReadinessRunState | undefined;
+  readonly observedGeneration: number;
   readonly onRunReadiness: (modelId: string, deep: boolean) => void;
-  readonly onCapabilityApplied: (model: ModelCapability) => void;
+  readonly onCapabilityApplied: (model: ModelCapability, observedGeneration: number) => void;
 }): ReactNode {
   const t = useTranslate();
   const conversationEligible = isConversationEligibleModel(model);
@@ -738,6 +745,7 @@ function ModelCapabilityRow({
         <ReadinessSummary
           model={model}
           state={readiness}
+          observedGeneration={observedGeneration}
           onCapabilityApplied={onCapabilityApplied}
         />
       </div>
@@ -1361,13 +1369,14 @@ interface ModelsTabContentProps {
   readonly modelError: string | undefined;
   readonly loadingModels: boolean;
   readonly readiness: Record<string, ReadinessRunState>;
+  readonly configGeneration: number;
   readonly setupOpen: boolean;
   readonly config: SafeGatewayConfig | null;
   readonly onOpenSetup: () => void;
   readonly onCloseSetup: () => void;
   readonly onRetry: () => void;
   readonly onRunReadiness: (modelId: string, deep: boolean) => void;
-  readonly onCapabilityApplied: (model: ModelCapability) => void;
+  readonly onCapabilityApplied: (model: ModelCapability, observedGeneration: number) => void;
 }
 
 // #2723 (S3358): the models-list body was a nested ternary (loadingModels ? … :
@@ -1377,6 +1386,7 @@ function renderModelsListBody({
   models,
   gatewayConfigured,
   readiness,
+  configGeneration,
   onRunReadiness,
   onCapabilityApplied,
   t,
@@ -1385,8 +1395,9 @@ function renderModelsListBody({
   readonly models: readonly ModelCapability[];
   readonly gatewayConfigured: boolean;
   readonly readiness: Record<string, ReadinessRunState>;
+  readonly configGeneration: number;
   readonly onRunReadiness: (modelId: string, deep: boolean) => void;
-  readonly onCapabilityApplied: (model: ModelCapability) => void;
+  readonly onCapabilityApplied: (model: ModelCapability, observedGeneration: number) => void;
   readonly t: I18nTranslate;
 }): ReactNode {
   if (loadingModels) {
@@ -1412,6 +1423,7 @@ function renderModelsListBody({
           key={model.id}
           model={model}
           readiness={readiness[model.id]}
+          observedGeneration={configGeneration}
           onRunReadiness={onRunReadiness}
           onCapabilityApplied={onCapabilityApplied}
         />
@@ -1428,6 +1440,7 @@ function ModelsTabContent({
   modelError,
   loadingModels,
   readiness,
+  configGeneration,
   setupOpen,
   config,
   onOpenSetup,
@@ -1517,6 +1530,7 @@ function ModelsTabContent({
         models,
         gatewayConfigured,
         readiness,
+        configGeneration,
         onRunReadiness,
         onCapabilityApplied,
         t,
@@ -1692,6 +1706,7 @@ export function SettingsPanel({
             modelError={modelError}
             loadingModels={loadingModels}
             readiness={readiness}
+            configGeneration={configGeneration}
             setupOpen={setupOpen}
             config={config}
             onOpenSetup={() => setSetupOpen(true)}
@@ -1700,13 +1715,13 @@ export function SettingsPanel({
             onRunReadiness={(modelId, deep) => {
               void handleRunReadiness(modelId, deep);
             }}
-            onCapabilityApplied={(updatedModel) => {
-              if (configGenerationRef.current !== configGeneration) return;
+            onCapabilityApplied={(updatedModel, observedGeneration) => {
+              if (configGenerationRef.current !== observedGeneration) return;
               setModels((current) =>
                 current.map((model) => (model.id === updatedModel.id ? updatedModel : model)),
               );
               setReadinessLedger((ledger) =>
-                clearReadinessRun(ledger, ledger.generation, updatedModel.id),
+                clearReadinessRun(ledger, observedGeneration, updatedModel.id),
               );
               notifyGatewayConfigUpdated();
               setReloadTick((tick) => tick + 1);

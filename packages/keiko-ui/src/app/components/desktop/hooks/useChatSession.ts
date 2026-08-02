@@ -34,6 +34,7 @@ import {
   fetchProjects,
   patchChatMessage,
   projectResponseWarningMessage,
+  resetModelRequestCache,
   regenerateDesktopChat,
   sendDesktopChat,
   sendDesktopChatStream,
@@ -2528,6 +2529,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     let cancelled = false;
     const refreshModels = (): void => {
       invalidateSharedBootstrap();
+      resetModelRequestCache();
       void loadRefreshedSessionModels({
         isCancelled: () => cancelled,
         setError,

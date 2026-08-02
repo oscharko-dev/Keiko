@@ -14,6 +14,7 @@ import {
   fetchModels,
   fetchProjects,
   regenerateDesktopChat,
+  resetModelRequestCache,
   sendDesktopChat,
   uploadConversationAttachment,
 } from "@/lib/api";
@@ -42,6 +43,7 @@ import {
   clearCanonicalVoiceHasherForTests,
   prepareCanonicalVoiceHasher,
 } from "./canonical-voice-hasher";
+import { notifyGatewayConfigUpdated } from "../widgets/shared/gatewaySetupBus";
 
 beforeAll(async () => {
   await prepareCanonicalVoiceHasher();
@@ -82,6 +84,7 @@ vi.mock("@/lib/api", () => ({
   fetchProjects: vi.fn(),
   patchChatMessage: vi.fn(),
   regenerateDesktopChat: vi.fn(),
+  resetModelRequestCache: vi.fn(),
   sendDesktopChat: vi.fn(),
   sendDesktopChatStream: vi.fn(),
   uploadConversationAttachment: vi.fn().mockResolvedValue({
@@ -549,6 +552,29 @@ describe("useChatSession bootstrap", () => {
     await waitFor(() =>
       expect(result.current.chats.some((item) => item.id === "chat-new")).toBe(false),
     );
+  });
+
+  it("drops the API model cache before refreshing after a gateway update", async () => {
+    vi.mocked(fetchModels)
+      .mockResolvedValueOnce({ models: [model({ id: "chat-before" })] })
+      .mockResolvedValueOnce({ models: [model({ id: "chat-after" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() =>
+      expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-before"]),
+    );
+
+    act(() => {
+      notifyGatewayConfigUpdated();
+    });
+
+    await waitFor(() => expect(resetModelRequestCache).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-after"]),
+    );
+    expect(fetchModels).toHaveBeenCalledTimes(2);
   });
 
   // 0.3.0 release audit — the chat list carries trashed (status "closed") conversations so the

@@ -1258,6 +1258,16 @@ function capturedMemoryBody(
   return memory.body;
 }
 
+function captureCandidateForMode(
+  record: MemoryRecord,
+  mode: CodingWorkbenchMode,
+  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+): MemoryRecord {
+  return memoryCaptureAutoAcceptEligible(mode, outcome)
+    ? promoteEligibleMemoryRecord(record)
+    : record;
+}
+
 async function candidateActionFromOutcome(
   outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
   deps: UiHandlerDeps,
@@ -1275,9 +1285,7 @@ async function candidateActionFromOutcome(
   if (isSuppressedByForgetTombstone(deps.memoryVault, record)) {
     return { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON };
   }
-  const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
-    ? promoteEligibleMemoryRecord(record)
-    : record;
+  const candidate = captureCandidateForMode(record, mode, outcome);
   const persisted = persistCapturedMemory(deps.memoryVault, candidate, canonicalCapture);
   const inserted = persisted.memory;
   if (persisted.inserted && inserted.status === "accepted") {

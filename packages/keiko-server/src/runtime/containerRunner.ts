@@ -373,17 +373,11 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
 
   public readonly listCatalog = async (projectId: string): Promise<ContainerTaskCatalog> => {
     const capability = await this.resolveCapability(projectId);
-    const availableEngines = new Set(
-      capability.engines
-        .filter((engine) => engine.state === "available")
-        .map((engine) => engine.engine),
-    );
-    const tasks = this.catalog.filter((task) => availableEngines.has(task.engine));
     return {
       schemaVersion: CONTAINER_RUNTIME_SCHEMA_VERSION,
       projectId,
       engineAvailable: capability.anyAvailable,
-      tasks,
+      tasks: capability.anyAvailable ? this.catalog : [],
     };
   };
 

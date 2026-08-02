@@ -621,6 +621,13 @@ describe("handleMemoryCaptureFromConversation", () => {
     expect(asJson(result).outcomes).toEqual([
       expect.objectContaining({ kind: "candidate", status: "proposed" }),
     ]);
+    const proposalId = (
+      asJson(result).outcomes as readonly {
+        readonly proposal?: { readonly proposalId: string };
+      }[]
+    )[0]?.proposal?.proposalId;
+    expect(vault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
+    expect(listAllMemories(vault, { status: ["accepted"] })).toHaveLength(0);
   });
 
   // eslint-disable-next-line complexity

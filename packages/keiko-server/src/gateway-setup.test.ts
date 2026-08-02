@@ -3369,6 +3369,48 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("materializes implicit legacy capabilities when workflow eligibility is updated", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-coding-legacy-");
+    let verificationCalls = 0;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-coding-legacy-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => {
+        verificationCalls += 1;
+        return Promise.resolve(modelIds);
+      },
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "legacy-chat",
+            baseUrl: "https://llm-gateway.example.com/v1",
+            apiKey: "legacy-token",
+          },
+        ],
+      }),
+      true,
+    );
+    expect(requiredGatewayConfig(deps).capabilities).toBeUndefined();
+
+    const updated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, workflowEligibleModelIds: ["legacy-chat"] }),
+      deps,
+    );
+
+    expect(updated.status).toBe(200);
+    expect(requiredCapability(requiredGatewayConfig(deps), "legacy-chat")).toMatchObject({
+      workflowEligible: true,
+    });
+    expect(verificationCalls).toBe(0);
+    deps.store.close();
+  });
+
   it("uses LiteLLM model info to persist embeddings while smoke-testing only chat models", async () => {
     const uiDir = await tempDir("keiko-gw-ui-litellm-");
     const evidenceDir = await tempDir("keiko-gw-ev-litellm-");

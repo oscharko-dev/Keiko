@@ -15,7 +15,7 @@
 // Every response is redacted through `deps.redactor` before serialisation to honour D9.
 
 import type { IncomingMessage } from "node:http";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   createMemoryVault,
   MemoryStorageError,
@@ -152,14 +152,23 @@ function isBoundedCursorString(value: unknown, max: number): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= max;
 }
 
-function isTombstoneCursorRecord(value: unknown): value is MemoryTombstoneLedgerCursor {
+interface TombstoneRouteCursor extends MemoryTombstoneLedgerCursor {
+  readonly scopeDigest: string;
+}
+
+function isTombstoneCursorRecord(value: unknown): value is TombstoneRouteCursor {
   if (!isRecord(value)) return false;
   if (!Number.isSafeInteger(value.forgottenAt) || (value.forgottenAt as number) < 0) return false;
-  return isBoundedCursorString(value.id, MAX_TOMBSTONE_ID_CHARS);
+  return (
+    isBoundedCursorString(value.id, MAX_TOMBSTONE_ID_CHARS) &&
+    typeof value.scopeDigest === "string" &&
+    /^[0-9a-f]{64}$/u.test(value.scopeDigest)
+  );
 }
 
 function parseTombstoneCursor(
   raw: string | null,
+  scopeDigest: string,
 ): MemoryTombstoneLedgerCursor | RouteResult | undefined {
   if (raw === null) return undefined;
   if (raw.length === 0 || raw.length > MAX_TOMBSTONE_CURSOR_CHARS || !/^[\w-]+$/u.test(raw)) {
@@ -167,19 +176,20 @@ function parseTombstoneCursor(
   }
   try {
     const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as unknown;
-    if (!isTombstoneCursorRecord(parsed)) {
+    if (!isTombstoneCursorRecord(parsed) || parsed.scopeDigest !== scopeDigest) {
       return invalidTombstoneCursorResult();
     }
-    return parsed;
+    return { forgottenAt: parsed.forgottenAt, id: parsed.id };
   } catch {
     return invalidTombstoneCursorResult();
   }
 }
 
-function tombstoneCursor(tombstone: MemoryTombstone): string {
-  const cursor: MemoryTombstoneLedgerCursor = {
+function tombstoneCursor(tombstone: MemoryTombstone, scopeDigest: string): string {
+  const cursor: TombstoneRouteCursor = {
     forgottenAt: tombstone.forgottenAt,
     id: tombstone.id,
+    scopeDigest,
   };
   return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
 }
@@ -688,13 +698,17 @@ export function handleListMemoryTombstones(ctx: RouteContext, deps: UiHandlerDep
     DEFAULT_LIST_LIMIT,
     MAX_LIST_LIMIT,
   );
-  const after = parseTombstoneCursor(ctx.url.searchParams.get("cursor"));
+  const authorizedScopes = authorizedMemoryScopes(deps, vault);
+  const scopeDigest = authorizedScopeDigest(authorizedScopes);
+  const after = parseTombstoneCursor(ctx.url.searchParams.get("cursor"), scopeDigest);
   if (isRouteResult(after)) return after;
-  const page = vault.listTombstonesPage(authorizedMemoryScopes(deps, vault), limit + 1, after);
+  const page = vault.listTombstonesPage(authorizedScopes, limit + 1, after);
   const tombstones = page.tombstones.slice(0, limit);
   const last = tombstones.at(-1);
   const nextCursor =
-    page.tombstones.length > limit && last !== undefined ? tombstoneCursor(last) : null;
+    page.tombstones.length > limit && last !== undefined
+      ? tombstoneCursor(last, scopeDigest)
+      : null;
   const projection = tombstones.map((tombstone) => ({
     id: tombstone.id,
     memoryId: tombstone.memoryId,
@@ -1132,6 +1146,13 @@ function authorizedMemoryScopes(
   vault: MemoryVaultStore,
 ): readonly MemoryScope[] {
   return deps.memoryAuthorization?.authorizedScopes() ?? vault.listMemoryScopes();
+}
+
+function authorizedScopeDigest(scopes: readonly MemoryScope[]): string {
+  const keys = [...new Set(scopes.map(scopeKey))].sort((left, right) =>
+    left.localeCompare(right, "en"),
+  );
+  return createHash("sha256").update(JSON.stringify(keys), "utf8").digest("hex");
 }
 
 function selectorScope(selector: ForgetSelector): MemoryScope | undefined {

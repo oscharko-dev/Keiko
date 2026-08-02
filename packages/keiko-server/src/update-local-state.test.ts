@@ -6,7 +6,6 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
-  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -256,14 +255,12 @@ describe("update runtime state and audit events", () => {
     expect(existsSync(leasePath)).toBe(false);
   });
 
-  it("quarantines an aged malformed remediation lease before continuing", () => {
+  it("quarantines a fresh malformed remediation lease before continuing", () => {
     const stateDir = makeStateDir();
     const actionId = "local-state-repair:memory-vault";
     const digest = createHash("sha256").update(actionId, "utf8").digest("hex");
     const leasePath = join(stateDir, "updates", "remediation-leases", `${digest}.json`);
     touch(leasePath, "{");
-    const oldTime = new Date(NOW - 60_000);
-    utimesSync(leasePath, oldTime, oldTime);
     const localState = createUpdateLocalStateManager({
       stateDir,
       now: () => NOW,
@@ -275,6 +272,30 @@ describe("update runtime state and audit events", () => {
     expect(release).toBeTypeOf("function");
     expect(existsSync(`${leasePath}.corrupt.2026-06-30T12-00-00-000Z`)).toBe(true);
     release?.();
+  });
+
+  it("never reclaims an aged remediation lease owned by this live process", () => {
+    const stateDir = makeStateDir();
+    const actionId = "local-state-repair:memory-vault";
+    const digest = createHash("sha256").update(actionId, "utf8").digest("hex");
+    const leasePath = join(stateDir, "updates", "remediation-leases", `${digest}.json`);
+    touch(
+      leasePath,
+      JSON.stringify({
+        pid: process.pid,
+        token: "current-process-lease",
+        acquiredAt: "2026-06-30T11:00:00.000Z",
+      }),
+    );
+    const localState = createUpdateLocalStateManager({
+      stateDir,
+      now: () => NOW,
+      pidAlive: () => true,
+      remediationLeaseStaleMs: 1_000,
+    });
+
+    expect(localState.acquireRemediationLease(actionId)).toBeUndefined();
+    expect(existsSync(leasePath)).toBe(true);
   });
 
   it("surfaces audit persistence failure without discarding recovery runtime state", () => {

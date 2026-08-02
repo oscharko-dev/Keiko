@@ -334,9 +334,11 @@ function remediationLeaseReclaimable(
   record: RemediationLeaseRecord | undefined,
   context: ManagerContext,
 ): boolean {
+  if (record === undefined) return true;
   const ageMs = remediationLeaseAgeMs(path, record, context.now);
   if (ageMs === undefined || ageMs < context.remediationLeaseStaleMs) return false;
-  if (record === undefined || !context.pidAlive(record.pid)) return true;
+  if (!context.pidAlive(record.pid)) return true;
+  if (record.pid === process.pid) return false;
   // A live PID may be a reused process identity. Give a genuine owner a second full lease window,
   // then bound the orphan instead of blocking remediation forever.
   return ageMs >= context.remediationLeaseStaleMs * 2;
@@ -384,6 +386,26 @@ function releaseRemediationLease(path: string, token: string): void {
   }
 }
 
+function publishRemediationLease(path: string, record: RemediationLeaseRecord): void {
+  const draftPath = `${path}.${record.token}.tmp`;
+  writeFileSync(draftPath, JSON.stringify(record), {
+    encoding: "utf8",
+    flag: "wx",
+    mode: SNAPSHOT_FILE_MODE,
+  });
+  try {
+    // A hard link publishes the already-complete inode without replacing an existing owner. Readers
+    // can therefore treat malformed canonical files as abandoned without racing a partial write.
+    linkSync(draftPath, path);
+  } finally {
+    try {
+      unlinkSync(draftPath);
+    } catch {
+      // The canonical lease is authoritative; a private draft is safe to clean up later.
+    }
+  }
+}
+
 function acquireRemediationLease(
   context: ManagerContext,
   actionId: string,
@@ -393,15 +415,11 @@ function acquireRemediationLease(
   const token = randomUUID();
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      writeFileSync(
-        path,
-        JSON.stringify({ pid: process.pid, token, acquiredAt: nowIso(context.now) }),
-        {
-          encoding: "utf8",
-          flag: "wx",
-          mode: SNAPSHOT_FILE_MODE,
-        },
-      );
+      publishRemediationLease(path, {
+        pid: process.pid,
+        token,
+        acquiredAt: nowIso(context.now),
+      });
       return (): void => {
         releaseRemediationLease(path, token);
       };

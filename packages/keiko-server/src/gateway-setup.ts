@@ -3396,19 +3396,15 @@ function saveExistingConfigUpdate(
   const updatedCurrent = request.workflowEligibleModelIdsConfigured
     ? {
         ...current,
-        ...(current.capabilities === undefined
-          ? {}
-          : {
-              capabilities: current.capabilities.map((capability) => ({
-                ...capability,
-                ...workflowCapabilityFields(
-                  capability.id,
-                  capability,
-                  capability,
-                  request.workflowEligibleModelIds,
-                ),
-              })),
-            }),
+        capabilities: listConfiguredCapabilities(current).map((capability) => ({
+          ...capability,
+          ...workflowCapabilityFields(
+            capability.id,
+            capability,
+            capability,
+            request.workflowEligibleModelIds,
+          ),
+        })),
       }
     : current;
   const rawConfig = applyVoiceProviders(

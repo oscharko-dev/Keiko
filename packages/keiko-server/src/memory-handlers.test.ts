@@ -233,6 +233,18 @@ describe("memory handlers", () => {
     expect(JSON.stringify(result.body)).not.toContain("bodyHash");
   });
 
+  it("accepts the advertised maximum tombstone page size with its look-ahead row", () => {
+    const result = handleListMemoryTombstones(
+      makeCtx("/api/memory/tombstones?limit=200", {}),
+      tombstoneDeps(makeVault()),
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: { limit: 200, nextCursor: null, tombstones: [] },
+    });
+  });
+
   it("redacts tombstone scope and reviewer identifiers before the BFF response", () => {
     const vault = makeVault();
     const scope = {
@@ -352,6 +364,42 @@ describe("memory handlers", () => {
     );
 
     expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+  });
+
+  it("rejects a tombstone cursor after the authorized scope set changes", () => {
+    const vault = makeVault();
+    const firstScope = { kind: "user" as const, userId: userId("scope-a") };
+    const secondScope = { kind: "user" as const, userId: userId("scope-b") };
+    for (const [id, scope, nowMs] of [
+      ["scope-a-new", firstScope, 300],
+      ["scope-a-old", firstScope, 200],
+      ["scope-b-new", secondScope, 400],
+    ] as const) {
+      vault.insertMemory(makeMemory(id, `secret-${id}`, { scope }));
+      vault.deleteMemory(memoryId(id), {
+        tombstone: true,
+        forgetterSurface: "memory-center",
+        nowMs,
+      });
+    }
+    let authorized = [firstScope] as readonly (typeof firstScope | typeof secondScope)[];
+    const deps = makeDeps({
+      memoryVault: vault,
+      memoryAuthorization: {
+        reviewerId: reviewerId("tombstone-auditor"),
+        authorizedScopes: () => authorized,
+      },
+    });
+    const first = handleListMemoryTombstones(makeCtx("/api/memory/tombstones?limit=1", {}), deps);
+    const cursor = String(asJson(first).nextCursor);
+    authorized = [firstScope, secondScope];
+
+    const resumed = handleListMemoryTombstones(
+      makeCtx(`/api/memory/tombstones?limit=1&cursor=${cursor}`, {}),
+      deps,
+    );
+
+    expect(resumed).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
   });
 
   it("fails closed when tombstone audit authorization is unavailable", () => {
