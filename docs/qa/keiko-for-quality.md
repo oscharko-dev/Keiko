@@ -22,6 +22,18 @@ from any token holding `pull-requests: write`, which both the App token and `GIT
 platform does not withhold it — the pinned action's behaviour does, and that behaviour is pinned by
 a test upstream. When assessing a compromised or defective action, assume the capability exists.
 
+## Activation record
+
+Activated on 2026-08-02 against Keiko for Quality `v0.4.0`
+(`80bda11eec1e113573c09878b91a885981211009`), model `gpt-5.4` over an OpenAI-compatible endpoint.
+
+The delivery freeze in step 4 was **not** applied, and the reason is recorded rather than left to
+inference: at the moment of activation there were zero open pull requests against `dev`. The freeze
+and both `hold.sh` runs exist to stop an already-armed pull request integrating unreviewed in the
+window around the switch; with no open pull request there was nothing to hold, nothing to disarm and
+nothing to retrigger. The procedure below remains the required one for every later activation or
+re-enable, when that will not be true.
+
 ## Provisioning
 
 Until `KEIKO_QUALITY_ENABLED` is `true`, the job does not run at all — that variable, not the
