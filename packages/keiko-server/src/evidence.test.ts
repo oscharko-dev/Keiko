@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
-import { persistWorkflowEvidence, type RunIdentity } from "./evidence.js";
+import { persistVerifyEvidence, persistWorkflowEvidence, type RunIdentity } from "./evidence.js";
 
 const identity: RunIdentity = {
   runId: "ui-run-1",
@@ -34,5 +34,21 @@ describe("persistWorkflowEvidence", () => {
     if (loaded === undefined) throw new Error("Expected persisted evidence.");
     expect(loaded.patch?.redactedDiff).toBeDefined();
     expect(loaded.patch?.redactedDiff).not.toContain(literalSecret);
+  });
+});
+
+describe("persistVerifyEvidence", () => {
+  it("applies the declared regulated retention partition after each write", () => {
+    const store = createInMemoryEvidenceStore();
+    const ctx = { store, env: {}, retention: { maxRunsByPartition: { regulated: 1 } } } as const;
+    const verifyIdentity = { ...identity, kind: "verify" } as const;
+
+    persistVerifyEvidence({ ...verifyIdentity, runId: "verify-old" }, ctx);
+    persistVerifyEvidence(
+      { ...verifyIdentity, runId: "verify-new", startedAt: 26, finishedAt: 40 },
+      ctx,
+    );
+
+    expect(store.list()).toEqual(["verify-new"]);
   });
 });

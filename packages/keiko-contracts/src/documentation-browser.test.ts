@@ -88,6 +88,7 @@ describe("classifyDocumentationTarget — accepted", () => {
       "http://10.1.2.3/manual",
       "https://172.16.5.9/handbook",
       "https://192.168.1.20/docs",
+      "https://[fd00::1]/manual",
       "http://intranet/handbook",
       "https://wiki.corp/page",
     ]) {
@@ -104,6 +105,16 @@ describe("classifyDocumentationTarget — accepted", () => {
     if (!result.ok) return;
     expect(result.targetClass).toBe("external-http");
   });
+
+  it.each(["fda.gov", "fdroid.org", "fcc.gov"])(
+    "does not apply IPv6 private-prefix rules to public named host %s",
+    (host) => {
+      const result = classifyDocumentationTarget(`https://${host}/manual`);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.targetClass).toBe("external-http");
+    },
+  );
 
   it("classifies punycode/IDN homograph hosts as external, not intranet (AUDIT-E1852-004)", () => {
     for (const raw of [

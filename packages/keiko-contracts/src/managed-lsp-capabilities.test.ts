@@ -170,6 +170,22 @@ describe("bounded Monaco-safe semantic tokens", () => {
     expect(parseManagedLspSemanticTokenRequest({ ...request, tokenBodies: true }).ok).toBe(false);
   });
 
+  it("rejects Windows drive-letter absolute document paths", () => {
+    const request = {
+      schemaVersion: "1",
+      root: "/workspace",
+      document: { path: "src/lib.rs", languageId: "rust", text: "fn main() {}", version: 4 },
+    };
+    for (const path of ["C:\\outside.rs", "d:/outside.rs"]) {
+      expect(
+        parseManagedLspSemanticTokenRequest({
+          ...request,
+          document: { ...request.document, path },
+        }).ok,
+      ).toBe(false);
+    }
+  });
+
   it("freezes the closed Monaco-safe token vocabulary", () => {
     expect(MANAGED_LSP_SEMANTIC_TOKEN_TYPES).toContain("class");
     expect(MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS).toContain("readonly");

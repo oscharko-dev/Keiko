@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   type GitDeliveryApprovalRequirement,
+  type GitDeliveryOrgPolicyPack,
+  type GitDeliveryPolicyDecision,
   type GitDeliveryRepoPolicyPack,
 } from "@oscharko-dev/keiko-contracts";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
@@ -97,11 +99,13 @@ const SUCCESS: GitPrExecResult = {
 function deps(over: {
   adapter: GitPullRequestAdapter;
   pack?: GitDeliveryRepoPolicyPack;
+  orgPack?: GitDeliveryOrgPolicyPack;
 }): Parameters<typeof runGitPullRequest>[1] {
   return {
     adapter: over.adapter,
     snapshot: snapshot(),
     ...(over.pack !== undefined ? { repoPolicyPack: over.pack } : {}),
+    ...(over.orgPack !== undefined ? { orgPolicyPack: over.orgPack } : {}),
     now: () => 1_000,
     newActionId: () => "act-pr-1",
   };
@@ -266,12 +270,12 @@ describe("gitPullRequestRejectionFor", () => {
 
 describe("evaluateGitPullRequestEffectivePolicy", () => {
   it("resolves a constrained decision against the base branch target", () => {
-    const constrained = {
-      outcome: "constrained" as const,
+    const constrained: GitDeliveryPolicyDecision = {
+      outcome: "constrained",
       constraints: [
         {
-          kind: "branch-pattern" as const,
-          patterns: [{ matchKind: "exact" as const, value: "dev" }],
+          kind: "branch-pattern",
+          patterns: [{ matchKind: "exact", value: "dev" }],
         },
       ],
     };
@@ -281,6 +285,26 @@ describe("evaluateGitPullRequestEffectivePolicy", () => {
     const blocked = evaluateGitPullRequestEffectivePolicy(constrained, "main", [], "pr-create");
     expect(blocked.outcome).toBe("blocked");
     expect(blocked.blockReason).toBe("policy-pack-blocked");
+  });
+
+  it("retains approval only after every composite constraint passes", () => {
+    const composite = {
+      outcome: "approval-gated" as const,
+      requiredApprovers: ["lead"],
+      constraints: [
+        {
+          kind: "protected-branch" as const,
+          patterns: [{ matchKind: "exact" as const, value: "main" }],
+        },
+      ],
+    } as const;
+
+    expect(evaluateGitPullRequestEffectivePolicy(composite, "main", [], "pr-create")).toMatchObject(
+      { outcome: "blocked", blockReason: "protected-branch" },
+    );
+    expect(evaluateGitPullRequestEffectivePolicy(composite, "dev", [], "pr-create").outcome).toBe(
+      "approval-gated",
+    );
   });
 });
 
@@ -308,6 +332,47 @@ describe("runGitPullRequest lifecycle gates", () => {
       deps({ adapter, pack }),
     );
     expect(result.lifecycle.outcome.status).toBe("approval-required");
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("does not let repo approval override an org protected-base constraint", async () => {
+    const { adapter, create } = fakeAdapter(SUCCESS);
+    const orgPack: GitDeliveryOrgPolicyPack = {
+      schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+      orgId: "org",
+      rules: [
+        {
+          actionKind: "pr-create",
+          decision: "constrained",
+          constraints: [
+            {
+              kind: "protected-branch",
+              patterns: [{ matchKind: "exact", value: "main" }],
+            },
+          ],
+        },
+      ],
+    };
+    const repoPack: GitDeliveryRepoPolicyPack = {
+      schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+      repoId: "repo",
+      rules: [{ actionKind: "pr-create", decision: "approval-gated", requiredApprovers: ["lead"] }],
+    };
+    const approval: GitDeliveryApprovalRequirement = {
+      required: true,
+      approvalTokenHash: "a".repeat(64),
+      approvedByUserId: "lead",
+      approvedAtMs: 1,
+    };
+    const result = await runGitPullRequest(
+      { command: createCommand({ baseBranchName: "main" }), approval },
+      deps({ adapter, orgPack, pack: repoPack }),
+    );
+
+    expect(result.lifecycle.outcome).toMatchObject({
+      status: "blocked",
+      blockReason: "protected-branch",
+    });
     expect(create).not.toHaveBeenCalled();
   });
 

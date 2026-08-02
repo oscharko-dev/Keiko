@@ -225,7 +225,7 @@ export function buildGitDeliveryPushPreview(
       ...signatureAdvisoryCodes(signatureRequirement),
     ],
     policyOutcome: effective.outcome,
-    ...(effective.blockReason !== undefined ? { policyBlockReason: effective.blockReason } : {}),
+    ...(effective.outcome === "blocked" ? { policyBlockReason: effective.blockReason } : {}),
   };
 }
 

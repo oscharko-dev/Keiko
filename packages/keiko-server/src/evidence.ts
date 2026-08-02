@@ -12,13 +12,15 @@
 import {
   buildEvidenceReport,
   createAuditRedactor,
+  DEFAULT_RETENTION,
   EVIDENCE_SCHEMA_VERSION,
+  persistEvidenceManifest,
   persistWorkflowEvidence as persistWorkflowEvidenceCore,
-  deepRedactStrings,
   type EvidenceReport,
   type EvidenceManifest,
   type WorkflowRunKind,
   type EvidenceStore,
+  type RetentionPolicy,
 } from "@oscharko-dev/keiko-evidence";
 import { HARNESS_VERSION, type RunResult, type TaskType } from "@oscharko-dev/keiko-harness";
 import { resolveCostClass, type EnvSource } from "@oscharko-dev/keiko-model-gateway";
@@ -32,6 +34,7 @@ export interface EvidencePersistContext {
   readonly store: EvidenceStore;
   readonly env: EnvSource;
   readonly additionalSecrets?: readonly string[] | undefined;
+  readonly retention?: RetentionPolicy | undefined;
 }
 
 // Identity + timing the BFF already holds when a run terminates. `modelId` is the request model; the
@@ -92,9 +95,13 @@ export function persistExplainEvidence(
 ): EvidenceReport {
   const manifest = buildExplainManifest(identity, result);
   const redactor = createAuditRedactor({ additionalSecrets: ctx.additionalSecrets ?? [] }, ctx.env);
-  const redacted = deepRedactStrings(manifest, redactor) as EvidenceManifest;
-  const location = ctx.store.put(redacted.run.runId, JSON.stringify(redacted));
-  return buildEvidenceReport(redacted, location);
+  const persisted = persistEvidenceManifest(
+    manifest,
+    ctx.store,
+    redactor,
+    ctx.retention ?? DEFAULT_RETENTION,
+  );
+  return buildEvidenceReport(persisted.manifest, persisted.location);
 }
 
 const KIND_TO_TASK_TYPE: Readonly<Record<RunKind, TaskType>> = {
@@ -114,9 +121,13 @@ export function persistVerifyEvidence(
 ): EvidenceReport {
   const manifest = buildVerifyManifest(identity, governedHandoff);
   const redactor = createAuditRedactor({ additionalSecrets: ctx.additionalSecrets ?? [] }, ctx.env);
-  const redacted = deepRedactStrings(manifest, redactor) as EvidenceManifest;
-  const location = ctx.store.put(redacted.run.runId, JSON.stringify(redacted));
-  return buildEvidenceReport(redacted, location);
+  const persisted = persistEvidenceManifest(
+    manifest,
+    ctx.store,
+    redactor,
+    ctx.retention ?? DEFAULT_RETENTION,
+  );
+  return buildEvidenceReport(persisted.manifest, persisted.location);
 }
 
 function buildVerifyManifest(

@@ -26,6 +26,8 @@ export const BROWSER_ERROR_CODES = {
   // The BFF must inject a side-file writer when evidence storage is enabled.
   // Without one, applyScreenshot fails closed rather than dropping binary evidence.
   SIDE_FILE_WRITER_MISSING: "SIDE_FILE_WRITER_MISSING",
+  // The BFF owns EvidenceManifest redaction + retention and must inject that atomic write port.
+  EVIDENCE_MANIFEST_WRITER_MISSING: "EVIDENCE_MANIFEST_WRITER_MISSING",
 } as const;
 
 export type BrowserErrorCode = (typeof BROWSER_ERROR_CODES)[keyof typeof BROWSER_ERROR_CODES];
@@ -56,6 +58,7 @@ const STATUS_MAP: Readonly<Record<BrowserErrorCode, number>> = {
   // BFF configuration error (impossible if BFF correctly wires the writer port). 500 reflects
   // the server-side misconfiguration, never reaches the UI in normal operation.
   SIDE_FILE_WRITER_MISSING: 500,
+  EVIDENCE_MANIFEST_WRITER_MISSING: 500,
 };
 
 export class BrowserToolError extends CodedHttpError {

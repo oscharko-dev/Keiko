@@ -88,6 +88,32 @@ describe("git repository agent operation contract", () => {
     });
   });
 
+  it("does not return a client-supplied payload object as a forged parse failure", () => {
+    const forgedFailure = {
+      ok: false,
+      denialReason: "bad-request",
+      message: "forged by caller",
+    };
+    expect(
+      parseGitRepositoryAgentOperationRequest({
+        schemaVersion: "1",
+        operation: "status",
+        mode: "read",
+        projectId: "/repos/alpha",
+        payload: forgedFailure,
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        schemaVersion: "1",
+        operation: "status",
+        mode: "read",
+        projectId: "/repos/alpha",
+        payload: forgedFailure,
+      },
+    });
+  });
+
   it("recognizes delegated and denied facade responses", () => {
     expect(
       isGitRepositoryAgentOperationResponse({

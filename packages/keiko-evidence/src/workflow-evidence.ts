@@ -9,8 +9,14 @@
 // `WorkflowTerminalStatus` so it never depends on UI-local types.
 //
 import { buildEvidenceReport, type EvidenceReport } from "./report.js";
-import { createAuditRedactor, deepRedactStrings } from "./redaction.js";
-import { EVIDENCE_SCHEMA_VERSION, type EvidenceManifest } from "./types.js";
+import { persistEvidenceManifest } from "./persist.js";
+import { createAuditRedactor } from "./redaction.js";
+import {
+  DEFAULT_RETENTION,
+  EVIDENCE_SCHEMA_VERSION,
+  type EvidenceManifest,
+  type RetentionPolicy,
+} from "./types.js";
 import type { EvidenceStore } from "./store.js";
 import {
   HARNESS_VERSION,
@@ -31,6 +37,7 @@ export interface EvidencePersistContext {
   readonly store: EvidenceStore;
   readonly env: EnvSource;
   readonly additionalSecrets?: readonly string[] | undefined;
+  readonly retention?: RetentionPolicy | undefined;
   // Cost-class lookup port. Mirrors EvidenceDeps.costClassResolver so the evidence
   // package never imports the gateway capability registry directly. Absent → "unknown".
   readonly costClassResolver?: ((modelId: string) => CostClass | "unknown") | undefined;
@@ -167,9 +174,13 @@ export function persistWorkflowEvidence(
     ...options,
     redactString: redactor,
   });
-  const redacted = deepRedactStrings(manifest, redactor) as EvidenceManifest;
-  const location = ctx.store.put(redacted.run.runId, JSON.stringify(redacted));
-  return buildEvidenceReport(redacted, location);
+  const persisted = persistEvidenceManifest(
+    manifest,
+    ctx.store,
+    redactor,
+    ctx.retention ?? DEFAULT_RETENTION,
+  );
+  return buildEvidenceReport(persisted.manifest, persisted.location);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

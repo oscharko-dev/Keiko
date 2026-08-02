@@ -140,7 +140,10 @@ function candidateActions(
   actions: readonly ConversationMemoryActionWire[] | undefined,
 ): readonly CandidateMemoryAction[] {
   return (
-    actions?.filter((action): action is CandidateMemoryAction => action.kind === "candidate") ?? []
+    actions?.filter(
+      (action): action is CandidateMemoryAction =>
+        action.kind === "candidate" && action.status === "proposed",
+    ) ?? []
   );
 }
 
@@ -175,9 +178,9 @@ function VoiceMemoryCandidate({
       setBusy(kind);
       setError(undefined);
       void callback(action.proposalId)
-        .catch((caught) => {
+        .catch((error_) => {
           setError(
-            caught instanceof Error ? caught.message : t("voice.realtime.memory.updateFailed"),
+            error_ instanceof Error ? error_.message : t("voice.realtime.memory.updateFailed"),
           );
         })
         .finally(() => setBusy(null));
@@ -280,7 +283,7 @@ export function VoiceRealtimeStatus({
 
   if (phase === "connected") {
     return (
-      <div className="cmp-voice-preview" role="group" aria-label={t("voice.realtime.status")}>
+      <section className="cmp-voice-preview" aria-label={t("voice.realtime.status")}>
         <div className="cmp-voice-connected-line" role="status" aria-live="polite">
           <span className="cmp-voice-dot" aria-hidden="true" />
           {t("voice.realtime.connected")}
@@ -292,7 +295,7 @@ export function VoiceRealtimeStatus({
           onAcceptMemoryCandidate={onAcceptMemoryCandidate}
           onRejectMemoryCandidate={onRejectMemoryCandidate}
         />
-      </div>
+      </section>
     );
   }
 

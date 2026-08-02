@@ -127,6 +127,30 @@ describe("isCommandAllowed — deny-by-default", () => {
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["config"]).allowed).toBe(false);
   });
 
+  it("does not mistake an npm --prefix value for a read-only subcommand", () => {
+    for (const flag of ["--prefix", "--loglevel", "--registry"]) {
+      expect(
+        isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", [flag, "audit", "install"]).allowed,
+      ).toBe(false);
+    }
+  });
+
+  it("denies npm audit fix because it mutates the dependency tree and lockfile", () => {
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["audit", "fix"]).allowed).toBe(false);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["audit", "--fix"]).allowed).toBe(false);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["audit", "--fix=true"]).allowed).toBe(
+      false,
+    );
+    expect(
+      isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["audit", "--fix", "--force"]).allowed,
+    ).toBe(false);
+    expect(
+      isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["--prefix=/workspace", "audit", "fix"])
+        .allowed,
+    ).toBe(false);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["audit", "--force"]).allowed).toBe(true);
+  });
+
   it("skips leading flags when locating the subcommand", () => {
     // `git --no-pager push` must still be denied: push is the subcommand, not --no-pager.
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["--no-pager", "push"]).allowed).toBe(

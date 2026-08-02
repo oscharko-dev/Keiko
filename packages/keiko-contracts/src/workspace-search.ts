@@ -220,6 +220,84 @@ function hasAdjacentQuantifiedAtoms(source: string): boolean {
   return false;
 }
 
+interface GroupScan {
+  readonly end: number;
+  readonly containsRepetition: boolean;
+}
+
+function characterClassEnd(source: string, start: number): number | undefined {
+  let cursor = start + 1;
+  while (cursor < source.length) {
+    if (source[cursor] === "\\") {
+      cursor += 2;
+    } else if (source[cursor] === "]") {
+      return cursor + 1;
+    } else {
+      cursor += 1;
+    }
+  }
+  return undefined;
+}
+
+function adjustedGroupDepth(depth: number, char: string | undefined): number {
+  if (char === "(") return depth + 1;
+  if (char === ")") return depth - 1;
+  return depth;
+}
+
+function isRepetitionStart(source: string, cursor: number): boolean {
+  const char = source[cursor];
+  return char === "+" || char === "*" || boundedQuantifierEnd(source, cursor) !== undefined;
+}
+
+function scanGroup(source: string, start: number): GroupScan | undefined {
+  if (source[start] !== "(") return undefined;
+  let depth = 1;
+  let containsRepetition = false;
+  let cursor = start + 1;
+  while (cursor < source.length) {
+    const char = source[cursor];
+    if (char === "\\") {
+      cursor += 2;
+      continue;
+    }
+    if (char === "[") {
+      const end = characterClassEnd(source, cursor);
+      if (end === undefined) return undefined;
+      cursor = end;
+      continue;
+    }
+    depth = adjustedGroupDepth(depth, char);
+    if (depth === 0) return { end: cursor + 1, containsRepetition };
+    if (isRepetitionStart(source, cursor)) containsRepetition = true;
+    cursor += 1;
+  }
+  return undefined;
+}
+
+function hasConcatenatedQuantifiedGroups(source: string): boolean {
+  let start = 0;
+  while (start < source.length) {
+    if (source[start] === "\\") {
+      start += 2;
+      continue;
+    }
+    if (source[start] === "[") {
+      const end = characterClassEnd(source, start);
+      if (end === undefined) return false;
+      start = end;
+      continue;
+    }
+    const first = scanGroup(source, start);
+    if (first?.containsRepetition === true) {
+      const second = scanGroup(source, first.end);
+      if (second?.containsRepetition === true) return true;
+    }
+    start += 1;
+  }
+  return false;
+}
+
 function buildResult(reasons: readonly string[]): ValidationResult {
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
@@ -250,6 +328,7 @@ export function regexSafetyIssue(source: string): string | undefined {
   if (source.length > MAX_QUERY_LENGTH) return "query regex too long";
   if (hasDangerousGroupOrClassRepetition(source)) return "query regex unsafe";
   if (hasAdjacentQuantifiedAtoms(source)) return "query regex unsafe";
+  if (hasConcatenatedQuantifiedGroups(source)) return "query regex unsafe";
   try {
     new RegExp(source);
   } catch {
@@ -363,11 +442,7 @@ function validateApplyFile(value: unknown, reasons: string[]): void {
 }
 
 function isRelativeWorkspacePathShape(path: string): boolean {
-  if (path.trim().length === 0 || path.includes("\0") || path.startsWith("/")) return false;
-  if (path.includes("\\")) return false;
-  return !path
-    .split("/")
-    .some((segment) => segment.length === 0 || segment === "." || segment === "..");
+  return path.trim().length > 0 && isValidScopePath(path, { mustBeRelative: true });
 }
 
 export function validateWorkspaceSearchRequest(value: unknown): ValidationResult {

@@ -56,6 +56,9 @@ describe("auxiliary branded-id and domain predicates", () => {
   it("accepts public domains and rejects ip literals, loopback, and schemes", () => {
     expect(isCodeTaskPublicDomain("developer.mozilla.org")).toBe(true);
     expect(isCodeTaskPublicDomain("localhost")).toBe(false);
+    expect(isCodeTaskPublicDomain("api.localhost")).toBe(false);
+    expect(isCodeTaskPublicDomain("localhost.localdomain")).toBe(false);
+    expect(isCodeTaskPublicDomain("api.localhost.localdomain")).toBe(false);
     expect(isCodeTaskPublicDomain("127.0.0.1")).toBe(false);
     expect(isCodeTaskPublicDomain("::1")).toBe(false);
     expect(isCodeTaskPublicDomain("169.254.169.254")).toBe(false);
@@ -63,6 +66,12 @@ describe("auxiliary branded-id and domain predicates", () => {
     expect(isCodeTaskPublicDomain("example.com:8080")).toBe(false);
     expect(isCodeTaskPublicDomain("example")).toBe(false);
     expect(isCodeTaskPublicDomain("EXAMPLE.com")).toBe(false);
+  });
+
+  it("rejects non-canonical IPv4 shorthand and octal forms", () => {
+    for (const host of ["127.1", "127.0.1", "0177.0.0.1", "0x7f.0.0.1", "0x7f.1"]) {
+      expect(isCodeTaskPublicDomain(host)).toBe(false);
+    }
   });
 });
 

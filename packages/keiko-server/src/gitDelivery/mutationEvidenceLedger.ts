@@ -19,7 +19,10 @@
 // closed and preserves the existing artifact for operator investigation.
 
 import type { GitDeliveryEvidenceRecord } from "@oscharko-dev/keiko-contracts";
-import { GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import {
+  GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION,
+  isGitDeliveryEvidenceRecord,
+} from "@oscharko-dev/keiko-contracts";
 import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { randomUUID } from "node:crypto";
@@ -100,12 +103,16 @@ function parseExistingRecords(json: string | undefined): readonly GitDeliveryEvi
       { cause: error },
     );
   }
-  if (!isPlainObject(parsed) || !Array.isArray(parsed.records)) {
+  if (
+    !isPlainObject(parsed) ||
+    !Array.isArray(parsed.records) ||
+    !parsed.records.every(isGitDeliveryEvidenceRecord)
+  ) {
     throw new Error(
       "git-delivery evidence ledger has an unexpected shape; refusing to overwrite existing audit evidence",
     );
   }
-  return parsed.records as readonly GitDeliveryEvidenceRecord[];
+  return parsed.records;
 }
 
 function boundedDoc(

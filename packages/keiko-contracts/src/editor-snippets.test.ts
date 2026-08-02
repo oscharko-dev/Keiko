@@ -420,4 +420,40 @@ describe("editor workspace snippets — rejection and diagnostic paths", () => {
       }),
     ).toHaveLength(1);
   });
+
+  it.each([
+    ["a**/a", "a/a"],
+    ["component**/*.tsx", "component/file.tsx"],
+  ])("preserves globstar-directory matching for %s against %s", (include, relativePath) => {
+    const parsed = parseEditorM7WorkspaceSnippetCollection(
+      rawCollection([rawSnippet({ include: [include] })]),
+    );
+    if (!parsed.ok) throw new Error("expected valid collection");
+    expect(
+      matchingEditorM7Snippets({
+        collection: parsed.value,
+        languageId: "typescript",
+        relativePath,
+        prefix: "kte",
+        insertionSafe: true,
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("matches hostile wildcard patterns within a bounded runtime", () => {
+    const parsed = parseEditorM7WorkspaceSnippetCollection(
+      rawCollection([rawSnippet({ include: [`${"a*".repeat(14)}b`] })]),
+    );
+    if (!parsed.ok) throw new Error("expected valid collection");
+    const startedAt = performance.now();
+    const matches = matchingEditorM7Snippets({
+      collection: parsed.value,
+      languageId: "typescript",
+      relativePath: "a".repeat(30),
+      prefix: "kte",
+      insertionSafe: true,
+    });
+    expect(matches).toEqual([]);
+    expect(performance.now() - startedAt).toBeLessThan(100);
+  });
 });

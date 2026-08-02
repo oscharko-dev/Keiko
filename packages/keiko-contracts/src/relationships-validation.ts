@@ -107,15 +107,13 @@ function validateEndpointShape(
   errors: RelationshipValidationError[],
 ): endpoint is Record<string, unknown> {
   if (!isRecord(endpoint)) {
-    errors.push(
-      makeError("denied/schema-version-unsupported", `${field} must be an object`, field),
-    );
+    errors.push(makeError("denied/invalid-structure", `${field} must be an object`, field));
     return false;
   }
   if (!isNonEmptyString(endpoint.kind)) {
     errors.push(
       makeError(
-        "denied/schema-version-unsupported",
+        "denied/invalid-structure",
         `${field}.kind must be a non-empty string`,
         `${field}.kind`,
       ),
@@ -125,7 +123,7 @@ function validateEndpointShape(
   if (!isNonEmptyString(endpoint.id)) {
     errors.push(
       makeError(
-        "denied/schema-version-unsupported",
+        "denied/invalid-structure",
         `${field}.id must be a non-empty string`,
         `${field}.id`,
       ),
@@ -135,7 +133,7 @@ function validateEndpointShape(
   if (!isNonEmptyString(endpoint.workspaceId)) {
     errors.push(
       makeError(
-        "denied/schema-version-unsupported",
+        "denied/invalid-structure",
         `${field}.workspaceId must be a non-empty string`,
         `${field}.workspaceId`,
       ),
@@ -165,7 +163,7 @@ function checkRequiredStringField(
 ): void {
   if (!isNonEmptyString(input[field])) {
     errors.push(
-      makeError("denied/schema-version-unsupported", `${field} must be a non-empty string`, field),
+      makeError("denied/invalid-structure", `${field} must be a non-empty string`, field),
     );
   }
 }
@@ -180,11 +178,7 @@ function checkRequiredTopLevelFields(
   checkRequiredStringField(input, "updatedAt", errors);
   if (!isFiniteInteger(input.etag) || input.etag < 0) {
     errors.push(
-      makeError(
-        "denied/schema-version-unsupported",
-        "etag must be a non-negative finite integer",
-        "etag",
-      ),
+      makeError("denied/invalid-structure", "etag must be a non-negative finite integer", "etag"),
     );
   }
 }
@@ -195,7 +189,7 @@ function structuralPrelude(input: unknown): {
 } {
   if (!isRecord(input)) {
     return {
-      errors: [makeError("denied/schema-version-unsupported", "relationship must be an object")],
+      errors: [makeError("denied/invalid-structure", "relationship must be an object")],
     };
   }
   const errors: RelationshipValidationError[] = [];
@@ -237,7 +231,7 @@ function checkKindIsKnown(
   const kind = endpoint.kind as string;
   if (!(RELATIONSHIP_OBJECT_KINDS as readonly string[]).includes(kind)) {
     return makeError(
-      "denied/schema-version-unsupported",
+      "denied/invalid-structure",
       `${field}.kind is not a known object kind`,
       `${field}.kind`,
     );
@@ -248,18 +242,10 @@ function checkKindIsKnown(
 function checkTypeIsKnown(record: Record<string, unknown>): RelationshipValidationError | null {
   const type = record.type as string;
   if (!isNonEmptyString(type)) {
-    return makeError(
-      "denied/schema-version-unsupported",
-      "type must be a non-empty string",
-      "type",
-    );
+    return makeError("denied/invalid-structure", "type must be a non-empty string", "type");
   }
   if (!(RELATIONSHIP_TYPES as readonly string[]).includes(type)) {
-    return makeError(
-      "denied/schema-version-unsupported",
-      "type is not a known relationship type",
-      "type",
-    );
+    return makeError("denied/invalid-structure", "type is not a known relationship type", "type");
   }
   return null;
 }
@@ -270,14 +256,14 @@ function checkLifecycleIsKnown(
   const state = record.lifecycleState as string;
   if (!isNonEmptyString(state)) {
     return makeError(
-      "denied/schema-version-unsupported",
+      "denied/invalid-structure",
       "lifecycleState must be a non-empty string",
       "lifecycleState",
     );
   }
   if (!(RELATIONSHIP_LIFECYCLE_STATES as readonly string[]).includes(state)) {
     return makeError(
-      "denied/schema-version-unsupported",
+      "denied/invalid-structure",
       "lifecycleState is not a known lifecycle state",
       "lifecycleState",
     );

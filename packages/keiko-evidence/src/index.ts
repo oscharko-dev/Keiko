@@ -6,7 +6,12 @@
 
 export { KEIKO_EVIDENCE_VERSION } from "./version.js";
 export { buildEvidenceManifest } from "./build.js";
-export { persistEvidence, type PersistResult } from "./persist.js";
+export {
+  persistEvidence,
+  persistEvidenceManifest,
+  type PersistedEvidenceManifest,
+  type PersistResult,
+} from "./persist.js";
 export { createAuditRedactor, deepRedactStrings } from "./redaction.js";
 export { aggregateUsage } from "./aggregate.js";
 export { listEvidence, loadEvidence, type EvidenceListEntry } from "./index-api.js";
@@ -238,6 +243,7 @@ export {
   type EvidenceRunIdentity,
   type EvidenceStateTransition,
   type EvidenceTaskType,
+  type EvidenceRetentionPartition,
   type EvidenceToolCall,
   type EvidenceUsageTotals,
   type EvidenceVerificationResult,

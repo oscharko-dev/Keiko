@@ -308,6 +308,31 @@ describe("validateRelationship — resolution order (denial-reasons.md)", () => 
 
 // ─── Schema-version mismatch ──────────────────────────────────────────────────
 describe("validateRelationship — schema-version", () => {
+  it("distinguishes malformed relationship structure from schema-version skew", () => {
+    const source = endpoint("workflow-run", "r1");
+    const target = endpoint("memory", "m1");
+    const valid = happy("reads-context", source, target);
+    const malformedCases: readonly unknown[] = [
+      null,
+      { ...valid, id: "" },
+      { ...valid, workspaceId: null },
+      { ...valid, createdAt: undefined },
+      { ...valid, updatedAt: 12 },
+      { ...valid, etag: -1 },
+      { ...valid, source: null },
+      { ...valid, source: { ...source, kind: "" } },
+      { ...valid, source: { ...source, id: "" } },
+      { ...valid, target: { ...target, workspaceId: "" } },
+      { ...valid, type: "invented" },
+      { ...valid, lifecycleState: "invented" },
+    ];
+    for (const malformed of malformedCases) {
+      const codes = codesFrom(validateRelationship(malformed));
+      expect(codes).toContain("denied/invalid-structure");
+      expect(codes).not.toContain("denied/schema-version-unsupported");
+    }
+  });
+
   it("rejects payload with schemaVersion '0'", () => {
     const payload = {
       ...happy("reads-context", endpoint("workflow-run", "r1"), endpoint("memory", "m1")),

@@ -28,8 +28,8 @@ import type {
   GitDeliveryBlockReason,
   GitDeliveryBranchProtection,
   GitDeliveryChecksState,
-  GitDeliveryConstraint,
   GitDeliveryExecutionResult,
+  GitDeliveryEffectivePolicy,
   GitDeliveryMergeInputs,
   GitDeliveryMergeReadiness,
   GitDeliveryMergeStrategyHint,
@@ -46,10 +46,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   deriveEligibleMergeStrategies,
+  evaluateGitDeliveryEffectivePolicy,
   evaluateGitPolicy,
   GIT_DELIVERY_MERGE_STRATEGY_HINTS,
   GIT_DELIVERY_SCHEMA_VERSION,
-  gitDeliveryConstraintBlockReason,
   gitDeliveryDefaultRiskClass,
   gitDeliveryPolicyTargetBranchName,
   gitMergeReadinessFor,
@@ -491,46 +491,18 @@ export function mapRawMergeReadiness(raw: RawMergeReadiness): GitDeliveryPullReq
 
 // ─── Effective policy (preview-predicts-execute) ─────────────────────────────────────────────────────
 
-export interface GitMergeEffectivePolicy {
-  readonly outcome: "allowed" | "blocked" | "approval-gated";
-  readonly blockReason?: GitDeliveryBlockReason | undefined;
-}
-
-// Delegates to the contract-owned resolver so this gate and every preview surface resolve a
-// `constrained` decision identically.
-function constraintBlock(
-  constraint: GitDeliveryConstraint,
-  target: string | undefined,
-  capabilities: readonly GitDeliveryProviderCapability[],
-): GitDeliveryBlockReason | undefined {
-  return gitDeliveryConstraintBlockReason(constraint, {
-    riskClass: gitDeliveryDefaultRiskClass("merge"),
-    targetBranchName: target,
-    activeProviderCapabilities: capabilities,
-  });
-}
+export type GitMergeEffectivePolicy = GitDeliveryEffectivePolicy;
 
 export function evaluateGitMergeEffectivePolicy(
   decision: GitDeliveryPolicyDecision,
   baseTarget: string | undefined,
   capabilities: readonly GitDeliveryProviderCapability[],
 ): GitMergeEffectivePolicy {
-  if (decision.outcome === "allowed") {
-    return { outcome: "allowed" };
-  }
-  if (decision.outcome === "blocked") {
-    return { outcome: "blocked", blockReason: decision.reason };
-  }
-  if (decision.outcome === "approval-gated") {
-    return { outcome: "approval-gated" };
-  }
-  for (const constraint of decision.constraints) {
-    const reason = constraintBlock(constraint, baseTarget, capabilities);
-    if (reason !== undefined) {
-      return { outcome: "blocked", blockReason: reason };
-    }
-  }
-  return { outcome: "allowed" };
+  return evaluateGitDeliveryEffectivePolicy(decision, {
+    riskClass: gitDeliveryDefaultRiskClass("merge"),
+    targetBranchName: baseTarget,
+    activeProviderCapabilities: capabilities,
+  });
 }
 
 // ─── Lifecycle orchestration ─────────────────────────────────────────────────────────────────────────
@@ -634,27 +606,23 @@ function resolveMergeGate(
   capabilities: readonly GitDeliveryProviderCapability[],
   now: number,
 ): MergeGate {
-  if (decision.outcome === "allowed") {
+  const effective = evaluateGitMergeEffectivePolicy(decision, target, capabilities);
+  if (effective.outcome === "allowed") {
     return { proceed: true };
   }
-  if (decision.outcome === "blocked") {
-    return { proceed: false, status: "policy-block", reason: decision.reason };
+  if (effective.outcome === "blocked") {
+    return { proceed: false, status: "policy-block", reason: effective.blockReason };
   }
-  if (decision.outcome === "approval-gated") {
-    const state = approvalState(approval, now);
-    if (state === "valid") return { proceed: true };
-    if (state === "expired") {
-      return { proceed: false, status: "policy-block", reason: "approval-expired" };
-    }
-    return { proceed: false, status: "approval-required", approvers: decision.requiredApprovers };
+  const state = approvalState(approval, now);
+  if (state === "valid") return { proceed: true };
+  if (state === "expired") {
+    return { proceed: false, status: "policy-block", reason: "approval-expired" };
   }
-  for (const constraint of decision.constraints) {
-    const reason = constraintBlock(constraint, target, capabilities);
-    if (reason !== undefined) {
-      return { proceed: false, status: "policy-block", reason };
-    }
-  }
-  return { proceed: true };
+  return {
+    proceed: false,
+    status: "approval-required",
+    approvers: decision.outcome === "approval-gated" ? decision.requiredApprovers : [],
+  };
 }
 
 function mergeOutcomeFor(result: GitDeliveryExecutionResult): GitMutationOutcome {

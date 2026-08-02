@@ -256,9 +256,17 @@ export interface CommandRule {
   // Flags that must appear at the start of the argument vector, before the resolved subcommand. This
   // lets callers require invariants such as `npx --no-install <tool>` as policy, not convention.
   readonly requiredLeadingFlags?: readonly string[] | undefined;
+  // When true, the argument vector must begin with the resolved subcommand. Useful for CLIs such as
+  // npm where arbitrary config flags may consume the following token and make a value masquerade as
+  // an allowed subcommand.
+  readonly forbidLeadingFlags?: boolean | undefined;
   // Flags that are themselves denied because they execute a transitive shell or arbitrary command
   // (e.g. npm/npx `-c`/`--call`). Presence of any of these anywhere in args denies the invocation.
   readonly denyFlags?: readonly string[] | undefined;
+  // Positional arguments that turn an otherwise allowed subcommand into a mutation. Entries are
+  // scoped by subcommand so, for example, npm `audit fix` is denied without forbidding a package
+  // named "fix" from the read-only `view` command.
+  readonly deniedArgumentsBySubcommand?: Readonly<Record<string, readonly string[]>> | undefined;
   // In denylist mode, the resolved first non-flag token MUST be one of these known subcommands;
   // an unrecognized token (e.g. a stray path left by a value-flag bypass) is denied by default.
   readonly knownSubcommands?: readonly string[] | undefined;
@@ -279,8 +287,21 @@ export const DEFAULT_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
       "help",
       "ping",
     ]),
-    // `-c`/`--call` execute a command string in a shell; deny outright (S-H2).
-    denyFlags: Object.freeze(["-c", "--call"]),
+    forbidLeadingFlags: true,
+    // Shell-spawning and scope-shifting flags are denied outright. In particular, leaving
+    // `--prefix` parseable lets its value masquerade as an allowed subcommand.
+    denyFlags: Object.freeze([
+      "-c",
+      "--call",
+      "--prefix",
+      "-g",
+      "--global",
+      "--location",
+      "-w",
+      "--workspace",
+      "--workspaces",
+    ]),
+    deniedArgumentsBySubcommand: Object.freeze({ audit: Object.freeze(["fix", "--fix"]) }),
   },
   {
     executable: "git",

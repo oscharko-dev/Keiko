@@ -94,9 +94,15 @@ evidence schema the other two layers consume. It exports:
   `GitDeliveryRecoveryStrategyHint` for the concrete governed recovery strategy.
 - `GitDeliveryEvidenceRecord` — the top-level content-free record: `recordId`, `schemaVersion`,
   `outcomeClass`, `phaseReached` (as `GitDeliveryEvidenceLifecyclePhase`), `actionKind`,
-  `riskClass`, `correlation` (see D4), `recovery` (as `GitDeliveryRecoveryMetadata`), `timestamp`
-  (epoch ms integer, content-free), and the hashed identifiers from D3. No diff, path, command
-  string, secret, or raw subprocess output appears in any field.
+  `riskClass`, the effective approval-request metadata and accumulated typed constraints
+  (`requiredApprovers`, `constraints`),
+  `correlation` (see D4), `recovery` (as `GitDeliveryRecoveryMetadata`), `timestamp` (epoch ms
+  integer, content-free), and the hashed identifiers from D3. No diff, path, command string, secret,
+  or raw subprocess output appears in any field.
+- Schema 2 is the current write shape and binds every `constrained` outcome to a non-empty typed
+  constraint tuple. Readers continue to accept schema-1 constrained records without that field,
+  because the original builder omitted it; this read-only compatibility prevents historical
+  governed attempts from disappearing while all new writes remain fail-closed.
 - `GitDeliveryAuditPacket` — the export envelope: a bounded array of `GitDeliveryEvidenceRecord`,
   a `generatedAt` timestamp, a `count`, and a `schemaVersion`. Used by the GET route.
 - Total pure derivation functions: `gitDeliveryRecoveryDispositionForExecutionError` (maps the
@@ -250,8 +256,9 @@ worth more than the discipline cost, and six is a fixed, small set for a mature 
   `GitDeliveryRecoveryMetadata` will not carry a provider-specific action hint until a provider
   adapter (#476–#478) populates the outcome's extended fields.
 - The schema (six phases, six outcome classes, four dispositions) must remain stable once records
-  are persisted; any structural rename or removal is a migration. The `schemaVersion` field provides
-  the forward escape hatch, but migration code is not in scope for this issue.
+  are persisted; any structural rename or removal is a migration. Readers accept the legacy
+  schema-1 constrained shape while writers emit schema 2, and any future structural change requires
+  the same explicit versioned read policy.
 - In-memory correlation degrades after a server restart, consistent with the `memory-audit-handler`
   pattern; a durable cross-session correlation would require a persistent run-id index not in scope
   here.

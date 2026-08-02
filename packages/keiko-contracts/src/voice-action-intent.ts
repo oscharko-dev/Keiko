@@ -159,9 +159,11 @@ function normalizeForClassification(text: string): string {
     .replace(/\s+/g, " ");
 }
 
-// Whole-word membership test: wraps both sides in spaces so `set` does not match inside `settlement`.
-function containsMarker(paddedText: string, markers: readonly string[]): boolean {
-  return markers.some((marker) => paddedText.includes(` ${marker} `));
+// Whole-word membership keeps `set` from matching inside `settlement` while treating punctuation
+// as a real word boundary. Transcripts commonly punctuate clauses ("delete, then show"); requiring
+// literal spaces around a marker lets the dangerous verb disappear and the read-only verb win.
+function containsMarker(words: ReadonlySet<string>, markers: readonly string[]): boolean {
+  return markers.some((marker) => words.has(marker));
 }
 
 // Conservative, ordered precedence: destructive > external-effect > mutating > read-only. Empty /
@@ -171,17 +173,17 @@ export function classifySpokenActionEffect(committedText: string): SpokenActionE
   if (normalized.length === 0) {
     return "unknown";
   }
-  const padded = ` ${normalized} `;
-  if (containsMarker(padded, SPOKEN_ACTION_EFFECT_MARKERS.destructive)) {
+  const words = new Set(normalized.split(/[^\p{L}\p{N}]+/u));
+  if (containsMarker(words, SPOKEN_ACTION_EFFECT_MARKERS.destructive)) {
     return "destructive";
   }
-  if (containsMarker(padded, SPOKEN_ACTION_EFFECT_MARKERS.externalEffect)) {
+  if (containsMarker(words, SPOKEN_ACTION_EFFECT_MARKERS.externalEffect)) {
     return "external-effect";
   }
-  if (containsMarker(padded, SPOKEN_ACTION_EFFECT_MARKERS.mutating)) {
+  if (containsMarker(words, SPOKEN_ACTION_EFFECT_MARKERS.mutating)) {
     return "mutating";
   }
-  if (containsMarker(padded, SPOKEN_ACTION_EFFECT_MARKERS.readOnly)) {
+  if (containsMarker(words, SPOKEN_ACTION_EFFECT_MARKERS.readOnly)) {
     return "read-only";
   }
   return "unknown";

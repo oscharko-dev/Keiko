@@ -748,13 +748,19 @@ function buildApprovalSummary(
   };
 }
 
+function constraintsForDecision(
+  decision: GitDeliveryPolicyDecision,
+): readonly GitDeliveryConstraint[] {
+  if (decision.outcome === "constrained") return decision.constraints;
+  return decision.outcome === "approval-gated" ? (decision.constraints ?? []) : [];
+}
+
 function buildPolicyExplanation(decision: GitDeliveryPolicyDecision): GitDeliveryPolicyExplanation {
   const requiredApprovers = decision.outcome === "approval-gated" ? decision.requiredApprovers : [];
-  const constraints = decision.outcome === "constrained" ? decision.constraints : [];
   const base: GitDeliveryPolicyExplanation = {
     decision: decision.outcome,
     requiredApprovers,
-    constraints,
+    constraints: constraintsForDecision(decision),
   };
   if (decision.outcome === "blocked") {
     return { ...base, blockReason: decision.reason };

@@ -86,7 +86,7 @@ interface RecordedCall {
   readonly sessionId: string | undefined;
 }
 
-type Responder = (call: RecordedCall) => unknown;
+type Responder = (call: RecordedCall, client: FakeCdpClient) => unknown;
 
 class FakeCdpClient {
   public readonly calls: RecordedCall[] = [];
@@ -111,7 +111,7 @@ class FakeCdpClient {
     sessionId?: string,
   ): Promise<T> {
     this.calls.push({ method, params, sessionId });
-    const result = await this.responder({ method, params, sessionId });
+    const result = await this.responder({ method, params, sessionId }, this);
     return result as T;
   }
 
@@ -189,11 +189,20 @@ function defaultResponder(call: RecordedCall): unknown {
   return response;
 }
 
+function navigationResponder(url: string): Responder {
+  return (call, client): unknown => {
+    const response = defaultResponder(call);
+    if (call.method === "Page.navigate") client.emitFrameNavigated(url);
+    return response;
+  };
+}
+
 async function makeFixture(overrides?: {
   readonly responder?: Responder;
   readonly redactor?: (v: unknown) => unknown;
   readonly fetchVersion?: (url: string) => Promise<unknown>;
   readonly useRealFetchVersion?: boolean;
+  readonly omitEvidenceManifestWriter?: boolean;
 }): Promise<ManagerFixture> {
   const evidenceDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-browser-")));
   const evidenceStore = createInMemoryEvidenceStore();
@@ -212,6 +221,12 @@ async function makeFixture(overrides?: {
   const manager = createBrowserSessionManager({
     evidenceDir,
     evidenceStore,
+    ...(overrides?.omitEvidenceManifestWriter === true
+      ? {}
+      : {
+          evidenceManifestWriter: (manifest: EvidenceManifest): string =>
+            evidenceStore.put(manifest.run.runId, JSON.stringify(manifest, null, 2)),
+        }),
     redactor:
       overrides?.redactor ??
       ((value: unknown): unknown =>
@@ -299,6 +314,15 @@ function requireBrowserManifest(
 }
 
 describe("openSession", () => {
+  it("fails closed when evidence storage has no governed manifest writer", async () => {
+    const fixture = await withFixture({ omitEvidenceManifestWriter: true });
+
+    await expect(fixture.manager.openSession(9222)).rejects.toMatchObject({
+      code: "EVIDENCE_MANIFEST_WRITER_MISSING",
+    });
+    expect(() => fixture.client).toThrow("client not created yet");
+  });
+
   it("opens, creates a fresh target, attaches, and emits session-opened", async () => {
     const fixture = await withFixture();
     const meta = await fixture.manager.openSession(9222);
@@ -722,22 +746,37 @@ describe("closeSession + dispose", () => {
 
 describe("subscribe", () => {
   it("emits to multiple subscribers and unsubscribe stops further events", async () => {
-    const fixture = await withFixture();
+    const url = "http://127.0.0.1:5173/";
+    const fixture = await withFixture({ responder: navigationResponder(url) });
     const meta = await fixture.manager.openSession(9222);
     const a: BrowserEventEnvelope[] = [];
     const b: BrowserEventEnvelope[] = [];
     const offA = fixture.manager.subscribe(meta.sessionId, (e) => a.push(e));
     fixture.manager.subscribe(meta.sessionId, (e) => b.push(e));
-    setTimeout(() => {
-      fixture.client.emitFrameNavigated("http://127.0.0.1:5173/");
-    }, 5);
-    await fixture.manager.navigate(meta.sessionId, "http://127.0.0.1:5173/");
+    await fixture.manager.navigate(meta.sessionId, url);
     expect(a.some((e) => e.kind === "navigated")).toBe(true);
     expect(b.some((e) => e.kind === "navigated")).toBe(true);
     offA();
     await fixture.manager.closeSession(meta.sessionId);
     expect(a.some((e) => e.kind === "session-closed")).toBe(false);
     expect(b.some((e) => e.kind === "session-closed")).toBe(true);
+  });
+
+  it("dispatches each event to a stable subscriber snapshot", async () => {
+    const url = "http://127.0.0.1:5173/";
+    const fixture = await withFixture({ responder: navigationResponder(url) });
+    const meta = await fixture.manager.openSession(9222);
+    const deliveries: string[] = [];
+    fixture.manager.subscribe(meta.sessionId, (event) => {
+      if (event.kind !== "navigated") return;
+      deliveries.push("existing");
+      fixture.manager.subscribe(meta.sessionId, (laterEvent) => {
+        if (laterEvent.kind === "navigated") deliveries.push("added-during-dispatch");
+      });
+    });
+    await fixture.manager.navigate(meta.sessionId, url);
+
+    expect(deliveries).toEqual(["existing"]);
   });
 });
 

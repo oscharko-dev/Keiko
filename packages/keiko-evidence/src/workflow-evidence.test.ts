@@ -220,4 +220,25 @@ describe("persistWorkflowEvidence", () => {
     expect(loaded.patch?.redactedDiff).toBeDefined();
     expect(loaded.patch?.redactedDiff).not.toContain(literalSecret);
   });
+
+  it("applies the declared regulated retention partition after each write", () => {
+    const store = createInMemoryEvidenceStore();
+    const report = {
+      workflowId: "unit-test-generation",
+      status: "dry-run",
+      proposedDiff: "",
+      addedTestFiles: [],
+    };
+    const ctx = { store, env: {}, retention: { maxRunsByPartition: { regulated: 1 } } } as const;
+
+    persistWorkflowEvidence(identity({ runId: "run-old", finishedAt: 20 }), report, [], ctx);
+    persistWorkflowEvidence(
+      identity({ runId: "run-new", startedAt: 21, finishedAt: 30 }),
+      report,
+      [],
+      ctx,
+    );
+
+    expect(store.list()).toEqual(["run-new"]);
+  });
 });

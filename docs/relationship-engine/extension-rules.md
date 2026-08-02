@@ -84,7 +84,7 @@ Deprecation is ADR-gated. The rules:
 
 ## 6. Adding a new denial code
 
-1. **Append** the new code to `RELATIONSHIP_DENIAL_CODES` in `relationships.ts`. The tuple order matches the normative "Resolution order" in [denial-reasons.md](denial-reasons.md); insert at the correct position.
+1. **Append** the new code to `RELATIONSHIP_DENIAL_CODES` in `relationships.ts`. The public tuple is an append-only catalog: existing entries retain their stable order, independently of semantic validator resolution order.
 2. **Update** [denial-reasons.md §"Catalog"](denial-reasons.md) with the new code's user-facing message, when-it-fires rule, and audit-event implication.
 3. **Update** [denial-reasons.md §"Resolution order"](denial-reasons.md) to include the new code at its slot.
 4. **Wire** the validator: add the corresponding pure helper in `relationships-validation.ts` AND call it from `validateRelationship` in the position dictated by the resolution order.

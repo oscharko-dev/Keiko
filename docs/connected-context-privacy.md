@@ -100,8 +100,11 @@ relay, no telemetry endpoint, no analytics beacon.
 
 ## Retention defaults
 
-The evidence ledger keeps the most recent 50 runs per process
-(`DEFAULT_RETENTION.maxRuns`). Override via the audit config; see
+The evidence ledger keeps the most recent 50 chat/RAG runs in their own retention partition
+(`DEFAULT_RETENTION.maxRunsByPartition["chat-rag"]`) and independently keeps the most recent 50
+regulated runs. Chat/RAG writes therefore cannot evict regulated evidence. Future-unknown task
+types are retained fail-safe; an explicit global or partition policy may govern recognised
+evidence. Override via the audit config; see
 [packages/keiko-contracts/src/evidence.ts](../packages/keiko-contracts/src/evidence.ts).
 Process-local grounded micro-indexes use the workflow micro-index TTL, a server-side cap
 of 8 cached packs per connected scope, and a registry cap of 32 scopes. Expired entries

@@ -38,6 +38,7 @@ import {
 } from "./git-delivery.js";
 import type {
   GitDeliveryBranchPattern,
+  GitDeliveryPolicyDecision,
   GitDeliveryPushInputs,
   GitDeliveryResolvedInputs,
 } from "./git-delivery.js";
@@ -148,6 +149,36 @@ describe("git-delivery branch-pattern and constraint guards", () => {
 });
 
 describe("git-delivery approval / policy-decision / evidence / execution-result guards", () => {
+  it("models composite decision constraints as non-empty when present", () => {
+    type ApprovalDecision = Extract<GitDeliveryPolicyDecision, { outcome: "approval-gated" }>;
+    type ConstrainedDecision = Extract<GitDeliveryPolicyDecision, { outcome: "constrained" }>;
+    // @ts-expect-error optional composite constraints must contain at least one typed constraint.
+    const emptyConstraints: ApprovalDecision["constraints"] = [];
+    const runtimeEmptyConstraints: readonly [] = [];
+
+    expect(
+      isGitDeliveryPolicyDecision({
+        outcome: "approval-gated",
+        requiredApprovers: ["lead"],
+        constraints: emptyConstraints,
+      }),
+    ).toBe(false);
+
+    expect(
+      isGitDeliveryPolicyDecision({
+        outcome: "constrained",
+        constraints: runtimeEmptyConstraints,
+      }),
+    ).toBe(false);
+
+    const invalidConstrainedDecision: ConstrainedDecision = {
+      outcome: "constrained",
+      // @ts-expect-error constrained decisions must contain at least one typed constraint.
+      constraints: runtimeEmptyConstraints,
+    };
+    expect(invalidConstrainedDecision.constraints).toEqual([]);
+  });
+
   it("isGitDeliveryApprovalRequirement accepts both discriminants", () => {
     expect(isGitDeliveryApprovalRequirement({ required: false })).toBe(true);
     expect(
@@ -200,6 +231,13 @@ describe("git-delivery approval / policy-decision / evidence / execution-result 
     ).toBe(true);
     expect(
       isGitDeliveryPolicyDecision({
+        outcome: "approval-gated",
+        requiredApprovers: ["lead"],
+        constraints: [{ kind: "protected-branch", patterns: [] }],
+      }),
+    ).toBe(true);
+    expect(
+      isGitDeliveryPolicyDecision({
         outcome: "constrained",
         constraints: [{ kind: "provider-capability", capability: "merge-queue" }],
       }),
@@ -208,6 +246,20 @@ describe("git-delivery approval / policy-decision / evidence / execution-result 
     expect(isGitDeliveryPolicyDecision({ outcome: "approval-gated", requiredApprovers: [1] })).toBe(
       false,
     );
+    expect(
+      isGitDeliveryPolicyDecision({
+        outcome: "approval-gated",
+        requiredApprovers: ["lead"],
+        constraints: [],
+      }),
+    ).toBe(false);
+    expect(
+      isGitDeliveryPolicyDecision({
+        outcome: "approval-gated",
+        requiredApprovers: ["lead"],
+        constraints: [{ kind: "unknown" }],
+      }),
+    ).toBe(false);
     expect(
       isGitDeliveryPolicyDecision({ outcome: "constrained", constraints: [{ kind: "x" }] }),
     ).toBe(false);
@@ -465,6 +517,17 @@ describe("parseGitDeliveryActionEnvelope (soundness: kind === resolvedInputs.kin
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errors.some((e) => e.includes("policyDecision"))).toBe(true);
+    }
+  });
+
+  it("rejects a constrained envelope without an enforceable constraint", () => {
+    const result = parseGitDeliveryActionEnvelope({
+      ...baseEnvelope(),
+      policyDecision: { outcome: "constrained", constraints: [] },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((error) => error.includes("policyDecision"))).toBe(true);
     }
   });
 

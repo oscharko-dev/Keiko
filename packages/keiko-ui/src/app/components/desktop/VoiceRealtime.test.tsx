@@ -190,6 +190,7 @@ describe("VoiceRealtimeStatus", () => {
             body: "The user's preferred test runner is Vitest.",
             scopeLabel: "Project memory",
             requiresApproval: false,
+            status: "proposed",
           },
         ]}
         onAcceptMemoryCandidate={onAccept}
@@ -207,6 +208,32 @@ describe("VoiceRealtimeStatus", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Reject" }));
     expect(onReject).toHaveBeenCalledWith("proposal-1");
+  });
+
+  it("does not surface review actions for a server-reported auto-accepted candidate", () => {
+    render(
+      <VoiceRealtimeStatus
+        phase="connected"
+        error={undefined}
+        onRetry={vi.fn()}
+        onDismiss={vi.fn()}
+        memoryActions={[
+          {
+            kind: "candidate",
+            proposalId: "proposal-auto-1",
+            body: "The user prefers Vitest.",
+            scopeLabel: "Project memory",
+            requiresApproval: false,
+            status: "accepted",
+          },
+        ]}
+        onAcceptMemoryCandidate={vi.fn()}
+        onRejectMemoryCandidate={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reject" })).toBeNull();
   });
 
   it("renders an alert with retry/dismiss on error and focuses retry", () => {

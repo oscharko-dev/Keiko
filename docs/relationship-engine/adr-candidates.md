@@ -96,7 +96,11 @@ Lock the audit-event family (`relationship:*`), the live-stream activity envelop
 5. **Redaction chokepoint**: `createAuditRedactor` + `deepRedactStrings` per [`packages/keiko-security/src/redaction.ts:96`](../../packages/keiko-security/src/redaction.ts). No new redactor.
 6. **Body-free invariant**: re-state the invariant from [`memory-audit-events.ts:19`](../../packages/keiko-contracts/src/memory-audit-events.ts) so the relationship audit pipeline can be tested against it (a fixture-based negative test rejecting any audit record that embeds endpoint content).
 7. **Activity vs. audit separation**: SSE-driven activity events (Gap 6) are body-free but ephemeral; audit entries (Gap 7) are body-free but durable and retention-bound. The two surfaces share the kind enum but never share the payload.
-8. **Retention**: relationship audit entries inherit the run's retention via `DEFAULT_RETENTION` ([`packages/keiko-contracts/src/evidence.ts:315`](../../packages/keiko-contracts/src/evidence.ts)). No new retention lever.
+8. **Retention**: relationship audit entries inherit the manifest's applicable explicit or
+   partition policy. `DEFAULT_RETENTION` caps chat/RAG and regulated evidence independently and does
+   not evict unknown manifests
+   ([`packages/keiko-contracts/src/evidence.ts`](../../packages/keiko-contracts/src/evidence.ts)).
+   No new retention lever.
 9. **Activity visibility scope**: a viewer sees activity for relationships whose scope intersects their own, mirroring [connected-context-privacy.md](../connected-context-privacy.md) and the `MemoryScope` discriminator.
 
 ### Options being weighed

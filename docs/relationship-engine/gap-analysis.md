@@ -65,7 +65,7 @@ Each owning package has its own concept of "live":
 
 - `keiko-memory-vault` tombstones on hard delete ([`packages/keiko-memory-vault/src/tombstones.ts`](../../packages/keiko-memory-vault/src/tombstones.ts), `ON DELETE CASCADE` for edges).
 - `keiko-local-knowledge` has `source-lifecycle.ts` and `capsule-lifecycle.ts` running their own state machines.
-- `keiko-evidence` has retention with `DEFAULT_RETENTION: maxRuns: 50` ([`packages/keiko-contracts/src/evidence.ts:315`](../../packages/keiko-contracts/src/evidence.ts)).
+- `keiko-evidence` has partition-aware retention; `DEFAULT_RETENTION` independently bounds chat/RAG and regulated evidence at 50 while retaining unknown manifests fail-safe ([`packages/keiko-contracts/src/evidence.ts`](../../packages/keiko-contracts/src/evidence.ts)).
 - `keiko-workspace` resolves availability per-`realpath`.
 
 A single "live?" function would either duplicate every domain's lifecycle or break the [ADR-0019](../adr/ADR-0019-modular-package-architecture.md) direction rules.
@@ -334,7 +334,7 @@ readonly relationships?: EvidenceRelationshipAudit | undefined;
 - Body-free invariant from [`memory-audit-events.ts:19`](../../packages/keiko-contracts/src/memory-audit-events.ts).
 - Persistence flows through `deepRedactStrings` at the persist boundary — the same second-barrier pattern `keiko-evidence` already applies.
 - `evidenceSchemaVersion` is bumped per `ADR-0033` (see [adr-candidates.md](adr-candidates.md)); existing readers receive a typed schema-mismatch error rather than silent data corruption.
-- Retention: relationship audit entries inherit the run's retention (`DEFAULT_RETENTION: maxRuns: 50`); they do not pin runs from eviction.
+- Retention: relationship audit entries inherit the parent manifest's partition and applicable retention policy; they do not pin runs from eviction.
 
 ## Gap 8 — Bounded impact-analysis primitive
 
@@ -407,7 +407,7 @@ Page-able via `(limit, cursor)`; the implementation walks the relationship table
 
 - Read-only.
 - Body-free.
-- Cost-bounded: caller passes `limit`; default cap derived from `maxRuns: 50` precedent (e.g., `limit: 256`).
+- Cost-bounded: caller passes `limit`; the default cap follows the bounded-retention precedent (e.g., `limit: 256`).
 - Redaction applied to any summary string returned in the report.
 
 ## Gap 10 — New `WindowType` entries for the relationship inspector and controlled graph view

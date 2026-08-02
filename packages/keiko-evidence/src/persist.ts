@@ -31,9 +31,28 @@ export interface PersistResult {
   readonly report: EvidenceReport;
 }
 
+export interface PersistedEvidenceManifest {
+  readonly manifest: EvidenceManifest;
+  readonly location: string;
+}
+
 function defaultEvidenceDir(input: EvidenceBuildInput, env: EvidenceDeps["env"]): string {
   const configured = resolveEvidenceDir(undefined, env);
   return isAbsolute(configured) ? configured : resolve(input.manifest.workingDirectory, configured);
+}
+
+// The owning write primitive for a standard EvidenceManifest. Keeping redaction, the atomic store
+// write, and retention in one operation prevents a new writer from silently bypassing rotation.
+export function persistEvidenceManifest(
+  manifest: EvidenceManifest,
+  store: NonNullable<EvidenceDeps["store"]>,
+  redact: (input: string) => string,
+  retention: RetentionPolicy = DEFAULT_RETENTION,
+): PersistedEvidenceManifest {
+  const safeManifest = deepRedactStrings(manifest, redact) as EvidenceManifest;
+  const location = store.put(safeManifest.run.runId, JSON.stringify(safeManifest, null, 2));
+  applyRetention(store, retention);
+  return { manifest: safeManifest, location };
 }
 
 export function persistEvidence(
@@ -47,13 +66,13 @@ export function persistEvidence(
   // bug that missed a field still cannot persist a secret.
   const manifest = buildEvidenceManifest(input, deps);
   const redact = createAuditRedactor(input.redaction ?? {}, env);
-  const safeManifest = deepRedactStrings(manifest, redact) as EvidenceManifest;
-  const json = JSON.stringify(safeManifest, null, 2);
   // C5/AC#6: with no explicit store, persist to the predictable local node store (resolved dir incl.
   // KEIKO_EVIDENCE_DIR), NOT an in-memory store that would silently discard the evidence. Tests
   // inject createInMemoryEvidenceStore explicitly so they never write to the repository tree.
   const store = deps.store ?? createNodeEvidenceStore(defaultEvidenceDir(input, deps.env));
-  const location = store.put(safeManifest.run.runId, json);
-  applyRetention(store, retention);
-  return { manifest: safeManifest, location, report: buildEvidenceReport(safeManifest, location) };
+  const persisted = persistEvidenceManifest(manifest, store, redact, retention);
+  return {
+    ...persisted,
+    report: buildEvidenceReport(persisted.manifest, persisted.location),
+  };
 }
