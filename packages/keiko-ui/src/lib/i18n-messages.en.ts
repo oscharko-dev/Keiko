@@ -42,6 +42,8 @@ export const EN_MESSAGES = {
     "File saved, but Local History could not protect this version.",
   "editor.localHistoryProtection.workspaceUnavailable":
     "Reconnect this project, then edit and save the file again.",
+  "editor.localHistoryProtection.filesystemIdentityUnsupported":
+    "Move this project to a filesystem with stable file identity before relying on Local History.",
   "editor.localHistoryProtection.historyUnavailable":
     "Save again after Local History is available.",
   "editor.localHistoryProtection.diagnosticReference": "Diagnostic reference: {correlationId}",

@@ -3045,6 +3045,46 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("clears coding-safe enrichment when an explicit empty workflow list is submitted", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-coding-revoke-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-coding-revoke-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({
+            baseUrl: "https://llm-gateway.example.com/v1",
+            apiKey: "first-secret-token",
+            deploymentNames: ["coding-chat"],
+            workflowEligibleModelIds: ["coding-chat"],
+          }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+
+    const revoked = await handleGatewaySetup(
+      ctx({ preserveExisting: true, workflowEligibleModelIds: [] }),
+      deps,
+    );
+
+    expect(revoked.status).toBe(200);
+    expect(
+      currentGatewayConfig(deps)?.capabilities?.find(
+        (capability) => capability.id === "coding-chat",
+      )?.workflowEligible,
+    ).toBe(false);
+    expect(resolveCodingSafeSidecarGatewayProfile(currentGatewayConfig(deps))).toMatchObject({
+      status: "unavailable",
+    });
+    deps.store.close();
+  });
+
   it("uses LiteLLM model info to persist embeddings while smoke-testing only chat models", async () => {
     const uiDir = await tempDir("keiko-gw-ui-litellm-");
     const evidenceDir = await tempDir("keiko-gw-ev-litellm-");

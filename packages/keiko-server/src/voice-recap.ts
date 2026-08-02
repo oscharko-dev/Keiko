@@ -82,7 +82,9 @@ interface RecapOutcome {
   readonly candidatesExtracted: number;
   readonly candidatesRejected: number;
   readonly candidatesProposed: number;
+  readonly candidatesAccepted: number;
   readonly proposalIds: readonly string[];
+  readonly acceptedIds: readonly string[];
 }
 
 export interface RecapResponseBody extends RecapOutcome {
@@ -225,16 +227,23 @@ function buildCaptureContext(runtime: ConversationMemoryRuntimeContext): Capture
   };
 }
 
-function proposedAuditEvent(memoryId: MemoryId, scope: MemoryScope): MemoryAuditEvent {
+function recapMemoryAuditEvent(
+  status: "proposed" | "accepted",
+  memoryId: MemoryId,
+  scope: MemoryScope,
+): MemoryAuditEvent {
   return {
     schemaVersion: "1",
-    kind: "memory:proposed",
+    kind: status === "accepted" ? "memory:accepted" : "memory:proposed",
     eventId: randomUUID(),
     occurredAt: Date.now(),
     // User-triggered capture from a live conversation → the conversation-center surface (the recap
     // reuses the same provenance surface as per-turn capture; ADR-0109 D3 adds no new surface tag).
     initiatorSurface: "conversation-center",
-    summary: "Proposed a memory from a reviewed voice session recap.",
+    summary:
+      status === "accepted"
+        ? "Accepted a memory from a reviewed voice session recap."
+        : "Proposed a memory from a reviewed voice session recap.",
     memoryId,
     scope,
   };
@@ -242,6 +251,7 @@ function proposedAuditEvent(memoryId: MemoryId, scope: MemoryScope): MemoryAudit
 
 interface RecapPersistResult {
   readonly proposed: readonly { readonly id: MemoryId; readonly scope: MemoryScope }[];
+  readonly accepted: readonly { readonly id: MemoryId; readonly scope: MemoryScope }[];
   readonly extracted: number;
   readonly rejected: number;
 }
@@ -256,6 +266,7 @@ async function persistRecapOutcomes(
   outcomes: readonly CaptureOutcome[],
 ): Promise<RecapPersistResult> {
   const proposed: { id: MemoryId; scope: MemoryScope }[] = [];
+  const accepted: { id: MemoryId; scope: MemoryScope }[] = [];
   const mode = resolveMemoryCaptureAutonomyMode(deps);
   let rejected = 0;
   for (const outcome of outcomes) {
@@ -276,9 +287,11 @@ async function persistRecapOutcomes(
       : record;
     const inserted = vault.insertMemory(candidate);
     await embedAndStoreMemory(deps, vault, inserted.id, inserted.body);
-    proposed.push({ id: inserted.id, scope: inserted.scope });
+    const persisted = { id: inserted.id, scope: inserted.scope };
+    if (inserted.status === "accepted") accepted.push(persisted);
+    else proposed.push(persisted);
   }
-  return { proposed, extracted: outcomes.length, rejected };
+  return { proposed, accepted, extracted: outcomes.length, rejected };
 }
 
 function recordRecapAudits(
@@ -288,7 +301,10 @@ function recordRecapAudits(
   persisted: RecapPersistResult,
   startedAtMs: number,
 ): void {
-  const events = persisted.proposed.map(({ id, scope }) => proposedAuditEvent(id, scope));
+  const events = [
+    ...persisted.proposed.map(({ id, scope }) => recapMemoryAuditEvent("proposed", id, scope)),
+    ...persisted.accepted.map(({ id, scope }) => recapMemoryAuditEvent("accepted", id, scope)),
+  ];
   if (events.length > 0) {
     recordMemoryAudits(
       {
@@ -310,6 +326,7 @@ function recordRecapAudits(
     candidatesExtracted: persisted.extracted,
     candidatesRejected: persisted.rejected,
     candidatesProposed: persisted.proposed.length,
+    candidatesAccepted: persisted.accepted.length,
     triggeredByUser: true,
     durationMs: Math.max(0, Date.now() - startedAtMs),
   };
@@ -342,7 +359,9 @@ async function buildRecapResponse(
     candidatesExtracted: persisted.extracted,
     candidatesRejected: persisted.rejected,
     candidatesProposed: persisted.proposed.length,
+    candidatesAccepted: persisted.accepted.length,
     proposalIds: persisted.proposed.map(({ id }) => String(id)),
+    acceptedIds: persisted.accepted.map(({ id }) => String(id)),
   };
 }
 
@@ -356,7 +375,9 @@ function dormantResponse(): RouteResult {
       candidatesExtracted: 0,
       candidatesRejected: 0,
       candidatesProposed: 0,
+      candidatesAccepted: 0,
       proposalIds: [],
+      acceptedIds: [],
     } satisfies RecapResponseBody,
   };
 }

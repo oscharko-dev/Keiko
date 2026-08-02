@@ -102,7 +102,13 @@ function chatOnlyConfig(): GatewayConfig {
   };
 }
 
-function deps(options: { config?: GatewayConfig; includeVault?: boolean } = {}): UiHandlerDeps {
+function deps(
+  options: {
+    config?: GatewayConfig;
+    includeVault?: boolean;
+    mode?: UiHandlerDeps["codingRuntimeDeploymentCeiling"];
+  } = {},
+): UiHandlerDeps {
   return {
     config: options.config ?? realtimeConfig(),
     configPresent: true,
@@ -112,6 +118,7 @@ function deps(options: { config?: GatewayConfig; includeVault?: boolean } = {}):
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
+    ...(options.mode === undefined ? {} : { codingRuntimeDeploymentCeiling: options.mode }),
     ...(options.includeVault === false ? {} : { memoryVault: vault }),
   };
 }
@@ -175,7 +182,13 @@ describe("handleBuildVoiceRecap", () => {
     const result = await handleBuildVoiceRecap(ctx(recapBody(chat, [])), deps());
     expect(result.status).toBe(200);
     const body = result.body as RecapResponseBody;
-    expect(body).toMatchObject({ candidatesProposed: 0, candidatesExtracted: 0, proposalIds: [] });
+    expect(body).toMatchObject({
+      candidatesProposed: 0,
+      candidatesAccepted: 0,
+      candidatesExtracted: 0,
+      proposalIds: [],
+      acceptedIds: [],
+    });
     expect(proposedCount()).toBe(0);
   });
 
@@ -224,6 +237,38 @@ describe("handleBuildVoiceRecap", () => {
       })
       .filter((event) => event.kind === "memory:proposed");
     expect(proposedEvents).toHaveLength(2);
+  });
+
+  it("reports and audits mode-eligible recap memories as accepted", async () => {
+    const chat = createChat();
+    const result = await handleBuildVoiceRecap(
+      ctx(recapBody(chat, ["remember that I prefer dark mode"])),
+      deps({ mode: "supervised-coding" }),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as RecapResponseBody;
+    expect(body).toMatchObject({
+      candidatesAccepted: 1,
+      candidatesProposed: 0,
+      proposalIds: [],
+    });
+    expect(body.acceptedIds).toHaveLength(1);
+    const accepted = vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), {
+      status: ["accepted"],
+      includeExpired: true,
+    });
+    expect(accepted).toHaveLength(1);
+
+    const entries = evidenceStore.list().map((runId) => evidenceStore.get(runId) ?? "");
+    const rollup = entries.find((entry) => entry.includes('"candidatesAccepted"')) ?? "{}";
+    expect(JSON.parse(rollup)).toMatchObject({ candidatesAccepted: 1, candidatesProposed: 0 });
+    const auditEvents = entries.flatMap((entry) => {
+      const parsed = JSON.parse(entry) as unknown;
+      return Array.isArray(parsed) ? (parsed as readonly { kind?: string }[]) : [];
+    });
+    expect(auditEvents.filter((event) => event.kind === "memory:accepted")).toHaveLength(1);
+    expect(auditEvents.filter((event) => event.kind === "memory:proposed")).toHaveLength(0);
   });
 
   it("rejects a secret in committed text before it reaches the vault (AC6)", async () => {

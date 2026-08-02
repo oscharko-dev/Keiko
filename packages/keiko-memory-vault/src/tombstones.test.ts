@@ -13,9 +13,11 @@ import type {
 import type { MemoryTombstone } from "./types.js";
 import {
   deleteTombstonesByScopeBeforeRows,
+  hasSemanticallySimilarForgetTombstoneRow,
   insertTombstoneRow,
-  listForgetTombstoneVectors,
+  listTombstonesByScopePageRows,
   listTombstonesByScopeRows,
+  listTombstonesPageRows,
   selectForgetSuppressionBodyHashPresence,
 } from "./tombstones.js";
 import { memoryBodySuppressionHash } from "./body-fingerprint.js";
@@ -42,7 +44,7 @@ const userScope: MemoryScope = { kind: "user", userId: "u-1" as UserId };
 const workspaceScope: MemoryScope = { kind: "workspace", workspaceId: "u-1" as WorkspaceId };
 
 describe("tombstones", () => {
-  it("bounds semantic suppression to the 200 most recent forgotten vectors", () => {
+  it("finds an older semantic refusal through bounded indexed pages", () => {
     const db = openTestDb();
     for (let index = 0; index < 250; index += 1) {
       insertTombstoneRow(
@@ -53,14 +55,79 @@ describe("tombstones", () => {
           forgottenAt: index,
         }),
         TEST_CIPHER,
-        new Float32Array([index]),
+        new Float32Array([index === 0 ? 1 : 0, index === 0 ? 0 : 1]),
       );
     }
 
-    const vectors = listForgetTombstoneVectors(db, userScope, TEST_CIPHER, 200);
-    expect(vectors).toHaveLength(200);
-    expect(vectors[0]?.[0]).toBe(249);
-    expect(vectors.at(-1)?.[0]).toBe(50);
+    expect(
+      hasSemanticallySimilarForgetTombstoneRow(
+        db,
+        userScope,
+        TEST_CIPHER,
+        new Float32Array([1, 0]),
+        0.95,
+      ),
+    ).toBe(true);
+    db.close();
+  });
+
+  it("paginates the audit ledger with a stable descending keyset", () => {
+    const db = openTestDb();
+    for (let index = 0; index < 5; index += 1) {
+      insertTombstoneRow(
+        db,
+        makeTombstone({
+          id: `t-${String(index)}`,
+          memoryId: `m-${String(index)}` as MemoryId,
+          forgottenAt: index < 2 ? 10 : 5 - index,
+        }),
+        TEST_CIPHER,
+      );
+    }
+
+    const first = listTombstonesByScopePageRows(db, userScope, TEST_CIPHER, 2);
+    const last = first.tombstones.at(-1);
+    expect(first.total).toBe(5);
+    expect(first.tombstones.map((row) => row.id)).toEqual(["t-0", "t-1"]);
+    expect(last).toBeDefined();
+    const second = listTombstonesByScopePageRows(db, userScope, TEST_CIPHER, 2, {
+      forgottenAt: last?.forgottenAt ?? 0,
+      id: last?.id ?? "",
+    });
+    expect(second.tombstones.map((row) => row.id)).toEqual(["t-2", "t-3"]);
+    db.close();
+  });
+
+  it("continues a ledger page deterministically across authorized scopes", () => {
+    const db = openTestDb();
+    insertTombstoneRow(
+      db,
+      makeTombstone({ id: "t-b", memoryId: "m-b" as MemoryId, forgottenAt: 100 }),
+      TEST_CIPHER,
+    );
+    insertTombstoneRow(
+      db,
+      makeTombstone({
+        id: "t-a",
+        memoryId: "m-a" as MemoryId,
+        scopeKind: "workspace",
+        forgottenAt: 100,
+      }),
+      TEST_CIPHER,
+    );
+
+    const scopes = [userScope, workspaceScope];
+    const first = listTombstonesPageRows(db, scopes, TEST_CIPHER, 1);
+    const item = first.tombstones[0];
+    expect(item?.id).toBe("t-a");
+    expect(item).toBeDefined();
+    const second = listTombstonesPageRows(db, scopes, TEST_CIPHER, 1, {
+      forgottenAt: item?.forgottenAt ?? 0,
+      id: item?.id ?? "",
+      scopeKind: item?.scopeKind ?? "global",
+      scopeCoordinate: item?.scopeCoordinate ?? "global",
+    });
+    expect(second.tombstones.map((row) => row.id)).toEqual(["t-b"]);
     db.close();
   });
 

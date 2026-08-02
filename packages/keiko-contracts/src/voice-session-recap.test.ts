@@ -52,6 +52,7 @@ function validAuditRecord(
     candidatesExtracted: 4,
     candidatesRejected: 1,
     candidatesProposed: 3,
+    candidatesAccepted: 0,
     triggeredByUser: true,
     durationMs: 42,
     ...overrides,
@@ -107,6 +108,10 @@ describe("voice-session-recap contract", () => {
       [
         validAuditRecord({ candidatesProposed: 1.5 }),
         "candidatesProposed: must be a non-negative integer",
+      ],
+      [
+        validAuditRecord({ candidatesAccepted: -1 }),
+        "candidatesAccepted: must be a non-negative integer",
       ],
       [validAuditRecord({ durationMs: "42" }), "durationMs: must be a non-negative integer"],
     ];

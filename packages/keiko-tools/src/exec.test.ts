@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nodeSpawnFn, runCommand, type HomeProvider, type RunCommandDeps } from "./exec.js";
 import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
 import { PathEscapeError, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
@@ -147,6 +147,44 @@ describe("runCommand — allowlist guard (before spawn)", () => {
     expect(seen).toEqual([spawn.child.pid]);
     spawn.child.emit("close", 0, null);
     await expect(pending).resolves.toMatchObject({ exitCode: 0 });
+  });
+
+  it("retains ownership until a child is terminated when the spawn callback fails", async () => {
+    vi.useFakeTimers();
+    const spawn = recordingSpawn();
+    const home = recordingHome();
+    const kills = captureKills();
+    try {
+      const pending = runCommand(
+        {
+          command: "node",
+          args: ["-e", "1"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+          onSpawn: (): void => {
+            throw new Error("lock write failed");
+          },
+        },
+        { ...fakeDeps(spawn.fn), home: home.provider },
+      );
+
+      expectTerminated(kills, spawn.child);
+      expect(home.cleaned()).toEqual([]);
+      await vi.advanceTimersByTimeAsync(DEFAULT_SANDBOX_POLICY.terminationGraceMs);
+      const groupKilled = kills.groupSignals.some(
+        (call) => call.pid < 0 && call.signal === "SIGKILL",
+      );
+      expect(groupKilled || spawn.child.killed.includes("SIGKILL")).toBe(true);
+      expect(home.cleaned()).toEqual([]);
+
+      spawn.child.emit("close", null, "SIGKILL");
+      await expect(pending).rejects.toThrow("lock write failed");
+      expect(home.cleaned()).toHaveLength(1);
+    } finally {
+      kills.restore();
+      vi.useRealTimers();
+    }
   });
 
   it("rejects a denied command WITHOUT spawning", async () => {

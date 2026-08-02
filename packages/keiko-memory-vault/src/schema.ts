@@ -47,7 +47,10 @@ import { encryptExistingContent } from "./migrate-encrypt.js";
 // v10 = forget-tombstone semantic fingerprint (GEN-AI-MEMORY-003, RB-4). Adds a sealed embedding
 // vector to tombstones so a paraphrase of a forgotten body (different body_hash, similar cosine)
 // can be suppressed at capture without storing the deleted body text itself.
-export const MEMORY_VAULT_SCHEMA_VERSION = 10;
+// v11 = stable keyset traversal for the sealed tombstone vector ledger. The partial composite index
+// keeps each exact semantic-suppression page and each authorized audit page bounded without dropping
+// older refusals or exposing a plaintext vector sidecar.
+export const MEMORY_VAULT_SCHEMA_VERSION = 11;
 
 const ENCRYPTION_VERSION = 2;
 
@@ -198,6 +201,14 @@ const V10_SQL = `
 ALTER TABLE memory_tombstones ADD COLUMN body_embedding BLOB;
 `;
 
+const V11_SQL = `
+CREATE INDEX IF NOT EXISTS idx_tombstones_scope_forgotten_vector
+  ON memory_tombstones(scope_kind, scope_coordinate, forgotten_at DESC, id ASC)
+  WHERE body_embedding IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tombstones_scope_forgotten
+  ON memory_tombstones(scope_kind, scope_coordinate, forgotten_at DESC, id ASC);
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 3, sql: V3_SQL },
@@ -208,6 +219,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 8, sql: V8_SQL },
   { version: 9, sql: V9_SQL },
   { version: 10, sql: V10_SQL },
+  { version: 11, sql: V11_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

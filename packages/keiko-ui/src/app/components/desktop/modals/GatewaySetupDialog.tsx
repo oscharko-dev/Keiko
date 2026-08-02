@@ -105,6 +105,13 @@ function storedSemanticTurnDetection(models: readonly ModelCapability[]): boolea
   return storedSemanticRealtimeModelId(models) !== undefined;
 }
 
+function storedWorkflowEligibleModelIds(models: readonly ModelCapability[]): string {
+  return models
+    .filter((model) => model.kind === "chat" && model.workflowEligible === true)
+    .map((model) => model.id)
+    .join("\n");
+}
+
 function semanticTurnDetectionForIdentity(
   preserveExisting: boolean,
   storedModels: readonly ModelCapability[],
@@ -307,6 +314,7 @@ interface CoreGatewayFields {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
+  readonly workflowEligibleModelIdsConfigured: boolean;
 }
 
 function hasCoreGatewayFieldInput(
@@ -322,7 +330,7 @@ function hasCoreGatewayFieldInput(
     fields.apiKeyHeaderName.trim() !== "" ||
     derived.parsedDeploymentNames.length > 0 ||
     derived.parsedImageInputModelIds.length > 0 ||
-    derived.parsedWorkflowEligibleModelIds.length > 0
+    fields.workflowEligibleModelIdsConfigured
   );
 }
 
@@ -334,6 +342,7 @@ interface AnyGatewayCredentialFields {
   readonly parsedDeploymentNames: readonly string[];
   readonly parsedImageInputModelIds: readonly string[];
   readonly parsedWorkflowEligibleModelIds: readonly string[];
+  readonly workflowEligibleModelIdsConfigured: boolean;
   readonly voiceCredentialInput: boolean;
 }
 
@@ -345,7 +354,7 @@ function hasAnyGatewayCredentialInput(fields: AnyGatewayCredentialFields): boole
     fields.timeoutMs.trim() !== "" ||
     fields.parsedDeploymentNames.length > 0 ||
     fields.parsedImageInputModelIds.length > 0 ||
-    fields.parsedWorkflowEligibleModelIds.length > 0 ||
+    fields.workflowEligibleModelIdsConfigured ||
     fields.voiceCredentialInput
   );
 }
@@ -493,6 +502,7 @@ interface GatewayFormFields {
   readonly deploymentNames: string;
   readonly imageInputModelIds: string;
   readonly workflowEligibleModelIds: string;
+  readonly workflowEligibleModelIdsConfigured: boolean;
   readonly voiceBaseUrl: string;
   readonly voiceApiKey: string;
   readonly voiceApiKeyHeaderName: string;
@@ -552,7 +562,7 @@ function buildSetupGatewayPayload(
     ...(derived.parsedImageInputModelIds.length === 0
       ? {}
       : { imageInputModelIds: derived.parsedImageInputModelIds }),
-    ...(derived.parsedWorkflowEligibleModelIds.length === 0
+    ...(!fields.workflowEligibleModelIdsConfigured
       ? {}
       : { workflowEligibleModelIds: derived.parsedWorkflowEligibleModelIds }),
     ...voiceCredentialFields,
@@ -2027,7 +2037,11 @@ export function GatewaySetupDialog({
   const [timeoutMs, setTimeoutMs] = useState("");
   const [deploymentNames, setDeploymentNames] = useState("");
   const [imageInputModelIds, setImageInputModelIds] = useState("");
-  const [workflowEligibleModelIds, setWorkflowEligibleModelIds] = useState("");
+  const [workflowEligibleModelIds, setWorkflowEligibleModelIds] = useState(() =>
+    preserveExisting ? storedWorkflowEligibleModelIds(storedModels) : "",
+  );
+  const [workflowEligibleModelIdsConfigured, setWorkflowEligibleModelIdsConfigured] =
+    useState(false);
   const [voiceBaseUrl, setVoiceBaseUrl] = useState("");
   const [voiceApiKey, setVoiceApiKey] = useState("");
   const [voiceApiKeyHeaderName, setVoiceApiKeyHeaderName] = useState("");
@@ -2269,6 +2283,7 @@ export function GatewaySetupDialog({
           deploymentNames,
           imageInputModelIds,
           workflowEligibleModelIds,
+          workflowEligibleModelIdsConfigured,
           voiceBaseUrl,
           voiceApiKey,
           voiceApiKeyHeaderName,
@@ -2345,6 +2360,7 @@ export function GatewaySetupDialog({
     parsedDeploymentNames,
     parsedImageInputModelIds,
     parsedWorkflowEligibleModelIds,
+    workflowEligibleModelIdsConfigured,
     voiceCredentialInput,
   });
   const hasFigmaCredentialInput = figmaAccessToken.trim() !== "";
@@ -2382,7 +2398,10 @@ export function GatewaySetupDialog({
       imageInputModelIds={imageInputModelIds}
       setImageInputModelIds={setImageInputModelIds}
       workflowEligibleModelIds={workflowEligibleModelIds}
-      setWorkflowEligibleModelIds={setWorkflowEligibleModelIds}
+      setWorkflowEligibleModelIds={(value): void => {
+        setWorkflowEligibleModelIdsConfigured(true);
+        setWorkflowEligibleModelIds(value);
+      }}
     />
   );
 

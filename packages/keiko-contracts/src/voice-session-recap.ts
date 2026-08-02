@@ -95,6 +95,7 @@ export interface VoiceSessionRecapEvidenceSummary {
   readonly candidatesExtracted: number;
   readonly candidatesRejected: number;
   readonly candidatesProposed: number;
+  readonly candidatesAccepted: number;
   readonly triggeredByUser: boolean;
 }
 
@@ -108,6 +109,7 @@ export interface VoiceSessionRecapAuditRecord {
   readonly candidatesExtracted: number;
   readonly candidatesRejected: number;
   readonly candidatesProposed: number;
+  readonly candidatesAccepted: number;
   readonly triggeredByUser: boolean;
   readonly durationMs: number;
 }
@@ -138,6 +140,7 @@ const AUDIT_COUNT_FIELDS = [
   "candidatesExtracted",
   "candidatesRejected",
   "candidatesProposed",
+  "candidatesAccepted",
   "durationMs",
 ] as const;
 

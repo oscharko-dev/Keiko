@@ -78,8 +78,15 @@ positive safe-integer environment values:
 Absent values leave that dimension disabled; an invalid value disables the retention phase and
 emits a content-free operator diagnostic. Pinned records remain ineligible. Scope enumeration
 includes tombstone-only scopes so later passes can actually purge forgotten ledgers after their last
-live record is gone. `GET /api/memory/tombstones` exposes a bounded, authorized, content-free audit
-projection without body hashes or forgotten body content.
+live record is gone. `GET /api/memory/tombstones` exposes an authorized, content-free audit
+projection without body hashes or forgotten body content. It reads a bounded storage page ordered
+by a stable keyset and returns an opaque continuation cursor, so every older record remains
+inspectable without materializing or decrypting the complete ledger.
+
+Semantic forget suppression is deletion-grade across the complete retained tombstone ledger. Sealed
+vectors are traversed in fixed-size pages through the scope/time/id index and compared exactly,
+short-circuiting on a match. The implementation deliberately does not persist a plaintext ANN
+sidecar for forgotten content and never drops older refusals merely to cap an in-memory array.
 
 ## Consequences
 

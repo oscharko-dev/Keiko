@@ -512,6 +512,36 @@ describe("GatewaySetupDialog", () => {
     });
   });
 
+  it("submits an explicit empty workflow list when the operator clears stored approval", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "coding-chat",
+      testedModelIds: ["coding-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog preserveExisting storedModels={[modelCapability("coding-chat")]} />);
+
+    await userEvent.click(screen.getByText("Replace model gateway settings"));
+    const workflowModels = screen.getByLabelText(/coding-safe workflow models optional/i);
+    expect(workflowModels).toHaveValue("coding-chat");
+    await userEvent.clear(workflowModels);
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).toHaveBeenCalledWith({
+      baseUrl: undefined,
+      apiKey: undefined,
+      apiKeyHeaderName: undefined,
+      deploymentNames: [],
+      preserveExisting: true,
+      workflowEligibleModelIds: [],
+    });
+  });
+
   it("submits optional voice dictation credentials from update mode", async () => {
     vi.mocked(setupGateway).mockResolvedValueOnce({
       ok: true,

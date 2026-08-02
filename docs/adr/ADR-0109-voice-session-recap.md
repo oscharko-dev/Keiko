@@ -11,7 +11,18 @@ the route is not the productive Twin memory path.
 
 ## Version
 
-0.3.1
+0.3.2
+
+## 2026-08-02 amendment — persisted status is authoritative
+
+The product-wide memory autonomy posture also governs explicit recap capture. A public,
+non-approval-gated candidate may therefore be persisted directly as `accepted` in supervised or
+autonomous mode through the same canonical promotion predicate used by every other capture surface.
+The recap response and content-free audit record report `candidatesAccepted` separately from
+`candidatesProposed`; accepted record ids are returned as `acceptedIds`, while `proposalIds` contains
+only records that actually entered the review queue. The per-record audit kind likewise matches the
+persisted status (`memory:accepted` or `memory:proposed`). Historical statements below that every
+recap candidate always lands as `proposed` are superseded by this amendment.
 
 ## 2026-07-21 amendment — per-turn capture is canonical; recap is aggregation only
 

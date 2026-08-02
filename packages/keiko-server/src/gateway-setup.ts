@@ -338,8 +338,14 @@ function workflowCapabilityFields(
   existing: ModelCapability | undefined,
   workflowEligibleModelIds: readonly string[] | undefined,
 ): Partial<ModelCapability> {
-  if (baseCapability.kind !== "chat" || workflowEligibleModelIds?.includes(modelId) !== true) {
+  if (baseCapability.kind !== "chat" || workflowEligibleModelIds === undefined) {
     return {};
+  }
+  if (!workflowEligibleModelIds.includes(modelId)) {
+    return {
+      workflowEligible: false,
+      preferredUseCases: baseCapability.preferredUseCases,
+    };
   }
   return {
     workflowEligible: true,
@@ -1335,6 +1341,7 @@ interface SetupRequest {
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
   readonly workflowEligibleModelIds: readonly string[];
+  readonly workflowEligibleModelIdsConfigured: boolean;
   readonly voiceProviders: readonly SetupVoiceProvider[];
   readonly figmaAccessToken: string | undefined;
   readonly verifyGateway: boolean;
@@ -1475,6 +1482,10 @@ function hasNonEmptyListField(raw: Record<string, unknown>, key: string): boolea
     return normalizeDeploymentNames(deploymentNameValues(value) ?? []).length > 0;
   }
   return Array.isArray(value) && value.some((item) => typeof item === "string" && item.trim());
+}
+
+function hasListField(raw: Record<string, unknown>, key: string): boolean {
+  return Object.hasOwn(raw, key);
 }
 
 const VOICE_PROVIDER_STRING_FIELDS = [
@@ -2800,7 +2811,7 @@ function setupRequiresGatewayVerification(
     hasNonBlankStringField(raw, "apiKeyHeaderName") ||
     hasNonEmptyListField(raw, "deploymentNames") ||
     hasNonEmptyListField(raw, "imageInputModelIds") ||
-    hasNonEmptyListField(raw, "workflowEligibleModelIds")
+    hasListField(raw, "workflowEligibleModelIds")
   );
 }
 
@@ -2839,6 +2850,7 @@ function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | Route
     deploymentNames: resolved.deploymentNames,
     imageInputModelIds: resolved.imageInputModelIds,
     workflowEligibleModelIds: resolved.workflowEligibleModelIds,
+    workflowEligibleModelIdsConfigured: hasListField(input.raw, "workflowEligibleModelIds"),
     voiceProviders: input.voiceProviders,
     figmaAccessToken: input.figmaAccessToken ?? input.current?.figma?.accessToken,
     verifyGateway: setupRequiresGatewayVerification(input.raw, input.preserveExisting),
@@ -2934,7 +2946,7 @@ interface SetupVerificationInput {
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
-  readonly workflowEligibleModelIds: readonly string[];
+  readonly workflowEligibleModelIds: readonly string[] | undefined;
   readonly voiceProviders: readonly SetupVoiceProvider[];
   readonly tester: GatewaySetupTester;
   readonly discovery: GatewayModelDiscovery;
@@ -3342,7 +3354,9 @@ async function trySetupCandidate(
     timeoutMs: request.timeoutMs,
     deploymentNames: request.deploymentNames,
     imageInputModelIds: request.imageInputModelIds,
-    workflowEligibleModelIds: request.workflowEligibleModelIds,
+    workflowEligibleModelIds: request.workflowEligibleModelIdsConfigured
+      ? request.workflowEligibleModelIds
+      : undefined,
     voiceProviders: request.voiceProviders,
     tester,
     discovery,

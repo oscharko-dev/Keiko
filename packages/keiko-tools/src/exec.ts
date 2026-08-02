@@ -307,6 +307,7 @@ function appendCapped(buffers: Buffers, sink: Buffer[], chunk: Buffer, max: numb
 interface RunState {
   settled: boolean;
   timedOut: boolean;
+  spawnCallbackError: Error | undefined;
   timer: NodeJS.Timeout | undefined;
   graceTimer: NodeJS.Timeout | undefined;
   onAbort: (() => void) | undefined;
@@ -455,6 +456,10 @@ function settleOnClose(
     }
     ctx.state.settled = true;
     cleanup(ctx.state, ctx.input.signal);
+    if (ctx.state.spawnCallbackError !== undefined) {
+      reject(ctx.state.spawnCallbackError);
+      return;
+    }
     if (ctx.state.timedOut) {
       reject(new CommandTimeoutError("command timed out", timeoutOf(ctx)));
       return;
@@ -482,7 +487,7 @@ function settleOnClose(
     }
     ctx.state.settled = true;
     cleanup(ctx.state, ctx.input.signal);
-    reject(error);
+    reject(ctx.state.spawnCallbackError ?? error);
   });
 }
 
@@ -535,6 +540,7 @@ function createRunState(home: HomeProvider | undefined, homeDir: string | undefi
   return {
     settled: false,
     timedOut: false,
+    spawnCallbackError: undefined,
     timer: undefined,
     graceTimer: undefined,
     onAbort: undefined,
@@ -592,12 +598,6 @@ function spawnChild(
       shell: false,
       detached: POSIX,
     });
-    try {
-      if (child.pid !== undefined) input.onSpawn?.(child.pid);
-    } catch (error) {
-      killGroup(child, "SIGTERM");
-      throw error;
-    }
     return child;
   } catch (error) {
     cleanup(state, input.signal);
@@ -609,6 +609,13 @@ function runSpawnedChild(ctx: ExecContext): Promise<CommandResult> {
   return new Promise<CommandResult>((resolve, reject) => {
     wireStreams(ctx.child, ctx.buffers, ctx.deps.policy, ctx.state);
     settleOnClose(ctx, resolve, reject);
+    try {
+      if (ctx.child.pid !== undefined) ctx.input.onSpawn?.(ctx.child.pid);
+    } catch (error) {
+      ctx.state.spawnCallbackError = asError(error, "spawn callback failed");
+      terminate(ctx.child, ctx.deps.policy, ctx.state);
+      return;
+    }
     armTimersAndAbort(ctx);
   });
 }

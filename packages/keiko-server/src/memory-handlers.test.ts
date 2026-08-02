@@ -209,6 +209,7 @@ describe("memory handlers", () => {
     expect(result.body).toMatchObject({
       total: 1,
       limit: 10,
+      nextCursor: null,
       tombstones: [
         {
           memoryId: "forgotten-1",
@@ -220,6 +221,56 @@ describe("memory handlers", () => {
     });
     expect(JSON.stringify(result.body)).not.toContain("secret body");
     expect(JSON.stringify(result.body)).not.toContain("bodyHash");
+  });
+
+  it("paginates the complete tombstone ledger with an opaque continuation cursor", () => {
+    const vault = makeVault();
+    const scope = { kind: "user" as const, userId: userId("u-1") };
+    for (const [id, nowMs] of [
+      ["forgotten-newest", 300],
+      ["forgotten-middle", 200],
+      ["forgotten-oldest", 100],
+    ] as const) {
+      vault.insertMemory(makeMemory(id, `secret-${id}`, { scope }));
+      vault.deleteMemory(memoryId(id), {
+        tombstone: true,
+        forgetterSurface: "memory-center",
+        reason: "user-request",
+        nowMs,
+      });
+    }
+
+    const first = handleListMemoryTombstones(
+      makeCtx("/api/memory/tombstones?limit=2", {}),
+      makeDeps({ memoryVault: vault }),
+    );
+    const firstBody = asJson(first);
+    expect(firstBody).toMatchObject({ total: 3, limit: 2 });
+    expect(firstBody.nextCursor).toEqual(expect.any(String));
+    expect(firstBody.tombstones).toMatchObject([
+      { memoryId: "forgotten-newest" },
+      { memoryId: "forgotten-middle" },
+    ]);
+
+    const second = handleListMemoryTombstones(
+      makeCtx(`/api/memory/tombstones?limit=2&cursor=${String(firstBody.nextCursor)}`, {}),
+      makeDeps({ memoryVault: vault }),
+    );
+    expect(second.body).toMatchObject({
+      total: 3,
+      limit: 2,
+      nextCursor: null,
+      tombstones: [{ memoryId: "forgotten-oldest" }],
+    });
+  });
+
+  it("rejects a malformed tombstone continuation cursor", () => {
+    const result = handleListMemoryTombstones(
+      makeCtx("/api/memory/tombstones?cursor=not.valid", {}),
+      makeDeps({ memoryVault: makeVault() }),
+    );
+
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
   });
 
   it("lists memories across scopes and paginates after filtering", () => {

@@ -55,6 +55,21 @@ export interface MemoryTombstone {
   readonly reason?: string;
 }
 
+export interface MemoryTombstoneCursor {
+  readonly forgottenAt: number;
+  readonly id: string;
+}
+
+export interface MemoryTombstoneLedgerCursor extends MemoryTombstoneCursor {
+  readonly scopeKind: MemoryScopeKind;
+  readonly scopeCoordinate: string;
+}
+
+export interface MemoryTombstonePage {
+  readonly tombstones: readonly MemoryTombstone[];
+  readonly total: number;
+}
+
 export interface MemoryMetadata {
   readonly id: MemoryId;
   readonly schemaVersion: "1";
@@ -188,11 +203,20 @@ export interface MemoryVaultStore {
     memoryIds: readonly MemoryId[],
   ) => ReadonlyMap<MemoryId, MemoryEmbeddingRow>;
   readonly listTombstonesByScope: (scope: MemoryScope) => readonly MemoryTombstone[];
+  readonly listTombstonesPage: (
+    scopes: readonly MemoryScope[],
+    limit: number,
+    after?: MemoryTombstoneLedgerCursor,
+  ) => MemoryTombstonePage;
   readonly hasForgetTombstoneForBody: (scope: MemoryScope, body: string) => boolean;
   // Sealed embeddings of forgotten memories in this scope (GEN-AI-MEMORY-003, RB-4). Lets a capture
   // boundary suppress a semantic paraphrase of a forgotten fact — cosine-similar but a different
   // body_hash — without ever exposing the forgotten body text itself.
-  readonly forgetTombstoneVectors: (scope: MemoryScope, limit: number) => readonly Float32Array[];
+  readonly hasSemanticallySimilarForgetTombstone: (
+    scope: MemoryScope,
+    candidate: Float32Array,
+    threshold: number,
+  ) => boolean;
   readonly purgeTombstonesByScopeBefore: (scope: MemoryScope, forgottenBeforeMs: number) => number;
   // Access tracking (#204). `recordAccess` upserts an insert-or-increment counter for each id
   // (a recall reflex from the retrieval surface); `getAccessStats` reads the counters back for the
