@@ -140,13 +140,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_NAME: >-
             keiko-review-store-pr${{ github.event.pull_request.number }}-${{
-              hashFiles('.github/keiko-for-quality.json') }}-${{ vars.KEIKO_QUALITY_MODEL_ID }}
+              hashFiles('.github/keiko-for-quality.json') }}-${{
+              vars.KEIKO_QUALITY_MODEL_ID }}-${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           WORKFLOW_PATH: .github/workflows/keiko-for-quality.yml
         run: |
-          MATCH="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/artifacts" -f "name=${ARTIFACT_NAME}" -F per_page=20 \
+          MATCH="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/artifacts" -f "name=${ARTIFACT_NAME}" -F per_page=100 \
             --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | reverse | .[].workflow_run.id' \
             | while read -r RUN_ID; do
                 OK="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '
@@ -167,7 +168,8 @@ jobs:
         with:
           name: >-
             keiko-review-store-pr${{ github.event.pull_request.number }}-${{
-              hashFiles('.github/keiko-for-quality.json') }}-${{ vars.KEIKO_QUALITY_MODEL_ID }}
+              hashFiles('.github/keiko-for-quality.json') }}-${{
+              vars.KEIKO_QUALITY_MODEL_ID }}-${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
           path: keiko-review-store
           run-id: ${{ steps.locate.outputs.run-id }}
           github-token: ${{ github.token }}
@@ -222,7 +224,8 @@ jobs:
         with:
           name: >-
             keiko-review-store-pr${{ github.event.pull_request.number }}-${{
-              hashFiles('.github/keiko-for-quality.json') }}-${{ vars.KEIKO_QUALITY_MODEL_ID }}
+              hashFiles('.github/keiko-for-quality.json') }}-${{
+              vars.KEIKO_QUALITY_MODEL_ID }}-${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
           path: keiko-review-store
           retention-days: 7
           if-no-files-found: error
