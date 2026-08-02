@@ -26,7 +26,18 @@ a test upstream. When assessing a compromised or defective action, assume the ca
 
 Activated on 2026-08-02 against Keiko for Quality `v0.4.0`
 (`80bda11eec1e113573c09878b91a885981211009`), model `gpt-5.4` over an OpenAI-compatible endpoint.
-Repinned the same day to `v0.5.0`, then `v0.7.0`.
+
+Repinned twice the same day, each time because a live run exposed a defect no fixture had:
+
+| pin                                                 | why                                                                                                                                                                            |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `v0.4.0` `80bda11eec1e113573c09878b91a885981211009` | activation                                                                                                                                                                     |
+| `v0.5.0` `be392820f2839ba9b9711c1a5a4ccceaa465e6d6` | v0.4.0 passed the profile's exclusions to the engine, whose filter resolves an overlap the opposite way to the inventory. Every documentation pull request settled incomplete. |
+| `v0.7.0` `688e34f077f3aec328614e77212e8cfd486d84ab` | v0.6.0 lets the reviewer search the repository before making a claim; v0.7.0 publishes the findings a partial run did produce instead of discarding them.                      |
+
+The pin in [`keiko-for-quality.yml`](../../.github/workflows/keiko-for-quality.yml) is the
+authoritative one; this table is history, and a disagreement between them means the table is
+stale.
 
 **The delivery freeze in step 4 was not applied, and coverage for that window was therefore not
 established.** Recorded as a shortfall rather than as an exception, because the reasoning that
