@@ -91,11 +91,54 @@ reviewed.
 auto-merge armed. Its last required check can go green in the window between enabling the reviewer
 and retriggering that pull request — and because enabling emits no event and this reviewer publishes
 no required status, GitHub integrates it immediately, unreviewed, with the loop below still to reach
-it. Nothing afterwards can undo that, so the confirmation step would attest to coverage this
-procedure never had. Disable auto-merge on every eligible pull request first
-(`gh pr merge --disable-auto <n>`), then set the variable, then retrigger, and re-arm only once each
-current head has a terminated review under the ADR-0170 D5 interlock. The same hold applies to the
-re-enable instruction in the disable section below.
+it. Nothing afterward can undo that, so the confirmation step would attest to coverage this
+procedure never had.
+
+So the hold is a step with its own fail-closed check, not an instruction to be careful. Run it
+**before** setting the variable, and do not set the variable if it aborts — a partially disarmed
+fleet is the same hazard as an undisarmed one, and the only safe response to a failed disarm is to
+leave the reviewer off. The same hold applies to the re-enable instruction in the disable section
+below.
+
+```bash
+set -euo pipefail
+LIMIT=200
+total=$(gh pr list --base dev --state open --limit "$LIMIT" --json number --jq 'length')
+if [ "$total" -ge "$LIMIT" ]; then
+  echo "open pull requests reached the query limit ($LIMIT) — raise it; hold NOT established" >&2
+  exit 1
+fi
+eligible=$(gh pr list --base dev --state open --limit "$LIMIT" \
+  --json number,isDraft,headRepositoryOwner,headRepository \
+  --jq '.[] | select(.isDraft == false)
+            | select(.headRepositoryOwner.login == "oscharko-dev" and .headRepository.name == "Keiko")
+            | .number')
+
+# Disarm every one of them. Abort on the first failure: continuing past one leaves an armed pull
+# request behind while the rest of the procedure reports success.
+printf '%s\n' "$eligible" | sed '/^$/d' |
+while read -r n; do
+  gh pr merge --disable-auto "$n" || {
+    echo "FAILED to disable auto-merge on #$n — hold NOT established" >&2
+    exit 1
+  }
+done
+
+# Then verify, rather than trust the loop. A disable that silently no-ops, or a pull request armed
+# between the list and the loop, is exactly what this catches.
+armed=$(printf '%s\n' "$eligible" | sed '/^$/d' |
+  while read -r n; do
+    gh pr view "$n" --json number,autoMergeRequest \
+      --jq 'select(.autoMergeRequest != null) | .number'
+  done)
+if [ -n "$armed" ]; then
+  echo "still armed after disarm: $armed — hold NOT established, do NOT enable" >&2
+  exit 1
+fi
+echo "hold established: no eligible pull request has auto-merge armed"
+```
+
+Re-arm only once each current head has a terminated review under the ADR-0170 D5 interlock.
 
 ```bash
 # Non-draft, same-repository heads only, and an explicit limit — `gh pr list` returns 30 by default.
