@@ -1,9 +1,12 @@
 # Keiko review standards
 
 These project-specific standards bind every automated reviewer and autonomous coding agent. They
-supplement `AGENTS.md`, `CONTRIBUTING.md`, and the Architecture Decision Records; an ADR wins on any
-conflict. Reviewers identify defects and verify repairs, but never write to the pull-request branch,
-approve a gate bypass, dismiss a finding to obtain green status, or merge.
+supplement `AGENTS.md`, `CONTRIBUTING.md`, and the Architecture Decision Records. Correct, secure,
+verified product behavior is authoritative. ADRs are guardrails, not authority over working code:
+an ADR mismatch does not preserve a defect or stop a repair, and agents must decide in favour of
+working, clean, secure code before correcting the affected ADR text in the same change. Reviewers
+identify defects and verify repairs, but never write to the pull-request branch, approve a gate
+bypass, dismiss a finding to obtain green status, or merge.
 
 Canonical governance:
 
