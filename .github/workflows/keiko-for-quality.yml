@@ -152,6 +152,10 @@ jobs:
           # meaning changes, so an upgrade must start from an empty store.
           ACTION_SHA="$(grep -oE 'Keiko-for-Quality@[0-9a-f]{40}' \
             .github/workflows/keiko-for-quality.yml | head -1 | cut -d@ -f2)"
+          if [ -z "${ACTION_SHA}" ]; then
+            echo "::error::failed to derive the action pin from the workflow text — the uses: line changed shape; fix the grep alongside it"
+            exit 1
+          fi
           IDENTITY="$(printf 'profile=%s model=%s protocol=%s action=%s' \
               "${PROFILE_HASH}" "${MODEL_ID}" "${MODEL_PROTOCOL}" "${ACTION_SHA}" \
             | openssl dgst -sha256 -r | cut -c1-16)"
