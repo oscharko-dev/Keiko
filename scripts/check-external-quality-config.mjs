@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const CODERABBIT_POLICY_DIGEST = "61918bb38942215dc8c625f118e76ec0646866190b1e7191cc594017f73bec5b";
+const CODERABBIT_POLICY_DIGEST = "7749a565faf0018c24c275ecace8ce0515725fb13f301774d1a7e7dba4ff1cb5";
 const CODERABBIT_TEXT_CHECKS = [
   ['profile: "assertive"', "CodeRabbit must keep its assertive review profile"],
   [
@@ -47,7 +47,7 @@ const CODERABBIT_TEXT_CHECKS = [
     "CodeRabbit must consume repository governance",
   ],
   [
-    'files: "docs/adr/ADR-0019-modular-package-architecture.md,docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md,docs/adr/ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md,docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md,docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md,docs/adr/ADR-0168-quota-tolerant-review-settlement.md,docs/adr/ADR-0169-*.md"',
+    'files: "docs/adr/ADR-0019-modular-package-architecture.md,docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md,docs/adr/ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md,docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md,docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md,docs/adr/ADR-0168-quota-tolerant-review-settlement.md,docs/adr/ADR-0169-*.md,docs/adr/ADR-0170-keiko-for-quality-as-an-external-reviewer.md"',
     "CodeRabbit must consume canonical architecture, authority, Sonar, and delivery decisions",
   ],
 ];

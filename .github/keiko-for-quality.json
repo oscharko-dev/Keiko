@@ -46,6 +46,7 @@
     "*.conf.json",
     ".dependency-cruiser.*",
     "eslint.config.*",
+    "**/{.prettierrc*,prettier.config.*,.prettierignore}",
     ".env.example",
     "docs/adr/*.md"
   ],
@@ -111,8 +112,8 @@
       "reason": "remaining prose, data, and configuration not named as review-relevant above; covered by deterministic gates. HTML is deliberately NOT here: 27 design-system pages carry inline <script>, so HTML is review-relevant above."
     },
     {
-      "pattern": "**/{.gitignore,.editorconfig,.prettierignore,.npmignore,.dockerignore}",
-      "reason": "tooling ignore and editor files. Deliberately the LAST entry rather than a catch-all: an unmatched path must reach inventory.unclassified_path and fail the run, which a `**/*` rule made unreachable. Note .gitattributes is NOT here \u2014 it can mark sources binary and hide them from review."
+      "pattern": "**/{.gitignore,.editorconfig,.npmignore,.dockerignore}",
+      "reason": "tooling ignore and editor files. Deliberately the LAST entry rather than a catch-all: an unmatched path must reach inventory.unclassified_path and fail the run, which a `**/*` rule made unreachable. Note .gitattributes is NOT here \u2014 it can mark sources binary and hide them from review. Nor are the Prettier controls: `prettier --check .` is a required gate, and both its rule file and its ignore file steer that gate's own verdict, so they are review-relevant above."
     }
   ],
   "benignWarnings": []

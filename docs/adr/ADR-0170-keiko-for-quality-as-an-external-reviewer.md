@@ -139,7 +139,14 @@ part of version 0.1.
 
 ADR-0135 is amended. The delivering agent arms GitHub native auto-merge only after the Keiko for
 Quality run for the current head has terminated — published its result or failed — or after a
-documented bounded wait has expired.
+documented bounded wait has expired **and every queued or in-progress run for that head has been
+cancelled**.
+
+Cancellation before arming is part of the decision, not an operating convenience. Without it the
+expiry branch arms while a review is still running, so the reviewer can publish a binding
+conversation onto a pull request that auto-merge has already integrated — the widest form of the
+late-publication window, reachable on every slow run rather than only on a race. A failed
+cancellation is not an expiry: containment was not established, so the agent does not arm.
 
 An expired wait is recorded as a delivery-policy event and is never presented as a clean review.
 
@@ -157,7 +164,9 @@ Two fail-open windows follow, and are documented rather than minimized:
 1. A total absence of the workflow, a runner that never starts, or a failure preventing all
    publication cannot be made fail-closed by review conversations alone.
 2. A review that terminates only after the bounded arming wait has expired can publish after
-   integration.
+   integration. D5's cancel-before-arm requirement narrows this window to whatever is already in
+   flight when the cancellation lands — a run that has begun writing its conversations is not
+   stopped mid-write. It does not close the window, and must not be described as closing it.
 
 Both are the promotion path for a later required-check stage. Neither may be described as closed.
 
