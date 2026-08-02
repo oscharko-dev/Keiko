@@ -306,12 +306,16 @@ activation that window is closable, because the freeze is holding — so close i
 pull request lacks a published result, the freeze stays on. Do not release on "it probably ran".
 
 There is deliberately **no script here**, and the reason is worth knowing before you write one.
-Under `pull_request_target` the workflow runs against the base, so a run's `head_sha` and
-`head_branch` are `dev`'s — not the pull request's. Matching runs to heads the obvious way
-therefore silently matches nothing, and a check that silently matches nothing reports success. The
-association lives in the run's `pull_requests` array; confirm the query shape against a real run on
-first activation, and only then commit it here. Two shell snippets in this document have already
-shipped with a fail-open defect, and this one gates a branch unlock.
+This paragraph originally warned — as an unverified activation-day assumption with an explicit
+confirm-against-a-real-run instruction — that under `pull_request_target` a run's `head_sha` and
+`head_branch` would be `dev`'s. That instruction has now been carried out, and the assumption was
+wrong: verified against run `30759440660` (2026-08-02, PR #2930), the API reports the PULL
+REQUEST'S head branch and head SHA, and the `pull_requests` array names the pull request. So
+both associations work: `pull_requests` is the explicit one and remains preferred; `head_branch`
+plus `head_repository` is a valid fallback where the API omits the array. What remains true and
+load-bearing: confirm any matching snippet's query shape against a real run before committing it
+here — two shell snippets in this document have already shipped with a fail-open defect, and
+this one gates a branch unlock.
 
 Pin a provider snapshot in `KEIKO_QUALITY_MODEL_ID` where the provider offers one. Behaviour drifts
 behind a stable identifier, and the qualification evidence is bound to the identifier that produced
