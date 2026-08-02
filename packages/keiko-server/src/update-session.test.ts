@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -589,6 +589,8 @@ describe("UpdateSessionManager", () => {
       });
       first.start({ targetVersion: "0.2.12" });
       await spawned.promise;
+      const authority = JSON.parse(await readFile(lockPath, "utf8")) as Record<string, unknown>;
+      expect(authority).not.toHaveProperty("childPid");
 
       const restarted = createUpdateSessionManager({
         detector: () => supportedMode(),

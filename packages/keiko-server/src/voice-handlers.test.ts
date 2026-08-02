@@ -283,9 +283,42 @@ describe("POST /api/voice/transcribe — successful dictation (AC3/AC4/AC6)", ()
     expect(request.signal?.aborted).toBe(false);
     fixture.response.emit("close");
     expect(request.signal?.aborted).toBe(true);
-    await expect(handling).resolves.toMatchObject({ status: 502 });
+    await expect(handling).resolves.toMatchObject({
+      status: 499,
+      body: { error: { code: "REQUEST_CANCELLED" } },
+    });
     expect(fixture.request.listenerCount("aborted")).toBe(0);
     expect(fixture.response.listenerCount("close")).toBe(0);
+  });
+
+  it("maps a provider rejection after disconnect to request cancellation", async () => {
+    const fixture = voiceContext({ audio: VALID_AUDIO, mimeType: "audio/webm" });
+    const captured = deferred<SpeechToTextRequest>();
+    const deps = depsWith({
+      config: VOICE_STT_CONFIG,
+      configPresent: true,
+      voiceTranscriptionRequest: (request): Promise<SpeechToTextOutcome> => {
+        captured.resolve(request);
+        return new Promise((_resolve, reject) => {
+          request.signal?.addEventListener(
+            "abort",
+            () => {
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+      },
+    });
+
+    const handling = handleVoiceTranscribe(fixture.context, deps);
+    await captured.promise;
+    fixture.response.emit("close");
+
+    await expect(handling).resolves.toMatchObject({
+      status: 499,
+      body: { error: { code: "REQUEST_CANCELLED" } },
+    });
   });
 
   it("transcribes against the configured keiko-stt provider and returns the transcript (AC6)", async () => {

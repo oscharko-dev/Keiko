@@ -405,6 +405,10 @@ function transcriptResult(deps: UiHandlerDeps, value: SpeechToTextSuccess): Rout
   };
 }
 
+function voiceRequestCancelledResult(): RouteResult {
+  return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
+}
+
 export async function handleVoiceTranscribe(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -427,9 +431,13 @@ export async function handleVoiceTranscribe(
     const outcome = await transcribe(
       buildSttRequest(provider, validated, deps, cancellation.signal),
     );
+    if (cancellation.signal.aborted) return voiceRequestCancelledResult();
     return outcome.ok
       ? transcriptResult(deps, outcome.value)
       : providerErrorResult(deps, outcome.kind);
+  } catch (error) {
+    if (cancellation.signal.aborted) return voiceRequestCancelledResult();
+    throw error;
   } finally {
     cancellation.dispose();
   }

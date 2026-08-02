@@ -2824,7 +2824,7 @@ function setupRequiresGatewayVerification(
     hasNonBlankStringField(raw, "apiKeyHeaderName") ||
     hasNonEmptyListField(raw, "deploymentNames") ||
     hasNonEmptyListField(raw, "imageInputModelIds") ||
-    hasListField(raw, "workflowEligibleModelIds")
+    hasNonEmptyListField(raw, "workflowEligibleModelIds")
   );
 }
 
@@ -3393,8 +3393,26 @@ function saveExistingConfigUpdate(
   deps: UiHandlerDeps,
   gatewayConfig: RuntimeGatewayConfig,
 ): RouteResult {
+  const updatedCurrent = request.workflowEligibleModelIdsConfigured
+    ? {
+        ...current,
+        ...(current.capabilities === undefined
+          ? {}
+          : {
+              capabilities: current.capabilities.map((capability) => ({
+                ...capability,
+                ...workflowCapabilityFields(
+                  capability.id,
+                  capability,
+                  capability,
+                  request.workflowEligibleModelIds,
+                ),
+              })),
+            }),
+      }
+    : current;
   const rawConfig = applyVoiceProviders(
-    rawConfigFromCurrent(current, request.figmaAccessToken, request.timeoutMs),
+    rawConfigFromCurrent(updatedCurrent, request.figmaAccessToken, request.timeoutMs),
     request.voiceProviders,
   );
   const config = parseGatewayConfig(

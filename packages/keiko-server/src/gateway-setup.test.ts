@@ -3265,12 +3265,19 @@ describe("handleGatewaySetup", () => {
 
   it("clears coding-safe enrichment when an explicit empty workflow list is submitted", async () => {
     const uiDir = await tempDir("keiko-gw-ui-coding-revoke-");
+    let verificationCalls = 0;
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: await tempDir("keiko-gw-ev-coding-revoke-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
-      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+      gatewaySetupTester: (_config, modelIds) => {
+        verificationCalls += 1;
+        if (verificationCalls > 1) {
+          return Promise.reject(new Error("gateway is temporarily unavailable"));
+        }
+        return Promise.resolve(modelIds);
+      },
     });
     expect(
       (
@@ -3303,6 +3310,7 @@ describe("handleGatewaySetup", () => {
     expect(resolveCodingSafeSidecarGatewayProfile(currentGatewayConfig(deps))).toMatchObject({
       status: "unavailable",
     });
+    expect(verificationCalls).toBe(1);
     deps.store.close();
   });
 

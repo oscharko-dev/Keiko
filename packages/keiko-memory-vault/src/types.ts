@@ -60,10 +60,10 @@ export interface MemoryTombstoneCursor {
   readonly id: string;
 }
 
-export interface MemoryTombstoneLedgerCursor extends MemoryTombstoneCursor {
-  readonly scopeKind: MemoryScopeKind;
-  readonly scopeCoordinate: string;
-}
+// Tombstone ids are the table's global primary key, so `(forgottenAt, id)` is a complete and
+// compact cross-scope keyset cursor. Keeping authorization-scope coordinates out of the opaque
+// continuation token also guarantees that long, valid workspace paths round-trip through the BFF.
+export type MemoryTombstoneLedgerCursor = MemoryTombstoneCursor;
 
 export interface MemoryTombstonePage {
   readonly tombstones: readonly MemoryTombstone[];

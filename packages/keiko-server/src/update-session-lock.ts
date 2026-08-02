@@ -7,7 +7,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
 const DEFAULT_STALE_LOCK_MS = 10 * 60_000;
@@ -108,6 +108,48 @@ function readLock(lockPath: string): UpdateSessionLockRecord | undefined {
   return parseRecord(readFileSync(lockPath, "utf8"));
 }
 
+interface ChildPidRecord {
+  readonly sessionId: string;
+  readonly childPid: number;
+}
+
+function childPidPath(lockPath: string, sessionId: string): string {
+  const sessionKey = createHash("sha256").update(sessionId).digest("hex");
+  return `${lockPath}.${sessionKey}.child`;
+}
+
+function parseChildPidRecord(value: string, sessionId: string): ChildPidRecord | undefined {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!isRecord(parsed) || parsed.sessionId !== sessionId || !isPositivePid(parsed.childPid)) {
+      return undefined;
+    }
+    return { sessionId, childPid: parsed.childPid };
+  } catch {
+    return undefined;
+  }
+}
+
+function readChildPid(lockPath: string, sessionId: string): number | undefined {
+  const path = childPidPath(lockPath, sessionId);
+  try {
+    const record = parseChildPidRecord(readFileSync(path, "utf8"), sessionId);
+    if (record === undefined) throw new TypeError("Update-session child lock is invalid.");
+    return record.childPid;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function recordWithChildPid(
+  lockPath: string,
+  record: UpdateSessionLockRecord,
+): UpdateSessionLockRecord {
+  const childPid = readChildPid(lockPath, record.sessionId);
+  return childPid === undefined ? record : { ...record, childPid };
+}
+
 type LockInspection =
   | { readonly status: "absent" }
   | { readonly status: "valid"; readonly record: UpdateSessionLockRecord }
@@ -120,7 +162,9 @@ function inspectLock(lockPath: string): LockInspection {
   }
   try {
     const record = parseRecord(readFileSync(lockPath, "utf8"));
-    return record === undefined ? { status: "corrupt" } : { status: "valid", record };
+    return record === undefined
+      ? { status: "corrupt" }
+      : { status: "valid", record: recordWithChildPid(lockPath, record) };
   } catch {
     return { status: "unreadable" };
   }
@@ -146,14 +190,14 @@ function writeLock(lockPath: string, record: UpdateSessionLockRecord): void {
   }
 }
 
-function replaceLock(lockPath: string, record: UpdateSessionLockRecord): void {
-  const temporaryPath = `${lockPath}.${randomUUID()}.tmp`;
-  writeFileSync(temporaryPath, `${JSON.stringify(record)}\n`, {
+function replaceJsonFile(path: string, value: unknown): void {
+  const temporaryPath = `${path}.${randomUUID()}.tmp`;
+  writeFileSync(temporaryPath, `${JSON.stringify(value)}\n`, {
     flag: "wx",
     mode: LOCK_FILE_MODE,
   });
   try {
-    renameSync(temporaryPath, lockPath);
+    renameSync(temporaryPath, path);
   } catch (error) {
     try {
       unlinkSync(temporaryPath);
@@ -206,6 +250,15 @@ function removeReclaimableLock(
     return;
   }
   unlinkSync(lockPath);
+  if (inspection.status === "valid") removeChildPid(lockPath, inspection.record.sessionId);
+}
+
+function removeChildPid(lockPath: string, sessionId: string): void {
+  try {
+    unlinkSync(childPidPath(lockPath, sessionId));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
 }
 
 function resolveLockOptions(
@@ -235,17 +288,22 @@ function acquireFileLock(
 ): boolean {
   try {
     writeLock(lockPath, record);
-    return true;
   } catch {
     try {
       const inspection = inspectLock(lockPath);
       if (!reclaimable(inspection, options)) return false;
       removeReclaimableLock(lockPath, inspection, options.now);
       writeLock(lockPath, record);
-      return true;
     } catch {
       return false;
     }
+  }
+  try {
+    removeChildPid(lockPath, record.sessionId);
+    return true;
+  } catch {
+    releaseFileLock(lockPath, record.sessionId);
+    return false;
   }
 }
 
@@ -254,8 +312,8 @@ function updateFileLockChildPid(lockPath: string, sessionId: string, childPid: n
   try {
     const record = readLock(lockPath);
     if (record?.sessionId !== sessionId) return false;
-    replaceLock(lockPath, { ...record, childPid });
-    return true;
+    replaceJsonFile(childPidPath(lockPath, sessionId), { sessionId, childPid });
+    return readLock(lockPath)?.sessionId === sessionId;
   } catch {
     return false;
   }
@@ -264,7 +322,10 @@ function updateFileLockChildPid(lockPath: string, sessionId: string, childPid: n
 function releaseFileLock(lockPath: string, sessionId: string): void {
   try {
     const record = readLock(lockPath);
-    if (record?.sessionId === sessionId) unlinkSync(lockPath);
+    if (record?.sessionId === sessionId) {
+      unlinkSync(lockPath);
+      removeChildPid(lockPath, sessionId);
+    }
   } catch {
     // Malformed or inaccessible locks fail closed; only the owner session may remove the lock.
   }

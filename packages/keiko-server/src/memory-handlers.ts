@@ -155,9 +155,7 @@ function isBoundedCursorString(value: unknown, max: number): value is string {
 function isTombstoneCursorRecord(value: unknown): value is MemoryTombstoneLedgerCursor {
   if (!isRecord(value)) return false;
   if (!Number.isSafeInteger(value.forgottenAt) || (value.forgottenAt as number) < 0) return false;
-  if (!isBoundedCursorString(value.id, MAX_TOMBSTONE_ID_CHARS)) return false;
-  if (!isMemoryScopeKind(value.scopeKind)) return false;
-  return isBoundedCursorString(value.scopeCoordinate, MAX_TOMBSTONE_CURSOR_CHARS);
+  return isBoundedCursorString(value.id, MAX_TOMBSTONE_ID_CHARS);
 }
 
 function parseTombstoneCursor(
@@ -182,8 +180,6 @@ function tombstoneCursor(tombstone: MemoryTombstone): string {
   const cursor: MemoryTombstoneLedgerCursor = {
     forgottenAt: tombstone.forgottenAt,
     id: tombstone.id,
-    scopeKind: tombstone.scopeKind,
-    scopeCoordinate: tombstone.scopeCoordinate,
   };
   return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
 }

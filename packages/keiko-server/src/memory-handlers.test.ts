@@ -274,6 +274,38 @@ describe("memory handlers", () => {
     });
   });
 
+  it("round-trips a tombstone cursor for a valid long scope coordinate", () => {
+    const vault = makeVault();
+    const scope = { kind: "user" as const, userId: userId(`user-${"x".repeat(2_000)}`) };
+    for (const [id, nowMs] of [
+      ["long-scope-newest", 200],
+      ["long-scope-oldest", 100],
+    ] as const) {
+      vault.insertMemory(makeMemory(id, `secret-${id}`, { scope }));
+      vault.deleteMemory(memoryId(id), {
+        tombstone: true,
+        forgetterSurface: "memory-center",
+        nowMs,
+      });
+    }
+
+    const first = handleListMemoryTombstones(
+      makeCtx("/api/memory/tombstones?limit=1", {}),
+      tombstoneDeps(vault),
+    );
+    const cursor = String(asJson(first).nextCursor);
+    expect(cursor.length).toBeLessThanOrEqual(1_024);
+
+    const second = handleListMemoryTombstones(
+      makeCtx(`/api/memory/tombstones?limit=1&cursor=${cursor}`, {}),
+      tombstoneDeps(vault),
+    );
+    expect(second).toMatchObject({
+      status: 200,
+      body: { nextCursor: null, tombstones: [{ memoryId: "long-scope-oldest" }] },
+    });
+  });
+
   it("rejects a malformed tombstone continuation cursor", () => {
     const result = handleListMemoryTombstones(
       makeCtx("/api/memory/tombstones?cursor=not.valid", {}),

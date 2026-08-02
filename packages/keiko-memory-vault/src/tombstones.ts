@@ -254,18 +254,14 @@ function scopeBindings(scopes: readonly MemoryScope[]): readonly string[] {
 function ledgerPageSql(scopes: readonly MemoryScope[], after: boolean): string {
   const cursor = after
     ? `AND (
-      forgotten_at < ? OR (forgotten_at = ? AND (
-        id > ? OR (id = ? AND (
-          scope_kind > ? OR (scope_kind = ? AND scope_coordinate > ?)
-        ))
-      ))
+      forgotten_at < ? OR (forgotten_at = ? AND id > ?)
     )`
     : "";
   return `
 SELECT * FROM memory_tombstones
 WHERE (scope_kind, scope_coordinate) IN (${scopePredicate(scopes)})
 ${cursor}
-ORDER BY forgotten_at DESC, id ASC, scope_kind ASC, scope_coordinate ASC
+ORDER BY forgotten_at DESC, id ASC
 LIMIT ?
 `;
 }
@@ -287,17 +283,7 @@ export function listTombstonesPageRows(
   if (scopes.length === 0) return { tombstones: [], total: 0 };
   const bindings = scopeBindings(scopes);
   const cursorBindings =
-    after === undefined
-      ? []
-      : [
-          after.forgottenAt,
-          after.forgottenAt,
-          after.id,
-          after.id,
-          after.scopeKind,
-          after.scopeKind,
-          after.scopeCoordinate,
-        ];
+    after === undefined ? [] : [after.forgottenAt, after.forgottenAt, after.id];
   const rows = cachedPrepare(db, ledgerPageSql(scopes, after !== undefined)).all(
     ...bindings,
     ...cursorBindings,

@@ -114,8 +114,6 @@ describe("tombstones", () => {
     const second = listTombstonesPageRows(db, scopes, TEST_CIPHER, 2, {
       forgottenAt: last?.forgottenAt ?? 0,
       id: last?.id ?? "",
-      scopeKind: last?.scopeKind ?? "global",
-      scopeCoordinate: last?.scopeCoordinate ?? "global",
     });
     expect(second.tombstones.map((row) => row.id)).toEqual(["t-2", "t-3"]);
     db.close();
@@ -147,8 +145,6 @@ describe("tombstones", () => {
     const second = listTombstonesPageRows(db, scopes, TEST_CIPHER, 1, {
       forgottenAt: item?.forgottenAt ?? 0,
       id: item?.id ?? "",
-      scopeKind: item?.scopeKind ?? "global",
-      scopeCoordinate: item?.scopeCoordinate ?? "global",
     });
     expect(second.tombstones.map((row) => row.id)).toEqual(["t-b"]);
     db.close();
