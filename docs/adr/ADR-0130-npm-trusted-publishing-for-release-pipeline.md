@@ -120,11 +120,14 @@ that secret.
 
 ### Negative / Neutral
 
-- The workflow filename `.github/workflows/release.yml` is now a load-bearing identifier: renaming
-  or moving it, or wrapping the publish job behind `workflow_call`, would silently break trusted
-  publishing (npm does not re-validate the saved configuration; publishing would simply start
-  failing auth). Renaming that file must come with updating the npmjs.com Trusted Publisher entry
-  in the same change.
+- The workflow filename `.github/workflows/release.yml` **and the `npm-publish` environment name**
+  are load-bearing identifiers: the publisher entry is bound to both (D4), so renaming or moving
+  the file, wrapping the publish job behind `workflow_call`, or renaming the environment would
+  silently break trusted publishing (npm does not re-validate the saved configuration; publishing
+  would simply start failing auth). Changing either must come with updating the npmjs.com Trusted
+  Publisher entry in the same change. Neither half is verifiable from this repository — the
+  binding lives only in the npmjs.com publisher settings — so the obligation is stated here
+  rather than enforced by a gate.
 - Trusted publishing requires GitHub-hosted runners; self-hosted runners cannot use it. The
   `publish` job already runs on `ubuntu-latest`, so this is not a present constraint, only a
   future one to remember if that job is ever moved.
