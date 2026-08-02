@@ -90,14 +90,14 @@ Two boundaries hold together. First, no such workflow exists on the protected ba
 requires a reviewed, merged change. Second — because `workflow_dispatch` runs execute the workflow
 file of a **caller-chosen ref**, so "reviewed base" alone does not bind a dispatched run — the
 environment carries a protected-branches-only deployment branch policy: a job running a candidate
-branch's workflow file cannot declare this environment at all (raised by the Codex reviewer on
-#2931). Verify with `gh api repos/<owner>/<repo>/environments/keiko-for-quality` — the
+branch's workflow file cannot declare this environment at all — a Codex reviewer finding on
+pull request 2931. Verify with `gh api repos/<owner>/<repo>/environments/keiko-for-quality` — the
 `deployment_branch_policy.protected_branches` flag must be `true`. Binding issuance to this
 workflow's OIDC identity would close the gap absolutely and is tracked as follow-up.
 
 The same review also made a second environment an operating prerequisite: `npm-publish`, with a
 required human reviewer, in front of `release.yml`'s publish job — because any job token holding
-`actions: write` (the reviewer's persist-store job, infra-failure-retry) can dispatch that
+`actions: write` (today only `infra-failure-retry`) can dispatch that
 workflow. Verify its protection the same way; a missing `required_reviewers` rule there reopens a
 production-publish path and must be treated as a provisioning failure, not a nicety. The
 environment declaration alone is not sufficient either: a dispatched candidate-branch
@@ -107,6 +107,13 @@ operator-only step; until it is done, ADR-0170 D3 records that residual path as 
 fail-open window.
 
 ### 3. Set variables and secrets
+
+The store-authenticity key is part of provisioning: create `KEIKO_QUALITY_STORE_HMAC` in the
+`keiko-for-quality` environment (any 32-byte random value; it is never read by a human again).
+The workflow signs each persisted review store with it and discards any restored store that does
+not verify — the boundary that keeps a candidate-base `pull_request_target` run from donating a
+fabricated store through a retarget (ADR-0170 D3). Verify existence with
+`gh api repos/<owner>/<repo>/environments/keiko-for-quality/secrets`.
 
 Repository **variables** — non-sensitive only. Variables are **not** masked in logs, so nothing
 that could identify a private endpoint belongs here:

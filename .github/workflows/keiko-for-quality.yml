@@ -174,6 +174,38 @@ jobs:
           run-id: ${{ steps.locate.outputs.run-id }}
           github-token: ${{ github.token }}
 
+      # The producer checks above NARROW; this MAC DECIDES. Digest validation inside the store is
+      # not authentication — every input of the public key formula is candidate-visible, so a
+      # fabricated store with valid digests and empty findings could mark files "reviewed clean"
+      # and route them around the model. The concrete chain (Codex, #2931 round eleven): open a
+      # pull request against a contributor-controlled base, whose candidate-authored workflow COPY
+      # receives pull_request_target and uploads an artifact under this PR's number; retarget the
+      # pull request to dev; event, path, and PR predicates all pass. What that chain can never
+      # obtain is this signature: the HMAC key lives in the keiko-for-quality environment, whose
+      # protected-branches-only deployment policy refuses candidate-base runs, so only a run
+      # executing dev's own workflow file can have produced a store that verifies. An unsigned or
+      # mismatched store is discarded — one full-price review, never a poisoned replay.
+      - name: Verify restored store authenticity
+        if: steps.locate.outputs.run-id != ''
+        env:
+          STORE_HMAC: ${{ secrets.KEIKO_QUALITY_STORE_HMAC }}
+        run: |
+          STORE="keiko-review-store/store.json"
+          SIG="keiko-review-store/store.json.hmac"
+          if [ -f "${STORE}" ] && [ -f "${SIG}" ]; then
+            EXPECTED="$(openssl dgst -sha256 -hmac "${STORE_HMAC}" -r "${STORE}" | cut -d' ' -f1)"
+            ACTUAL="$(cut -d' ' -f1 < "${SIG}")"
+            if [ "${EXPECTED}" = "${ACTUAL}" ]; then
+              echo "store authenticated"
+              exit 0
+            fi
+            echo "::warning::restored review store failed HMAC verification — discarding it"
+          else
+            echo "restored artifact carries no signature — discarding it"
+          fi
+          rm -rf keiko-review-store
+          mkdir -p keiko-review-store
+
       - name: Review
         id: review
         uses: oscharko-dev/Keiko-for-Quality@3e458cdc86eb102b3a06a7dfb161d3c0f12e8364 # v0.9.0
@@ -218,6 +250,17 @@ jobs:
       # derivation, which reject foreign entries regardless of what the name says). Runs each own
       # their artifact; the locate step picks the newest eligible one. Seven days comfortably
       # outlives any push gap on an active pull request.
+      # Signs what the persist step uploads — the counterpart of the verification above. Only a
+      # job holding the keiko-for-quality environment can compute this MAC, and the environment's
+      # branch policy confines that to runs executing a protected ref's workflow file.
+      - name: Sign review store
+        if: steps.review.outputs.outcome == 'complete'
+        env:
+          STORE_HMAC: ${{ secrets.KEIKO_QUALITY_STORE_HMAC }}
+        run: >-
+          openssl dgst -sha256 -hmac "${STORE_HMAC}" -r keiko-review-store/store.json
+          > keiko-review-store/store.json.hmac
+
       - name: Persist review store
         if: steps.review.outputs.outcome == 'complete'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

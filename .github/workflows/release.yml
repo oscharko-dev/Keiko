@@ -102,8 +102,9 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.publish && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     # The approval boundary that keeps API-driven dispatch human-controlled: `actions: write` on
-    # any job token in this repository (the quality reviewer's cache grant, infra-failure-retry)
-    # is enough to call the workflow-dispatch endpoint with an existing v* tag and publish=true —
+    # any job token in this repository (today only infra-failure-retry; the quality reviewer
+    # holds none since its artifact migration) is enough to call the workflow-dispatch endpoint
+    # with an existing v* tag and publish=true —
     # so without this environment, a compromised dependency holding that scope could initiate a
     # production npm publish. The environment requires a human review before any step runs, which
     # restores the invariant that publishing is a person's decision (ADR-0170 D3 records the

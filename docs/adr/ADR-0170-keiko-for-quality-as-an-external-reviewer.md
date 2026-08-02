@@ -92,12 +92,20 @@ narrowed but could not close that class. Removing it did: the store now persists
 artifact, which needs no write scope to upload, and the previous push's store is located and
 downloaded with `actions: read` — a scope that can neither cancel, re-run, nor dispatch.
 
-Artifacts carry their own poisoning model, bounded structurally: they are repository-wide, so a
-candidate's `pull_request` workflow could upload a same-named artifact — but the locate step
-accepts only artifacts whose producing run's event is `pull_request_target`, which a
-candidate-authored workflow file can never generate (that trigger always executes the protected
-base's file). Beneath that boundary, the action re-derives every entry's digests on load and
-rejects mismatches: a replayed entry is exactly as untrusted as the run that produced it.
+Artifacts carry their own poisoning model, and the review escalation on the adopting pull
+request sharpened it to its final form: digest validation is not authentication. Every input of
+the store's public key formula is candidate-visible, so a fabricated store with valid digests
+and empty findings could mark files "reviewed clean" — and the metadata predicates (producing
+event, workflow path, pull-request association) narrow but cannot decide, because a pull request
+opened against a contributor-controlled base receives `pull_request_target` with that base's
+candidate-authored workflow copy, which can upload a matching artifact before the pull request
+is retargeted to `dev`. Authenticity therefore rests on cryptography: the producing run signs
+the store with an HMAC whose key (`KEIKO_QUALITY_STORE_HMAC`) is a keiko-for-quality environment
+secret, and the consuming run verifies before use, discarding anything unsigned or mismatched.
+The environment's protected-branches-only deployment policy is what makes the signature mean
+something: only a run executing a protected ref's own workflow file can hold the key. Beneath
+that, the action still re-derives every entry's digests on load — integrity on top of
+authenticity, not instead of it.
 
 Two containments hold independently of this workflow's scopes, because other token holders
 retain `actions: write` (infra-failure-retry):
