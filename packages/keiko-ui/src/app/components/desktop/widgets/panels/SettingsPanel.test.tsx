@@ -285,9 +285,11 @@ describe("SettingsPanel Updates entry point (Issue #1696)", () => {
       expect(screen.getByTestId("conv-elig-ok")).toBeInTheDocument();
     });
     fireEvent.click(screen.getByRole("button", { name: "General" }));
-    fireEvent.click(screen.getByRole("button", { name: "Review updates" }));
+    const updatesButton = screen.getByRole("button", { name: "Review updates" });
+    fireEvent.click(updatesButton);
 
     expect(openUpdatesWindow).toHaveBeenCalledTimes(1);
+    expect(updatesButton.closest(".set-sec-actions")).toBeTruthy();
     expect(
       screen.getByText("Check for Keiko updates and install them when available."),
     ).toBeInTheDocument();

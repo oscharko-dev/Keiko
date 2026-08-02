@@ -752,16 +752,18 @@ function GeneralPrefs({ voicePersonas, openUpdatesWindow }: GeneralPrefsProps): 
             {t("settings.updates.description")}
           </div>
         </div>
-        <button
-          type="button"
-          className="set-add"
-          aria-describedby="settings-updates-help"
-          disabled={openUpdatesWindow === undefined}
-          onClick={openUpdatesWindow}
-        >
-          <ActivityIcon size={14} />
-          {t("settings.updates.open")}
-        </button>
+        <div className="set-sec-actions">
+          <button
+            type="button"
+            className="set-add"
+            aria-describedby="settings-updates-help"
+            disabled={openUpdatesWindow === undefined}
+            onClick={openUpdatesWindow}
+          >
+            <ActivityIcon size={14} />
+            {t("settings.updates.open")}
+          </button>
+        </div>
       </div>
       <div className="set-sec-h">
         <div>
