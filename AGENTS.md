@@ -411,6 +411,11 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   publish after integration — it does not close it, because a run mid-publish can complete an
   in-flight call, and ADR-0170 D6 keeps that as a stated fail-open window.
 
+  A cancellation that fails is not an expiry. If any queued or in-progress run for the current head
+  cannot be cancelled, containment was not established, so auto-merge stays disarmed and the failed
+  cancellation is recorded — arming anyway would restore the full late-publication window the
+  cancellation exists to narrow.
+
   The wait is bounded on purpose: a reviewer outage may delay integration, never block it
   indefinitely. A cancelled or expired review is recorded as such and is never described as clean.
   When `KEIKO_QUALITY_ENABLED` is not `true` the job never starts, the interlock does not apply,

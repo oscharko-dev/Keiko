@@ -85,15 +85,35 @@ redaction contract states that logs carry no endpoints.
 Setting a variable emits **no** pull-request activity event. Every eligible `dev` pull request that
 is already open with an unchanged head therefore still has no reviewer run, and the delivery policy
 only waits for runs that actually started. Provisioning is not finished until those heads have been
-reviewed:
+reviewed.
+
+**Hold delivery before setting the variable.** An open pull request can already have native
+auto-merge armed. Its last required check can go green in the window between enabling the reviewer
+and retriggering that pull request — and because enabling emits no event and this reviewer publishes
+no required status, GitHub integrates it immediately, unreviewed, with the loop below still to reach
+it. Nothing afterwards can undo that, so the confirmation step would attest to coverage this
+procedure never had. Disable auto-merge on every eligible pull request first
+(`gh pr merge --disable-auto <n>`), then set the variable, then retrigger, and re-arm only once each
+current head has a terminated review under the ADR-0170 D5 interlock. The same hold applies to the
+re-enable instruction in the disable section below.
 
 ```bash
 # Non-draft, same-repository heads only, and an explicit limit — `gh pr list` returns 30 by default.
 # The draft filter is not cosmetic: `gh pr ready` on a draft would PUBLISH someone else's draft.
 # Abort on the first failure rather than continuing: a pull request whose `--undo` succeeded and
 # whose `ready` failed is left AS A DRAFT, which is exactly the state that makes it ineligible.
+#
+# The limit is checked rather than trusted. A query returning exactly LIMIT rows is indistinguishable
+# from one that was truncated, so the loop would retrigger 200 pull requests, report success, and
+# leave the rest unreviewed — this runbook's own failure mode, wearing a green tick.
 set -euo pipefail
-gh pr list --base dev --state open --limit 200 \
+LIMIT=200
+total=$(gh pr list --base dev --state open --limit "$LIMIT" --json number --jq 'length')
+if [ "$total" -ge "$LIMIT" ]; then
+  echo "open pull requests reached the query limit ($LIMIT) — raise it; coverage NOT established" >&2
+  exit 1
+fi
+gh pr list --base dev --state open --limit "$LIMIT" \
   --json number,isDraft,headRepositoryOwner,headRepository \
   --jq '.[] | select(.isDraft == false)
             | select(.headRepositoryOwner.login == "oscharko-dev" and .headRepository.name == "Keiko")
@@ -208,9 +228,22 @@ branch-protection change.
    # of a moving target: a run that goes from `requested` to `queued` after the `queued` query but
    # before the `requested` one appears in neither, and the loop declares containment over a run
    # that is still holding the credential. Ask once, filter locally.
+   #
+   # And the limit is checked, not trusted: a truncated window can hide an older live run behind
+   # newer completed ones, and the loop would then report containment it never achieved.
    set -euo pipefail
+   LIMIT=200
    while :; do
-     if ! ids=$(gh run list --workflow keiko-for-quality.yml --limit 200 \
+     if ! seen=$(gh run list --workflow keiko-for-quality.yml --limit "$LIMIT" \
+                   --json databaseId --jq 'length'); then
+       echo "FAILED to size the run list — containment NOT established" >&2
+       exit 1
+     fi
+     if [ "$seen" -ge "$LIMIT" ]; then
+       echo "run list reached the query limit ($LIMIT) — raise it; containment NOT established" >&2
+       exit 1
+     fi
+     if ! ids=$(gh run list --workflow keiko-for-quality.yml --limit "$LIMIT" \
                   --json databaseId,status \
                   --jq '["queued","in_progress","requested","waiting","pending"] as $live
                         | .[] | select(.status as $s | $live | index($s)) | .databaseId'); then

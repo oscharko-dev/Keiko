@@ -54,8 +54,9 @@ SHA-pinned reviewer whose product code lives in
 [oscharko-dev/Keiko-for-Quality](https://github.com/oscharko-dev/Keiko-for-Quality). It publishes no
 required status; its findings block only through conversation resolution. **While it is active,
 arm auto-merge only after its run for the current head has terminated. If it has not terminated
-within 35 minutes, cancel the run first, then arm, and record the expiry as a delivery-policy
-event.** Cancelling — not the duration — is what narrows the window in which a review can publish after
+within 35 minutes, cancel every queued or in-progress run for that head first, then arm, and record
+the expiry as a delivery-policy event. If any cancellation fails, leave auto-merge disarmed and
+record that instead.** Cancelling — not the duration — is what narrows the window in which a review can publish after
 integration: `timeout-minutes` bounds execution after start, not queue time, so no fixed wait can
 guarantee a healthy review has finished. The window is narrowed, not closed; ADR-0170 D6 records
 it as a fail-open window, and an expired review is never described as clean. It stays inert until

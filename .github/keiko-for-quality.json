@@ -47,6 +47,7 @@
     ".dependency-cruiser.*",
     "eslint.config.*",
     "**/{.prettierrc*,prettier.config.*,.prettierignore}",
+    "**/*.sql",
     ".env.example",
     "docs/adr/*.md"
   ],
@@ -83,7 +84,8 @@
     "CLAUDE.md",
     "CODEX.md",
     "docs/qa/**/*.md",
-    "docs/security-and-audit-boundaries.md"
+    "docs/security-and-audit-boundaries.md",
+    "**/*.sql"
   ],
   "generated": [
     "**/dist/**",
@@ -108,7 +110,7 @@
       "reason": "binary assets carry no reviewable source. SVG is deliberately NOT here: it is text and can carry <script>, so it is review-relevant above. Property lists likewise \u2014 a macOS entitlements plist is a privilege boundary."
     },
     {
-      "pattern": "**/*.{md,mdx,txt,csv,sql,lock,snap,map,yml,yaml,json,toml,properties}",
+      "pattern": "**/*.{md,mdx,txt,csv,lock,snap,map,yml,yaml,json,toml,properties}",
       "reason": "remaining prose, data, and configuration not named as review-relevant above; covered by deterministic gates. HTML is deliberately NOT here: 27 design-system pages carry inline <script>, so HTML is review-relevant above."
     },
     {
