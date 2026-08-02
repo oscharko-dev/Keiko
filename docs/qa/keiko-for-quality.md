@@ -80,6 +80,24 @@ A changed path matching none of the lists is **unclassified**, which fails the r
 therefore ends with a catch-all exclusion so that every path is described. Inclusion is evaluated
 before exclusion, so the catch-all never overrides a specific review-relevant entry.
 
+**The relevant list is keyed by file type, not by directory — deliberately.** An earlier
+location-keyed version silently left `native/` (including the endpoint-security system extension and
+`secure_workspace_read.c`), `sandbox/scripts/`, and `design-system/` unreviewed, each discovered
+only after the previous gap was patched. A type-keyed list cannot be defeated by adding a directory;
+only by adding a language, which is rarer and more visible. Entitlement property lists, gate
+configuration (`sonar-project.properties`, `osv-scanner.toml`, `.coderabbit.yaml`), and the
+`docs/qa/*.json` ratchet baselines are named explicitly because each is a way to weaken a gate.
+
+Verify a profile change the same way: enumerate every tracked file, classify it, and confirm that no
+code-like path lands in the catch-all. Sampling recent commits is not enough — it was exactly what
+missed all three gaps above.
+
+**There is no benign-warning allowlist.** `context_truncated` was allowlisted at first, with a
+justification admitting the file was reviewed only in part. That permitted a clean verdict over a
+partially inspected file — this repository has production sources above 250 KB — which is precisely
+the false-clean outcome the reviewer exists to prevent. Any engine warning now settles the run as
+incomplete. If truncation becomes common, the fix is engine-side chunking, not an allowlist entry.
+
 Adding a new top-level directory or file type usually means editing this file. If the reviewer
 reports an incomplete run with `inventory.unclassified_path`, that is what happened.
 
@@ -105,9 +123,21 @@ the incomplete state is visible and blocking without leaking diagnostics.
 The reviewer has no required status context, so disabling it never blocks delivery and needs no
 branch-protection change.
 
-**Fastest, no merge required:** delete or rename the `KEIKO_QUALITY_MODEL_ENDPOINT` repository
-variable. The job's `if:` condition stops matching and no runner starts. Reverse it by setting the
-variable again.
+**Fastest, no merge required — two steps, both required:**
+
+1. Delete or rename the `KEIKO_QUALITY_MODEL_ENDPOINT` repository variable. The job's `if:`
+   condition stops matching, so no _new_ runner starts.
+2. **Cancel every in-progress `keiko-for-quality` run.** Step 1 does not stop a runner that already
+   started: it has its inputs and credentials and will keep publishing findings until it finishes or
+   hits the 30-minute job timeout. Treating step 1 alone as "nothing new is published" is wrong, and
+   during a precision failure that is exactly the window that matters.
+
+   ```bash
+   gh run list --workflow keiko-for-quality.yml --status in_progress --json databaseId \
+     --jq '.[].databaseId' | xargs -r -n1 gh run cancel
+   ```
+
+Reverse it by setting the variable again.
 
 **Durable:** open a pull request removing `.github/workflows/keiko-for-quality.yml`, its zizmor
 anchor in `.github/zizmor.yml`, and the profile. Re-run `npm run check:zizmor-anchors` afterwards,
@@ -120,7 +150,8 @@ Required Conversation Resolution.
 
 If a bad model or configuration publishes many wrong findings:
 
-1. Disable via the variable, so nothing new is published while you work.
+1. Disable via the variable **and cancel every in-progress run** (both steps above). Step one alone
+   leaves an already-running review publishing for up to 30 more minutes.
 2. Do **not** bulk-resolve conversations to clear the board. A resolved conversation is a claim that
    the defect was repaired or technically dispositioned, and a false one is worse than the noise.
 3. Triage the published findings. Repair the real ones; on each false one, reply stating why it is

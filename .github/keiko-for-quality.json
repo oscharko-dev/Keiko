@@ -1,38 +1,52 @@
 {
   "version": 1,
   "reviewRelevant": [
-    "packages/**/*.{ts,tsx,mts,cts,js,mjs,cjs}",
-    "src/**/*.{ts,tsx,mts,cts,js,mjs,cjs}",
-    "tests/**",
-    "scripts/**",
-    "native/**",
-    "docker/**",
+    "**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
+    "**/*.{c,h,m,mm,cpp,hpp,cc,cs}",
+    "**/*.{sh,bash,zsh,ps1,psm1,bat,cmd}",
+    "**/*.{py,rb,go,rs,java,kt,swift}",
+    "**/*.{plist,entitlements,rc,csproj,props,targets}",
+    "docker/**/*.{yml,yaml}",
+    "docs/qa/*.json",
+    "**/Dockerfile*",
+    "**/Makefile",
+    "**/package.json",
+    "**/package-lock.json",
+    "**/tsconfig*.json",
     ".github/workflows/**/*.{yml,yaml}",
     ".github/actions/**",
     ".github/*.{json,yml,yaml}",
-    "package.json",
-    "package-lock.json",
-    "packages/*/package.json",
-    "docs/adr/*.md",
-    "*.config.{ts,js,mjs,cjs}",
-    "packages/*/*.config.{ts,js,mjs,cjs}",
-    "tsconfig*.json",
+    ".coderabbit.yaml",
+    "sonar-project.properties",
+    "osv-scanner.toml",
+    "socket.yml",
+    "knip.json",
+    "*.conf.json",
+    ".dependency-cruiser.*",
     "eslint.config.*",
-    ".dependency-cruiser.*"
+    ".env.example",
+    "docs/adr/*.md"
   ],
   "deletionCritical": [
-    "**/*.test.{ts,tsx,mts,js,mjs}",
+    "**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}",
+    "**/*.{c,h,m,mm,cpp,hpp,cc,cs}",
+    "**/*.{sh,bash,zsh,ps1,psm1,bat,cmd}",
+    "**/*.{py,rb,go,rs,java,kt,swift}",
     "**/__tests__/**",
     "tests/**",
     "scripts/**",
     "native/**",
     "docker/**",
+    "sandbox/**",
     ".github/workflows/**",
     ".github/actions/**",
     "docs/adr/**",
     "docs/qa/**",
-    "packages/**/*.{ts,tsx}",
-    "src/**/*.{ts,tsx}"
+    "sonar-project.properties",
+    "osv-scanner.toml",
+    ".coderabbit.yaml",
+    "**/*.{plist,entitlements,rc,csproj,props,targets}",
+    "docs/qa/*.json"
   ],
   "generated": [
     "**/dist/**",
@@ -40,34 +54,34 @@
     "**/coverage/**",
     "**/.next/**",
     "**/*.tsbuildinfo",
-    "**/__snapshots__/**"
+    "**/__snapshots__/**",
+    "**/*.min.js"
   ],
   "excluded": [
     {
-      "pattern": "docs/**/*.md",
-      "reason": "prose documentation outside docs/adr; reviewed by people, not by the model"
+      "pattern": "docs/**/evidence/**",
+      "reason": "committed evidence documents are data, not code, and are validated by the deterministic gates that produced them; the harnesses that generate them are review-relevant and matched above"
     },
     {
-      "pattern": "**/*.{png,jpg,jpeg,gif,svg,ico,icns,webp,woff,woff2,ttf,pdf,zip,wasm,plist}",
-      "reason": "binary, vector, or property-list assets carry no reviewable source"
+      "pattern": "docs/**/*.{md,json}",
+      "reason": "prose and acceptance data outside docs/adr; reviewed by people and by deterministic gates, not by the model"
+    },
+    {
+      "pattern": "**/*.{png,jpg,jpeg,gif,svg,ico,icns,webp,woff,woff2,ttf,pdf,zip,wasm}",
+      "reason": "binary and vector assets carry no reviewable source. Property lists are deliberately NOT here: a macOS entitlements plist is a privilege boundary, so it is review-relevant above."
     },
     {
       "pattern": "**/*.{css,scss}",
       "reason": "styling is gated by the SHA-pinned visual-proof and axe gates, not by model review"
     },
     {
-      "pattern": "**/*.{md,mdx,txt,csv,json,yml,yaml,html,sql,toml,lock,snap,map}",
-      "reason": "data, prose, and config outside the review-relevant set above; covered by deterministic gates"
+      "pattern": "**/*.{md,mdx,txt,csv,html,sql,lock,snap,map,yml,yaml,json,toml,properties}",
+      "reason": "remaining prose, data, and configuration not named as review-relevant above; covered by deterministic gates"
     },
     {
       "pattern": "**/*",
-      "reason": "catch-all: every remaining path is deliberately outside model review for this repository. It is the last resort, not the routine answer — an executable or trust-boundary tree that lands here is a profile gap, not an exclusion. Inclusion is evaluated before exclusion, so an entry in reviewRelevant always wins over this rule."
+      "reason": "catch-all: every remaining path is deliberately outside model review. It is the last resort, not the routine answer \u2014 an executable or trust-boundary path landing here is a profile gap, not an exclusion. Inclusion wins over exclusion, and the relevant list is keyed by file type rather than directory on purpose; see docs/qa/keiko-for-quality.md."
     }
   ],
-  "benignWarnings": [
-    {
-      "type": "context_truncated",
-      "justification": "expected on files larger than the model context window; the file is still reviewed in part, and the deterministic gates cover it in full"
-    }
-  ]
+  "benignWarnings": []
 }

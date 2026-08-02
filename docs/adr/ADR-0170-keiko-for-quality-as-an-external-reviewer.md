@@ -95,8 +95,16 @@ The earlier draft of this decision claimed that fork and draft heads record a re
 do not, because the workflow deliberately never starts for them. Starting a secret-bearing job in
 order to produce a nicer diagnostic would trade the actual security property for a cosmetic one.
 
-The model credential is environment-scoped to this workflow and passed to the action by variable
-**name**, never as an input value.
+The model credential is scoped to the `keiko-for-quality` environment and passed to the action by
+variable **name**, never as an input value — an input appears in the step context that every other
+action in the job can read.
+
+The environment limitation stated in D4 applies to **every** secret stored there, the model
+credential included: an environment scopes its secrets to jobs that *declare* it, not to one
+workflow. A future protected-base job declaring `environment: keiko-for-quality` could reference the
+same model token. The boundary is that adding such a job requires a reviewed, merged change to the
+protected base — the same boundary that protects every other gate here — not that the platform
+prevents it.
 
 ### D4 — Dedicated bot posting identity
 
@@ -144,6 +152,27 @@ Two fail-open windows follow, and are documented rather than minimized:
    integration.
 
 Both are the promotion path for a later required-check stage. Neither may be described as closed.
+
+### D7 — No benign-warning allowlist, and a type-keyed review profile
+
+The reviewer's profile carries an **empty** benign-warning allowlist. Any engine warning settles the
+run as incomplete.
+
+The first draft allowlisted `context_truncated`, with a justification that admitted the file was
+reviewed only in part. That would have permitted a clean verdict over a partially inspected file —
+this repository holds production sources above 250 KB, so the case is real, not theoretical — which
+is the exact false-clean outcome the reviewer exists to prevent. If truncation becomes common the
+answer is engine-side chunking, not an allowlist entry.
+
+The review-relevant list is keyed by **file type**, not by directory. A location-keyed list left
+`native/` (including the endpoint-security system extension and `secure_workspace_read.c`),
+`sandbox/scripts/`, and `design-system/` unreviewed — three separate gaps, each found only after the
+previous one was patched. A type-keyed list cannot be defeated by adding a directory. Entitlement
+property lists, gate configuration, and the `docs/qa/*.json` ratchet baselines are named explicitly,
+because each is a way to weaken a gate rather than to change product behaviour.
+
+A profile change is verified by enumerating every tracked file and confirming that no code-like path
+lands in the catch-all. Sampling recent commits is not sufficient and is what missed all three gaps.
 
 ## Consequences
 
