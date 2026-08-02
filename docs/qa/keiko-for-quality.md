@@ -179,15 +179,23 @@ branch-protection change.
    during a precision failure that is exactly the window that matters.
 
    ```bash
-   # --limit is required: `gh run list` returns 20 by default, so a mass incident with more
-   # in-flight runs would leave the rest alive. The loop repeats until none remain.
+   # Fails closed. A query failure must not read as "no runs left", and a failed cancellation must
+   # not be skipped — during a precision incident both would leave credentialed runs publishing.
+   # Each cancellable status is queried separately: a single --limit over mixed statuses can push
+   # an older active run outside the newest results.
+   set -euo pipefail
    while :; do
-     # Both statuses: a QUEUED run already read KEIKO_QUALITY_ENABLED at queue time, so it can
-     # still start with the old value, materialize the credentials and publish after this loop.
-     ids=$(gh run list --workflow keiko-for-quality.yml --limit 200 \
-       --json databaseId,status --jq '.[] | select(.status=="in_progress" or .status=="queued") | .databaseId')
+     ids=$(for st in queued in_progress requested waiting pending; do
+       gh run list --workflow keiko-for-quality.yml --status "$st" --limit 100 \
+         --json databaseId --jq '.[].databaseId'
+     done | sort -u)
      [ -z "$ids" ] && break
-     echo "$ids" | xargs -r -n1 gh run cancel
+     failed=0
+     for id in $ids; do
+       gh run cancel "$id" || { echo "FAILED to cancel run $id" >&2; failed=1; }
+     done
+     [ "$failed" -eq 1 ] && { echo "cancel incomplete — do not proceed" >&2; exit 1; }
+     sleep 5
    done
    ```
 

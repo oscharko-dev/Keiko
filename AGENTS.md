@@ -407,11 +407,14 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 
   Cancelling is the load-bearing part, not the duration. `timeout-minutes` bounds how long a job
   runs _after it starts_ and says nothing about queue time, so no wall-clock number can guarantee a
-  healthy review has finished. Cancelling at expiry makes publication-after-integration impossible
-  by construction instead of by an argument the queue defeats. A cancelled review is recorded as
-  such and is never described as clean. The wait is bounded on purpose: a reviewer outage may delay integration, never block it
-  indefinitely. An expired wait is never described as a clean review. When `KEIKO_QUALITY_ENABLED`
-  is not `true` the job never starts, the interlock does not apply, and nothing changes.
+  healthy review has finished. Cancelling at expiry **narrows** the window in which a review can
+  publish after integration — it does not close it, because a run mid-publish can complete an
+  in-flight call, and ADR-0170 D6 keeps that as a stated fail-open window.
+
+  The wait is bounded on purpose: a reviewer outage may delay integration, never block it
+  indefinitely. A cancelled or expired review is recorded as such and is never described as clean.
+  When `KEIKO_QUALITY_ENABLED` is not `true` the job never starts, the interlock does not apply,
+  and nothing changes.
 
 - **Branch naming** follows `type/short-slug` — e.g. `feat/…`, `fix/…`, `issue/<n>-…`,
   `codex/…`, `claude/…`, `release/…`. Never work directly on `dev`.

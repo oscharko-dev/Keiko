@@ -55,11 +55,10 @@ SHA-pinned reviewer whose product code lives in
 required status; its findings block only through conversation resolution. **While it is active,
 arm auto-merge only after its run for the current head has terminated. If it has not terminated
 within 35 minutes, cancel the run first, then arm, and record the expiry as a delivery-policy
-event.** Cancelling — not the duration — is what prevents a review publishing after integration:
-`timeout-minutes` bounds execution after start, not queue time, so no fixed wait can guarantee a
-healthy review has finished. It stays inert until
-`KEIKO_QUALITY_ENABLED` is `true`; see
-[`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md).
+event.** Cancelling — not the duration — is what narrows the window in which a review can publish after
+integration: `timeout-minutes` bounds execution after start, not queue time, so no fixed wait can
+guarantee a healthy review has finished. The window is narrowed, not closed; ADR-0170 D6 records
+it as a fail-open window, and an expired review is never described as clean.md).
 
 Qodo is retired by
 [ADR-0167](docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md); it is not Sonar evidence.
