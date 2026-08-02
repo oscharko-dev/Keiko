@@ -1329,19 +1329,19 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
         Promise.resolve({ references: [], noEvidence: true, reason: "no-vectors" }),
       answer: () => {
         answererCalls += 1;
-        return Promise.resolve("You prefer pnpm.");
+        return Promise.resolve("You prefer pnpm; see [src/preferences.ts:42].");
       },
     });
 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
     expect(answererCalls).toBe(1);
-    expect(answer.content).toBe("You prefer pnpm.");
+    expect(answer.content).toContain("src/preferences.ts:42");
     expect(answer.citations).toEqual([]);
     expect(answer.knowledgeCitations).toEqual([]);
     expect(answer.evidenceRunId).toBeUndefined();
     expect(answer.evidenceRunIds).toEqual([]);
-    expect(answer.uncertainty.some((u) => u.kind === "unsupported-citation")).toBe(false);
+    expect(answer.uncertainty.some((u) => u.kind === "unsupported-citation")).toBe(true);
   });
 });
 

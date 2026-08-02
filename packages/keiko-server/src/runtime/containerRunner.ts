@@ -373,29 +373,36 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
 
   public readonly listCatalog = async (projectId: string): Promise<ContainerTaskCatalog> => {
     const capability = await this.resolveCapability(projectId);
-    // Graceful degradation: no engine → engineAvailable:false + tasks:[] (never an error).
-    const engineAvailable = capability.anyAvailable;
+    const availableEngines = new Set(
+      capability.engines
+        .filter((engine) => engine.state === "available")
+        .map((engine) => engine.engine),
+    );
+    const tasks = this.catalog.filter((task) => availableEngines.has(task.engine));
     return {
       schemaVersion: CONTAINER_RUNTIME_SCHEMA_VERSION,
       projectId,
-      engineAvailable,
-      tasks: engineAvailable ? this.catalog : [],
+      engineAvailable: tasks.length > 0,
+      tasks,
     };
   };
 
   public readonly execute = async (input: ContainerRunInput): Promise<ContainerRunResult> => {
     const workspace = this.resolveWorkspace(input.projectId);
-    // Engine-unavailable is a GOVERNANCE failure: throw BEFORE minting a run id (route → 503).
-    const capability = await this.resolveCapability(input.projectId);
-    if (!capability.anyAvailable) {
-      throw new ContainerRunnerError(
-        "CONTAINER_ENGINE_UNAVAILABLE",
-        "No container engine is available.",
-      );
-    }
     const task = this.catalog.find((entry) => entry.id === input.taskId);
     if (task === undefined) {
       throw new ContainerRunnerError("TASK_NOT_FOUND", "Task is not in the container catalog.");
+    }
+    // Engine-unavailable is a GOVERNANCE failure: throw BEFORE minting a run id (route → 503).
+    const capability = await this.resolveCapability(input.projectId);
+    const taskEngineAvailable = capability.engines.some(
+      (engine) => engine.engine === task.engine && engine.state === "available",
+    );
+    if (!taskEngineAvailable) {
+      throw new ContainerRunnerError(
+        "CONTAINER_ENGINE_UNAVAILABLE",
+        "The task's container engine is unavailable.",
+      );
     }
     if (!this.executionPolicy.imageAllowlist.includes(task.image)) {
       throw new ContainerRunnerError("IMAGE_NOT_ALLOWED", "Task image is not allowlisted.");
@@ -615,7 +622,8 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
   }
 
   private emit(event: ContainerRunnerEvent): void {
-    for (const listener of [...this.subscribers]) {
+    const listeners = new Set(this.subscribers);
+    for (const listener of listeners) {
       try {
         listener(event);
       } catch {

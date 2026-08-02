@@ -36,11 +36,6 @@ import {
 } from "./codeContextConnector.js";
 import { createGitHubCodeContextConnector } from "./githubCodeContextConnector.js";
 import { createJiraCodeContextConnector } from "./jiraCodeContextConnector.js";
-import { createGitHubCodeContextApiPort } from "./githubCodeContextPort.js";
-import {
-  createJiraCodeContextHttpPort,
-  parseJiraCodeContextPortConfig,
-} from "./jiraCodeContextPort.js";
 
 const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "schemaVersion",
@@ -237,37 +232,15 @@ const NO_CONNECTOR: CodeContextConnector = {
 };
 
 function composeConnectors(deps: UiHandlerDeps): ComposedConnectors {
-  const jiraPortConfig = parseJiraCodeContextPortConfig(deps.env);
-  const githubPort =
-    deps.codingContextGitHubPort ??
-    (deps.preferredProjectPath === undefined
-      ? undefined
-      : createGitHubCodeContextApiPort({
-          workspace: {
-            root: deps.preferredProjectPath,
-            name: undefined,
-            version: undefined,
-            testFramework: "unknown",
-            sourceDirs: [],
-            testDirs: [],
-            languages: [],
-            ignoreLines: [],
-          },
-          processEnv: process.env,
-        }));
-  const jiraPort =
-    deps.codingContextJiraPort ??
-    (jiraPortConfig === undefined ? undefined : createJiraCodeContextHttpPort(jiraPortConfig));
+  const githubPort = deps.codingContextGitHubPort;
+  const jiraPort = deps.codingContextJiraPort;
   return {
     connectors: {
       github:
         githubPort === undefined ? NO_CONNECTOR : createGitHubCodeContextConnector(githubPort),
       jira: jiraPort === undefined ? NO_CONNECTOR : createJiraCodeContextConnector(jiraPort),
     },
-    connectorConfig: connectorConfigFor(
-      deps,
-      jiraPortConfig !== undefined || deps.codingContextJiraPort !== undefined,
-    ),
+    connectorConfig: connectorConfigFor(deps, jiraPort !== undefined),
   };
 }
 

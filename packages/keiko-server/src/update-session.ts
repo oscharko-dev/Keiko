@@ -505,6 +505,11 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
           cwd: undefined,
           timeoutMs: this.timeoutMs,
           signal: controller.signal,
+          onSpawn: (childPid): void => {
+            if (this.lock !== undefined && !this.lock.updateChildPid(session.sessionId, childPid)) {
+              throw new Error("Update session child ownership could not be recorded.");
+            }
+          },
         },
         this.buildRunDeps(mode.installRoot ?? process.cwd()),
       );

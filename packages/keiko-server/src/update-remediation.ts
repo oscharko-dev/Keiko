@@ -317,6 +317,7 @@ function deferDraft(
 async function runDraft(
   options: UpdateRemediationManagerOptions,
   now: () => number,
+  runningActions: Set<string>,
   request: UpdateRemediationActionRequest,
   draft: ActionDraft,
 ): Promise<void> {
@@ -327,40 +328,46 @@ async function runDraft(
       409,
     );
   }
-  if (persistedStatus(options.localState, draft) === "running") {
+  if (runningActions.has(draft.actionId)) {
     throw new UpdateRemediationError(
       "UPDATE_REMEDIATION_RUNNING",
       "This remediation action is already running.",
       409,
     );
   }
-  upsertRuntimeAction({
-    localState: options.localState,
-    targetVersion: request.targetVersion,
-    draft,
-    status: "running",
-    now,
-  });
-  let status: RuntimeRemediationStatus;
+  runningActions.add(draft.actionId);
   try {
-    status = await executeDraft(options, draft);
-  } catch {
-    status = "failed";
+    upsertRuntimeAction({
+      localState: options.localState,
+      targetVersion: request.targetVersion,
+      draft,
+      status: "running",
+      now,
+    });
+    let status: RuntimeRemediationStatus;
+    try {
+      status = await executeDraft(options, draft);
+    } catch {
+      status = "failed";
+    }
+    upsertRuntimeAction({
+      localState: options.localState,
+      targetVersion: request.targetVersion,
+      draft,
+      status,
+      now,
+      ...(status === "failed" ? { warningCode: "manual-review-required" } : {}),
+    });
+    recordRemediationAudit(options, request, draft, status);
+  } finally {
+    runningActions.delete(draft.actionId);
   }
-  upsertRuntimeAction({
-    localState: options.localState,
-    targetVersion: request.targetVersion,
-    draft,
-    status,
-    now,
-    ...(status === "failed" ? { warningCode: "manual-review-required" } : {}),
-  });
-  recordRemediationAudit(options, request, draft, status);
 }
 
 async function runRemediationAction(
   options: UpdateRemediationManagerOptions,
   now: () => number,
+  runningActions: Set<string>,
   request: UpdateRemediationActionRequest,
 ): Promise<UpdateRemediationStatusReport> {
   const drafts = draftsForImpact(options.localState, request.impact, options.localKnowledge);
@@ -368,7 +375,7 @@ async function runRemediationAction(
   if (request.decision === "defer") {
     deferDraft(options, now, request, draft);
   } else {
-    await runDraft(options, now, request, draft);
+    await runDraft(options, now, runningActions, request, draft);
   }
   return statusFor(options, now, { ...request, persist: false });
 }
@@ -404,10 +411,11 @@ export function createUpdateRemediationManager(
   options: UpdateRemediationManagerOptions,
 ): UpdateRemediationManager {
   const now = options.now ?? Date.now;
+  const runningActions = new Set<string>();
   return {
     getStatus: (request): UpdateRemediationStatusReport => statusFor(options, now, request),
     runAction: (request): Promise<UpdateRemediationStatusReport> =>
-      runRemediationAction(options, now, request),
+      runRemediationAction(options, now, runningActions, request),
     completeRestart: (targetVersion): UpdateRemediationStatusReport =>
       completeRestartAction(options, now, targetVersion),
     updateCanComplete: (targetVersion): boolean =>

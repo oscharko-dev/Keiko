@@ -49,7 +49,10 @@ import { resolveConversationMemoryContext } from "./memory-conversation-context.
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
 import {
   isPersistableMemoryCandidate,
+  memoryCaptureAutoAcceptEligible,
   memoryCapturePolicyForDeps,
+  promoteEligibleMemoryRecord,
+  resolveMemoryCaptureAutonomyMode,
 } from "./memory-capture-policy.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
@@ -253,6 +256,7 @@ async function persistRecapOutcomes(
   outcomes: readonly CaptureOutcome[],
 ): Promise<RecapPersistResult> {
   const proposed: { id: MemoryId; scope: MemoryScope }[] = [];
+  const mode = resolveMemoryCaptureAutonomyMode(deps);
   let rejected = 0;
   for (const outcome of outcomes) {
     if (!isPersistableMemoryCandidate(outcome)) {
@@ -267,7 +271,10 @@ async function persistRecapOutcomes(
       rejected += 1;
       continue;
     }
-    const inserted = vault.insertMemory(record);
+    const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
+      ? promoteEligibleMemoryRecord(record)
+      : record;
+    const inserted = vault.insertMemory(candidate);
     await embedAndStoreMemory(deps, vault, inserted.id, inserted.body);
     proposed.push({ id: inserted.id, scope: inserted.scope });
   }

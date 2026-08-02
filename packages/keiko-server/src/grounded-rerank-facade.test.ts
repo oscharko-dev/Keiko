@@ -167,6 +167,8 @@ describe("rerankSelection", () => {
         generation: () => 0,
         verification: () => UNVERIFIED_GATEWAY,
         recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: () => undefined,
       },
     };
 
@@ -205,6 +207,8 @@ describe("rerankSelection", () => {
         generation: () => 0,
         verification: () => UNVERIFIED_GATEWAY,
         recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: () => undefined,
       },
     };
 

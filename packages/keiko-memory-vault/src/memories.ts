@@ -36,7 +36,11 @@ const SELECT_BY_ID_SQL = "SELECT * FROM memories WHERE id = ?";
 const DELETE_SQL = "DELETE FROM memories WHERE id = ?";
 const LIST_SCOPES_SQL = `
 SELECT DISTINCT scope_kind, scope_coordinate
-FROM memories
+FROM (
+  SELECT scope_kind, scope_coordinate FROM memories
+  UNION
+  SELECT scope_kind, scope_coordinate FROM memory_tombstones
+)
 ORDER BY scope_kind ASC, scope_coordinate ASC
 `;
 const METADATA_COLUMNS = [

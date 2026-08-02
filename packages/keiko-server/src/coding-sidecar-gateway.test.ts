@@ -518,6 +518,31 @@ async function* streamedResponse(response: NormalizedResponse): AsyncGenerator<G
 }
 
 describe("coding-sidecar gateway", () => {
+  it("keeps circuit-breaker failures across separate production gateway requests", async () => {
+    const fetchMock = vi.fn(() => Promise.reject(new Error("provider unavailable")));
+    vi.stubGlobal("fetch", fetchMock);
+    const config = {
+      ...configValue(provider({ maxRetries: 0 }), capability()),
+      circuitBreaker: { failureThreshold: 2, cooldownMs: 30_000, halfOpenProbes: 1 },
+    };
+    const deps = depsValue(config);
+    const request = (): RouteContext =>
+      authenticatedContext({
+        model: "azure-coding-model",
+        messages: [{ role: "user", content: "continue" }],
+        tools: [],
+      });
+
+    try {
+      await handleCodingSidecarGatewayChatCompletions(request(), deps);
+      await handleCodingSidecarGatewayChatCompletions(request(), deps);
+      await handleCodingSidecarGatewayChatCompletions(request(), deps);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("fails closed when a runtime gateway route has no capability authenticator", async () => {
     const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
     const deps = { ...depsValue(configValue(provider(), capability()), () => chat) } as Record<
@@ -1894,6 +1919,8 @@ describe("coding-sidecar gateway", () => {
         generation: () => 0,
         verification: () => "verified",
         recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: () => undefined,
       },
     });
 

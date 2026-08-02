@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { workspaceRootObjectIdentityDigestFor } from "./workspace-root-identity.js";
+import {
+  workspaceRootObjectIdentityDigestFor,
+  workspaceRootObjectIdentityFor,
+} from "./workspace-root-identity.js";
 
 describe("workspace root object identity", () => {
   it("is stable across path aliases for the same filesystem object", () => {
@@ -38,5 +41,9 @@ describe("workspace root object identity", () => {
     expect(
       workspaceRootObjectIdentityDigestFor({ dev: 7n, ino: 11n, birthtimeNs: 0n }),
     ).toBeUndefined();
+    expect(workspaceRootObjectIdentityFor({ dev: 7n, ino: 11n, birthtimeNs: 0n })).toEqual({
+      digest: undefined,
+      unsupported: true,
+    });
   });
 });

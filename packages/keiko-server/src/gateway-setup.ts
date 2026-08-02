@@ -10,6 +10,9 @@ import {
   DEFAULT_API_KEY_HEADER_NAME,
   Gateway,
   createDefaultChatCapability,
+  createDefaultEmbeddingCapability,
+  findConfiguredCapability,
+  isLikelyEmbeddingModelId,
   isVoiceCapability,
   listConfiguredCapabilities,
   modelSupportsRealtimeVoice,
@@ -37,11 +40,13 @@ import type {
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type {
+  GatewayDiscoveredModelMetadata,
   GatewayDiscoveredModels,
   GatewayModelDiscoveryOutput,
   GatewaySetupTestResult,
   RuntimeGatewayConfig,
   UiHandlerDeps,
+  VerifiedModelCapabilityFields,
 } from "./deps.js";
 import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
@@ -70,8 +75,6 @@ const FIGMA_CREDENTIAL_SMOKE_TIMEOUT_MS = 15_000;
 const FIGMA_CREDENTIAL_SMOKE_RESPONSE_BYTES = 64_000;
 const SETUP_SMOKE_CONCURRENCY = 4;
 const CHAT_COMPATIBLE_MODES = new Set(["chat", "completion", "responses"]);
-const EMBEDDING_ID_PATTERN =
-  /(?:^|[-_/. ])(?:text-)?embed(?:ding)?s?(?:[-_/. ]|$)|ada-002(?:$|[-_/. ])/i;
 const IMAGE_INPUT_ID_PATTERNS: readonly RegExp[] = [
   /(?:^|[-_/. ])(?:vision|multimodal|multi-modal|llava|pixtral|omni|gpt-4o)(?:$|[-_/. ])/i,
   /(?:^|[-_/. ])vl(?:$|[-_/. ])/i,
@@ -296,27 +299,91 @@ interface ProviderRawOptions {
   readonly imageInputModelIds?: readonly string[] | undefined;
   readonly responseFormatModelIds?: readonly string[] | undefined;
   readonly embeddingModelIds?: readonly string[] | undefined;
+  readonly modelMetadata?: Readonly<Record<string, GatewayDiscoveredModelMetadata>> | undefined;
+  readonly current?: GatewayConfig | undefined;
+  readonly workflowEligibleModelIds?: readonly string[] | undefined;
+}
+
+function existingCapabilityForSetup(
+  current: GatewayConfig | undefined,
+  modelId: string,
+  baseUrl: string,
+): ModelCapability | undefined {
+  const provider = current?.providers.find((candidate) => candidate.modelId === modelId);
+  if (provider === undefined || !sameBaseUrlIdentity(provider.baseUrl, baseUrl)) return undefined;
+  return current?.capabilities?.find((candidate) => candidate.id === modelId);
+}
+
+function codingUseCases(capability: ModelCapability): readonly string[] {
+  return capability.preferredUseCases.some((useCase) => useCase.toLowerCase().includes("coding"))
+    ? capability.preferredUseCases
+    : [...capability.preferredUseCases, "Coding"];
+}
+
+function discoveredCapabilityFields(
+  discovered: GatewayDiscoveredModelMetadata | undefined,
+): Partial<ModelCapability> {
+  return {
+    ...(discovered?.contextWindow === undefined ? {} : { contextWindow: discovered.contextWindow }),
+    ...(discovered?.maxOutputTokens === undefined
+      ? {}
+      : { maxOutputTokens: discovered.maxOutputTokens }),
+    ...(discovered?.toolCalling === undefined ? {} : { toolCalling: discovered.toolCalling }),
+  };
+}
+
+function workflowCapabilityFields(
+  modelId: string,
+  baseCapability: ModelCapability,
+  existing: ModelCapability | undefined,
+  workflowEligibleModelIds: readonly string[] | undefined,
+): Partial<ModelCapability> {
+  if (baseCapability.kind !== "chat" || workflowEligibleModelIds?.includes(modelId) !== true) {
+    return {};
+  }
+  return {
+    workflowEligible: true,
+    preferredUseCases: codingUseCases(existing ?? baseCapability),
+  };
+}
+
+function applyMistralSetupDefaults(modelId: string, capability: ModelCapability): ModelCapability {
+  if (!modelId.toLowerCase().includes("mistral")) return capability;
+  return {
+    ...capability,
+    toolCalling: false,
+    knownLimitations: [
+      ...capability.knownLimitations,
+      "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it",
+    ],
+  };
 }
 
 function createDefaultSetupCapability(
   modelId: string,
+  baseUrl: string,
   embeddingModelIds: readonly string[] | undefined,
+  options: ProviderRawOptions,
 ): ModelCapability {
-  if (embeddingModelIds?.includes(modelId) === true) {
-    return createDefaultEmbeddingCapabilityForSetup(modelId);
-  }
-  const capability = createDefaultChatCapability(modelId);
-  if (modelId.toLowerCase().includes("mistral")) {
-    return {
-      ...capability,
-      toolCalling: false,
-      knownLimitations: [
-        ...capability.knownLimitations,
-        "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it",
-      ],
-    };
-  }
-  return capability;
+  const baseCapability =
+    embeddingModelIds?.includes(modelId) === true
+      ? createDefaultEmbeddingCapability(modelId)
+      : createDefaultChatCapability(modelId);
+  const existing = existingCapabilityForSetup(options.current, modelId, baseUrl);
+  const capability: ModelCapability = {
+    ...baseCapability,
+    ...existing,
+    ...discoveredCapabilityFields(options.modelMetadata?.[modelId]),
+    id: modelId,
+    kind: baseCapability.kind,
+    ...workflowCapabilityFields(
+      modelId,
+      baseCapability,
+      existing,
+      options.workflowEligibleModelIds,
+    ),
+  };
+  return applyMistralSetupDefaults(modelId, capability);
 }
 
 function providerRaw(
@@ -325,7 +392,12 @@ function providerRaw(
   apiKey: string,
   options: ProviderRawOptions = {},
 ): Record<string, unknown> {
-  const defaultCapability = createDefaultSetupCapability(modelId, options.embeddingModelIds);
+  const defaultCapability = createDefaultSetupCapability(
+    modelId,
+    baseUrl,
+    options.embeddingModelIds,
+    options,
+  );
   const supportsResponseFormat = options.responseFormatModelIds?.includes(modelId) === true;
   return {
     modelId,
@@ -453,10 +525,6 @@ function voiceProviderRaw(
   };
 }
 
-function isLikelyEmbeddingModelId(modelId: string): boolean {
-  return EMBEDDING_ID_PATTERN.test(modelId);
-}
-
 function isLikelyImageInputModelId(modelId: string): boolean {
   return IMAGE_INPUT_ID_PATTERNS.some((pattern) => pattern.test(modelId));
 }
@@ -475,6 +543,47 @@ function booleanFieldFromRecords(
   fields: readonly string[],
 ): boolean {
   return records.some((record) => fields.some((field) => record[field] === true));
+}
+
+function optionalBooleanFieldFromRecords(
+  records: readonly Record<string, unknown>[],
+  fields: readonly string[],
+): boolean | undefined {
+  for (const record of records) {
+    for (const field of fields) {
+      const value = record[field];
+      if (typeof value === "boolean") return value;
+    }
+  }
+  return undefined;
+}
+
+function numberFieldFromRecords(
+  records: readonly Record<string, unknown>[],
+  fields: readonly string[],
+): number | undefined {
+  for (const record of records) {
+    for (const field of fields) {
+      const value = record[field];
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+    }
+  }
+  return undefined;
+}
+
+function metadataFromDiscoveryItem(item: Record<string, unknown>): GatewayDiscoveredModelMetadata {
+  const records = discoveryRecords(item);
+  const contextWindow = numberFieldFromRecords(records, ["max_input_tokens", "max_tokens"]);
+  const maxOutputTokens = numberFieldFromRecords(records, ["max_output_tokens"]);
+  const toolCalling = optionalBooleanFieldFromRecords(records, [
+    "supports_function_calling",
+    "supportsFunctionCalling",
+  ]);
+  return {
+    ...(contextWindow === undefined ? {} : { contextWindow }),
+    ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+    ...(toolCalling === undefined ? {} : { toolCalling }),
+  };
 }
 
 function stringsFromValue(value: unknown): readonly string[] {
@@ -521,28 +630,6 @@ function supportsImageInputFromDiscoveryItem(
     return true;
   }
   return isLikelyImageInputModelId(modelId);
-}
-
-function createDefaultEmbeddingCapabilityForSetup(modelId: string): ModelCapability {
-  return {
-    id: modelId,
-    kind: "embedding",
-    contextWindow: 8_191,
-    maxOutputTokens: 0,
-    toolCalling: false,
-    structuredOutput: false,
-    streaming: false,
-    supportsImageInput: false,
-    supportsDocumentInput: false,
-    workflowEligible: false,
-    costClass: "low",
-    latencyClass: "fast",
-    throughputHint: "runtime-configured embedding endpoint",
-    preferredUseCases: ["Embeddings"],
-    knownLimitations: [
-      "Runtime-configured capability; validate against the target endpoint before production use",
-    ],
-  };
 }
 
 function mergeChatAndEmbeddingModelIds(
@@ -826,6 +913,7 @@ interface ClassifiedDiscoveryModel {
   readonly id: string;
   readonly kind: DiscoveryModelKind;
   readonly supportsImageInput: boolean;
+  readonly metadata: GatewayDiscoveredModelMetadata;
 }
 
 function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefined {
@@ -836,17 +924,23 @@ function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefi
   if (id === undefined) {
     return undefined;
   }
+  const metadata = metadataFromDiscoveryItem(item);
   if (isExplicitlyEmbeddingModel(item)) {
-    return { id, kind: "embedding", supportsImageInput: false };
+    return { id, kind: "embedding", supportsImageInput: false, metadata };
   }
   if (isExplicitlyNonChatModel(item)) {
     return isLikelyEmbeddingModelId(id)
-      ? { id, kind: "embedding", supportsImageInput: false }
+      ? { id, kind: "embedding", supportsImageInput: false, metadata }
       : undefined;
   }
   return isLikelyEmbeddingModelId(id)
-    ? { id, kind: "embedding", supportsImageInput: false }
-    : { id, kind: "chat", supportsImageInput: supportsImageInputFromDiscoveryItem(item, id) };
+    ? { id, kind: "embedding", supportsImageInput: false, metadata }
+    : {
+        id,
+        kind: "chat",
+        supportsImageInput: supportsImageInputFromDiscoveryItem(item, id),
+        metadata,
+      };
 }
 
 // Issue #144: exported as part of the discovery-normalization seam. Gateway setup now returns
@@ -887,6 +981,7 @@ export function parseModelDiscovery(payload: unknown): GatewayDiscoveredModels {
     imageInputModelIds: limited
       .filter((entry) => entry.kind === "chat" && entry.supportsImageInput)
       .map((entry) => entry.id),
+    modelMetadata: Object.fromEntries(limited.map((entry) => [entry.id, entry.metadata])),
   };
 }
 
@@ -1026,6 +1121,28 @@ function parseImageInputModelIds(value: unknown): readonly string[] | RouteResul
     return {
       status: 400,
       body: errorBody("BAD_REQUEST", "imageInputModelIds contains an invalid model id."),
+    };
+  }
+  return names;
+}
+
+function parseWorkflowEligibleModelIds(value: unknown): readonly string[] | RouteResult {
+  if (value === undefined) return [];
+  const values = deploymentNameValues(value);
+  if (values === undefined) {
+    return {
+      status: 400,
+      body: errorBody(
+        "BAD_REQUEST",
+        "workflowEligibleModelIds must be a string or an array of strings.",
+      ),
+    };
+  }
+  const names = normalizeDeploymentNames(values);
+  if (names.length > MAX_DEPLOYMENT_NAMES || names.some((name) => !isUsableModelId(name))) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "workflowEligibleModelIds contains invalid model ids."),
     };
   }
   return names;
@@ -1217,6 +1334,7 @@ interface SetupRequest {
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
+  readonly workflowEligibleModelIds: readonly string[];
   readonly voiceProviders: readonly SetupVoiceProvider[];
   readonly figmaAccessToken: string | undefined;
   readonly verifyGateway: boolean;
@@ -1226,6 +1344,7 @@ interface SetupRequest {
 interface SetupModelLists {
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
+  readonly workflowEligibleModelIds: readonly string[];
 }
 
 interface SetupGatewayCredentials {
@@ -1276,7 +1395,11 @@ function readSetupModelLists(raw: Record<string, unknown>): SetupModelLists | Ro
   if (isRouteResult(imageInputModelIds)) {
     return imageInputModelIds;
   }
-  return { deploymentNames, imageInputModelIds };
+  const workflowEligibleModelIds = parseWorkflowEligibleModelIds(raw.workflowEligibleModelIds);
+  if (isRouteResult(workflowEligibleModelIds)) {
+    return workflowEligibleModelIds;
+  }
+  return { deploymentNames, imageInputModelIds, workflowEligibleModelIds };
 }
 
 function optionalSetupSecret(value: unknown, path: string): SetupParseResult<string | undefined> {
@@ -2630,6 +2753,7 @@ function resolveSetupModelLists(
       existing !== undefined && modelLists.imageInputModelIds.length === 0
         ? currentImageInputModelIds(existing)
         : modelLists.imageInputModelIds,
+    workflowEligibleModelIds: modelLists.workflowEligibleModelIds,
   };
 }
 
@@ -2675,7 +2799,8 @@ function setupRequiresGatewayVerification(
     hasNonBlankStringField(raw, "apiKey") ||
     hasNonBlankStringField(raw, "apiKeyHeaderName") ||
     hasNonEmptyListField(raw, "deploymentNames") ||
-    hasNonEmptyListField(raw, "imageInputModelIds")
+    hasNonEmptyListField(raw, "imageInputModelIds") ||
+    hasNonEmptyListField(raw, "workflowEligibleModelIds")
   );
 }
 
@@ -2713,6 +2838,7 @@ function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | Route
     timeoutMs: input.timeoutMs,
     deploymentNames: resolved.deploymentNames,
     imageInputModelIds: resolved.imageInputModelIds,
+    workflowEligibleModelIds: resolved.workflowEligibleModelIds,
     voiceProviders: input.voiceProviders,
     figmaAccessToken: input.figmaAccessToken ?? input.current?.figma?.accessToken,
     verifyGateway: setupRequiresGatewayVerification(input.raw, input.preserveExisting),
@@ -2808,6 +2934,7 @@ interface SetupVerificationInput {
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
+  readonly workflowEligibleModelIds: readonly string[];
   readonly voiceProviders: readonly SetupVoiceProvider[];
   readonly tester: GatewaySetupTester;
   readonly discovery: GatewayModelDiscovery;
@@ -2822,6 +2949,7 @@ interface SetupCandidateModels {
   readonly chatModelIds: readonly string[];
   readonly embeddingModelIds: readonly string[];
   readonly imageInputModelIds: readonly string[];
+  readonly modelMetadata: Readonly<Record<string, GatewayDiscoveredModelMetadata>>;
 }
 
 function isGatewaySetupTestResult(
@@ -2888,6 +3016,7 @@ function normalizeLegacyDiscoveryResult(modelIds: readonly string[]): SetupCandi
     chatModelIds: modelIds.filter((modelId) => !embeddingSet.has(modelId)),
     embeddingModelIds,
     imageInputModelIds: [],
+    modelMetadata: {},
   };
 }
 
@@ -2912,6 +3041,7 @@ function normalizeDiscoveryResult(result: GatewayModelDiscoveryOutput): SetupCan
       chatModelIds: result.chatModelIds,
       embeddingModelIds: result.embeddingModelIds,
       imageInputModelIds: result.imageInputModelIds ?? [],
+      modelMetadata: result.modelMetadata ?? {},
     };
   }
   return normalizeLegacyDiscoveryResult(result);
@@ -2927,6 +3057,7 @@ function candidateModelsFromDeploymentNames(
     chatModelIds: deploymentNames.filter((modelId) => !embeddingSet.has(modelId)),
     embeddingModelIds,
     imageInputModelIds: [],
+    modelMetadata: {},
   };
 }
 
@@ -2953,6 +3084,7 @@ function finalRawConfigForSetup(
   embeddingModelIds: readonly string[],
   imageInputModelIds: readonly string[],
   responseFormatModelIds: readonly string[],
+  modelMetadata: Readonly<Record<string, GatewayDiscoveredModelMetadata>>,
 ): Record<string, unknown> {
   const configuredModelIds = mergeChatAndEmbeddingModelIds(testedModelIds, embeddingModelIds);
   const rawConfig = buildRawConfig(input.baseUrl, input.apiKey, configuredModelIds, {
@@ -2960,6 +3092,9 @@ function finalRawConfigForSetup(
     imageInputModelIds,
     responseFormatModelIds,
     embeddingModelIds,
+    modelMetadata,
+    current: input.current,
+    workflowEligibleModelIds: input.workflowEligibleModelIds,
     timeoutMs: input.timeoutMs,
   });
   const rawConfigWithOptionalBlocks = {
@@ -3002,6 +3137,7 @@ function finalRawConfigForTestedSetup(
     candidateModels.embeddingModelIds,
     imageInputModelIds,
     testResult.responseFormatModelIds,
+    candidateModels.modelMetadata,
   );
 }
 
@@ -3206,6 +3342,7 @@ async function trySetupCandidate(
     timeoutMs: request.timeoutMs,
     deploymentNames: request.deploymentNames,
     imageInputModelIds: request.imageInputModelIds,
+    workflowEligibleModelIds: request.workflowEligibleModelIds,
     voiceProviders: request.voiceProviders,
     tester,
     discovery,
@@ -3332,4 +3469,131 @@ export async function handleGatewaySetup(
     return verifyAndSaveExistingConfigUpdate(request, current, deps, gatewayConfig);
   }
   return verifyAndSaveGatewaySetup(request, current, deps, gatewayConfig);
+}
+
+const VERIFIED_CAPABILITY_FIELDS = new Set<keyof VerifiedModelCapabilityFields>([
+  "streaming",
+  "toolCalling",
+  "structuredOutput",
+  "supportsImageInput",
+  "supportsDocumentInput",
+  "contextWindow",
+]);
+
+interface CapabilityApplyRequest {
+  readonly fields: VerifiedModelCapabilityFields;
+}
+
+function verifiedFieldValue(value: unknown, field: string): boolean | number | undefined {
+  if (field === "contextWindow") {
+    return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+      ? value
+      : undefined;
+  }
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function parseCapabilityApplyRequest(value: unknown): CapabilityApplyRequest | RouteResult {
+  if (!isRecord(value) || !isRecord(value.fields)) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "Verified capability fields are required."),
+    };
+  }
+  const entries = Object.entries(value.fields);
+  if (entries.length === 0) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "At least one verified field is required."),
+    };
+  }
+  const fields: Record<string, boolean | number> = {};
+  for (const [field, rawValue] of entries) {
+    if (!VERIFIED_CAPABILITY_FIELDS.has(field as keyof VerifiedModelCapabilityFields)) {
+      return {
+        status: 400,
+        body: errorBody("BAD_REQUEST", "An unsupported capability field was supplied."),
+      };
+    }
+    const parsed = verifiedFieldValue(rawValue, field);
+    if (parsed === undefined) {
+      return { status: 400, body: errorBody("BAD_REQUEST", "A capability value is invalid.") };
+    }
+    fields[field] = parsed;
+  }
+  return { fields };
+}
+
+function decodeModelId(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  try {
+    const decoded = decodeURIComponent(value).trim();
+    return decoded.length > 0 && decoded.length <= MAX_MODEL_ID_LENGTH ? decoded : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function fieldsMatchObservation(
+  requested: VerifiedModelCapabilityFields,
+  observed: VerifiedModelCapabilityFields,
+): boolean {
+  return Object.entries(requested).every(
+    ([field, value]) => observed[field as keyof VerifiedModelCapabilityFields] === value,
+  );
+}
+
+function replaceModelCapability(
+  config: GatewayConfig,
+  modelId: string,
+  fields: VerifiedModelCapabilityFields,
+): GatewayConfig | undefined {
+  const capabilities = listConfiguredCapabilities(config);
+  const current = capabilities.find((capability) => capability.id === modelId);
+  if (current === undefined) return undefined;
+  return {
+    ...config,
+    capabilities: capabilities.map((capability) =>
+      capability.id === modelId ? { ...capability, ...fields } : capability,
+    ),
+  };
+}
+
+/** Applies only generation-current live observations after an explicit, human-confirmed request. */
+export async function handleApplyGatewayVerifiedCapabilities(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const modelId = decodeModelId(ctx.params.modelId);
+  const gatewayConfig = deps.gatewayConfig;
+  const current = currentGatewayConfig(deps);
+  if (modelId === undefined) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "A valid model id is required.") };
+  }
+  if (gatewayConfig === undefined || current === undefined) return gatewayUnavailableResult();
+  const bodyResult = await readJsonSetupBody(ctx);
+  if ("status" in bodyResult) return bodyResult;
+  const request = parseCapabilityApplyRequest(bodyResult.parsed);
+  if ("status" in request) return request;
+  const observation = gatewayConfig.verifiedCapability(modelId);
+  if (observation === undefined || !fieldsMatchObservation(request.fields, observation.fields)) {
+    return {
+      status: 409,
+      body: errorBody(
+        "GATEWAY_CAPABILITY_OBSERVATION_STALE",
+        "Run readiness again before applying verified capability values.",
+      ),
+    };
+  }
+  const updated = replaceModelCapability(current, modelId, request.fields);
+  if (updated === undefined) {
+    return {
+      status: 404,
+      body: errorBody("MODEL_NOT_FOUND", "The configured model was not found."),
+    };
+  }
+  const raw = rawConfigFromCurrent(updated, updated.figma?.accessToken);
+  persistGatewayConfig(raw, gatewayConfig.storagePath, deps);
+  gatewayConfig.set(updated, true);
+  return { status: 200, body: { ok: true, model: findConfiguredCapability(updated, modelId) } };
 }

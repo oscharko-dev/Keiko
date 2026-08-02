@@ -18,13 +18,18 @@ import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorE
 import { currentGatewayConfig } from "./deps.js";
 import { buildUiHandlerDeps } from "./deps.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
-import { parseGatewayConfig, resolveVoiceCapability } from "@oscharko-dev/keiko-model-gateway";
+import {
+  parseGatewayConfig,
+  resolveCodingSafeSidecarGatewayProfile,
+  resolveVoiceCapability,
+} from "@oscharko-dev/keiko-model-gateway";
 import type {
   GatewayConfig,
   ModelCapability,
   ModelProviderConfig,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
+  handleApplyGatewayVerifiedCapabilities,
   handleGatewaySetup,
   MAX_DISCOVERED_MODELS,
   isExplicitlyNonChatModel,
@@ -303,6 +308,57 @@ function voiceElectionProviders(): readonly Record<string, unknown>[] {
 }
 
 describe("handleGatewaySetup", () => {
+  it("applies only a generation-current live capability observation after an explicit request", async () => {
+    const uiDir = await tempDir("keiko-gw-capability-apply-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-capability-apply-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "model/one",
+            baseUrl: "https://llm-gateway.example.com/v1",
+            apiKey: "example-secret-token",
+            capability: { kind: "chat", toolCalling: true },
+          },
+        ],
+      }),
+      true,
+    );
+    gatewayConfig.recordVerifiedCapability(
+      "model/one",
+      { toolCalling: false },
+      "2026-08-02T08:00:00.000Z",
+      gatewayConfig.generation(),
+    );
+
+    const rejected = await handleApplyGatewayVerifiedCapabilities(
+      { ...ctx({ fields: { toolCalling: true } }), params: { modelId: "model%2Fone" } },
+      deps,
+    );
+    expect(rejected.status).toBe(409);
+    expect(requiredCapability(requiredGatewayConfig(deps), "model/one").toolCalling).toBe(true);
+
+    const result = await handleApplyGatewayVerifiedCapabilities(
+      { ...ctx({ fields: { toolCalling: false } }), params: { modelId: "model%2Fone" } },
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(requiredCapability(requiredGatewayConfig(deps), "model/one").toolCalling).toBe(false);
+    expect(gatewayConfig.verifiedCapability("model/one")).toBeUndefined();
+    const persisted = readFileSync(gatewayConfig.storagePath, "utf8");
+    expect(persisted).toContain('"toolCalling": false');
+    expect(persisted).not.toContain("example-secret-token");
+    deps.store.close();
+  });
+
   it("persists verified response-format support and makes it available to QI immediately", async () => {
     const uiDir = await tempDir("keiko-gw-response-format-ui-");
     const evidenceDir = await tempDir("keiko-gw-response-format-ev-");
@@ -2916,6 +2972,79 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("lets the operator explicitly mark one discovered chat model as coding-safe", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-coding-safe-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-coding-safe-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "example-secret-token",
+        deploymentNames: ["coding-chat"],
+        workflowEligibleModelIds: ["coding-chat"],
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(resolveCodingSafeSidecarGatewayProfile(currentGatewayConfig(deps))).toMatchObject({
+      status: "available",
+    });
+    expect(
+      currentGatewayConfig(deps)?.capabilities?.find(
+        (capability) => capability.id === "coding-chat",
+      ),
+    ).toMatchObject({ workflowEligible: true, preferredUseCases: ["Chat", "Coding"] });
+    deps.store.close();
+  });
+
+  it("preserves coding-safe enrichment across a verified credential rotation", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-coding-rotation-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-coding-rotation-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({
+            baseUrl: "https://llm-gateway.example.com/v1",
+            apiKey: "first-secret-token",
+            deploymentNames: ["coding-chat"],
+            workflowEligibleModelIds: ["coding-chat"],
+          }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+
+    const rotated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        apiKey: "rotated-secret-token",
+        deploymentNames: ["coding-chat"],
+      }),
+      deps,
+    );
+
+    expect(rotated.status).toBe(200);
+    expect(
+      currentGatewayConfig(deps)?.capabilities?.find(
+        (capability) => capability.id === "coding-chat",
+      ),
+    ).toMatchObject({ workflowEligible: true, preferredUseCases: ["Chat", "Coding"] });
+    deps.store.close();
+  });
+
   it("uses LiteLLM model info to persist embeddings while smoke-testing only chat models", async () => {
     const uiDir = await tempDir("keiko-gw-ui-litellm-");
     const evidenceDir = await tempDir("keiko-gw-ev-litellm-");
@@ -2936,7 +3065,15 @@ describe("handleGatewaySetup", () => {
           new Response(
             JSON.stringify({
               data: [
-                { model_name: "litellm-chat-large", model_info: { mode: "chat" } },
+                {
+                  model_name: "litellm-chat-large",
+                  model_info: {
+                    mode: "chat",
+                    max_input_tokens: 1_050_000,
+                    max_output_tokens: 128_000,
+                    supports_function_calling: false,
+                  },
+                },
                 {
                   model_name: "litellm-vision-chat",
                   model_info: { mode: "chat", supports_vision: true },
@@ -3021,6 +3158,13 @@ describe("handleGatewaySetup", () => {
         config?.capabilities?.find((capability) => capability.id === "litellm-vision-chat")
           ?.supportsImageInput,
       ).toBe(true);
+      expect(
+        config?.capabilities?.find((capability) => capability.id === "litellm-chat-large"),
+      ).toMatchObject({
+        contextWindow: 1_050_000,
+        maxOutputTokens: 128_000,
+        toolCalling: false,
+      });
       expect(selectEmbeddingModelId(config)).toBe("litellm-embedding");
       const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
       expect(saved).toContain('"apiKeyHeaderName": "x-litellm-key"');
@@ -3369,6 +3513,20 @@ describe("handleGatewaySetup", () => {
 // customer gateway models without requiring code changes for each model name")
 // by exercising the wrapper with every documented payload shape.
 describe("normalizeDiscoveryPayload", () => {
+  it("uses the canonical embedding model-id families", () => {
+    const embeddingModelIds = [
+      "bge-large-en-v1.5",
+      "intfloat/e5-large-v2",
+      "thenlper/gte-large",
+      "hkunlp/instructor-xl",
+    ];
+    expect(
+      normalizeDiscoveryPayloadForSetup({
+        data: embeddingModelIds.map((id) => ({ id })),
+      }).embeddingModelIds,
+    ).toEqual(embeddingModelIds);
+  });
+
   it("returns OpenAI-compatible ids in original order", () => {
     const payload = { data: [{ id: "test-chat-1" }, { id: "test-chat-2" }] };
     expect(normalizeDiscoveryPayload(payload)).toEqual(["test-chat-1", "test-chat-2"]);

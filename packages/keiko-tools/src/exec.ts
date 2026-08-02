@@ -103,6 +103,7 @@ export interface RunCommandInput {
   readonly cwd: string | undefined;
   readonly timeoutMs: number | undefined;
   readonly signal: AbortSignal;
+  readonly onSpawn?: ((pid: number) => void) | undefined;
 }
 
 const POSIX = process.platform !== "win32";
@@ -585,7 +586,19 @@ function spawnChild(
   state: RunState,
 ): ChildProcess {
   try {
-    return deps.spawn(target.command, target.args, { cwd, env, shell: false, detached: POSIX });
+    const child = deps.spawn(target.command, target.args, {
+      cwd,
+      env,
+      shell: false,
+      detached: POSIX,
+    });
+    try {
+      if (child.pid !== undefined) input.onSpawn?.(child.pid);
+    } catch (error) {
+      killGroup(child, "SIGTERM");
+      throw error;
+    }
+    return child;
   } catch (error) {
     cleanup(state, input.signal);
     throw asError(error, "spawn failed");

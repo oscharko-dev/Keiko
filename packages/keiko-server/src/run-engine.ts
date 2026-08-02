@@ -35,7 +35,6 @@ import {
 import {
   buildVerificationPlan,
   detectScripts,
-  runVerification,
   type VerificationReport,
 } from "@oscharko-dev/keiko-verification";
 import { detectWorkspace, readWorkspaceFile } from "@oscharko-dev/keiko-workspace";
@@ -50,6 +49,7 @@ import {
   type AgentRunGovernanceBinding,
 } from "./agent-run-governance.js";
 import { QueueEventSink } from "./sink.js";
+import { executeVerificationEnforced } from "./editor/verificationExecution.js";
 import type { AppliableSnapshot, RunRegistry, RunStatus } from "./runs.js";
 import {
   persistWorkflowEvidence,
@@ -422,7 +422,8 @@ async function runVerify(
   const plan = buildVerificationPlan(workspace, catalog, {
     ...(targetFiles === undefined ? {} : { changedFiles: targetFiles }),
   });
-  return runVerification(plan, { workspace, signal });
+  const { report } = await executeVerificationEnforced({ plan, workspace, signal });
+  return report;
 }
 
 function readTargetFiles(value: unknown): readonly string[] | undefined {

@@ -510,7 +510,9 @@ function refusedScopeVectors(
   scope: MemoryRecord["scope"],
   reason: MemoryCaptureSuppressionReason,
 ): readonly Float32Array[] {
-  if (reason === FORGOTTEN_MEMORY_SUPPRESSION_REASON) return vault.forgetTombstoneVectors(scope);
+  if (reason === FORGOTTEN_MEMORY_SUPPRESSION_REASON) {
+    return vault.forgetTombstoneVectors(scope, MAX_DEDUP_NEIGHBORS);
+  }
   const ids = vault
     .listMemoriesByScope(scope, {
       status: ["rejected"],

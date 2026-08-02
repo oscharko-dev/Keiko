@@ -21,6 +21,8 @@ import {
   type AgentRunGovernanceBinding,
 } from "./agent-run-governance.js";
 import { editorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
+import { probeNetworkIsolation } from "./editor/verificationExecution.js";
+import type { VerificationReport } from "@oscharko-dev/keiko-verification";
 
 const REJECT_MODEL: ModelPort = {
   call: (): Promise<NormalizedResponse> =>
@@ -119,6 +121,31 @@ async function waitForTerminal(runId: string): Promise<void> {
 }
 
 describe("startRun verify dispatch", () => {
+  it("probes network enforcement before executing a real verification script", async () => {
+    writeFileSync(
+      join(workspaceRoot, "package.json"),
+      JSON.stringify({ name: "fixture", scripts: { test: 'node -e "process.exit(0)"' } }),
+    );
+    const request = ok(
+      parseRunRequest(
+        JSON.stringify({
+          taskType: "verify",
+          modelId: "m",
+          input: { workspaceRoot },
+        }),
+      ),
+    );
+    const result = startRun({ request, model: REJECT_MODEL, registry }, (value) => value);
+    await waitForTerminal(result.runId);
+    const report = registry.get(result.runId)?.report as VerificationReport;
+
+    if (probeNetworkIsolation(workspaceRoot).available) {
+      expect(report.counts.denied).toBeLessThan(report.results.length);
+    } else {
+      expect(report.results.every((step) => step.status === "denied")).toBe(true);
+    }
+  });
+
   it("returns a synchronous {runId, fingerprint} and registers the run", () => {
     const request = ok(
       parseRunRequest(

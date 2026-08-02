@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (MemoriaViva forgetting-model milestone)
+Accepted (MemoriaViva forgetting-model milestone). Amended by Issue #2885 (2026-08-02) to wire
+explicit retention and tombstone purge into the bounded maintenance pass.
 
 ## Version
 
@@ -58,6 +59,27 @@ becoming default), the server enables it only under `KEIKO_MEMORY_SEMANTICIZATIO
 Default OFF keeps existing forgetting behaviour — and its retrieval/forgetting evaluation evidence —
 unchanged. Flipping the default to ON is a deliberate follow-up gated on eval evidence, not a silent
 behaviour change here.
+
+### D4 — Absolute retention is explicit, config-driven, and uses the same bounded pass
+
+The separate absolute-retention engine runs as phase four of `runMemoryMaintenance`, after
+consolidation and strength-based fade. It reuses the pass's scope snapshot and deterministic clock,
+so the manual route and rate-limited post-chat trigger exercise the same implementation. No timer or
+second maintenance subsystem is introduced.
+
+There are deliberately no deletion defaults. Operators opt into any subset of the policy through
+positive safe-integer environment values:
+
+- `KEIKO_MEMORY_RETENTION_MAX_AGE_DAYS`
+- `KEIKO_MEMORY_RETENTION_MAX_RECORDS_PER_SCOPE`
+- `KEIKO_MEMORY_RETENTION_EXPIRE_PROPOSALS_AFTER_DAYS`
+- `KEIKO_MEMORY_RETENTION_PURGE_FORGOTTEN_AFTER_DAYS`
+
+Absent values leave that dimension disabled; an invalid value disables the retention phase and
+emits a content-free operator diagnostic. Pinned records remain ineligible. Scope enumeration
+includes tombstone-only scopes so later passes can actually purge forgotten ledgers after their last
+live record is gone. `GET /api/memory/tombstones` exposes a bounded, authorized, content-free audit
+projection without body hashes or forgotten body content.
 
 ## Consequences
 

@@ -395,6 +395,48 @@ describe("update remediation manager", () => {
     expect(status.updateCanComplete).toBe(false);
   });
 
+  it("reruns an interrupted local-state repair after restart", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const stateDir = makeStateDir();
+    const memoryDb = join(stateDir, "memory", "keiko-memory.db");
+    touch(memoryDb, "sealed-memory");
+    chmodSync(memoryDb, 0o644);
+    const localState = createUpdateLocalStateManager({ stateDir, now: () => NOW });
+    localState.writeRuntimeState({
+      schemaVersion: UPDATE_LOCAL_STATE_SCHEMA_VERSION,
+      updatedAt: "stale",
+      targetVersion: TARGET,
+      remediations: [
+        {
+          store: "memory-vault",
+          remediation: "repair-required",
+          status: "running",
+          updatedAt: "stale",
+        },
+      ],
+      warnings: [],
+    });
+    const subject = createUpdateRemediationManager({ localState, now: () => NOW });
+
+    const result = await subject.runAction({
+      actionId: "local-state-repair:memory-vault",
+      targetVersion: TARGET,
+      impact: {
+        stateImpact: [
+          {
+            store: "memory",
+            description: "Memory store permissions require repair.",
+            remediation: "repair-required",
+            userActionRequired: true,
+          },
+        ],
+      },
+    });
+
+    expect(result.actions[0]?.status).toBe("completed");
+    expect(statSync(memoryDb).mode & 0o777).toBe(0o600);
+  });
+
   it("records failed remediation and keeps update completion blocked", async () => {
     const subject = manager(makeStateDir(), fakeLocalKnowledge("failed"));
 

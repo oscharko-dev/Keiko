@@ -8,7 +8,7 @@ import type { IncomingMessage, Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
@@ -344,6 +344,30 @@ describe("GET /api/projects", () => {
 
 // ─── Route 14: POST /api/projects ────────────────────────────────────────────
 describe("POST /api/projects", () => {
+  it("keeps a committed project when the trailing trust grant fails", async () => {
+    const diagnostic = vi.fn();
+    await restartWithDeps({
+      workspaceScriptTrust: {
+        grant: () => {
+          throw new Error("manifest unavailable");
+        },
+      } as unknown as UiHandlerDeps["workspaceScriptTrust"],
+      diagnostics: { record: diagnostic },
+    });
+
+    const res = await fetch(url("/api/projects"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({ path: projDir }),
+    });
+
+    expect(res.status).toBe(201);
+    expect(store.listProjects()).toContainEqual(expect.objectContaining({ path: projDir }));
+    expect(diagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "project.create.trust.grant" }),
+    );
+  });
+
   it("records the explicit folder selection as the exact root trust grant", async () => {
     writeFileSync(join(projDir, "package.json"), JSON.stringify({ name: "selected-root" }));
     const workspaceScriptTrust = createWorkspaceScriptTrustService({ store });

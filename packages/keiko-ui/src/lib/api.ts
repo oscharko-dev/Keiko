@@ -609,6 +609,7 @@ export interface GatewaySetupInput {
   readonly timeoutMs?: number | undefined;
   readonly deploymentNames?: readonly string[] | undefined;
   readonly imageInputModelIds?: readonly string[] | undefined;
+  readonly workflowEligibleModelIds?: readonly string[] | undefined;
   readonly voiceBaseUrl?: string | undefined;
   readonly voiceApiKey?: string | undefined;
   readonly voiceApiKeyHeaderName?: string | undefined;
@@ -657,6 +658,32 @@ export async function runGatewayReadiness(
       ...(options === undefined ? {} : { options }),
     }),
   });
+}
+
+export type VerifiedGatewayCapabilityFields = Partial<
+  Pick<
+    ModelCapability,
+    | "streaming"
+    | "toolCalling"
+    | "structuredOutput"
+    | "supportsImageInput"
+    | "supportsDocumentInput"
+    | "contextWindow"
+  >
+>;
+
+export async function applyGatewayVerifiedCapabilities(
+  modelId: string,
+  fields: VerifiedGatewayCapabilityFields,
+): Promise<{ readonly ok: true; readonly model: ModelCapability }> {
+  const response = await fetchJson<{ readonly ok: true; readonly model: ModelCapability }>(
+    `/api/gateway/capabilities/${encodeURIComponent(modelId)}`,
+    { method: "PATCH", body: JSON.stringify({ fields }) },
+  );
+  clearConfigCacheForTests();
+  clearModelCacheForTests();
+  invalidateVoiceCapability();
+  return response;
 }
 
 // ---------------------------------------------------------------------------

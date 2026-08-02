@@ -720,9 +720,9 @@ function buildTombstoneAndAccessOps(
       });
       return true;
     },
-    forgetTombstoneVectors: (scope: MemoryScope): readonly Float32Array[] => {
+    forgetTombstoneVectors: (scope: MemoryScope, limit: number): readonly Float32Array[] => {
       gateMemoryScope(scope);
-      return listForgetTombstoneVectors(db, scope, opts.cipher);
+      return listForgetTombstoneVectors(db, scope, opts.cipher, limit);
     },
     purgeTombstonesByScopeBefore: (scope: MemoryScope, forgottenBeforeMs: number): number => {
       return withSidecarHardening(opts, () => {

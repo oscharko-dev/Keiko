@@ -33,6 +33,7 @@ import {
   handleArchiveMemory,
   handleEditMemory,
   handleListMemories,
+  handleListMemoryTombstones,
   handleMemoryReviewQueue,
   handleAcceptMemoryProposal,
   handleCorrectMemory,
@@ -188,6 +189,39 @@ function readAllAuditEvents(store: EvidenceStore): readonly MemoryAuditEvent[] {
 }
 
 describe("memory handlers", () => {
+  it("lists the bounded, content-free tombstone audit ledger for authorized scopes", () => {
+    const vault = makeVault();
+    const scope = { kind: "user" as const, userId: userId("u-1") };
+    vault.insertMemory(makeMemory("forgotten-1", "secret body", { scope }));
+    vault.deleteMemory(memoryId("forgotten-1"), {
+      tombstone: true,
+      forgetterSurface: "memory-center",
+      reason: "user-request",
+      nowMs: 200,
+    });
+
+    const result = handleListMemoryTombstones(
+      makeCtx("/api/memory/tombstones?limit=10", {}),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      total: 1,
+      limit: 10,
+      tombstones: [
+        {
+          memoryId: "forgotten-1",
+          scopeKind: "user",
+          scopeCoordinate: "u-1",
+          forgetterSurface: "memory-center",
+        },
+      ],
+    });
+    expect(JSON.stringify(result.body)).not.toContain("secret body");
+    expect(JSON.stringify(result.body)).not.toContain("bodyHash");
+  });
+
   it("lists memories across scopes and paginates after filtering", () => {
     const vault = makeVault();
     vault.insertMemory(makeMemory("global-1", "global"));

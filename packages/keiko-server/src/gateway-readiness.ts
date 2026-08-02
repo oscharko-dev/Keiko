@@ -21,7 +21,7 @@ import {
   gatewayVerificationFromProbeOutcome,
   maxUtf8BytesForTokenBudget,
 } from "@oscharko-dev/keiko-contracts";
-import type { UiHandlerDeps } from "./deps.js";
+import type { UiHandlerDeps, VerifiedModelCapabilityFields } from "./deps.js";
 import { currentGatewayConfig } from "./deps.js";
 import { newCorrelationId } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
@@ -1106,6 +1106,33 @@ function verifiedCapabilities(
   };
 }
 
+function categoricalProbeValue(
+  probes: readonly GatewayReadinessProbeResult[],
+  name: GatewayReadinessProbeName,
+): boolean | undefined {
+  const status = probes.find((probe) => probe.name === name)?.status;
+  if (status === "passed") return true;
+  if (status === "unsupported") return false;
+  return undefined;
+}
+
+function verifiedCapabilityObservation(
+  probes: readonly GatewayReadinessProbeResult[],
+  report: GatewayReadinessReport,
+): VerifiedModelCapabilityFields {
+  const values = [
+    ["streaming", categoricalProbeValue(probes, "streaming")],
+    ["toolCalling", categoricalProbeValue(probes, "tool_calling")],
+    ["structuredOutput", categoricalProbeValue(probes, "json_schema")],
+    ["supportsImageInput", categoricalProbeValue(probes, "image_input")],
+    ["supportsDocumentInput", categoricalProbeValue(probes, "document_input")],
+    ["contextWindow", report.verifiedCapabilities.testedContextTokens],
+  ] as const;
+  return Object.fromEntries(
+    values.filter(([, value]) => value !== undefined),
+  ) as VerifiedModelCapabilityFields;
+}
+
 export async function runGatewayReadiness(
   request: GatewayReadinessRequest,
   deps: UiHandlerDeps,
@@ -1150,6 +1177,12 @@ export async function runGatewayReadiness(
   // Content-free: one state word, no probe bodies, no endpoints, no credentials.
   deps.gatewayConfig?.recordVerification(
     gatewayVerificationFromProbeOutcome(report.overallStatus),
+    observedGeneration,
+  );
+  deps.gatewayConfig?.recordVerifiedCapability(
+    report.modelId,
+    verifiedCapabilityObservation(probes, report),
+    report.checkedAt,
     observedGeneration,
   );
   return report;

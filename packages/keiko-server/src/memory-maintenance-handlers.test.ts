@@ -18,6 +18,7 @@ import {
   maybeRunAutoMaintenance,
   runMemoryMaintenance,
   MEMORY_AUTO_MAINTENANCE_MIN_INTERVAL_MS,
+  memoryRetentionPolicy,
   type AutoMaintenanceState,
 } from "./memory-maintenance-handlers.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -246,6 +247,41 @@ describe("handleRunMaintenance", () => {
     expect(
       vault.listTombstonesByScope({ kind: "user", userId: "u-1" as unknown as MemoryUserId }),
     ).toHaveLength(0);
+  });
+
+  it("runs configured age retention and tombstoning inside the bounded maintenance pass", () => {
+    const vault = makeVault();
+    const now = Date.now();
+    insert(vault, { id: "old-accepted", status: "accepted", createdAt: now - 40 * DAY });
+
+    const result = runMemoryMaintenance(vault, undefined, {
+      nowMs: now,
+      retentionPolicy: { maxAgeMs: 30 * DAY },
+    });
+
+    expect(result.retentionForgotten).toBe(1);
+    expect(result.forgotten).toBe(1);
+    expect(vault.getMemory(mid("old-accepted"))).toBeUndefined();
+    expect(
+      vault.listTombstonesByScope({ kind: "user", userId: "u-1" as unknown as MemoryUserId }),
+    ).toHaveLength(1);
+  });
+
+  it("builds retention only from explicit operator configuration", () => {
+    expect(memoryRetentionPolicy({})).toBeUndefined();
+    expect(
+      memoryRetentionPolicy({
+        KEIKO_MEMORY_RETENTION_MAX_AGE_DAYS: "30",
+        KEIKO_MEMORY_RETENTION_MAX_RECORDS_PER_SCOPE: "5000",
+        KEIKO_MEMORY_RETENTION_EXPIRE_PROPOSALS_AFTER_DAYS: "14",
+        KEIKO_MEMORY_RETENTION_PURGE_FORGOTTEN_AFTER_DAYS: "365",
+      }),
+    ).toEqual({
+      maxAgeMs: 30 * DAY,
+      maxRecordsPerScope: 5000,
+      expireProposalsAfterMs: 14 * DAY,
+      purgeForgottenAfterMs: 365 * DAY,
+    });
   });
 
   it("returns a review item instead of auto-superseding a pairwise correction conflict", () => {

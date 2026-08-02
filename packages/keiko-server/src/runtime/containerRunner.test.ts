@@ -119,6 +119,17 @@ const UNAVAILABLE: ContainerCapabilityResponse = {
   anyAvailable: false,
 };
 
+const WRONG_ENGINE_AVAILABLE: ContainerCapabilityResponse = {
+  schemaVersion: "1",
+  generatedAtMs: 1,
+  deadlineMs: 4_000,
+  engines: [
+    { engine: "podman", state: "available", version: "5.0.0" },
+    { engine: "docker", state: "missing", unavailableReason: "executable-not-found" },
+  ],
+  anyAvailable: true,
+};
+
 // ── Fixture ────────────────────────────────────────────────────────────────────────
 
 let workspaceRoot: string;
@@ -385,6 +396,20 @@ describe("ContainerRunnerManager — execution", () => {
 // ── Governance / pilot path ────────────────────────────────────────────────────────
 
 describe("ContainerRunnerManager — governance", () => {
+  it("rejects a task when only a different container engine is available", async () => {
+    const spawn = vi.fn<SpawnFn>(makeSpawn());
+    const manager = makeManager(spawn, {
+      detect: () => Promise.resolve(WRONG_ENGINE_AVAILABLE),
+    });
+
+    const catalog = await manager.listCatalog(workspaceRoot);
+    expect(catalog).toMatchObject({ engineAvailable: false, tasks: [] });
+    await expect(
+      manager.execute({ projectId: workspaceRoot, taskId: PILOT_ID }),
+    ).rejects.toMatchObject({ code: "CONTAINER_ENGINE_UNAVAILABLE" });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("THROWS CONTAINER_ENGINE_UNAVAILABLE before minting a run id when no engine is available", async () => {
     const spawn = vi.fn<SpawnFn>(makeSpawn());
     const manager = makeManager(spawn, {

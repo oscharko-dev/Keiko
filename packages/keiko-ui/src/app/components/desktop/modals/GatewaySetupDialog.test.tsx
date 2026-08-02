@@ -480,6 +480,38 @@ describe("GatewaySetupDialog", () => {
     });
   });
 
+  it("submits explicit coding-safe workflow model approval", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "coding-chat",
+      testedModelIds: ["coding-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://llm.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.type(
+      screen.getByLabelText(/coding-safe workflow models optional/i),
+      "coding-chat",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).toHaveBeenCalledWith({
+      baseUrl: "https://llm.example.com/v1",
+      apiKey: "example-token",
+      apiKeyHeaderName: undefined,
+      deploymentNames: [],
+      preserveExisting: false,
+      workflowEligibleModelIds: ["coding-chat"],
+    });
+  });
+
   it("submits optional voice dictation credentials from update mode", async () => {
     vi.mocked(setupGateway).mockResolvedValueOnce({
       ok: true,

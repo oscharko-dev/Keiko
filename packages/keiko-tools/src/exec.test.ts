@@ -127,6 +127,28 @@ function expectTerminated(kills: KillRecorder, child: { killed: string[] }): voi
 }
 
 describe("runCommand — allowlist guard (before spawn)", () => {
+  it("reports the live child pid immediately after spawn", async () => {
+    const spawn = recordingSpawn();
+    const seen: number[] = [];
+    const pending = runCommand(
+      {
+        command: "node",
+        args: ["-e", "1"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+        onSpawn: (pid): void => {
+          seen.push(pid);
+        },
+      },
+      fakeDeps(spawn.fn),
+    );
+
+    expect(seen).toEqual([spawn.child.pid]);
+    spawn.child.emit("close", 0, null);
+    await expect(pending).resolves.toMatchObject({ exitCode: 0 });
+  });
+
   it("rejects a denied command WITHOUT spawning", async () => {
     const spawn = recordingSpawn();
     await expect(

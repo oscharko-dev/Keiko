@@ -1018,6 +1018,22 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     deps.memoryVault?.close();
   });
 
+  it("composes the connected-context GitHub port for the launch project", async () => {
+    const projectDir = tmp("coding-context-project-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("coding-context-evidence-"),
+      env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+      initialProjectPath: projectDir,
+    });
+
+    try {
+      expect(deps.codingContextGitHubPort).toBeDefined();
+    } finally {
+      await deps.dispose?.();
+    }
+  });
+
   it("resolves the DB path via KEIKO_UI_DATA_DIR when no explicit path is supplied", () => {
     const uiDir = tmp("ui-env-");
     const evidenceDir = tmp("ev-");

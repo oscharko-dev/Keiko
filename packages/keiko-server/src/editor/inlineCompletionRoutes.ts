@@ -42,7 +42,7 @@ import {
   type EditorInlineCompletionWireResponse,
   type UsageMetadata,
 } from "@oscharko-dev/keiko-contracts";
-import { Gateway, selectCompletionModel } from "@oscharko-dev/keiko-model-gateway";
+import { selectCompletionModel } from "@oscharko-dev/keiko-model-gateway";
 import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
@@ -53,6 +53,7 @@ import { assembleCodingContext } from "./codingContext.js";
 import { recordCodingContextEvidence } from "./codingContextEvidence.js";
 import { recordEditorCompletionModelEvidence } from "./completionModelEvidence.js";
 import { recordInlineCompletionTelemetryEvidence } from "./inlineCompletionTelemetryEvidence.js";
+import { gatewayForConfig } from "../gateway-instance-cache.js";
 import { clientAbortSignal, resolveOverlayPath } from "./languageRoutes.js";
 import type { ModelChatFn } from "./editorCompletionModel.js";
 import {
@@ -112,7 +113,7 @@ const sharedRateLimiter: InlineCompletionRateLimiter = createInlineCompletionRat
 
 // Default chat seam: route the elected model through the Model Gateway, server-side only.
 function defaultChatFactory(config: GatewayConfig, modelId: string): ModelChatFn {
-  const gateway = new Gateway(config);
+  const gateway = gatewayForConfig(config);
   return async (chatRequest, chatSignal) => {
     const response = await gateway.chat({
       modelId,

@@ -7,6 +7,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
 const DEFAULT_STALE_LOCK_MS = 10 * 60_000;
@@ -20,11 +21,13 @@ export interface UpdateSessionLockRecord {
   readonly targetVersion: string;
   readonly startedAt: string;
   readonly pid: number;
+  readonly childPid?: number | undefined;
 }
 
 export interface UpdateSessionLock {
   readonly isLocked: () => boolean;
   readonly acquire: (record: UpdateSessionLockRecord) => boolean;
+  readonly updateChildPid: (sessionId: string, childPid: number) => boolean;
   readonly release: (sessionId: string) => void;
 }
 
@@ -44,25 +47,42 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+interface RequiredLockFields {
+  readonly sessionId: string;
+  readonly targetVersion: string;
+  readonly startedAt: string;
+}
+
+function hasRequiredLockFields(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & RequiredLockFields {
+  return (
+    typeof value.sessionId === "string" &&
+    typeof value.targetVersion === "string" &&
+    typeof value.startedAt === "string"
+  );
+}
+
+function isPositivePid(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
 function parseRecord(value: string): UpdateSessionLockRecord | undefined {
   try {
     const parsed: unknown = JSON.parse(value);
-    if (!isRecord(parsed)) return undefined;
-    if (
-      typeof parsed.sessionId !== "string" ||
-      typeof parsed.targetVersion !== "string" ||
-      typeof parsed.startedAt !== "string" ||
-      typeof parsed.pid !== "number"
-    ) {
-      return undefined;
-    }
-    if (!Number.isInteger(parsed.pid) || parsed.pid <= 0) {
-      return undefined;
-    }
+    if (!isRecord(parsed) || !hasRequiredLockFields(parsed)) return undefined;
+    if (!isPositivePid(parsed.pid)) return undefined;
+    if (parsed.childPid !== undefined && !isPositivePid(parsed.childPid)) return undefined;
     if (!Number.isFinite(Date.parse(parsed.startedAt))) {
       return undefined;
     }
-    return parsed as unknown as UpdateSessionLockRecord;
+    return {
+      sessionId: parsed.sessionId,
+      targetVersion: parsed.targetVersion,
+      startedAt: parsed.startedAt,
+      pid: parsed.pid,
+      ...(parsed.childPid === undefined ? {} : { childPid: parsed.childPid }),
+    };
   } catch {
     return undefined;
   }
@@ -126,11 +146,31 @@ function writeLock(lockPath: string, record: UpdateSessionLockRecord): void {
   }
 }
 
+function replaceLock(lockPath: string, record: UpdateSessionLockRecord): void {
+  const temporaryPath = `${lockPath}.${randomUUID()}.tmp`;
+  writeFileSync(temporaryPath, `${JSON.stringify(record)}\n`, {
+    flag: "wx",
+    mode: LOCK_FILE_MODE,
+  });
+  try {
+    renameSync(temporaryPath, lockPath);
+  } catch (error) {
+    try {
+      unlinkSync(temporaryPath);
+    } catch {
+      // Best-effort cleanup; the original lock remains authoritative.
+    }
+    throw error;
+  }
+}
+
 function reclaimableValidRecord(
   record: UpdateSessionLockRecord,
   options: ResolvedFileUpdateSessionLockOptions,
 ): boolean {
-  if (!options.pidAlive(record.pid)) return true;
+  if (!options.pidAlive(record.pid)) {
+    return record.childPid === undefined || !options.pidAlive(record.childPid);
+  }
   const ageMs = lockAgeMs(record, options.now);
   if (ageMs === undefined || ageMs < options.staleMs) return false;
   return ageMs >= options.staleMs * 2;
@@ -166,45 +206,79 @@ function removeReclaimableLock(
   unlinkSync(lockPath);
 }
 
+function resolveLockOptions(
+  input: FileUpdateSessionLockOptions,
+): ResolvedFileUpdateSessionLockOptions {
+  return {
+    staleMs: input.staleMs ?? DEFAULT_STALE_LOCK_MS,
+    now: input.now ?? Date.now,
+    pidAlive: input.pidAlive ?? defaultPidAlive,
+  };
+}
+
+function fileLockIsActive(
+  lockPath: string,
+  options: ResolvedFileUpdateSessionLockOptions,
+): boolean {
+  const inspection = inspectLock(lockPath);
+  if (inspection.status === "absent" || inspection.status === "corrupt") return false;
+  if (inspection.status === "unreadable") return true;
+  return !reclaimableValidRecord(inspection.record, options);
+}
+
+function acquireFileLock(
+  lockPath: string,
+  record: UpdateSessionLockRecord,
+  options: ResolvedFileUpdateSessionLockOptions,
+): boolean {
+  try {
+    writeLock(lockPath, record);
+    return true;
+  } catch {
+    try {
+      const inspection = inspectLock(lockPath);
+      if (!reclaimable(inspection, options)) return false;
+      removeReclaimableLock(lockPath, inspection, options.now);
+      writeLock(lockPath, record);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function updateFileLockChildPid(lockPath: string, sessionId: string, childPid: number): boolean {
+  if (!isPositivePid(childPid)) return false;
+  try {
+    const record = readLock(lockPath);
+    if (record?.sessionId !== sessionId) return false;
+    replaceLock(lockPath, { ...record, childPid });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function releaseFileLock(lockPath: string, sessionId: string): void {
+  try {
+    const record = readLock(lockPath);
+    if (record?.sessionId === sessionId) unlinkSync(lockPath);
+  } catch {
+    // Malformed or inaccessible locks fail closed; only the owner session may remove the lock.
+  }
+}
+
 export function createFileUpdateSessionLock(
   lockPath: string,
   inputOptions: FileUpdateSessionLockOptions = {},
 ): UpdateSessionLock {
-  const options: ResolvedFileUpdateSessionLockOptions = {
-    staleMs: inputOptions.staleMs ?? DEFAULT_STALE_LOCK_MS,
-    now: inputOptions.now ?? Date.now,
-    pidAlive: inputOptions.pidAlive ?? defaultPidAlive,
-  };
+  const options = resolveLockOptions(inputOptions);
   return {
-    isLocked: (): boolean => {
-      const inspection = inspectLock(lockPath);
-      if (inspection.status === "absent" || inspection.status === "corrupt") return false;
-      if (inspection.status === "unreadable") return true;
-      return !reclaimableValidRecord(inspection.record, options);
-    },
-    acquire: (record): boolean => {
-      try {
-        writeLock(lockPath, record);
-        return true;
-      } catch {
-        try {
-          const inspection = inspectLock(lockPath);
-          if (!reclaimable(inspection, options)) return false;
-          removeReclaimableLock(lockPath, inspection, options.now);
-          writeLock(lockPath, record);
-          return true;
-        } catch {
-          return false;
-        }
-      }
-    },
+    isLocked: () => fileLockIsActive(lockPath, options),
+    acquire: (record) => acquireFileLock(lockPath, record, options),
+    updateChildPid: (sessionId, childPid) => updateFileLockChildPid(lockPath, sessionId, childPid),
     release: (sessionId): void => {
-      try {
-        const record = readLock(lockPath);
-        if (record?.sessionId === sessionId) unlinkSync(lockPath);
-      } catch {
-        // Malformed or inaccessible locks fail closed; only the owner session may remove the lock.
-      }
+      releaseFileLock(lockPath, sessionId);
     },
   };
 }

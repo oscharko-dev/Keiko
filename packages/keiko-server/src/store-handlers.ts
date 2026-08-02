@@ -3,6 +3,7 @@
 // applied uniformly by the server layer. JSON body reading is bounded by MAX_STORE_BODY_BYTES.
 
 import type { IncomingMessage } from "node:http";
+import { randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -51,6 +52,7 @@ import {
 import { isLegacyEmptyAssistantPlaceholder } from "./assistant-response.js";
 import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
 import { createRequestCancellation } from "./request-cancellation.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 // Issue #184 — workspace-relative path gate. isValidScopePath is the canonical validator from
 // @oscharko-dev/keiko-contracts/connected-context (issue #178). Reusing it here keeps the BFF
 // boundary aligned with the rest of the connected-repo surface and avoids regex drift.
@@ -357,6 +359,27 @@ export function handleListProjects(_ctx: RouteContext, deps: UiHandlerDeps): Rou
   return { status: 200, body: { projects } };
 }
 
+function reportProjectTrustGrantFailure(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation: "project.create.trust.grant",
+      source: "store-handlers",
+      error,
+      summary: "server-operation-failed",
+      redact: (message): string => {
+        const redacted = deps.redactor(message);
+        return typeof redacted === "string" ? redacted : "[REDACTED]";
+      },
+    }),
+  );
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Route 14 — POST /api/projects
 // ──────────────────────────────────────────────────────────────────────────
@@ -386,7 +409,11 @@ export async function handleCreateProject(
     // the browser supplies only the path it already selected. When the service is unavailable the
     // project remains registered but restricted, preserving the legacy injectable test seam without
     // inventing browser-side authority.
-    deps.workspaceScriptTrust?.grant(project.path);
+    try {
+      deps.workspaceScriptTrust?.grant(project.path);
+    } catch (error) {
+      reportProjectTrustGrantFailure(deps, ctx.correlationId ?? randomUUID(), error);
+    }
     return {
       status: 201,
       body: { project: projectWithWorkspaceAvailability(deps.store, project) },

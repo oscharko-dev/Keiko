@@ -192,7 +192,7 @@ export interface MemoryVaultStore {
   // Sealed embeddings of forgotten memories in this scope (GEN-AI-MEMORY-003, RB-4). Lets a capture
   // boundary suppress a semantic paraphrase of a forgotten fact — cosine-similar but a different
   // body_hash — without ever exposing the forgotten body text itself.
-  readonly forgetTombstoneVectors: (scope: MemoryScope) => readonly Float32Array[];
+  readonly forgetTombstoneVectors: (scope: MemoryScope, limit: number) => readonly Float32Array[];
   readonly purgeTombstonesByScopeBefore: (scope: MemoryScope, forgottenBeforeMs: number) => number;
   // Access tracking (#204). `recordAccess` upserts an insert-or-increment counter for each id
   // (a recall reflex from the retrieval surface); `getAccessStats` reads the counters back for the

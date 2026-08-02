@@ -48,6 +48,8 @@ INSERT INTO memory_tombstones (
 const LIST_FORGET_VECTORS_BY_SCOPE_SQL = `
 SELECT body_embedding FROM memory_tombstones
 WHERE scope_kind = ? AND scope_coordinate = ? AND body_embedding IS NOT NULL
+ORDER BY forgotten_at DESC
+LIMIT ?
 `;
 
 const LIST_BY_SCOPE_SQL = `
@@ -151,10 +153,12 @@ export function listForgetTombstoneVectors(
   db: DatabaseSync,
   scope: MemoryScope,
   cipher: MemoryContentCipher,
+  limit: number,
 ): readonly Float32Array[] {
   const rows = cachedPrepare(db, LIST_FORGET_VECTORS_BY_SCOPE_SQL).all(
     scopeKindOf(scope),
     scopeCoordinateOf(scope),
+    limit,
   ) as unknown as readonly { readonly body_embedding: Uint8Array | null }[];
   const vectors: Float32Array[] = [];
   for (const row of rows) {

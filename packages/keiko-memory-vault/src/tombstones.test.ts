@@ -14,6 +14,7 @@ import type { MemoryTombstone } from "./types.js";
 import {
   deleteTombstonesByScopeBeforeRows,
   insertTombstoneRow,
+  listForgetTombstoneVectors,
   listTombstonesByScopeRows,
   selectForgetSuppressionBodyHashPresence,
 } from "./tombstones.js";
@@ -41,6 +42,28 @@ const userScope: MemoryScope = { kind: "user", userId: "u-1" as UserId };
 const workspaceScope: MemoryScope = { kind: "workspace", workspaceId: "u-1" as WorkspaceId };
 
 describe("tombstones", () => {
+  it("bounds semantic suppression to the 200 most recent forgotten vectors", () => {
+    const db = openTestDb();
+    for (let index = 0; index < 250; index += 1) {
+      insertTombstoneRow(
+        db,
+        makeTombstone({
+          id: `vector-${String(index)}`,
+          memoryId: `memory-${String(index)}` as MemoryId,
+          forgottenAt: index,
+        }),
+        TEST_CIPHER,
+        new Float32Array([index]),
+      );
+    }
+
+    const vectors = listForgetTombstoneVectors(db, userScope, TEST_CIPHER, 200);
+    expect(vectors).toHaveLength(200);
+    expect(vectors[0]?.[0]).toBe(249);
+    expect(vectors.at(-1)?.[0]).toBe(50);
+    db.close();
+  });
+
   it("inserts and lists in forgotten_at ASC order", () => {
     const db = openTestDb();
     insertTombstoneRow(

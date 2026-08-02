@@ -151,6 +151,12 @@ class MemoryUpdateSessionLock implements UpdateSessionLock {
     return true;
   };
 
+  public readonly updateChildPid = (sessionId: string, childPid: number): boolean => {
+    if (this.record?.sessionId !== sessionId) return false;
+    this.record = { ...this.record, childPid };
+    return true;
+  };
+
   public readonly release = (sessionId: string): void => {
     if (this.record?.sessionId === sessionId) this.record = undefined;
   };
@@ -551,6 +557,50 @@ describe("UpdateSessionManager", () => {
       expect(lock.isLocked()).toBe(false);
       expect(manager.start({ targetVersion: "0.2.12" }).session.phase).toBe("preparing");
       await waitForPhase(manager, "restart-required");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a restarted server while the detached mutation child is still alive", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-child-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      const childPid = 43_210;
+      const lockOptions = {
+        staleMs: 10 * 60_000,
+        now: (): number => Date.parse("2026-06-30T00:00:01.000Z"),
+        pidAlive: (pid: number): boolean => pid === childPid,
+      };
+      const firstLock = createFileUpdateSessionLock(lockPath, lockOptions);
+      const spawned = deferred();
+      let settle!: (result: CommandResult) => void;
+      const running = new Promise<CommandResult>((resolve) => {
+        settle = resolve;
+      });
+      const first = createUpdateSessionManager({
+        detector: () => supportedMode(),
+        lock: firstLock,
+        runCommandImpl: (input) => {
+          input.onSpawn?.(childPid);
+          spawned.resolve();
+          return running;
+        },
+      });
+      first.start({ targetVersion: "0.2.12" });
+      await spawned.promise;
+
+      const restarted = createUpdateSessionManager({
+        detector: () => supportedMode(),
+        lock: createFileUpdateSessionLock(lockPath, lockOptions),
+        runCommandImpl: () => Promise.resolve(commandResult()),
+      });
+      expect(() => restarted.start({ targetVersion: "0.2.13" })).toThrow(
+        expect.objectContaining({ code: "UPDATE_SESSION_ACTIVE" }),
+      );
+
+      settle(commandResult());
+      await waitForPhase(first, "restart-required");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

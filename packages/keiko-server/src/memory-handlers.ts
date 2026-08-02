@@ -627,6 +627,38 @@ export function handleListMemories(ctx: RouteContext, deps: UiHandlerDeps): Rout
   }
 }
 
+export function handleListMemoryTombstones(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  const vault = resolveVault(deps);
+  if (isRouteResult(vault)) return vault;
+  const limit = parseIntQuery(
+    ctx.url.searchParams.get("limit"),
+    DEFAULT_LIST_LIMIT,
+    MAX_LIST_LIMIT,
+  );
+  const tombstones = authorizedMemoryScopes(deps, vault)
+    .flatMap((scope) => vault.listTombstonesByScope(scope))
+    .sort((left, right) => right.forgottenAt - left.forgottenAt || left.id.localeCompare(right.id));
+  return {
+    status: 200,
+    body: {
+      tombstones: tombstones.slice(0, limit).map((tombstone) => ({
+        id: tombstone.id,
+        memoryId: tombstone.memoryId,
+        scopeKind: tombstone.scopeKind,
+        scopeCoordinate: tombstone.scopeCoordinate,
+        type: tombstone.type,
+        forgottenAt: tombstone.forgottenAt,
+        forgetterSurface: tombstone.forgetterSurface,
+        reviewerId: tombstone.reviewerId,
+        originalStatus: tombstone.originalStatus,
+        reason: tombstone.reason,
+      })),
+      total: tombstones.length,
+      limit,
+    },
+  };
+}
+
 // ─── Handler: GET /api/memory/review-queue ────────────────────────────────────
 
 export function handleMemoryReviewQueue(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {

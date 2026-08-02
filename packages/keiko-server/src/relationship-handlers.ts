@@ -88,21 +88,21 @@ export type RelationshipScopeResolver = (
 // real SQLite DB into this interface inside `deps.ts`; tests inject a fake. We use a port
 // rather than passing `DatabaseSync` so the handlers stay decoupled from node:sqlite.
 export interface RelationshipStore {
-  createRelationship(input: CreateRelationshipInput): {
-    readonly relationship: StoredRelationship;
-    readonly etag: string;
-  };
+  createRelationship(
+    input: CreateRelationshipInput,
+    audit: RelationshipMutationAuditFactory,
+  ): RelationshipMutationResult;
   getRelationship(workspaceId: string, id: string): StoredRelationship | undefined;
   getEtag(workspaceId: string, id: string): string | undefined;
   listRelationships(query: ListQuery): ListResult;
-  updateLifecycle(args: UpdateLifecycleInput): {
-    readonly relationship: StoredRelationship;
-    readonly etag: string;
-  };
-  reconnect(args: ReconnectInput): {
-    readonly relationship: StoredRelationship;
-    readonly etag: string;
-  };
+  updateLifecycle(
+    args: UpdateLifecycleInput,
+    audit: RelationshipMutationAuditFactory,
+  ): RelationshipMutationResult;
+  reconnect(
+    args: ReconnectInput,
+    audit: RelationshipMutationAuditFactory,
+  ): RelationshipMutationResult;
   walkDependencies(args: WalkArgs): DependencyWalkResult;
   computeImpact(args: ImpactArgs): DependencyWalkResult;
   graphHealth(workspaceId: string): GraphHealth;
@@ -206,6 +206,15 @@ export interface AuditEntryInput {
   readonly payload: Readonly<Record<string, unknown>>;
 }
 
+export interface RelationshipMutationResult {
+  readonly relationship: StoredRelationship;
+  readonly etag: string;
+}
+
+export type RelationshipMutationAuditFactory = (
+  result: RelationshipMutationResult,
+) => AuditEntryInput;
+
 export interface RelationshipHandlerDeps {
   readonly scopeResolver: RelationshipScopeResolver;
   readonly store: RelationshipStore;
@@ -269,8 +278,8 @@ function hashBody(raw: string): string {
   // strength is not required (key collisions only affect replay detection; the cache miss
   // path executes the mutation normally). Using djb2 over a fixed-length raw string.
   let h = 5381;
-  for (let i = 0; i < raw.length; i++) {
-    h = (Math.imul(h, 33) + raw.charCodeAt(i)) >>> 0;
+  for (const character of raw) {
+    h = (Math.imul(h, 33) + (character.codePointAt(0) ?? 0)) >>> 0;
   }
   return h.toString(16);
 }
@@ -796,7 +805,7 @@ function runningActivity(
 function activityFromRun(record: RunRecord, now: number): RelationshipActivitySnapshot | undefined {
   const events = relevantRunEvents(record, now);
   const latestTimestamp =
-    events.length > 0 ? events[events.length - 1]?.ts : (record.terminatedAt ?? undefined);
+    events.length > 0 ? events.at(-1)?.ts : (record.terminatedAt ?? undefined);
   if (latestTimestamp === undefined || latestTimestamp < now - ACTIVITY_WINDOW_MS) {
     return undefined;
   }
@@ -1208,13 +1217,12 @@ function performCreateDenial(
   return { replay: false, status: 422, response: denied };
 }
 
-function emitCreatedAuditEntry(
-  store: RelationshipStore,
+function createdAuditEntry(
   workspaceId: string,
   stored: StoredRelationship,
   etag: string,
-): void {
-  store.recordAuditEntry({
+): AuditEntryInput {
+  return {
     workspaceId,
     kind: "relationship.created",
     relationshipId: stored.id,
@@ -1227,7 +1235,7 @@ function emitCreatedAuditEntry(
       lifecycle: stored.lifecycleState,
       etag,
     },
-  });
+  };
 }
 
 function performCreate(
@@ -1257,16 +1265,19 @@ function performCreate(
     );
   }
   const summary = sanitizeSummary(redactor, proposal.summary);
-  const { relationship: stored, etag } = store.createRelationship({
-    workspaceId,
-    scope: proposal.scope,
-    type: proposal.type,
-    source: proposal.source,
-    target: proposal.target,
-    lifecycleState: "active",
-    ...(summary === undefined ? {} : { summary }),
-  });
-  emitCreatedAuditEntry(store, workspaceId, stored, etag);
+  const { relationship: stored, etag } = store.createRelationship(
+    {
+      workspaceId,
+      scope: proposal.scope,
+      type: proposal.type,
+      source: proposal.source,
+      target: proposal.target,
+      lifecycleState: "active",
+      ...(summary === undefined ? {} : { summary }),
+    },
+    ({ relationship, etag: committedEtag }) =>
+      createdAuditEntry(workspaceId, relationship, committedEtag),
+  );
   const response = { schemaVersion: "1", relationship: exposeRelationship(stored), etag };
   recordIdempotency(cacheKey, {
     bodyHash: hash,
@@ -1480,21 +1491,28 @@ function applyTransition(
   if (!validation.ok) {
     return { status: 422, body: denialBody(validation.errors), etag: undefined };
   }
-  const { relationship: updated, etag } = store.updateLifecycle({
-    workspaceId,
-    id,
-    currentEtag,
-    to,
-    ...(summary === undefined ? {} : { summary }),
-  });
-  store.recordAuditEntry({
-    workspaceId,
-    kind: "relationship.activity-transitioned",
-    relationshipId: id,
-    actor: { surface: "system", redactedActorId: "bff" },
-    summary: "lifecycle transitioned",
-    payload: { from: existing.lifecycleState, to, previousEtag: currentEtag, newEtag: etag },
-  });
+  const { relationship: updated, etag } = store.updateLifecycle(
+    {
+      workspaceId,
+      id,
+      currentEtag,
+      to,
+      ...(summary === undefined ? {} : { summary }),
+    },
+    ({ etag: committedEtag }) => ({
+      workspaceId,
+      kind: "relationship.activity-transitioned",
+      relationshipId: id,
+      actor: { surface: "system", redactedActorId: "bff" },
+      summary: "lifecycle transitioned",
+      payload: {
+        from: existing.lifecycleState,
+        to,
+        previousEtag: currentEtag,
+        newEtag: committedEtag,
+      },
+    }),
+  );
   return {
     status: 200,
     body: { schemaVersion: "1", relationship: exposeRelationship(updated) },
@@ -1506,14 +1524,13 @@ function applyTransition(
 // array (`confidence | summary | lifecycle`). Reconnect changes the target endpoint, which sits
 // outside the closed set; emitting `[]` keeps the persisted row schema-conformant while
 // signalling "metadata-only change" until the contract grows a `target` member.
-function recordReconnectAudit(
-  store: RelationshipStore,
+function reconnectAuditEntry(
   workspaceId: string,
   id: string,
   currentEtag: string,
   etag: string,
-): void {
-  store.recordAuditEntry({
+): AuditEntryInput {
+  return {
     workspaceId,
     kind: "relationship.updated",
     relationshipId: id,
@@ -1524,7 +1541,7 @@ function recordReconnectAudit(
       previousEtag: currentEtag,
       newEtag: etag,
     },
-  });
+  };
 }
 
 // Reconnect branch of PATCH: validates and retargets an existing relationship.
@@ -1546,14 +1563,16 @@ function applyReconnect(
   if (!validation.ok) {
     return { status: 422, body: denialBody(validation.errors), etag: undefined };
   }
-  const { relationship: updated, etag } = store.reconnect({
-    workspaceId,
-    id,
-    currentEtag,
-    target: newTarget,
-    ...(summary === undefined ? {} : { summary }),
-  });
-  recordReconnectAudit(store, workspaceId, id, currentEtag, etag);
+  const { relationship: updated, etag } = store.reconnect(
+    {
+      workspaceId,
+      id,
+      currentEtag,
+      target: newTarget,
+      ...(summary === undefined ? {} : { summary }),
+    },
+    ({ etag: committedEtag }) => reconnectAuditEntry(workspaceId, id, currentEtag, committedEtag),
+  );
   return {
     status: 200,
     body: { schemaVersion: "1", relationship: exposeRelationship(updated) },
@@ -1647,53 +1666,68 @@ async function handlePatchImpl(ctx: RouteContext, deps: UiHandlerDeps): Promise<
 }
 
 // ─── Route 6: DELETE /api/relationships/:id ───────────────────────────────────
+interface DeletePreflight {
+  readonly store: RelationshipStore;
+  readonly workspaceId: string;
+  readonly id: string;
+  readonly currentEtag: string;
+  readonly existing: StoredRelationship;
+}
+
+function performDeletePreflight(ctx: RouteContext, deps: UiHandlerDeps): DeletePreflight {
+  const relationship = readRelationshipDeps(deps);
+  const workspaceId = scope(ctx.req, relationship);
+  const id = requireRelationshipId(ctx.params.id);
+  const ifMatch = requireIfMatch(ctx.req);
+  requireIdempotencyKey(ctx.req);
+  const currentEtag = relationship.store.getEtag(workspaceId, id);
+  const existing = relationship.store.getRelationship(workspaceId, id);
+  if (currentEtag === undefined || existing === undefined) {
+    throw new HandlerError(404, "relationship/not-found", "Relationship not found.");
+  }
+  if (currentEtag !== ifMatch) {
+    throw new HandlerError(
+      412,
+      "relationship/optimistic-concurrency-conflict",
+      "Relationship was modified by another writer.",
+    );
+  }
+  return { store: relationship.store, workspaceId, id, currentEtag, existing };
+}
+
+function revokeRelationship(input: DeletePreflight): PatchOutcome {
+  const { store, workspaceId, id, currentEtag, existing } = input;
+  const validation = validateTransitionCandidate(store, workspaceId, existing, "revoked");
+  if (!validation.ok) {
+    return { status: 422, body: denialBody(validation.errors), etag: undefined };
+  }
+  const { relationship: updated, etag } = store.updateLifecycle(
+    { workspaceId, id, currentEtag, to: "revoked" },
+    ({ etag: committedEtag }) => ({
+      workspaceId,
+      kind: "relationship.deleted",
+      relationshipId: id,
+      actor: { surface: "system", redactedActorId: "bff" },
+      summary: "relationship revoked",
+      payload: {
+        reasonCode: "operator-revoked",
+        previousEtag: currentEtag,
+        newEtag: committedEtag,
+      },
+    }),
+  );
+  return {
+    status: 200,
+    body: { schemaVersion: "1", relationship: exposeRelationship(updated) },
+    etag,
+  };
+}
+
 async function handleDeleteImpl(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
   return runHandler(
     deps.redactor,
-    () => {
-      const relationship = readRelationshipDeps(deps);
-      const workspaceId = scope(ctx.req, relationship);
-      const id = requireRelationshipId(ctx.params.id);
-      const ifMatch = requireIfMatch(ctx.req);
-      requireIdempotencyKey(ctx.req);
-      const currentEtag = relationship.store.getEtag(workspaceId, id);
-      if (currentEtag === undefined) {
-        throw new HandlerError(404, "relationship/not-found", "Relationship not found.");
-      }
-      if (currentEtag !== ifMatch) {
-        throw new HandlerError(
-          412,
-          "relationship/optimistic-concurrency-conflict",
-          "Relationship was modified by another writer.",
-        );
-      }
-      const existing = relationship.store.getRelationship(workspaceId, id);
-      if (existing === undefined) {
-        throw new HandlerError(404, "relationship/not-found", "Relationship not found.");
-      }
-      const { relationship: updated, etag } = relationship.store.updateLifecycle({
-        workspaceId,
-        id,
-        currentEtag,
-        to: "revoked",
-      });
-      relationship.store.recordAuditEntry({
-        workspaceId,
-        kind: "relationship.deleted",
-        relationshipId: id,
-        actor: { surface: "system", redactedActorId: "bff" },
-        summary: "relationship revoked",
-        payload: { reasonCode: "operator-revoked", previousEtag: currentEtag, newEtag: etag },
-      });
-      return { updated, etag };
-    },
-    ({ updated, etag }) =>
-      respond(
-        deps.redactor,
-        200,
-        { schemaVersion: "1", relationship: exposeRelationship(updated) },
-        etag,
-      ),
+    () => revokeRelationship(performDeletePreflight(ctx, deps)),
+    (out) => respond(deps.redactor, out.status, out.body, out.etag),
   );
 }
 
@@ -2032,14 +2066,16 @@ function portCreateRelationship(
   txn: TxnFn,
   now: NowFn,
   newId: NewIdFn,
+  redactString: (text: string) => string,
   input: CreateRelationshipInput,
-): { readonly relationship: StoredRelationship; readonly etag: string } {
+  audit: RelationshipMutationAuditFactory,
+): RelationshipMutationResult {
   const id = newId();
   const at = now();
   const etag = defaultEtag(at);
   let inserted: StoredRelationship | undefined;
   txn(() => {
-    inserted = sqlInsertRelationship(db, {
+    const relationship = sqlInsertRelationship(db, {
       id,
       workspaceId: input.workspaceId,
       scope: input.scope,
@@ -2053,6 +2089,8 @@ function portCreateRelationship(
       ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
       ...(input.summary === undefined ? {} : { summary: input.summary }),
     });
+    inserted = relationship;
+    insertPortAuditEntry(db, at, redactString, audit({ relationship, etag }));
   });
   if (inserted === undefined) throw new Error("Insert did not produce a row.");
   return { relationship: inserted, etag };
@@ -2062,8 +2100,10 @@ function portUpdateLifecycle(
   db: DatabaseSync,
   txn: TxnFn,
   now: NowFn,
+  redactString: (text: string) => string,
   args: UpdateLifecycleInput,
-): { readonly relationship: StoredRelationship; readonly etag: string } {
+  audit: RelationshipMutationAuditFactory,
+): RelationshipMutationResult {
   // Optimistic concurrency was checked by the handler; we still re-read here to keep
   // the previous-state value honest for the validator + history row.
   const current = sqlGetRelationship(db, args.id, args.workspaceId);
@@ -2074,7 +2114,7 @@ function portUpdateLifecycle(
   const etag = defaultEtag(at);
   let updated: StoredRelationship | undefined;
   txn(() => {
-    updated = sqlUpdateLifecycle(db, {
+    const relationship = sqlUpdateLifecycle(db, {
       id: args.id,
       workspaceId: args.workspaceId,
       to: args.to,
@@ -2083,6 +2123,8 @@ function portUpdateLifecycle(
       updatedAt: at,
       ...(args.summary === undefined ? {} : { summary: args.summary }),
     });
+    updated = relationship;
+    insertPortAuditEntry(db, at, redactString, audit({ relationship, etag }));
   });
   if (updated === undefined) throw new Error("Update did not produce a row.");
   return { relationship: updated, etag };
@@ -2092,13 +2134,15 @@ function portReconnect(
   db: DatabaseSync,
   txn: TxnFn,
   now: NowFn,
+  redactString: (text: string) => string,
   args: ReconnectInput,
-): { readonly relationship: StoredRelationship; readonly etag: string } {
+  audit: RelationshipMutationAuditFactory,
+): RelationshipMutationResult {
   const at = now();
   const etag = defaultEtag(at);
   let updated: StoredRelationship | undefined;
   txn(() => {
-    updated = sqlReconnect(db, {
+    const relationship = sqlReconnect(db, {
       id: args.id,
       workspaceId: args.workspaceId,
       target: args.target,
@@ -2106,6 +2150,8 @@ function portReconnect(
       updatedAt: at,
       ...(args.summary === undefined ? {} : { summary: args.summary }),
     });
+    updated = relationship;
+    insertPortAuditEntry(db, at, redactString, audit({ relationship, etag }));
   });
   if (updated === undefined) throw new Error("Reconnect did not produce a row.");
   return { relationship: updated, etag };
@@ -2124,9 +2170,9 @@ function makeTxn(db: DatabaseSync): TxnFn {
   };
 }
 
-function portRecordAuditEntry(
+function insertPortAuditEntry(
   db: DatabaseSync,
-  now: () => number,
+  occurredAt: number,
   redactString: (text: string) => string,
   input: AuditEntryInput,
 ): RelationshipAuditEntryRow {
@@ -2136,7 +2182,7 @@ function portRecordAuditEntry(
     {
       eventId,
       workspaceId: input.workspaceId,
-      occurredAt: now(),
+      occurredAt,
       kind: input.kind,
       ...(input.relationshipId === undefined ? {} : { relationshipId: input.relationshipId }),
       actor: input.actor,
@@ -2145,6 +2191,15 @@ function portRecordAuditEntry(
     },
     redactString,
   );
+}
+
+function portRecordAuditEntry(
+  db: DatabaseSync,
+  now: () => number,
+  redactString: (text: string) => string,
+  input: AuditEntryInput,
+): RelationshipAuditEntryRow {
+  return insertPortAuditEntry(db, now(), redactString, input);
 }
 
 function portListRelationships(db: DatabaseSync, query: ListQuery): ListResult {
@@ -2178,12 +2233,15 @@ export function createRelationshipStorePort(
   const newId = options.newId ?? ((): string => `rel-${randomUUID()}`);
   const txn = makeTxn(options.db);
   return {
-    createRelationship: (input) => portCreateRelationship(options.db, txn, now, newId, input),
+    createRelationship: (input, audit) =>
+      portCreateRelationship(options.db, txn, now, newId, options.redactString, input, audit),
     getRelationship: (workspaceId, id) => sqlGetRelationship(options.db, id, workspaceId),
     getEtag: (workspaceId, id) => sqlGetEtag(options.db, id, workspaceId),
     listRelationships: (query) => portListRelationships(options.db, query),
-    updateLifecycle: (args) => portUpdateLifecycle(options.db, txn, now, args),
-    reconnect: (args) => portReconnect(options.db, txn, now, args),
+    updateLifecycle: (args, audit) =>
+      portUpdateLifecycle(options.db, txn, now, options.redactString, args, audit),
+    reconnect: (args, audit) =>
+      portReconnect(options.db, txn, now, options.redactString, args, audit),
     walkDependencies: (args) => sqlWalkDependencies(options.db, args),
     computeImpact: (args) => sqlComputeImpact(options.db, args),
     graphHealth: (workspaceId): GraphHealth => {
