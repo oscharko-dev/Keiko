@@ -8,7 +8,8 @@ The canary succeeds only when all of the following are true:
 
 - the candidate commit and resulting squash merge are validly signed;
 - the exact ten App-bound checks in ADR-0169 D3 succeed on the current head;
-- no CodSpeed or Greptile workflow, status, configuration, or App participates;
+- no retired hosted quality provider listed in ADR-0167 or ADR-0169 has a workflow, status,
+  configuration, or App participating;
 - every review conversation is resolved without a human approving review; and
 - GitHub native auto-merge performs the squash after the checks settle.
 
