@@ -11,6 +11,8 @@
     "tests/**",
     "scripts/**",
     "portable-runtime-approvals.json",
+    "**/*.{css,scss}",
+    "release-impact.catalog.json",
     "**/Dockerfile*",
     "**/Makefile",
     "**/package.json",
@@ -51,7 +53,8 @@
     ".coderabbit.yaml",
     "**/*.{plist,entitlements,rc,csproj,props,targets}",
     "docs/qa/*.json",
-    "portable-runtime-approvals.json"
+    "portable-runtime-approvals.json",
+    "release-impact.catalog.json"
   ],
   "generated": [
     "**/dist/**",
@@ -74,10 +77,6 @@
     {
       "pattern": "**/*.{png,jpg,jpeg,gif,svg,ico,icns,webp,woff,woff2,ttf,pdf,zip,wasm}",
       "reason": "binary and vector assets carry no reviewable source. Property lists are deliberately NOT here: a macOS entitlements plist is a privilege boundary, so it is review-relevant above."
-    },
-    {
-      "pattern": "**/*.{css,scss}",
-      "reason": "styling is gated by the SHA-pinned visual-proof and axe gates, not by model review"
     },
     {
       "pattern": "**/*.{md,mdx,txt,csv,html,sql,lock,snap,map,yml,yaml,json,toml,properties}",

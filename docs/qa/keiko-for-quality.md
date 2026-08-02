@@ -175,8 +175,14 @@ branch-protection change.
    during a precision failure that is exactly the window that matters.
 
    ```bash
-   gh run list --workflow keiko-for-quality.yml --status in_progress --json databaseId \
-     --jq '.[].databaseId' | xargs -r -n1 gh run cancel
+   # --limit is required: `gh run list` returns 20 by default, so a mass incident with more
+   # in-flight runs would leave the rest alive. The loop repeats until none remain.
+   while :; do
+     ids=$(gh run list --workflow keiko-for-quality.yml --status in_progress \
+       --limit 200 --json databaseId --jq '.[].databaseId')
+     [ -z "$ids" ] && break
+     echo "$ids" | xargs -r -n1 gh run cancel
+   done
    ```
 
 Reverse it by setting `KEIKO_QUALITY_ENABLED` back to `true`, then retrigger the open pull
