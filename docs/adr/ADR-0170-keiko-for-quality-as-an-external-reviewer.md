@@ -85,13 +85,20 @@ push, or merge authority.
 store proved the cache service refuses writes without it (`cache write denied: token has no
 writable scopes` — `actions/cache/save` fails soft, so the run reviewed 105 files, reported step
 success, and persisted nothing). The grant exists solely so the review store can persist between
-runs, and it carries a named residual risk accepted deliberately: the scope also permits
-cancelling and re-running workflow runs through the API, a denial-of-service surface, not a code
-or content-integrity surface. It is accepted because this job executes no candidate code — the
+runs, and it carries a named residual risk accepted deliberately: the scope permits cancelling
+and re-running workflow runs through the API, and it also satisfies the workflow-dispatch
+endpoint. Dispatch is the sharper edge: a dispatchable workflow whose jobs hold privileged
+scopes would let this token initiate that privilege indirectly — the concrete case was
+`release.yml`, whose publish job holds `contents: write` and `id-token: write`. That path is
+closed at the owning layer, not by narrowing this grant: the publish job runs behind the
+`npm-publish` environment, which requires a human approval before any step executes, so a
+dispatch from any token — this one included — stops at a person. What remains accepted is CI
+disruption (cancel/re-run/dispatch of unprivileged, approval-gated, or same-tree workflows), not
+code or content integrity. It is accepted because this job executes no candidate code — the
 token only ever runs inside the base-controlled workflow and the SHA-pinned action — and because
 the alternative is no cross-run memoization at all. A compromised pinned action holding this
-scope could disrupt CI runs; it still could not commit, push, merge, alter checks, or widen its
-own authority.
+scope could disrupt CI runs; it still could not commit, push, merge, alter checks, publish, or
+widen its own authority.
 
 State the approval case precisely rather than in that list. GitHub's create-review API accepts an
 `APPROVE` event from any token holding `pull-requests: write`, so the platform does **not** withhold
