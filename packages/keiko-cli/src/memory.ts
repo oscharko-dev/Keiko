@@ -221,16 +221,17 @@ async function runMaintain(
   env: EnvSource,
   deps: MemoryCliDeps,
 ): Promise<number> {
-  const [{ runMemoryMaintenance, memorySemanticizationMultipliers }, evidence] = await Promise.all([
-    loadServer(),
-    loadEvidence(),
-  ]);
+  const [
+    { runMemoryMaintenance, memoryRetentionPolicy, memorySemanticizationMultipliers },
+    evidence,
+  ] = await Promise.all([loadServer(), loadEvidence()]);
   const vault = resolveVault(args, env, deps);
   const evidenceDir = evidence.resolveEvidenceDir(flagValue(args, "--evidence-dir"), env);
   const evidenceStore = deps.evidenceStore ?? evidence.createNodeEvidenceStore(evidenceDir);
   // Honour KEIKO_MEMORY_SEMANTICIZATION on the CLI exactly as the two server passes do, so the
   // "CLI and UI never drift" invariant in this module's header holds when the flag is on.
   const multipliers = memorySemanticizationMultipliers(env);
+  const retentionPolicy = memoryRetentionPolicy(env);
   try {
     // The pass writes audit evidence, so it needs the security layer's redactor by name — the API no
     // longer accepts a bare store and silently falls back to identity redaction.
@@ -243,6 +244,7 @@ async function runMaintain(
       { evidenceStore, redactString: (input: string): string => redact(input) },
       {
         ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
+        ...(retentionPolicy !== undefined ? { retentionPolicy } : {}),
       },
     );
     io.out(renderMaintenanceReport(counts));

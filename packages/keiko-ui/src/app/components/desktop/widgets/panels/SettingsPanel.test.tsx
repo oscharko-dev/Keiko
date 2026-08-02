@@ -660,6 +660,7 @@ describe("SettingsPanel gateway readiness checks", () => {
       expect(screen.getByText("Working today")).toBeInTheDocument();
     });
     expect(screen.getByText(/JSON schema response_format was not accepted/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("capability-disagreements")).toBeNull();
   });
 
   it("shows capability disagreements and applies only live-verified values after confirmation", async () => {
@@ -677,6 +678,7 @@ describe("SettingsPanel gateway readiness checks", () => {
           status: "unsupported",
           latencyMs: 9,
           evidence: "Tool calls were rejected.",
+          capabilityObservation: false,
         },
       ],
       verifiedCapabilities: {},
@@ -720,7 +722,13 @@ describe("SettingsPanel gateway readiness checks", () => {
       overallStatus: "partial",
       probes: [
         { name: "chat", status: "passed", latencyMs: 1, evidence: "Working today" },
-        { name: "tool_calling", status: "unsupported", latencyMs: 1, evidence: "Rejected" },
+        {
+          name: "tool_calling",
+          status: "unsupported",
+          latencyMs: 1,
+          evidence: "Rejected",
+          capabilityObservation: false,
+        },
       ],
       verifiedCapabilities: {},
     });
@@ -742,7 +750,13 @@ describe("SettingsPanel gateway readiness checks", () => {
       overallStatus: "partial",
       probes: [
         { name: "chat", status: "passed", latencyMs: 1, evidence: "Working today" },
-        { name: "tool_calling", status: "unsupported", latencyMs: 1, evidence: "Rejected" },
+        {
+          name: "tool_calling",
+          status: "unsupported",
+          latencyMs: 1,
+          evidence: "Rejected",
+          capabilityObservation: false,
+        },
       ],
       verifiedCapabilities: {},
     });

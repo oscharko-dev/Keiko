@@ -67,12 +67,11 @@ export function probeVerifiedGatewayConfig(config: GatewayConfig): RuntimeGatewa
     verifiedCapability: (modelId) => observations.get(modelId),
     recordVerifiedCapability: (modelId, fields, checkedAt, observedGeneration): void => {
       if (observedGeneration !== undefined && observedGeneration !== generation) return;
-      const previous = observations.get(modelId);
       observations.set(modelId, {
         modelId,
         generation,
         checkedAt,
-        fields: { ...(previous?.generation === generation ? previous.fields : {}), ...fields },
+        fields: { ...fields },
       });
     },
     clearVerifiedCapability: (modelId, observedGeneration): boolean => {

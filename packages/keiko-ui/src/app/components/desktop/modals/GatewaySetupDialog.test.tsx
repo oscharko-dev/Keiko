@@ -235,6 +235,23 @@ describe("GatewaySetupDialog", () => {
     expect(screen.getByRole("status")).toHaveTextContent(/testing credentials/i);
   });
 
+  it("prevents native cancellation while a gateway request is in flight", async () => {
+    vi.mocked(setupGateway).mockImplementation(() => new Promise(() => undefined));
+    const onCancel = vi.fn();
+    render(<GatewaySetupDialog onCancel={onCancel} />);
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://llm-gateway.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+    const dialog = screen.getByRole("dialog");
+    const cancelEvent = new Event("cancel", { bubbles: false, cancelable: true });
+
+    fireEvent(dialog, cancelEvent);
+
+    expect(cancelEvent.defaultPrevented).toBe(true);
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(dialog).toHaveAttribute("open");
+  });
+
   it("restores focus to the triggering element when the dialog closes", () => {
     const trigger = document.createElement("button");
     trigger.textContent = "Open gateway setup";

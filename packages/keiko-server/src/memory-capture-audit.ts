@@ -26,7 +26,7 @@ export function recordAutoAcceptedMemoryCaptureDecision(
     },
     buildMemoryCaptureDecisionAuditEvent({
       eventId: randomUUID(),
-      occurredAt: memory.createdAt,
+      occurredAt: memory.updatedAt,
       outcome: "auto-accepted",
       scope: memory.scope,
       mode,

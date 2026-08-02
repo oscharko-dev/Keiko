@@ -389,10 +389,7 @@ function observedProbeValue(
   report: GatewayReadinessReport,
   probeName: string,
 ): boolean | undefined {
-  const status = report.probes.find((probe) => probe.name === probeName)?.status;
-  if (status === "passed") return true;
-  if (status === "unsupported") return false;
-  return undefined;
+  return report.probes.find((probe) => probe.name === probeName)?.capabilityObservation;
 }
 
 function capabilityDisagreements(

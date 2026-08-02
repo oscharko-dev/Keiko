@@ -277,7 +277,8 @@ describe("handleBuildVoiceRecap", () => {
         const parsed = JSON.parse(entry.raw ?? "[]") as unknown;
         return Array.isArray(parsed) ? (parsed as readonly { kind?: string }[]) : [];
       });
-    expect(auditEvents.filter((event) => event.kind === "memory:accepted")).toHaveLength(1);
+    expect(auditEvents.filter((event) => event.kind === "memory:accepted")).toHaveLength(2);
+    expect(entries.map((entry) => entry.raw).join("\n")).toContain("governance-auto-accepted");
     expect(auditEvents.filter((event) => event.kind === "memory:proposed")).toHaveLength(0);
   });
 

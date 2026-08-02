@@ -81,6 +81,7 @@ describe("redactEvidenceString", () => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const d of tmpDirs.splice(0)) {
     rmSync(d, { recursive: true, force: true });
   }
@@ -1044,8 +1045,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     };
     writeGhStub(injectedBin, "injected");
     writeGhStub(ambientBin, "ambient");
-    const originalPath = process.env.PATH;
-    process.env.PATH = ambientBin;
+    vi.stubEnv("PATH", ambientBin);
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("coding-context-env-evidence-"),
@@ -1063,8 +1063,6 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
         deps.codingContextGitHubPort?.readJson(["api", "repos/example/project/issues/1"]),
       ).resolves.toEqual({ source: "injected" });
     } finally {
-      if (originalPath === undefined) delete process.env.PATH;
-      else process.env.PATH = originalPath;
       await deps.dispose?.();
     }
   });

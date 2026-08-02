@@ -294,24 +294,6 @@ async function executeDraftStatus(
   }
 }
 
-function persistDraftStatus(
-  options: UpdateRemediationManagerOptions,
-  now: () => number,
-  request: UpdateRemediationActionRequest,
-  draft: ActionDraft,
-  status: RuntimeRemediationStatus,
-): void {
-  upsertRuntimeAction({
-    localState: options.localState,
-    targetVersion: request.targetVersion,
-    draft,
-    status,
-    now,
-    ...(status === "failed" ? { warningCode: "remediation-execution-failed" } : {}),
-  });
-  recordRemediationAudit(options, request, draft, status);
-}
-
 function persistFailureAfterPersistenceError(
   options: UpdateRemediationManagerOptions,
   now: () => number,
@@ -345,10 +327,23 @@ function persistDraftStatusSafely(
   status: RuntimeRemediationStatus,
 ): void {
   try {
-    persistDraftStatus(options, now, request, draft, status);
+    upsertRuntimeAction({
+      localState: options.localState,
+      targetVersion: request.targetVersion,
+      draft,
+      status,
+      now,
+      ...(status === "failed" ? { warningCode: "remediation-execution-failed" } : {}),
+    });
   } catch (error) {
     recordDraftFailure(options, error, "update-remediation.persistDraftStatus");
     persistFailureAfterPersistenceError(options, now, request, draft);
+    return;
+  }
+  try {
+    recordRemediationAudit(options, request, draft, status);
+  } catch (error) {
+    recordDraftFailure(options, error, "update-remediation.persistDraftAudit");
   }
 }
 
@@ -378,13 +373,16 @@ function recordRemediationAudit(
   draft: ActionDraft,
   status: RuntimeRemediationStatus,
 ): void {
-  options.localState.recordAuditEvent(remediationAuditEventType(status), {
+  const result = options.localState.recordAuditEvent(remediationAuditEventType(status), {
     targetVersion: request.targetVersion,
     store: draft.store,
     remediation: draft.remediation,
     status,
     ...(status === "failed" ? { warningCode: "remediation-execution-failed" } : {}),
   });
+  if (result.warning !== undefined) {
+    recordDraftFailure(options, new Error(result.warning), "update-remediation.persistDraftAudit");
+  }
 }
 
 function deferDraft(
@@ -454,20 +452,27 @@ function acquireRunningDraftLease(
   request: UpdateRemediationActionRequest,
   draft: ActionDraft,
 ): () => void {
-  upsertRuntimeAction({
-    localState: options.localState,
-    targetVersion: request.targetVersion,
-    draft,
-    status: "running",
-    now,
-  });
   const releaseLease = options.localState.acquireRemediationLease(draft.actionId);
-  if (releaseLease !== undefined) return releaseLease;
-  throw new UpdateRemediationError(
-    "UPDATE_REMEDIATION_RUNNING",
-    "This remediation action is already running.",
-    409,
-  );
+  if (releaseLease === undefined) {
+    throw new UpdateRemediationError(
+      "UPDATE_REMEDIATION_RUNNING",
+      "This remediation action is already running.",
+      409,
+    );
+  }
+  try {
+    upsertRuntimeAction({
+      localState: options.localState,
+      targetVersion: request.targetVersion,
+      draft,
+      status: "running",
+      now,
+    });
+    return releaseLease;
+  } catch (error) {
+    releaseLease();
+    throw error;
+  }
 }
 
 async function runRemediationAction(

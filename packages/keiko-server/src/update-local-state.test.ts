@@ -6,6 +6,7 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -255,12 +256,30 @@ describe("update runtime state and audit events", () => {
     expect(existsSync(leasePath)).toBe(false);
   });
 
-  it("quarantines a fresh malformed remediation lease before continuing", () => {
+  it("keeps a fresh malformed remediation lease during its publication grace window", () => {
     const stateDir = makeStateDir();
     const actionId = "local-state-repair:memory-vault";
     const digest = createHash("sha256").update(actionId, "utf8").digest("hex");
     const leasePath = join(stateDir, "updates", "remediation-leases", `${digest}.json`);
     touch(leasePath, "{");
+    const localState = createUpdateLocalStateManager({
+      stateDir,
+      now: () => NOW,
+      remediationLeaseStaleMs: 1_000,
+    });
+
+    expect(localState.acquireRemediationLease(actionId)).toBeUndefined();
+    expect(existsSync(leasePath)).toBe(true);
+  });
+
+  it("quarantines an aged malformed remediation lease before continuing", () => {
+    const stateDir = makeStateDir();
+    const actionId = "local-state-repair:memory-vault";
+    const digest = createHash("sha256").update(actionId, "utf8").digest("hex");
+    const leasePath = join(stateDir, "updates", "remediation-leases", `${digest}.json`);
+    touch(leasePath, "{");
+    const old = new Date(NOW - 2_000);
+    utimesSync(leasePath, old, old);
     const localState = createUpdateLocalStateManager({
       stateDir,
       now: () => NOW,

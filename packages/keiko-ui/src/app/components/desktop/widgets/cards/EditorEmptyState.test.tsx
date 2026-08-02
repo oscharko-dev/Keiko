@@ -130,7 +130,7 @@ describe("EditorEmptyState", () => {
     expect(onOpenRoot).not.toHaveBeenCalled();
   });
 
-  it("keeps the editor unbound and exposes a trust-grant warning", async () => {
+  it("opens the registered project and exposes a trust-grant warning", async () => {
     createProjectMock.mockResolvedValueOnce({
       project: {
         path: "/abs/project",
@@ -151,7 +151,7 @@ describe("EditorEmptyState", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open" }));
 
     expect(await screen.findByRole("status")).toHaveTextContent("editor-trust-correlation");
-    expect(onOpenRoot).not.toHaveBeenCalled();
+    expect(onOpenRoot).toHaveBeenCalledWith("/abs/project");
   });
 
   it("disables the native picker button when the platform is unsupported", () => {

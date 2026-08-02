@@ -240,6 +240,7 @@ function reclaimableValidRecord(
 ): boolean {
   const ageMs = lockAgeMs(record, options.now);
   if (ageMs === undefined || ageMs < options.staleMs) return false;
+  if (options.pidAlive(record.pid)) return false;
   if (record.childPid === undefined || !options.pidAlive(record.childPid)) return true;
   return ageMs > options.staleMs * 2;
 }

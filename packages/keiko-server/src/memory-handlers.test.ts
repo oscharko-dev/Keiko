@@ -325,6 +325,37 @@ describe("memory handlers", () => {
     });
   });
 
+  it("returns a bounded client error when retention removes a cursor row", () => {
+    const vault = makeVault();
+    const scope = { kind: "user" as const, userId: userId("u-1") };
+    for (const [id, nowMs] of [
+      ["cursor-row", 200],
+      ["remaining-row", 100],
+    ] as const) {
+      vault.insertMemory(makeMemory(id, `secret-${id}`, { scope }));
+      vault.deleteMemory(memoryId(id), {
+        tombstone: true,
+        forgetterSurface: "memory-center",
+        reason: "user-request",
+        nowMs,
+      });
+    }
+    vault.insertMemory(makeMemory("live-scope-anchor", "live", { scope }));
+    const first = handleListMemoryTombstones(
+      makeCtx("/api/memory/tombstones?limit=1", {}),
+      tombstoneDeps(vault),
+    );
+    const cursor = String(asJson(first).nextCursor);
+    vault.purgeTombstonesByScopeBefore(scope, 201);
+
+    const resumed = handleListMemoryTombstones(
+      makeCtx(`/api/memory/tombstones?limit=1&cursor=${cursor}`, {}),
+      tombstoneDeps(vault),
+    );
+
+    expect(resumed).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+  });
+
   it("round-trips a tombstone cursor for a valid long scope coordinate", () => {
     const vault = makeVault();
     const scope = { kind: "user" as const, userId: userId(`user-${"x".repeat(2_000)}`) };

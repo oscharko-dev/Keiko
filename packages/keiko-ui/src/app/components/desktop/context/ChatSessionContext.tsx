@@ -6,6 +6,7 @@ import type { ChatSessionApi } from "../hooks/useChatSession";
 
 type ChatSessionActionKeys =
   | "clearError"
+  | "clearNotice"
   | "setDraft"
   | "setSelectedModel"
   | "openNewChat"
@@ -109,9 +110,11 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       rejectMemoryCandidate: value.rejectMemoryCandidate,
       forgetMemoryAction: value.forgetMemoryAction,
       ...(value.clearError === undefined ? {} : { clearError: value.clearError }),
+      ...(value.clearNotice === undefined ? {} : { clearNotice: value.clearNotice }),
     }),
     [
       value.clearError,
+      value.clearNotice,
       value.setDraft,
       value.setSelectedModel,
       value.openNewChat,
@@ -188,6 +191,7 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       canonicalVoiceTurnRequiresRetry: value.canonicalVoiceTurnRequiresRetry,
       regeneratingMessageId: value.regeneratingMessageId,
       error: value.error,
+      notice: value.notice,
       latestGrounded: value.latestGrounded,
       pendingAttachments: value.pendingAttachments,
       lastSentDocuments: value.lastSentDocuments,
@@ -212,6 +216,7 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       value.canonicalVoiceTurnRequiresRetry,
       value.regeneratingMessageId,
       value.error,
+      value.notice,
       value.latestGrounded,
       value.pendingAttachments,
       value.lastSentDocuments,

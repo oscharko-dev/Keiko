@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
+  constants,
+  copyFileSync,
   linkSync,
   mkdirSync,
   readFileSync,
@@ -334,9 +336,9 @@ function remediationLeaseReclaimable(
   record: RemediationLeaseRecord | undefined,
   context: ManagerContext,
 ): boolean {
-  if (record === undefined) return true;
   const ageMs = remediationLeaseAgeMs(path, record, context.now);
   if (ageMs === undefined || ageMs < context.remediationLeaseStaleMs) return false;
+  if (record === undefined) return true;
   if (!context.pidAlive(record.pid)) return true;
   if (record.pid === process.pid) return false;
   // A live PID may be a reused process identity. Give a genuine owner a second full lease window,
@@ -346,10 +348,22 @@ function remediationLeaseReclaimable(
 
 function restoreClaimedRemediationLease(claimedPath: string, path: string): void {
   try {
-    linkSync(claimedPath, path);
+    publishFileWithoutReplacement(claimedPath, path);
     unlinkSync(claimedPath);
   } catch {
     // A newer canonical owner wins. Preserve the displaced inode for diagnosis.
+  }
+}
+
+const HARD_LINK_UNAVAILABLE_CODES = new Set(["ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EPERM", "EXDEV"]);
+
+function publishFileWithoutReplacement(source: string, destination: string): void {
+  try {
+    linkSync(source, destination);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === undefined || !HARD_LINK_UNAVAILABLE_CODES.has(code)) throw error;
+    copyFileSync(source, destination, constants.COPYFILE_EXCL);
   }
 }
 
@@ -418,7 +432,7 @@ function releaseRemediationLease(path: string, token: string): void {
   try {
     // Restore a lease claimed by the wrong callback only when the canonical path is still free.
     // `link` is the no-replace operation that `rename` does not provide portably.
-    linkSync(claimedPath, path);
+    publishFileWithoutReplacement(claimedPath, path);
     unlinkSync(claimedPath);
   } catch {
     // A newer canonical lease wins. Preserve the displaced record for diagnosis instead of
@@ -434,9 +448,10 @@ function publishRemediationLease(path: string, record: RemediationLeaseRecord): 
     mode: SNAPSHOT_FILE_MODE,
   });
   try {
-    // A hard link publishes the already-complete inode without replacing an existing owner. Readers
-    // can therefore treat malformed canonical files as abandoned without racing a partial write.
-    linkSync(draftPath, path);
+    // Prefer a hard link for atomic publication. Filesystems without hard-link support fall back to
+    // an exclusive copy; a fresh malformed record then remains protected for one stale window so a
+    // concurrent reader cannot reclaim a copy that is still being published.
+    publishFileWithoutReplacement(draftPath, path);
   } finally {
     try {
       unlinkSync(draftPath);

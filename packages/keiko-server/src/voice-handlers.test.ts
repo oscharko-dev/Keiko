@@ -93,9 +93,17 @@ function b64(text: string): string {
 const VALID_AUDIO = b64("keiko-dictation-audio-bytes");
 
 class FakeResponse extends EventEmitter {
-  readonly destroyed = false;
-  readonly closed = false;
-  readonly writableEnded = false;
+  destroyed = false;
+  closed = false;
+  writableEnded = false;
+
+  public override emit(event: string | symbol, ...args: unknown[]): boolean {
+    if (event === "close") {
+      this.destroyed = true;
+      this.closed = true;
+    }
+    return super.emit(event, ...args);
+  }
 }
 
 function voiceContext(body: unknown): {

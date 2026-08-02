@@ -2,7 +2,8 @@
   min-width: 0;
 }
 
-.pendingVoiceTurnNotice {
+.pendingVoiceTurnNotice,
+.sessionNotice {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -17,7 +18,8 @@
 }
 
 @media (max-width: 520px) {
-  .pendingVoiceTurnNotice {
+  .pendingVoiceTurnNotice,
+  .sessionNotice {
     align-items: stretch;
     flex-direction: column;
   }

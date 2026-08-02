@@ -1279,7 +1279,9 @@ export interface UseChatSessionResult {
   sendStatus: SendStatus;
   regeneratingMessageId: string | undefined;
   error: string | undefined;
+  notice?: string | undefined;
   clearError?: (() => void) | undefined;
+  clearNotice?: (() => void) | undefined;
   setDraft: (value: string) => void;
   setSelectedModel: (id: string) => void;
   // Optional `title` names the fresh conversation (e.g. from the New-Chat-window dialog);
@@ -2030,6 +2032,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     canonicalVoicePageOutbox.status,
   );
   const [error, setError] = useState<string | undefined>();
+  const [notice, setNotice] = useState<string | undefined>();
   // Issue #185 — most recent grounded answer for the active chat. Cleared when the active
   // chat changes (see openChat) so a stale answer never overhangs into another conversation.
   const [latestGrounded, setLatestGrounded] = useState<GroundedAnswerWire | undefined>();
@@ -2862,12 +2865,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       const trimmed = path.trim();
       if (trimmed.length === 0) return undefined;
       setError(undefined);
+      setNotice(undefined);
       try {
         const created = await createProject({ path: trimmed });
         const projectPayload = await fetchProjects();
         setState((previous) => ({ ...previous, projects: Array.from(projectPayload.projects) }));
         await openProject(created.project);
-        setError(projectResponseWarningMessage(created));
+        setNotice(projectResponseWarningMessage(created));
         return created.project;
       } catch (error_) {
         setError(errorMessage(error_));
@@ -3917,6 +3921,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const clearError = useCallback((): void => {
     setError(undefined);
   }, []);
+  const clearNotice = useCallback((): void => {
+    setNotice(undefined);
+  }, []);
 
   const noEligibleModels =
     !loading && resolveSelectedModelId(state.selectedModel, state.models) === undefined;
@@ -3938,7 +3945,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       sendStatus,
       regeneratingMessageId,
       error,
+      notice,
       clearError,
+      clearNotice,
       setDraft,
       setSelectedModel,
       openNewChat,
@@ -3989,7 +3998,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       sendStatus,
       regeneratingMessageId,
       error,
+      notice,
       clearError,
+      clearNotice,
       setSelectedModel,
       openNewChat,
       openProject,

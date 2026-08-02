@@ -436,7 +436,9 @@ describe("useChatSession bootstrap", () => {
 
     expect(selected).toEqual(added);
     expect(rendered.result.current.activeProject?.path).toBe(selectedRoot);
-    expect(rendered.result.current.error).toContain("chat-project-trust-correlation");
+    expect(rendered.result.current.error).toContain("No conversation-eligible model");
+    expect(rendered.result.current.error).not.toContain("chat-project-trust-correlation");
+    expect(rendered.result.current.notice).toContain("chat-project-trust-correlation");
     expect(createDesktopChat).not.toHaveBeenCalled();
   });
 

@@ -60,6 +60,7 @@ import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { exactCaptureSuppressionReason } from "./memory-suppression.js";
 import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudits } from "./memory-audit-handler.js";
+import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.js";
 
 const MAX_BODY_BYTES = 16_000;
 const MAX_SPANS = 200;
@@ -289,8 +290,12 @@ async function persistRecapOutcomes(
     const inserted = vault.insertMemory(candidate);
     await embedAndStoreMemory(deps, vault, inserted.id, inserted.body);
     const persisted = { id: inserted.id, scope: inserted.scope };
-    if (inserted.status === "accepted") accepted.push(persisted);
-    else proposed.push(persisted);
+    if (inserted.status === "accepted") {
+      recordAutoAcceptedMemoryCaptureDecision(deps, mode, "voice", inserted);
+      accepted.push(persisted);
+    } else {
+      proposed.push(persisted);
+    }
   }
   return { proposed, accepted, extracted: outcomes.length, rejected };
 }

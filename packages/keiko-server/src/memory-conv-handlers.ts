@@ -60,6 +60,7 @@ import {
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
+import { persistCapturedMemory } from "./memory-capture-persistence.js";
 import {
   enforcePersistableMemoryOutcome,
   FORGOTTEN_MEMORY_SUPPRESSION_REASON,
@@ -506,9 +507,11 @@ function persistCandidateOutcome(
   const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
     ? promoteEligibleMemoryRecord(record)
     : record;
-  vault.insertMemory(candidate);
-  const accepted = candidate.status === "accepted";
-  if (accepted) recordAutoAcceptedMemoryCaptureDecision(deps, mode, "desktop", candidate);
+  const persisted = persistCapturedMemory(vault, candidate, true);
+  const accepted = persisted.memory.status === "accepted";
+  if ((persisted.inserted || persisted.promoted) && accepted) {
+    recordAutoAcceptedMemoryCaptureDecision(deps, mode, "desktop", persisted.memory);
+  }
   return {
     ...outcome,
     requiresApproval: outcome.requiresApproval,

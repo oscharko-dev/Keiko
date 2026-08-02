@@ -665,7 +665,7 @@ describe("UpdateSessionManager", () => {
     }
   });
 
-  it("continues an already-spawned update when child-PID metadata cannot be published", async () => {
+  it("fails closed when child-PID metadata cannot be published", async () => {
     const authority = new MemoryUpdateSessionLock();
     const lock: UpdateSessionLock = {
       isLocked: authority.isLocked,
@@ -684,7 +684,7 @@ describe("UpdateSessionManager", () => {
 
     manager.start({ targetVersion: "0.2.12" });
 
-    await waitForPhase(manager, "restart-required");
+    await waitForPhase(manager, "failed");
   });
 
   it("keeps child-PID-only lock ownership after the parent disappears", async () => {
@@ -715,7 +715,7 @@ describe("UpdateSessionManager", () => {
     }
   });
 
-  it("expires a stale pre-spawn lock even while its server parent remains alive", async () => {
+  it("keeps a stale pre-spawn lock while its server parent remains alive", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-live-parent-"));
     try {
       const lockPath = join(tempDir, "update.lock");
@@ -733,6 +733,33 @@ describe("UpdateSessionManager", () => {
         staleMs: 1_000,
         now: () => Date.parse("2026-06-30T00:00:02.001Z"),
         pidAlive: (pid) => pid === 111,
+      });
+
+      expect(lock.isLocked()).toBe(true);
+      expect(lock.acquire(lockRecord("replacement"))).toBe(false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers a stale pre-spawn lock after its server parent dies", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-dead-parent-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      await writeFile(
+        lockPath,
+        `${JSON.stringify({
+          sessionId: "dead-parent",
+          targetVersion: "0.2.10",
+          startedAt: "2026-06-30T00:00:00.000Z",
+          pid: 111,
+        })}\n`,
+        { mode: 0o600 },
+      );
+      const lock = createFileUpdateSessionLock(lockPath, {
+        staleMs: 1_000,
+        now: () => Date.parse("2026-06-30T00:00:02.001Z"),
+        pidAlive: () => false,
       });
 
       expect(lock.isLocked()).toBe(false);

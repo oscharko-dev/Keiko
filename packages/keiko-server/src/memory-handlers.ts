@@ -19,6 +19,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   createMemoryVault,
   MemoryStorageError,
+  MemoryStorageValidationError,
   type MemoryBatchUpdate,
   type MemoryTombstone,
   type MemoryTombstoneLedgerCursor,
@@ -681,6 +682,22 @@ export function handleListMemories(ctx: RouteContext, deps: UiHandlerDeps): Rout
   }
 }
 
+function loadTombstonePage(
+  vault: MemoryVaultStore,
+  authorizedScopes: readonly MemoryScope[],
+  limit: number,
+  after: MemoryTombstoneLedgerCursor | undefined,
+): ReturnType<MemoryVaultStore["listTombstonesPage"]> | RouteResult {
+  try {
+    return vault.listTombstonesPage(authorizedScopes, limit + 1, after);
+  } catch (error) {
+    if (after !== undefined && error instanceof MemoryStorageValidationError) {
+      return invalidTombstoneCursorResult();
+    }
+    throw error;
+  }
+}
+
 export function handleListMemoryTombstones(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
@@ -693,16 +710,14 @@ export function handleListMemoryTombstones(ctx: RouteContext, deps: UiHandlerDep
       ),
     };
   }
-  const limit = parseIntQuery(
-    ctx.url.searchParams.get("limit"),
-    DEFAULT_LIST_LIMIT,
-    MAX_LIST_LIMIT,
-  );
+  const rawLimit = ctx.url.searchParams.get("limit");
+  const limit = parseIntQuery(rawLimit, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
   const authorizedScopes = authorizedMemoryScopes(deps, vault);
   const scopeDigest = authorizedScopeDigest(authorizedScopes);
   const after = parseTombstoneCursor(ctx.url.searchParams.get("cursor"), scopeDigest);
   if (isRouteResult(after)) return after;
-  const page = vault.listTombstonesPage(authorizedScopes, limit + 1, after);
+  const page = loadTombstonePage(vault, authorizedScopes, limit, after);
+  if (isRouteResult(page)) return page;
   const tombstones = page.tombstones.slice(0, limit);
   const last = tombstones.at(-1);
   const nextCursor =

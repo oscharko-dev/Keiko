@@ -2453,6 +2453,10 @@ export function GatewaySetupDialog({
         aria-modal="true"
         aria-labelledby="gw-setup-title"
         aria-describedby="gw-setup-desc"
+        onCancel={(event) => {
+          event.preventDefault();
+          if (!busy && success === undefined) onCancel?.();
+        }}
         // tabIndex -1: keeps focus (and thus the Escape/Tab-trap keydown
         // listener on this element) inside the dialog when a non-focusable
         // area is clicked or all controls are disabled (audit C007/C186).

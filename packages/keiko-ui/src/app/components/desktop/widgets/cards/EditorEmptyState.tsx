@@ -36,7 +36,6 @@ export function EditorEmptyState({
         const warning = projectResponseWarningMessage(response);
         if (warning !== undefined) {
           setNotice(warning);
-          return;
         }
         if (response.project.workspaceAvailable !== true) {
           setNotice(t("editor.empty.workspaceUnavailable"));
