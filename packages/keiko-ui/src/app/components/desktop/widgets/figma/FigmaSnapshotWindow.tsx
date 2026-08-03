@@ -30,6 +30,7 @@ import {
   useRef,
   useState,
   type Dispatch,
+  type CSSProperties,
   type DragEvent,
   type KeyboardEvent,
   type MouseEvent,
@@ -100,6 +101,15 @@ type FormSubmitEvent = { preventDefault: () => void };
 const INITIAL_GALLERY_LIMIT = 24;
 const EMPTY_SELECTED_SCREEN_IDS: readonly string[] = [];
 const JSON_DRAG_THRESHOLD_PX = 6;
+const JSON_DRAG_BUTTON_STYLE = {
+  appearance: "none",
+  border: 0,
+  background: "transparent",
+  padding: 0,
+  color: "inherit",
+  font: "inherit",
+  textAlign: "left",
+} satisfies CSSProperties;
 
 /**
  * Client-side Figma URL validator. Accepts:
@@ -2239,10 +2249,11 @@ export function FigmaSnapshotWindow({
             })}
           >
             <div className="figma-view-json-inspector-header">
-              <div
+              <button
+                type="button"
                 className="figma-view-json-drag-surface"
-                role="button"
-                tabIndex={jsonDragPayload !== null ? 0 : -1}
+                style={JSON_DRAG_BUTTON_STYLE}
+                disabled={jsonDragPayload === null}
                 draggable={false}
                 onDragStart={handleJsonDragStart}
                 onDragEnd={handleJsonDragEnd}
@@ -2255,7 +2266,6 @@ export function FigmaSnapshotWindow({
                 aria-label={t("figmaSnapshotWindow.jsonInspector.createJsonSourceAria", {
                   name: screenJson.screen.name,
                 })}
-                aria-disabled={jsonDragPayload === null ? "true" : undefined}
                 title={t("figmaSnapshotWindow.jsonInspector.dragJsonTitle", {
                   name: screenJson.screen.name,
                 })}
@@ -2274,7 +2284,7 @@ export function FigmaSnapshotWindow({
                         count: screenJson.relatedLinks.length,
                       })}
                 </p>
-              </div>
+              </button>
               <button type="button" className="figma-view-json-copy-btn" onClick={handleCopyJson}>
                 {t("figmaSnapshotWindow.jsonInspector.copyJson")}
               </button>
@@ -2745,6 +2755,12 @@ export function FigmaSnapshotWindow({
                   {code.screenCount !== 1
                     ? t("figmaSnapshotWindow.count.screenPlural", { count: code.screenCount })
                     : t("figmaSnapshotWindow.count.screenSingular", { count: code.screenCount })}
+                  ;{" "}
+                  {t("figmaSnapshotWindow.codegen.screenBreakdown", {
+                    rendered: code.renderedScreenCount,
+                    structural: code.structuralScreenCount,
+                    unparseable: code.unparseableScreenCount,
+                  })}
                   , {code.adapterName}) {t("figmaSnapshotWindow.codegen.proposalNote")}
                 </p>
                 {code.files.map((file) => (

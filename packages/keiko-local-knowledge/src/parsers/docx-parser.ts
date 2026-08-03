@@ -475,40 +475,70 @@ function cellText(cellXml: string): string {
     .trim();
 }
 
-function tableRows(tableXml: string): readonly Paragraph[] {
-  const rows = extractWordElements(tableXml, ROW_ELEMENTS).map((row) =>
-    extractWordElements(row.innerXml, CELL_ELEMENTS).map((cell) => cellText(cell.innerXml)),
-  );
-  if (rows.length === 0) return [];
-  const headerIsSchema =
-    rows.length > 1 && (rows[0] ?? []).some((cell) => /[A-Za-z_ÄÖÜäöüß]/u.test(cell));
-  const headers = headerIsSchema ? normalizeTableHeaders(rows[0] ?? []) : [];
-  const dataRows = headerIsSchema ? rows.slice(1) : rows;
-  return dataRows
-    .map((cells, index) => {
-      const labels = headers.length > 0 ? headers : normalizeTableHeaders([]);
-      const projected = cells
-        .map((cell, cellIndex) => {
-          const fallbackLabel = `Column ${String(cellIndex + 1)}`;
-          return `${labels[cellIndex] ?? fallbackLabel}=${cell}`;
-        })
-        .join(" | ");
-      return { text: `Table row ${String(index + 1)}: ${projected}` };
+function projectTableRow(
+  cells: readonly string[],
+  rowIndex: number,
+  headers: readonly string[],
+): Paragraph {
+  const projected = cells
+    .map((cell, cellIndex) => {
+      const fallbackLabel = `Column ${String(cellIndex + 1)}`;
+      return `${headers[cellIndex] ?? fallbackLabel}=${cell}`;
     })
-    .filter((paragraph) => paragraph.text.trim().length > 0);
+    .join(" | ");
+  return { text: `Table row ${String(rowIndex + 1)}: ${projected}` };
+}
+
+type TableTraversalItem =
+  | { readonly kind: "paragraph"; readonly paragraph: Paragraph }
+  | { readonly kind: "table"; readonly tableXml: string };
+
+function nestedTableItems(cells: readonly WordXmlElement[]): readonly TableTraversalItem[] {
+  const items: TableTraversalItem[] = [];
+  for (const cell of cells) {
+    for (const nested of extractWordElements(cell.innerXml, TABLE_ELEMENTS)) {
+      items.push({ kind: "table", tableXml: nested.innerXml });
+    }
+  }
+  return items;
+}
+
+function tableTraversalItems(tableXml: string): readonly TableTraversalItem[] {
+  const rows = extractWordElements(tableXml, ROW_ELEMENTS);
+  const cellRows = rows.map((row) => extractWordElements(row.innerXml, CELL_ELEMENTS));
+  const values = cellRows.map((cells) => cells.map((cell) => cellText(cell.innerXml)));
+  const headerIsSchema =
+    values.length > 1 && (values[0] ?? []).some((cell) => /[A-Za-z_ÄÖÜäöüß]/u.test(cell));
+  const headers = headerIsSchema ? normalizeTableHeaders(values[0] ?? []) : [];
+  const items: TableTraversalItem[] = [];
+  let dataRowIndex = 0;
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    if (!headerIsSchema || rowIndex > 0) {
+      items.push({
+        kind: "paragraph",
+        paragraph: projectTableRow(values[rowIndex] ?? [], dataRowIndex, headers),
+      });
+      dataRowIndex += 1;
+    }
+    items.push(...nestedTableItems(cellRows[rowIndex] ?? []));
+  }
+  return items;
 }
 
 function tableTreeRows(tableXml: string): readonly Paragraph[] {
-  const pending = [tableXml];
+  const pending: TableTraversalItem[] = [{ kind: "table", tableXml }];
   const paragraphs: Paragraph[] = [];
   while (pending.length > 0) {
     const current = pending.pop();
     if (current === undefined) break;
-    paragraphs.push(...tableRows(current));
-    const nested = extractWordElements(current, TABLE_ELEMENTS);
-    for (let index = nested.length - 1; index >= 0; index -= 1) {
-      const table = nested[index];
-      if (table !== undefined) pending.push(table.innerXml);
+    if (current.kind === "paragraph") {
+      paragraphs.push(current.paragraph);
+      continue;
+    }
+    const items = tableTraversalItems(current.tableXml);
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const item = items[index];
+      if (item !== undefined) pending.push(item);
     }
   }
   return paragraphs;

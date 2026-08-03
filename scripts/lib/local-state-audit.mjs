@@ -20,6 +20,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { URL } from "node:url";
 
 // ── On-disk layout (source of truth: packages/keiko-cli/src/state-paths.ts) ────────────────
 const GATEWAY_CONFIG = "keiko.config.json";
@@ -56,6 +57,17 @@ const EDITOR_HOT_EXIT_VAULT = "snapshots.vault";
 const EDITOR_HOT_EXIT_KEYFILE = "editor-hot-exit-vault.key";
 const LOCAL_SECRET_VAULT_VERSION = 1;
 const HOT_EXIT_REF_PATTERN = /^hot-exit:[a-f0-9]{64}$/u;
+const ATLASSIAN_SCHEMA_VERSION = "1";
+const ATLASSIAN_AUTH_REF_PATTERN = /^atlassian-cred:[A-Za-z0-9_-]{22}$/u;
+const ATLASSIAN_METADATA_KEYS = new Set([
+  "schemaVersion",
+  "authRef",
+  "provider",
+  "displayName",
+  "baseUrl",
+  "authScheme",
+  "createdAt",
+]);
 
 // ── Sealed-envelope markers (source of truth: packages/keiko-security/src/secretbox.ts) ─────
 const SEALED_STRING_PREFIX = "kv1."; // AES-256-GCM string envelope
@@ -427,8 +439,107 @@ function atlassianMetadataEntries(value) {
   return objectRecord(metadata.credentials);
 }
 
+function isBidiOrZeroWidthCodePoint(codePoint) {
+  return (
+    codePoint === 0x061c ||
+    (codePoint >= 0x200b && codePoint <= 0x200f) ||
+    (codePoint >= 0x202a && codePoint <= 0x202e) ||
+    (codePoint >= 0x2060 && codePoint <= 0x206f) ||
+    codePoint === 0xfeff
+  );
+}
+
+function isUnsafeControlCodePoint(codePoint) {
+  if (codePoint === 0x09 || codePoint === 0x0a || codePoint === 0x0d) return false;
+  return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+}
+
+function hasUnsafeFormatCharacter(value) {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (isBidiOrZeroWidthCodePoint(codePoint) || isUnsafeControlCodePoint(codePoint)) return true;
+  }
+  return false;
+}
+
+function hasAtlassianDisplayMarker(value) {
+  return value.includes("@") || value.includes("?") || value.includes("#") || value.includes("://");
+}
+
+function safeAtlassianDisplayName(value) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 100 &&
+    value.trim() === value &&
+    !hasUnsafeFormatCharacter(value) &&
+    !hasAtlassianDisplayMarker(value)
+  );
+}
+
+function safeParsedAtlassianBaseUrl(url, source) {
+  return (
+    url.protocol === "https:" &&
+    url.username.length === 0 &&
+    url.password.length === 0 &&
+    url.search.length === 0 &&
+    url.hash.length === 0 &&
+    !source.includes("@") &&
+    !source.includes("?") &&
+    !source.includes("#")
+  );
+}
+
+function safeAtlassianBaseUrl(value) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 2048 || /\s/u.test(value)) {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    return safeParsedAtlassianBaseUrl(url, value);
+  } catch {
+    return false;
+  }
+}
+
+function hasCompleteAtlassianMetadataKeys(record) {
+  const keys = Object.keys(record);
+  return (
+    keys.length === ATLASSIAN_METADATA_KEYS.size &&
+    keys.every((key) => ATLASSIAN_METADATA_KEYS.has(key))
+  );
+}
+
+function hasValidAtlassianMetadataIdentity(reference, record) {
+  return (
+    ATLASSIAN_AUTH_REF_PATTERN.test(reference) &&
+    record.schemaVersion === ATLASSIAN_SCHEMA_VERSION &&
+    record.authRef === reference &&
+    (record.provider === "confluence" || record.provider === "jira")
+  );
+}
+
+function hasValidAtlassianMetadataDetails(record) {
+  return (
+    safeAtlassianDisplayName(record.displayName) &&
+    safeAtlassianBaseUrl(record.baseUrl) &&
+    record.authScheme === "basic-api-token"
+  );
+}
+
+function validAtlassianCreatedAt(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
 function validAtlassianMetadataEntry(reference, entry) {
-  return reference.length > 0 && objectRecord(entry)?.authRef === reference;
+  const record = objectRecord(entry);
+  return (
+    record !== undefined &&
+    hasCompleteAtlassianMetadataKeys(record) &&
+    hasValidAtlassianMetadataIdentity(reference, record) &&
+    hasValidAtlassianMetadataDetails(record) &&
+    validAtlassianCreatedAt(record.createdAt)
+  );
 }
 
 function readAtlassianMetadataRefs(stateDir, metadataRel, findings) {

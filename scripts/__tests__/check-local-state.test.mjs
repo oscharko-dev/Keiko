@@ -57,6 +57,7 @@ function freshStateDir(name) {
 
 const SEALED_PROBE = sealString(Buffer.alloc(32, 1), "content_encryption_probe");
 const SEALED_SECRET = sealString(Buffer.alloc(32, 2), "provider-secret");
+const ATLASSIAN_AUTH_REF = `atlassian-cred:${"a".repeat(22)}`;
 
 function sha256OfJson(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -91,14 +92,27 @@ function writeProviderVault(stateDir, content) {
 function writeAtlassianCredentialState(stateDir, vaultContent = "{not-json") {
   const dataDir = join(stateDir, "ui");
   const credentialsDir = join(dataDir, "credentials");
-  const authRef = "atlassian:fixture";
+  const authRef = ATLASSIAN_AUTH_REF;
   mkdirSync(credentialsDir, { recursive: true, mode: 0o700 });
   writeFileSync(join(dataDir, "keiko.config.json"), JSON.stringify({ providers: [] }), {
     mode: 0o600,
   });
   writeFileSync(
     join(credentialsDir, "atlassian-connector-credentials.metadata.json"),
-    JSON.stringify({ version: 1, credentials: { [authRef]: { authRef } } }),
+    JSON.stringify({
+      version: 1,
+      credentials: {
+        [authRef]: {
+          schemaVersion: "1",
+          authRef,
+          provider: "jira",
+          displayName: "Engineering Jira",
+          baseUrl: "https://example.atlassian.net",
+          authScheme: "basic-api-token",
+          createdAt: 0,
+        },
+      },
+    }),
     { mode: 0o600 },
   );
   writeFileSync(join(credentialsDir, "atlassian-connector-credentials.vault"), vaultContent, {
@@ -507,14 +521,31 @@ describe("auditLocalState — per-class failure detection", () => {
     const stateDir = freshStateDir("loose-atlassian-vault");
     const { authRef, credentialsDir } = writeAtlassianCredentialState(
       stateDir,
-      JSON.stringify({ version: 1, entries: { ["atlassian:fixture"]: SEALED_SECRET } }),
+      JSON.stringify({ version: 1, entries: { [ATLASSIAN_AUTH_REF]: SEALED_SECRET } }),
     );
-    expect(authRef).toBe("atlassian:fixture");
+    expect(authRef).toBe(ATLASSIAN_AUTH_REF);
     chmodSync(join(credentialsDir, "atlassian-connector-credentials.vault"), 0o644);
 
     const cls = classById(auditLocalState(stateDir), "credentials");
     expect(cls.status).toBe("fail");
     expect(cls.findings.join(" ")).toContain("expected 0o600");
+  });
+
+  it("credentials: rejects incomplete Atlassian metadata with a matching vault reference", () => {
+    const stateDir = freshStateDir("incomplete-atlassian-metadata");
+    const { authRef, credentialsDir } = writeAtlassianCredentialState(
+      stateDir,
+      JSON.stringify({ version: 1, entries: { [ATLASSIAN_AUTH_REF]: SEALED_SECRET } }),
+    );
+    writeFileSync(
+      join(credentialsDir, "atlassian-connector-credentials.metadata.json"),
+      JSON.stringify({ version: 1, credentials: { [authRef]: { authRef } } }),
+      { mode: 0o600 },
+    );
+
+    const cls = classById(auditLocalState(stateDir), "credentials");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("malformed reference");
   });
 
   it("credentials: refuses a symlinked Atlassian vault without reading its target", (ctx) => {

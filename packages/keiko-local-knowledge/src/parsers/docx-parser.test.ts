@@ -195,7 +195,10 @@ describe("docxParser", () => {
       selectionFromBytes(zipDocxParts(xml), { extension: "docx" }),
       buildParserOptions({ now: () => 0 }),
     );
-    const normalizedText = "normalizedText" in result ? result.normalizedText : "";
+    const normalizedText =
+      "normalizedText" in result && typeof result.normalizedText === "string"
+        ? result.normalizedText
+        : "";
     expect(normalizedText).toContain("- Review backups");
     expect(normalizedText).toContain("Table row 1: Name=Firewall | Status=Enabled");
   });
@@ -216,11 +219,20 @@ describe("docxParser", () => {
       selectionFromBytes(zipDocxParts(xml), { extension: "docx" }),
       buildParserOptions({ now: () => 0 }),
     );
-    const normalizedText = "normalizedText" in result ? result.normalizedText : "";
+    const normalizedText =
+      "normalizedText" in result && typeof result.normalizedText === "string"
+        ? result.normalizedText
+        : "";
 
     expect(normalizedText).toContain("Table row 1: Name=Before | Status=Present");
     expect(normalizedText).toContain("Table row 3: Name=After | Status=Done");
     expect(normalizedText).toContain("Table row 1: InnerKey=Nested | InnerValue=Only");
+    expect(normalizedText.indexOf("Name=Before")).toBeLessThan(
+      normalizedText.indexOf("InnerKey=Nested"),
+    );
+    expect(normalizedText.indexOf("InnerKey=Nested")).toBeLessThan(
+      normalizedText.indexOf("Name=After"),
+    );
   });
 
   it("emits each table exactly once across multiple nesting levels", async () => {

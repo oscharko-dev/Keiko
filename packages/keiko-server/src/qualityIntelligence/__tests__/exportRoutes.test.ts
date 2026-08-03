@@ -921,6 +921,24 @@ describe("handleQiExport — deliverable quality gate", () => {
     expect(result.status).toBe(409);
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_NOTHING_TO_EXPORT");
   });
+
+  it("withholds rejected candidates from local deliverable exports", async () => {
+    const runId = "run-export-rejected";
+    recordSingleCandidateRun(runId, {
+      ...makeCandidate("Reviewer rejected candidate", "cand-rejected"),
+      status: "rejected",
+    });
+
+    const result = asResult(
+      await handleQiExport(
+        ctx(runId, makeReq({ adapter: "json", dryRun: false, approvedOnly: false })),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(409);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_NOTHING_TO_EXPORT");
+  });
 });
 
 // ─── FIX E (Issue #282) — export honors RUN-scope approval ───────────────────
