@@ -8,7 +8,7 @@ covers only what to do when something is wrong.
 
 ---
 
-## Memoization is not persisting, and every push pays for every file
+## Restore a review store that is not persisting
 
 | Field             | Value                                                |
 | ----------------- | ---------------------------------------------------- |
@@ -94,7 +94,11 @@ broke from the job's conclusion:
 gh run view <run-id> --log | grep -E "::warning::|::notice::"
 ```
 
-No signing job at all points at the review job's own outcome instead.
+No signing job at all has two causes, not one. The job is skipped when the review did not settle
+complete **and** when the store was disabled for the run — `Derive store identity` turns
+persistence off when the declared pin is unreadable or disagrees with the pinned `uses:` line, and
+that decision gates the signer independently of the outcome. Read the store-identity step's
+warnings and its `store-enabled` output before concluding anything from the review outcome.
 
 **Resolution**
 
@@ -102,8 +106,23 @@ No signing job at all points at the review job's own outcome instead.
    job both gate on `outcome == 'complete'`. That explains the cold start **only when no older
    complete artifact under the same identity is still retained**; the locator scans all eligible
    artifacts, so if one exists this is still a real lookup or verification failure and the
-   investigation continues at step 3. Where it is the explanation, reduce the size of the change so
-   the review completes, rather than raising or lowering `token_budget`.
+   investigation continues at step 3.
+
+   Then read the settlement reason, because the remedy differs and only one of them is "make the
+   change smaller":
+
+   | Reason                                                   | What to do                                                                                                                       |
+   | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+   | `settlement.incomplete.budget_exceeded`                  | Split the change, or raise `token_budget` knowingly                                                                              |
+   | `settlement.incomplete.coverage_gap`                     | Compare the engine's coverage against the inventory — a path the profile classifies as reviewable that the engine did not select |
+   | `settlement.incomplete.engine_status_not_success`        | The engine reported failure; `reviewed`/`expected` on the reason give the size of the gap                                        |
+   | `settlement.incomplete.schema_rejected`, `…engine_error` | The manifest is not to be believed — check the engine pin and its output, not the change size                                    |
+   | `settlement.incomplete.warning_not_allowlisted`          | An unlisted warning; decide whether it belongs in the profile's `benignWarnings`                                                 |
+   | `inventory.unclassified_path`                            | A path the profile classifies neither way; extend the profile                                                                    |
+
+   Reducing the change size for any of the others wastes another full-price run without making the
+   store persist.
+
 2. If the earlier run settled complete and produced no artifact, read the hand-off and signing
    steps' logs — every archive-gate refusal writes a `::warning::` naming what it rejected.
 3. If an artifact exists but the next run discarded it, the verify step logs
@@ -113,7 +132,7 @@ No signing job at all points at the review job's own outcome instead.
 
 ---
 
-## Model spend must be stopped immediately
+## Stop model spend immediately
 
 | Field             | Value                   |
 | ----------------- | ----------------------- |

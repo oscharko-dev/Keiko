@@ -466,7 +466,7 @@ jobs:
           # ones. See docs/qa/review-cost-model.md for the numbers.
           #
           # The cost is real and must not be described as free: a pull request whose review needs
-          # more than 2M tokens now stops dispatching files partway and settles INCOMPLETE. That is
+          # more than 4M tokens stops dispatching files partway and settles INCOMPLETE. That is
           # visible and honest rather than silent — an incomplete settlement says so — but it does
           # mean the tail of a very large change goes unreviewed. Raising the ceiling was the
           # response to exactly that starvation on an 87-file pull request (#2926), so this is a

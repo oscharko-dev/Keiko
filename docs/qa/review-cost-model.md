@@ -32,11 +32,11 @@ same 3,000 file reviews gives about 4.6k per file. Both numbers are real and the
 windows. Plan with 25k, because it comes from money actually spent, and expect the materialized
 per-file figure to rise toward it as billing settles.
 
-| Change    | First review (empty store)     | Later push (most files unchanged)    |
-| --------- | ------------------------------ | ------------------------------------ |
-| 5 files   | ~0.15 EUR, completes           | ~0.03 EUR                            |
-| 50 files  | ~1.50–3.50 EUR, completes      | ~0.03–0.25 EUR                       |
-| 135 files | ~4.50 EUR, **truncated at 2M** | ~0.10 EUR, when a store was retained |
+| Change    | First review (empty store)    | Later push (most files unchanged)    |
+| --------- | ----------------------------- | ------------------------------------ |
+| 5 files   | ~0.15 EUR, completes          | ~0.03 EUR                            |
+| 50 files  | ~1.50–3.50 EUR, completes     | ~0.03–0.25 EUR                       |
+| 135 files | ~3.40 EUR, completes under 4M | ~0.10 EUR, when a store was retained |
 
 At the 25k planning figure a 135-file change wants roughly 3.4M tokens, which the 4M ceiling
 accommodates — it completes, hands off a store, and every later push is cheap. Under the previous
@@ -54,9 +54,11 @@ So the ceiling starts binding at roughly half the size where it starts cutting. 
 those two numbers is capped but still completes.
 
 The ceiling was 2M for one day, while the store was inert. Raising it back to 4M is the cheaper
-direction, not a relaxation: a run that exceeds the ceiling settles incomplete, an incomplete run
-hands off no store, and such a pull request then pays in full on every push forever. A ceiling low
-enough to be hit is self-defeating.
+direction, not a relaxation: a run that exceeds the ceiling settles incomplete and an incomplete
+run hands off no store, so a pull request that has **never completed under its current identity**
+pays in full on every push. One that completed while it was smaller keeps replaying that older
+store until retention expires. A ceiling low enough to be hit is self-defeating for the first
+group, which is the group that costs money.
 
 The spread on the first-review column is prompt caching: the lower bound assumes the provider
 caches most of the prompt across files, the upper bound assumes none of it.
