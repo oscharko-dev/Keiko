@@ -499,6 +499,14 @@ function resetFrame(reason: string): string {
   return `event: reset\ndata: ${JSON.stringify({ reason, snapshotNeeded: true })}\n\n`;
 }
 
+function resolveEventCursor(
+  lastEventId: string | string[] | undefined,
+  queryCursor: string | null,
+): string | undefined {
+  if (typeof lastEventId === "string") return lastEventId;
+  return queryCursor === null || queryCursor.length === 0 ? undefined : queryCursor;
+}
+
 export function handleCodingRuntimeEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
   const required = requireRuntime(deps);
   if (isRouteResult(required)) return required;
@@ -506,12 +514,7 @@ export function handleCodingRuntimeEvents(ctx: RouteContext, deps: UiHandlerDeps
   if (!required.orchestrator.getSnapshot(runId)) return notFound();
   const lastEventId = ctx.req.headers["last-event-id"];
   const queryCursor = ctx.url.searchParams.get("cursor");
-  const cursor =
-    typeof lastEventId === "string"
-      ? lastEventId
-      : queryCursor === null || queryCursor.length === 0
-        ? undefined
-        : queryCursor;
+  const cursor = resolveEventCursor(lastEventId, queryCursor);
   openCodingRuntimeSse(ctx.res, ctx.req, required.eventHub, runId, cursor);
   return STREAMING;
 }
