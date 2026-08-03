@@ -423,39 +423,48 @@ jobs:
           app_id: ${{ secrets.KEIKO_QUALITY_APP_ID }}
           app_private_key: ${{ secrets.KEIKO_QUALITY_APP_PRIVATE_KEY }}
           target_branches: dev
-          # Ceiling, not the spend. Since v0.8.0 the action allots
+          # Ceiling, not the spend. The action allots
           # min(ceiling, clamp(1.3 x (files x 40k + lines x 60), 80k, 6M)) per run and passes it to
           # the engine's own --max-tokens-budget, which stops dispatching new files at the limit
           # instead of reviewing everything first and confessing afterwards.
           #
-          # Lowered from 6M to 2M by owner decision under budget pressure. What that buys and what
-          # it costs, stated plainly: the formula already keeps ordinary pull requests far below
-          # either number, so this changes nothing for them. It binds exactly the large ones — a
-          # 135-file pull request would otherwise be allotted the full ceiling, and with the review
-          # store inert every push spent it again (#2930: twenty-one full re-reviews of 133 files in
-          # one day). The store fix in v0.10.0 is the structural answer; this ceiling is the
-          # backstop while credit is tight.
+          # 6M is the MAXIMUM VALUE THAT DOES ANYTHING, not a preference: the clamp above caps at
+          # 6,000,000 before this input applies, so a larger number is inert and would only suggest
+          # headroom the reviewer cannot use. The formula keeps ordinary pull requests far below it
+          # either way — the allotment first meets the cap at about 115 reviewable files.
           #
-          # A second cost, sharper and found in review (Codex, #2934): the store hand-off below runs
-          # only for a COMPLETE settlement, and the action refuses to write a store for anything
-          # else. So a pull request large enough to exhaust this ceiling never seeds a store at
-          # all — every later push starts empty and spends the ceiling again, never converging.
-          # For exactly the large pull requests this cap targets, it therefore costs more over a
-          # branch's life than the old ceiling did with a working store. The durable fix is
-          # upstream (Keiko-for-Quality#75): persist the verdicts for files that WERE reviewed
-          # when the incompleteness is budget exhaustion, which does not cast doubt on those
-          # files' own verdicts the way a schema rejection or an engine error does. Until that
-          # ships, this ceiling is a saving on mid-size pull requests and a repeated cost on very
-          # large ones — stated here rather than discovered later.
+          # One fact everything below leans on, stated once because it is easy to drop: an
+          # incomplete run uploads NO replacement store, but the locate step scans every
+          # same-named artifact and takes the newest eligible one. So a pull request that has
+          # completed at least once under its current identity keeps replaying that store until
+          # the seven-day retention expires. "Starts cold on every push" is true only of a pull
+          # request that has NEVER completed under its current identity — call that the cold set.
           #
-          # The cost is real and must not be described as free: a pull request whose review needs
-          # more than 2M tokens now stops dispatching files partway and settles INCOMPLETE. That is
-          # visible and honest rather than silent — an incomplete settlement says so — but it does
-          # mean the tail of a very large change goes unreviewed. Raising the ceiling was the
-          # response to exactly that starvation on an 87-file pull request (#2926), so this is a
-          # deliberate re-trade, not a correction of that decision. Revisit once memoization is
-          # confirmed working in production and the credit position allows.
-          token_budget: "2000000"
+          # Why a HIGH ceiling is the cheap setting, which is the opposite of the intuition. A run
+          # that exhausts its allotment settles INCOMPLETE, and the hand-off and the signing job
+          # below both gate on `outcome == 'complete'`, so it persists nothing. A pull request in
+          # the cold set therefore pays in full on every push. Lowering the ceiling moves MORE
+          # pull requests into the cold set; raising it moves them out by letting the first review
+          # finish. This argument does not depend on any upstream change: it is exactly why the 2M
+          # cap set under credit pressure on 2026-08-02 was a false economy on large changes, and
+          # it holds at the pin this workflow currently runs.
+          #
+          # What the upstream fix would add, and why it is not what makes this ceiling right.
+          # Keiko-for-Quality#75 (merged as #76) lets a truncated run persist the verdicts for the
+          # files it DID reach, restricted to the engine's own account of what it covered. That is
+          # inert here until two things happen together: the pin advances to a release carrying it,
+          # AND the two conditions below move from `outcome == 'complete'` to the `store_written`
+          # output added by Keiko-for-Quality#78. Until then a truncated run still strands its
+          # store on the runner — which is the reason the ceiling, not the fix, is doing the work.
+          #
+          # What the edge costs, stated rather than left to be discovered: a run consuming the full
+          # 6M costs roughly 7 to 13 EUR depending on how much the provider serves from its prompt
+          # cache. That is ONE first review of a change larger than any this repository has
+          # produced; at the measured 25k tokens per file, truncation begins around 240 files.
+          # Whether that cost recurs is decided by whether the run completed, not by the ceiling.
+          # See docs/qa/review-cost-model.md for the numbers and
+          # docs/troubleshooting/model-review-spend.md for the failure modes.
+          token_budget: "6000000"
           # Enables per-file memoization (v0.9.0). Relative to the workspace; the file lives in
           # the directory the locate/upload steps carry between runs. Without this input the
           # store layer is fully inert — that property is pinned by a test upstream.

@@ -753,6 +753,17 @@ live Jira read, or performing a governed write action are documented separately.
 
 ---
 
+## Model-backed review spend
+
+Unexpected model spend from the Keiko for Quality reviewer, and how to contain it, are documented
+separately. Refer to the [model-review spend runbook](./model-review-spend.md) for the
+non-persisting review store (`cache.store_loaded` reporting zero entries, which fails silently and
+only shows on the bill) and for the two-step emergency stop, which requires cancelling live runs as
+well as setting `KEIKO_QUALITY_ENABLED`. The cost arithmetic itself is in
+[the review cost model](../qa/review-cost-model.md).
+
+---
+
 ## Related documentation
 
 - [README](../../README.md) — installation, daily use, and configuration.
