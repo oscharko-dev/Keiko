@@ -68,8 +68,8 @@ gh run view <run-id> --log | grep -oE '"code":"cache[^}]*}'
 # mixes in the previous pull request's runs, and artifacts partition by pull-request number — so a
 # complete run from the old one would look like a producer for the new one and turn an expected
 # empty store into a phantom lookup failure. Raise the limit until the list stops saturating;
-# twenty is not enough: the incident change settled at twenty-one completed reviews in one
-# day, and one branch alone produced thirty-four runs.
+# twenty was not enough for the incident recorded here: the change settled at twenty-one
+# completed reviews in one day, and one branch alone produced thirty-four runs.
 gh run list --workflow keiko-for-quality.yml --branch <branch> --limit 200 \
   --json databaseId,createdAt,event --jq 'length'   # equals the limit? raise it and repeat
 gh api repos/<owner>/<repo>/actions/runs/<candidate-run-id> \

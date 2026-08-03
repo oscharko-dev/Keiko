@@ -53,7 +53,9 @@ lands below it; no lighter day has settled yet to say how far.
 
 The 135-file figure is measured, not modelled: the incident change was exactly this size, and one
 full review of it consumed 5.5–6M tokens — €12–13 with a cold prompt cache, €8–9 on warmed
-repeats, €10.1 on average across its twenty-one completed runs (€212.62 ÷ 21). This row has now
+repeats, roughly €9.50 per completed review on average. That average subtracts what the day's
+total does not belong to this change: of €212.62, about €10 was the small-change tail and €4–6
+corpus qualification runs, leaving ≈€199 across 21 completed reviews. This row has now
 been wrong twice — first €3.40 (3.4M tokens misread as euros), then €4.30–7.30, whose floor
 divided the unsettled €96 ledger figure — which is why every number in this document carries its
 derivation inline.
@@ -75,7 +77,7 @@ Two different thresholds are easy to conflate, and how far apart they sit depend
   mixes. An earlier version said 240, from the unsettled 25k-per-file figure.
 
 So how far apart the two thresholds sit is a property of the change's weight, not of the formula:
-a heavy change is capped at 115 and cutting from about 135 — the thresholds nearly touch — while
+a heavy change is capped at 115 and truncates at about 135 — the thresholds nearly touch — while
 a light change keeps real headroom between them. A change between the two numbers is capped but
 still completes.
 
@@ -97,8 +99,10 @@ hits — about a tenth of a first review), one paid roughly half per push, and o
 its files on every push because each push kept invalidating the stored context
 (`cache.context_invalidated: 12`). That last case is the store working as designed: a verdict is
 deliberately not replayed once the surroundings it was formed under have moved. A push costs
-anywhere from a tenth of the first review to all of it, set by how coupled the change is — not by
-how many files it touches.
+anywhere from a tenth of the first review to all of it, and two terms add up to it: the directly
+changed files, which by definition can never replay, and every unchanged file whose bound context
+moved. The first term is the push's own size; the second is its coupling — which is why a small
+push into shared context can still cost the whole review.
 
 ## What actually made a day expensive
 
@@ -160,8 +164,8 @@ expected and how to tell a real persistence failure from one of them.
 Measured end to end on 2026-08-03: a first run reported `store_loaded entries:0`, then
 `hits:0 misses:2`, and appended two entries; the next push, changing only one of the two files,
 reported `store_loaded entries:2` and `hits:1 misses:1`. At production scale the same day, a
-36-file pull request reported `hits: 32, misses: 3` on a later push — the store answered 91% of
-what a full re-review would have paid for.
+36-file pull request (35 reviewable, 1 excluded) reported `hits: 32, misses: 3` on a later push —
+the store answered 91% of what a full re-review would have paid for.
 
 Both files this document was introduced with are review-relevant, including this one: the profile's
 `docs/qa/**/*.md` entry wins over the broader prose exclusion. Worth knowing before predicting what
