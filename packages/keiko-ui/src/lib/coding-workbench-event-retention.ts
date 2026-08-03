@@ -74,8 +74,16 @@ export interface CodingWorkbenchRuntimeStreamSession {
   readonly close: () => void;
 }
 
+interface RuntimeEventSourceBinding {
+  readonly source: EventSource;
+  readonly receive: EventListener;
+  readonly reset: EventListener;
+  readonly heartbeat: EventListener;
+}
+
 class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
   private source: EventSource | undefined;
+  private sourceBinding: RuntimeEventSourceBinding | undefined;
   private pending: CodingWorkbenchRuntimeSseEvent[] = [];
   private pendingResnapshot = false;
   private latestCursor = "";
@@ -95,7 +103,7 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
   public close(): void {
     if (this.closed) return;
     this.closed = true;
-    this.source?.close();
+    this.detachSource();
     if (this.batchTimer !== undefined) clearTimeout(this.batchTimer);
     if (this.watchdogTimer !== undefined) clearTimeout(this.watchdogTimer);
     this.pending = [];
@@ -103,24 +111,50 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
   }
 
   private connect(): void {
-    this.source?.close();
+    this.detachSource();
     const source = this.createEventSource(
       this.runId,
       this.latestCursor.length === 0 ? undefined : this.latestCursor,
     );
     this.source = source;
     source.onopen = (): void => {
+      if (this.source !== source) return;
       this.armWatchdog();
       this.handlers.onOpen();
     };
     source.onerror = (): void => {
+      if (this.source !== source) return;
       this.handlers.onError(new Error("The runtime event stream is reconnecting."));
     };
-    source.addEventListener("status", this.receive as EventListener);
-    source.addEventListener("runtime-event", this.receive as EventListener);
-    source.addEventListener("reset", this.handleReset);
-    source.addEventListener("heartbeat", this.handleHeartbeat);
+    const receive: EventListener = (event) => {
+      if (this.source === source) this.receive(event as MessageEvent<string>);
+    };
+    const reset: EventListener = () => {
+      if (this.source === source) this.handleReset();
+    };
+    const heartbeat: EventListener = () => {
+      if (this.source === source) this.handleHeartbeat();
+    };
+    this.sourceBinding = { source, receive, reset, heartbeat };
+    source.addEventListener("status", receive);
+    source.addEventListener("runtime-event", receive);
+    source.addEventListener("reset", reset);
+    source.addEventListener("heartbeat", heartbeat);
     this.armWatchdog();
+  }
+
+  private detachSource(): void {
+    const binding = this.sourceBinding;
+    this.source = undefined;
+    this.sourceBinding = undefined;
+    if (binding === undefined) return;
+    binding.source.onopen = null;
+    binding.source.onerror = null;
+    binding.source.removeEventListener("status", binding.receive);
+    binding.source.removeEventListener("runtime-event", binding.receive);
+    binding.source.removeEventListener("reset", binding.reset);
+    binding.source.removeEventListener("heartbeat", binding.heartbeat);
+    binding.source.close();
   }
 
   private readonly receive = (message: MessageEvent<string>): void => {

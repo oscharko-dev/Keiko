@@ -180,6 +180,19 @@ describe("supervised coding policy", () => {
     }
   });
 
+  it("rejects malformed or overlong absolute edit targets before filesystem fallback", () => {
+    const { root } = workspaceFixture();
+    const malformed = join(root, "src", `new\u0000dir`, "file.ts");
+    const overlong = join(root, "src", "x".repeat(4_096), "file.ts");
+
+    for (const targetPath of [malformed, overlong]) {
+      expect(decideSupervisedFileEdit(fileRequest(root, targetPath))).toMatchObject({
+        status: "denied",
+        reason: "out-of-scope-file-edit",
+      });
+    }
+  });
+
   it("allows configured verification commands and persists only counts", () => {
     const result = decideSupervisedVerificationCommand(commandRequest("npm", ["run", "typecheck"]));
 

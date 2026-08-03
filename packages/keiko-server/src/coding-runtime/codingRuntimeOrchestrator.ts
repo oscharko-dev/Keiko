@@ -269,8 +269,20 @@ export class CodingRuntimeOrchestrator {
     this.activeEffectiveMode = effectiveMode;
     const nextState = approval === undefined ? "running" : "awaiting-approval";
     const transitioned = this.transition(admitted.current, nextState);
+    if (!transitioned.ok || transitioned.snapshot.state !== nextState) {
+      await this.containResumedRuntime(runId);
+      return transitioned;
+    }
     this.activeEffectiveMode = effectiveModeAfterResume(transitioned, effectiveMode);
     return transitioned;
+  }
+
+  private async containResumedRuntime(runId: string): Promise<void> {
+    try {
+      await this.deps.manager.stop(runId, "failed");
+    } catch {
+      // The failed state publish already put the run in recovery-required; containment stays open.
+    }
   }
 
   private async stopExpiredPausedRuntime(

@@ -513,7 +513,24 @@ describe("EditorAgentAuthorityRegistry.reserveForConnector", () => {
         actionClasses: CODING_WORKBENCH_ACTION_CLASSES.filter(
           (value) => value !== "network-egress",
         ),
-        networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+        networkPolicy: {
+          mode: "connector-scoped-egress",
+          allowLoopback: false,
+          connectorScopes: ["source-control.read"],
+        },
+      },
+    ],
+    [
+      "missing connector-access class",
+      {
+        actionClasses: CODING_WORKBENCH_ACTION_CLASSES.filter(
+          (value) => value !== "connector-access",
+        ),
+        networkPolicy: {
+          mode: "connector-scoped-egress",
+          allowLoopback: false,
+          connectorScopes: ["source-control.read"],
+        },
       },
     ],
     [

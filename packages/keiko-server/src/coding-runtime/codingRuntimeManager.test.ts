@@ -3437,6 +3437,9 @@ describe("coding runtime manager", () => {
   it.each([
     ["authenticated-health-version", "runtime-version-mismatch"],
     ["authenticated-health", "protocol-schema-mismatch"],
+    ["endpoint-invalid", "protocol-schema-mismatch"],
+    ["preparation-missing", "protocol-schema-mismatch"],
+    ["readiness-failed", "protocol-schema-mismatch"],
   ] as const)("maps the %s handshake reason precisely", async (reason, failureCode) => {
     const fixture = createManagedFixture();
     const child = fakeChild();

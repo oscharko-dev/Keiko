@@ -1839,6 +1839,9 @@ const OPEN_CODE_HANDSHAKE_PHASES: ReadonlySet<string> = new Set([
   "tool-facade-challenge",
   "sse-history-reconciliation",
   "session-echo",
+  "endpoint-invalid",
+  "preparation-missing",
+  "readiness-failed",
   "handshake-rejected",
 ]);
 

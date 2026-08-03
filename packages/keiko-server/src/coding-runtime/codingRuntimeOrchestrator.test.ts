@@ -1029,6 +1029,18 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     expect(f.manager.resume).toHaveBeenCalledWith("run-1", "supervised-coding");
   });
 
+  it("stops a resumed manager when the durable resumed state cannot be published", async () => {
+    const f = await runningFixture();
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    f.eventHub.publish.mockReturnValueOnce({ ok: false });
+
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+
+    expect(successfulSnapshot(resumed).state).toBe("recovery-required");
+    expect(f.manager.resume).toHaveBeenCalledWith("run-1", "supervised-coding");
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+  });
+
   it("persists a narrower resumed mode so a later mode-less resume cannot request widening", async () => {
     const f = await runningFixture();
     f.manager.resume.mockImplementation((_runId, requestedMode) => ({

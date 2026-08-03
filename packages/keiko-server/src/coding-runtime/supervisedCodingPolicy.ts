@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 
 import {
   CODING_WORKBENCH_SCHEMA_VERSION,
+  EDITOR_AGENT_TARGET_PATH_MAX_BYTES,
   isContainedAgentPath,
   permissionKindForSupervisedCodingAction,
   validateCodingWorkbenchEvidenceRecord,
@@ -131,7 +132,11 @@ function resolveContainedEditTarget(request: SupervisedCodingFileEditRequest): b
 }
 
 function candidatePathSyntaxAllowed(targetPath: string): boolean {
-  return isAbsolute(targetPath) || isContainedAgentPath(targetPath);
+  if (!isAbsolute(targetPath)) return isContainedAgentPath(targetPath);
+  return (
+    !targetPath.includes("\u0000") &&
+    Buffer.byteLength(targetPath, "utf8") <= EDITOR_AGENT_TARGET_PATH_MAX_BYTES
+  );
 }
 
 function resolveCandidatePath(root: string, targetPath: string): string | undefined {

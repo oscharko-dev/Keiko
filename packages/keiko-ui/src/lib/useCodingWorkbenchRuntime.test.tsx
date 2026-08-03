@@ -74,6 +74,13 @@ class FakeEventSource {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
   }
 
+  removeEventListener(type: string, listener: EventListener): void {
+    this.listeners.set(
+      type,
+      (this.listeners.get(type) ?? []).filter((candidate) => candidate !== listener),
+    );
+  }
+
   dispatch(type: "status" | "runtime-event" | "reset", data = "{}"): void {
     for (const listener of this.listeners.get(type) ?? []) {
       listener(new MessageEvent(type, { data }));

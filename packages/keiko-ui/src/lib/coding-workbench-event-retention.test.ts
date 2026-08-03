@@ -102,6 +102,27 @@ describe("Coding Workbench event retention", () => {
     }
   });
 
+  it("detaches stale source callbacks when the session closes", () => {
+    const source = new FakeEventSource();
+    const onEvents = vi.fn();
+    const onError = vi.fn();
+    const onReset = vi.fn(() => Promise.resolve());
+    const session = createCodingWorkbenchRuntimeStreamSession(
+      "run-1",
+      { onOpen: vi.fn(), onEvents, onError, onReset },
+      { createEventSource: () => source as unknown as EventSource },
+    );
+
+    session.close();
+    source.emit("runtime-event", JSON.stringify(event(1)));
+    source.emit("reset");
+    source.onerror?.(new Event("error"));
+
+    expect(onEvents).not.toHaveBeenCalled();
+    expect(onReset).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it("delivers observations before a later state event without bypassing the batch", () => {
     vi.useFakeTimers();
     try {
@@ -252,6 +273,14 @@ class FakeEventSource {
     const listeners = this.listeners.get(type) ?? [];
     listeners.push(listener);
     this.listeners.set(type, listeners);
+  }
+
+  public removeEventListener(type: string, listener: EventListener): void {
+    const listeners = this.listeners.get(type) ?? [];
+    this.listeners.set(
+      type,
+      listeners.filter((candidate) => candidate !== listener),
+    );
   }
 
   public emit(type: string, data?: string): void {
