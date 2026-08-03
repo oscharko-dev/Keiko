@@ -286,10 +286,11 @@ describe("SettingsPanel Updates entry point (Issue #1696)", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "General" }));
     const updatesButton = screen.getByRole("button", { name: "Review updates" });
+    expect(updatesButton.closest(".set-sec-actions")).toBeTruthy();
+
     fireEvent.click(updatesButton);
 
     expect(openUpdatesWindow).toHaveBeenCalledTimes(1);
-    expect(updatesButton.closest(".set-sec-actions")).toBeTruthy();
     expect(
       screen.getByText("Check for Keiko updates and install them when available."),
     ).toBeInTheDocument();
