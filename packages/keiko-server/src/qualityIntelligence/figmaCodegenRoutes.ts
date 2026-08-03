@@ -55,6 +55,9 @@ export interface FigmaCodegenResponse {
   readonly fileCount: number;
   readonly totalBytes: number;
   readonly screenCount: number;
+  readonly renderedScreenCount: number;
+  readonly structuralScreenCount: number;
+  readonly unparseableScreenCount: number;
   readonly files: readonly { readonly path: string; readonly contents: string }[];
 }
 
@@ -69,14 +72,29 @@ function codegenTooLarge(message: string): RouteResult {
   return { status: 413, body: errorBody("FIGMA_CODEGEN_TOO_LARGE", message) };
 }
 
-// Re-hydrate the deterministic emission input from the stored snapshot. Unparseable screens are
-// dropped (never crash). Links → nav graph → routing hints feed the adapter's screen-to-screen wiring.
-function emissionInputFromRecord(
-  record: FigmaSnapshotRecord,
-): QualityIntelligenceFigma.EmissionInput {
-  const screens = record.screens
-    .map((s) => QualityIntelligenceFigma.parseScreenIr(s.irJson))
-    .filter((s): s is QualityIntelligenceFigma.ScreenIr => s !== undefined);
+interface EmissionProjection {
+  readonly input: QualityIntelligenceFigma.EmissionInput;
+  readonly renderedScreenCount: number;
+  readonly structuralScreenCount: number;
+  readonly unparseableScreenCount: number;
+}
+
+function parseScreens(
+  screens: readonly { readonly irJson: unknown }[],
+): readonly QualityIntelligenceFigma.ScreenIr[] {
+  return screens
+    .map((screen) => QualityIntelligenceFigma.parseScreenIr(screen.irJson))
+    .filter((screen): screen is QualityIntelligenceFigma.ScreenIr => screen !== undefined);
+}
+
+// Re-hydrate rendered and structural-only screens from the stored snapshot. Unparseable IR is
+// excluded from emission but counted explicitly in the response. Links → graph → routing hints
+// feed the adapter's screen-to-screen wiring.
+function emissionInputFromRecord(record: FigmaSnapshotRecord): EmissionProjection {
+  const renderedScreens = parseScreens(record.screens);
+  const structuralRows = record.structuralScreens ?? [];
+  const structuralScreens = parseScreens(structuralRows);
+  const screens = [...renderedScreens, ...structuralScreens];
   const tokens = QualityIntelligenceFigma.parseDesignTokens(record.tokens);
   const links: QualityIntelligenceFigma.InterScreenLink[] = (record.links ?? []).map((l) => ({
     sourceNodeId: l.sourceNodeId,
@@ -89,7 +107,16 @@ function emissionInputFromRecord(
     tokens,
     reduction: { inputNodeCount: 0, keptNodeCount: 0, removedNodeCount: 0, removedRatio: 0 },
   });
-  return { screens, tokens, hints: QualityIntelligenceFigma.deriveRoutingHints(graph) };
+  return {
+    input: { screens, tokens, hints: QualityIntelligenceFigma.deriveRoutingHints(graph) },
+    renderedScreenCount: renderedScreens.length,
+    structuralScreenCount: structuralScreens.length,
+    unparseableScreenCount:
+      record.screens.length +
+      structuralRows.length -
+      renderedScreens.length -
+      structuralScreens.length,
+  };
 }
 
 function persistArtifact(evidenceDir: string, artifact: PersistedFigmaCodeArtifact): void {
@@ -167,12 +194,32 @@ function loadSnapshotForCodegen(
   return { record, evidenceDir, runId };
 }
 
+function codegenResponse(
+  runId: string,
+  artifact: QualityIntelligenceFigma.CodeArtifact,
+  totalBytes: number,
+  projection: EmissionProjection,
+): FigmaCodegenResponse {
+  return {
+    runId,
+    adapterName: artifact.adapterName,
+    fileCount: artifact.files.length,
+    totalBytes,
+    screenCount: projection.input.screens.length,
+    renderedScreenCount: projection.renderedScreenCount,
+    structuralScreenCount: projection.structuralScreenCount,
+    unparseableScreenCount: projection.unparseableScreenCount,
+    files: artifact.files,
+  };
+}
+
 export function handleFigmaGenerateCode(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const loaded = loadSnapshotForCodegen(ctx, deps);
   if ("status" in loaded) return loaded;
   const { record, evidenceDir, runId } = loaded;
 
-  const input = emissionInputFromRecord(record);
+  const projection = emissionInputFromRecord(record);
+  const { input } = projection;
   if (input.screens.length === 0) {
     return {
       status: 422,
@@ -208,13 +255,8 @@ export function handleFigmaGenerateCode(ctx: RouteContext, deps: UiHandlerDeps):
     };
   }
 
-  const response: FigmaCodegenResponse = {
-    runId,
-    adapterName: artifact.adapterName,
-    fileCount: artifact.files.length,
-    totalBytes: artifactSummary.totalBytes,
-    screenCount: input.screens.length,
-    files: artifact.files,
+  return {
+    status: 200,
+    body: codegenResponse(runId, artifact, artifactSummary.totalBytes, projection),
   };
-  return { status: 200, body: response };
 }

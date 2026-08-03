@@ -24,7 +24,7 @@ const referenceCss = [
 const MODES = [
   { id: "01-dark", label: "Dark", theme: "dark", hc: false },
   { id: "02-light", label: "Light", theme: "light", hc: false },
-  { id: "03-light-hc", label: "Light High Contrast", theme: "light", hc: true },
+  { id: "03-light-hc", label: "Light High Contrast", theme: "light", hc: "more" },
 ];
 
 const shellCss = `
@@ -109,12 +109,14 @@ const productMarkup = `
 `;
 
 function frameHtml(css, markup, mode) {
-  const attrs = `${mode.theme ? ` data-theme="${mode.theme}"` : ""}${mode.hc ? ' data-hc="true"' : ""} data-input-modality="keyboard"`;
+  const themeAttr = mode.theme ? ` data-theme="${mode.theme}"` : "";
+  const hcAttr = mode.hc ? ` data-hc="${mode.hc}"` : "";
+  const attrs = `${themeAttr}${hcAttr} data-input-modality="keyboard"`;
   return `<!doctype html>
   <html${attrs}>
     <head>
       <meta charset="utf-8" />
-      <style>${css.replaceAll("</style", "<\\/style")}</style>
+      <style>${css.replaceAll("</style", String.raw`<\/style`)}</style>
       <style>
         body { margin: 0; min-height: 100vh; padding: 24px; background: var(--background-primary, var(--bg)); color: var(--text-primary, var(--fg)); }
         .evidence-section { margin: 0 0 28px; padding: 16px; border: 1px solid var(--border-default, var(--line)); border-radius: 10px; background: var(--surface-primary, var(--card)); }

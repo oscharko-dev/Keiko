@@ -662,7 +662,8 @@ describe("Confluence sync — request validation fail-closed", () => {
       throw new Error("defective transport adapter");
     };
     const { deps, credential } = depsFor(explodingPort);
-    const started = await startSync(deps, credential, { spaceKeys: ["ENG"] });
+    const diagnostics = { record: vi.fn() };
+    const started = await startSync({ ...deps, diagnostics }, credential, { spaceKeys: ["ENG"] });
     const terminal = await awaitTerminal(started.job.jobId);
     expect(terminal.status).toBe("failed");
     if (terminal.status !== "failed") return;
@@ -671,5 +672,16 @@ describe("Confluence sync — request validation fail-closed", () => {
     expect(activity).toHaveLength(1);
     expect(activity[0]).toMatchObject({ outcome: "failed", reasonCode: "unavailable" });
     expect(JSON.stringify({ terminal, activity })).not.toContain("defective transport adapter");
+    expect(diagnostics.record).toHaveBeenCalledOnce();
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        correlationId: terminal.jobId,
+        operation: "atlassian.sync-job",
+        errorClass: "Error",
+      }),
+    );
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(
+      "defective transport adapter",
+    );
   });
 });

@@ -40,6 +40,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../..");
+const GIT_PATH = "/usr/bin/git";
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
 const POST = readFileSync(resolve(REPO, CSS_PATH), "utf8").replace(/\r\n?/g, "\n");
 const POST_CSS_SHA256 = createHash("sha256").update(POST).digest("hex");
@@ -47,7 +48,7 @@ const RUN_STARTED_AT = new Date().toISOString();
 
 function git(args) {
   try {
-    return execFileSync("git", ["-C", REPO, ...args], {
+    return execFileSync(GIT_PATH, ["-C", REPO, ...args], {
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
     }).trim();
@@ -72,10 +73,22 @@ const REFERENCE = REFERENCE_FILES.map((f) => readFileSync(resolve(DS_DIR, f), "u
 
 const ICON = "▾";
 const CHECK = "✓";
+function perfStatus(index) {
+  if (index % 11 === 0) return "Degraded";
+  if (index % 17 === 0) return "Queued";
+  return "Active";
+}
+
+function perfModel(index) {
+  if (index % 3 === 0) return "gpt-oss-120b";
+  if (index % 3 === 1) return "claude-sonnet";
+  return "gpt-oss-20b";
+}
+
 const PERF_ROWS = Array.from({ length: 250 }, (_, i) => {
   const idx = i + 1;
-  const status = idx % 11 === 0 ? "Degraded" : idx % 17 === 0 ? "Queued" : "Active";
-  const model = idx % 3 === 0 ? "gpt-oss-120b" : idx % 3 === 1 ? "claude-sonnet" : "gpt-oss-20b";
+  const status = perfStatus(idx);
+  const model = perfModel(idx);
   return `<tr role="row"><td role="gridcell" data-label="Agent">Bounded row ${idx}</td><td role="gridcell" data-label="Status">${status}</td><td class="num" role="gridcell" data-label="Runs">${(1000 + idx).toLocaleString()}</td><td role="gridcell" data-label="Model">${model}</td></tr>`;
 }).join("");
 
@@ -282,6 +295,22 @@ const MODES = [
 ];
 const GATE_R_MODES = new Set(["01-dark", "02-light"]);
 
+async function readMediaProbe(page) {
+  return page.evaluate(() => ({
+    reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+    forcedColors: matchMedia("(forced-colors: active)").matches,
+    prefersContrast: matchMedia("(prefers-contrast: more)").matches,
+  }));
+}
+
+function mediaMatchesMode(modeId, probe) {
+  return (
+    probe.reducedMotion === (modeId === "07-reduced-motion") &&
+    probe.forcedColors === (modeId === "06-forced-colors") &&
+    probe.prefersContrast === (modeId === "05-prefers-contrast")
+  );
+}
+
 function pageHtml(cssText, extra = "") {
   return `<!doctype html><html><head><meta charset="utf-8"><style>${cssText}
   body{margin:0;padding:22px;background:var(--background-primary);color:var(--text-primary);font-family:var(--font-ui),system-ui,sans-serif;display:flex;flex-direction:column;gap:22px}
@@ -293,15 +322,21 @@ function pageHtml(cssText, extra = "") {
 }
 
 async function applyMode(page, cssText, mode, extra = "") {
-  await page.emulateMedia({ colorScheme: "dark", ...mode.media });
+  await page.emulateMedia({
+    colorScheme: "dark",
+    contrast: "no-preference",
+    forcedColors: "none",
+    reducedMotion: "no-preference",
+    ...mode.media,
+  });
   await page.setContent(pageHtml(cssText, extra), { waitUntil: "load" });
   await page.evaluate(
     ({ theme, hc }) => {
       const r = document.documentElement;
-      r.removeAttribute("data-theme");
-      r.removeAttribute("data-hc");
-      if (theme) r.setAttribute("data-theme", theme);
-      if (hc) r.setAttribute("data-hc", hc);
+      delete r.dataset.theme;
+      delete r.dataset.hc;
+      if (theme) r.dataset.theme = theme;
+      if (hc) r.dataset.hc = hc;
     },
     { theme: mode.theme, hc: mode.hc },
   );
@@ -368,13 +403,8 @@ async function collectAccessibilityProof(page) {
   await applyMode(page, POST, MODES[0]);
   // keyboard / focus: Tab to the first focusable interactive control and assert it receives focus
   // and a visible ring (WCAG 2.4.7 / 2.1.1).
-  let activeTag = "";
   for (let i = 0; i < 25; i++) {
     await page.keyboard.press("Tab");
-    activeTag = await page.evaluate(() => {
-      const a = document.activeElement;
-      return a ? `${a.tagName.toLowerCase()}#${a.id || ""}.${a.className || ""}` : "";
-    });
     const reached = await page.evaluate(() => {
       const a = document.activeElement;
       return !!a && a.closest(".c-back") !== null;
@@ -479,6 +509,7 @@ for (const mode of MODES) {
   }
 
   await applyMode(page, POST, mode);
+  byMode[mode.id].mediaProbe = await readMediaProbe(page);
   await page.screenshot({ path: resolve(HERE, `${mode.id}.png`), fullPage: true });
   console.log(
     `${mode.id}: R ${byMode[mode.id].groupR_diffs} diff${byMode[mode.id].groupR_gated ? " (gated)" : " (recorded)"}`,
@@ -487,7 +518,9 @@ for (const mode of MODES) {
 
 // Extra screenshots: compact density + narrow responsive (PRODUCT).
 await applyMode(page, POST, MODES[0], "");
-await page.evaluate(() => document.documentElement.setAttribute("data-density", "compact"));
+await page.evaluate(() => {
+  document.documentElement.dataset.density = "compact";
+});
 await page.screenshot({ path: resolve(HERE, "08-compact-density.png"), fullPage: true });
 
 const narrow = await ctx.newPage();
@@ -521,7 +554,15 @@ const perfFailed =
 // A missing probe selector (e.g. a migrated surface was renamed away) must FAIL the gate, not pass
 // silently — otherwise a dropped surface would still record PASS with fewer probes.
 const missingSelectors = [...missing].sort((a, b) => a.localeCompare(b));
-const failed = rDiffsGated.length > 0 || missingSelectors.length > 0 || focusFailed || perfFailed;
+const mediaFailed = Object.entries(byMode).some(
+  ([modeId, mode]) => !mediaMatchesMode(modeId, mode.mediaProbe),
+);
+const failed =
+  rDiffsGated.length > 0 ||
+  missingSelectors.length > 0 ||
+  focusFailed ||
+  perfFailed ||
+  mediaFailed;
 
 writeFileSync(
   resolve(HERE, "consolidated-fidelity-proof.json"),
@@ -591,6 +632,6 @@ console.log(
   `BOUNDED ROW SMOKE: ${boundedRowSmoke.rowCount} rows, ${boundedRowSmoke.durationMs.toFixed(2)}ms, sticky delta ${boundedRowSmoke.stickyHeaderDeltaPx.toFixed(2)}px`,
 );
 console.log(
-  `\n${failed ? "FAIL" : "PASS"} — Group R dark/light 0-diff: ${rDiffsGated.length === 0}; missing selectors: ${missingSelectors.length}; a11y proof: ${!focusFailed}; bounded-row smoke: ${!perfFailed}`,
+  `\n${failed ? "FAIL" : "PASS"} — Group R dark/light 0-diff: ${rDiffsGated.length === 0}; missing selectors: ${missingSelectors.length}; media isolation: ${!mediaFailed}; a11y proof: ${!focusFailed}; bounded-row smoke: ${!perfFailed}`,
 );
 process.exit(failed ? 1 : 0);

@@ -88,6 +88,30 @@ function writeProviderVault(stateDir, content) {
   writeFileSync(join(dir, "provider-credentials.vault"), payload, { mode: 0o600 });
 }
 
+function writeAtlassianCredentialState(stateDir, vaultContent = "{not-json") {
+  const dataDir = join(stateDir, "ui");
+  const credentialsDir = join(dataDir, "credentials");
+  const authRef = "atlassian:fixture";
+  mkdirSync(credentialsDir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(dataDir, "keiko.config.json"), JSON.stringify({ providers: [] }), {
+    mode: 0o600,
+  });
+  writeFileSync(
+    join(credentialsDir, "atlassian-connector-credentials.metadata.json"),
+    JSON.stringify({ version: 1, credentials: { [authRef]: { authRef } } }),
+    { mode: 0o600 },
+  );
+  writeFileSync(join(credentialsDir, "atlassian-connector-credentials.vault"), vaultContent, {
+    mode: 0o600,
+  });
+  writeFileSync(
+    join(credentialsDir, "atlassian-connector-credentials-vault.key"),
+    Buffer.alloc(32, 9).toString("base64"),
+    { mode: 0o600 },
+  );
+  return { authRef, credentialsDir };
+}
+
 // Assembles a provider-shaped secret string at runtime from fragments. No contiguous secret literal
 // is committed (so GitHub push protection does not flag the test fixtures), yet the joined value
 // still matches the auditor's SECRET_PATTERNS so the leak-detection branch is genuinely exercised.
@@ -467,6 +491,46 @@ describe("auditLocalState — per-class failure detection", () => {
     expect(cls.status).toBe("fail");
     expect(cls.findings.join(" ")).toContain("credential reference #1");
     expect(cls.findings.join(" ")).not.toContain(ref);
+  });
+
+  it("credentials: validates the Atlassian vault in the default UI data directory", () => {
+    const stateDir = freshStateDir("malformed-atlassian-vault");
+    writeAtlassianCredentialState(stateDir);
+
+    const cls = classById(auditLocalState(stateDir), "credentials");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("Atlassian credential vault is not valid JSON");
+  });
+
+  it("credentials: rejects loose Atlassian credential permissions", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const stateDir = freshStateDir("loose-atlassian-vault");
+    const { authRef, credentialsDir } = writeAtlassianCredentialState(
+      stateDir,
+      JSON.stringify({ version: 1, entries: { ["atlassian:fixture"]: SEALED_SECRET } }),
+    );
+    expect(authRef).toBe("atlassian:fixture");
+    chmodSync(join(credentialsDir, "atlassian-connector-credentials.vault"), 0o644);
+
+    const cls = classById(auditLocalState(stateDir), "credentials");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("expected 0o600");
+  });
+
+  it("credentials: refuses a symlinked Atlassian vault without reading its target", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const stateDir = freshStateDir("symlinked-atlassian-vault");
+    const { credentialsDir } = writeAtlassianCredentialState(stateDir);
+    const vault = join(credentialsDir, "atlassian-connector-credentials.vault");
+    const outside = join(root, "outside-atlassian-vault");
+    rmSync(vault);
+    writeFileSync(outside, "outside-secret-shaped-content", { mode: 0o600 });
+    symlinkSync(outside, vault);
+
+    const cls = classById(auditLocalState(stateDir), "credentials");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("symbolic link");
+    expect(cls.findings.join(" ")).not.toContain(outside);
   });
 
   it("file-modes: detects a group/world-readable state directory", (ctx) => {

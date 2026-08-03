@@ -7,10 +7,13 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../..");
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
+const PDF_CSS_PATH =
+  "packages/keiko-ui/src/app/components/desktop/widgets/cards/PdfCitationPreviewWindow.module.css";
 const AXE_PATH = resolve(REPO, "node_modules/axe-core/axe.min.js");
 
 const SOURCES = {
   delivery: "packages/keiko-server/src/local-knowledge-preview-delivery.ts",
+  handlers: "packages/keiko-server/src/local-knowledge-preview-handlers.ts",
   sessionManager: "packages/keiko-server/src/local-knowledge-preview-session-manager.ts",
   viewer: "packages/keiko-ui/src/app/components/desktop/widgets/cards/PdfCitationPreviewWindow.tsx",
   session:
@@ -19,11 +22,39 @@ const SOURCES = {
   descriptor: "packages/keiko-ui/src/app/components/desktop/windows/descriptor-meta.ts",
 };
 
-const cssText = readFileSync(resolve(REPO, CSS_PATH), "utf8");
+// Render the current component-scoped product CSS too. Next's CSS-module compiler removes
+// :global(...) while scoping .lazyWidgetScope; the standalone evidence applies that equivalent
+// transform and mounts the same scope class instead of restating component declarations.
+const pdfComponentCss = readFileSync(resolve(REPO, PDF_CSS_PATH), "utf8").replace(
+  /:global\(([^)]+)\)/gu,
+  "$1",
+);
+const cssText = `${readFileSync(resolve(REPO, CSS_PATH), "utf8")}\n${pdfComponentCss}`;
 const cssSha256 = createHash("sha256").update(cssText).digest("hex");
 const axeSource = readFileSync(AXE_PATH, "utf8");
 const sourceText = Object.fromEntries(
   Object.entries(SOURCES).map(([key, path]) => [key, readFileSync(resolve(REPO, path), "utf8")]),
+);
+
+// Derive product-owned numeric caps from their declarations. Only a multiplication of numeric
+// literals is accepted; malformed or widened source syntax fails the evidence closed without eval.
+function numericProductConstant(source, name) {
+  const match = source.match(new RegExp(`export const ${name} = ([^;]+);`, "u"));
+  if (match?.[1] === undefined) return undefined;
+  const terms = match[1].split("*").map((term) => term.trim());
+  if (terms.length === 0 || terms.some((term) => !/^\d[\d_]*$/u.test(term))) return undefined;
+  const value = terms.reduce((product, term) => product * Number(term.replaceAll("_", "")), 1);
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+function occurrenceCount(source, name) {
+  return source.split(name).length - 1;
+}
+
+const maxPdfPreviewBytes = numericProductConstant(sourceText.delivery, "MAX_PDF_PREVIEW_BYTES");
+const maxPdfPreviewRangeBytes = numericProductConstant(
+  sourceText.delivery,
+  "MAX_PDF_PREVIEW_RANGE_BYTES",
 );
 
 mkdirSync(HERE, { recursive: true });
@@ -301,7 +332,7 @@ function pageHtml(capture) {
   <body>
     <main class="ev-root">
       <p class="ev-caption">Issue #1637 - ${escapeHtml(capture.state)} - ${escapeHtml(capture.file)}</p>
-      <section class="ev-card">
+      <section class="ev-card lazyWidgetScope">
         ${viewerMarkup(capture.state)}
       </section>
     </main>
@@ -352,8 +383,10 @@ function sourceAssertions() {
       name: "Large and slow PDF behavior remains bounded",
       pass:
         sourceText.viewer.includes("const RENDER_RADIUS = 1") &&
-        sourceText.delivery.includes("MAX_PDF_PREVIEW_BYTES = 32 * 1024 * 1024") &&
-        sourceText.delivery.includes("MAX_PDF_PREVIEW_RANGE_BYTES = 4 * 1024 * 1024") &&
+        Number.isFinite(maxPdfPreviewBytes) &&
+        occurrenceCount(sourceText.delivery, "MAX_PDF_PREVIEW_BYTES") === 4 &&
+        Number.isFinite(maxPdfPreviewRangeBytes) &&
+        occurrenceCount(sourceText.handlers, "MAX_PDF_PREVIEW_RANGE_BYTES") === 3 &&
         sourceText.viewer.includes("SLOW_LOAD_MS"),
     },
     {
@@ -366,7 +399,7 @@ function sourceAssertions() {
     {
       name: "Windows and macOS path behavior uses normalized containment instead of raw path trust",
       pass:
-        sourceText.delivery.includes('replaceAll("\\\\", "/")') &&
+        sourceText.delivery.includes(String.raw`replaceAll("\\", "/")`) &&
         sourceText.delivery.includes("containedRealPathInfo") &&
         sourceText.delivery.includes("isDenied"),
     },
@@ -404,10 +437,10 @@ try {
     await page.setContent(pageHtml(capture), { waitUntil: "load" });
     await page.evaluate((theme) => {
       const root = document.documentElement;
-      root.removeAttribute("data-theme");
-      root.removeAttribute("data-hc");
-      root.setAttribute("data-input-modality", "keyboard");
-      if (theme) root.setAttribute("data-theme", theme);
+      delete root.dataset.theme;
+      delete root.dataset.hc;
+      root.dataset.inputModality = "keyboard";
+      if (theme) root.dataset.theme = theme;
     }, capture.theme);
     await page.locator(".ev-root").screenshot({
       animations: "disabled",
@@ -511,8 +544,8 @@ writeFileSync(
       },
       performanceEvidence: {
         renderRadius: 1,
-        maxPdfPreviewBytes: "32 MiB",
-        maxRangeBytes: "4 MiB",
+        maxPdfPreviewBytes,
+        maxRangeBytes: maxPdfPreviewRangeBytes,
         slowLoadStatusMs: 900,
         closeCleanup:
           "Preview sessions close on window removal and server TTL/sweep is the fail-safe.",

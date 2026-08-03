@@ -21,9 +21,12 @@ import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   loadQualityIntelligenceRun,
+  recordQualityIntelligenceCandidates,
   recordQualityIntelligenceRun,
 } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import type { UiHandlerDeps } from "../../deps.js";
@@ -152,6 +155,22 @@ function buildRunInput(): RunInput {
   };
 }
 
+function coveringCandidate(): QI.QualityIntelligenceTestCaseCandidate {
+  return {
+    id: QualityIntelligence.asQualityIntelligenceTestCaseId(COVERING_CANDIDATE_ID),
+    runId: QualityIntelligence.asQualityIntelligenceRunId(RUN_ID),
+    derivedFromAtomIds: [QualityIntelligence.asQualityIntelligenceEvidenceAtomId(COVERED_ATOM_ID)],
+    title: "Covered requirement candidate",
+    preconditions: [],
+    steps: ["Exercise the covered requirement"],
+    expectedResults: ["The requirement is satisfied"],
+    priority: "P1",
+    riskClass: "functional",
+    tags: [],
+    status: "proposed",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Suite
 // ---------------------------------------------------------------------------
@@ -163,6 +182,13 @@ describe("Issue #741 — coverage consistency across all three surfaces", () => 
     evidenceDir = mkdtempSync(join(tmpdir(), "keiko-741-test-"));
     // Persist ONE manifest that all three surfaces read from.
     recordQualityIntelligenceRun(buildRunInput(), { evidenceDir });
+    recordQualityIntelligenceCandidates({
+      runId: RUN_ID,
+      generatedAt: "2026-06-14T10:01:00.000Z",
+      candidates: [coveringCandidate()],
+      evidenceDir,
+      redact: (value: unknown): unknown => value,
+    });
   });
 
   afterEach(() => {

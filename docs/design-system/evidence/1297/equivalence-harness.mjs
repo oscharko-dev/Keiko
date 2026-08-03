@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../..");
+const GIT_PATH = "/usr/bin/git";
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
 const IMMUTABLE_BASE_SHA = "afd2c7af18f269459893363d2380fc6bccd0dd77";
 const BASE_REF = process.env.BASE_REF ?? IMMUTABLE_BASE_SHA;
@@ -47,13 +48,13 @@ if (!REF_RE.test(BASE_REF) || BASE_REF.includes("..") || BASE_REF.endsWith(".loc
 }
 
 function git(args) {
-  return execFileSync("git", ["-C", REPO, ...args], {
+  return execFileSync(GIT_PATH, ["-C", REPO, ...args], {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   }).trim();
 }
 
-const PRE = execFileSync("git", ["-C", REPO, "show", `${BASE_REF}:${CSS_PATH}`], {
+const PRE = execFileSync(GIT_PATH, ["-C", REPO, "show", `${BASE_REF}:${CSS_PATH}`], {
   encoding: "utf8",
   maxBuffer: 64 * 1024 * 1024,
 });
@@ -74,10 +75,22 @@ const REFERENCE = [
   .map((f) => readFileSync(resolve(DS_DIR, f), "utf8"))
   .join("\n");
 
+function perfStatus(index) {
+  if (index % 11 === 0) return "Degraded";
+  if (index % 17 === 0) return "Queued";
+  return "Active";
+}
+
+function perfModel(index) {
+  if (index % 3 === 0) return "gpt-oss-120b";
+  if (index % 3 === 1) return "claude-sonnet";
+  return "gpt-oss-20b";
+}
+
 const PERF_ROWS = Array.from({ length: 250 }, (_, i) => {
   const idx = i + 1;
-  const status = idx % 11 === 0 ? "Degraded" : idx % 17 === 0 ? "Queued" : "Active";
-  const model = idx % 3 === 0 ? "gpt-oss-120b" : idx % 3 === 1 ? "claude-sonnet" : "gpt-oss-20b";
+  const status = perfStatus(idx);
+  const model = perfModel(idx);
   return `<tr role="row"><td role="gridcell" data-label="Agent">Bounded row ${idx}</td><td role="gridcell" data-label="Status">${status}</td><td class="num" role="gridcell" data-label="Runs">${(1000 + idx).toLocaleString()}</td><td role="gridcell" data-label="Model">${model}</td></tr>`;
 }).join("");
 
@@ -243,6 +256,22 @@ const MODES = [
 ];
 const GATE_R_MODES = new Set(["01-dark", "02-light"]);
 
+async function readMediaProbe(page) {
+  return page.evaluate(() => ({
+    reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+    forcedColors: matchMedia("(forced-colors: active)").matches,
+    prefersContrast: matchMedia("(prefers-contrast: more)").matches,
+  }));
+}
+
+function mediaMatchesMode(modeId, probe) {
+  return (
+    probe.reducedMotion === (modeId === "07-reduced-motion") &&
+    probe.forcedColors === (modeId === "06-forced-colors") &&
+    probe.prefersContrast === (modeId === "05-prefers-contrast")
+  );
+}
+
 function pageHtml(cssText, extra = "") {
   return `<!doctype html><html><head><meta charset="utf-8"><style>${cssText}
   body{margin:0;padding:22px;background:var(--background-primary);color:var(--text-primary);font-family:var(--font-ui),system-ui,sans-serif;display:flex;flex-direction:column;gap:22px}
@@ -253,15 +282,21 @@ function pageHtml(cssText, extra = "") {
 }
 
 async function applyMode(page, cssText, mode, extra = "") {
-  await page.emulateMedia({ colorScheme: "dark", ...mode.media });
+  await page.emulateMedia({
+    colorScheme: "dark",
+    contrast: "no-preference",
+    forcedColors: "none",
+    reducedMotion: "no-preference",
+    ...mode.media,
+  });
   await page.setContent(pageHtml(cssText, extra), { waitUntil: "load" });
   await page.evaluate(
     ({ theme, hc }) => {
       const r = document.documentElement;
-      r.removeAttribute("data-theme");
-      r.removeAttribute("data-hc");
-      if (theme) r.setAttribute("data-theme", theme);
-      if (hc) r.setAttribute("data-hc", hc);
+      delete r.dataset.theme;
+      delete r.dataset.hc;
+      if (theme) r.dataset.theme = theme;
+      if (hc) r.dataset.hc = hc;
     },
     { theme: mode.theme, hc: mode.hc },
   );
@@ -386,7 +421,7 @@ function rgbaClose(x, y, tol = 1) {
   return a.length === 4 && b.length === 4 && a.every((v, i) => Math.abs(v - b[i]) <= tol);
 }
 
-function diffSets(a, b, probes, modeId, group, sink, counters, missing) {
+function diffSets({ a, b, probes, modeId, group, sink, counters, missing }) {
   for (const [sel] of probes) {
     if (a[sel] === "__MISSING__" || b[sel] === "__MISSING__") {
       missing.add(`${group}:${sel}`);
@@ -428,14 +463,32 @@ for (const mode of MODES) {
   const aPre = await collect(page, PRE, mode, PROBES_A);
   const aPost = await collect(page, POST, mode, PROBES_A);
   const aBefore = aCounters.diffs;
-  diffSets(aPre, aPost, PROBES_A, mode.id, "A", aDiffs, aCounters, missing);
+  diffSets({
+    a: aPre,
+    b: aPost,
+    probes: PROBES_A,
+    modeId: mode.id,
+    group: "A",
+    sink: aDiffs,
+    counters: aCounters,
+    missing,
+  });
 
   // GROUP R — reference fidelity, POST app vs DS reference.
   const rPost = await collect(page, POST, mode, PROBES_R);
   const rRef = await collect(page, REFERENCE, mode, PROBES_R);
   const sink = GATE_R_MODES.has(mode.id) ? rDiffsGated : rDiffsRecorded;
   const rBefore = rCounters.diffs;
-  diffSets(rRef, rPost, PROBES_R, mode.id, "R", sink, rCounters, missing);
+  diffSets({
+    a: rRef,
+    b: rPost,
+    probes: PROBES_R,
+    modeId: mode.id,
+    group: "R",
+    sink,
+    counters: rCounters,
+    missing,
+  });
 
   byMode[mode.id] = {
     groupA_diffs: aCounters.diffs - aBefore,
@@ -456,6 +509,7 @@ for (const mode of MODES) {
   dRaw.post[mode.id] = await collectD(page, POST, mode);
 
   await applyMode(page, POST, mode);
+  byMode[mode.id].mediaProbe = await readMediaProbe(page);
   await page.screenshot({ path: resolve(HERE, `${mode.id}.png`), fullPage: true });
   console.log(
     `${mode.id}: A ${byMode[mode.id].groupA_diffs} diff · R ${byMode[mode.id].groupR_diffs} diff${byMode[mode.id].groupR_gated ? " (gated)" : " (recorded)"}`,
@@ -464,7 +518,9 @@ for (const mode of MODES) {
 
 // Extra screenshots: compact density + narrow responsive (POST app).
 await applyMode(page, POST, MODES[0], "");
-await page.evaluate(() => document.documentElement.setAttribute("data-density", "compact"));
+await page.evaluate(() => {
+  document.documentElement.dataset.density = "compact";
+});
 await page.screenshot({ path: resolve(HERE, "08-compact-density.png"), fullPage: true });
 
 const narrow = await ctx.newPage();
@@ -589,8 +645,12 @@ const perfFailed =
   boundedRowSmoke.afterScrollTop <= 0 ||
   boundedRowSmoke.durationMs > 250 ||
   boundedRowSmoke.stickyHeaderDeltaPx > 4;
-const failed = aDiffs.length > 0 || rDiffsGated.length > 0 || focusFailed || perfFailed;
+const mediaFailed = Object.entries(byMode).some(
+  ([modeId, mode]) => !mediaMatchesMode(modeId, mode.mediaProbe),
+);
+const failed =
+  aDiffs.length > 0 || rDiffsGated.length > 0 || focusFailed || perfFailed || mediaFailed;
 console.log(
-  `\n${failed ? "FAIL" : "PASS"} — Group A 0-diff: ${aDiffs.length === 0}; Group R dark/light 0-diff: ${rDiffsGated.length === 0}; a11y proof: ${!focusFailed}; bounded-row smoke: ${!perfFailed}`,
+  `\n${failed ? "FAIL" : "PASS"} — Group A 0-diff: ${aDiffs.length === 0}; Group R dark/light 0-diff: ${rDiffsGated.length === 0}; media isolation: ${!mediaFailed}; a11y proof: ${!focusFailed}; bounded-row smoke: ${!perfFailed}`,
 );
 process.exit(failed ? 1 : 0);

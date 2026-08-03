@@ -2411,6 +2411,32 @@ describe("coding-sidecar gateway", () => {
     expect(seenRequests).toHaveLength(0);
   });
 
+  it("accepts normal prompts when capability token geometry is not yet enriched", async () => {
+    const seenRequests: GatewayRequest[] = [];
+    const deps = depsValue(
+      configValue(provider(), capability({ contextWindow: 0, maxOutputTokens: 0 })),
+      (
+        _config: GatewayConfig,
+        modelId: string,
+      ): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
+        return (request: GatewayRequest): Promise<NormalizedResponse> => {
+          seenRequests.push(request);
+          return Promise.resolve(assistantResponse(modelId));
+        };
+      },
+    );
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({
+        messages: [{ role: "user", content: "normal prompt ".repeat(50) }],
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(seenRequests).toHaveLength(1);
+  });
+
   it("aggregates accepted counts without a durable per-request evidence write", async () => {
     const rootPut = vi.fn((_runId: string, _json: string): string => "");
     const codingPut = vi.fn((_runId: string, _json: string): string => "");

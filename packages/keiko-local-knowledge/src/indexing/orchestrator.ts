@@ -442,19 +442,30 @@ function restoreDocumentSnapshot(
   snapshot: DocumentRestoreSnapshot,
 ): void {
   const db = state.options.store._internal.db;
-  db.prepare("DELETE FROM parsed_units WHERE capsule_id = :c AND document_id = :d").run({
-    c: String(state.capsule.id),
-    d: String(documentId),
-  });
-  for (const row of snapshot.parsedUnits) insertRawRow(db, "parsed_units", row);
-  for (const row of snapshot.chunks) insertRawRow(db, "chunks", row);
-  for (const row of snapshot.chunkLexicalRows) insertRawRow(db, "chunk_lexical_index", row);
-  for (const row of snapshot.repositoryChunkLineRows) {
-    insertRawRow(db, "repository_chunk_line_ranges", row);
+  db.exec("BEGIN");
+  try {
+    db.prepare("DELETE FROM parsed_units WHERE capsule_id = :c AND document_id = :d").run({
+      c: String(state.capsule.id),
+      d: String(documentId),
+    });
+    for (const row of snapshot.parsedUnits) insertRawRow(db, "parsed_units", row);
+    for (const row of snapshot.chunks) insertRawRow(db, "chunks", row);
+    for (const row of snapshot.chunkLexicalRows) insertRawRow(db, "chunk_lexical_index", row);
+    for (const row of snapshot.repositoryChunkLineRows) {
+      insertRawRow(db, "repository_chunk_line_ranges", row);
+    }
+    for (const row of snapshot.vectors) insertRawRow(db, "vectors", row);
+    restoreDocumentRow(db, documentId, snapshot.document);
+    invalidateVectorIndexStateForCapsules(db, [state.capsule.id]);
+    db.exec("COMMIT");
+  } catch (cause) {
+    db.exec("ROLLBACK");
+    throw new IndexingError(
+      "PERSISTENCE_FAILED",
+      "document snapshot restore failed mid-transaction",
+      cause === undefined ? undefined : { cause },
+    );
   }
-  for (const row of snapshot.vectors) insertRawRow(db, "vectors", row);
-  restoreDocumentRow(db, documentId, snapshot.document);
-  invalidateVectorIndexStateForCapsules(db, [state.capsule.id]);
 }
 
 // Checked once a document's standard chunk/embed processing reaches a terminal outcome for this

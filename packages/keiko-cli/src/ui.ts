@@ -30,6 +30,7 @@ import { resolvePreferredInstallLayout } from "./install-layout.js";
 // Only type imports may reference the package at module scope here.
 import { loadServer as loadServerModule } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
+import { defaultUiDataDir } from "./state-paths.js";
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
 const KEIKO_PROCESS_TITLE = "Keiko";
@@ -294,7 +295,7 @@ function withDefaultLocalRuntimeStateEnv(
     KEIKO_UI_PORT: String(parsed.port),
   };
   if (parsed.uiDbPath === undefined && !hasEnvValue(next.KEIKO_UI_DATA_DIR)) {
-    next.KEIKO_UI_DATA_DIR = join(stateDir, "ui");
+    next.KEIKO_UI_DATA_DIR = defaultUiDataDir(stateDir);
   }
   if (!hasEnvValue(next.KEIKO_MEMORY_DIR)) {
     next.KEIKO_MEMORY_DIR = join(stateDir, "memory");

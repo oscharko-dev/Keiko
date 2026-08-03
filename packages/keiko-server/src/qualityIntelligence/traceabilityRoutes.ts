@@ -18,6 +18,7 @@ import {
   loadQualityIntelligenceRun,
   type QualityIntelligenceEvidenceManifest,
   type QualityIntelligenceExportRow,
+  type QualityIntelligenceCandidateRow,
   type QualityIntelligenceTraceabilityExportMode,
 } from "@oscharko-dev/keiko-evidence";
 import { QualityIntelligenceExport } from "@oscharko-dev/keiko-quality-intelligence";
@@ -30,6 +31,7 @@ import {
   runReviewStateOf,
 } from "./reviewStore.js";
 import { buildQualityIntelligenceExportProvenance } from "./exportProvenance.js";
+import { isDeliverableQualityRow } from "./candidateDeliverability.js";
 
 const MAX_BODY_BYTES = 4 * 1024;
 
@@ -272,18 +274,56 @@ type ScopedRowsOutcome =
   | { readonly ok: true; readonly rows: TraceabilityRows }
   | { readonly ok: false; readonly result: RouteResult };
 
-// Apply the requested review scope to the matrix. A tampered review artifact fails closed with the
-// same 409 the generic export route returns — never a silent fall-back to the unscoped matrix.
+function loadDeliverableCandidateIds(
+  id: string,
+  evidenceDir: string,
+): readonly QualityIntelligenceCandidateRow[] | undefined {
+  return loadQualityIntelligenceCandidates(id, { evidenceDir })?.candidates.filter(
+    isDeliverableQualityRow,
+  );
+}
+
+function qualityScopedRows(
+  id: string,
+  evidenceDir: string,
+  rows: TraceabilityRows,
+): ScopedRowsOutcome {
+  try {
+    const candidates = loadDeliverableCandidateIds(id, evidenceDir);
+    if (candidates === undefined) {
+      return {
+        ok: false,
+        result: errorResult(500, "QI_LOAD_FAILED", "Failed to load the Quality Intelligence run."),
+      };
+    }
+    return {
+      ok: true,
+      rows: QualityIntelligenceExport.scopeTraceabilityRowsToTests(
+        rows,
+        new Set(candidates.map((candidate) => candidate.id)),
+      ),
+    };
+  } catch {
+    return {
+      ok: false,
+      result: errorResult(500, "QI_LOAD_FAILED", "Failed to load the Quality Intelligence run."),
+    };
+  }
+}
+
+// Apply the same deliverability gate as the candidate/TMS route unconditionally, then optionally
+// narrow further to approved tests. Tampered review evidence fails closed with the sibling 409.
 function scopedRows(
   id: string,
   evidenceDir: string,
   rows: TraceabilityRows,
   approvedOnly: boolean,
 ): ScopedRowsOutcome {
-  if (!approvedOnly) return { ok: true, rows };
+  const qualityScoped = qualityScopedRows(id, evidenceDir, rows);
+  if (!qualityScoped.ok || !approvedOnly) return qualityScoped;
   let approved: ReadonlySet<string>;
   try {
-    approved = approvedTestIdsFor(id, evidenceDir, rows);
+    approved = approvedTestIdsFor(id, evidenceDir, qualityScoped.rows);
   } catch (error) {
     if (error instanceof QualityIntelligenceReviewIntegrityError) {
       return {
@@ -300,7 +340,10 @@ function scopedRows(
       result: errorResult(500, "QI_LOAD_FAILED", "Failed to load the Quality Intelligence run."),
     };
   }
-  return { ok: true, rows: QualityIntelligenceExport.scopeTraceabilityRowsToTests(rows, approved) };
+  return {
+    ok: true,
+    rows: QualityIntelligenceExport.scopeTraceabilityRowsToTests(qualityScoped.rows, approved),
+  };
 }
 
 function resultWarnings(warnings: readonly string[]): { readonly warnings?: readonly string[] } {

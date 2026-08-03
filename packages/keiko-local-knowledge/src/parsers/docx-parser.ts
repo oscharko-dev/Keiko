@@ -40,8 +40,7 @@ const MAX_DOCUMENT_XML_INFLATE_RATIO = 100;
 const HEADING_STYLE_PATTERN = /<w:pStyle\b[^>]*w:val="Heading([1-6])"/i;
 const PARAGRAPH_PATTERN = /<w:p\b[\s\S]*?<\/w:p>/gi;
 const TEXT_RUN_PATTERN = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>/gi;
-const TABLE_ROW_PATTERN = /<w:tr\b[\s\S]*?<\/w:tr>/gi;
-const TABLE_CELL_PATTERN = /<w:tc\b[\s\S]*?<\/w:tc>/gi;
+const WORD_STRUCTURE_TAG_PATTERN = /<(\/?)w:(p|tbl|tr|tc)\b[^>]*>/giu;
 const DOCX_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_DOCX_FILE_EXTENSIONS);
 
 interface ZipFileLike {
@@ -374,17 +373,111 @@ function normalizeTableHeaders(cells: readonly string[]): readonly string[] {
   });
 }
 
+type WordElementName = "p" | "tbl" | "tr" | "tc";
+
+interface WordXmlTag {
+  readonly name: WordElementName;
+  readonly closing: boolean;
+  readonly selfClosing: boolean;
+  readonly start: number;
+  readonly end: number;
+}
+
+interface WordXmlElement {
+  readonly name: WordElementName;
+  readonly xml: string;
+  readonly innerXml: string;
+  readonly start: number;
+  readonly end: number;
+}
+
+function wordElementName(value: string | undefined): WordElementName | undefined {
+  if (value === "p" || value === "tbl" || value === "tr" || value === "tc") return value;
+  return undefined;
+}
+
+function nextWordXmlTag(xml: string, from: number): WordXmlTag | undefined {
+  WORD_STRUCTURE_TAG_PATTERN.lastIndex = from;
+  const match = WORD_STRUCTURE_TAG_PATTERN.exec(xml);
+  if (match === null) return undefined;
+  const name = wordElementName(match[2]?.toLowerCase());
+  if (name === undefined) return undefined;
+  const raw = match[0];
+  return {
+    name,
+    closing: match[1] === "/",
+    selfClosing: raw.slice(0, -1).trimEnd().endsWith("/"),
+    start: match.index,
+    end: match.index + raw.length,
+  };
+}
+
+function matchingWordElementEnd(xml: string, opening: WordXmlTag): WordXmlTag {
+  let depth = 1;
+  let cursor = opening.end;
+  while (cursor < xml.length) {
+    const tag = nextWordXmlTag(xml, cursor);
+    if (tag === undefined) break;
+    cursor = tag.end;
+    if (tag.name !== opening.name || tag.selfClosing) continue;
+    depth += tag.closing ? -1 : 1;
+    if (depth === 0) return tag;
+  }
+  throw new Error(`unterminated w:${opening.name} element`);
+}
+
+function extractWordElements(
+  xml: string,
+  names: ReadonlySet<WordElementName>,
+): readonly WordXmlElement[] {
+  const elements: WordXmlElement[] = [];
+  let cursor = 0;
+  while (cursor < xml.length) {
+    const opening = nextWordXmlTag(xml, cursor);
+    if (opening === undefined) break;
+    cursor = opening.end;
+    if (opening.closing || opening.selfClosing || !names.has(opening.name)) continue;
+    const closing = matchingWordElementEnd(xml, opening);
+    elements.push({
+      name: opening.name,
+      xml: xml.slice(opening.start, closing.end),
+      innerXml: xml.slice(opening.end, closing.start),
+      start: opening.start,
+      end: closing.end,
+    });
+    cursor = closing.end;
+  }
+  return elements;
+}
+
+const PARAGRAPH_ELEMENTS: ReadonlySet<WordElementName> = new Set(["p"]);
+const TABLE_ELEMENTS: ReadonlySet<WordElementName> = new Set(["tbl"]);
+const ROW_ELEMENTS: ReadonlySet<WordElementName> = new Set(["tr"]);
+const CELL_ELEMENTS: ReadonlySet<WordElementName> = new Set(["tc"]);
+const DOCUMENT_BLOCK_ELEMENTS: ReadonlySet<WordElementName> = new Set(["p", "tbl"]);
+
+function removeNestedTables(cellXml: string): string {
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const table of extractWordElements(cellXml, TABLE_ELEMENTS)) {
+    parts.push(cellXml.slice(cursor, table.start));
+    cursor = table.end;
+  }
+  parts.push(cellXml.slice(cursor));
+  return parts.join("");
+}
+
 function cellText(cellXml: string): string {
-  return Array.from(cellXml.matchAll(PARAGRAPH_PATTERN))
-    .map((match) => paragraphText(match[0]))
+  return extractWordElements(removeNestedTables(cellXml), PARAGRAPH_ELEMENTS)
+    .map((paragraph) => paragraphText(paragraph.xml))
     .filter((part) => part.length > 0)
     .join(" ")
     .trim();
 }
 
 function tableRows(tableXml: string): readonly Paragraph[] {
-  const rows = Array.from(tableXml.matchAll(TABLE_ROW_PATTERN)).map((rowMatch) =>
-    Array.from(rowMatch[0].matchAll(TABLE_CELL_PATTERN)).map((cellMatch) => cellText(cellMatch[0])),
+  const rows = extractWordElements(tableXml, ROW_ELEMENTS).map((row) =>
+    extractWordElements(row.innerXml, CELL_ELEMENTS).map((cell) => cellText(cell.innerXml)),
   );
   if (rows.length === 0) return [];
   const headerIsSchema =
@@ -405,17 +498,31 @@ function tableRows(tableXml: string): readonly Paragraph[] {
     .filter((paragraph) => paragraph.text.trim().length > 0);
 }
 
+function tableTreeRows(tableXml: string): readonly Paragraph[] {
+  const pending = [tableXml];
+  const paragraphs: Paragraph[] = [];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    paragraphs.push(...tableRows(current));
+    const nested = extractWordElements(current, TABLE_ELEMENTS);
+    for (let index = nested.length - 1; index >= 0; index -= 1) {
+      const table = nested[index];
+      if (table !== undefined) pending.push(table.innerXml);
+    }
+  }
+  return paragraphs;
+}
+
 function parseDocumentBlocks(xml: string): readonly Paragraph[] {
   const body = bodyXml(xml);
   const blocks: Paragraph[] = [];
-  const blockPattern = /<w:(p|tbl)\b[\s\S]*?<\/w:\1>/gi;
-  for (const match of body.matchAll(blockPattern)) {
-    const blockXml = match[0];
-    if (blockXml.startsWith("<w:tbl")) {
-      blocks.push(...tableRows(blockXml));
+  for (const block of extractWordElements(body, DOCUMENT_BLOCK_ELEMENTS)) {
+    if (block.name === "tbl") {
+      blocks.push(...tableTreeRows(block.innerXml));
       continue;
     }
-    const paragraph = parseParagraphXml(blockXml);
+    const paragraph = parseParagraphXml(block.xml);
     if (paragraph !== undefined) blocks.push(paragraph);
   }
   return blocks;

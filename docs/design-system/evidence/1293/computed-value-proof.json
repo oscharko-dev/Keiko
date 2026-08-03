@@ -1,36 +1,85 @@
 {
   "baseRef": "origin/release/0.2.0",
   "totalProbes": 840,
-  "diffCount": 0,
+  "diffCount": 13,
   "byMode": {
     "01-dark": {
       "probes": 120,
-      "diffs": 0
+      "diffs": 2,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": false
+      }
     },
     "02-light": {
       "probes": 120,
-      "diffs": 0
+      "diffs": 2,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": false
+      }
     },
     "03-dark-hc": {
       "probes": 120,
-      "diffs": 0
+      "diffs": 2,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": false
+      }
     },
     "04-light-hc": {
       "probes": 120,
-      "diffs": 0
+      "diffs": 2,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": false
+      }
     },
     "05-prefers-contrast": {
       "probes": 120,
-      "diffs": 0
+      "diffs": 2,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": true
+      }
     },
     "06-forced-colors": {
       "probes": 120,
-      "diffs": 0
+      "diffs": 1,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": true,
+        "prefersContrast": false
+      }
     },
     "07-reduced-motion": {
       "probes": 120,
-      "diffs": 0
+      "diffs": 2,
+      "mediaProbe": {
+        "reducedMotion": true,
+        "forcedColors": false,
+        "prefersContrast": false
+      }
     }
   },
-  "diffs": []
+  "diffs": [
+    "[01-dark] .rail { zIndex: PRE=\"12000\" POST=\"40\" }",
+    "[01-dark] .win-zpct { color: PRE=\"oklch(0.66 0.004 160)\" POST=\"oklch(0.855 0.0035 160)\" }",
+    "[02-light] .rail { zIndex: PRE=\"12000\" POST=\"40\" }",
+    "[02-light] .win-zpct { color: PRE=\"oklch(0.48 0.01 160)\" POST=\"oklch(0.34 0.0115 160)\" }",
+    "[03-dark-hc] .rail { zIndex: PRE=\"12000\" POST=\"40\" }",
+    "[03-dark-hc] .win-zpct { color: PRE=\"oklch(0.84 0.004 160)\" POST=\"oklch(0.94 0.002 80)\" }",
+    "[04-light-hc] .rail { zIndex: PRE=\"12000\" POST=\"40\" }",
+    "[04-light-hc] .win-zpct { color: PRE=\"oklch(0.34 0.012 160)\" POST=\"oklch(0.215 0.011 160)\" }",
+    "[05-prefers-contrast] .rail { zIndex: PRE=\"12000\" POST=\"40\" }",
+    "[05-prefers-contrast] .win-zpct { color: PRE=\"oklch(0.84 0.004 160)\" POST=\"oklch(0.94 0.002 80)\" }",
+    "[06-forced-colors] .rail { zIndex: PRE=\"12000\" POST=\"40\" }",
+    "[07-reduced-motion] .rail { zIndex: PRE=\"12000\" POST=\"40\" }",
+    "[07-reduced-motion] .win-zpct { color: PRE=\"oklch(0.66 0.004 160)\" POST=\"oklch(0.855 0.0035 160)\" }"
+  ]
 }

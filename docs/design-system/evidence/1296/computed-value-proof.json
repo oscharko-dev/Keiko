@@ -4,7 +4,7 @@
   "defaultBaseRef": "ee245ce8972c906f3eb9e0bff9d060f98be224f7",
   "baseRefResolved": "ee245ce8972c906f3eb9e0bff9d060f98be224f7",
   "postRef": "working-tree",
-  "postHeadRefResolved": "6dd6c425ad3f3dd61b8b172567cecad560d95c97",
+  "postHeadRefResolved": "a29064da2d68f6eb88f95e4eb68a8cbd01f888c1",
   "postIncludesWorkingTree": true,
   "totalProbes": 98,
   "diffCount": 0,
@@ -12,31 +12,66 @@
   "byMode": {
     "01-dark": {
       "probes": 14,
-      "diffs": 0
+      "diffs": 0,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": false
+      }
     },
     "02-light": {
       "probes": 14,
-      "diffs": 0
+      "diffs": 0,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": false
+      }
     },
     "03-dark-hc": {
       "probes": 14,
-      "diffs": 0
+      "diffs": 0,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": false
+      }
     },
     "04-light-hc": {
       "probes": 14,
-      "diffs": 0
+      "diffs": 0,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": false
+      }
     },
     "05-prefers-contrast": {
       "probes": 14,
-      "diffs": 0
+      "diffs": 0,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": true
+      }
     },
     "06-forced-colors": {
       "probes": 14,
-      "diffs": 0
+      "diffs": 0,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": true,
+        "prefersContrast": false
+      }
     },
     "07-reduced-motion": {
       "probes": 14,
-      "diffs": 0
+      "diffs": 0,
+      "mediaProbe": {
+        "reducedMotion": true,
+        "forcedColors": false,
+        "prefersContrast": false
+      }
     }
   },
   "diffs": [],

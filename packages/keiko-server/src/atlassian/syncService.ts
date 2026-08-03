@@ -66,6 +66,7 @@ import {
   type KnowledgeStore,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type { UiHandlerDeps } from "../deps.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { openKnowledgeStoreForDeps } from "../local-knowledge-store-open.js";
 import {
   configuredProviderForCapsule,
@@ -720,7 +721,18 @@ async function executeSyncJob(context: SyncRunContext): Promise<void> {
       },
     });
     await finalizeRun(context, outcome);
-  } catch {
+  } catch (error) {
+    emitServerDiagnostic(
+      context.deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: context.job.jobId,
+        operation: "atlassian.sync-job",
+        source: "atlassian.sync-service",
+        error,
+        redact: () => "server-operation-failed",
+        now: context.now,
+      }),
+    );
     failJobClosed(context);
   }
 }
