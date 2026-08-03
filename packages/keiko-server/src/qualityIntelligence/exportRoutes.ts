@@ -36,6 +36,7 @@ import {
   loadRunReviewState,
   candidateReviewStateOf,
   runReviewStateOf,
+  type QiReviewStateArtifact,
 } from "./reviewStore.js";
 import { assemblePdf, assembleZipBundle } from "./exportAssembly.js";
 import { buildQualityIntelligenceExportProvenance } from "./exportProvenance.js";
@@ -452,11 +453,9 @@ function parseExportBody(body: Record<string, unknown>): ExportRequest | undefin
 function selectRows(
   rows: readonly QualityIntelligenceCandidateRow[],
   approvedOnly: boolean,
-  runId: string,
-  evidenceDir: string,
+  review: QiReviewStateArtifact | undefined,
 ): readonly QualityIntelligenceCandidateRow[] {
   if (!approvedOnly) return rows;
-  const review = loadRunReviewState(runId, evidenceDir);
   // FIX E (Issue #282) — a reviewer can approve the whole RUN instead of each candidate. A
   // run-level approval is an explicit approval of every candidate, so it satisfies approvedOnly
   // (incl. the TMS adapters that force it). Otherwise fall back to the per-candidate filter.
@@ -776,8 +775,9 @@ function serialiseExport(
   const isBinary = adapter === "pdf" || adapter === "zip-bundle";
   const isTms = !isBinary && QualityIntelligence.QUALITY_INTELLIGENCE_TMS_ADAPTERS.has(adapter);
   const approvedOnly = isTms ? true : request.approvedOnly;
-  const rows = selectRows(allRows, approvedOnly, runId, evidenceDir).filter(
-    isDeliverableQualityRow,
+  const review = loadRunReviewState(runId, evidenceDir);
+  const rows = selectRows(allRows, approvedOnly, review).filter((row) =>
+    isDeliverableQualityRow(row, review),
   );
   if (rows.length === 0) {
     return {

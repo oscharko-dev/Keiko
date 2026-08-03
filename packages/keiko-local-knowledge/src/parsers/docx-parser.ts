@@ -481,10 +481,27 @@ function projectTableRow(
   rowIndex: number,
   headers: readonly string[],
 ): Paragraph {
+  return projectTableCells(
+    cells.map((text, cellIndex) => ({ cellIndex, text })),
+    rowIndex,
+    headers,
+  );
+}
+
+interface ProjectedTableCell {
+  readonly cellIndex: number;
+  readonly text: string;
+}
+
+function projectTableCells(
+  cells: readonly ProjectedTableCell[],
+  rowIndex: number,
+  headers: readonly string[],
+): Paragraph {
   const projected = cells
-    .map((cell, cellIndex) => {
+    .map(({ cellIndex, text }) => {
       const fallbackLabel = `Column ${String(cellIndex + 1)}`;
-      return `${headers[cellIndex] ?? fallbackLabel}=${cell}`;
+      return `${headers[cellIndex] ?? fallbackLabel}=${text}`;
     })
     .join(" | ");
   return { text: `Table row ${String(rowIndex + 1)}: ${projected}` };
@@ -502,6 +519,72 @@ function nestedTableItems(cells: readonly WordXmlElement[]): readonly TableTrave
     }
   }
   return items;
+}
+
+function flushProjectedCells(
+  items: TableTraversalItem[],
+  cells: ProjectedTableCell[],
+  rowIndex: number,
+  headers: readonly string[],
+): void {
+  if (cells.length === 0) return;
+  items.push({ kind: "paragraph", paragraph: projectTableCells(cells, rowIndex, headers) });
+  cells.length = 0;
+}
+
+function nestedTableRowItems(
+  cells: readonly WordXmlElement[],
+  rowIndex: number,
+  headers: readonly string[],
+): readonly TableTraversalItem[] {
+  const items: TableTraversalItem[] = [];
+  const projected: ProjectedTableCell[] = [];
+  for (const [cellIndex, cell] of cells.entries()) {
+    const textParts: string[] = [];
+    for (const block of extractWordElements(cell.innerXml, DOCUMENT_BLOCK_ELEMENTS)) {
+      if (block.name === "p") {
+        const text = paragraphText(block.xml);
+        if (text.length > 0) textParts.push(text);
+        continue;
+      }
+      if (textParts.length > 0) projected.push({ cellIndex, text: textParts.splice(0).join(" ") });
+      flushProjectedCells(items, projected, rowIndex, headers);
+      items.push({ kind: "table", tableXml: block.innerXml });
+    }
+    if (textParts.length > 0) projected.push({ cellIndex, text: textParts.join(" ") });
+  }
+  flushProjectedCells(items, projected, rowIndex, headers);
+  return items;
+}
+
+function tableRowItems(
+  cells: readonly WordXmlElement[],
+  values: readonly string[],
+  rowIndex: number,
+  headers: readonly string[],
+): readonly TableTraversalItem[] {
+  const nested = nestedTableItems(cells);
+  return nested.length === 0
+    ? [{ kind: "paragraph", paragraph: projectTableRow(values, rowIndex, headers) }]
+    : nestedTableRowItems(cells, rowIndex, headers);
+}
+
+interface AppendTableRowInput {
+  readonly cells: readonly WordXmlElement[];
+  readonly values: readonly string[];
+  readonly sourceRowIndex: number;
+  readonly dataRowIndex: number;
+  readonly headerIsSchema: boolean;
+  readonly headers: readonly string[];
+}
+
+function appendTableRow(items: TableTraversalItem[], input: AppendTableRowInput): number {
+  if (input.headerIsSchema && input.sourceRowIndex === 0) {
+    items.push(...nestedTableItems(input.cells));
+    return input.dataRowIndex;
+  }
+  items.push(...tableRowItems(input.cells, input.values, input.dataRowIndex, input.headers));
+  return input.dataRowIndex + 1;
 }
 
 function isMarkedTableHeaderRow(row: WordXmlElement): boolean {
@@ -528,14 +611,14 @@ function tableTraversalItems(tableXml: string): readonly TableTraversalItem[] {
   const items: TableTraversalItem[] = [];
   let dataRowIndex = 0;
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-    if (!headerIsSchema || rowIndex > 0) {
-      items.push({
-        kind: "paragraph",
-        paragraph: projectTableRow(values[rowIndex] ?? [], dataRowIndex, headers),
-      });
-      dataRowIndex += 1;
-    }
-    items.push(...nestedTableItems(cellRows[rowIndex] ?? []));
+    dataRowIndex = appendTableRow(items, {
+      cells: cellRows[rowIndex] ?? [],
+      values: values[rowIndex] ?? [],
+      sourceRowIndex: rowIndex,
+      dataRowIndex,
+      headerIsSchema,
+      headers,
+    });
   }
   return items;
 }

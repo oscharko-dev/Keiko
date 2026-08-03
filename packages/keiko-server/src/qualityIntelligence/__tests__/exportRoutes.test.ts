@@ -939,6 +939,62 @@ describe("handleQiExport — deliverable quality gate", () => {
     expect(result.status).toBe(409);
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_NOTHING_TO_EXPORT");
   });
+
+  it.each(["reject", "request-changes", "withdraw"] as const)(
+    "withholds candidates whose persisted review action is %s from unscoped local exports",
+    async (action) => {
+      const runId = `run-export-review-${action}`;
+      const candidateId = `cand-review-${action}`;
+      recordSingleCandidateRun(runId, makeCandidate("Persistently blocked", candidateId));
+      applyReviewDecision({
+        runId,
+        evidenceDir,
+        action,
+        scope: "candidate",
+        candidateId,
+        reviewerLabel: "auditor",
+        now: "2026-08-03T10:00:00.000Z",
+        redact: (value: unknown): unknown => value,
+      });
+
+      const result = asResult(
+        await handleQiExport(
+          ctx(runId, makeReq({ adapter: "json", dryRun: false, approvedOnly: false })),
+          deps(evidenceDir),
+        ),
+      );
+
+      expect(result.status).toBe(409);
+      expect((result.body as { error: { code: string } }).error.code).toBe("QI_NOTHING_TO_EXPORT");
+    },
+  );
+
+  it.each(["reject", "request-changes", "withdraw"] as const)(
+    "withholds every candidate when the persisted run review action is %s",
+    async (action) => {
+      const runId = `run-export-run-review-${action}`;
+      recordSingleCandidateRun(runId, makeCandidate("Run-level blocked", `cand-run-${action}`));
+      applyReviewDecision({
+        runId,
+        evidenceDir,
+        action,
+        scope: "run",
+        reviewerLabel: "auditor",
+        now: "2026-08-03T10:00:00.000Z",
+        redact: (value: unknown): unknown => value,
+      });
+
+      const result = asResult(
+        await handleQiExport(
+          ctx(runId, makeReq({ adapter: "json", dryRun: false, approvedOnly: false })),
+          deps(evidenceDir),
+        ),
+      );
+
+      expect(result.status).toBe(409);
+      expect((result.body as { error: { code: string } }).error.code).toBe("QI_NOTHING_TO_EXPORT");
+    },
+  );
 });
 
 // ─── FIX E (Issue #282) — export honors RUN-scope approval ───────────────────

@@ -246,11 +246,16 @@ describe("docxParser", () => {
 
     expect(normalizedText).toContain("Table row 1: Name=Before | Status=Present");
     expect(normalizedText).toContain("Table row 3: Name=After | Status=Done");
+    expect(normalizedText).toContain("Table row 2: Name=Container");
+    expect(normalizedText).toContain("Table row 2: Status=Has child");
     expect(normalizedText).toContain("Table row 1: InnerKey=Nested | InnerValue=Only");
-    expect(normalizedText.indexOf("Name=Before")).toBeLessThan(
+    expect(normalizedText.indexOf("Name=Container")).toBeLessThan(
       normalizedText.indexOf("InnerKey=Nested"),
     );
     expect(normalizedText.indexOf("InnerKey=Nested")).toBeLessThan(
+      normalizedText.indexOf("Status=Has child"),
+    );
+    expect(normalizedText.indexOf("Status=Has child")).toBeLessThan(
       normalizedText.indexOf("Name=After"),
     );
     expect(normalizedText.match(/InnerKey=Nested \| InnerValue=Only/gu)).toHaveLength(1);
