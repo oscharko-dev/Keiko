@@ -99,11 +99,27 @@ if [[ "$suite" != "fast" ]]; then
 fi
 
 if [[ "$suite" == "e2e" || "$suite" == "full" ]]; then
+  playwright_browser_revision() {
+    local browser_name="$1"
+    node -e '
+      const { readFileSync } = require("node:fs");
+      const { dirname, join } = require("node:path");
+      const metadataPath = join(dirname(require.resolve("playwright-core")), "browsers.json");
+      const { browsers } = JSON.parse(readFileSync(metadataPath, "utf8"));
+      const browser = browsers.find((candidate) => candidate.name === process.argv[1]);
+      if (typeof browser?.revision !== "string" || browser.revision.length === 0) {
+        process.exit(1);
+      }
+      process.stdout.write(browser.revision);
+    ' "$browser_name"
+  }
+
   browsers="${PLAYWRIGHT_BROWSERS_PATH:-/opt/playwright}"
-  playwright_version="1.62.0"
-  chromium_revision="1234"
+  playwright_version="$(node -p "require('playwright/package.json').version")"
+  chromium_revision="$(playwright_browser_revision chromium)"
+  headless_shell_revision="$(playwright_browser_revision chromium-headless-shell)"
   chromium_cache="${browsers}/chromium-${chromium_revision}"
-  headless_shell_cache="${browsers}/chromium_headless_shell-${chromium_revision}"
+  headless_shell_cache="${browsers}/chromium_headless_shell-${headless_shell_revision}"
   if [[ ! -d "$chromium_cache" || ! -d "$headless_shell_cache" ]]; then
     step "install Chromium for Playwright ${playwright_version}" \
       npx --ignore-scripts "playwright@${playwright_version}" install --with-deps chromium

@@ -130,6 +130,42 @@ describe("checkWorkspacePackageGraph", () => {
     );
   });
 
+  it("rejects malformed, boundary, and escaped package project references", async () => {
+    root = makeRoot("pkg-graph-refs-");
+    writeCleanRoot(root);
+    writeJson(root, "packages/keiko-security/tsconfig.json", {
+      compilerOptions: { rootDir: "src" },
+      include: ["src"],
+      references: [
+        { path: "../../../outside/keiko-contracts/tsconfig.json" },
+        { path: "../../keiko-contracts/tsconfig.json" },
+        { path: "" },
+        {},
+      ],
+    });
+
+    const failures = await checkWorkspacePackageGraph(root);
+
+    expect(failures).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          '@oscharko-dev/keiko-security: tsconfig reference "../../../outside/keiko-contracts/tsconfig.json" must resolve to a known workspace package tsconfig.json',
+        ),
+        expect.stringContaining(
+          '@oscharko-dev/keiko-security: tsconfig reference "../../keiko-contracts/tsconfig.json" must resolve to a known workspace package tsconfig.json',
+        ),
+        expect.stringContaining(
+          "@oscharko-dev/keiko-security: tsconfig reference must specify a non-empty string path",
+        ),
+      ]),
+    );
+    expect(
+      failures.filter((failure) =>
+        failure.includes("tsconfig reference must specify a non-empty string path"),
+      ),
+    ).toHaveLength(2);
+  });
+
   it("guards keiko-ui workspace dependencies without requiring package project references", async () => {
     root = makeRoot("pkg-graph-ui-");
     writeCleanRoot(root);
