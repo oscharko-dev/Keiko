@@ -100,8 +100,13 @@ fi
 
 if [[ "$suite" == "e2e" || "$suite" == "full" ]]; then
   browsers="${PLAYWRIGHT_BROWSERS_PATH:-/opt/playwright}"
-  if ! compgen -G "${browsers}/chromium-*" > /dev/null; then
-    step "install chromium" npx --ignore-scripts playwright@1.61.1 install --with-deps chromium
+  playwright_version="1.62.0"
+  chromium_revision="1234"
+  chromium_cache="${browsers}/chromium-${chromium_revision}"
+  headless_shell_cache="${browsers}/chromium_headless_shell-${chromium_revision}"
+  if [[ ! -d "$chromium_cache" || ! -d "$headless_shell_cache" ]]; then
+    step "install Chromium for Playwright ${playwright_version}" \
+      npx --ignore-scripts "playwright@${playwright_version}" install --with-deps chromium
   fi
   step "release smoke E2E" npm run test:e2e:smoke
 fi
