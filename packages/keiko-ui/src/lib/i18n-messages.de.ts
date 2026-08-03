@@ -2062,6 +2062,8 @@ export const DE_MESSAGES = {
     "— nur ein Vorschlag, wird nie automatisch angewendet.",
   "figmaSnapshotWindow.codegen.reviewableFilePlural": "{count} überprüfbare Dateien",
   "figmaSnapshotWindow.codegen.reviewableFileSingular": "{count} überprüfbare Datei",
+  "figmaSnapshotWindow.codegen.screenBreakdown":
+    "{rendered} gerendert, {structural} strukturell, {unparseable} als nicht lesbar ausgelassen",
   "figmaSnapshotWindow.count.screenPlural": "{count} Bildschirme",
   "figmaSnapshotWindow.count.screenSingular": "{count} Bildschirm",
   "figmaSnapshotWindow.dashboard.currentBadge": "Aktuell",

@@ -455,6 +455,7 @@ const TABLE_ELEMENTS: ReadonlySet<WordElementName> = new Set(["tbl"]);
 const ROW_ELEMENTS: ReadonlySet<WordElementName> = new Set(["tr"]);
 const CELL_ELEMENTS: ReadonlySet<WordElementName> = new Set(["tc"]);
 const DOCUMENT_BLOCK_ELEMENTS: ReadonlySet<WordElementName> = new Set(["p", "tbl"]);
+const TABLE_HEADER_ENABLED_VALUES: ReadonlySet<string> = new Set(["1", "on", "true"]);
 
 function removeNestedTables(cellXml: string): string {
   const parts: string[] = [];
@@ -475,40 +476,167 @@ function cellText(cellXml: string): string {
     .trim();
 }
 
-function tableRows(tableXml: string): readonly Paragraph[] {
-  const rows = extractWordElements(tableXml, ROW_ELEMENTS).map((row) =>
-    extractWordElements(row.innerXml, CELL_ELEMENTS).map((cell) => cellText(cell.innerXml)),
+function projectTableRow(
+  cells: readonly string[],
+  rowIndex: number,
+  headers: readonly string[],
+): Paragraph {
+  return projectTableCells(
+    cells.map((text, cellIndex) => ({ cellIndex, text })),
+    rowIndex,
+    headers,
   );
-  if (rows.length === 0) return [];
-  const headerIsSchema =
-    rows.length > 1 && (rows[0] ?? []).some((cell) => /[A-Za-z_ÄÖÜäöüß]/u.test(cell));
-  const headers = headerIsSchema ? normalizeTableHeaders(rows[0] ?? []) : [];
-  const dataRows = headerIsSchema ? rows.slice(1) : rows;
-  return dataRows
-    .map((cells, index) => {
-      const labels = headers.length > 0 ? headers : normalizeTableHeaders([]);
-      const projected = cells
-        .map((cell, cellIndex) => {
-          const fallbackLabel = `Column ${String(cellIndex + 1)}`;
-          return `${labels[cellIndex] ?? fallbackLabel}=${cell}`;
-        })
-        .join(" | ");
-      return { text: `Table row ${String(index + 1)}: ${projected}` };
+}
+
+interface ProjectedTableCell {
+  readonly cellIndex: number;
+  readonly text: string;
+}
+
+function projectTableCells(
+  cells: readonly ProjectedTableCell[],
+  rowIndex: number,
+  headers: readonly string[],
+): Paragraph {
+  const projected = cells
+    .map(({ cellIndex, text }) => {
+      const fallbackLabel = `Column ${String(cellIndex + 1)}`;
+      return `${headers[cellIndex] ?? fallbackLabel}=${text}`;
     })
-    .filter((paragraph) => paragraph.text.trim().length > 0);
+    .join(" | ");
+  return { text: `Table row ${String(rowIndex + 1)}: ${projected}` };
+}
+
+type TableTraversalItem =
+  | { readonly kind: "paragraph"; readonly paragraph: Paragraph }
+  | { readonly kind: "table"; readonly tableXml: string };
+
+function nestedTableItems(cells: readonly WordXmlElement[]): readonly TableTraversalItem[] {
+  const items: TableTraversalItem[] = [];
+  for (const cell of cells) {
+    for (const nested of extractWordElements(cell.innerXml, TABLE_ELEMENTS)) {
+      items.push({ kind: "table", tableXml: nested.innerXml });
+    }
+  }
+  return items;
+}
+
+function flushProjectedCells(
+  items: TableTraversalItem[],
+  cells: ProjectedTableCell[],
+  rowIndex: number,
+  headers: readonly string[],
+): void {
+  if (cells.length === 0) return;
+  items.push({ kind: "paragraph", paragraph: projectTableCells(cells, rowIndex, headers) });
+  cells.length = 0;
+}
+
+function nestedTableRowItems(
+  cells: readonly WordXmlElement[],
+  rowIndex: number,
+  headers: readonly string[],
+): readonly TableTraversalItem[] {
+  const items: TableTraversalItem[] = [];
+  const projected: ProjectedTableCell[] = [];
+  for (const [cellIndex, cell] of cells.entries()) {
+    const textParts: string[] = [];
+    for (const block of extractWordElements(cell.innerXml, DOCUMENT_BLOCK_ELEMENTS)) {
+      if (block.name === "p") {
+        const text = paragraphText(block.xml);
+        if (text.length > 0) textParts.push(text);
+        continue;
+      }
+      if (textParts.length > 0) projected.push({ cellIndex, text: textParts.splice(0).join(" ") });
+      flushProjectedCells(items, projected, rowIndex, headers);
+      items.push({ kind: "table", tableXml: block.innerXml });
+    }
+    if (textParts.length > 0) projected.push({ cellIndex, text: textParts.join(" ") });
+  }
+  flushProjectedCells(items, projected, rowIndex, headers);
+  return items;
+}
+
+function tableRowItems(
+  cells: readonly WordXmlElement[],
+  values: readonly string[],
+  rowIndex: number,
+  headers: readonly string[],
+): readonly TableTraversalItem[] {
+  const nested = nestedTableItems(cells);
+  return nested.length === 0
+    ? [{ kind: "paragraph", paragraph: projectTableRow(values, rowIndex, headers) }]
+    : nestedTableRowItems(cells, rowIndex, headers);
+}
+
+interface AppendTableRowInput {
+  readonly cells: readonly WordXmlElement[];
+  readonly values: readonly string[];
+  readonly sourceRowIndex: number;
+  readonly dataRowIndex: number;
+  readonly headerIsSchema: boolean;
+  readonly headers: readonly string[];
+}
+
+function appendTableRow(items: TableTraversalItem[], input: AppendTableRowInput): number {
+  if (input.headerIsSchema && input.sourceRowIndex === 0) {
+    items.push(...nestedTableItems(input.cells));
+    return input.dataRowIndex;
+  }
+  items.push(...tableRowItems(input.cells, input.values, input.dataRowIndex, input.headers));
+  return input.dataRowIndex + 1;
+}
+
+function isMarkedTableHeaderRow(row: WordXmlElement): boolean {
+  const firstCellStart = row.innerXml.search(/<w:tc\b/iu);
+  const rowProperties =
+    firstCellStart === -1 ? row.innerXml : row.innerXml.slice(0, firstCellStart);
+  const markerStart = rowProperties.search(/<w:tblHeader(?=[\s/>])/iu);
+  if (markerStart === -1) return false;
+  const markerEnd = rowProperties.indexOf(">", markerStart);
+  if (markerEnd === -1) return false;
+  const marker = rowProperties.slice(markerStart, markerEnd + 1);
+  const value = /\bw:val\s*=\s*["']([^"']+)["']/iu.exec(marker)?.[1];
+  return value === undefined || TABLE_HEADER_ENABLED_VALUES.has(value.toLowerCase());
+}
+
+function tableTraversalItems(tableXml: string): readonly TableTraversalItem[] {
+  const rows = extractWordElements(tableXml, ROW_ELEMENTS);
+  const cellRows = rows.map((row) => extractWordElements(row.innerXml, CELL_ELEMENTS));
+  const values = cellRows.map((cells) => cells.map((cell) => cellText(cell.innerXml)));
+  const firstRow = rows[0];
+  const headerIsSchema =
+    values.length > 1 && firstRow !== undefined && isMarkedTableHeaderRow(firstRow);
+  const headers = headerIsSchema ? normalizeTableHeaders(values[0] ?? []) : [];
+  const items: TableTraversalItem[] = [];
+  let dataRowIndex = 0;
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    dataRowIndex = appendTableRow(items, {
+      cells: cellRows[rowIndex] ?? [],
+      values: values[rowIndex] ?? [],
+      sourceRowIndex: rowIndex,
+      dataRowIndex,
+      headerIsSchema,
+      headers,
+    });
+  }
+  return items;
 }
 
 function tableTreeRows(tableXml: string): readonly Paragraph[] {
-  const pending = [tableXml];
+  const pending: TableTraversalItem[] = [{ kind: "table", tableXml }];
   const paragraphs: Paragraph[] = [];
   while (pending.length > 0) {
     const current = pending.pop();
     if (current === undefined) break;
-    paragraphs.push(...tableRows(current));
-    const nested = extractWordElements(current, TABLE_ELEMENTS);
-    for (let index = nested.length - 1; index >= 0; index -= 1) {
-      const table = nested[index];
-      if (table !== undefined) pending.push(table.innerXml);
+    if (current.kind === "paragraph") {
+      paragraphs.push(current.paragraph);
+      continue;
+    }
+    const items = tableTraversalItems(current.tableXml);
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const item = items[index];
+      if (item !== undefined) pending.push(item);
     }
   }
   return paragraphs;

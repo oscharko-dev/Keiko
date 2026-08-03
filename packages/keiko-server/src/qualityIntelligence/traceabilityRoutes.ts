@@ -278,8 +278,9 @@ function loadDeliverableCandidateIds(
   id: string,
   evidenceDir: string,
 ): readonly QualityIntelligenceCandidateRow[] | undefined {
-  return loadQualityIntelligenceCandidates(id, { evidenceDir })?.candidates.filter(
-    isDeliverableQualityRow,
+  const review = loadRunReviewState(id, evidenceDir);
+  return loadQualityIntelligenceCandidates(id, { evidenceDir })?.candidates.filter((candidate) =>
+    isDeliverableQualityRow(candidate, review),
   );
 }
 
@@ -303,7 +304,17 @@ function qualityScopedRows(
         new Set(candidates.map((candidate) => candidate.id)),
       ),
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof QualityIntelligenceReviewIntegrityError) {
+      return {
+        ok: false,
+        result: errorResult(
+          409,
+          "QI_REVIEW_TAMPERED",
+          "The review artifact failed integrity validation.",
+        ),
+      };
+    }
     return {
       ok: false,
       result: errorResult(500, "QI_LOAD_FAILED", "Failed to load the Quality Intelligence run."),

@@ -18,6 +18,13 @@
 import { chmodSync, existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
+import {
+  ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
+  isAtlassianConnectorAuthRef,
+  isAtlassianConnectorProvider,
+  isSafeAtlassianConnectorBaseUrl,
+  isSafeAtlassianDisplayName,
+} from "@oscharko-dev/keiko-contracts";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
 import { collectDoctorReport } from "./doctor.js";
@@ -415,33 +422,16 @@ function credentialConfigPaths(
 ): readonly string[] {
   const resolution = resolveConfigPathFromArgs(args, env);
   if (resolution.kind === "path") return [resolution.path];
-  if (resolution.kind === "not-configured") {
-    const existing = defaultConfigCandidates.filter((candidate) => existsSync(candidate));
-    return existing.length > 0 ? existing : [defaultConfigCandidates[0] ?? ""];
-  }
+  if (resolution.kind === "not-configured") return defaultConfigCandidates;
   return [];
 }
 
-function checkCredentialConfig(configPath: string): CheckResult {
-  if (configPath.length === 0 || !existsSync(configPath)) {
-    return ok("Credential storage", "no config file to inspect");
-  }
-  let raw: unknown;
-  try {
-    raw = JSON.parse(readFileSync(configPath, "utf8"));
-  } catch {
-    // Invalid JSON is already reported by the gateway-config check; avoid a duplicate action item.
-    return ok("Credential storage", "config not parseable (reported above)");
-  }
-  if (hasPlaintextGatewayCredentials(raw)) {
-    return action(
-      "Credential storage",
-      "plaintext credentials present in config — start `keiko ui` to migrate them into encrypted storage",
-    );
-  }
+function credentialReferenceCheck(configPath: string, raw: unknown): CheckResult {
   let orphaned: number;
   try {
-    orphaned = orphanedSecretRefs(raw, configPath) + orphanedAtlassianSecretRefs(configPath);
+    orphaned =
+      (raw === undefined ? 0 : orphanedSecretRefs(raw, configPath)) +
+      orphanedAtlassianSecretRefs(configPath);
   } catch (error) {
     if (error instanceof SecretVaultStoreError) {
       return action(
@@ -463,7 +453,28 @@ function checkCredentialConfig(configPath: string): CheckResult {
       `${String(orphaned)} credential reference(s) have no encrypted entry — incomplete or interrupted migration; start \`keiko ui\` to complete it`,
     );
   }
-  return ok("Credential storage", "no plaintext credentials in config");
+  return raw === undefined
+    ? ok("Credential storage", "no config file to inspect")
+    : ok("Credential storage", "no plaintext credentials in config");
+}
+
+function checkCredentialConfig(configPath: string): CheckResult {
+  if (configPath.length === 0) return ok("Credential storage", "no config file to inspect");
+  if (!existsSync(configPath)) return credentialReferenceCheck(configPath, undefined);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(configPath, "utf8"));
+  } catch {
+    // Invalid JSON is already reported by the gateway-config check; avoid a duplicate action item.
+    return ok("Credential storage", "config not parseable (reported above)");
+  }
+  if (hasPlaintextGatewayCredentials(raw)) {
+    return action(
+      "Credential storage",
+      "plaintext credentials present in config — start `keiko ui` to migrate them into encrypted storage",
+    );
+  }
+  return credentialReferenceCheck(configPath, raw);
 }
 
 function checkCredentialStorage(
@@ -649,6 +660,59 @@ function atlassianCredentialPaths(configPath: string): {
   };
 }
 
+const ATLASSIAN_METADATA_KEYS: ReadonlySet<string> = new Set([
+  "schemaVersion",
+  "authRef",
+  "provider",
+  "displayName",
+  "baseUrl",
+  "authScheme",
+  "createdAt",
+]);
+
+function hasCompleteAtlassianMetadataKeys(record: Record<string, unknown>): boolean {
+  const keys = Object.keys(record);
+  return (
+    keys.length === ATLASSIAN_METADATA_KEYS.size &&
+    keys.every((key) => ATLASSIAN_METADATA_KEYS.has(key))
+  );
+}
+
+function hasValidAtlassianMetadataIdentity(
+  reference: string,
+  record: Record<string, unknown>,
+): boolean {
+  return (
+    record.schemaVersion === ATLASSIAN_CONNECTOR_SCHEMA_VERSION &&
+    record.authRef === reference &&
+    isAtlassianConnectorAuthRef(record.authRef) &&
+    isAtlassianConnectorProvider(record.provider)
+  );
+}
+
+function hasValidAtlassianMetadataDetails(record: Record<string, unknown>): boolean {
+  return (
+    isSafeAtlassianDisplayName(record.displayName) &&
+    isSafeAtlassianConnectorBaseUrl(record.baseUrl) &&
+    record.authScheme === "basic-api-token"
+  );
+}
+
+function hasValidAtlassianCreatedAt(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isCompleteAtlassianMetadata(reference: string, value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    hasCompleteAtlassianMetadataKeys(record) &&
+    hasValidAtlassianMetadataIdentity(reference, record) &&
+    hasValidAtlassianMetadataDetails(record) &&
+    hasValidAtlassianCreatedAt(record.createdAt)
+  );
+}
+
 function readAtlassianMetadataReferences(path: string): readonly string[] {
   if (!existsSync(path)) return [];
   try {
@@ -662,13 +726,8 @@ function readAtlassianMetadataReferences(path: string): readonly string[] {
       throw new TypeError("metadata schema is unsupported");
     }
     return Object.entries(credentials).map(([reference, entry]) => {
-      if (
-        reference.length === 0 ||
-        typeof entry !== "object" ||
-        entry === null ||
-        (entry as { readonly authRef?: unknown }).authRef !== reference
-      ) {
-        throw new TypeError("metadata reference is malformed");
+      if (!isCompleteAtlassianMetadata(reference, entry)) {
+        throw new TypeError("metadata entry is malformed");
       }
       return reference;
     });

@@ -41,6 +41,20 @@ function seedVault(root: string, refs: readonly string[]): void {
   );
 }
 
+const ATLASSIAN_AUTH_REF = `atlassian-cred:${"a".repeat(22)}`;
+
+function atlassianMetadata(authRef = ATLASSIAN_AUTH_REF): Record<string, unknown> {
+  return {
+    schemaVersion: "1",
+    authRef,
+    provider: "jira",
+    displayName: "Engineering Jira",
+    baseUrl: "https://example.atlassian.net",
+    authScheme: "basic-api-token",
+    createdAt: 0,
+  };
+}
+
 interface Captured {
   readonly io: CliIo;
   readonly out: () => string;
@@ -856,12 +870,12 @@ describe("runRepairCli — credential storage", () => {
     seedInstalledLayout(root);
     const dataDir = defaultUiDataDir(join(root, ".keiko"));
     const credentialsDir = join(dataDir, "credentials");
-    const authRef = "atlassian:fixture";
+    const authRef = ATLASSIAN_AUTH_REF;
     mkdirSync(credentialsDir, { recursive: true, mode: 0o700 });
     writeFileSync(join(dataDir, "keiko.config.json"), JSON.stringify({ providers: [] }), "utf8");
     writeFileSync(
       join(credentialsDir, ATLASSIAN_CREDENTIAL_ARTIFACTS[2]),
-      JSON.stringify({ version: 1, credentials: { [authRef]: { authRef } } }),
+      JSON.stringify({ version: 1, credentials: { [authRef]: atlassianMetadata(authRef) } }),
       "utf8",
     );
 
@@ -871,6 +885,76 @@ describe("runRepairCli — credential storage", () => {
     expect(code).toBe(1);
     expect(c.out()).toContain("[action] Credential storage");
     expect(c.out()).toContain("credential reference(s) have no encrypted entry");
+  });
+
+  it("reports orphaned Atlassian artifacts when the default UI config is absent", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const dataDir = defaultUiDataDir(join(root, ".keiko"));
+    const credentialsDir = join(dataDir, "credentials");
+    mkdirSync(credentialsDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(credentialsDir, ATLASSIAN_CREDENTIAL_ARTIFACTS[2]),
+      JSON.stringify({
+        version: 1,
+        credentials: { [ATLASSIAN_AUTH_REF]: atlassianMetadata() },
+      }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain("[action] Credential storage");
+    expect(c.out()).toContain("credential reference(s) have no encrypted entry");
+  });
+
+  it("reports orphaned Atlassian artifacts beside an absent home fallback config", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const credentialsDir = join(root, ".keiko", "credentials");
+    mkdirSync(credentialsDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(credentialsDir, ATLASSIAN_CREDENTIAL_ARTIFACTS[2]),
+      JSON.stringify({
+        version: 1,
+        credentials: { [ATLASSIAN_AUTH_REF]: atlassianMetadata() },
+      }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain("[action] Credential storage");
+    expect(c.out()).toContain("credential reference(s) have no encrypted entry");
+    expect(c.out()).toContain(join(root, ".keiko", "keiko.config.json"));
+  });
+
+  it("fails closed on incomplete Atlassian credential metadata", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const dataDir = defaultUiDataDir(join(root, ".keiko"));
+    const credentialsDir = join(dataDir, "credentials");
+    mkdirSync(credentialsDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(dataDir, "keiko.config.json"), JSON.stringify({ providers: [] }), "utf8");
+    writeFileSync(
+      join(credentialsDir, ATLASSIAN_CREDENTIAL_ARTIFACTS[2]),
+      JSON.stringify({
+        version: 1,
+        credentials: { [ATLASSIAN_AUTH_REF]: { authRef: ATLASSIAN_AUTH_REF } },
+      }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain("[action] Credential storage");
+    expect(c.out()).toContain("credential state is unreadable");
   });
 
   it("fails closed on a corrupt Atlassian credential vault", () => {
@@ -1121,8 +1205,26 @@ describe("runRepairCli — runtime state artifacts", () => {
     const atlassianFiles = ATLASSIAN_CREDENTIAL_ARTIFACTS.map((artifact) =>
       join(uiCredentials, artifact),
     );
+    const atlassianVault = atlassianFiles[0];
+    const atlassianMetadataPath = atlassianFiles[2];
+    if (atlassianVault === undefined || atlassianMetadataPath === undefined) {
+      throw new Error("expected the pinned Atlassian credential artifact paths");
+    }
     const vaultFiles = [providerVault, keyfile, figmaVault, figmaKeyfile, ...atlassianFiles];
     for (const p of vaultFiles) writeFileSync(p, "x", "utf8");
+    writeFileSync(
+      atlassianVault,
+      JSON.stringify({ version: 1, entries: { [ATLASSIAN_AUTH_REF]: "kv1.placeholder" } }),
+      "utf8",
+    );
+    writeFileSync(
+      atlassianMetadataPath,
+      JSON.stringify({
+        version: 1,
+        credentials: { [ATLASSIAN_AUTH_REF]: atlassianMetadata() },
+      }),
+      "utf8",
+    );
     for (const p of vaultFiles) chmodSync(p, 0o644);
 
     const c = makeIo();

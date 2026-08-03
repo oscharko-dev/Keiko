@@ -186,7 +186,7 @@ describe("docxParser", () => {
       headingParagraphXml("Policy"),
       '<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/></w:numPr></w:pPr><w:r><w:t>Review backups</w:t></w:r></w:p>',
       "<w:tbl>",
-      "<w:tr><w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Status</w:t></w:r></w:p></w:tc></w:tr>",
+      "<w:tr><w:trPr><w:tblHeader/></w:trPr><w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Status</w:t></w:r></w:p></w:tc></w:tr>",
       "<w:tr><w:tc><w:p><w:r><w:t>Firewall</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Enabled</w:t></w:r></w:p></w:tc></w:tr>",
       "</w:tbl>",
       "</w:body></w:document>",
@@ -195,18 +195,41 @@ describe("docxParser", () => {
       selectionFromBytes(zipDocxParts(xml), { extension: "docx" }),
       buildParserOptions({ now: () => 0 }),
     );
-    const normalizedText = "normalizedText" in result ? result.normalizedText : "";
+    const normalizedText =
+      "normalizedText" in result && typeof result.normalizedText === "string"
+        ? result.normalizedText
+        : "";
     expect(normalizedText).toContain("- Review backups");
     expect(normalizedText).toContain("Table row 1: Name=Firewall | Status=Enabled");
+  });
+
+  it("preserves the first row when a text-only table has no DOCX header marker", async () => {
+    const xml = [
+      "<w:document><w:body><w:tbl>",
+      "<w:tr><w:tc><w:p><w:r><w:t>Alice</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Open</w:t></w:r></w:p></w:tc></w:tr>",
+      "<w:tr><w:tc><w:p><w:r><w:t>Bob</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Closed</w:t></w:r></w:p></w:tc></w:tr>",
+      "</w:tbl></w:body></w:document>",
+    ].join("");
+    const result = await docxParser.parseAsync(
+      selectionFromBytes(zipDocxParts(xml), { extension: "docx" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const normalizedText =
+      "normalizedText" in result && typeof result.normalizedText === "string"
+        ? result.normalizedText
+        : "";
+
+    expect(normalizedText).toContain("Table row 1: Column 1=Alice | Column 2=Open");
+    expect(normalizedText).toContain("Table row 2: Column 1=Bob | Column 2=Closed");
   });
 
   it("preserves outer rows around a nested table and projects the nested rows separately", async () => {
     const xml = [
       "<w:document><w:body><w:tbl>",
-      "<w:tr><w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Status</w:t></w:r></w:p></w:tc></w:tr>",
+      "<w:tr><w:trPr><w:tblHeader/></w:trPr><w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Status</w:t></w:r></w:p></w:tc></w:tr>",
       "<w:tr><w:tc><w:p><w:r><w:t>Before</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Present</w:t></w:r></w:p></w:tc></w:tr>",
       "<w:tr><w:tc><w:p><w:r><w:t>Container</w:t></w:r></w:p><w:tbl>",
-      "<w:tr><w:tc><w:p><w:r><w:t>InnerKey</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>InnerValue</w:t></w:r></w:p></w:tc></w:tr>",
+      "<w:tr><w:trPr><w:tblHeader/></w:trPr><w:tc><w:p><w:r><w:t>InnerKey</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>InnerValue</w:t></w:r></w:p></w:tc></w:tr>",
       "<w:tr><w:tc><w:p><w:r><w:t>Nested</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Only</w:t></w:r></w:p></w:tc></w:tr>",
       "</w:tbl></w:tc><w:tc><w:p><w:r><w:t>Has child</w:t></w:r></w:p></w:tc></w:tr>",
       "<w:tr><w:tc><w:p><w:r><w:t>After</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Done</w:t></w:r></w:p></w:tc></w:tr>",
@@ -216,21 +239,36 @@ describe("docxParser", () => {
       selectionFromBytes(zipDocxParts(xml), { extension: "docx" }),
       buildParserOptions({ now: () => 0 }),
     );
-    const normalizedText = "normalizedText" in result ? result.normalizedText : "";
+    const normalizedText =
+      "normalizedText" in result && typeof result.normalizedText === "string"
+        ? result.normalizedText
+        : "";
 
     expect(normalizedText).toContain("Table row 1: Name=Before | Status=Present");
     expect(normalizedText).toContain("Table row 3: Name=After | Status=Done");
+    expect(normalizedText).toContain("Table row 2: Name=Container");
+    expect(normalizedText).toContain("Table row 2: Status=Has child");
     expect(normalizedText).toContain("Table row 1: InnerKey=Nested | InnerValue=Only");
+    expect(normalizedText.indexOf("Name=Container")).toBeLessThan(
+      normalizedText.indexOf("InnerKey=Nested"),
+    );
+    expect(normalizedText.indexOf("InnerKey=Nested")).toBeLessThan(
+      normalizedText.indexOf("Status=Has child"),
+    );
+    expect(normalizedText.indexOf("Status=Has child")).toBeLessThan(
+      normalizedText.indexOf("Name=After"),
+    );
+    expect(normalizedText.match(/InnerKey=Nested \| InnerValue=Only/gu)).toHaveLength(1);
   });
 
   it("emits each table exactly once across multiple nesting levels", async () => {
     const xml = [
       "<w:document><w:body><w:tbl>",
-      "<w:tr><w:tc><w:p><w:r><w:t>OuterKey</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>OuterValue</w:t></w:r></w:p></w:tc></w:tr>",
+      "<w:tr><w:trPr><w:tblHeader/></w:trPr><w:tc><w:p><w:r><w:t>OuterKey</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>OuterValue</w:t></w:r></w:p></w:tc></w:tr>",
       "<w:tr><w:tc><w:p><w:r><w:t>Outer</w:t></w:r></w:p><w:tbl>",
-      "<w:tr><w:tc><w:p><w:r><w:t>MiddleKey</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>MiddleValue</w:t></w:r></w:p></w:tc></w:tr>",
+      "<w:tr><w:trPr><w:tblHeader/></w:trPr><w:tc><w:p><w:r><w:t>MiddleKey</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>MiddleValue</w:t></w:r></w:p></w:tc></w:tr>",
       "<w:tr><w:tc><w:p><w:r><w:t>Middle</w:t></w:r></w:p><w:tbl>",
-      "<w:tr><w:tc><w:p><w:r><w:t>DeepKey</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>DeepValue</w:t></w:r></w:p></w:tc></w:tr>",
+      "<w:tr><w:trPr><w:tblHeader/></w:trPr><w:tc><w:p><w:r><w:t>DeepKey</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>DeepValue</w:t></w:r></w:p></w:tc></w:tr>",
       "<w:tr><w:tc><w:p><w:r><w:t>Deep</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Once</w:t></w:r></w:p></w:tc></w:tr>",
       "</w:tbl></w:tc><w:tc><w:p><w:r><w:t>Layer</w:t></w:r></w:p></w:tc></w:tr>",
       "</w:tbl></w:tc><w:tc><w:p><w:r><w:t>Container</w:t></w:r></w:p></w:tc></w:tr>",

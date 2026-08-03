@@ -1037,6 +1037,8 @@ export {
   validateAuxiliaryCapabilityRequestV1,
 } from "./code-task-auxiliary.js";
 
+export type { FigmaCodegenFile, FigmaCodegenResponse } from "./figma-codegen.js";
+
 // ─── Atlassian connector contracts (Issue #2240, Epic #2238, ADR-0128) ─────────────
 // Governed Confluence/Jira connector lane: descriptors (opaque authRef, never a secret), bounded
 // sync scopes and job lifecycle, the D4 action-class mapping table with its pure per-mode decision

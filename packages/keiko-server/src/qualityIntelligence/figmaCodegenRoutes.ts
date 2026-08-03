@@ -26,6 +26,7 @@
 
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import type { FigmaCodegenResponse } from "@oscharko-dev/keiko-contracts";
 import {
   createNodeContainedJsonArtifactStore,
   createNodeFigmaSnapshotStore,
@@ -48,18 +49,7 @@ export interface PersistedFigmaCodeArtifact {
   readonly files: readonly { readonly path: string; readonly contents: string }[];
 }
 
-/** Browser-safe response: the reviewable file set plus a small summary. No token, no board id. */
-export interface FigmaCodegenResponse {
-  readonly runId: string;
-  readonly adapterName: string;
-  readonly fileCount: number;
-  readonly totalBytes: number;
-  readonly screenCount: number;
-  readonly renderedScreenCount: number;
-  readonly structuralScreenCount: number;
-  readonly unparseableScreenCount: number;
-  readonly files: readonly { readonly path: string; readonly contents: string }[];
-}
+export type { FigmaCodegenResponse } from "@oscharko-dev/keiko-contracts";
 
 const errorBody = (
   code: string,

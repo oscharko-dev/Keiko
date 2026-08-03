@@ -20,6 +20,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { URL } from "node:url";
 
 // ── On-disk layout (source of truth: packages/keiko-cli/src/state-paths.ts) ────────────────
 const GATEWAY_CONFIG = "keiko.config.json";
@@ -56,6 +57,31 @@ const EDITOR_HOT_EXIT_VAULT = "snapshots.vault";
 const EDITOR_HOT_EXIT_KEYFILE = "editor-hot-exit-vault.key";
 const LOCAL_SECRET_VAULT_VERSION = 1;
 const HOT_EXIT_REF_PATTERN = /^hot-exit:[a-f0-9]{64}$/u;
+const ATLASSIAN_SCHEMA_VERSION = "1";
+const ATLASSIAN_AUTH_REF_PATTERN = /^atlassian-cred:[A-Za-z0-9_-]{22}$/u;
+// Dependency-light mirrors of the leaf contract in
+// packages/keiko-contracts/src/atlassian-connectors.ts. The audit intentionally runs without a
+// workspace build; parity tests bind these values and validators back to the canonical exports.
+const ATLASSIAN_CONNECTOR_PROVIDERS = Object.freeze(["confluence", "jira"]);
+const ATLASSIAN_CONNECTOR_PROVIDER_SET = new Set(ATLASSIAN_CONNECTOR_PROVIDERS);
+const ATLASSIAN_METADATA_KEYS = new Set([
+  "schemaVersion",
+  "authRef",
+  "provider",
+  "displayName",
+  "baseUrl",
+  "authScheme",
+  "createdAt",
+]);
+const ATLASSIAN_POSIX_ABSOLUTE_PATH_PATTERN =
+  /(^|[^A-Za-z0-9._~:/-])\/(?!\/)(?=[^\n\r"'\x60<>]*\/)[^\n\r"'\x60<>]+/u;
+const ATLASSIAN_WINDOWS_DRIVE_ABSOLUTE_PATH_PATTERN =
+  /(^|[^A-Za-z0-9._~:/-])[A-Za-z]:[\\/](?=[^\n\r"'\x60<>]*[\\/])[^\n\r"'\x60<>]+/u;
+const ATLASSIAN_WINDOWS_UNC_ABSOLUTE_PATH_PATTERN =
+  /(^|[^A-Za-z0-9._~:/-])(?:\\\\|\/\/)(?=[^\n\r"'\x60<>]*[\\/])[^\n\r"'\x60<>]+/u;
+const ATLASSIAN_DIRECT_ROLE_MARKER_PATTERN = /^[ \t\f\v]*(?:user|assistant|system)[ \t\f\v]*:/iu;
+const ATLASSIAN_NAMED_ROLE_MARKER_PATTERN =
+  /^[ \t\f\v]*role[ \t\f\v]*:[ \t\f\v]*(?:user|assistant|system)(?:\W|$)/iu;
 
 // ── Sealed-envelope markers (source of truth: packages/keiko-security/src/secretbox.ts) ─────
 const SEALED_STRING_PREFIX = "kv1."; // AES-256-GCM string envelope
@@ -427,8 +453,131 @@ function atlassianMetadataEntries(value) {
   return objectRecord(metadata.credentials);
 }
 
+function isBidiOrZeroWidthCodePoint(codePoint) {
+  return (
+    codePoint === 0x061c ||
+    (codePoint >= 0x200b && codePoint <= 0x200f) ||
+    (codePoint >= 0x202a && codePoint <= 0x202e) ||
+    (codePoint >= 0x2060 && codePoint <= 0x206f) ||
+    codePoint === 0xfeff
+  );
+}
+
+function isUnsafeControlCodePoint(codePoint) {
+  if (codePoint === 0x09 || codePoint === 0x0a || codePoint === 0x0d) return false;
+  return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+}
+
+function hasUnsafeFormatCharacter(value) {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (isBidiOrZeroWidthCodePoint(codePoint) || isUnsafeControlCodePoint(codePoint)) return true;
+  }
+  return false;
+}
+
+function hasAtlassianDisplayMarker(value) {
+  return value.includes("@") || value.includes("?") || value.includes("#") || value.includes("://");
+}
+
+function containsAtlassianAbsolutePath(value) {
+  return (
+    ATLASSIAN_POSIX_ABSOLUTE_PATH_PATTERN.test(value) ||
+    ATLASSIAN_WINDOWS_DRIVE_ABSOLUTE_PATH_PATTERN.test(value) ||
+    ATLASSIAN_WINDOWS_UNC_ABSOLUTE_PATH_PATTERN.test(value)
+  );
+}
+
+function containsAtlassianPseudoRoleMarker(value) {
+  return value
+    .split(/\r\n?|\n/u)
+    .some(
+      (line) =>
+        ATLASSIAN_DIRECT_ROLE_MARKER_PATTERN.test(line) ||
+        ATLASSIAN_NAMED_ROLE_MARKER_PATTERN.test(line),
+    );
+}
+
+function safeAtlassianDisplayName(value) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 100 &&
+    value.trim() === value &&
+    !hasUnsafeFormatCharacter(value) &&
+    !containsAtlassianAbsolutePath(value) &&
+    !containsAtlassianPseudoRoleMarker(value) &&
+    !hasAtlassianDisplayMarker(value)
+  );
+}
+
+function isAtlassianConnectorProvider(value) {
+  return ATLASSIAN_CONNECTOR_PROVIDER_SET.has(value);
+}
+
+function safeParsedAtlassianBaseUrl(url, source) {
+  return (
+    url.protocol === "https:" &&
+    url.username.length === 0 &&
+    url.password.length === 0 &&
+    url.search.length === 0 &&
+    url.hash.length === 0 &&
+    !source.includes("@") &&
+    !source.includes("?") &&
+    !source.includes("#")
+  );
+}
+
+function safeAtlassianBaseUrl(value) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 2048 || /\s/u.test(value)) {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    return safeParsedAtlassianBaseUrl(url, value);
+  } catch {
+    return false;
+  }
+}
+
+function hasCompleteAtlassianMetadataKeys(record) {
+  const keys = Object.keys(record);
+  return (
+    keys.length === ATLASSIAN_METADATA_KEYS.size &&
+    keys.every((key) => ATLASSIAN_METADATA_KEYS.has(key))
+  );
+}
+
+function hasValidAtlassianMetadataIdentity(reference, record) {
+  return (
+    ATLASSIAN_AUTH_REF_PATTERN.test(reference) &&
+    record.schemaVersion === ATLASSIAN_SCHEMA_VERSION &&
+    record.authRef === reference &&
+    isAtlassianConnectorProvider(record.provider)
+  );
+}
+
+function hasValidAtlassianMetadataDetails(record) {
+  return (
+    safeAtlassianDisplayName(record.displayName) &&
+    safeAtlassianBaseUrl(record.baseUrl) &&
+    record.authScheme === "basic-api-token"
+  );
+}
+
+function validAtlassianCreatedAt(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
 function validAtlassianMetadataEntry(reference, entry) {
-  return reference.length > 0 && objectRecord(entry)?.authRef === reference;
+  const record = objectRecord(entry);
+  return (
+    record !== undefined &&
+    hasCompleteAtlassianMetadataKeys(record) &&
+    hasValidAtlassianMetadataIdentity(reference, record) &&
+    hasValidAtlassianMetadataDetails(record) &&
+    validAtlassianCreatedAt(record.createdAt)
+  );
 }
 
 function readAtlassianMetadataRefs(stateDir, metadataRel, findings) {
@@ -1409,6 +1558,10 @@ export function auditLocalState(stateDir) {
   return { ok: classes.every((c) => c.status !== "fail"), stateDir, classes };
 }
 
-// Exported solely for a direct, fast regression test of the ReDoS-safe rewrite of the trailing
-// placeholder-punctuation trim (SonarCloud S8786) — not part of the module's operational surface.
-export const _testables = Object.freeze({ isPlaceholderSafe });
+// Exported solely for direct, fast regression and canonical-parity tests — not part of the
+// module's operational surface.
+export const _testables = Object.freeze({
+  isAtlassianConnectorProvider,
+  isPlaceholderSafe,
+  safeAtlassianDisplayName,
+});
