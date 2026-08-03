@@ -394,6 +394,9 @@ describe("gateway readiness route", () => {
         generation: () => 0,
         verification: () => UNVERIFIED_GATEWAY,
         recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
       },
     };
 
@@ -410,7 +413,23 @@ describe("gateway readiness route", () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(chatPayload("unexpected-answer"))) as typeof fetch;
-    const deps = depsWith(gatewayConfig(), fetchImpl);
+    const config = gatewayConfig();
+    const clearVerifiedCapability = vi.fn(() => true);
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        generation: () => 0,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability,
+      },
+    };
     const report = await runGatewayReadiness(
       { options: { probes: ["streaming", "json_schema", "tool_calling"] } },
       deps,
@@ -426,6 +445,7 @@ describe("gateway readiness route", () => {
       expect.objectContaining({ name: "json_schema", status: "skipped" }),
       expect.objectContaining({ name: "tool_calling", status: "skipped" }),
     ]);
+    expect(clearVerifiedCapability).toHaveBeenCalledWith("test-chat-model", 0);
     deps.store.close();
   });
 
@@ -561,13 +581,30 @@ describe("gateway readiness route", () => {
 
   it("marks a single unsupported feature as partial without mutating the model config", async () => {
     const config = gatewayConfig("qwen3-coder-test");
+    let observedToolCalling: boolean | undefined;
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
       .mockResolvedValueOnce(sseResponse("stream-ok"))
       .mockResolvedValueOnce(jsonResponse({ error: { message: "tools unavailable" } }, 400))
       .mockResolvedValueOnce(jsonResponse(chatPayload('{"status":"json-ok"}'))) as typeof fetch;
-    const deps = depsWith(config, fetchImpl);
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        generation: () => 0,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: (_modelId, fields) => {
+          observedToolCalling = fields.toolCalling;
+        },
+        clearVerifiedCapability: () => false,
+      },
+    };
     const report = await runGatewayReadiness({ modelId: "qwen3-coder-test" }, deps);
 
     expect("status" in report).toBe(false);
@@ -577,6 +614,41 @@ describe("gateway readiness route", () => {
     expect(toolProbe?.status).toBe("unsupported");
     expect(toolProbe?.warning).toMatch(/qwen3_coder tool parser/i);
     expect(config.capabilities?.[0]?.toolCalling).toBe(true);
+    expect(observedToolCalling).toBe(false);
+    deps.store.close();
+  });
+
+  it("does not persist a negative capability from an inconclusive semantic probe", async () => {
+    const config = gatewayConfig();
+    const recordVerifiedCapability = vi.fn();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
+      .mockResolvedValueOnce(sseResponse("different-answer")) as typeof fetch;
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        generation: () => 0,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability,
+        clearVerifiedCapability: () => false,
+      },
+    };
+
+    const report = await runGatewayReadiness({ options: { probes: ["chat", "streaming"] } }, deps);
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    expect(report.probes.find((probe) => probe.name === "streaming")).toMatchObject({
+      status: "unsupported",
+    });
+    expect(recordVerifiedCapability).not.toHaveBeenCalled();
     deps.store.close();
   });
 
@@ -730,6 +802,9 @@ describe("gateway readiness route", () => {
         recordVerification: (state) => {
           recorded.push(state);
         },
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
       },
     };
 
@@ -739,6 +814,31 @@ describe("gateway readiness route", () => {
     if ("status" in report) return;
     expect(report.overallStatus).toBe("ready");
     expect(recorded).toEqual(["verified"]);
+    deps.store.close();
+  });
+
+  it("does not record negative capabilities for probes the request did not execute", async () => {
+    const config = gatewayConfig();
+    const recordVerifiedCapability = vi.fn();
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchForDefaultSuccess()),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        verification: () => UNVERIFIED_GATEWAY,
+        generation: () => 0,
+        recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability,
+        clearVerifiedCapability: () => false,
+      },
+    };
+
+    await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
+
+    expect(recordVerifiedCapability).not.toHaveBeenCalled();
     deps.store.close();
   });
 
@@ -760,6 +860,9 @@ describe("gateway readiness route", () => {
         recordVerification: (state) => {
           recorded.push(state);
         },
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
       },
     };
 

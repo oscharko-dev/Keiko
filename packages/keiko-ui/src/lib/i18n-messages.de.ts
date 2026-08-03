@@ -45,6 +45,8 @@ export const DE_MESSAGES = {
     "Die Datei wurde gespeichert, aber der lokale Verlauf konnte diese Version nicht schützen.",
   "editor.localHistoryProtection.workspaceUnavailable":
     "Verbinden Sie dieses Projekt erneut. Bearbeiten und speichern Sie die Datei danach noch einmal.",
+  "editor.localHistoryProtection.filesystemIdentityUnsupported":
+    "Verschieben Sie dieses Projekt auf ein Dateisystem mit stabiler Dateiidentität, bevor Sie sich auf den lokalen Verlauf verlassen.",
   "editor.localHistoryProtection.historyUnavailable":
     "Speichern Sie erneut, sobald der lokale Verlauf verfügbar ist.",
   "editor.localHistoryProtection.diagnosticReference": "Diagnosereferenz: {correlationId}",
@@ -232,6 +234,9 @@ export const DE_MESSAGES = {
   "gatewaySetup.loading.description":
     "Die lokalen Einrichtungsfelder werden geladen. Es wurde noch keine Anbieteranfrage gestartet.",
   "gatewaySetup.loading.error": "Die Einrichtungsfelder konnten nicht geladen werden.",
+  "gatewaySetup.workflowEligibleModels": "Für Coding-Workflows freigegebene Modelle",
+  "gatewaySetup.workflowEligibleModelsPlaceholder":
+    "Ausdrücklich freigegebene Coding-Modellnamen einfügen, einen pro Zeile",
   "gatewaySetup.voice.title": "Audio & Digital Voice",
   "gatewaySetup.voice.description":
     "Optionale Modelle für Diktat, Live-Unterhaltungen und vorgelesene Antworten.",

@@ -335,6 +335,60 @@ async function waitForCount(
 }
 
 describe("mode-aware memory capture journey", () => {
+  it("auto-accepts explicit remember intent under autonomous delivery", async () => {
+    const vault = makeVault();
+    const evidence = capturingEvidenceStore();
+    const deps = makeDeps({
+      vault,
+      model: "[]",
+      mode: "autonomous-delivery",
+      evidenceStore: evidence.store,
+    });
+    const ctx = context();
+    const request = {
+      ...turnRequest("Remember that release hardening uses vitest"),
+      clientTurnId: "canonical-auto-accept",
+    };
+
+    const actions = await collectMemoryActions(deps, request, ctx);
+    const replay = await collectMemoryActions(deps, request, ctx);
+
+    expect(actions).toContainEqual(
+      expect.objectContaining({
+        kind: "candidate",
+        body: "release hardening uses vitest",
+        requiresApproval: false,
+        status: "accepted",
+      }),
+    );
+    expect(replay).toContainEqual(expect.objectContaining({ status: "accepted" }));
+    expect(readByStatus(vault, ctx, "accepted")).toHaveLength(1);
+    const ledger = evidence.serialized();
+    expect(ledger.match(/governance-auto-accepted/gu)).toHaveLength(1);
+    expect(ledger).not.toContain("release hardening uses vitest");
+  });
+
+  it("rejects explicit recapture of a forgotten body", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ vault, model: "[]" });
+    const ctx = context();
+    const request = turnRequest("Remember that release hardening uses vitest");
+    await collectMemoryActions(deps, request, ctx);
+    const existing = readMemories(vault, ctx)[0];
+    if (existing === undefined) throw new Error("expected captured memory");
+    vault.deleteMemory(existing.id, {
+      tombstone: true,
+      forgetterSurface: "test",
+      reason: "user-request",
+      nowMs: existing.updatedAt + 1,
+    });
+
+    const actions = await collectMemoryActions(deps, request, ctx);
+
+    expect(actions).toEqual([{ kind: "rejected", reason: "suppressed-by-forget" }]);
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
   it("keeps a routine public fact proposed under governed-assist (legacy default deps)", async () => {
     const vault = makeVault();
     const deps = makeDeps({ vault, model: publicFact(0.7) });

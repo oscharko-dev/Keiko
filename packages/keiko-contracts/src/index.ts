@@ -2254,6 +2254,8 @@ export type {
   ConversationAttachmentDescriptorWire,
   ConversationMemoryRequestWire,
   ConversationMemoryCaptureSurfaceWire,
+  ConversationMemoryCaptureOutcomeWire,
+  ConversationMemoryCaptureResponseWire,
   MemoryAutonomyPolicyWire,
   UpdateMemoryAutonomyPolicyWire,
   ConversationMemoryResultWire,

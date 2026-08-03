@@ -16,6 +16,7 @@ import type { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { Readable } from "node:stream";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type {
   MemoryEdge,
   MemoryId,
@@ -558,6 +559,78 @@ describe("handleMemoryCaptureFromConversation", () => {
     expect((outcomes[0]?.proposal?.body ?? "").length).toBeGreaterThan(0);
   });
 
+  it("returns the accepted status that supervised capture persisted", async () => {
+    const vault = makeVault();
+    const evidenceStore = createInMemoryEvidenceStore();
+    const deps = makeDeps({
+      memoryVault: vault,
+      evidenceStore,
+      codingRuntimeDeploymentCeiling: "supervised-coding",
+    });
+    deps.store.updateMemoryAutonomyPolicy("supervised-coding", 0);
+    const chat = registerChat(deps, "capture-supervised-accepted");
+
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: "remember that release checks use vitest",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const outcomes = asJson(result).outcomes as readonly {
+      readonly kind: string;
+      readonly requiresApproval?: boolean;
+      readonly status?: string;
+      readonly proposal?: { readonly proposalId: string };
+    }[];
+    expect(outcomes[0]).toMatchObject({
+      kind: "candidate",
+      requiresApproval: false,
+      status: "accepted",
+      proposal: { body: "release checks use vitest" },
+    });
+    const proposalId = outcomes[0]?.proposal?.proposalId;
+    expect(vault.getMemory(proposalId as unknown as MemoryId)?.status).toBe("accepted");
+    const ledger = evidenceStore
+      .list()
+      .map((runId) => evidenceStore.get(runId) ?? "")
+      .join("\n");
+    expect(ledger).toContain("governance-auto-accepted");
+    expect(ledger).not.toContain("release checks use vitest");
+  });
+
+  it("honors a governed-assist memory posture below the deployment ceiling", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({
+      memoryVault: vault,
+      codingRuntimeDeploymentCeiling: "autonomous-delivery",
+    });
+    deps.store.updateMemoryAutonomyPolicy("governed-assist", 0);
+    const chat = registerChat(deps, "capture-governed-assist");
+
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: "remember that release checks use vitest",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(asJson(result).outcomes).toEqual([
+      expect.objectContaining({ kind: "candidate", status: "proposed" }),
+    ]);
+    const proposalId = (
+      asJson(result).outcomes as readonly {
+        readonly proposal?: { readonly proposalId: string };
+      }[]
+    )[0]?.proposal?.proposalId;
+    expect(vault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
+    expect(listAllMemories(vault, { status: ["accepted"] })).toHaveLength(0);
+  });
+
   // eslint-disable-next-line complexity
   it("captures an ambient identity statement as a reviewable user-scoped candidate", async () => {
     const vault = makeVault();
@@ -898,6 +971,28 @@ describe("handleMemoryCaptureFromConversation", () => {
       expect(accepted.status).toBe(200);
       const reloaded = vault.getMemory(proposalId as unknown as MemoryId);
       expect(reloaded?.status).toBe("accepted");
+    });
+
+    it("returns the persisted proposal id when an identical candidate is reused", async () => {
+      const vault = makeVault();
+      const deps = makeDeps({ memoryVault: vault });
+      const chat = registerChat(deps, "capture-reuse");
+      const input = {
+        text: "remember that release hardening uses vitest",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      };
+      const first = await handleMemoryCaptureFromConversation(makeCtx(input), deps);
+      const second = await handleMemoryCaptureFromConversation(makeCtx(input), deps);
+      const proposalIds = [first, second].map((result) => {
+        const outcomes = asJson(result).outcomes as readonly {
+          readonly proposal?: { readonly proposalId: string };
+        }[];
+        return outcomes[0]?.proposal?.proposalId;
+      });
+
+      expect(proposalIds[0]).toBeDefined();
+      expect(proposalIds[1]).toBe(proposalIds[0]);
+      expect(listAllMemories(vault, { includeExpired: true })).toHaveLength(1);
     });
 
     it("does not insert records for non-candidate outcomes", async () => {

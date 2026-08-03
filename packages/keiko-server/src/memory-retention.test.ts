@@ -260,7 +260,7 @@ describe("applyMemoryRetention — purgeForgottenAfterMs", () => {
     });
     const policy: MemoryRetentionPolicy = { purgeForgottenAfterMs: 7 * ONE_DAY_MS };
     const result = applyMemoryRetention({ vault, scopes: [SCOPE], policy, nowMs: NOW });
-    expect(result.forgottenPurgeBacklog).toBe(1);
+    expect(result.tombstonesPurged).toBe(1);
     expect(vault.listTombstonesByScope(SCOPE)).toHaveLength(1);
     expect(vault.listTombstonesByScope(SCOPE)[0]?.memoryId).toBe(brandedMemoryId("fresh-tomb"));
   });

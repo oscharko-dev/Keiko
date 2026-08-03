@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   UpdateRemediationAction,
   UpdateRemediationActionRequest,
@@ -7,6 +8,7 @@ import type {
   UpdateRemediationStatusRequest,
   UpdateRemediationStatus as RuntimeRemediationStatus,
   UpdateRuntimeEventType,
+  UpdateRuntimeWarningCode,
 } from "@oscharko-dev/keiko-contracts";
 import { UPDATE_REMEDIATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 import type { LocalKnowledgeRemediationPort } from "./local-knowledge-remediation.js";
@@ -17,6 +19,11 @@ import {
   type ActionDraft,
 } from "./update-remediation-drafts.js";
 import type { UpdateLocalStateManager } from "./update-local-state.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
 
 export interface UpdateRemediationManager {
   readonly getStatus: (request?: UpdateRemediationStatusRequest) => UpdateRemediationStatusReport;
@@ -31,6 +38,8 @@ export interface UpdateRemediationManagerOptions {
   readonly localState: UpdateLocalStateManager;
   readonly localKnowledge?: LocalKnowledgeRemediationPort | undefined;
   readonly now?: (() => number) | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly redactString?: ((value: string) => string) | undefined;
 }
 
 export class UpdateRemediationError extends Error {
@@ -59,15 +68,22 @@ function statusRank(status: UpdateRemediationOverallStatus): number {
   }[status];
 }
 
-function persistedStatus(
+function persistedAction(
   manager: UpdateLocalStateManager,
   draft: ActionDraft,
-): RuntimeRemediationStatus | undefined {
+): ReturnType<UpdateLocalStateManager["readRuntimeState"]>["remediations"][number] | undefined {
   return manager
     .readRuntimeState()
     .remediations.find(
       (item) => item.store === draft.store && item.remediation === draft.remediation,
-    )?.status;
+    );
+}
+
+function persistedStatus(
+  manager: UpdateLocalStateManager,
+  draft: ActionDraft,
+): RuntimeRemediationStatus | undefined {
+  return persistedAction(manager, draft)?.status;
 }
 
 function actionStatus(
@@ -76,7 +92,11 @@ function actionStatus(
 ): UpdateRemediationAction["status"] {
   if (!draft.required) return "not-needed";
   if (draft.kind === "manual-review") return "manual-review-required";
-  const status = persistedStatus(manager, draft);
+  const persisted = persistedAction(manager, draft);
+  if (persisted?.warningCode === "remediation-outcome-uncertain") {
+    return "manual-review-required";
+  }
+  const status = persisted?.status;
   if (status === "running") return "pending";
   if (status !== undefined) return status;
   return "pending";
@@ -86,10 +106,7 @@ function materializeAction(
   manager: UpdateLocalStateManager,
   draft: ActionDraft,
 ): UpdateRemediationAction {
-  const state = manager.readRuntimeState();
-  const persisted = state.remediations.find(
-    (item) => item.store === draft.store && item.remediation === draft.remediation,
-  );
+  const persisted = persistedAction(manager, draft);
   return {
     ...draft,
     status: actionStatus(manager, draft),
@@ -173,7 +190,7 @@ function upsertRuntimeAction(input: {
   readonly draft: ActionDraft;
   readonly status: RuntimeRemediationStatus;
   readonly now: () => number;
-  readonly warningCode?: "manual-review-required" | undefined;
+  readonly warningCode?: UpdateRuntimeWarningCode | undefined;
 }): void {
   const current = input.localState.readRuntimeState();
   const next = current.remediations.filter(
@@ -256,6 +273,96 @@ async function executeDraft(
   return "failed";
 }
 
+function recordDraftFailure(
+  options: UpdateRemediationManagerOptions,
+  error: unknown,
+  source = "update-remediation.executeDraft",
+): void {
+  emitServerDiagnostic(
+    options.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: randomUUID(),
+      operation: "update.remediation.execute",
+      source,
+      error,
+      redact: options.redactString ?? ((message): string => message),
+    }),
+  );
+}
+
+async function executeDraftStatus(
+  options: UpdateRemediationManagerOptions,
+  draft: ActionDraft,
+): Promise<RuntimeRemediationStatus> {
+  try {
+    return await executeDraft(options, draft);
+  } catch (error) {
+    recordDraftFailure(options, error);
+    return "failed";
+  }
+}
+
+function persistOutcomeUncertainty(
+  options: UpdateRemediationManagerOptions,
+  now: () => number,
+  request: UpdateRemediationActionRequest,
+  draft: ActionDraft,
+): boolean {
+  try {
+    upsertRuntimeAction({
+      localState: options.localState,
+      targetVersion: request.targetVersion,
+      draft,
+      status: "running",
+      now,
+      warningCode: "remediation-outcome-uncertain",
+    });
+    return true;
+  } catch (error) {
+    recordDraftFailure(options, error, "update-remediation.persistOutcomeUncertainty");
+    return false;
+  }
+}
+
+function recordDraftAuditSafely(
+  options: UpdateRemediationManagerOptions,
+  request: UpdateRemediationActionRequest,
+  draft: ActionDraft,
+  status: RuntimeRemediationStatus,
+): void {
+  try {
+    recordRemediationAudit(options, request, draft, status);
+  } catch (error) {
+    recordDraftFailure(options, error, "update-remediation.persistDraftAudit");
+  }
+}
+
+function persistDraftStatusSafely(
+  options: UpdateRemediationManagerOptions,
+  now: () => number,
+  request: UpdateRemediationActionRequest,
+  draft: ActionDraft,
+  status: RuntimeRemediationStatus,
+): boolean {
+  try {
+    upsertRuntimeAction({
+      localState: options.localState,
+      targetVersion: request.targetVersion,
+      draft,
+      status,
+      now,
+      ...(status === "failed" ? { warningCode: "remediation-execution-failed" } : {}),
+    });
+  } catch (error) {
+    recordDraftFailure(options, error, "update-remediation.persistDraftStatus");
+    const interlocked = persistOutcomeUncertainty(options, now, request, draft);
+    recordDraftAuditSafely(options, request, draft, status);
+    return interlocked;
+  }
+  recordDraftAuditSafely(options, request, draft, status);
+  return true;
+}
+
 function findDraftOrThrow(drafts: readonly ActionDraft[], actionIdValue: string): ActionDraft {
   const draft = drafts.find((item) => item.actionId === actionIdValue);
   if (draft !== undefined) return draft;
@@ -282,13 +389,16 @@ function recordRemediationAudit(
   draft: ActionDraft,
   status: RuntimeRemediationStatus,
 ): void {
-  options.localState.recordAuditEvent(remediationAuditEventType(status), {
+  const result = options.localState.recordAuditEvent(remediationAuditEventType(status), {
     targetVersion: request.targetVersion,
     store: draft.store,
     remediation: draft.remediation,
     status,
-    ...(status === "failed" ? { warningCode: "manual-review-required" } : {}),
+    ...(status === "failed" ? { warningCode: "remediation-execution-failed" } : {}),
   });
+  if (result.warning !== undefined) {
+    recordDraftFailure(options, new Error(result.warning), "update-remediation.persistDraftAudit");
+  }
 }
 
 function deferDraft(
@@ -314,9 +424,24 @@ function deferDraft(
   recordRemediationAudit(options, request, draft, "deferred");
 }
 
+function assertDraftOutcomeKnown(
+  options: UpdateRemediationManagerOptions,
+  draft: ActionDraft,
+): void {
+  if (persistedAction(options.localState, draft)?.warningCode !== "remediation-outcome-uncertain") {
+    return;
+  }
+  throw new UpdateRemediationError(
+    "UPDATE_REMEDIATION_OUTCOME_UNCERTAIN",
+    "The prior remediation outcome must be reconciled before this action can run again.",
+    409,
+  );
+}
+
 async function runDraft(
   options: UpdateRemediationManagerOptions,
   now: () => number,
+  runningActions: Set<string>,
   request: UpdateRemediationActionRequest,
   draft: ActionDraft,
 ): Promise<void> {
@@ -327,48 +452,75 @@ async function runDraft(
       409,
     );
   }
-  if (persistedStatus(options.localState, draft) === "running") {
+  if (runningActions.has(draft.actionId)) {
     throw new UpdateRemediationError(
       "UPDATE_REMEDIATION_RUNNING",
       "This remediation action is already running.",
       409,
     );
   }
-  upsertRuntimeAction({
-    localState: options.localState,
-    targetVersion: request.targetVersion,
-    draft,
-    status: "running",
-    now,
-  });
-  let status: RuntimeRemediationStatus;
+  runningActions.add(draft.actionId);
+  let releaseLease: (() => void) | undefined;
+  let releaseAllowed = true;
   try {
-    status = await executeDraft(options, draft);
-  } catch {
-    status = "failed";
+    releaseLease = acquireRunningDraftLease(options, now, request, draft);
+    releaseAllowed = persistDraftStatusSafely(
+      options,
+      now,
+      request,
+      draft,
+      await executeDraftStatus(options, draft),
+    );
+  } finally {
+    if (releaseAllowed) {
+      runningActions.delete(draft.actionId);
+      releaseLease?.();
+    }
   }
-  upsertRuntimeAction({
-    localState: options.localState,
-    targetVersion: request.targetVersion,
-    draft,
-    status,
-    now,
-    ...(status === "failed" ? { warningCode: "manual-review-required" } : {}),
-  });
-  recordRemediationAudit(options, request, draft, status);
+}
+
+function acquireRunningDraftLease(
+  options: UpdateRemediationManagerOptions,
+  now: () => number,
+  request: UpdateRemediationActionRequest,
+  draft: ActionDraft,
+): () => void {
+  const releaseLease = options.localState.acquireRemediationLease(draft.actionId);
+  if (releaseLease === undefined) {
+    throw new UpdateRemediationError(
+      "UPDATE_REMEDIATION_RUNNING",
+      "This remediation action is already running.",
+      409,
+    );
+  }
+  try {
+    upsertRuntimeAction({
+      localState: options.localState,
+      targetVersion: request.targetVersion,
+      draft,
+      status: "running",
+      now,
+    });
+    return releaseLease;
+  } catch (error) {
+    releaseLease();
+    throw error;
+  }
 }
 
 async function runRemediationAction(
   options: UpdateRemediationManagerOptions,
   now: () => number,
+  runningActions: Set<string>,
   request: UpdateRemediationActionRequest,
 ): Promise<UpdateRemediationStatusReport> {
   const drafts = draftsForImpact(options.localState, request.impact, options.localKnowledge);
   const draft = findDraftOrThrow(drafts, request.actionId);
+  assertDraftOutcomeKnown(options, draft);
   if (request.decision === "defer") {
     deferDraft(options, now, request, draft);
   } else {
-    await runDraft(options, now, request, draft);
+    await runDraft(options, now, runningActions, request, draft);
   }
   return statusFor(options, now, { ...request, persist: false });
 }
@@ -404,10 +556,11 @@ export function createUpdateRemediationManager(
   options: UpdateRemediationManagerOptions,
 ): UpdateRemediationManager {
   const now = options.now ?? Date.now;
+  const runningActions = new Set<string>();
   return {
     getStatus: (request): UpdateRemediationStatusReport => statusFor(options, now, request),
     runAction: (request): Promise<UpdateRemediationStatusReport> =>
-      runRemediationAction(options, now, request),
+      runRemediationAction(options, now, runningActions, request),
     completeRestart: (targetVersion): UpdateRemediationStatusReport =>
       completeRestartAction(options, now, targetVersion),
     updateCanComplete: (targetVersion): boolean =>

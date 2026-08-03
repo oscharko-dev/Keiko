@@ -16,6 +16,8 @@ export interface WorkspaceRootIdentity {
    * cannot provide a durable creation identity, so persisted authority must fail closed.
    */
   readonly objectIdentityDigest: string | undefined;
+  /** True when stat succeeded but this filesystem reports no durable creation-time identity. */
+  readonly objectIdentityUnsupported: boolean;
   readonly rootRef: WorkspaceRootRef;
   readonly device: number;
   readonly inode: number;
@@ -71,6 +73,15 @@ export function workspaceRootObjectIdentityDigestFor(stat: {
   ]);
 }
 
+export function workspaceRootObjectIdentityFor(stat: {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly birthtimeNs: bigint;
+}): { readonly digest: string | undefined; readonly unsupported: boolean } {
+  const digest = workspaceRootObjectIdentityDigestFor(stat);
+  return { digest, unsupported: stat.birthtimeNs <= 0n };
+}
+
 export function inspectWorkspaceRootIdentity(path: string): WorkspaceRootIdentity {
   const supplied = lstatSync(path);
   if (supplied.isSymbolicLink()) throw new Error("WORKSPACE_ROOT_ALIAS_DENIED");
@@ -92,10 +103,12 @@ export function inspectWorkspaceRootIdentity(path: string): WorkspaceRootIdentit
   // debug launch in #2643; two derivations of one digest in one file is the same latent defect,
   // one edit away.
   const identityDigest = workspaceRootIdentityDigestFor(canonicalRoot, legacyStat);
+  const objectIdentity = workspaceRootObjectIdentityFor(stat);
   return Object.freeze({
     canonicalRoot,
     identityDigest,
-    objectIdentityDigest: workspaceRootObjectIdentityDigestFor(stat),
+    objectIdentityDigest: objectIdentity.digest,
+    objectIdentityUnsupported: objectIdentity.unsupported,
     rootRef: rootReference(canonicalRoot),
     device: legacyStat.dev,
     inode: legacyStat.ino,

@@ -39,6 +39,7 @@ describe("GatewaySetupDialog", () => {
 
     const dialog = screen.getByRole("dialog", { name: /connect keiko to your internal llms/i });
     expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dialog).toHaveAttribute("open");
 
     const baseUrl = screen.getByLabelText(/base url/i);
     await waitFor(() => expect(baseUrl).toHaveFocus());
@@ -232,6 +233,23 @@ describe("GatewaySetupDialog", () => {
       "true",
     );
     expect(screen.getByRole("status")).toHaveTextContent(/testing credentials/i);
+  });
+
+  it("prevents native cancellation while a gateway request is in flight", async () => {
+    vi.mocked(setupGateway).mockImplementation(() => new Promise(() => undefined));
+    const onCancel = vi.fn();
+    render(<GatewaySetupDialog onCancel={onCancel} />);
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://llm-gateway.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+    const dialog = screen.getByRole("dialog");
+    const cancelEvent = new Event("cancel", { bubbles: false, cancelable: true });
+
+    fireEvent(dialog, cancelEvent);
+
+    expect(cancelEvent.defaultPrevented).toBe(true);
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(dialog).toHaveAttribute("open");
   });
 
   it("restores focus to the triggering element when the dialog closes", () => {
@@ -478,6 +496,96 @@ describe("GatewaySetupDialog", () => {
       imageInputModelIds: ["vision-chat"],
       preserveExisting: false,
     });
+  });
+
+  it("submits explicit coding-safe workflow model approval", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "coding-chat",
+      testedModelIds: ["coding-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://llm.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.type(
+      screen.getByLabelText(/coding-safe workflow models optional/i),
+      "coding-chat",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).toHaveBeenCalledWith({
+      baseUrl: "https://llm.example.com/v1",
+      apiKey: "example-token",
+      apiKeyHeaderName: undefined,
+      deploymentNames: [],
+      preserveExisting: false,
+      workflowEligibleModelIds: ["coding-chat"],
+    });
+  });
+
+  it("submits an explicit empty workflow list when the operator clears stored approval", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "coding-chat",
+      testedModelIds: ["coding-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog preserveExisting storedModels={[modelCapability("coding-chat")]} />);
+
+    await userEvent.click(screen.getByText("Replace model gateway settings"));
+    const workflowModels = screen.getByLabelText(/coding-safe workflow models optional/i);
+    expect(workflowModels).toHaveValue("coding-chat");
+    await userEvent.clear(workflowModels);
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).toHaveBeenCalledWith({
+      baseUrl: undefined,
+      apiKey: undefined,
+      apiKeyHeaderName: undefined,
+      deploymentNames: [],
+      preserveExisting: true,
+      workflowEligibleModelIds: [],
+    });
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent(/updated model gateway settings/i);
+    expect(status).not.toHaveTextContent(/verified/i);
+  });
+
+  it("preserves the stored workflow approval list without requiring an edit", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "coding-chat",
+      testedModelIds: ["coding-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog preserveExisting storedModels={[modelCapability("coding-chat")]} />);
+
+    await userEvent.click(screen.getByText("Replace model gateway settings"));
+    await userEvent.type(screen.getByLabelText(/^api token/i), "rotated-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    const submitted = vi.mocked(setupGateway).mock.lastCall?.[0];
+    expect(submitted).toEqual(
+      expect.objectContaining({ preserveExisting: true, apiKey: "rotated-token" }),
+    );
+    expect(submitted).not.toHaveProperty("workflowEligibleModelIds");
   });
 
   it("submits optional voice dictation credentials from update mode", async () => {

@@ -26,6 +26,7 @@ import {
 import * as api from "@/lib/api";
 import type { Chat, ChatMessage, DesktopChatSendResponse, ModelCapability } from "@/lib/types";
 import type { StreamHandlers } from "@/lib/api";
+import { notifyGatewayConfigUpdated } from "./widgets/shared/gatewaySetupBus";
 
 // ─── UI test helpers ──────────────────────────────────────────────────────────
 
@@ -516,7 +517,7 @@ async function bootHook(): Promise<ReturnType<typeof renderHook<ChatSessionApi, 
 describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    api.clearModelCacheForTests();
+    api.resetModelRequestCache();
     mockBootstrap();
   });
   afterEach(() => {
@@ -662,7 +663,7 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
   it("cancels an in-flight grounded request without persisting a partial answer (ST-F2)", async () => {
     // Re-bootstrap with a connected-scope chat so sendMessage routes to grounded.
     vi.restoreAllMocks();
-    api.clearModelCacheForTests();
+    api.resetModelRequestCache();
     const groundedChat = makeChat({
       connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 },
     });
@@ -724,7 +725,7 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
 
   it("routes plural-only connectedScopes through grounded Q&A", async () => {
     vi.restoreAllMocks();
-    api.clearModelCacheForTests();
+    api.resetModelRequestCache();
     const groundedChat = makeChat({
       connectedScopes: [{ kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 }],
     });
@@ -840,7 +841,7 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
 
   it("refreshes a grounded turn from the chat's canonical projectPath after send", async () => {
     vi.restoreAllMocks();
-    api.clearModelCacheForTests();
+    api.resetModelRequestCache();
     const activeProjectPath = "/proj-active";
     const canonicalChatPath = "/proj-canonical";
     const groundedChat = makeChat({
@@ -998,7 +999,7 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
 describe("useChatSession bootstrap eligibility filter (Issue #144 AC #1/#2)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    api.clearModelCacheForTests();
+    api.resetModelRequestCache();
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -1042,6 +1043,29 @@ describe("useChatSession bootstrap eligibility filter (Issue #144 AC #1/#2)", ()
     expect(modelIds).not.toContain("test-embed-only");
     expect(modelIds).not.toContain("test-ocr-only");
     expect(view.result.current.models.every((m) => m.kind === "chat")).toBe(true);
+  });
+
+  it("refreshes the shared conversation model state after capability reconciliation", async () => {
+    const before = { ...chatModelCapability("example-chat-model"), streaming: false };
+    const after = { ...before, streaming: true, supportsImageInput: true };
+    vi.spyOn(api, "fetchModels")
+      .mockResolvedValueOnce({ models: [before] })
+      .mockResolvedValueOnce({ models: [after] });
+    vi.spyOn(api, "fetchProjects").mockResolvedValue({ projects: [] });
+
+    const view = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => {
+      expect(view.result.current.models).toEqual([before]);
+    });
+
+    act(() => {
+      notifyGatewayConfigUpdated();
+    });
+
+    await waitFor(() => {
+      expect(view.result.current.models).toEqual([after]);
+    });
+    expect(view.result.current.selectedModel).toBe("example-chat-model");
   });
 
   it("surfaces model bootstrap failures instead of treating them as an empty configured gateway", async () => {
@@ -1165,7 +1189,7 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    api.clearModelCacheForTests();
+    api.resetModelRequestCache();
     mockBootstrapStreaming();
   });
   afterEach(() => {
@@ -1381,7 +1405,7 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
   // ST-L3-3 — non-streaming model: sendDesktopChatStream must NOT be called.
   it("uses sendDesktopChat (not sendDesktopChatStream) for a non-streaming model", async () => {
     vi.restoreAllMocks();
-    api.clearModelCacheForTests();
+    api.resetModelRequestCache();
     const nonStreamChat: Chat = {
       ...streamingChat(),
       selectedModel: "non-stream-model",

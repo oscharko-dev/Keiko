@@ -333,6 +333,20 @@ function launchRun(
   }
 }
 
+function requireVerifyAppSession(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  request: RunRequest,
+): RouteResult | undefined {
+  if (request.kind !== "verify" || resolveAppSessionReadAuthority(deps, ctx.req) !== undefined) {
+    return undefined;
+  }
+  return {
+    status: 403,
+    body: errorBody("VERIFY_AUTHORITY_REQUIRED", "The local app session is not paired."),
+  };
+}
+
 // Route 5 — POST /api/runs. Validates the body, resolves the ModelPort, starts the run, returns 202.
 export async function handleCreateRun(
   ctx: RouteContext,
@@ -354,6 +368,8 @@ export async function handleCreateRun(
   if ("code" in parsed) {
     return { status: 400, body: errorBody(parsed.code, parsed.message) };
   }
+  const verifyAuthority = requireVerifyAppSession(ctx, deps, parsed);
+  if (verifyAuthority !== undefined) return verifyAuthority;
   const governed = applyVoiceGovernance(parsed, deps);
   if ("status" in governed) {
     return governed;

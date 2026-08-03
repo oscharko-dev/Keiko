@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState, type KeyboardEvent, type ReactNode } from "react";
-import { createProject } from "../../../../../lib/api";
+import { createProject, projectResponseWarningMessage } from "../../../../../lib/api";
 import { useTranslate } from "../../../../../lib/i18n";
 import { pickWithNativeDialog } from "../../../../../lib/native-file-dialog";
 import { useNativeFileDialogCapability } from "../../hooks/useNativeFileDialogCapability";
@@ -18,8 +18,11 @@ const FolderIcon = Icons.folder;
 // path where the native picker is unavailable — and binds it via the parent's `onOpenRoot`.
 export function EditorEmptyState({
   onOpenRoot,
+  onWorkspaceNotice,
 }: {
   readonly onOpenRoot: (root: string) => void;
+  readonly onWorkspaceNotice?:
+    ((notice: { readonly root: string; readonly message: string }) => void) | undefined;
 }): ReactNode {
   const t = useTranslate();
   const nativeSupported = useNativeFileDialogCapability();
@@ -33,9 +36,16 @@ export function EditorEmptyState({
       setConnecting(true);
       try {
         const response = await createProject({ path: selectedPath });
+        const warning = projectResponseWarningMessage(response);
+        if (warning !== undefined) {
+          setNotice(warning);
+        }
         if (response.project.workspaceAvailable !== true) {
           setNotice(t("editor.empty.workspaceUnavailable"));
           return;
+        }
+        if (warning !== undefined) {
+          onWorkspaceNotice?.({ root: response.project.path, message: warning });
         }
         onOpenRoot(response.project.path);
       } catch {
@@ -44,7 +54,7 @@ export function EditorEmptyState({
         setConnecting(false);
       }
     },
-    [onOpenRoot, t],
+    [onOpenRoot, onWorkspaceNotice, t],
   );
 
   const browse = useCallback(async (): Promise<void> => {

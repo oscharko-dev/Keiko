@@ -17,6 +17,7 @@ import type {
 
 const JIRA_TIMEOUT_MS = 30_000;
 const JIRA_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+const JIRA_MAX_REDIRECTS = 5;
 
 export type JiraCodeContextPortErrorCode =
   "jira-config-invalid" | "jira-denied" | "jira-failed" | "jira-invalid-json";
@@ -74,7 +75,7 @@ function requestUrl(base: URL, request: JiraCodeContextHttpRequest): URL {
   for (const [key, value] of Object.entries(request.query)) {
     url.searchParams.set(key, value);
   }
-  if (url.hostname !== base.hostname || url.protocol !== "https:") {
+  if (url.origin !== base.origin || url.protocol !== "https:") {
     throw new JiraCodeContextPortError("jira-denied");
   }
   return url;
@@ -88,9 +89,68 @@ function assertResponseStaysOnHost(responseUrl: string, base: URL): void {
   } catch {
     throw new JiraCodeContextPortError("jira-denied");
   }
-  if (url.hostname !== base.hostname || url.protocol !== "https:") {
+  if (url.origin !== base.origin || url.protocol !== "https:") {
     throw new JiraCodeContextPortError("jira-denied");
   }
+}
+
+function redirectDestination(response: Response, current: URL, base: URL): URL | undefined {
+  if (response.status < 300 || response.status >= 400) return undefined;
+  const location = response.headers.get("location");
+  if (location === null) return undefined;
+  let destination: URL;
+  try {
+    destination = new URL(location, current);
+  } catch {
+    throw new JiraCodeContextPortError("jira-denied");
+  }
+  if (
+    destination.origin !== base.origin ||
+    destination.protocol !== "https:" ||
+    destination.username !== "" ||
+    destination.password !== ""
+  ) {
+    throw new JiraCodeContextPortError("jira-denied");
+  }
+  return destination;
+}
+
+async function cancelIntermediateResponse(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    throw new JiraCodeContextPortError("jira-failed");
+  }
+}
+
+async function fetchPinnedJiraResponse(
+  fetchFn: typeof globalThis.fetch,
+  initialUrl: URL,
+  base: URL,
+  authorization: string,
+  signal: AbortSignal,
+): Promise<Response> {
+  let url = initialUrl;
+  for (let redirects = 0; redirects <= JIRA_MAX_REDIRECTS; redirects += 1) {
+    const response = await fetchFn(url, {
+      method: "GET",
+      redirect: "manual",
+      headers: { accept: "application/json", authorization },
+      signal,
+    });
+    let destination: URL | undefined;
+    try {
+      destination = redirectDestination(response, url, base);
+    } catch (error) {
+      await cancelIntermediateResponse(response);
+      throw error;
+    }
+    if (destination === undefined) return response;
+    await cancelIntermediateResponse(response);
+    if (redirects === JIRA_MAX_REDIRECTS) throw new JiraCodeContextPortError("jira-denied");
+    url = destination;
+  }
+  throw new JiraCodeContextPortError("jira-denied");
 }
 
 function parseBoundedJson(payload: string): unknown {
@@ -118,13 +178,15 @@ export function createJiraCodeContextHttpPort(
       const url = requestUrl(base, request);
       let response: Response;
       try {
-        response = await fetchFn(url, {
-          method: "GET",
-          redirect: "follow",
-          headers: { accept: "application/json", authorization },
-          signal: globalThis.AbortSignal.timeout(timeoutMs),
-        });
-      } catch {
+        response = await fetchPinnedJiraResponse(
+          fetchFn,
+          url,
+          base,
+          authorization,
+          globalThis.AbortSignal.timeout(timeoutMs),
+        );
+      } catch (error) {
+        if (error instanceof JiraCodeContextPortError) throw error;
         throw new JiraCodeContextPortError("jira-failed");
       }
       assertResponseStaysOnHost(response.url, base);

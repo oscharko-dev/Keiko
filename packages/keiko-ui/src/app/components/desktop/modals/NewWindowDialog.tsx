@@ -2,7 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { ApiError, createProject, fetchModels, fetchProjects, startRun } from "../../../../lib/api";
+import {
+  ApiError,
+  createProject,
+  fetchModels,
+  fetchProjects,
+  projectResponseWarningMessage,
+  startRun,
+} from "../../../../lib/api";
 import type {
   AgentWorkflowId,
   ModelCapability,
@@ -847,8 +854,9 @@ function AgentLauncher({
     setRegistering(true);
     setDialogError(null);
     try {
-      await createProject({ path: workspace });
+      const response = await createProject({ path: workspace });
       await refreshProjects();
+      setDialogError(projectResponseWarningMessage(response) ?? null);
     } catch (error: unknown) {
       setDialogError(errorMessage(error, t));
     } finally {

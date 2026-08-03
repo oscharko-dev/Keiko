@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { isIP } from "node:net";
 import { dirname, isAbsolute, normalize } from "node:path";
@@ -7,7 +8,7 @@ import type { RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { errorBody } from "./routes.js";
 import { pathIsDenied } from "./files-deny.js";
-import { assertUiDbOutsideProject, validateProjectPath } from "./store/index.js";
+import { assertUiDbOutsideProject, UiStoreError, validateProjectPath } from "./store/index.js";
 import { projectWithWorkspaceAvailability } from "./workspace-root-membership.js";
 import {
   classifyGitRemoteFailure,
@@ -16,6 +17,7 @@ import {
   type GitProcessResult,
   type GitRemoteFailureReason,
 } from "@oscharko-dev/keiko-git";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 
 const MAX_BODY_BYTES = 32 * 1024;
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -82,6 +84,27 @@ function invalid(message: string): RouteResult {
 
 function forbidden(message: string): RouteResult {
   return { status: 403, body: errorBody("DENIED", message) };
+}
+
+function redactedErrorMessage(message: string, deps: UiHandlerDeps): string {
+  const redacted = deps.redactor(message);
+  return typeof redacted === "string" ? redacted : "Request failed.";
+}
+
+function reportCloneFailure(ctx: RouteContext, deps: UiHandlerDeps, error: unknown): string {
+  const correlationId = ctx.correlationId ?? randomUUID();
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation: "POST /api/repositories/clone",
+      source: "git-repository-routes",
+      error,
+      summary: "server-operation-failed",
+      redact: (message): string => redactedErrorMessage(message, deps),
+    }),
+  );
+  return correlationId;
 }
 
 type RepositoryHostClass = "public" | "loopback" | "private" | "link-local" | "metadata";
@@ -349,7 +372,17 @@ export function createCloneRepositoryHandler(
       if (error instanceof BodyTooLargeError) {
         return { status: 413, body: errorBody("PAYLOAD_TOO_LARGE", "Request body is too large.") };
       }
-      return invalid("The clone request is invalid.");
+      if (error instanceof UiStoreError) {
+        return {
+          status: error.status,
+          body: errorBody(error.code, redactedErrorMessage(error.message, deps)),
+        };
+      }
+      const correlationId = reportCloneFailure(ctx, deps, error);
+      return {
+        status: 400,
+        body: errorBody("BAD_REQUEST", "The clone request is invalid.", correlationId),
+      };
     }
   };
 }

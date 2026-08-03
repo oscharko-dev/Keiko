@@ -25,10 +25,6 @@ import type {
   MemorySourceKind,
 } from "@oscharko-dev/keiko-contracts/memory";
 import { redact } from "@oscharko-dev/keiko-security";
-import {
-  type MemoryAccessStatLike,
-  planMemoryMaintenance,
-} from "@oscharko-dev/keiko-memory-governance";
 import { findConfiguredCapability, type ResponseFormat } from "@oscharko-dev/keiko-model-gateway";
 import {
   extractSalientMemories,
@@ -59,6 +55,7 @@ import {
   isPersistableMemoryCandidate,
   memoryCaptureAutoAcceptEligible,
   memoryCapturePolicyForDeps,
+  promoteEligibleMemoryRecord,
   resolveMemoryCaptureAutonomyMode,
   SENSITIVE_MEMORY_ACTION_BODY,
   SENSITIVE_MEMORY_REJECTION_REASON,
@@ -278,7 +275,6 @@ function emitSalienceFailureDiagnostic(
 // Salience capture never tracks per-record access stats at capture time, so the governance planner
 // sees a fresh record with no recall/utility history: its strength collapses to provenance
 // confidence, exactly what shouldPromote's confidence >= promoteStrength gate expects.
-const EMPTY_SALIENCE_ACCESS_STATS: ReadonlyMap<MemoryId, MemoryAccessStatLike> = new Map();
 
 // How a candidate settled, for the content-free capture summary. "none" outcomes (non-candidate or
 // unbuildable records) are not tallied.
@@ -361,19 +357,6 @@ function recordRejectedCandidateDecision(
   });
 }
 
-// Auto-accept a freshly captured public record by routing it THROUGH the existing governance
-// promotion lever — no second promotion path. planMemoryMaintenance/shouldPromote keeps its own
-// gates (status proposed + sensitivity public + strength >= promoteStrength). The record's own
-// createdAt is the clock so a just-captured record decays by zero and its strength equals its
-// provenance confidence deterministically. Promoted -> insert as "accepted" (one atomic insert, no
-// proposed->accepted window); otherwise the record is inserted unchanged.
-function promoteEligibleRecord(record: MemoryRecord): MemoryRecord {
-  const plan = planMemoryMaintenance([record], EMPTY_SALIENCE_ACCESS_STATS, {
-    nowMs: record.createdAt,
-  });
-  return plan.promote.includes(record.id) ? { ...record, status: "accepted" } : record;
-}
-
 function candidateWireAction(
   outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
   inserted: MemoryRecord,
@@ -426,15 +409,12 @@ async function persistCandidate(
   }
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
-  if (record === null) {
-    return { action: null, disposition: "none" };
-  }
   const exactSuppression = exactCaptureSuppressionReason(vault, record);
   if (exactSuppression !== null) {
     return rejectedCandidate(deps, mode, surface, outcome, exactSuppression);
   }
   const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
-    ? promoteEligibleRecord(record)
+    ? promoteEligibleMemoryRecord(record)
     : record;
   const outcomeOfInsert = await insertSalienceMemoryWithNoveltyGate(deps, vault, candidate);
   if (outcomeOfInsert.kind === "suppressed") {

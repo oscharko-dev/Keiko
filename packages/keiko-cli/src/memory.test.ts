@@ -231,6 +231,77 @@ describe("runMemoryCli maintain", () => {
     ).toBe(0);
     expect(on.getMemory(mid("ep"))?.status).toBe("archived");
   });
+
+  it("honours explicit retention policy in the shared CLI maintenance pass", async () => {
+    const vault = makeVault();
+    const evidenceStore = createInMemoryEvidenceStore();
+    insert(vault, { id: "retention-old", createdAt: Date.now() - 2 * 864e5 });
+
+    expect(
+      await runMemoryCli(
+        ["maintain"],
+        capture().io,
+        { KEIKO_MEMORY_RETENTION_MAX_AGE_DAYS: "1" },
+        { vault, evidenceStore },
+      ),
+    ).toBe(0);
+    expect(vault.getMemory(mid("retention-old"))).toBeUndefined();
+    const events = evidenceStore
+      .list()
+      .flatMap((runId) => JSON.parse(evidenceStore.get(runId) ?? "[]") as MemoryAuditEvent[]);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "memory:forgotten",
+        initiatorSurface: "retention",
+        memoryId: "retention-old",
+        tombstoned: true,
+      }),
+    );
+  });
+
+  it("reports destructive tombstone purges and their retention breakdown", async () => {
+    const vault = makeVault();
+    insert(vault, { id: "old-tombstone" });
+    vault.deleteMemory(mid("old-tombstone"), {
+      tombstone: true,
+      forgetterSurface: "test",
+      reason: "retention test seed",
+      nowMs: Date.now() - 2 * 864e5,
+    });
+    const cap = capture();
+
+    expect(
+      await runMemoryCli(
+        ["maintain"],
+        cap.io,
+        { KEIKO_MEMORY_RETENTION_PURGE_FORGOTTEN_AFTER_DAYS: "1" },
+        { vault },
+      ),
+    ).toBe(0);
+
+    expect(cap.out()).toContain("retentionForgotten:      0");
+    expect(cap.out()).toContain("tombstonesPurged:        1");
+    expect(vault.listTombstonesByScope({ kind: "user", userId: "u-1" as MemoryUserId })).toEqual(
+      [],
+    );
+  });
+
+  it("fails closed on invalid retention configuration without exposing its value", async () => {
+    const vault = makeVault();
+    const cap = capture();
+    const invalid = "customer-secret-invalid-retention";
+
+    expect(
+      await runMemoryCli(
+        ["maintain"],
+        cap.io,
+        { KEIKO_MEMORY_RETENTION_MAX_AGE_DAYS: invalid },
+        { vault },
+      ),
+    ).toBe(1);
+    expect(cap.err()).toContain("KEIKO_MEMORY_RETENTION_MAX_AGE_DAYS");
+    expect(cap.err()).not.toContain(invalid);
+  });
 });
 
 describe("runMemoryCli reembed", () => {

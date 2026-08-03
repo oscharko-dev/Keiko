@@ -6590,14 +6590,28 @@ function EditorRuntimeWidget({
     </>
   );
 
+  const localHistoryProtectionGuidance = (
+    reason: Extract<
+      NonNullable<FilesContentResponse["localHistoryProtection"]>,
+      { readonly status: "degraded" }
+    >["reason"],
+  ): string => {
+    switch (reason) {
+      case "workspace-unavailable":
+        return commonT("editor.localHistoryProtection.workspaceUnavailable");
+      case "filesystem-identity-unsupported":
+        return commonT("editor.localHistoryProtection.filesystemIdentityUnsupported");
+      default:
+        return commonT("editor.localHistoryProtection.historyUnavailable");
+    }
+  };
+
   const renderLocalHistoryProtectionBanner = (): ReactNode =>
     localHistoryProtection?.status === "degraded" ? (
       <output className="ed-recovery" data-testid="editor-local-history-protection">
         <span>
           {commonT("editor.localHistoryProtection.savedUnprotected")}{" "}
-          {localHistoryProtection.reason === "workspace-unavailable"
-            ? commonT("editor.localHistoryProtection.workspaceUnavailable")
-            : commonT("editor.localHistoryProtection.historyUnavailable")}{" "}
+          {localHistoryProtectionGuidance(localHistoryProtection.reason)}{" "}
           {commonT("editor.localHistoryProtection.diagnosticReference", {
             correlationId: localHistoryProtection.correlationId,
           })}

@@ -20,6 +20,7 @@ import {
 const fetchConfigMock = vi.fn();
 const fetchModelsMock = vi.fn();
 const runGatewayReadinessMock = vi.fn();
+const applyGatewayVerifiedCapabilitiesMock = vi.fn();
 const fetchManagedLspSettingsMock = vi.fn();
 const mutateManagedLspSettingsMock = vi.fn();
 
@@ -28,6 +29,8 @@ vi.mock("@/lib/api", () => ({
   fetchModels: (): Promise<unknown> => fetchModelsMock(),
   runGatewayReadiness: (...args: readonly unknown[]): Promise<unknown> =>
     runGatewayReadinessMock(...args),
+  applyGatewayVerifiedCapabilities: (...args: readonly unknown[]): Promise<unknown> =>
+    applyGatewayVerifiedCapabilitiesMock(...args),
   fetchManagedLspSettings: (...args: readonly unknown[]): Promise<unknown> =>
     fetchManagedLspSettingsMock(...args),
   mutateManagedLspSettings: (...args: readonly unknown[]): Promise<unknown> =>
@@ -657,6 +660,152 @@ describe("SettingsPanel gateway readiness checks", () => {
       expect(screen.getByText("Working today")).toBeInTheDocument();
     });
     expect(screen.getByText(/JSON schema response_format was not accepted/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("capability-disagreements")).toBeNull();
+  });
+
+  it("shows capability disagreements and applies only live-verified values after confirmation", async () => {
+    const configured = chatCapability("test-chat-1");
+    const updated = { ...configured, toolCalling: false };
+    primeFetches([configured]);
+    runGatewayReadinessMock.mockResolvedValue({
+      modelId: "test-chat-1",
+      checkedAt: "2026-08-02T08:00:00.000Z",
+      overallStatus: "partial",
+      probes: [
+        { name: "chat", status: "passed", latencyMs: 12, evidence: "Working today" },
+        {
+          name: "tool_calling",
+          status: "unsupported",
+          latencyMs: 9,
+          evidence: "Tool calls were rejected.",
+          capabilityObservation: false,
+        },
+      ],
+      verifiedCapabilities: {},
+    });
+    applyGatewayVerifiedCapabilitiesMock.mockResolvedValue({ ok: true, model: updated });
+
+    const view = render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+
+    expect(await screen.findByTestId("capability-disagreements")).toHaveTextContent(
+      /Tools: configured yes; verified no/i,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply verified values" }));
+    expect(
+      screen.getByRole("alertdialog", { name: "Apply verified model capabilities?" }),
+    ).toBeInTheDocument();
+    const readinessButton = screen.getByRole("button", { name: "Run readiness check" });
+    readinessButton.focus();
+    view.rerender(<SettingsPanel />);
+    expect(screen.getByRole("button", { name: "Run readiness check" })).toHaveFocus();
+    fetchModelsMock.mockResolvedValue({ models: [updated] });
+    fireEvent.click(screen.getByRole("button", { name: "Apply values" }));
+    await waitFor(() => {
+      expect(applyGatewayVerifiedCapabilitiesMock).toHaveBeenCalledWith("test-chat-1", {
+        toolCalling: false,
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("capability-disagreements")).toBeNull();
+    });
+    await waitFor(() => {
+      expect(fetchModelsMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("offers a passed probe as a positive verified capability value", async () => {
+    const configured = { ...chatCapability("test-chat-1"), toolCalling: false };
+    primeFetches([configured]);
+    runGatewayReadinessMock.mockResolvedValue({
+      modelId: "test-chat-1",
+      checkedAt: "2026-08-02T08:00:00.000Z",
+      overallStatus: "ready",
+      probes: [
+        { name: "chat", status: "passed", latencyMs: 12, evidence: "Working today" },
+        { name: "tool_calling", status: "passed", latencyMs: 9, evidence: "Tools work" },
+      ],
+      verifiedCapabilities: { toolCalling: true },
+    });
+    applyGatewayVerifiedCapabilitiesMock.mockResolvedValue({
+      ok: true,
+      model: { ...configured, toolCalling: true },
+    });
+
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+
+    expect(await screen.findByTestId("capability-disagreements")).toHaveTextContent(
+      /Tools: configured no; verified yes/i,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply verified values" }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply values" }));
+    await waitFor(() => {
+      expect(applyGatewayVerifiedCapabilitiesMock).toHaveBeenCalledWith("test-chat-1", {
+        toolCalling: true,
+      });
+    });
+  });
+
+  it("keeps verified capability changes unapplied when the in-app confirmation is declined", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockResolvedValue({
+      modelId: "test-chat-1",
+      checkedAt: "2026-08-02T08:00:00.000Z",
+      overallStatus: "partial",
+      probes: [
+        { name: "chat", status: "passed", latencyMs: 1, evidence: "Working today" },
+        {
+          name: "tool_calling",
+          status: "unsupported",
+          latencyMs: 1,
+          evidence: "Rejected",
+          capabilityObservation: false,
+        },
+      ],
+      verifiedCapabilities: {},
+    });
+
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply verified values" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(applyGatewayVerifiedCapabilitiesMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces capability-apply diagnostics while keeping the readiness result retryable", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockResolvedValue({
+      modelId: "test-chat-1",
+      checkedAt: "2026-08-02T08:00:00.000Z",
+      overallStatus: "partial",
+      probes: [
+        { name: "chat", status: "passed", latencyMs: 1, evidence: "Working today" },
+        {
+          name: "tool_calling",
+          status: "unsupported",
+          latencyMs: 1,
+          evidence: "Rejected",
+          capabilityObservation: false,
+        },
+      ],
+      verifiedCapabilities: {},
+    });
+    applyGatewayVerifiedCapabilitiesMock.mockRejectedValue(
+      new Error("HTTP 409 — correlation corr-capability-123"),
+    );
+
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply verified values" }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply values" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/were not applied/i);
+    expect(alert).toHaveTextContent("corr-capability-123");
+    expect(screen.getByRole("button", { name: "Apply verified values" })).toBeEnabled();
   });
 
   it("copies a complete readiness report for customer diagnostics", async () => {

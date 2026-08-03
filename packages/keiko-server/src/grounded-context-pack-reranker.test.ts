@@ -157,6 +157,9 @@ describe("configuredContextPackRerankerFor", () => {
         generation: () => 0,
         verification: () => UNVERIFIED_GATEWAY,
         recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
       },
     };
     const reranker = configuredContextPackRerankerFor(deps, QUERY, undefined);

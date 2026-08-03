@@ -13,7 +13,11 @@ import { parseWorkspaceManifestRecord } from "./workspace-manifests.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 
 export type WorkspaceRootMembershipFailure =
-  "ROOT_UNRESOLVED" | "IDENTITY_UNREADABLE" | "IDENTITY_DRIFT" | "NOT_A_MEMBER";
+  | "ROOT_UNRESOLVED"
+  | "IDENTITY_UNREADABLE"
+  | "FILESYSTEM_IDENTITY_UNSUPPORTED"
+  | "IDENTITY_DRIFT"
+  | "NOT_A_MEMBER";
 
 export class WorkspaceRootMembershipError extends Error {
   public constructor(public readonly failure: WorkspaceRootMembershipFailure) {
@@ -96,6 +100,9 @@ function resolveCanonicalWorkspaceRootMembership(
     inspected = inspectWorkspaceRootIdentity(realRoot);
   } catch {
     return unavailable("IDENTITY_UNREADABLE");
+  }
+  if (inspected.objectIdentityUnsupported) {
+    return unavailable("FILESYSTEM_IDENTITY_UNSUPPORTED");
   }
   if (!rootIdentityMatches(inspected, indexed.root, indexed.objectIdentityDigest)) {
     return unavailable("IDENTITY_DRIFT");

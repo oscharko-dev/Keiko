@@ -82,14 +82,18 @@ import {
   validateKnowledgePodSummary,
   validateKnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
-import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";
+import {
+  currentGateway,
+  currentGatewayConfig,
+  currentGatewayEgressConfig,
+  type UiHandlerDeps,
+} from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import {
   EMBEDDING_INSTRUCTION_VERSION,
   EMBEDDING_NORMALIZATION,
   findConfiguredCapability,
-  Gateway,
   requestOpenAIEmbedding,
   requestOpenAIEmbeddingBatch,
   selectConfiguredModel,
@@ -1920,7 +1924,7 @@ function contextualRetrievalChatGateway(
   if (config === undefined || modelId === undefined || !contextModelCanChat(config, modelId)) {
     return undefined;
   }
-  return deps.localKnowledgeContextualRetrievalChatGateway ?? new Gateway(config);
+  return deps.localKnowledgeContextualRetrievalChatGateway ?? currentGateway(deps);
 }
 
 function contextualRetrievalMaxContextChars(

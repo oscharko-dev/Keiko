@@ -1,7 +1,7 @@
 // Voice session recap contract tests (ADR-0109). Pinned behaviours:
 //   AC1 — recap capability derives from the committed-transcript predicate (dormant for
 //         "none" / "speech-output"; allowed for "speech-to-text" / "full-realtime").
-//   AC3 — candidate lifecycle vocabulary: "proposed" first, terminal states delegated.
+//   AC3 — candidate lifecycle vocabulary supports governed initial acceptance and review states.
 //   AC4 — the audit record is content-free by validation; a non-user-triggered audit record is
 //         structurally invalid, making the "never automatic" invariant machine-checkable.
 //   D8  — the module source carries no forbidden sensitive vocabulary (same scan posture as
@@ -20,6 +20,7 @@ import {
   VOICE_SESSION_RECAP_SCHEMA_VERSION,
   voiceRecapAllowed,
   type VoiceSessionRecapAuditRecord,
+  type VoiceSessionRecapEvidenceSummary,
 } from "./voice-session-recap.js";
 
 const FORBIDDEN_SUBSTRINGS = [
@@ -52,6 +53,7 @@ function validAuditRecord(
     candidatesExtracted: 4,
     candidatesRejected: 1,
     candidatesProposed: 3,
+    candidatesAccepted: 0,
     triggeredByUser: true,
     durationMs: 42,
     ...overrides,
@@ -59,12 +61,52 @@ function validAuditRecord(
 }
 
 describe("voice-session-recap contract", () => {
+  it("keeps legacy v1 evidence summaries source-compatible without the v2 accepted count", () => {
+    const legacy: VoiceSessionRecapEvidenceSummary = {
+      schemaVersion: "1",
+      transcript: {
+        schemaVersion: "1",
+        segmentCount: 1,
+        committedCount: 1,
+        correctedCount: 0,
+        discardedCount: 0,
+        redactedCount: 0,
+        providerErrorCount: 0,
+        committedChars: 12,
+        highestSeq: 1,
+      },
+      candidatesExtracted: 1,
+      candidatesRejected: 0,
+      candidatesProposed: 1,
+      triggeredByUser: true,
+    };
+
+    expect(legacy.candidatesAccepted).toBeUndefined();
+  });
+
   it("pins the schema version and rejects every other value", () => {
-    expect(VOICE_SESSION_RECAP_SCHEMA_VERSION).toBe("1");
+    expect(VOICE_SESSION_RECAP_SCHEMA_VERSION).toBe("2");
     expect(isVoiceSessionRecapSchemaVersionSupported("1")).toBe(true);
-    for (const other of ["0", "2", 1, undefined, null, ""]) {
+    expect(isVoiceSessionRecapSchemaVersionSupported("2")).toBe(true);
+    for (const other of ["0", "3", 1, undefined, null, ""]) {
       expect(isVoiceSessionRecapSchemaVersionSupported(other)).toBe(false);
     }
+  });
+
+  it("accepts a legacy v1 audit record without the v2 accepted count", () => {
+    const legacy: VoiceSessionRecapAuditRecord = {
+      schemaVersion: "1",
+      profile: "full-realtime",
+      committedSegmentCount: 3,
+      committedChars: 120,
+      candidatesExtracted: 4,
+      candidatesRejected: 1,
+      candidatesProposed: 3,
+      triggeredByUser: true,
+      durationMs: 42,
+    };
+
+    expect(validateVoiceSessionRecapAuditRecord(legacy)).toEqual({ ok: true });
   });
 
   it("derives recap capability from the committed-transcript predicate (AC1)", () => {
@@ -101,12 +143,16 @@ describe("voice-session-recap contract", () => {
   it("rejects malformed audit records with a precise reason", () => {
     const cases: readonly [unknown, string][] = [
       [null, "audit: must be an object"],
-      [validAuditRecord({ schemaVersion: "2" }), "schemaVersion: unsupported"],
+      [validAuditRecord({ schemaVersion: "3" }), "schemaVersion: unsupported"],
       [validAuditRecord({ profile: "loud" }), "profile: unknown voice profile"],
       [validAuditRecord({ committedChars: -1 }), "committedChars: must be a non-negative integer"],
       [
         validAuditRecord({ candidatesProposed: 1.5 }),
         "candidatesProposed: must be a non-negative integer",
+      ],
+      [
+        validAuditRecord({ candidatesAccepted: -1 }),
+        "candidatesAccepted: must be a non-negative integer",
       ],
       [validAuditRecord({ durationMs: "42" }), "durationMs: must be a non-negative integer"],
     ];

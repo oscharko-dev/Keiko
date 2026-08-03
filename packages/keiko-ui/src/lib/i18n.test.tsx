@@ -193,9 +193,11 @@ describe("I18nProvider", () => {
       </I18nProvider>,
     );
 
-    await waitFor(() => expect(screen.getByTestId("label")).toHaveTextContent("Einstellungen"));
-    expect(screen.getByTestId("locale")).toHaveTextContent("de");
-    expect(document.documentElement.lang).toBe("de");
+    await waitFor(() => {
+      expect(screen.getByTestId("label")).toHaveTextContent("Einstellungen");
+      expect(screen.getByTestId("locale")).toHaveTextContent("de");
+      expect(document.documentElement.lang).toBe("de");
+    });
     expect(window.localStorage.getItem(I18N_STORAGE_KEY)).toBe("de");
   });
 
@@ -260,9 +262,11 @@ describe("I18nProvider", () => {
     expect(document.documentElement.lang).toBe("en");
     expect(window.localStorage.getItem(I18N_STORAGE_KEY)).toBe("de");
 
-    await waitFor(() => expect(screen.getByTestId("label")).toHaveTextContent("Einstellungen"));
-    expect(screen.getByTestId("locale")).toHaveTextContent("de");
-    expect(document.documentElement.lang).toBe("de");
+    await waitFor(() => {
+      expect(screen.getByTestId("label")).toHaveTextContent("Einstellungen");
+      expect(screen.getByTestId("locale")).toHaveTextContent("de");
+      expect(document.documentElement.lang).toBe("de");
+    });
     expect(window.localStorage.getItem(I18N_STORAGE_KEY)).toBe("de");
   });
 

@@ -20,13 +20,17 @@ import type {
   LocalKnowledgeRemediationRunResult,
   LocalKnowledgeRemediationScope,
 } from "./local-knowledge-remediation.js";
-import { createUpdateLocalStateManager } from "./update-local-state.js";
+import {
+  createUpdateLocalStateManager,
+  type UpdateLocalStateManager,
+} from "./update-local-state.js";
 import {
   createUpdateRemediationManager,
   overallStatus,
   UpdateRemediationError,
   type UpdateRemediationManager,
 } from "./update-remediation.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 
 const tempRoots: string[] = [];
 const NOW = Date.parse("2026-06-30T12:00:00.000Z");
@@ -366,6 +370,106 @@ describe("update remediation manager", () => {
     await expect(first).resolves.toMatchObject({ overallStatus: "completed" });
   });
 
+  it("acquires the durable remediation lease before persisting running state", async () => {
+    const stateDir = makeStateDir();
+    const localState = createUpdateLocalStateManager({ stateDir, now: () => NOW });
+    let observedStatus: string | undefined;
+    const inspectingLocalState: UpdateLocalStateManager = {
+      ...localState,
+      acquireRemediationLease: (actionId) => {
+        observedStatus = localState.readRuntimeState().remediations[0]?.status;
+        return localState.acquireRemediationLease(actionId);
+      },
+    };
+    const subject = createUpdateRemediationManager({
+      localState: inspectingLocalState,
+      localKnowledge: fakeLocalKnowledge(),
+      now: () => NOW,
+    });
+
+    await subject.runAction({
+      actionId: "local-knowledge-reindex:local-knowledge",
+      targetVersion: TARGET,
+      impact: localKnowledgeImpact,
+    });
+
+    expect(observedStatus).toBeUndefined();
+  });
+
+  it("does not persist running state when another process owns the durable lease", async () => {
+    const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });
+    const unavailableLease: UpdateLocalStateManager = {
+      ...durable,
+      acquireRemediationLease: () => undefined,
+    };
+    const subject = createUpdateRemediationManager({
+      localState: unavailableLease,
+      localKnowledge: fakeLocalKnowledge(),
+      now: () => NOW,
+    });
+
+    await expect(
+      subject.runAction({
+        actionId: "local-knowledge-reindex:local-knowledge",
+        targetVersion: TARGET,
+        impact: localKnowledgeImpact,
+      }),
+    ).rejects.toMatchObject({ code: "UPDATE_REMEDIATION_RUNNING" });
+    expect(durable.readRuntimeState().remediations).toEqual([]);
+  });
+
+  it("releases the durable lease when initial running-state persistence fails", async () => {
+    const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });
+    let releases = 0;
+    const unavailableState: UpdateLocalStateManager = {
+      ...durable,
+      acquireRemediationLease: () => (): void => {
+        releases += 1;
+      },
+      writeRuntimeState: () => {
+        throw new Error("runtime state unavailable");
+      },
+    };
+    const subject = createUpdateRemediationManager({
+      localState: unavailableState,
+      localKnowledge: fakeLocalKnowledge(),
+      now: () => NOW,
+    });
+
+    await expect(
+      subject.runAction({
+        actionId: "local-knowledge-reindex:local-knowledge",
+        targetVersion: TARGET,
+        impact: localKnowledgeImpact,
+      }),
+    ).rejects.toThrow("runtime state unavailable");
+    expect(releases).toBe(1);
+  });
+
+  it("rejects the same remediation from a second manager while the durable lease is live", async () => {
+    const stateDir = makeStateDir();
+    const localKnowledge = deferredLocalKnowledge();
+    const firstManager = manager(stateDir, localKnowledge);
+    const secondManager = manager(stateDir, localKnowledge);
+    const request = {
+      actionId: "local-knowledge-reindex:local-knowledge",
+      targetVersion: TARGET,
+      impact: localKnowledgeImpact,
+    } as const;
+
+    const first = firstManager.runAction(request);
+    await Promise.resolve();
+
+    await expect(secondManager.runAction(request)).rejects.toMatchObject({
+      code: "UPDATE_REMEDIATION_RUNNING",
+      status: 409,
+    });
+    expect(localKnowledge.runs()).toBe(1);
+
+    localKnowledge.complete();
+    await expect(first).resolves.toMatchObject({ overallStatus: "completed" });
+  });
+
   it("resumes an interrupted running remediation as pending after restart", () => {
     const stateDir = makeStateDir();
     const localState = createUpdateLocalStateManager({ stateDir, now: () => NOW });
@@ -395,6 +499,49 @@ describe("update remediation manager", () => {
     expect(status.updateCanComplete).toBe(false);
   });
 
+  it("resumes an interrupted local-state repair after restart when no live lease remains", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const stateDir = makeStateDir();
+    const memoryDb = join(stateDir, "memory", "keiko-memory.db");
+    touch(memoryDb, "sealed-memory");
+    chmodSync(memoryDb, 0o644);
+    const localState = createUpdateLocalStateManager({ stateDir, now: () => NOW });
+    localState.writeRuntimeState({
+      schemaVersion: UPDATE_LOCAL_STATE_SCHEMA_VERSION,
+      updatedAt: "stale",
+      targetVersion: TARGET,
+      remediations: [
+        {
+          store: "memory-vault",
+          remediation: "repair-required",
+          status: "running",
+          updatedAt: "stale",
+        },
+      ],
+      warnings: [],
+    });
+    const subject = createUpdateRemediationManager({ localState, now: () => NOW });
+
+    await expect(
+      subject.runAction({
+        actionId: "local-state-repair:memory-vault",
+        targetVersion: TARGET,
+        impact: {
+          stateImpact: [
+            {
+              store: "memory",
+              description: "Memory store permissions require repair.",
+              remediation: "repair-required",
+              userActionRequired: true,
+            },
+          ],
+        },
+      }),
+    ).resolves.toMatchObject({ overallStatus: "completed" });
+
+    expect(statSync(memoryDb).mode & 0o777).toBe(0o600);
+  });
+
   it("records failed remediation and keeps update completion blocked", async () => {
     const subject = manager(makeStateDir(), fakeLocalKnowledge("failed"));
 
@@ -406,11 +553,21 @@ describe("update remediation manager", () => {
 
     expect(failed.overallStatus).toBe("failed");
     expect(failed.updateCanComplete).toBe(false);
-    expect(failed.actions[0]?.status).toBe("failed");
+    expect(failed.actions[0]).toMatchObject({
+      status: "failed",
+      failure: "remediation-execution-failed",
+    });
   });
 
   it("records thrown remediation failures instead of resuming stale running state", async () => {
-    const subject = manager(makeStateDir(), throwingLocalKnowledge());
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const subject = createUpdateRemediationManager({
+      localState: createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW }),
+      localKnowledge: throwingLocalKnowledge(),
+      now: () => NOW,
+      diagnostics: { record: (record) => diagnostics.push(record) },
+      redactString: (value) => value,
+    });
 
     const failed = await subject.runAction({
       actionId: "local-knowledge-reindex:local-knowledge",
@@ -421,11 +578,171 @@ describe("update remediation manager", () => {
     expect(failed.overallStatus).toBe("failed");
     expect(failed.actions[0]).toMatchObject({
       status: "failed",
-      failure: "manual-review-required",
+      failure: "remediation-execution-failed",
     });
     expect(
       subject.getStatus({ targetVersion: TARGET, impact: localKnowledgeImpact }).actions[0]?.status,
     ).toBe("failed");
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        operation: "update.remediation.execute",
+        source: "update-remediation.executeDraft",
+      }),
+    );
+    expect(JSON.stringify(diagnostics)).not.toContain("denied source");
+  });
+
+  it("keeps a completed side effect visible when terminal audit persistence fails", async () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const localKnowledge = fakeLocalKnowledge();
+    const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });
+    let rejectCompletionAudit = true;
+    const unreliable: UpdateLocalStateManager = {
+      ...durable,
+      recordAuditEvent: (eventType, payload) => {
+        if (eventType === "remediation-completed" && rejectCompletionAudit) {
+          rejectCompletionAudit = false;
+          throw new Error("terminal audit unavailable");
+        }
+        return durable.recordAuditEvent(eventType, payload);
+      },
+    };
+    const subject = createUpdateRemediationManager({
+      localState: unreliable,
+      localKnowledge,
+      now: () => NOW,
+      diagnostics: { record: (record) => diagnostics.push(record) },
+    });
+
+    const result = await subject.runAction({
+      actionId: "local-knowledge-reindex:local-knowledge",
+      targetVersion: TARGET,
+      impact: localKnowledgeImpact,
+    });
+
+    expect(localKnowledge.runs()).toBe(1);
+    expect(result.actions[0]).toMatchObject({
+      status: "completed",
+    });
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({ source: "update-remediation.persistDraftAudit" }),
+    );
+  });
+
+  it("persists outcome uncertainty and blocks retries when terminal state persistence fails", async () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const auditEvents: string[] = [];
+    const localKnowledge = fakeLocalKnowledge();
+    const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });
+    let stateWrites = 0;
+    const unreliable: UpdateLocalStateManager = {
+      ...durable,
+      writeRuntimeState: (state) => {
+        stateWrites += 1;
+        if (stateWrites === 2) throw new Error("terminal state unavailable");
+        return durable.writeRuntimeState(state);
+      },
+      recordAuditEvent: (eventType, payload) => {
+        auditEvents.push(eventType);
+        return durable.recordAuditEvent(eventType, payload);
+      },
+    };
+    const subject = createUpdateRemediationManager({
+      localState: unreliable,
+      localKnowledge,
+      now: () => NOW,
+      diagnostics: { record: (record) => diagnostics.push(record) },
+    });
+
+    const result = await subject.runAction({
+      actionId: "local-knowledge-reindex:local-knowledge",
+      targetVersion: TARGET,
+      impact: localKnowledgeImpact,
+    });
+
+    expect(localKnowledge.runs()).toBe(1);
+    expect(result.actions[0]).toMatchObject({
+      status: "manual-review-required",
+      failure: "remediation-outcome-uncertain",
+    });
+    expect(durable.readRuntimeState().remediations[0]).toMatchObject({
+      status: "running",
+      warningCode: "remediation-outcome-uncertain",
+    });
+    expect(auditEvents).toContain("remediation-completed");
+    expect(auditEvents).not.toContain("remediation-failed");
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({ source: "update-remediation.persistDraftStatus" }),
+    );
+    await expect(
+      subject.runAction({
+        actionId: "local-knowledge-reindex:local-knowledge",
+        targetVersion: TARGET,
+        impact: localKnowledgeImpact,
+      }),
+    ).rejects.toMatchObject({ code: "UPDATE_REMEDIATION_OUTCOME_UNCERTAIN", status: 409 });
+    expect(localKnowledge.runs()).toBe(1);
+  });
+
+  it("retains the live lease when neither terminal nor uncertainty state can persist", async () => {
+    const localKnowledge = fakeLocalKnowledge();
+    const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });
+    let stateWrites = 0;
+    const unavailableTerminalState: UpdateLocalStateManager = {
+      ...durable,
+      writeRuntimeState: (state) => {
+        stateWrites += 1;
+        if (stateWrites > 1) throw new Error("terminal state unavailable");
+        return durable.writeRuntimeState(state);
+      },
+    };
+    const subject = createUpdateRemediationManager({
+      localState: unavailableTerminalState,
+      localKnowledge,
+      now: () => NOW,
+    });
+    const request = {
+      actionId: "local-knowledge-reindex:local-knowledge",
+      targetVersion: TARGET,
+      impact: localKnowledgeImpact,
+    } as const;
+
+    expect((await subject.runAction(request)).actions[0]?.status).toBe("pending");
+    await expect(subject.runAction(request)).rejects.toMatchObject({
+      code: "UPDATE_REMEDIATION_RUNNING",
+      status: 409,
+    });
+    expect(localKnowledge.runs()).toBe(1);
+  });
+
+  it("diagnoses a non-throwing terminal audit persistence warning", async () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const localKnowledge = fakeLocalKnowledge();
+    const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });
+    const unreliable: UpdateLocalStateManager = {
+      ...durable,
+      recordAuditEvent: (eventType, payload) => ({
+        ...durable.recordAuditEvent(eventType, payload),
+        warning: "Update audit event could not be persisted.",
+      }),
+    };
+    const subject = createUpdateRemediationManager({
+      localState: unreliable,
+      localKnowledge,
+      now: () => NOW,
+      diagnostics: { record: (record) => diagnostics.push(record) },
+    });
+
+    const result = await subject.runAction({
+      actionId: "local-knowledge-reindex:local-knowledge",
+      targetVersion: TARGET,
+      impact: localKnowledgeImpact,
+    });
+
+    expect(result.actions[0]?.status).toBe("completed");
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({ source: "update-remediation.persistDraftAudit" }),
+    );
   });
 
   it("treats unsupported owned runtime entries as manual review", (ctx) => {

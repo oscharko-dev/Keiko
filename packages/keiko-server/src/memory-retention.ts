@@ -67,7 +67,7 @@ export interface MemoryRetentionResult {
   readonly byReason: Readonly<Record<MemoryRetentionReason, number>>;
   // Number of tombstones purged across the scanned scopes when purgeForgottenAfterMs is set.
   // Always 0 when purgeForgottenAfterMs is undefined.
-  readonly forgottenPurgeBacklog: number;
+  readonly tombstonesPurged: number;
 }
 
 // ─── Pure classification ──────────────────────────────────────────────────────
@@ -186,7 +186,7 @@ export function applyMemoryRetention(options: ApplyMemoryRetentionOptions): Memo
   const { vault, scopes, policy, nowMs } = options;
   const decisions = new Map<MemoryId, MemoryRetentionDecision>();
   let evaluated = 0;
-  let forgottenPurgeBacklog = 0;
+  let tombstonesPurged = 0;
   const uniqueScopes = [...new Map(scopes.map((scope) => [memoryScopeKey(scope), scope])).values()];
   for (const scope of uniqueScopes) {
     const records = vault.listMemoriesByScope(scope, { includeExpired: true });
@@ -194,7 +194,7 @@ export function applyMemoryRetention(options: ApplyMemoryRetentionOptions): Memo
     for (const decision of classifyScope(scope, records, nowMs, policy)) {
       decisions.set(decision.memoryId, decision);
     }
-    forgottenPurgeBacklog += countPurgeBacklog(vault, scope, policy, nowMs);
+    tombstonesPurged += purgeExpiredTombstones(vault, scope, policy, nowMs);
   }
   const forgotten = [...decisions.values()];
   for (const decision of forgotten) {
@@ -210,7 +210,7 @@ export function applyMemoryRetention(options: ApplyMemoryRetentionOptions): Memo
     forgotten,
     kept: evaluated - forgotten.length,
     byReason: countByReason(forgotten),
-    forgottenPurgeBacklog,
+    tombstonesPurged,
   };
 }
 
@@ -228,7 +228,7 @@ function countByReason(
   return counts;
 }
 
-function countPurgeBacklog(
+function purgeExpiredTombstones(
   vault: MemoryVaultStore,
   scope: MemoryScope,
   policy: MemoryRetentionPolicy,

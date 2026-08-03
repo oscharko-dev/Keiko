@@ -4,6 +4,7 @@
 // signal. We therefore store memory_id as a denormalised TEXT column and accept that listing a
 // tombstone tells you "this id existed in this scope at this time," not "follow the FK."
 
+import { Buffer } from "node:buffer";
 import type { DatabaseSync } from "node:sqlite";
 import type {
   MemoryId,
@@ -14,7 +15,12 @@ import type {
   MemoryType,
 } from "@oscharko-dev/keiko-contracts/memory";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
-import type { MemoryTombstone } from "./types.js";
+import type {
+  MemoryTombstone,
+  MemoryTombstoneCursor,
+  MemoryTombstoneLedgerCursor,
+  MemoryTombstonePage,
+} from "./types.js";
 import type { MemoryContentCipher } from "./cipher.js";
 import { cachedPrepare } from "./statements.js";
 import { sanitizeMemoryTombstoneReason } from "./tombstone-reason.js";
@@ -45,9 +51,19 @@ INSERT INTO memory_tombstones (
 // Forget-tombstone rows whose body_embedding is present, scoped for the semantic suppression scan
 // (GEN-AI-MEMORY-003, RB-4). Selects only the sealed vector column so the cosine sweep never touches
 // the (irrelevant here) reason/body_hash columns.
-const LIST_FORGET_VECTORS_BY_SCOPE_SQL = `
-SELECT body_embedding FROM memory_tombstones
+const LIST_FORGET_VECTOR_PAGE_BY_SCOPE_SQL = `
+SELECT id, forgotten_at, body_embedding FROM memory_tombstones
 WHERE scope_kind = ? AND scope_coordinate = ? AND body_embedding IS NOT NULL
+ORDER BY forgotten_at DESC, id ASC
+LIMIT ?
+`;
+
+const LIST_FORGET_VECTOR_PAGE_AFTER_BY_SCOPE_SQL = `
+SELECT id, forgotten_at, body_embedding FROM memory_tombstones
+WHERE scope_kind = ? AND scope_coordinate = ? AND body_embedding IS NOT NULL
+  AND (forgotten_at < ? OR (forgotten_at = ? AND id > ?))
+ORDER BY forgotten_at DESC, id ASC
+LIMIT ?
 `;
 
 const LIST_BY_SCOPE_SQL = `
@@ -147,21 +163,73 @@ function decodeSealedTombstoneVector(
 // paraphrase of a forgotten memory at capture time, even though its body_hash differs from the
 // exact-match fingerprint. Tombstones written before v10 (or written without an embedder configured)
 // have a NULL body_embedding and are skipped rather than failing the scan.
-export function listForgetTombstoneVectors(
+interface TombstoneVectorRow {
+  readonly id: string;
+  readonly forgotten_at: number;
+  readonly body_embedding: Uint8Array;
+}
+
+const SEMANTIC_VECTOR_PAGE_SIZE = 200;
+
+function vectorPageRows(
+  db: DatabaseSync,
+  scope: MemoryScope,
+  after: MemoryTombstoneCursor | undefined,
+): readonly TombstoneVectorRow[] {
+  const scopeKind = scopeKindOf(scope);
+  const coordinate = scopeCoordinateOf(scope);
+  if (after === undefined) {
+    return cachedPrepare(db, LIST_FORGET_VECTOR_PAGE_BY_SCOPE_SQL).all(
+      scopeKind,
+      coordinate,
+      SEMANTIC_VECTOR_PAGE_SIZE,
+    ) as unknown as readonly TombstoneVectorRow[];
+  }
+  return cachedPrepare(db, LIST_FORGET_VECTOR_PAGE_AFTER_BY_SCOPE_SQL).all(
+    scopeKind,
+    coordinate,
+    after.forgottenAt,
+    after.forgottenAt,
+    after.id,
+    SEMANTIC_VECTOR_PAGE_SIZE,
+  ) as unknown as readonly TombstoneVectorRow[];
+}
+
+function cosineAtLeast(a: Float32Array, b: Float32Array, threshold: number): boolean {
+  if (a.length === 0 || a.length !== b.length) return false;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index] ?? 0;
+    const right = b[index] ?? 0;
+    dot += left * right;
+    normA += left * left;
+    normB += right * right;
+  }
+  if (normA === 0 || normB === 0) return false;
+  return dot / Math.sqrt(normA * normB) >= threshold;
+}
+
+export function hasSemanticallySimilarForgetTombstoneRow(
   db: DatabaseSync,
   scope: MemoryScope,
   cipher: MemoryContentCipher,
-): readonly Float32Array[] {
-  const rows = cachedPrepare(db, LIST_FORGET_VECTORS_BY_SCOPE_SQL).all(
-    scopeKindOf(scope),
-    scopeCoordinateOf(scope),
-  ) as unknown as readonly { readonly body_embedding: Uint8Array | null }[];
-  const vectors: Float32Array[] = [];
-  for (const row of rows) {
-    if (row.body_embedding === null) continue;
-    vectors.push(decodeSealedTombstoneVector(row.body_embedding, cipher));
+  candidate: Float32Array,
+  threshold: number,
+): boolean {
+  let after: MemoryTombstoneCursor | undefined;
+  for (;;) {
+    const rows = vectorPageRows(db, scope, after);
+    for (const row of rows) {
+      const vector = decodeSealedTombstoneVector(row.body_embedding, cipher);
+      if (cosineAtLeast(candidate, vector, threshold)) return true;
+    }
+    if (rows.length < SEMANTIC_VECTOR_PAGE_SIZE) return false;
+    const last = rows.at(-1);
+    if (last === undefined) return false;
+    after = { forgottenAt: last.forgotten_at, id: last.id };
   }
-  return vectors;
 }
 
 export function listTombstonesByScopeRows(
@@ -174,6 +242,128 @@ export function listTombstonesByScopeRows(
     scopeCoordinateOf(scope),
   ) as unknown as readonly TombstoneRow[];
   return rows.map((row) => rowToTombstone(row, cipher));
+}
+
+function scopePredicate(scopes: readonly MemoryScope[]): string {
+  return scopes.map(() => "(?, ?)").join(", ");
+}
+
+function scopeBindings(scopes: readonly MemoryScope[]): readonly string[] {
+  return scopes.flatMap((scope) => [scopeKindOf(scope), scopeCoordinateOf(scope)]);
+}
+
+const LEDGER_SCOPE_CHUNK_SIZE = 100;
+
+function scopeChunks(scopes: readonly MemoryScope[]): readonly (readonly MemoryScope[])[] {
+  const unique = [
+    ...new Map(
+      scopes.map((scope) => [
+        JSON.stringify([scopeKindOf(scope), scopeCoordinateOf(scope)]),
+        scope,
+      ]),
+    ).values(),
+  ];
+  const chunks: MemoryScope[][] = [];
+  for (let offset = 0; offset < unique.length; offset += LEDGER_SCOPE_CHUNK_SIZE) {
+    chunks.push(unique.slice(offset, offset + LEDGER_SCOPE_CHUNK_SIZE));
+  }
+  return chunks;
+}
+
+function ledgerPageSql(scopes: readonly MemoryScope[], after: boolean): string {
+  const cursor = after
+    ? `AND (
+      forgotten_at < ? OR (forgotten_at = ? AND id > ?)
+    )`
+    : "";
+  return `
+SELECT * FROM memory_tombstones
+WHERE (scope_kind, scope_coordinate) IN (${scopePredicate(scopes)})
+${cursor}
+ORDER BY forgotten_at DESC, id ASC
+LIMIT ?
+`;
+}
+
+function ledgerCountSql(scopes: readonly MemoryScope[]): string {
+  return `
+SELECT COUNT(*) AS count FROM memory_tombstones
+WHERE (scope_kind, scope_coordinate) IN (${scopePredicate(scopes)})
+`;
+}
+
+function ledgerCursorScopeSql(scopes: readonly MemoryScope[]): string {
+  return `
+SELECT 1 FROM memory_tombstones
+WHERE id = ? AND forgotten_at = ?
+  AND (scope_kind, scope_coordinate) IN (${scopePredicate(scopes)})
+LIMIT 1
+`;
+}
+
+function compareLedgerRows(left: TombstoneRow, right: TombstoneRow): number {
+  return (
+    right.forgotten_at - left.forgotten_at ||
+    Buffer.compare(Buffer.from(left.id, "utf8"), Buffer.from(right.id, "utf8"))
+  );
+}
+
+function ledgerRowsForScopes(
+  db: DatabaseSync,
+  scopes: readonly MemoryScope[],
+  limit: number,
+  after: MemoryTombstoneLedgerCursor | undefined,
+): readonly TombstoneRow[] {
+  const cursorBindings =
+    after === undefined ? [] : [after.forgottenAt, after.forgottenAt, after.id];
+  return cachedPrepare(db, ledgerPageSql(scopes, after !== undefined)).all(
+    ...scopeBindings(scopes),
+    ...cursorBindings,
+    limit,
+  ) as unknown as readonly TombstoneRow[];
+}
+
+function ledgerCountForScopes(db: DatabaseSync, scopes: readonly MemoryScope[]): number {
+  const row = cachedPrepare(db, ledgerCountSql(scopes)).get(...scopeBindings(scopes)) as
+    { readonly count: number } | undefined;
+  return row?.count ?? 0;
+}
+
+export function tombstoneLedgerCursorBelongsToScopes(
+  db: DatabaseSync,
+  scopes: readonly MemoryScope[],
+  cursor: MemoryTombstoneLedgerCursor,
+): boolean {
+  return scopeChunks(scopes).some((chunk) => {
+    const row = cachedPrepare(db, ledgerCursorScopeSql(chunk)).get(
+      cursor.id,
+      cursor.forgottenAt,
+      ...scopeBindings(chunk),
+    );
+    return row !== undefined;
+  });
+}
+
+export function listTombstonesPageRows(
+  db: DatabaseSync,
+  scopes: readonly MemoryScope[],
+  cipher: MemoryContentCipher,
+  limit: number,
+  after?: MemoryTombstoneLedgerCursor,
+): MemoryTombstonePage {
+  if (scopes.length === 0) return { tombstones: [], total: 0 };
+  let rows: readonly TombstoneRow[] = [];
+  let total = 0;
+  for (const chunk of scopeChunks(scopes)) {
+    rows = [...rows, ...ledgerRowsForScopes(db, chunk, limit, after)]
+      .sort(compareLedgerRows)
+      .slice(0, limit);
+    total += ledgerCountForScopes(db, chunk);
+  }
+  return {
+    tombstones: rows.map((row) => rowToTombstone(row, cipher)),
+    total,
+  };
 }
 
 /**

@@ -81,6 +81,7 @@ describe("redactEvidenceString", () => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const d of tmpDirs.splice(0)) {
     rmSync(d, { recursive: true, force: true });
   }
@@ -1016,6 +1017,95 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     expect(deps.store.listProjects().map((project) => project.path)).toEqual([projectDir]);
     deps.store.close();
     deps.memoryVault?.close();
+  });
+
+  it("composes the connected-context GitHub port for the launch project", async () => {
+    const projectDir = tmp("coding-context-project-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("coding-context-evidence-"),
+      env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+      initialProjectPath: projectDir,
+    });
+
+    try {
+      expect(deps.codingContextGitHubPort).toBeDefined();
+    } finally {
+      await deps.dispose?.();
+    }
+  });
+
+  it("runs the GitHub connector with the composed environment", async () => {
+    const injectedBin = tmp("coding-context-injected-bin-");
+    const ambientBin = tmp("coding-context-ambient-bin-");
+    const writeGhStub = (directory: string, source: string): void => {
+      const executable = join(directory, "gh");
+      writeFileSync(executable, `#!/bin/sh\nprintf '{"source":"${source}"}'\n`, "utf8");
+      chmodSync(executable, 0o700);
+    };
+    writeGhStub(injectedBin, "injected");
+    writeGhStub(ambientBin, "ambient");
+    vi.stubEnv("PATH", ambientBin);
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("coding-context-env-evidence-"),
+      env: {
+        GITHUB_CONNECTOR_AUTHORIZED: "true",
+        GH_TOKEN: "test-injected-token",
+        HOME: tmp("coding-context-env-home-"),
+        PATH: injectedBin,
+      },
+      initialProjectPath: tmp("coding-context-env-project-"),
+    });
+
+    try {
+      await expect(
+        deps.codingContextGitHubPort?.readJson(["api", "repos/example/project/issues/1"]),
+      ).resolves.toEqual({ source: "injected" });
+    } finally {
+      await deps.dispose?.();
+    }
+  });
+
+  it("does not compose the connected-context GitHub port without authorization", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("coding-context-disabled-evidence-"),
+      env: { GITHUB_CONNECTOR_AUTHORIZED: "false" },
+      initialProjectPath: tmp("coding-context-disabled-project-"),
+    });
+
+    try {
+      expect(deps.codingContextGitHubPort).toBeUndefined();
+    } finally {
+      await deps.dispose?.();
+    }
+  });
+
+  it("keeps startup available when optional Jira connector configuration is invalid", async () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("coding-context-invalid-jira-evidence-"),
+      env: {
+        KEIKO_JIRA_BASE_URL: "http://invalid.example.com",
+        KEIKO_JIRA_EMAIL: "operator@example.com",
+        KEIKO_JIRA_API_TOKEN: "secret-token",
+      },
+      diagnostics: { record: (record) => diagnostics.push(record) },
+    });
+
+    try {
+      expect(deps.codingContextJiraPort).toBeUndefined();
+      expect(diagnostics).toContainEqual(
+        expect.objectContaining({ source: "deps.codingContextJiraPort" }),
+      );
+      expect(JSON.stringify(diagnostics)).not.toContain("secret-token");
+      expect(JSON.stringify(diagnostics)).not.toContain("invalid.example.com");
+      expect(JSON.stringify(diagnostics)).not.toContain("operator@example.com");
+    } finally {
+      await deps.dispose?.();
+    }
   });
 
   it("resolves the DB path via KEIKO_UI_DATA_DIR when no explicit path is supplied", () => {

@@ -33,6 +33,8 @@ import {
   fetchModels,
   fetchProjects,
   patchChatMessage,
+  projectResponseWarningMessage,
+  resetModelRequestCache,
   regenerateDesktopChat,
   sendDesktopChat,
   sendDesktopChatStream,
@@ -47,6 +49,7 @@ import {
   loadMemoryAutonomyMode,
   rejectMemoryProposal,
 } from "@/lib/memory-api";
+import { GATEWAY_CONFIG_UPDATED_EVENT } from "../widgets/shared/gatewaySetupBus";
 import { sortProjects } from "@/lib/sidebar-sort";
 import {
   classifyRunReport,
@@ -1276,7 +1279,9 @@ export interface UseChatSessionResult {
   sendStatus: SendStatus;
   regeneratingMessageId: string | undefined;
   error: string | undefined;
+  notice?: string | undefined;
   clearError?: (() => void) | undefined;
+  clearNotice?: (() => void) | undefined;
   setDraft: (value: string) => void;
   setSelectedModel: (id: string) => void;
   // Optional `title` names the fresh conversation (e.g. from the New-Chat-window dialog);
@@ -1735,6 +1740,35 @@ function sharedBootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   return pending.then(cloneSessionPatch);
 }
 
+function refreshSessionModels(
+  previous: SessionState,
+  capabilities: readonly ModelCapability[],
+): SessionState {
+  const models = capabilities.filter(isConversationEligibleModel);
+  return {
+    ...previous,
+    models,
+    selectedModel: resolveSelectedModelId(previous.selectedModel, models),
+  };
+}
+
+interface SessionModelRefreshContext {
+  readonly isCancelled: () => boolean;
+  readonly setError: Dispatch<SetStateAction<string | undefined>>;
+  readonly setState: Dispatch<SetStateAction<SessionState>>;
+}
+
+async function loadRefreshedSessionModels(context: SessionModelRefreshContext): Promise<void> {
+  try {
+    const { models } = await fetchModels();
+    if (!context.isCancelled()) {
+      context.setState((previous) => refreshSessionModels(previous, models));
+    }
+  } catch (error_) {
+    if (!context.isCancelled()) context.setError(errorMessage(error_));
+  }
+}
+
 // Sonar S2004 — extracted out of streamUngrounded's `.catch` handler (itself already nested
 // inside a `new Promise` executor inside the useCallback body) so this setState updater is not
 // a fifth level of nested function. Takes the specific dispatchers/values it needs rather than
@@ -1998,6 +2032,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     canonicalVoicePageOutbox.status,
   );
   const [error, setError] = useState<string | undefined>();
+  const [notice, setNotice] = useState<string | undefined>();
   // Issue #185 — most recent grounded answer for the active chat. Cleared when the active
   // chat changes (see openChat) so a stale answer never overhangs into another conversation.
   const [latestGrounded, setLatestGrounded] = useState<GroundedAnswerWire | undefined>();
@@ -2494,6 +2529,27 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   }, [autoCreate, canonicalVoiceProjectionRef]);
 
   useEffect(() => {
+    let cancelled = false;
+    let refreshGeneration = 0;
+    const refreshModels = (): void => {
+      refreshGeneration += 1;
+      const generation = refreshGeneration;
+      invalidateSharedBootstrap();
+      resetModelRequestCache();
+      void loadRefreshedSessionModels({
+        isCancelled: () => cancelled || generation !== refreshGeneration,
+        setError,
+        setState,
+      });
+    };
+    window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshModels);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshModels);
+    };
+  }, []);
+
+  useEffect(() => {
     return subscribeChatMutations((mutation) => {
       if (mutation.type === "upsert") {
         const { chat } = mutation;
@@ -2668,6 +2724,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return undefined;
       }
       setError(undefined);
+      setNotice(undefined);
       setStreamingAssistantMessage(undefined);
       // 0.3.0 release audit — a new conversation is a different conversation: whatever was staged
       // for the previous one must not be carried into it.
@@ -2711,6 +2768,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const openProject = useCallback(
     async (project: ProjectWithAvailability): Promise<void> => {
       setError(undefined);
+      setNotice(undefined);
       setStreamingAssistantMessage(undefined);
       // 0.3.0 release audit — a project switch changes the active conversation, so the one
       // app-wide composer must not carry the previous project's draft or staged files into it.
@@ -2755,6 +2813,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     async (chat: Chat): Promise<void> => {
       if (activeChatIdRef.current === chat.id && state.activeChat?.id === chat.id) return;
       setError(undefined);
+      setNotice(undefined);
       setStreamingAssistantMessage(undefined);
       // Issue #152 — opening a different chat must abort any in-flight send so
       // a late response from the prior chat never lands here.
@@ -2809,11 +2868,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       const trimmed = path.trim();
       if (trimmed.length === 0) return undefined;
       setError(undefined);
+      setNotice(undefined);
       try {
         const created = await createProject({ path: trimmed });
         const projectPayload = await fetchProjects();
         setState((previous) => ({ ...previous, projects: Array.from(projectPayload.projects) }));
         await openProject(created.project);
+        setNotice(projectResponseWarningMessage(created));
         return created.project;
       } catch (error_) {
         setError(errorMessage(error_));
@@ -3863,6 +3924,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const clearError = useCallback((): void => {
     setError(undefined);
   }, []);
+  const clearNotice = useCallback((): void => {
+    setNotice(undefined);
+  }, []);
 
   const noEligibleModels =
     !loading && resolveSelectedModelId(state.selectedModel, state.models) === undefined;
@@ -3884,7 +3948,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       sendStatus,
       regeneratingMessageId,
       error,
+      notice,
       clearError,
+      clearNotice,
       setDraft,
       setSelectedModel,
       openNewChat,
@@ -3935,7 +4001,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       sendStatus,
       regeneratingMessageId,
       error,
+      notice,
       clearError,
+      clearNotice,
       setSelectedModel,
       openNewChat,
       openProject,

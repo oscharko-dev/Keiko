@@ -13,12 +13,15 @@ import type {
 import type { MemoryTombstone } from "./types.js";
 import {
   deleteTombstonesByScopeBeforeRows,
+  hasSemanticallySimilarForgetTombstoneRow,
   insertTombstoneRow,
   listTombstonesByScopeRows,
+  listTombstonesPageRows,
   selectForgetSuppressionBodyHashPresence,
 } from "./tombstones.js";
 import { memoryBodySuppressionHash } from "./body-fingerprint.js";
 import { createMemoryVault } from "./index.js";
+import { MemoryStorageValidationError } from "./errors.js";
 import type { MemoryContentCipher } from "./cipher.js";
 import { openTestDb, TEST_CIPHER } from "./_support.js";
 
@@ -40,7 +43,238 @@ function makeTombstone(
 const userScope: MemoryScope = { kind: "user", userId: "u-1" as UserId };
 const workspaceScope: MemoryScope = { kind: "workspace", workspaceId: "u-1" as WorkspaceId };
 
+function requiredFirstTombstone(page: ReturnType<typeof listTombstonesPageRows>): MemoryTombstone {
+  const tombstone = page.tombstones[0];
+  if (tombstone === undefined) throw new Error("expected a tombstone page row");
+  return tombstone;
+}
+
 describe("tombstones", () => {
+  it("rejects unbounded public tombstone page limits before SQL", () => {
+    const dir = freshFactoryDir();
+    const vault = createMemoryVault({
+      memoryDir: dir,
+      env: { KEIKO_MEMORY_DIR: dir },
+      vaultKey: TEST_VAULT_KEY,
+    });
+    try {
+      for (const limit of [0, -1, 1.5, 202, Number.MAX_SAFE_INTEGER + 1]) {
+        expect(() => vault.listTombstonesPage([userScope], limit)).toThrow(
+          MemoryStorageValidationError,
+        );
+      }
+      expect(vault.listTombstonesPage([userScope], 201)).toEqual({ tombstones: [], total: 0 });
+    } finally {
+      vault.close();
+    }
+  });
+
+  it("rejects a continuation cursor from outside the requested scope set", () => {
+    const dir = freshFactoryDir();
+    const vault = createMemoryVault({
+      memoryDir: dir,
+      env: { KEIKO_MEMORY_DIR: dir },
+      vaultKey: TEST_VAULT_KEY,
+      newTombstoneId: () => "foreign-scope-cursor",
+    });
+    try {
+      const record = happyRecord("foreign-scope-memory");
+      vault.insertMemory(record);
+      vault.deleteMemory(record.id, {
+        tombstone: true,
+        forgetterSurface: "test",
+        nowMs: 1_700_000_000_001,
+      });
+
+      expect(() =>
+        vault.listTombstonesPage([workspaceScope], 10, {
+          forgottenAt: 1_700_000_000_001,
+          id: "foreign-scope-cursor",
+        }),
+      ).toThrow(MemoryStorageValidationError);
+    } finally {
+      vault.close();
+    }
+  });
+
+  it("finds an older semantic refusal through bounded indexed pages", () => {
+    const db = openTestDb();
+    for (let index = 0; index < 250; index += 1) {
+      insertTombstoneRow(
+        db,
+        makeTombstone({
+          id: `vector-${String(index)}`,
+          memoryId: `memory-${String(index)}` as MemoryId,
+          forgottenAt: index,
+        }),
+        TEST_CIPHER,
+        new Float32Array([index === 0 ? 1 : 0, index === 0 ? 0 : 1]),
+      );
+    }
+
+    expect(
+      hasSemanticallySimilarForgetTombstoneRow(
+        db,
+        userScope,
+        TEST_CIPHER,
+        new Float32Array([1, 0]),
+        0.95,
+      ),
+    ).toBe(true);
+    db.close();
+  });
+
+  it("paginates the audit ledger with a stable descending keyset", () => {
+    const db = openTestDb();
+    const forgottenAtValues = [10, 10, 3, 2, 1] as const;
+    for (const [index, forgottenAt] of forgottenAtValues.entries()) {
+      insertTombstoneRow(
+        db,
+        makeTombstone({
+          id: `t-${String(index)}`,
+          memoryId: `m-${String(index)}` as MemoryId,
+          forgottenAt,
+        }),
+        TEST_CIPHER,
+      );
+    }
+
+    const scopes = [userScope];
+    const first = listTombstonesPageRows(db, scopes, TEST_CIPHER, 2);
+    const last = first.tombstones.at(-1);
+    expect(first.total).toBe(5);
+    expect(first.tombstones.map((row) => row.id)).toEqual(["t-0", "t-1"]);
+    expect(last).toBeDefined();
+    const second = listTombstonesPageRows(db, scopes, TEST_CIPHER, 2, {
+      forgottenAt: last?.forgottenAt ?? 0,
+      id: last?.id ?? "",
+    });
+    expect(second.tombstones.map((row) => row.id)).toEqual(["t-2", "t-3"]);
+    db.close();
+  });
+
+  it("continues a ledger page deterministically across authorized scopes", () => {
+    const db = openTestDb();
+    insertTombstoneRow(
+      db,
+      makeTombstone({ id: "t-b", memoryId: "m-b" as MemoryId, forgottenAt: 100 }),
+      TEST_CIPHER,
+    );
+    insertTombstoneRow(
+      db,
+      makeTombstone({
+        id: "t-a",
+        memoryId: "m-a" as MemoryId,
+        scopeKind: "workspace",
+        forgottenAt: 100,
+      }),
+      TEST_CIPHER,
+    );
+
+    const scopes = [userScope, workspaceScope];
+    const first = listTombstonesPageRows(db, scopes, TEST_CIPHER, 1);
+    const item = first.tombstones[0];
+    expect(item?.id).toBe("t-a");
+    expect(item).toBeDefined();
+    const second = listTombstonesPageRows(db, scopes, TEST_CIPHER, 1, {
+      forgottenAt: item?.forgottenAt ?? 0,
+      id: item?.id ?? "",
+    });
+    expect(second.tombstones.map((row) => row.id)).toEqual(["t-b"]);
+    db.close();
+  });
+
+  it("pages a large authorized scope set without exceeding SQLite bind limits", () => {
+    const db = openTestDb();
+    const scopes = Array.from({ length: 20_000 }, (_, index): MemoryScope => ({
+      kind: "user",
+      userId: `authorized-user-${String(index)}` as UserId,
+    }));
+    insertTombstoneRow(
+      db,
+      makeTombstone({
+        id: "large-scope-ledger",
+        memoryId: "large-scope-memory" as MemoryId,
+        scopeCoordinate: "authorized-user-19999",
+      }),
+      TEST_CIPHER,
+    );
+
+    expect(listTombstonesPageRows(db, scopes, TEST_CIPHER, 2)).toMatchObject({
+      total: 1,
+      tombstones: [{ id: "large-scope-ledger" }],
+    });
+    db.close();
+  });
+
+  it("keeps global keyset order across independently queried scope chunks", () => {
+    const db = openTestDb();
+    const scopes = Array.from({ length: 201 }, (_, index): MemoryScope => ({
+      kind: "user",
+      userId: `chunked-user-${String(index)}` as UserId,
+    }));
+    for (const [id, scopeCoordinate, forgottenAt] of [
+      ["newest-later-chunk", "chunked-user-150", 300],
+      ["middle-first-chunk", "chunked-user-50", 200],
+      ["oldest-final-chunk", "chunked-user-200", 100],
+    ] as const) {
+      insertTombstoneRow(
+        db,
+        makeTombstone({
+          id,
+          memoryId: `${id}-memory` as MemoryId,
+          scopeCoordinate,
+          forgottenAt,
+        }),
+        TEST_CIPHER,
+      );
+    }
+
+    const first = listTombstonesPageRows(db, scopes, TEST_CIPHER, 1);
+    const firstRow = requiredFirstTombstone(first);
+    expect(firstRow.id).toBe("newest-later-chunk");
+    const second = listTombstonesPageRows(db, scopes, TEST_CIPHER, 1, {
+      forgottenAt: firstRow.forgottenAt,
+      id: firstRow.id,
+    });
+    const secondRow = requiredFirstTombstone(second);
+    expect(secondRow.id).toBe("middle-first-chunk");
+    const third = listTombstonesPageRows(db, scopes, TEST_CIPHER, 1, {
+      forgottenAt: secondRow.forgottenAt,
+      id: secondRow.id,
+    });
+    expect(third.tombstones.map((row) => row.id)).toEqual(["oldest-final-chunk"]);
+    db.close();
+  });
+
+  it("uses SQLite binary id order at a cross-chunk page boundary", () => {
+    const db = openTestDb();
+    const scopes = Array.from({ length: 101 }, (_, index): MemoryScope => ({
+      kind: "user",
+      userId: `binary-order-user-${String(index)}` as UserId,
+    }));
+    for (const [id, scopeCoordinate] of [
+      ["a-lowercase", "binary-order-user-0"],
+      ["B-uppercase", "binary-order-user-100"],
+    ] as const) {
+      insertTombstoneRow(
+        db,
+        makeTombstone({ id, memoryId: `${id}-memory` as MemoryId, scopeCoordinate }),
+        TEST_CIPHER,
+      );
+    }
+
+    const first = listTombstonesPageRows(db, scopes, TEST_CIPHER, 1);
+    const firstRow = requiredFirstTombstone(first);
+    expect(firstRow.id).toBe("B-uppercase");
+    const second = listTombstonesPageRows(db, scopes, TEST_CIPHER, 1, {
+      forgottenAt: firstRow.forgottenAt,
+      id: firstRow.id,
+    });
+    expect(second.tombstones.map((row) => row.id)).toEqual(["a-lowercase"]);
+    db.close();
+  });
+
   it("inserts and lists in forgotten_at ASC order", () => {
     const db = openTestDb();
     insertTombstoneRow(

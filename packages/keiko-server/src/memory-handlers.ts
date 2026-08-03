@@ -15,11 +15,14 @@
 // Every response is redacted through `deps.redactor` before serialisation to honour D9.
 
 import type { IncomingMessage } from "node:http";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   createMemoryVault,
   MemoryStorageError,
+  MemoryStorageValidationError,
   type MemoryBatchUpdate,
+  type MemoryTombstone,
+  type MemoryTombstoneLedgerCursor,
   type MemoryVaultStore,
 } from "@oscharko-dev/keiko-memory-vault";
 import {
@@ -86,6 +89,8 @@ const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_QUERY_CHARS = 200;
 const MAX_RECENT_SINCE_CHARS = 13;
 const MAX_MEMORY_EXCERPT_CHARS = 240;
+const MAX_TOMBSTONE_CURSOR_CHARS = 1_024;
+const MAX_TOMBSTONE_ID_CHARS = 200;
 const REVIEW_QUEUE_STATUSES: readonly MemoryStatus[] = ["proposed", "conflicted", "expired"];
 
 // ─── Type guards / helpers ─────────────────────────────────────────────────────
@@ -138,6 +143,56 @@ function parseIntQuery(raw: string | null, defaultValue: number, max: number): n
   const n = Number.parseInt(raw, 10);
   if (!Number.isFinite(n) || n < 1) return defaultValue;
   return Math.min(n, max);
+}
+
+function invalidTombstoneCursorResult(): RouteResult {
+  return { status: 400, body: errorBody("BAD_REQUEST", "Tombstone cursor is invalid.") };
+}
+
+function isBoundedCursorString(value: unknown, max: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= max;
+}
+
+interface TombstoneRouteCursor extends MemoryTombstoneLedgerCursor {
+  readonly scopeDigest: string;
+}
+
+function isTombstoneCursorRecord(value: unknown): value is TombstoneRouteCursor {
+  if (!isRecord(value)) return false;
+  if (!Number.isSafeInteger(value.forgottenAt) || (value.forgottenAt as number) < 0) return false;
+  return (
+    isBoundedCursorString(value.id, MAX_TOMBSTONE_ID_CHARS) &&
+    typeof value.scopeDigest === "string" &&
+    /^[0-9a-f]{64}$/u.test(value.scopeDigest)
+  );
+}
+
+function parseTombstoneCursor(
+  raw: string | null,
+  scopeDigest: string,
+): MemoryTombstoneLedgerCursor | RouteResult | undefined {
+  if (raw === null) return undefined;
+  if (raw.length === 0 || raw.length > MAX_TOMBSTONE_CURSOR_CHARS || !/^[\w-]+$/u.test(raw)) {
+    return invalidTombstoneCursorResult();
+  }
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as unknown;
+    if (!isTombstoneCursorRecord(parsed) || parsed.scopeDigest !== scopeDigest) {
+      return invalidTombstoneCursorResult();
+    }
+    return { forgottenAt: parsed.forgottenAt, id: parsed.id };
+  } catch {
+    return invalidTombstoneCursorResult();
+  }
+}
+
+function tombstoneCursor(tombstone: MemoryTombstone, scopeDigest: string): string {
+  const cursor: TombstoneRouteCursor = {
+    forgottenAt: tombstone.forgottenAt,
+    id: tombstone.id,
+    scopeDigest,
+  };
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
 }
 
 function splitComma(raw: string | null): string[] {
@@ -627,6 +682,71 @@ export function handleListMemories(ctx: RouteContext, deps: UiHandlerDeps): Rout
   }
 }
 
+function loadTombstonePage(
+  vault: MemoryVaultStore,
+  authorizedScopes: readonly MemoryScope[],
+  limit: number,
+  after: MemoryTombstoneLedgerCursor | undefined,
+): ReturnType<MemoryVaultStore["listTombstonesPage"]> | RouteResult {
+  try {
+    return vault.listTombstonesPage(authorizedScopes, limit + 1, after);
+  } catch (error) {
+    if (after !== undefined && error instanceof MemoryStorageValidationError) {
+      return invalidTombstoneCursorResult();
+    }
+    throw error;
+  }
+}
+
+export function handleListMemoryTombstones(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  const vault = resolveVault(deps);
+  if (isRouteResult(vault)) return vault;
+  if (deps.memoryAuthorization === undefined) {
+    return {
+      status: 403,
+      body: errorBody(
+        "MEMORY_AUTHORIZATION_REQUIRED",
+        "Memory tombstone access requires an authorized caller.",
+      ),
+    };
+  }
+  const rawLimit = ctx.url.searchParams.get("limit");
+  const limit = parseIntQuery(rawLimit, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
+  const authorizedScopes = authorizedMemoryScopes(deps, vault);
+  const scopeDigest = authorizedScopeDigest(authorizedScopes);
+  const after = parseTombstoneCursor(ctx.url.searchParams.get("cursor"), scopeDigest);
+  if (isRouteResult(after)) return after;
+  const page = loadTombstonePage(vault, authorizedScopes, limit, after);
+  if (isRouteResult(page)) return page;
+  const tombstones = page.tombstones.slice(0, limit);
+  const last = tombstones.at(-1);
+  const nextCursor =
+    page.tombstones.length > limit && last !== undefined
+      ? tombstoneCursor(last, scopeDigest)
+      : null;
+  const projection = tombstones.map((tombstone) => ({
+    id: tombstone.id,
+    memoryId: tombstone.memoryId,
+    scopeKind: tombstone.scopeKind,
+    scopeCoordinate: tombstone.scopeCoordinate,
+    type: tombstone.type,
+    forgottenAt: tombstone.forgottenAt,
+    forgetterSurface: tombstone.forgetterSurface,
+    reviewerId: tombstone.reviewerId,
+    originalStatus: tombstone.originalStatus,
+    reason: tombstone.reason,
+  }));
+  return {
+    status: 200,
+    body: {
+      tombstones: deps.redactor(projection),
+      total: page.total,
+      limit,
+      nextCursor,
+    },
+  };
+}
+
 // ─── Handler: GET /api/memory/review-queue ────────────────────────────────────
 
 export function handleMemoryReviewQueue(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
@@ -1041,6 +1161,13 @@ function authorizedMemoryScopes(
   vault: MemoryVaultStore,
 ): readonly MemoryScope[] {
   return deps.memoryAuthorization?.authorizedScopes() ?? vault.listMemoryScopes();
+}
+
+function authorizedScopeDigest(scopes: readonly MemoryScope[]): string {
+  const keys = [...new Set(scopes.map(scopeKey))].sort((left, right) =>
+    left.localeCompare(right, "en"),
+  );
+  return createHash("sha256").update(JSON.stringify(keys), "utf8").digest("hex");
 }
 
 function selectorScope(selector: ForgetSelector): MemoryScope | undefined {

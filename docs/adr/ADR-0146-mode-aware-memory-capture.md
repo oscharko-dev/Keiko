@@ -5,7 +5,9 @@
 Accepted (Issue #2546, Epic #2537, Memory M1.1, 2026-07-19). Amended by Issue #2549
 (Memory M1.4, 2026-07-19) to add the user-selected requested-mode surface described in D1.
 Amended by Issue #2864 (2026-07-31) to record that standing and opportunistic maintenance apply
-the same D2 autonomy gate before unattended promotion.
+the same D2 autonomy gate before unattended promotion. Amended by Issue #2885 (2026-08-02) to make
+the mapping apply uniformly to salience, explicit chat intent, voice recap, and
+capture-from-conversation.
 
 ## Amends
 
@@ -121,11 +123,13 @@ it is inserted `proposed`, exactly as it would be in `governed-assist`. Mode-eli
 therefore a gate on top of governance, not a bypass of it: a mode-eligible but low-confidence
 candidate in `supervised-coding` still lands as `proposed`.
 
-This is a deliberate reuse decision, not an optimization: it keeps memory capture to **one** capture
-path (`collectMemoryActions` → `captureSalientFromTurn`), **one** policy module
-(`memory-capture-policy.ts`), and **one** promotion lever (`planMemoryMaintenance`/`shouldPromote`).
-No second acceptance rule is fabricated outside governance, per §5 of `AGENTS.md` ("do not introduce
-a parallel policy or memory subsystem when an existing one can be shaped for the need").
+This is a deliberate reuse decision, not an optimization. Every live capture entry point — salience,
+the explicit chat-intent extractor, voice recap, and capture-from-conversation — resolves the same
+mode and delegates eligible records to `promoteEligibleMemoryRecord` in
+`memory-capture-policy.ts`. That helper owns the single
+`planMemoryMaintenance`/`shouldPromote` lever. No entry point may persist an eligible record through
+a private acceptance rule or remain permanently `proposed` merely because it entered through a
+different transport, per §5 of `AGENTS.md`.
 
 ### D4a — Maintenance promotion uses the same unattended-acceptance gate
 
