@@ -222,7 +222,8 @@ export type CodingRuntimeApprovalIssueResult =
     }
   | {
       readonly ok: false;
-      readonly failureCode: "runtime-run-mismatch" | "runtime-stopped";
+      readonly failureCode:
+        "approval-activation-failed" | "runtime-run-mismatch" | "runtime-stopped";
       readonly retryable: false;
     };
 
@@ -796,7 +797,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     });
     if (!activateIssuedToolApproval(this.deps.codingToolApprovals, request, issued)) {
       rollbackIssuedApproval(this.deps.approvalStore, binding, issued);
-      return { ok: false, failureCode: "runtime-stopped", retryable: false };
+      return { ok: false, failureCode: "approval-activation-failed", retryable: false };
     }
     return {
       ok: true,

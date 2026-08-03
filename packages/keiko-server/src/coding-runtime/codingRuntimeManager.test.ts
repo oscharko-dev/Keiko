@@ -2432,7 +2432,7 @@ describe("coding runtime manager", () => {
         actionKind: "verification-command",
         approvedByUserId: "operator",
       }),
-    ).toEqual({ ok: false, failureCode: "runtime-stopped", retryable: false });
+    ).toEqual({ ok: false, failureCode: "approval-activation-failed", retryable: false });
     expect(consume).toHaveBeenCalledOnce();
     const rollback = consume.mock.calls[0]?.[0];
     expect(rollback?.approval.approvalId).toMatch(/^sca_/u);
