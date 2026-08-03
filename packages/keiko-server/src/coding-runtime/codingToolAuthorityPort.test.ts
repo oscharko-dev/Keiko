@@ -675,7 +675,10 @@ describe("CodingToolAuthorityPort", () => {
           : { ...request, verifierId: "different-verifier" };
       expect(port.admit("runtime-capability-secret", mismatched).ok).toBe(false);
 
-      expect(port.admit("runtime-capability-secret", request).ok).toBe(false);
+      expect(port.admit("runtime-capability-secret", request)).toEqual({
+        ok: false,
+        reason: "budget-exceeded",
+      });
       expect(port.admit("runtime-capability-secret", request).ok).toBe(true);
       expect(port.admit("runtime-capability-secret", request).ok).toBe(false);
     },
