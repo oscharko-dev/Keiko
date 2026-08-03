@@ -26,6 +26,7 @@ function record(
   status: "proposed" | "accepted",
   updatedAt = 100,
   id = "canonical-memory",
+  sensitivity: MemoryRecord["provenance"]["sensitivity"] = "public",
 ): MemoryRecord {
   return {
     id: id as MemoryId,
@@ -37,7 +38,7 @@ function record(
       sourceKind: "explicit-user-instruction",
       capturedAt: updatedAt,
       confidence: 0.9,
-      sensitivity: "public",
+      sensitivity,
     },
     validity: { validFrom: updatedAt },
     status,
@@ -84,5 +85,23 @@ describe("persistCapturedMemory", () => {
       memory: { id: "first-capture", status: "accepted" },
     });
     expect(store.listMemoriesByScope(record("accepted").scope)).toHaveLength(1);
+  });
+
+  it("does not promote a confidential proposal through a later public capture", () => {
+    const store = vault();
+    persistCapturedMemory(
+      store,
+      record("proposed", 100, "confidential-capture", "confidential"),
+      true,
+    );
+
+    expect(
+      persistCapturedMemory(store, record("accepted", 200, "public-capture", "public"), true),
+    ).toMatchObject({
+      inserted: true,
+      promoted: false,
+      memory: { id: "public-capture", status: "accepted" },
+    });
+    expect(store.getMemory("confidential-capture" as MemoryId)?.status).toBe("proposed");
   });
 });

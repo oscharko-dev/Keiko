@@ -1,5 +1,6 @@
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 import { memoryBodySuppressionHash, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { canonicalise } from "@oscharko-dev/keiko-security";
 
 export interface PersistedCapturedMemory {
   readonly memory: MemoryRecord;
@@ -8,7 +9,7 @@ export interface PersistedCapturedMemory {
 }
 
 function memoryCaptureProjection(record: MemoryRecord): string {
-  return JSON.stringify({
+  return canonicalise({
     schemaVersion: record.schemaVersion,
     scope: record.scope,
     type: record.type,
@@ -33,7 +34,11 @@ function reusableScopedMemory(
       status: ["proposed", "accepted"],
       includeExpired: true,
     })
-    .find((existing) => memoryBodySuppressionHash(existing.body) === bodyHash);
+    .find(
+      (existing) =>
+        memoryBodySuppressionHash(existing.body) === bodyHash &&
+        memoryCaptureProjection(existing) === memoryCaptureProjection(record),
+    );
 }
 
 function reuseCapturedMemory(

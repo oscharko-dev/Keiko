@@ -973,6 +973,28 @@ describe("handleMemoryCaptureFromConversation", () => {
       expect(reloaded?.status).toBe("accepted");
     });
 
+    it("returns the persisted proposal id when an identical candidate is reused", async () => {
+      const vault = makeVault();
+      const deps = makeDeps({ memoryVault: vault });
+      const chat = registerChat(deps, "capture-reuse");
+      const input = {
+        text: "remember that release hardening uses vitest",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      };
+      const first = await handleMemoryCaptureFromConversation(makeCtx(input), deps);
+      const second = await handleMemoryCaptureFromConversation(makeCtx(input), deps);
+      const proposalIds = [first, second].map((result) => {
+        const outcomes = asJson(result).outcomes as readonly {
+          readonly proposal?: { readonly proposalId: string };
+        }[];
+        return outcomes[0]?.proposal?.proposalId;
+      });
+
+      expect(proposalIds[0]).toBeDefined();
+      expect(proposalIds[1]).toBe(proposalIds[0]);
+      expect(listAllMemories(vault, { includeExpired: true })).toHaveLength(1);
+    });
+
     it("does not insert records for non-candidate outcomes", async () => {
       const vault = makeVault();
       const deps = makeDeps({ memoryVault: vault });

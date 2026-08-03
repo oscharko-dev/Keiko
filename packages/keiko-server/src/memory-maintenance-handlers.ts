@@ -48,7 +48,11 @@ import {
   memoryUnattendedAcceptanceAllowed,
   resolveMemoryMaintenanceAutonomyMode,
 } from "./memory-capture-policy.js";
-import { applyMemoryRetention, type MemoryRetentionPolicy } from "./memory-retention.js";
+import {
+  applyMemoryRetention,
+  type MemoryRetentionDecision,
+  type MemoryRetentionPolicy,
+} from "./memory-retention.js";
 
 export interface MaintenanceCounts {
   promoted: number;
@@ -323,6 +327,27 @@ function applyForgets(
   }
 }
 
+function auditRetentionForgets(
+  auditSink: MemoryAuditSink | undefined,
+  nowMs: number,
+  decisions: readonly MemoryRetentionDecision[],
+): void {
+  for (const decision of decisions) {
+    emitAudit(
+      auditSink,
+      nowMs,
+      "memory:forgotten",
+      "retention",
+      `Forgot a memory (${decision.reason}).`,
+      {
+        memoryId: decision.memoryId,
+        scope: decision.scope,
+        tombstoned: true,
+      },
+    );
+  }
+}
+
 // Reusable maintenance core. Drives consolidation + the governance plan against a vault, emitting
 // audit events when an evidence store is supplied. Exported so both the BFF route handler and the
 // `keiko memory maintain` CLI run the SAME pass — no duplicated orchestration.
@@ -462,6 +487,7 @@ export function runMemoryMaintenance(
       policy: options.retentionPolicy,
       nowMs,
     });
+    auditRetentionForgets(auditSink, nowMs, retention.forgotten);
     counts.retentionForgotten += retention.forgotten.length;
     counts.forgotten += retention.forgotten.length;
     counts.tombstonesPurged += retention.tombstonesPurged;

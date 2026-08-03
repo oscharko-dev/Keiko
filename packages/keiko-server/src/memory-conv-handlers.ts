@@ -514,6 +514,10 @@ function persistCandidateOutcome(
   }
   return {
     ...outcome,
+    proposal: {
+      ...outcome.proposal,
+      proposalId: persisted.memory.id as unknown as MemoryProposalId,
+    },
     requiresApproval: outcome.requiresApproval,
     status: accepted ? "accepted" : "proposed",
   };

@@ -234,6 +234,7 @@ describe("runMemoryCli maintain", () => {
 
   it("honours explicit retention policy in the shared CLI maintenance pass", async () => {
     const vault = makeVault();
+    const evidenceStore = createInMemoryEvidenceStore();
     insert(vault, { id: "retention-old", createdAt: Date.now() - 2 * 864e5 });
 
     expect(
@@ -241,10 +242,21 @@ describe("runMemoryCli maintain", () => {
         ["maintain"],
         capture().io,
         { KEIKO_MEMORY_RETENTION_MAX_AGE_DAYS: "1" },
-        { vault },
+        { vault, evidenceStore },
       ),
     ).toBe(0);
     expect(vault.getMemory(mid("retention-old"))).toBeUndefined();
+    const events = evidenceStore
+      .list()
+      .flatMap((runId) => JSON.parse(evidenceStore.get(runId) ?? "[]") as MemoryAuditEvent[]);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "memory:forgotten",
+        initiatorSurface: "retention",
+        memoryId: "retention-old",
+        tombstoned: true,
+      }),
+    );
   });
 
   it("reports destructive tombstone purges and their retention breakdown", async () => {

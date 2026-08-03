@@ -3402,6 +3402,44 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("rejects an unknown workflow-eligible model without changing the stored selection", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-coding-unknown-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-coding-unknown-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({
+            baseUrl: "https://llm-gateway.example.com/v1",
+            apiKey: "first-secret-token",
+            deploymentNames: ["coding-chat", "general-chat"],
+            workflowEligibleModelIds: ["coding-chat"],
+          }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+
+    const rejected = await handleGatewaySetup(
+      ctx({ preserveExisting: true, workflowEligibleModelIds: ["coding-cht"] }),
+      deps,
+    );
+
+    expect(rejected).toMatchObject({
+      status: 400,
+      body: { error: { code: "BAD_REQUEST" } },
+    });
+    expect(
+      currentGatewayConfig(deps)?.capabilities?.filter((capability) => capability.workflowEligible),
+    ).toMatchObject([{ id: "coding-chat" }]);
+    deps.store.close();
+  });
+
   it("preserves stored egress when only workflow eligibility changes", async () => {
     const uiDir = await tempDir("keiko-gw-ui-workflow-egress-");
     const deps = buildUiHandlerDeps({

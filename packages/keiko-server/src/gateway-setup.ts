@@ -3382,9 +3382,34 @@ async function trySetupCandidate(
     figmaAccessToken: request.figmaAccessToken,
     current,
   });
+  const workflowEligibilityError = validateWorkflowEligibleModelIds(request, verified.config);
+  if (workflowEligibilityError !== undefined) return workflowEligibilityError;
   persistGatewayConfig(verified.rawConfig, gatewayConfig.storagePath, deps);
   gatewayConfig.set(verified.config, true);
   return setupSuccessResult(verified.config, verified.testedModelIds, verified.skippedModelIds);
+}
+
+function validateWorkflowEligibleModelIds(
+  request: SetupRequest,
+  config: GatewayConfig,
+): RouteResult | undefined {
+  if (!request.workflowEligibleModelIdsConfigured) return undefined;
+  const chatModelIds = new Set(
+    listConfiguredCapabilities(config)
+      .filter((capability) => capability.kind === "chat")
+      .map((capability) => capability.id),
+  );
+  if (request.workflowEligibleModelIds.every((modelId) => chatModelIds.has(modelId))) {
+    return undefined;
+  }
+  return {
+    status: 400,
+    body: errorBody(
+      "BAD_REQUEST",
+      "workflowEligibleModelIds must reference configured chat models.",
+      request.correlationId,
+    ),
+  };
 }
 
 function setupCandidateError(): string {
@@ -3397,6 +3422,8 @@ function saveExistingConfigUpdate(
   deps: UiHandlerDeps,
   gatewayConfig: RuntimeGatewayConfig,
 ): RouteResult {
+  const workflowEligibilityError = validateWorkflowEligibleModelIds(request, current);
+  if (workflowEligibilityError !== undefined) return workflowEligibilityError;
   const updatedCurrent = request.workflowEligibleModelIdsConfigured
     ? {
         ...current,
