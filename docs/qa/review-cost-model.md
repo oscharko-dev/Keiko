@@ -94,11 +94,12 @@ after any of these, because each one deliberately begins a fresh partition or le
 - a change to `.github/keiko-for-quality.json`, the model id, the model protocol, or the reviewer
   pin — all four are hashed into the store's artifact name and bound into its signature context;
 - the seven-day artifact retention expiring;
-- the previous run settling incomplete — for ANY reason, in this repository. The hand-off and the
-  signing job both gate on `outcome == 'complete'`, so even a run that persisted verdicts locally
-  (budget exhaustion, once the pin carries Keiko-for-Quality#75) never uploads them until the
-  workflow adopts `store_written`; a rejected schema or an engine error writes nothing in the
-  first place;
+- an incomplete run **and no older complete artifact still retained** under the same identity. An
+  incomplete run uploads no replacement — the hand-off and the signing job both gate on
+  `outcome == 'complete'`, so even verdicts persisted locally never leave the runner until the
+  workflow adopts `store_written` — but the locator scans every same-named artifact and takes the
+  newest eligible one, so an earlier complete store inside the retention window is still found.
+  A cold start after an incomplete run is expected only when there is no such artifact left;
 - the store being disabled for that run, which the log states explicitly.
 
 Suspect persistence only when a prior run under the _same_ identity completed inside the retention
@@ -127,7 +128,9 @@ reported `store_loaded entries:2` and `hits:1 misses:1`.
 
 Two steps, and the first alone is not enough.
 
-1. Set `vars.KEIKO_QUALITY_ENABLED` to `false`, so no new job starts and the environment's secrets
+1. Set the repository variable `KEIKO_QUALITY_ENABLED` to `false` — that is its name; the
+   `vars.` prefix in the workflow is the Actions expression context, not part of it — so no new job
+   starts and the environment's secrets
    are never materialized for one.
 2. **Cancel every run already requested, queued, or in progress.** The variable does not touch
    them: a run that has started keeps its credentials and can keep spending until it finishes or
