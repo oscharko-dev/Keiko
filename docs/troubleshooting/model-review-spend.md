@@ -86,9 +86,12 @@ outcome.
 
 **Resolution**
 
-1. If the earlier run settled **incomplete**, this is expected today: the hand-off and the signing
-   job both gate on `outcome == 'complete'`, so nothing was uploaded. Reduce the size of the change
-   so the review completes, rather than raising or lowering `token_budget`.
+1. If the earlier run settled **incomplete**, it uploaded nothing — the hand-off and the signing
+   job both gate on `outcome == 'complete'`. That explains the cold start **only when no older
+   complete artifact under the same identity is still retained**; the locator scans all eligible
+   artifacts, so if one exists this is still a real lookup or verification failure and the
+   investigation continues at step 3. Where it is the explanation, reduce the size of the change so
+   the review completes, rather than raising or lowering `token_budget`.
 2. If the earlier run settled complete and produced no artifact, read the hand-off and signing
    steps' logs — every archive-gate refusal writes a `::warning::` naming what it rejected.
 3. If an artifact exists but the next run discarded it, the verify step logs

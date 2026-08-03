@@ -32,11 +32,18 @@ same 3,000 file reviews gives about 4.6k per file. Both numbers are real and the
 windows. Plan with 25k, because it comes from money actually spent, and expect the materialized
 per-file figure to rise toward it as billing settles.
 
-| Change    | First review (empty store) | Later push (most files unchanged)    |
-| --------- | -------------------------- | ------------------------------------ |
-| 5 files   | ~0.15 EUR                  | ~0.03 EUR                            |
-| 50 files  | ~1.50–3.50 EUR             | ~0.03–0.25 EUR                       |
-| 135 files | ~4.50 EUR                  | ~0.10 EUR, when a store was retained |
+| Change    | First review (empty store)     | Later push (most files unchanged)    |
+| --------- | ------------------------------ | ------------------------------------ |
+| 5 files   | ~0.15 EUR, completes           | ~0.03 EUR                            |
+| 50 files  | ~1.50–3.50 EUR, completes      | ~0.03–0.25 EUR                       |
+| 135 files | ~4.50 EUR, **truncated at 2M** | ~0.10 EUR, when a store was retained |
+
+The last row is not the price of reviewing 135 files. At the 25k planning figure that change wants
+roughly 3.4M tokens and the ceiling stops it at 2M, so the number is what hitting the ceiling costs
+— the run settles incomplete and the tail goes unreviewed. There is no configuration that buys a
+completed 135-file first review below the ceiling: either split the change, or raise `token_budget`
+and accept the cost the first two columns imply. Around 80 files is where the allotment starts
+meeting the cap.
 
 The spread on the first-review column is prompt caching: the lower bound assumes the provider
 caches most of the prompt across files, the upper bound assumes none of it.
