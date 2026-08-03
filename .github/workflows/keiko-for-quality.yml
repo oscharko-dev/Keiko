@@ -441,12 +441,14 @@ jobs:
           # else. So a pull request large enough to exhaust this ceiling never seeds a store at
           # all — every later push starts empty and spends the ceiling again, never converging.
           # For exactly the large pull requests this cap targets, it therefore costs more over a
-          # branch's life than the old ceiling did with a working store. The durable fix is
-          # upstream (Keiko-for-Quality#75): persist the verdicts for files that WERE reviewed
-          # when the incompleteness is budget exhaustion, which does not cast doubt on those
-          # files' own verdicts the way a schema rejection or an engine error does. Until that
-          # ships, this ceiling is a saving on mid-size pull requests and a repeated cost on very
-          # large ones — stated here rather than discovered later.
+          # branch's life than the old ceiling did with a working store. The durable fix has
+          # landed upstream (Keiko-for-Quality#75, merged as #76): a truncated run now persists
+          # the verdicts for the files it DID reach — restricted to the engine's own account of
+          # what it covered, so a file it never opened can still never be replayed as reviewed —
+          # while a rejected schema or an engine error still persists nothing, because there the
+          # manifest itself is not to be believed. Until the pin above advances to a release
+          # carrying that fix, this ceiling remains a saving on mid-size pull requests and a
+          # repeated cost on very large ones. See docs/qa/review-cost-model.md for the numbers.
           #
           # The cost is real and must not be described as free: a pull request whose review needs
           # more than 2M tokens now stops dispatching files partway and settles INCOMPLETE. That is
