@@ -207,8 +207,7 @@ function resolveRequest(
     nowIso,
   );
   if (!preflight.ok) return undefined;
-  const connectorScopes = editorAgentAuthorizedConnectorScopes(preflight.envelope);
-  if (connectorScopes === undefined) return undefined;
+  if (editorAgentAuthorizedConnectorScopes(preflight.envelope) === undefined) return undefined;
   const reserved = editorAgentAuthorityRegistry.reserveForConnector(
     parsed.authority.reference,
     parsed.authority.workspaceRoot,
@@ -216,6 +215,8 @@ function resolveRequest(
     nowIso,
   );
   if (!reserved.ok) return undefined;
+  const connectorScopes = editorAgentAuthorizedConnectorScopes(reserved.envelope);
+  if (connectorScopes === undefined) return undefined;
   return {
     runId: reserved.envelope.runId,
     effectiveMode: resolveEffectiveCodingWorkbenchMode(reserved.envelope.effectiveMode, ceiling),

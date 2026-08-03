@@ -212,6 +212,55 @@ describe("coding context pack route", () => {
     expect(blocked[0]).toMatchObject({ source: "jira", reason: "missing-scope" });
   });
 
+  it("derives connector scopes from the envelope that reserved the action", async () => {
+    const request = packRequest({
+      refs: [
+        {
+          source: "github",
+          objectKind: "issue",
+          ownerAndRepo: "oscharko-dev/Keiko",
+          objectId: "1989",
+        },
+      ],
+    });
+    const authority = request.authority as Record<string, unknown>;
+    const reference = {
+      runId: String(authority.runId),
+      envelopeDigest: String(authority.envelopeDigest),
+    };
+    const preflight = editorAgentAuthorityRegistry.resolve(
+      reference,
+      WORKSPACE_ROOT,
+      "supervised-coding",
+      new Date().toISOString(),
+    );
+    if (!preflight.ok) throw new Error("expected preflight authority");
+    const reservedEnvelope = {
+      ...preflight.envelope,
+      connectorScopes: ["issue-tracker.read" as const],
+      networkPolicy: {
+        ...preflight.envelope.networkPolicy,
+        connectorScopes: ["issue-tracker.read" as const],
+      },
+    };
+    const resolve = vi.spyOn(editorAgentAuthorityRegistry, "resolve").mockReturnValue(preflight);
+    const reserve = vi
+      .spyOn(editorAgentAuthorityRegistry, "reserveForConnector")
+      .mockReturnValue({ ok: true, envelope: reservedEnvelope });
+
+    try {
+      const result = await handleCodingContextPack(ctxFor(request), depsFor());
+      expect(result.status).toBe(200);
+      expect(bodyOf(result).items).toEqual([]);
+      expect(bodyOf(result).blocked).toEqual([
+        expect.objectContaining({ source: "github", reason: "missing-scope" }),
+      ]);
+    } finally {
+      reserve.mockRestore();
+      resolve.mockRestore();
+    }
+  });
+
   it("denies connector reads when the retained envelope forbids network egress", async () => {
     const github = fakeGitHubPort();
     const readJson = vi.fn((argv: readonly string[]) => github.readJson(argv));
