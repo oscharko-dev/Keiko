@@ -58,10 +58,22 @@ with prompt caching: it removes the model call entirely, where caching only make
 **The same work on two branches.** The same audit ran on two branches of the same change, so every
 review of it was paid for twice.
 
-**A ceiling that a large change can exhaust.** A review that runs out of budget settles _incomplete_,
-and until Keiko-for-Quality#75 an incomplete run persisted nothing — so a large pull request could
-never converge, and a _lower_ ceiling made that worse rather than better by turning more pull
-requests into the non-converging case.
+**A ceiling that a large change can exhaust — still true here today.** A review that runs out of
+budget settles _incomplete_, and an incomplete run persists no store, so a large pull request never
+converges: every push starts empty and spends the ceiling again. A _lower_ ceiling makes this worse
+rather than better, by turning more pull requests into the non-converging case.
+
+Do not read this one in the past tense. The upstream fix exists — Keiko-for-Quality#75 lets a
+truncated run keep the verdicts for files it actually reached — but **this repository does not have
+it yet**, and adopting it takes two steps, not one:
+
+1. advance the pin to a release carrying #75; and
+2. move the store hand-off and the signing job off `outcome == 'complete'` and onto the
+   `store_written` output (Keiko-for-Quality#78), because budget exhaustion still settles
+   `INCOMPLETE` — without this the store is written on the review runner and stranded there.
+
+Until both are done, a large pull request here re-prices every file on every push, and the honest
+budget response is to split the change rather than to raise or lower the ceiling.
 
 ## How to tell whether memoization is working
 
