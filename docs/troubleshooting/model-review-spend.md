@@ -64,11 +64,15 @@ retention window and this run still loads nothing.
 # 1. Confirm the current run loaded nothing, and how many files it paid for.
 gh run view <run-id> --log | grep -oE '"code":"cache[^}]*}'
 
-# 2. Find the earlier runs on this branch. Raise the limit until the list stops saturating —
-# twenty is not enough: the incident this document records had twenty-one runs in one day, and a
-# truncated list hides exactly the older complete run whose artifact the locator can still restore.
+# 2. Find the earlier runs FOR THIS PULL REQUEST. Branch alone is not enough: a reused head branch
+# mixes in the previous pull request's runs, and artifacts partition by pull-request number — so a
+# complete run from the old one would look like a producer for the new one and turn an expected
+# empty store into a phantom lookup failure. Raise the limit until the list stops saturating;
+# twenty is not enough, the incident recorded here had twenty-one runs in one day.
 gh run list --workflow keiko-for-quality.yml --branch <branch> --limit 200 \
-  --json databaseId,createdAt --jq 'length'   # if this equals the limit, raise it and repeat
+  --json databaseId,createdAt,event --jq 'length'   # equals the limit? raise it and repeat
+gh api repos/<owner>/<repo>/actions/runs/<candidate-run-id> \
+  --jq '[.pull_requests[]?.number]'   # must contain THIS pull request's number
 
 # ...and read how the REVIEWER settled, which is not the workflow's conclusion. A review can
 # settle complete and the workflow still fail afterwards (a hand-off or signing failure), and a

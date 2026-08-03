@@ -433,14 +433,21 @@ jobs:
           # headroom the reviewer cannot use. The formula keeps ordinary pull requests far below it
           # either way — the allotment first meets the cap at about 115 reviewable files.
           #
+          # One fact everything below leans on, stated once because it is easy to drop: an
+          # incomplete run uploads NO replacement store, but the locate step scans every
+          # same-named artifact and takes the newest eligible one. So a pull request that has
+          # completed at least once under its current identity keeps replaying that store until
+          # the seven-day retention expires. "Starts cold on every push" is true only of a pull
+          # request that has NEVER completed under its current identity — call that the cold set.
+          #
           # Why a HIGH ceiling is the cheap setting, which is the opposite of the intuition. A run
-          # that exhausts its allotment settles INCOMPLETE. The hand-off and the signing job below
-          # both gate on `outcome == 'complete'`, so an incomplete run persists no store at all,
-          # and the next push starts cold and spends the ceiling again — forever, for that pull
-          # request. Lowering the ceiling puts MORE pull requests into that state. This argument
-          # does not depend on any upstream change: it is exactly why the 2M cap set under credit
-          # pressure on 2026-08-02 was a false economy on large changes, and it holds at the pin
-          # this workflow currently runs.
+          # that exhausts its allotment settles INCOMPLETE, and the hand-off and the signing job
+          # below both gate on `outcome == 'complete'`, so it persists nothing. A pull request in
+          # the cold set therefore pays in full on every push. Lowering the ceiling moves MORE
+          # pull requests into the cold set; raising it moves them out by letting the first review
+          # finish. This argument does not depend on any upstream change: it is exactly why the 2M
+          # cap set under credit pressure on 2026-08-02 was a false economy on large changes, and
+          # it holds at the pin this workflow currently runs.
           #
           # What the upstream fix would add, and why it is not what makes this ceiling right.
           # Keiko-for-Quality#75 (merged as #76) lets a truncated run persist the verdicts for the
