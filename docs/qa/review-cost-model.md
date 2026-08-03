@@ -45,10 +45,15 @@ caches most of the prompt across files, the upper bound assumes none of it.
 
 Three multipliers, in the order they cost money. None of them is the price per token.
 
-**A memoization store that never persisted.** Every push re-read every file at full price. The
+**A memoization store that never persisted.** Every push sent every file to the model again. The
 diagnostics said so plainly — `cache.store_loaded` reported zero entries and `cache.hits` zero on
 every run — and nobody was reading them. One 135-file pull request was reviewed twenty-one times in
-a day, each time from scratch: about 2,800 full-price file reviews for one piece of work.
+a day: about 2,800 file reviews dispatched for one piece of work.
+
+Those diagnostics measure this workflow's own memoization, not what the provider billed. The
+provider's prompt cache still applied — that is where the 7.4M cached tokens above came from — so
+the repeats were cheaper than a first review, just not free. Workflow memoization does not compete
+with prompt caching: it removes the model call entirely, where caching only makes it cost less.
 
 **The same work on two branches.** The same audit ran on two branches of the same change, so every
 review of it was paid for twice.
