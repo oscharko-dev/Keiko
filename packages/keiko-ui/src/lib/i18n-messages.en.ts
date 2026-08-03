@@ -2007,6 +2007,8 @@ export const EN_MESSAGES = {
   "figmaSnapshotWindow.codegen.proposalNote": "— proposal only, never auto-applied.",
   "figmaSnapshotWindow.codegen.reviewableFilePlural": "{count} reviewable files",
   "figmaSnapshotWindow.codegen.reviewableFileSingular": "{count} reviewable file",
+  "figmaSnapshotWindow.codegen.screenBreakdown":
+    "{rendered} rendered, {structural} structural, {unparseable} omitted as unparseable",
   "figmaSnapshotWindow.count.screenPlural": "{count} screens",
   "figmaSnapshotWindow.count.screenSingular": "{count} screen",
   "figmaSnapshotWindow.dashboard.currentBadge": "Current",

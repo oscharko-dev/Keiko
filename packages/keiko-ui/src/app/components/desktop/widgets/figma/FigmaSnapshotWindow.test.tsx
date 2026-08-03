@@ -1013,8 +1013,12 @@ describe("FigmaSnapshotWindow", () => {
       expect(codeBlock).toHaveTextContent('"screenIds": [');
       expect(container.querySelector(".json-token-key")).not.toBeNull();
 
-      const dragSurface = container.querySelector<HTMLElement>(".figma-view-json-drag-surface");
+      const dragSurface = container.querySelector<HTMLButtonElement>(
+        ".figma-view-json-drag-surface",
+      );
       expect(dragSurface).not.toBeNull();
+      expect(dragSurface).toHaveAttribute("type", "button");
+      expect(dragSurface).not.toBeDisabled();
       const dataTransfer = {
         effectAllowed: "none",
         setData: vi.fn(),
@@ -1030,6 +1034,28 @@ describe("FigmaSnapshotWindow", () => {
         FIGMA_JSON_DRAG_TYPE,
         expect.stringContaining('"screenId":"screen-2"'),
       );
+    });
+
+    it("disables the JSON drag surface for a malformed empty run id", async () => {
+      const loadScreenJsonSpy = vi.fn(async () => ({ ...MOCK_SCREEN_JSON, runId: "" }));
+      const { container } = renderWindow({
+        sourceWindowId: "figma-view-1",
+        snapshotRunId: MOCK_SUMMARY.runId,
+        selectedScreenIds: ["screen-2"],
+        selectedScreenName: "Screen 2",
+        loadImpl: vi.fn(async () => MOCK_SUMMARY) as unknown as LoadFn,
+        loadScreenJsonImpl: loadScreenJsonSpy as unknown as LoadScreenJsonFn,
+      });
+      const user = userEvent.setup();
+
+      await screen.findByRole("article", { name: /figma view source: screen 2/iu });
+      await user.click(screen.getByRole("button", { name: /inspect json/iu }));
+      await screen.findByRole("region", { name: /scoped json for screen 2/iu });
+      const dragSurface = container.querySelector<HTMLButtonElement>(
+        ".figma-view-json-drag-surface",
+      );
+
+      expect(dragSurface).toBeDisabled();
     });
 
     it("exposes a standalone image drag payload from the scoped view preview", async () => {
@@ -1913,6 +1939,9 @@ describe("FigmaSnapshotWindow", () => {
       fileCount: 3,
       totalBytes: 1234,
       screenCount: 2,
+      renderedScreenCount: 1,
+      structuralScreenCount: 1,
+      unparseableScreenCount: 1,
       files: [
         { path: "index.html", contents: "<!doctype html>" },
         { path: "tokens.css", contents: ":root { --color-1: #000000; }" },
@@ -1955,6 +1984,9 @@ describe("FigmaSnapshotWindow", () => {
       expect(codegen.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
       expect(await screen.findByText("index.html")).toBeInTheDocument();
       expect(screen.getByText("tokens.css")).toBeInTheDocument();
+      expect(
+        screen.getByText(/1 rendered, 1 structural, 1 omitted as unparseable/iu),
+      ).toBeInTheDocument();
       expect(screen.getByText(/proposal only, never auto-applied/iu)).toBeInTheDocument();
     });
 

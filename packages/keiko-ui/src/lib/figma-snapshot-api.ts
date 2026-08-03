@@ -7,6 +7,7 @@
  * and returns a token-free summary. No secret ever reaches this module.
  */
 
+import type { FigmaCodegenResponse } from "@oscharko-dev/keiko-contracts";
 import { bffFetchJson } from "./http";
 
 // ─── Shared internal helpers ───────────────────────────────────────────────────
@@ -271,21 +272,10 @@ export async function loadFigmaSnapshotScreenJson(
 
 // ─── POST /api/figma/snapshots/:runId/code (design-to-code #755) ────────────────
 
-/** One reviewable file in the generated code artifact. */
-export interface FigmaCodeFile {
-  readonly path: string;
-  readonly contents: string;
-}
-
-/** The reviewable design-to-code artifact for a stored snapshot (#755). */
-export interface FigmaCodegenResponse {
-  readonly runId: string;
-  readonly adapterName: string;
-  readonly fileCount: number;
-  readonly totalBytes: number;
-  readonly screenCount: number;
-  readonly files: readonly FigmaCodeFile[];
-}
+export type {
+  FigmaCodegenFile as FigmaCodeFile,
+  FigmaCodegenResponse,
+} from "@oscharko-dev/keiko-contracts";
 
 /**
  * Generate reviewable frontend code (semantic HTML/CSS + design tokens) from a stored snapshot.

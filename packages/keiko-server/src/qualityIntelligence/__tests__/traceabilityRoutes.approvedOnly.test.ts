@@ -297,7 +297,7 @@ describe("handleQiTraceabilityExport — approvedOnly scope (CSV)", () => {
     expect(body).toContain("tc-open");
   });
 
-  it("exports the unscoped matrix when approvedOnly is not requested", async () => {
+  it("withholds persistently rejected tests even when approvedOnly is not requested", async () => {
     seedRun();
     decide("approve", "tc-approved");
     decide("reject", "tc-rejected");
@@ -308,7 +308,8 @@ describe("handleQiTraceabilityExport — approvedOnly scope (CSV)", () => {
     );
 
     expect(result.status).toBe(200);
-    expect(bodyOf(result)).toContain("tc-rejected");
+    expect(bodyOf(result)).not.toContain("tc-rejected");
+    expect(bodyOf(result)).toContain("tc-approved");
     expect(bodyOf(result)).toContain("tc-open");
   });
 
