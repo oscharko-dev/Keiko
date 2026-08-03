@@ -49,7 +49,7 @@
     "@oscharko-dev/keiko-verification": "0.2.15",
     "@oscharko-dev/keiko-workflows": "0.2.15",
     "@oscharko-dev/keiko-workspace": "0.2.15",
-    "smol-toml": "^1.7.0",
+    "smol-toml": "^1.7.1",
     "typescript": "~6.0.3",
     "ws": "^8.21.0",
     "yauzl": "^3.4.0"

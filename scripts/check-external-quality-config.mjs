@@ -140,7 +140,7 @@ function validatePackage(packageJson) {
   const duplicationCommand =
     "fallow dupes --mode semantic --min-tokens 100 --min-lines 10 --ignore-imports --format compact --fail-on-issues";
   const checks = [
-    [parsed.value.devDependencies?.fallow, "2.104.0", "fallow must be pinned to 2.104.0"],
+    [parsed.value.devDependencies?.fallow, "3.9.1", "fallow must be pinned to 3.9.1"],
     [
       parsed.value.devDependencies?.yaml,
       "2.9.0",
