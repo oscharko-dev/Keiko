@@ -5,42 +5,8 @@
 # entry back through this gate on that date, so a stale waiver cannot outlive its justification.
 # Nothing here weakens the scan for shipped dependencies — only build-time-only findings that have
 # no upstream fix may be recorded, and each must state why it cannot reach a user.
-
-[[IgnoredVulns]]
-id = "GHSA-mh99-v99m-4gvg"
-ignoreUntil = 2026-09-30
-reason = """
-brace-expansion DoS via unbounded expansion length (high, 7.5). Build-time only and unfixable
-upstream at the time of writing.
-
-Reach: every affected instance is a development dependency (`npm audit --omit=dev` reports zero
-vulnerabilities). Four of the five come from minimatch@3 under eslint, @eslint/eslintrc,
-@eslint/config-array, and eslint-plugin-import; the fifth from minimatch@10 under
-@stryker-mutator/core. None is part of the distributed CLI or the editor's static export, so the
-vulnerable code path is only ever reached by lint and mutation tooling expanding brace patterns
-that this repository itself authors -- never untrusted input.
-
-No upgrade path exists: the advisory patches only brace-expansion 5.0.8, whose CommonJS build
-exports `exports.expand` (a named export), while minimatch@3 consumes it as a callable default
-(`module.exports = expandTop`). A global override therefore breaks eslint outright. The maintainers
-published no 1.x/2.x/3.x/4.x backport and left the `maintenance-v1` tag on the vulnerable 1.1.16.
-Substituting minimatch@10 fails for the same reason -- it, too, exports only named bindings.
-
-Scope, and why it is bound to the ID rather than the package: this entry suppresses exactly one
-advisory. A future, unrelated brace-expansion advisory still fails this gate (verified by a negative
-control -- with the id changed, the scan reports the finding again and exits 1). A
-`[[PackageOverrides]]` rule with `group = "dev"` and `vulnerability.ignore` was considered and
-rejected: it would narrow the waiver to dev dependencies but widen it to EVERY present and future
-vulnerability in brace-expansion, and since both `npm audit` steps now run with `--omit=dev`,
-nothing else would catch such a finding. osv-scanner cannot express "this id AND only in the dev
-group" -- `IgnoredVulns` matches on id only, `PackageOverrides` has no id field -- so the id bound is
-the half that fails closed on the unknown.
-Residual gap, stated deliberately: this entry does not re-check the dependency group, so it would
-also apply if brace-expansion entered the PRODUCTION graph while still vulnerable. That case is
-covered by the audit steps instead -- `npm audit --omit=dev` would then see it, because it would no
-longer be a dev dependency.
-
-Revisit condition: drop this entry as soon as brace-expansion ships a patched 1.x, or once eslint
-and eslint-plugin-import move off minimatch@3. Recorded during #2696 (PR #2700); the advisory was
-published 2026-07-24, after the last green scan on dev.
-"""
+#
+# Currently empty. The GHSA-mh99-v99m-4gvg brace-expansion waiver (recorded during #2696, PR
+# #2700) was removed when its own revisit condition arrived: upstream shipped patched releases on
+# both affected lines and the lockfile moved to 1.1.18/5.0.9, so the id-wide suppression would
+# only have hidden a reintroduced vulnerable release from the one gate positioned to catch it.
