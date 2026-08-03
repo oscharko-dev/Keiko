@@ -41,7 +41,7 @@
     "@vitejs/plugin-react": "6.0.3",
     "autoprefixer": "^10.5.3",
     "axe-core": "4.12.1",
-    "eslint": "9.39.5",
+    "eslint": "10.8.0",
     "eslint-config-next": "16.2.12",
     "jest-axe": "11.0.0",
     "jsdom": "29.1.1",
