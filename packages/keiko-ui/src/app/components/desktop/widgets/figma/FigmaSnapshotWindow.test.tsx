@@ -1018,6 +1018,7 @@ describe("FigmaSnapshotWindow", () => {
       );
       expect(dragSurface).not.toBeNull();
       expect(dragSurface).toHaveAttribute("type", "button");
+      expect(dragSurface).not.toBeDisabled();
       const dataTransfer = {
         effectAllowed: "none",
         setData: vi.fn(),
@@ -1033,6 +1034,28 @@ describe("FigmaSnapshotWindow", () => {
         FIGMA_JSON_DRAG_TYPE,
         expect.stringContaining('"screenId":"screen-2"'),
       );
+    });
+
+    it("disables the JSON drag surface for a malformed empty run id", async () => {
+      const loadScreenJsonSpy = vi.fn(async () => ({ ...MOCK_SCREEN_JSON, runId: "" }));
+      const { container } = renderWindow({
+        sourceWindowId: "figma-view-1",
+        snapshotRunId: MOCK_SUMMARY.runId,
+        selectedScreenIds: ["screen-2"],
+        selectedScreenName: "Screen 2",
+        loadImpl: vi.fn(async () => MOCK_SUMMARY) as unknown as LoadFn,
+        loadScreenJsonImpl: loadScreenJsonSpy as unknown as LoadScreenJsonFn,
+      });
+      const user = userEvent.setup();
+
+      await screen.findByRole("article", { name: /figma view source: screen 2/iu });
+      await user.click(screen.getByRole("button", { name: /inspect json/iu }));
+      await screen.findByRole("region", { name: /scoped json for screen 2/iu });
+      const dragSurface = container.querySelector<HTMLButtonElement>(
+        ".figma-view-json-drag-surface",
+      );
+
+      expect(dragSurface).toBeDisabled();
     });
 
     it("exposes a standalone image drag payload from the scoped view preview", async () => {

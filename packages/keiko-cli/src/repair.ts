@@ -422,10 +422,7 @@ function credentialConfigPaths(
 ): readonly string[] {
   const resolution = resolveConfigPathFromArgs(args, env);
   if (resolution.kind === "path") return [resolution.path];
-  if (resolution.kind === "not-configured") {
-    const existing = defaultConfigCandidates.filter((candidate) => existsSync(candidate));
-    return existing.length > 0 ? existing : [defaultConfigCandidates[0] ?? ""];
-  }
+  if (resolution.kind === "not-configured") return defaultConfigCandidates;
   return [];
 }
 

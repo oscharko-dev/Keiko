@@ -59,6 +59,11 @@ const LOCAL_SECRET_VAULT_VERSION = 1;
 const HOT_EXIT_REF_PATTERN = /^hot-exit:[a-f0-9]{64}$/u;
 const ATLASSIAN_SCHEMA_VERSION = "1";
 const ATLASSIAN_AUTH_REF_PATTERN = /^atlassian-cred:[A-Za-z0-9_-]{22}$/u;
+// Dependency-light mirrors of the leaf contract in
+// packages/keiko-contracts/src/atlassian-connectors.ts. The audit intentionally runs without a
+// workspace build; parity tests bind these values and validators back to the canonical exports.
+const ATLASSIAN_CONNECTOR_PROVIDERS = Object.freeze(["confluence", "jira"]);
+const ATLASSIAN_CONNECTOR_PROVIDER_SET = new Set(ATLASSIAN_CONNECTOR_PROVIDERS);
 const ATLASSIAN_METADATA_KEYS = new Set([
   "schemaVersion",
   "authRef",
@@ -68,6 +73,15 @@ const ATLASSIAN_METADATA_KEYS = new Set([
   "authScheme",
   "createdAt",
 ]);
+const ATLASSIAN_POSIX_ABSOLUTE_PATH_PATTERN =
+  /(^|[^A-Za-z0-9._~:/-])\/(?!\/)(?=[^\n\r"'\x60<>]*\/)[^\n\r"'\x60<>]+/u;
+const ATLASSIAN_WINDOWS_DRIVE_ABSOLUTE_PATH_PATTERN =
+  /(^|[^A-Za-z0-9._~:/-])[A-Za-z]:[\\/](?=[^\n\r"'\x60<>]*[\\/])[^\n\r"'\x60<>]+/u;
+const ATLASSIAN_WINDOWS_UNC_ABSOLUTE_PATH_PATTERN =
+  /(^|[^A-Za-z0-9._~:/-])(?:\\\\|\/\/)(?=[^\n\r"'\x60<>]*[\\/])[^\n\r"'\x60<>]+/u;
+const ATLASSIAN_DIRECT_ROLE_MARKER_PATTERN = /^[ \t\f\v]*(?:user|assistant|system)[ \t\f\v]*:/iu;
+const ATLASSIAN_NAMED_ROLE_MARKER_PATTERN =
+  /^[ \t\f\v]*role[ \t\f\v]*:[ \t\f\v]*(?:user|assistant|system)(?:\W|$)/iu;
 
 // ── Sealed-envelope markers (source of truth: packages/keiko-security/src/secretbox.ts) ─────
 const SEALED_STRING_PREFIX = "kv1."; // AES-256-GCM string envelope
@@ -466,6 +480,24 @@ function hasAtlassianDisplayMarker(value) {
   return value.includes("@") || value.includes("?") || value.includes("#") || value.includes("://");
 }
 
+function containsAtlassianAbsolutePath(value) {
+  return (
+    ATLASSIAN_POSIX_ABSOLUTE_PATH_PATTERN.test(value) ||
+    ATLASSIAN_WINDOWS_DRIVE_ABSOLUTE_PATH_PATTERN.test(value) ||
+    ATLASSIAN_WINDOWS_UNC_ABSOLUTE_PATH_PATTERN.test(value)
+  );
+}
+
+function containsAtlassianPseudoRoleMarker(value) {
+  return value
+    .split(/\r\n?|\n/u)
+    .some(
+      (line) =>
+        ATLASSIAN_DIRECT_ROLE_MARKER_PATTERN.test(line) ||
+        ATLASSIAN_NAMED_ROLE_MARKER_PATTERN.test(line),
+    );
+}
+
 function safeAtlassianDisplayName(value) {
   return (
     typeof value === "string" &&
@@ -473,8 +505,14 @@ function safeAtlassianDisplayName(value) {
     value.length <= 100 &&
     value.trim() === value &&
     !hasUnsafeFormatCharacter(value) &&
+    !containsAtlassianAbsolutePath(value) &&
+    !containsAtlassianPseudoRoleMarker(value) &&
     !hasAtlassianDisplayMarker(value)
   );
+}
+
+function isAtlassianConnectorProvider(value) {
+  return ATLASSIAN_CONNECTOR_PROVIDER_SET.has(value);
 }
 
 function safeParsedAtlassianBaseUrl(url, source) {
@@ -515,7 +553,7 @@ function hasValidAtlassianMetadataIdentity(reference, record) {
     ATLASSIAN_AUTH_REF_PATTERN.test(reference) &&
     record.schemaVersion === ATLASSIAN_SCHEMA_VERSION &&
     record.authRef === reference &&
-    (record.provider === "confluence" || record.provider === "jira")
+    isAtlassianConnectorProvider(record.provider)
   );
 }
 
@@ -1520,6 +1558,10 @@ export function auditLocalState(stateDir) {
   return { ok: classes.every((c) => c.status !== "fail"), stateDir, classes };
 }
 
-// Exported solely for a direct, fast regression test of the ReDoS-safe rewrite of the trailing
-// placeholder-punctuation trim (SonarCloud S8786) — not part of the module's operational surface.
-export const _testables = Object.freeze({ isPlaceholderSafe });
+// Exported solely for direct, fast regression and canonical-parity tests — not part of the
+// module's operational surface.
+export const _testables = Object.freeze({
+  isAtlassianConnectorProvider,
+  isPlaceholderSafe,
+  safeAtlassianDisplayName,
+});

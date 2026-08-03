@@ -910,6 +910,29 @@ describe("runRepairCli — credential storage", () => {
     expect(c.out()).toContain("credential reference(s) have no encrypted entry");
   });
 
+  it("reports orphaned Atlassian artifacts beside an absent home fallback config", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const credentialsDir = join(root, ".keiko", "credentials");
+    mkdirSync(credentialsDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(credentialsDir, ATLASSIAN_CREDENTIAL_ARTIFACTS[2]),
+      JSON.stringify({
+        version: 1,
+        credentials: { [ATLASSIAN_AUTH_REF]: atlassianMetadata() },
+      }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain("[action] Credential storage");
+    expect(c.out()).toContain("credential reference(s) have no encrypted entry");
+    expect(c.out()).toContain(join(root, ".keiko", "keiko.config.json"));
+  });
+
   it("fails closed on incomplete Atlassian credential metadata", () => {
     const root = makeRoot();
     seedInstalledLayout(root);

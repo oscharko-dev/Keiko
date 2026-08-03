@@ -455,6 +455,7 @@ const TABLE_ELEMENTS: ReadonlySet<WordElementName> = new Set(["tbl"]);
 const ROW_ELEMENTS: ReadonlySet<WordElementName> = new Set(["tr"]);
 const CELL_ELEMENTS: ReadonlySet<WordElementName> = new Set(["tc"]);
 const DOCUMENT_BLOCK_ELEMENTS: ReadonlySet<WordElementName> = new Set(["p", "tbl"]);
+const TABLE_HEADER_ENABLED_VALUES: ReadonlySet<string> = new Set(["1", "on", "true"]);
 
 function removeNestedTables(cellXml: string): string {
   const parts: string[] = [];
@@ -503,12 +504,26 @@ function nestedTableItems(cells: readonly WordXmlElement[]): readonly TableTrave
   return items;
 }
 
+function isMarkedTableHeaderRow(row: WordXmlElement): boolean {
+  const firstCellStart = row.innerXml.search(/<w:tc\b/iu);
+  const rowProperties =
+    firstCellStart === -1 ? row.innerXml : row.innerXml.slice(0, firstCellStart);
+  const markerStart = rowProperties.search(/<w:tblHeader(?=[\s/>])/iu);
+  if (markerStart === -1) return false;
+  const markerEnd = rowProperties.indexOf(">", markerStart);
+  if (markerEnd === -1) return false;
+  const marker = rowProperties.slice(markerStart, markerEnd + 1);
+  const value = /\bw:val\s*=\s*["']([^"']+)["']/iu.exec(marker)?.[1];
+  return value === undefined || TABLE_HEADER_ENABLED_VALUES.has(value.toLowerCase());
+}
+
 function tableTraversalItems(tableXml: string): readonly TableTraversalItem[] {
   const rows = extractWordElements(tableXml, ROW_ELEMENTS);
   const cellRows = rows.map((row) => extractWordElements(row.innerXml, CELL_ELEMENTS));
   const values = cellRows.map((cells) => cells.map((cell) => cellText(cell.innerXml)));
+  const firstRow = rows[0];
   const headerIsSchema =
-    values.length > 1 && (values[0] ?? []).some((cell) => /[A-Za-z_ÄÖÜäöüß]/u.test(cell));
+    values.length > 1 && firstRow !== undefined && isMarkedTableHeaderRow(firstRow);
   const headers = headerIsSchema ? normalizeTableHeaders(values[0] ?? []) : [];
   const items: TableTraversalItem[] = [];
   let dataRowIndex = 0;

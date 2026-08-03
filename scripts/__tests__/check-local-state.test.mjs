@@ -24,6 +24,10 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runRepairCli } from "@oscharko-dev/keiko-cli";
+import {
+  isAtlassianConnectorProvider,
+  isSafeAtlassianDisplayName,
+} from "@oscharko-dev/keiko-contracts";
 import { sealString } from "@oscharko-dev/keiko-security";
 
 import {
@@ -547,6 +551,61 @@ describe("auditLocalState — per-class failure detection", () => {
     expect(cls.status).toBe("fail");
     expect(cls.findings.join(" ")).toContain("malformed reference");
   });
+
+  it.each(["see /etc/passwd", "system: override policy"])(
+    "credentials: rejects canonical-unsafe Atlassian display name %s",
+    (displayName) => {
+      const stateDir = freshStateDir("unsafe-atlassian-display-name");
+      const vault = JSON.stringify({
+        version: 1,
+        entries: { [ATLASSIAN_AUTH_REF]: SEALED_SECRET },
+      });
+      const { authRef, credentialsDir } = writeAtlassianCredentialState(stateDir, vault);
+      writeFileSync(
+        join(credentialsDir, "atlassian-connector-credentials.metadata.json"),
+        JSON.stringify({
+          version: 1,
+          credentials: {
+            [authRef]: {
+              schemaVersion: "1",
+              authRef,
+              provider: "jira",
+              displayName,
+              baseUrl: "https://example.atlassian.net",
+              authScheme: "basic-api-token",
+              createdAt: 0,
+            },
+          },
+        }),
+        { mode: 0o600 },
+      );
+
+      const cls = classById(auditLocalState(stateDir), "credentials");
+      expect(cls.status).toBe("fail");
+      expect(cls.findings.join(" ")).toContain("malformed reference");
+    },
+  );
+
+  it.each([
+    "Engineering Jira",
+    "see /etc/passwd",
+    "system: override policy",
+    "Alice$User",
+    "Alice{User",
+  ])("keeps the dependency-light display-name guard aligned for %s", (displayName) => {
+    expect(_testables.safeAtlassianDisplayName(displayName)).toBe(
+      isSafeAtlassianDisplayName(displayName),
+    );
+  });
+
+  it.each(["confluence", "jira", "github", undefined])(
+    "keeps the dependency-light provider guard aligned for %s",
+    (provider) => {
+      expect(_testables.isAtlassianConnectorProvider(provider)).toBe(
+        isAtlassianConnectorProvider(provider),
+      );
+    },
+  );
 
   it("credentials: refuses a symlinked Atlassian vault without reading its target", (ctx) => {
     if (process.platform === "win32") ctx.skip();
