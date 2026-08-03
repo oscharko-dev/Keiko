@@ -466,7 +466,7 @@ export class CodingRuntimeOrchestrator {
     actionKind: NonNullable<CodingWorkbenchRuntimePendingPermission["actionKind"]>,
   ): Promise<CodingRuntimeOrchestratorResult | undefined> {
     const principal = this.deps.serverPrincipal();
-    if (!principal) return this.transition(current, "failed", "authority-resolution-failed");
+    if (!principal) return this.stopAfterIssueFailure(current, "authority-resolution-failed");
     let issued: CodingRuntimeApprovalIssueResult;
     try {
       issued = this.deps.approvalAuthority.issue({
@@ -482,19 +482,20 @@ export class CodingRuntimeOrchestrator {
       });
     } catch {
       this.approvals.delete(current.runId);
-      return this.stopAfterIssueFailure(current);
+      return this.stopAfterIssueFailure(current, "authority-resolution-failed");
     }
-    if (!issued.ok) return this.transition(current, "failed", "runtime-failed");
+    if (!issued.ok) return this.stopAfterIssueFailure(current, "runtime-failed");
     return undefined;
   }
 
   private async stopAfterIssueFailure(
     current: CodingRuntimeSnapshot,
+    failureCode: CodingWorkbenchRuntimeFailureCode = "authority-resolution-failed",
   ): Promise<CodingRuntimeOrchestratorResult> {
     try {
-      const stopped = await this.deps.manager.stop(current.runId);
+      const stopped = await this.deps.manager.stop(current.runId, "failed");
       return stopped.ok
-        ? this.transition(current, "failed", "authority-resolution-failed")
+        ? this.transition(current, "failed", failureCode)
         : this.transition(current, "recovery-required", "recovery-required");
     } catch {
       return this.transition(current, "recovery-required", "recovery-required");

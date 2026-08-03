@@ -129,7 +129,7 @@ describe("Coding Workbench event retention", () => {
     }
   });
 
-  it("flushes observations before reset closes the session", () => {
+  it("drops pending observations when reset atomically replaces the session", () => {
     const source = new FakeEventSource();
     const onEvents = vi.fn();
     const onReset = vi.fn(() => Promise.resolve());
@@ -142,10 +142,8 @@ describe("Coding Workbench event retention", () => {
     source.emit("runtime-event", JSON.stringify(observation(1)));
     source.emit("reset");
 
-    expect(onEvents).toHaveBeenCalledWith([observation(1)], "cursor-1", false);
-    expect(onEvents.mock.invocationCallOrder[0]).toBeLessThan(
-      onReset.mock.invocationCallOrder[0] ?? 0,
-    );
+    expect(onEvents).not.toHaveBeenCalled();
+    expect(onReset).toHaveBeenCalledOnce();
     expect(source.close).toHaveBeenCalledOnce();
   });
 

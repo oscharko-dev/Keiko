@@ -669,10 +669,10 @@ describe("CodingRuntimeOrchestrator", () => {
       ok: true,
       snapshot: { state: "failed", failureCode: "authority-resolution-failed" },
     });
-    expect(f.manager.stop).toHaveBeenCalledWith("run-1");
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 
-  it("rejects stale route/body pairs and keeps a failed approval pending", async () => {
+  it("rejects stale route/body pairs and stops after approval activation fails", async () => {
     const f = fixture();
     await f.orchestrator.start(start);
     expect(await f.orchestrator.stop("other", { requestId: "run-1" })).toEqual({
@@ -715,6 +715,7 @@ describe("CodingRuntimeOrchestrator", () => {
       }),
     ).toMatchObject({ ok: true, snapshot: { state: "failed", failureCode: "runtime-failed" } });
     expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 
   it("requires recovery acknowledgement before fresh retry and records a predecessor", async () => {
@@ -960,7 +961,7 @@ describe("CodingRuntimeOrchestrator", () => {
       state: "failed",
       failureCode: "authority-resolution-failed",
     });
-    expect(f.manager.stop).toHaveBeenCalledWith("run-1");
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 
   it("moves to recovery when event admission fails and deletes evidence for pruned runs", async () => {

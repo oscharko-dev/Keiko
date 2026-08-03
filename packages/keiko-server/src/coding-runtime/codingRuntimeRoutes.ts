@@ -503,6 +503,7 @@ function resolveEventCursor(
   lastEventId: string | string[] | undefined,
   queryCursor: string | null,
 ): string | undefined {
+  if (Array.isArray(lastEventId)) return undefined;
   if (typeof lastEventId === "string" && lastEventId.length > 0) return lastEventId;
   return queryCursor === null || queryCursor.length === 0 ? undefined : queryCursor;
 }
@@ -527,12 +528,13 @@ export function openCodingRuntimeSse(
   lastEventId: string | undefined,
 ): void {
   res.writeHead(200, SSE_HEADERS);
-  startSseHeartbeat(res, undefined, "heartbeat");
+  const stopHeartbeat = startSseHeartbeat(res, undefined, "heartbeat");
   let detach = (): void => undefined;
   let closed = false;
   const close = (): void => {
     if (closed) return;
     closed = true;
+    stopHeartbeat();
     detach();
     if (!res.writableEnded && !res.destroyed) res.end();
   };
@@ -546,7 +548,7 @@ export function openCodingRuntimeSse(
   });
   if (!subscribed.ok) {
     res.write(resetFrame(subscribed.reason));
-    res.end();
+    close();
     return;
   }
   detach = subscribed.detach;

@@ -149,7 +149,6 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
   };
 
   private readonly handleReset = (): void => {
-    this.flush();
     this.close();
     void this.handlers.onReset();
   };

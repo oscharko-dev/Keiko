@@ -403,6 +403,8 @@ function verifyApprovalProof(
   request: CodingToolActionRequest,
   verifier: CodingToolApprovalProofVerifier | undefined,
 ): boolean {
+  // A proof is required only when the ordinary policy denies this action without one. Keeping this
+  // guard inverted prevents an unrelated proof from becoming authority for an already-allowed act.
   if (additionalPolicyAllowed(envelope, request, false)) return false;
   if (
     verifier === undefined ||
