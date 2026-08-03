@@ -428,13 +428,20 @@ jobs:
           # the engine's own --max-tokens-budget, which stops dispatching new files at the limit
           # instead of reviewing everything first and confessing afterwards.
           #
-          # Lowered from 6M to 2M by owner decision under budget pressure. What that buys and what
-          # it costs, stated plainly: the formula already keeps ordinary pull requests far below
-          # either number, so this changes nothing for them. It binds exactly the large ones — a
-          # 135-file pull request would otherwise be allotted the full ceiling, and with the review
-          # store inert every push spent it again (#2930: twenty-one full re-reviews of 133 files in
-          # one day). The store fix in v0.10.0 is the structural answer; this ceiling is the
-          # backstop while credit is tight.
+          # 6M -> 2M -> 4M, and the middle step is the interesting one. It was lowered under budget
+          # pressure while the review store was inert, when every push of a large pull request
+          # re-priced every file (#2930: twenty-one full re-reviews of 133 files in one day). The
+          # store now demonstrably works — a production run has recorded a cache hit — so the
+          # premise of the low ceiling is gone.
+          #
+          # Raising it back is not a relaxation, it is the cheaper direction, and the reason is
+          # counter-intuitive enough to write down: a run that EXCEEDS the ceiling settles
+          # incomplete, and an incomplete run hands off no store (see the note below). Such a pull
+          # request therefore never seeds a store at all and pays in full on every push, forever.
+          # A ceiling low enough to be hit is self-defeating; one high enough to let the first
+          # review complete pays once and then replays. 4M lets a change of roughly 160 files
+          # complete at the measured 25k tokens per file, which covers every pull request this
+          # repository has actually produced.
           #
           # A second cost, sharper and found in review (Codex, #2934): the store hand-off below runs
           # only for a COMPLETE settlement, and the action refuses to write a store for anything
@@ -465,7 +472,7 @@ jobs:
           # response to exactly that starvation on an 87-file pull request (#2926), so this is a
           # deliberate re-trade, not a correction of that decision. Revisit once memoization is
           # confirmed working in production and the credit position allows.
-          token_budget: "2000000"
+          token_budget: "4000000"
           # Enables per-file memoization (v0.9.0). Relative to the workspace; the file lives in
           # the directory the locate/upload steps carry between runs. Without this input the
           # store layer is fully inert — that property is pinned by a test upstream.
