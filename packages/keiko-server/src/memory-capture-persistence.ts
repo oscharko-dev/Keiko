@@ -1,5 +1,5 @@
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
-import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { memoryBodySuppressionHash, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 export interface PersistedCapturedMemory {
   readonly memory: MemoryRecord;
@@ -23,17 +23,24 @@ function memoryCaptureProjection(record: MemoryRecord): string {
   });
 }
 
-function insertOrReuseCanonicalMemory(
+function reusableScopedMemory(
   vault: MemoryVaultStore,
   record: MemoryRecord,
+): MemoryRecord | undefined {
+  const bodyHash = memoryBodySuppressionHash(record.body);
+  return vault
+    .listMemoriesByScope(record.scope, {
+      status: ["proposed", "accepted"],
+      includeExpired: true,
+    })
+    .find((existing) => memoryBodySuppressionHash(existing.body) === bodyHash);
+}
+
+function reuseCapturedMemory(
+  vault: MemoryVaultStore,
+  existing: MemoryRecord,
+  record: MemoryRecord,
 ): PersistedCapturedMemory {
-  const existing = vault.getMemory(record.id);
-  if (existing === undefined) {
-    return { memory: vault.insertMemory(record), inserted: true, promoted: false };
-  }
-  if (memoryCaptureProjection(existing) !== memoryCaptureProjection(record)) {
-    throw new Error("Canonical memory capture conflicted.");
-  }
   if (existing.status === "proposed" && record.status === "accepted") {
     return {
       memory: vault.updateMemory(existing.id, { status: "accepted" }, record.updatedAt),
@@ -42,6 +49,23 @@ function insertOrReuseCanonicalMemory(
     };
   }
   return { memory: existing, inserted: false, promoted: false };
+}
+
+function insertOrReuseCanonicalMemory(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+): PersistedCapturedMemory {
+  const existingById = vault.getMemory(record.id);
+  if (
+    existingById !== undefined &&
+    memoryCaptureProjection(existingById) !== memoryCaptureProjection(record)
+  ) {
+    throw new Error("Canonical memory capture conflicted.");
+  }
+  const existing = existingById ?? reusableScopedMemory(vault, record);
+  return existing === undefined
+    ? { memory: vault.insertMemory(record), inserted: true, promoted: false }
+    : reuseCapturedMemory(vault, existing, record);
 }
 
 export function persistCapturedMemory(

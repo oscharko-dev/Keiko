@@ -304,17 +304,47 @@ describe("update runtime state and audit events", () => {
         pid: process.pid,
         token: "current-process-lease",
         acquiredAt: "2026-06-30T11:00:00.000Z",
+        processIdentity: "current-process-instance",
       }),
     );
     const localState = createUpdateLocalStateManager({
       stateDir,
       now: () => NOW,
       pidAlive: () => false,
+      processIdentity: "current-process-instance",
       remediationLeaseStaleMs: 1_000,
     });
 
     expect(localState.acquireRemediationLease(actionId)).toBeUndefined();
     expect(existsSync(leasePath)).toBe(true);
+  });
+
+  it("reclaims an aged lease from a prior process instance with the same pid", () => {
+    const stateDir = makeStateDir();
+    const actionId = "local-state-repair:memory-vault";
+    const digest = createHash("sha256").update(actionId, "utf8").digest("hex");
+    const leasePath = join(stateDir, "updates", "remediation-leases", `${digest}.json`);
+    touch(
+      leasePath,
+      JSON.stringify({
+        pid: process.pid,
+        token: "prior-process-lease",
+        acquiredAt: "2026-06-30T11:00:00.000Z",
+        processIdentity: "prior-process-instance",
+      }),
+    );
+    const localState = createUpdateLocalStateManager({
+      stateDir,
+      now: () => NOW,
+      pidAlive: () => true,
+      processIdentity: "replacement-process-instance",
+      remediationLeaseStaleMs: 1_000,
+    });
+
+    const release = localState.acquireRemediationLease(actionId);
+
+    expect(release).toBeTypeOf("function");
+    release?.();
   });
 
   it("surfaces audit persistence failure without discarding recovery runtime state", () => {

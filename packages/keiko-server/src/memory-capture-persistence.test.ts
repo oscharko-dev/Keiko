@@ -22,9 +22,13 @@ function vault(): MemoryVaultStore {
   return store;
 }
 
-function record(status: "proposed" | "accepted", updatedAt = 100): MemoryRecord {
+function record(
+  status: "proposed" | "accepted",
+  updatedAt = 100,
+  id = "canonical-memory",
+): MemoryRecord {
   return {
-    id: "canonical-memory" as MemoryId,
+    id: id as MemoryId,
     schemaVersion: "1",
     scope: { kind: "user", userId: "operator" as MemoryUserId },
     type: "preference",
@@ -66,5 +70,19 @@ describe("persistCapturedMemory", () => {
       memory: { status: "accepted", updatedAt: 200 },
     });
     expect(persistCapturedMemory(store, record("accepted", 300), true).promoted).toBe(false);
+  });
+
+  it("reuses an exact scoped body produced under a different capture id", () => {
+    const store = vault();
+    persistCapturedMemory(store, record("accepted", 100, "first-capture"), true);
+
+    expect(
+      persistCapturedMemory(store, record("accepted", 200, "later-capture"), true),
+    ).toMatchObject({
+      inserted: false,
+      promoted: false,
+      memory: { id: "first-capture", status: "accepted" },
+    });
+    expect(store.listMemoriesByScope(record("accepted").scope)).toHaveLength(1);
   });
 });

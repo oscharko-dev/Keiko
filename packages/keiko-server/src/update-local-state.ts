@@ -49,6 +49,11 @@ import {
   snapshotManifestPath,
   validateSnapshot,
 } from "./update-local-state-snapshot.js";
+import {
+  isOptionalProcessIdentity,
+  processIdentityField,
+  PROCESS_START_IDENTITY,
+} from "./process-identity.js";
 
 interface AuditEventRecord {
   readonly event: UpdateRuntimeAuditEvent;
@@ -66,6 +71,7 @@ interface ManagerContext {
   readonly idFactory: () => string;
   readonly remediationLeaseStaleMs: number;
   readonly pidAlive: (pid: number) => boolean;
+  readonly processIdentity: string;
 }
 
 type AuditEventInput = Partial<
@@ -98,6 +104,7 @@ export interface UpdateLocalStateManagerOptions {
   readonly idFactory?: (() => string) | undefined;
   readonly remediationLeaseStaleMs?: number | undefined;
   readonly pidAlive?: ((pid: number) => boolean) | undefined;
+  readonly processIdentity?: string | undefined;
 }
 
 export type { UpdateLocalStateRepairResult } from "./update-local-state-repair.js";
@@ -277,6 +284,7 @@ interface RemediationLeaseRecord {
   readonly pid: number;
   readonly token: string;
   readonly acquiredAt: string;
+  readonly processIdentity?: string | undefined;
 }
 
 function remediationLeasePath(stateDir: string, actionId: string): string {
@@ -290,8 +298,14 @@ function parseRemediationLease(value: unknown): RemediationLeaseRecord | undefin
   return Number.isInteger(record.pid) &&
     typeof record.token === "string" &&
     typeof record.acquiredAt === "string" &&
+    isOptionalProcessIdentity(record.processIdentity) &&
     Number.isFinite(Date.parse(record.acquiredAt))
-    ? { pid: record.pid as number, token: record.token, acquiredAt: record.acquiredAt }
+    ? {
+        pid: record.pid as number,
+        token: record.token,
+        acquiredAt: record.acquiredAt,
+        ...processIdentityField(record.processIdentity),
+      }
     : undefined;
 }
 
@@ -339,7 +353,9 @@ function remediationLeaseReclaimable(
   const ageMs = remediationLeaseAgeMs(path, record, context.now);
   if (ageMs === undefined || ageMs < context.remediationLeaseStaleMs) return false;
   if (record === undefined) return true;
-  if (record.pid === process.pid) return false;
+  if (record.pid === process.pid) {
+    return record.processIdentity !== context.processIdentity;
+  }
   if (!context.pidAlive(record.pid)) return true;
   // A live PID may be a reused process identity. Give a genuine owner a second full lease window,
   // then bound the orphan instead of blocking remediation forever.
@@ -474,6 +490,7 @@ function acquireRemediationLease(
         pid: process.pid,
         token,
         acquiredAt: nowIso(context.now),
+        processIdentity: context.processIdentity,
       });
       return (): void => {
         releaseRemediationLease(path, token);
@@ -605,6 +622,7 @@ export function createUpdateLocalStateManager(
     idFactory: options.idFactory ?? randomUUID,
     remediationLeaseStaleMs: remediationLeaseStaleMs(options.remediationLeaseStaleMs),
     pidAlive: options.pidAlive ?? processIsAlive,
+    processIdentity: options.processIdentity ?? PROCESS_START_IDENTITY,
   };
   return {
     scanCompatibility: (impact): UpdateCompatibilityScan => scanCompatibility(context, impact),

@@ -61,6 +61,7 @@ import { exactCaptureSuppressionReason } from "./memory-suppression.js";
 import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudits } from "./memory-audit-handler.js";
 import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.js";
+import { persistCapturedMemory } from "./memory-capture-persistence.js";
 
 const MAX_BODY_BYTES = 16_000;
 const MAX_SPANS = 200;
@@ -287,8 +288,15 @@ async function persistRecapOutcomes(
     const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
       ? promoteEligibleMemoryRecord(record)
       : record;
-    const inserted = vault.insertMemory(candidate);
-    await embedAndStoreMemory(deps, vault, inserted.id, inserted.body);
+    const result = persistCapturedMemory(vault, candidate, true);
+    if (!result.inserted && !result.promoted) {
+      rejected += 1;
+      continue;
+    }
+    const inserted = result.memory;
+    if (result.inserted) {
+      await embedAndStoreMemory(deps, vault, inserted.id, inserted.body);
+    }
     const persisted = { id: inserted.id, scope: inserted.scope };
     if (inserted.status === "accepted") {
       recordAutoAcceptedMemoryCaptureDecision(deps, mode, "voice", inserted);

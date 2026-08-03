@@ -282,6 +282,33 @@ describe("handleBuildVoiceRecap", () => {
     expect(auditEvents.filter((event) => event.kind === "memory:proposed")).toHaveLength(0);
   });
 
+  it("deduplicates an exact scoped recap candidate before auto-acceptance", async () => {
+    const chat = createChat();
+    store.updateMemoryAutonomyPolicy("supervised-coding", 0);
+    const request = ctx(recapBody(chat, ["remember that I prefer dark mode"]));
+
+    const first = await handleBuildVoiceRecap(request, deps({ mode: "supervised-coding" }));
+    const repeated = await handleBuildVoiceRecap(
+      ctx(recapBody(chat, ["remember that I prefer dark mode"])),
+      deps({ mode: "supervised-coding" }),
+    );
+
+    expect(first.body).toMatchObject({ candidatesAccepted: 1, candidatesRejected: 0 });
+    expect(repeated.body).toMatchObject({
+      candidatesAccepted: 0,
+      candidatesProposed: 0,
+      candidatesRejected: 1,
+      acceptedIds: [],
+      proposalIds: [],
+    });
+    expect(
+      vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), {
+        status: ["accepted"],
+        includeExpired: true,
+      }),
+    ).toHaveLength(1);
+  });
+
   it("honors a governed-assist memory posture below the deployment ceiling", async () => {
     const chat = createChat();
     store.updateMemoryAutonomyPolicy("governed-assist", 0);

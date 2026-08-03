@@ -714,6 +714,39 @@ describe("SettingsPanel gateway readiness checks", () => {
     });
   });
 
+  it("offers a passed probe as a positive verified capability value", async () => {
+    const configured = { ...chatCapability("test-chat-1"), toolCalling: false };
+    primeFetches([configured]);
+    runGatewayReadinessMock.mockResolvedValue({
+      modelId: "test-chat-1",
+      checkedAt: "2026-08-02T08:00:00.000Z",
+      overallStatus: "ready",
+      probes: [
+        { name: "chat", status: "passed", latencyMs: 12, evidence: "Working today" },
+        { name: "tool_calling", status: "passed", latencyMs: 9, evidence: "Tools work" },
+      ],
+      verifiedCapabilities: { toolCalling: true },
+    });
+    applyGatewayVerifiedCapabilitiesMock.mockResolvedValue({
+      ok: true,
+      model: { ...configured, toolCalling: true },
+    });
+
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+
+    expect(await screen.findByTestId("capability-disagreements")).toHaveTextContent(
+      /Tools: configured no; verified yes/i,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply verified values" }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply values" }));
+    await waitFor(() => {
+      expect(applyGatewayVerifiedCapabilitiesMock).toHaveBeenCalledWith("test-chat-1", {
+        toolCalling: true,
+      });
+    });
+  });
+
   it("keeps verified capability changes unapplied when the in-app confirmation is declined", async () => {
     primeFetches([chatCapability("test-chat-1")]);
     runGatewayReadinessMock.mockResolvedValue({

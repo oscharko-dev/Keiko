@@ -10,6 +10,11 @@ import {
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
+import {
+  isOptionalProcessIdentity,
+  processIdentityField,
+  PROCESS_START_IDENTITY,
+} from "./process-identity.js";
 
 const DEFAULT_STALE_LOCK_MS = 10 * 60_000;
 const LOCK_DIR_MODE = 0o700;
@@ -23,6 +28,7 @@ export interface UpdateSessionLockRecord {
   readonly startedAt: string;
   readonly pid: number;
   readonly childPid?: number | undefined;
+  readonly processIdentity?: string | undefined;
 }
 
 export interface UpdateSessionLock {
@@ -36,12 +42,14 @@ export interface FileUpdateSessionLockOptions {
   readonly staleMs?: number | undefined;
   readonly now?: (() => number) | undefined;
   readonly pidAlive?: ((pid: number) => boolean) | undefined;
+  readonly processIdentity?: string | undefined;
 }
 
 interface ResolvedFileUpdateSessionLockOptions {
   readonly staleMs: number;
   readonly now: () => number;
   readonly pidAlive: (pid: number) => boolean;
+  readonly processIdentity: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -74,6 +82,7 @@ function parseRecord(value: string): UpdateSessionLockRecord | undefined {
     if (!isRecord(parsed) || !hasRequiredLockFields(parsed)) return undefined;
     if (!isPositivePid(parsed.pid)) return undefined;
     if (parsed.childPid !== undefined && !isPositivePid(parsed.childPid)) return undefined;
+    if (!isOptionalProcessIdentity(parsed.processIdentity)) return undefined;
     if (!Number.isFinite(Date.parse(parsed.startedAt))) {
       return undefined;
     }
@@ -83,6 +92,7 @@ function parseRecord(value: string): UpdateSessionLockRecord | undefined {
       startedAt: parsed.startedAt,
       pid: parsed.pid,
       ...(parsed.childPid === undefined ? {} : { childPid: parsed.childPid }),
+      ...processIdentityField(parsed.processIdentity),
     };
   } catch {
     return undefined;
@@ -128,6 +138,7 @@ function lockIdentity(record: UpdateSessionLockRecord): string {
         targetVersion: record.targetVersion,
         startedAt: record.startedAt,
         pid: record.pid,
+        processIdentity: record.processIdentity ?? null,
       }),
       "utf8",
     )
@@ -240,9 +251,15 @@ function reclaimableValidRecord(
 ): boolean {
   const ageMs = lockAgeMs(record, options.now);
   if (ageMs === undefined || ageMs < options.staleMs) return false;
+  if (record.pid === process.pid && record.processIdentity === options.processIdentity)
+    return false;
+  const childCanBeReclaimed =
+    record.childPid === undefined ||
+    !options.pidAlive(record.childPid) ||
+    ageMs > options.staleMs * 2;
+  if (record.pid === process.pid) return childCanBeReclaimed;
   if (options.pidAlive(record.pid)) return false;
-  if (record.childPid === undefined || !options.pidAlive(record.childPid)) return true;
-  return ageMs > options.staleMs * 2;
+  return childCanBeReclaimed;
 }
 
 function reclaimable(
@@ -329,6 +346,7 @@ function resolveLockOptions(
     staleMs: input.staleMs ?? DEFAULT_STALE_LOCK_MS,
     now: input.now ?? Date.now,
     pidAlive: input.pidAlive ?? defaultPidAlive,
+    processIdentity: input.processIdentity ?? PROCESS_START_IDENTITY,
   };
 }
 
@@ -451,7 +469,8 @@ export function createFileUpdateSessionLock(
   const options = resolveLockOptions(inputOptions);
   return {
     isLocked: () => fileLockIsActive(lockPath, options),
-    acquire: (record) => acquireFileLock(lockPath, record, options),
+    acquire: (record) =>
+      acquireFileLock(lockPath, { ...record, processIdentity: options.processIdentity }, options),
     updateChildPid: (sessionId, childPid) => updateFileLockChildPid(lockPath, sessionId, childPid),
     release: (sessionId): void => {
       releaseFileLock(lockPath, sessionId);

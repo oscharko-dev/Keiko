@@ -501,6 +501,39 @@ describe("UpdateSessionManager", () => {
     }
   });
 
+  it("recovers a stale lock from a prior process instance that reused the same pid", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-reused-parent-pid-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      await writeFile(
+        lockPath,
+        `${JSON.stringify({
+          sessionId: "stale-container-session",
+          targetVersion: "0.2.10",
+          startedAt: "2026-06-30T00:00:00.000Z",
+          pid: process.pid,
+          processIdentity: "prior-container-process",
+        })}\n`,
+        { mode: 0o600 },
+      );
+      const lock = createFileUpdateSessionLock(lockPath, {
+        staleMs: 1_000,
+        now: () => Date.parse("2026-06-30T00:00:02.000Z"),
+        pidAlive: (pid) => pid === process.pid,
+        processIdentity: "replacement-container-process",
+      });
+
+      expect(lock.isLocked()).toBe(false);
+      expect(lock.acquire(lockRecord("replacement-session"))).toBe(true);
+      expect(JSON.parse(await readFile(lockPath, "utf8"))).toMatchObject({
+        processIdentity: "replacement-container-process",
+      });
+      lock.release("replacement-session");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("quarantines a corrupt file lock and starts a new update", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-corrupt-"));
     try {
