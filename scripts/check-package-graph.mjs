@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import { collectWorkspacePackages } from "./workspace-graph.mjs";
 
@@ -212,8 +212,55 @@ function workspaceDeps(manifest) {
     .sort((a, b) => a.localeCompare(b));
 }
 
-function workspaceRefs(tsconfig) {
-  return (tsconfig.references ?? []).map((entry) => `@oscharko-dev/${basename(entry.path)}`).sort();
+function workspaceConfigIndex(packages) {
+  return new Map(packages.map((pkg) => [resolve(pkg.dir, "tsconfig.json"), pkg]));
+}
+
+function referenceConfigPath(owner, entry) {
+  const referencePath = entry?.path;
+  if (typeof referencePath !== "string" || referencePath.trim() === "") {
+    return { failure: `${owner.name}: tsconfig reference must specify a non-empty string path` };
+  }
+  const resolvedReference = resolve(dirname(owner.configPath), referencePath);
+  const configPath =
+    basename(resolvedReference) === "tsconfig.json"
+      ? resolvedReference
+      : join(resolvedReference, "tsconfig.json");
+  return { configPath, referencePath };
+}
+
+function workspaceReference(owner, entry, knownWorkspaceConfigs) {
+  const reference = referenceConfigPath(owner, entry);
+  if ("failure" in reference) {
+    return reference;
+  }
+  const workspacePackage = knownWorkspaceConfigs.get(reference.configPath);
+  if (!workspacePackage || resolve(workspacePackage.dir) !== dirname(reference.configPath)) {
+    return {
+      failure: `${owner.name}: tsconfig reference ${JSON.stringify(reference.referencePath)} must resolve to a known workspace package tsconfig.json`,
+    };
+  }
+  return { name: workspacePackage.name };
+}
+
+function workspaceRefs(tsconfig, owner, knownWorkspaceConfigs) {
+  const failures = [];
+  const refs = [];
+  if (tsconfig.references !== undefined && !Array.isArray(tsconfig.references)) {
+    return { failures: [`${owner.name}: tsconfig references must be an array`], refs };
+  }
+
+  for (const entry of tsconfig.references ?? []) {
+    const reference = workspaceReference(owner, entry, knownWorkspaceConfigs);
+    if ("failure" in reference) {
+      failures.push(reference.failure);
+      continue;
+    }
+    refs.push(reference.name);
+  }
+
+  refs.sort((left, right) => left.localeCompare(right));
+  return { failures, refs };
 }
 
 function manifestTargets(manifest) {
@@ -256,22 +303,31 @@ function rootScriptFailures(rootManifest) {
   return failures;
 }
 
-function solutionRefFailures(packagesSolution, graphPackages) {
+function solutionRefFailures(packagesSolution, graphPackages, knownWorkspaceConfigs, configPath) {
   const expectedSolutionRefs = graphPackages.map((pkg) => pkg.name);
-  const actualSolutionRefs = workspaceRefs(packagesSolution);
-  if (JSON.stringify(actualSolutionRefs) !== JSON.stringify(expectedSolutionRefs)) {
-    return [
-      `tsconfig.packages.json references ${actualSolutionRefs.join(", ")} but expected ${expectedSolutionRefs.join(", ")}`,
-    ];
+  const { failures, refs } = workspaceRefs(
+    packagesSolution,
+    { configPath, name: "tsconfig.packages.json" },
+    knownWorkspaceConfigs,
+  );
+  if (JSON.stringify(refs) !== JSON.stringify(expectedSolutionRefs)) {
+    failures.push(
+      `tsconfig.packages.json references ${refs.join(", ")} but expected ${expectedSolutionRefs.join(", ")}`,
+    );
   }
-  return [];
+  return failures;
 }
 
-function packageGraphFailures(pkg, tsconfig) {
+function packageGraphFailures(pkg, tsconfig, knownWorkspaceConfigs) {
   const failures = [];
   const deps = workspaceDeps(pkg.manifest);
-  const refs = workspaceRefs(tsconfig);
+  const { failures: refFailures, refs } = workspaceRefs(
+    tsconfig,
+    { configPath: join(pkg.dir, "tsconfig.json"), name: pkg.name },
+    knownWorkspaceConfigs,
+  );
 
+  failures.push(...refFailures);
   if (JSON.stringify(refs) !== JSON.stringify(deps)) {
     failures.push(
       `${pkg.name}: tsconfig references ${refs.join(", ")} do not match dependencies ${deps.join(", ")}`,
@@ -316,10 +372,16 @@ export async function checkWorkspacePackageGraph(root) {
   const graphPackages = packages
     .filter((pkg) => pkg.name !== UI_PACKAGE)
     .sort((a, b) => a.name.localeCompare(b.name));
+  const knownWorkspaceConfigs = workspaceConfigIndex(packages);
 
   failures.push(
     ...rootScriptFailures(rootManifest),
-    ...solutionRefFailures(packagesSolution, graphPackages),
+    ...solutionRefFailures(
+      packagesSolution,
+      graphPackages,
+      knownWorkspaceConfigs,
+      join(root, "tsconfig.packages.json"),
+    ),
   );
   const uiPackage = packages.find((pkg) => pkg.name === UI_PACKAGE);
   if (uiPackage) {
@@ -328,7 +390,7 @@ export async function checkWorkspacePackageGraph(root) {
   for (const pkg of graphPackages) {
     const tsconfigPath = join(pkg.dir, "tsconfig.json");
     const tsconfig = await readJson(tsconfigPath);
-    failures.push(...packageGraphFailures(pkg, tsconfig));
+    failures.push(...packageGraphFailures(pkg, tsconfig, knownWorkspaceConfigs));
   }
 
   return failures;
