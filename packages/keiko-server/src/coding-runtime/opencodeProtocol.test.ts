@@ -844,6 +844,8 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
             risk: "low",
             policyReason: "approval-required",
             commandLabel: "typecheck",
+            actionId: "session:call",
+            idempotencyKey: "session:call",
             approvalId: "session:call",
             approvalDigest: "a".repeat(64),
           },

@@ -16,6 +16,8 @@ describe("coding sidecar approval proof events", () => {
       risk: "low",
       policyReason: "approval-required",
       commandLabel: "typecheck",
+      actionId: "session:call",
+      idempotencyKey: "session:call",
       approvalId: "session:call",
       approvalDigest: "b".repeat(64),
     };

@@ -1372,6 +1372,20 @@ describe("validateCodingWorkbenchRuntimeEvent", () => {
     });
   });
 
+  it("accepts the exact closed verifier id in a verification approval prompt", () => {
+    expect(
+      validateCodingWorkbenchPermissionRequest({
+        requestId: "perm-verification",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "approval-required",
+        actionKind: "verification-command",
+        commandLabel: "typecheck",
+        expiresAt: "2026-07-07T12:30:00Z",
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
   it("rejects nested command-execution permission requests with unsafe command text", () => {
     const parsed = validateCodingWorkbenchRuntimeEvent({
       schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,

@@ -32,6 +32,8 @@ export interface SidecarPermissionEvent {
   readonly policyReason?: CodingWorkbenchSupervisedPolicyReason | undefined;
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly commandLabel?: string | undefined;
+  readonly actionId?: string | undefined;
+  readonly idempotencyKey?: string | undefined;
   readonly approvalId?: string | undefined;
   readonly approvalDigest?: string | undefined;
   readonly targetPath?: string | undefined;
@@ -162,6 +164,8 @@ function optionalMutationMetadata(
   record: Record<string, unknown>,
 ): Partial<SidecarPermissionEvent> {
   return {
+    ...optionalStringField(record, "actionId"),
+    ...optionalStringField(record, "idempotencyKey"),
     ...optionalStringField(record, "approvalId"),
     ...optionalStringField(record, "approvalDigest"),
     ...optionalApprovalToken(record),

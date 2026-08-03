@@ -721,6 +721,8 @@ interface PermissionLineInput {
   readonly risk?: string | undefined;
   readonly policyReason?: string | undefined;
   readonly commandLabel?: string | undefined;
+  readonly actionId?: string | undefined;
+  readonly idempotencyKey?: string | undefined;
   readonly approvalId?: string | undefined;
   readonly approvalDigest?: string | undefined;
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
@@ -2361,6 +2363,8 @@ describe("coding runtime manager", () => {
         risk: "low",
         policyReason: "approval-required",
         commandLabel: request.verifierId,
+        actionId: request.actionId,
+        idempotencyKey: request.idempotencyKey,
         approvalId: approvalProof.approvalId,
         approvalDigest: approvalProof.approvalDigest,
       }),
@@ -2370,7 +2374,7 @@ describe("coding runtime manager", () => {
     expect(events.find((event) => event.kind === "permission-requested")).toMatchObject({
       permissionRequest: {
         requestId: "permission-verification",
-        commandLabel: "verification-command",
+        commandLabel: "typecheck",
       },
     });
     expect(
@@ -3395,7 +3399,10 @@ describe("coding runtime manager", () => {
     expect(manager.health()).toEqual({ status: "stopped" });
   });
 
-  it("reports an authenticated-health handshake failure as a version mismatch", async () => {
+  it.each([
+    ["authenticated-health-version", "runtime-version-mismatch"],
+    ["authenticated-health", "protocol-schema-mismatch"],
+  ] as const)("maps the %s handshake reason precisely", async (reason, failureCode) => {
     const fixture = createManagedFixture();
     const child = fakeChild();
     const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
@@ -3410,7 +3417,7 @@ describe("coding runtime manager", () => {
         },
       })),
       openCodeLifecycleAdapter: {
-        handshake: vi.fn(() => Promise.resolve({ ok: false, reason: "authenticated-health" })),
+        handshake: vi.fn(() => Promise.resolve({ ok: false, reason })),
       },
       now: () => Date.parse("2026-07-07T13:00:00.000Z"),
     });
@@ -3421,7 +3428,7 @@ describe("coding runtime manager", () => {
       ),
     ).resolves.toEqual({
       ok: false,
-      failureCode: "runtime-version-mismatch",
+      failureCode,
       retryable: false,
     });
     expect(diagnostics.record).toHaveBeenCalledWith(
@@ -3429,7 +3436,7 @@ describe("coding runtime manager", () => {
         correlationId: "run-1988",
         operation: "coding-runtime.handshake",
         errorClass: "OpenCodeHandshakeFailure",
-        message: "runtime-handshake-phase:authenticated-health",
+        message: `runtime-handshake-phase:${reason}`,
       }),
     );
   });

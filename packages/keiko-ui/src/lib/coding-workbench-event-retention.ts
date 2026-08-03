@@ -67,7 +67,7 @@ export interface CodingWorkbenchRuntimeStreamHandlers {
 
 export interface CodingWorkbenchRuntimeStreamSessionOptions {
   readonly staleAfterMs?: number | undefined;
-  readonly createEventSource?: ((runId: string) => EventSource) | undefined;
+  readonly createEventSource?: ((runId: string, cursor?: string) => EventSource) | undefined;
 }
 
 export interface CodingWorkbenchRuntimeStreamSession {
@@ -77,6 +77,7 @@ export interface CodingWorkbenchRuntimeStreamSession {
 class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
   private source: EventSource | undefined;
   private pending: CodingWorkbenchRuntimeSseEvent[] = [];
+  private pendingResnapshot = false;
   private latestCursor = "";
   private batchTimer: ReturnType<typeof setTimeout> | undefined;
   private watchdogTimer: ReturnType<typeof setTimeout> | undefined;
@@ -86,7 +87,7 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
     private readonly runId: string,
     private readonly handlers: CodingWorkbenchRuntimeStreamHandlers,
     private readonly staleAfterMs: number,
-    private readonly createEventSource: (runId: string) => EventSource,
+    private readonly createEventSource: (runId: string, cursor?: string) => EventSource,
   ) {
     this.connect();
   }
@@ -97,11 +98,16 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
     this.source?.close();
     if (this.batchTimer !== undefined) clearTimeout(this.batchTimer);
     if (this.watchdogTimer !== undefined) clearTimeout(this.watchdogTimer);
+    this.pending = [];
+    this.pendingResnapshot = false;
   }
 
   private connect(): void {
     this.source?.close();
-    const source = this.createEventSource(this.runId);
+    const source = this.createEventSource(
+      this.runId,
+      this.latestCursor.length === 0 ? undefined : this.latestCursor,
+    );
     this.source = source;
     source.onopen = (): void => {
       this.armWatchdog();
@@ -113,6 +119,7 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
     source.addEventListener("status", this.receive as EventListener);
     source.addEventListener("runtime-event", this.receive as EventListener);
     source.addEventListener("reset", this.handleReset);
+    source.addEventListener("heartbeat", this.handleHeartbeat);
     this.armWatchdog();
   }
 
@@ -130,6 +137,11 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
         }, CODING_WORKBENCH_OBSERVATION_BATCH_MS);
         return;
       }
+      if (this.pending.length > 0) {
+        this.pending.push(event);
+        this.pendingResnapshot = true;
+        return;
+      }
       this.handlers.onEvents([event], event.cursor, true);
     } catch (error) {
       this.handlers.onError(error);
@@ -137,15 +149,24 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
   };
 
   private readonly handleReset = (): void => {
+    this.flush();
     this.close();
     void this.handlers.onReset();
   };
 
+  private readonly handleHeartbeat = (): void => {
+    this.armWatchdog();
+  };
+
   private flush(): void {
+    if (this.batchTimer !== undefined) clearTimeout(this.batchTimer);
+    this.batchTimer = undefined;
     if (this.pending.length === 0) return;
     const events = this.pending;
+    const resnapshot = this.pendingResnapshot;
     this.pending = [];
-    this.handlers.onEvents(events, this.latestCursor, false);
+    this.pendingResnapshot = false;
+    this.handlers.onEvents(events, this.latestCursor, resnapshot);
   }
 
   private armWatchdog(): void {
@@ -160,6 +181,7 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
   private reconnectStaleStream(): void {
     if (this.closed) return;
     try {
+      this.flush();
       this.connect();
     } catch (error) {
       this.handlers.onError(error);

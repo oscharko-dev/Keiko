@@ -2,7 +2,8 @@ import { createHash, timingSafeEqual } from "node:crypto";
 
 import type { CodingToolActionRequest, CodingToolApprovalProof } from "./codingToolIpc.js";
 
-const MAX_RECORDS = 64;
+const MAX_PENDING_RECORDS = 64;
+const MAX_APPROVED_RECORDS = 64;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 
 export type ApprovableToolRequest = Extract<
@@ -110,8 +111,9 @@ function observePermission(
   ) {
     return false;
   }
-  pending.set(permissionKey(input.runId, input.requestId), { ...input, expiresAtMs });
-  trimOldest(pending);
+  const key = permissionKey(input.runId, input.requestId);
+  if (!pending.has(key) && pending.size >= MAX_PENDING_RECORDS) return false;
+  pending.set(key, { ...input, expiresAtMs });
   return true;
 }
 
@@ -130,13 +132,14 @@ function activatePermission(
   ) {
     return false;
   }
+  const approvedKey = actionKey(input.runId, requested.proof.approvalId);
+  if (!approved.has(approvedKey) && approved.size >= MAX_APPROVED_RECORDS) return false;
   pending.delete(key);
-  approved.set(actionKey(input.runId, requested.proof.approvalId), {
+  approved.set(approvedKey, {
     ...requested,
     expiresAtMs: Math.min(requested.expiresAtMs, input.expiresAtMs),
     approvalAuthorityDigest: input.approvalAuthorityDigest,
   });
-  trimOldest(approved);
   return true;
 }
 
@@ -232,14 +235,6 @@ function prune(
 function pruneApproved(approved: Map<string, ApprovedAction>, nowMs: number): void {
   for (const [key, record] of approved) {
     if (record.expiresAtMs <= nowMs) approved.delete(key);
-  }
-}
-
-function trimOldest<T>(records: Map<string, T>): void {
-  while (records.size > MAX_RECORDS) {
-    const oldest = records.keys().next().value;
-    if (oldest === undefined) return;
-    records.delete(oldest);
   }
 }
 

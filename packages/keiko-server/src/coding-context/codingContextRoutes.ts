@@ -196,7 +196,7 @@ function resolveRequest(
   deps: UiHandlerDeps,
 ): CodeContextReadRequest | undefined {
   const ceiling = serverCeiling(deps);
-  const resolved = editorAgentAuthorityRegistry.resolve(
+  const resolved = editorAgentAuthorityRegistry.reserveForConnector(
     parsed.authority.reference,
     parsed.authority.workspaceRoot,
     ceiling,

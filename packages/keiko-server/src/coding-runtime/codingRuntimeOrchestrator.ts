@@ -255,15 +255,15 @@ export class CodingRuntimeOrchestrator {
   private resumeCurrent(runId: string, input: unknown): CodingRuntimeOrchestratorResult {
     const admitted = resumeAdmission(this.current(), runId, input, this.activeEffectiveMode);
     if (admitted === undefined) return this.fail("invalid-intent");
-    const resumed = this.deps.manager.resume(runId, admitted.requestedMode);
-    if (!resumed.ok) return this.fail(runtimePauseFailureCode(resumed.failureCode));
-    const effectiveMode = resumed.effectiveMode ?? admitted.requestedMode;
-    this.activeEffectiveMode = effectiveMode;
     const approval = this.approvals.get(runId);
     if (approval !== undefined && approval.expiresAt <= this.now().getTime()) {
       this.approvals.delete(runId);
       return this.transition(admitted.current, "failed", "authority-expired");
     }
+    const resumed = this.deps.manager.resume(runId, admitted.requestedMode);
+    if (!resumed.ok) return this.fail(runtimePauseFailureCode(resumed.failureCode));
+    const effectiveMode = resumed.effectiveMode ?? admitted.requestedMode;
+    this.activeEffectiveMode = effectiveMode;
     const nextState = approval === undefined ? "running" : "awaiting-approval";
     const transitioned = this.transition(admitted.current, nextState);
     this.activeEffectiveMode = effectiveModeAfterResume(transitioned, effectiveMode);

@@ -343,7 +343,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       return undefined;
     }
     if (!safeWorkspaceCheck(entry.workspaceIsCurrent)) {
-      this.expireCurrent();
+      this.purgeCurrent("workspace-switch");
       return undefined;
     }
     return entry;

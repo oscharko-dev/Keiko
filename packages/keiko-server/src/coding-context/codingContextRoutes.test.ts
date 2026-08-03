@@ -72,6 +72,7 @@ interface AuthorityOptions {
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly deploymentCeiling?: CodingWorkbenchMode | undefined;
   readonly effectiveMode?: CodingWorkbenchMode | undefined;
+  readonly maxToolCalls?: number | undefined;
 }
 
 function registerAuthority(options: AuthorityOptions = {}): Record<string, unknown> {
@@ -123,7 +124,7 @@ function registerAuthority(options: AuthorityOptions = {}): Record<string, unkno
     gates: ["human-approval", "verification-green", "artifact-review"],
     budget: {
       maxRuntimeMs: 120_000,
-      maxToolCalls: 12,
+      maxToolCalls: options.maxToolCalls ?? 12,
       maxPromptTokens: 24_000,
       maxPatchBytes: 32_768,
     },
@@ -157,6 +158,14 @@ function packRequest(
     ],
     ...overrides,
   };
+}
+
+function packRequestWithAuthorityOverrides(
+  overrides: Record<string, unknown>,
+): Record<string, unknown> {
+  const request = packRequest();
+  const authority = request.authority as Record<string, unknown>;
+  return { ...request, authority: { ...authority, ...overrides } };
 }
 
 function bodyOf(result: RouteResult): Record<string, unknown> {
@@ -209,6 +218,36 @@ describe("coding context pack route", () => {
       status: 403,
       body: { error: { code: "CODING_CONTEXT_AUTHORITY_DENIED" } },
     });
+  });
+
+  it("reserves one connector action and denies an exhausted authority before fetching", async () => {
+    const github = fakeGitHubPort();
+    const readJson = vi.fn((argv: readonly string[]) => github.readJson(argv));
+    const request = packRequest(
+      {
+        refs: [
+          {
+            source: "github",
+            objectKind: "issue",
+            ownerAndRepo: "oscharko-dev/Keiko",
+            objectId: "1989",
+          },
+        ],
+      },
+      { maxToolCalls: 1 },
+    );
+    const deps = depsFor({ codingContextGitHubPort: { readJson } });
+
+    const admitted = await handleCodingContextPack(ctxFor(request), deps);
+    const callCountAfterAdmission = readJson.mock.calls.length;
+    const result = await handleCodingContextPack(ctxFor(request), deps);
+
+    expect(admitted.status).toBe(200);
+    expect(result).toMatchObject({
+      status: 403,
+      body: { error: { code: "CODING_CONTEXT_AUTHORITY_DENIED" } },
+    });
+    expect(readJson).toHaveBeenCalledTimes(callCountAfterAdmission);
   });
 
   it("reports missing-credentials when the connector authorization flag is absent", async () => {
@@ -295,9 +334,8 @@ describe("coding context pack route", () => {
   it("rejects malformed bodies, unknown keys, hostile refs, and bad bounds", async () => {
     const cases: readonly Record<string, unknown>[] = [
       packRequest({ extra: true }),
-      packRequest({ runId: "forged-run" }),
-      packRequest({ effectiveMode: "autonomous-delivery" }),
-      packRequest({ connectorScopes: ["issue-tracker.read"] }),
+      packRequestWithAuthorityOverrides({ effectiveMode: "autonomous-delivery" }),
+      packRequestWithAuthorityOverrides({ connectorScopes: ["issue-tracker.read"] }),
       packRequest({ authority: { runId: "../escape" } }),
       packRequest({ refs: [] }),
       packRequest({
@@ -329,6 +367,18 @@ describe("coding context pack route", () => {
       const result = await handleCodingContextPack(ctxFor(body), depsFor());
       expect(result.status).toBe(400);
     }
+  });
+
+  it("denies a well-formed forged run id at authority resolution", async () => {
+    const result = await handleCodingContextPack(
+      ctxFor(packRequestWithAuthorityOverrides({ runId: "forged-run" })),
+      depsFor(),
+    );
+
+    expect(result).toMatchObject({
+      status: 403,
+      body: { error: { code: "CODING_CONTEXT_AUTHORITY_DENIED" } },
+    });
   });
 
   it("rejects a forged authority before invoking any connector", async () => {

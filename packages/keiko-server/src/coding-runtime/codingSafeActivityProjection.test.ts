@@ -215,9 +215,13 @@ describe("bounded coding safe-activity projection", () => {
 
     open();
     currentWorkspace = false;
+    const priorWorkspaceListener = vi.fn();
+    projection.subscribeContent(priorWorkspaceListener);
     expect(projection.currentContent()).toBeNull();
     currentWorkspace = true;
     expect(projection.currentContent()).toBeNull();
+    open();
+    expect(priorWorkspaceListener).toHaveBeenCalledOnce();
 
     open();
     now += 101;

@@ -41,6 +41,7 @@ export type OpenCodeReadinessPhase =
   | "config-materialization"
   | "endpoint"
   | "authenticated-health"
+  | "authenticated-health-version"
   | "unauthenticated-health"
   | "openapi-digest"
   | "gateway-challenge"
@@ -480,9 +481,9 @@ async function startAdapter(
     if (endpoint === undefined) return fail("endpoint");
     phase = "authenticated-health";
     const authenticated = await readiness.health("basic");
-    if (authenticated.status !== 200 || authenticated.version !== OPENCODE_PINNED_VERSION) {
-      return fail("authenticated-health");
-    }
+    if (authenticated.status !== 200) return fail("authenticated-health");
+    if (authenticated.version !== OPENCODE_PINNED_VERSION)
+      return fail("authenticated-health-version");
     phase = "unauthenticated-health";
     const unauthenticated = await readiness.health("none");
     if (unauthenticated.status !== 401) return fail("unauthenticated-health");
@@ -906,14 +907,14 @@ function governedPermissionSource(): readonly string[] {
     "  };",
     "}",
     "async function toolApprovalProof(request) {",
-    '  if (process.env.KEIKO_CODING_MODE !== "governed-assist" || !["verification", "command"].includes(action)) return;',
+    '  if (process.env.KEIKO_CODING_MODE !== "governed-assist" || !["verification", "command"].includes(request.action)) return;',
     "  const runId = process.env.KEIKO_CODING_RUN_ID;",
-    '  const targetId = action === "verification" ? request.verifierId : request.commandId;',
+    '  const targetId = request.action === "verification" ? request.verifierId : request.commandId;',
     '  if (!runId || typeof targetId !== "string") throw new Error("keiko-tool-invalid");',
-    '  const payload = JSON.stringify(["coding-tool-approval-v1", runId, action, request.actionId, request.idempotencyKey, targetId]);',
+    '  const payload = JSON.stringify(["coding-tool-approval-v1", runId, request.action, request.actionId, request.idempotencyKey, targetId]);',
     '  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));',
     '  const approvalDigest = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");',
-    "  return { approvalId: request.actionId, approvalDigest };",
+    "  return { actionId: request.actionId, idempotencyKey: request.idempotencyKey, approvalId: request.actionId, approvalDigest };",
     "}",
     "async function askForGovernedPermission(args, context, approvalProof) {",
     '  if (process.env.KEIKO_CODING_MODE !== "governed-assist") return;',
@@ -963,7 +964,7 @@ function toolSource(
     "    for (const name of argumentNames) request[name] = args[name];",
     "    const approvalProof = await toolApprovalProof(request);",
     "    await askForGovernedPermission(args, context, approvalProof);",
-    "    if (approvalProof) request.approvalProof = approvalProof;",
+    "    if (approvalProof) request.approvalProof = { approvalId: approvalProof.approvalId, approvalDigest: approvalProof.approvalDigest };",
     "    const body = JSON.stringify(request);",
     "    const controller = new AbortController();",
     "    const abort = () => controller.abort();",

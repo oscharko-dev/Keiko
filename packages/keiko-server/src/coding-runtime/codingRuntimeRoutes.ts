@@ -505,7 +505,13 @@ export function handleCodingRuntimeEvents(ctx: RouteContext, deps: UiHandlerDeps
   const runId = ctx.params.runId ?? "";
   if (!required.orchestrator.getSnapshot(runId)) return notFound();
   const lastEventId = ctx.req.headers["last-event-id"];
-  const cursor = typeof lastEventId === "string" ? lastEventId : undefined;
+  const queryCursor = ctx.url.searchParams.get("cursor");
+  const cursor =
+    typeof lastEventId === "string"
+      ? lastEventId
+      : queryCursor === null || queryCursor.length === 0
+        ? undefined
+        : queryCursor;
   openCodingRuntimeSse(ctx.res, ctx.req, required.eventHub, runId, cursor);
   return STREAMING;
 }

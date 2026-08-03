@@ -228,6 +228,8 @@ const GOVERNED_VERIFICATION_METADATA_KEYS = [
   "risk",
   "policyReason",
   "commandLabel",
+  "actionId",
+  "idempotencyKey",
   "approvalId",
   "approvalDigest",
 ] as const;
@@ -363,18 +365,31 @@ function validVerificationApproval(
   metadata: Record<string, unknown>,
 ): boolean {
   const commandLabel = metadata.commandLabel;
-  const approvalId = metadata.approvalId;
   const approvalDigest = metadata.approvalDigest;
   return (
     typeof commandLabel === "string" &&
     GOVERNED_VERIFIERS.has(commandLabel) &&
-    typeof approvalId === "string" &&
-    approvalId.length > 0 &&
-    approvalId.length <= 512 &&
+    validApprovalIdentities(metadata) &&
     typeof approvalDigest === "string" &&
     /^[0-9a-f]{64}$/u.test(approvalDigest) &&
     sameStrings(properties.patterns, [commandLabel])
   );
+}
+
+function validApprovalIdentities(metadata: Record<string, unknown>): boolean {
+  const actionId = metadata.actionId;
+  const idempotencyKey = metadata.idempotencyKey;
+  const approvalId = metadata.approvalId;
+  return (
+    boundedApprovalIdentity(actionId) &&
+    boundedApprovalIdentity(idempotencyKey) &&
+    boundedApprovalIdentity(approvalId) &&
+    approvalId === actionId
+  );
+}
+
+function boundedApprovalIdentity(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 512;
 }
 
 function fixedPermissionMetadata(

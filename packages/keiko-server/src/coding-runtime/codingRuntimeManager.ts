@@ -1840,6 +1840,7 @@ const OPEN_CODE_HANDSHAKE_PHASES: ReadonlySet<string> = new Set([
   "config-materialization",
   "endpoint",
   "authenticated-health",
+  "authenticated-health-version",
   "unauthenticated-health",
   "openapi-digest",
   "gateway-challenge",
@@ -1850,7 +1851,7 @@ const OPEN_CODE_HANDSHAKE_PHASES: ReadonlySet<string> = new Set([
 ]);
 
 function openCodeHandshakeFailureCode(reason: string): CodingRuntimeFailureCode {
-  return reason === "authenticated-health"
+  return reason === "authenticated-health-version"
     ? "runtime-version-mismatch"
     : "protocol-schema-mismatch";
 }
@@ -2663,6 +2664,8 @@ function observeCodingToolApproval(
   if (
     event.approvalId === undefined ||
     event.approvalDigest === undefined ||
+    event.actionId === undefined ||
+    event.idempotencyKey === undefined ||
     event.commandLabel === undefined
   ) {
     return false;
@@ -2671,8 +2674,8 @@ function observeCodingToolApproval(
     runId: active.context.runId,
     requestId: event.requestId,
     action: "verification",
-    actionId: event.approvalId,
-    idempotencyKey: event.approvalId,
+    actionId: event.actionId,
+    idempotencyKey: event.idempotencyKey,
     targetId: event.commandLabel,
     proof: { approvalId: event.approvalId, approvalDigest: event.approvalDigest },
     expiresAt: event.expiresAt,
@@ -2804,8 +2807,6 @@ function invalidSidecarEventDetails(): Partial<CodingWorkbenchRuntimeEvent> {
 }
 
 function permissionRequest(event: SidecarPermissionEvent): CodingWorkbenchPermissionRequest {
-  const commandLabel =
-    event.actionKind === "verification-command" ? "verification-command" : event.commandLabel;
   return {
     requestId: event.requestId,
     kind: event.kind,
@@ -2817,6 +2818,6 @@ function permissionRequest(event: SidecarPermissionEvent): CodingWorkbenchPermis
     ...(event.risk === undefined ? {} : { risk: event.risk }),
     ...(event.policyReason === undefined ? {} : { policyReason: event.policyReason }),
     ...(event.connectorScopes === undefined ? {} : { connectorScopes: event.connectorScopes }),
-    ...(commandLabel === undefined ? {} : { commandLabel }),
+    ...(event.commandLabel === undefined ? {} : { commandLabel: event.commandLabel }),
   };
 }

@@ -1143,6 +1143,7 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
       state: "failed",
       failureCode: "authority-expired",
     });
+    expect(f.manager.resume).not.toHaveBeenCalled();
     expect(f.approvalAuthority.issue).not.toHaveBeenCalled();
   });
 

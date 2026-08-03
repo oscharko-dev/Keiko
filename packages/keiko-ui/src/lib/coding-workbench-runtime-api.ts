@@ -337,8 +337,15 @@ export function rejectCodingWorkbenchRuntimeQuestion(
   return postSnapshot(runPath(runId, "/questions/reject"), input, signal);
 }
 
-export function createCodingWorkbenchRuntimeEventSource(runId: string): EventSource {
-  const source = createSameOriginApiEventSource(runPath(runId, "/events"));
+export function createCodingWorkbenchRuntimeEventSource(
+  runId: string,
+  cursor?: string,
+): EventSource {
+  const suffix =
+    cursor === undefined || cursor.length === 0
+      ? "/events"
+      : `/events?cursor=${encodeURIComponent(cursor)}`;
+  const source = createSameOriginApiEventSource(runPath(runId, suffix));
   if (source !== null) return source;
   throw new ApiError(
     "CODING_RUNTIME_STREAM_UNAVAILABLE",

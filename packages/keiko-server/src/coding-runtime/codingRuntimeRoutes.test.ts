@@ -834,6 +834,20 @@ describe("coding runtime routes", () => {
     expect((ctx.res as unknown as FakeResponse).chunks.join("")).toContain('"cursor":"run-1:0"');
   });
 
+  it("resumes a watchdog-recreated stream from its query cursor", () => {
+    const subscribe = vi.fn(() => ({ ok: true as const, detach: () => undefined }));
+    const ctx = context(
+      "",
+      { runId: "run-1" },
+      "/api/coding-workbench/runtime/runs/run-1/events?cursor=run-1%3A42",
+    );
+
+    expect(handleCodingRuntimeEvents(ctx, runtime({ codingRuntimeEventHub: { subscribe } }))).toBe(
+      STREAMING,
+    );
+    expect(subscribe).toHaveBeenCalledWith("run-1", "run-1:42", expect.any(Object));
+  });
+
   it("keeps an idle runtime event stream alive and stops heartbeats on close", async () => {
     vi.useFakeTimers();
     try {
@@ -852,6 +866,7 @@ describe("coding runtime routes", () => {
 
       await vi.advanceTimersByTimeAsync(15_000);
       expect(response.chunks).toContain(": keep-alive\n\n");
+      expect(response.chunks).toContain("event: heartbeat\ndata: {}\n\n");
       response.destroy();
       const heartbeatCount = response.chunks.length;
       await vi.advanceTimersByTimeAsync(15_000);
