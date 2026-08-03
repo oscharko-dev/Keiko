@@ -3340,7 +3340,9 @@ function setupErrorCode(error: unknown): string | undefined {
 function setupHttpStatus(error: unknown): number | undefined {
   const isStatus = (value: unknown): value is number =>
     typeof value === "number" && Number.isInteger(value);
-  return setupErrorValue(error, "httpStatus", isStatus) ?? setupErrorValue(error, "status", isStatus);
+  return (
+    setupErrorValue(error, "httpStatus", isStatus) ?? setupErrorValue(error, "status", isStatus)
+  );
 }
 
 function figmaFailureStatus(code: FigmaConnectorErrorCode): number {

@@ -655,11 +655,7 @@ export async function setupGateway(body: GatewaySetupInput): Promise<GatewaySetu
     });
   } catch (error) {
     if (isFetchNetworkError(error)) {
-      throw new ApiError(
-        "GATEWAY_SETUP_NETWORK_ERROR",
-        GATEWAY_SETUP_NETWORK_ERROR_MESSAGE,
-        0,
-      );
+      throw new ApiError("GATEWAY_SETUP_NETWORK_ERROR", GATEWAY_SETUP_NETWORK_ERROR_MESSAGE, 0);
     }
     throw error;
   }
