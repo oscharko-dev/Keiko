@@ -84,34 +84,23 @@ cache.store_loaded  counts: { entries: N }
 cache.hits          counts: { hits: H, misses: M }
 ```
 
-Both files this document was introduced with are review-relevant, including this one: the profile's
-`docs/qa/**/*.md` entry wins over the broader prose exclusion. Worth knowing before predicting what
-a change will cost — "it is only documentation" is not the same as "it is not reviewed."
-
-**`entries: 0` is a defect only under specific conditions.** A cold start is expected and correct
-after any of these, because each one deliberately begins a fresh partition or leaves none to find:
-
-- a change to `.github/keiko-for-quality.json`, the model id, the model protocol, or the reviewer
-  pin — all four are hashed into the store's artifact name and bound into its signature context;
-- the seven-day artifact retention expiring;
-- an incomplete run **and no older complete artifact still retained** under the same identity. An
-  incomplete run uploads no replacement — the hand-off and the signing job both gate on
-  `outcome == 'complete'`, so even verdicts persisted locally never leave the runner until the
-  workflow adopts `store_written` — but the locator scans every same-named artifact and takes the
-  newest eligible one, so an earlier complete store inside the retention window is still found.
-  A cold start after an incomplete run is expected only when there is no such artifact left;
-- the store being disabled for that run, which the log states explicitly.
-
-Suspect persistence only when a prior run under the _same_ identity completed inside the retention
-window and this run still loads nothing.
-
-**`hits` and `misses` count files, not pushes.** A push that changes three of twenty reviewable
+`hits` and `misses` count **files, not pushes**. A push that changes three of twenty reviewable
 files reads `hits: 17, misses: 3` — one miss per changed or uncached file. Several misses at once
-are normal and are not evidence of a defect by themselves.
+are normal.
+
+`entries: 0` on a pull request that has been pushed to before is the expensive failure, and an
+invisible one: nothing goes red, findings still publish, and only the bill moves. It is also
+legitimate in several ordinary cases, so diagnosing it correctly matters —
+[the troubleshooting entry](../troubleshooting/model-review-spend.md) lists which cold starts are
+expected and how to tell a real persistence failure from one of them.
 
 Measured end to end on 2026-08-03: a first run reported `store_loaded entries:0`, then
 `hits:0 misses:2`, and appended two entries; the next push, changing only one of the two files,
 reported `store_loaded entries:2` and `hits:1 misses:1`.
+
+Both files this document was introduced with are review-relevant, including this one: the profile's
+`docs/qa/**/*.md` entry wins over the broader prose exclusion. Worth knowing before predicting what
+a change will cost — "it is only documentation" is not the same as "it is not reviewed."
 
 ## Levers, strongest first
 
@@ -126,24 +115,7 @@ reported `store_loaded entries:2` and `hits:1 misses:1`.
 
 ## Stopping spend in an emergency
 
-Two steps, and the first alone is not enough.
-
-1. Set the repository variable `KEIKO_QUALITY_ENABLED` to `false` — that is its name; the
-   `vars.` prefix in the workflow is the Actions expression context, not part of it — so no new job
-   starts and the environment's secrets
-   are never materialized for one.
-2. **Cancel every run already requested, queued, or in progress.** The variable does not touch
-   them: a run that has started keeps its credentials and can keep spending until it finishes or
-   reaches the thirty-minute job timeout.
-
-The cancellation half is deliberately NOT restated here. It is not a one-liner: the authoritative
-procedure in [`keiko-for-quality.md`](keiko-for-quality.md) checks the query limit rather than
-trusting it — a truncated window hides an older live run behind newer completed ones and would
-report containment it never achieved — loops until no live run remains, covers all five live
-statuses, and treats every failed call as containment NOT established. A simplified copy of it in
-this file would be a second procedure to keep in sync on the one path where being wrong costs
-money. Run the one in that document.
-
-The full disable procedure, including what to record afterwards, is in
-[`keiko-for-quality.md`](keiko-for-quality.md). Nothing else in this repository can spend model
-budget on review; the scheduled re-qualification lives in the product repository, not here.
+Setting `KEIKO_QUALITY_ENABLED` to `false` stops new jobs but does **not** touch runs already
+requested, queued, or in progress — those keep their credentials until they finish or time out. The
+complete two-step containment, including the cancellation loop that checks its own query limit, is
+in [the troubleshooting entry](../troubleshooting/model-review-spend.md).
