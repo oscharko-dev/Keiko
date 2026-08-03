@@ -446,9 +446,17 @@ jobs:
           # the verdicts for the files it DID reach — restricted to the engine's own account of
           # what it covered, so a file it never opened can still never be replayed as reviewed —
           # while a rejected schema or an engine error still persists nothing, because there the
-          # manifest itself is not to be believed. Until the pin above advances to a release
-          # carrying that fix, this ceiling remains a saving on mid-size pull requests and a
-          # repeated cost on very large ones. See docs/qa/review-cost-model.md for the numbers.
+          # manifest itself is not to be believed.
+          #
+          # Advancing the pin alone does NOT end the repeated cost, and it is worth being precise
+          # about why (raised by the Codex reviewer on #2962). The hand-off and the signing job
+          # below both gate on `outcome == 'complete'`, and budget exhaustion still settles
+          # INCOMPLETE — so a truncated run's store would be written on this runner and stranded
+          # here, never uploaded, never signed, never found by the next push. Keiko-for-Quality#78
+          # adds a `store_written` output carrying the write decision itself; the repin that
+          # adopts it must move BOTH conditions to that output in the same change. Until then this
+          # ceiling remains a saving on mid-size pull requests and a repeated cost on very large
+          # ones. See docs/qa/review-cost-model.md for the numbers.
           #
           # The cost is real and must not be described as free: a pull request whose review needs
           # more than 2M tokens now stops dispatching files partway and settles INCOMPLETE. That is
