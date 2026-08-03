@@ -294,7 +294,7 @@ describe("API route contract", () => {
 
   it("keeps recent captures on the existing GET /api/memory route", () => {
     const memoryRoutes = API_ROUTES.filter((r) => r.pattern.startsWith("/api/memory"));
-    expect(memoryRoutes).toHaveLength(24);
+    expect(memoryRoutes).toHaveLength(25);
     expect(API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/memory")).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/forget"),
@@ -348,6 +348,18 @@ describe("API route contract", () => {
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/gateway/setup"),
     ).toBeDefined();
+  });
+
+  it("includes the verified gateway-capability mutation route", () => {
+    expect(matchRoute("PATCH", "/api/gateway/capabilities/model-one")).toMatchObject({
+      definition: { method: "PATCH", pattern: "/api/gateway/capabilities/:modelId" },
+    });
+  });
+
+  it("includes the bounded memory-tombstone enumeration route", () => {
+    expect(matchRoute("GET", "/api/memory/tombstones")).toMatchObject({
+      definition: { method: "GET", pattern: "/api/memory/tombstones" },
+    });
   });
 
   it("includes the coding-sidecar gateway profile and chat routes", () => {

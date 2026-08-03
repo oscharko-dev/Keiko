@@ -42,6 +42,8 @@ export const EN_MESSAGES = {
     "File saved, but Local History could not protect this version.",
   "editor.localHistoryProtection.workspaceUnavailable":
     "Reconnect this project, then edit and save the file again.",
+  "editor.localHistoryProtection.filesystemIdentityUnsupported":
+    "Move this project to a filesystem with stable file identity before relying on Local History.",
   "editor.localHistoryProtection.historyUnavailable":
     "Save again after Local History is available.",
   "editor.localHistoryProtection.diagnosticReference": "Diagnostic reference: {correlationId}",
@@ -222,6 +224,9 @@ export const EN_MESSAGES = {
   "gatewaySetup.loading.description":
     "Loading the local setup controls. No provider request has been started.",
   "gatewaySetup.loading.error": "The setup controls could not be loaded.",
+  "gatewaySetup.workflowEligibleModels": "Coding-safe workflow models",
+  "gatewaySetup.workflowEligibleModelsPlaceholder":
+    "Paste explicitly approved coding model names, one per line",
   "gatewaySetup.voice.title": "Audio & Digital Voice",
   "gatewaySetup.voice.description":
     "Optional models for dictation, live conversation, and spoken answers.",

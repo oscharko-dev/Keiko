@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -148,6 +148,12 @@ class MemoryUpdateSessionLock implements UpdateSessionLock {
   public readonly acquire = (record: UpdateSessionLockRecord): boolean => {
     if (this.record !== undefined) return false;
     this.record = record;
+    return true;
+  };
+
+  public readonly updateChildPid = (sessionId: string, childPid: number): boolean => {
+    if (this.record?.sessionId !== sessionId) return false;
+    this.record = { ...this.record, childPid };
     return true;
   };
 
@@ -495,6 +501,39 @@ describe("UpdateSessionManager", () => {
     }
   });
 
+  it("recovers a stale lock from a prior process instance that reused the same pid", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-reused-parent-pid-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      await writeFile(
+        lockPath,
+        `${JSON.stringify({
+          sessionId: "stale-container-session",
+          targetVersion: "0.2.10",
+          startedAt: "2026-06-30T00:00:00.000Z",
+          pid: process.pid,
+          processIdentity: "prior-container-process",
+        })}\n`,
+        { mode: 0o600 },
+      );
+      const lock = createFileUpdateSessionLock(lockPath, {
+        staleMs: 1_000,
+        now: () => Date.parse("2026-06-30T00:00:02.000Z"),
+        pidAlive: (pid) => pid === process.pid,
+        processIdentity: "replacement-container-process",
+      });
+
+      expect(lock.isLocked()).toBe(false);
+      expect(lock.acquire(lockRecord("replacement-session"))).toBe(true);
+      expect(JSON.parse(await readFile(lockPath, "utf8"))).toMatchObject({
+        processIdentity: "replacement-container-process",
+      });
+      lock.release("replacement-session");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("quarantines a corrupt file lock and starts a new update", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-corrupt-"));
     try {
@@ -522,7 +561,7 @@ describe("UpdateSessionManager", () => {
     }
   });
 
-  it("recovers a file lock from a dead process before the stale timeout", async () => {
+  it("keeps a fresh file lock after its owner dies so child metadata can be published", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-dead-"));
     try {
       const now = Date.parse("2026-06-30T00:00:01.000Z");
@@ -548,9 +587,244 @@ describe("UpdateSessionManager", () => {
         runCommandImpl: () => Promise.resolve(commandResult()),
       });
 
+      expect(lock.isLocked()).toBe(true);
+      expect(() => manager.start({ targetVersion: "0.2.12" })).toThrow(
+        expect.objectContaining({ code: "UPDATE_SESSION_ACTIVE" }),
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a restarted server while the detached mutation child is still alive", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-child-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      const childPid = 43_210;
+      const lockOptions = {
+        staleMs: 10 * 60_000,
+        now: (): number => Date.parse("2026-06-30T01:00:00.000Z"),
+        pidAlive: (pid: number): boolean => pid === childPid,
+      };
+      const firstLock = createFileUpdateSessionLock(lockPath, lockOptions);
+      const spawned = deferred();
+      let settle!: (result: CommandResult) => void;
+      const running = new Promise<CommandResult>((resolve) => {
+        settle = resolve;
+      });
+      const first = createUpdateSessionManager({
+        detector: () => supportedMode(),
+        lock: firstLock,
+        runCommandImpl: (input) => {
+          input.onSpawn?.(childPid);
+          spawned.resolve();
+          return running;
+        },
+      });
+      first.start({ targetVersion: "0.2.12" });
+      await spawned.promise;
+      const authority = JSON.parse(await readFile(lockPath, "utf8")) as Record<string, unknown>;
+      expect(authority).not.toHaveProperty("childPid");
+      const childSidecar = (await readdir(tempDir)).find((entry) => entry.endsWith(".child"));
+      expect(childSidecar).toBeDefined();
+      const childAuthority = JSON.parse(
+        await readFile(join(tempDir, childSidecar ?? "missing-child-sidecar"), "utf8"),
+      ) as Record<string, unknown>;
+      expect(childAuthority).toMatchObject({
+        sessionId: authority.sessionId,
+        childPid,
+      });
+      expect(childAuthority.lockIdentity).toEqual(expect.any(String));
+
+      const restarted = createUpdateSessionManager({
+        detector: () => supportedMode(),
+        lock: createFileUpdateSessionLock(lockPath, lockOptions),
+        runCommandImpl: () => Promise.resolve(commandResult()),
+      });
+      expect(() => restarted.start({ targetVersion: "0.2.13" })).toThrow(
+        expect.objectContaining({ code: "UPDATE_SESSION_ACTIVE" }),
+      );
+
+      settle(commandResult());
+      await waitForPhase(first, "restart-required");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not attach a child sidecar to a reused session id with different lock ownership", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-identity-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      const lock = createFileUpdateSessionLock(lockPath, {
+        pidAlive: (pid) => pid === 43_210,
+      });
+      expect(lock.acquire(lockRecord("reused-session"))).toBe(true);
+      expect(lock.updateChildPid("reused-session", 43_210)).toBe(true);
+      await writeFile(
+        lockPath,
+        `${JSON.stringify({
+          ...lockRecord("reused-session"),
+          targetVersion: "0.2.13",
+          startedAt: "2026-07-01T00:00:00.000Z",
+          pid: 999_999,
+        })}\n`,
+        { mode: 0o600 },
+      );
+
       expect(lock.isLocked()).toBe(false);
-      expect(manager.start({ targetVersion: "0.2.12" }).session.phase).toBe("preparing");
-      await waitForPhase(manager, "restart-required");
+      expect(lock.acquire(lockRecord("replacement-session"))).toBe(true);
+      expect((await readdir(tempDir)).filter((name) => name.endsWith(".child"))).toEqual([]);
+      lock.release("replacement-session");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("removes the session child sidecar when the authoritative lock is already absent", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-orphaned-sidecar-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      const lock = createFileUpdateSessionLock(lockPath);
+      expect(lock.acquire(lockRecord("released-session"))).toBe(true);
+      expect(lock.updateChildPid("released-session", 43_210)).toBe(true);
+      await unlink(lockPath);
+
+      lock.release("released-session");
+
+      expect((await readdir(tempDir)).filter((name) => name.endsWith(".child"))).toEqual([]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when child-PID metadata cannot be published", async () => {
+    const authority = new MemoryUpdateSessionLock();
+    const lock: UpdateSessionLock = {
+      isLocked: authority.isLocked,
+      acquire: authority.acquire,
+      updateChildPid: () => false,
+      release: authority.release,
+    };
+    const manager = createUpdateSessionManager({
+      detector: () => supportedMode(),
+      lock,
+      runCommandImpl: (input) => {
+        input.onSpawn?.(43_210);
+        return Promise.resolve(commandResult());
+      },
+    });
+
+    manager.start({ targetVersion: "0.2.12" });
+
+    await waitForPhase(manager, "failed");
+  });
+
+  it("keeps child-PID-only lock ownership after the parent disappears", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-reused-child-pid-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      await writeFile(
+        lockPath,
+        `${JSON.stringify({
+          sessionId: "abandoned",
+          targetVersion: "0.2.10",
+          startedAt: "2026-06-30T00:00:00.000Z",
+          pid: 111,
+          childPid: 222,
+        })}\n`,
+        { mode: 0o600 },
+      );
+      const lock = createFileUpdateSessionLock(lockPath, {
+        staleMs: 1_000,
+        now: () => Date.parse("2026-06-30T00:00:02.000Z"),
+        pidAlive: (pid) => pid === 222,
+      });
+
+      expect(lock.isLocked()).toBe(true);
+      expect(lock.acquire(lockRecord("replacement"))).toBe(false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a stale pre-spawn lock while its server parent remains alive", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-live-parent-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      await writeFile(
+        lockPath,
+        `${JSON.stringify({
+          sessionId: "live-parent",
+          targetVersion: "0.2.10",
+          startedAt: "2026-06-30T00:00:00.000Z",
+          pid: 111,
+        })}\n`,
+        { mode: 0o600 },
+      );
+      const lock = createFileUpdateSessionLock(lockPath, {
+        staleMs: 1_000,
+        now: () => Date.parse("2026-06-30T00:00:02.001Z"),
+        pidAlive: (pid) => pid === 111,
+      });
+
+      expect(lock.isLocked()).toBe(true);
+      expect(lock.acquire(lockRecord("replacement"))).toBe(false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers a stale pre-spawn lock after its server parent dies", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-dead-parent-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      await writeFile(
+        lockPath,
+        `${JSON.stringify({
+          sessionId: "dead-parent",
+          targetVersion: "0.2.10",
+          startedAt: "2026-06-30T00:00:00.000Z",
+          pid: 111,
+        })}\n`,
+        { mode: 0o600 },
+      );
+      const lock = createFileUpdateSessionLock(lockPath, {
+        staleMs: 1_000,
+        now: () => Date.parse("2026-06-30T00:00:02.001Z"),
+        pidAlive: () => false,
+      });
+
+      expect(lock.isLocked()).toBe(false);
+      expect(lock.acquire(lockRecord("replacement"))).toBe(true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a live installer child non-reclaimable beyond two stale windows", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-expired-child-pid-"));
+    try {
+      const lockPath = join(tempDir, "update.lock");
+      await writeFile(
+        lockPath,
+        `${JSON.stringify({
+          sessionId: "abandoned",
+          targetVersion: "0.2.10",
+          startedAt: "2026-06-30T00:00:00.000Z",
+          pid: 111,
+          childPid: 222,
+        })}\n`,
+        { mode: 0o600 },
+      );
+      const lock = createFileUpdateSessionLock(lockPath, {
+        staleMs: 1_000,
+        now: () => Date.parse("2026-06-30T00:10:00.000Z"),
+        pidAlive: (pid) => pid === 222,
+      });
+
+      expect(lock.isLocked()).toBe(true);
+      expect(lock.acquire(lockRecord("replacement"))).toBe(false);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

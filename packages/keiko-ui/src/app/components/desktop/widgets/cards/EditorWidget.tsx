@@ -160,6 +160,11 @@ interface PendingDirtyClose {
   readonly error?: string | undefined;
 }
 
+interface WorkspaceRegistrationNoticeState {
+  readonly root: string;
+  readonly message: string;
+}
+
 // Reasons whose file list spans every pane rather than one pane's tabs. A root change and a window
 // close act on the whole editor; a path mutation acts on the filesystem, so a second pane holding the
 // same dirty file — or any dirty file under a renamed directory — must be prompted for too (S7776:
@@ -267,7 +272,7 @@ function DirtyCloseDialog(props: {
   readonly onCancel: () => void;
 }): ReactNode {
   const titleId = "editor-dirty-close-title";
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     // GEN-UI-FOCUS-006: capture the opener before moving focus into the dialog, and restore it on
     // close/unmount so keyboard focus returns to where the user was (never lost to <body>).
@@ -290,14 +295,15 @@ function DirtyCloseDialog(props: {
     };
   }, [props]);
   return (
-    <div className="ed-dialog-backdrop" role="presentation">
-      <div
+    <div className="ed-dialog-backdrop">
+      <dialog
+        open
         className="ed-dirty-dialog"
         ref={dialogRef}
-        role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
+        style={{ position: "relative", inset: "auto", margin: 0, color: "inherit" }}
       >
         <h2 id={titleId}>Unsaved editor changes</h2>
         <p>Choose how to handle these files before continuing.</p>
@@ -333,7 +339,7 @@ function DirtyCloseDialog(props: {
             Cancel
           </button>
         </div>
-      </div>
+      </dialog>
     </div>
   );
 }
@@ -481,6 +487,24 @@ function resolveTrustSettledAttribute(
   return initialPromptPending ? "false" : "true";
 }
 
+function WorkspaceRegistrationNotice({
+  notice,
+  workspaceRoot,
+}: {
+  readonly notice: WorkspaceRegistrationNoticeState | null;
+  readonly workspaceRoot: string;
+}): ReactNode {
+  if (notice?.root !== workspaceRoot) return null;
+  return (
+    <output
+      className={`${trustStyles.cmpBanner} ${trustStyles.cmpEditorBanner}`}
+      data-testid="editor-workspace-registration-notice"
+    >
+      <span className={trustStyles.cmpBannerCopy}>{notice.message}</span>
+    </output>
+  );
+}
+
 /**
  * Whether this binding still owes the human the one-per-binding "opening on an untrusted root"
  * question, and whether answering it means raising the prompt.
@@ -621,6 +645,8 @@ export function EditorWidget({
     layoutJson,
   });
   const [workspaceRoot, setWorkspaceRoot] = useState(initialRoot);
+  const [workspaceRegistrationNotice, setWorkspaceRegistrationNotice] =
+    useState<WorkspaceRegistrationNoticeState | null>(null);
   const editorSettings = useEditorSettings(nonEmptyRoot(workspaceRoot));
   const editorShortcutRegistry = useMemo(
     () => resolveEffectiveKeyboardShortcuts(editorSettings.applied.keybindingOverrides),
@@ -788,7 +814,9 @@ export function EditorWidget({
     if (dirtyFileList.length === 0) return;
     const beforeUnload = (event: BeforeUnloadEvent): void => {
       event.preventDefault();
-      event.returnValue = "";
+      // Chrome 79, Firefox 72, and Safari 13.1 require this in addition to preventDefault(); these
+      // are still explicit product browser floors.
+      event.returnValue = ""; // NOSONAR typescript:S1874 -- required compatibility assignment.
     };
     window.addEventListener("beforeunload", beforeUnload);
     return () => {
@@ -1917,7 +1945,9 @@ export function EditorWidget({
   if (workspaceRoot.length === 0) {
     // Unbound editor (opened without a project root, e.g. toggled from the left rail): offer the
     // native OS folder picker so the user can choose a project and start working (ADR-0118).
-    return <EditorEmptyState onOpenRoot={openRoot} />;
+    return (
+      <EditorEmptyState onOpenRoot={openRoot} onWorkspaceNotice={setWorkspaceRegistrationNotice} />
+    );
   }
 
   const renderPane = (pane: EditorPaneStateV2): ReactNode => {
@@ -2004,8 +2034,7 @@ export function EditorWidget({
       >
         {renderNode(node.first)}
         {/* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- WAI-ARIA window-splitter pattern: focusable role=separator exposes keyboard resizing through aria-valuenow. */}
-        <div
-          role="separator"
+        <hr
           tabIndex={0}
           className={splitResizerClassName(node.direction)}
           aria-label="Resize editor split"
@@ -2135,6 +2164,10 @@ export function EditorWidget({
         </>
       )}
       <div className={`ed-main ${trustStyles.cmpEditorMain}`}>
+        <WorkspaceRegistrationNotice
+          notice={workspaceRegistrationNotice}
+          workspaceRoot={workspaceRoot}
+        />
         {workspaceTrustUiAvailable ? (
           <WorkspaceTrustBanner
             status={verification.catalog?.workspaceTrust}

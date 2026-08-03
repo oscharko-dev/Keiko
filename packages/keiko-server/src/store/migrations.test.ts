@@ -92,6 +92,7 @@ function syntheticRootIdentity(
     canonicalRoot: seed.canonicalRoot,
     identityDigest: seed.identityDigest as RootIdentity["identityDigest"],
     objectIdentityDigest,
+    objectIdentityUnsupported: false,
     rootRef: seed.rootRef as RootIdentity["rootRef"],
     device: 1,
     inode: 1,

@@ -3,7 +3,7 @@ import type { IncomingMessage } from "node:http";
 import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { handleCodingContextPack } from "./codingContextRoutes.js";
+import { composeCodingContextConnectors, handleCodingContextPack } from "./codingContextRoutes.js";
 import type { GitHubCodeContextApiPort } from "./githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./jiraCodeContextConnector.js";
 import type { RouteContext, RouteResult } from "../routes.js";
@@ -135,6 +135,72 @@ describe("coding context pack route", () => {
     const blocked = bodyOf(result).blocked as readonly Record<string, unknown>[];
     expect(blocked).toHaveLength(1);
     expect(blocked[0]).toMatchObject({ source: "jira", reason: "missing-credentials" });
+  });
+
+  it("fails closed when an authorized connector has unusable complete configuration", async () => {
+    const result = await handleCodingContextPack(
+      ctxFor(packRequest()),
+      depsFor({
+        codingContextGitHubPort: undefined,
+        codingContextJiraPort: undefined,
+        preferredProjectPath: undefined,
+        env: {
+          GITHUB_CONNECTOR_AUTHORIZED: "true",
+          JIRA_CONNECTOR_AUTHORIZED: "true",
+          KEIKO_JIRA_BASE_URL: "http://invalid.example.com",
+          KEIKO_JIRA_EMAIL: "operator@example.com",
+          KEIKO_JIRA_API_TOKEN: "secret-token",
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 502,
+      body: { error: { code: "CODING_CONTEXT_UPSTREAM_FAILED" } },
+    });
+  });
+
+  it("composes the governed GitHub fallback for an authorized launch project", () => {
+    const composed = composeCodingContextConnectors(
+      depsFor({
+        codingContextGitHubPort: undefined,
+        preferredProjectPath: "/workspace/project",
+        env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+      }),
+    );
+
+    expect(composed.connectorConfig.github_connector_authorized).toBe(true);
+  });
+
+  it("fails closed with a redacted diagnostic when fallback Jira configuration is invalid", async () => {
+    const diagnostics: unknown[] = [];
+
+    const result = await handleCodingContextPack(
+      ctxFor(packRequest()),
+      depsFor({
+        codingContextJiraPort: undefined,
+        diagnostics: { record: (record) => diagnostics.push(record) },
+        env: {
+          JIRA_CONNECTOR_AUTHORIZED: "true",
+          KEIKO_JIRA_BASE_URL: "http://invalid.example.com",
+          KEIKO_JIRA_EMAIL: "operator@example.com",
+          KEIKO_JIRA_API_TOKEN: "secret-token",
+        },
+      }),
+    );
+
+    expect(result.status).toBe(502);
+    const responseError = bodyOf(result).error as Record<string, unknown>;
+    expect(responseError.code).toBe("CODING_CONTEXT_UPSTREAM_FAILED");
+    expect(typeof responseError.correlationId).toBe("string");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      operation: "coding-context.pack",
+      source: "coding-context.handleCodingContextPack",
+    });
+    expect(JSON.stringify(diagnostics)).not.toContain("invalid.example.com");
+    expect(JSON.stringify(diagnostics)).not.toContain("operator@example.com");
+    expect(JSON.stringify(diagnostics)).not.toContain("secret-token");
   });
 
   it("rejects malformed bodies, unknown keys, hostile refs, and bad bounds", async () => {

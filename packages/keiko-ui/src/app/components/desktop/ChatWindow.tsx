@@ -4806,18 +4806,64 @@ function ChatWindowLog({
 // Extracted from ChatWindow (SonarCloud S3776) — the composer form and its two error-notice
 // slots (Issue #1560's single stable composer render site, see the render-site comment kept at
 // the call site).
+function SessionNotice({
+  notice,
+  onDismiss,
+}: {
+  readonly notice: string;
+  readonly onDismiss: (() => void) | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <output className={styles.sessionNotice}>
+      <span>{notice}</span>
+      {onDismiss === undefined ? null : (
+        <button type="button" className="cmp-voice-btn" onClick={onDismiss}>
+          {t("common.dismiss")}
+        </button>
+      )}
+    </output>
+  );
+}
+
+function EmptySessionFeedback({
+  error,
+  clearError,
+  notice,
+  clearNotice,
+}: {
+  readonly error: string | undefined;
+  readonly clearError: (() => void) | undefined;
+  readonly notice: string | undefined;
+  readonly clearNotice: (() => void) | undefined;
+}): ReactNode {
+  if (error !== undefined) {
+    return (
+      <ErrorNoticeFromError error={error} fallback="Could not load chat." onDismiss={clearError} />
+    );
+  }
+  if (notice !== undefined) {
+    return <SessionNotice notice={notice} onDismiss={clearNotice} />;
+  }
+  return null;
+}
+
 function ComposerSendNotice({
   canonicalVoiceTurnRequiresRetry,
   retryPendingCanonicalVoiceTurn,
   discardPendingCanonicalVoiceTurn,
   error,
   clearError,
+  notice,
+  clearNotice,
 }: {
   readonly canonicalVoiceTurnRequiresRetry: boolean;
   readonly retryPendingCanonicalVoiceTurn: (() => void) | undefined;
   readonly discardPendingCanonicalVoiceTurn: (() => void) | undefined;
   readonly error: string | undefined;
   readonly clearError: (() => void) | undefined;
+  readonly notice: string | undefined;
+  readonly clearNotice: (() => void) | undefined;
 }): ReactNode {
   const t = useTranslate();
   if (canonicalVoiceTurnRequiresRetry) {
@@ -4840,10 +4886,13 @@ function ComposerSendNotice({
       </div>
     );
   }
-  if (error === undefined) return null;
-  return (
-    <ErrorNoticeFromError error={error} fallback={t("chat.error.send")} onDismiss={clearError} />
-  );
+  if (error !== undefined) {
+    return (
+      <ErrorNoticeFromError error={error} fallback={t("chat.error.send")} onDismiss={clearError} />
+    );
+  }
+  if (notice === undefined) return null;
+  return <SessionNotice notice={notice} onDismiss={clearNotice} />;
 }
 
 function ChatWindowComposerFooter({
@@ -4858,6 +4907,8 @@ function ChatWindowComposerFooter({
   sendMessage,
   error,
   clearError,
+  notice,
+  clearNotice,
   canonicalVoiceTurnRequiresRetry,
   retryPendingCanonicalVoiceTurn,
   discardPendingCanonicalVoiceTurn,
@@ -4873,6 +4924,8 @@ function ChatWindowComposerFooter({
   readonly sendMessage: () => Promise<void>;
   readonly error: string | undefined;
   readonly clearError: (() => void) | undefined;
+  readonly notice: string | undefined;
+  readonly clearNotice: (() => void) | undefined;
   readonly canonicalVoiceTurnRequiresRetry: boolean;
   readonly retryPendingCanonicalVoiceTurn: (() => void) | undefined;
   readonly discardPendingCanonicalVoiceTurn: (() => void) | undefined;
@@ -4903,17 +4956,22 @@ function ChatWindowComposerFooter({
               discardPendingCanonicalVoiceTurn={discardPendingCanonicalVoiceTurn}
               error={error}
               clearError={clearError}
+              notice={notice}
+              clearNotice={clearNotice}
             />
           </form>
         </div>
       ) : null}
 
-      {visible.length === 0 && error !== undefined && activeChat === undefined ? (
+      {visible.length === 0 &&
+      activeChat === undefined &&
+      (error !== undefined || notice !== undefined) ? (
         <div className="chatw-foot">
-          <ErrorNoticeFromError
+          <EmptySessionFeedback
             error={error}
-            fallback="Could not load chat."
-            onDismiss={clearError}
+            clearError={clearError}
+            notice={notice}
+            clearNotice={clearNotice}
           />
         </div>
       ) : null}
@@ -4946,6 +5004,7 @@ export function ChatWindow({
     sendStatus,
     regeneratingMessageId,
     error,
+    notice,
     noEligibleModels,
     sendMessage,
     regenerateMessage,
@@ -5187,6 +5246,8 @@ export function ChatWindow({
         sendMessage={sendMessage}
         error={displayedError}
         clearError={session.clearError}
+        notice={notice}
+        clearNotice={session.clearNotice}
         canonicalVoiceTurnRequiresRetry={canonicalVoiceTurnRequiresRetry === true}
         retryPendingCanonicalVoiceTurn={retryPendingCanonicalVoiceTurn}
         discardPendingCanonicalVoiceTurn={discardPendingCanonicalVoiceTurn}

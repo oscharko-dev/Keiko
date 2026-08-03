@@ -62,6 +62,8 @@ export const UPDATE_RUNTIME_WARNING_CODES = [
   "audit-persistence-failed",
   "state-snapshot-unavailable",
   "manual-review-required",
+  "remediation-execution-failed",
+  "remediation-outcome-uncertain",
 ] as const;
 
 export type UpdateRuntimeWarningCode = (typeof UPDATE_RUNTIME_WARNING_CODES)[number];

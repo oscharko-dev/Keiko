@@ -61,8 +61,15 @@ rules:
       # it checks out `github.event.pull_request.base.sha` explicitly and fetches the head only as
       # Git objects (`git fetch pull/N/head`), so no candidate file is ever written to the working
       # tree, no candidate script/hook/action/package manager runs, and `--no-recurse-submodules`
-      # keeps submodules uninitialised. Its only write grant is `pull-requests: write`; it holds no
-      # contents-write, checks-write, actions-write, commit, push, or merge authority, and it
+      # keeps submodules uninitialised. Its only write grant is `pull-requests: write`;
+      # `actions: write` exists nowhere in the workflow — the review store persists as a run
+      # artifact (upload needs no scope; the cross-run lookup needs only `actions: read`, which
+      # cannot dispatch). The poisoning BOUNDARY is the context-bound HMAC over the store, keyed
+      # by a keiko-for-quality environment secret that the environment's protected-branches-only
+      # policy withholds from candidate-base runs — the event/path/PR lookup predicates only
+      # SELECT candidates (ADR-0170 D3). Also recorded there: the npm-publish required-reviewer
+      # boundary in front of the one privileged dispatch target. It holds no contents-write,
+      # checks-write, commit, push, or merge authority, and it
       # publishes no required status context. Approval is deliberately absent from that list:
       # `pull-requests: write` can submit an APPROVE review, so a compromised action could, and only
       # the pinned action's behaviour declines to (ADR-0170 D3).
@@ -91,4 +98,4 @@ rules:
       # bootstrapping npm is inherently outside the lockfile since it changes the binary that
       # later reads that lockfile. The version is pinned exactly (not @latest), which is the
       # practical mitigation for this specific operation (see the inline comment there).
-      - release.yml:127
+      - release.yml:136

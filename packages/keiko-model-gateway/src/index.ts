@@ -66,6 +66,8 @@ export {
 export {
   CAPABILITY_REGISTRY,
   createDefaultChatCapability,
+  createDefaultEmbeddingCapability,
+  EMBEDDING_ID_PATTERN,
   explainConversationIneligibility,
   findCapability,
   INFILLING_ALIGNMENTS,
@@ -73,6 +75,7 @@ export {
   isAsYouTypeCompletionModel,
   isConfiguredVoiceProvider,
   isConversationEligibleModel,
+  isLikelyEmbeddingModelId,
   isCompleteRealtimeVoiceCapability,
   isVoiceCapability,
   describeVoiceProviderAvailability,

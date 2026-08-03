@@ -27,6 +27,13 @@ import { WORKSPACE_TRUST_CHANGED_EVENT } from "../../../../../lib/workspace-trus
 import { EditorQuickAccessTriggerProvider } from "../../EditorQuickAccessTriggerContext";
 import { editorSidebarTrackWidth } from "../../editorSidebarSizing";
 
+const createProjectMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../../../../lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../../lib/api")>()),
+  createProject: createProjectMock,
+}));
+
 function editorWidgetCssClass(name: keyof typeof editorWidgetStyles): string {
   const value = editorWidgetStyles[name];
   if (value === undefined) throw new TypeError(`missing EditorWidget CSS module class ${name}`);
@@ -334,6 +341,29 @@ describe("EditorWidget workspace session", () => {
     expect(screen.queryByTestId("runtime-probe")).toBeNull();
     expect(screen.queryByTestId("files-probe")).toBeNull();
     expect(screen.queryByRole("separator", { name: "Resize project tree" })).toBeNull();
+  });
+
+  it("keeps a project trust warning visible after the empty state opens the workspace", async () => {
+    createProjectMock.mockResolvedValueOnce({
+      project: { path: "/repo", workspaceAvailable: true },
+      warning: {
+        code: "PROJECT_TRUST_GRANT_FAILED",
+        message: "The project was registered but remains restricted.",
+        correlationId: "workspace-warning-correlation",
+      },
+    });
+    render(<EditorWidget />);
+
+    fireEvent.change(screen.getByLabelText("Project folder path"), {
+      target: { value: "/repo" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+
+    expect(await screen.findByTestId("runtime-probe")).toBeInTheDocument();
+    expect(screen.getByTestId("editor-workspace-registration-notice")).toHaveTextContent(
+      "workspace-warning-correlation",
+    );
+    expect(screen.queryByTestId("editor-empty-state")).toBeNull();
   });
 
   it("lets the empty editor pane fill the full editor area when no file is open", () => {

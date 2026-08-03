@@ -11,20 +11,25 @@ import {
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import type { IncomingMessage } from "node:http";
 import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
 import { currentGatewayConfig } from "./deps.js";
 import { buildUiHandlerDeps } from "./deps.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
-import { parseGatewayConfig, resolveVoiceCapability } from "@oscharko-dev/keiko-model-gateway";
+import {
+  parseGatewayConfig,
+  resolveCodingSafeSidecarGatewayProfile,
+  resolveVoiceCapability,
+} from "@oscharko-dev/keiko-model-gateway";
 import type {
   GatewayConfig,
   ModelCapability,
   ModelProviderConfig,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
+  handleApplyGatewayVerifiedCapabilities,
   handleGatewaySetup,
   MAX_DISCOVERED_MODELS,
   isExplicitlyNonChatModel,
@@ -303,6 +308,280 @@ function voiceElectionProviders(): readonly Record<string, unknown>[] {
 }
 
 describe("handleGatewaySetup", () => {
+  it("applies only a generation-current live capability observation after an explicit request", async () => {
+    const uiDir = await tempDir("keiko-gw-capability-apply-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-capability-apply-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    const rawConfig = {
+      providers: [
+        {
+          modelId: "model/one",
+          baseUrl: "https://llm-gateway.example.com/v1",
+          apiKey: "example-secret-token",
+          timeoutMs: 45_678,
+          capability: {
+            kind: "chat",
+            toolCalling: true,
+            structuredOutput: true,
+            supportsResponseFormat: true,
+          },
+        },
+      ],
+      egress: {
+        httpsProxy: "http://proxy.internal.example:8443",
+        noProxy: "localhost,.corp.example",
+        allowPrivateNetwork: false,
+      },
+    };
+    gatewayConfig.set(parseGatewayConfig(rawConfig), true);
+    writeFileSync(gatewayConfig.storagePath, JSON.stringify(rawConfig), "utf8");
+    gatewayConfig.recordVerifiedCapability(
+      "model/one",
+      { streaming: true, toolCalling: false, structuredOutput: false },
+      "2026-08-02T08:00:00.000Z",
+      gatewayConfig.generation(),
+    );
+
+    const rejected = await handleApplyGatewayVerifiedCapabilities(
+      { ...ctx({ fields: { toolCalling: true } }), params: { modelId: "model%2Fone" } },
+      deps,
+    );
+    expect(rejected.status).toBe(409);
+    expect(requiredCapability(requiredGatewayConfig(deps), "model/one").toolCalling).toBe(true);
+
+    const result = await handleApplyGatewayVerifiedCapabilities(
+      {
+        ...ctx({ fields: { streaming: true, toolCalling: false, structuredOutput: false } }),
+        params: { modelId: "model%2Fone" },
+      },
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(requiredCapability(requiredGatewayConfig(deps), "model/one").toolCalling).toBe(false);
+    expect(requiredCapability(requiredGatewayConfig(deps), "model/one")).toMatchObject({
+      structuredOutput: false,
+      supportsResponseFormat: false,
+    });
+    expect(gatewayConfig.verifiedCapability("model/one")).toBeUndefined();
+    const persisted = readFileSync(gatewayConfig.storagePath, "utf8");
+    expect(persisted).toContain('"toolCalling": false');
+    expect(persisted).toContain('"supportsResponseFormat": false');
+    expect(JSON.parse(persisted)).toMatchObject({
+      providers: [expect.objectContaining({ timeoutMs: 45_678 })],
+      egress: rawConfig.egress,
+    });
+    expect(persisted).not.toContain("example-secret-token");
+    const replay = await handleApplyGatewayVerifiedCapabilities(
+      { ...ctx({ fields: { toolCalling: false } }), params: { modelId: "model%2Fone" } },
+      deps,
+    );
+    expect(replay.status).toBe(409);
+    deps.store.close();
+  });
+
+  it("replaces an older partial capability observation instead of refreshing its fields", async () => {
+    const uiDir = await tempDir("keiko-gw-capability-replace-observation-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-capability-replace-observation-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    gatewayConfig.recordVerifiedCapability(
+      "model-one",
+      { toolCalling: true },
+      "2026-08-02T08:00:00.000Z",
+    );
+    gatewayConfig.recordVerifiedCapability(
+      "model-one",
+      { streaming: true },
+      "2026-08-02T08:01:00.000Z",
+    );
+
+    expect(gatewayConfig.verifiedCapability("model-one")).toEqual({
+      modelId: "model-one",
+      generation: 0,
+      checkedAt: "2026-08-02T08:01:00.000Z",
+      fields: { streaming: true },
+    });
+    deps.store.close();
+  });
+
+  it("materializes only the selected registry-default capability as an explicit override", async () => {
+    const uiDir = await tempDir("keiko-gw-capability-single-override-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-capability-single-override-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          { modelId: "model-one", baseUrl: "https://gateway.example.com/v1", apiKey: "token" },
+          { modelId: "model-two", baseUrl: "https://gateway.example.com/v1", apiKey: "token" },
+        ],
+      }),
+      true,
+    );
+    gatewayConfig.recordVerifiedCapability(
+      "model-one",
+      { toolCalling: false },
+      "2026-08-02T08:00:00.000Z",
+      gatewayConfig.generation(),
+    );
+
+    const result = await handleApplyGatewayVerifiedCapabilities(
+      { ...ctx({ fields: { toolCalling: false } }), params: { modelId: "model-one" } },
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(requiredGatewayConfig(deps).capabilities?.map((capability) => capability.id)).toEqual([
+      "model-one",
+    ]);
+    deps.store.close();
+  });
+
+  it("rejects malformed capability patches before mutating configuration", async () => {
+    const uiDir = await tempDir("keiko-gw-capability-invalid-patch-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-capability-invalid-patch-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          { modelId: "model-one", baseUrl: "https://gateway.example.com/v1", apiKey: "token" },
+        ],
+      }),
+      true,
+    );
+    const before = gatewayConfig.current();
+
+    for (const body of [
+      {},
+      { fields: {} },
+      { fields: { unknown: true } },
+      { fields: { toolCalling: "true" } },
+      { fields: { contextWindow: 0 } },
+    ]) {
+      const result = await handleApplyGatewayVerifiedCapabilities(
+        { ...ctx(body), params: { modelId: "model-one" } },
+        deps,
+      );
+      expect(result.status).toBe(400);
+      expect(gatewayConfig.current()).toBe(before);
+    }
+    const unknown = await handleApplyGatewayVerifiedCapabilities(
+      { ...ctx({ fields: { toolCalling: true } }), params: { modelId: "missing-model" } },
+      deps,
+    );
+    expect(unknown.status).toBe(404);
+    deps.store.close();
+  });
+
+  it("rejects a capability patch when configuration changes while its body is being read", async () => {
+    const uiDir = await tempDir("keiko-gw-capability-generation-race-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-capability-generation-race-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    const initial = parseGatewayConfig({
+      providers: [
+        { modelId: "model-one", baseUrl: "https://gateway.example.com/v1", apiKey: "token" },
+      ],
+    });
+    gatewayConfig.set(initial, true);
+    gatewayConfig.recordVerifiedCapability(
+      "model-one",
+      { toolCalling: false },
+      "2026-08-02T08:00:00.000Z",
+      gatewayConfig.generation(),
+    );
+    const body = new PassThrough();
+    const pending = handleApplyGatewayVerifiedCapabilities(
+      {
+        ...ctx({}),
+        req: body as unknown as IncomingMessage,
+        params: { modelId: "model-one" },
+      },
+      deps,
+    );
+    const replacement = parseGatewayConfig({
+      providers: [
+        { modelId: "model-one", baseUrl: "https://replacement.example.com/v1", apiKey: "token" },
+      ],
+    });
+    gatewayConfig.set(replacement, true);
+    body.end(JSON.stringify({ fields: { toolCalling: false } }));
+
+    await expect(pending).resolves.toMatchObject({
+      status: 409,
+      body: { error: { code: "GATEWAY_CAPABILITY_OBSERVATION_STALE" } },
+    });
+    expect(gatewayConfig.current()).toBe(replacement);
+    deps.store.close();
+  });
+
+  it("retains the live observation when capability persistence fails", async () => {
+    const uiDir = await tempDir("keiko-gw-capability-persist-failure-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-capability-persist-failure-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          { modelId: "model-one", baseUrl: "https://gateway.example.com/v1", apiKey: "token" },
+        ],
+      }),
+      true,
+    );
+    gatewayConfig.recordVerifiedCapability(
+      "model-one",
+      { toolCalling: false },
+      "2026-08-02T08:00:00.000Z",
+      gatewayConfig.generation(),
+    );
+    const failingGatewayConfig = { ...gatewayConfig, storagePath: uiDir };
+
+    await expect(
+      handleApplyGatewayVerifiedCapabilities(
+        { ...ctx({ fields: { toolCalling: false } }), params: { modelId: "model-one" } },
+        { ...deps, gatewayConfig: failingGatewayConfig },
+      ),
+    ).rejects.toThrow();
+    expect(gatewayConfig.verifiedCapability("model-one")).toMatchObject({
+      fields: { toolCalling: false },
+    });
+    expect(gatewayConfig.current()?.providers[0]?.baseUrl).toBe("https://gateway.example.com/v1");
+    deps.store.close();
+  });
+
   it("persists verified response-format support and makes it available to QI immediately", async () => {
     const uiDir = await tempDir("keiko-gw-response-format-ui-");
     const evidenceDir = await tempDir("keiko-gw-response-format-ev-");
@@ -2913,6 +3192,342 @@ describe("handleGatewaySetup", () => {
       structuredOutput: false,
       streaming: true,
     });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    gatewayConfig.recordVerifiedCapability(
+      "Mistral-Large-3",
+      { toolCalling: true },
+      "2026-08-02T08:00:00.000Z",
+      gatewayConfig.generation(),
+    );
+    expect(
+      (
+        await handleApplyGatewayVerifiedCapabilities(
+          {
+            ...ctx({ fields: { toolCalling: true } }),
+            params: { modelId: "Mistral-Large-3" },
+          },
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      requiredCapability(requiredGatewayConfig(deps), "Mistral-Large-3").knownLimitations,
+    ).not.toContain(
+      "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it",
+    );
+
+    const updated = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://workspace.example.services.ai.azure.com/openai/v1",
+        apiKey: "example-secret-token",
+        deploymentNames: ["Mistral-Large-3"],
+      }),
+      deps,
+    );
+
+    expect(updated.status).toBe(200);
+    const preserved = requiredCapability(requiredGatewayConfig(deps), "Mistral-Large-3");
+    expect(preserved.toolCalling).toBe(true);
+    expect(preserved.knownLimitations).not.toContain(
+      "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it",
+    );
+    deps.store.close();
+  });
+
+  it("lets the operator explicitly mark one discovered chat model as coding-safe", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-coding-safe-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-coding-safe-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "example-secret-token",
+        deploymentNames: ["coding-chat"],
+        workflowEligibleModelIds: ["coding-chat"],
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(resolveCodingSafeSidecarGatewayProfile(currentGatewayConfig(deps))).toMatchObject({
+      status: "available",
+    });
+    expect(
+      currentGatewayConfig(deps)?.capabilities?.find(
+        (capability) => capability.id === "coding-chat",
+      ),
+    ).toMatchObject({ workflowEligible: true, preferredUseCases: ["Chat", "Coding"] });
+    deps.store.close();
+  });
+
+  it("preserves coding-safe enrichment across a verified credential rotation", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-coding-rotation-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-coding-rotation-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({
+            baseUrl: "https://llm-gateway.example.com/v1",
+            apiKey: "first-secret-token",
+            deploymentNames: ["coding-chat"],
+            workflowEligibleModelIds: ["coding-chat"],
+          }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+
+    const rotated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        apiKey: "rotated-secret-token",
+        deploymentNames: ["coding-chat"],
+      }),
+      deps,
+    );
+
+    expect(rotated.status).toBe(200);
+    expect(
+      currentGatewayConfig(deps)?.capabilities?.find(
+        (capability) => capability.id === "coding-chat",
+      ),
+    ).toMatchObject({ workflowEligible: true, preferredUseCases: ["Chat", "Coding"] });
+    deps.store.close();
+  });
+
+  it("clears coding-safe enrichment when an explicit empty workflow list is submitted", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-coding-revoke-");
+    let verificationCalls = 0;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-coding-revoke-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => {
+        verificationCalls += 1;
+        if (verificationCalls > 1) {
+          return Promise.reject(new Error("gateway is temporarily unavailable"));
+        }
+        return Promise.resolve(modelIds);
+      },
+    });
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({
+            baseUrl: "https://llm-gateway.example.com/v1",
+            apiKey: "first-secret-token",
+            deploymentNames: ["coding-chat"],
+            workflowEligibleModelIds: ["coding-chat"],
+          }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+
+    const revoked = await handleGatewaySetup(
+      ctx({ preserveExisting: true, workflowEligibleModelIds: [] }),
+      deps,
+    );
+
+    expect(revoked.status).toBe(200);
+    expect(
+      currentGatewayConfig(deps)?.capabilities?.find(
+        (capability) => capability.id === "coding-chat",
+      ),
+    ).toMatchObject({
+      workflowEligible: false,
+      preferredUseCases: ["Chat", "Coding"],
+    });
+    expect(resolveCodingSafeSidecarGatewayProfile(currentGatewayConfig(deps))).toMatchObject({
+      status: "unavailable",
+    });
+    expect(verificationCalls).toBe(1);
+    deps.store.close();
+  });
+
+  it("updates a non-empty workflow list without rerunning provider verification", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-coding-update-");
+    let verificationCalls = 0;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-coding-update-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => {
+        verificationCalls += 1;
+        if (verificationCalls > 1) {
+          return Promise.reject(new Error("gateway is temporarily unavailable"));
+        }
+        return Promise.resolve(modelIds);
+      },
+    });
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({
+            baseUrl: "https://llm-gateway.example.com/v1",
+            apiKey: "first-secret-token",
+            deploymentNames: ["coding-chat", "general-chat"],
+            workflowEligibleModelIds: ["coding-chat"],
+          }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+
+    const updated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, workflowEligibleModelIds: ["general-chat"] }),
+      deps,
+    );
+
+    expect(updated.status).toBe(200);
+    expect(verificationCalls).toBe(1);
+    expect(
+      currentGatewayConfig(deps)?.capabilities?.filter((capability) => capability.workflowEligible),
+    ).toMatchObject([{ id: "general-chat" }]);
+    deps.store.close();
+  });
+
+  it("rejects an unknown workflow-eligible model without changing the stored selection", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-coding-unknown-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-coding-unknown-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({
+            baseUrl: "https://llm-gateway.example.com/v1",
+            apiKey: "first-secret-token",
+            deploymentNames: ["coding-chat", "general-chat"],
+            workflowEligibleModelIds: ["coding-chat"],
+          }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+
+    const rejected = await handleGatewaySetup(
+      ctx({ preserveExisting: true, workflowEligibleModelIds: ["coding-cht"] }),
+      deps,
+    );
+
+    expect(rejected).toMatchObject({
+      status: 400,
+      body: { error: { code: "BAD_REQUEST" } },
+    });
+    expect(
+      currentGatewayConfig(deps)?.capabilities?.filter((capability) => capability.workflowEligible),
+    ).toMatchObject([{ id: "coding-chat" }]);
+    deps.store.close();
+  });
+
+  it("preserves stored egress when only workflow eligibility changes", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-workflow-egress-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-workflow-egress-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "first-secret-token",
+        deploymentNames: ["coding-chat"],
+        workflowEligibleModelIds: ["coding-chat"],
+      }),
+      deps,
+    );
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    const persisted = JSON.parse(readFileSync(gatewayConfig.storagePath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const egress = {
+      httpsProxy: "http://proxy.internal.example:8443",
+      caBundlePath: "/etc/keiko/private-ca.pem",
+      allowPrivateNetwork: false,
+      denyLoopback: true,
+    };
+    writeFileSync(gatewayConfig.storagePath, JSON.stringify({ ...persisted, egress }), "utf8");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        ...rawConfigFromCurrent(requiredGatewayConfig(deps), undefined),
+        egress,
+      }),
+      true,
+    );
+
+    const updated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, workflowEligibleModelIds: [] }),
+      deps,
+    );
+
+    expect(updated.status).toBe(200);
+    expect(JSON.parse(readFileSync(gatewayConfig.storagePath, "utf8"))).toMatchObject({ egress });
+    deps.store.close();
+  });
+
+  it("materializes implicit legacy capabilities when workflow eligibility is updated", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-coding-legacy-");
+    let verificationCalls = 0;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-coding-legacy-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => {
+        verificationCalls += 1;
+        return Promise.resolve(modelIds);
+      },
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "legacy-chat",
+            baseUrl: "https://llm-gateway.example.com/v1",
+            apiKey: "legacy-token",
+          },
+        ],
+      }),
+      true,
+    );
+    expect(requiredGatewayConfig(deps).capabilities).toBeUndefined();
+
+    const updated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, workflowEligibleModelIds: ["legacy-chat"] }),
+      deps,
+    );
+
+    expect(updated.status).toBe(200);
+    expect(requiredCapability(requiredGatewayConfig(deps), "legacy-chat")).toMatchObject({
+      workflowEligible: true,
+    });
+    expect(verificationCalls).toBe(0);
     deps.store.close();
   });
 
@@ -2936,7 +3551,15 @@ describe("handleGatewaySetup", () => {
           new Response(
             JSON.stringify({
               data: [
-                { model_name: "litellm-chat-large", model_info: { mode: "chat" } },
+                {
+                  model_name: "litellm-chat-large",
+                  model_info: {
+                    mode: "chat",
+                    max_input_tokens: 1_050_000,
+                    max_output_tokens: 128_000,
+                    supports_function_calling: false,
+                  },
+                },
                 {
                   model_name: "litellm-vision-chat",
                   model_info: { mode: "chat", supports_vision: true },
@@ -3021,6 +3644,13 @@ describe("handleGatewaySetup", () => {
         config?.capabilities?.find((capability) => capability.id === "litellm-vision-chat")
           ?.supportsImageInput,
       ).toBe(true);
+      expect(
+        config?.capabilities?.find((capability) => capability.id === "litellm-chat-large"),
+      ).toMatchObject({
+        contextWindow: 1_050_000,
+        maxOutputTokens: 128_000,
+        toolCalling: false,
+      });
       expect(selectEmbeddingModelId(config)).toBe("litellm-embedding");
       const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
       expect(saved).toContain('"apiKeyHeaderName": "x-litellm-key"');
@@ -3369,6 +3999,40 @@ describe("handleGatewaySetup", () => {
 // customer gateway models without requiring code changes for each model name")
 // by exercising the wrapper with every documented payload shape.
 describe("normalizeDiscoveryPayload", () => {
+  it("does not reinterpret an output max_tokens field as an input context window", () => {
+    const normalized = normalizeDiscoveryPayloadForSetup({
+      data: [{ id: "test-chat-1", model_info: { max_tokens: 4_096 } }],
+    });
+
+    expect(normalized.modelMetadata?.["test-chat-1"]?.contextWindow).toBeUndefined();
+    expect(normalized.modelMetadata?.["test-chat-1"]?.maxOutputTokens).toBe(4_096);
+  });
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    "ignores invalid discovered token limits (%s)",
+    (maxInputTokens) => {
+      const normalized = normalizeDiscoveryPayloadForSetup({
+        data: [{ id: "test-chat-1", model_info: { max_input_tokens: maxInputTokens } }],
+      });
+
+      expect(normalized.modelMetadata?.["test-chat-1"]?.contextWindow).toBeUndefined();
+    },
+  );
+
+  it("uses the canonical embedding model-id families", () => {
+    const embeddingModelIds = [
+      "bge-large-en-v1.5",
+      "intfloat/e5-large-v2",
+      "thenlper/gte-large",
+      "hkunlp/instructor-xl",
+    ];
+    expect(
+      normalizeDiscoveryPayloadForSetup({
+        data: embeddingModelIds.map((id) => ({ id })),
+      }).embeddingModelIds,
+    ).toEqual(embeddingModelIds);
+  });
+
   it("returns OpenAI-compatible ids in original order", () => {
     const payload = { data: [{ id: "test-chat-1" }, { id: "test-chat-2" }] };
     expect(normalizeDiscoveryPayload(payload)).toEqual(["test-chat-1", "test-chat-2"]);
@@ -3691,5 +4355,38 @@ describe("rawConfigFromCurrent — voice persona persistence round-trip", () => 
     expect(
       reloaded.capabilities?.find((c) => c.id === "keiko-tts")?.supportedVoicePersonas,
     ).toEqual(["male", "neutral"]);
+  });
+
+  it("preserves the provider-backed reranker on reload", () => {
+    const config = parseGatewayConfig({
+      ...voiceRaw,
+      reranker: {
+        modelId: "qwen3-reranker",
+        baseUrl: "https://reranker.example.invalid/v1",
+        apiKey: "reranker-fixture-key",
+        apiKeyHeaderName: "x-litellm-key",
+        timeoutMs: 12_000,
+      },
+    });
+
+    const reloaded = parseGatewayConfig(rawConfigFromCurrent(config, undefined));
+
+    expect(reloaded.reranker).toEqual(config.reranker);
+  });
+
+  it("preserves an explicit output-token parameter override on reload", () => {
+    const config = parseGatewayConfig({
+      ...voiceRaw,
+      providers: [
+        {
+          ...voiceRaw.providers[0],
+          outputTokenParameter: "max_completion_tokens",
+        },
+      ],
+    });
+
+    const reloaded = parseGatewayConfig(rawConfigFromCurrent(config, undefined));
+
+    expect(reloaded.providers[0]?.outputTokenParameter).toBe("max_completion_tokens");
   });
 });

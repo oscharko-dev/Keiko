@@ -41,10 +41,10 @@ import {
   type LanguageServiceRequest,
   type UsageMetadata,
 } from "@oscharko-dev/keiko-contracts";
-import { Gateway, selectCompletionModel } from "@oscharko-dev/keiko-model-gateway";
+import { selectCompletionModel } from "@oscharko-dev/keiko-model-gateway";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
-import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
+import { currentGateway, currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
 import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
 import { assembleCodingContext } from "./codingContext.js";
 import { recordCodingContextEvidence } from "./codingContextEvidence.js";
@@ -99,18 +99,21 @@ export interface EditorCompletionRouteOptions {
 }
 
 // Default chat seam: route the elected model through the Model Gateway, server-side only.
-function defaultChatFactory(config: GatewayConfig, modelId: string): ModelChatFn {
-  const gateway = new Gateway(config);
-  return async (chatRequest, chatSignal) => {
-    const response = await gateway.chat({
-      modelId,
-      messages: [
-        { role: "system", content: chatRequest.system },
-        { role: "user", content: chatRequest.user },
-      ],
-      cancellationSignal: chatSignal,
-    });
-    return { content: response.content, usage: response.usage };
+function defaultChatFactoryFor(deps: UiHandlerDeps): CompletionChatFactory {
+  return (_config, modelId): ModelChatFn => {
+    const gateway = currentGateway(deps);
+    if (gateway === undefined) throw new TypeError("Model gateway is unavailable.");
+    return async (chatRequest, chatSignal) => {
+      const response = await gateway.chat({
+        modelId,
+        messages: [
+          { role: "system", content: chatRequest.system },
+          { role: "user", content: chatRequest.user },
+        ],
+        cancellationSignal: chatSignal,
+      });
+      return { content: response.content, usage: response.usage };
+    };
   };
 }
 
@@ -356,6 +359,9 @@ function modelOutcomeFromGenerated(
 // Runs the elected model: assembles coding context (#1211), records content-free evidence, and calls
 // the gateway through the injected chat factory. A failure throws to the caller, which degrades.
 async function runElectedModel(ctx: ElectedModelContext): Promise<ModelTierOutcome> {
+  // Resolve the gateway before the first await so model selection and provider state belong to one
+  // runtime-config generation even if setup replaces the live configuration during context intake.
+  const chat = ctx.chatFactory(ctx.config, ctx.modelId);
   const pack = await assembleCodingContext(buildContextRequest(ctx.request), {
     deps: ctx.deps,
     realRoot: ctx.realRoot,
@@ -379,11 +385,7 @@ async function runElectedModel(ctx: ElectedModelContext): Promise<ModelTierOutco
       ctx.selection.latencyClass,
     );
   }
-  const generated = await generateModelCompletions(
-    generationInput,
-    ctx.chatFactory(ctx.config, ctx.modelId),
-    ctx.signal,
-  );
+  const generated = await generateModelCompletions(generationInput, chat, ctx.signal);
   settleModelUsage(reservation, generated.usage);
   recordModelEvidence({
     deps: ctx.deps,
@@ -647,7 +649,7 @@ export async function handleEditorCompletion(
       root.realRoot,
       signal,
       deps,
-      options.chatFactory ?? defaultChatFactory,
+      options.chatFactory ?? defaultChatFactoryFor(deps),
       options.tokenBudget ?? sharedEditorModelTokenBudget,
       options.now ?? Date.now,
     );

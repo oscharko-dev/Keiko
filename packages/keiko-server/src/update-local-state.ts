@@ -1,5 +1,13 @@
-import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import type {
   ReleaseImpactRemediation,
@@ -38,6 +46,12 @@ import {
   snapshotManifestPath,
   validateSnapshot,
 } from "./update-local-state-snapshot.js";
+import { publishFileWithoutReplacement } from "./publish-file-without-replacement.js";
+import {
+  isOptionalProcessIdentity,
+  processIdentityField,
+  PROCESS_START_IDENTITY,
+} from "./process-identity.js";
 
 interface AuditEventRecord {
   readonly event: UpdateRuntimeAuditEvent;
@@ -53,6 +67,9 @@ interface ManagerContext {
   readonly stateDir: string;
   readonly now: () => number;
   readonly idFactory: () => string;
+  readonly remediationLeaseStaleMs: number;
+  readonly pidAlive: (pid: number) => boolean;
+  readonly processIdentity: string;
 }
 
 type AuditEventInput = Partial<
@@ -72,6 +89,7 @@ export interface UpdateLocalStateManager {
   readonly repairStores: (stores: readonly UpdateStateStore[]) => UpdateLocalStateRepairResult;
   readonly readRuntimeState: () => UpdateRuntimeState;
   readonly writeRuntimeState: (state: UpdateRuntimeState) => UpdateRuntimeState;
+  readonly acquireRemediationLease: (actionId: string) => (() => void) | undefined;
   readonly recordAuditEvent: (
     type: UpdateRuntimeEventType,
     input?: AuditEventInput,
@@ -82,12 +100,17 @@ export interface UpdateLocalStateManagerOptions {
   readonly stateDir: string;
   readonly now?: (() => number) | undefined;
   readonly idFactory?: (() => string) | undefined;
+  readonly remediationLeaseStaleMs?: number | undefined;
+  readonly pidAlive?: ((pid: number) => boolean) | undefined;
+  readonly processIdentity?: string | undefined;
 }
 
 export type { UpdateLocalStateRepairResult } from "./update-local-state-repair.js";
 
 const RUNTIME_STATE_FILE = "runtime-state.json";
 const AUDIT_LOG_FILE = "update-audit.jsonl";
+const REMEDIATION_LEASE_DIR = "remediation-leases";
+const DEFAULT_REMEDIATION_LEASE_STALE_MS = 24 * 60 * 60 * 1_000;
 const SNAPSHOT_FILE_MODE = 0o600;
 const SNAPSHOT_DIR_MODE = 0o700;
 
@@ -255,6 +278,222 @@ function auditLogPath(stateDir: string): string {
   return join(stateDir, UPDATE_DIR, AUDIT_LOG_FILE);
 }
 
+interface RemediationLeaseRecord {
+  readonly pid: number;
+  readonly token: string;
+  readonly acquiredAt: string;
+  readonly processIdentity?: string | undefined;
+}
+
+function remediationLeasePath(stateDir: string, actionId: string): string {
+  const digest = createHash("sha256").update(actionId, "utf8").digest("hex");
+  return join(stateDir, UPDATE_DIR, REMEDIATION_LEASE_DIR, `${digest}.json`);
+}
+
+function parseRemediationLease(value: unknown): RemediationLeaseRecord | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  return Number.isInteger(record.pid) &&
+    typeof record.token === "string" &&
+    typeof record.acquiredAt === "string" &&
+    isOptionalProcessIdentity(record.processIdentity) &&
+    Number.isFinite(Date.parse(record.acquiredAt))
+    ? {
+        pid: record.pid as number,
+        token: record.token,
+        acquiredAt: record.acquiredAt,
+        ...processIdentityField(record.processIdentity),
+      }
+    : undefined;
+}
+
+function readRemediationLease(path: string): RemediationLeaseRecord | undefined {
+  try {
+    return parseRemediationLease(JSON.parse(readFileSync(path, "utf8")));
+  } catch {
+    return undefined;
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+function remediationLeaseStaleMs(value: number | undefined): number {
+  return value !== undefined && Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_REMEDIATION_LEASE_STALE_MS;
+}
+
+function remediationLeaseAgeMs(
+  path: string,
+  record: RemediationLeaseRecord | undefined,
+  now: () => number,
+): number | undefined {
+  try {
+    const timestamp = record === undefined ? statSync(path).mtimeMs : Date.parse(record.acquiredAt);
+    return Math.max(0, now() - timestamp);
+  } catch {
+    return undefined;
+  }
+}
+
+function remediationLeaseReclaimable(
+  path: string,
+  record: RemediationLeaseRecord | undefined,
+  context: ManagerContext,
+): boolean {
+  const ageMs = remediationLeaseAgeMs(path, record, context.now);
+  if (ageMs === undefined || ageMs < context.remediationLeaseStaleMs) return false;
+  if (record === undefined) return true;
+  if (record.pid === process.pid) {
+    return record.processIdentity !== context.processIdentity;
+  }
+  if (!context.pidAlive(record.pid)) return true;
+  // A live PID may be a reused process identity. Give a genuine owner a second full lease window,
+  // then bound the orphan instead of blocking remediation forever.
+  return ageMs >= context.remediationLeaseStaleMs * 2;
+}
+
+function restoreClaimedRemediationLease(claimedPath: string, path: string): void {
+  try {
+    publishFileWithoutReplacement(claimedPath, path);
+    unlinkSync(claimedPath);
+  } catch {
+    // A newer canonical owner wins. Preserve the displaced inode for diagnosis.
+  }
+}
+
+function remediationLeaseMatches(
+  claimed: RemediationLeaseRecord | undefined,
+  expected: RemediationLeaseRecord | undefined,
+): boolean {
+  if (expected === undefined) return claimed === undefined;
+  return claimed?.token === expected.token;
+}
+
+function discardRemediationLease(
+  path: string,
+  expected: RemediationLeaseRecord | undefined,
+  now: () => number,
+): boolean {
+  const claimedPath = `${path}.reclaim.${randomUUID()}`;
+  try {
+    renameSync(path, claimedPath);
+  } catch {
+    return false;
+  }
+  let matches = false;
+  try {
+    matches = remediationLeaseMatches(readRemediationLease(claimedPath), expected);
+  } catch {
+    restoreClaimedRemediationLease(claimedPath, path);
+    return false;
+  }
+  if (!matches) {
+    restoreClaimedRemediationLease(claimedPath, path);
+    return false;
+  }
+  try {
+    if (expected === undefined) {
+      const suffix = new Date(now()).toISOString().replace(/[:.]/g, "-");
+      renameSync(claimedPath, `${path}.corrupt.${suffix}`);
+    } else {
+      unlinkSync(claimedPath);
+    }
+  } catch {
+    restoreClaimedRemediationLease(claimedPath, path);
+    return false;
+  }
+  return true;
+}
+
+function releaseRemediationLease(path: string, token: string): void {
+  // Do not vacate the canonical name until ownership has been established. In particular, an old
+  // callback must never move a replacement lease out of the way merely to discover its token.
+  if (readRemediationLease(path)?.token !== token) return;
+  const claimedPath = `${path}.release.${token}`;
+  try {
+    renameSync(path, claimedPath);
+  } catch {
+    return;
+  }
+  if (readRemediationLease(claimedPath)?.token === token) {
+    try {
+      unlinkSync(claimedPath);
+    } catch {
+      // A settled lease may already have been removed by shutdown cleanup.
+    }
+    return;
+  }
+  try {
+    // Restore a lease claimed by the wrong callback only when the canonical path is still free.
+    // `link` is the no-replace operation that `rename` does not provide portably.
+    publishFileWithoutReplacement(claimedPath, path);
+    unlinkSync(claimedPath);
+  } catch {
+    // A newer canonical lease wins. Preserve the displaced record for diagnosis instead of
+    // deleting a lease this callback does not own.
+  }
+}
+
+function publishRemediationLease(path: string, record: RemediationLeaseRecord): void {
+  const draftPath = `${path}.${record.token}.tmp`;
+  writeFileSync(draftPath, JSON.stringify(record), {
+    encoding: "utf8",
+    flag: "wx",
+    mode: SNAPSHOT_FILE_MODE,
+  });
+  try {
+    // Prefer a hard link for atomic publication. Filesystems without hard-link support fall back to
+    // an exclusive copy; a fresh malformed record then remains protected for one stale window so a
+    // concurrent reader cannot reclaim a copy that is still being published.
+    publishFileWithoutReplacement(draftPath, path);
+  } finally {
+    try {
+      unlinkSync(draftPath);
+    } catch {
+      // The canonical lease is authoritative; a private draft is safe to clean up later.
+    }
+  }
+}
+
+function acquireRemediationLease(
+  context: ManagerContext,
+  actionId: string,
+): (() => void) | undefined {
+  const path = remediationLeasePath(context.stateDir, actionId);
+  mkdirPrivate(dirname(path));
+  const token = randomUUID();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      publishRemediationLease(path, {
+        pid: process.pid,
+        token,
+        acquiredAt: nowIso(context.now),
+        processIdentity: context.processIdentity,
+      });
+      return (): void => {
+        releaseRemediationLease(path, token);
+      };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") throw error;
+      const existing = readRemediationLease(path);
+      if (!remediationLeaseReclaimable(path, existing, context)) return undefined;
+      if (!discardRemediationLease(path, existing, context.now)) {
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
 function overallHealth(stores: readonly UpdateStoreHealth[]): UpdateHealthState {
   return stores.reduce<UpdateHealthState>(
     (worst, item) => (healthRank(item.health) > healthRank(worst) ? item.health : worst),
@@ -367,6 +606,9 @@ export function createUpdateLocalStateManager(
     stateDir: options.stateDir,
     now: options.now ?? Date.now,
     idFactory: options.idFactory ?? randomUUID,
+    remediationLeaseStaleMs: remediationLeaseStaleMs(options.remediationLeaseStaleMs),
+    pidAlive: options.pidAlive ?? processIsAlive,
+    processIdentity: options.processIdentity ?? PROCESS_START_IDENTITY,
   };
   return {
     scanCompatibility: (impact): UpdateCompatibilityScan => scanCompatibility(context, impact),
@@ -377,6 +619,8 @@ export function createUpdateLocalStateManager(
     repairStores: (stores): UpdateLocalStateRepairResult => repairStores(context, stores),
     readRuntimeState: (): UpdateRuntimeState => readRuntimeState(context),
     writeRuntimeState: (state): UpdateRuntimeState => writeRuntimeState(context, state),
+    acquireRemediationLease: (actionId): (() => void) | undefined =>
+      acquireRemediationLease(context, actionId),
     recordAuditEvent: (type, input): AuditEventRecord => recordAuditEvent(context, type, input),
   };
 }

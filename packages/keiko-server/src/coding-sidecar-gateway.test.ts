@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import type { IncomingMessage } from "node:http";
+import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import {
   ProviderError,
@@ -17,10 +19,11 @@ import {
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
 } from "./coding-sidecar-gateway.js";
-import { mockRequest, mockResponse } from "./_support.js";
+import { mockRequest, mockResponse, probeVerifiedGatewayConfig } from "./_support.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { STREAMING, type RouteContext, type RouteResult } from "./routes.js";
+import { resetGatewayInstanceCacheForTests } from "./gateway-instance-cache.js";
 
 function provider(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
   return {
@@ -518,6 +521,98 @@ async function* streamedResponse(response: NormalizedResponse): AsyncGenerator<G
 }
 
 describe("coding-sidecar gateway", () => {
+  it.each([
+    { label: "buffered", stream: false },
+    { label: "streaming", stream: true },
+  ])(
+    "pins the $label sidecar request to the gateway resolved before body intake",
+    async ({ stream }) => {
+      resetGatewayInstanceCacheForTests();
+      let requestedUrl: string | undefined;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: string | URL | Request): Promise<Response> => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return Promise.reject(new Error("provider unavailable"));
+        }),
+      );
+      const initialConfig = configValue(
+        provider({ baseUrl: "https://initial-gateway.example/v1", maxRetries: 0 }),
+        capability(),
+      );
+      const runtimeConfig = probeVerifiedGatewayConfig(initialConfig);
+      const deps = {
+        ...runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-pinned" } })),
+        gatewayConfig: runtimeConfig,
+      };
+      const body = new PassThrough();
+      const request = body as unknown as IncomingMessage & {
+        method: string;
+        url: string;
+        headers: Record<string, string>;
+      };
+      request.method = "POST";
+      request.url = "/api/coding-sidecar/gateway/chat/completions";
+      request.headers = { authorization: "Bearer gateway-capability-material-0000000001" };
+      const context = { ...authenticatedContext({}), req: request };
+
+      try {
+        const pending = handleCodingSidecarGatewayChatCompletions(context, deps);
+        runtimeConfig.set(
+          configValue(
+            provider({ baseUrl: "https://replacement-gateway.example/v1", maxRetries: 0 }),
+            capability(),
+          ),
+          true,
+        );
+        body.end(
+          JSON.stringify({
+            model: "coding",
+            stream,
+            messages: [{ role: "user", content: "continue" }],
+            tools: modelVisibleTools(),
+          }),
+        );
+
+        const result = await pending;
+        if (stream) expect(result).toBe(STREAMING);
+        else expect(result).toMatchObject({ status: 503 });
+        expect(requestedUrl).toContain("initial-gateway.example");
+        expect(requestedUrl).not.toContain("replacement-gateway.example");
+      } finally {
+        vi.unstubAllGlobals();
+        resetGatewayInstanceCacheForTests();
+      }
+    },
+  );
+
+  it("keeps circuit-breaker failures across separate production gateway requests", async () => {
+    resetGatewayInstanceCacheForTests();
+    const fetchMock = vi.fn(() => Promise.reject(new Error("provider unavailable")));
+    vi.stubGlobal("fetch", fetchMock);
+    const config = {
+      ...configValue(provider({ maxRetries: 0 }), capability()),
+      circuitBreaker: { failureThreshold: 2, cooldownMs: 30_000, halfOpenProbes: 1 },
+    };
+    const deps = depsValue(config);
+    const request = (): RouteContext =>
+      authenticatedContext({
+        model: "azure-coding-model",
+        messages: [{ role: "user", content: "continue" }],
+        tools: [],
+      });
+
+    try {
+      await handleCodingSidecarGatewayChatCompletions(request(), deps);
+      await handleCodingSidecarGatewayChatCompletions(request(), deps);
+      await handleCodingSidecarGatewayChatCompletions(request(), deps);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
   it("fails closed when a runtime gateway route has no capability authenticator", async () => {
     const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
     const deps = { ...depsValue(configValue(provider(), capability()), () => chat) } as Record<
@@ -1894,6 +1989,9 @@ describe("coding-sidecar gateway", () => {
         generation: () => 0,
         verification: () => "verified",
         recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability: () => undefined,
+        clearVerifiedCapability: () => false,
       },
     });
 

@@ -14,6 +14,7 @@ import {
   fetchModels,
   fetchProjects,
   regenerateDesktopChat,
+  resetModelRequestCache,
   sendDesktopChat,
   uploadConversationAttachment,
 } from "@/lib/api";
@@ -42,6 +43,7 @@ import {
   clearCanonicalVoiceHasherForTests,
   prepareCanonicalVoiceHasher,
 } from "./canonical-voice-hasher";
+import { notifyGatewayConfigUpdated } from "../widgets/shared/gatewaySetupBus";
 
 beforeAll(async () => {
   await prepareCanonicalVoiceHasher();
@@ -68,6 +70,12 @@ vi.mock("@/lib/api", () => ({
   askGrounded: vi.fn(),
   createDesktopChat: vi.fn(),
   createProject: vi.fn(),
+  projectResponseWarningMessage: (response: {
+    readonly warning?: { readonly message: string; readonly correlationId: string };
+  }): string | undefined =>
+    response.warning === undefined
+      ? undefined
+      : `${response.warning.message} Support ID: ${response.warning.correlationId}`,
   fetchChatMessages: vi.fn(),
   fetchChats: vi.fn(),
   fetchEvidenceManifest: vi.fn(),
@@ -76,6 +84,7 @@ vi.mock("@/lib/api", () => ({
   fetchProjects: vi.fn(),
   patchChatMessage: vi.fn(),
   regenerateDesktopChat: vi.fn(),
+  resetModelRequestCache: vi.fn(),
   sendDesktopChat: vi.fn(),
   sendDesktopChatStream: vi.fn(),
   uploadConversationAttachment: vi.fn().mockResolvedValue({
@@ -409,7 +418,14 @@ describe("useChatSession bootstrap", () => {
       .mockResolvedValueOnce({ projects: [initial] })
       .mockResolvedValueOnce({ projects: [initial, added] });
     vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
-    vi.mocked(createProject).mockResolvedValue({ project: added });
+    vi.mocked(createProject).mockResolvedValue({
+      project: added,
+      warning: {
+        code: "PROJECT_TRUST_GRANT_FAILED",
+        message: "The project was registered but remains restricted.",
+        correlationId: "chat-project-trust-correlation",
+      },
+    });
     const rendered = renderHook(() => useChatSession({ autoCreate: false }));
     await waitFor(() => expect(rendered.result.current.loading).toBe(false));
 
@@ -420,7 +436,15 @@ describe("useChatSession bootstrap", () => {
 
     expect(selected).toEqual(added);
     expect(rendered.result.current.activeProject?.path).toBe(selectedRoot);
+    expect(rendered.result.current.error).toContain("No conversation-eligible model");
+    expect(rendered.result.current.error).not.toContain("chat-project-trust-correlation");
+    expect(rendered.result.current.notice).toContain("chat-project-trust-correlation");
     expect(createDesktopChat).not.toHaveBeenCalled();
+
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    await act(() => rendered.result.current.openChat(chat({ id: "other-chat" })));
+
+    expect(rendered.result.current.notice).toBeUndefined();
   });
 
   it("surfaces bootstrap and navigation mutation failures without stale state", async () => {
@@ -535,6 +559,61 @@ describe("useChatSession bootstrap", () => {
     await waitFor(() =>
       expect(result.current.chats.some((item) => item.id === "chat-new")).toBe(false),
     );
+  });
+
+  it("drops the API model cache before refreshing after a gateway update", async () => {
+    vi.mocked(fetchModels)
+      .mockResolvedValueOnce({ models: [model({ id: "chat-before" })] })
+      .mockResolvedValueOnce({ models: [model({ id: "chat-after" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() =>
+      expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-before"]),
+    );
+
+    act(() => {
+      notifyGatewayConfigUpdated();
+    });
+
+    await waitFor(() => expect(resetModelRequestCache).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-after"]),
+    );
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores an older gateway model refresh that resolves after the latest one", async () => {
+    vi.mocked(fetchModels).mockResolvedValueOnce({ models: [model({ id: "chat-before" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    const older = deferred<{ models: ModelCapability[] }>();
+    const latest = deferred<{ models: ModelCapability[] }>();
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() =>
+      expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-before"]),
+    );
+    vi.mocked(fetchModels)
+      .mockImplementationOnce(() => older.promise)
+      .mockImplementationOnce(() => latest.promise);
+
+    act(() => {
+      notifyGatewayConfigUpdated();
+      notifyGatewayConfigUpdated();
+    });
+    await act(async () => {
+      latest.resolve({ models: [model({ id: "chat-latest" })] });
+      await latest.promise;
+    });
+    expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-latest"]);
+
+    await act(async () => {
+      older.resolve({ models: [model({ id: "chat-stale" })] });
+      await older.promise;
+    });
+    expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-latest"]);
   });
 
   // 0.3.0 release audit — the chat list carries trashed (status "closed") conversations so the

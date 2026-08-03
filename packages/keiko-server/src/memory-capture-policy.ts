@@ -8,6 +8,11 @@ import type {
   CapturePolicyOptions,
   RejectionReason,
 } from "@oscharko-dev/keiko-memory-capture";
+import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  planMemoryMaintenance,
+  type MemoryAccessStatLike,
+} from "@oscharko-dev/keiko-memory-governance";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentRedactionSecrets } from "./deps.js";
 
@@ -30,6 +35,7 @@ export const SENSITIVE_MEMORY_ACTION_BODY = "Sensitive memory pending review.";
 // The posture a memory surface falls back to when nothing narrower is resolvable: ADR-0124 D2 /
 // ADR-0138 D2 fail closed to the most restrictive mode, and ADR-0146 D5 restates that for memory.
 export const DEFAULT_MEMORY_AUTONOMY_MODE: CodingWorkbenchMode = "governed-assist";
+const EMPTY_CAPTURE_ACCESS_STATS: ReadonlyMap<MemoryId, MemoryAccessStatLike> = new Map();
 
 const DEFAULT_MEMORY_DENIED_CATEGORY_MATCHERS: NonNullable<
   CapturePolicyOptions["deniedCategoryMatchers"]
@@ -159,11 +165,17 @@ export function resolveMemoryCaptureAutonomyMode(
 // projection already reports as `governed-assist` — so the sweep behaves exactly as the mode the UI
 // is showing. This may throw if the UI store is unreadable; callers that must not fail a chat turn
 // wrap it and fall closed (see resolveMaintenanceAutonomyMode in memory-maintenance-handlers.ts).
-export function resolveMemoryMaintenanceAutonomyMode(
+export function resolvePersistedMemoryAutonomyMode(
   deps: Pick<UiHandlerDeps, "codingRuntimeDeploymentCeiling" | "store">,
 ): CodingWorkbenchMode {
   const requestedMode = deps.store.readMemoryAutonomyPolicy()?.requestedMode;
   return resolveMemoryCaptureAutonomyMode(deps, requestedMode ?? DEFAULT_MEMORY_AUTONOMY_MODE);
+}
+
+export function resolveMemoryMaintenanceAutonomyMode(
+  deps: Pick<UiHandlerDeps, "codingRuntimeDeploymentCeiling" | "store">,
+): CodingWorkbenchMode {
+  return resolvePersistedMemoryAutonomyMode(deps);
 }
 
 // THE lever for "may Keiko make a memory retrievable without the local human accepting it?".
@@ -194,4 +206,15 @@ export function memoryCaptureAutoAcceptEligible(
     !outcome.requiresApproval &&
     outcome.proposal.provenance.sensitivity === "public"
   );
+}
+
+// Route every mode-eligible capture through the existing governance promotion plan. This keeps
+// promotion thresholds and future governance changes identical across all capture surfaces.
+export function promoteEligibleMemoryRecord(record: MemoryRecord): MemoryRecord {
+  const plan = planMemoryMaintenance([record], EMPTY_CAPTURE_ACCESS_STATS, {
+    nowMs: record.createdAt,
+  });
+  return plan.promote.includes(record.id)
+    ? { ...record, status: "accepted", updatedAt: record.createdAt }
+    : record;
 }

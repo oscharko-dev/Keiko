@@ -42,10 +42,10 @@ import {
   type EditorInlineCompletionWireResponse,
   type UsageMetadata,
 } from "@oscharko-dev/keiko-contracts";
-import { Gateway, selectCompletionModel } from "@oscharko-dev/keiko-model-gateway";
+import { selectCompletionModel } from "@oscharko-dev/keiko-model-gateway";
 import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
-import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
+import { currentGateway, currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
 import { newCorrelationId } from "../correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
@@ -111,18 +111,21 @@ export interface EditorInlineCompletionRouteOptions {
 const sharedRateLimiter: InlineCompletionRateLimiter = createInlineCompletionRateLimiter();
 
 // Default chat seam: route the elected model through the Model Gateway, server-side only.
-function defaultChatFactory(config: GatewayConfig, modelId: string): ModelChatFn {
-  const gateway = new Gateway(config);
-  return async (chatRequest, chatSignal) => {
-    const response = await gateway.chat({
-      modelId,
-      messages: [
-        { role: "system", content: chatRequest.system },
-        { role: "user", content: chatRequest.user },
-      ],
-      cancellationSignal: chatSignal,
-    });
-    return { content: response.content, usage: response.usage };
+function defaultChatFactoryFor(deps: UiHandlerDeps): InlineCompletionChatFactory {
+  return (_config, modelId): ModelChatFn => {
+    const gateway = currentGateway(deps);
+    if (gateway === undefined) throw new TypeError("Model gateway is unavailable.");
+    return async (chatRequest, chatSignal) => {
+      const response = await gateway.chat({
+        modelId,
+        messages: [
+          { role: "system", content: chatRequest.system },
+          { role: "user", content: chatRequest.user },
+        ],
+        cancellationSignal: chatSignal,
+      });
+      return { content: response.content, usage: response.usage };
+    };
   };
 }
 
@@ -357,6 +360,9 @@ function inlineOutcomeFromGenerated(
 // gateway through the injected chat factory, and filters the output. A failure throws to the caller,
 // which degrades.
 async function runElectedInlineModel(ctx: ElectedInlineModelContext): Promise<InlineModelOutcome> {
+  // Pin provider state before context assembly yields: selection and invocation must describe the
+  // same runtime-config generation when gateway setup completes concurrently.
+  const chat = ctx.chatFactory(ctx.config, ctx.modelId);
   const pack = await assembleCodingContext(buildContextRequest(ctx.request), {
     deps: ctx.deps,
     realRoot: ctx.realRoot,
@@ -375,11 +381,7 @@ async function runElectedInlineModel(ctx: ElectedInlineModelContext): Promise<In
   if (reservation === undefined) {
     return noItemOutcome(ctx.selection.mode, undefined, ctx.modelId, ctx.selection.latencyClass);
   }
-  const generated = await generateInlineCompletion(
-    generationInput,
-    ctx.chatFactory(ctx.config, ctx.modelId),
-    ctx.signal,
-  );
+  const generated = await generateInlineCompletion(generationInput, chat, ctx.signal);
   settleModelUsage(reservation, generated.usage);
   recordInlineModelEvidence(ctx, generated);
   return inlineOutcomeFromGenerated(ctx, pack, generated);
@@ -502,7 +504,7 @@ async function runInlineModelTier(
       deps,
       selection,
       modelId,
-      chatFactory: options.chatFactory ?? defaultChatFactory,
+      chatFactory: options.chatFactory ?? defaultChatFactoryFor(deps),
       config,
       nowMs: now(),
       tokenBudget,

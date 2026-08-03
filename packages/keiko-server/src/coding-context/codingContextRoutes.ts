@@ -20,6 +20,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import type { UiHandlerDeps } from "../deps.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import {
   GitDeliveryBodyTooLargeError,
@@ -219,10 +220,12 @@ async function readParsedBody(req: IncomingMessage): Promise<BodyRead> {
 
 function connectorConfigFor(
   deps: UiHandlerDeps,
+  githubConfigured: boolean,
   jiraConfigured: boolean,
 ): CodeContextConnectorConfig {
   return {
-    github_connector_authorized: deps.env.GITHUB_CONNECTOR_AUTHORIZED === "true",
+    github_connector_authorized:
+      deps.env.GITHUB_CONNECTOR_AUTHORIZED === "true" && githubConfigured,
     jira_connector_authorized: deps.env.JIRA_CONNECTOR_AUTHORIZED === "true" && jiraConfigured,
   };
 }
@@ -236,11 +239,17 @@ const NO_CONNECTOR: CodeContextConnector = {
   read: () => Promise.reject(new Error("coding context connector is not configured")),
 };
 
-function composeConnectors(deps: UiHandlerDeps): ComposedConnectors {
-  const jiraPortConfig = parseJiraCodeContextPortConfig(deps.env);
+function fallbackJiraPort(
+  deps: UiHandlerDeps,
+): ReturnType<typeof createJiraCodeContextHttpPort> | undefined {
+  const config = parseJiraCodeContextPortConfig(deps.env);
+  return config === undefined ? undefined : createJiraCodeContextHttpPort(config);
+}
+
+export function composeCodingContextConnectors(deps: UiHandlerDeps): ComposedConnectors {
   const githubPort =
     deps.codingContextGitHubPort ??
-    (deps.preferredProjectPath === undefined
+    (deps.env.GITHUB_CONNECTOR_AUTHORIZED !== "true" || deps.preferredProjectPath === undefined
       ? undefined
       : createGitHubCodeContextApiPort({
           workspace: {
@@ -255,19 +264,14 @@ function composeConnectors(deps: UiHandlerDeps): ComposedConnectors {
           },
           processEnv: process.env,
         }));
-  const jiraPort =
-    deps.codingContextJiraPort ??
-    (jiraPortConfig === undefined ? undefined : createJiraCodeContextHttpPort(jiraPortConfig));
+  const jiraPort = deps.codingContextJiraPort ?? fallbackJiraPort(deps);
   return {
     connectors: {
       github:
         githubPort === undefined ? NO_CONNECTOR : createGitHubCodeContextConnector(githubPort),
       jira: jiraPort === undefined ? NO_CONNECTOR : createJiraCodeContextConnector(jiraPort),
     },
-    connectorConfig: connectorConfigFor(
-      deps,
-      jiraPortConfig !== undefined || deps.codingContextJiraPort !== undefined,
-    ),
+    connectorConfig: connectorConfigFor(deps, githubPort !== undefined, jiraPort !== undefined),
   };
 }
 
@@ -279,18 +283,28 @@ export async function handleCodingContextPack(
   if (!read.ok) return read.result;
   const request = parseRequest(read.value, deps);
   if (request === undefined) return badRequest();
-  const composed = composeConnectors(deps);
   try {
+    const composed = composeCodingContextConnectors(deps);
     const pack = await buildCodeContextPack(request, {
       connectors: composed.connectors,
       connectorConfig: composed.connectorConfig,
       nowIso: (): string => new Date().toISOString(),
     });
     return { status: 200, body: { schemaVersion: "1", ...pack } };
-  } catch {
+  } catch (error) {
     // Port failures stay opaque: content-free code + correlation id only. The
     // connector layer never places endpoints, credentials, or bodies on errors.
     const correlationId = randomUUID();
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "coding-context.pack",
+        source: "coding-context.handleCodingContextPack",
+        error,
+        redact: (): string => "The server operation failed.",
+      }),
+    );
     return {
       status: 502,
       body: errBody(

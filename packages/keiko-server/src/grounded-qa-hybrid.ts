@@ -1003,10 +1003,10 @@ function folderCitationCount(
     .filter((candidate) => availableIds.has(candidate.payload.stableId)).length;
 }
 
-function hashString32(value: string): string {
+export function hashString32(value: string): string {
   let hash = 0x811c9dc5;
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i);
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.at(index)?.codePointAt(0) ?? 0;
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
@@ -1627,6 +1627,17 @@ async function noEvidenceAssistant(
   return answer;
 }
 
+function noEvidenceSources(meta: AnswerMeta): RetrievedSources {
+  return {
+    folders: meta.folderResult.retrieved,
+    connectors: meta.connectorResult.retrieved,
+    skipped: meta.connectorResult.skipped,
+    skippedFolders: meta.folderResult.skipped,
+    folderSourceCount: meta.folderScopeCount,
+    connectorSourceCount: meta.connectorScopeCount,
+  };
+}
+
 async function assembleHybridNoEvidenceRoute(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
@@ -1649,14 +1660,7 @@ async function assembleHybridNoEvidenceRoute(
   );
   const answer = assembleHybridAnswer({
     ctx,
-    sources: {
-      folders: meta.folderResult.retrieved,
-      connectors: meta.connectorResult.retrieved,
-      skipped: meta.connectorResult.skipped,
-      skippedFolders: meta.folderResult.skipped,
-      folderSourceCount: meta.folderScopeCount,
-      connectorSourceCount: meta.connectorScopeCount,
-    },
+    sources: noEvidenceSources(meta),
     store,
     selected,
     limits,

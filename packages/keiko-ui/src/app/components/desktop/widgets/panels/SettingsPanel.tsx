@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import {
   gatewayVerificationContradictsReadiness,
@@ -9,7 +9,13 @@ import {
   VOICE_PERSONAS,
   type GatewayVerificationState,
 } from "@oscharko-dev/keiko-contracts";
-import { fetchConfig, fetchModels, runGatewayReadiness } from "@/lib/api";
+import {
+  applyGatewayVerifiedCapabilities,
+  fetchConfig,
+  fetchModels,
+  runGatewayReadiness,
+  type VerifiedGatewayCapabilityFields,
+} from "@/lib/api";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import {
   LOCALE_LABELS,
@@ -53,6 +59,7 @@ import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_SETUP_REQUEST_EVENT,
   consumePendingGatewaySetup,
+  notifyGatewayConfigUpdated,
 } from "../shared/gatewaySetupBus";
 import {
   WALLPAPER_ENABLED_EVENT,
@@ -82,6 +89,8 @@ import {
   readWorkspaceGridStrength,
 } from "../../workspace-appearance";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
+import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
+import editorStyles from "./EditorSettingsPanel.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CopyIcon = Icons.copy;
@@ -281,6 +290,17 @@ function recordReadinessRun(
   return { generation: observedGeneration, runs: { ...runs, [modelId]: state } };
 }
 
+function clearReadinessRun(
+  ledger: ReadinessLedger,
+  generation: number,
+  modelId: string,
+): ReadinessLedger {
+  if (ledger.generation !== generation || ledger.runs[modelId] === undefined) return ledger;
+  const runs = { ...ledger.runs };
+  Reflect.deleteProperty(runs, modelId);
+  return { generation, runs };
+}
+
 /**
  * A value identity for the configuration the panel currently holds. Credential-free by construction
  * (the safe projection carries no key or base URL), so a rotated credential is invisible here and
@@ -349,6 +369,184 @@ function firstActionableProbeMessage(report: GatewayReadinessReport): string | u
   return issue?.warning ?? issue?.evidence;
 }
 
+type ObservableCapabilityField = keyof VerifiedGatewayCapabilityFields;
+
+interface CapabilityDisagreement {
+  readonly field: ObservableCapabilityField;
+  readonly configured: boolean | number;
+  readonly observed: boolean | number;
+}
+
+const BOOLEAN_CAPABILITY_PROBES = [
+  ["streaming", "streaming"],
+  ["toolCalling", "tool_calling"],
+  ["structuredOutput", "json_schema"],
+  ["supportsImageInput", "image_input"],
+  ["supportsDocumentInput", "document_input"],
+] as const satisfies readonly (readonly [ObservableCapabilityField, string])[];
+
+function observedProbeValue(
+  report: GatewayReadinessReport,
+  probeName: string,
+): boolean | undefined {
+  const probe = report.probes.find((candidate) => candidate.name === probeName);
+  if (probe?.status === "passed") return true;
+  return probe?.capabilityObservation;
+}
+
+function capabilityDisagreements(
+  model: ModelCapability,
+  report: GatewayReadinessReport,
+): readonly CapabilityDisagreement[] {
+  const disagreements: CapabilityDisagreement[] = [];
+  for (const [field, probe] of BOOLEAN_CAPABILITY_PROBES) {
+    const observed = observedProbeValue(report, probe);
+    const configured = model[field];
+    if (observed !== undefined && configured !== observed) {
+      disagreements.push({ field, configured, observed });
+    }
+  }
+  return disagreements;
+}
+
+function capabilityFieldLabel(field: ObservableCapabilityField, t: I18nTranslate): string {
+  if (field === "toolCalling") return t("settings.models.capabilityTools");
+  if (field === "structuredOutput") return t("settings.models.capabilityJson");
+  if (field === "supportsImageInput") return t("settings.models.capabilityImage");
+  if (field === "supportsDocumentInput") return t("settings.models.capabilityPdf");
+  return t("settings.models.capabilityStreaming");
+}
+
+function displayCapabilityValue(value: boolean | number, t: I18nTranslate): string {
+  if (typeof value === "number") return value.toLocaleString();
+  return value ? t("settings.models.yes") : t("settings.models.no");
+}
+
+function CapabilityApplyConfirmDialog({
+  onAccept,
+  onDecline,
+}: {
+  readonly onAccept: () => void;
+  readonly onDecline: () => void;
+}): ReactNode {
+  const t = useTranslate();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const decline = useEffectEvent(onDecline);
+  useDialogTabTrap(dialogRef);
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    dialogRef.current?.focus();
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === "Escape") decline();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      if (opener?.isConnected === true) opener.focus();
+    };
+  }, []);
+  return (
+    <div className={editorStyles.confirmBackdrop}>
+      <div
+        ref={dialogRef}
+        className={editorStyles.confirmDialog}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="capability-apply-confirm-title"
+        aria-describedby="capability-apply-confirm-body"
+        tabIndex={-1}
+      >
+        <h4 className={editorStyles.confirmTitle} id="capability-apply-confirm-title">
+          {t("settings.models.applyVerifiedConfirmTitle")}
+        </h4>
+        <p className={editorStyles.confirmBody} id="capability-apply-confirm-body">
+          {t("settings.models.applyVerifiedConfirm")}
+        </p>
+        <div className={editorStyles.confirmActions}>
+          <button type="button" className={editorStyles.button} onClick={onDecline}>
+            {t("settings.models.applyVerifiedDecline")}
+          </button>
+          <button type="button" className={editorStyles.button} onClick={onAccept}>
+            {t("settings.models.applyVerifiedAccept")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CapabilityDisagreementActions({
+  model,
+  report,
+  observedGeneration,
+  onApplied,
+}: {
+  readonly model: ModelCapability;
+  readonly report: GatewayReadinessReport;
+  readonly observedGeneration: number;
+  readonly onApplied: (model: ModelCapability, observedGeneration: number) => void;
+}): ReactNode {
+  const t = useTranslate();
+  const [applying, setApplying] = useState(false);
+  const [applyError, setApplyError] = useState<string | undefined>();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const disagreements = capabilityDisagreements(model, report);
+  if (disagreements.length === 0) return null;
+  const apply = async (): Promise<void> => {
+    setApplying(true);
+    setApplyError(undefined);
+    try {
+      const fields = Object.fromEntries(
+        disagreements.map(({ field, observed }) => [field, observed]),
+      ) as VerifiedGatewayCapabilityFields;
+      const response = await applyGatewayVerifiedCapabilities(model.id, fields);
+      onApplied(response.model, observedGeneration);
+    } catch (error) {
+      setApplyError(readinessErrorMessage(error, t));
+    } finally {
+      setApplying(false);
+    }
+  };
+  return (
+    <div className="ml-rwarn" data-testid="capability-disagreements">
+      <div>{t("settings.models.capabilityDisagreement")}</div>
+      {disagreements.map(({ field, configured, observed }) => (
+        <div className="mono" key={field}>
+          {t("settings.models.capabilityDifference", {
+            field: capabilityFieldLabel(field, t),
+            configured: displayCapabilityValue(configured, t),
+            observed: displayCapabilityValue(observed, t),
+          })}
+        </div>
+      ))}
+      <button
+        type="button"
+        className="ml-check secondary"
+        disabled={applying}
+        onClick={() => setConfirmOpen(true)}
+      >
+        {applying
+          ? t("settings.models.applyingVerified")
+          : t("settings.models.applyVerifiedValues")}
+      </button>
+      {applyError === undefined ? null : (
+        <div role="alert">
+          {t("settings.models.applyVerifiedFailed")} {applyError}
+        </div>
+      )}
+      {confirmOpen ? (
+        <CapabilityApplyConfirmDialog
+          onAccept={() => {
+            setConfirmOpen(false);
+            void apply();
+          }}
+          onDecline={() => setConfirmOpen(false)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 function ReadinessReportCopyButton({
   report,
 }: {
@@ -397,7 +595,17 @@ function ReadinessReportCopyButton({
   );
 }
 
-function ReadinessSummary({ state }: { readonly state: ReadinessRunState | undefined }): ReactNode {
+function ReadinessSummary({
+  model,
+  state,
+  observedGeneration,
+  onCapabilityApplied,
+}: {
+  readonly model: ModelCapability;
+  readonly state: ReadinessRunState | undefined;
+  readonly observedGeneration: number;
+  readonly onCapabilityApplied: (model: ModelCapability, observedGeneration: number) => void;
+}): ReactNode {
   const t = useTranslate();
   if (state === undefined || state.status === "idle") return null;
   if (state.status === "running") {
@@ -466,6 +674,12 @@ function ReadinessSummary({ state }: { readonly state: ReadinessRunState | undef
             ) : null}
           </div>
           {warning !== undefined ? <div className="ml-rwarn">{warning}</div> : null}
+          <CapabilityDisagreementActions
+            model={model}
+            report={report}
+            observedGeneration={observedGeneration}
+            onApplied={onCapabilityApplied}
+          />
         </div>
       </div>
     </div>
@@ -490,11 +704,15 @@ function modelStatusTitle(
 function ModelCapabilityRow({
   model,
   readiness,
+  observedGeneration,
   onRunReadiness,
+  onCapabilityApplied,
 }: {
   readonly model: ModelCapability;
   readonly readiness: ReadinessRunState | undefined;
+  readonly observedGeneration: number;
   readonly onRunReadiness: (modelId: string, deep: boolean) => void;
+  readonly onCapabilityApplied: (model: ModelCapability, observedGeneration: number) => void;
 }): ReactNode {
   const t = useTranslate();
   const conversationEligible = isConversationEligibleModel(model);
@@ -523,7 +741,12 @@ function ModelCapabilityRow({
             latencyClass: model.latencyClass,
           })}
         </div>
-        <ReadinessSummary state={readiness} />
+        <ReadinessSummary
+          model={model}
+          state={readiness}
+          observedGeneration={observedGeneration}
+          onCapabilityApplied={onCapabilityApplied}
+        />
       </div>
       {conversationEligible ? (
         <div className="ml-actions">
@@ -1147,12 +1370,14 @@ interface ModelsTabContentProps {
   readonly modelError: string | undefined;
   readonly loadingModels: boolean;
   readonly readiness: Record<string, ReadinessRunState>;
+  readonly configGeneration: number;
   readonly setupOpen: boolean;
   readonly config: SafeGatewayConfig | null;
   readonly onOpenSetup: () => void;
   readonly onCloseSetup: () => void;
   readonly onRetry: () => void;
   readonly onRunReadiness: (modelId: string, deep: boolean) => void;
+  readonly onCapabilityApplied: (model: ModelCapability, observedGeneration: number) => void;
 }
 
 // #2723 (S3358): the models-list body was a nested ternary (loadingModels ? … :
@@ -1162,14 +1387,18 @@ function renderModelsListBody({
   models,
   gatewayConfigured,
   readiness,
+  configGeneration,
   onRunReadiness,
+  onCapabilityApplied,
   t,
 }: {
   readonly loadingModels: boolean;
   readonly models: readonly ModelCapability[];
   readonly gatewayConfigured: boolean;
   readonly readiness: Record<string, ReadinessRunState>;
+  readonly configGeneration: number;
   readonly onRunReadiness: (modelId: string, deep: boolean) => void;
+  readonly onCapabilityApplied: (model: ModelCapability, observedGeneration: number) => void;
   readonly t: I18nTranslate;
 }): ReactNode {
   if (loadingModels) {
@@ -1195,7 +1424,9 @@ function renderModelsListBody({
           key={model.id}
           model={model}
           readiness={readiness[model.id]}
+          observedGeneration={configGeneration}
           onRunReadiness={onRunReadiness}
+          onCapabilityApplied={onCapabilityApplied}
         />
       ))}
     </div>
@@ -1210,12 +1441,14 @@ function ModelsTabContent({
   modelError,
   loadingModels,
   readiness,
+  configGeneration,
   setupOpen,
   config,
   onOpenSetup,
   onCloseSetup,
   onRetry,
   onRunReadiness,
+  onCapabilityApplied,
 }: ModelsTabContentProps): ReactNode {
   const t = useTranslate();
   // Issue #144: source of truth is the helper, not an inline kind check.
@@ -1298,7 +1531,9 @@ function ModelsTabContent({
         models,
         gatewayConfigured,
         readiness,
+        configGeneration,
         onRunReadiness,
+        onCapabilityApplied,
         t,
       })}
 
@@ -1336,6 +1571,7 @@ export function SettingsPanel({
   // configuration changes; a run tagged with an older one is evidence about a replaced gateway.
   const [readinessLedger, setReadinessLedger] = useState<ReadinessLedger>(INITIAL_READINESS_LEDGER);
   const [configGeneration, setConfigGeneration] = useState(0);
+  const configGenerationRef = useRef(0);
   const measuredConfigIdentity = useRef(gatewayConfigIdentity(null, false));
   const [setupOpen, setSetupOpen] = useState(false);
   // Issue #1399: a PAT error in the Figma Snapshot window can deep-link here to open the
@@ -1383,14 +1619,22 @@ export function SettingsPanel({
   // first-run dialog) must not leave this panel presenting the old gateway's verdict as current
   // verification. It happens in the same commit as the config itself so that a readiness run started
   // from the very first render of that configuration is attributed to it, not to its predecessor.
-  const applyConfig = useCallback((next: SafeGatewayConfig | null, present: boolean): void => {
-    setConfig(next);
-    setConfigPresent(present);
-    const identity = gatewayConfigIdentity(next, present);
-    if (measuredConfigIdentity.current === identity) return;
-    measuredConfigIdentity.current = identity;
-    setConfigGeneration((generation) => generation + 1);
+  const advanceConfigGeneration = useCallback((): void => {
+    configGenerationRef.current += 1;
+    setConfigGeneration(configGenerationRef.current);
   }, []);
+
+  const applyConfig = useCallback(
+    (next: SafeGatewayConfig | null, present: boolean): void => {
+      setConfig(next);
+      setConfigPresent(present);
+      const identity = gatewayConfigIdentity(next, present);
+      if (measuredConfigIdentity.current === identity) return;
+      measuredConfigIdentity.current = identity;
+      advanceConfigGeneration();
+    },
+    [advanceConfigGeneration],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -1414,13 +1658,13 @@ export function SettingsPanel({
   // all it takes: every remembered run is tagged with the generation it measured.
   useEffect(() => {
     const onConfigUpdated = (): void => {
-      setConfigGeneration((generation) => generation + 1);
+      advanceConfigGeneration();
     };
     window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
     return () => {
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
     };
-  }, []);
+  }, [advanceConfigGeneration]);
 
   const voicePersonas = useMemo(() => voicePersonasFromModels(models), [models]);
   const gatewayConfigured = configPresent;
@@ -1463,6 +1707,7 @@ export function SettingsPanel({
             modelError={modelError}
             loadingModels={loadingModels}
             readiness={readiness}
+            configGeneration={configGeneration}
             setupOpen={setupOpen}
             config={config}
             onOpenSetup={() => setSetupOpen(true)}
@@ -1470,6 +1715,17 @@ export function SettingsPanel({
             onRetry={() => setReloadTick((tick) => tick + 1)}
             onRunReadiness={(modelId, deep) => {
               void handleRunReadiness(modelId, deep);
+            }}
+            onCapabilityApplied={(updatedModel, observedGeneration) => {
+              if (configGenerationRef.current !== observedGeneration) return;
+              setModels((current) =>
+                current.map((model) => (model.id === updatedModel.id ? updatedModel : model)),
+              );
+              setReadinessLedger((ledger) =>
+                clearReadinessRun(ledger, observedGeneration, updatedModel.id),
+              );
+              notifyGatewayConfigUpdated();
+              setReloadTick((tick) => tick + 1);
             }}
           />
         )}

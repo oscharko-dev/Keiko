@@ -972,6 +972,49 @@ async function applyMultiSourceEntailment(
   );
 }
 
+interface PersistedMultiSourceExchange {
+  readonly userMessageId: string;
+  readonly assistantMessageId: string;
+}
+
+function persistMultiSourceExchange(
+  ctx: MultiSourceAskInput,
+  assistant: GroundedAnswerResult,
+): PersistedMultiSourceExchange {
+  const [userMessage, assistantMessage] = persistGroundedExchange(
+    ctx.deps,
+    ctx.chat.id,
+    redactString(ctx.deps.redactor, ctx.content),
+    redactString(ctx.deps.redactor, assistant.content),
+    ctx.userMessage,
+  );
+  return {
+    userMessageId: userMessage.id,
+    assistantMessageId: assistantMessage.id,
+  };
+}
+
+function recordMultiSourceAnswer(
+  ctx: MultiSourceAskInput,
+  retrieved: readonly RetrievedSource[],
+  answer: GroundedAnswer,
+  assistantMessageId: string,
+  abstained: boolean,
+): void {
+  ctx.deps.store.attachGroundedAnswer(assistantMessageId, answer);
+  if (abstained) return;
+  registerGroundedTurn(
+    {
+      assistantMessageId,
+      chatId: ctx.chat.id,
+      workspaceRoot: retrieved[0]?.pack.scope.workspaceRoot ?? ctx.chat.projectPath,
+      ...(answer.evidenceRunId === undefined ? {} : { evidenceRunId: answer.evidenceRunId }),
+      packs: retrieved.map((source) => source.pack),
+    },
+    ctx.commitTurnId ?? ctx.clientTurnId,
+  );
+}
+
 export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<RouteResult> {
   const query = buildQuery(ctx.content, () => Date.now());
   const labels = sourceLabels(ctx.scopes);
@@ -995,33 +1038,19 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
     return assistant;
   }
   ensureNotCancelled(ctx.signal);
-  const [userMessage, assistantMessage] = persistGroundedExchange(
-    ctx.deps,
-    ctx.chat.id,
-    redactString(ctx.deps.redactor, ctx.content),
-    redactString(ctx.deps.redactor, assistant.content),
-    ctx.userMessage,
-  );
-  const assembled = assembleMultiSourceAnswer(ctx, retrieved, skipped, assistant, {
-    userMessageId: userMessage.id,
-    assistantMessageId: assistantMessage.id,
+  const persisted = persistMultiSourceExchange(ctx, assistant);
+  const answer = await applyMultiSourceEntailment(
+    ctx,
+    assembleMultiSourceAnswer(ctx, retrieved, skipped, assistant, {
+      ...persisted,
+      abstained,
+    }),
+    assistant,
+    retrieved,
     abstained,
-  });
-  const answer = await applyMultiSourceEntailment(ctx, assembled, assistant, retrieved, abstained);
+  );
   ensureNotCancelled(ctx.signal);
-  ctx.deps.store.attachGroundedAnswer(assistantMessage.id, answer);
-  if (!abstained) {
-    registerGroundedTurn(
-      {
-        assistantMessageId: assistantMessage.id,
-        chatId: ctx.chat.id,
-        workspaceRoot: retrieved[0]?.pack.scope.workspaceRoot ?? ctx.chat.projectPath,
-        ...(answer.evidenceRunId === undefined ? {} : { evidenceRunId: answer.evidenceRunId }),
-        packs: retrieved.map((source) => source.pack),
-      },
-      ctx.commitTurnId ?? ctx.clientTurnId,
-    );
-  }
+  recordMultiSourceAnswer(ctx, retrieved, answer, persisted.assistantMessageId, abstained);
   return { status: 200, body: answer };
 }
 

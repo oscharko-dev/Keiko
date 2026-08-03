@@ -56,6 +56,7 @@ import {
   connectorQuery,
   connectorRetrievalTopK,
   estimateConnectorExcerptBytes,
+  hashString32,
   runHybridGroundedAsk,
   type ConnectorRetrieve,
 } from "./grounded-qa-hybrid.js";
@@ -75,6 +76,12 @@ const NOW = 1_700_000_000_000;
 const ANY_LATENCY_MS = expect.any(Number) as unknown as number;
 const CHAT_MODEL = "example-chat-model";
 const HYBRID_ANSWER_SENTINEL = "Hybrid answer from injected seam [1] [2].";
+
+describe("hybrid scope hash compatibility", () => {
+  it("keeps non-BMP connector identities on the UTF-16 hash contract", () => {
+    expect(hashString32("😀")).toBe("cb31c4b8");
+  });
+});
 
 // ─── Store + temp-dir lifecycle ───────────────────────────────────────────────
 

@@ -1137,6 +1137,29 @@ describe("EditorWidget — edit and save", () => {
     });
   });
 
+  it("explains when Local History cannot use the workspace filesystem identity", async () => {
+    await renderLoaded();
+    vi.mocked(saveFilesContent).mockResolvedValueOnce(
+      fileResponse({
+        modifiedAt: 2,
+        content: "const value = 2;\n",
+        localHistoryProtection: {
+          status: "degraded",
+          reason: "filesystem-identity-unsupported",
+          correlationId: "filesystem-identity-correlation",
+        },
+      }),
+    );
+    act(() => {
+      surface.props?.onContentChange({ text: "const value = 2;\n", sizeBytes: 17 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+
+    const warning = await screen.findByTestId("editor-local-history-protection");
+    expect(warning).toHaveTextContent("filesystem with stable file identity");
+    expect(warning).toHaveTextContent("filesystem-identity-correlation");
+  });
+
   it("surfaces a clean external disk edit and reloads only after the user chooses Reload", async () => {
     const FakeSource = installFakeEventSource();
     await renderLoaded();

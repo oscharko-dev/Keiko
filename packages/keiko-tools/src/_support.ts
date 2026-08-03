@@ -30,7 +30,7 @@ export function makeWorkspace(): { root: string; info: WorkspaceInfo } {
 export interface FakeChild extends EventEmitter {
   stdout: EventEmitter;
   stderr: EventEmitter;
-  pid: number;
+  pid: number | undefined;
   kill: (signal?: NodeJS.Signals) => boolean;
   killed: NodeJS.Signals[];
 }

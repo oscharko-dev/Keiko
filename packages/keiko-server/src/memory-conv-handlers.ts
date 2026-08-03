@@ -34,7 +34,11 @@ import {
   type CaptureContext,
   type CaptureOutcome,
 } from "@oscharko-dev/keiko-memory-capture";
-import { MEMORY_TYPES } from "@oscharko-dev/keiko-contracts";
+import {
+  MEMORY_TYPES,
+  type CodingWorkbenchMode,
+  type ConversationMemoryCaptureOutcomeWire,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   MemoryAuditEvent,
   MemoryId,
@@ -54,13 +58,19 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
+import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
+import { persistCapturedMemory } from "./memory-capture-persistence.js";
 import {
   enforcePersistableMemoryOutcome,
   FORGOTTEN_MEMORY_SUPPRESSION_REASON,
   isPersistableMemoryCandidate,
+  memoryCaptureAutoAcceptEligible,
   memoryCapturePolicyForDeps,
+  promoteEligibleMemoryRecord,
+  resolvePersistedMemoryAutonomyMode,
   SENSITIVE_MEMORY_ACTION_BODY,
+  SENSITIVE_MEMORY_REJECTION_REASON,
 } from "./memory-capture-policy.js";
 import { isSuppressedByForgetTombstone } from "./memory-suppression.js";
 import {
@@ -462,7 +472,7 @@ export async function handleMemoryCaptureFromConversation(
   // /api/memory/proposals/:id/accept route can find it by the returned proposalId. Uses the
   // shared `buildMemoryRecordFromProposal` builder for parity with chat-handlers.ts.
   const persistableOutcomes = outcomes.map(enforcePersistableMemoryOutcome);
-  const persistedOutcomes = persistCandidateOutcomes(vault, persistableOutcomes);
+  const persistedOutcomes = persistCandidateOutcomes(deps, vault, persistableOutcomes);
   // Redact every outcome (proposal bodies may carry user text that needs scrubbing).
   return {
     status: 200,
@@ -471,30 +481,51 @@ export async function handleMemoryCaptureFromConversation(
 }
 
 function persistCandidateOutcomes(
+  deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   outcomes: readonly CaptureOutcome[],
-): readonly CaptureOutcome[] {
-  const persisted: CaptureOutcome[] = [];
-  for (const outcome of outcomes) {
-    if (!isPersistableMemoryCandidate(outcome)) {
-      persisted.push(outcome);
-      continue;
-    }
-    const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
-    const record = buildMemoryRecordFromProposal(proposalId, outcome);
-    if (record !== null) {
-      if (isSuppressedByForgetTombstone(vault, record)) {
-        persisted.push({ kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON });
-        continue;
-      }
-      vault.insertMemory(record);
-    }
-    persisted.push(outcome);
-  }
-  return persisted;
+): readonly PersistedCaptureOutcome[] {
+  const mode = resolvePersistedMemoryAutonomyMode(deps);
+  return outcomes.map((outcome) => persistCandidateOutcome(deps, vault, mode, outcome));
 }
 
-function redactCaptureOutcome(deps: UiHandlerDeps, outcome: CaptureOutcome): unknown {
+function persistCandidateOutcome(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  mode: CodingWorkbenchMode,
+  outcome: CaptureOutcome,
+): PersistedCaptureOutcome {
+  if (outcome.kind !== "candidate") return outcome;
+  if (!isPersistableMemoryCandidate(outcome)) {
+    return { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON };
+  }
+  const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
+  const record = buildMemoryRecordFromProposal(proposalId, outcome);
+  if (isSuppressedByForgetTombstone(vault, record)) {
+    return { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON };
+  }
+  const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
+    ? promoteEligibleMemoryRecord(record)
+    : record;
+  const persisted = persistCapturedMemory(vault, candidate, true);
+  const accepted = persisted.memory.status === "accepted";
+  if ((persisted.inserted || persisted.promoted) && accepted) {
+    recordAutoAcceptedMemoryCaptureDecision(deps, mode, "desktop", persisted.memory);
+  }
+  return {
+    ...outcome,
+    proposal: {
+      ...outcome.proposal,
+      proposalId: persisted.memory.id as unknown as MemoryProposalId,
+    },
+    requiresApproval: outcome.requiresApproval,
+    status: accepted ? "accepted" : "proposed",
+  };
+}
+
+type PersistedCaptureOutcome = ConversationMemoryCaptureOutcomeWire;
+
+function redactCaptureOutcome(deps: UiHandlerDeps, outcome: PersistedCaptureOutcome): unknown {
   if (
     outcome.kind === "candidate" &&
     (outcome.requiresApproval || outcome.proposal.provenance.sensitivity !== "public")

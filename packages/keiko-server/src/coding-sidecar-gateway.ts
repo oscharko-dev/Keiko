@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
-  Gateway,
   resolveCodingSafeSidecarGatewayProfile,
+  type Gateway,
   type GatewayConfig,
   type GatewayRequest,
   type GatewayStreamChunk,
@@ -16,7 +16,12 @@ import {
   type CodingWorkbenchSidecarGatewayRunMetadata,
   type CodingWorkbenchSidecarGatewayResult,
 } from "@oscharko-dev/keiko-contracts";
-import { currentGatewayConfig, currentGatewayVerification, type UiHandlerDeps } from "./deps.js";
+import {
+  currentGateway,
+  currentGatewayConfig,
+  currentGatewayVerification,
+  type UiHandlerDeps,
+} from "./deps.js";
 import { OPENCODE_RUNTIME_MODEL_ALIAS } from "./coding-runtime/opencodeLaunchProfile.js";
 import { hasExactOpenCodeVisibleToolContract } from "./coding-runtime/opencodeToolSchemas.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
@@ -138,12 +143,14 @@ export interface CodingSidecarGatewayEvidenceAggregator {
 
 interface ResolvedGatewayProfile {
   readonly config: GatewayConfig | undefined;
+  readonly gateway: Gateway | undefined;
   readonly modelSource: CodingWorkbenchModelSource;
   readonly result: CodingWorkbenchSidecarGatewayResult;
 }
 
 type AvailableGatewayProfile = ResolvedGatewayProfile & {
   readonly config: GatewayConfig;
+  readonly gateway: Gateway;
   readonly result: Extract<CodingWorkbenchSidecarGatewayResult, { readonly status: "available" }>;
 };
 
@@ -165,28 +172,27 @@ function isCodingSidecarGatewayChatRole(
   return value === "system" || value === "user" || value === "assistant" || value === "tool";
 }
 
-function chatFactoryFor(deps: UiHandlerDeps): CodingSidecarGatewayChatFactory {
-  return deps.codingSidecarGatewayChatFactory ?? defaultChatFactory;
+function chatFactoryFor(deps: UiHandlerDeps, gateway: Gateway): CodingSidecarGatewayChatFactory {
+  return deps.codingSidecarGatewayChatFactory ?? defaultChatFactoryFor(gateway);
 }
 
-function defaultChatFactory(
-  config: GatewayConfig,
-  modelId: string,
-): (request: GatewayRequest) => Promise<NormalizedResponse> {
-  const gateway = new Gateway(config);
-  return (request: GatewayRequest) => gateway.chat({ ...request, modelId });
+function defaultChatFactoryFor(gateway: Gateway): CodingSidecarGatewayChatFactory {
+  return (_config, modelId) => {
+    return (request: GatewayRequest) => gateway.chat({ ...request, modelId });
+  };
 }
 
-function defaultChatStreamFactory(
-  config: GatewayConfig,
-  modelId: string,
-): (request: GatewayRequest) => AsyncIterable<GatewayStreamChunk> {
-  const gateway = new Gateway(config);
-  return (request: GatewayRequest) => gateway.chatStream({ ...request, modelId });
+function defaultChatStreamFactoryFor(gateway: Gateway): CodingSidecarGatewayChatStreamFactory {
+  return (_config, modelId) => {
+    return (request: GatewayRequest) => gateway.chatStream({ ...request, modelId });
+  };
 }
 
-function chatStreamFactoryFor(deps: UiHandlerDeps): CodingSidecarGatewayChatStreamFactory {
-  return deps.codingSidecarGatewayChatStreamFactory ?? defaultChatStreamFactory;
+function chatStreamFactoryFor(
+  deps: UiHandlerDeps,
+  gateway: Gateway,
+): CodingSidecarGatewayChatStreamFactory {
+  return deps.codingSidecarGatewayChatStreamFactory ?? defaultChatStreamFactoryFor(gateway);
 }
 
 function unavailableError(): RouteResult {
@@ -441,6 +447,7 @@ function currentModelSource(deps: UiHandlerDeps): CodingWorkbenchModelSource {
 
 function resolveGatewayProfile(deps: UiHandlerDeps): ResolvedGatewayProfile {
   const config = currentGatewayConfig(deps);
+  const gateway = config === undefined ? undefined : currentGateway(deps);
   const modelSource = currentModelSource(deps);
   const result = resolveCodingSafeSidecarGatewayProfile(config, {
     deploymentPolicyDisabled: sidecarPolicyDisabled(deps),
@@ -451,7 +458,7 @@ function resolveGatewayProfile(deps: UiHandlerDeps): ResolvedGatewayProfile {
     // its own live error, while the projection is what a surface is allowed to CLAIM.
     gatewayVerification: currentGatewayVerification(deps),
   });
-  return { config, modelSource, result };
+  return { config, gateway, modelSource, result };
 }
 
 function cancellationRegistry(
@@ -835,7 +842,11 @@ function reserveGatewayPromptBudget(
 function isAvailableGatewayProfile(
   resolved: ResolvedGatewayProfile,
 ): resolved is AvailableGatewayProfile {
-  return resolved.result.status === "available" && resolved.config !== undefined;
+  return (
+    resolved.result.status === "available" &&
+    resolved.config !== undefined &&
+    resolved.gateway !== undefined
+  );
 }
 
 function unavailableGatewayProfile(
@@ -888,16 +899,21 @@ interface GatewayChatDelivery {
   readonly upstreamStreamingSupported: boolean;
 }
 
+interface PinnedGatewayBinding {
+  readonly config: GatewayConfig;
+  readonly gateway: Gateway;
+}
+
 async function executeGatewayChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  config: GatewayConfig,
+  binding: PinnedGatewayBinding,
   parsed: CodingSidecarGatewayChatCompletionRequest,
   runId: string,
   delivery: GatewayChatDelivery,
 ): Promise<RouteResult | typeof STREAMING> {
   const { modelAlias, maxOutputTokens, upstreamStreamingSupported } = delivery;
-  const cancellation = gatewayRequestCancellation(ctx, deps, config, modelAlias, runId);
+  const cancellation = gatewayRequestCancellation(ctx, deps, binding.config, modelAlias, runId);
   const request = buildChatRequest(parsed, modelAlias, cancellation.signal, maxOutputTokens);
   let bufferedStream: BufferedOpenAiStreamSession | undefined;
   try {
@@ -905,7 +921,7 @@ async function executeGatewayChat(
       return await streamGatewayChat(
         ctx,
         deps,
-        config,
+        binding,
         modelAlias,
         request,
         runId,
@@ -915,7 +931,7 @@ async function executeGatewayChat(
     if (parsed.stream) bufferedStream = beginBufferedOpenAiStream(ctx, modelAlias);
     return await executeBufferedGatewayChat(
       deps,
-      config,
+      binding,
       modelAlias,
       request,
       runId,
@@ -935,14 +951,14 @@ async function executeGatewayChat(
 
 async function executeBufferedGatewayChat(
   deps: UiHandlerDeps,
-  config: GatewayConfig,
+  binding: PinnedGatewayBinding,
   modelAlias: string,
   request: GatewayRequest,
   runId: string,
   cancellationSignal: AbortSignal,
   stream: BufferedOpenAiStreamSession | undefined,
 ): Promise<RouteResult | typeof STREAMING> {
-  const response = await chatFactoryFor(deps)(config, modelAlias)(request);
+  const response = await chatFactoryFor(deps, binding.gateway)(binding.config, modelAlias)(request);
   const metrics = outputMetrics(response);
   if (cancellationSignal.aborted) {
     recordGatewayOutcome(deps, runId, "cancelled", metrics.completionTokens, metrics.outputBytes);
@@ -972,7 +988,7 @@ async function executeBufferedGatewayChat(
 async function streamGatewayChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  config: GatewayConfig,
+  binding: PinnedGatewayBinding,
   modelId: string,
   request: GatewayRequest,
   runId: string,
@@ -980,7 +996,10 @@ async function streamGatewayChat(
 ): Promise<RouteResult | typeof STREAMING> {
   let iterator: AsyncIterator<GatewayStreamChunk>;
   try {
-    iterator = chatStreamFactoryFor(deps)(config, modelId)(request)[Symbol.asyncIterator]();
+    iterator = chatStreamFactoryFor(deps, binding.gateway)(
+      binding.config,
+      modelId,
+    )(request)[Symbol.asyncIterator]();
   } catch (error) {
     recordGatewayOutcome(deps, runId, "failed", 0, 0);
     emitGatewayFailureDiagnostic(ctx, deps, error);
@@ -1378,7 +1397,7 @@ export async function handleCodingSidecarGatewayChatCompletions(
     }
     noteToolAdoptionGap(ctx, deps, authentication.runId, parsed.messages);
   }
-  return executeBudgetedGatewayChat(ctx, deps, resolved.config, parsed, authentication, {
+  return executeBudgetedGatewayChat(ctx, deps, resolved, parsed, authentication, {
     modelAlias: resolved.result.modelAlias,
     maxOutputTokens: resolved.result.runMetadata.maxOutputTokens,
     upstreamStreamingSupported: upstreamGatewayStreamingSupported(
@@ -1391,7 +1410,7 @@ export async function handleCodingSidecarGatewayChatCompletions(
 function executeBudgetedGatewayChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  config: GatewayConfig,
+  binding: PinnedGatewayBinding,
   parsed: CodingSidecarGatewayChatCompletionRequest,
   authentication: { readonly capability: string; readonly runId: string },
   profile: {
@@ -1403,7 +1422,7 @@ function executeBudgetedGatewayChat(
   if (!reserveGatewayPromptBudget(deps, authentication.capability, authentication.runId, parsed)) {
     return Promise.resolve(forbiddenGatewayRequest());
   }
-  return executeGatewayChat(ctx, deps, config, parsed, authentication.runId, profile);
+  return executeGatewayChat(ctx, deps, binding, parsed, authentication.runId, profile);
 }
 
 function fixedReadinessResponse(

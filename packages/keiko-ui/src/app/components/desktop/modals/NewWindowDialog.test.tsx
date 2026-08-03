@@ -34,6 +34,12 @@ vi.mock("@/lib/api", () => ({
   fetchProjects: vi.fn(async () => ({ projects: [] })),
   startRun: vi.fn(),
   createProject: vi.fn(),
+  projectResponseWarningMessage: (response: {
+    readonly warning?: { readonly message: string; readonly correlationId: string };
+  }): string | undefined =>
+    response.warning === undefined
+      ? undefined
+      : `${response.warning.message} Support ID: ${response.warning.correlationId}`,
   updateProject: vi.fn(),
   fetchNativeFileDialogCapability: vi.fn(async () => ({ supported: true })),
   openNativeFileDialog: vi.fn(async () => ({ cancelled: true, selections: [] })),
@@ -653,6 +659,11 @@ describe("NewWindowDialog agents: start-run contract", () => {
       });
     vi.mocked(createProject).mockResolvedValue({
       project: project("/external", "External"),
+      warning: {
+        code: "PROJECT_TRUST_GRANT_FAILED",
+        message: "The project was registered but remains restricted.",
+        correlationId: "new-window-trust-correlation",
+      },
     });
     vi.mocked(startRun).mockResolvedValue({
       runId: "run 2",
@@ -686,6 +697,7 @@ describe("NewWindowDialog agents: start-run contract", () => {
     fireEvent.click(screen.getByRole("button", { name: "Register repository" }));
 
     await waitFor(() => expect(createProject).toHaveBeenCalledWith({ path: "/external" }));
+    expect(await screen.findByText(/new-window-trust-correlation/u)).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.queryByText("Repository is not registered.")).not.toBeInTheDocument(),
     );

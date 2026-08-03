@@ -17,6 +17,7 @@ import {
   fetchRunReport,
   fetchWorkflows,
   patchChatMessage,
+  projectResponseWarningMessage,
   runGatewayReadiness,
   sendDesktopChat,
   sendDesktopChatStream,
@@ -38,7 +39,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function okBody(): unknown {
+function okBody(): Record<string, unknown> {
   return {
     ok: true,
     status: "ok",
@@ -77,6 +78,53 @@ function streamResponse(text: string): Response {
 describe("API BFF boundary helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("preserves project trust warnings with their support id", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse({
+            ...okBody(),
+            warning: {
+              code: "PROJECT_TRUST_GRANT_FAILED",
+              message: "The project was registered but remains restricted.",
+              correlationId: "project-trust-correlation",
+            },
+          }),
+        ),
+      ),
+    );
+
+    const response = await createProject({ path: "/repo" });
+
+    expect(projectResponseWarningMessage(response)).toBe(
+      "The project was registered but remains restricted. Support ID: project-trust-correlation",
+    );
+  });
+
+  it("preserves a project trust warning that has no support id", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse({
+            ...okBody(),
+            warning: {
+              code: "PROJECT_TRUST_GRANT_FAILED",
+              message: "The project was registered but remains restricted.",
+            },
+          }),
+        ),
+      ),
+    );
+
+    const response = await createProject({ path: "/repo" });
+
+    expect(projectResponseWarningMessage(response)).toBe(
+      "The project was registered but remains restricted.",
+    );
   });
 
   it("encodes high-risk chat, project, run, and evidence routes with CSRF on mutations", async () => {

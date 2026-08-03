@@ -15,8 +15,8 @@ import {
   resolveCodingSafeSidecarGatewayProfile,
   resolveOutboundHttpEgressConfig,
   selectConfiguredModel,
-  GatewayError,
   Gateway,
+  GatewayError,
   resolveCostClass,
   type EnvSource,
   type GatewayRequest,
@@ -24,6 +24,7 @@ import {
   type GatewayConfig,
   type LiteLLMRerankRequest,
   type ModelProviderConfig,
+  type ModelCapability,
   type NormalizedResponse,
   type OpenAIEmbeddingBatchOutcome,
   type OpenAIEmbeddingBatchRequest,
@@ -72,6 +73,7 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:pa
 import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
+import { gatewayForConfig, gatewayForRuntimeConfig } from "./gateway-instance-cache.js";
 import {
   createConversationAttachmentStore,
   type ConversationAttachmentStore,
@@ -267,6 +269,11 @@ import { resolveProductionOpenCodeActivation } from "./coding-runtime/production
 import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextConnector.js";
+import { createGitHubCodeContextApiPort } from "./coding-context/githubCodeContextPort.js";
+import {
+  createJiraCodeContextHttpPort,
+  parseJiraCodeContextPortConfig,
+} from "./coding-context/jiraCodeContextPort.js";
 import {
   createAutonomousDeliveryApprovalStore,
   type AutonomousDeliveryApprovalStore,
@@ -339,6 +346,32 @@ export interface RuntimeGatewayConfig {
    */
   verification(): GatewayVerificationState;
   recordVerification(state: GatewayVerificationState, observedGeneration?: number): void;
+  verifiedCapability(modelId: string): VerifiedModelCapabilityObservation | undefined;
+  recordVerifiedCapability(
+    modelId: string,
+    fields: VerifiedModelCapabilityFields,
+    checkedAt: string,
+    observedGeneration?: number,
+  ): void;
+  readonly clearVerifiedCapability: (modelId: string, observedGeneration?: number) => boolean;
+}
+
+export type VerifiedModelCapabilityFields = Partial<
+  Pick<
+    ModelCapability,
+    | "streaming"
+    | "toolCalling"
+    | "structuredOutput"
+    | "supportsImageInput"
+    | "supportsDocumentInput"
+  >
+>;
+
+export interface VerifiedModelCapabilityObservation {
+  readonly modelId: string;
+  readonly generation: number;
+  readonly checkedAt: string;
+  readonly fields: VerifiedModelCapabilityFields;
 }
 
 export interface GatewayDiscoveredModels {
@@ -346,6 +379,13 @@ export interface GatewayDiscoveredModels {
   readonly chatModelIds: readonly string[];
   readonly embeddingModelIds: readonly string[];
   readonly imageInputModelIds?: readonly string[];
+  readonly modelMetadata?: Readonly<Record<string, GatewayDiscoveredModelMetadata>>;
+}
+
+export interface GatewayDiscoveredModelMetadata {
+  readonly contextWindow?: number | undefined;
+  readonly maxOutputTokens?: number | undefined;
+  readonly toolCalling?: boolean | undefined;
 }
 
 export interface GatewaySetupTestResult {
@@ -988,6 +1028,7 @@ function createRuntimeGatewayConfig(
   // never seeded from disk: a probe outcome describes a live endpoint at a point in time, not a
   // stored setting, and reloading one would let a surface claim health nobody observed.
   let verification: GatewayVerificationState = UNVERIFIED_GATEWAY;
+  const verifiedCapabilities = new Map<string, VerifiedModelCapabilityObservation>();
   // Bumped on every set(): a probe captures the generation it observed, and a verdict carrying a
   // stale generation is dropped, so a slow probe of the PREVIOUS config can never stamp the
   // replacement config with an outcome nobody measured against it (#2847 review).
@@ -1000,6 +1041,7 @@ function createRuntimeGatewayConfig(
       config = next;
       present = nextPresent;
       verification = UNVERIFIED_GATEWAY;
+      verifiedCapabilities.clear();
       generation += 1;
     },
     generation: (): number => generation,
@@ -1008,11 +1050,34 @@ function createRuntimeGatewayConfig(
       if (observedGeneration !== undefined && observedGeneration !== generation) return;
       verification = state;
     },
+    verifiedCapability: (modelId): VerifiedModelCapabilityObservation | undefined =>
+      verifiedCapabilities.get(modelId),
+    recordVerifiedCapability: (modelId, fields, checkedAt, observedGeneration): void => {
+      if (observedGeneration !== undefined && observedGeneration !== generation) return;
+      verifiedCapabilities.set(modelId, {
+        modelId,
+        generation,
+        checkedAt,
+        fields: { ...fields },
+      });
+    },
+    clearVerifiedCapability: (modelId, observedGeneration): boolean => {
+      if (observedGeneration !== undefined && observedGeneration !== generation) return false;
+      return verifiedCapabilities.delete(modelId);
+    },
   };
 }
 
 export function currentGatewayConfig(deps: UiHandlerDeps): GatewayConfig | undefined {
   return deps.gatewayConfig?.current() ?? deps.config;
+}
+
+/** Resolves the process-shared gateway while honoring live runtime-config generations. */
+export function currentGateway(deps: UiHandlerDeps): Gateway | undefined {
+  if (deps.gatewayConfig !== undefined) {
+    return gatewayForRuntimeConfig(deps.gatewayConfig);
+  }
+  return deps.config === undefined ? undefined : gatewayForConfig(deps.config);
 }
 
 /**
@@ -1353,11 +1418,11 @@ export function currentEvidenceRequiresFullStringRedaction(deps: UiHandlerDeps):
 // config was resolved so the run route answers 400 NO_MODEL rather than constructing a broken port.
 function defaultModelPortFactory(runtimeConfig: RuntimeGatewayConfig): ModelPortFactory {
   return (): ModelPort | undefined => {
-    const config = runtimeConfig.current();
-    if (config === undefined) {
+    const gateway = gatewayForRuntimeConfig(runtimeConfig);
+    if (gateway === undefined) {
       return undefined;
     }
-    return new GatewayModelPort(new Gateway(config));
+    return new GatewayModelPort(gateway);
   };
 }
 
@@ -2064,6 +2129,8 @@ function buildUpdateRemediation(options: {
   readonly runtimeStateDir: string;
   readonly runtimeConfig: RuntimeGatewayConfig;
   readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly redactString: (value: string) => string;
 }): UpdateRemediationManager {
   if (options.injected !== undefined) return options.injected;
   const localKnowledge = buildLocalKnowledgeRemediation({
@@ -2074,6 +2141,8 @@ function buildUpdateRemediation(options: {
   return createUpdateRemediationManager({
     localState: options.updateLocalState,
     localKnowledge,
+    diagnostics: options.diagnostics,
+    redactString: options.redactString,
   });
 }
 
@@ -2538,6 +2607,8 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
     runtimeStateDir: args.runtimeStateDir,
     runtimeConfig: args.runtimeConfig,
     localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
+    diagnostics: args.options.diagnostics,
+    redactString: args.redactString,
   });
   const memoryVault = buildMemoryVault(args.redactString, args.evidenceStore, args.options.env);
   const { workspaceScriptTrust, managedLspControl, disposeTrustLspBridge } =
@@ -3495,6 +3566,7 @@ function buildIntegrationUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): Integra
 }
 
 type OptionalUiHandlerDeps = ReturnType<typeof buildMemoryDeniedCategoryMatchersDependency> &
+  ReturnType<typeof buildCodingContextPortsDependency> &
   ReturnType<typeof buildDapDebugDependency> &
   ReturnType<typeof buildWorkspaceLifecycleDependency> &
   ReturnType<typeof optionalPersistenceServices> &
@@ -3506,10 +3578,49 @@ function buildOptionalUiHandlerDeps(
 ): OptionalUiHandlerDeps {
   return {
     ...buildMemoryDeniedCategoryMatchersDependency(args.options),
+    ...buildCodingContextPortsDependency(args),
     ...buildDapDebugDependency(services.dapRuntime),
     ...optionalPersistenceServices(args.bundle),
     ...buildWorkspaceLifecycleDependency(services.workspaceLifecycle),
     ...services.peripherals,
+  };
+}
+
+function buildCodingContextPortsDependency(
+  args: UiHandlerDepsAssemblyArgs,
+): Pick<UiHandlerDeps, "codingContextGitHubPort" | "codingContextJiraPort"> {
+  const githubPort =
+    args.options.env.GITHUB_CONNECTOR_AUTHORIZED !== "true" ||
+    args.bundle.preferredProjectPath === undefined
+      ? undefined
+      : createGitHubCodeContextApiPort({
+          workspace: {
+            root: args.bundle.preferredProjectPath,
+            name: undefined,
+            version: undefined,
+            testFramework: "unknown",
+            sourceDirs: [],
+            testDirs: [],
+            languages: [],
+            ignoreLines: [],
+          },
+          processEnv: args.options.env,
+        });
+  let jiraPort: JiraCodeContextHttpPort | undefined;
+  try {
+    const jiraConfig = parseJiraCodeContextPortConfig(args.options.env);
+    jiraPort = jiraConfig === undefined ? undefined : createJiraCodeContextHttpPort(jiraConfig);
+  } catch (error) {
+    emitCompositionDiagnostic(
+      args.options.diagnostics,
+      "deps.codingContextJiraPort",
+      "server-operation-failed",
+      error,
+    );
+  }
+  return {
+    ...(githubPort === undefined ? {} : { codingContextGitHubPort: githubPort }),
+    ...(jiraPort === undefined ? {} : { codingContextJiraPort: jiraPort }),
   };
 }
 

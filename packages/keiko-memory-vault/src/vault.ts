@@ -54,10 +54,12 @@ import {
 } from "./access.js";
 import {
   deleteTombstonesByScopeBeforeRows,
+  hasSemanticallySimilarForgetTombstoneRow,
   insertTombstoneRow,
-  listForgetTombstoneVectors,
+  listTombstonesPageRows,
   listTombstonesByScopeRows,
   selectForgetSuppressionBodyHashPresence,
+  tombstoneLedgerCursorBelongsToScopes,
   updateTombstoneBodyHashByScopeRows,
 } from "./tombstones.js";
 import {
@@ -68,7 +70,11 @@ import {
   gateMemoryScope,
 } from "./validate.js";
 import { redactMemoryEdge, redactMemoryRecord, redactTombstone } from "./redact-record.js";
-import { MemoryStorageError, MemoryStoragePreconditionError } from "./errors.js";
+import {
+  MemoryStorageError,
+  MemoryStoragePreconditionError,
+  MemoryStorageValidationError,
+} from "./errors.js";
 import {
   memoryBodySuppressionHash,
   memoryBodySuppressionHashForVault,
@@ -87,6 +93,8 @@ import type {
   MemoryGraphPrecondition,
   MemoryGraphMutationResult,
   MemoryTombstone,
+  MemoryTombstoneLedgerCursor,
+  MemoryTombstonePage,
   MemoryUpdatePatch,
   MemoryVaultFactoryOptions,
   MemoryVaultStore,
@@ -613,13 +621,54 @@ type EmbeddingOps = Pick<
 type TombstoneAndAccessOps = Pick<
   MemoryVaultStore,
   | "listTombstonesByScope"
+  | "listTombstonesPage"
   | "hasForgetTombstoneForBody"
-  | "forgetTombstoneVectors"
+  | "hasSemanticallySimilarForgetTombstone"
   | "purgeTombstonesByScopeBefore"
   | "recordAccess"
   | "recordOutcome"
   | "getAccessStats"
 >;
+
+// The public route requests one look-ahead row beyond its maximum 200-item response page so it can
+// issue a continuation cursor without an unbounded count/materialization read.
+const MAX_TOMBSTONE_LEDGER_PAGE_ROWS = 201;
+
+function gateTombstonePageLimit(limit: number): number {
+  if (!Number.isSafeInteger(limit) || limit <= 0 || limit > MAX_TOMBSTONE_LEDGER_PAGE_ROWS) {
+    throw new MemoryStorageValidationError("Invalid tombstone page limit.", []);
+  }
+  return limit;
+}
+
+function gateTombstoneLedgerCursor(
+  db: DatabaseSync,
+  scopes: readonly MemoryScope[],
+  after: MemoryTombstoneLedgerCursor | undefined,
+): void {
+  if (after === undefined) return;
+  const shapeIsValid =
+    Number.isSafeInteger(after.forgottenAt) &&
+    after.forgottenAt >= 0 &&
+    after.id.length > 0 &&
+    after.id.length <= 200;
+  if (!shapeIsValid || !tombstoneLedgerCursorBelongsToScopes(db, scopes, after)) {
+    throw new MemoryStorageValidationError("Invalid tombstone page cursor.", []);
+  }
+}
+
+function validatedTombstonePage(
+  db: DatabaseSync,
+  opts: ResolvedOptions,
+  scopes: readonly MemoryScope[],
+  limit: number,
+  after: MemoryTombstoneLedgerCursor | undefined,
+): MemoryTombstonePage {
+  for (const scope of scopes) gateMemoryScope(scope);
+  const boundedLimit = gateTombstonePageLimit(limit);
+  gateTombstoneLedgerCursor(db, scopes, after);
+  return listTombstonesPageRows(db, scopes, opts.cipher, boundedLimit, after);
+}
 
 function buildEdgeOps(db: DatabaseSync, opts: ResolvedOptions): EdgeOps {
   return {
@@ -701,6 +750,8 @@ function buildTombstoneAndAccessOps(
       gateMemoryScope(scope);
       return listTombstonesByScopeRows(db, scope, opts.cipher);
     },
+    listTombstonesPage: (scopes, limit, after): MemoryTombstonePage =>
+      validatedTombstonePage(db, opts, scopes, limit, after),
     hasForgetTombstoneForBody: (scope: MemoryScope, body: string): boolean => {
       gateMemoryScope(scope);
       const currentHash = opts.bodySuppressionHash(body);
@@ -709,20 +760,16 @@ function buildTombstoneAndAccessOps(
       // reason column. Same suppression decision as scanning + decrypting every tombstone, but O(1)
       // rows and zero reason decrypts (strengthens confidentiality on this hot path).
       const presence = selectForgetSuppressionBodyHashPresence(db, scope, currentHash, legacyHash);
-      if (presence.current) {
-        return true;
-      }
-      if (!presence.legacy) {
-        return false;
-      }
+      if (presence.current) return true;
+      if (!presence.legacy) return false;
       withSidecarHardening(opts, () => {
         updateTombstoneBodyHashByScopeRows(db, scope, legacyHash, currentHash);
       });
       return true;
     },
-    forgetTombstoneVectors: (scope: MemoryScope): readonly Float32Array[] => {
+    hasSemanticallySimilarForgetTombstone: (scope, candidate, threshold): boolean => {
       gateMemoryScope(scope);
-      return listForgetTombstoneVectors(db, scope, opts.cipher);
+      return hasSemanticallySimilarForgetTombstoneRow(db, scope, opts.cipher, candidate, threshold);
     },
     purgeTombstonesByScopeBefore: (scope: MemoryScope, forgottenBeforeMs: number): number => {
       return withSidecarHardening(opts, () => {

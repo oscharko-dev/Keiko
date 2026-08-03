@@ -15,7 +15,6 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
-  Gateway,
   listConfiguredCapabilities,
   findConfiguredCapability,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -33,7 +32,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { currentGatewayConfig } from "../deps.js";
+import { currentGateway, currentGatewayConfig } from "../deps.js";
 import {
   normaliseQiModelPolicy,
   recommendQiModelPolicy,
@@ -369,9 +368,9 @@ async function preflightStage(
     };
   }
   try {
-    const response = await new Gateway(config).chat(
-      requestForPreflight(stage, modelId, capability),
-    );
+    const gateway = currentGateway(deps);
+    if (gateway === undefined) throw new TypeError("Model gateway is unavailable.");
+    const response = await gateway.chat(requestForPreflight(stage, modelId, capability));
     if (stage === "judge" && tryParseJudgeVerdict(response.content) === null) {
       return {
         stage,
