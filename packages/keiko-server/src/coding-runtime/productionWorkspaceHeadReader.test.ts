@@ -129,6 +129,34 @@ describe("production workspace HEAD reader worktree layouts", () => {
     expect(readProductionWorkspaceHead(fixture.worktreeRoot, fixture.worktreeRoot)).toBe(MAIN_SHA);
   });
 
+  it("matches linked-worktree internals using platform filesystem identity", () => {
+    const fixture = worktreeFixture();
+    const actualGitDir = realpathSync(fixture.worktreeGitDir);
+    const disguisedGitDir = `${actualGitDir.slice(0, -2)}WT`;
+    const actualPath = (path: string): string =>
+      path.startsWith(disguisedGitDir)
+        ? `${actualGitDir}${path.slice(disguisedGitDir.length)}`
+        : path;
+    const fileSystem: ProductionWorkspaceHeadFileSystem = {
+      close: closeSync,
+      fstat: fstatSync,
+      lstat: (path) => lstatSync(actualPath(path)),
+      open: (path) => openSync(actualPath(path), "r"),
+      read: readSync,
+      realpath: (path) => {
+        if (path.startsWith(disguisedGitDir)) return path;
+        const canonical = realpathSync(actualPath(path));
+        return canonical === actualGitDir ? disguisedGitDir : canonical;
+      },
+    };
+    const expected =
+      process.platform === "darwin" || process.platform === "win32" ? MAIN_SHA : undefined;
+
+    expect(readProductionWorkspaceHead(fixture.worktreeRoot, fixture.repoRoot, fileSystem)).toBe(
+      expected,
+    );
+  });
+
   it("fails closed when the commondir pointer escapes the repository git directory", () => {
     const fixture = worktreeFixture();
     writeFileSync(join(fixture.worktreeGitDir, "commondir"), "../../../..\n");

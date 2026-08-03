@@ -236,7 +236,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       messageTurns: new Map(),
       feed: emptyFeed(input.runId, instant(now)),
     };
-    if (!validOpenInput(input, expiresAtMs, now)) this.expireCurrent("expiry");
+    if (!validOpenInput(input, expiresAtMs, now)) this.expireCurrent();
     else {
       this.lastEmittedDropCount = 0;
       this.scheduleExpiry(this.entry);
@@ -286,11 +286,11 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
 
   public purge(runId: string, reason: CodingSafeActivityPurgeReason): void {
     if (this.entry?.runId !== runId) return;
-    this.expireCurrent(reason);
+    this.purgeCurrent(reason);
   }
 
   public purgeAll(reason: CodingSafeActivityPurgeReason): void {
-    if (this.entry !== undefined) this.expireCurrent(reason);
+    if (this.entry !== undefined) this.purgeCurrent(reason);
   }
 
   public markUnavailable(runId: string): void {
@@ -339,11 +339,11 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (entry === undefined || (runId !== undefined && entry.runId !== runId)) return undefined;
     if (entry.feed.availability === "unavailable") return entry;
     if (this.now() >= entry.expiresAtMs) {
-      this.expireCurrent("expiry");
+      this.expireCurrent();
       return undefined;
     }
     if (!safeWorkspaceCheck(entry.workspaceIsCurrent)) {
-      this.expireCurrent("workspace-switch");
+      this.expireCurrent();
       return undefined;
     }
     return entry;
@@ -354,13 +354,23 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     return false;
   }
 
-  private expireCurrent(_reason: CodingSafeActivityPurgeReason): void {
+  private expireCurrent(): void {
+    const subscribers = [...this.subscribers];
+    this.clearCurrentEntry();
+    this.notifySubscribers(subscribers, null);
+  }
+
+  private purgeCurrent(_reason: CodingSafeActivityPurgeReason): void {
+    const subscribers = [...this.subscribers];
+    this.clearCurrentEntry();
+    this.subscribers.clear();
+    this.notifySubscribers(subscribers, null);
+  }
+
+  private clearCurrentEntry(): void {
     if (this.expiryTimer !== undefined) clearTimeout(this.expiryTimer);
     this.expiryTimer = undefined;
     this.entry = undefined;
-    const subscribers = [...this.subscribers];
-    this.subscribers.clear();
-    this.notifySubscribers(subscribers, null);
   }
 
   private notify(): void {
@@ -404,7 +414,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (this.expiryTimer !== undefined) clearTimeout(this.expiryTimer);
     const delay = Math.max(0, entry.expiresAtMs - this.now());
     this.expiryTimer = setTimeout(() => {
-      if (this.entry === entry) this.expireCurrent("expiry");
+      if (this.entry === entry) this.expireCurrent();
     }, delay);
     this.expiryTimer.unref();
   }

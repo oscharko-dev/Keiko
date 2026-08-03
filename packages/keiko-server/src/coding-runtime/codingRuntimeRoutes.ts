@@ -27,7 +27,7 @@ import {
   type RouteDefinition,
   type RouteResult,
 } from "../routes.js";
-import { SSE_HEADERS } from "../sse.js";
+import { SSE_HEADERS, startSseHeartbeat } from "../sse.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 
@@ -132,10 +132,7 @@ async function withBody(work: () => Promise<RouteResult>): Promise<RouteResult> 
         status: 413,
         body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit."),
       };
-    return {
-      status: 400,
-      body: errorBody("CODING_RUNTIME_INVALID_INTENT", "Runtime request was rejected."),
-    };
+    throw error;
   }
 }
 
@@ -521,6 +518,7 @@ export function openCodingRuntimeSse(
   lastEventId: string | undefined,
 ): void {
   res.writeHead(200, SSE_HEADERS);
+  startSseHeartbeat(res);
   let detach = (): void => undefined;
   let closed = false;
   const close = (): void => {

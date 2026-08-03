@@ -7,7 +7,9 @@ import {
   realpathSync,
   type Stats,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, join, resolve } from "node:path";
+
+import { containsPath } from "@oscharko-dev/keiko-git";
 
 const HEAD_BYTES = 4_096;
 const PACKED_REFS_BYTES = 1_048_576;
@@ -88,7 +90,7 @@ function resolveGitDir(
   if (pointer === undefined) return undefined;
   const pointed = resolve(workspaceRoot, pointer);
   const gitDir = canonicalDirectory(pointed, fileSystem);
-  return contained(commonRoot, gitDir) ? gitDir : undefined;
+  return containsPath(commonRoot, gitDir) ? gitDir : undefined;
 }
 
 function readReference(
@@ -114,7 +116,7 @@ function resolveCommonDir(
   if (pointer === undefined || pointer.length === 0) return commonRoot;
   const pointed = resolve(gitDir, pointer);
   const candidate = canonicalDirectory(pointed, fileSystem);
-  if (candidate !== commonRoot && !contained(commonRoot, candidate)) {
+  if (candidate !== commonRoot && !containsPath(commonRoot, candidate)) {
     throw new Error("git-common-dir-invalid");
   }
   return candidate;
@@ -127,7 +129,7 @@ function readLooseReference(
 ): string | undefined {
   try {
     const candidate = resolve(root, reference);
-    if (!contained(root, dirname(candidate)) || fileSystem.realpath(candidate) !== candidate) {
+    if (!containsPath(root, dirname(candidate)) || fileSystem.realpath(candidate) !== candidate) {
       return undefined;
     }
     const value = boundedText(candidate, HEAD_BYTES, fileSystem)?.trim();
@@ -262,9 +264,4 @@ function parseGitPointer(value: string | undefined): string | undefined {
 
 function safeRef(reference: string): boolean {
   return REF.test(reference) && !reference.includes("..") && !reference.includes("//");
-}
-
-function contained(root: string, candidate: string): boolean {
-  const rel = relative(root, candidate);
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }

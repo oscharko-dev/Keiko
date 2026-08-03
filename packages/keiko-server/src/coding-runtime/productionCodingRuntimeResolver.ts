@@ -43,6 +43,7 @@ import {
 } from "./researchApprovalIssuance.js";
 import {
   createResearchGrantRegistry,
+  RESEARCH_GRANT_DEFAULT_MAX_TTL_MS,
   type ResearchGrantRegistry,
 } from "./researchGrantRegistry.js";
 import {
@@ -74,6 +75,10 @@ import {
   type CodingRuntimeMintResult,
   type CodingRuntimeTrustedContext,
 } from "./runtimeAuthorityService.js";
+import {
+  createCodingToolApprovalBridge,
+  type CodingToolApprovalBridge,
+} from "./codingToolApprovalBridge.js";
 import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCatalog.js";
 
 type MintedRuntime = Extract<CodingRuntimeMintResult, { readonly ok: true }>;
@@ -87,6 +92,7 @@ export interface ProductionRuntimeBackendInput {
   readonly context: CodingRuntimeTrustedContext;
   readonly minted: MintedRuntime;
   readonly toolFacade: CodingToolFacade;
+  readonly codingToolApprovals: CodingToolApprovalBridge;
   readonly authorityLifecycle: Pick<
     CodingRuntimeManagerDeps,
     | "abortInFlightActions"
@@ -161,11 +167,12 @@ function researchIssuingApprovalAuthority(
     issue: (request): ReturnType<CodingRuntimeManager["issueApproval"]> => {
       const issued = manager.issueApproval(request);
       if (issued.ok && request.actionKind === "research") {
+        const grantExpiresAtMs = now().getTime() + RESEARCH_GRANT_DEFAULT_MAX_TTL_MS;
         registerApprovedResearchGrant(
           { pending: research.pending, registry: research.grants, now },
           request,
           issued.approvalDigest,
-          issued.expiresAtMs,
+          grantExpiresAtMs,
         );
       }
       return issued;
@@ -323,6 +330,7 @@ interface RunToolSurface {
   readonly leases: ReturnType<typeof createLeaseCoordinator>;
   readonly explicitSkills: ReturnType<typeof createExplicitSkillInvocationTracker>;
   readonly toolFacade: ReturnType<typeof createManagedToolFacade>;
+  readonly codingToolApprovals: CodingToolApprovalBridge;
 }
 
 function createRunToolSurface(
@@ -335,6 +343,7 @@ function createRunToolSurface(
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
 ): RunToolSurface {
   const invocationRegistry = createCodingToolInvocationRegistry();
+  const codingToolApprovals = createCodingToolApprovalBridge();
   const leases = createLeaseCoordinator(invocationRegistry);
   const skillCatalog = createServerApprovedSkillCatalog();
   const explicitSkills = createExplicitSkillInvocationTracker(skillCatalog);
@@ -349,9 +358,10 @@ function createRunToolSurface(
     research,
     skillCatalog,
     explicitSkills,
+    codingToolApprovals,
     onRuntimeEvent,
   });
-  return { invocationRegistry, leases, explicitSkills, toolFacade };
+  return { invocationRegistry, leases, explicitSkills, toolFacade, codingToolApprovals };
 }
 
 function createRunRecord(
@@ -364,21 +374,15 @@ function createRunRecord(
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
 ): ResolverRunRecord {
   const controller = new AbortController();
-  const { invocationRegistry, leases, explicitSkills, toolFacade } = createRunToolSurface(
-    input,
-    request,
-    context,
-    minted,
-    authority,
-    research,
-    onRuntimeEvent,
-  );
+  const { invocationRegistry, leases, explicitSkills, toolFacade, codingToolApprovals } =
+    createRunToolSurface(input, request, context, minted, authority, research, onRuntimeEvent);
   const backend = createBackendRun({
     input,
     request,
     context,
     minted,
     toolFacade,
+    codingToolApprovals,
     authority,
     controller,
     invocationRegistry,
@@ -472,6 +476,7 @@ interface CreateBackendRunInput {
   readonly context: CodingRuntimeTrustedContext;
   readonly minted: MintedRuntime;
   readonly toolFacade: CodingToolFacade;
+  readonly codingToolApprovals: CodingToolApprovalBridge;
   readonly authority: CodingRuntimeAuthorityService;
   readonly controller: AbortController;
   readonly invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>;
@@ -486,6 +491,7 @@ function createBackendRun({
   context,
   minted,
   toolFacade,
+  codingToolApprovals,
   authority,
   controller,
   invocationRegistry,
@@ -498,6 +504,7 @@ function createBackendRun({
     context,
     minted,
     toolFacade,
+    codingToolApprovals,
     authorityLifecycle: authorityLifecycle(
       authority,
       controller,
@@ -524,6 +531,7 @@ interface ManagedToolFacadeInput {
   readonly research: ResearchComposition;
   readonly skillCatalog: SkillCatalog;
   readonly explicitSkills: ExplicitSkillInvocationTracker;
+  readonly codingToolApprovals: CodingToolApprovalBridge;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
 }
 
@@ -537,6 +545,7 @@ function createManagedToolFacade({
   research,
   skillCatalog,
   explicitSkills,
+  codingToolApprovals,
   onRuntimeEvent,
 }: ManagedToolFacadeInput): CodingToolFacade {
   const childModelId = input.childModelId?.();
@@ -549,16 +558,7 @@ function createManagedToolFacade({
     ...(childModelId === undefined ? {} : { modelId: childModelId }),
     adapterKind: adapterKind(context),
     workspaceRoot: context.workspaceRoot,
-    researchGrantRegistry: research.grants,
-    gatewayEgress: input.gatewayEgress ?? ((): undefined => undefined),
-    requestResearchApproval: researchApprovalRequester(
-      input,
-      context,
-      minted.authorityRef.runId,
-      research.pending,
-      onRuntimeEvent,
-    ),
-    ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
+    ...managedResearchOptions(input, context, minted, research, onRuntimeEvent),
     authorityExpiresAt: context.expiresAt,
     effectiveMode: minted.effectiveMode,
     effectiveModeNow: () => authority.effectiveMode(),
@@ -570,6 +570,7 @@ function createManagedToolFacade({
     editorAgentClient: input.editorAgentClient,
     mutationLeaseCoordinator: leases,
     invocationRegistry,
+    approvalProofVerifier: codingToolApprovals,
     skillCatalog,
     explicitSkillInvocations: explicitSkills,
     childModelPortFactory: input.childModelPortFactory,
@@ -577,6 +578,30 @@ function createManagedToolFacade({
     onRuntimeEvent,
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
   });
+}
+
+function managedResearchOptions(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+  minted: MintedRuntime,
+  research: ResearchComposition,
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+): Pick<
+  ProductionManagedWorktreeToolInput,
+  "gatewayEgress" | "requestResearchApproval" | "researchFetchImpl" | "researchGrantRegistry"
+> {
+  return {
+    researchGrantRegistry: research.grants,
+    gatewayEgress: input.gatewayEgress ?? ((): undefined => undefined),
+    requestResearchApproval: researchApprovalRequester(
+      input,
+      context,
+      minted.authorityRef.runId,
+      research.pending,
+      onRuntimeEvent,
+    ),
+    ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
+  };
 }
 
 // Opens the #2387 approval loop for a research URL no grant covers: retain the URL transiently and

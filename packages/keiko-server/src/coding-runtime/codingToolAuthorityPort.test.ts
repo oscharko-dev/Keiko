@@ -9,6 +9,11 @@ import {
   createCodingToolAuthorityPort,
   createRuntimeCodingToolFacade,
 } from "./codingToolAuthorityPort.js";
+import {
+  codingToolApprovalBindingDigest,
+  createCodingToolApprovalBridge,
+} from "./codingToolApprovalBridge.js";
+import type { CodingToolActionRequest } from "./codingToolIpc.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingToolGovernedPorts } from "./codingToolGovernedDelegate.js";
 import type { CodingRuntimeCapabilityDelegationInput } from "./runtimeAuthorityService.js";
@@ -589,6 +594,86 @@ describe("CodingToolAuthorityPort", () => {
         reason: "action-not-authorized",
       });
       expect(resolveCapabilityForDelegation).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["verification", { action: "verification", verifierId: "test" }],
+    ["command", { action: "command", commandId: "test" }],
+  ] as const)(
+    "admits a governed-assist %s only with its exact approved proof",
+    (_label, action) => {
+      const envelope = restrictedEnvelope({
+        effectiveMode: "governed-assist",
+        commandPolicy: {
+          mode: "governed",
+          allow: [],
+          deny: [],
+          requirePerCommandApproval: true,
+        },
+      });
+      const authority = {
+        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+      };
+      const approvalProofVerifier = createCodingToolApprovalBridge();
+      const port = createCodingToolAuthorityPort(
+        authority,
+        () => ({
+          ...runtimeContext(),
+          deploymentCeiling: "supervised-coding",
+          nowIso: "2026-07-12T09:00:00.000Z",
+        }),
+        { approvalProofVerifier },
+      );
+      const bareRequest = {
+        ...action,
+        actionId: "action-approved",
+        idempotencyKey: "action-approved",
+      } as unknown as CodingToolActionRequest;
+      if (bareRequest.action !== "command" && bareRequest.action !== "verification") {
+        throw new TypeError("expected an approvable request");
+      }
+      const approvalProof = {
+        approvalId: bareRequest.actionId,
+        approvalDigest: codingToolApprovalBindingDigest("run-authority-a", bareRequest),
+      };
+      const request = { ...bareRequest, approvalProof };
+      const targetId = request.action === "command" ? request.commandId : request.verifierId;
+
+      expect(port.admit("runtime-capability-secret", request).ok).toBe(false);
+      expect(
+        approvalProofVerifier.observePermission({
+          runId: "run-authority-a",
+          requestId: "permission-approved",
+          action: request.action,
+          actionId: request.actionId,
+          idempotencyKey: request.idempotencyKey,
+          targetId,
+          proof: approvalProof,
+          expiresAt: "2026-07-12T09:05:00.000Z",
+          nowMs: Date.parse("2026-07-12T09:00:00.000Z"),
+        }),
+      ).toBe(true);
+      expect(port.admit("runtime-capability-secret", request).ok).toBe(false);
+      expect(
+        approvalProofVerifier.activatePermission({
+          runId: "run-authority-a",
+          requestId: "permission-approved",
+          approvalAuthorityDigest: "c".repeat(64),
+          expiresAtMs: Date.parse("2026-07-12T09:05:00.000Z"),
+          nowMs: Date.parse("2026-07-12T09:00:00.000Z"),
+        }),
+      ).toBe(true);
+
+      const mismatched =
+        request.action === "command"
+          ? { ...request, commandId: "different-command" }
+          : { ...request, verifierId: "different-verifier" };
+      expect(port.admit("runtime-capability-secret", mismatched).ok).toBe(false);
+
+      expect(port.admit("runtime-capability-secret", request).ok).toBe(true);
+      expect(port.admit("runtime-capability-secret", request).ok).toBe(false);
     },
   );
 });

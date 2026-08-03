@@ -9,6 +9,7 @@ import {
   KEIKO_CODING_RUNTIME_DEV_LANE_ENV,
   type DevLaneOpenCodeTarget,
 } from "../devLanePortableCodingRuntime.js";
+import { OPENCODE_PINNED_VERSION } from "../opencodeToolSchemas.js";
 
 const FIXTURE_TARGET: DevLaneOpenCodeTarget = "macos-arm64";
 const FIXTURE_EXECUTABLE = "#!/bin/sh\nexit 0\n";
@@ -88,7 +89,7 @@ function fixtureCatalog(): Record<string, unknown> {
       {
         name: "opencode-compatible",
         kind: "coding-runtime",
-        upstream: { owner: "anomalyco", repository: "opencode", version: "1.17.17" },
+        upstream: { owner: "anomalyco", repository: "opencode", version: OPENCODE_PINNED_VERSION },
         adapterCompatibility: {
           adapterName: "keiko-coding-sidecar",
           adapterVersion: "1",

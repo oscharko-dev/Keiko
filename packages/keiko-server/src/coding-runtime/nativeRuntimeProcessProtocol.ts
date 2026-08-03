@@ -1,5 +1,3 @@
-import { realpathSync } from "node:fs";
-
 import type { RuntimeSupervisorLaunchRequest } from "./runtimeProcessSupervisor.js";
 
 export const MAX_PACKET_BYTES = 128 * 1024;
@@ -20,10 +18,15 @@ interface LaunchValidationDependencies {
   readonly invalidRequest: () => never;
 }
 
+export interface ValidatedLaunchPacketPaths {
+  readonly executable: string;
+  readonly cwd: string;
+}
+
 export function validateLaunchPacketRequest(
   request: RuntimeSupervisorLaunchRequest,
   options: LaunchValidationDependencies,
-): void {
+): ValidatedLaunchPacketPaths {
   const executable = options.safeRealFile(request.executable);
   const cwd = options.safeRealDirectory(request.cwd);
   if (!/^[0-9a-f]{32}$/u.test(request.recoveryHandle)) options.invalidRequest();
@@ -41,16 +44,20 @@ export function validateLaunchPacketRequest(
     if (!ENVIRONMENT_NAME_PATTERN.test(name)) options.invalidRequest();
     validateText(value, MAX_ENVIRONMENT_VALUE_BYTES, options.invalidRequest);
   }
+  return { executable, cwd };
 }
 
-export function encodeLaunchPacket(request: RuntimeSupervisorLaunchRequest): Buffer {
+export function encodeLaunchPacket(
+  request: RuntimeSupervisorLaunchRequest,
+  paths: ValidatedLaunchPacketPaths,
+): Buffer {
   const environment = Object.entries(request.env).sort(([left], [right]) =>
     left.localeCompare(right),
   );
   const values = [
     request.recoveryHandle,
-    realpathSync(request.executable),
-    realpathSync(request.cwd),
+    paths.executable,
+    paths.cwd,
     ...request.args,
     ...environment.flatMap(([name, value]) => [name, value]),
   ];

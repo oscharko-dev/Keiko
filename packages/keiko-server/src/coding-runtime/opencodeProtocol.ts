@@ -228,6 +228,8 @@ const GOVERNED_VERIFICATION_METADATA_KEYS = [
   "risk",
   "policyReason",
   "commandLabel",
+  "approvalId",
+  "approvalDigest",
 ] as const;
 const GOVERNED_VERIFIERS = new Set(["test", "targeted-test", "typecheck", "lint", "build"]);
 // Colons are rejected wholesale: `C:/…` is drive-absolute under win32 resolution and
@@ -342,13 +344,11 @@ function projectGovernedVerificationPermission(
     !fixedPermissionMetadata(
       metadata,
       "command-execution",
-      "verification",
+      "command-execution",
       "verification-command",
       "low",
     ) ||
-    typeof metadata.commandLabel !== "string" ||
-    !GOVERNED_VERIFIERS.has(metadata.commandLabel) ||
-    !sameStrings(properties.patterns, [metadata.commandLabel])
+    !validVerificationApproval(properties, metadata)
   ) {
     return undefined;
   }
@@ -356,6 +356,25 @@ function projectGovernedVerificationPermission(
   return requestId === undefined
     ? undefined
     : { type: "permission-request", requestId, ...metadata };
+}
+
+function validVerificationApproval(
+  properties: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+): boolean {
+  const commandLabel = metadata.commandLabel;
+  const approvalId = metadata.approvalId;
+  const approvalDigest = metadata.approvalDigest;
+  return (
+    typeof commandLabel === "string" &&
+    GOVERNED_VERIFIERS.has(commandLabel) &&
+    typeof approvalId === "string" &&
+    approvalId.length > 0 &&
+    approvalId.length <= 512 &&
+    typeof approvalDigest === "string" &&
+    /^[0-9a-f]{64}$/u.test(approvalDigest) &&
+    sameStrings(properties.patterns, [commandLabel])
+  );
 }
 
 function fixedPermissionMetadata(

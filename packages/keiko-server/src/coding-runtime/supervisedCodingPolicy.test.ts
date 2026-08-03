@@ -156,6 +156,17 @@ describe("supervised coding policy", () => {
     expect(validateCodingWorkbenchEvidenceRecord(result.evidence).ok).toBe(true);
   });
 
+  it("allows a new file beneath a not-yet-existing in-scope directory", () => {
+    const { root } = workspaceFixture();
+
+    const result = decideSupervisedFileEdit({
+      ...fileRequest(root, "src/new-module/deep/new-file.ts"),
+      allowedRelativePaths: ["src/new-module"],
+    });
+
+    expect(result).toMatchObject({ status: "allowed", reason: "scoped-file-edit" });
+  });
+
   it("fails closed for file edits outside the worktree, scope, or through escaping symlinks", () => {
     const { root, outside } = workspaceFixture();
 

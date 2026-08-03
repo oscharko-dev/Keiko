@@ -346,6 +346,14 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(bundle.toolSources.keiko_changeset_edit).toContain(
       'KEIKO_CODING_MODE !== "governed-assist"',
     );
+    const verificationSource = bundle.toolSources.keiko_verification;
+    if (verificationSource === undefined) throw new TypeError("verification source missing");
+    expect(verificationSource).toContain('actionClass: "command-execution"');
+    expect(verificationSource).toContain('crypto.subtle.digest("SHA-256"');
+    expect(verificationSource).toContain("request.approvalProof = approvalProof");
+    expect(verificationSource.indexOf("await askForGovernedPermission")).toBeLessThan(
+      verificationSource.indexOf("fetch(endpoint"),
+    );
     // #2473 large-file read window: the child-side source forwards the optional window arguments
     // and validates the transient pagination facts the bridge returns.
     expect(bundle.toolSources.keiko_workspace_read).toContain('"startLine"');

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 import {
   CODING_WORKBENCH_SCHEMA_VERSION,
@@ -18,6 +18,8 @@ import {
   type CodingWorkbenchSupervisedActionKind,
   type CodingWorkbenchSupervisedPolicyReason,
 } from "@oscharko-dev/keiko-contracts";
+import { containedRealPathInfo, PathEscapeError } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import type { SupervisedCodingConsumedApproval } from "./supervisedCodingApprovalStore.js";
 
@@ -134,10 +136,7 @@ function candidatePathSyntaxAllowed(targetPath: string): boolean {
 
 function resolveCandidatePath(root: string, targetPath: string): string | undefined {
   const absolute = isAbsolute(targetPath) ? resolve(targetPath) : resolve(join(root, targetPath));
-  const existing = realPath(absolute);
-  if (existing !== undefined) return existing;
-  const parent = realPath(dirname(absolute));
-  return parent === undefined ? undefined : resolve(parent, basename(absolute));
+  return containedPath(root, absolute);
 }
 
 function resolveAllowedScopes(
@@ -151,8 +150,17 @@ function resolveAllowedScopes(
 
 function resolveScope(root: string, scope: string): string | undefined {
   if (!isContainedAgentPath(scope)) return undefined;
-  const resolved = realPath(resolve(join(root, scope)));
+  const resolved = containedPath(root, resolve(join(root, scope)));
   return resolved !== undefined && pathInside(root, resolved) ? resolved : undefined;
+}
+
+function containedPath(root: string, absolute: string): string | undefined {
+  try {
+    return containedRealPathInfo(nodeWorkspaceFs, root, absolute).path;
+  } catch (error) {
+    if (error instanceof PathEscapeError) return undefined;
+    throw error;
+  }
 }
 
 function realPath(path: string): string | undefined {

@@ -13,6 +13,7 @@ import { reserveInteractiveBrowserStreamCapacity } from "./browser-stream-capaci
 
 export const CODING_WORKBENCH_EVENT_RETENTION_LIMIT = 500;
 export const CODING_WORKBENCH_OBSERVATION_BATCH_MS = 100;
+export const CODING_WORKBENCH_EVENT_STREAM_STALE_MS = 35_000;
 
 const TERMINAL_STATES = new Set<CodingWorkbenchRuntimeStateName>([
   "succeeded",
@@ -64,64 +65,158 @@ export interface CodingWorkbenchRuntimeStreamHandlers {
   readonly onReset: () => Promise<void>;
 }
 
+export interface CodingWorkbenchRuntimeStreamSessionOptions {
+  readonly staleAfterMs?: number | undefined;
+  readonly createEventSource?: ((runId: string) => EventSource) | undefined;
+}
+
+export interface CodingWorkbenchRuntimeStreamSession {
+  readonly close: () => void;
+}
+
+class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
+  private source: EventSource | undefined;
+  private pending: CodingWorkbenchRuntimeSseEvent[] = [];
+  private latestCursor = "";
+  private batchTimer: ReturnType<typeof setTimeout> | undefined;
+  private watchdogTimer: ReturnType<typeof setTimeout> | undefined;
+  private closed = false;
+
+  public constructor(
+    private readonly runId: string,
+    private readonly handlers: CodingWorkbenchRuntimeStreamHandlers,
+    private readonly staleAfterMs: number,
+    private readonly createEventSource: (runId: string) => EventSource,
+  ) {
+    this.connect();
+  }
+
+  public close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.source?.close();
+    if (this.batchTimer !== undefined) clearTimeout(this.batchTimer);
+    if (this.watchdogTimer !== undefined) clearTimeout(this.watchdogTimer);
+  }
+
+  private connect(): void {
+    this.source?.close();
+    const source = this.createEventSource(this.runId);
+    this.source = source;
+    source.onopen = (): void => {
+      this.armWatchdog();
+      this.handlers.onOpen();
+    };
+    source.onerror = (): void => {
+      this.handlers.onError(new Error("The runtime event stream is reconnecting."));
+    };
+    source.addEventListener("status", this.receive as EventListener);
+    source.addEventListener("runtime-event", this.receive as EventListener);
+    source.addEventListener("reset", this.handleReset);
+    this.armWatchdog();
+  }
+
+  private readonly receive = (message: MessageEvent<string>): void => {
+    this.armWatchdog();
+    try {
+      const event = parseCodingWorkbenchRuntimeEvent(message.data);
+      if (event.runId !== this.runId) return;
+      this.latestCursor = event.cursor;
+      if (event.kind === "runtime-event" && event.eventKind === "observation-streamed") {
+        this.pending.push(event);
+        this.batchTimer ??= setTimeout(() => {
+          this.batchTimer = undefined;
+          this.flush();
+        }, CODING_WORKBENCH_OBSERVATION_BATCH_MS);
+        return;
+      }
+      this.handlers.onEvents([event], event.cursor, true);
+    } catch (error) {
+      this.handlers.onError(error);
+    }
+  };
+
+  private readonly handleReset = (): void => {
+    this.close();
+    void this.handlers.onReset();
+  };
+
+  private flush(): void {
+    if (this.pending.length === 0) return;
+    const events = this.pending;
+    this.pending = [];
+    this.handlers.onEvents(events, this.latestCursor, false);
+  }
+
+  private armWatchdog(): void {
+    if (this.closed) return;
+    if (this.watchdogTimer !== undefined) clearTimeout(this.watchdogTimer);
+    this.watchdogTimer = setTimeout(() => {
+      this.watchdogTimer = undefined;
+      this.reconnectStaleStream();
+    }, this.staleAfterMs);
+  }
+
+  private reconnectStaleStream(): void {
+    if (this.closed) return;
+    try {
+      this.connect();
+    } catch (error) {
+      this.handlers.onError(error);
+      this.armWatchdog();
+    }
+  }
+}
+
+export function createCodingWorkbenchRuntimeStreamSession(
+  runId: string,
+  handlers: CodingWorkbenchRuntimeStreamHandlers,
+  options: CodingWorkbenchRuntimeStreamSessionOptions = {},
+): CodingWorkbenchRuntimeStreamSession {
+  const staleAfterMs =
+    Number.isFinite(options.staleAfterMs) && (options.staleAfterMs ?? 0) > 0
+      ? (options.staleAfterMs ?? CODING_WORKBENCH_EVENT_STREAM_STALE_MS)
+      : CODING_WORKBENCH_EVENT_STREAM_STALE_MS;
+  return new RuntimeEventStreamSession(
+    runId,
+    handlers,
+    staleAfterMs,
+    options.createEventSource ?? createCodingWorkbenchRuntimeEventSource,
+  );
+}
+
 export function useCodingWorkbenchRuntimeEventStream(
   runId: string | undefined,
   epoch: number,
   handlers: CodingWorkbenchRuntimeStreamHandlers,
+  staleAfterMs = CODING_WORKBENCH_EVENT_STREAM_STALE_MS,
 ): void {
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
   useEffect(() => {
     if (runId === undefined) return;
     const releaseCapacity = reserveInteractiveBrowserStreamCapacity();
-    let source: EventSource;
+    let session: CodingWorkbenchRuntimeStreamSession;
     try {
-      source = createCodingWorkbenchRuntimeEventSource(runId);
+      session = createCodingWorkbenchRuntimeStreamSession(
+        runId,
+        {
+          onOpen: () => handlersRef.current.onOpen(),
+          onEvents: (events, cursor, resnapshot) =>
+            handlersRef.current.onEvents(events, cursor, resnapshot),
+          onError: (error) => handlersRef.current.onError(error),
+          onReset: () => handlersRef.current.onReset(),
+        },
+        { staleAfterMs },
+      );
     } catch (error) {
       releaseCapacity();
       handlersRef.current.onError(error);
       return;
     }
-    let pending: CodingWorkbenchRuntimeSseEvent[] = [];
-    let latestCursor = "";
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const flush = (): void => {
-      if (pending.length === 0) return;
-      const events = pending;
-      pending = [];
-      handlersRef.current.onEvents(events, latestCursor, false);
-    };
-    const receive = (message: MessageEvent<string>): void => {
-      try {
-        const event = parseCodingWorkbenchRuntimeEvent(message.data);
-        if (event.runId !== runId) return;
-        latestCursor = event.cursor;
-        if (event.kind === "runtime-event" && event.eventKind === "observation-streamed") {
-          pending.push(event);
-          timer ??= setTimeout(() => {
-            timer = undefined;
-            flush();
-          }, CODING_WORKBENCH_OBSERVATION_BATCH_MS);
-          return;
-        }
-        handlersRef.current.onEvents([event], event.cursor, true);
-      } catch (error) {
-        handlersRef.current.onError(error);
-      }
-    };
-    source.onopen = handlersRef.current.onOpen;
-    source.onerror = () =>
-      handlersRef.current.onError(new Error("The runtime event stream is reconnecting."));
-    source.addEventListener("status", receive as EventListener);
-    source.addEventListener("runtime-event", receive as EventListener);
-    source.addEventListener("reset", () => {
-      source.close();
-      void handlersRef.current.onReset();
-    });
     return (): void => {
-      source.close();
+      session.close();
       releaseCapacity();
-      if (timer !== undefined) clearTimeout(timer);
     };
-  }, [epoch, runId]);
+  }, [epoch, runId, staleAfterMs]);
 }

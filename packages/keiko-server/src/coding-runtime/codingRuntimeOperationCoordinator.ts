@@ -59,7 +59,11 @@ export class CodingRuntimeOperationCoordinator {
   public submitFollowUp(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
     return this.deps.serial(async () => {
       const operation = this.prepare(runId, input, ["requestId", "expectedRevision", "taskIntent"]);
-      if (!operation.ok || !validTaskIntent(operation.value.taskIntent)) {
+      if (
+        !operation.ok ||
+        operation.current.state !== "running" ||
+        !validTaskIntent(operation.value.taskIntent)
+      ) {
         if (operation.ok) operation.reservation.release();
         return failure("invalid-intent");
       }

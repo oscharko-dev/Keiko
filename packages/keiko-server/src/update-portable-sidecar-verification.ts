@@ -14,6 +14,7 @@ import {
   OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
   OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
 } from "./coding-runtime/opencodeProtocolSurface.js";
+import { OPENCODE_PINNED_VERSION } from "./coding-runtime/opencodeToolSchemas.js";
 
 export interface PortableSidecarRuntimeVerification {
   readonly summary: UpdatePortableSidecarSummary;
@@ -100,7 +101,6 @@ export class PortableSidecarVerificationError extends Error {
 
 const SIDECAR_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/u;
 const HEX_SHA256 = /^[a-f0-9]{64}$/u;
-const OPENCODE_VERSION = "1.17.17";
 const OPENCODE_COMMIT = "474abdd7ee60f4b67476cfcef7e5311beff4a824";
 const OPENCODE_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
 const SIGNING_KEYS = [
@@ -313,8 +313,8 @@ function portableProvenanceVerified(
     fieldEquals(upstream, "owner", "anomalyco"),
     fieldEquals(upstream, "repository", "opencode"),
     fieldEquals(upstream, "name", "opencode"),
-    fieldEquals(upstream, "version", OPENCODE_VERSION),
-    fieldEquals(upstream, "tag", `v${OPENCODE_VERSION}`),
+    fieldEquals(upstream, "version", OPENCODE_PINNED_VERSION),
+    fieldEquals(upstream, "tag", `v${OPENCODE_PINNED_VERSION}`),
     fieldEquals(upstream, "commit", OPENCODE_COMMIT),
     fieldEquals(adapter, "adapterName", "keiko-coding-sidecar"),
     fieldEquals(adapter, "adapterVersion", "1"),

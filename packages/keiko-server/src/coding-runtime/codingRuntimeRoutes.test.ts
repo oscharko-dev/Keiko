@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local test fixture callbacks are contextually typed. */
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
@@ -834,6 +834,33 @@ describe("coding runtime routes", () => {
     expect((ctx.res as unknown as FakeResponse).chunks.join("")).toContain('"cursor":"run-1:0"');
   });
 
+  it("keeps an idle runtime event stream alive and stops heartbeats on close", async () => {
+    vi.useFakeTimers();
+    try {
+      const response = new FakeResponse();
+      const req = new EventEmitter() as unknown as RouteContext["req"];
+      const hub = {
+        subscribe: () => ({ ok: true as const, detach: () => undefined }),
+      };
+      openCodingRuntimeSse(
+        response as unknown as RouteContext["res"],
+        req,
+        hub as never,
+        "run-1",
+        undefined,
+      );
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(response.chunks).toContain(": keep-alive\n\n");
+      response.destroy();
+      const heartbeatCount = response.chunks.length;
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(response.chunks).toHaveLength(heartbeatCount);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects an over-budget mutation body with 413 without buffering it", async () => {
     const session = pairedAppSession();
     const oversized = "x".repeat(64 * 1024 + 1);
@@ -874,6 +901,23 @@ describe("coding runtime routes", () => {
     );
     expect(result).toMatchObject({ status: 400 });
     expect(JSON.stringify(result.body)).toContain("CODING_RUNTIME_INVALID_INTENT");
+  });
+
+  it("propagates unexpected orchestrator failures to the server diagnostic boundary", async () => {
+    const session = pairedAppSession();
+    const deps = runtime({ codingAppSessionChannel: session.channel });
+    const orchestrator = deps.codingRuntimeOrchestrator as unknown as {
+      start: (body: unknown) => Promise<never>;
+    };
+    const failure = new Error("runtime-start-failure");
+    orchestrator.start = () => Promise.reject(failure);
+
+    await expect(
+      handleCreateCodingRuntimeRun(
+        context("{}", {}, "/api/coding-workbench/runtime/runs", session.cookie),
+        deps,
+      ),
+    ).rejects.toBe(failure);
   });
 
   it("serves the singleton status and fails closed without the runtime", () => {

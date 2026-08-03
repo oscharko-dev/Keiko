@@ -1005,8 +1005,8 @@ describe("CodingRuntimeOrchestrator", () => {
 });
 
 describe("pause and resume (#2386 adversarial-review regressions)", () => {
-  async function runningFixture(): Promise<ReturnType<typeof fixture>> {
-    const f = fixture();
+  async function runningFixture(clock?: () => Date): Promise<ReturnType<typeof fixture>> {
+    const f = fixture(undefined, clock);
     await f.orchestrator.start(start);
     await f.orchestrator.ingest({
       schemaVersion: "1",
@@ -1053,7 +1053,7 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     });
   });
 
-  it("keeps a paused run paused when adapter events arrive", async () => {
+  it("stashes a paused permission request until explicit resume", async () => {
     const f = await runningFixture();
     await f.orchestrator.pause("run-1", { requestId: "run-1" });
     const afterSubmit = await f.orchestrator.ingest({
@@ -1071,7 +1071,7 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
       occurredAt: "2026-01-01T00:00:02.000Z",
       kind: "permission-requested",
       permissionRequest: {
-        requestId: "permission-paused",
+        requestId: "permission-1",
         kind: "workspace-write",
         actionClass: "workspace-write",
         reasonCode: "approval-required",
@@ -1080,12 +1080,70 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
       },
     });
     expect(successfulSnapshot(afterPermission).state).toBe("paused");
-    const decided = await f.orchestrator.decideApproval("run-1", {
-      requestId: "permission-paused",
-      decision: "approved",
-      expectedRevision: 5,
+    expect(
+      await f.orchestrator.decideApproval("run-1", {
+        requestId: "permission-1",
+        decision: "approved",
+        expectedRevision: successfulSnapshot(afterPermission).revision,
+      }),
+    ).toEqual({ ok: false, failureCode: "invalid-intent" });
+
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+    expect(successfulSnapshot(resumed)).toMatchObject({
+      state: "awaiting-approval",
+      pendingPermission: { requestId: "permission-1" },
     });
-    expect(decided.ok).toBe(false);
+    const decided = await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-1",
+      decision: "approved",
+      expectedRevision: successfulSnapshot(resumed).revision,
+    });
+    expect(decided.ok).toBe(true);
+    expect(f.approvalAuthority.issue).toHaveBeenCalledOnce();
+  });
+
+  it("rejects follow-up task submission while paused", async () => {
+    const f = await runningFixture();
+    const paused = await f.orchestrator.pause("run-1", { requestId: "run-1" });
+
+    await expect(
+      f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-paused",
+        expectedRevision: successfulSnapshot(paused).revision,
+        taskIntent: "must not be queued while paused",
+      }),
+    ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when a stashed permission expires before resume", async () => {
+    let nowMs = FIXTURE_NOW_MS;
+    const f = await runningFixture(() => new Date(nowMs));
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-pause-expired",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:02.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-1",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        actionKind: "file-edit",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+    nowMs += 60_001;
+
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+
+    expect(successfulSnapshot(resumed)).toMatchObject({
+      state: "failed",
+      failureCode: "authority-expired",
+    });
+    expect(f.approvalAuthority.issue).not.toHaveBeenCalled();
   });
 
   it("still terminates a paused run on a redacted runtime failure", async () => {

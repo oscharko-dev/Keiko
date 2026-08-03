@@ -78,7 +78,7 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
   }
 
   public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
-    validateLaunchPacketRequest(request, {
+    const paths = validateLaunchPacketRequest(request, {
       ...this.options,
       safeRealFile,
       safeRealDirectory,
@@ -86,7 +86,7 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
       invalidRequest,
     });
     const recoveryHandle = request.recoveryHandle;
-    const packet = encodeLaunchPacket(request);
+    const packet = encodeLaunchPacket(request, paths);
     const child = this.options.spawnHelper(this.options.helperPath, [], {
       cwd: dirname(this.options.helperPath),
       env: {},

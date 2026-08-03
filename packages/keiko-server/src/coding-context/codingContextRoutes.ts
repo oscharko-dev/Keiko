@@ -10,17 +10,17 @@
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { isAbsolute } from "node:path";
 
 import {
-  CODING_WORKBENCH_CONNECTOR_SCOPES,
-  isCodingWorkbenchMode,
   resolveEffectiveCodingWorkbenchMode,
-  type CodingWorkbenchConnectorScope,
   type CodingWorkbenchMode,
+  type EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
 
 import type { UiHandlerDeps } from "../deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
+import { editorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import {
   GitDeliveryBodyTooLargeError,
@@ -45,12 +45,11 @@ import {
 
 const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "schemaVersion",
-  "runId",
-  "effectiveMode",
-  "connectorScopes",
+  "authority",
   "refs",
   "maxBodyBytes",
 ]);
+const AUTHORITY_KEYS: ReadonlySet<string> = new Set(["runId", "envelopeDigest", "workspaceRoot"]);
 const REF_KEYS: ReadonlySet<string> = new Set([
   "source",
   "objectKind",
@@ -64,6 +63,7 @@ const DEFAULT_MAX_BODY_BYTES = 16_384;
 const MIN_MAX_BODY_BYTES = 256;
 const MAX_MAX_BODY_BYTES = 65_536;
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const OWNER_AND_REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/u;
 const JIRA_PROJECT_PATTERN = /^[A-Z][A-Z0-9_]{1,20}$/u;
 const OBJECT_ID_PATTERN = /^[1-9]\d{0,9}$/u;
@@ -82,27 +82,15 @@ function badRequest(): RouteResult {
   return { status: 400, body: errBody("CODING_CONTEXT_BAD_REQUEST", "Invalid request.") };
 }
 
-function parseRunId(value: unknown): string | undefined {
-  return typeof value === "string" && RUN_ID_PATTERN.test(value) ? value : undefined;
+function authorityDenied(): RouteResult {
+  return {
+    status: 403,
+    body: errBody("CODING_CONTEXT_AUTHORITY_DENIED", "Coding context authority was denied."),
+  };
 }
 
-function parseConnectorScopes(
-  value: unknown,
-): readonly CodingWorkbenchConnectorScope[] | undefined {
-  if (!Array.isArray(value) || value.length > CODING_WORKBENCH_CONNECTOR_SCOPES.length) {
-    return undefined;
-  }
-  const scopes: CodingWorkbenchConnectorScope[] = [];
-  for (const entry of value) {
-    if (
-      typeof entry !== "string" ||
-      !(CODING_WORKBENCH_CONNECTOR_SCOPES as readonly string[]).includes(entry)
-    ) {
-      return undefined;
-    }
-    scopes.push(entry as CodingWorkbenchConnectorScope);
-  }
-  return scopes;
+function parseRunId(value: unknown): string | undefined {
+  return typeof value === "string" && RUN_ID_PATTERN.test(value) ? value : undefined;
 }
 
 function parseGitHubRef(record: Record<string, unknown>): CodeContextRef | undefined {
@@ -161,33 +149,66 @@ function serverCeiling(deps: UiHandlerDeps): CodingWorkbenchMode {
   return deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist";
 }
 
-function parseRequest(input: unknown, deps: UiHandlerDeps): CodeContextReadRequest | undefined {
-  if (!isPlainObject(input) || !hasOnlyAllowedKeys(input, TOP_LEVEL_KEYS)) return undefined;
-  if (input.schemaVersion !== "1") return undefined;
-  const runId = parseRunId(input.runId);
-  const requestedMode = isCodingWorkbenchMode(input.effectiveMode)
-    ? input.effectiveMode
-    : undefined;
-  const connectorScopes = parseConnectorScopes(input.connectorScopes);
-  const refs = parseRefs(input.refs);
-  const maxBodyBytes = parseMaxBodyBytes(input.maxBodyBytes);
+interface ParsedAuthority {
+  readonly reference: EditorAgentGovernedAuthorityReference;
+  readonly workspaceRoot: string;
+}
+
+interface ParsedRequest {
+  readonly authority: ParsedAuthority;
+  readonly refs: readonly CodeContextRef[];
+  readonly maxBodyBytes: number;
+}
+
+function parseAuthority(value: unknown): ParsedAuthority | undefined {
+  if (!isPlainObject(value) || !hasOnlyAllowedKeys(value, AUTHORITY_KEYS)) return undefined;
+  const runId = parseRunId(value.runId);
+  const envelopeDigest = value.envelopeDigest;
+  const workspaceRoot = value.workspaceRoot;
   if (
     runId === undefined ||
-    requestedMode === undefined ||
-    connectorScopes === undefined ||
-    refs === undefined ||
-    maxBodyBytes === undefined
+    typeof envelopeDigest !== "string" ||
+    !DIGEST_PATTERN.test(envelopeDigest) ||
+    typeof workspaceRoot !== "string" ||
+    workspaceRoot.length > 4_096 ||
+    workspaceRoot.includes("\0") ||
+    !isAbsolute(workspaceRoot)
   ) {
     return undefined;
   }
+  return { reference: { runId, envelopeDigest }, workspaceRoot };
+}
+
+function parseRequest(input: unknown): ParsedRequest | undefined {
+  if (!isPlainObject(input) || !hasOnlyAllowedKeys(input, TOP_LEVEL_KEYS)) return undefined;
+  if (input.schemaVersion !== "1") return undefined;
+  const authority = parseAuthority(input.authority);
+  const refs = parseRefs(input.refs);
+  const maxBodyBytes = parseMaxBodyBytes(input.maxBodyBytes);
+  if (authority === undefined || refs === undefined || maxBodyBytes === undefined) {
+    return undefined;
+  }
+  return { authority, refs, maxBodyBytes };
+}
+
+function resolveRequest(
+  parsed: ParsedRequest,
+  deps: UiHandlerDeps,
+): CodeContextReadRequest | undefined {
+  const ceiling = serverCeiling(deps);
+  const resolved = editorAgentAuthorityRegistry.resolve(
+    parsed.authority.reference,
+    parsed.authority.workspaceRoot,
+    ceiling,
+    new Date().toISOString(),
+  );
+  if (!resolved.ok) return undefined;
   return {
-    runId,
-    // The client-supplied mode is a REQUEST; the server deployment ceiling caps it
-    // fail-closed so a hostile browser payload can never widen connector authority.
-    effectiveMode: resolveEffectiveCodingWorkbenchMode(requestedMode, serverCeiling(deps)),
-    connectorScopes,
-    refs,
-    maxBodyBytes,
+    runId: resolved.envelope.runId,
+    effectiveMode: resolveEffectiveCodingWorkbenchMode(resolved.envelope.effectiveMode, ceiling),
+    connectorScopes: resolved.envelope.connectorScopes,
+    refs: parsed.refs,
+    maxBodyBytes: parsed.maxBodyBytes,
   };
 }
 
@@ -281,8 +302,10 @@ export async function handleCodingContextPack(
 ): Promise<RouteResult> {
   const read = await readParsedBody(ctx.req);
   if (!read.ok) return read.result;
-  const request = parseRequest(read.value, deps);
-  if (request === undefined) return badRequest();
+  const parsed = parseRequest(read.value);
+  if (parsed === undefined) return badRequest();
+  const request = resolveRequest(parsed, deps);
+  if (request === undefined) return authorityDenied();
   try {
     const composed = composeCodingContextConnectors(deps);
     const pack = await buildCodeContextPack(request, {

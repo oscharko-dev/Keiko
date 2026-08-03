@@ -17,6 +17,7 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { VerificationRunnerManager } from "../editor/verificationRunner.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import { createRuntimeCodingToolFacade } from "./codingToolAuthorityPort.js";
+import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
 import type {
   CodingToolGovernedPorts,
@@ -60,6 +61,7 @@ export interface ProductionManagedWorktreeToolInput {
   readonly editorAgentClient: CodingToolReadEditPortDeps["editorAgentClient"];
   readonly mutationLeaseCoordinator?: CodingToolReadEditPortDeps["mutationLeaseCoordinator"];
   readonly invocationRegistry: CodingToolInvocationRegistry;
+  readonly approvalProofVerifier?: CodingToolApprovalProofVerifier | undefined;
   readonly skillCatalog?: SkillCatalog | undefined;
   readonly explicitSkillInvocations?: ExplicitSkillInvocationTracker | undefined;
   readonly childModelPortFactory?: ((modelId: string) => ModelPort | undefined) | undefined;
@@ -98,6 +100,9 @@ export function createProductionManagedWorktreeToolFacade(
     {
       invocationRegistry: input.invocationRegistry,
       reserveEditDelegation: true,
+      ...(input.approvalProofVerifier === undefined
+        ? {}
+        : { approvalProofVerifier: input.approvalProofVerifier }),
     },
   );
 }

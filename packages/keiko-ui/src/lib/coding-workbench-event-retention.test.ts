@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchRuntimeSseEvent } from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_EVENT_RETENTION_LIMIT,
+  createCodingWorkbenchRuntimeStreamSession,
   isPinnedCodingWorkbenchRuntimeEvent,
   retainCodingWorkbenchRuntimeEvents,
 } from "./coding-workbench-event-retention";
@@ -24,6 +25,37 @@ function event(
 }
 
 describe("Coding Workbench event retention", () => {
+  it("closes and recreates a runtime stream after bounded inactivity", async () => {
+    vi.useFakeTimers();
+    try {
+      const sources: FakeEventSource[] = [];
+      const createEventSource = vi.fn((): EventSource => {
+        const source = new FakeEventSource();
+        sources.push(source);
+        return source as unknown as EventSource;
+      });
+      const session = createCodingWorkbenchRuntimeStreamSession(
+        "run-1",
+        {
+          onOpen: vi.fn(),
+          onEvents: vi.fn(),
+          onError: vi.fn(),
+          onReset: vi.fn(() => Promise.resolve()),
+        },
+        { staleAfterMs: 100, createEventSource },
+      );
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(createEventSource).toHaveBeenCalledTimes(2);
+      expect(sources[0]?.close).toHaveBeenCalledOnce();
+      session.close();
+      expect(sources[1]?.close).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("retains at most 500 events while preserving incoming critical containment facts", () => {
     const ordinary = Array.from({ length: 1_000 }, (_, index) => event(index + 1));
     const critical = [
@@ -85,3 +117,11 @@ describe("Coding Workbench event retention", () => {
     expect(retained.map((entry) => entry.runId)).toEqual(["run-1", "run-2"]);
   });
 });
+
+class FakeEventSource {
+  public onopen: ((event: Event) => void) | null = null;
+  public onerror: ((event: Event) => void) | null = null;
+  public readonly close = vi.fn();
+
+  public addEventListener(_type: string, _listener: EventListener): void {}
+}

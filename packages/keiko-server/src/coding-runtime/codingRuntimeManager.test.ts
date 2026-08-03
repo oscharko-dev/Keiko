@@ -44,6 +44,10 @@ import {
 import { createInMemorySupervisedCodingApprovalStore } from "./supervisedCodingApprovalStore.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
+  codingToolApprovalBindingDigest,
+  createCodingToolApprovalBridge,
+} from "./codingToolApprovalBridge.js";
+import {
   OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
   OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
 } from "./opencodeProtocolSurface.js";
@@ -717,6 +721,8 @@ interface PermissionLineInput {
   readonly risk?: string | undefined;
   readonly policyReason?: string | undefined;
   readonly commandLabel?: string | undefined;
+  readonly approvalId?: string | undefined;
+  readonly approvalDigest?: string | undefined;
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly targetPath?: string | undefined;
   readonly allowedRelativePaths?: readonly string[] | undefined;
@@ -2315,6 +2321,89 @@ describe("coding runtime manager", () => {
     expect(JSON.stringify(events)).not.toMatch(/stdout|stderr|npm run typecheck/u);
   });
 
+  it("activates one exact governed verification proof only after human approval", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const codingToolApprovals = createCodingToolApprovalBridge();
+    const request = {
+      action: "verification" as const,
+      actionId: "session:call",
+      idempotencyKey: "session:call",
+      verifierId: "typecheck",
+    };
+    const approvalProof = {
+      approvalId: request.actionId,
+      approvalDigest: codingToolApprovalBindingDigest("run-1991", request),
+    };
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      codingToolApprovals,
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    await manager.start(
+      governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "permission-verification",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "approval-required",
+        actionKind: "verification-command",
+        scopeLabel: "workspace-scope",
+        risk: "low",
+        policyReason: "approval-required",
+        commandLabel: request.verifierId,
+        approvalId: approvalProof.approvalId,
+        approvalDigest: approvalProof.approvalDigest,
+      }),
+    );
+    await settle();
+
+    expect(events.find((event) => event.kind === "permission-requested")).toMatchObject({
+      permissionRequest: {
+        requestId: "permission-verification",
+        commandLabel: "verification-command",
+      },
+    });
+    expect(
+      codingToolApprovals.consume({
+        runId: "run-1991",
+        request: { ...request, approvalProof },
+        nowMs: Date.parse("2026-07-07T13:00:00.000Z"),
+      }),
+    ).toBe(false);
+    expect(
+      manager.issueApproval({
+        runId: "run-1991",
+        requestId: "permission-verification",
+        actionKind: "verification-command",
+        approvedByUserId: "operator",
+      }).ok,
+    ).toBe(true);
+    expect(
+      codingToolApprovals.consume({
+        runId: "run-1991",
+        request: { ...request, approvalProof },
+        nowMs: Date.parse("2026-07-07T13:00:00.000Z"),
+      }),
+    ).toBe(true);
+    expect(
+      codingToolApprovals.consume({
+        runId: "run-1991",
+        request: { ...request, approvalProof },
+        nowMs: Date.parse("2026-07-07T13:00:00.000Z"),
+      }),
+    ).toBe(false);
+  });
+
   it("refuses approval issuance while paused and restores it on resume (#2386)", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
@@ -3187,6 +3276,79 @@ describe("coding runtime manager", () => {
     expect(events.filter((event) => event.kind === "failure-redacted")).toEqual([]);
   });
 
+  it("retains multiple OpenCode startup lines in FIFO order", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const observed: string[] = [];
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(() => child.handle),
+      openCodeLifecycleAdapter: {
+        handshake: async ({ startupOutput }) => {
+          observed.push(await startupOutput.nextLine());
+          observed.push(await startupOutput.nextLine());
+          return { ok: true } as const;
+        },
+      },
+    });
+
+    const starting = manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    child.stdout.write("line-one\nline-two\n");
+
+    await expect(starting).resolves.toMatchObject({ ok: true });
+    expect(observed).toEqual(["line-one\n", "line-two\n"]);
+  });
+
+  it("fails startup loudly when the bounded OpenCode mailbox overflows", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    let releaseHandshake: (() => void) | undefined;
+    let mailboxFailure: string | undefined;
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(() => ({
+        ...child.handle,
+        kill: (signal): void => {
+          child.kills.push(signal);
+          child.exit(0);
+        },
+      })),
+      openCodeLifecycleAdapter: {
+        handshake: async ({ startupOutput }) => {
+          await new Promise<void>((resolve) => {
+            releaseHandshake = resolve;
+          });
+          try {
+            await startupOutput.nextLine();
+          } catch (error) {
+            mailboxFailure = error instanceof Error ? error.message : "unknown";
+            throw error;
+          }
+          return { ok: true } as const;
+        },
+      },
+    });
+
+    const starting = manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    await vi.waitFor(() => {
+      expect(releaseHandshake).toBeTypeOf("function");
+    });
+    child.stdout.write(
+      Array.from({ length: 65 }, (_value, index) => `line-${String(index)}\n`).join(""),
+    );
+    releaseHandshake?.();
+
+    await expect(starting).resolves.toMatchObject({
+      ok: false,
+      failureCode: "protocol-schema-mismatch",
+    });
+    expect(mailboxFailure).toBe("runtime-startup-output-overflow");
+  });
+
   it("revokes and proves complete-tree reap when OpenCode readiness fails", async () => {
     const fixture = createManagedFixture();
     const child = fakeChild();
@@ -3231,6 +3393,45 @@ describe("coding runtime manager", () => {
       "release:run-1988",
     ]);
     expect(manager.health()).toEqual({ status: "stopped" });
+  });
+
+  it("reports an authenticated-health handshake failure as a version mismatch", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      diagnostics,
+      supervisor: testSupervisor(() => ({
+        ...child.handle,
+        kill: (signal): void => {
+          child.kills.push(signal);
+          child.exit(0);
+        },
+      })),
+      openCodeLifecycleAdapter: {
+        handshake: vi.fn(() => Promise.resolve({ ok: false, reason: "authenticated-health" })),
+      },
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+    });
+
+    await expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      failureCode: "runtime-version-mismatch",
+      retryable: false,
+    });
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        correlationId: "run-1988",
+        operation: "coding-runtime.handshake",
+        errorClass: "OpenCodeHandshakeFailure",
+        message: "runtime-handshake-phase:authenticated-health",
+      }),
+    );
   });
 
   it("aborts the adapter-visible handshake signal on timeout and rejects a late ready result", async () => {

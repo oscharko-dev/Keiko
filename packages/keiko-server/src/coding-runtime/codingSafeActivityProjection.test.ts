@@ -382,13 +382,21 @@ describe("bounded coding safe-activity projection", () => {
         authorityExpiresAt: "2026-07-18T18:00:00.000Z",
         workspaceIsCurrent: () => true,
       });
-      const listener = vi.fn();
+      const listener = vi.fn<(content: CodingSafeActivityContent | null) => void>();
       projection.subscribeContent(listener);
 
       await vi.advanceTimersByTimeAsync(101);
 
       expect(projection.currentContent()).toBeNull();
       expect(listener).toHaveBeenCalledWith(null);
+      projection.open({
+        runId: "run-safe-activity-after-expiry",
+        workspaceId: WORKSPACE_ID,
+        authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+        workspaceIsCurrent: () => true,
+      });
+      const republished = listener.mock.calls.at(-1)?.[0];
+      expect(republished?.feed.runId).toBe("run-safe-activity-after-expiry");
     } finally {
       vi.useRealTimers();
     }
