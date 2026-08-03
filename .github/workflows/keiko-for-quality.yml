@@ -459,8 +459,10 @@ jobs:
           #
           # What the edge costs, stated rather than left to be discovered: a run consuming the full
           # 6M costs roughly 7 to 13 EUR depending on how much the provider serves from its prompt
-          # cache. That is ONE first review of a change larger than any this repository has
-          # produced; at the measured 25k tokens per file, truncation begins around 240 files.
+          # cache. This repository has already been there: its 135-file incident change measured
+          # 5.5-6M tokens per full review once billing settled (~44k input tokens per file for a
+          # change of that weight, not the 25k first written here), so a heavy change meets the
+          # ceiling around 135 files and only lighter mixes reach further.
           # Whether that cost recurs is decided by whether the run completed, not by the ceiling.
           # See docs/qa/review-cost-model.md for the numbers and
           # docs/troubleshooting/model-review-spend.md for the failure modes.
