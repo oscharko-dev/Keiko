@@ -428,20 +428,27 @@ jobs:
           # the engine's own --max-tokens-budget, which stops dispatching new files at the limit
           # instead of reviewing everything first and confessing afterwards.
           #
-          # 6M -> 2M -> 4M, and the middle step is the interesting one. It was lowered under budget
-          # pressure while the review store was inert, when every push of a large pull request
-          # re-priced every file (#2930: twenty-one full re-reviews of 133 files in one day). The
-          # store now demonstrably works — a production run has recorded a cache hit — so the
-          # premise of the low ceiling is gone.
+          # 6M -> 2M -> 6M. The middle step was taken under budget pressure while the review store
+          # was inert, when every push of a large pull request re-priced every file (#2930:
+          # twenty-one full re-reviews of 133 files in one day). The store now demonstrably works —
+          # a production run has recorded a cache hit — so that premise is gone.
           #
-          # Raising it back is not a relaxation, it is the cheaper direction, and the reason is
-          # counter-intuitive enough to write down: a run that EXCEEDS the ceiling settles
-          # incomplete, and an incomplete run hands off no store (see the note below). Such a pull
-          # request therefore never seeds a store at all and pays in full on every push, forever.
-          # A ceiling low enough to be hit is self-defeating; one high enough to let the first
-          # review complete pays once and then replays. 4M lets a change of roughly 160 files
-          # complete at the measured 25k tokens per file, which covers every pull request this
-          # repository has actually produced.
+          # 6M is the MAXIMUM VALUE THAT DOES ANYTHING, not a preference. The action's own
+          # allotment formula clamps at ALLOTMENT_CEILING = 6,000,000 before this input is applied
+          # (`min(token_budget, clamp(...))`), so any larger number here is inert and would only
+          # mislead a reader into thinking the reviewer had more headroom than it can use.
+          #
+          # Raising it is the cheaper direction, which is counter-intuitive enough to write down: a
+          # run that EXCEEDS its allotment settles incomplete, and an incomplete run hands off no
+          # store (see the note below). A pull request that never completes therefore never seeds a
+          # store and pays in full on every push. A ceiling low enough to be hit is self-defeating;
+          # one high enough for the first review to finish pays once and replays afterwards.
+          #
+          # What it costs at the edge: the allotment reaches 6M at about 115 reviewable files, and
+          # a run consuming all of it costs roughly 7 to 13 EUR depending on how much the provider
+          # serves from its prompt cache. That is the worst case for ONE first review of a change
+          # larger than anything this repository has produced — and the run before it, not the
+          # ceiling, is what decides whether it recurs.
           #
           # A second cost, sharper and found in review (Codex, #2934): the store hand-off below runs
           # only for a COMPLETE settlement, and the action refuses to write a store for anything
@@ -472,7 +479,7 @@ jobs:
           # response to exactly that starvation on an 87-file pull request (#2926), so this is a
           # deliberate re-trade, not a correction of that decision. Revisit once memoization is
           # confirmed working in production and the credit position allows.
-          token_budget: "4000000"
+          token_budget: "6000000"
           # Enables per-file memoization (v0.9.0). Relative to the workspace; the file lives in
           # the directory the locate/upload steps carry between runs. Without this input the
           # store layer is fully inert — that property is pinned by a test upstream.

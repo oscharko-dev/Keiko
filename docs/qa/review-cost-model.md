@@ -38,23 +38,27 @@ per-file figure to rise toward it as billing settles.
 | 50 files  | ~1.50–3.50 EUR, completes     | ~0.03–0.25 EUR                       |
 | 135 files | ~3.40 EUR, completes under 4M | ~0.10 EUR, when a store was retained |
 
-At the 25k planning figure a 135-file change wants roughly 3.4M tokens, which the 4M ceiling
-accommodates — it completes, hands off a store, and every later push is cheap. Under the previous
-2M ceiling the same change truncated, seeded nothing, and paid in full again on the next push.
+At the 25k planning figure a 135-file change wants roughly 3.4M tokens, well inside the 6M ceiling
+— it completes, hands off a store, and every later push is cheap. Under the 2M ceiling the same
+change truncated, seeded nothing, and paid in full again on the next push. The worst case the
+ceiling now permits is a single run of 6M, roughly 7 to 13 EUR depending on prompt-cache hit rate,
+for a first review of a change larger than any this repository has produced.
 
 Two different thresholds are easy to conflate, and they are far apart:
 
-- the **allotment** meets the cap at about **77 files** — the formula grants 1.3 × 40,000 = 52,000
-  tokens per file, and the 4M ceiling divides by that at 76.9, with the line term only lowering it.
-  Past this point the engine is handed the ceiling rather than what the formula asked for;
-- the run actually **truncates** when consumption reaches 4M, which at the measured 25k per file is
-  around **160 files**.
+- the **allotment** meets the cap at about **115 files** — the formula grants 1.3 × 40,000 = 52,000
+  tokens per file, and the 6M ceiling divides by that at 115.4, with the line term only lowering
+  it. Past this point the engine is handed the ceiling rather than what the formula asked for;
+- the run actually **truncates** when consumption reaches 6M, which at the measured 25k per file is
+  around **240 files**.
 
 So the ceiling starts binding at roughly half the size where it starts cutting. A change between
 those two numbers is capped but still completes.
 
-The ceiling was 2M for one day, while the store was inert. Raising it back to 4M is the cheaper
-direction, not a relaxation: a run that exceeds the ceiling settles incomplete and an incomplete
+The ceiling was 2M for one day, while the store was inert. It now sits at 6M, which is the largest
+value that has any effect at all: the action's allotment formula clamps at 6,000,000 before this
+input applies, so a bigger number would be inert. Raising it is the cheaper direction, not a
+relaxation: a run that exceeds the ceiling settles incomplete and an incomplete
 run hands off no store, so a pull request that has **never completed under its current identity**
 pays in full on every push. One that completed while it was smaller keeps replaying that older
 store until retention expires. A ceiling low enough to be hit is self-defeating for the first
