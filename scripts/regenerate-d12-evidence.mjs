@@ -26,7 +26,7 @@ const EVIDENCE_FILES = [
 ];
 
 export const CONTAINER_IMAGE = "node:24.18.0-bookworm";
-export const PLAYWRIGHT_PIN = "playwright@1.61.1";
+export const PLAYWRIGHT_PIN = "playwright@1.62.0";
 
 // The one command the container runs. `safe.directory` is not optional: the bind mount is owned by
 // the host user and git refuses a repository it does not own, which otherwise fails the clone step
