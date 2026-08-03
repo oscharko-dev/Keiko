@@ -32,11 +32,11 @@ same 3,000 file reviews gives about 4.6k per file. Both numbers are real and the
 windows. Plan with 25k, because it comes from money actually spent, and expect the materialized
 per-file figure to rise toward it as billing settles.
 
-| Change    | First review (empty store) | Later push (most files unchanged) |
-| --------- | -------------------------- | --------------------------------- |
-| 5 files   | ~0.15 EUR                  | ~0.03 EUR                         |
-| 50 files  | ~1.50–3.50 EUR             | ~0.03–0.25 EUR                    |
-| 135 files | ~4.50 EUR                  | ~0.10 EUR                         |
+| Change    | First review (empty store) | Later push (most files unchanged)    |
+| --------- | -------------------------- | ------------------------------------ |
+| 5 files   | ~0.15 EUR                  | ~0.03 EUR                            |
+| 50 files  | ~1.50–3.50 EUR             | ~0.03–0.25 EUR                       |
+| 135 files | ~4.50 EUR                  | ~0.10 EUR, when a store was retained |
 
 The spread on the first-review column is prompt caching: the lower bound assumes the provider
 caches most of the prompt across files, the upper bound assumes none of it.
@@ -72,8 +72,12 @@ it yet**, and adopting it takes two steps, not one:
    `store_written` output (Keiko-for-Quality#78), because budget exhaustion still settles
    `INCOMPLETE` — without this the store is written on the review runner and stranded there.
 
-Until both are done, a large pull request here re-prices every file on every push, and the honest
-budget response is to split the change rather than to raise or lower the ceiling.
+Until both are done, a large pull request here re-prices every file on every push **for as long as
+it has no retained complete store to fall back on**. The locator takes the newest eligible
+same-named artifact rather than the previous run's, so a pull request that completed while it was
+smaller keeps benefiting from that older store until the seven-day retention expires; the
+non-converging case is the one that has never completed under its current identity. Either way the
+honest budget response is to split the change rather than to raise or lower the ceiling.
 
 ## How to tell whether memoization is working
 

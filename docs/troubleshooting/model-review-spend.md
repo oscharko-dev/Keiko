@@ -49,6 +49,10 @@ A cold start is **expected and correct** in each of these cases, none of which i
   under the same identity. The locator takes the newest eligible same-named artifact, not the
   immediately preceding run's, so an earlier complete store inside the retention window is still
   found;
+- `KEIKO_QUALITY_STORE_HMAC` was rotated. The signing key is deliberately **not** part of the
+  store identity — that is profile, model, protocol, and pin — so a retained artifact stays
+  eligible by name, and the verify step then recomputes its MAC with the new key and discards it.
+  Zero entries on the first run after a rotation is the boundary working, not a defect;
 - the store is disabled for the run, which the log states explicitly.
 
 Suspect a real failure only when a prior run under the same identity completed inside the
@@ -60,9 +64,14 @@ retention window and this run still loads nothing.
 # 1. Confirm the current run loaded nothing, and how many files it paid for.
 gh run view <run-id> --log | grep -oE '"code":"cache[^}]*}'
 
-# 2. Find the run that should have produced the store, and check it settled complete.
-gh run list --workflow keiko-for-quality.yml --branch <branch> --limit 10 \
-  --json databaseId,conclusion,createdAt
+# 2. Find the earlier runs on this branch...
+gh run list --workflow keiko-for-quality.yml --branch <branch> --limit 20 \
+  --json databaseId,createdAt
+
+# ...and read how the REVIEWER settled, which is not the workflow's conclusion. A review can
+# settle complete and the workflow still fail afterwards (a hand-off or signing failure), and a
+# workflow can succeed while the review settled incomplete. Only this diagnostic answers it.
+gh run view <earlier-run-id> --log | grep -oE '"code":"settlement\.[^}]*}'
 
 # 3. Check that the signing job ran and that a signed artifact exists for that run.
 gh run view <earlier-run-id> --json jobs --jq '.jobs[] | "\(.name): \(.conclusion)"'
@@ -114,8 +123,10 @@ file that the store cannot answer. Nothing throttles the number of runs per pull
 gh run list --workflow keiko-for-quality.yml --limit 100 \
   --json createdAt,headBranch,conclusion
 
-# How many files a given run paid for.
-gh run view <run-id> --log | grep -oE '"code":"inventory.completed"[^}]*}'
+# How many files a given run actually sent to the model. Use the MISSES here, not
+# inventory.completed: the inventory counts every reviewable path including the ones the store
+# answered, so on a healthy repeat run it overstates paid work by nearly the whole pull request.
+gh run view <run-id> --log | grep -oE '"code":"cache.hits"[^}]*}'
 ```
 
 **Resolution**
