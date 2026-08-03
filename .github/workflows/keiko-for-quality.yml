@@ -436,6 +436,18 @@ jobs:
           # one day). The store fix in v0.10.0 is the structural answer; this ceiling is the
           # backstop while credit is tight.
           #
+          # A second cost, sharper and found in review (Codex, #2934): the store hand-off below runs
+          # only for a COMPLETE settlement, and the action refuses to write a store for anything
+          # else. So a pull request large enough to exhaust this ceiling never seeds a store at
+          # all — every later push starts empty and spends the ceiling again, never converging.
+          # For exactly the large pull requests this cap targets, it therefore costs more over a
+          # branch's life than the old ceiling did with a working store. The durable fix is
+          # upstream (Keiko-for-Quality#75): persist the verdicts for files that WERE reviewed
+          # when the incompleteness is budget exhaustion, which does not cast doubt on those
+          # files' own verdicts the way a schema rejection or an engine error does. Until that
+          # ships, this ceiling is a saving on mid-size pull requests and a repeated cost on very
+          # large ones — stated here rather than discovered later.
+          #
           # The cost is real and must not be described as free: a pull request whose review needs
           # more than 2M tokens now stops dispatching files partway and settles INCOMPLETE. That is
           # visible and honest rather than silent — an incomplete settlement says so — but it does
