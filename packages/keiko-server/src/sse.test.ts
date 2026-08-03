@@ -68,7 +68,7 @@ describe("startSseHeartbeat process-liveness", () => {
     }
   });
 
-  it("emits an observable heartbeat event for browser EventSource clients", async () => {
+  it("uses comment-only heartbeats by default", async () => {
     vi.useFakeTimers();
     try {
       const write = vi.fn(() => true);
@@ -80,6 +80,29 @@ describe("startSseHeartbeat process-liveness", () => {
         on: vi.fn(),
       } as unknown as import("node:http").ServerResponse;
       const stop = startSseHeartbeat(res, 10);
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(write).toHaveBeenCalledOnce();
+      expect(write).toHaveBeenCalledWith(": keep-alive\n\n");
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("emits an opt-in observable heartbeat event for browser EventSource clients", async () => {
+    vi.useFakeTimers();
+    try {
+      const write = vi.fn(() => true);
+      const res = {
+        destroyed: false,
+        writableEnded: false,
+        write,
+        destroy: vi.fn(),
+        on: vi.fn(),
+      } as unknown as import("node:http").ServerResponse;
+      const stop = startSseHeartbeat(res, 10, "heartbeat");
 
       await vi.advanceTimersByTimeAsync(10);
 

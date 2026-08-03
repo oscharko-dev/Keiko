@@ -566,6 +566,56 @@ describe("bounded coding safe-activity projection", () => {
     expect(projection.currentContent()).toBeNull();
   });
 
+  it("clears expired subscribers on a later workspace-wide purge", () => {
+    let now = 1_721_323_200_000;
+    const projection = createCodingSafeActivityProjection({ now: () => now, ttlMs: 100 });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    const priorWorkspaceListener = vi.fn();
+    projection.subscribeContent(priorWorkspaceListener);
+    now += 100;
+    expect(projection.currentContent()).toBeNull();
+
+    projection.purgeAll("workspace-switch");
+    projection.open({
+      runId: "run-safe-activity-next",
+      workspaceId: "workspace-safe-activity-next",
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+
+    expect(priorWorkspaceListener).toHaveBeenCalledOnce();
+  });
+
+  it("records a content-free diagnostic for explicit purge reasons", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      diagnostics: { record: (record) => void records.push(record) },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+
+    projection.purge(RUN_ID, "takeover");
+
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        code: "CODING_SAFE_ACTIVITY_PURGED",
+        errorClass: "SafeActivityProjectionPurge",
+      }),
+    );
+    expect(JSON.stringify(records)).toContain("takeover");
+    expect(JSON.stringify(records)).not.toContain(RUN_ID);
+  });
+
   it("replaces the plan snapshot with monotonic revisions and purges it with the feed", () => {
     const projection = openProjection();
     expect(

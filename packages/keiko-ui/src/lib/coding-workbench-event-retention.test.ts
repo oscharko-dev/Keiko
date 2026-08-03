@@ -167,11 +167,11 @@ describe("Coding Workbench event retention", () => {
           onError: vi.fn(),
           onReset: vi.fn(() => Promise.resolve()),
         },
-        { staleAfterMs: 100, createEventSource },
+        { staleAfterMs: 50, createEventSource },
       );
       sources[0]?.emit("runtime-event", JSON.stringify(observation(1)));
 
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(50);
 
       expect(onEvents).toHaveBeenCalledWith([observation(1)], "cursor-1", false);
       expect(createEventSource).toHaveBeenLastCalledWith("run-1", "cursor-1");

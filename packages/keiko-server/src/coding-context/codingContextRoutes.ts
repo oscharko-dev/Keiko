@@ -20,7 +20,10 @@ import {
 
 import type { UiHandlerDeps } from "../deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
-import { editorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
+import {
+  editorAgentAuthorityRegistry,
+  editorAgentAuthorizedConnectorScopes,
+} from "../editor/agentAuthorityRegistry.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import {
   GitDeliveryBodyTooLargeError,
@@ -196,17 +199,27 @@ function resolveRequest(
   deps: UiHandlerDeps,
 ): CodeContextReadRequest | undefined {
   const ceiling = serverCeiling(deps);
-  const resolved = editorAgentAuthorityRegistry.reserveForConnector(
+  const nowIso = new Date().toISOString();
+  const preflight = editorAgentAuthorityRegistry.resolve(
     parsed.authority.reference,
     parsed.authority.workspaceRoot,
     ceiling,
-    new Date().toISOString(),
+    nowIso,
   );
-  if (!resolved.ok) return undefined;
+  if (!preflight.ok) return undefined;
+  const connectorScopes = editorAgentAuthorizedConnectorScopes(preflight.envelope);
+  if (connectorScopes === undefined) return undefined;
+  const reserved = editorAgentAuthorityRegistry.reserveForConnector(
+    parsed.authority.reference,
+    parsed.authority.workspaceRoot,
+    ceiling,
+    nowIso,
+  );
+  if (!reserved.ok) return undefined;
   return {
-    runId: resolved.envelope.runId,
-    effectiveMode: resolveEffectiveCodingWorkbenchMode(resolved.envelope.effectiveMode, ceiling),
-    connectorScopes: resolved.envelope.connectorScopes,
+    runId: reserved.envelope.runId,
+    effectiveMode: resolveEffectiveCodingWorkbenchMode(reserved.envelope.effectiveMode, ceiling),
+    connectorScopes,
     refs: parsed.refs,
     maxBodyBytes: parsed.maxBodyBytes,
   };

@@ -45,6 +45,11 @@ export interface CodingToolApprovalActivation {
 }
 
 export interface CodingToolApprovalProofVerifier {
+  readonly matches: (input: {
+    readonly runId: string;
+    readonly request: ApprovableToolRequest;
+    readonly nowMs: number;
+  }) => boolean;
   readonly consume: (input: {
     readonly runId: string;
     readonly request: ApprovableToolRequest;
@@ -88,6 +93,7 @@ export function createCodingToolApprovalBridge(): CodingToolApprovalBridge {
   return {
     observePermission: (input): boolean => observePermission(pending, approved, input),
     activatePermission: (input): boolean => activatePermission(pending, approved, input),
+    matches: (input): boolean => matchesApprovedAction(approved, input),
     consume: (input): boolean => consumeApprovedAction(approved, input),
     invalidateRun: (runId): void => {
       invalidateRun(pending, approved, runId);
@@ -151,15 +157,28 @@ function consumeApprovedAction(
     readonly nowMs: number;
   },
 ): boolean {
+  if (!matchesApprovedAction(approved, input)) return false;
+  const proof = input.request.approvalProof;
+  if (proof === undefined) return false;
+  approved.delete(actionKey(input.runId, proof.approvalId));
+  return true;
+}
+
+function matchesApprovedAction(
+  approved: Map<string, ApprovedAction>,
+  input: {
+    readonly runId: string;
+    readonly request: ApprovableToolRequest;
+    readonly nowMs: number;
+  },
+): boolean {
   pruneApproved(approved, input.nowMs);
   const proof = input.request.approvalProof;
   if (proof === undefined) return false;
   const key = actionKey(input.runId, proof.approvalId);
   const record = approved.get(key);
   const digest = codingToolApprovalBindingDigest(input.runId, input.request);
-  if (!approvedActionMatches(record, input.request, proof, digest)) return false;
-  approved.delete(key);
-  return true;
+  return approvedActionMatches(record, input.request, proof, digest);
 }
 
 function approvedActionMatches(

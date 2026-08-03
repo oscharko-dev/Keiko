@@ -249,16 +249,19 @@ export class CodingRuntimeOrchestrator {
   }
 
   resume(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
-    return this.serialValue(() => this.resumeCurrent(runId, input));
+    return this.serial(() => this.resumeCurrent(runId, input));
   }
 
-  private resumeCurrent(runId: string, input: unknown): CodingRuntimeOrchestratorResult {
+  private async resumeCurrent(
+    runId: string,
+    input: unknown,
+  ): Promise<CodingRuntimeOrchestratorResult> {
     const admitted = resumeAdmission(this.current(), runId, input, this.activeEffectiveMode);
     if (admitted === undefined) return this.fail("invalid-intent");
     const approval = this.approvals.get(runId);
     if (approval !== undefined && approval.expiresAt <= this.now().getTime()) {
       this.approvals.delete(runId);
-      return this.transition(admitted.current, "failed", "authority-expired");
+      return this.stopExpiredPausedRuntime(admitted.current);
     }
     const resumed = this.deps.manager.resume(runId, admitted.requestedMode);
     if (!resumed.ok) return this.fail(runtimePauseFailureCode(resumed.failureCode));
@@ -268,6 +271,19 @@ export class CodingRuntimeOrchestrator {
     const transitioned = this.transition(admitted.current, nextState);
     this.activeEffectiveMode = effectiveModeAfterResume(transitioned, effectiveMode);
     return transitioned;
+  }
+
+  private async stopExpiredPausedRuntime(
+    current: CodingRuntimeSnapshot,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    try {
+      const stopped = await this.deps.manager.stop(current.runId, "failed");
+      return stopped.ok
+        ? this.transition(current, "failed", "authority-expired")
+        : this.transition(current, "recovery-required", "recovery-required");
+    } catch {
+      return this.transition(current, "recovery-required", "recovery-required");
+    }
   }
 
   /**
@@ -1094,7 +1110,10 @@ function effectiveModeAfterResume(
   result: CodingRuntimeOrchestratorResult,
   effectiveMode: CodingWorkbenchMode,
 ): CodingWorkbenchMode | undefined {
-  return result.ok && result.snapshot.state === "running" ? effectiveMode : undefined;
+  return result.ok &&
+    (result.snapshot.state === "running" || result.snapshot.state === "awaiting-approval")
+    ? effectiveMode
+    : undefined;
 }
 
 function resumeAdmission(

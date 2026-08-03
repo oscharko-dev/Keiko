@@ -69,10 +69,12 @@ function depsFor(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
 }
 
 interface AuthorityOptions {
+  readonly actionClasses?: CodingWorkbenchAuthorityEnvelope["actionClasses"] | undefined;
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly deploymentCeiling?: CodingWorkbenchMode | undefined;
   readonly effectiveMode?: CodingWorkbenchMode | undefined;
   readonly maxToolCalls?: number | undefined;
+  readonly networkPolicy?: CodingWorkbenchAuthorityEnvelope["networkPolicy"] | undefined;
 }
 
 function registerAuthority(options: AuthorityOptions = {}): Record<string, unknown> {
@@ -99,12 +101,13 @@ function registerAuthority(options: AuthorityOptions = {}): Record<string, unkno
     deploymentCeiling,
     effectiveMode,
     runtimeSource: "keiko-sidecar",
-    actionClasses: [
+    actionClasses: options.actionClasses ?? [
       "workspace-read",
       "workspace-write",
       "command-execution",
       "verification",
       "connector-access",
+      "network-egress",
     ],
     connectorScopes,
     modelProfile: {
@@ -120,7 +123,11 @@ function registerAuthority(options: AuthorityOptions = {}): Record<string, unkno
       maxCommandTimeoutMs: 30_000,
       requirePerCommandApproval: true,
     },
-    networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+    networkPolicy: options.networkPolicy ?? {
+      mode: "connector-scoped-egress",
+      allowLoopback: false,
+      connectorScopes,
+    },
     gates: ["human-approval", "verification-green", "artifact-review"],
     budget: {
       maxRuntimeMs: 120_000,
@@ -203,6 +210,35 @@ describe("coding context pack route", () => {
     const blocked = body.blocked as readonly Record<string, unknown>[];
     expect(blocked).toHaveLength(1);
     expect(blocked[0]).toMatchObject({ source: "jira", reason: "missing-scope" });
+  });
+
+  it("denies connector reads when the retained envelope forbids network egress", async () => {
+    const github = fakeGitHubPort();
+    const readJson = vi.fn((argv: readonly string[]) => github.readJson(argv));
+    const request = packRequest(
+      {
+        refs: [
+          {
+            source: "github",
+            objectKind: "issue",
+            ownerAndRepo: "oscharko-dev/Keiko",
+            objectId: "1989",
+          },
+        ],
+      },
+      { networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] } },
+    );
+
+    const result = await handleCodingContextPack(
+      ctxFor(request),
+      depsFor({ codingContextGitHubPort: { readJson } }),
+    );
+
+    expect(result).toMatchObject({
+      status: 403,
+      body: { error: { code: "CODING_CONTEXT_AUTHORITY_DENIED" } },
+    });
+    expect(readJson).not.toHaveBeenCalled();
   });
 
   it("denies authority whose registered ceiling no longer matches server policy", async () => {
@@ -336,7 +372,7 @@ describe("coding context pack route", () => {
       packRequest({ extra: true }),
       packRequestWithAuthorityOverrides({ effectiveMode: "autonomous-delivery" }),
       packRequestWithAuthorityOverrides({ connectorScopes: ["issue-tracker.read"] }),
-      packRequest({ authority: { runId: "../escape" } }),
+      packRequestWithAuthorityOverrides({ runId: "../escape" }),
       packRequest({ refs: [] }),
       packRequest({
         refs: [

@@ -848,6 +848,17 @@ describe("coding runtime routes", () => {
     expect(subscribe).toHaveBeenCalledWith("run-1", "run-1:42", expect.any(Object));
   });
 
+  it("treats an empty Last-Event-ID header as an absent cursor", () => {
+    const subscribe = vi.fn(() => ({ ok: true as const, detach: () => undefined }));
+    const ctx = context("", { runId: "run-1" });
+    ctx.req.headers["last-event-id"] = "";
+
+    expect(handleCodingRuntimeEvents(ctx, runtime({ codingRuntimeEventHub: { subscribe } }))).toBe(
+      STREAMING,
+    );
+    expect(subscribe).toHaveBeenCalledWith("run-1", undefined, expect.any(Object));
+  });
+
   it("keeps an idle runtime event stream alive and stops heartbeats on close", async () => {
     vi.useFakeTimers();
     try {

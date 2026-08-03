@@ -361,7 +361,7 @@ export function handleCodingRuntimeResearchRevoke(
     : mutation(ctx, deps, runId, (runtime, body) => runtime.revokeResearch(runId, body));
 }
 
-// Inline follow-up: a drafted message is admitted while the run is running or paused; the
+// Inline follow-up: a drafted message is admitted only while the run is running; the
 // orchestrator's operation coordinator enforces the revision and one-use request-id serial
 // admission, so exactly one turn is admitted per revision and no hidden prompt queue is possible.
 export function handleCodingRuntimeFollowUp(
@@ -503,7 +503,7 @@ function resolveEventCursor(
   lastEventId: string | string[] | undefined,
   queryCursor: string | null,
 ): string | undefined {
-  if (typeof lastEventId === "string") return lastEventId;
+  if (typeof lastEventId === "string" && lastEventId.length > 0) return lastEventId;
   return queryCursor === null || queryCursor.length === 0 ? undefined : queryCursor;
 }
 
@@ -527,7 +527,7 @@ export function openCodingRuntimeSse(
   lastEventId: string | undefined,
 ): void {
   res.writeHead(200, SSE_HEADERS);
-  startSseHeartbeat(res);
+  startSseHeartbeat(res, undefined, "heartbeat");
   let detach = (): void => undefined;
   let closed = false;
   const close = (): void => {

@@ -8,6 +8,7 @@ import {
 import {
   EDITOR_AGENT_AUTHORITY_MAX_RECORDS,
   EditorAgentAuthorityRegistry,
+  editorAgentAuthorizedConnectorScopes,
   editorAgentWorkspaceRootDigest,
 } from "./agentAuthorityRegistry.js";
 
@@ -442,7 +443,20 @@ describe("EditorAgentAuthorityRegistry.reserveForConnector", () => {
     reference: { runId: string; envelopeDigest: string };
   } {
     const registry = new EditorAgentAuthorityRegistry();
-    const registration = registry.register(envelope(over), "autonomous-delivery", NOW);
+    const registration = registry.register(
+      envelope({
+        actionClasses: CODING_WORKBENCH_ACTION_CLASSES,
+        connectorScopes: ["source-control.read"],
+        networkPolicy: {
+          mode: "connector-scoped-egress",
+          allowLoopback: false,
+          connectorScopes: ["source-control.read"],
+        },
+        ...over,
+      }),
+      "autonomous-delivery",
+      NOW,
+    );
     if (!registration.ok) throw new Error("registration failed");
     return { registry, reference: registration.authorityRef };
   }
@@ -486,6 +500,35 @@ describe("EditorAgentAuthorityRegistry.reserveForConnector", () => {
         NOW,
       ),
     ).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  it.each([
+    [
+      "deny-all network policy",
+      { networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] } },
+    ],
+    [
+      "missing network-egress class",
+      {
+        actionClasses: CODING_WORKBENCH_ACTION_CLASSES.filter(
+          (value) => value !== "network-egress",
+        ),
+        networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+      },
+    ],
+    [
+      "empty network connector scopes",
+      {
+        connectorScopes: ["source-control.read"],
+        networkPolicy: {
+          mode: "connector-scoped-egress",
+          allowLoopback: false,
+          connectorScopes: [],
+        },
+      },
+    ],
+  ] as const)("derives no authorized connector scopes for %s", (_label, overrides) => {
+    expect(editorAgentAuthorizedConnectorScopes(envelope(overrides))).toBeUndefined();
   });
 
   it("refuses a local-bridge-bound envelope: one-shot editor authority is not connector-consumable", () => {

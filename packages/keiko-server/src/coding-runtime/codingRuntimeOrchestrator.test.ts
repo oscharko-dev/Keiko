@@ -1055,6 +1055,11 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
 
   it("stashes a paused permission request until explicit resume", async () => {
     const f = await runningFixture();
+    f.manager.resume.mockImplementation(() => ({
+      ok: true,
+      paused: false,
+      effectiveMode: "governed-assist",
+    }));
     await f.orchestrator.pause("run-1", { requestId: "run-1" });
     const afterSubmit = await f.orchestrator.ingest({
       schemaVersion: "1",
@@ -1091,6 +1096,7 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
     expect(successfulSnapshot(resumed)).toMatchObject({
       state: "awaiting-approval",
+      effectiveMode: "governed-assist",
       pendingPermission: { requestId: "permission-1" },
     });
     const decided = await f.orchestrator.decideApproval("run-1", {
@@ -1100,6 +1106,9 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     });
     expect(decided.ok).toBe(true);
     expect(f.approvalAuthority.issue).toHaveBeenCalledOnce();
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    await f.orchestrator.resume("run-1", { requestId: "run-1" });
+    expect(f.manager.resume).toHaveBeenLastCalledWith("run-1", "governed-assist");
   });
 
   it("rejects follow-up task submission while paused", async () => {
@@ -1116,36 +1125,40 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledOnce();
   });
 
-  it("fails closed when a stashed permission expires before resume", async () => {
-    let nowMs = FIXTURE_NOW_MS;
-    const f = await runningFixture(() => new Date(nowMs));
-    await f.orchestrator.pause("run-1", { requestId: "run-1" });
-    await f.orchestrator.ingest({
-      schemaVersion: "1",
-      eventId: "event-pause-expired",
-      runId: "run-1",
-      occurredAt: "2026-01-01T00:00:02.000Z",
-      kind: "permission-requested",
-      permissionRequest: {
-        requestId: "permission-1",
-        kind: "workspace-write",
-        actionClass: "workspace-write",
-        reasonCode: "approval-required",
-        actionKind: "file-edit",
-        expiresAt: "2026-01-01T00:01:00.000Z",
-      },
-    });
-    nowMs += 60_001;
+  it.each([60_000, 60_001])(
+    "fails closed and stops the manager when a stashed permission expires at +%i ms",
+    async (elapsedMs) => {
+      let nowMs = FIXTURE_NOW_MS;
+      const f = await runningFixture(() => new Date(nowMs));
+      await f.orchestrator.pause("run-1", { requestId: "run-1" });
+      await f.orchestrator.ingest({
+        schemaVersion: "1",
+        eventId: "event-pause-expired",
+        runId: "run-1",
+        occurredAt: "2026-01-01T00:00:02.000Z",
+        kind: "permission-requested",
+        permissionRequest: {
+          requestId: "permission-1",
+          kind: "workspace-write",
+          actionClass: "workspace-write",
+          reasonCode: "approval-required",
+          actionKind: "file-edit",
+          expiresAt: "2026-01-01T00:01:00.000Z",
+        },
+      });
+      nowMs += elapsedMs;
 
-    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+      const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
 
-    expect(successfulSnapshot(resumed)).toMatchObject({
-      state: "failed",
-      failureCode: "authority-expired",
-    });
-    expect(f.manager.resume).not.toHaveBeenCalled();
-    expect(f.approvalAuthority.issue).not.toHaveBeenCalled();
-  });
+      expect(successfulSnapshot(resumed)).toMatchObject({
+        state: "failed",
+        failureCode: "authority-expired",
+      });
+      expect(f.manager.resume).not.toHaveBeenCalled();
+      expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+      expect(f.approvalAuthority.issue).not.toHaveBeenCalled();
+    },
+  );
 
   it("still terminates a paused run on a redacted runtime failure", async () => {
     const f = await runningFixture();

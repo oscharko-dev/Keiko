@@ -17,14 +17,20 @@ export const SSE_HEADERS: Readonly<Record<string, string>> = {
   "X-Accel-Buffering": "no",
 };
 
-export function startSseHeartbeat(res: ServerResponse, intervalMs = 15000): () => void {
+export function startSseHeartbeat(
+  res: ServerResponse,
+  intervalMs = 15000,
+  observableEvent?: "heartbeat",
+): () => void {
   const timer = setInterval(() => {
     if (res.destroyed || res.writableEnded) return;
     if (!res.write(": keep-alive\n\n")) {
       res.destroy();
       return;
     }
-    if (!res.write("event: heartbeat\ndata: {}\n\n")) res.destroy();
+    if (observableEvent === "heartbeat" && !res.write("event: heartbeat\ndata: {}\n\n")) {
+      res.destroy();
+    }
   }, intervalMs);
   // The heartbeat must never be what keeps the process alive: on shutdown the
   // socket teardown fires `close` and clears it, but an un-unref'd interval

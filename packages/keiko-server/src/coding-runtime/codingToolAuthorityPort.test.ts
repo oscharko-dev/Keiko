@@ -12,8 +12,8 @@ import {
 import {
   codingToolApprovalBindingDigest,
   createCodingToolApprovalBridge,
+  type ApprovableToolRequest,
 } from "./codingToolApprovalBridge.js";
-import type { CodingToolActionRequest } from "./codingToolIpc.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingToolGovernedPorts } from "./codingToolGovernedDelegate.js";
 import type { CodingRuntimeCapabilityDelegationInput } from "./runtimeAuthorityService.js";
@@ -126,6 +126,16 @@ function runtimeContext(): {
   };
 }
 
+function approvableRequest(action: "command" | "verification"): ApprovableToolRequest {
+  const identity = {
+    actionId: "action-approved",
+    idempotencyKey: "action-approved",
+  };
+  return action === "command"
+    ? { ...identity, action, commandId: "test" }
+    : { ...identity, action, verifierId: "test" };
+}
+
 async function duplicateResults(
   runtime: ReturnType<typeof createRuntimeCodingToolFacade>,
   body: string,
@@ -141,7 +151,7 @@ describe("CodingToolAuthorityPort", () => {
   it("binds capability admission to live facts, replay identity, and usage", () => {
     const resolveCapabilityForDelegation = vi.fn(() => ({
       ok: true as const,
-      envelope: undefined as never,
+      envelope: fullyAuthorizedEnvelope,
     }));
     const revalidateCapabilityForMutation = vi.fn(() => ({
       ok: true as const,
@@ -597,12 +607,9 @@ describe("CodingToolAuthorityPort", () => {
     },
   );
 
-  it.each([
-    ["verification", { action: "verification", verifierId: "test" }],
-    ["command", { action: "command", commandId: "test" }],
-  ] as const)(
+  it.each(["verification", "command"] as const)(
     "admits a governed-assist %s only with its exact approved proof",
-    (_label, action) => {
+    (action) => {
       const envelope = restrictedEnvelope({
         effectiveMode: "governed-assist",
         commandPolicy: {
@@ -614,7 +621,10 @@ describe("CodingToolAuthorityPort", () => {
       });
       const authority = {
         revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
-        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+        resolveCapabilityForDelegation: vi
+          .fn()
+          .mockReturnValueOnce({ ok: false as const, reason: "budget-exceeded" as const })
+          .mockReturnValue({ ok: true as const, envelope }),
       };
       const approvalProofVerifier = createCodingToolApprovalBridge();
       const port = createCodingToolAuthorityPort(
@@ -626,14 +636,7 @@ describe("CodingToolAuthorityPort", () => {
         }),
         { approvalProofVerifier },
       );
-      const bareRequest = {
-        ...action,
-        actionId: "action-approved",
-        idempotencyKey: "action-approved",
-      } as unknown as CodingToolActionRequest;
-      if (bareRequest.action !== "command" && bareRequest.action !== "verification") {
-        throw new TypeError("expected an approvable request");
-      }
+      const bareRequest = approvableRequest(action);
       const approvalProof = {
         approvalId: bareRequest.actionId,
         approvalDigest: codingToolApprovalBindingDigest("run-authority-a", bareRequest),
@@ -672,6 +675,7 @@ describe("CodingToolAuthorityPort", () => {
           : { ...request, verifierId: "different-verifier" };
       expect(port.admit("runtime-capability-secret", mismatched).ok).toBe(false);
 
+      expect(port.admit("runtime-capability-secret", request).ok).toBe(false);
       expect(port.admit("runtime-capability-secret", request).ok).toBe(true);
       expect(port.admit("runtime-capability-secret", request).ok).toBe(false);
     },

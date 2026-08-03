@@ -96,27 +96,45 @@ function admit(
     nowIso: trusted.nowIso,
   });
   if (!preflight.ok) return { ok: false, reason: preflight.reason };
-  const approvalVerified = approved(preflight.envelope, trusted, request, approvalProofVerifier);
-  if (!actionAllowed(preflight.envelope, request, approvalVerified)) {
+  const approvalMatched = approved(preflight.envelope, trusted, request, approvalProofVerifier);
+  if (!actionAllowed(preflight.envelope, request, approvalMatched)) {
     return { ok: false, reason: "action-not-authorized" };
   }
   if (request.action === "edit" && !reserveEditDelegation) {
-    return guarded(authority, context, capability, request, binding, approvalVerified);
+    return guarded(authority, context, capability, request, binding, false);
   }
-  const resolved = authority.resolveCapabilityForDelegation({
+  const resolved = resolveDelegation(authority, trusted, capability, request);
+  if (!resolved.ok) return { ok: false, reason: resolved.reason };
+  // A one-shot proof is consumed only after the delegation budget has been reserved. Consuming it
+  // during preflight would make a transient reservation failure permanently deny a valid action.
+  const approvalVerified = consumeMatchedApproval(
+    approvalMatched,
+    trusted,
+    request,
+    approvalProofVerifier,
+  );
+  return actionAllowed(resolved.envelope, request, approvalVerified)
+    ? guarded(authority, context, capability, request, binding, approvalVerified)
+    : { ok: false, reason: "action-not-authorized" };
+}
+
+function resolveDelegation(
+  authority: Pick<CodingRuntimeAuthorityService, "resolveCapabilityForDelegation">,
+  context: CodingToolAuthorityContext,
+  capability: string,
+  request: CodingToolActionRequest,
+): ReturnType<CodingRuntimeAuthorityService["resolveCapabilityForDelegation"]> {
+  return authority.resolveCapabilityForDelegation({
     capability,
-    adapterKind: trusted.adapterKind,
-    liveFacts: trusted.liveFacts,
+    adapterKind: context.adapterKind,
+    liveFacts: context.liveFacts,
     delegationId: request.actionId,
     idempotencyKey: request.idempotencyKey,
     usage: delegationUsage(request),
-    workspaceRoot: trusted.workspaceRoot,
-    deploymentCeiling: trusted.deploymentCeiling,
-    nowIso: trusted.nowIso,
+    workspaceRoot: context.workspaceRoot,
+    deploymentCeiling: context.deploymentCeiling,
+    nowIso: context.nowIso,
   });
-  return resolved.ok
-    ? guarded(authority, context, capability, request, binding, approvalVerified)
-    : { ok: false, reason: resolved.reason };
 }
 
 function approved(
@@ -395,7 +413,32 @@ function verifyApprovalProof(
     return false;
   }
   const nowMs = Date.parse(context.nowIso);
+  return Number.isFinite(nowMs) && verifier.matches({ runId: context.runId, request, nowMs });
+}
+
+function consumeApprovalProof(
+  context: CodingToolAuthorityContext,
+  request: CodingToolActionRequest,
+  verifier: CodingToolApprovalProofVerifier | undefined,
+): boolean {
+  if (
+    verifier === undefined ||
+    context.runId === undefined ||
+    (request.action !== "command" && request.action !== "verification")
+  ) {
+    return false;
+  }
+  const nowMs = Date.parse(context.nowIso);
   return Number.isFinite(nowMs) && verifier.consume({ runId: context.runId, request, nowMs });
+}
+
+function consumeMatchedApproval(
+  matched: boolean,
+  context: CodingToolAuthorityContext,
+  request: CodingToolActionRequest,
+  verifier: CodingToolApprovalProofVerifier | undefined,
+): boolean {
+  return matched && consumeApprovalProof(context, request, verifier);
 }
 
 function deliveryAllowed(
