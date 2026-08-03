@@ -76,6 +76,19 @@ interface PortableUpgradePaths {
   readonly backupTarget: string;
 }
 
+class PortableUpgradeRollbackError extends Error {
+  readonly rollbackCause: unknown;
+
+  constructor(backupRoot: string, promotionCause: unknown, rollbackCause: unknown) {
+    super(
+      `portable upgrade failed and automatic rollback also failed; the previous install was preserved at ${backupRoot} — restore it manually`,
+      { cause: promotionCause },
+    );
+    this.name = "PortableUpgradeRollbackError";
+    this.rollbackCause = rollbackCause;
+  }
+}
+
 const STABLE_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const PORTABLE_TARGETS = ["windows-x64", "macos-arm64", "macos-x64"] as const;
 
@@ -305,16 +318,27 @@ function createPortableUpgradePaths(
   };
 }
 
-function restoreManagedUpgrade(paths: PortableUpgradePaths, promoted: boolean): void {
-  if (promoted) rmSync(paths.managedRoot, { recursive: true, force: true });
-  if (existsSync(paths.backupTarget) && !existsSync(paths.managedRoot)) {
-    renameSync(paths.backupTarget, paths.managedRoot);
+function restoreManagedUpgrade(
+  paths: PortableUpgradePaths,
+  promoted: boolean,
+): { readonly restored: true } | { readonly restored: false; readonly cause: unknown } {
+  try {
+    if (promoted) rmSync(paths.managedRoot, { recursive: true, force: true });
+    if (existsSync(paths.backupTarget) && !existsSync(paths.managedRoot)) {
+      renameSync(paths.backupTarget, paths.managedRoot);
+    }
+    if (!existsSync(paths.managedRoot) || existsSync(paths.backupTarget)) {
+      return { restored: false, cause: new Error("portable rollback could not be verified") };
+    }
+    return { restored: true };
+  } catch (error) {
+    return { restored: false, cause: error };
   }
 }
 
-function cleanupPortableUpgrade(paths: PortableUpgradePaths): void {
+function cleanupPortableUpgrade(paths: PortableUpgradePaths, removeBackup: boolean): void {
   rmSync(paths.stagingRoot, { recursive: true, force: true });
-  rmSync(paths.backupRoot, { recursive: true, force: true });
+  if (removeBackup) rmSync(paths.backupRoot, { recursive: true, force: true });
 }
 
 function promoteStagedUpgrade(
@@ -346,7 +370,12 @@ function promoteStagedUpgrade(
     );
     return layout;
   } catch (error) {
-    if (moved) restoreManagedUpgrade(paths, promoted);
+    if (moved) {
+      const rollback = restoreManagedUpgrade(paths, promoted);
+      if (!rollback.restored) {
+        throw new PortableUpgradeRollbackError(paths.backupRoot, error, rollback.cause);
+      }
+    }
     throw error;
   }
 }
@@ -356,12 +385,16 @@ export function upgradeManagedInstall(input: PortableManagedUpgradeInput): Porta
     throw new Error("portable upgrade candidate must be newer than or target-corrective");
   }
   const paths = createPortableUpgradePaths(input.target, input.managedRoot, input.stateDir);
+  let removeBackup = true;
   try {
     copyTreeSafe(input.source.layout.installRoot, paths.stagedTarget);
     const stagedSource = validatePortableRoot(input.target, paths.stagedTarget);
     return promoteStagedUpgrade(input, stagedSource, paths);
+  } catch (error) {
+    if (error instanceof PortableUpgradeRollbackError) removeBackup = false;
+    throw error;
   } finally {
-    cleanupPortableUpgrade(paths);
+    cleanupPortableUpgrade(paths, removeBackup);
   }
 }
 

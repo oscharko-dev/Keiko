@@ -661,6 +661,16 @@ describe("htmlParser — nested-script leak hardening across skip paths (audit 2
 // Header/row extraction was purely positional (no colspan/rowspan awareness), silently
 // misaligning headers from values for merged-cell tables.
 describe("htmlParser — table span hardening (audit 2026-07-07)", () => {
+  it("bounds cumulative colspan expansion across the whole table", () => {
+    const hostileCells = '<td colspan="999999999">x</td>'.repeat(5000);
+    const result = htmlParser.parse(
+      selectionFromText(`<table><tr>${hostileCells}</tr></table>`, { extension: "html" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toContain("UNIT_LIMIT_REACHED");
+  });
+
   it("expands a colspan header so values stay aligned with their real column headers", () => {
     const html =
       '<table><tr><th colspan="2">Category</th><th>Other</th></tr>' +

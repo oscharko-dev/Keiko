@@ -18,6 +18,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runRepairCli, type RepairCliDeps } from "./repair.js";
+import { ATLASSIAN_CREDENTIAL_ARTIFACTS, defaultUiDataDir } from "./state-paths.js";
 import { runLauncherCli } from "./launcher.js";
 import { loadState } from "./launcher-state.js";
 import { runPortableCli } from "./portable.js";
@@ -830,6 +831,65 @@ describe("runRepairCli — credential storage", () => {
     expect(c.out()).toContain("no config file to inspect");
   });
 
+  it("detects plaintext credentials in the default ui state-dir config", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = join(root, ".keiko");
+    const dataDir = defaultUiDataDir(stateDir);
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(dataDir, "keiko.config.json"),
+      JSON.stringify({ providers: [{ modelId: "gpt-4o", apiKey: "sk-state-secret" }] }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain("[action] Credential storage");
+    expect(c.out()).toContain("plaintext credentials present");
+  });
+
+  it("reports orphaned Atlassian credential metadata in the default UI state", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const dataDir = defaultUiDataDir(join(root, ".keiko"));
+    const credentialsDir = join(dataDir, "credentials");
+    const authRef = "atlassian:fixture";
+    mkdirSync(credentialsDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(dataDir, "keiko.config.json"), JSON.stringify({ providers: [] }), "utf8");
+    writeFileSync(
+      join(credentialsDir, ATLASSIAN_CREDENTIAL_ARTIFACTS[2]),
+      JSON.stringify({ version: 1, credentials: { [authRef]: { authRef } } }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain("[action] Credential storage");
+    expect(c.out()).toContain("credential reference(s) have no encrypted entry");
+  });
+
+  it("fails closed on a corrupt Atlassian credential vault", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const dataDir = defaultUiDataDir(join(root, ".keiko"));
+    const credentialsDir = join(dataDir, "credentials");
+    mkdirSync(credentialsDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(dataDir, "keiko.config.json"), JSON.stringify({ providers: [] }), "utf8");
+    writeFileSync(join(credentialsDir, ATLASSIAN_CREDENTIAL_ARTIFACTS[0]), "{not-json", "utf8");
+
+    const c = makeIo();
+    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain("[action] Credential storage");
+    expect(c.out()).toContain("credential state is unreadable");
+  });
+
   it("inspects the default local config when no explicit config is set", () => {
     const root = makeRoot();
     seedInstalledLayout(root);
@@ -849,6 +909,34 @@ describe("runRepairCli — credential storage", () => {
     expect(code).toBe(1);
     expect(c.out()).toContain("[action] Credential storage");
     expect(c.out()).toContain("plaintext credentials present");
+  });
+
+  it("reports every broken default credential config", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = join(root, ".keiko");
+    const uiDataDir = defaultUiDataDir(stateDir);
+    mkdirSync(uiDataDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(uiDataDir, "keiko.config.json"),
+      JSON.stringify({ providers: [{ modelId: "gpt-4o", apiKey: "sk-state-secret" }] }),
+      "utf8",
+    );
+    writeFileSync(
+      join(stateDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [{ modelId: "gpt-4o", apiKeySecretRef: "cred:missing" }],
+      }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain("plaintext credentials present");
+    expect(c.out()).toContain("credential reference(s) have no encrypted entry");
+    expect(c.out().match(/\[action\] Credential storage \(/gu)).toHaveLength(2);
   });
 
   it("inspects KEIKO_UI_DATA_DIR/keiko.config.json when no explicit config is set", () => {
@@ -1022,13 +1110,18 @@ describe("runRepairCli — runtime state artifacts", () => {
     const root = makeRoot();
     seedInstalledLayout(root);
     const stateDir = seedStateDir(root);
+    const uiCredentials = join(defaultUiDataDir(stateDir), "credentials");
     mkdirSync(join(stateDir, "credentials"), { recursive: true });
+    mkdirSync(uiCredentials, { recursive: true });
     mkdirSync(join(stateDir, "evidence", "figma"), { recursive: true });
     const providerVault = join(stateDir, "credentials", "provider-credentials.vault");
     const keyfile = join(stateDir, "credentials", "provider-credentials-vault.key");
     const figmaVault = join(stateDir, "evidence", "figma", "figma-token.vault");
     const figmaKeyfile = join(stateDir, "evidence", "figma", "figma-vault.key");
-    const vaultFiles = [providerVault, keyfile, figmaVault, figmaKeyfile];
+    const atlassianFiles = ATLASSIAN_CREDENTIAL_ARTIFACTS.map((artifact) =>
+      join(uiCredentials, artifact),
+    );
+    const vaultFiles = [providerVault, keyfile, figmaVault, figmaKeyfile, ...atlassianFiles];
     for (const p of vaultFiles) writeFileSync(p, "x", "utf8");
     for (const p of vaultFiles) chmodSync(p, 0o644);
 

@@ -17,7 +17,7 @@
 
 import { chmodSync, existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
 import { collectDoctorReport } from "./doctor.js";
@@ -40,7 +40,11 @@ import {
 import {
   RUNTIME_STATE_DIR_MODE,
   RUNTIME_STATE_FILE_MODE,
+  ATLASSIAN_CREDENTIALS_KEYFILE,
+  ATLASSIAN_CREDENTIALS_METADATA,
+  ATLASSIAN_CREDENTIALS_VAULT,
   classifyPid,
+  defaultUiDataDir,
   defaultIsProcessAlive,
   inspectStateRoot,
   resolveStateDir,
@@ -388,36 +392,38 @@ function checkGatewayConfig(args: readonly string[], env: EnvSource): CheckResul
 // provider apiKey or Figma accessToken. Credentials must live in encrypted local storage, with only
 // non-secret references in the JSON file; `keiko ui` performs the one-time, crash-aware migration, so
 // lingering plaintext here is the signal that a migration never ran or was interrupted.
-function defaultLocalGatewayConfigPath(env: EnvSource, homedir: string): string {
+function defaultLocalGatewayConfigCandidates(
+  env: EnvSource,
+  homedir: string,
+  stateDir: string,
+): readonly string[] {
   const dataDir = env.KEIKO_UI_DATA_DIR;
   if (dataDir !== undefined && dataDir.length > 0 && isAbsolute(dataDir)) {
-    return join(dataDir, "keiko.config.json");
+    return [join(dataDir, "keiko.config.json")];
   }
-  return join(homedir, ".keiko", "keiko.config.json");
+  const stateDirCandidate = join(defaultUiDataDir(stateDir), "keiko.config.json");
+  const homeCandidate = join(homedir, ".keiko", "keiko.config.json");
+  return stateDirCandidate === homeCandidate
+    ? [stateDirCandidate]
+    : [stateDirCandidate, homeCandidate];
 }
 
-function credentialConfigPath(
+function credentialConfigPaths(
   args: readonly string[],
   env: EnvSource,
-  defaultConfigPath: string,
-): string | undefined {
+  defaultConfigCandidates: readonly string[],
+): readonly string[] {
   const resolution = resolveConfigPathFromArgs(args, env);
-  if (resolution.kind === "path") {
-    return resolution.path;
-  }
+  if (resolution.kind === "path") return [resolution.path];
   if (resolution.kind === "not-configured") {
-    return defaultConfigPath;
+    const existing = defaultConfigCandidates.filter((candidate) => existsSync(candidate));
+    return existing.length > 0 ? existing : [defaultConfigCandidates[0] ?? ""];
   }
-  return undefined;
+  return [];
 }
 
-function checkCredentialStorage(
-  args: readonly string[],
-  env: EnvSource,
-  defaultConfigPath: string,
-): CheckResult {
-  const configPath = credentialConfigPath(args, env, defaultConfigPath);
-  if (configPath === undefined || !existsSync(configPath)) {
+function checkCredentialConfig(configPath: string): CheckResult {
+  if (configPath.length === 0 || !existsSync(configPath)) {
     return ok("Credential storage", "no config file to inspect");
   }
   let raw: unknown;
@@ -435,12 +441,18 @@ function checkCredentialStorage(
   }
   let orphaned: number;
   try {
-    orphaned = orphanedSecretRefs(raw, configPath);
+    orphaned = orphanedSecretRefs(raw, configPath) + orphanedAtlassianSecretRefs(configPath);
   } catch (error) {
     if (error instanceof SecretVaultStoreError) {
       return action(
         "Credential storage",
         "encrypted credential vault is unreadable — refusing to treat it as empty; restore the vault file or move it aside intentionally",
+      );
+    }
+    if (error instanceof AtlassianCredentialStateError) {
+      return action(
+        "Credential storage",
+        "encrypted Atlassian credential state is unreadable — refusing to treat it as empty; restore the credential files or move them aside intentionally",
       );
     }
     throw error;
@@ -452,6 +464,20 @@ function checkCredentialStorage(
     );
   }
   return ok("Credential storage", "no plaintext credentials in config");
+}
+
+function checkCredentialStorage(
+  args: readonly string[],
+  env: EnvSource,
+  defaultConfigCandidates: readonly string[],
+): readonly CheckResult[] {
+  const paths = credentialConfigPaths(args, env, defaultConfigCandidates);
+  if (paths.length === 0) return [ok("Credential storage", "no config file to inspect")];
+  const includePath = paths.length > 1;
+  return paths.map((configPath) => {
+    const result = checkCredentialConfig(configPath);
+    return includePath ? { ...result, name: `${result.name} (${configPath})` } : result;
+  });
 }
 
 function checkPortableManagedInstall(
@@ -603,6 +629,71 @@ function orphanedSecretRefs(raw: unknown, configPath: string): number {
   return refs.filter((ref) => !vaulted.has(ref)).length;
 }
 
+class AtlassianCredentialStateError extends Error {
+  constructor(cause?: unknown) {
+    super("Atlassian credential state is unreadable", cause === undefined ? undefined : { cause });
+    this.name = "AtlassianCredentialStateError";
+  }
+}
+
+function atlassianCredentialPaths(configPath: string): {
+  readonly vault: string;
+  readonly keyfile: string;
+  readonly metadata: string;
+} {
+  const credentialsDir = join(dirname(configPath), "credentials");
+  return {
+    vault: join(credentialsDir, ATLASSIAN_CREDENTIALS_VAULT),
+    keyfile: join(credentialsDir, ATLASSIAN_CREDENTIALS_KEYFILE),
+    metadata: join(credentialsDir, ATLASSIAN_CREDENTIALS_METADATA),
+  };
+}
+
+function readAtlassianMetadataReferences(path: string): readonly string[] {
+  if (!existsSync(path)) return [];
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new TypeError("metadata envelope is malformed");
+    }
+    const record = raw as Record<string, unknown>;
+    const credentials = record.credentials;
+    if (record.version !== 1 || typeof credentials !== "object" || credentials === null) {
+      throw new TypeError("metadata schema is unsupported");
+    }
+    return Object.entries(credentials).map(([reference, entry]) => {
+      if (
+        reference.length === 0 ||
+        typeof entry !== "object" ||
+        entry === null ||
+        (entry as { readonly authRef?: unknown }).authRef !== reference
+      ) {
+        throw new TypeError("metadata reference is malformed");
+      }
+      return reference;
+    });
+  } catch (error) {
+    throw new AtlassianCredentialStateError(error);
+  }
+}
+
+function orphanedAtlassianSecretRefs(configPath: string): number {
+  const paths = atlassianCredentialPaths(configPath);
+  const metadataRefs = new Set(readAtlassianMetadataReferences(paths.metadata));
+  let vaultReferences: readonly string[] = [];
+  try {
+    vaultReferences = existsSync(paths.vault) ? readLocalVaultReferences(paths.vault) : [];
+  } catch (error) {
+    throw new AtlassianCredentialStateError(error);
+  }
+  const vaultedRefs = new Set(vaultReferences);
+  const mismatched = new Set<string>();
+  for (const reference of metadataRefs) if (!vaultedRefs.has(reference)) mismatched.add(reference);
+  for (const reference of vaultedRefs) if (!metadataRefs.has(reference)) mismatched.add(reference);
+  if (existsSync(paths.keyfile) && !existsSync(paths.vault)) mismatched.add("missing-vault");
+  return mismatched.size;
+}
+
 interface ResolvedRepairDeps {
   readonly cwd: string;
   readonly argv: readonly string[];
@@ -657,7 +748,11 @@ export function runRepairCli(
   }
   const resolved = resolveDeps(deps);
   const stateDir = resolveStateDir(resolved.cwd, env, parsed.stateDirArg);
-  const defaultConfigPath = defaultLocalGatewayConfigPath(env, resolved.homedir());
+  const defaultConfigCandidates = defaultLocalGatewayConfigCandidates(
+    env,
+    resolved.homedir(),
+    stateDir,
+  );
   const stateRoot = inspectStateRoot(stateDir);
   const stateRootAction = stateRootRefusal(stateRoot);
   const stateResults =
@@ -676,7 +771,7 @@ export function runRepairCli(
     checkInstallLayout(resolved.cwd, env),
     checkLaunchPath(resolved.cwd, resolved.argv),
     checkGatewayConfig(args, env),
-    checkCredentialStorage(args, env, defaultConfigPath),
+    ...checkCredentialStorage(args, env, defaultConfigCandidates),
   ];
   reportResults(io, results);
   const code = exitCodeFor(results, parsed.dryRun);

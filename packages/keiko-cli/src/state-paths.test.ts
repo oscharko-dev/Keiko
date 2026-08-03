@@ -3,9 +3,11 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  ATLASSIAN_CREDENTIAL_ARTIFACTS,
   DEFAULT_STATE_DIR_NAME,
   KEIKO_STATE_FILES,
   classifyPid,
+  defaultUiDataDir,
   defaultIsProcessAlive,
   isInsidePath,
   readPidFile,
@@ -58,6 +60,10 @@ describe("resolveStateDir", () => {
   it("resolves a relative KEIKO_STATE_DIR against cwd", () => {
     const dir = resolveStateDir("/cwd", { KEIKO_STATE_DIR: "rel" });
     expect(dir).toBe(join("/cwd", "rel"));
+  });
+
+  it("derives the UI data directory from the resolved state directory", () => {
+    expect(defaultUiDataDir("/state")).toBe(join("/state", "ui"));
   });
 });
 
@@ -143,6 +149,7 @@ function seedRuntimeState(root: string): string {
   const stateDir = join(root, ".keiko");
   const toolArtifactId = "a".repeat(64);
   mkdirSync(join(stateDir, "credentials"), { recursive: true });
+  mkdirSync(join(defaultUiDataDir(stateDir), "credentials"), { recursive: true });
   mkdirSync(join(stateDir, "memory"), { recursive: true });
   mkdirSync(join(stateDir, "local-knowledge", "default"), { recursive: true });
   mkdirSync(join(stateDir, "evidence", "tool-results"), { recursive: true });
@@ -162,6 +169,9 @@ function seedRuntimeState(root: string): string {
   touch(join(stateDir, "credentials", "provider-credentials.vault"));
   touch(join(stateDir, "credentials", "provider-credentials-vault.key"));
   touch(join(stateDir, "credentials", ".secret-vault.1234.deadbeefdeadbeef.tmp"));
+  for (const artifact of ATLASSIAN_CREDENTIAL_ARTIFACTS) {
+    touch(join(defaultUiDataDir(stateDir), "credentials", artifact));
+  }
   touch(join(stateDir, "memory", "keiko-memory.db"));
   touch(join(stateDir, "memory", "keiko-memory.db-wal"));
   touch(join(stateDir, "memory", "keiko-memory.db-wal.corrupt.2026-06-20T12-00-00-000Z"));
@@ -261,6 +271,9 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(categoryOf(scan, "credentials/.secret-vault.1234.deadbeefdeadbeef.tmp")).toBe(
       "credential-vault",
     );
+    for (const artifact of ATLASSIAN_CREDENTIAL_ARTIFACTS) {
+      expect(categoryOf(scan, `ui/credentials/${artifact}`)).toBe("credential-vault");
+    }
     expect(categoryOf(scan, "memory/keiko-memory.db")).toBe("memory-vault");
     expect(categoryOf(scan, "local-knowledge/default/capsules.db")).toBe("local-knowledge");
     expect(categoryOf(scan, "evidence/run-1.json")).toBe("evidence");

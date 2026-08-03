@@ -212,13 +212,27 @@ describe("executeJob", () => {
 
   it("fails closed to a failed job (body-free) when the run rejects", async () => {
     const base = initialJob("exec-fail", "refresh", "c", "s");
+    const diagnostics = { record: vi.fn() };
     manualPodJobRegistry.register(base, new AbortController());
-    await executeJob("exec-fail", base, new AbortController(), () =>
-      Promise.reject(new Error("secret crawl detail")),
+    await executeJob(
+      "exec-fail",
+      base,
+      new AbortController(),
+      () => Promise.reject(new Error("secret crawl detail")),
+      diagnostics,
     );
     const job = getManualPodJob("exec-fail");
     expect(job?.state).toBe("failed");
     expect(JSON.stringify(job)).not.toContain("secret crawl detail");
+    expect(diagnostics.record).toHaveBeenCalledOnce();
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        correlationId: "exec-fail",
+        operation: "manual-pod.job",
+        errorClass: "Error",
+      }),
+    );
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("secret crawl detail");
   });
 });
 

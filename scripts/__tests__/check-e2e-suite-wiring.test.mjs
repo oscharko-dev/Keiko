@@ -142,6 +142,7 @@ describe("e2e suite wiring gate (#2629)", () => {
       expect(isWiredInWorkflows(suite, workflowText), suite).toBe(true);
       expect(baseline.suites, suite).not.toContain(suite);
     }
+    expect(isWiredInWorkflows("test:e2e:merge-governance-478", workflowText)).toBe(true);
   });
 
   it("reports failures with every problem listed under a FAIL headline", () => {

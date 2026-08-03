@@ -26,15 +26,15 @@ import type {
   VoiceCapabilityResolution,
   VoicePersona,
 } from "./types.js";
-import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
-import type {
-  CodingWorkbenchModelSource,
-  CodingWorkbenchSidecarGatewayProjection,
-  CodingWorkbenchSidecarGatewayResult,
-  CodingWorkbenchSidecarGatewayUnavailableReason,
-  GatewayVerificationState,
+import {
+  UNVERIFIED_GATEWAY,
+  deriveContextProfileFromCapability,
+  type CodingWorkbenchModelSource,
+  type CodingWorkbenchSidecarGatewayProjection,
+  type CodingWorkbenchSidecarGatewayResult,
+  type CodingWorkbenchSidecarGatewayUnavailableReason,
+  type GatewayVerificationState,
 } from "@oscharko-dev/keiko-contracts";
-
 const voiceCapabilityCache = new WeakMap<
   ConfiguredCapabilitySource,
   Map<string, VoiceCapabilityResolution>
@@ -185,6 +185,7 @@ function codingSidecarProjection(
   capability: ModelCapability,
   verification: GatewayVerificationState,
 ): CodingWorkbenchSidecarGatewayProjection {
+  const contextProfile = deriveContextProfileFromCapability(capability);
   return {
     status: "available",
     profileId: "coding-safe-openai-compatible",
@@ -193,8 +194,8 @@ function codingSidecarProjection(
     supportsStreaming: false,
     supportsToolCalling: true,
     runMetadata: {
-      maxPromptTokens: Math.max(1, capability.contextWindow),
-      maxOutputTokens: Math.max(1, capability.maxOutputTokens),
+      maxPromptTokens: contextProfile.maxInputTokens,
+      maxOutputTokens: contextProfile.reservedOutputTokens,
       maxInputMessages: 64,
       maxRequestBytes: 64_000,
     },

@@ -20,6 +20,7 @@ import { runUninstallCli, type UninstallCliDeps } from "./uninstall.js";
 import { runLauncherCli } from "./launcher.js";
 import { runPortableCli } from "./portable.js";
 import { KEIKO_START_SCRIPT, KEIKO_STOP_SCRIPT } from "./init.js";
+import { ATLASSIAN_CREDENTIAL_ARTIFACTS, defaultUiDataDir } from "./state-paths.js";
 import type { CliIo } from "./runner.js";
 
 interface Captured {
@@ -739,6 +740,7 @@ function seedFullState(root: string, pid = "2147483646"): string {
   mkdirSync(join(stateDir, "local-knowledge", "default"), { recursive: true });
   mkdirSync(join(stateDir, "evidence", "figma"), { recursive: true });
   mkdirSync(join(stateDir, "evidence", "qi", "figma-snapshots", "run-1"), { recursive: true });
+  mkdirSync(join(defaultUiDataDir(stateDir), "credentials"), { recursive: true });
   const files: Record<string, string> = {
     "ui.pid": `${pid}\n`,
     "ui.log": "log\n",
@@ -767,6 +769,9 @@ function seedFullState(root: string, pid = "2147483646"): string {
     "evidence/qi/figma-snapshots/run-1/screen.png": "img",
   };
   for (const [rel, body] of Object.entries(files)) writeFileSync(join(stateDir, rel), body, "utf8");
+  for (const artifact of ATLASSIAN_CREDENTIAL_ARTIFACTS) {
+    writeFileSync(join(defaultUiDataDir(stateDir), "credentials", artifact), "owned", "utf8");
+  }
   return stateDir;
 }
 
@@ -777,6 +782,21 @@ describe("runUninstallCli — runtime state manifest", () => {
     const c = makeIo();
     expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
     expect(existsSync(stateDir)).toBe(false);
+  });
+
+  it("removes Atlassian credential artifacts from the default UI data directory", () => {
+    const root = makeRoot();
+    const stateDir = seedFullState(root);
+    const vault = join(
+      defaultUiDataDir(stateDir),
+      "credentials",
+      ATLASSIAN_CREDENTIAL_ARTIFACTS[0],
+    );
+    const c = makeIo();
+
+    expect(runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root })).toBe(0);
+    expect(existsSync(vault)).toBe(false);
+    expect(c.out()).toContain(`removed: ${vault}`);
   });
 
   it("with --state --dry-run lists the sensitive artifacts without removing them", () => {

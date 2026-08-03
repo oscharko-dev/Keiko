@@ -1851,6 +1851,97 @@ describe("runIndexingJob — partial adapter failure", () => {
   });
 });
 
+describe("runIndexingJob — document snapshot restore atomicity", () => {
+  it("rolls back every restored row when reinsertion fails mid-snapshot", async () => {
+    const fixture = buildFixture({
+      "large.txt": "Known-good indexed content with many distinct sections. ".repeat(400),
+    });
+    const documentId = documentIdFor({
+      capsuleId: fixture.capsuleId,
+      sourceId: fixture.sourceId,
+      relativePath: "large.txt",
+    });
+    const db = fixture.store._internal.db;
+    const originalPrepare = db.prepare.bind(db);
+    const tables = [
+      "parsed_units",
+      "chunks",
+      "chunk_lexical_index",
+      "repository_chunk_line_ranges",
+      "vectors",
+    ] as const;
+    const persistenceState = (): unknown => ({
+      tables: Object.fromEntries(
+        tables.map((table) => [
+          table,
+          originalPrepare(
+            `SELECT * FROM ${table} WHERE capsule_id = :c AND document_id = :d ORDER BY rowid`,
+          ).all({ c: fixture.capsuleId, d: documentId }),
+        ]),
+      ),
+      document: originalPrepare("SELECT * FROM documents WHERE capsule_id = :c AND id = :d").get({
+        c: fixture.capsuleId,
+        d: documentId,
+      }),
+    });
+
+    try {
+      await drain(runIndexingJob(buildOptions(fixture)));
+      expect(countVectorsForDocument(db, fixture.capsuleId, documentId)).toBeGreaterThan(1);
+
+      let restoreExpected = false;
+      let restoredChunkInserts = 0;
+      let beforeRestore: unknown;
+      db.prepare = (sql: string): ReturnType<typeof originalPrepare> => {
+        if (restoreExpected && sql.startsWith("DELETE FROM parsed_units")) {
+          beforeRestore = persistenceState();
+        }
+        if (restoreExpected && sql.startsWith("INSERT INTO chunks")) {
+          restoredChunkInserts += 1;
+          if (restoredChunkInserts === 2) throw new Error("injected restore insert failure");
+        }
+        return originalPrepare(sql);
+      };
+      const failingAdapter = scriptedAdapter({
+        responder: (request) => {
+          if (!isEmbeddingCapabilityProbe(request.input)) {
+            restoreExpected = true;
+            return { ok: false, kind: "invalid-response" };
+          }
+          return {
+            ok: true,
+            value: {
+              vector: deterministicVector(request.input, DEFAULT_EMBEDDING.vectorDimensions),
+              modelId: DEFAULT_EMBEDDING.modelId,
+            },
+          };
+        },
+      });
+      const changedFs = memoryFs(ROOT, [
+        {
+          relativePath: "large.txt",
+          content: "Changed content that must remain intact when restoration itself fails. ".repeat(
+            400,
+          ),
+        },
+      ]);
+
+      await expect(
+        drain(
+          runIndexingJob(
+            buildOptions(fixture, { embeddingAdapter: failingAdapter, workspaceFs: changedFs }),
+          ),
+        ),
+      ).rejects.toBeDefined();
+      expect(beforeRestore).toBeDefined();
+      expect(persistenceState()).toStrictEqual(beforeRestore);
+    } finally {
+      db.prepare = originalPrepare;
+      fixture.cleanup();
+    }
+  });
+});
+
 // ─── F2: cached capsule sources (no N+1 listCapsuleSources) ──────────────────
 describe("runIndexingJob — capsule-sources query budget", () => {
   let fixture: Fixture;

@@ -39,6 +39,7 @@ import {
 } from "./reviewStore.js";
 import { assemblePdf, assembleZipBundle } from "./exportAssembly.js";
 import { buildQualityIntelligenceExportProvenance } from "./exportProvenance.js";
+import { isDeliverableQualityRow } from "./candidateDeliverability.js";
 
 type Adapter = QI.QualityIntelligenceExportAdapter;
 
@@ -461,10 +462,6 @@ function selectRows(
   // (incl. the TMS adapters that force it). Otherwise fall back to the per-candidate filter.
   if (runReviewStateOf(review) === "approved") return rows;
   return rows.filter((r) => candidateReviewStateOf(review, r.id) === "approved");
-}
-
-function isDeliverableQualityRow(row: QualityIntelligenceCandidateRow): boolean {
-  return row.status !== "needs-review" && row.qualityVerdict?.verdict !== "weak";
 }
 
 type ExportOutcome =

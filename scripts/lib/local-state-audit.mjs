@@ -23,8 +23,12 @@ import { DatabaseSync } from "node:sqlite";
 
 // ── On-disk layout (source of truth: packages/keiko-cli/src/state-paths.ts) ────────────────
 const GATEWAY_CONFIG = "keiko.config.json";
+const UI_SUBDIR = "ui";
 const CREDENTIALS_SUBDIR = "credentials";
 const PROVIDER_VAULT = "provider-credentials.vault";
+const ATLASSIAN_VAULT = "atlassian-connector-credentials.vault";
+const ATLASSIAN_KEYFILE = "atlassian-connector-credentials-vault.key";
+const ATLASSIAN_METADATA = "atlassian-connector-credentials.metadata.json";
 const PROVIDER_SECRET_REF_PREFIX = "cred:";
 const RERANKER_SECRET_REF = "model-gateway:reranker";
 const MEMORY_SUBDIR = "memory";
@@ -229,32 +233,83 @@ function hasPlaintextCredentials(config) {
   return providerLeak || figmaLeak || rerankerLeak;
 }
 
-function auditCredentials(stateDir) {
-  const id = "credentials";
-  const title = "No plaintext credentials";
-  const configPath = join(stateDir, GATEWAY_CONFIG);
-  if (!existsSync(configPath)) return skip(id, title, "no keiko.config.json present");
-  const config = readJsonFile(configPath);
-  if (config === undefined) return fail(id, title, ["keiko.config.json is not valid JSON"]);
-  const findings = [];
+function credentialLocations(stateDir) {
+  return [
+    {
+      configPath: join(stateDir, GATEWAY_CONFIG),
+      configRel: GATEWAY_CONFIG,
+      credentialsRel: CREDENTIALS_SUBDIR,
+    },
+    {
+      configPath: join(stateDir, UI_SUBDIR, GATEWAY_CONFIG),
+      configRel: `${UI_SUBDIR}/${GATEWAY_CONFIG}`,
+      credentialsRel: `${UI_SUBDIR}/${CREDENTIALS_SUBDIR}`,
+    },
+  ];
+}
+
+function existsWithoutFollowing(path) {
+  return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
+}
+
+function locationIsPresent(stateDir, location) {
+  return (
+    existsWithoutFollowing(location.configPath) ||
+    existsWithoutFollowing(join(stateDir, location.credentialsRel))
+  );
+}
+
+function auditCredentialConfig(stateDir, location, findings) {
+  if (!existsWithoutFollowing(location.configPath)) return [];
+  const configSymlink = firstSymlinkInPath(stateDir, location.configRel);
+  if (configSymlink !== undefined) {
+    findings.push(symlinkFinding(stateDir, configSymlink));
+    return [];
+  }
+  const config = readJsonFile(location.configPath);
+  if (config === undefined) {
+    findings.push(`${location.configRel} is not valid JSON`);
+    return [];
+  }
   if (hasPlaintextCredentials(config)) {
     findings.push(
-      "keiko.config.json contains a plaintext apiKey/accessToken (must be a secret reference)",
+      `${location.configRel} contains a plaintext apiKey/accessToken (must be a secret reference)`,
     );
   }
   const { refs, findings: refFindings } = collectCredentialRefs(config);
   findings.push(...refFindings);
-  const vaultPath = join(stateDir, CREDENTIALS_SUBDIR, PROVIDER_VAULT);
-  const credentialsSymlink = firstSymlinkInPath(stateDir, CREDENTIALS_SUBDIR);
+  return refs;
+}
+
+function auditCredentialLocation(stateDir, location, findings) {
+  const refs = auditCredentialConfig(stateDir, location, findings);
+  const credentialsSymlink = firstSymlinkInPath(stateDir, location.credentialsRel);
   if (credentialsSymlink !== undefined) {
     findings.push(symlinkFinding(stateDir, credentialsSymlink));
-  } else {
-    auditProviderVaultPath(stateDir, vaultPath, refs, findings);
+    return refs.length;
   }
+  const vaultRel = `${location.credentialsRel}/${PROVIDER_VAULT}`;
+  auditProviderVaultPath(stateDir, join(stateDir, vaultRel), vaultRel, refs, findings);
+  auditAtlassianCredentialFiles(stateDir, location.credentialsRel, findings);
+  return refs.length;
+}
+
+function auditCredentials(stateDir) {
+  const id = "credentials";
+  const title = "No plaintext credentials";
+  const locations = credentialLocations(stateDir).filter((location) =>
+    locationIsPresent(stateDir, location),
+  );
+  if (locations.length === 0) return skip(id, title, "no credential state present");
+  const findings = [];
+  const refCount = locations.reduce(
+    (count, location) => count + auditCredentialLocation(stateDir, location, findings),
+    0,
+  );
   if (findings.length > 0) return fail(id, title, findings);
   return pass(id, title, [
-    refs.length > 0
-      ? `config exposes ${refs.length} secret reference(s); credentials are sealed in ${CREDENTIALS_SUBDIR}/${PROVIDER_VAULT}`
+    refCount > 0
+      ? `config exposes ${refCount} secret reference(s); credential vaults are sealed`
       : "config carries no credential material",
   ]);
 }
@@ -307,39 +362,153 @@ function collectRerankerCredentialRef(config, refs, findings) {
   refs.push(ref);
 }
 
-function auditProviderVaultPath(stateDir, vaultPath, refs, findings) {
+function auditProviderVaultPath(stateDir, vaultPath, vaultRel, refs, findings) {
   if (!existsSync(vaultPath)) {
     if (refs.length > 0) {
       findings.push(
-        `config references ${refs.length} sealed credential(s) but ${CREDENTIALS_SUBDIR}/${PROVIDER_VAULT} is missing`,
+        `config references ${refs.length} sealed credential(s) but ${vaultRel} is missing`,
       );
     }
     return;
   }
-  const vaultSymlink = firstSymlinkInPath(stateDir, `${CREDENTIALS_SUBDIR}/${PROVIDER_VAULT}`);
+  const vaultSymlink = firstSymlinkInPath(stateDir, vaultRel);
   if (vaultSymlink !== undefined) {
     findings.push(symlinkFinding(stateDir, vaultSymlink));
     return;
   }
-  findings.push(...validateProviderVault(vaultPath, refs));
+  findings.push(...validateProviderVault(vaultPath, vaultRel, refs));
 }
 
-function validateProviderVault(vaultPath, refs) {
+function validateProviderVault(vaultPath, vaultRel, refs) {
   const vault = readJsonFile(vaultPath);
   if (vault === undefined) {
-    return [`${CREDENTIALS_SUBDIR}/${PROVIDER_VAULT} is not valid JSON`];
+    return [`${vaultRel} is not valid JSON`];
   }
   if (typeof vault !== "object" || vault === null || Array.isArray(vault)) {
-    return [`${CREDENTIALS_SUBDIR}/${PROVIDER_VAULT} is not an object`];
+    return [`${vaultRel} is not an object`];
   }
   if (vault.version !== LOCAL_SECRET_VAULT_VERSION) {
-    return [`${CREDENTIALS_SUBDIR}/${PROVIDER_VAULT} has an unsupported schema version`];
+    return [`${vaultRel} has an unsupported schema version`];
   }
   const entries = vault.entries;
   if (typeof entries !== "object" || entries === null || Array.isArray(entries)) {
-    return [`${CREDENTIALS_SUBDIR}/${PROVIDER_VAULT} is missing an entries object`];
+    return [`${vaultRel} is missing an entries object`];
   }
   return validateProviderVaultEntries(entries, refs);
+}
+
+function checkPrivateCredentialFile(stateDir, rel, findings) {
+  const path = join(stateDir, rel);
+  if (!existsWithoutFollowing(path)) return false;
+  const symlink = firstSymlinkInPath(stateDir, rel);
+  if (symlink !== undefined) {
+    findings.push(symlinkFinding(stateDir, symlink));
+    return false;
+  }
+  const stat = lstatSync(path);
+  if (!stat.isFile()) {
+    findings.push(`${rel} is not a regular file`);
+    return false;
+  }
+  if (process.platform !== "win32" && looseModeFromStat(stat)) {
+    findings.push(`${rel} is ${octalFromStat(stat)} (expected 0o600)`);
+  }
+  return true;
+}
+
+function objectRecord(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  return value;
+}
+
+function atlassianMetadataEntries(value) {
+  const metadata = objectRecord(value);
+  if (metadata?.version !== 1) return undefined;
+  return objectRecord(metadata.credentials);
+}
+
+function validAtlassianMetadataEntry(reference, entry) {
+  return reference.length > 0 && objectRecord(entry)?.authRef === reference;
+}
+
+function readAtlassianMetadataRefs(stateDir, metadataRel, findings) {
+  const metadataPath = join(stateDir, metadataRel);
+  if (!checkPrivateCredentialFile(stateDir, metadataRel, findings)) return [];
+  const entries = atlassianMetadataEntries(readJsonFile(metadataPath));
+  if (entries === undefined) {
+    findings.push("Atlassian credential metadata is not a supported JSON envelope");
+    return [];
+  }
+  const refs = [];
+  for (const [reference, entry] of Object.entries(entries)) {
+    if (!validAtlassianMetadataEntry(reference, entry)) {
+      findings.push("Atlassian credential metadata contains a malformed reference");
+      continue;
+    }
+    refs.push(reference);
+  }
+  return refs;
+}
+
+function atlassianVaultEntries(value) {
+  const vault = objectRecord(value);
+  if (vault?.version !== LOCAL_SECRET_VAULT_VERSION) return undefined;
+  return objectRecord(vault.entries);
+}
+
+function readAtlassianVaultRefs(stateDir, vaultRel, findings) {
+  const vaultPath = join(stateDir, vaultRel);
+  if (!checkPrivateCredentialFile(stateDir, vaultRel, findings)) return [];
+  const vault = readJsonFile(vaultPath);
+  if (vault === undefined) {
+    findings.push("Atlassian credential vault is not valid JSON");
+    return [];
+  }
+  const entries = atlassianVaultEntries(vault);
+  if (entries === undefined) {
+    findings.push("Atlassian credential vault has an unsupported schema");
+    return [];
+  }
+  const refs = [];
+  for (const [index, [reference, value]] of Object.entries(entries).entries()) {
+    const finding = sealedEntryFinding(`Atlassian vault entry #${index + 1}`, value);
+    if (finding !== undefined) findings.push(finding);
+    refs.push(reference);
+  }
+  return refs;
+}
+
+function checkAtlassianKeyfile(stateDir, keyfileRel, findings) {
+  const keyfilePath = join(stateDir, keyfileRel);
+  if (!checkPrivateCredentialFile(stateDir, keyfileRel, findings)) return;
+  if (!isBase64Key(readFileSync(keyfilePath, "utf8"))) {
+    findings.push("Atlassian credential keyfile is not a base64-encoded 32-byte key");
+  }
+}
+
+function countReferenceMismatch(left, right) {
+  const rightSet = new Set(right);
+  return left.filter((reference) => !rightSet.has(reference)).length;
+}
+
+function auditAtlassianCredentialFiles(stateDir, credentialsRel, findings) {
+  const vaultRel = `${credentialsRel}/${ATLASSIAN_VAULT}`;
+  const keyfileRel = `${credentialsRel}/${ATLASSIAN_KEYFILE}`;
+  const metadataRel = `${credentialsRel}/${ATLASSIAN_METADATA}`;
+  const present = [vaultRel, keyfileRel, metadataRel].map((rel) =>
+    existsWithoutFollowing(join(stateDir, rel)),
+  );
+  if (!present.some(Boolean)) return;
+  const metadataRefs = readAtlassianMetadataRefs(stateDir, metadataRel, findings);
+  const vaultRefs = readAtlassianVaultRefs(stateDir, vaultRel, findings);
+  checkAtlassianKeyfile(stateDir, keyfileRel, findings);
+  const mismatches =
+    countReferenceMismatch(metadataRefs, vaultRefs) +
+    countReferenceMismatch(vaultRefs, metadataRefs);
+  if (mismatches > 0) {
+    findings.push(`${mismatches} Atlassian credential reference(s) are orphaned`);
+  }
+  if (present[1] && !present[0]) findings.push("Atlassian credential keyfile has no vault");
 }
 
 function sealedEntryFinding(label, value) {

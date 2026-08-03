@@ -120,10 +120,11 @@ const recordSnapshot = (
     readonly trigger: string;
     readonly targetNodeId: string;
   }[] = [],
+  structuralScreens: readonly { readonly screenId: string; readonly irJson: unknown }[] = [],
 ): void => {
   const store = createNodeFigmaSnapshotStore(dir);
   const img = { mimeType: "image/png" as const, bytes: new Uint8Array([0x89, 0x50]) };
-  const hashedScreens = screens.map((screen, i) => ({
+  const hashedScreens = [...screens, ...structuralScreens].map((screen, i) => ({
     screenId: screen.screenId,
     integrityHash: `h${String(i + 1)}`,
   }));
@@ -137,6 +138,12 @@ const recordSnapshot = (
       integrityHash: `h${String(i + 1)}`,
       image: img,
     })),
+    structuralScreens: structuralScreens.map((screen, i) => ({
+      screenId: screen.screenId,
+      irJson: screen.irJson,
+      integrityHash: `h${String(screens.length + i + 1)}`,
+      reason: "render-fetch-failed" as const,
+    })),
     skippedScreens: [],
     links,
     tokens: TOKENS,
@@ -144,6 +151,40 @@ const recordSnapshot = (
 };
 
 describe("handleFigmaGenerateCode (#755)", () => {
+  it("emits rendered and structural-only screens with an honest count split", () => {
+    recordSnapshot(
+      "structural-1",
+      [
+        { screenId: "s1", irJson: screenIr("s1", []) },
+        { screenId: "s2", irJson: screenIr("s2", []) },
+      ],
+      [],
+      [{ screenId: "s3", irJson: screenIr("s3", [irNode("s3-title", "text")]) }],
+    );
+
+    const result = handleFigmaGenerateCode(ctxFor("structural-1"), depsFor(dir));
+
+    expect(result.status).toBe(200);
+    const response = body(result);
+    expect(response.screenCount).toBe(3);
+    expect(response.structuralScreenCount).toBe(1);
+    expect(response.files.map((file) => file.path)).toContain("screens/s3.html");
+  });
+
+  it("emits an all-structural snapshot instead of reporting no usable screens", () => {
+    recordSnapshot(
+      "structural-only-1",
+      [],
+      [],
+      [{ screenId: "s3", irJson: screenIr("s3", [irNode("s3-title", "text")]) }],
+    );
+
+    const result = handleFigmaGenerateCode(ctxFor("structural-only-1"), depsFor(dir));
+
+    expect(result.status).toBe(200);
+    expect(body(result)).toMatchObject({ screenCount: 1, structuralScreenCount: 1 });
+  });
+
   it("emits a reviewable html-css artifact for a stored snapshot", () => {
     seedSnapshot(dir, "fs-1");
     const result = handleFigmaGenerateCode(ctxFor("fs-1"), depsFor(dir));
