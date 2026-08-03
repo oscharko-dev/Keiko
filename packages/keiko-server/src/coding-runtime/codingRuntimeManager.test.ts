@@ -2408,6 +2408,41 @@ describe("coding runtime manager", () => {
     ).toBe(false);
   });
 
+  it("rolls back the issued approval when verification bridge activation fails", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const approvalStore = createInMemorySupervisedCodingApprovalStore();
+    const consume = vi.spyOn(approvalStore, "consume");
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      approvalStore,
+      codingToolApprovals: createCodingToolApprovalBridge(),
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+    await manager.start(
+      governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    expect(
+      manager.issueApproval({
+        runId: "run-1991",
+        requestId: "permission-without-bridge-observation",
+        actionKind: "verification-command",
+        approvedByUserId: "operator",
+      }),
+    ).toEqual({ ok: false, failureCode: "runtime-stopped", retryable: false });
+    expect(consume).toHaveBeenCalledOnce();
+    const rollback = consume.mock.calls[0]?.[0];
+    expect(rollback?.approval.approvalId).toMatch(/^sca_/u);
+    expect(rollback?.binding).toMatchObject({
+      runId: "run-1991",
+      requestId: "permission-without-bridge-observation",
+    });
+    expect(rollback?.nowMs).toBe(Date.parse("2026-07-07T13:00:00.000Z"));
+  });
+
   it("refuses approval issuance while paused and restores it on resume (#2386)", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();

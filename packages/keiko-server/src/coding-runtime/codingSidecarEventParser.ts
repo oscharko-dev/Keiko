@@ -19,6 +19,8 @@ import {
   type SupervisedCodingApprovalClaim,
 } from "./supervisedCodingApprovalStore.js";
 
+const APPROVAL_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
+
 export interface SidecarPermissionEvent {
   readonly type: "permission-request";
   readonly requestId: string;
@@ -91,9 +93,10 @@ function permissionEvent(record: Record<string, unknown>): SidecarPermissionEven
   const reasonCode = stringField(record, "reasonCode");
   const expiresAt = stringField(record, "expiresAt");
   const connectorScopes = optionalConnectorScopes(record);
+  const mutationMetadata = optionalMutationMetadata(record);
   if (requestId === undefined || kind === undefined || actionClass === undefined) return undefined;
   if (reasonCode === undefined || expiresAt === undefined) return undefined;
-  if (connectorScopes === undefined) return undefined;
+  if (connectorScopes === undefined || mutationMetadata === undefined) return undefined;
   return {
     type: "permission-request",
     requestId,
@@ -106,7 +109,7 @@ function permissionEvent(record: Record<string, unknown>): SidecarPermissionEven
     ...optionalCommandLabel(record),
     ...optionalFileEditMetadata(record),
     ...optionalVerificationMetadata(record),
-    ...optionalMutationMetadata(record),
+    ...mutationMetadata,
   };
 }
 
@@ -162,15 +165,27 @@ function optionalVerificationMetadata(
 
 function optionalMutationMetadata(
   record: Record<string, unknown>,
-): Partial<SidecarPermissionEvent> {
+): Partial<SidecarPermissionEvent> | undefined {
+  const approvalDigest = optionalApprovalDigest(record);
+  if (approvalDigest === undefined) return undefined;
   return {
     ...optionalStringField(record, "actionId"),
     ...optionalStringField(record, "idempotencyKey"),
     ...optionalStringField(record, "approvalId"),
-    ...optionalStringField(record, "approvalDigest"),
+    ...approvalDigest,
     ...optionalApprovalToken(record),
     ...optionalBooleanField(record, "operatorStopped"),
   };
+}
+
+function optionalApprovalDigest(
+  record: Record<string, unknown>,
+): { readonly approvalDigest?: string } | undefined {
+  if (!Object.hasOwn(record, "approvalDigest")) return {};
+  const approvalDigest = record.approvalDigest;
+  return typeof approvalDigest === "string" && APPROVAL_DIGEST_PATTERN.test(approvalDigest)
+    ? { approvalDigest }
+    : undefined;
 }
 
 function optionalActionKind(record: Record<string, unknown>): {

@@ -51,6 +51,7 @@ import {
   type SupervisedCodingApprovalClaim,
   type SupervisedCodingApprovalStore,
   type SupervisedCodingConsumedApproval,
+  type SupervisedCodingIssuedApproval,
 } from "./supervisedCodingApprovalStore.js";
 import {
   parseCodingSidecarEventLine,
@@ -793,17 +794,8 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       nowMs: this.deps.now(),
       ttlMs: request.ttlMs,
     });
-    if (
-      request.actionKind === "verification-command" &&
-      this.deps.codingToolApprovals !== undefined &&
-      !this.deps.codingToolApprovals.activatePermission({
-        runId: request.runId,
-        requestId: request.requestId,
-        approvalAuthorityDigest: issued.approvalDigest,
-        expiresAtMs: issued.expiresAtMs,
-        nowMs: issued.approvedAtMs,
-      })
-    ) {
+    if (!activateIssuedToolApproval(this.deps.codingToolApprovals, request, issued)) {
+      rollbackIssuedApproval(this.deps.approvalStore, binding, issued);
       return { ok: false, failureCode: "runtime-stopped", retryable: false };
     }
     return {
@@ -2693,6 +2685,34 @@ function approvalBindingForIssue(
     actionKind: request.actionKind,
     connectorScopes: request.connectorScopes,
   });
+}
+
+function activateIssuedToolApproval(
+  bridge: CodingToolApprovalBridge | undefined,
+  request: CodingRuntimeApprovalIssueRequest,
+  issued: SupervisedCodingIssuedApproval,
+): boolean {
+  if (request.actionKind !== "verification-command" || bridge === undefined) return true;
+  return bridge.activatePermission({
+    runId: request.runId,
+    requestId: request.requestId,
+    approvalAuthorityDigest: issued.approvalDigest,
+    expiresAtMs: issued.expiresAtMs,
+    nowMs: issued.approvedAtMs,
+  });
+}
+
+function rollbackIssuedApproval(
+  store: SupervisedCodingApprovalStore,
+  binding: SupervisedCodingApprovalBindingOnce,
+  issued: SupervisedCodingIssuedApproval,
+): void {
+  const rolledBack = store.consume({
+    approval: issued.approval,
+    binding,
+    nowMs: issued.approvedAtMs,
+  });
+  if (rolledBack === undefined) store.invalidateRun(binding.runId);
 }
 
 function approvalBindingForEvent(

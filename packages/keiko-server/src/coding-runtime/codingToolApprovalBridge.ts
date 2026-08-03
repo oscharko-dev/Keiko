@@ -133,7 +133,7 @@ function activatePermission(
     return false;
   }
   const approvedKey = actionKey(input.runId, requested.proof.approvalId);
-  if (!approved.has(approvedKey) && approved.size >= MAX_APPROVED_RECORDS) return false;
+  if (approved.has(approvedKey) || approved.size >= MAX_APPROVED_RECORDS) return false;
   pending.delete(key);
   approved.set(approvedKey, {
     ...requested,

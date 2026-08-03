@@ -52,4 +52,60 @@ describe("coding tool approval bridge capacity", () => {
       }),
     ).toBe(true);
   });
+
+  it("rejects duplicate activation without replacing the first approved action", () => {
+    const bridge = createCodingToolApprovalBridge();
+    const firstRequest = {
+      action: "verification" as const,
+      actionId: "shared-action",
+      idempotencyKey: "first-idempotency",
+      verifierId: "typecheck",
+    };
+    const secondRequest = {
+      ...firstRequest,
+      idempotencyKey: "second-idempotency",
+      verifierId: "lint",
+    };
+    const observeRequest = (requestId: string, request: typeof firstRequest): boolean =>
+      bridge.observePermission({
+        runId: RUN_ID,
+        requestId,
+        action: request.action,
+        actionId: request.actionId,
+        idempotencyKey: request.idempotencyKey,
+        targetId: request.verifierId,
+        proof: {
+          approvalId: request.actionId,
+          approvalDigest: codingToolApprovalBindingDigest(RUN_ID, request),
+        },
+        expiresAt: EXPIRES_AT,
+        nowMs: NOW_MS,
+      });
+    const activate = (requestId: string): boolean =>
+      bridge.activatePermission({
+        runId: RUN_ID,
+        requestId,
+        approvalAuthorityDigest: "a".repeat(64),
+        expiresAtMs: Date.parse(EXPIRES_AT),
+        nowMs: NOW_MS,
+      });
+
+    expect(observeRequest("permission-first", firstRequest)).toBe(true);
+    expect(activate("permission-first")).toBe(true);
+    expect(observeRequest("permission-second", secondRequest)).toBe(true);
+    expect(activate("permission-second")).toBe(false);
+    expect(
+      bridge.consume({
+        runId: RUN_ID,
+        request: {
+          ...firstRequest,
+          approvalProof: {
+            approvalId: firstRequest.actionId,
+            approvalDigest: codingToolApprovalBindingDigest(RUN_ID, firstRequest),
+          },
+        },
+        nowMs: NOW_MS,
+      }),
+    ).toBe(true);
+  });
 });
