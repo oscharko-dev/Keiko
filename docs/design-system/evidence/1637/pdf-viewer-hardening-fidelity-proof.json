@@ -1,7 +1,7 @@
 {
   "issue": 1637,
   "verdict": "PASS",
-  "cssSha256": "564fc757de97ba01fd7ad87d6dcdf6132b20fc1bc048472bd8da5d304d99a298",
+  "cssSha256": "ac492aaee609740c00543bed0093e029b20e9d6955775a42527b580bf1451830",
   "captures": [
     {
       "file": "01-restored-shell-dark.png",

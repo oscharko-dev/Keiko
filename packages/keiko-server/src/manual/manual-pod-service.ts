@@ -40,6 +40,11 @@ import {
   resolveNewCapsuleEmbeddingIdentity,
 } from "../local-knowledge-handlers.js";
 import { currentGatewayEgressConfig, type UiHandlerDeps } from "../deps.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import { createGatewayManualFetcher } from "./manual-crawl-fetcher.js";
 
 // Terminal jobs are retained so a poll after completion still resolves; the registry is capped so a
@@ -213,8 +218,8 @@ export function createTerminalState(progress: HtmlManualIndexingProgress): HtmlM
   );
 }
 
-// A run failure is a body-free failure: the error is dropped and the job goes to state=failed. The
-// prior pod (refresh) or no pod (create) is left intact by the domain functions. A resolved run
+// A run failure is body-free in the job state and emits one correlation-keyed operator diagnostic.
+// The prior pod (refresh) or no pod (create) is left intact by the domain functions. A resolved run
 // carries the domain-derived terminal state, so a fail-closed outcome settles as `failed`, not
 // `succeeded`.
 export async function executeJob(
@@ -222,6 +227,7 @@ export async function executeJob(
   base: HtmlManualPodJob,
   controller: AbortController,
   run: ManualPodJobRunner,
+  diagnostics?: ServerDiagnosticSink,
 ): Promise<void> {
   let current = base;
   const onCrawlEvent = (event: ManualCrawlEvent): void => {
@@ -231,7 +237,17 @@ export async function executeJob(
   try {
     const { progress, state } = await run(onCrawlEvent);
     manualPodJobRegistry.patch(jobId, projectJob(current, progress, state));
-  } catch {
+  } catch (error) {
+    emitServerDiagnostic(
+      diagnostics,
+      serverDiagnosticFromError({
+        correlationId: jobId,
+        operation: "manual-pod.job",
+        source: "manual-pod.service",
+        error,
+        redact: () => "server-operation-failed",
+      }),
+    );
     manualPodJobRegistry.patch(jobId, failedJob(current));
   }
 }
@@ -346,12 +362,13 @@ function startJob(
   operation: "create" | "refresh",
   ids: { capsuleId: string; sourceId: string },
   buildRun: (base: HtmlManualPodJob, controller: AbortController) => ManualPodJobRunner,
+  diagnostics?: ServerDiagnosticSink,
 ): HtmlManualPodJob {
   const jobId = randomUUID();
   const controller = new AbortController();
   const base = initialJob(jobId, operation, ids.capsuleId, ids.sourceId);
   manualPodJobRegistry.register(base, controller);
-  void executeJob(jobId, base, controller, buildRun(base, controller));
+  void executeJob(jobId, base, controller, buildRun(base, controller), diagnostics);
   return base;
 }
 
@@ -376,6 +393,7 @@ export async function startManualPodCreate(
     "create",
     ids,
     (_base, controller) => run ?? createRun(ctx, built.source, identity, ids, controller),
+    deps.diagnostics,
   );
   return { ok: true, job };
 }
@@ -418,6 +436,7 @@ export function startManualPodRefresh(
     "refresh",
     { capsuleId: request.capsuleId, sourceId: request.sourceId },
     (_base, controller) => run ?? refreshRun(ctx, request, controller),
+    deps.diagnostics,
   );
   return { ok: true, job };
 }

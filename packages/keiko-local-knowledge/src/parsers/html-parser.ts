@@ -558,6 +558,7 @@ const CELL_TAGS: ReadonlySet<string> = new Set(["td", "th"]);
 // Bounds a `colspan`/`rowspan` attribute value to a sane positive integer so a malformed or
 // hostile table (e.g. `colspan="999999999"`) cannot force an unbounded column-expansion loop.
 const MAX_CELL_SPAN = 1000;
+const MAX_EXPANDED_CELLS_PER_TABLE = 20_000;
 
 function readSpanCount(tagRaw: string, attribute: string): number {
   const raw = readAttribute(tagRaw, attribute);
@@ -586,12 +587,49 @@ function tableCells(rowHtml: string): readonly TableCell[] {
 // Repeats each cell `colspan` times so a spanning `<th>`/`<td>` occupies one array slot per
 // logical column it covers — otherwise header-to-value zipping (`appendTableRows`) stays purely
 // positional and misaligns every column from a spanning cell onward.
-function expandRowByColspan(row: readonly TableCell[]): readonly TableCell[] {
+interface TableExpansionBudget {
+  remaining: number;
+}
+
+interface ExpandedTableRow {
+  readonly cells: readonly TableCell[];
+  readonly truncated: boolean;
+}
+
+function expandRowByColspan(
+  row: readonly TableCell[],
+  budget: TableExpansionBudget,
+): ExpandedTableRow {
   const expanded: TableCell[] = [];
   for (const cell of row) {
-    for (let i = 0; i < cell.colspan; i += 1) expanded.push(cell);
+    for (let i = 0; i < cell.colspan; i += 1) {
+      if (budget.remaining === 0) return { cells: expanded, truncated: true };
+      expanded.push(cell);
+      budget.remaining -= 1;
+    }
   }
-  return expanded;
+  return { cells: expanded, truncated: false };
+}
+
+function expandedTableRows(state: ScanState, tableHtml: string): readonly (readonly TableCell[])[] {
+  const budget: TableExpansionBudget = { remaining: MAX_EXPANDED_CELLS_PER_TABLE };
+  const rows: (readonly TableCell[])[] = [];
+  for (const row of extractElements(tableHtml, ROW_TAGS)) {
+    if (recordScanLimit(state)) break;
+    const expanded = expandRowByColspan(tableCells(row.innerHtml), budget);
+    rows.push(expanded.cells);
+    if (!expanded.truncated) continue;
+    state.diagnostics.push(
+      diagnostic(
+        "UNIT_LIMIT_REACHED",
+        "table exceeded the maximum expanded-cell budget; remaining cells were skipped",
+        state.input.documentId,
+        "warning",
+      ),
+    );
+    break;
+  }
+  return rows;
 }
 
 function normalizeHeaders(headers: readonly string[], count: number): readonly string[] {
@@ -638,9 +676,7 @@ function warnIfHeaderRowspanUnsupported(state: ScanState, headerRow: readonly Ta
 
 function appendTableRows(state: ScanState, tableHtml: string): void {
   appendTableCaption(state, tableHtml);
-  const rows = extractElements(tableHtml, ROW_TAGS)
-    .map((row) => tableCells(row.innerHtml))
-    .map(expandRowByColspan);
+  const rows = expandedTableRows(state, tableHtml);
   if (rows.length === 0) return;
   const first = rows[0] ?? [];
   const headerIsSchema =

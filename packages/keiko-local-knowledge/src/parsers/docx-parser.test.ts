@@ -200,6 +200,67 @@ describe("docxParser", () => {
     expect(normalizedText).toContain("Table row 1: Name=Firewall | Status=Enabled");
   });
 
+  it("preserves outer rows around a nested table and projects the nested rows separately", async () => {
+    const xml = [
+      "<w:document><w:body><w:tbl>",
+      "<w:tr><w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Status</w:t></w:r></w:p></w:tc></w:tr>",
+      "<w:tr><w:tc><w:p><w:r><w:t>Before</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Present</w:t></w:r></w:p></w:tc></w:tr>",
+      "<w:tr><w:tc><w:p><w:r><w:t>Container</w:t></w:r></w:p><w:tbl>",
+      "<w:tr><w:tc><w:p><w:r><w:t>InnerKey</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>InnerValue</w:t></w:r></w:p></w:tc></w:tr>",
+      "<w:tr><w:tc><w:p><w:r><w:t>Nested</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Only</w:t></w:r></w:p></w:tc></w:tr>",
+      "</w:tbl></w:tc><w:tc><w:p><w:r><w:t>Has child</w:t></w:r></w:p></w:tc></w:tr>",
+      "<w:tr><w:tc><w:p><w:r><w:t>After</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Done</w:t></w:r></w:p></w:tc></w:tr>",
+      "</w:tbl></w:body></w:document>",
+    ].join("");
+    const result = await docxParser.parseAsync(
+      selectionFromBytes(zipDocxParts(xml), { extension: "docx" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const normalizedText = "normalizedText" in result ? result.normalizedText : "";
+
+    expect(normalizedText).toContain("Table row 1: Name=Before | Status=Present");
+    expect(normalizedText).toContain("Table row 3: Name=After | Status=Done");
+    expect(normalizedText).toContain("Table row 1: InnerKey=Nested | InnerValue=Only");
+  });
+
+  it("emits each table exactly once across multiple nesting levels", async () => {
+    const xml = [
+      "<w:document><w:body><w:tbl>",
+      "<w:tr><w:tc><w:p><w:r><w:t>OuterKey</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>OuterValue</w:t></w:r></w:p></w:tc></w:tr>",
+      "<w:tr><w:tc><w:p><w:r><w:t>Outer</w:t></w:r></w:p><w:tbl>",
+      "<w:tr><w:tc><w:p><w:r><w:t>MiddleKey</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>MiddleValue</w:t></w:r></w:p></w:tc></w:tr>",
+      "<w:tr><w:tc><w:p><w:r><w:t>Middle</w:t></w:r></w:p><w:tbl>",
+      "<w:tr><w:tc><w:p><w:r><w:t>DeepKey</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>DeepValue</w:t></w:r></w:p></w:tc></w:tr>",
+      "<w:tr><w:tc><w:p><w:r><w:t>Deep</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Once</w:t></w:r></w:p></w:tc></w:tr>",
+      "</w:tbl></w:tc><w:tc><w:p><w:r><w:t>Layer</w:t></w:r></w:p></w:tc></w:tr>",
+      "</w:tbl></w:tc><w:tc><w:p><w:r><w:t>Container</w:t></w:r></w:p></w:tc></w:tr>",
+      "</w:tbl></w:body></w:document>",
+    ].join("");
+    const result = await docxParser.parseAsync(
+      selectionFromBytes(zipDocxParts(xml), { extension: "docx" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const normalizedText =
+      "normalizedText" in result && typeof result.normalizedText === "string"
+        ? result.normalizedText
+        : "";
+
+    expect(normalizedText.match(/DeepKey=Deep \| DeepValue=Once/gu)).toHaveLength(1);
+  });
+
+  it("fails closed when a nested table is unterminated", async () => {
+    const xml =
+      "<w:document><w:body><w:tbl><w:tr><w:tc>" +
+      "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Nested</w:t></w:r></w:p></w:tc></w:tr>" +
+      "</w:tc></w:tr></w:body></w:document>";
+    const result = await docxParser.parseAsync(
+      selectionFromBytes(zipDocxParts(xml), { extension: "docx" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+
+    expect(result.diagnostics[0]?.code).toBe("MALFORMED_INPUT");
+  });
+
   it("extracts DOCX footnotes into the normalized text", async () => {
     const documentXml =
       "<w:document><w:body><w:p><w:r><w:t>Body text</w:t></w:r></w:p></w:body></w:document>";

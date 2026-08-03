@@ -17,6 +17,23 @@ import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 
 export const DEFAULT_STATE_DIR_NAME = ".keiko";
+export const DEFAULT_UI_STATE_SUBDIR = "ui";
+
+export function defaultUiDataDir(stateDir: string): string {
+  return join(stateDir, DEFAULT_UI_STATE_SUBDIR);
+}
+
+export const ATLASSIAN_CREDENTIALS_VAULT = "atlassian-connector-credentials.vault";
+export const ATLASSIAN_CREDENTIALS_KEYFILE = "atlassian-connector-credentials-vault.key";
+export const ATLASSIAN_CREDENTIALS_METADATA = "atlassian-connector-credentials.metadata.json";
+export const ATLASSIAN_CREDENTIAL_ARTIFACTS = [
+  ATLASSIAN_CREDENTIALS_VAULT,
+  ATLASSIAN_CREDENTIALS_KEYFILE,
+  ATLASSIAN_CREDENTIALS_METADATA,
+] as const;
+const ATLASSIAN_CREDENTIAL_ARTIFACT_SET: ReadonlySet<string> = new Set(
+  ATLASSIAN_CREDENTIAL_ARTIFACTS,
+);
 
 // Runtime files Keiko writes under the state dir. `ui.pid`/`ui.log` come from
 // `lifecycle.ts`; `launcher-state.json` from `launcher-state.ts`; portable
@@ -97,9 +114,12 @@ export function classifyPid(
 //     launcher-state.json                   launcher-state.ts
 //     portable-install-state.json           portable.ts
 //     .launcher-state-*/                    launcher-state.ts atomic-save temp dirs
-//     keiko-ui.db[-wal|-shm|.corrupt.*]     keiko-server  store/paths.ts (UI_DB_FILENAME)
-//     keiko.config.json                     keiko-server  deps.ts (model-gateway config)
-//     credentials/*.vault, *.key            keiko-server  credentialVault.ts (sealed apiKeys + keyfile)
+//     keiko-ui.db, keiko.config.json         legacy root-local UI data
+//     credentials/*.vault, *.key            legacy provider credential custody
+//     ui/keiko-ui.db[-wal|-shm|.corrupt.*]  keiko-server  store/paths.ts (UI_DB_FILENAME)
+//     ui/keiko.config.json                   keiko-server  deps.ts (model-gateway config)
+//     ui/credentials/provider-*.vault|*.key keiko-server  credentialVault.ts
+//     ui/credentials/atlassian-*             keiko-server  atlassian credential stores
 //     memory/keiko-memory.db[-wal|-shm|.*]  keiko-memory-vault paths.ts (MEMORY_DB_FILENAME)
 //     local-knowledge/<ns>/capsules.db[…]   keiko-local-knowledge store-paths.ts
 //     evidence/<runId>.json|.lock|…         keiko-evidence store.ts
@@ -289,6 +309,7 @@ function isProviderCredentialVaultFile(name: string): boolean {
   return (
     name === PROVIDER_CREDENTIALS_VAULT ||
     name === PROVIDER_CREDENTIALS_KEYFILE ||
+    ATLASSIAN_CREDENTIAL_ARTIFACT_SET.has(name) ||
     SECRET_VAULT_TEMP_FILE.test(name)
   );
 }
@@ -386,6 +407,13 @@ const credentialsSubtree: OwnedSubtree = {
   childSubtree: NO_CHILD,
 };
 
+const uiDataSubtree: OwnedSubtree = {
+  category: "ui-database",
+  whole: false,
+  ownsFile: (name) => name === GATEWAY_CONFIG_FILENAME || isSqliteFamily(UI_DB_FILENAME, name),
+  childSubtree: (name) => (name === CREDENTIALS_SUBDIR ? credentialsSubtree : undefined),
+};
+
 const editorHotExitSubtree: OwnedSubtree = {
   category: "editor-hot-exit",
   whole: false,
@@ -444,6 +472,7 @@ function topLevelFileCategory(name: string): RuntimeStateCategory | undefined {
 }
 
 function topLevelChildSubtree(name: string): OwnedSubtree | undefined {
+  if (name === DEFAULT_UI_STATE_SUBDIR) return uiDataSubtree;
   if (name === CREDENTIALS_SUBDIR) return credentialsSubtree;
   if (name === MEMORY_SUBDIR) return memorySubtree;
   if (name === LOCAL_KNOWLEDGE_SUBDIR) return localKnowledgeSubtree;

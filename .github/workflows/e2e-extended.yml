@@ -25,6 +25,7 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.code_task_real_binary }}
     name: extended e2e (${{ matrix.suite }})
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       # #2485: the Local Knowledge campaign's large-PDF passes bind a curated multi-hundred-page
       # document that only exists on the maintainer corpus machine; the hermetic generated corpus
@@ -44,6 +45,18 @@ jobs:
           - test:e2e:formatting-1380
           - test:e2e:language-intelligence-1383
           - test:e2e:git-changes-1575
+          # Issue #2887: keep the governed Git delivery/PR/merge journeys and the Files-window
+          # repository transition coverage on the nightly lane. Their dedicated configs boot the
+          # packaged UI with the required delivery feature flag and cannot run under the shared
+          # per-PR smoke server without changing the product surface under test.
+          - test:e2e:git-status-1386
+          - test:e2e:git-branch-sync-1576
+          - test:e2e:git-client-closeout-1578
+          - test:e2e:git-delivery-475
+          - test:e2e:git-pr-merge-1577
+          - test:e2e:git-publish-476
+          - test:e2e:merge-governance-478
+          - test:e2e:pr-command-center-477
           - test:e2e:local-knowledge
           # Epic #2285 (Editor M11). Only the #2533 closeout journey runs per pull request; these
           # seven per-child journeys shipped with npm scripts and no lane at all, which is the exact

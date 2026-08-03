@@ -107,6 +107,8 @@ implementation, start with these clusters:
 - Git delivery and Git client: ADR-0080 through ADR-0087, ADR-0098.
 - Voice and dialogue mode: voice-specific ADR-0100 through ADR-0111, ADR-0094
   through ADR-0096.
+- Coding Workbench autonomy, sidecar runtime, and packaged qualification: ADR-0124,
+  ADR-0125, ADR-0137, ADR-0140, ADR-0141, ADR-0163.
 
 ADR statuses matter. Proposed ADRs are design intent; Accepted ADRs are constraints
 unless superseded by later code or ADRs.
@@ -296,6 +298,26 @@ Rules:
   detected and attested rather than assumed.
 - Troubleshooting examples must never include API keys, customer data, private logs,
   internal endpoints, or raw evidence payloads.
+
+### Coding Workbench
+
+Primary docs:
+
+- [coding-runtime/dev-lane.md](coding-runtime/dev-lane.md)
+- [coding-runtime/milestone-1-real-binary-validation.md](coding-runtime/milestone-1-real-binary-validation.md)
+- [coding-runtime/research-content-threat-model.md](coding-runtime/research-content-threat-model.md)
+- [coding-workbench-codex-subscription-profiles.md](coding-workbench-codex-subscription-profiles.md)
+- [qa/coding-workbench-operator-runbook.md](qa/coding-workbench-operator-runbook.md)
+- [qa/coding-workbench-autonomy-qa-matrix.md](qa/coding-workbench-autonomy-qa-matrix.md)
+
+Rules:
+
+- The three product modes and their fail-closed effective-mode ceiling come from the shared
+  Coding Workbench contract and ADR-0124, ADR-0125, and ADR-0138; do not reconstruct them locally.
+- The macOS development lane is explicitly opted in and confined to repositories that carry the
+  checkout marker. It never substitutes for packaged qualification (ADR-0140).
+- Packaged installs are release-qualified only for the fixed `windows-x64`, `macos-arm64`, and
+  `macos-x64` ZIP targets; unsupported targets fail closed (ADR-0163).
 
 ## Verification commands
 

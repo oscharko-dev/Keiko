@@ -11,6 +11,7 @@ import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import {
+  deleteQualityIntelligenceCandidates,
   recordQualityIntelligenceCandidates,
   recordQualityIntelligenceRun,
 } from "@oscharko-dev/keiko-evidence";
@@ -72,6 +73,13 @@ const MATRIX = [
 
 beforeEach(() => {
   evidenceDir = mkdtempSync(join(tmpdir(), "keiko-trace-test-"));
+  recordQualityIntelligenceCandidates({
+    runId: RUN_ID,
+    generatedAt: "2026-06-01T10:01:00.000Z",
+    candidates: [makeCandidate("tc-1", "Traceability candidate")],
+    evidenceDir,
+    redact: (value: unknown): unknown => value,
+  });
 });
 
 afterEach(() => {
@@ -356,12 +364,11 @@ describe("handleQiTraceabilityExport — readability (#790)", () => {
     expect(body).toMatch(/requirement-to-test;atom-2;—;uncovered;"0,00";—;—/u);
   });
 
-  it("still exports when the candidate artifact is absent (titles fall back to em-dash)", async () => {
+  it("fails closed when the candidate artifact needed by the quality gate is absent", async () => {
     recordQualityIntelligenceRun(runInput(RUN_ID, READABLE_MATRIX), { evidenceDir });
+    deleteQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
     const result = await handleQiTraceabilityExport(ctx(RUN_ID, makeReq(null)), deps(evidenceDir));
-    expect(result.status).toBe(200);
-    const body = (result.body as { body: string }).body;
-    expect(body).toContain("Lock the account after five failed logins.");
-    expect(body).toMatch(/test-to-requirement;atom-1;Lock the account.*;covered;"0,90";tc-1;—/u);
+    expect(result.status).toBe(500);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_LOAD_FAILED");
   });
 });

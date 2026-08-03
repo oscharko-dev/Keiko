@@ -3,12 +3,12 @@
   "baseRef": "afd2c7af18f269459893363d2380fc6bccd0dd77",
   "baseSha": "afd2c7af18f269459893363d2380fc6bccd0dd77",
   "immutableBaseSha": "afd2c7af18f269459893363d2380fc6bccd0dd77",
-  "postSha": "4d8d787256f10095cc82d3235c40c3b47f0553580020367c4361dead6c2cd103",
-  "postCssSha256": "4d8d787256f10095cc82d3235c40c3b47f0553580020367c4361dead6c2cd103",
+  "postSha": "416783ba19cc77a3f5754d62093cffd250724211fe126d8785faa7466d3af68d",
+  "postCssSha256": "416783ba19cc77a3f5754d62093cffd250724211fe126d8785faa7466d3af68d",
   "run": {
-    "startedAt": "2026-06-21T20:58:37.376Z",
-    "generatedAt": "2026-06-21T20:58:40.470Z",
-    "repoHeadSha": "13e08d1b0270deca2f9160e8edf9fab781f99fd1",
+    "startedAt": "2026-08-03T08:50:06.911Z",
+    "generatedAt": "2026-08-03T08:50:10.468Z",
+    "repoHeadSha": "a29064da2d68f6eb88f95e4eb68a8cbd01f888c1",
     "baseRefIsImmutableSha": true
   },
   "groupA": {
@@ -115,8 +115,8 @@
       "activeElementId": "focus-row",
       "tabIndex": "0",
       "outlineStyle": "solid",
-      "outlineWidth": "3px",
-      "outlineColor": "rgba(26, 235, 255, 0.8)",
+      "outlineWidth": "2px",
+      "outlineColor": "rgb(78, 186, 135)",
       "outlineOffset": "-2px"
     },
     "sortAnnouncement": {
@@ -131,7 +131,7 @@
   "boundedRowSmoke": {
     "ok": true,
     "rowCount": 250,
-    "durationMs": 0.10000038146972656,
+    "durationMs": 0,
     "afterScrollTop": 8363,
     "scrollHeight": 8783,
     "clientHeight": 420,
@@ -142,37 +142,72 @@
     "01-dark": {
       "groupA_diffs": 0,
       "groupR_diffs": 0,
-      "groupR_gated": true
+      "groupR_gated": true,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": false
+      }
     },
     "02-light": {
       "groupA_diffs": 0,
       "groupR_diffs": 0,
-      "groupR_gated": true
+      "groupR_gated": true,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": false
+      }
     },
     "03-dark-hc": {
       "groupA_diffs": 0,
       "groupR_diffs": 0,
-      "groupR_gated": false
+      "groupR_gated": false,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": false
+      }
     },
     "04-light-hc": {
       "groupA_diffs": 0,
       "groupR_diffs": 0,
-      "groupR_gated": false
+      "groupR_gated": false,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": false
+      }
     },
     "05-prefers-contrast": {
       "groupA_diffs": 0,
       "groupR_diffs": 0,
-      "groupR_gated": false
+      "groupR_gated": false,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": true
+      }
     },
     "06-forced-colors": {
       "groupA_diffs": 0,
       "groupR_diffs": 0,
-      "groupR_gated": false
+      "groupR_gated": false,
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": true,
+        "prefersContrast": false
+      }
     },
     "07-reduced-motion": {
       "groupA_diffs": 0,
       "groupR_diffs": 0,
-      "groupR_gated": false
+      "groupR_gated": false,
+      "mediaProbe": {
+        "reducedMotion": true,
+        "forcedColors": false,
+        "prefersContrast": false
+      }
     }
   }
 }

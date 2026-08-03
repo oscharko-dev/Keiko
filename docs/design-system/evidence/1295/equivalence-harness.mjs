@@ -853,6 +853,22 @@ const MODES = [
   { id: "07-reduced-motion", theme: null, hc: null, media: { reducedMotion: "reduce" } },
 ];
 
+async function readMediaProbe(page) {
+  return page.evaluate(() => ({
+    reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+    forcedColors: matchMedia("(forced-colors: active)").matches,
+    prefersContrast: matchMedia("(prefers-contrast: more)").matches,
+  }));
+}
+
+function mediaMatchesMode(modeId, probe) {
+  return (
+    probe.reducedMotion === (modeId === "07-reduced-motion") &&
+    probe.forcedColors === (modeId === "06-forced-colors") &&
+    probe.prefersContrast === (modeId === "05-prefers-contrast")
+  );
+}
+
 function pageHtml(cssText) {
   return `<!doctype html><html><head><meta charset="utf-8"><style>${cssText}
   body{margin:0;padding:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start}
@@ -863,15 +879,21 @@ function pageHtml(cssText) {
 }
 
 async function collect(page, cssText, mode) {
-  await page.emulateMedia({ colorScheme: "dark", ...mode.media });
+  await page.emulateMedia({
+    colorScheme: "dark",
+    contrast: "no-preference",
+    forcedColors: "none",
+    reducedMotion: "no-preference",
+    ...mode.media,
+  });
   await page.setContent(pageHtml(cssText), { waitUntil: "load" });
   await page.evaluate(
     ({ theme, hc }) => {
       const r = document.documentElement;
-      r.removeAttribute("data-theme");
-      r.removeAttribute("data-hc");
-      if (theme) r.setAttribute("data-theme", theme);
-      if (hc) r.setAttribute("data-hc", hc);
+      delete r.dataset.theme;
+      delete r.dataset.hc;
+      if (theme) r.dataset.theme = theme;
+      if (hc) r.dataset.hc = hc;
     },
     { theme: mode.theme, hc: mode.hc },
   );
@@ -891,15 +913,21 @@ async function collect(page, cssText, mode) {
 }
 
 async function collectC(page, cssText, mode) {
-  await page.emulateMedia({ colorScheme: "dark", ...mode.media });
+  await page.emulateMedia({
+    colorScheme: "dark",
+    contrast: "no-preference",
+    forcedColors: "none",
+    reducedMotion: "no-preference",
+    ...mode.media,
+  });
   await page.setContent(pageHtml(cssText), { waitUntil: "load" });
   await page.evaluate(
     ({ theme, hc }) => {
       const r = document.documentElement;
-      r.removeAttribute("data-theme");
-      r.removeAttribute("data-hc");
-      if (theme) r.setAttribute("data-theme", theme);
-      if (hc) r.setAttribute("data-hc", hc);
+      delete r.dataset.theme;
+      delete r.dataset.hc;
+      if (theme) r.dataset.theme = theme;
+      if (hc) r.dataset.hc = hc;
     },
     { theme: mode.theme, hc: mode.hc },
   );
@@ -972,9 +1000,14 @@ for (const mode of MODES) {
 
   // ── Screenshot (POST) ───────────────────────────────────────────────────
   await collect(page, POST, mode);
+  proof[mode.id].mediaProbe = await readMediaProbe(page);
   await page.screenshot({ path: resolve(HERE, `${mode.id}.png`), fullPage: true });
   console.log(`${mode.id}: ${modeProbes} probes, ${modeDiffs} differing computed values`);
 }
+
+const mediaFailed = Object.entries(proof).some(
+  ([modeId, mode]) => !mediaMatchesMode(modeId, mode.mediaProbe),
+);
 
 // ─── Category-C analysis ──────────────────────────────────────────────────────
 const catCResults = {};
@@ -1099,18 +1132,20 @@ console.log(
 console.log(`MISSING selectors (not in DOM, skipped): ${missing.size}`);
 if (missing.size > 0) for (const s of missing) console.log(`  MISSING: ${s}`);
 console.log(`DIFFERENCES (pre vs post): ${diffs.length}`);
+console.log(`MEDIA ISOLATION: ${mediaFailed ? "FAIL" : "PASS"}`);
 for (const d of diffs.slice(0, 80)) console.log(d);
 console.log(`\nCategory-C deliberate adaptations:`);
+
+function categoryCLightStatus(result) {
+  if (result.group === "C1") {
+    return result.lightDiffers ? "OK differs (expected)" : "FAIL should differ";
+  }
+  return result.lightIdentical ? "OK identical (expected)" : "FAIL should be identical";
+}
+
 for (const [key, r] of Object.entries(catCResults)) {
   const darkOk = r.darkIdentical ? "OK" : "FAIL";
-  const lightOk =
-    r.group === "C1"
-      ? r.lightDiffers
-        ? "OK differs (expected)"
-        : "FAIL should differ"
-      : r.lightIdentical
-        ? "OK identical (expected)"
-        : "FAIL should be identical";
+  const lightOk = categoryCLightStatus(r);
   console.log(`  [${r.group}] ${key}: dark=${darkOk}  light=${lightOk}`);
   console.log(`    dark   PRE="${r.darkPre}"  POST="${r.darkPost}"`);
   console.log(`    light  PRE="${r.lightPre}"  POST="${r.lightPost}"`);
@@ -1129,4 +1164,4 @@ if (catCFailures.length > 0) {
 }
 
 await browser.close();
-process.exit(diffs.length === 0 && catCFailures.length === 0 ? 0 : 1);
+process.exit(diffs.length === 0 && catCFailures.length === 0 && !mediaFailed ? 0 : 1);

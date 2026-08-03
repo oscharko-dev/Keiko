@@ -93,6 +93,7 @@ const MATRIX = [
 function candidate(
   id: string,
   title: string,
+  status: "proposed" | "needs-review" = "proposed",
 ): {
   readonly id: string;
   readonly runId: string;
@@ -101,10 +102,10 @@ function candidate(
   readonly preconditions: readonly string[];
   readonly steps: readonly string[];
   readonly expectedResults: readonly string[];
-  readonly priority: "high";
-  readonly riskClass: "standard";
+  readonly priority: "P1";
+  readonly riskClass: "functional";
   readonly tags: readonly string[];
-  readonly status: "draft";
+  readonly status: "proposed" | "needs-review";
 } {
   return {
     id,
@@ -114,10 +115,10 @@ function candidate(
     preconditions: [],
     steps: ["do the thing"],
     expectedResults: ["it happened"],
-    priority: "high",
-    riskClass: "standard",
+    priority: "P1",
+    riskClass: "functional",
     tags: [],
-    status: "draft",
+    status,
   };
 }
 
@@ -161,6 +162,59 @@ afterEach(() => {
 });
 
 describe("handleQiTraceabilityExport — approvedOnly scope (CSV)", () => {
+  it.each([false, true])(
+    "withholds a needs-review test and reclassifies its sole requirement (approvedOnly=%s)",
+    async (approvedOnly) => {
+      const runId = `run-trace-quality-${String(approvedOnly)}`;
+      recordQualityIntelligenceRun(
+        runInput(runId, [
+          {
+            atomId: "atom-quality",
+            status: "covered",
+            confidence: 0.91,
+            coveringCandidateIds: ["tc-needs-review"],
+          },
+        ]),
+        { evidenceDir },
+      );
+      recordQualityIntelligenceCandidates({
+        runId,
+        generatedAt: "2026-07-01T09:01:00.000Z",
+        candidates: [
+          { ...candidate("tc-needs-review", "Unverified case", "needs-review"), runId },
+        ] as unknown as Parameters<typeof recordQualityIntelligenceCandidates>[0]["candidates"],
+        evidenceDir,
+        redact: (value: unknown): unknown => value,
+      });
+      if (approvedOnly) {
+        applyReviewDecision({
+          runId,
+          evidenceDir,
+          action: "approve",
+          scope: "candidate",
+          candidateId: "tc-needs-review",
+          reviewerLabel: "auditor",
+          now: "2026-07-01T09:02:00.000Z",
+          redact: (value: unknown): unknown => value,
+        });
+      }
+
+      const result = await handleQiTraceabilityExport(
+        ctx(runId, makeReq({ format: "markdown", approvedOnly })),
+        deps(evidenceDir),
+      );
+
+      expect(result.status).toBe(200);
+      const body = bodyOf(result);
+      expect(body).not.toContain("tc-needs-review");
+      const atomRow = body.split("\n").find((line) => line.startsWith("| atom-quality |"));
+      expect(atomRow).toBeDefined();
+      const cells = (atomRow ?? "").split("|").map((cell) => cell.trim());
+      expect(cells[3]).toBe("uncovered");
+      expect(cells[6]).toBe("0");
+    },
+  );
+
   it("omits rejected and never-reviewed tests from both matrix directions", async () => {
     seedRun();
     decide("approve", "tc-approved");

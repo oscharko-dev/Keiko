@@ -13,8 +13,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   loadQualityIntelligenceRun,
+  recordQualityIntelligenceCandidates,
   recordQualityIntelligenceRun,
 } from "@oscharko-dev/keiko-evidence";
+import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext } from "../../routes.js";
 import type { UiHandlerDeps } from "../../deps.js";
 import { handleQiTraceabilityExport } from "../traceabilityRoutes.js";
@@ -73,6 +76,33 @@ const MATRIX = [
   { atomId: "atom-b", status: "uncovered", confidence: 0, coveringCandidateIds: [] },
 ] as const;
 
+function exportCandidate(): QI.QualityIntelligenceTestCaseCandidate {
+  return {
+    id: QualityIntelligence.asQualityIntelligenceTestCaseId("tc-a"),
+    runId: QualityIntelligence.asQualityIntelligenceRunId(RUN_ID),
+    derivedFromAtomIds: [QualityIntelligence.asQualityIntelligenceEvidenceAtomId("atom-a")],
+    title: "Traceability export candidate",
+    preconditions: [],
+    steps: ["Exercise atom A"],
+    expectedResults: ["Atom A is satisfied"],
+    priority: "P1",
+    riskClass: "functional",
+    tags: [],
+    status: "proposed",
+  };
+}
+
+function seedExportableRun(): void {
+  recordQualityIntelligenceRun(runInput(RUN_ID, MATRIX), { evidenceDir });
+  recordQualityIntelligenceCandidates({
+    runId: RUN_ID,
+    generatedAt: "2026-06-14T09:01:00.000Z",
+    candidates: [exportCandidate()],
+    evidenceDir,
+    redact: (value: unknown): unknown => value,
+  });
+}
+
 beforeEach(() => {
   evidenceDir = mkdtempSync(join(tmpdir(), "keiko-trace-audit-test-"));
 });
@@ -85,7 +115,7 @@ afterEach(() => {
 
 describe("handleQiTraceabilityExport — export audit (CSV)", () => {
   it("appends exactly one export-evidence row with targetAdapter=traceability-csv after a CSV export", async () => {
-    recordQualityIntelligenceRun(runInput(RUN_ID, MATRIX), { evidenceDir });
+    seedExportableRun();
 
     const result = await handleQiTraceabilityExport(ctx(RUN_ID, makeReq(null)), deps(evidenceDir));
     expect(result.status).toBe(200);
@@ -113,7 +143,7 @@ describe("handleQiTraceabilityExport — export audit (CSV)", () => {
 
 describe("handleQiTraceabilityExport — export audit (Markdown)", () => {
   it("appends exactly one export-evidence row with targetAdapter=traceability-markdown after a Markdown export", async () => {
-    recordQualityIntelligenceRun(runInput(RUN_ID, MATRIX), { evidenceDir });
+    seedExportableRun();
 
     const result = await handleQiTraceabilityExport(
       ctx(RUN_ID, makeReq({ format: "markdown" })),
@@ -135,7 +165,7 @@ describe("handleQiTraceabilityExport — export audit (Markdown)", () => {
 
 describe("handleQiTraceabilityExport — export audit (re-export history)", () => {
   it("records distinct rows when the same export is requested twice", async () => {
-    recordQualityIntelligenceRun(runInput(RUN_ID, MATRIX), { evidenceDir });
+    seedExportableRun();
 
     await handleQiTraceabilityExport(ctx(RUN_ID, makeReq(null)), deps(evidenceDir));
     await handleQiTraceabilityExport(ctx(RUN_ID, makeReq(null)), deps(evidenceDir));

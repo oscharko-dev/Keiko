@@ -27,9 +27,11 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveHostExecutable } from "../../../../scripts/lib/host-executable.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../..");
+const GIT_PATH = resolveHostExecutable("git", { workspaceRoot: REPO });
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
 const DEFAULT_BASE_REF = "ee245ce8972c906f3eb9e0bff9d060f98be224f7";
 const BASE_REF = process.env.BASE_REF ?? DEFAULT_BASE_REF;
@@ -40,7 +42,7 @@ if (!/^[\w./-]+$/.test(BASE_REF)) {
 }
 
 const BASE_REF_RESOLVED = execFileSync(
-  "git",
+  GIT_PATH,
   ["-C", REPO, "rev-parse", "--verify", `${BASE_REF}^{commit}`],
   {
     encoding: "utf8",
@@ -48,7 +50,7 @@ const BASE_REF_RESOLVED = execFileSync(
   },
 ).trim();
 const POST_HEAD_REF_RESOLVED = execFileSync(
-  "git",
+  GIT_PATH,
   ["-C", REPO, "rev-parse", "--verify", "HEAD^{commit}"],
   {
     encoding: "utf8",
@@ -62,7 +64,7 @@ if (BASE_REF_RESOLVED === POST_HEAD_REF_RESOLVED) {
   );
 }
 
-const PRE = execFileSync("git", ["-C", REPO, "show", `${BASE_REF}:${CSS_PATH}`], {
+const PRE = execFileSync(GIT_PATH, ["-C", REPO, "show", `${BASE_REF}:${CSS_PATH}`], {
   encoding: "utf8",
   maxBuffer: 64 * 1024 * 1024,
 });
@@ -166,6 +168,22 @@ const MODES = [
   { id: "07-reduced-motion", theme: null, hc: null, media: { reducedMotion: "reduce" } },
 ];
 
+async function readMediaProbe(page) {
+  return page.evaluate(() => ({
+    reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+    forcedColors: matchMedia("(forced-colors: active)").matches,
+    prefersContrast: matchMedia("(prefers-contrast: more)").matches,
+  }));
+}
+
+function mediaMatchesMode(modeId, probe) {
+  return (
+    probe.reducedMotion === (modeId === "07-reduced-motion") &&
+    probe.forcedColors === (modeId === "06-forced-colors") &&
+    probe.prefersContrast === (modeId === "05-prefers-contrast")
+  );
+}
+
 function pageHtml(cssText) {
   return `<!doctype html><html><head><meta charset="utf-8"><style>${cssText}
   body{margin:0;padding:20px;background:var(--background-primary);color:var(--text-primary);font-family:var(--font-ui),system-ui,sans-serif;display:flex;flex-direction:column;gap:20px}
@@ -177,15 +195,21 @@ function pageHtml(cssText) {
 }
 
 async function applyMode(page, cssText, mode) {
-  await page.emulateMedia({ colorScheme: "dark", ...mode.media });
+  await page.emulateMedia({
+    colorScheme: "dark",
+    contrast: "no-preference",
+    forcedColors: "none",
+    reducedMotion: "no-preference",
+    ...mode.media,
+  });
   await page.setContent(pageHtml(cssText), { waitUntil: "load" });
   await page.evaluate(
     ({ theme, hc }) => {
       const r = document.documentElement;
-      r.removeAttribute("data-theme");
-      r.removeAttribute("data-hc");
-      if (theme) r.setAttribute("data-theme", theme);
-      if (hc) r.setAttribute("data-hc", hc);
+      delete r.dataset.theme;
+      delete r.dataset.hc;
+      if (theme) r.dataset.theme = theme;
+      if (hc) r.dataset.hc = hc;
     },
     { theme: mode.theme, hc: mode.hc },
   );
@@ -263,9 +287,14 @@ for (const mode of MODES) {
 
   // ── Screenshot (POST) ────────────────────────────────────────────────────
   await applyMode(page, POST, mode);
+  proof[mode.id].mediaProbe = await readMediaProbe(page);
   await page.screenshot({ path: resolve(HERE, `${mode.id}.png`), fullPage: true });
   console.log(`${mode.id}: ${modeProbes} Group-A probes, ${modeDiffs} differing computed values`);
 }
+
+const mediaFailed = Object.entries(proof).some(
+  ([modeId, mode]) => !mediaMatchesMode(modeId, mode.mediaProbe),
+);
 
 // ─── Group-D analysis: the thinking dots MUST differ in dark + light (deliberate) ──────
 const dResults = {};
@@ -327,6 +356,7 @@ console.log(`\nTOTAL Group-A: ${totalProbes} computed-value probes across ${MODE
 console.log(`MISSING selectors (not in DOM, skipped): ${missing.size}`);
 for (const s of missing) console.log(`  MISSING: ${s}`);
 console.log(`DIFFERENCES (pre vs post): ${diffs.length}`);
+console.log(`MEDIA ISOLATION: ${mediaFailed ? "FAIL" : "PASS"}`);
 for (const d of diffs.slice(0, 80)) console.log(d);
 console.log(`\nGroup-D deliberate alignment (thinking dots):`);
 for (const [key, r] of Object.entries(dResults)) {
@@ -342,4 +372,4 @@ if (dFailures.length > 0) {
 }
 
 await browser.close();
-process.exit(diffs.length === 0 && dFailures.length === 0 ? 0 : 1);
+process.exit(diffs.length === 0 && dFailures.length === 0 && !mediaFailed ? 0 : 1);
