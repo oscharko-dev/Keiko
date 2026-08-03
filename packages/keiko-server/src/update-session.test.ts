@@ -802,7 +802,7 @@ describe("UpdateSessionManager", () => {
     }
   });
 
-  it("expires orphaned child-PID ownership after the bounded grace window", async () => {
+  it("keeps a live installer child non-reclaimable beyond two stale windows", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-expired-child-pid-"));
     try {
       const lockPath = join(tempDir, "update.lock");
@@ -819,12 +819,12 @@ describe("UpdateSessionManager", () => {
       );
       const lock = createFileUpdateSessionLock(lockPath, {
         staleMs: 1_000,
-        now: () => Date.parse("2026-06-30T00:00:02.001Z"),
+        now: () => Date.parse("2026-06-30T00:10:00.000Z"),
         pidAlive: (pid) => pid === 222,
       });
 
-      expect(lock.isLocked()).toBe(false);
-      expect(lock.acquire(lockRecord("replacement"))).toBe(true);
+      expect(lock.isLocked()).toBe(true);
+      expect(lock.acquire(lockRecord("replacement"))).toBe(false);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

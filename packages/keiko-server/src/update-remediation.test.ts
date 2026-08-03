@@ -629,7 +629,7 @@ describe("update remediation manager", () => {
     );
   });
 
-  it("does not fabricate an execution failure when terminal state persistence fails", async () => {
+  it("persists outcome uncertainty and blocks retries when terminal state persistence fails", async () => {
     const diagnostics: ServerDiagnosticRecord[] = [];
     const auditEvents: string[] = [];
     const localKnowledge = fakeLocalKnowledge();
@@ -661,12 +661,58 @@ describe("update remediation manager", () => {
     });
 
     expect(localKnowledge.runs()).toBe(1);
-    expect(result.actions[0]?.status).toBe("pending");
+    expect(result.actions[0]).toMatchObject({
+      status: "manual-review-required",
+      failure: "remediation-outcome-uncertain",
+    });
+    expect(durable.readRuntimeState().remediations[0]).toMatchObject({
+      status: "running",
+      warningCode: "remediation-outcome-uncertain",
+    });
     expect(auditEvents).toContain("remediation-completed");
     expect(auditEvents).not.toContain("remediation-failed");
     expect(diagnostics).toContainEqual(
       expect.objectContaining({ source: "update-remediation.persistDraftStatus" }),
     );
+    await expect(
+      subject.runAction({
+        actionId: "local-knowledge-reindex:local-knowledge",
+        targetVersion: TARGET,
+        impact: localKnowledgeImpact,
+      }),
+    ).rejects.toMatchObject({ code: "UPDATE_REMEDIATION_OUTCOME_UNCERTAIN", status: 409 });
+    expect(localKnowledge.runs()).toBe(1);
+  });
+
+  it("retains the live lease when neither terminal nor uncertainty state can persist", async () => {
+    const localKnowledge = fakeLocalKnowledge();
+    const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });
+    let stateWrites = 0;
+    const unavailableTerminalState: UpdateLocalStateManager = {
+      ...durable,
+      writeRuntimeState: (state) => {
+        stateWrites += 1;
+        if (stateWrites > 1) throw new Error("terminal state unavailable");
+        return durable.writeRuntimeState(state);
+      },
+    };
+    const subject = createUpdateRemediationManager({
+      localState: unavailableTerminalState,
+      localKnowledge,
+      now: () => NOW,
+    });
+    const request = {
+      actionId: "local-knowledge-reindex:local-knowledge",
+      targetVersion: TARGET,
+      impact: localKnowledgeImpact,
+    } as const;
+
+    expect((await subject.runAction(request)).actions[0]?.status).toBe("pending");
+    await expect(subject.runAction(request)).rejects.toMatchObject({
+      code: "UPDATE_REMEDIATION_RUNNING",
+      status: 409,
+    });
+    expect(localKnowledge.runs()).toBe(1);
   });
 
   it("diagnoses a non-throwing terminal audit persistence warning", async () => {

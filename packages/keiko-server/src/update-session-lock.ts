@@ -258,10 +258,7 @@ function reclaimableValidRecord(
   if (ageMs === undefined || ageMs < options.staleMs) return false;
   if (record.pid === process.pid && record.processIdentity === options.processIdentity)
     return false;
-  const childCanBeReclaimed =
-    record.childPid === undefined ||
-    !options.pidAlive(record.childPid) ||
-    ageMs > options.staleMs * 2;
+  const childCanBeReclaimed = record.childPid === undefined || !options.pidAlive(record.childPid);
   if (record.pid === process.pid) return childCanBeReclaimed;
   if (options.pidAlive(record.pid)) return false;
   return childCanBeReclaimed;
