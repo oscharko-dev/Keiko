@@ -165,7 +165,8 @@ Measured end to end on 2026-08-03: a first run reported `store_loaded entries:0`
 `hits:0 misses:2`, and appended two entries; the next push, changing only one of the two files,
 reported `store_loaded entries:2` and `hits:1 misses:1`. At production scale the same day, a
 36-file pull request (35 reviewable, 1 excluded) reported `hits: 32, misses: 3` on a later push —
-the store answered 91% of what a full re-review would have paid for.
+the store replayed 91% of the files (32 of 35). That is a file hit rate, not an avoided-spend
+percentage — these diagnostics count files, and spend varies by file weight.
 
 Both files this document was introduced with are review-relevant, including this one: the profile's
 `docs/qa/**/*.md` entry wins over the broader prose exclusion. Worth knowing before predicting what
