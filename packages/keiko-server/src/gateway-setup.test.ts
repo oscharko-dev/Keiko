@@ -318,25 +318,29 @@ describe("handleGatewaySetup", () => {
     });
     const gatewayConfig = deps.gatewayConfig;
     if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
-    gatewayConfig.set(
-      parseGatewayConfig({
-        providers: [
-          {
-            modelId: "model/one",
-            baseUrl: "https://llm-gateway.example.com/v1",
-            apiKey: "example-secret-token",
-            timeoutMs: 45_678,
-            capability: {
-              kind: "chat",
-              toolCalling: true,
-              structuredOutput: true,
-              supportsResponseFormat: true,
-            },
+    const rawConfig = {
+      providers: [
+        {
+          modelId: "model/one",
+          baseUrl: "https://llm-gateway.example.com/v1",
+          apiKey: "example-secret-token",
+          timeoutMs: 45_678,
+          capability: {
+            kind: "chat",
+            toolCalling: true,
+            structuredOutput: true,
+            supportsResponseFormat: true,
           },
-        ],
-      }),
-      true,
-    );
+        },
+      ],
+      egress: {
+        httpsProxy: "http://proxy.internal.example:8443",
+        noProxy: "localhost,.corp.example",
+        allowPrivateNetwork: false,
+      },
+    };
+    gatewayConfig.set(parseGatewayConfig(rawConfig), true);
+    writeFileSync(gatewayConfig.storagePath, JSON.stringify(rawConfig), "utf8");
     gatewayConfig.recordVerifiedCapability(
       "model/one",
       { streaming: true, toolCalling: false, structuredOutput: false },
@@ -371,6 +375,7 @@ describe("handleGatewaySetup", () => {
     expect(persisted).toContain('"supportsResponseFormat": false');
     expect(JSON.parse(persisted)).toMatchObject({
       providers: [expect.objectContaining({ timeoutMs: 45_678 })],
+      egress: rawConfig.egress,
     });
     expect(persisted).not.toContain("example-secret-token");
     const replay = await handleApplyGatewayVerifiedCapabilities(

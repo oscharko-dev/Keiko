@@ -3,6 +3,7 @@
 // chat-completions smoke call, stores the resulting config on disk with private permissions, and
 // updates the in-memory runtime config without exposing credentials back to the browser.
 
+import { existsSync, readFileSync } from "node:fs";
 import { resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import {
   apiKeyHeaderValue,
@@ -3637,6 +3638,33 @@ function capabilityObservationMatches(
   );
 }
 
+function persistedGatewayEgress(storagePath: string): unknown {
+  if (!existsSync(storagePath)) return undefined;
+  let persisted: unknown;
+  try {
+    persisted = JSON.parse(readFileSync(storagePath, "utf8")) as unknown;
+  } catch {
+    throw new ConfigInvalidError("Stored gateway config cannot be safely updated.");
+  }
+  if (!isRecord(persisted)) {
+    throw new ConfigInvalidError("Stored gateway config cannot be safely updated.");
+  }
+  return persisted.egress;
+}
+
+function rawConfigForVerifiedCapabilityUpdate(
+  updated: GatewayConfig,
+  storagePath: string,
+  deps: UiHandlerDeps,
+): Record<string, unknown> {
+  const raw = rawConfigFromCurrent(updated, updated.figma?.accessToken);
+  const egress = persistedGatewayEgress(storagePath);
+  if (egress === undefined) return raw;
+  const withEgress = { ...raw, egress };
+  parseGatewayConfig(withEgress, deps.env, linkLocalGatewayOverrideOptions(deps.env));
+  return withEgress;
+}
+
 function persistVerifiedCapabilityUpdate(
   gatewayConfig: RuntimeGatewayConfig,
   deps: UiHandlerDeps,
@@ -3644,7 +3672,7 @@ function persistVerifiedCapabilityUpdate(
   generation: number,
   updated: GatewayConfig,
 ): RouteResult {
-  const raw = rawConfigFromCurrent(updated, updated.figma?.accessToken);
+  const raw = rawConfigForVerifiedCapabilityUpdate(updated, gatewayConfig.storagePath, deps);
   persistGatewayConfig(raw, gatewayConfig.storagePath, deps);
   // Persistence is synchronous, so no configuration mutation can interleave between the
   // generation check in the handler and this consumption. Keep the live observation available

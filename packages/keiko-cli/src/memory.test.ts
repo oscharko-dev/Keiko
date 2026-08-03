@@ -247,6 +247,33 @@ describe("runMemoryCli maintain", () => {
     expect(vault.getMemory(mid("retention-old"))).toBeUndefined();
   });
 
+  it("reports destructive tombstone purges and their retention breakdown", async () => {
+    const vault = makeVault();
+    insert(vault, { id: "old-tombstone" });
+    vault.deleteMemory(mid("old-tombstone"), {
+      tombstone: true,
+      forgetterSurface: "test",
+      reason: "retention test seed",
+      nowMs: Date.now() - 2 * 864e5,
+    });
+    const cap = capture();
+
+    expect(
+      await runMemoryCli(
+        ["maintain"],
+        cap.io,
+        { KEIKO_MEMORY_RETENTION_PURGE_FORGOTTEN_AFTER_DAYS: "1" },
+        { vault },
+      ),
+    ).toBe(0);
+
+    expect(cap.out()).toContain("retentionForgotten:      0");
+    expect(cap.out()).toContain("tombstonesPurged:        1");
+    expect(vault.listTombstonesByScope({ kind: "user", userId: "u-1" as MemoryUserId })).toEqual(
+      [],
+    );
+  });
+
   it("fails closed on invalid retention configuration without exposing its value", async () => {
     const vault = makeVault();
     const cap = capture();

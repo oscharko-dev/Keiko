@@ -170,30 +170,36 @@ export interface VoiceRecapAssistantTurnDescriptor {
 
 // Evidence summary for the recap as a whole — reuses VoiceTranscriptEvidenceSummary
 // from voice-transcript.ts for the committed transcript roll-up; adds recap-specific counts.
-export interface VoiceSessionRecapEvidenceSummary {
-  readonly schemaVersion: VoiceSessionRecapSchemaVersion;
+interface VoiceSessionRecapEvidenceSummaryBase {
   readonly transcript: VoiceTranscriptEvidenceSummary;  // from ./voice-transcript.js
   readonly candidatesExtracted: number;   // CaptureOutcome[] length from extraction
   readonly candidatesRejected: number;    // how many were rejected by scanForSecrets / policy
   readonly candidatesProposed: number;    // how many reached status "proposed" in the vault
-  readonly candidatesAccepted: number;    // how many governance accepted at capture time
   readonly triggeredByUser: boolean;      // always true (recap is user-triggered, never automatic)
 }
+export type VoiceSessionRecapEvidenceSummary = VoiceSessionRecapEvidenceSummaryBase &
+  (
+    | { readonly schemaVersion: "1"; readonly candidatesAccepted?: number }
+    | { readonly schemaVersion: "2"; readonly candidatesAccepted: number }
+  );
 
 // Content-free audit record for the recap trigger event.
 // Mirrors SpokenActionAuditRecord posture: no text, no audio, only enums/ints/bools.
-export interface VoiceSessionRecapAuditRecord {
-  readonly schemaVersion: VoiceSessionRecapSchemaVersion;
+interface VoiceSessionRecapAuditRecordBase {
   readonly profile: VoiceProfile;          // voice profile at recap time
   readonly committedSegmentCount: number;  // from selectCommittedVoiceTranscript projection
   readonly committedChars: number;         // character count; never transcript text
   readonly candidatesExtracted: number;
   readonly candidatesRejected: number;
   readonly candidatesProposed: number;
-  readonly candidatesAccepted: number;
   readonly triggeredByUser: boolean;
   readonly durationMs: number;             // extraction + vault write duration
 }
+export type VoiceSessionRecapAuditRecord = VoiceSessionRecapAuditRecordBase &
+  (
+    | { readonly schemaVersion: "1"; readonly candidatesAccepted?: number }
+    | { readonly schemaVersion: "2"; readonly candidatesAccepted: number }
+  );
 
 // Validation
 export function validateVoiceSessionRecapAuditRecord(

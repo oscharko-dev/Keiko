@@ -154,6 +154,8 @@ function renderMaintenanceReport(counts: ReturnType<ServerModule["runMemoryMaint
     `  archived:          ${String(counts.archived)}`,
     `  expired:           ${String(counts.expired)}`,
     `  forgotten:         ${String(counts.forgotten)}`,
+    `  retentionForgotten:${String(counts.retentionForgotten).padStart(7)}`,
+    `  tombstonesPurged:  ${String(counts.tombstonesPurged).padStart(7)}`,
     `  superseded:        ${String(counts.superseded)}`,
     `  edgesCreated:      ${String(counts.edgesCreated)}`,
     `  clustersInspected: ${String(counts.clustersInspected)}`,

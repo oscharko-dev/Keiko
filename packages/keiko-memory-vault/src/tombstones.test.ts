@@ -247,6 +247,34 @@ describe("tombstones", () => {
     db.close();
   });
 
+  it("uses SQLite binary id order at a cross-chunk page boundary", () => {
+    const db = openTestDb();
+    const scopes = Array.from({ length: 101 }, (_, index): MemoryScope => ({
+      kind: "user",
+      userId: `binary-order-user-${String(index)}` as UserId,
+    }));
+    for (const [id, scopeCoordinate] of [
+      ["a-lowercase", "binary-order-user-0"],
+      ["B-uppercase", "binary-order-user-100"],
+    ] as const) {
+      insertTombstoneRow(
+        db,
+        makeTombstone({ id, memoryId: `${id}-memory` as MemoryId, scopeCoordinate }),
+        TEST_CIPHER,
+      );
+    }
+
+    const first = listTombstonesPageRows(db, scopes, TEST_CIPHER, 1);
+    const firstRow = requiredFirstTombstone(first);
+    expect(firstRow.id).toBe("B-uppercase");
+    const second = listTombstonesPageRows(db, scopes, TEST_CIPHER, 1, {
+      forgottenAt: firstRow.forgottenAt,
+      id: firstRow.id,
+    });
+    expect(second.tombstones.map((row) => row.id)).toEqual(["a-lowercase"]);
+    db.close();
+  });
+
   it("inserts and lists in forgotten_at ASC order", () => {
     const db = openTestDb();
     insertTombstoneRow(

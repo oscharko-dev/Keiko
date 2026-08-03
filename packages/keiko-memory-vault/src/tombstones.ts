@@ -4,6 +4,7 @@
 // signal. We therefore store memory_id as a denormalised TEXT column and accept that listing a
 // tombstone tells you "this id existed in this scope at this time," not "follow the FK."
 
+import { Buffer } from "node:buffer";
 import type { DatabaseSync } from "node:sqlite";
 import type {
   MemoryId,
@@ -301,7 +302,10 @@ LIMIT 1
 }
 
 function compareLedgerRows(left: TombstoneRow, right: TombstoneRow): number {
-  return right.forgotten_at - left.forgotten_at || left.id.localeCompare(right.id);
+  return (
+    right.forgotten_at - left.forgotten_at ||
+    Buffer.compare(Buffer.from(left.id, "utf8"), Buffer.from(right.id, "utf8"))
+  );
 }
 
 function ledgerRowsForScopes(
