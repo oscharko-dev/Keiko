@@ -64,9 +64,11 @@ retention window and this run still loads nothing.
 # 1. Confirm the current run loaded nothing, and how many files it paid for.
 gh run view <run-id> --log | grep -oE '"code":"cache[^}]*}'
 
-# 2. Find the earlier runs on this branch...
-gh run list --workflow keiko-for-quality.yml --branch <branch> --limit 20 \
-  --json databaseId,createdAt
+# 2. Find the earlier runs on this branch. Raise the limit until the list stops saturating —
+# twenty is not enough: the incident this document records had twenty-one runs in one day, and a
+# truncated list hides exactly the older complete run whose artifact the locator can still restore.
+gh run list --workflow keiko-for-quality.yml --branch <branch> --limit 200 \
+  --json databaseId,createdAt --jq 'length'   # if this equals the limit, raise it and repeat
 
 # ...and read how the REVIEWER settled, which is not the workflow's conclusion. A review can
 # settle complete and the workflow still fail afterwards (a hand-off or signing failure), and a
@@ -80,9 +82,19 @@ gh api repos/<owner>/<repo>/actions/runs/<earlier-run-id>/artifacts \
 ```
 
 A store artifact named `keiko-review-store-pr<number>-<identity>` confirms the producing half
-worked, so the fault is in locating, downloading, or verifying. No such artifact, with the signing
-job green, points at the hand-off condition; no signing job at all points at the review job's own
-outcome.
+worked, so the fault is in locating, downloading, or verifying.
+
+**A green signing job proves nothing on its own.** By design it never fails on an attacker-
+reachable path: a missing or undownloadable unsigned artifact, an archive-gate refusal, an
+extraction over the limits, and a failed signature all exit zero with a `::warning::` and simply
+skip the upload. So when no artifact exists, read those warnings rather than inferring which half
+broke from the job's conclusion:
+
+```bash
+gh run view <run-id> --log | grep -E "::warning::|::notice::"
+```
+
+No signing job at all points at the review job's own outcome instead.
 
 **Resolution**
 
@@ -126,10 +138,14 @@ file that the store cannot answer. Nothing throttles the number of runs per pull
 gh run list --workflow keiko-for-quality.yml --limit 100 \
   --json createdAt,headBranch,conclusion
 
-# How many files a given run actually sent to the model. Use the MISSES here, not
-# inventory.completed: the inventory counts every reviewable path including the ones the store
-# answered, so on a healthy repeat run it overstates paid work by nearly the whole pull request.
+# What a run actually paid. On a COMPLETE run the misses from cache.hits are the files that went
+# to the model — use those, not inventory.completed, which also counts the ones the store answered.
 gh run view <run-id> --log | grep -oE '"code":"cache.hits"[^}]*}'
+
+# On a TRUNCATED run misses is only an upper bound: the engine stops dispatching at the limit, so
+# the undispatched tail is still a miss that cost nothing. There the engine's own token total is
+# the honest number, carried on the settlement itself.
+gh run view <run-id> --log | grep -oE '"code":"settlement.incomplete.budget_exceeded"[^}]*}'
 ```
 
 **Resolution**

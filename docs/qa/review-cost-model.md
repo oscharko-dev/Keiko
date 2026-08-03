@@ -42,8 +42,18 @@ The last row is not the price of reviewing 135 files. At the 25k planning figure
 roughly 3.4M tokens and the ceiling stops it at 2M, so the number is what hitting the ceiling costs
 — the run settles incomplete and the tail goes unreviewed. There is no configuration that buys a
 completed 135-file first review below the ceiling: either split the change, or raise `token_budget`
-and accept the cost the first two columns imply. Around 80 files is where the allotment starts
-meeting the cap.
+and accept the cost the first two columns imply.
+
+Two different thresholds are easy to conflate, and they are far apart:
+
+- the **allotment** meets the cap at about **38 files** — the formula grants 1.3 × 40,000 = 52,000
+  tokens per file, and 2M divides by that at 38.5, with the line term only lowering it. Past this
+  point the engine is handed the ceiling rather than what the formula asked for;
+- the run actually **truncates** when consumption reaches 2M, which at the measured 25k per file is
+  around **80 files**.
+
+So the ceiling starts binding at roughly half the size where it starts cutting. A change between
+those two numbers is capped but still completes.
 
 The spread on the first-review column is prompt caching: the lower bound assumes the provider
 caches most of the prompt across files, the upper bound assumes none of it.
