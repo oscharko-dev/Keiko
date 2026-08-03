@@ -381,6 +381,16 @@ function reportProjectTrustGrantFailure(
   return correlationId;
 }
 
+function projectTrustRemainsRestricted(deps: UiHandlerDeps, projectPath: string): boolean {
+  const status = deps.workspaceScriptTrust?.status;
+  if (status === undefined) return true;
+  try {
+    return status(projectPath).trust !== "trusted";
+  } catch {
+    return true;
+  }
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Route 14 — POST /api/projects
 // ──────────────────────────────────────────────────────────────────────────
@@ -418,10 +428,17 @@ export async function handleCreateProject(
         ctx.correlationId ?? randomUUID(),
         error,
       );
+      const projectWithAvailability = projectWithWorkspaceAvailability(deps.store, project);
+      // The trust write and its bounded-history prune are separate store operations. If the write
+      // committed before pruning failed, re-read the governed state instead of falsely telling the
+      // operator that authority stayed restricted.
+      if (!projectTrustRemainsRestricted(deps, project.path)) {
+        return { status: 201, body: { project: projectWithAvailability } };
+      }
       return {
         status: 201,
         body: {
-          project: projectWithWorkspaceAvailability(deps.store, project),
+          project: projectWithAvailability,
           warning: {
             code: "PROJECT_TRUST_GRANT_FAILED",
             message: "The project was registered but remains restricted.",

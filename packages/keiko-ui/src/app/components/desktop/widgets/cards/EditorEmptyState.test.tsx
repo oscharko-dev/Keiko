@@ -143,7 +143,8 @@ describe("EditorEmptyState", () => {
       },
     });
     const onOpenRoot = vi.fn();
-    render(<EditorEmptyState onOpenRoot={onOpenRoot} />);
+    const onWorkspaceNotice = vi.fn();
+    render(<EditorEmptyState onOpenRoot={onOpenRoot} onWorkspaceNotice={onWorkspaceNotice} />);
 
     fireEvent.change(screen.getByLabelText("Project folder path"), {
       target: { value: "/abs/project" },
@@ -152,6 +153,10 @@ describe("EditorEmptyState", () => {
 
     expect(await screen.findByRole("status")).toHaveTextContent("editor-trust-correlation");
     expect(onOpenRoot).toHaveBeenCalledWith("/abs/project");
+    expect(onWorkspaceNotice).toHaveBeenCalledWith({
+      root: "/abs/project",
+      message: expect.stringContaining("editor-trust-correlation") as string,
+    });
   });
 
   it("disables the native picker button when the platform is unsupported", () => {

@@ -115,6 +115,14 @@ function redirectDestination(response: Response, current: URL, base: URL): URL |
   return destination;
 }
 
+async function cancelIntermediateResponse(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    throw new JiraCodeContextPortError("jira-failed");
+  }
+}
+
 async function fetchPinnedJiraResponse(
   fetchFn: typeof globalThis.fetch,
   initialUrl: URL,
@@ -130,8 +138,15 @@ async function fetchPinnedJiraResponse(
       headers: { accept: "application/json", authorization },
       signal,
     });
-    const destination = redirectDestination(response, url, base);
+    let destination: URL | undefined;
+    try {
+      destination = redirectDestination(response, url, base);
+    } catch (error) {
+      await cancelIntermediateResponse(response);
+      throw error;
+    }
     if (destination === undefined) return response;
+    await cancelIntermediateResponse(response);
     if (redirects === JIRA_MAX_REDIRECTS) throw new JiraCodeContextPortError("jira-denied");
     url = destination;
   }

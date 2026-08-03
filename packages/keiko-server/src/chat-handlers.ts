@@ -1045,22 +1045,36 @@ const memoryMaintenanceCursor: AutoMaintenanceState = {};
 // handed the SAME effective posture — the operator's persisted memory mode clamped by the
 // deployment ceiling. In "Ask for approval" it promotes nothing; an unresolvable posture fails
 // closed to exactly that.
-function maybeRunChatAutoMaintenance(deps: UiHandlerDeps, vault: MemoryVaultStore): void {
+export function maybeRunChatAutoMaintenance(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  state: AutoMaintenanceState = memoryMaintenanceCursor,
+  nowMs: number = Date.now(),
+): void {
   if (deps.env.KEIKO_MEMORY_AUTO_MAINTAIN === "0") return;
-  const nowMs = Date.now();
-  if (!isMaintenanceDue(memoryMaintenanceCursor.lastRunAtMs, nowMs)) return;
+  if (!isMaintenanceDue(state.lastRunAtMs, nowMs)) return;
   const multipliers = memorySemanticizationMultipliers(deps.env);
   const retention = resolveMemoryRetentionPolicy(deps);
   // A malformed retention setting disables only the retention phase. The resolver already emits a
   // diagnostic; promotion, consolidation, supersession, and fade must keep running so one invalid
   // optional setting cannot silently suspend all pre-existing vault maintenance.
   const retentionPolicy = retention.ok ? retention.policy : undefined;
-  maybeRunAutoMaintenance(vault, memoryMaintenanceAuditSink(deps), memoryMaintenanceCursor, {
+  maybeRunAutoMaintenance(vault, memoryMaintenanceAuditSink(deps), state, {
     nowMs,
     enabled: true,
     autonomyMode: resolveMaintenanceAutonomyMode(deps),
     ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
     ...(retentionPolicy !== undefined ? { retentionPolicy } : {}),
+    onFailure: (error): void => {
+      emitServerDiagnostic(deps.diagnostics, {
+        correlationId: randomUUID(),
+        timestamp: new Date(Date.now()).toISOString(),
+        operation: "chat.memory.auto-maintenance",
+        source: "chat.memory.maintenance",
+        errorClass: contentFreeErrorClass(error),
+        message: "chat-memory-auto-maintenance-failed",
+      });
+    },
   });
 }
 

@@ -505,6 +505,18 @@ export interface MaybeRunAutoMaintenanceOptions {
   // keeps the flat single half-life. Resolve from the env via `memorySemanticizationMultipliers`.
   readonly decayHalfLifeMultiplierByType?: Partial<Record<MemoryType, number>>;
   readonly retentionPolicy?: MemoryRetentionPolicy;
+  readonly onFailure?: ((error: unknown) => void) | undefined;
+}
+
+function notifyAutoMaintenanceFailure(
+  onFailure: ((error: unknown) => void) | undefined,
+  error: unknown,
+): void {
+  try {
+    onFailure?.(error);
+  } catch {
+    return;
+  }
 }
 
 // Runs ONE bounded maintenance pass iff enabled AND due, advancing the cursor BEFORE running so a
@@ -531,7 +543,8 @@ export function maybeRunAutoMaintenance(
         ? { retentionPolicy: options.retentionPolicy }
         : {}),
     });
-  } catch {
+  } catch (error) {
+    notifyAutoMaintenanceFailure(options.onFailure, error);
     return null;
   }
 }

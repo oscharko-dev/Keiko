@@ -3415,12 +3415,13 @@ function saveExistingConfigUpdate(
     rawConfigFromCurrent(updatedCurrent, request.figmaAccessToken, request.timeoutMs),
     request.voiceProviders,
   );
+  const persistedRawConfig = withPersistedGatewayEgress(rawConfig, gatewayConfig.storagePath, deps);
   const config = parseGatewayConfig(
-    withInheritedEgress(rawConfig, currentGatewayEgressConfig(deps)),
+    withInheritedEgress(persistedRawConfig, currentGatewayEgressConfig(deps)),
     deps.env,
     linkLocalGatewayOverrideOptions(deps.env),
   );
-  persistGatewayConfig(rawConfig, gatewayConfig.storagePath, deps);
+  persistGatewayConfig(persistedRawConfig, gatewayConfig.storagePath, deps);
   gatewayConfig.set(config, true);
   return setupSuccessResult(
     config,
@@ -3652,17 +3653,25 @@ function persistedGatewayEgress(storagePath: string): unknown {
   return persisted.egress;
 }
 
+function withPersistedGatewayEgress(
+  raw: Record<string, unknown>,
+  storagePath: string,
+  deps: UiHandlerDeps,
+): Record<string, unknown> {
+  const egress = persistedGatewayEgress(storagePath);
+  if (egress === undefined) return raw;
+  const withEgress = { ...raw, egress };
+  parseGatewayConfig(withEgress, deps.env, linkLocalGatewayOverrideOptions(deps.env));
+  return withEgress;
+}
+
 function rawConfigForVerifiedCapabilityUpdate(
   updated: GatewayConfig,
   storagePath: string,
   deps: UiHandlerDeps,
 ): Record<string, unknown> {
   const raw = rawConfigFromCurrent(updated, updated.figma?.accessToken);
-  const egress = persistedGatewayEgress(storagePath);
-  if (egress === undefined) return raw;
-  const withEgress = { ...raw, egress };
-  parseGatewayConfig(withEgress, deps.env, linkLocalGatewayOverrideOptions(deps.env));
-  return withEgress;
+  return withPersistedGatewayEgress(raw, storagePath, deps);
 }
 
 function persistVerifiedCapabilityUpdate(

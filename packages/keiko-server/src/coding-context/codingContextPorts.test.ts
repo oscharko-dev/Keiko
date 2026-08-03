@@ -247,10 +247,11 @@ describe("jira code context port", () => {
   });
 
   it("follows only same-origin redirects and preserves the bounded request policy", async () => {
+    const cancelRedirectBody = vi.fn();
     const fetchFn = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
-        new Response(undefined, {
+        new Response(new ReadableStream({ cancel: cancelRedirectBody }), {
           status: 307,
           headers: { location: "/rest/api/3/issue/K-1?redirected=true" },
         }),
@@ -269,6 +270,7 @@ describe("jira code context port", () => {
       "https://example.atlassian.net/rest/api/3/issue/K-1?redirected=true",
     );
     expect(fetchFn.mock.calls[1]?.[1]).toMatchObject({ redirect: "manual" });
+    expect(cancelRedirectBody).toHaveBeenCalledOnce();
   });
 
   it("bounds oversized responses fail-closed", async () => {

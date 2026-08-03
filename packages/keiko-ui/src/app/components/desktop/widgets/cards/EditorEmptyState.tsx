@@ -18,8 +18,11 @@ const FolderIcon = Icons.folder;
 // path where the native picker is unavailable — and binds it via the parent's `onOpenRoot`.
 export function EditorEmptyState({
   onOpenRoot,
+  onWorkspaceNotice,
 }: {
   readonly onOpenRoot: (root: string) => void;
+  readonly onWorkspaceNotice?:
+    ((notice: { readonly root: string; readonly message: string }) => void) | undefined;
 }): ReactNode {
   const t = useTranslate();
   const nativeSupported = useNativeFileDialogCapability();
@@ -41,6 +44,9 @@ export function EditorEmptyState({
           setNotice(t("editor.empty.workspaceUnavailable"));
           return;
         }
+        if (warning !== undefined) {
+          onWorkspaceNotice?.({ root: response.project.path, message: warning });
+        }
         onOpenRoot(response.project.path);
       } catch {
         setNotice(t("editor.empty.connectionFailed"));
@@ -48,7 +54,7 @@ export function EditorEmptyState({
         setConnecting(false);
       }
     },
-    [onOpenRoot, t],
+    [onOpenRoot, onWorkspaceNotice, t],
   );
 
   const browse = useCallback(async (): Promise<void> => {

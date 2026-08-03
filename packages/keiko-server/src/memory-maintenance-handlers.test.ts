@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -22,6 +22,7 @@ import {
   resolveMemoryRetentionPolicy,
   type AutoMaintenanceState,
 } from "./memory-maintenance-handlers.js";
+import { maybeRunChatAutoMaintenance } from "./chat-handlers.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
@@ -727,6 +728,9 @@ describe("maybeRunAutoMaintenance (O-V4)", () => {
   });
 
   it("never throws and still advances the cursor when the pass faults", () => {
+    const onFailure = vi.fn(() => {
+      throw new Error("diagnostic sink unavailable");
+    });
     const faulty = {
       ...makeVault(),
       listMemoriesAcrossScopes: () => {
@@ -735,10 +739,41 @@ describe("maybeRunAutoMaintenance (O-V4)", () => {
     } as MemoryVaultStore;
     const state: AutoMaintenanceState = {};
     expect(
-      maybeRunAutoMaintenance(faulty, undefined, state, { nowMs: NOW, enabled: true }),
+      maybeRunAutoMaintenance(faulty, undefined, state, {
+        nowMs: NOW,
+        enabled: true,
+        onFailure,
+      }),
     ).toBeNull();
     // Cursor advanced BEFORE running so a persistently-failing pass cannot hot-loop.
     expect(state.lastRunAtMs).toBe(NOW);
+    expect(onFailure).toHaveBeenCalledOnce();
+  });
+
+  it("emits a content-free server diagnostic for a failed chat-triggered pass", () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const faulty = {
+      ...makeVault(),
+      listMemoriesAcrossScopes: () => {
+        throw new Error("disk path and customer content must stay private");
+      },
+    } as MemoryVaultStore;
+
+    maybeRunChatAutoMaintenance(
+      makeDeps({ diagnostics: { record: (record) => diagnostics.push(record) } }),
+      faulty,
+      {},
+      NOW,
+    );
+
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        operation: "chat.memory.auto-maintenance",
+        source: "chat.memory.maintenance",
+        message: "chat-memory-auto-maintenance-failed",
+      }),
+    );
+    expect(JSON.stringify(diagnostics)).not.toContain("customer content");
   });
 
   it("promotes nothing when no autonomy mode is supplied (fail closed to governed-assist)", () => {

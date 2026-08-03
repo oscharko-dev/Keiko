@@ -3402,6 +3402,55 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("preserves stored egress when only workflow eligibility changes", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-workflow-egress-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-workflow-egress-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "first-secret-token",
+        deploymentNames: ["coding-chat"],
+        workflowEligibleModelIds: ["coding-chat"],
+      }),
+      deps,
+    );
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    const persisted = JSON.parse(readFileSync(gatewayConfig.storagePath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const egress = {
+      httpsProxy: "http://proxy.internal.example:8443",
+      caBundlePath: "/etc/keiko/private-ca.pem",
+      allowPrivateNetwork: false,
+      denyLoopback: true,
+    };
+    writeFileSync(gatewayConfig.storagePath, JSON.stringify({ ...persisted, egress }), "utf8");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        ...rawConfigFromCurrent(requiredGatewayConfig(deps), undefined),
+        egress,
+      }),
+      true,
+    );
+
+    const updated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, workflowEligibleModelIds: [] }),
+      deps,
+    );
+
+    expect(updated.status).toBe(200);
+    expect(JSON.parse(readFileSync(gatewayConfig.storagePath, "utf8"))).toMatchObject({ egress });
+    deps.store.close();
+  });
+
   it("materializes implicit legacy capabilities when workflow eligibility is updated", async () => {
     const uiDir = await tempDir("keiko-gw-ui-coding-legacy-");
     let verificationCalls = 0;
