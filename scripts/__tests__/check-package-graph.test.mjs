@@ -37,7 +37,7 @@ function writePackage(root, name, dependencyNames = []) {
     compilerOptions: { rootDir: "src" },
     include: ["src"],
     references: dependencyNames.map((dependencyName) => ({
-      path: `../${dependencyName.slice("@oscharko-dev/".length)}`,
+      path: `../${dependencyName.slice("@oscharko-dev/".length)}/tsconfig.json`,
     })),
   });
 }
@@ -55,7 +55,10 @@ function writeCleanRoot(root) {
   });
   writeJson(root, "tsconfig.packages.json", {
     files: [],
-    references: [{ path: "./packages/keiko-contracts" }, { path: "./packages/keiko-security" }],
+    references: [
+      { path: "./packages/keiko-contracts/tsconfig.json" },
+      { path: "./packages/keiko-security/tsconfig.json" },
+    ],
   });
   writePackage(root, "keiko-contracts");
   writePackage(root, "keiko-security", ["@oscharko-dev/keiko-contracts"]);

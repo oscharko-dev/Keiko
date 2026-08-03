@@ -11,14 +11,14 @@
   "include": ["src"],
   "exclude": ["dist", "node_modules", "**/*.test.ts", "**/_support.ts"],
   "references": [
-    { "path": "../keiko-contracts" },
-    { "path": "../keiko-security" },
-    { "path": "../keiko-model-gateway" },
-    { "path": "../keiko-workspace" },
-    { "path": "../keiko-tools" },
-    { "path": "../keiko-evidence" },
-    { "path": "../keiko-verification" },
-    { "path": "../keiko-harness" },
-    { "path": "../keiko-quality-intelligence" }
+    { "path": "../keiko-contracts/tsconfig.json" },
+    { "path": "../keiko-security/tsconfig.json" },
+    { "path": "../keiko-model-gateway/tsconfig.json" },
+    { "path": "../keiko-workspace/tsconfig.json" },
+    { "path": "../keiko-tools/tsconfig.json" },
+    { "path": "../keiko-evidence/tsconfig.json" },
+    { "path": "../keiko-verification/tsconfig.json" },
+    { "path": "../keiko-harness/tsconfig.json" },
+    { "path": "../keiko-quality-intelligence/tsconfig.json" }
   ]
 }

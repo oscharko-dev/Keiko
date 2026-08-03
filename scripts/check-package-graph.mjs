@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import { collectWorkspacePackages } from "./workspace-graph.mjs";
 
@@ -213,7 +213,12 @@ function workspaceDeps(manifest) {
 }
 
 function workspaceRefs(tsconfig) {
-  return (tsconfig.references ?? []).map((entry) => `@oscharko-dev/${basename(entry.path)}`).sort();
+  return (tsconfig.references ?? [])
+    .map((entry) => {
+      const reference = basename(entry.path) === "tsconfig.json" ? dirname(entry.path) : entry.path;
+      return `@oscharko-dev/${basename(reference)}`;
+    })
+    .sort();
 }
 
 function manifestTargets(manifest) {
