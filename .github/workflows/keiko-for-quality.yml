@@ -423,62 +423,40 @@ jobs:
           app_id: ${{ secrets.KEIKO_QUALITY_APP_ID }}
           app_private_key: ${{ secrets.KEIKO_QUALITY_APP_PRIVATE_KEY }}
           target_branches: dev
-          # Ceiling, not the spend. Since v0.8.0 the action allots
+          # Ceiling, not the spend. The action allots
           # min(ceiling, clamp(1.3 x (files x 40k + lines x 60), 80k, 6M)) per run and passes it to
           # the engine's own --max-tokens-budget, which stops dispatching new files at the limit
           # instead of reviewing everything first and confessing afterwards.
           #
-          # 6M -> 2M -> 6M. The middle step was taken under budget pressure while the review store
-          # was inert, when every push of a large pull request re-priced every file (#2930:
-          # twenty-one full re-reviews of 133 files in one day). The store now demonstrably works —
-          # a production run has recorded a cache hit — so that premise is gone.
+          # 6M is the MAXIMUM VALUE THAT DOES ANYTHING, not a preference: the clamp above caps at
+          # 6,000,000 before this input applies, so a larger number is inert and would only suggest
+          # headroom the reviewer cannot use. The formula keeps ordinary pull requests far below it
+          # either way — the allotment first meets the cap at about 115 reviewable files.
           #
-          # 6M is the MAXIMUM VALUE THAT DOES ANYTHING, not a preference. The action's own
-          # allotment formula clamps at ALLOTMENT_CEILING = 6,000,000 before this input is applied
-          # (`min(token_budget, clamp(...))`), so any larger number here is inert and would only
-          # mislead a reader into thinking the reviewer had more headroom than it can use.
+          # Why a HIGH ceiling is the cheap setting, which is the opposite of the intuition. A run
+          # that exhausts its allotment settles INCOMPLETE. The hand-off and the signing job below
+          # both gate on `outcome == 'complete'`, so an incomplete run persists no store at all,
+          # and the next push starts cold and spends the ceiling again — forever, for that pull
+          # request. Lowering the ceiling puts MORE pull requests into that state. This argument
+          # does not depend on any upstream change: it is exactly why the 2M cap set under credit
+          # pressure on 2026-08-02 was a false economy on large changes, and it holds at the pin
+          # this workflow currently runs.
           #
-          # Raising it is the cheaper direction, which is counter-intuitive enough to write down: a
-          # run that EXCEEDS its allotment settles incomplete, and an incomplete run hands off no
-          # store (see the note below). A pull request that never completes therefore never seeds a
-          # store and pays in full on every push. A ceiling low enough to be hit is self-defeating;
-          # one high enough for the first review to finish pays once and replays afterwards.
+          # What the upstream fix would add, and why it is not what makes this ceiling right.
+          # Keiko-for-Quality#75 (merged as #76) lets a truncated run persist the verdicts for the
+          # files it DID reach, restricted to the engine's own account of what it covered. That is
+          # inert here until two things happen together: the pin advances to a release carrying it,
+          # AND the two conditions below move from `outcome == 'complete'` to the `store_written`
+          # output added by Keiko-for-Quality#78. Until then a truncated run still strands its
+          # store on the runner — which is the reason the ceiling, not the fix, is doing the work.
           #
-          # What it costs at the edge: the allotment reaches 6M at about 115 reviewable files, and
-          # a run consuming all of it costs roughly 7 to 13 EUR depending on how much the provider
-          # serves from its prompt cache. That is the worst case for ONE first review of a change
-          # larger than anything this repository has produced — and the run before it, not the
-          # ceiling, is what decides whether it recurs.
-          #
-          # A second cost, sharper and found in review (Codex, #2934): the store hand-off below runs
-          # only for a COMPLETE settlement, and the action refuses to write a store for anything
-          # else. So a pull request large enough to exhaust this ceiling never seeds a store at
-          # all — every later push starts empty and spends the ceiling again, never converging.
-          # For exactly the large pull requests this cap targets, it therefore costs more over a
-          # branch's life than the old ceiling did with a working store. The durable fix has
-          # landed upstream (Keiko-for-Quality#75, merged as #76): a truncated run now persists
-          # the verdicts for the files it DID reach — restricted to the engine's own account of
-          # what it covered, so a file it never opened can still never be replayed as reviewed —
-          # while a rejected schema or an engine error still persists nothing, because there the
-          # manifest itself is not to be believed.
-          #
-          # Advancing the pin alone does NOT end the repeated cost, and it is worth being precise
-          # about why (raised by the Codex reviewer on #2962). The hand-off and the signing job
-          # below both gate on `outcome == 'complete'`, and budget exhaustion still settles
-          # INCOMPLETE — so a truncated run's store would be written on this runner and stranded
-          # here, never uploaded, never signed, never found by the next push. Keiko-for-Quality#78
-          # adds a `store_written` output carrying the write decision itself; the repin that
-          # adopts it must move BOTH conditions to that output in the same change. Until then this
-          # ceiling remains a saving on mid-size pull requests and a repeated cost on very large
-          # ones. See docs/qa/review-cost-model.md for the numbers.
-          #
-          # The cost is real and must not be described as free: a pull request whose review needs
-          # more than 4M tokens stops dispatching files partway and settles INCOMPLETE. That is
-          # visible and honest rather than silent — an incomplete settlement says so — but it does
-          # mean the tail of a very large change goes unreviewed. Raising the ceiling was the
-          # response to exactly that starvation on an 87-file pull request (#2926), so this is a
-          # deliberate re-trade, not a correction of that decision. Revisit once memoization is
-          # confirmed working in production and the credit position allows.
+          # What the edge costs, stated rather than left to be discovered: a run consuming the full
+          # 6M costs roughly 7 to 13 EUR depending on how much the provider serves from its prompt
+          # cache. That is ONE first review of a change larger than any this repository has
+          # produced; at the measured 25k tokens per file, truncation begins around 240 files.
+          # Whether that cost recurs is decided by whether the run completed, not by the ceiling.
+          # See docs/qa/review-cost-model.md for the numbers and
+          # docs/troubleshooting/model-review-spend.md for the failure modes.
           token_budget: "6000000"
           # Enables per-file memoization (v0.9.0). Relative to the workspace; the file lives in
           # the directory the locate/upload steps carry between runs. Without this input the
