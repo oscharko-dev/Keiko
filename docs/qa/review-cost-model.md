@@ -94,7 +94,11 @@ after any of these, because each one deliberately begins a fresh partition or le
 - a change to `.github/keiko-for-quality.json`, the model id, the model protocol, or the reviewer
   pin — all four are hashed into the store's artifact name and bound into its signature context;
 - the seven-day artifact retention expiring;
-- the previous run settling incomplete for a reason that persists nothing;
+- the previous run settling incomplete — for ANY reason, in this repository. The hand-off and the
+  signing job both gate on `outcome == 'complete'`, so even a run that persisted verdicts locally
+  (budget exhaustion, once the pin carries Keiko-for-Quality#75) never uploads them until the
+  workflow adopts `store_written`; a rejected schema or an engine error writes nothing in the
+  first place;
 - the store being disabled for that run, which the log states explicitly.
 
 Suspect persistence only when a prior run under the _same_ identity completed inside the retention
@@ -129,12 +133,13 @@ Two steps, and the first alone is not enough.
    them: a run that has started keeps its credentials and can keep spending until it finishes or
    reaches the thirty-minute job timeout.
 
-```bash
-gh api -X PATCH repos/<owner>/<repo>/actions/variables/KEIKO_QUALITY_ENABLED \
-  -f name=KEIKO_QUALITY_ENABLED -f value=false
-gh run list --workflow keiko-for-quality --json databaseId,status \
-  --jq '.[] | select(.status != "completed") | .databaseId' | xargs -r -n1 gh run cancel
-```
+The cancellation half is deliberately NOT restated here. It is not a one-liner: the authoritative
+procedure in [`keiko-for-quality.md`](keiko-for-quality.md) checks the query limit rather than
+trusting it — a truncated window hides an older live run behind newer completed ones and would
+report containment it never achieved — loops until no live run remains, covers all five live
+statuses, and treats every failed call as containment NOT established. A simplified copy of it in
+this file would be a second procedure to keep in sync on the one path where being wrong costs
+money. Run the one in that document.
 
 The full disable procedure, including what to record afterwards, is in
 [`keiko-for-quality.md`](keiko-for-quality.md). Nothing else in this repository can spend model
