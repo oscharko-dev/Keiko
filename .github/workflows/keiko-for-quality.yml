@@ -152,7 +152,7 @@ jobs:
           # duplication safe.
           # Quoted: a hypothetical all-digit sha would otherwise parse as a YAML number and reach
           # the shell in a normalized form, defeating the length check below.
-          ACTION_PIN: "ec48db94d70d9a07d729d814ea405157652530be" # keep in sync with Review's uses:
+          ACTION_PIN: "ec48db94d70d9a07d729d814ea405157652530be" # v0.10.0 — keep in sync with Review's uses:
         run: |
           # The pin partitions the store because a wrapper release can change review or
           # sanitization SEMANTICS without changing the store's format. Three earlier rounds
