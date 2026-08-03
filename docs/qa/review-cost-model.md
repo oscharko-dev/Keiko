@@ -60,6 +60,11 @@ cache.store_loaded  counts: { entries: N }
 cache.hits          counts: { hits: H, misses: M }
 ```
 
+Both files this document was introduced with are review-relevant, including this one: the
+profile's `docs/qa/**/*.md` entry wins over the broader prose exclusion. Worth knowing before
+predicting what a change will cost — "it is only documentation" is not the same as "it is not
+reviewed."
+
 `entries: 0` on a pull request that has been pushed to before means the store is not persisting —
 the expensive failure, and an invisible one. `hits: 0` with a large `misses` on a re-push means the
 store loaded but nothing matched: expected after a profile, model, or reviewer-pin change, since
