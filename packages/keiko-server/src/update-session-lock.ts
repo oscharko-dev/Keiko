@@ -1,7 +1,6 @@
 import {
   chmodSync,
   existsSync,
-  linkSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -10,6 +9,7 @@ import {
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
+import { publishFileWithoutReplacement } from "./publish-file-without-replacement.js";
 import {
   isOptionalProcessIdentity,
   processIdentityField,
@@ -190,17 +190,22 @@ function recordWithChildPid(
 type LockInspection =
   | { readonly status: "absent" }
   | { readonly status: "valid"; readonly record: UpdateSessionLockRecord }
-  | { readonly status: "corrupt" }
+  | { readonly status: "corrupt"; readonly identity: string }
   | { readonly status: "unreadable" };
+
+function lockContentIdentity(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
 
 function inspectLock(lockPath: string): LockInspection {
   if (!existsSync(lockPath)) {
     return { status: "absent" };
   }
   try {
-    const record = parseRecord(readFileSync(lockPath, "utf8"));
+    const contents = readFileSync(lockPath, "utf8");
+    const record = parseRecord(contents);
     return record === undefined
-      ? { status: "corrupt" }
+      ? { status: "corrupt", identity: lockContentIdentity(contents) }
       : { status: "valid", record: recordWithChildPid(lockPath, record) };
   } catch {
     return { status: "unreadable" };
@@ -276,18 +281,11 @@ function corruptQuarantinePath(lockPath: string, now: () => number): string {
   return `${lockPath}.corrupt.${stamp}`;
 }
 
-function restoreClaimedLock(claimedPath: string, lockPath: string): void {
-  try {
-    linkSync(claimedPath, lockPath);
-    unlinkSync(claimedPath);
-  } catch {
-    // A newer canonical owner wins. Preserve the displaced inode for diagnosis.
-  }
-}
-
 function claimedInspectionMatches(claimedPath: string, inspection: LockInspection): boolean {
+  if (inspection.status === "corrupt") {
+    return lockContentIdentity(readFileSync(claimedPath, "utf8")) === inspection.identity;
+  }
   const claimed = readLock(claimedPath);
-  if (inspection.status === "corrupt") return claimed === undefined;
   return (
     inspection.status === "valid" &&
     claimed !== undefined &&
@@ -295,40 +293,76 @@ function claimedInspectionMatches(claimedPath: string, inspection: LockInspectio
   );
 }
 
+function inspectionIdentity(inspection: LockInspection): string | undefined {
+  if (inspection.status === "corrupt") return inspection.identity;
+  if (inspection.status === "valid") return lockIdentity(inspection.record);
+  return undefined;
+}
+
+function removeOwnershipClaim(claimedPath: string): void {
+  try {
+    unlinkSync(claimedPath);
+  } catch {
+    // A failed cleanup leaves a fail-closed ownership claim instead of risking a second owner.
+  }
+}
+
+function claimInspectedLock(lockPath: string, inspection: LockInspection): string | undefined {
+  const identity = inspectionIdentity(inspection);
+  if (identity === undefined) return undefined;
+  const claimedPath = `${lockPath}.claim.${identity}`;
+  try {
+    publishFileWithoutReplacement(lockPath, claimedPath);
+  } catch {
+    return undefined;
+  }
+  try {
+    if (claimedInspectionMatches(claimedPath, inspection)) return claimedPath;
+  } catch {
+    // The claim stays fail-closed until the cleanup below completes.
+  }
+  removeOwnershipClaim(claimedPath);
+  return undefined;
+}
+
+function retireClaimedLock(
+  lockPath: string,
+  claimedPath: string,
+  inspection: LockInspection,
+  now: () => number,
+): boolean {
+  try {
+    unlinkSync(lockPath);
+  } catch {
+    removeOwnershipClaim(claimedPath);
+    return false;
+  }
+  if (inspection.status === "corrupt") {
+    try {
+      renameSync(claimedPath, corruptQuarantinePath(lockPath, now));
+    } catch {
+      // Preserve the verified corrupt claim for diagnosis if quarantine publication fails.
+    }
+    return true;
+  }
+  removeOwnershipClaim(claimedPath);
+  if (inspection.status === "valid") {
+    try {
+      removeChildPid(lockPath, inspection.record.sessionId);
+    } catch {
+      // The canonical owner is gone; an identity-bound child sidecar is inert.
+    }
+  }
+  return true;
+}
+
 function claimReclaimableLock(
   lockPath: string,
   inspection: LockInspection,
   now: () => number,
 ): boolean {
-  const claimedPath = `${lockPath}.reclaim.${randomUUID()}`;
-  try {
-    renameSync(lockPath, claimedPath);
-  } catch {
-    return false;
-  }
-  let matches = false;
-  try {
-    matches = claimedInspectionMatches(claimedPath, inspection);
-  } catch {
-    restoreClaimedLock(claimedPath, lockPath);
-    return false;
-  }
-  if (!matches) {
-    restoreClaimedLock(claimedPath, lockPath);
-    return false;
-  }
-  try {
-    if (inspection.status === "corrupt") {
-      renameSync(claimedPath, corruptQuarantinePath(lockPath, now));
-    } else {
-      if (inspection.status === "valid") removeChildPid(lockPath, inspection.record.sessionId);
-      unlinkSync(claimedPath);
-    }
-  } catch {
-    restoreClaimedLock(claimedPath, lockPath);
-    return false;
-  }
-  return true;
+  const claimedPath = claimInspectedLock(lockPath, inspection);
+  return claimedPath !== undefined && retireClaimedLock(lockPath, claimedPath, inspection, now);
 }
 
 function removeChildPid(lockPath: string, sessionId: string): void {
@@ -427,34 +461,19 @@ function lockOwnedForRelease(
   }
 }
 
-function claimedLockMatches(claimedPath: string, expected: UpdateSessionLockRecord): boolean {
-  try {
-    const record = readLock(claimedPath);
-    return record !== undefined && lockIdentity(record) === lockIdentity(expected);
-  } catch {
-    return false;
-  }
-}
-
 function releaseFileLock(lockPath: string, sessionId: string): void {
   const expected = lockOwnedForRelease(lockPath, sessionId);
   if (expected === undefined) return;
-  const claimedPath = `${lockPath}.release.${randomUUID()}`;
+  const inspection: LockInspection = { status: "valid", record: expected };
+  const claimedPath = claimInspectedLock(lockPath, inspection);
+  if (claimedPath === undefined) return;
   try {
-    renameSync(lockPath, claimedPath);
+    unlinkSync(lockPath);
   } catch {
+    removeOwnershipClaim(claimedPath);
     return;
   }
-  if (!claimedLockMatches(claimedPath, expected)) {
-    restoreClaimedLock(claimedPath, lockPath);
-    return;
-  }
-  try {
-    unlinkSync(claimedPath);
-  } catch {
-    restoreClaimedLock(claimedPath, lockPath);
-    return;
-  }
+  removeOwnershipClaim(claimedPath);
   try {
     removeChildPid(lockPath, sessionId);
   } catch {

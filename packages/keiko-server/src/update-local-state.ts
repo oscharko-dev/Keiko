@@ -1,9 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
-  constants,
-  copyFileSync,
-  linkSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -49,6 +46,7 @@ import {
   snapshotManifestPath,
   validateSnapshot,
 } from "./update-local-state-snapshot.js";
+import { publishFileWithoutReplacement } from "./publish-file-without-replacement.js";
 import {
   isOptionalProcessIdentity,
   processIdentityField,
@@ -368,18 +366,6 @@ function restoreClaimedRemediationLease(claimedPath: string, path: string): void
     unlinkSync(claimedPath);
   } catch {
     // A newer canonical owner wins. Preserve the displaced inode for diagnosis.
-  }
-}
-
-const HARD_LINK_UNAVAILABLE_CODES = new Set(["ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EPERM", "EXDEV"]);
-
-function publishFileWithoutReplacement(source: string, destination: string): void {
-  try {
-    linkSync(source, destination);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === undefined || !HARD_LINK_UNAVAILABLE_CODES.has(code)) throw error;
-    copyFileSync(source, destination, constants.COPYFILE_EXCL);
   }
 }
 
