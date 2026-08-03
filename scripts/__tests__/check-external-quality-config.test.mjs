@@ -71,7 +71,7 @@ describe("external quality integration configuration", () => {
     parsed.scripts["check:semantic-duplication"] = "true";
     expect(findings({ packageJson: JSON.stringify(parsed) })).toEqual(
       expect.arrayContaining([
-        "fallow must be pinned to 2.104.0",
+        "fallow must be pinned to 3.9.1",
         "yaml must be pinned to 2.9.0 for semantic reviewer-policy validation",
         "check:external-quality-config script is missing or redirected",
         "check:review-bot-suppression script is missing or redirected",
