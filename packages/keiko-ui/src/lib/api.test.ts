@@ -52,6 +52,7 @@ import {
   prepareUpdateRemediationStatus,
   reconnectProject,
   runGatewayReadiness,
+  setupGateway,
   checkUpdatePreflight,
   cancelUpdateSession,
   retryUpdateSession,
@@ -1874,6 +1875,34 @@ describe("fetchModels", () => {
     await expect(fetchModels()).resolves.toEqual({ models: [] });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("setupGateway", () => {
+  afterEach(() => {
+    resetConfigRequestCache();
+    resetModelRequestCache();
+    clearVoiceCapabilityCacheForTests();
+    vi.unstubAllGlobals();
+  });
+
+  it("maps browser transport failures to a setup-specific ApiError", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+
+    let thrown: unknown;
+    try {
+      await setupGateway({ baseUrl: "https://api.openai.com/v1", apiKey: "secret" });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(ApiError);
+    expect(thrown).toMatchObject({
+      code: "GATEWAY_SETUP_NETWORK_ERROR",
+      status: 0,
+    } satisfies Partial<ApiError>);
+    expect((thrown as Error).message).toContain("local setup service");
+    expect((thrown as Error).message).not.toBe("Failed to fetch");
   });
 });
 

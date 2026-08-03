@@ -2951,6 +2951,32 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("explains local provider reachability failures without exposing credentials", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-network-failure-");
+    const evidenceDir = await tempDir("keiko-gw-ev-network-failure-");
+    const networkError = Object.assign(new AggregateError([]), { code: "EACCES" });
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.reject(networkError),
+      gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+
+    expect(result.status).toBe(502);
+    expect(JSON.stringify(result.body)).toContain("local setup service could not reach");
+    expect(JSON.stringify(result.body)).toContain("internet access");
+    expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
+    expect(JSON.stringify(result.body)).not.toContain("https://llm-gateway.example.com");
+    deps.store.close();
+  });
+
   it("rejects malformed gateway endpoint URLs before discovery", async () => {
     const uiDir = await tempDir("keiko-gw-ui-bad-url-");
     const evidenceDir = await tempDir("keiko-gw-ev-bad-url-");
