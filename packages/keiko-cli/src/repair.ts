@@ -470,15 +470,14 @@ function checkCredentialStorage(
   args: readonly string[],
   env: EnvSource,
   defaultConfigCandidates: readonly string[],
-): CheckResult {
-  const results = credentialConfigPaths(args, env, defaultConfigCandidates).map((configPath) =>
-    checkCredentialConfig(configPath),
-  );
-  return (
-    results.find((result) => result.status === "action-required") ??
-    results[0] ??
-    ok("Credential storage", "no config file to inspect")
-  );
+): readonly CheckResult[] {
+  const paths = credentialConfigPaths(args, env, defaultConfigCandidates);
+  if (paths.length === 0) return [ok("Credential storage", "no config file to inspect")];
+  const includePath = paths.length > 1;
+  return paths.map((configPath) => {
+    const result = checkCredentialConfig(configPath);
+    return includePath ? { ...result, name: `${result.name} (${configPath})` } : result;
+  });
 }
 
 function checkPortableManagedInstall(
@@ -772,7 +771,7 @@ export function runRepairCli(
     checkInstallLayout(resolved.cwd, env),
     checkLaunchPath(resolved.cwd, resolved.argv),
     checkGatewayConfig(args, env),
-    checkCredentialStorage(args, env, defaultConfigCandidates),
+    ...checkCredentialStorage(args, env, defaultConfigCandidates),
   ];
   reportResults(io, results);
   const code = exitCodeFor(results, parsed.dryRun);

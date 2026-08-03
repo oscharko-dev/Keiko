@@ -15,10 +15,11 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveHostExecutable } from "../../../../scripts/lib/host-executable.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../..");
-const GIT_PATH = "/usr/bin/git";
+const GIT_PATH = resolveHostExecutable("git", { workspaceRoot: REPO });
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
 const BASE_REF = process.env.BASE_REF ?? "origin/release/0.2.0";
 

@@ -911,6 +911,34 @@ describe("runRepairCli — credential storage", () => {
     expect(c.out()).toContain("plaintext credentials present");
   });
 
+  it("reports every broken default credential config", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = join(root, ".keiko");
+    const uiDataDir = defaultUiDataDir(stateDir);
+    mkdirSync(uiDataDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(uiDataDir, "keiko.config.json"),
+      JSON.stringify({ providers: [{ modelId: "gpt-4o", apiKey: "sk-state-secret" }] }),
+      "utf8",
+    );
+    writeFileSync(
+      join(stateDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [{ modelId: "gpt-4o", apiKeySecretRef: "cred:missing" }],
+      }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    const code = runRepairCli([], c.io, {}, healthyDeps(root));
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain("plaintext credentials present");
+    expect(c.out()).toContain("credential reference(s) have no encrypted entry");
+    expect(c.out().match(/\[action\] Credential storage \(/gu)).toHaveLength(2);
+  });
+
   it("inspects KEIKO_UI_DATA_DIR/keiko.config.json when no explicit config is set", () => {
     const root = makeRoot();
     seedInstalledLayout(root);

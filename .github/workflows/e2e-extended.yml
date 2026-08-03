@@ -25,6 +25,7 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.code_task_real_binary }}
     name: extended e2e (${{ matrix.suite }})
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       # #2485: the Local Knowledge campaign's large-PDF passes bind a curated multi-hundred-page
       # document that only exists on the maintainer corpus machine; the hermetic generated corpus

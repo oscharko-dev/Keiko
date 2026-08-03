@@ -28,10 +28,11 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveHostExecutable } from "../../../../scripts/lib/host-executable.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../..");
-const GIT_PATH = "/usr/bin/git";
+const GIT_PATH = resolveHostExecutable("git", { workspaceRoot: REPO });
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
 const IMMUTABLE_BASE_SHA = "afd2c7af18f269459893363d2380fc6bccd0dd77";
 const BASE_REF = process.env.BASE_REF ?? IMMUTABLE_BASE_SHA;

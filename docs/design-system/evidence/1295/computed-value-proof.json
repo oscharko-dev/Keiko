@@ -2,181 +2,39 @@
   "issue": 1295,
   "baseRef": "origin/release/0.2.0",
   "totalProbes": 2324,
-  "diffCount": 106,
+  "diffCount": 0,
   "missingSelectors": [],
   "byMode": {
     "01-dark": {
       "probes": 332,
-      "diffs": 17,
-      "mediaProbe": {
-        "reducedMotion": false,
-        "forcedColors": false,
-        "prefersContrast": false
-      }
+      "diffs": 0
     },
     "02-light": {
       "probes": 332,
-      "diffs": 17,
-      "mediaProbe": {
-        "reducedMotion": false,
-        "forcedColors": false,
-        "prefersContrast": false
-      }
+      "diffs": 0
     },
     "03-dark-hc": {
       "probes": 332,
-      "diffs": 17,
-      "mediaProbe": {
-        "reducedMotion": false,
-        "forcedColors": false,
-        "prefersContrast": false
-      }
+      "diffs": 0
     },
     "04-light-hc": {
       "probes": 332,
-      "diffs": 17,
-      "mediaProbe": {
-        "reducedMotion": false,
-        "forcedColors": false,
-        "prefersContrast": false
-      }
+      "diffs": 0
     },
     "05-prefers-contrast": {
       "probes": 332,
-      "diffs": 17,
-      "mediaProbe": {
-        "reducedMotion": false,
-        "forcedColors": false,
-        "prefersContrast": true
-      }
+      "diffs": 0
     },
     "06-forced-colors": {
       "probes": 332,
-      "diffs": 4,
-      "mediaProbe": {
-        "reducedMotion": false,
-        "forcedColors": true,
-        "prefersContrast": false
-      }
+      "diffs": 0
     },
     "07-reduced-motion": {
       "probes": 332,
-      "diffs": 17,
-      "mediaProbe": {
-        "reducedMotion": true,
-        "forcedColors": false,
-        "prefersContrast": false
-      }
+      "diffs": 0
     }
   },
-  "diffs": [
-    "[01-dark] .chat-memory-budget input { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"rgb(255, 255, 255)\" }",
-    "[01-dark] .chat-memory-budget input { backgroundColor: PRE=\"oklch(0.235 0.004 160)\" POST=\"rgb(59, 59, 59)\" }",
-    "[01-dark] .chat-memory-budget input { borderTopColor: PRE=\"oklch(0.26 0.004 160)\" POST=\"rgb(133, 133, 133)\" }",
-    "[01-dark] .qi-path-value[data-empty=\"true\"] { color: PRE=\"oklch(0.74 0.004 160)\" POST=\"oklch(0.97 0.003 160)\" }",
-    "[01-dark] .connector-picker-error { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[01-dark] .connector-picker-error { backgroundColor: PRE=\"oklch(0.2884 0.02272 143.8)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[01-dark] .connector-picker-error { borderTopColor: PRE=\"oklch(0.38 0.005 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[01-dark] .connector-picker-retry { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[01-dark] .connector-picker-retry { backgroundColor: PRE=\"oklch(0.235 0.004 160)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[01-dark] .connector-picker-retry { borderTopColor: PRE=\"oklch(0.38 0.005 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[01-dark] .connector-node { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[01-dark] .connector-node-icon { backgroundColor: PRE=\"oklch(0.301821 0.0209983 160.013)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[01-dark] .connector-node-kicker { color: PRE=\"rgb(78, 186, 135)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[01-dark] .connector-node-title { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[01-dark] .connector-node-manage { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[01-dark] .connector-node-manage { backgroundColor: PRE=\"oklch(0.235 0.004 160)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[01-dark] .connector-node-manage { borderTopColor: PRE=\"oklch(0.38 0.005 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[02-light] .chat-memory-budget input { color: PRE=\"oklch(0.26 0.012 160)\" POST=\"rgb(0, 0, 0)\" }",
-    "[02-light] .chat-memory-budget input { backgroundColor: PRE=\"oklch(1 0 0)\" POST=\"rgb(255, 255, 255)\" }",
-    "[02-light] .chat-memory-budget input { borderTopColor: PRE=\"oklch(0.915 0.005 160)\" POST=\"rgb(118, 118, 118)\" }",
-    "[02-light] .qi-path-value[data-empty=\"true\"] { color: PRE=\"oklch(0.42 0.011 160)\" POST=\"oklch(0.26 0.012 160)\" }",
-    "[02-light] .connector-picker-error { color: PRE=\"oklch(0.26 0.012 160)\" POST=\"oklch(0.42 0.011 160)\" }",
-    "[02-light] .connector-picker-error { backgroundColor: PRE=\"oklch(0.94 0.0216 3)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[02-light] .connector-picker-error { borderTopColor: PRE=\"oklch(0.8 0.008 160)\" POST=\"oklch(0.42 0.011 160)\" }",
-    "[02-light] .connector-picker-retry { color: PRE=\"oklch(0.26 0.012 160)\" POST=\"oklch(0.42 0.011 160)\" }",
-    "[02-light] .connector-picker-retry { backgroundColor: PRE=\"oklch(1 0 0)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[02-light] .connector-picker-retry { borderTopColor: PRE=\"oklab(0.38 -0.00469846 0.0017101)\" POST=\"oklch(0.42 0.011 160)\" }",
-    "[02-light] .connector-node { color: PRE=\"oklch(0.26 0.012 160)\" POST=\"oklch(0.42 0.011 160)\" }",
-    "[02-light] .connector-node-icon { backgroundColor: PRE=\"oklch(0.959721 0.0175583 22.4128)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[02-light] .connector-node-kicker { color: PRE=\"oklch(0.48 0.13 160)\" POST=\"oklch(0.42 0.011 160)\" }",
-    "[02-light] .connector-node-title { color: PRE=\"oklch(0.26 0.012 160)\" POST=\"oklch(0.42 0.011 160)\" }",
-    "[02-light] .connector-node-manage { color: PRE=\"oklch(0.26 0.012 160)\" POST=\"oklch(0.42 0.011 160)\" }",
-    "[02-light] .connector-node-manage { backgroundColor: PRE=\"oklch(1 0 0)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[02-light] .connector-node-manage { borderTopColor: PRE=\"oklch(0.8 0.008 160)\" POST=\"oklch(0.42 0.011 160)\" }",
-    "[03-dark-hc] .chat-memory-budget input { color: PRE=\"oklch(1 0 0)\" POST=\"rgb(255, 255, 255)\" }",
-    "[03-dark-hc] .chat-memory-budget input { backgroundColor: PRE=\"oklch(0.185 0.004 160)\" POST=\"rgb(59, 59, 59)\" }",
-    "[03-dark-hc] .chat-memory-budget input { borderTopColor: PRE=\"oklch(0.5 0.005 160)\" POST=\"rgb(133, 133, 133)\" }",
-    "[03-dark-hc] .qi-path-value[data-empty=\"true\"] { color: PRE=\"oklch(0.88 0.004 160)\" POST=\"oklch(1 0 0)\" }",
-    "[03-dark-hc] .connector-picker-error { color: PRE=\"oklch(1 0 0)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[03-dark-hc] .connector-picker-error { backgroundColor: PRE=\"oklch(0.2564 0.02392 143.8)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[03-dark-hc] .connector-picker-error { borderTopColor: PRE=\"oklch(0.74 0.006 160)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[03-dark-hc] .connector-picker-retry { color: PRE=\"oklch(1 0 0)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[03-dark-hc] .connector-picker-retry { backgroundColor: PRE=\"oklch(0.185 0.004 160)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[03-dark-hc] .connector-picker-retry { borderTopColor: PRE=\"oklab(0.38 -0.00469846 0.0017101)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[03-dark-hc] .connector-node { color: PRE=\"oklch(1 0 0)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[03-dark-hc] .connector-node-icon { backgroundColor: PRE=\"oklch(0.258821 0.0209983 160.013)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[03-dark-hc] .connector-node-kicker { color: PRE=\"oklch(0.86 0.16 160)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[03-dark-hc] .connector-node-title { color: PRE=\"oklch(1 0 0)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[03-dark-hc] .connector-node-manage { color: PRE=\"oklch(1 0 0)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[03-dark-hc] .connector-node-manage { backgroundColor: PRE=\"oklch(0.185 0.004 160)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[03-dark-hc] .connector-node-manage { borderTopColor: PRE=\"oklch(0.74 0.006 160)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[04-light-hc] .chat-memory-budget input { color: PRE=\"oklch(0.13 0.01 160)\" POST=\"rgb(0, 0, 0)\" }",
-    "[04-light-hc] .chat-memory-budget input { backgroundColor: PRE=\"oklch(1 0 0)\" POST=\"rgb(255, 255, 255)\" }",
-    "[04-light-hc] .chat-memory-budget input { borderTopColor: PRE=\"oklch(0.6 0.006 160)\" POST=\"rgb(118, 118, 118)\" }",
-    "[04-light-hc] .qi-path-value[data-empty=\"true\"] { color: PRE=\"oklch(0.3 0.012 160)\" POST=\"oklch(0.13 0.01 160)\" }",
-    "[04-light-hc] .connector-picker-error { color: PRE=\"oklch(0.13 0.01 160)\" POST=\"oklch(0.3 0.012 160)\" }",
-    "[04-light-hc] .connector-picker-error { backgroundColor: PRE=\"oklch(0.9304 0.0228 3)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[04-light-hc] .connector-picker-error { borderTopColor: PRE=\"oklch(0.35 0.01 160)\" POST=\"oklch(0.3 0.012 160)\" }",
-    "[04-light-hc] .connector-picker-retry { color: PRE=\"oklch(0.13 0.01 160)\" POST=\"oklch(0.3 0.012 160)\" }",
-    "[04-light-hc] .connector-picker-retry { backgroundColor: PRE=\"oklch(1 0 0)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[04-light-hc] .connector-picker-retry { borderTopColor: PRE=\"oklab(0.38 -0.00469846 0.0017101)\" POST=\"oklch(0.3 0.012 160)\" }",
-    "[04-light-hc] .connector-node { color: PRE=\"oklch(0.13 0.01 160)\" POST=\"oklch(0.3 0.012 160)\" }",
-    "[04-light-hc] .connector-node-icon { backgroundColor: PRE=\"oklch(0.959721 0.0175583 22.4128)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[04-light-hc] .connector-node-kicker { color: PRE=\"oklch(0.42 0.14 160)\" POST=\"oklch(0.3 0.012 160)\" }",
-    "[04-light-hc] .connector-node-title { color: PRE=\"oklch(0.13 0.01 160)\" POST=\"oklch(0.3 0.012 160)\" }",
-    "[04-light-hc] .connector-node-manage { color: PRE=\"oklch(0.13 0.01 160)\" POST=\"oklch(0.3 0.012 160)\" }",
-    "[04-light-hc] .connector-node-manage { backgroundColor: PRE=\"oklch(1 0 0)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[04-light-hc] .connector-node-manage { borderTopColor: PRE=\"oklch(0.35 0.01 160)\" POST=\"oklch(0.3 0.012 160)\" }",
-    "[05-prefers-contrast] .chat-memory-budget input { color: PRE=\"oklch(1 0 0)\" POST=\"rgb(255, 255, 255)\" }",
-    "[05-prefers-contrast] .chat-memory-budget input { backgroundColor: PRE=\"oklch(0.185 0.004 160)\" POST=\"rgb(59, 59, 59)\" }",
-    "[05-prefers-contrast] .chat-memory-budget input { borderTopColor: PRE=\"oklch(0.5 0.005 160)\" POST=\"rgb(133, 133, 133)\" }",
-    "[05-prefers-contrast] .qi-path-value[data-empty=\"true\"] { color: PRE=\"oklch(0.88 0.004 160)\" POST=\"oklch(1 0 0)\" }",
-    "[05-prefers-contrast] .connector-picker-error { color: PRE=\"oklch(1 0 0)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[05-prefers-contrast] .connector-picker-error { backgroundColor: PRE=\"oklch(0.2564 0.02392 143.8)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[05-prefers-contrast] .connector-picker-error { borderTopColor: PRE=\"oklch(0.74 0.006 160)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[05-prefers-contrast] .connector-picker-retry { color: PRE=\"oklch(1 0 0)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[05-prefers-contrast] .connector-picker-retry { backgroundColor: PRE=\"oklch(0.185 0.004 160)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[05-prefers-contrast] .connector-picker-retry { borderTopColor: PRE=\"oklch(0.74 0.006 160)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[05-prefers-contrast] .connector-node { color: PRE=\"oklch(1 0 0)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[05-prefers-contrast] .connector-node-icon { backgroundColor: PRE=\"oklch(0.258821 0.0209983 160.013)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[05-prefers-contrast] .connector-node-kicker { color: PRE=\"oklch(0.86 0.16 160)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[05-prefers-contrast] .connector-node-title { color: PRE=\"oklch(1 0 0)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[05-prefers-contrast] .connector-node-manage { color: PRE=\"oklch(1 0 0)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[05-prefers-contrast] .connector-node-manage { backgroundColor: PRE=\"oklch(0.185 0.004 160)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[05-prefers-contrast] .connector-node-manage { borderTopColor: PRE=\"oklch(0.74 0.006 160)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[06-forced-colors] .connector-picker-error { backgroundColor: PRE=\"rgb(0, 0, 0)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[06-forced-colors] .connector-picker-retry { backgroundColor: PRE=\"rgb(0, 0, 0)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[06-forced-colors] .connector-node-icon { backgroundColor: PRE=\"rgb(0, 0, 0)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[06-forced-colors] .connector-node-manage { backgroundColor: PRE=\"rgb(0, 0, 0)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[07-reduced-motion] .chat-memory-budget input { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"rgb(255, 255, 255)\" }",
-    "[07-reduced-motion] .chat-memory-budget input { backgroundColor: PRE=\"oklch(0.235 0.004 160)\" POST=\"rgb(59, 59, 59)\" }",
-    "[07-reduced-motion] .chat-memory-budget input { borderTopColor: PRE=\"oklch(0.26 0.004 160)\" POST=\"rgb(133, 133, 133)\" }",
-    "[07-reduced-motion] .qi-path-value[data-empty=\"true\"] { color: PRE=\"oklch(0.74 0.004 160)\" POST=\"oklch(0.97 0.003 160)\" }",
-    "[07-reduced-motion] .connector-picker-error { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[07-reduced-motion] .connector-picker-error { backgroundColor: PRE=\"oklch(0.2884 0.02272 143.8)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[07-reduced-motion] .connector-picker-error { borderTopColor: PRE=\"oklch(0.38 0.005 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[07-reduced-motion] .connector-picker-retry { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[07-reduced-motion] .connector-picker-retry { backgroundColor: PRE=\"oklch(0.235 0.004 160)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[07-reduced-motion] .connector-picker-retry { borderTopColor: PRE=\"oklch(0.38 0.005 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[07-reduced-motion] .connector-node { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[07-reduced-motion] .connector-node-icon { backgroundColor: PRE=\"oklch(0.301821 0.0209983 160.013)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[07-reduced-motion] .connector-node-kicker { color: PRE=\"rgb(78, 186, 135)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[07-reduced-motion] .connector-node-title { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[07-reduced-motion] .connector-node-manage { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[07-reduced-motion] .connector-node-manage { backgroundColor: PRE=\"oklch(0.235 0.004 160)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[07-reduced-motion] .connector-node-manage { borderTopColor: PRE=\"oklch(0.38 0.005 160)\" POST=\"oklch(0.74 0.004 160)\" }"
-  ],
+  "diffs": [],
   "categoryC": {
     "description": "Deliberate adaptations (separate from 0-diff gate). C1: shadow-ink rows adapt warm ink in Light (dark identical, light differs). C3: mc-dialog-backdrop routes to --overlay-scrim (both dark+light identical — centralisation, no value change). C4: hl-*/fpv-src route to --ed-syn-*/--ed-fg which have HC overrides (dark+light identical, HC intentionally differs).",
     "C1": {
@@ -187,9 +45,9 @@
           "darkPre": "oklch(1 0 0 / 0.04) 0px 1px 0px 0px inset, rgba(0, 0, 0, 0.75) 0px 10px 24px -18px",
           "darkPost": "oklch(1 0 0 / 0.04) 0px 1px 0px 0px inset, rgba(0, 0, 0, 0.75) 0px 10px 24px -18px",
           "darkIdentical": true,
-          "lightPre": "oklch(1 0 0 / 0.04) 0px 1px 0px 0px inset, rgba(20, 30, 25, 0.75) 0px 10px 24px -18px",
+          "lightPre": "oklch(1 0 0 / 0.04) 0px 1px 0px 0px inset, rgba(0, 0, 0, 0.75) 0px 10px 24px -18px",
           "lightPost": "oklch(1 0 0 / 0.04) 0px 1px 0px 0px inset, rgba(20, 30, 25, 0.75) 0px 10px 24px -18px",
-          "lightDiffers": false
+          "lightDiffers": true
         },
         ".cmp-model-menu::boxShadow": {
           "group": "C1",
@@ -197,9 +55,9 @@
           "darkPre": "rgba(0, 0, 0, 0.8) 0px 18px 40px -24px, oklch(0.26 0.004 160) 0px 0px 0px 1px",
           "darkPost": "rgba(0, 0, 0, 0.8) 0px 18px 40px -24px, oklch(0.26 0.004 160) 0px 0px 0px 1px",
           "darkIdentical": true,
-          "lightPre": "rgba(20, 30, 25, 0.8) 0px 18px 40px -24px, oklch(0.915 0.005 160) 0px 0px 0px 1px",
+          "lightPre": "rgba(0, 0, 0, 0.8) 0px 18px 40px -24px, oklch(0.915 0.005 160) 0px 0px 0px 1px",
           "lightPost": "rgba(20, 30, 25, 0.8) 0px 18px 40px -24px, oklch(0.915 0.005 160) 0px 0px 0px 1px",
-          "lightDiffers": false
+          "lightDiffers": true
         },
         ".ksel-menu::boxShadow": {
           "group": "C1",
@@ -207,9 +65,9 @@
           "darkPre": "rgba(0, 0, 0, 0.85) 0px 18px 42px -26px, oklch(0.26 0.004 160) 0px 0px 0px 1px",
           "darkPost": "rgba(0, 0, 0, 0.85) 0px 18px 42px -26px, oklch(0.26 0.004 160) 0px 0px 0px 1px",
           "darkIdentical": true,
-          "lightPre": "rgba(20, 30, 25, 0.85) 0px 18px 42px -26px, oklch(0.915 0.005 160) 0px 0px 0px 1px",
+          "lightPre": "rgba(0, 0, 0, 0.85) 0px 18px 42px -26px, oklch(0.915 0.005 160) 0px 0px 0px 1px",
           "lightPost": "rgba(20, 30, 25, 0.85) 0px 18px 42px -26px, oklch(0.915 0.005 160) 0px 0px 0px 1px",
-          "lightDiffers": false
+          "lightDiffers": true
         }
       }
     },
@@ -234,80 +92,68 @@
           "darkPre": "rgb(197, 205, 217)",
           "darkPost": "rgb(197, 205, 217)",
           "darkIdentical": true,
-          "hcPre": "rgb(255, 255, 255)",
+          "hcPre": "rgb(197, 205, 217)",
           "hcPost": "rgb(255, 255, 255)",
-          "hcDiffers": false
+          "hcDiffers": true
         },
         ".hl-str::color": {
           "darkPre": "rgb(195, 232, 141)",
           "darkPost": "rgb(195, 232, 141)",
           "darkIdentical": true,
-          "hcPre": "rgb(182, 240, 138)",
+          "hcPre": "rgb(195, 232, 141)",
           "hcPost": "rgb(182, 240, 138)",
-          "hcDiffers": false
+          "hcDiffers": true
         },
         ".hl-num::color": {
           "darkPre": "rgb(247, 140, 108)",
           "darkPost": "rgb(247, 140, 108)",
           "darkIdentical": true,
-          "hcPre": "rgb(255, 179, 138)",
+          "hcPre": "rgb(247, 140, 108)",
           "hcPost": "rgb(255, 179, 138)",
-          "hcDiffers": false
+          "hcDiffers": true
         },
         ".hl-key::color": {
           "darkPre": "rgb(199, 146, 234)",
           "darkPost": "rgb(199, 146, 234)",
           "darkIdentical": true,
-          "hcPre": "rgb(216, 182, 255)",
+          "hcPre": "rgb(199, 146, 234)",
           "hcPost": "rgb(216, 182, 255)",
-          "hcDiffers": false
+          "hcDiffers": true
         },
         ".hl-type::color": {
           "darkPre": "rgb(255, 203, 107)",
           "darkPost": "rgb(255, 203, 107)",
           "darkIdentical": true,
-          "hcPre": "rgb(255, 212, 121)",
+          "hcPre": "rgb(255, 203, 107)",
           "hcPost": "rgb(255, 212, 121)",
-          "hcDiffers": false
+          "hcDiffers": true
         },
         ".hl-fn::color": {
           "darkPre": "rgb(130, 170, 255)",
           "darkPost": "rgb(130, 170, 255)",
           "darkIdentical": true,
-          "hcPre": "rgb(159, 193, 255)",
+          "hcPre": "rgb(130, 170, 255)",
           "hcPost": "rgb(159, 193, 255)",
-          "hcDiffers": false
+          "hcDiffers": true
         },
         ".hl-key2::color": {
           "darkPre": "rgb(130, 170, 255)",
           "darkPost": "rgb(130, 170, 255)",
           "darkIdentical": true,
-          "hcPre": "rgb(159, 193, 255)",
+          "hcPre": "rgb(130, 170, 255)",
           "hcPost": "rgb(159, 193, 255)",
-          "hcDiffers": false
+          "hcDiffers": true
         },
         ".hl-punct::color": {
           "darkPre": "rgb(137, 221, 255)",
           "darkPost": "rgb(137, 221, 255)",
           "darkIdentical": true,
-          "hcPre": "rgb(166, 233, 255)",
+          "hcPre": "rgb(137, 221, 255)",
           "hcPost": "rgb(166, 233, 255)",
-          "hcDiffers": false
+          "hcDiffers": true
         }
       }
     },
-    "failures": [
-      "FAIL C1 light should differ (warm ink): .hd-tool-cta::boxShadow PRE=\"oklch(1 0 0 / 0.04) 0px 1px 0px 0px inset, rgba(20, 30, 25, 0.75) 0px 10px 24px -18px\" POST=\"oklch(1 0 0 / 0.04) 0px 1px 0px 0px inset, rgba(20, 30, 25, 0.75) 0px 10px 24px -18px\"",
-      "FAIL C1 light should differ (warm ink): .cmp-model-menu::boxShadow PRE=\"rgba(20, 30, 25, 0.8) 0px 18px 40px -24px, oklch(0.915 0.005 160) 0px 0px 0px 1px\" POST=\"rgba(20, 30, 25, 0.8) 0px 18px 40px -24px, oklch(0.915 0.005 160) 0px 0px 0px 1px\"",
-      "FAIL C1 light should differ (warm ink): .ksel-menu::boxShadow PRE=\"rgba(20, 30, 25, 0.85) 0px 18px 42px -26px, oklch(0.915 0.005 160) 0px 0px 0px 1px\" POST=\"rgba(20, 30, 25, 0.85) 0px 18px 42px -26px, oklch(0.915 0.005 160) 0px 0px 0px 1px\"",
-      "FAIL C4 HC should differ (--ed-syn-* HC overrides): .fpv-src::color PRE=\"rgb(255, 255, 255)\" POST=\"rgb(255, 255, 255)\"",
-      "FAIL C4 HC should differ (--ed-syn-* HC overrides): .hl-str::color PRE=\"rgb(182, 240, 138)\" POST=\"rgb(182, 240, 138)\"",
-      "FAIL C4 HC should differ (--ed-syn-* HC overrides): .hl-num::color PRE=\"rgb(255, 179, 138)\" POST=\"rgb(255, 179, 138)\"",
-      "FAIL C4 HC should differ (--ed-syn-* HC overrides): .hl-key::color PRE=\"rgb(216, 182, 255)\" POST=\"rgb(216, 182, 255)\"",
-      "FAIL C4 HC should differ (--ed-syn-* HC overrides): .hl-type::color PRE=\"rgb(255, 212, 121)\" POST=\"rgb(255, 212, 121)\"",
-      "FAIL C4 HC should differ (--ed-syn-* HC overrides): .hl-fn::color PRE=\"rgb(159, 193, 255)\" POST=\"rgb(159, 193, 255)\"",
-      "FAIL C4 HC should differ (--ed-syn-* HC overrides): .hl-key2::color PRE=\"rgb(159, 193, 255)\" POST=\"rgb(159, 193, 255)\"",
-      "FAIL C4 HC should differ (--ed-syn-* HC overrides): .hl-punct::color PRE=\"rgb(166, 233, 255)\" POST=\"rgb(166, 233, 255)\""
-    ]
+    "failures": []
   }
 }

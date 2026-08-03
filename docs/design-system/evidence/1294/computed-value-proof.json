@@ -2,119 +2,37 @@
   "issue": 1294,
   "baseRef": "ba113ac373ebf1114af7de217b07935036adba08",
   "totalProbes": 1106,
-  "diffCount": 46,
+  "diffCount": 0,
   "missingSelectors": [],
   "byMode": {
     "01-dark": {
       "probes": 158,
-      "diffs": 7,
-      "mediaProbe": {
-        "reducedMotion": false,
-        "forcedColors": false,
-        "prefersContrast": false
-      }
+      "diffs": 0
     },
     "02-light": {
       "probes": 158,
-      "diffs": 8,
-      "mediaProbe": {
-        "reducedMotion": false,
-        "forcedColors": false,
-        "prefersContrast": false
-      }
+      "diffs": 0
     },
     "03-dark-hc": {
       "probes": 158,
-      "diffs": 7,
-      "mediaProbe": {
-        "reducedMotion": false,
-        "forcedColors": false,
-        "prefersContrast": false
-      }
+      "diffs": 0
     },
     "04-light-hc": {
       "probes": 158,
-      "diffs": 8,
-      "mediaProbe": {
-        "reducedMotion": false,
-        "forcedColors": false,
-        "prefersContrast": false
-      }
+      "diffs": 0
     },
     "05-prefers-contrast": {
       "probes": 158,
-      "diffs": 7,
-      "mediaProbe": {
-        "reducedMotion": false,
-        "forcedColors": false,
-        "prefersContrast": true
-      }
+      "diffs": 0
     },
     "06-forced-colors": {
       "probes": 158,
-      "diffs": 2,
-      "mediaProbe": {
-        "reducedMotion": false,
-        "forcedColors": true,
-        "prefersContrast": false
-      }
+      "diffs": 0
     },
     "07-reduced-motion": {
       "probes": 158,
-      "diffs": 7,
-      "mediaProbe": {
-        "reducedMotion": true,
-        "forcedColors": false,
-        "prefersContrast": false
-      }
+      "diffs": 0
     }
   },
-  "diffs": [
-    "[01-dark] .bw-btn { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[01-dark] .bw-btn { backgroundColor: PRE=\"oklch(0.155 0.004 160)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[01-dark] .bw-btn-danger { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[01-dark] .bw-btn-danger { backgroundColor: PRE=\"oklch(0.2495 0.03208 135.7)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[01-dark] .bw-input { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"rgb(255, 255, 255)\" }",
-    "[01-dark] .bw-input { backgroundColor: PRE=\"oklch(0.155 0.004 160)\" POST=\"rgb(59, 59, 59)\" }",
-    "[01-dark] .bw-input { borderTopColor: PRE=\"oklch(0.38 0.005 160)\" POST=\"rgb(133, 133, 133)\" }",
-    "[02-light] .bw-btn { color: PRE=\"oklab(0.97 -0.00281908 0.00102606)\" POST=\"oklch(0.42 0.011 160)\" }",
-    "[02-light] .bw-btn { backgroundColor: PRE=\"oklab(0.155 -0.00375877 0.00136808)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[02-light] .bw-btn-danger { color: PRE=\"oklch(0.26 0.012 160)\" POST=\"oklch(0.42 0.011 160)\" }",
-    "[02-light] .bw-btn-danger { backgroundColor: PRE=\"oklch(0.8649 0.0365 135.7)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[02-light] .bw-input { color: PRE=\"oklch(0.26 0.012 160)\" POST=\"rgb(0, 0, 0)\" }",
-    "[02-light] .bw-input { backgroundColor: PRE=\"oklch(0.945 0.005 160)\" POST=\"rgb(255, 255, 255)\" }",
-    "[02-light] .bw-input { borderTopColor: PRE=\"oklch(0.8 0.008 160)\" POST=\"rgb(118, 118, 118)\" }",
-    "[02-light] .ksel-menu { boxShadow: PRE=\"rgba(0, 0, 0, 0.85) 0px 18px 42px -26px, oklch(0.915 0.005 160) 0px 0px 0px 1px\" POST=\"rgba(20, 30, 25, 0.85) 0px 18px 42px -26px, oklch(0.915 0.005 160) 0px 0px 0px 1px\" }",
-    "[03-dark-hc] .bw-btn { color: PRE=\"oklab(0.97 -0.00281908 0.00102606)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[03-dark-hc] .bw-btn { backgroundColor: PRE=\"oklab(0.155 -0.00375877 0.00136808)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[03-dark-hc] .bw-btn-danger { color: PRE=\"oklch(1 0 0)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[03-dark-hc] .bw-btn-danger { backgroundColor: PRE=\"oklch(0.2142 0.03388 135.7)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[03-dark-hc] .bw-input { color: PRE=\"oklch(1 0 0)\" POST=\"rgb(255, 255, 255)\" }",
-    "[03-dark-hc] .bw-input { backgroundColor: PRE=\"oklch(0.09 0.004 160)\" POST=\"rgb(59, 59, 59)\" }",
-    "[03-dark-hc] .bw-input { borderTopColor: PRE=\"oklch(0.74 0.006 160)\" POST=\"rgb(133, 133, 133)\" }",
-    "[04-light-hc] .bw-btn { color: PRE=\"oklab(0.97 -0.00281908 0.00102606)\" POST=\"oklch(0.3 0.012 160)\" }",
-    "[04-light-hc] .bw-btn { backgroundColor: PRE=\"oklab(0.155 -0.00375877 0.00136808)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[04-light-hc] .bw-btn-danger { color: PRE=\"oklch(0.13 0.01 160)\" POST=\"oklch(0.3 0.012 160)\" }",
-    "[04-light-hc] .bw-btn-danger { backgroundColor: PRE=\"oklch(0.8546 0.03748 135.7)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[04-light-hc] .bw-input { color: PRE=\"oklch(0.13 0.01 160)\" POST=\"rgb(0, 0, 0)\" }",
-    "[04-light-hc] .bw-input { backgroundColor: PRE=\"oklch(0.95 0.004 160)\" POST=\"rgb(255, 255, 255)\" }",
-    "[04-light-hc] .bw-input { borderTopColor: PRE=\"oklch(0.35 0.01 160)\" POST=\"rgb(118, 118, 118)\" }",
-    "[04-light-hc] .ksel-menu { boxShadow: PRE=\"rgba(0, 0, 0, 0.85) 0px 18px 42px -26px, oklch(0.6 0.006 160) 0px 0px 0px 1px\" POST=\"rgba(20, 30, 25, 0.85) 0px 18px 42px -26px, oklch(0.6 0.006 160) 0px 0px 0px 1px\" }",
-    "[05-prefers-contrast] .bw-btn { color: PRE=\"oklch(1 0 0)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[05-prefers-contrast] .bw-btn { backgroundColor: PRE=\"oklch(0.09 0.004 160)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[05-prefers-contrast] .bw-btn-danger { color: PRE=\"oklch(1 0 0)\" POST=\"oklch(0.88 0.004 160)\" }",
-    "[05-prefers-contrast] .bw-btn-danger { backgroundColor: PRE=\"oklch(0.2142 0.03388 135.7)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[05-prefers-contrast] .bw-input { color: PRE=\"oklch(1 0 0)\" POST=\"rgb(255, 255, 255)\" }",
-    "[05-prefers-contrast] .bw-input { backgroundColor: PRE=\"oklch(0.09 0.004 160)\" POST=\"rgb(59, 59, 59)\" }",
-    "[05-prefers-contrast] .bw-input { borderTopColor: PRE=\"oklch(0.74 0.006 160)\" POST=\"rgb(133, 133, 133)\" }",
-    "[06-forced-colors] .bw-btn { backgroundColor: PRE=\"rgb(0, 0, 0)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[06-forced-colors] .bw-btn-danger { backgroundColor: PRE=\"rgb(0, 0, 0)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[07-reduced-motion] .bw-btn { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[07-reduced-motion] .bw-btn { backgroundColor: PRE=\"oklch(0.155 0.004 160)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[07-reduced-motion] .bw-btn-danger { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"oklch(0.74 0.004 160)\" }",
-    "[07-reduced-motion] .bw-btn-danger { backgroundColor: PRE=\"oklch(0.2495 0.03208 135.7)\" POST=\"rgba(0, 0, 0, 0)\" }",
-    "[07-reduced-motion] .bw-input { color: PRE=\"oklch(0.97 0.003 160)\" POST=\"rgb(255, 255, 255)\" }",
-    "[07-reduced-motion] .bw-input { backgroundColor: PRE=\"oklch(0.155 0.004 160)\" POST=\"rgb(59, 59, 59)\" }",
-    "[07-reduced-motion] .bw-input { borderTopColor: PRE=\"oklch(0.38 0.005 160)\" POST=\"rgb(133, 133, 133)\" }"
-  ]
+  "diffs": []
 }

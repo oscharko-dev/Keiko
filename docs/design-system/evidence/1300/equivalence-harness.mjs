@@ -37,10 +37,11 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveHostExecutable } from "../../../../scripts/lib/host-executable.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../..");
-const GIT_PATH = "/usr/bin/git";
+const GIT_PATH = resolveHostExecutable("git", { workspaceRoot: REPO });
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
 const POST = readFileSync(resolve(REPO, CSS_PATH), "utf8").replace(/\r\n?/g, "\n");
 const POST_CSS_SHA256 = createHash("sha256").update(POST).digest("hex");
