@@ -72,12 +72,20 @@ gh run view <run-id> --log | grep -oE '"code":"cache[^}]*}'
 gh run list --workflow keiko-for-quality.yml --branch <branch> --limit 200 \
   --json databaseId,createdAt,event --jq 'length'   # equals the limit? raise it and repeat
 gh api repos/<owner>/<repo>/actions/runs/<candidate-run-id> \
-  --jq '[.pull_requests[]?.number]'   # must contain THIS pull request's number
+  --jq '{prs: [.pull_requests[]?.number], branch: .head_branch, repo: .head_repository.full_name}'
+# Accept the candidate when `prs` carries THIS pull request's number — or, when GitHub
+# omits the association entirely and `prs` is empty, when the branch and repository match.
+# That fallback is not leniency: the workflow's own locator applies exactly the same rule,
+# so a stricter diagnostic would dismiss a run the reviewer itself would have accepted and
+# end the investigation early.
 
 # ...and read how the REVIEWER settled, which is not the workflow's conclusion. A review can
 # settle complete and the workflow still fail afterwards (a hand-off or signing failure), and a
 # workflow can succeed while the review settled incomplete. Only this diagnostic answers it.
-gh run view <earlier-run-id> --log | grep -oE '"code":"settlement\.[^}]*}'
+gh run view <earlier-run-id> --log | grep -oE '"code":"(settlement|inventory)\.[^}]*}'
+# `inventory.*` is included deliberately: an unclassified path fails the run WITHOUT a
+# settlement code, so a settlement-only search returns nothing and the table below is never
+# reached for the one reason whose remedy is a profile change rather than size or the engine.
 
 # 3. Check that the signing job ran and that a signed artifact exists for that run.
 gh run view <earlier-run-id> --json jobs --jq '.jobs[] | "\(.name): \(.conclusion)"'

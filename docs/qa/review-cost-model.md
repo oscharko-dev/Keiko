@@ -32,11 +32,16 @@ same 3,000 file reviews gives about 4.6k per file. Both numbers are real and the
 windows. Plan with 25k, because it comes from money actually spent, and expect the materialized
 per-file figure to rise toward it as billing settles.
 
-| Change    | First review (empty store)    | Later push (most files unchanged)    |
-| --------- | ----------------------------- | ------------------------------------ |
-| 5 files   | ~0.15 EUR, completes          | ~0.03 EUR                            |
-| 50 files  | ~1.50–3.50 EUR, completes     | ~0.03–0.25 EUR                       |
-| 135 files | ~3.40 EUR, completes under 4M | ~0.10 EUR, when a store was retained |
+| Change    | First review (empty store) | Later push (most files unchanged)    |
+| --------- | -------------------------- | ------------------------------------ |
+| 5 files   | ~0.15 EUR, completes       | ~0.03 EUR                            |
+| 50 files  | ~1.50–3.50 EUR, completes  | ~0.03–0.25 EUR                       |
+| 135 files | ~4.30–7.30 EUR, completes  | ~0.10 EUR, when a store was retained |
+
+The 135-file figure is derived two ways that agree: the ledger average of €96 over roughly 3,000
+file reviews gives €4.32, and scaling the €7–13 that a full 6M run costs down to 3.375M gives
+€3.94–7.31. An earlier version of this row read €3.40 — 3.4M tokens misread as euros, below the
+floor of both derivations — and still said "under 4M" after the ceiling had moved to 6M.
 
 At the 25k planning figure a 135-file change wants roughly 3.4M tokens, well inside the 6M ceiling
 — it completes, hands off a store, and every later push is cheap. Under the 2M ceiling the same
