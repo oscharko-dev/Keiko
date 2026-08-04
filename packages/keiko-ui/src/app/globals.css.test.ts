@@ -51,8 +51,14 @@ function productionStyleSources(directory: string): readonly StyleSource[] {
   return sources;
 }
 
+function withoutCssComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//gu, "");
+}
+
 function declaredGlobalTokens(source: string): ReadonlySet<string> {
-  return new Set(Array.from(source.matchAll(/(--[\w-]+)\s*:/gu), (match) => match[1]!));
+  return new Set(
+    Array.from(withoutCssComments(source).matchAll(/(--[\w-]+)\s*:/gu), (match) => match[1]!),
+  );
 }
 
 function hasNonEmptyFallback(source: string, varStart: number): boolean {
@@ -73,7 +79,7 @@ function hasNonEmptyFallback(source: string, varStart: number): boolean {
     } else if (character === ")") {
       if (depth === 0) {
         if (fallbackStart === undefined) return false;
-        const fallback = source.slice(fallbackStart, index).replace(/\/\*[\s\S]*?\*\//gu, "");
+        const fallback = withoutCssComments(source.slice(fallbackStart, index));
         return fallback.trim().length > 0;
       }
       depth -= 1;
@@ -272,6 +278,14 @@ function cssBlock(selector: string, opts: { readonly fromLast?: boolean } = {}):
 }
 
 describe("Design-token reference integrity", () => {
+  it("ignores token-shaped declarations inside CSS comments", () => {
+    expect(
+      Array.from(
+        declaredGlobalTokens("/* --comment-only: red; */ :root { --runtime-token: blue; }"),
+      ),
+    ).toStrictEqual(["--runtime-token"]);
+  });
+
   it("rejects missing, empty, and comment-only fallbacks", () => {
     const unresolved = unresolvedTokenReferences(
       [

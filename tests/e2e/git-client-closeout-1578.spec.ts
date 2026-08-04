@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { Buffer } from "node:buffer";
 import { execFileSync } from "node:child_process";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   existsSync,
   lstatSync,
@@ -350,9 +351,17 @@ function filesContentBody(route: Route): unknown {
     maxBytes: 1_000_000,
     session: {
       schemaVersion: "1",
-      version: { sizeBytes, modifiedAt: 1, contentHash: "a".repeat(64) },
+      version: fileContentVersion(sizeBytes),
     },
   };
+}
+
+function fileContentVersion(sizeBytes: number): {
+  readonly sizeBytes: number;
+  readonly modifiedAt: number;
+  readonly contentHash: string;
+} {
+  return { sizeBytes, modifiedAt: 1, contentHash: sha256Hex(FILE_CONTENT) };
 }
 
 function commitPreviewBody(): unknown {
@@ -806,6 +815,9 @@ async function captureCloseoutEvidence(
 }
 
 test("Issue #1578 - Git client closeout evidence covers integrated workflows", async ({ page }) => {
+  expect(fileContentVersion(Buffer.byteLength(FILE_CONTENT, "utf8")).contentHash).toBe(
+    sha256Hex(FILE_CONTENT),
+  );
   ensureEvidenceDir();
   const fixture = buildLocalBareFixture();
   const ledger = emptyLedger();

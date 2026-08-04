@@ -2828,7 +2828,10 @@ function EditorRuntimeWidget({
   // settings, and debugging confirms use) instead of re-deriving the wrap here; it is a no-op while
   // the dialog is unmounted because the ref is then null.
   useDialogTabTrap(reloadConfirmRef);
-  useModalInteractionLock({ active: reloadConfirm, initialFocusRef: reloadConfirmRef });
+  useModalInteractionLock({
+    active: reloadConfirm && sessionActive,
+    initialFocusRef: reloadConfirmRef,
+  });
   useEffect(() => {
     if (!reloadConfirm) return;
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {

@@ -553,6 +553,42 @@ describe("EditorRuntimeWidget reload-confirm dialog — focus restoration (GEN-U
     await waitFor(() => expect(document.activeElement).toBe(reload));
   });
 
+  it("releases the modal interaction lock when the editor session becomes inactive", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    const view = render(
+      <EditorRuntimeWidget
+        windowId="a11y-reload-inactive"
+        root="/repo"
+        file="src/app.ts"
+        paneId="pane-1"
+        sessionActive
+      />,
+    );
+    await screen.findByTestId("editor-surface");
+    act(() => {
+      surface.props?.onContentChange({ text: "edited value\n", sizeBytes: 13 }, "human");
+    });
+    vi.mocked(saveFilesContent).mockRejectedValueOnce(
+      new ApiError("CONFLICT", "The file changed on disk.", 409),
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(await screen.findByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(document.documentElement.dataset.keikoModalOpen).toBe("true"));
+
+    view.rerender(
+      <EditorRuntimeWidget
+        windowId="a11y-reload-inactive"
+        root="/repo"
+        file="src/app.ts"
+        paneId="pane-1"
+        sessionActive={false}
+      />,
+    );
+
+    await waitFor(() => expect(document.documentElement.dataset.keikoModalOpen).toBeUndefined());
+  });
+
   // GEN-UI-FOCUS-002 — "Discard unsaved changes?" is aria-modal="true", which tells assistive
   // technology that everything behind it is unavailable. Without containment a keyboard or
   // screen-reader user could Tab out of the destructive confirm into the editor toolbar and window
