@@ -76,7 +76,7 @@ const SECTION_STYLE: CSSProperties = {
   gap: "var(--space-2)",
   padding: "var(--space-3)",
   border: "1px solid var(--border-default)",
-  borderRadius: "var(--radius-md)",
+  borderRadius: "var(--radius-surface)",
   background: "var(--card)",
 };
 const HEADING_STYLE: CSSProperties = {

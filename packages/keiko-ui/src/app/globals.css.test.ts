@@ -12,7 +12,7 @@
  * Each assertion is crafted so that reverting the specific fix causes the test
  * to fail (mutation-robustness).
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,96 @@ import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(resolve(here, "globals.css"), "utf8").replace(/\r\n?/g, "\n");
+
+interface StyleSource {
+  readonly path: string;
+  readonly source: string;
+}
+
+function productionStyleSources(directory: string): readonly StyleSource[] {
+  const sources: StyleSource[] = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) {
+      sources.push(...productionStyleSources(path));
+      continue;
+    }
+    const productionModule = entry.name.endsWith(".module.css");
+    const productionComponent =
+      entry.name.endsWith(".tsx") &&
+      !entry.name.endsWith(".test.tsx") &&
+      !entry.name.endsWith(".spec.tsx");
+    const productionStyleHelper =
+      entry.name.endsWith(".ts") &&
+      !entry.name.endsWith(".d.ts") &&
+      !entry.name.endsWith(".test.ts") &&
+      !entry.name.endsWith(".spec.ts");
+    if (productionModule || productionComponent || productionStyleHelper) {
+      sources.push({ path, source: readFileSync(path, "utf8") });
+    }
+  }
+  return sources;
+}
+
+function withoutCssComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//gu, "");
+}
+
+function declaredGlobalTokens(source: string): ReadonlySet<string> {
+  return new Set(
+    Array.from(withoutCssComments(source).matchAll(/(--[\w-]+)\s*:/gu), (match) => match[1]!),
+  );
+}
+
+function hasNonEmptyFallback(source: string, varStart: number): boolean {
+  let depth = 0;
+  let fallbackStart: number | undefined;
+  let quote: '"' | "'" | undefined;
+  for (let index = varStart + 4; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === undefined) return false;
+    if (quote !== undefined) {
+      if (character === quote && source[index - 1] !== "\\") quote = undefined;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === "(") {
+      depth += 1;
+    } else if (character === ")") {
+      if (depth === 0) {
+        if (fallbackStart === undefined) return false;
+        const fallback = withoutCssComments(source.slice(fallbackStart, index));
+        return fallback.trim().length > 0;
+      }
+      depth -= 1;
+    } else if (character === "," && depth === 0 && fallbackStart === undefined) {
+      fallbackStart = index + 1;
+    }
+  }
+  return false;
+}
+
+function unresolvedTokenReferences(
+  sources: readonly StyleSource[],
+  declared: ReadonlySet<string>,
+): readonly string[] {
+  const unresolved = new Set<string>();
+  for (const { path, source } of sources) {
+    for (const match of source.matchAll(/var\(\s*(--[\w-]+)/gu)) {
+      const token = match[1];
+      if (
+        token !== undefined &&
+        !declared.has(token) &&
+        !hasNonEmptyFallback(source, match.index)
+      ) {
+        unresolved.add(`${path.slice(here.length + 1)}: ${token}`);
+      }
+    }
+  }
+  return [...unresolved].sort();
+}
+
 const currentCssSha256 = createHash("sha256").update(css).digest("hex");
 const pdfViewerModuleCss = readFileSync(
   resolve(here, "components/desktop/widgets/cards/PdfCitationPreviewWindow.module.css"),
@@ -186,6 +276,87 @@ function cssBlockFrom(
 function cssBlock(selector: string, opts: { readonly fromLast?: boolean } = {}): string {
   return cssBlockFrom(css, selector, opts);
 }
+
+describe("Design-token reference integrity", () => {
+  it("ignores token-shaped declarations inside CSS comments", () => {
+    expect(
+      Array.from(
+        declaredGlobalTokens("/* --comment-only: red; */ :root { --runtime-token: blue; }"),
+      ),
+    ).toStrictEqual(["--runtime-token"]);
+  });
+
+  it("rejects missing, empty, and comment-only fallbacks", () => {
+    const unresolved = unresolvedTokenReferences(
+      [
+        {
+          path: resolve(here, "fixture.tsx"),
+          source:
+            "var(--known) var(--missing) var(--empty,) var(--space, ) var(--comment, /* no value */)",
+        },
+      ],
+      new Set(["--known"]),
+    );
+
+    expect(unresolved).toStrictEqual([
+      "fixture.tsx: --comment",
+      "fixture.tsx: --empty",
+      "fixture.tsx: --missing",
+      "fixture.tsx: --space",
+    ]);
+  });
+
+  it("accepts concrete and fully validated nested fallbacks", () => {
+    const unresolved = unresolvedTokenReferences(
+      [
+        {
+          path: resolve(here, "fixture.module.css"),
+          source: "color: var(--literal, #fff); border: var(--nested, var(--known));",
+        },
+      ],
+      new Set(["--known"]),
+    );
+
+    expect(unresolved).toStrictEqual([]);
+  });
+
+  it("fails closed for unterminated, quoted, and circular hostile fallbacks", () => {
+    const unresolved = unresolvedTokenReferences(
+      [
+        {
+          path: resolve(here, "fixture.ts"),
+          source: [
+            "var(--unterminated, var(--known)",
+            'var(--quoted, "unterminated)',
+            "var(--cycle-a, var(--cycle-b, var(--cycle-a)))",
+          ].join(" "),
+        },
+      ],
+      new Set(["--known"]),
+    );
+
+    expect(unresolved).toStrictEqual([
+      "fixture.ts: --cycle-a",
+      "fixture.ts: --quoted",
+      "fixture.ts: --unterminated",
+    ]);
+  });
+
+  it("scans production TypeScript style helpers as well as components and CSS Modules", () => {
+    expect(
+      productionStyleSources(here).some(({ path }) => path.endsWith("git-client-styles.ts")),
+    ).toBe(true);
+  });
+
+  it("requires every CSS Module and inline style token to be global or safely fall back", () => {
+    const unresolved = unresolvedTokenReferences(
+      [{ path: resolve(here, "globals.css"), source: css }, ...productionStyleSources(here)],
+      declaredGlobalTokens(css),
+    );
+
+    expect(unresolved).toStrictEqual([]);
+  });
+});
 
 describe("BUNDLE-09 — lazy widget CSS split", () => {
   it("keeps PDF viewer window styles out of render-blocking globals.css", () => {
@@ -1707,7 +1878,7 @@ describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the ru
     expect(monacoSliderBlock).toContain("background: var(--ed-scrollbar-thumb) !important");
     expect(monacoSliderBlock).toContain("border-radius: 999px !important");
     expect(monacoSliderBlock).toContain(
-      "transition: background var(--motion-fast) var(--ease-out) !important",
+      "transition: background var(--dur-fast) var(--ease-out) !important",
     );
     expect(monacoSliderBlock).not.toContain("background-clip");
     expect(monacoSliderBlock).not.toContain("border:");
@@ -4900,7 +5071,7 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
 
   it("the browser evidence harness rejects HTTP method drift", (): void => {
     expect(browserCaptureSource).toContain(
-      'const POST_API_PATHS = new Set([\n  "/api/desktop/chats",\n  "/api/editor/agent/snapshot",\n  "/api/editor/language",\n]);',
+      'const POST_API_PATHS = new Set([\n  "/api/desktop/chats",\n  "/api/editor/agent/snapshot",\n  "/api/editor/language",\n  "/api/task-workspaces/reconciliation",\n]);',
     );
     expect(browserCaptureSource).toContain('return POST_API_PATHS.has(pathname) ? "POST" : "GET";');
     expect(browserCaptureSource).toContain("if (method !== expectedApiMethod(url.pathname)) {");

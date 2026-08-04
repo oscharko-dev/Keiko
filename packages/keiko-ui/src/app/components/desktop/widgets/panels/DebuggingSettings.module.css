@@ -112,7 +112,7 @@
 
 .toggle:checked::after {
   transform: translateX(14px);
-  background: var(--surface-base);
+  background: var(--surface-primary);
 }
 
 .toggle:focus-visible,
@@ -158,14 +158,14 @@
   display: grid;
   place-items: center;
   padding: 18px;
-  background: color-mix(in srgb, var(--surface-base) 78%, transparent);
+  background: color-mix(in srgb, var(--surface-primary) 78%, transparent);
 }
 
 .dialog {
   width: min(420px, 100%);
   border: 1px solid var(--border-strong);
   border-radius: 10px;
-  background: var(--surface-raised);
+  background: var(--surface-elevated);
   box-shadow: var(--shadow-pop);
   padding: 14px;
 }

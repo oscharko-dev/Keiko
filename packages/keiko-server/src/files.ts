@@ -5,7 +5,7 @@
 import type { IncomingMessage } from "node:http";
 import type { Dirent, Stats } from "node:fs";
 import { constants, createReadStream } from "node:fs";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { TextDecoder } from "node:util";
 import {
   cp,
@@ -30,7 +30,7 @@ import {
   relative,
   resolve,
 } from "node:path";
-import { redact } from "@oscharko-dev/keiko-security";
+import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   EDITOR_SESSION_SCHEMA_VERSION,
   parseEditorDocumentVersion,
@@ -397,8 +397,12 @@ export async function resolveRoot(
     : resolveRegisteredRoot(project, redactor);
 }
 
-export function normalizeRelativePath(pathInput: string | null): string {
-  const raw = pathInput ?? "";
+export function normalizeRelativePath(pathInput: unknown): string {
+  if (pathInput === null) return "";
+  if (typeof pathInput !== "string") {
+    throw new FilesError(400, "BAD_PATH", "The path must be a string or null.");
+  }
+  const raw = pathInput;
   if (raw.includes("\0") || isAbsolute(raw)) {
     throw new FilesError(400, "BAD_PATH", "The path must be relative to the selected root.");
   }
@@ -1428,10 +1432,6 @@ async function textPreview(
 
 // Issue #1197: content-free document version. The hash is a one-way SHA-256 of the editable
 // UTF-8 content — it never echoes the content itself.
-function sha256Hex(content: string): string {
-  return createHash("sha256").update(content, "utf8").digest("hex");
-}
-
 function documentVersion(content: string, stats: Stats): EditorDocumentVersion {
   return { sizeBytes: stats.size, modifiedAt: stats.mtimeMs, contentHash: sha256Hex(content) };
 }

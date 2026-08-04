@@ -1,28 +1,61 @@
 "use client";
 
-import { useEffect, type RefObject } from "react";
+import { useEffect, useSyncExternalStore, type RefObject } from "react";
+
+const modalLockListeners = new Set<() => void>();
 
 interface ModalInteractionLockOptions {
   readonly active?: boolean;
   readonly initialFocusRef?: RefObject<HTMLElement | null>;
-  readonly restoreFocus?: boolean;
+}
+
+function emitModalLockChange(): void {
+  for (const listener of modalLockListeners) listener();
+}
+
+export function restoreModalTriggerFocus(trigger: HTMLElement | null, remainingFrames = 60): void {
+  window.requestAnimationFrame(() => {
+    if (trigger?.isConnected !== true) return;
+    if (trigger.closest("[inert]") === null) {
+      trigger.focus();
+      return;
+    }
+    if (remainingFrames > 1) restoreModalTriggerFocus(trigger, remainingFrames - 1);
+  });
+}
+
+export function useModalInteractionLockState(): boolean {
+  return useSyncExternalStore(
+    (onStoreChange): (() => void) => {
+      modalLockListeners.add(onStoreChange);
+      return () => {
+        modalLockListeners.delete(onStoreChange);
+      };
+    },
+    () => document.documentElement.dataset.keikoModalOpen === "true",
+    () => false,
+  );
 }
 
 export function useModalInteractionLock({
   active = true,
   initialFocusRef,
-  restoreFocus = true,
 }: ModalInteractionLockOptions = {}): void {
   useEffect(() => {
     if (!active) return undefined;
     const root = document.documentElement;
-    const trigger = restoreFocus ? (document.activeElement as HTMLElement | null) : null;
+    const trigger = document.activeElement as HTMLElement | null;
     const previousCount = Number(root.dataset.keikoModalOpenCount ?? "0");
     root.dataset.keikoModalOpenCount = String(previousCount + 1);
     root.dataset.keikoModalOpen = "true";
-    initialFocusRef?.current?.focus();
+    emitModalLockChange();
+    const initialFocusFrame =
+      initialFocusRef === undefined
+        ? null
+        : window.requestAnimationFrame(() => initialFocusRef.current?.focus());
 
     return () => {
+      if (initialFocusFrame !== null) window.cancelAnimationFrame(initialFocusFrame);
       const nextCount = Math.max(0, Number(root.dataset.keikoModalOpenCount ?? "1") - 1);
       if (nextCount === 0) {
         delete root.dataset.keikoModalOpenCount;
@@ -30,7 +63,8 @@ export function useModalInteractionLock({
       } else {
         root.dataset.keikoModalOpenCount = String(nextCount);
       }
-      if (restoreFocus) trigger?.focus?.();
+      emitModalLockChange();
+      restoreModalTriggerFocus(trigger);
     };
-  }, [active, initialFocusRef, restoreFocus]);
+  }, [active, initialFocusRef]);
 }

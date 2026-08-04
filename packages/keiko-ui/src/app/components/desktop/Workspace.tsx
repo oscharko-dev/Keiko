@@ -253,7 +253,7 @@ function describeConnectEnd(
   t: I18nTranslate,
 ): string {
   if (conns.length <= wasConnCount) return t("workspace.connect.cancelled");
-  const added = conns[conns.length - 1];
+  const added = conns.at(-1);
   const a = added !== undefined ? wins?.find((w) => w.id === added.a) : undefined;
   const b = added !== undefined ? wins?.find((w) => w.id === added.b) : undefined;
   return a !== undefined && b !== undefined
@@ -446,6 +446,7 @@ function tryHandleWorkspaceEscapeShortcut(
     if (selection.selectedWindowIds.length > 0) {
       api.clearSelection();
       event.preventDefault();
+      event.stopPropagation();
     }
     return true;
   }
@@ -456,18 +457,15 @@ function tryHandleWorkspaceClipboardShortcut(
   event: ReactKeyboardEvent<HTMLElement>,
   api: UseWorkspaceResult["api"],
 ): boolean {
-  if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
-    const key = event.key.toLowerCase();
-    if (key === "c") {
-      if (api.copySelectedWindows()) event.preventDefault();
-      return true;
-    }
-    if (key === "v") {
-      if (api.pasteCopiedWindows()) event.preventDefault();
-      return true;
-    }
+  if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return false;
+  const key = event.key.toLowerCase();
+  if (key !== "c" && key !== "v") return false;
+  const handled = key === "c" ? api.copySelectedWindows() : api.pasteCopiedWindows();
+  if (handled) {
+    event.preventDefault();
+    event.stopPropagation();
   }
-  return false;
+  return true;
 }
 
 // Issue #2150 — selection commands (Escape/Ctrl+C/Ctrl+V) must fire from

@@ -122,6 +122,7 @@ interface SwSandbox {
   readonly respondWithCalls: Array<Response | Promise<Response>>;
   readonly putCalls: Array<{ key: string; response: unknown }>;
   readonly fetchCalls: Array<string>;
+  readonly reportedErrors: Error[];
 }
 
 interface SyntheticEvent {
@@ -133,7 +134,12 @@ interface SyntheticEvent {
   waitUntil(value: Promise<unknown>): void;
 }
 
-function makeSandbox(seededCache: Record<string, unknown> = {}): {
+function makeSandbox(
+  seededCache: Record<string, unknown> = {},
+  cachePutFailure?: Error,
+  cacheOpenFailure?: Error,
+  includeReportError = true,
+): {
   context: vm.Context;
   sandbox: SwSandbox;
 } {
@@ -141,6 +147,7 @@ function makeSandbox(seededCache: Record<string, unknown> = {}): {
   const respondWithCalls: Array<Response | Promise<Response>> = [];
   const putCalls: Array<{ key: string; response: unknown }> = [];
   const fetchCalls: Array<string> = [];
+  const reportedErrors: Error[] = [];
 
   // Resolve a seeded cache entry by the request's url (the SW matches on the Request object).
   const matchSeeded = (req: { url: string } | string): unknown => {
@@ -151,6 +158,7 @@ function makeSandbox(seededCache: Record<string, unknown> = {}): {
   const cacheStub = {
     addAll: async (_urls: readonly string[]): Promise<void> => undefined,
     put: async (req: { url: string } | string, response: unknown): Promise<void> => {
+      if (cachePutFailure !== undefined) throw cachePutFailure;
       const key = typeof req === "string" ? req : req.url;
       putCalls.push({ key, response });
     },
@@ -158,7 +166,10 @@ function makeSandbox(seededCache: Record<string, unknown> = {}): {
   };
 
   const cachesShim = {
-    open: async (_name: string): Promise<typeof cacheStub> => cacheStub,
+    open: async (_name: string): Promise<typeof cacheStub> => {
+      if (cacheOpenFailure !== undefined) throw cacheOpenFailure;
+      return cacheStub;
+    },
     keys: async (): Promise<readonly string[]> => [],
     delete: async (_name: string): Promise<boolean> => true,
     match: async (req: { url: string } | string): Promise<unknown> => matchSeeded(req),
@@ -169,6 +180,13 @@ function makeSandbox(seededCache: Record<string, unknown> = {}): {
       handlers.set(event, handler);
     },
     location: { origin: "http://localhost:3000" },
+    ...(includeReportError
+      ? {
+          reportError: (error: Error): void => {
+            reportedErrors.push(error);
+          },
+        }
+      : {}),
   };
 
   const fetchShim = async (req: { url: string } | string): Promise<Response> => {
@@ -197,7 +215,7 @@ function makeSandbox(seededCache: Record<string, unknown> = {}): {
 
   return {
     context,
-    sandbox: { handlers, respondWithCalls, putCalls, fetchCalls },
+    sandbox: { handlers, respondWithCalls, putCalls, fetchCalls, reportedErrors },
   };
 }
 
@@ -341,6 +359,62 @@ describe("sw.js cache policy — sandboxed fetch-handler evaluation", () => {
     expect(sandbox.respondWithCalls).toHaveLength(1);
     expect(sandbox.fetchCalls).not.toContain(url); // served from cache, network not touched
   });
+
+  it.each([
+    { title: "cache-first asset", url: "http://localhost:3000/_next/static/chunk.js" },
+    { title: "network-first shell", url: "http://localhost:3000/" },
+  ])(
+    "returns a successful $title response when Cache Storage rejects the write",
+    async ({ url }) => {
+      const { context, sandbox } = makeSandbox({}, new Error("QuotaExceededError"));
+      vm.runInContext(SW_SOURCE, context);
+
+      const fetchHandler = sandbox.handlers.get("fetch");
+      fetchHandler?.(makeEvent("fetch", url, sandbox));
+
+      await expect(sandbox.respondWithCalls[0]).resolves.toMatchObject({ ok: true, status: 200 });
+      expect(sandbox.reportedErrors.map((error) => error.message)).toStrictEqual([
+        "Service worker cache write failed.",
+      ]);
+    },
+  );
+
+  it.each([
+    { title: "cache-first asset", url: "http://localhost:3000/_next/static/chunk.js" },
+    { title: "network-first shell", url: "http://localhost:3000/" },
+  ])(
+    "returns a successful $title response when Cache Storage rejects opening the cache",
+    async ({ url }) => {
+      const { context, sandbox } = makeSandbox({}, undefined, new Error("StorageUnavailableError"));
+      vm.runInContext(SW_SOURCE, context);
+
+      const fetchHandler = sandbox.handlers.get("fetch");
+      fetchHandler?.(makeEvent("fetch", url, sandbox));
+
+      await expect(sandbox.respondWithCalls[0]).resolves.toMatchObject({ ok: true, status: 200 });
+      expect(sandbox.reportedErrors.map((error) => error.message)).toStrictEqual([
+        "Service worker cache write failed.",
+      ]);
+    },
+  );
+
+  it.each(["put", "open"] as const)(
+    "keeps the response successful when cache %s fails and reportError is unavailable",
+    async (failure) => {
+      const error = new Error("StorageFailure");
+      const { context, sandbox } =
+        failure === "put"
+          ? makeSandbox({}, error, undefined, false)
+          : makeSandbox({}, undefined, error, false);
+      vm.runInContext(SW_SOURCE, context);
+
+      const fetchHandler = sandbox.handlers.get("fetch");
+      fetchHandler?.(makeEvent("fetch", "http://localhost:3000/", sandbox));
+
+      await expect(sandbox.respondWithCalls[0]).resolves.toMatchObject({ ok: true, status: 200 });
+      expect(sandbox.reportedErrors).toHaveLength(0);
+    },
+  );
 
   it("activates a waiting update only for the explicit activation message", () => {
     const { context, sandbox } = makeSandbox();

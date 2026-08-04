@@ -62,6 +62,7 @@ import {
 } from "../git-repository-state-events";
 import { WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationRoots } from "../workspace-file-events";
 import { requestEditorBufferReconciliation } from "../editor-buffer-reconciliation-events";
+import { restoreModalTriggerFocus } from "../../../hooks/useModalInteractionLock";
 import {
   BODY_STYLE,
   DIFF_HEADER_STYLE,
@@ -705,9 +706,8 @@ export function GitClientWindow({
   const resetStaging = staging.reset;
   const resetCommit = commit.reset;
 
-  const openNewBranchDialog = useCallback((): void => {
-    newBranchReturnFocusRef.current =
-      typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null);
+  const openNewBranchDialog = useCallback((trigger: HTMLButtonElement): void => {
+    newBranchReturnFocusRef.current = trigger;
     setNewBranchOpen(true);
   }, []);
 
@@ -715,7 +715,7 @@ export function GitClientWindow({
     setNewBranchOpen(false);
     const target = newBranchReturnFocusRef.current;
     newBranchReturnFocusRef.current = null;
-    if (target !== null) queueMicrotask(() => target.focus());
+    restoreModalTriggerFocus(target);
   }, []);
 
   const loadRepositories = useCallback((): void => {
@@ -896,7 +896,9 @@ export function GitClientWindow({
           requestedCommit === undefined ||
           res.entries.some((entry) => entry.sha === requestedCommit);
         if (commitLandingKey !== null) completedCommitLandingRef.current = commitLandingKey;
-        setHistoryError(hasRequestedCommit ? null : t("gitClientWindow.history.commitUnavailable"));
+        setHistoryError(
+          hasRequestedCommit ? null : optionalT("gitClientWindow.history.commitUnavailable"),
+        );
         setSelectedCommitSha(
           selectedHistoryCommitResolver(res.entries, requestedCommit, hasRequestedCommit),
         );
@@ -906,7 +908,7 @@ export function GitClientWindow({
         setHistory(null);
         setHistoryProjectKey(null);
         setHistoryLoading(false);
-        setHistoryError(t("gitClientWindow.history.loadFailed"));
+        setHistoryError(optionalT("gitClientWindow.history.loadFailed"));
       },
     );
     return () => {
@@ -915,7 +917,7 @@ export function GitClientWindow({
         historyRequestSequenceRef.current += 1;
       }
     };
-  }, [client, initialCommit, selectedPath, statusRevision, t, tab]);
+  }, [client, initialCommit, optionalT, selectedPath, statusRevision, tab]);
 
   const loadMoreHistory = useCallback((): void => {
     if (selectedPath === null || history === null || !history.truncated || historyLoadingMore) {
@@ -930,7 +932,7 @@ export function GitClientWindow({
         if (historyRequestSequenceRef.current !== requestSequence) return;
         if (!page.available) {
           setHistoryLoadingMore(false);
-          setHistoryLoadMoreError(t("gitClientWindow.history.loadMoreFailed"));
+          setHistoryLoadMoreError(optionalT("gitClientWindow.history.loadMoreFailed"));
           return;
         }
         setHistory((current) => (current === null ? null : appendHistoryPage(current, page)));
@@ -940,10 +942,10 @@ export function GitClientWindow({
       () => {
         if (historyRequestSequenceRef.current !== requestSequence) return;
         setHistoryLoadingMore(false);
-        setHistoryLoadMoreError(t("gitClientWindow.history.loadMoreFailed"));
+        setHistoryLoadMoreError(optionalT("gitClientWindow.history.loadMoreFailed"));
       },
     );
-  }, [client, history, historyLoadingMore, historyNextSkip, selectedPath, t]);
+  }, [client, history, historyLoadingMore, historyNextSkip, optionalT, selectedPath]);
 
   // Status load, re-run on every mutation (statusRevision bump). Prunes a selected change that no
   // longer exists (e.g. after a commit) so the diff pane returns to its empty state.
@@ -1046,14 +1048,14 @@ export function GitClientWindow({
     (project: ProjectWithAvailability): boolean => {
       if (project.workspaceAvailable !== true) {
         setReposLoading(false);
-        setReposError(t("gitClientWindow.repository.workspaceUnavailable"));
+        setReposError(optionalT("gitClientWindow.repository.workspaceUnavailable"));
         return false;
       }
       setReposError(null);
       applyRepositorySelection(project.path);
       return true;
     },
-    [applyRepositorySelection, t],
+    [applyRepositorySelection, optionalT],
   );
 
   const reconnectRepository = useCallback(
@@ -1071,12 +1073,14 @@ export function GitClientWindow({
           if (requestSequence !== repositoryConnectSeqRef.current) return;
           setReposLoading(false);
           setReposError(
-            t("gitClientWindow.repository.reconnectFailed", { detail: formatGitError(error) }),
+            optionalT("gitClientWindow.repository.reconnectFailed", {
+              detail: formatGitError(error),
+            }),
           );
         },
       );
     },
-    [applyConnectedRepository, client, loadRepositories, t],
+    [applyConnectedRepository, client, loadRepositories, optionalT],
   );
 
   const onRepositoryAdded = useCallback(
@@ -1101,8 +1105,8 @@ export function GitClientWindow({
     }
     setSelectedPath(null);
     updateCfg?.({ projectPath: "" });
-    setReposError(t("gitClientWindow.repository.workspaceUnavailable"));
-  }, [projectId, repositories, reposError, reposLoading, selectedPath, t, updateCfg]);
+    setReposError(optionalT("gitClientWindow.repository.workspaceUnavailable"));
+  }, [optionalT, projectId, repositories, reposError, reposLoading, selectedPath, updateCfg]);
 
   const active = activeGitClientState({
     selectedPath,
@@ -1217,11 +1221,9 @@ export function GitClientWindow({
   );
 
   const switchBranch = useCallback(
-    (branchName: string): void => {
+    (branchName: string, trigger: HTMLButtonElement): void => {
       if (selectedPath === null) return;
-      worktreeConfirmationReturnFocusRef.current = document.querySelector<HTMLElement>(
-        '[role="combobox"][aria-label^="Branch:"]',
-      );
+      worktreeConfirmationReturnFocusRef.current = trigger;
       setWorktreeConfirmation({ kind: "branch-switch", branchName });
     },
     [selectedPath],
@@ -1318,7 +1320,7 @@ export function GitClientWindow({
     setWorktreeConfirmation(null);
     const target = worktreeConfirmationReturnFocusRef.current;
     worktreeConfirmationReturnFocusRef.current = null;
-    if (target !== null) queueMicrotask(() => target.focus());
+    restoreModalTriggerFocus(target);
   }, []);
 
   const confirmWorktreeMutation = useCallback((): void => {
@@ -1337,23 +1339,23 @@ export function GitClientWindow({
       setRightPaneMode(mode);
       setRightPaneAnnouncement(
         mode === "pull-request"
-          ? t("gitClientWindow.panel.pullRequestOpened")
-          : t("gitClientWindow.panel.mergeOpened"),
+          ? optionalT("gitClientWindow.panel.pullRequestOpened")
+          : optionalT("gitClientWindow.panel.mergeOpened"),
       );
     },
-    [selectedPath, t],
+    [optionalT, selectedPath],
   );
 
   const returnToDiff = useCallback((): void => {
     setRightPaneMode("diff");
-    setRightPaneAnnouncement(t("gitClientWindow.panel.diffOpened"));
+    setRightPaneAnnouncement(optionalT("gitClientWindow.panel.diffOpened"));
     window.requestAnimationFrame(() => {
       // The diff pane's scroll region is a native <section> (#2721): its region role is
       // implicit, so a [role="region"] attribute selector no longer matches it.
       const diffRegion = diffPaneRef.current?.querySelector('section[aria-label="Diff"]');
       if (diffRegion instanceof HTMLElement) diffRegion.focus();
     });
-  }, [t]);
+  }, [optionalT]);
 
   const visibleStagingOutcome = staging.flow.outcome;
   const currentBranch = activeStatus?.branch ?? activeSummary?.branch;

@@ -12,10 +12,12 @@
 import type { IncomingMessage } from "node:http";
 import {
   isTaskWorkspaceLifecycleState,
+  isWorkspaceCleanupMode,
   isWorkspaceRecoveryStrategy,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   TaskWorkspaceLifecycleState,
+  WorkspaceCleanupMode,
   WorkspaceRecoveryStrategy,
 } from "@oscharko-dev/keiko-contracts";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
@@ -25,7 +27,6 @@ import { TaskWorkspaceError } from "./errors.js";
 import { assertSafeFieldValue } from "./field-safety.js";
 import type {
   WorkspaceActivateRequest,
-  WorkspaceCleanupMode,
   WorkspaceCleanupService,
   WorkspaceHealthService,
   WorkspaceLifecycleActionRequest,
@@ -552,7 +553,7 @@ export async function handleGetTaskWorkspaceHealth(
 }
 
 function parseCleanupMode(value: unknown): WorkspaceCleanupMode {
-  if (value === "request" || value === "complete") return value;
+  if (isWorkspaceCleanupMode(value)) return value;
   throw new TaskWorkspaceError(
     "INVALID_REQUEST",
     "missing or invalid field: mode (expected 'request' or 'complete')",

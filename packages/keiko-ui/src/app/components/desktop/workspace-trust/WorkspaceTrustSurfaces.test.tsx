@@ -158,7 +158,7 @@ describe("Workspace Trust governance surfaces", () => {
     const onCancel = vi.fn();
     const onConfirm = vi.fn(async () => true);
     const user = userEvent.setup();
-    const { container } = render(
+    render(
       <I18nProvider>
         <WorkspaceTrustDecisionDialog
           action="grant"
@@ -171,6 +171,8 @@ describe("Workspace Trust governance surfaces", () => {
     );
 
     const stayRestricted = screen.getByRole("button", { name: "Stay restricted" });
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog.parentElement?.parentElement).toBe(document.body);
     await waitFor(() => expect(stayRestricted).toHaveFocus());
     await user.keyboard("{Enter}");
     expect(onCancel).toHaveBeenCalledOnce();
@@ -180,6 +182,6 @@ describe("Workspace Trust governance surfaces", () => {
     expect(screen.getByRole("button", { name: "Trust workspace" })).toHaveFocus();
     await user.tab();
     expect(stayRestricted).toHaveFocus();
-    expect(await axe(container)).toHaveNoViolations();
+    expect(await axe(dialog)).toHaveNoViolations();
   });
 });

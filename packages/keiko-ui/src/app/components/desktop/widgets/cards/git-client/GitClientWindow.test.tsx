@@ -637,7 +637,7 @@ describe("GitClientWindow — repository list", () => {
     );
     const client = makeClient({ getStatus });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await screen.findByRole("combobox", { name: "Branch: main" });
+    await screen.findByRole("button", { name: "Branch: main" });
     const initialReads = getStatus.mock.calls.length;
 
     act((): void => notifyWorkspaceFileMutated(REPO_B.path));
@@ -727,14 +727,14 @@ describe("GitClientWindow — repository list", () => {
     });
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await screen.findByRole("combobox", { name: "Branch: main" });
+    await screen.findByRole("button", { name: "Branch: main" });
 
     await user.click(screen.getByRole("combobox", { name: "Repository" }));
     await user.click(await screen.findByRole("option", { name: /beta/ }));
 
     await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_B.path));
-    expect(screen.queryByRole("combobox", { name: "Branch: main" })).not.toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Branch: Loading branches" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Branch: main" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Branch: Loading branches" })).toBeDisabled();
 
     act(() => {
       resolveBetaBranches(
@@ -745,7 +745,7 @@ describe("GitClientWindow — repository list", () => {
       );
       resolveBetaStatus(makeStatus({ root: REPO_B.path, branch: "release" }));
     });
-    await screen.findByRole("combobox", { name: "Branch: release" });
+    await screen.findByRole("button", { name: "Branch: release" });
   });
 
   it("renders a loading state while repos are being fetched", async () => {
@@ -821,7 +821,9 @@ describe("GitClientWindow — add-repository dialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Clone from URL" }));
 
-    expect(screen.getByRole("dialog", { name: "Add repository" })).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Add repository" });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog.parentElement?.parentElement).toBe(document.body);
   });
 
   it("Clone mode calls cloneRepository with {repositoryUrl, destinationPath}", async () => {
@@ -1171,8 +1173,8 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     const user = userEvent.setup();
     const client = makeClient();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await user.click(await screen.findByRole("combobox", { name: "Branch: main" }));
-    await user.click(screen.getByRole("option", { name: /feat\/x/ }));
+    await user.click(await screen.findByRole("button", { name: "Branch: main" }));
+    await user.click(screen.getByRole("menuitemradio", { name: /feat\/x/ }));
 
     const dialog = screen.getByRole("dialog", { name: "Confirm branch switch" });
     expect(client.branchSwitch).not.toHaveBeenCalled();
@@ -1192,8 +1194,8 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
         reconcileEditorBuffers={reconcileEditorBuffers}
       />,
     );
-    await user.click(await screen.findByRole("combobox", { name: "Branch: main" }));
-    await user.click(screen.getByRole("option", { name: /feat\/x/ }));
+    await user.click(await screen.findByRole("button", { name: "Branch: main" }));
+    await user.click(screen.getByRole("menuitemradio", { name: /feat\/x/ }));
     await user.click(screen.getByRole("button", { name: "Switch branch" }));
 
     await waitFor(() => expect(reconcileEditorBuffers).toHaveBeenCalledTimes(1));
@@ -1218,8 +1220,8 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
         reconcileEditorBuffers={reconcileEditorBuffers}
       />,
     );
-    await user.click(await screen.findByRole("combobox", { name: "Branch: main" }));
-    await user.click(screen.getByRole("option", { name: /feat\/x/ }));
+    await user.click(await screen.findByRole("button", { name: "Branch: main" }));
+    await user.click(screen.getByRole("menuitemradio", { name: /feat\/x/ }));
     await user.click(screen.getByRole("button", { name: "Switch branch" }));
 
     const outcome = await screen.findByTestId("git-branch-outcome");
@@ -1238,8 +1240,8 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
         reconcileEditorBuffers={reconcileEditorBuffers}
       />,
     );
-    await user.click(await screen.findByRole("combobox", { name: "Branch: main" }));
-    await user.click(screen.getByRole("option", { name: /feat\/x/ }));
+    await user.click(await screen.findByRole("button", { name: "Branch: main" }));
+    await user.click(screen.getByRole("menuitemradio", { name: /feat\/x/ }));
     await user.click(screen.getByRole("button", { name: "Switch branch" }));
 
     const outcome = await screen.findByTestId("git-branch-outcome");
@@ -1254,15 +1256,15 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
 
-    await user.click(screen.getByRole("combobox", { name: "Branch: main" }));
+    await user.click(screen.getByRole("button", { name: "Branch: main" }));
     const search = screen.getByRole("searchbox", { name: "Search branches" });
     await user.type(search, "feat");
 
-    expect(screen.getByRole("option", { name: /feat\/x/ })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /main/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitemradio", { name: /feat\/x/ })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitemradio", { name: /main/ })).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("bbb");
 
-    await user.click(screen.getByRole("option", { name: /feat\/x/ }));
+    await user.click(screen.getByRole("menuitemradio", { name: /feat\/x/ }));
     await user.click(screen.getByRole("button", { name: "Switch branch" }));
 
     await waitFor(() =>
@@ -1271,26 +1273,26 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
         branchName: "feat/x",
       }),
     );
-    expect(screen.getByRole("combobox", { name: "Branch: main" })).toHaveFocus();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Branch: main" })).toHaveFocus());
   });
 
   it("keeps the current branch option focusable for keyboard users", async () => {
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
 
-    await user.click(await screen.findByRole("combobox", { name: "Branch: main" }));
+    await user.click(await screen.findByRole("button", { name: "Branch: main" }));
     const search = screen.getByRole("searchbox", { name: "Search branches" });
     await user.keyboard("{ArrowDown}");
 
     expect(search).not.toHaveFocus();
-    expect(screen.getByRole("option", { name: /main/ })).toHaveFocus();
+    expect(screen.getByRole("menuitemradio", { name: /main/ })).toHaveFocus();
   });
 
   it("restores focus to the branch trigger when the popup is dismissed", async () => {
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
 
-    const trigger = await screen.findByRole("combobox", { name: "Branch: main" });
+    const trigger = await screen.findByRole("button", { name: "Branch: main" });
     await user.click(trigger);
     await user.keyboard("{Escape}");
 
@@ -1372,8 +1374,8 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
 
-    await user.click(screen.getByRole("combobox", { name: "Branch: main" }));
-    await user.click(screen.getByRole("option", { name: /feat\/x/ }));
+    await user.click(screen.getByRole("button", { name: "Branch: main" }));
+    await user.click(screen.getByRole("menuitemradio", { name: /feat\/x/ }));
     await user.click(screen.getByRole("button", { name: "Switch branch" }));
 
     await waitFor(() =>
@@ -1401,8 +1403,8 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
 
-    await user.click(screen.getByRole("combobox", { name: "Branch: main" }));
-    await user.click(screen.getByRole("option", { name: /feat\/x/ }));
+    await user.click(screen.getByRole("button", { name: "Branch: main" }));
+    await user.click(screen.getByRole("menuitemradio", { name: /feat\/x/ }));
     await user.click(screen.getByRole("button", { name: "Switch branch" }));
 
     await waitFor(() => expect(client.branchSwitch).toHaveBeenCalled());
@@ -1433,8 +1435,8 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
 
-    fireEvent.click(screen.getByRole("combobox", { name: "Branch: main" }));
-    fireEvent.click(screen.getByRole("option", { name: /feat\/x/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Branch: main" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /feat\/x/ }));
     fireEvent.click(screen.getByRole("button", { name: "Switch branch" }));
     await waitFor(() => expect(client.branchSwitch).toHaveBeenCalled());
 
@@ -2270,7 +2272,7 @@ describe("GitClientWindow — required visible / absent words", () => {
 
   it("renders 'Branch' as the branch combobox label in the toolbar", async () => {
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-    expect(await screen.findByRole("combobox", { name: "Branch: main" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Branch: main" })).toBeInTheDocument();
   });
 
   it("renders 'Sync' in the status pill", async () => {

@@ -1,7 +1,7 @@
 // Accessibility tests for GitClientWindow (Issue #1574, Epic #1571).
 // Uses jest-axe (NOT vitest-axe) — already extended in vitest.setup.ts.
 // Tests: axe no-violations for empty/populated/dialog-open states; plus explicit
-// name/role/value assertions for toolbar comboboxes, tablist, repository listbox, dialog.
+// name/role/value assertions for toolbar repository combobox and branch menu, tablist, repository listbox, dialog.
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -22,6 +22,7 @@ import type {
 } from "@/lib/types";
 import type { GitClientSeam } from "./git-client-seam";
 import { SIDEBAR_STYLE, TOOLBAR_STYLE } from "./git-client-styles";
+import { AddRepositoryDialog } from "./AddRepositoryDialog";
 import { GitClientWindow } from "./GitClientWindow";
 
 // ─── ResizeObserver stub (no global shim in vitest.setup.ts) ──────────────────
@@ -307,15 +308,15 @@ describe("GitClientWindow — axe no-violations", () => {
 });
 
 describe("GitClientWindow — explicit name/role/value assertions", () => {
-  describe("toolbar comboboxes", () => {
+  describe("toolbar repository combobox and branch menu", () => {
     it("Repository combobox has accessible name 'Repository'", async () => {
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
       expect(await screen.findByRole("combobox", { name: "Repository" })).toBeInTheDocument();
     });
 
-    it("Branch combobox has accessible name 'Branch'", async () => {
+    it("Branch menu trigger has accessible name 'Branch'", async () => {
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      expect(await screen.findByRole("combobox", { name: "Branch: main" })).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Branch: main" })).toBeInTheDocument();
     });
 
     it("Repository combobox is absent until a repository is connected", async () => {
@@ -350,7 +351,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
     it("branch search input keeps a visible native focus outline", async () => {
       const user = userEvent.setup();
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      await user.click(await screen.findByRole("combobox", { name: "Branch: main" }));
+      await user.click(await screen.findByRole("button", { name: "Branch: main" }));
       const search = screen.getByRole("searchbox", { name: "Search branches" });
       expect(search).not.toHaveStyle({ outline: "none" });
     });
@@ -495,59 +496,62 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       expect(status).not.toHaveAttribute("aria-label");
     });
 
-    it("branch selector exposes searchable listbox controls", async () => {
+    it("branch selector exposes searchable menu controls", async () => {
       const user = userEvent.setup();
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      expect(await screen.findByRole("combobox", { name: "Branch: main" })).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Branch: main" })).toBeInTheDocument();
 
-      await user.click(screen.getByRole("combobox", { name: "Branch: main" }));
+      await user.click(screen.getByRole("button", { name: "Branch: main" }));
 
       expect(screen.getByRole("searchbox", { name: "Search branches" })).toBeInTheDocument();
-      expect(screen.getByRole("listbox", { name: "Branches" })).toBeInTheDocument();
-      expect(screen.getByRole("option", { name: /main/ })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("menu", { name: "Branches" })).toBeInTheDocument();
+      expect(screen.getByRole("menuitemradio", { name: /main/ })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
     });
 
     it("branch popup restores focus and exposes the selected branch value", async () => {
       const user = userEvent.setup();
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      const trigger = await screen.findByRole("combobox", { name: "Branch: main" });
+      const trigger = await screen.findByRole("button", { name: "Branch: main" });
 
       await user.click(trigger);
       fireEvent.keyDown(screen.getByRole("searchbox", { name: "Search branches" }), {
         key: "ArrowDown",
       });
-      expect(screen.getByRole("option", { name: /main/ })).toHaveFocus();
+      expect(screen.getByRole("menuitemradio", { name: /main/ })).toHaveFocus();
 
-      fireEvent.keyDown(screen.getByRole("option", { name: /main/ }), { key: "Escape" });
+      fireEvent.keyDown(screen.getByRole("menuitemradio", { name: /main/ }), { key: "Escape" });
       await waitFor(() => expect(trigger).toHaveFocus());
     });
 
     it("branch popup dismisses on an outside pointerdown (GEN-UI-INTERACTION-002)", async () => {
       const user = userEvent.setup();
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      const trigger = await screen.findByRole("combobox", { name: "Branch: main" });
+      const trigger = await screen.findByRole("button", { name: "Branch: main" });
 
       await user.click(trigger);
-      expect(screen.getByRole("listbox", { name: "Branches" })).toBeInTheDocument();
+      expect(screen.getByRole("menu", { name: "Branches" })).toBeInTheDocument();
 
       // A pointerdown anywhere outside the selector wrapper closes the popup (mirrors KeikoSelect).
       fireEvent.pointerDown(document.body);
       await waitFor(() =>
-        expect(screen.queryByRole("listbox", { name: "Branches" })).not.toBeInTheDocument(),
+        expect(screen.queryByRole("menu", { name: "Branches" })).not.toBeInTheDocument(),
       );
     });
 
     it("branch popup dismisses when Tab leaves the search input (GEN-UI-INTERACTION-002)", async () => {
       const user = userEvent.setup();
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      const trigger = await screen.findByRole("combobox", { name: "Branch: main" });
+      const trigger = await screen.findByRole("button", { name: "Branch: main" });
 
       await user.click(trigger);
       const search = screen.getByRole("searchbox", { name: "Search branches" });
       fireEvent.keyDown(search, { key: "Tab" });
 
       await waitFor(() =>
-        expect(screen.queryByRole("listbox", { name: "Branches" })).not.toBeInTheDocument(),
+        expect(screen.queryByRole("menu", { name: "Branches" })).not.toBeInTheDocument(),
       );
     });
 
@@ -581,7 +585,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       // and reachable regardless of width.
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
       expect(await screen.findByRole("combobox", { name: "Repository" })).toBeInTheDocument();
-      expect(await screen.findByRole("combobox", { name: "Branch: main" })).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Branch: main" })).toBeInTheDocument();
       expect(screen.getByRole("region", { name: "Diff" })).toBeInTheDocument();
     });
 
@@ -594,7 +598,9 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
 
       const dialog = screen.getByRole("dialog", { name: "New branch" });
       expect(dialog).toHaveAttribute("aria-modal", "true");
-      expect(within(dialog).getByLabelText("Branch name")).toHaveFocus();
+      expect(dialog.parentElement).toBe(document.body);
+      expect(document.documentElement.dataset.keikoModalOpen).toBe("true");
+      await waitFor(() => expect(within(dialog).getByLabelText("Branch name")).toHaveFocus());
       within(dialog).getByRole("button", { name: "Cancel" }).focus();
       fireEvent.keyDown(dialog, { key: "Tab" });
       expect(dialog.contains(document.activeElement)).toBe(true);
@@ -603,12 +609,13 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
     it("branch-switch confirmation is modal, focus-contained, and axe-clean", async () => {
       const user = userEvent.setup();
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
-      await user.click(await screen.findByRole("combobox", { name: "Branch: main" }));
-      await user.click(screen.getByRole("option", { name: /feat\/a11y/ }));
+      await user.click(await screen.findByRole("button", { name: "Branch: main" }));
+      await user.click(screen.getByRole("menuitemradio", { name: /feat\/a11y/ }));
 
       const dialog = screen.getByRole("dialog", { name: "Confirm branch switch" });
       expect(dialog).toHaveAttribute("aria-modal", "true");
-      expect(dialog).toHaveFocus();
+      expect(document.documentElement.dataset.keikoModalOpen).toBe("true");
+      await waitFor(() => expect(dialog).toHaveFocus());
       within(dialog).getByRole("button", { name: "Switch branch" }).focus();
       fireEvent.keyDown(document, { key: "Tab" });
       expect(dialog.contains(document.activeElement)).toBe(true);
@@ -624,8 +631,8 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
           <GitClientWindow projectId={REPO_A.path} client={makeClient()} />
         </I18nProvider>,
       );
-      await user.click(await screen.findByRole("combobox", { name: "Branch: main" }));
-      await user.click(screen.getByRole("option", { name: /feat\/a11y/ }));
+      await user.click(await screen.findByRole("button", { name: "Branch: main" }));
+      await user.click(screen.getByRole("menuitemradio", { name: /feat\/a11y/ }));
 
       const dialog = screen.getByRole("dialog", { name: "Branchwechsel bestätigen" });
       expect(within(dialog).getByRole("button", { name: "Branch wechseln" })).toBeEnabled();
@@ -704,6 +711,26 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
   });
 
   describe("add-repository dialog", () => {
+    it("localizes every dialog control in German", async () => {
+      await loadLocaleMessages("de");
+      window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+      render(
+        <I18nProvider>
+          <AddRepositoryDialog client={makeClient()} onAdded={vi.fn()} onClose={vi.fn()} />
+        </I18nProvider>,
+      );
+
+      const dialog = screen.getByRole("dialog", { name: "Repository hinzufügen" });
+      expect(within(dialog).getAllByRole("button", { name: "Repository klonen" })).toHaveLength(2);
+      expect(
+        within(dialog).getByRole("button", { name: "Lokales Repository öffnen" }),
+      ).toBeEnabled();
+      expect(within(dialog).getByRole("textbox", { name: "Repository-URL" })).toBeEnabled();
+      expect(within(dialog).getByRole("textbox", { name: "In Ordner klonen" })).toBeEnabled();
+      expect(within(dialog).getByRole("button", { name: "Abbrechen" })).toBeEnabled();
+      expect(await axe(dialog)).toHaveNoViolations();
+    });
+
     it("dialog has role=dialog and accessible name 'Add repository'", async () => {
       const user = userEvent.setup();
       render(<GitClientWindow client={makeClient()} />);

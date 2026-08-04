@@ -1310,6 +1310,52 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(paste.defaultPrevented).toBe(true);
   });
 
+  it("stops an acted-on workspace shortcut before the window-level shortcut dispatcher", () => {
+    const copySelectedWindows = vi.fn(() => true);
+    const windowDispatcher = vi.fn();
+    window.addEventListener("keydown", windowDispatcher);
+    try {
+      render(
+        <Workspace
+          ws={workspace({ api: api({ copySelectedWindows }) })}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+      const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+      fireEvent.keyDown(surface, { key: "c", ctrlKey: true, bubbles: true });
+
+      expect(copySelectedWindows).toHaveBeenCalledOnce();
+      expect(windowDispatcher).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", windowDispatcher);
+    }
+  });
+
+  it("preserves propagation when a workspace shortcut has no canvas action", () => {
+    const copySelectedWindows = vi.fn(() => false);
+    const windowDispatcher = vi.fn();
+    window.addEventListener("keydown", windowDispatcher);
+    try {
+      render(
+        <Workspace
+          ws={workspace({ api: api({ copySelectedWindows }) })}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+      const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+      fireEvent.keyDown(surface, { key: "c", ctrlKey: true, bubbles: true });
+
+      expect(copySelectedWindows).toHaveBeenCalledOnce();
+      expect(windowDispatcher).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener("keydown", windowDispatcher);
+    }
+  });
+
   it("clears workspace selection with Escape from the focused surface", () => {
     const clearSelection = vi.fn();
     const wins = [appWindow({ id: "agents-1", type: "agents" })];
@@ -1331,6 +1377,46 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
 
     expect(clearSelection).toHaveBeenCalledTimes(1);
     expect(escape.defaultPrevented).toBe(true);
+  });
+
+  it("stops an acted-on Escape but preserves an unhandled Escape", () => {
+    const clearSelection = vi.fn();
+    const windowDispatcher = vi.fn();
+    window.addEventListener("keydown", windowDispatcher);
+    try {
+      const { rerender } = render(
+        <Workspace
+          ws={workspace({
+            selection: { focusedWindowId: "agents-1", selectedWindowIds: ["agents-1"] },
+            api: api({ clearSelection }),
+          })}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+      fireEvent.keyDown(screen.getByRole("main", { name: "Workspace surface" }), {
+        key: "Escape",
+        bubbles: true,
+      });
+      expect(clearSelection).toHaveBeenCalledOnce();
+      expect(windowDispatcher).not.toHaveBeenCalled();
+
+      rerender(
+        <Workspace
+          ws={workspace({ api: api({ clearSelection }) })}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+      fireEvent.keyDown(screen.getByRole("main", { name: "Workspace surface" }), {
+        key: "Escape",
+        bubbles: true,
+      });
+      expect(clearSelection).toHaveBeenCalledOnce();
+      expect(windowDispatcher).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener("keydown", windowDispatcher);
+    }
   });
 
   it("announces the current selected-window count through a live region", () => {

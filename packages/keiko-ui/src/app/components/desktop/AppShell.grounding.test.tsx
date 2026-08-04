@@ -419,6 +419,7 @@ describe("AppShell grounding connections", () => {
   });
 
   afterEach((): void => {
+    delete document.documentElement.dataset.keikoModalOpen;
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -1318,6 +1319,23 @@ describe("AppShell grounding connections", () => {
     expect(screen.getByTestId("quick-access-palette")).toBeInTheDocument();
   });
 
+  it("keeps shell shortcuts inert while a governed modal owns interaction", async () => {
+    await renderMounted();
+    const keyboardProps = mocks.useKeyboardShortcuts.mock.calls[0]?.[0] as
+      { readonly dispatch?: (commandId: string) => void } | undefined;
+    const dispatch = keyboardProps?.dispatch;
+    expect(dispatch).toBeTypeOf("function");
+    if (dispatch === undefined) throw new Error("keyboard shortcut dispatch is unavailable");
+    document.documentElement.dataset.keikoModalOpen = "true";
+
+    await act(async () => {
+      dispatch("quick-access.files");
+    });
+
+    expect(screen.queryByTestId("quick-access-palette")).toBeNull();
+    delete document.documentElement.dataset.keikoModalOpen;
+  });
+
   // GEN-UI-A11Y-004 — the shell always mounts one app-level status live-region pair (polite +
   // assertive) so any surface can post an outcome for AT, even after its originating surface unmounts.
   it("always mounts the app-level polite status and assertive alert live regions", async () => {
@@ -1332,18 +1350,18 @@ describe("AppShell grounding connections", () => {
     expect(assertive).toHaveAttribute("aria-atomic", "true");
   });
 
-  // GEN-UI-A11Y-003 — the background window layer (`#main` / `.stage`) is NOT inert while no modal is
-  // open, and becomes inert + aria-hidden while a modal dialog (here: first-run gateway setup) is open.
-  it("does not inert the window layer while no modal dialog is open", async () => {
+  // GEN-UI-A11Y-003 — the complete background shell is available while no modal is open and becomes
+  // inert + aria-hidden while a modal dialog (here: first-run gateway setup) owns interaction.
+  it("does not inert the background shell while no modal dialog is open", async () => {
     await renderMounted();
 
-    const stage = document.getElementById("main");
-    expect(stage).not.toBeNull();
-    expect(stage?.hasAttribute("inert")).toBe(false);
-    expect(stage?.hasAttribute("aria-hidden")).toBe(false);
+    const background = document.querySelector(".app");
+    expect(background).not.toBeNull();
+    expect(background?.hasAttribute("inert")).toBe(false);
+    expect(background?.hasAttribute("aria-hidden")).toBe(false);
   });
 
-  it("inerts and aria-hides the window layer while the gateway-setup modal is open", async () => {
+  it("inerts and aria-hides the complete shell behind the gateway-setup modal", async () => {
     mocks.state.session = {
       ...(mocks.state.session as TestSession),
       models: [],
@@ -1353,10 +1371,13 @@ describe("AppShell grounding connections", () => {
 
     await renderMounted();
 
-    expect(screen.getByRole("dialog", { name: "Gateway setup" })).toBeInTheDocument();
-    const stage = document.getElementById("main");
-    expect(stage).not.toBeNull();
-    expect(stage?.hasAttribute("inert")).toBe(true);
-    expect(stage).toHaveAttribute("aria-hidden", "true");
+    const dialog = screen.getByRole("dialog", { name: "Gateway setup" });
+    const background = document.querySelector(".app");
+    expect(background).not.toBeNull();
+    expect(background?.hasAttribute("inert")).toBe(true);
+    expect(background).toHaveAttribute("aria-hidden", "true");
+    expect(background).toContainElement(document.querySelector("header"));
+    expect(background).toContainElement(document.querySelector("footer"));
+    expect(background).not.toContainElement(dialog);
   });
 });

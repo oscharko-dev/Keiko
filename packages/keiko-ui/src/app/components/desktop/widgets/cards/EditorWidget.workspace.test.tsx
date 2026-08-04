@@ -1045,6 +1045,7 @@ describe("EditorWidget workspace session", () => {
     fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
     fireEvent.click(screen.getByRole("button", { name: "Close a" }));
     const dialog = await screen.findByRole("dialog", { name: "Unsaved editor changes" });
+    expect(dialog.parentElement?.parentElement).toBe(document.body);
     const saveButton = within(dialog).getByRole("button", { name: "Save" });
     const cancelButton = within(dialog).getByRole("button", { name: "Cancel" });
 

@@ -57,6 +57,7 @@ import { recordReadsContextRelationship } from "../../relationships/connector-re
 import type { ChatBindingTarget, WorkspaceApi } from "./hooks/useWorkspace.types";
 import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { useModalInteractionLockState } from "./hooks/useModalInteractionLock";
 import type { WorkspaceUiAction, WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
 import { resolveWorkspaceFileIdentifier } from "@oscharko-dev/keiko-contracts";
 import { applyShellUndoAction, shellPanelIsOpen } from "./shell-undo-bindings";
@@ -79,6 +80,7 @@ import { localizedWindowTitle, WIN_TYPES, type WindowType } from "./windows/Wind
 import type { AppWindow, Connection } from "./windows/types";
 import { registerSw } from "./install/registerSw";
 import { workspaceRootTargets } from "./workspaceRootTargets";
+import { workspaceInteractionLocked } from "./interactionGuards";
 import styles from "./AppShell.module.css";
 
 const APP_BOOT_RECOVERY_RELOAD_KEY = "keiko.app-boot-recovery-reload-count";
@@ -413,7 +415,6 @@ function chatIdFromWindow(win: AppWindow | undefined): string | undefined {
 
 class ChatBindingCompensationFailure extends Error {}
 class ChatMutationTimeoutFailure extends Error {}
-class ChatMutationQueueBlockedFailure extends Error {}
 
 interface ChatMutationQueue {
   readonly blocked: Set<string>;
@@ -426,16 +427,25 @@ interface ChatMutationAttempt {
 
 export const CHAT_MUTATION_TIMEOUT_MS = 15_000;
 
-function reportChatBindingCompensationFailure(): void {
-  const correlationId = newClientCorrelationId();
-  window.reportError(
-    new Error(`Chat binding compensation failed. Correlation ID: ${correlationId}`),
-  );
-}
-
 function reportGroundingMutationFailure(message: string): void {
   const correlationId = newClientCorrelationId();
   window.reportError(new Error(`${message} Correlation ID: ${correlationId}`));
+}
+
+function groundingMutationFailureKey(
+  error: unknown,
+  mutationFailedKey: "chat.grounding.connectSourceFailed" | "chat.grounding.connectKnowledgeFailed",
+): "chat.grounding.recoveryRequired" | "chat.grounding.timeoutBlocked" | typeof mutationFailedKey {
+  if (error instanceof ChatBindingCompensationFailure) {
+    reportGroundingMutationFailure("Chat binding compensation failed.");
+    return "chat.grounding.recoveryRequired";
+  }
+  if (error instanceof ChatMutationTimeoutFailure) {
+    reportGroundingMutationFailure("Chat grounding timeout.");
+    return "chat.grounding.timeoutBlocked";
+  }
+  reportGroundingMutationFailure("Chat grounding mutation failed.");
+  return mutationFailedKey;
 }
 
 async function persistCurrentChatBinding<T>(
@@ -484,10 +494,10 @@ async function serializeChatMutation<T>(
   chatKey: string,
   mutation: (attempt: ChatMutationAttempt) => Promise<T>,
 ): Promise<T> {
-  if (queue.blocked.has(chatKey)) throw new ChatMutationQueueBlockedFailure();
+  if (queue.blocked.has(chatKey)) throw new ChatMutationTimeoutFailure();
   const preceding = queue.tails.get(chatKey) ?? Promise.resolve();
   const execute = async (): Promise<T> => {
-    if (queue.blocked.has(chatKey)) throw new ChatMutationQueueBlockedFailure();
+    if (queue.blocked.has(chatKey)) throw new ChatMutationTimeoutFailure();
     try {
       return await mutationWithTimeout(mutation);
     } catch (error: unknown) {
@@ -840,15 +850,15 @@ function AppShellInner(): ReactNode {
     async (
       chatWindowId: string,
       nextScope: ChatConnectedScope,
-      previousScope: ChatConnectedScope | null = null,
       attempt: ChatMutationAttempt,
+      previousScope: ChatConnectedScope | null = null,
       target?: ChatBindingTarget,
     ): Promise<boolean> => {
       const chat = chatForWindow(chatWindowId);
       if (chat === undefined) {
         return rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
       }
-      if (target !== undefined && chat.id !== target.conversationId) return false;
+      if ((target?.conversationId ?? chat.id) !== chat.id) return false;
       const current =
         previousScope === null
           ? effectiveScopes(chat)
@@ -894,19 +904,9 @@ function AppShellInner(): ReactNode {
         if (relationshipPath !== null) recordReadsContextRelationship(chat.id, relationshipPath);
         return true;
       } catch (error: unknown) {
-        if (error instanceof ChatBindingCompensationFailure) {
-          reportChatBindingCompensationFailure();
-          return rejectForConnectionFailure(t("chat.grounding.recoveryRequired"));
-        }
-        if (
-          error instanceof ChatMutationTimeoutFailure ||
-          error instanceof ChatMutationQueueBlockedFailure
-        ) {
-          reportGroundingMutationFailure("Chat grounding mutation timed out.");
-          return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
-        }
-        reportGroundingMutationFailure("Chat grounding mutation failed.");
-        return rejectForConnectionFailure(t("chat.grounding.connectSourceFailed"));
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "chat.grounding.connectSourceFailed")),
+        );
       }
     },
     // GEN-PERF-RENDER-001 — depend on the stable `session.replaceChat` useCallback (the only member
@@ -938,18 +938,12 @@ function AppShellInner(): ReactNode {
           groundingMutationQueueRef.current,
           groundingMutationKey(chatWindowId, target),
           async (attempt): Promise<boolean> =>
-            replaceFilesScopeNow(chatWindowId, nextScope, previousScope, attempt, target),
+            replaceFilesScopeNow(chatWindowId, nextScope, attempt, previousScope, target),
         );
       } catch (error: unknown) {
-        if (
-          error instanceof ChatMutationTimeoutFailure ||
-          error instanceof ChatMutationQueueBlockedFailure
-        ) {
-          reportGroundingMutationFailure("Chat grounding mutation timed out.");
-          return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
-        }
-        reportGroundingMutationFailure("Chat grounding mutation failed.");
-        return rejectForConnectionFailure(t("chat.grounding.connectSourceFailed"));
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "chat.grounding.connectSourceFailed")),
+        );
       }
     },
     [groundingMutationKey, rejectForConnectionFailure, replaceFilesScopeNow, t],
@@ -1002,7 +996,7 @@ function AppShellInner(): ReactNode {
       if (chat === undefined) {
         return rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
       }
-      if (target !== undefined && chat.id !== target.conversationId) return false;
+      if ((target?.conversationId ?? chat.id) !== chat.id) return false;
       const current = effectiveLocalKnowledgeScopes(chat);
       const folderScopes = effectiveScopes(chat);
       if (isConnectorScopeConnected(current, scope)) return true;
@@ -1030,19 +1024,9 @@ function AppShellInner(): ReactNode {
         setSourceConnectionNotice(null);
         return true;
       } catch (error: unknown) {
-        if (error instanceof ChatBindingCompensationFailure) {
-          reportChatBindingCompensationFailure();
-          return rejectForConnectionFailure(t("chat.grounding.recoveryRequired"));
-        }
-        if (
-          error instanceof ChatMutationTimeoutFailure ||
-          error instanceof ChatMutationQueueBlockedFailure
-        ) {
-          reportGroundingMutationFailure("Chat grounding mutation timed out.");
-          return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
-        }
-        reportGroundingMutationFailure("Chat grounding mutation failed.");
-        return rejectForConnectionFailure(t("chat.grounding.connectKnowledgeFailed"));
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "chat.grounding.connectKnowledgeFailed")),
+        );
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
@@ -1070,15 +1054,9 @@ function AppShellInner(): ReactNode {
             handleConnectorBindNow(chatWindowId, scope, attempt, target),
         );
       } catch (error: unknown) {
-        if (
-          error instanceof ChatMutationTimeoutFailure ||
-          error instanceof ChatMutationQueueBlockedFailure
-        ) {
-          reportGroundingMutationFailure("Chat grounding mutation timed out.");
-          return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
-        }
-        reportGroundingMutationFailure("Chat grounding mutation failed.");
-        return rejectForConnectionFailure(t("chat.grounding.connectKnowledgeFailed"));
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "chat.grounding.connectKnowledgeFailed")),
+        );
       }
     },
     [groundingMutationKey, handleConnectorBindNow, rejectForConnectionFailure, t],
@@ -1375,6 +1353,7 @@ function AppShellInner(): ReactNode {
   // and editable-target guards apply to the unified quick-access surface.
   const dispatchShortcut = useCallback(
     (commandId: string): void => {
+      if (workspaceInteractionLocked()) return;
       if (commandId === "undo") undoStack.undo();
       else if (commandId === "redo") undoStack.redo();
       else if (commandId === "focus-status") statusRef.current?.focus();
@@ -1459,24 +1438,23 @@ function AppShellInner(): ReactNode {
     <Palette types={WIN_TYPES} order={paletteWindowOrder()} onAdd={pick} onClose={closePalette} />
   ) : null;
 
-  // GEN-UI-A11Y-003 — while a genuinely modal dialog is open, take the background window layer out of
-  // the accessibility tree and the tab order. These dialogs (NewWindowDialog / UnifiedQuickAccessPalette /
-  // GatewaySetupDialog) are each aria-modal and render as later siblings OUTSIDE `.stage`, so inerting
-  // `.stage` leaves them fully operable while nothing behind them can be tabbed to or read by AT. The
-  // non-modal `Palette` (palOpen) deliberately does NOT count here: it renders INSIDE `.stage` and is
-  // designed to keep the workspace behind it interactive, so inerting on `palOpen` would disable the
-  // Palette itself. `inert` implies aria-hidden in modern engines; the explicit aria-hidden is a
-  // fallback for older assistive tech that has not yet adopted inert.
-  const modalOpen = pending !== null || quickAccessMode !== null || needsGatewaySetup;
+  // GEN-UI-A11Y-003 — while a genuinely modal dialog is open, take the complete background shell out
+  // of the accessibility tree and tab order. The modal dialogs render as later siblings OUTSIDE
+  // `.app`, so inerting `.app` leaves them fully operable while the header, rails, workspace, and
+  // footer are all unavailable. The non-modal `Palette` deliberately stays inside the workspace and
+  // does not count here because it is designed to keep the shell interactive.
+  const nestedModalOpen = useModalInteractionLockState();
+  const modalOpen =
+    pending !== null || quickAccessMode !== null || needsGatewaySetup || nestedModalOpen;
   // GEN-UI-A11Y-003 — toggle `inert` imperatively so the modal lifecycle owns the exact presence of
   // the boolean attribute across supported renderers: set it while a modal dialog is open and remove
   // it otherwise. `aria-hidden` pairs with `inert` for older assistive technology.
-  const stageRef = useRef<HTMLDivElement>(null);
+  const backgroundRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const stage = stageRef.current;
-    if (stage === null) return;
-    if (modalOpen) stage.setAttribute("inert", "");
-    else stage.removeAttribute("inert");
+    const background = backgroundRef.current;
+    if (background === null) return;
+    if (modalOpen) background.setAttribute("inert", "");
+    else background.removeAttribute("inert");
   }, [modalOpen]);
 
   return (
@@ -1490,7 +1468,11 @@ function AppShellInner(): ReactNode {
             renders its role="status"/role="alert" regions as siblings of `.app`, OUTSIDE the window
             layer, so they never unmount and any surface can post an outcome via useAnnouncer(). */}
                 <AnnouncerProvider>
-                  <div className="app">
+                  <div
+                    ref={backgroundRef}
+                    className="app"
+                    aria-hidden={modalOpen ? true : undefined}
+                  >
                     {/* WCAG 2.4.1 — bypass blocks: the first focusable element jumps keyboard
               users past the header/rail straight to the workspace (design/accessibility.html §04). */}
                     <a className="skip-link" href="#main">
@@ -1515,15 +1497,7 @@ function AppShellInner(): ReactNode {
                           onToggleTheme={toggleTheme}
                         />
                       )}
-                      <div
-                        ref={stageRef}
-                        className="stage"
-                        id="main"
-                        tabIndex={-1}
-                        // GEN-UI-A11Y-003 — `inert` is toggled imperatively via stageRef (see effect above);
-                        // aria-hidden pairs with it for older AT while a modal dialog is open.
-                        aria-hidden={modalOpen ? true : undefined}
-                      >
+                      <div className="stage" id="main" tabIndex={-1}>
                         <Workspace
                           ws={ws}
                           wsRef={wsRef}
@@ -1570,28 +1544,27 @@ function AppShellInner(): ReactNode {
                       evidenceStatusLabel={footerEvidenceStatusLabel}
                       statusRef={setStatusRef}
                     />
-
-                    {pending !== null && (
-                      <NewWindowDialog
-                        type={pending}
-                        types={WIN_TYPES}
-                        filesContext={ws.api.currentFilesContext()}
-                        onConfirm={confirmNew}
-                        onClose={closeDialog}
-                      />
-                    )}
-                    {quickAccessMode !== null ? (
-                      <UnifiedQuickAccessPalette
-                        initialMode={quickAccessMode}
-                        root={quickAccessRoot}
-                        roots={quickAccessRoots}
-                        commands={quickAccessCommands}
-                        openEditorFile={ws.api.openEditorFile}
-                        onClose={closeQuickAccess}
-                      />
-                    ) : null}
-                    {needsGatewaySetup ? <GatewaySetupDialog /> : null}
                   </div>
+                  {pending !== null && (
+                    <NewWindowDialog
+                      type={pending}
+                      types={WIN_TYPES}
+                      filesContext={ws.api.currentFilesContext()}
+                      onConfirm={confirmNew}
+                      onClose={closeDialog}
+                    />
+                  )}
+                  {quickAccessMode !== null ? (
+                    <UnifiedQuickAccessPalette
+                      initialMode={quickAccessMode}
+                      root={quickAccessRoot}
+                      roots={quickAccessRoots}
+                      commands={quickAccessCommands}
+                      openEditorFile={ws.api.openEditorFile}
+                      onClose={closeQuickAccess}
+                    />
+                  ) : null}
+                  {needsGatewaySetup ? <GatewaySetupDialog /> : null}
                 </AnnouncerProvider>
               </WsContext.Provider>
             </WorkspaceReplaceBufferProvider>

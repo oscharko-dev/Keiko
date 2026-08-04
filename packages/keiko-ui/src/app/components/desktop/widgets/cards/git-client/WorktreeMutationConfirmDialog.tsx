@@ -4,6 +4,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { useDialogTabTrap } from "../../../hooks/useDialogTabTrap";
+import { useModalInteractionLock } from "../../../hooks/useModalInteractionLock";
 import { PRIMARY_BTN, SECONDARY_BTN } from "./git-client-styles";
 
 export type WorktreeMutationConfirmation =
@@ -23,22 +24,18 @@ export function WorktreeMutationConfirmDialog({
   const t = useOptionalWidgetTranslate();
   const dialogRef = useRef<HTMLDialogElement>(null);
   useDialogTabTrap(dialogRef);
+  useModalInteractionLock({ initialFocusRef: dialogRef });
   const branchSwitch = request.kind === "branch-switch";
   const label = branchSwitch
     ? t("gitClientWindow.confirm.branchSwitch.title")
     : t("gitClientWindow.confirm.pull.title");
 
   useEffect(() => {
-    let active = true;
-    queueMicrotask(() => {
-      if (active) dialogRef.current?.focus();
-    });
     const onKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (event.key === "Escape") onCancel();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => {
-      active = false;
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [onCancel]);
@@ -74,9 +71,9 @@ export function WorktreeMutationConfirmDialog({
           width: "min(440px, calc(100vw - 48px))",
           padding: "var(--space-5)",
           border: "1px solid var(--border-subtle)",
-          borderRadius: "var(--radius-card)",
+          borderRadius: "var(--radius-lg)",
           background: "var(--surface-primary)",
-          boxShadow: "var(--shadow-popover)",
+          boxShadow: "var(--shadow-pop)",
         }}
       >
         <h2 style={{ margin: 0, font: "var(--weight-semibold) var(--text-body) var(--font-ui)" }}>

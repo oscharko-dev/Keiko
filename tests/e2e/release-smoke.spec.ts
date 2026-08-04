@@ -2,6 +2,12 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  EDITOR_M7_SCHEMA_VERSION,
+  EDITOR_M7_SETTING_REGISTRY,
+  resolveEditorM11Settings,
+} from "@oscharko-dev/keiko-contracts";
+import { expectViewportModal } from "./support/modal.js";
 
 const CHAT_MODEL_ID = "e2e-chat-model";
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
@@ -176,6 +182,31 @@ async function seedFilesWindow(page: Page, projectPath: string): Promise<void> {
     );
     window.localStorage.removeItem("keiko.conns.v1");
   }, projectPath);
+}
+
+async function seedModalProofWindow(
+  page: Page,
+  windowEntry: { readonly id: string; readonly type: "governedGit" | "settings" },
+): Promise<void> {
+  await page.addInitScript((entry) => {
+    window.localStorage.setItem(
+      "keiko.workspace.v4",
+      JSON.stringify([
+        {
+          id: entry.id,
+          type: entry.type,
+          x: 36,
+          y: 36,
+          w: 720,
+          h: 640,
+          z: 10,
+          cfg: {},
+          max: false,
+        },
+      ]),
+    );
+    window.localStorage.removeItem("keiko.conns.v1");
+  }, windowEntry);
 }
 
 async function openTreePath(
@@ -362,6 +393,62 @@ test("governed Git action-sheet endpoint is wired, CSRF-protected, and returns t
   expect(noCsrf.status()).toBe(403);
 });
 
+test("window-owned repository confirm preserves viewport modality @smoke", async ({ page }) => {
+  await page.route("**/api/projects**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ projects: [] }),
+    }),
+  );
+  await seedModalProofWindow(page, { id: "e2e-modal-git", type: "governedGit" });
+  await page.goto("/");
+
+  const gitWindow = page.locator('[data-window-id="e2e-modal-git"]');
+  await expect(gitWindow).toBeVisible();
+  await gitWindow.getByRole("button", { name: "Clone from URL" }).click();
+  const repositoryDialog = page.getByRole("dialog", { name: "Add repository" });
+  await expectViewportModal(page, repositoryDialog);
+  await repositoryDialog.getByRole("button", { name: "Close" }).click();
+});
+
+test("window-owned AI confirm preserves viewport modality @smoke", async ({ page }) => {
+  await page.route("**/api/editor/settings**", (route) => {
+    const requestUrl = new URL(route.request().url());
+    if (requestUrl.pathname !== "/api/editor/settings" || route.request().method() !== "GET") {
+      return route.continue();
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+        storeState: "ready",
+        userRevision: 1,
+        workspaceRevision: 1,
+        revision: 1_000_000,
+        etag: '"modal-proof"',
+        definitions: EDITOR_M7_SETTING_REGISTRY,
+        settings: resolveEditorM11Settings({
+          user: { scope: "user", values: {} },
+          workspace: { scope: "workspace", values: {} },
+        }),
+        eventSequence: 1,
+      }),
+    });
+  });
+  await seedModalProofWindow(page, { id: "e2e-modal-settings", type: "settings" });
+  await page.goto("/");
+
+  const settingsWindow = page.locator('[data-window-id="e2e-modal-settings"]');
+  await expect(settingsWindow).toBeVisible();
+  await settingsWindow.getByRole("button", { name: "Editor" }).click();
+  await settingsWindow.getByRole("checkbox", { name: "Inline AI completion" }).click();
+  const aiDialog = page.getByRole("alertdialog", { name: "Confirm AI-assist activation" });
+  await expectViewportModal(page, aiDialog);
+  await aiDialog.getByRole("button", { name: "Cancel" }).click();
+});
+
 test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", async ({
   page,
   request,
@@ -395,7 +482,9 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   // Issue #1376 (D1/AC1): reloading from disk over the dirty conflict buffer routes through an
   // explicit discard confirmation before the disk content replaces the unsaved edits.
   await editorWindow.getByRole("button", { name: "Reload", exact: true }).click();
-  await editorWindow.getByRole("button", { name: "Discard and reload" }).click();
+  const reloadDialog = page.getByRole("dialog", { name: "Discard unsaved changes?" });
+  await expectViewportModal(page, reloadDialog);
+  await reloadDialog.getByRole("button", { name: "Discard and reload" }).click();
   await expect(saveField).toHaveText("Saved");
   await expect(editorWindow.getByText("external edit")).toBeVisible();
 
@@ -411,8 +500,8 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
     .getByRole("tab", { name: new RegExp(escapeRegExp(relativePath), "u") })
     .click();
   await page.keyboard.press("Delete");
-  const dirtyDialog = editorWindow.getByRole("dialog", { name: "Unsaved editor changes" });
-  await expect(dirtyDialog).toBeVisible();
+  const dirtyDialog = page.getByRole("dialog", { name: "Unsaved editor changes" });
+  await expectViewportModal(page, dirtyDialog);
   await dirtyDialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dirtyDialog).toBeHidden();
   await expect(saveField).toHaveText("Unsaved");

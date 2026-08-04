@@ -23,6 +23,7 @@
  * `disabled`/`deferred` and no model-generated code is produced or executed in v1.
  */
 import dynamic from "next/dynamic";
+import { createPortal } from "react-dom";
 import {
   memo,
   useCallback,
@@ -220,6 +221,7 @@ import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/us
 import { Icons } from "../../Icons";
 
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
+import { useModalInteractionLock } from "../../hooks/useModalInteractionLock";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
 import {
   useRegisterWorkspaceReplaceBuffer,
@@ -2826,21 +2828,18 @@ function EditorRuntimeWidget({
   // settings, and debugging confirms use) instead of re-deriving the wrap here; it is a no-op while
   // the dialog is unmounted because the ref is then null.
   useDialogTabTrap(reloadConfirmRef);
+  useModalInteractionLock({
+    active: reloadConfirm && sessionActive,
+    initialFocusRef: reloadConfirmRef,
+  });
   useEffect(() => {
     if (!reloadConfirm) return;
-    // GEN-UI-FOCUS-006: capture the opener (the Reload button) before moving focus into the dialog,
-    // and restore it on close so keyboard focus returns to the trigger instead of being lost to <body>.
-    const opener = document.activeElement as HTMLElement | null;
-    reloadConfirmRef.current?.focus();
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (event.key === "Escape") cancelReloadDiscard();
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
-      if (opener !== null && typeof opener.focus === "function" && opener.isConnected) {
-        opener.focus();
-      }
     };
   }, [reloadConfirm, cancelReloadDiscard]);
 
@@ -6685,38 +6684,38 @@ function EditorRuntimeWidget({
     </>
   );
 
-  const renderReloadConfirmation = (): ReactNode => (
-    <>
-      {reloadConfirm ? (
-        <div className="ed-dialog-backdrop">
-          <dialog
-            open
-            className="ed-dirty-dialog"
-            ref={reloadConfirmRef}
-            aria-modal="true"
-            aria-labelledby="editor-reload-confirm-title"
-            tabIndex={-1}
-            style={{ position: "relative", inset: "auto", margin: 0, color: "inherit" }}
-          >
-            <h2 id="editor-reload-confirm-title">Discard unsaved changes?</h2>
-            <p>
-              {`Reloading from disk replaces this buffer with the saved file and discards your unsaved editor changes${
-                file !== undefined && file.length > 0 ? ` in ${file}` : ""
-              }.`}
-            </p>
-            <div className="ed-dialog-actions">
-              <button type="button" className="ed-reload" onClick={confirmReloadDiscard}>
-                Discard and reload
-              </button>
-              <button type="button" className="ed-icon-action" onClick={cancelReloadDiscard}>
-                Cancel
-              </button>
-            </div>
-          </dialog>
-        </div>
-      ) : null}
-    </>
-  );
+  const renderReloadConfirmation = (): ReactNode => {
+    if (!reloadConfirm) return null;
+    const dialog = (
+      <div className="ed-dialog-backdrop">
+        <dialog
+          open
+          className="ed-dirty-dialog"
+          ref={reloadConfirmRef}
+          aria-modal="true"
+          aria-labelledby="editor-reload-confirm-title"
+          tabIndex={-1}
+          style={{ position: "relative", inset: "auto", margin: 0, color: "inherit" }}
+        >
+          <h2 id="editor-reload-confirm-title">Discard unsaved changes?</h2>
+          <p>
+            {`Reloading from disk replaces this buffer with the saved file and discards your unsaved editor changes${
+              file !== undefined && file.length > 0 ? ` in ${file}` : ""
+            }.`}
+          </p>
+          <div className="ed-dialog-actions">
+            <button type="button" className="ed-reload" onClick={confirmReloadDiscard}>
+              Discard and reload
+            </button>
+            <button type="button" className="ed-icon-action" onClick={cancelReloadDiscard}>
+              Cancel
+            </button>
+          </div>
+        </dialog>
+      </div>
+    );
+    return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
+  };
 
   const renderAgentConflictBanner = (): ReactNode => (
     <>

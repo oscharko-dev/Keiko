@@ -37,6 +37,7 @@ import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 import { Icons } from "../../Icons";
 import { acquireGrabbingBodyStyle } from "../../interactionGuards";
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
+import { useModalInteractionLock } from "../../hooks/useModalInteractionLock";
 import {
   dirtyFilesUnderPath,
   reconcileEditorDirtyByPane,
@@ -273,18 +274,8 @@ function DirtyCloseDialog(props: {
 }): ReactNode {
   const titleId = "editor-dirty-close-title";
   const dialogRef = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    // GEN-UI-FOCUS-006: capture the opener before moving focus into the dialog, and restore it on
-    // close/unmount so keyboard focus returns to where the user was (never lost to <body>).
-    const opener = document.activeElement as HTMLElement | null;
-    dialogRef.current?.focus();
-    return () => {
-      if (opener !== null && typeof opener.focus === "function" && opener.isConnected) {
-        opener.focus();
-      }
-    };
-  }, []);
   useDialogTabTrap(dialogRef);
+  useModalInteractionLock({ initialFocusRef: dialogRef });
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (event.key === "Escape" && !props.pending.saving) props.onCancel();
@@ -294,7 +285,7 @@ function DirtyCloseDialog(props: {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [props]);
-  return (
+  const dialog = (
     <div className="ed-dialog-backdrop">
       <dialog
         open
@@ -342,6 +333,7 @@ function DirtyCloseDialog(props: {
       </dialog>
     </div>
   );
+  return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
 }
 
 // The split controls rendered into each pane's toolbar. A pure function of the pane plus the stable

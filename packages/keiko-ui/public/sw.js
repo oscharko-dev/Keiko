@@ -102,13 +102,28 @@ function isActivateWaitingMessage(event) {
   return data !== null && typeof data === "object" && data.type === ACTIVATE_WAITING_MESSAGE_TYPE;
 }
 
+function reportCacheWriteFailure() {
+  // `reportError` is the browser/worker diagnostic channel. Keep the message redacted: neither the
+  // request URL nor the storage error may cross this boundary, while operators still see that the
+  // offline cache degraded.
+  if (typeof self.reportError === "function") {
+    self.reportError(new Error("Service worker cache write failed."));
+  }
+}
+
 async function putIfCacheable(request, response) {
   if (!isCacheableResponse(response)) return;
   // Clone before .put — the response body can only be consumed once, and the caller still
   // returns the original to the page.
   const copy = response.clone();
-  const cache = await caches.open(CACHE_NAME);
-  await cache.put(request, copy);
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    await cache.put(request, copy);
+  } catch {
+    // Cache Storage is opportunistic. Quota or storage failures must not turn an already-successful
+    // network response into a fetch failure; the caller still returns the original response.
+    reportCacheWriteFailure();
+  }
 }
 
 async function cacheFirst(request) {

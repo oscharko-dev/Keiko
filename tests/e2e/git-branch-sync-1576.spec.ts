@@ -139,6 +139,7 @@ function projectBody(fixture: GitFixture): unknown {
         createdAt: Date.now(),
         lastOpenedAt: Date.now(),
         available: true,
+        workspaceAvailable: true,
       },
     ],
   };
@@ -404,6 +405,9 @@ async function installReadRoutes(
   await page.route("**/api/git/diff**", async (route) => {
     await route.fulfill(jsonBody(emptyDiffBody(fixture)));
   });
+  await page.route("**/api/workspaces", async (route) => {
+    await route.fulfill(jsonBody({ manifests: [] }));
+  });
 }
 
 async function installMutationRoutes(
@@ -585,11 +589,12 @@ async function switchToFeatureBranch(
   fixture: GitFixture,
   calls: RouteCalls,
 ): Promise<void> {
-  await gitWindow.getByRole("combobox", { name: "Branch: main" }).click();
+  await gitWindow.getByRole("button", { name: "Branch: main" }).click();
   await gitWindow.getByRole("searchbox", { name: "Search branches" }).fill("feature");
-  await expect(gitWindow.getByRole("option", { name: /feature\/local/u })).toBeVisible();
+  await expect(gitWindow.getByRole("menuitemradio", { name: /feature\/local/u })).toBeVisible();
   await expect(gitWindow).not.toContainText(fixture.aheadSha);
-  await gitWindow.getByRole("option", { name: /feature\/local/u }).click();
+  await gitWindow.getByRole("menuitemradio", { name: /feature\/local/u }).click();
+  await gitWindow.page().getByRole("button", { name: "Switch branch" }).click();
   await expect
     .poll(() => calls.branchSwitches.length, { message: "branch switch route called" })
     .toBeGreaterThan(0);
@@ -625,15 +630,21 @@ async function verifyHistoryAndPullEvidence(
   calls: RouteCalls,
 ): Promise<void> {
   await gitWindow.getByRole("tab", { name: "History" }).click();
-  await expect(gitWindow.getByRole("listbox", { name: "Commit history" })).toBeVisible();
+  await expect(gitWindow.getByRole("list", { name: "Commit history" })).toBeVisible();
   await expect(
-    gitWindow.getByRole("option", { name: /feat: local branch evidence/u }),
+    gitWindow.getByRole("button", { name: /feat: local branch evidence/u }),
   ).toBeVisible();
   await expect(gitWindow.getByRole("region", { name: "Commit details" })).toContainText(
     fixture.aheadSha,
   );
 
   await gitWindow.getByRole("button", { name: "Run sync: Pull" }).click();
+  await page
+    .getByRole("dialog", { name: "Confirm pull" })
+    .getByRole("button", {
+      name: "Pull changes",
+    })
+    .click();
   await expect
     .poll(() => calls.syncPreviews.length, { message: "pull preview route called" })
     .toBeGreaterThan(0);

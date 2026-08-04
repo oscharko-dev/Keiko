@@ -1,5 +1,7 @@
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
+import { Buffer } from "node:buffer";
 import { execFileSync } from "node:child_process";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   existsSync,
   lstatSync,
@@ -12,6 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { expectViewportModal } from "./support/modal.js";
 
 // Issue #1578 capstone evidence for Epic #1571. This spec verifies the completed Git client through
 // the real packaged app path with local fixtures and deterministic route stubs only. The child issue
@@ -21,6 +24,8 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 const REPO_ROOT = resolve(process.cwd());
 const EVIDENCE_DIR = resolve(REPO_ROOT, "docs", "git-delivery", "evidence", "1578");
 const EVIDENCE_PROJECT_PATH = "keiko-git-client-closeout-1578";
+const FIXTURE_TIMESTAMP = Date.parse("2026-07-01T00:00:00.000Z");
+const FILE_CONTENT = "export const version = 2;\n";
 const ARTIFACT_NAMES = [
   "manifest.json",
   "git-client-closeout-desktop.png",
@@ -30,12 +35,14 @@ type ArtifactName = (typeof ARTIFACT_NAMES)[number];
 
 const ROUTES = [
   "/api/projects",
+  "/api/workspaces",
   "/api/git/status",
   "/api/git/branches",
   "/api/git/summary",
   "/api/git/history",
   "/api/git/remotes",
   "/api/git/diff",
+  "/api/files/content",
   "/api/git-delivery/staging/stage",
   "/api/git-delivery/commit/preview",
   "/api/git-delivery/commit/execute",
@@ -64,6 +71,8 @@ interface GitFixture {
 }
 
 interface RouteLedger {
+  readonly workspaceReads: unknown[];
+  readonly fileContentReads: unknown[];
   readonly stageCalls: unknown[];
   readonly commitPreviews: unknown[];
   readonly commitExecutes: unknown[];
@@ -137,6 +146,18 @@ function parsePost(route: Route): unknown {
   } catch {
     return {};
   }
+}
+
+function projectBody(): Record<string, unknown> {
+  return {
+    path: EVIDENCE_PROJECT_PATH,
+    name: "keiko-git-client-closeout-1578",
+    favorite: false,
+    createdAt: FIXTURE_TIMESTAMP,
+    lastOpenedAt: FIXTURE_TIMESTAMP,
+    available: true,
+    workspaceAvailable: true,
+  };
 }
 
 function statusBody(): unknown {
@@ -274,21 +295,75 @@ function remotesBody(): unknown {
 function diffBody(route: Route): unknown {
   const url = new URL(route.request().url());
   const pathParam = url.searchParams.get("path") ?? "src/app.ts";
+  const files =
+    pathParam === "src/app.ts"
+      ? [
+          {
+            path: pathParam,
+            layer: "worktree",
+            status: "modified",
+            binary: false,
+            hunks: [
+              {
+                header: "@@ -1 +1 @@",
+                oldStart: 1,
+                oldCount: 1,
+                newStart: 1,
+                newCount: 1,
+                lines: [
+                  { kind: "del", oldLine: 1, newLine: null, text: "export const version = 1;" },
+                  { kind: "add", oldLine: null, newLine: 1, text: "export const version = 2;" },
+                ],
+                truncated: false,
+              },
+            ],
+            addedLines: 1,
+            removedLines: 1,
+            truncated: false,
+          },
+        ]
+      : [];
   return {
     schemaVersion: "1",
-    root: EVIDENCE_PROJECT_PATH,
-    repositoryRoot: EVIDENCE_PROJECT_PATH,
-    state: "available",
-    available: true,
-    path: pathParam,
-    scope: url.searchParams.get("scope") ?? "worktree",
-    diff:
-      pathParam === "src/app.ts"
-        ? "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-export const version = 1;\n+export const version = 2;\n"
-        : "",
+    scope: url.searchParams.get("scope") ?? "unstaged",
+    files,
     truncated: false,
-    maxBytes: 131072,
+    totalFiles: files.length,
+    totalBytes: 128,
+    maxBytes: 524288,
+    maxFiles: 400,
   };
+}
+
+function filesContentBody(route: Route): unknown {
+  const url = new URL(route.request().url());
+  const root = url.searchParams.get("root") ?? EVIDENCE_PROJECT_PATH;
+  const path = url.searchParams.get("path") ?? "src/app.ts";
+  const sizeBytes = Buffer.byteLength(FILE_CONTENT, "utf8");
+  return {
+    root,
+    path,
+    name: path.split("/").at(-1) ?? path,
+    sizeBytes,
+    modifiedAt: 1,
+    extension: "ts",
+    mime: "text/plain",
+    symlink: false,
+    content: FILE_CONTENT,
+    maxBytes: 1_000_000,
+    session: {
+      schemaVersion: "1",
+      version: fileContentVersion(sizeBytes),
+    },
+  };
+}
+
+function fileContentVersion(sizeBytes: number): {
+  readonly sizeBytes: number;
+  readonly modifiedAt: number;
+  readonly contentHash: string;
+} {
+  return { sizeBytes, modifiedAt: 1, contentHash: sha256Hex(FILE_CONTENT) };
 }
 
 function commitPreviewBody(): unknown {
@@ -374,27 +449,35 @@ function mergePreviewBody(): unknown {
   };
 }
 
-async function installReadRoutes(page: Page, fixture: GitFixture): Promise<void> {
-  await page.route("**/api/projects**", (route) =>
-    json(route, {
-      projects: [
-        {
-          path: EVIDENCE_PROJECT_PATH,
-          name: "keiko-git-client-closeout-1578",
-          favorite: false,
-          createdAt: Date.now(),
-          lastOpenedAt: Date.now(),
-          available: true,
-        },
-      ],
-    }),
-  );
+async function installReadRoutes(
+  page: Page,
+  fixture: GitFixture,
+  ledger: RouteLedger,
+): Promise<void> {
+  let repositoryAdded = false;
+  await page.route("**/api/projects**", (route) => {
+    const project = projectBody();
+    const method = route.request().method();
+    if (method === "PATCH" || method === "POST") {
+      repositoryAdded = true;
+      return json(route, { project });
+    }
+    return json(route, { projects: repositoryAdded ? [project] : [] });
+  });
   await page.route("**/api/git/status**", (route) => json(route, statusBody()));
   await page.route("**/api/git/branches**", (route) => json(route, branchBody(fixture)));
   await page.route("**/api/git/summary**", (route) => json(route, summaryBody()));
   await page.route("**/api/git/history**", (route) => json(route, historyBody(fixture)));
   await page.route("**/api/git/remotes**", (route) => json(route, remotesBody()));
   await page.route("**/api/git/diff**", (route) => json(route, diffBody(route)));
+  await page.route("**/api/files/content**", (route) => {
+    ledger.fileContentReads.push(true);
+    return json(route, filesContentBody(route));
+  });
+  await page.route("**/api/workspaces", (route) => {
+    ledger.workspaceReads.push(true);
+    return json(route, { manifests: [] });
+  });
 }
 
 async function installLocalWriteRoutes(page: Page, ledger: RouteLedger): Promise<void> {
@@ -461,13 +544,13 @@ async function installRemoteWriteRoutes(page: Page, ledger: RouteLedger): Promis
 }
 
 async function installRoutes(page: Page, fixture: GitFixture, ledger: RouteLedger): Promise<void> {
-  await installReadRoutes(page, fixture);
+  await installReadRoutes(page, fixture, ledger);
   await installLocalWriteRoutes(page, ledger);
   await installRemoteWriteRoutes(page, ledger);
 }
 
 async function seedGitClientWindow(page: Page): Promise<void> {
-  await page.addInitScript((projectPath) => {
+  await page.addInitScript(() => {
     window.localStorage.setItem(
       "keiko.workspace.v4",
       JSON.stringify([
@@ -479,13 +562,13 @@ async function seedGitClientWindow(page: Page): Promise<void> {
           w: 1200,
           h: 900,
           z: 20,
-          cfg: { projectPath },
+          cfg: { projectPath: "" },
           max: true,
         },
       ]),
     );
     window.localStorage.removeItem("keiko.conns.v1");
-  }, EVIDENCE_PROJECT_PATH);
+  });
 }
 
 function ensureEvidenceDir(): void {
@@ -538,6 +621,8 @@ function writeManifest(ledger: RouteLedger): void {
       "path-free and credential-free browser evidence",
     ],
     assertions: {
+      workspaceReads: ledger.workspaceReads.length,
+      fileContentReads: ledger.fileContentReads.length,
       stageCalls: ledger.stageCalls.length,
       commitPreviews: ledger.commitPreviews.length,
       commitExecutes: ledger.commitExecutes.length,
@@ -559,6 +644,8 @@ function writeManifest(ledger: RouteLedger): void {
 
 function emptyLedger(): RouteLedger {
   return {
+    workspaceReads: [],
+    fileContentReads: [],
     stageCalls: [],
     commitPreviews: [],
     commitExecutes: [],
@@ -589,13 +676,18 @@ async function openGitWindow(page: Page, fixture: GitFixture): Promise<Locator> 
 }
 
 async function verifyAddRepositoryDialog(page: Page, gitWindow: Locator): Promise<void> {
-  await gitWindow.getByRole("button", { name: "Add repository" }).click();
+  const connectButton = gitWindow.getByRole("button", { name: "Connect repository" });
+  await expect(connectButton).toBeVisible();
+  await connectButton.click();
   const addDialog = page.getByRole("dialog", { name: "Add repository" });
+  await expectViewportModal(page, addDialog);
   const addMode = addDialog.getByRole("group", { name: "Add mode" });
   await expect(addMode.getByRole("button", { name: "Clone repository" })).toBeVisible();
   await addMode.getByRole("button", { name: "Open local repository" }).click();
   await expect(addDialog.getByLabel("Local repository path")).toBeVisible();
-  await addDialog.getByRole("button", { name: "Close" }).click();
+  await addDialog.getByLabel("Local repository path").fill(EVIDENCE_PROJECT_PATH);
+  await addDialog.getByRole("button", { name: "Open repository" }).click();
+  await expect(gitWindow.getByRole("button", { name: "Branch: main" })).toBeVisible();
 }
 
 async function verifyChangesAndCommit(
@@ -609,13 +701,20 @@ async function verifyChangesAndCommit(
   await expect
     .poll(() => ledger.stageCalls.length, { message: "stage route called" })
     .toBeGreaterThan(0);
-  await changedFiles.getByRole("button").filter({ hasText: "src/app.ts" }).click();
+  const changedFile = changedFiles.getByRole("button", { name: /^src\/app\.ts,/u });
+  await expect(changedFile).toBeVisible();
+  await changedFile.click();
   await expect(gitWindow.getByRole("group", { name: "Diff scope" })).toBeVisible();
   await expect(gitWindow.getByText(/version = 2/u)).toBeVisible();
+  const revealedEditor = page.locator('[data-window-id^="editor-"]');
+  await expect(revealedEditor).toBeVisible();
+  await revealedEditor.getByRole("button", { name: /^Close .+ window$/u }).click();
+  await expect(revealedEditor).toHaveCount(0);
 
   const commitSection = gitWindow.locator('section[aria-label="Commit"]');
   await commitSection.getByLabel("Summary").fill("test(git-ui): verify closeout evidence");
   await expect(page.locator('[data-testid="git-commit-preview"]')).toBeVisible();
+  expect(ledger.commitPreviews).toHaveLength(1);
   await commitSection.getByRole("button", { name: /Commit/u }).click();
   await expect
     .poll(() => ledger.commitExecutes.length, { message: "commit execute route called" })
@@ -628,9 +727,12 @@ async function verifyBranchAndHistory(
   fixture: GitFixture,
   ledger: RouteLedger,
 ): Promise<void> {
-  await gitWindow.getByRole("combobox", { name: "Branch: main" }).click();
+  await gitWindow.getByRole("button", { name: "Branch: main" }).click();
   await gitWindow.getByRole("searchbox", { name: "Search branches" }).fill("feature");
-  await gitWindow.getByRole("option", { name: /feature\/closeout/u }).click();
+  await gitWindow.getByRole("menuitemradio", { name: /feature\/closeout/u }).click();
+  const branchSwitchDialog = page.getByRole("dialog", { name: "Confirm branch switch" });
+  await expectViewportModal(page, branchSwitchDialog);
+  await branchSwitchDialog.getByRole("button", { name: "Switch branch" }).click();
   await expect
     .poll(() => ledger.branchSwitches.length, { message: "branch switch route called" })
     .toBeGreaterThan(0);
@@ -641,17 +743,26 @@ async function verifyBranchAndHistory(
   await expect
     .poll(() => ledger.branchCreates.length, { message: "branch create route called" })
     .toBeGreaterThan(0);
+  await expect
+    .poll(() => ledger.branchSwitches.length, { message: "created branch switch route called" })
+    .toBeGreaterThan(1);
+  await expect(branchDialog.locator('[data-testid="git-branch-outcome"]')).toHaveCount(0);
+  await expect(branchDialog).not.toBeVisible();
+  await expect(gitWindow.getByRole("button", { name: "New branch" })).toBeFocused();
 
   await gitWindow.getByRole("tab", { name: "History" }).click();
-  await expect(gitWindow.getByRole("listbox", { name: "Commit history" })).toBeVisible();
-  await gitWindow.getByRole("option", { name: /feat: closeout evidence/u }).click();
+  await expect(gitWindow.getByRole("list", { name: "Commit history" })).toBeVisible();
+  await gitWindow.getByRole("button", { name: /feat: closeout evidence/u }).click();
   await expect(gitWindow.getByRole("region", { name: "Commit details" })).toContainText(
     fixture.featureSha,
   );
 }
 
-async function verifySyncPull(gitWindow: Locator, ledger: RouteLedger): Promise<void> {
+async function verifySyncPull(page: Page, gitWindow: Locator, ledger: RouteLedger): Promise<void> {
   await gitWindow.getByRole("button", { name: "Run sync: Pull" }).click();
+  const pullDialog = page.getByRole("dialog", { name: "Confirm pull" });
+  await expectViewportModal(page, pullDialog);
+  await pullDialog.getByRole("button", { name: "Pull changes" }).click();
   await expect
     .poll(() => ledger.syncExecutes.length, { message: "pull execute route called" })
     .toBeGreaterThan(0);
@@ -663,7 +774,10 @@ async function verifyPrAndMerge(
   fixture: GitFixture,
   ledger: RouteLedger,
 ): Promise<void> {
-  await gitWindow.getByRole("button", { name: "Create Pull Request" }).click();
+  await gitWindow.getByRole("tab", { name: "Changes" }).click();
+  const createPullRequest = gitWindow.getByRole("button", { name: "Create Pull Request" });
+  await expect(createPullRequest).toBeVisible();
+  await createPullRequest.click();
   const prPanel = page.getByRole("region", { name: "Pull Request", exact: true });
   await expect(prPanel.getByLabel("Repository (owner/repo)")).toHaveValue("oscharko-dev/Keiko");
   await prPanel.getByRole("button", { name: "Preview" }).click();
@@ -690,6 +804,16 @@ async function captureCloseoutEvidence(
   fixture: GitFixture,
   ledger: RouteLedger,
 ): Promise<void> {
+  const editorWindows = page.locator('[data-window-id^="editor-"]');
+  if ((await editorWindows.count()) > 0) {
+    await editorWindows
+      .first()
+      .getByRole("button", { name: /^Close .+ window$/u })
+      .click();
+  }
+  await expect(editorWindows).toHaveCount(0);
+  await expect(gitWindow.getByRole("combobox", { name: "Repository" })).toBeVisible();
+  await expect(gitWindow.getByRole("region", { name: "Merge", exact: true })).toBeVisible();
   await page.screenshot({ path: artifactPath("git-client-closeout-desktop.png"), fullPage: true });
 
   await page.setViewportSize({ width: 900, height: 760 });
@@ -707,6 +831,9 @@ async function captureCloseoutEvidence(
 }
 
 test("Issue #1578 - Git client closeout evidence covers integrated workflows", async ({ page }) => {
+  expect(fileContentVersion(Buffer.byteLength(FILE_CONTENT, "utf8")).contentHash).toBe(
+    sha256Hex(FILE_CONTENT),
+  );
   ensureEvidenceDir();
   const fixture = buildLocalBareFixture();
   const ledger = emptyLedger();
@@ -718,7 +845,13 @@ test("Issue #1578 - Git client closeout evidence covers integrated workflows", a
   await verifyAddRepositoryDialog(page, gitWindow);
   await verifyChangesAndCommit(page, gitWindow, ledger);
   await verifyBranchAndHistory(page, gitWindow, fixture, ledger);
-  await verifySyncPull(gitWindow, ledger);
+  await verifySyncPull(page, gitWindow, ledger);
   await verifyPrAndMerge(page, gitWindow, fixture, ledger);
+  await expect
+    .poll(() => ledger.workspaceReads.length, { message: "workspace route called" })
+    .toBeGreaterThan(0);
+  await expect
+    .poll(() => ledger.fileContentReads.length, { message: "file content route called" })
+    .toBeGreaterThan(0);
   await captureCloseoutEvidence(page, gitWindow, fixture, ledger);
 });

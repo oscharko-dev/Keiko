@@ -309,6 +309,69 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     ).toMatchObject({ ok: false, reasonCode: "RESERVED_KEYBINDING" });
   });
 
+  it.each(["U", "Space", "Esc", "F5", "Shift+U"])(
+    "rejects the unsafe bare or Shift-only binding %s",
+    (binding) => {
+      expect(
+        validateEditorM7Keybinding({
+          commandId: "undo",
+          binding,
+          activeBindings: {},
+        }),
+      ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
+    },
+  );
+
+  it("rejects malformed input before applying a command's policy lock", () => {
+    expect(
+      validateEditorM7Keybinding({
+        commandId: "editor.renameSymbol",
+        binding: "CtrlOrMeta+",
+        activeBindings: {},
+      }),
+    ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
+  });
+
+  it("rejects a binding whose serialized override record exceeds the byte cap", () => {
+    const binding = `Alt+${"A".repeat(168)}`;
+    const record = serializeEditorM7KeybindingOverride({
+      schemaVersion: "1",
+      commandId: "quick-access.files",
+      binding,
+    });
+    expect(parseEditorM7KeybindingOverrides([record])).toMatchObject({
+      ok: false,
+      reasonCode: "OVERSIZED",
+    });
+
+    expect(
+      validateEditorM7Keybinding({
+        commandId: "quick-access.files",
+        binding,
+        activeBindings: {},
+      }),
+    ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
+  });
+
+  it.each([
+    "",
+    " ",
+    "+",
+    "+S",
+    "CtrlOrMeta+",
+    "CtrlOrMeta++S",
+    "CtrlOrMeta+\u0000S",
+    `CtrlOrMeta+${"A".repeat(4096)}`,
+  ])("rejects the malformed or hostile binding %j", (binding) => {
+    expect(
+      validateEditorM7Keybinding({
+        commandId: "quick-access.files",
+        binding,
+        activeBindings: {},
+      }),
+    ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
+  });
+
   // 0.3.0 release audit (#2802) — `Ctrl` and `Meta` name the same position in the chord vocabulary
   // the workspace matcher uses, so a binding carrying both is not a keystroke a keyboard produces.
   // It was accepted, and the doubled modifier carried a browser-reserved chord past the reservation

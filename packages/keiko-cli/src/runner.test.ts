@@ -95,6 +95,7 @@ describe("runCli", () => {
     expect(c.out()).toContain("keiko init");
     expect(c.out()).toContain("keiko doctor");
     expect(c.out()).toContain("keiko start|stop|status|restart");
+    expect(c.out()).toContain("keiko task-workspace");
   });
 
   it("dispatches the doctor subcommand", () => {

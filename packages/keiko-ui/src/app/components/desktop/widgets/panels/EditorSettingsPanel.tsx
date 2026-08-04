@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 import { EDITOR_M11_DEFAULT_PROFILE_REF } from "@oscharko-dev/keiko-contracts";
 import type {
@@ -12,6 +13,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { useEditorSettings, type EditorSettingsEditScope } from "../cards/useEditorSettings";
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
+import { useModalInteractionLock } from "../../hooks/useModalInteractionLock";
 import {
   useSettingsTranslate as useTranslate,
   type I18nTranslate,
@@ -415,16 +417,8 @@ function AiActivationConfirmDialog({
   const titleId = "editor-settings-ai-confirm-title";
   const descriptionId = "editor-settings-ai-confirm-description";
   const dialogRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    dialogRef.current?.focus();
-    return () => {
-      if (opener !== null && typeof opener.focus === "function" && opener.isConnected) {
-        opener.focus();
-      }
-    };
-  }, []);
   useDialogTabTrap(dialogRef);
+  useModalInteractionLock({ initialFocusRef: dialogRef });
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (event.key === "Escape") onDecline();
@@ -434,7 +428,7 @@ function AiActivationConfirmDialog({
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [onDecline]);
-  return (
+  const dialog = (
     <div className={styles.confirmBackdrop}>
       <div
         className={styles.confirmDialog}
@@ -462,6 +456,7 @@ function AiActivationConfirmDialog({
       </div>
     </div>
   );
+  return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
 }
 
 function unavailable(

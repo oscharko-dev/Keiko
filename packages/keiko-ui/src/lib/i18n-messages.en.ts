@@ -2241,27 +2241,9 @@ export const EN_MESSAGES = {
   "gitClientWindow.panel.pullRequest": "Pull Request",
   "gitClientWindow.panel.merge": "Merge",
   "gitClientWindow.action.backToDiff": "Back to diff",
-  "gitClientWindow.history.commitUnavailable":
-    "The requested commit is not available in bounded history.",
-  "gitClientWindow.history.truncated":
-    "Showing the most recent {count} commits; the history is truncated.",
-  "gitClientWindow.history.loadFailed": "Could not load commit history.",
-  "gitClientWindow.history.loadMoreFailed": "Could not load more commits.",
-  "gitClientWindow.history.loadMore": "Load more commits",
-  "gitClientWindow.history.loadingMore": "Loading more commits…",
-  "gitClientWindow.history.retryLoadMore": "Retry loading commits",
-  "gitClientWindow.history.end": "End of history. {count} commits loaded.",
-  "gitClientWindow.history.paginationStatusAria": "History pagination status",
-  "gitClientWindow.panel.pullRequestOpened": "Pull Request panel opened.",
-  "gitClientWindow.panel.mergeOpened": "Merge panel opened.",
-  "gitClientWindow.panel.diffOpened": "Diff panel opened.",
-  "gitClientWindow.repository.reconnectFailed": "Repository reconnection failed: {detail}",
-  "gitClientWindow.repository.workspaceUnavailable":
-    "This repository is not currently connected to a workspace. Connect it again to continue.",
   // Accessible names for the named <section> landmarks the #2721 wave introduced. They were
   // hardcoded English on the role="region" elements these sections replace; a screen reader
   // announces them, so they belong in the catalog like any other user-facing string.
-  "gitClientWindow.history.commitDetailsAria": "Commit details",
   "runtimeHubWidget.auditMetadataAria": "Runtime audit metadata",
   "installBanner.regionAria": "Install Keiko",
   "markdown.codeBlock.regionAria": "{language} code block",

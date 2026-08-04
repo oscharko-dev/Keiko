@@ -2,8 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import { createPortal } from "react-dom";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "@/lib/optional-widget-i18n";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../../Icons";
+import { useDialogTabTrap } from "../../../hooks/useDialogTabTrap";
+import { useModalInteractionLock } from "../../../hooks/useModalInteractionLock";
 import type { GitClientSeam } from "./git-client-seam";
 import { formatGitError } from "./git-client-seam";
 import {
@@ -28,13 +35,16 @@ const OVERLAY_STYLE: CSSProperties = {
 };
 
 const DIALOG_STYLE: CSSProperties = {
+  position: "relative",
   display: "flex",
   flexDirection: "column",
   gap: "var(--space-5)",
   width: "min(440px, 100%)",
   maxHeight: "100%",
   overflow: "auto",
+  margin: 0,
   padding: "var(--space-6)",
+  border: 0,
   borderRadius: "var(--radius)",
   background: "var(--card)",
   boxShadow: "var(--shadow-pop)",
@@ -70,19 +80,14 @@ interface AddRepositoryDialogProps {
   readonly initialMode?: AddMode | undefined;
 }
 
-function focusableInside(root: HTMLElement): readonly HTMLElement[] {
-  const nodes = root.querySelectorAll<HTMLElement>("button,input,textarea");
-  return Array.from(nodes).filter((node) => !node.hasAttribute("disabled"));
-}
-
-function submitButtonLabel(busy: boolean, mode: AddMode): string {
+function submitButtonLabel(busy: boolean, mode: AddMode, t: OptionalWidgetTranslate): string {
   let label: string;
   if (busy) {
-    label = "Adding…";
+    label = t("gitClientWindow.addRepository.adding");
   } else if (mode === "clone") {
-    label = "Clone repository";
+    label = t("gitClientWindow.addRepository.clone");
   } else {
-    label = "Open repository";
+    label = t("gitClientWindow.addRepository.open");
   }
   return label;
 }
@@ -93,25 +98,17 @@ export function AddRepositoryDialog({
   onClose,
   initialMode = "clone",
 }: AddRepositoryDialogProps): ReactNode {
+  const t = useOptionalWidgetTranslate();
   const [mode, setMode] = useState<AddMode>(initialMode);
   const [repositoryUrl, setRepositoryUrl] = useState("");
   const [destinationPath, setDestinationPath] = useState("");
   const [localPath, setLocalPath] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
   const firstFieldRef = useRef<HTMLInputElement | null>(null);
-  const triggerRef = useRef<HTMLElement | null>(null);
-
-  // Capture the opener once on mount and restore focus to it when the dialog closes,
-  // so keyboard users return to where they were (WCAG 2.4.3 / EV4 modal-control).
-  useEffect(() => {
-    triggerRef.current = document.activeElement as HTMLElement | null;
-    return () => {
-      const trigger = triggerRef.current;
-      if (trigger?.isConnected === true) trigger.focus();
-    };
-  }, []);
+  useDialogTabTrap(dialogRef);
+  useModalInteractionLock({ initialFocusRef: dialogRef });
 
   // Move initial focus into the dialog (first field, or the dialog container itself when a
   // mode has no field yet) so the Tab trap and Escape handler — both bound to the dialog —
@@ -152,40 +149,21 @@ export function AddRepositoryDialog({
     );
   };
 
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDialogElement>): void => {
     if (event.key === "Escape") {
       event.preventDefault();
       onClose();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const dialog = event.currentTarget;
-    const focusable = focusableInside(dialog);
-    if (focusable.length === 0) return;
-    const first = focusable[0]!;
-    const last = focusable.at(-1)!;
-    const active = document.activeElement;
-    // Keep focus inside the dialog. Wrap at the boundaries; and when focus has escaped the
-    // dialog entirely (e.g. a disabled control was activated and left focus on <body>), pull
-    // it back to the appropriate end so Tab can never tab out of an aria-modal dialog.
-    const escaped = !(active instanceof HTMLElement) || !dialog.contains(active);
-    if (event.shiftKey && (escaped || active === first)) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && (escaped || active === last)) {
-      event.preventDefault();
-      first.focus();
     }
   };
 
-  return (
+  const dialog = (
     <div style={OVERLAY_STYLE} onPointerDown={onClose}>
-      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- modal dialog needs Escape/Tab key handling */}
-      <div
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- the native dialog owns Escape and backdrop pointer containment */}
+      <dialog
+        open
         ref={dialogRef}
-        role="dialog"
         aria-modal="true"
-        aria-label="Add repository"
+        aria-label={t("gitClientWindow.addRepository.title")}
         tabIndex={-1}
         style={DIALOG_STYLE}
         onPointerDown={(event) => event.stopPropagation()}
@@ -193,28 +171,31 @@ export function AddRepositoryDialog({
       >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-4)" }}>
           <h2 style={{ margin: 0, font: "600 17px var(--font-ui)", color: "var(--fg)" }}>
-            Add repository
+            {t("gitClientWindow.addRepository.title")}
           </h2>
           <span style={{ flex: 1 }} />
           <button
             type="button"
             style={{ ...SECONDARY_BTN, padding: "0 var(--space-3)" }}
             onClick={onClose}
-            aria-label="Close"
-            title="Close"
+            aria-label={t("gitClientWindow.addRepository.close")}
+            title={t("gitClientWindow.addRepository.close")}
           >
             <CloseIcon size={14} />
           </button>
         </div>
 
-        <div style={{ display: "flex", gap: "var(--space-3)" }} role="group" aria-label="Add mode">
+        <fieldset
+          style={{ display: "flex", gap: "var(--space-3)", margin: 0, padding: 0, border: 0 }}
+          aria-label={t("gitClientWindow.addRepository.mode")}
+        >
           <button
             type="button"
             aria-pressed={mode === "clone"}
             style={{ ...MODE_TAB_STYLE, ...(mode === "clone" ? MODE_TAB_ACTIVE_STYLE : {}) }}
             onClick={() => setMode("clone")}
           >
-            Clone repository
+            {t("gitClientWindow.addRepository.clone")}
           </button>
           <button
             type="button"
@@ -222,14 +203,14 @@ export function AddRepositoryDialog({
             style={{ ...MODE_TAB_STYLE, ...(mode === "open" ? MODE_TAB_ACTIVE_STYLE : {}) }}
             onClick={() => setMode("open")}
           >
-            Open local repository
+            {t("gitClientWindow.addRepository.openLocal")}
           </button>
-        </div>
+        </fieldset>
 
         {mode === "clone" ? (
           <>
             <label style={FIELD_LABEL_STYLE}>
-              Repository URL
+              {t("gitClientWindow.addRepository.repositoryUrl")}
               {/* No text-node space intended: FIELD_LABEL_STYLE stacks label and input via a
                   CSS column layout, not inline text flow. */}
               <input
@@ -237,26 +218,26 @@ export function AddRepositoryDialog({
                 style={INPUT_STYLE}
                 value={repositoryUrl}
                 onChange={(event) => setRepositoryUrl(event.target.value)}
-                aria-label="Repository URL"
+                aria-label={t("gitClientWindow.addRepository.repositoryUrl")}
                 placeholder="https://github.com/org/repo.git"
               />
             </label>
             <label style={FIELD_LABEL_STYLE}>
-              Clone to folder
+              {t("gitClientWindow.addRepository.cloneDestination")}
               {/* No text-node space intended: FIELD_LABEL_STYLE stacks label and input via a
                   CSS column layout, not inline text flow. */}
               <input
                 style={INPUT_STYLE}
                 value={destinationPath}
                 onChange={(event) => setDestinationPath(event.target.value)}
-                aria-label="Clone to folder"
+                aria-label={t("gitClientWindow.addRepository.cloneDestination")}
                 placeholder="/Users/me/Work/repo"
               />
             </label>
           </>
         ) : (
           <label style={FIELD_LABEL_STYLE}>
-            Local repository path
+            {t("gitClientWindow.addRepository.localPath")}
             {/* No text-node space intended: FIELD_LABEL_STYLE stacks label and input via a
                 CSS column layout, not inline text flow. */}
             <input
@@ -264,7 +245,7 @@ export function AddRepositoryDialog({
               style={INPUT_STYLE}
               value={localPath}
               onChange={(event) => setLocalPath(event.target.value)}
-              aria-label="Local repository path"
+              aria-label={t("gitClientWindow.addRepository.localPath")}
               placeholder="/Users/me/Work/existing-repo"
             />
           </label>
@@ -278,7 +259,7 @@ export function AddRepositoryDialog({
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--space-4)" }}>
           <button type="button" style={SECONDARY_BTN} onClick={onClose}>
-            Cancel
+            {t("gitClientWindow.addRepository.cancel")}
           </button>
           <button
             type="button"
@@ -286,10 +267,11 @@ export function AddRepositoryDialog({
             disabled={busy || !canSubmit}
             onClick={submit}
           >
-            {submitButtonLabel(busy, mode)}
+            {submitButtonLabel(busy, mode, t)}
           </button>
         </div>
-      </div>
+      </dialog>
     </div>
   );
+  return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
 }

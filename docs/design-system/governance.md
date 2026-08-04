@@ -79,7 +79,9 @@ A change enters the system through three rules, each enforced by a real gate in 
 1. **Resolve to existing tokens.** A change that needs a new colour, hue, or one-off value is a **token
    proposal first**, not a component change. Enforcement: the scope-wide drift guards in
    `packages/keiko-ui/src/app/globals.css.test.ts` parse every in-scope rule and fail when a migrated surface
-   carries a raw, unreviewed value instead of a `--*` token — a new literal cannot land silently.
+   carries a raw, unreviewed value instead of a `--*` token. The same gate scans every CSS Module and
+   production TSX component: a custom-property reference must resolve to a token declared in `globals.css`
+   or provide an explicit safe fallback. New literals and phantom token names cannot land silently.
 2. **Ship the full template before future Ready promotions.** States and accessibility are included; a new or
    promoted component cannot move to Ready until the [component-template.md](component-template.md) spine is
    complete (see above). Existing Ready families with partial migration-note coverage must stay labelled as

@@ -13,12 +13,14 @@
   },
   "routesIntercepted": [
     "/api/projects",
+    "/api/workspaces",
     "/api/git/status",
     "/api/git/branches",
     "/api/git/summary",
     "/api/git/history",
     "/api/git/remotes",
     "/api/git/diff",
+    "/api/files/content",
     "/api/git-delivery/staging/stage",
     "/api/git-delivery/commit/preview",
     "/api/git-delivery/commit/execute",
@@ -48,8 +50,10 @@
     "path-free and credential-free browser evidence"
   ],
   "assertions": {
+    "workspaceReads": 2,
+    "fileContentReads": 1,
     "stageCalls": 1,
-    "commitPreviews": 2,
+    "commitPreviews": 1,
     "commitExecutes": 1,
     "branchCreates": 1,
     "branchSwitches": 2,
