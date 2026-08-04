@@ -407,7 +407,7 @@ jobs:
 
       - name: Review
         id: review
-        uses: oscharko-dev/Keiko-for-Quality@c3a1049ccd811a158ca9249b3f6828019ed1f0fb # v0.11.0
+        uses: oscharko-dev/Keiko-for-Quality@bcb332b057500b764b3318d3163e77c51dcff8fa # v0.11.0
         env:
           # Passed by variable NAME to the action, never as an input value: an input appears in the
           # step context that every other action in the job can read.
