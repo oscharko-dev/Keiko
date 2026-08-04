@@ -24,6 +24,7 @@ const RESPONSE_MAX_BYTES = 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
 const REQUESTED_BY = "keiko-cli";
 const RESERVED_WORKSPACE_IDS: ReadonlySet<string> = new Set<string>(["", ".", ".."]);
+const SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/u;
 
 const USAGE = `Usage:
   keiko task-workspace reconciliation [--root PATH] [--host HOST] [--port PORT]
@@ -95,12 +96,18 @@ function endpointOptions(tokens: ParsedTokens): LoopbackEndpointOptions {
   return { host: tokens.values.get("--host"), port: tokens.values.get("--port") };
 }
 
+function hasInvalidExplicitRoot(tokens: ParsedTokens): boolean {
+  const root = tokens.values.get("--root");
+  return root?.trim().length === 0;
+}
+
 function reportRequest(
   kind: "reconciliation" | "health",
   tokens: ParsedTokens,
 ): TaskWorkspaceRequest | null {
   if (tokens.approved || tokens.positionals.length !== 0) return null;
   if (!usesOnlyOptions(tokens, new Set(["--root"]))) return null;
+  if (hasInvalidExplicitRoot(tokens)) return null;
   const search = new URLSearchParams();
   const root = tokens.values.get("--root");
   if (root !== undefined) search.set("root", root);
@@ -173,6 +180,7 @@ function cleanupRequest(tokens: ParsedTokens): TaskWorkspaceRequest | null {
 function cleanupOrphansRequest(tokens: ParsedTokens): TaskWorkspaceRequest | null {
   if (!tokens.approved || tokens.positionals.length !== 0) return null;
   if (!usesOnlyOptions(tokens, new Set(["--root"]))) return null;
+  if (hasInvalidExplicitRoot(tokens)) return null;
   const root = tokens.values.get("--root");
   return {
     endpoint: endpointOptions(tokens),
@@ -238,7 +246,9 @@ function responseErrorCode(payload: unknown): string | undefined {
   if (typeof payload !== "object" || payload === null || !("error" in payload)) return undefined;
   const error = payload.error;
   if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
-  return typeof error.code === "string" ? error.code : undefined;
+  return typeof error.code === "string" && SAFE_ERROR_CODE.test(error.code)
+    ? error.code
+    : undefined;
 }
 
 async function executeRequest(

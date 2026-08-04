@@ -332,6 +332,27 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
   });
 
+  it("rejects a binding whose serialized override record exceeds the byte cap", () => {
+    const binding = `Alt+${"A".repeat(168)}`;
+    const record = serializeEditorM7KeybindingOverride({
+      schemaVersion: "1",
+      commandId: "quick-access.files",
+      binding,
+    });
+    expect(parseEditorM7KeybindingOverrides([record])).toMatchObject({
+      ok: false,
+      reasonCode: "OVERSIZED",
+    });
+
+    expect(
+      validateEditorM7Keybinding({
+        commandId: "quick-access.files",
+        binding,
+        activeBindings: {},
+      }),
+    ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
+  });
+
   it.each([
     "",
     " ",

@@ -1361,6 +1361,17 @@ function hasMinimumKeybindingModifier(binding: string): boolean {
   );
 }
 
+function canonicalPersistableBinding(commandId: string, binding: string): string | undefined {
+  const canonical = canonicalBinding(binding);
+  if (canonical === undefined) return undefined;
+  const serialized = serializeEditorM7KeybindingOverride({
+    schemaVersion: EDITOR_M7_KEYBINDING_OVERRIDE_VERSION,
+    commandId,
+    binding: canonical,
+  });
+  return utf8ByteLength(serialized) > MAX_KEYBINDING_OVERRIDE_BYTES ? undefined : canonical;
+}
+
 export function validateEditorM7Keybinding(args: {
   readonly commandId: string;
   readonly binding: string;
@@ -1372,7 +1383,7 @@ export function validateEditorM7Keybinding(args: {
     if (utf8ByteLength(args.binding) > MAX_KEYBINDING_OVERRIDE_BYTES) {
       return { ok: false, reasonCode: "INVALID_INPUT" };
     }
-    const canonical = canonicalBinding(args.binding);
+    const canonical = canonicalPersistableBinding(args.commandId, args.binding);
     if (canonical === undefined) return { ok: false, reasonCode: "INVALID_INPUT" };
     if (!hasMinimumKeybindingModifier(canonical)) {
       return { ok: false, reasonCode: "INVALID_INPUT" };

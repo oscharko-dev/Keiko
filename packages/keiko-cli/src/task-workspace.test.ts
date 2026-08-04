@@ -88,6 +88,8 @@ describe("task-workspace CLI", () => {
   it.each([
     ["invalid recovery strategy", ["repair", "workspace-1", "--strategy", "unknown", "--approve"]],
     ["invalid cleanup mode", ["cleanup", "workspace-1", "--mode", "unknown", "--approve"]],
+    ["empty report root", ["health", "--root", ""]],
+    ["blank orphan-cleanup root", ["cleanup-orphans", "--root", " ", "--approve"]],
     ["unknown option", ["health", "--unknown", "value"]],
     ["unknown command", ["unknown"]],
     ["duplicate option", ["health", "--root", "/one", "--root", "/two"]],
@@ -259,6 +261,21 @@ describe("task-workspace CLI", () => {
     expect(capture.err()).toContain("HTTP 403");
     expect(capture.err()).toContain("OPERATOR_APPROVAL_REQUIRED");
     expect(capture.err()).not.toContain("sensitive body");
+  });
+
+  it("rejects an untrusted response error code instead of emitting terminal-controlled text", async () => {
+    const injectedCode = "INVALID_REQUEST\nsensitive\u001B[31m";
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(jsonResponse({ error: { code: injectedCode } }, 400)),
+    );
+    const capture = capturedIo();
+
+    const code = await runTaskWorkspaceCli(["health"], capture.io, {}, { fetchImpl });
+
+    expect(code).toBe(1);
+    expect(capture.err()).toBe("keiko task-workspace: HTTP 400 (UNSPECIFIED_ERROR).\n");
+    expect(capture.err()).not.toContain("sensitive");
+    expect(capture.err()).not.toContain("\u001B");
   });
 
   it("preserves the HTTP status when an error response is not valid JSON", async () => {
