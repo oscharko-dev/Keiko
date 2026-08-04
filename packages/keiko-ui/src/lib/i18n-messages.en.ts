@@ -2255,20 +2255,6 @@ export const EN_MESSAGES = {
   "gitClientWindow.panel.pullRequestOpened": "Pull Request panel opened.",
   "gitClientWindow.panel.mergeOpened": "Merge panel opened.",
   "gitClientWindow.panel.diffOpened": "Diff panel opened.",
-  "gitClientWindow.repository.reconnectFailed": "Repository reconnection failed: {detail}",
-  "gitClientWindow.repository.workspaceUnavailable":
-    "This repository is not currently connected to a workspace. Connect it again to continue.",
-  "gitClientWindow.addRepository.title": "Add repository",
-  "gitClientWindow.addRepository.close": "Close",
-  "gitClientWindow.addRepository.mode": "Add mode",
-  "gitClientWindow.addRepository.clone": "Clone repository",
-  "gitClientWindow.addRepository.open": "Open repository",
-  "gitClientWindow.addRepository.openLocal": "Open local repository",
-  "gitClientWindow.addRepository.repositoryUrl": "Repository URL",
-  "gitClientWindow.addRepository.cloneDestination": "Clone to folder",
-  "gitClientWindow.addRepository.localPath": "Local repository path",
-  "gitClientWindow.addRepository.cancel": "Cancel",
-  "gitClientWindow.addRepository.adding": "Adding…",
   // Accessible names for the named <section> landmarks the #2721 wave introduced. They were
   // hardcoded English on the role="region" elements these sections replace; a screen reader
   // announces them, so they belong in the catalog like any other user-facing string.

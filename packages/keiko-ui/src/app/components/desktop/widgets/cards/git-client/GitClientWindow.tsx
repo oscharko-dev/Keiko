@@ -1046,14 +1046,14 @@ export function GitClientWindow({
     (project: ProjectWithAvailability): boolean => {
       if (project.workspaceAvailable !== true) {
         setReposLoading(false);
-        setReposError(t("gitClientWindow.repository.workspaceUnavailable"));
+        setReposError(optionalT("gitClientWindow.repository.workspaceUnavailable"));
         return false;
       }
       setReposError(null);
       applyRepositorySelection(project.path);
       return true;
     },
-    [applyRepositorySelection, t],
+    [applyRepositorySelection, optionalT],
   );
 
   const reconnectRepository = useCallback(
@@ -1071,12 +1071,14 @@ export function GitClientWindow({
           if (requestSequence !== repositoryConnectSeqRef.current) return;
           setReposLoading(false);
           setReposError(
-            t("gitClientWindow.repository.reconnectFailed", { detail: formatGitError(error) }),
+            optionalT("gitClientWindow.repository.reconnectFailed", {
+              detail: formatGitError(error),
+            }),
           );
         },
       );
     },
-    [applyConnectedRepository, client, loadRepositories, t],
+    [applyConnectedRepository, client, loadRepositories, optionalT],
   );
 
   const onRepositoryAdded = useCallback(
@@ -1101,8 +1103,8 @@ export function GitClientWindow({
     }
     setSelectedPath(null);
     updateCfg?.({ projectPath: "" });
-    setReposError(t("gitClientWindow.repository.workspaceUnavailable"));
-  }, [projectId, repositories, reposError, reposLoading, selectedPath, t, updateCfg]);
+    setReposError(optionalT("gitClientWindow.repository.workspaceUnavailable"));
+  }, [optionalT, projectId, repositories, reposError, reposLoading, selectedPath, updateCfg]);
 
   const active = activeGitClientState({
     selectedPath,

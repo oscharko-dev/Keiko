@@ -2,7 +2,7 @@
 
 import { useEffect, useSyncExternalStore, type RefObject } from "react";
 
-const MODAL_LOCK_CHANGE_EVENT = "keiko-modal-interaction-lock-change";
+const modalLockListeners = new Set<() => void>();
 
 interface ModalInteractionLockOptions {
   readonly active?: boolean;
@@ -10,21 +10,21 @@ interface ModalInteractionLockOptions {
   readonly restoreFocus?: boolean;
 }
 
-function modalInteractionLocked(): boolean {
-  return document.documentElement.dataset.keikoModalOpen === "true";
-}
-
 function emitModalLockChange(): void {
-  window.dispatchEvent(new Event(MODAL_LOCK_CHANGE_EVENT));
-}
-
-function subscribeToModalLockChange(onStoreChange: () => void): () => void {
-  window.addEventListener(MODAL_LOCK_CHANGE_EVENT, onStoreChange);
-  return () => window.removeEventListener(MODAL_LOCK_CHANGE_EVENT, onStoreChange);
+  for (const listener of modalLockListeners) listener();
 }
 
 export function useModalInteractionLockState(): boolean {
-  return useSyncExternalStore(subscribeToModalLockChange, modalInteractionLocked, () => false);
+  return useSyncExternalStore(
+    (onStoreChange): (() => void) => {
+      modalLockListeners.add(onStoreChange);
+      return () => {
+        modalLockListeners.delete(onStoreChange);
+      };
+    },
+    () => document.documentElement.dataset.keikoModalOpen === "true",
+    () => false,
+  );
 }
 
 export function useModalInteractionLock({

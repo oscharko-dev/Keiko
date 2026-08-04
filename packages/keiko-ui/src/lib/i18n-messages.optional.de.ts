@@ -123,6 +123,21 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Remote-Änderungen in den Arbeitsbaum übernehmen? Offene Editor-Puffer werden nach erfolgreichem Git-Vorgang abgeglichen.",
   "gitClientWindow.confirm.pull.action": "Änderungen übernehmen",
   "gitClientWindow.confirm.cancel": "Abbrechen",
+  "gitClientWindow.addRepository.title": "Repository hinzufügen",
+  "gitClientWindow.addRepository.close": "Schließen",
+  "gitClientWindow.addRepository.mode": "Hinzufügemodus",
+  "gitClientWindow.addRepository.clone": "Repository klonen",
+  "gitClientWindow.addRepository.open": "Repository öffnen",
+  "gitClientWindow.addRepository.openLocal": "Lokales Repository öffnen",
+  "gitClientWindow.addRepository.repositoryUrl": "Repository-URL",
+  "gitClientWindow.addRepository.cloneDestination": "In Ordner klonen",
+  "gitClientWindow.addRepository.localPath": "Lokaler Repository-Pfad",
+  "gitClientWindow.addRepository.cancel": "Abbrechen",
+  "gitClientWindow.addRepository.adding": "Wird hinzugefügt…",
+  "gitClientWindow.repository.reconnectFailed":
+    "Die Repository-Verbindung ist fehlgeschlagen: {detail}",
+  "gitClientWindow.repository.workspaceUnavailable":
+    "Dieses Repository ist derzeit mit keinem Workspace verbunden. Verbinden Sie es erneut, um fortzufahren.",
   "gitClientWindow.sync.editorReconciliationFailed":
     "Der Pull wurde abgeschlossen, aber Editor-Puffer müssen wiederhergestellt werden. Prüfen Sie offene Dateien, bevor Sie fortfahren.",
   "chat.turn.failed": "Beitrag fehlgeschlagen",

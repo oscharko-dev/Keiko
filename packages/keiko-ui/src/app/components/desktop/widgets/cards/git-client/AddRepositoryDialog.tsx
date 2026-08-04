@@ -3,7 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "@/lib/optional-widget-i18n";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../../Icons";
 import { useDialogTabTrap } from "../../../hooks/useDialogTabTrap";
@@ -77,7 +80,7 @@ interface AddRepositoryDialogProps {
   readonly initialMode?: AddMode | undefined;
 }
 
-function submitButtonLabel(busy: boolean, mode: AddMode, t: I18nTranslate): string {
+function submitButtonLabel(busy: boolean, mode: AddMode, t: OptionalWidgetTranslate): string {
   let label: string;
   if (busy) {
     label = t("gitClientWindow.addRepository.adding");
@@ -95,7 +98,7 @@ export function AddRepositoryDialog({
   onClose,
   initialMode = "clone",
 }: AddRepositoryDialogProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const [mode, setMode] = useState<AddMode>(initialMode);
   const [repositoryUrl, setRepositoryUrl] = useState("");
   const [destinationPath, setDestinationPath] = useState("");
