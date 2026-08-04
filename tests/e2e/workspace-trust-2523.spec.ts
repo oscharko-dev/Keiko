@@ -12,6 +12,7 @@ import {
   seedEditorWindow,
 } from "./support/editorWorkspace.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
+import { expectViewportModal } from "./support/modal.js";
 
 const MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
@@ -175,10 +176,18 @@ async function assertNarrowTextZoomLayout(page: Page, panel: Locator): Promise<v
   expect(metrics.scrollWidth, JSON.stringify(metrics)).toBeLessThanOrEqual(metrics.clientWidth);
 }
 
+test("workspace trust confirm preserves viewport modality @smoke", async ({ page }) => {
+  await openUntrustedEditor(page);
+  const prompt = page.getByRole("alertdialog", { name: "Trust this workspace?" });
+  await expectViewportModal(page, prompt);
+  await prompt.getByRole("button", { name: "Stay restricted" }).click();
+});
+
 test("an untrusted root stays restricted until an explicit confirmed grant and returns after revoke", async ({
   page,
 }) => {
   await openUntrustedEditor(page);
+  await expectViewportModal(page, page.getByRole("alertdialog", { name: "Trust this workspace?" }));
   await stayRestrictedAtPrompt(page);
   await inspectRestrictedLanguageStatus(page);
   const panel = await grantFromManagement(page);

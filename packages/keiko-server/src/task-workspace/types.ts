@@ -10,6 +10,7 @@ import type {
   TaskWorkspaceLifecycleState,
   WorkspaceBinding,
   WorkspaceCleanupRefusalReason,
+  WorkspaceCleanupMode,
   WorkspaceHealthReport,
   WorkspaceInstance,
   WorkspaceInfo,
@@ -266,8 +267,6 @@ export interface WorkspaceHealthService {
   // orphaned managed worktrees, and return the content-free report. Read-only — no persistence.
   readonly report: (repositoryRoot?: string) => Promise<WorkspaceHealthReport>;
 }
-
-export type WorkspaceCleanupMode = "request" | "complete";
 
 export interface WorkspaceCleanupRequest {
   readonly workspaceId: string;

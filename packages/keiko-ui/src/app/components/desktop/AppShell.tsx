@@ -57,6 +57,7 @@ import { recordReadsContextRelationship } from "../../relationships/connector-re
 import type { ChatBindingTarget, WorkspaceApi } from "./hooks/useWorkspace.types";
 import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { useModalInteractionLockState } from "./hooks/useModalInteractionLock";
 import type { WorkspaceUiAction, WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
 import { resolveWorkspaceFileIdentifier } from "@oscharko-dev/keiko-contracts";
 import { applyShellUndoAction, shellPanelIsOpen } from "./shell-undo-bindings";
@@ -411,6 +412,10 @@ function chatIdFromWindow(win: AppWindow | undefined): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+function targetMatchesChat(target: ChatBindingTarget | undefined, chatId: string): boolean {
+  return target === undefined || target.conversationId === chatId;
+}
+
 class ChatBindingCompensationFailure extends Error {}
 class ChatMutationTimeoutFailure extends Error {}
 class ChatMutationQueueBlockedFailure extends Error {}
@@ -436,6 +441,31 @@ function reportChatBindingCompensationFailure(): void {
 function reportGroundingMutationFailure(message: string): void {
   const correlationId = newClientCorrelationId();
   window.reportError(new Error(`${message} Correlation ID: ${correlationId}`));
+}
+
+interface GroundingMutationFailureNotices {
+  readonly compensation: string;
+  readonly timeout: string;
+  readonly generic: string;
+}
+
+function groundingMutationFailureNotice(
+  error: unknown,
+  notices: GroundingMutationFailureNotices,
+): string {
+  if (error instanceof ChatBindingCompensationFailure) {
+    reportChatBindingCompensationFailure();
+    return notices.compensation;
+  }
+  if (
+    error instanceof ChatMutationTimeoutFailure ||
+    error instanceof ChatMutationQueueBlockedFailure
+  ) {
+    reportGroundingMutationFailure("Chat grounding mutation timed out.");
+    return notices.timeout;
+  }
+  reportGroundingMutationFailure("Chat grounding mutation failed.");
+  return notices.generic;
 }
 
 async function persistCurrentChatBinding<T>(
@@ -840,15 +870,15 @@ function AppShellInner(): ReactNode {
     async (
       chatWindowId: string,
       nextScope: ChatConnectedScope,
-      previousScope: ChatConnectedScope | null = null,
       attempt: ChatMutationAttempt,
+      previousScope: ChatConnectedScope | null = null,
       target?: ChatBindingTarget,
     ): Promise<boolean> => {
       const chat = chatForWindow(chatWindowId);
       if (chat === undefined) {
         return rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
       }
-      if (target !== undefined && chat.id !== target.conversationId) return false;
+      if (!targetMatchesChat(target, chat.id)) return false;
       const current =
         previousScope === null
           ? effectiveScopes(chat)
@@ -894,19 +924,13 @@ function AppShellInner(): ReactNode {
         if (relationshipPath !== null) recordReadsContextRelationship(chat.id, relationshipPath);
         return true;
       } catch (error: unknown) {
-        if (error instanceof ChatBindingCompensationFailure) {
-          reportChatBindingCompensationFailure();
-          return rejectForConnectionFailure(t("chat.grounding.recoveryRequired"));
-        }
-        if (
-          error instanceof ChatMutationTimeoutFailure ||
-          error instanceof ChatMutationQueueBlockedFailure
-        ) {
-          reportGroundingMutationFailure("Chat grounding mutation timed out.");
-          return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
-        }
-        reportGroundingMutationFailure("Chat grounding mutation failed.");
-        return rejectForConnectionFailure(t("chat.grounding.connectSourceFailed"));
+        return rejectForConnectionFailure(
+          groundingMutationFailureNotice(error, {
+            compensation: t("chat.grounding.recoveryRequired"),
+            timeout: t("chat.grounding.timeoutBlocked"),
+            generic: t("chat.grounding.connectSourceFailed"),
+          }),
+        );
       }
     },
     // GEN-PERF-RENDER-001 — depend on the stable `session.replaceChat` useCallback (the only member
@@ -938,7 +962,7 @@ function AppShellInner(): ReactNode {
           groundingMutationQueueRef.current,
           groundingMutationKey(chatWindowId, target),
           async (attempt): Promise<boolean> =>
-            replaceFilesScopeNow(chatWindowId, nextScope, previousScope, attempt, target),
+            replaceFilesScopeNow(chatWindowId, nextScope, attempt, previousScope, target),
         );
       } catch (error: unknown) {
         if (
@@ -1002,7 +1026,7 @@ function AppShellInner(): ReactNode {
       if (chat === undefined) {
         return rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
       }
-      if (target !== undefined && chat.id !== target.conversationId) return false;
+      if (!targetMatchesChat(target, chat.id)) return false;
       const current = effectiveLocalKnowledgeScopes(chat);
       const folderScopes = effectiveScopes(chat);
       if (isConnectorScopeConnected(current, scope)) return true;
@@ -1467,7 +1491,9 @@ function AppShellInner(): ReactNode {
   // designed to keep the workspace behind it interactive, so inerting on `palOpen` would disable the
   // Palette itself. `inert` implies aria-hidden in modern engines; the explicit aria-hidden is a
   // fallback for older assistive tech that has not yet adopted inert.
-  const modalOpen = pending !== null || quickAccessMode !== null || needsGatewaySetup;
+  const nestedModalOpen = useModalInteractionLockState();
+  const modalOpen =
+    pending !== null || quickAccessMode !== null || needsGatewaySetup || nestedModalOpen;
   // GEN-UI-A11Y-003 — toggle `inert` imperatively so the modal lifecycle owns the exact presence of
   // the boolean attribute across supported renderers: set it while a modal dialog is open and remove
   // it otherwise. `aria-hidden` pairs with `inert` for older assistive technology.

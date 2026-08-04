@@ -107,8 +107,13 @@ async function putIfCacheable(request, response) {
   // Clone before .put — the response body can only be consumed once, and the caller still
   // returns the original to the page.
   const copy = response.clone();
-  const cache = await caches.open(CACHE_NAME);
-  await cache.put(request, copy);
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    await cache.put(request, copy);
+  } catch {
+    // Cache Storage is opportunistic. Quota or storage failures must not turn an already-successful
+    // network response into a fetch failure; the caller still returns the original response.
+  }
 }
 
 async function cacheFirst(request) {

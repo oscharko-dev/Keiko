@@ -37,6 +37,7 @@ import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 import { Icons } from "../../Icons";
 import { acquireGrabbingBodyStyle } from "../../interactionGuards";
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
+import { useModalInteractionLock } from "../../hooks/useModalInteractionLock";
 import {
   dirtyFilesUnderPath,
   reconcileEditorDirtyByPane,
@@ -285,6 +286,7 @@ function DirtyCloseDialog(props: {
     };
   }, []);
   useDialogTabTrap(dialogRef);
+  useModalInteractionLock({ restoreFocus: false });
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (event.key === "Escape" && !props.pending.saving) props.onCancel();
@@ -294,7 +296,7 @@ function DirtyCloseDialog(props: {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [props]);
-  return (
+  const dialog = (
     <div className="ed-dialog-backdrop">
       <dialog
         open
@@ -342,6 +344,7 @@ function DirtyCloseDialog(props: {
       </dialog>
     </div>
   );
+  return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
 }
 
 // The split controls rendered into each pane's toolbar. A pure function of the pane plus the stable

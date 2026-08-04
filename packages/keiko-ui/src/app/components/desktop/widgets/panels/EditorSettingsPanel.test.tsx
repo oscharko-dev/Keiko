@@ -441,7 +441,9 @@ describe("EditorSettingsPanel AI activation confirmation", () => {
     const { container } = renderPanel();
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Inline AI completion" }));
-    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toBeInTheDocument();
+    expect(dialog.parentElement?.parentElement).toBe(document.body);
 
     expect(await axe(container)).toHaveNoViolations();
   });

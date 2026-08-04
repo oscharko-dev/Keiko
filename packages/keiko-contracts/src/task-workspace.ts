@@ -433,6 +433,15 @@ export function isWorkspaceRecoveryStrategy(value: unknown): value is WorkspaceR
   );
 }
 
+export const WORKSPACE_CLEANUP_MODES = ["request", "complete"] as const;
+export type WorkspaceCleanupMode = (typeof WORKSPACE_CLEANUP_MODES)[number];
+
+export function isWorkspaceCleanupMode(value: unknown): value is WorkspaceCleanupMode {
+  return (
+    typeof value === "string" && WORKSPACE_CLEANUP_MODES.includes(value as WorkspaceCleanupMode)
+  );
+}
+
 export interface WorkspaceRecoveryHint {
   readonly marker: TaskWorkspaceDriftMarker;
   readonly strategy: WorkspaceRecoveryStrategy;

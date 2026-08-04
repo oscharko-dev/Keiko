@@ -1351,6 +1351,16 @@ function normalizedDefaultKeybindings(): readonly EditorM7ActiveKeybinding[] {
   );
 }
 
+function hasMinimumKeybindingModifier(binding: string): boolean {
+  const modifiers = new Set(binding.split("+").slice(0, -1));
+  return (
+    modifiers.has("CtrlOrMeta") ||
+    modifiers.has("Ctrl") ||
+    modifiers.has("Meta") ||
+    modifiers.has("Alt")
+  );
+}
+
 export function validateEditorM7Keybinding(args: {
   readonly commandId: string;
   readonly binding: string;
@@ -1362,6 +1372,9 @@ export function validateEditorM7Keybinding(args: {
     if (!command.rebindable) return { ok: false, reasonCode: "POLICY_LOCKED" };
     const canonical = canonicalBinding(args.binding);
     if (canonical === undefined) return { ok: false, reasonCode: "INVALID_INPUT" };
+    if (!hasMinimumKeybindingModifier(canonical)) {
+      return { ok: false, reasonCode: "INVALID_INPUT" };
+    }
     if (isReservedBinding(canonical)) {
       return { ok: false, reasonCode: "RESERVED_KEYBINDING" };
     }

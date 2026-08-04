@@ -821,7 +821,9 @@ describe("GitClientWindow — add-repository dialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Clone from URL" }));
 
-    expect(screen.getByRole("dialog", { name: "Add repository" })).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Add repository" });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog.parentElement?.parentElement).toBe(document.body);
   });
 
   it("Clone mode calls cloneRepository with {repositoryUrl, destinationPath}", async () => {

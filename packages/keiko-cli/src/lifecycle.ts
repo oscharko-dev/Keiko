@@ -23,12 +23,11 @@ import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   CODING_APP_SESSION_LAUNCHER_SECRET_ENV,
   CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS,
-  DEFAULT_UI_PORT,
   KEIKO_PRODUCT_VERSION as SDK_VERSION,
-  UI_HOST,
   encodeCodingAppSessionPairingFragment,
 } from "@oscharko-dev/keiko-contracts";
 import { resolvePreferredInstallLayout } from "./install-layout.js";
+import { resolveLoopbackEndpoint } from "./loopback-endpoint.js";
 import type { CliIo } from "./runner.js";
 
 type LifecycleCommand = "start" | "stop" | "status" | "restart";
@@ -41,7 +40,6 @@ type PortAvailabilityFn = (host: string, port: number) => Promise<boolean>;
 type LifecycleFlag = "--port" | "--host" | "--state-dir" | "--start-timeout" | "--stop-timeout";
 type LifecycleFlagSetter = (raw: RawLifecycleOptions, value: string) => void;
 
-const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
 const KEIKO_PROCESS_TITLE = "Keiko";
 const LIFECYCLE_FLAG_SETTERS: Readonly<Record<LifecycleFlag, LifecycleFlagSetter>> = {
   "--port": (raw, value) => {
@@ -134,12 +132,6 @@ function readFlagValue(args: readonly string[], index: number): string | null {
   return value === undefined || value.startsWith("--") ? null : value;
 }
 
-function parsePort(raw: string): number | null {
-  if (!/^\d{1,5}$/.test(raw)) return null;
-  const port = Number(raw);
-  return port >= 1 && port <= 65535 ? port : null;
-}
-
 function parsePositiveSeconds(raw: string): number | null {
   if (!/^[1-9]\d*$/.test(raw)) return null;
   return Number(raw) * 1000;
@@ -187,25 +179,19 @@ function buildLifecycleOptions(
   cwd: string,
   env: EnvSource,
 ): LifecycleOptions | null {
-  const port = parsePort(optionOrEnv(raw.portRaw, env.KEIKO_UI_PORT, String(DEFAULT_UI_PORT)));
-  const host = optionOrEnv(raw.hostRaw, env.KEIKO_UI_HOST, UI_HOST);
+  const endpoint = resolveLoopbackEndpoint({ host: raw.hostRaw, port: raw.portRaw }, env);
   const startTimeoutMs = parsePositiveSeconds(
     optionOrEnv(raw.startTimeoutRaw, env.KEIKO_START_TIMEOUT_SECS, "20"),
   );
   const stopTimeoutMs = parsePositiveSeconds(
     optionOrEnv(raw.stopTimeoutRaw, env.KEIKO_STOP_TIMEOUT_SECS, "10"),
   );
-  if (
-    port === null ||
-    !ALLOWED_HOSTS.has(host) ||
-    startTimeoutMs === null ||
-    stopTimeoutMs === null
-  ) {
+  if (endpoint === null || startTimeoutMs === null || stopTimeoutMs === null) {
     return null;
   }
   return {
-    port,
-    host,
+    port: endpoint.port,
+    host: endpoint.host,
     stateDir: resolveStateDir(cwd, optionOrEnv(raw.stateDirRaw, env.KEIKO_STATE_DIR, ".keiko")),
     startTimeoutMs,
     stopTimeoutMs,

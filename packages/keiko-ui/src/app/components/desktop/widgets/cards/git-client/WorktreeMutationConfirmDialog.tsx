@@ -74,9 +74,9 @@ export function WorktreeMutationConfirmDialog({
           width: "min(440px, calc(100vw - 48px))",
           padding: "var(--space-5)",
           border: "1px solid var(--border-subtle)",
-          borderRadius: "var(--radius-card)",
+          borderRadius: "var(--radius-lg)",
           background: "var(--surface-primary)",
-          boxShadow: "var(--shadow-popover)",
+          boxShadow: "var(--shadow-pop)",
         }}
       >
         <h2 style={{ margin: 0, font: "var(--weight-semibold) var(--text-body) var(--font-ui)" }}>

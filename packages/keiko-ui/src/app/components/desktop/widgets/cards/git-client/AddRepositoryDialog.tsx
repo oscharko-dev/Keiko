@@ -2,8 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../../Icons";
+import { useDialogTabTrap } from "../../../hooks/useDialogTabTrap";
+import { useModalInteractionLock } from "../../../hooks/useModalInteractionLock";
 import type { GitClientSeam } from "./git-client-seam";
 import { formatGitError } from "./git-client-seam";
 import {
@@ -34,7 +37,9 @@ const DIALOG_STYLE: CSSProperties = {
   width: "min(440px, 100%)",
   maxHeight: "100%",
   overflow: "auto",
+  margin: 0,
   padding: "var(--space-6)",
+  border: 0,
   borderRadius: "var(--radius)",
   background: "var(--card)",
   boxShadow: "var(--shadow-pop)",
@@ -70,11 +75,6 @@ interface AddRepositoryDialogProps {
   readonly initialMode?: AddMode | undefined;
 }
 
-function focusableInside(root: HTMLElement): readonly HTMLElement[] {
-  const nodes = root.querySelectorAll<HTMLElement>("button,input,textarea");
-  return Array.from(nodes).filter((node) => !node.hasAttribute("disabled"));
-}
-
 function submitButtonLabel(busy: boolean, mode: AddMode): string {
   let label: string;
   if (busy) {
@@ -99,9 +99,11 @@ export function AddRepositoryDialog({
   const [localPath, setLocalPath] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
   const firstFieldRef = useRef<HTMLInputElement | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
+  useDialogTabTrap(dialogRef);
+  useModalInteractionLock({ restoreFocus: false });
 
   // Capture the opener once on mount and restore focus to it when the dialog closes,
   // so keyboard users return to where they were (WCAG 2.4.3 / EV4 modal-control).
@@ -152,38 +154,19 @@ export function AddRepositoryDialog({
     );
   };
 
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDialogElement>): void => {
     if (event.key === "Escape") {
       event.preventDefault();
       onClose();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const dialog = event.currentTarget;
-    const focusable = focusableInside(dialog);
-    if (focusable.length === 0) return;
-    const first = focusable[0]!;
-    const last = focusable.at(-1)!;
-    const active = document.activeElement;
-    // Keep focus inside the dialog. Wrap at the boundaries; and when focus has escaped the
-    // dialog entirely (e.g. a disabled control was activated and left focus on <body>), pull
-    // it back to the appropriate end so Tab can never tab out of an aria-modal dialog.
-    const escaped = !(active instanceof HTMLElement) || !dialog.contains(active);
-    if (event.shiftKey && (escaped || active === first)) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && (escaped || active === last)) {
-      event.preventDefault();
-      first.focus();
     }
   };
 
-  return (
+  const dialog = (
     <div style={OVERLAY_STYLE} onPointerDown={onClose}>
-      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- modal dialog needs Escape/Tab key handling */}
-      <div
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- the native dialog owns Escape and backdrop pointer containment */}
+      <dialog
+        open
         ref={dialogRef}
-        role="dialog"
         aria-modal="true"
         aria-label="Add repository"
         tabIndex={-1}
@@ -207,7 +190,10 @@ export function AddRepositoryDialog({
           </button>
         </div>
 
-        <div style={{ display: "flex", gap: "var(--space-3)" }} role="group" aria-label="Add mode">
+        <fieldset
+          style={{ display: "flex", gap: "var(--space-3)", margin: 0, padding: 0, border: 0 }}
+          aria-label="Add mode"
+        >
           <button
             type="button"
             aria-pressed={mode === "clone"}
@@ -224,7 +210,7 @@ export function AddRepositoryDialog({
           >
             Open local repository
           </button>
-        </div>
+        </fieldset>
 
         {mode === "clone" ? (
           <>
@@ -289,7 +275,8 @@ export function AddRepositoryDialog({
             {submitButtonLabel(busy, mode)}
           </button>
         </div>
-      </div>
+      </dialog>
     </div>
   );
+  return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
 }

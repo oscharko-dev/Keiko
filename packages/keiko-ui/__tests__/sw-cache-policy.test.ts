@@ -133,7 +133,10 @@ interface SyntheticEvent {
   waitUntil(value: Promise<unknown>): void;
 }
 
-function makeSandbox(seededCache: Record<string, unknown> = {}): {
+function makeSandbox(
+  seededCache: Record<string, unknown> = {},
+  cachePutFailure?: Error,
+): {
   context: vm.Context;
   sandbox: SwSandbox;
 } {
@@ -151,6 +154,7 @@ function makeSandbox(seededCache: Record<string, unknown> = {}): {
   const cacheStub = {
     addAll: async (_urls: readonly string[]): Promise<void> => undefined,
     put: async (req: { url: string } | string, response: unknown): Promise<void> => {
+      if (cachePutFailure !== undefined) throw cachePutFailure;
       const key = typeof req === "string" ? req : req.url;
       putCalls.push({ key, response });
     },
@@ -341,6 +345,22 @@ describe("sw.js cache policy — sandboxed fetch-handler evaluation", () => {
     expect(sandbox.respondWithCalls).toHaveLength(1);
     expect(sandbox.fetchCalls).not.toContain(url); // served from cache, network not touched
   });
+
+  it.each([
+    { title: "cache-first asset", url: "http://localhost:3000/_next/static/chunk.js" },
+    { title: "network-first shell", url: "http://localhost:3000/" },
+  ])(
+    "returns a successful $title response when Cache Storage rejects the write",
+    async ({ url }) => {
+      const { context, sandbox } = makeSandbox({}, new Error("QuotaExceededError"));
+      vm.runInContext(SW_SOURCE, context);
+
+      const fetchHandler = sandbox.handlers.get("fetch");
+      fetchHandler?.(makeEvent("fetch", url, sandbox));
+
+      await expect(sandbox.respondWithCalls[0]).resolves.toMatchObject({ ok: true, status: 200 });
+    },
+  );
 
   it("activates a waiting update only for the explicit activation message", () => {
     const { context, sandbox } = makeSandbox();

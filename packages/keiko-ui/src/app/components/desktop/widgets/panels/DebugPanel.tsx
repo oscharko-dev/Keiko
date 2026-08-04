@@ -72,7 +72,7 @@ const PANEL_STYLE: CSSProperties = {
   padding: "12px",
 };
 const SECTION_STYLE: CSSProperties = {
-  border: "1px solid var(--border-subtle, var(--border))",
+  border: "1px solid var(--border-subtle, var(--line))",
   borderRadius: "6px",
   padding: "8px",
 };

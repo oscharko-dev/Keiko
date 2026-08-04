@@ -545,6 +545,7 @@ describe("EditorRuntimeWidget reload-confirm dialog — focus restoration (GEN-U
     await user.click(reload);
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toBeInTheDocument();
+    expect(dialog.parentElement?.parentElement).toBe(document.body);
 
     // Cancel the dialog — focus must return to the Reload trigger, not be lost to <body>.
     await user.click(screen.getByRole("button", { name: "Cancel" }));

@@ -309,6 +309,29 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     ).toMatchObject({ ok: false, reasonCode: "RESERVED_KEYBINDING" });
   });
 
+  it.each(["U", "Space", "Esc", "F5", "Shift+U"])(
+    "rejects the unsafe bare or Shift-only binding %s",
+    (binding) => {
+      expect(
+        validateEditorM7Keybinding({
+          commandId: "undo",
+          binding,
+          activeBindings: {},
+        }),
+      ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
+    },
+  );
+
+  it("keeps the policy refusal ahead of the minimum-modifier rule", () => {
+    expect(
+      validateEditorM7Keybinding({
+        commandId: "editor.renameSymbol",
+        binding: "F2",
+        activeBindings: {},
+      }),
+    ).toMatchObject({ ok: false, reasonCode: "POLICY_LOCKED" });
+  });
+
   // 0.3.0 release audit (#2802) — `Ctrl` and `Meta` name the same position in the chord vocabulary
   // the workspace matcher uses, so a binding carrying both is not a keystroke a keyboard produces.
   // It was accepted, and the doubled modifier carried a browser-reserved chord past the reservation

@@ -51,7 +51,7 @@
 
 .cmp-tc {
   color: var(--text-tertiary);
-  transition: transform var(--duration-fast) var(--ease-out);
+  transition: transform 120ms var(--ease-out);
 }
 
 .cmp-t[aria-expanded="true"] .cmp-tc {
@@ -81,7 +81,7 @@
 
 .cmp-p h2 {
   margin: 0;
-  font-size: var(--text-title-sm);
+  font-size: var(--text-heading);
   line-height: 1.25;
 }
 
@@ -120,7 +120,7 @@
 
 .cmp-cc strong {
   overflow: hidden;
-  font-size: var(--text-body-md);
+  font-size: var(--text-body);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -129,7 +129,7 @@
   overflow: hidden;
   color: var(--text-secondary);
   font-family: var(--font-mono);
-  font-size: var(--text-code-sm);
+  font-size: var(--text-body-sm);
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -150,7 +150,7 @@
 
 .cmp-pb {
   width: 100%;
-  border-color: var(--button-primary-border);
+  border-color: var(--border-accent);
   background: var(--button-primary-surface);
   color: var(--button-primary-text);
 }
@@ -197,7 +197,7 @@
   background: var(--input-surface);
   color: var(--input-text);
   font-family: var(--font-mono);
-  font-size: var(--text-code-sm);
+  font-size: var(--text-body-sm);
 }
 
 .cmp-mc input::placeholder {
@@ -207,7 +207,7 @@
 .cmp-e {
   margin: 0;
   padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--feedback-danger-border);
+  border: 1px solid var(--feedback-danger);
   border-radius: var(--radius-control);
   background: var(--feedback-danger-surface);
   color: var(--feedback-danger);

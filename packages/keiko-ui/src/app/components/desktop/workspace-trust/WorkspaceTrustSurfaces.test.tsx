@@ -171,6 +171,8 @@ describe("Workspace Trust governance surfaces", () => {
     );
 
     const stayRestricted = screen.getByRole("button", { name: "Stay restricted" });
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog.parentElement?.parentElement).toBe(document.body);
     await waitFor(() => expect(stayRestricted).toHaveFocus());
     await user.keyboard("{Enter}");
     expect(onCancel).toHaveBeenCalledOnce();

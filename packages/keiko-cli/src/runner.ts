@@ -10,6 +10,7 @@ import { runPromptEnhancerCli } from "./prompt-enhancer.js";
 import { runMemoryCli } from "./memory.js";
 import { runInitCli } from "./init.js";
 import { runLifecycleCli } from "./lifecycle.js";
+import { runTaskWorkspaceCli } from "./task-workspace.js";
 import { runUiCli } from "./ui.js";
 import { runLauncherCli } from "./launcher.js";
 import { runPortableCli } from "./portable.js";
@@ -57,6 +58,8 @@ Usage:
   keiko evaluate [OPTIONS]     Run the evaluation harness (offline by default; --live for live model).
   keiko prompt-enhancer [OPTIONS] Enhance a raw prompt into a governed, reviewable Enhanced Prompt.
   keiko memory <maintain|stats> Run a memory maintenance pass or print vault stats (#204).
+  keiko task-workspace <reconciliation|health|repair|cleanup|cleanup-orphans>
+                           Inspect or repair governed task workspaces.
   keiko ui [OPTIONS]       Launch the local UI on 127.0.0.1 and print its URL.
   keiko launcher <install|remove|status> [OPTIONS]
                            Manage a user-local OS shortcut for \`keiko start --open\`.
@@ -84,6 +87,7 @@ const COMMAND_HANDLERS: Readonly<Record<string, CommandHandler>> = {
   evaluate: (rest, io, env) => runEvaluateCli(rest, io, env, {}),
   "prompt-enhancer": (rest, io, env) => runPromptEnhancerCli(rest, io, env, {}),
   memory: (rest, io, env) => runMemoryCli(rest, io, env),
+  "task-workspace": runTaskWorkspaceCli,
   init: runInitCli,
   doctor: runDoctorCli,
   repair: runRepairCli,

@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { WorkspaceTrustReason, WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
 import type { MessageKey } from "@/lib/i18n-messages.en";
 import { useTranslate } from "@/lib/i18n";
 import type { WorkspaceTrustFailure } from "@/lib/workspace-trust-api";
 import { useDialogTabTrap } from "../hooks/useDialogTabTrap";
+import { useModalInteractionLock } from "../hooks/useModalInteractionLock";
 import styles from "./WorkspaceTrust.module.css";
 
 function confirmButtonLabel(
@@ -187,6 +189,7 @@ export function WorkspaceTrustDecisionDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   useDialogTabTrap(dialogRef);
+  useModalInteractionLock({ restoreFocus: false });
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     cancelRef.current?.focus();
@@ -210,7 +213,7 @@ export function WorkspaceTrustDecisionDialog({
     action === "grant"
       ? t("workspaceTrust.dialog.grantBody")
       : t("workspaceTrust.dialog.revokeBody");
-  return (
+  const dialog = (
     <div className={styles.cmpDialogBackdrop}>
       <div
         className={styles.cmpDialog}
@@ -256,4 +259,5 @@ export function WorkspaceTrustDecisionDialog({
       </div>
     </div>
   );
+  return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
 }

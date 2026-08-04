@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { expectViewportModal } from "./support/modal.js";
 
 // Issue #1578 capstone evidence for Epic #1571. This spec verifies the completed Git client through
 // the real packaged app path with local fixtures and deterministic route stubs only. The child issue
@@ -591,6 +592,7 @@ async function openGitWindow(page: Page, fixture: GitFixture): Promise<Locator> 
 async function verifyAddRepositoryDialog(page: Page, gitWindow: Locator): Promise<void> {
   await gitWindow.getByRole("button", { name: "Add repository" }).click();
   const addDialog = page.getByRole("dialog", { name: "Add repository" });
+  await expectViewportModal(page, addDialog);
   const addMode = addDialog.getByRole("group", { name: "Add mode" });
   await expect(addMode.getByRole("button", { name: "Clone repository" })).toBeVisible();
   await addMode.getByRole("button", { name: "Open local repository" }).click();

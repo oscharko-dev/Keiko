@@ -23,6 +23,7 @@ export { runRepairCli, type RepairCliDeps } from "./repair.js";
 export { runUninstallCli, type UninstallCliDeps } from "./uninstall.js";
 export { runUpdateCli, type UpdateCliDeps, type UpdateCliPreflight } from "./update.js";
 export { runLifecycleCli, type LifecycleCliDeps } from "./lifecycle.js";
+export { runTaskWorkspaceCli, type TaskWorkspaceCliDeps } from "./task-workspace.js";
 export { runUiCli, parseUiArgs, waitForShutdown, type UiCliDeps } from "./ui.js";
 export { runLauncherCli, type LauncherCliDeps } from "./launcher.js";
 export { runPortableCli, type PortableSetupDeps } from "./portable.js";

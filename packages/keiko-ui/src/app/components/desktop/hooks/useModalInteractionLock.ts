@@ -1,11 +1,30 @@
 "use client";
 
-import { useEffect, type RefObject } from "react";
+import { useEffect, useSyncExternalStore, type RefObject } from "react";
+
+const MODAL_LOCK_CHANGE_EVENT = "keiko-modal-interaction-lock-change";
 
 interface ModalInteractionLockOptions {
   readonly active?: boolean;
   readonly initialFocusRef?: RefObject<HTMLElement | null>;
   readonly restoreFocus?: boolean;
+}
+
+function modalInteractionLocked(): boolean {
+  return document.documentElement.dataset.keikoModalOpen === "true";
+}
+
+function emitModalLockChange(): void {
+  window.dispatchEvent(new Event(MODAL_LOCK_CHANGE_EVENT));
+}
+
+function subscribeToModalLockChange(onStoreChange: () => void): () => void {
+  window.addEventListener(MODAL_LOCK_CHANGE_EVENT, onStoreChange);
+  return () => window.removeEventListener(MODAL_LOCK_CHANGE_EVENT, onStoreChange);
+}
+
+export function useModalInteractionLockState(): boolean {
+  return useSyncExternalStore(subscribeToModalLockChange, modalInteractionLocked, () => false);
 }
 
 export function useModalInteractionLock({
@@ -20,6 +39,7 @@ export function useModalInteractionLock({
     const previousCount = Number(root.dataset.keikoModalOpenCount ?? "0");
     root.dataset.keikoModalOpenCount = String(previousCount + 1);
     root.dataset.keikoModalOpen = "true";
+    emitModalLockChange();
     initialFocusRef?.current?.focus();
 
     return () => {
@@ -30,6 +50,7 @@ export function useModalInteractionLock({
       } else {
         root.dataset.keikoModalOpenCount = String(nextCount);
       }
+      emitModalLockChange();
       if (restoreFocus) trigger?.focus?.();
     };
   }, [active, initialFocusRef, restoreFocus]);
