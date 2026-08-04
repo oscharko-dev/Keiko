@@ -398,6 +398,15 @@ type CodingRuntimeTerminalStatus = Extract<
   "cancelled" | "failed" | "succeeded"
 >;
 
+function mostSevereTerminalStatus(
+  current: CodingRuntimeTerminalStatus,
+  requested: CodingRuntimeTerminalStatus,
+): CodingRuntimeTerminalStatus {
+  if (current === "failed" || requested === "failed") return "failed";
+  if (current === "cancelled" || requested === "cancelled") return "cancelled";
+  return "succeeded";
+}
+
 export interface CodingRuntimeManager {
   start(
     request: CodingRuntimeLaunchRequest,
@@ -471,6 +480,7 @@ interface ActiveRuntime {
   pendingApprovalReview: CodingWorkbenchRuntimePendingApprovalReview | undefined;
   shutdownBarrierComplete: boolean;
   stopPromise: Promise<CodingRuntimeStopResult> | undefined;
+  stopResultStatus: CodingRuntimeTerminalStatus;
   stopRequested: boolean;
   paused: boolean;
   status: CodingRuntimeStatus;
@@ -692,16 +702,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
         retryable: false,
       });
     }
+    active.stopResultStatus = mostSevereTerminalStatus(active.stopResultStatus, resultStatus);
     if (active.stopPromise !== undefined) return active.stopPromise;
-    const stopping = this.stopActive(active, resultStatus);
+    const stopping = this.stopActive(active);
     active.stopPromise = stopping;
     return stopping;
   }
 
-  private async stopActive(
-    active: ActiveRuntime,
-    resultStatus: CodingRuntimeTerminalStatus,
-  ): Promise<CodingRuntimeStopResult> {
+  private async stopActive(active: ActiveRuntime): Promise<CodingRuntimeStopResult> {
     active.stopRequested = true;
     active.status = "stopping";
     const receipt = await this.revokeAndTerminate(active);
@@ -714,7 +722,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
     }
     active.status = "stopped";
-    this.captureResult(active, resultStatus, null);
+    this.captureResult(active, active.stopResultStatus, null);
     this.active = undefined;
     this.emit(
       runtimeEvent(active, this.nextSequence(active), "runtime-stopped", { health: "stopped" }),
@@ -1970,6 +1978,7 @@ function createActiveRuntime(
     pendingApprovalReview: undefined,
     shutdownBarrierComplete: false,
     stopPromise: undefined,
+    stopResultStatus: "succeeded",
     stopRequested: false,
     paused: false,
     status: "starting",
@@ -2005,6 +2014,7 @@ function createInactiveRuntime(
     pendingApprovalReview: undefined,
     shutdownBarrierComplete: false,
     stopPromise: undefined,
+    stopResultStatus: "succeeded",
     stopRequested: false,
     paused: false,
     status: "stopped",

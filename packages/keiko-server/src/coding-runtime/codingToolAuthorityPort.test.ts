@@ -624,6 +624,10 @@ describe("CodingToolAuthorityPort", () => {
         resolveCapabilityForDelegation: vi
           .fn()
           .mockReturnValueOnce({ ok: false as const, reason: "budget-exceeded" as const })
+          .mockReturnValueOnce({
+            ok: true as const,
+            envelope: restrictedEnvelope({ actionClasses: ["workspace-read"] }),
+          })
           .mockReturnValue({ ok: true as const, envelope }),
       };
       const approvalProofVerifier = createCodingToolApprovalBridge();
@@ -678,6 +682,10 @@ describe("CodingToolAuthorityPort", () => {
       expect(port.admit("runtime-capability-secret", request)).toEqual({
         ok: false,
         reason: "budget-exceeded",
+      });
+      expect(port.admit("runtime-capability-secret", request)).toEqual({
+        ok: false,
+        reason: "action-not-authorized",
       });
       expect(port.admit("runtime-capability-secret", request).ok).toBe(true);
       expect(port.admit("runtime-capability-secret", request).ok).toBe(false);

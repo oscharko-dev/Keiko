@@ -48,6 +48,18 @@ function runtimePauseFailureCode(
   return code === "runtime-run-mismatch" ? "authority-resolution-failed" : code;
 }
 
+type CodingRuntimeApprovalIssueFailureCode = Extract<
+  CodingRuntimeApprovalIssueResult,
+  { readonly ok: false }
+>["failureCode"];
+
+function runtimeApprovalIssueFailureCode(
+  code: CodingRuntimeApprovalIssueFailureCode,
+): CodingWorkbenchRuntimeFailureCode {
+  if (code === "approval-activation-failed") return code;
+  return code === "runtime-run-mismatch" ? "authority-resolution-failed" : "runtime-failed";
+}
+
 export type {
   CodingRuntimeApprovalAuthority,
   CodingRuntimeLaunchResolver,
@@ -524,7 +536,12 @@ export class CodingRuntimeOrchestrator {
       this.approvals.delete(current.runId);
       return this.stopAfterIssueFailure(current, "authority-resolution-failed");
     }
-    if (!issued.ok) return this.stopAfterIssueFailure(current, "runtime-failed");
+    if (!issued.ok) {
+      return this.stopAfterIssueFailure(
+        current,
+        runtimeApprovalIssueFailureCode(issued.failureCode),
+      );
+    }
     return undefined;
   }
 

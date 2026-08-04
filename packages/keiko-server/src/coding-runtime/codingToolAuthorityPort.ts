@@ -105,17 +105,19 @@ function admit(
   }
   const resolved = resolveDelegation(authority, trusted, capability, request);
   if (!resolved.ok) return { ok: false, reason: resolved.reason };
+  if (!actionAllowed(resolved.envelope, request, approvalMatched)) {
+    return { ok: false, reason: "action-not-authorized" };
+  }
   // A one-shot proof is consumed only after the delegation budget has been reserved. Consuming it
-  // during preflight would make a transient reservation failure permanently deny a valid action.
+  // during preflight or before the resolved envelope is authorized would make a transient failure
+  // permanently deny a valid action.
   const approvalVerified = consumeMatchedApproval(
     approvalMatched,
     trusted,
     request,
     approvalProofVerifier,
   );
-  return actionAllowed(resolved.envelope, request, approvalVerified)
-    ? guarded(authority, context, capability, request, binding, approvalVerified)
-    : { ok: false, reason: "action-not-authorized" };
+  return guarded(authority, context, capability, request, binding, approvalVerified);
 }
 
 function resolveDelegation(

@@ -3608,7 +3608,7 @@ describe("coding runtime manager", () => {
       onRuntimeEvent: (event): void => {
         events.push(event);
         if (event.kind === "failure-redacted") {
-          observedStop = manager.stop(event.runId, "failed");
+          observedStop = manager.stop(event.runId);
         }
       },
       supervisor: testSupervisor(() => ({

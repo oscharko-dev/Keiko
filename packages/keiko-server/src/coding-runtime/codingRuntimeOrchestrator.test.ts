@@ -704,7 +704,7 @@ describe("CodingRuntimeOrchestrator", () => {
     });
     f.approvalAuthority.issue.mockReturnValueOnce({
       ok: false,
-      failureCode: "runtime-stopped",
+      failureCode: "approval-activation-failed",
       retryable: false,
     });
     expect(
@@ -713,7 +713,10 @@ describe("CodingRuntimeOrchestrator", () => {
         decision: "approved",
         expectedRevision: 4,
       }),
-    ).toMatchObject({ ok: true, snapshot: { state: "failed", failureCode: "runtime-failed" } });
+    ).toMatchObject({
+      ok: true,
+      snapshot: { state: "failed", failureCode: "approval-activation-failed" },
+    });
     expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
     expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });

@@ -276,6 +276,13 @@ describe("Coding Workbench runtime contracts", () => {
     expect(
       validateCodingWorkbenchRuntimeState({ ...active, state: "failed", failureCode: undefined }),
     ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeState({
+        ...active,
+        state: "failed",
+        failureCode: "approval-activation-failed",
+      }),
+    ).toMatchObject({ ok: true });
     expect(validateCodingWorkbenchRuntimeState({ ...active, state: "idle" })).toMatchObject({
       ok: false,
     });
