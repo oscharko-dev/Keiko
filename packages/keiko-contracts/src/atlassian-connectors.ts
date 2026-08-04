@@ -181,6 +181,52 @@ export const ATLASSIAN_JIRA_PROJECT_KEY_MAX_CHARS = 32;
 // transports it. No JQL parsing in v1, and it never appears in evidence (D6: hashed or omitted).
 export const ATLASSIAN_JQL_MAX_CHARS = 2048;
 
+// The sync scope executes as `project IN (...) AND (<jql>)`, so the narrowing guarantee holds only
+// while `<jql>` cannot terminate the injected group: `1=1) OR (project = SECRET` re-associates the
+// query into `(project IN (...) AND 1=1) OR (project = SECRET)` and reads unapproved projects.
+// This is a linear structural scan, not a JQL parser — the contract still transports JQL opaquely
+// and never interprets its semantics.
+export function hasBalancedJqlNesting(value: string): boolean {
+  let depth = 0;
+  let index = 0;
+  while (index < value.length) {
+    const character = value[index];
+    if (character === '"' || character === "'") {
+      const closing = indexOfJqlLiteralEnd(value, index + 1, character);
+      if (closing < 0) return false;
+      index = closing + 1;
+      continue;
+    }
+    if (character === "(") {
+      depth += 1;
+    } else if (character === ")") {
+      depth -= 1;
+      if (depth < 0) return false;
+    }
+    index += 1;
+  }
+  return depth === 0;
+}
+
+// Index of the quote that closes a literal opened at `start`, or -1 when it is unterminated. Inside
+// a literal a backslash escapes the next character, so `\"` does not close it — mirroring how Jira
+// lexes the string instead of rejecting a legitimate escaped quote.
+function indexOfJqlLiteralEnd(value: string, start: number, quote: string): number {
+  let index = start;
+  while (index < value.length) {
+    const character = value[index];
+    if (character === "\\") {
+      index += 2;
+      continue;
+    }
+    if (character === quote) {
+      return index;
+    }
+    index += 1;
+  }
+  return -1;
+}
+
 const CONFLUENCE_SPACE_KEY_PATTERN = /^~?[A-Za-z0-9]{1,255}$/u;
 const JIRA_PROJECT_KEY_PATTERN = /^[A-Z][A-Z0-9_]{0,31}$/u;
 

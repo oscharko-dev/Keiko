@@ -23,6 +23,22 @@ function checkWallTime(ctx: RunContext): StateStep | null {
   return null;
 }
 
+// Post-dispatch the deadline may have passed while a handler was running, and that handler may
+// already have recorded the authoritative failure (e.g. onModelError's HARNESS_MODEL_ERROR).
+// Detecting the deadline here must not overwrite it: a terminal outcome the handler decided wins
+// outright, and the failure slot is only claimed while still unclaimed. A non-terminal step past
+// the deadline still terminates the run rather than looping again.
+function checkWallTimePostDispatch(ctx: RunContext, dispatched: StateStep): StateStep | null {
+  if (TERMINAL_STATES.has(dispatched.to)) {
+    return null;
+  }
+  if (ctx.clock.now() - ctx.startedAt <= ctx.limits.maxWallTimeMs) {
+    return null;
+  }
+  ctx.failure ??= toFailure(HARNESS_CODES.LIMIT_WALL_TIME, "wall-time budget exhausted");
+  return { to: "limit-exceeded", reason: "maxWallTimeMs exceeded" };
+}
+
 // Limit checks evaluated when re-entering planning (iterations) plus the wall-time gate for
 // the run as a whole.
 function checkLoopLimits(ctx: RunContext): StateStep | null {
@@ -163,7 +179,7 @@ export async function runLoop(ctx: RunContext): Promise<RunOutcome> {
       continue;
     }
     const dispatched = await dispatch(ctx, state);
-    const postDispatchGuard = checkWallTime(ctx);
+    const postDispatchGuard = checkWallTimePostDispatch(ctx, dispatched);
     state = transition(ctx, state, postDispatchGuard ?? dispatched);
   }
   if (!TERMINAL_STATES.has(state)) {

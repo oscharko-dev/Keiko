@@ -11,12 +11,15 @@
 
 import {
   closeSync,
+  fstatSync,
   fsyncSync,
+  linkSync,
   readdirSync,
   readFileSync,
   openSync,
   lstatSync,
   rmSync,
+  statSync,
   writeSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -303,41 +306,63 @@ function lockOwnerIsDead(lockPath: string): boolean {
   }
 }
 
-function acquireManifestLock(realBase: string, runId: string): () => void {
-  assertValidRunId(runId);
-  assertLockFilenameFits(runId);
-  const lockPath = resolveWithinWorkspace(realBase, `${runId}${MANIFEST_LOCK_SUFFIX}`);
-  const deadline = Date.now() + MANIFEST_LOCK_TIMEOUT_MS;
-  let fd: number | undefined;
+// Stages the owner stamp in a per-attempt file and returns the inode it was written to. The hard
+// link published below shares that inode, which is what identifies the lock we own: a lock that is
+// later reclaimed and recreated by another process occupies the same PATH but a different file.
+function stageLockOwnerPid(tempPath: string): bigint {
+  const fd = openSync(tempPath, "wx");
+  try {
+    writeSync(fd, `${String(process.pid)}\n`);
+    fsyncSync(fd);
+    return fstatSync(fd, { bigint: true }).ino;
+  } finally {
+    closeSync(fd);
+  }
+}
 
-  while (fd === undefined) {
+// Publishing the lock by hard-linking an already-stamped file is atomic and EEXIST-fails exactly
+// like `openSync(lockPath, "wx")` did, but the lock is NEVER observably present-yet-unstamped.
+// That in-between state is indistinguishable from a crashed writer's abandoned lock, so the fast
+// reclaim above would delete a lock whose live owner had simply not finished acquiring it, and let
+// two processes into the same critical section (a silent lost update, not a torn file).
+function publishManifestLock(realBase: string, lockPath: string, deadline: number): bigint {
+  for (;;) {
+    // A fixed-length staging name (not `<lockPath>.<uuid>`) keeps the filename inside the POSIX
+    // limit for every runId the lock name itself admits, so a long runId cannot surface an
+    // ENAMETOOLONG carrying the absolute path (CWE-209, guarded above for the lock itself).
+    const tempPath = resolveWithinWorkspace(realBase, `.${randomUUID()}.pidtmp`);
+    const ownedInode = stageLockOwnerPid(tempPath);
     try {
-      fd = openSync(lockPath, "wx");
+      linkSync(tempPath, lockPath);
+      return ownedInode;
     } catch (error) {
       if (retryManifestLock(error, lockPath, deadline)) continue;
       throw new EvidenceWriteError(
         `evidence update lock failed: ${error instanceof Error ? error.message : "unknown"}`,
       );
+    } finally {
+      rmSync(tempPath, { force: true });
     }
   }
+}
 
-  writeLockOwnerPid(fd);
+function acquireManifestLock(realBase: string, runId: string): () => void {
+  assertValidRunId(runId);
+  assertLockFilenameFits(runId);
+  const lockPath = resolveWithinWorkspace(realBase, `${runId}${MANIFEST_LOCK_SUFFIX}`);
+  const deadline = Date.now() + MANIFEST_LOCK_TIMEOUT_MS;
+  const ownedInode = publishManifestLock(realBase, lockPath, deadline);
+
   return (): void => {
-    try {
-      closeSync(fd);
-    } finally {
+    // Release only while the file at the path is still the one we published. Removing by path
+    // alone would drop a process that legitimately reclaimed this lock (as dead-owned or stale)
+    // out of its own critical section. A lock we decline to remove here is not stranded: the
+    // dead-owner and mtime-staleness reclaims still recover it.
+    const current = statSync(lockPath, { bigint: true, throwIfNoEntry: false });
+    if (current?.ino === ownedInode) {
       rmSync(lockPath, { force: true });
     }
   };
-}
-
-function writeLockOwnerPid(fd: number): void {
-  try {
-    writeSync(fd, `${String(process.pid)}\n`);
-    fsyncSync(fd);
-  } catch {
-    // Best-effort ownership stamp: if the write fails the lock still works via mtime staleness.
-  }
 }
 
 function retryManifestLock(error: unknown, lockPath: string, deadline: number): boolean {

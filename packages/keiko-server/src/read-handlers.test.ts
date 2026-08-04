@@ -718,6 +718,28 @@ describe("GET /api/evidence", () => {
     expect(entries[0]?.runId).toBe(expectedRunId);
   });
 
+  it("still serves the healthy runs when one stored manifest is unreadable", () => {
+    // The ledger is the product's primary governance surface; one foreign file in the evidence
+    // directory must not turn it into an empty page or an opaque 500 (KEIKO-0106).
+    const store = storeFrom([
+      manifestJson("run-a", "generate-unit-tests", "completed", Date.parse("2026-05-01T10:00:00Z")),
+      manifestJson("run-b", "investigate-bug", "failed", Date.parse("2026-05-02T10:00:00Z")),
+    ]);
+    const withBadEntry: EvidenceStore = {
+      ...store,
+      list: () => ["run-a", "run-b", "run-legacy"],
+      get: (runId) =>
+        runId === "run-legacy" ? JSON.stringify({ evidenceSchemaVersion: "2" }) : store.get(runId),
+    };
+    const result = handleEvidenceList(
+      ctx("/api/evidence"),
+      depsWith({ evidenceStore: withBadEntry }),
+    );
+    expect(result.status).toBe(200);
+    const entries = (result.body as { entries: { runId: string }[] }).entries;
+    expect(entries.map((entry) => entry.runId)).toEqual(["run-a", "run-b"]);
+  });
+
   it("filters by model and workspace metadata", () => {
     const store = storeFrom([
       manifestJson(

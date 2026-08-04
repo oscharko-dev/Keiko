@@ -382,10 +382,23 @@ function matchesFilters(entry: EvidenceListEntry, filters: EvidenceFilters): boo
 // Route 10 — evidence list header projection, filtered server-side.
 export function handleEvidenceList(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const filters = readFilters(ctx.url);
-  const entries = listEvidence(deps.evidenceStore).filter((entry) =>
-    matchesFilters(entry, filters),
-  );
-  return { status: 200, body: { entries } };
+  try {
+    const entries = listEvidence(deps.evidenceStore).filter((entry) =>
+      matchesFilters(entry, filters),
+    );
+    return { status: 200, body: { entries } };
+  } catch (error) {
+    // listEvidence skips a single bad manifest, so reaching here means a store-level fault. Map it
+    // the way the detail sibling does instead of surfacing an opaque 500 for a diagnosable,
+    // pre-redacted condition; anything unrecognised still propagates to the top-level handler.
+    if (error instanceof EvidenceSchemaError) {
+      return { status: 422, body: errorBody("EVIDENCE_SCHEMA", error.message) };
+    }
+    if (error instanceof EvidenceReadError) {
+      return { status: 422, body: errorBody("EVIDENCE_READ", error.message) };
+    }
+    throw error;
+  }
 }
 
 // Route 11 — a single evidence manifest, served as-is (already redacted on disk). Invalid runId →

@@ -320,6 +320,26 @@ describe("validateAtlassianSyncScope (hostile input)", () => {
     expectOk(validateAtlassianSyncScope(jiraScope({ jql: "x".repeat(2_048) })));
   });
 
+  it("rejects JQL that can escape the composed project conjunction", () => {
+    // `project IN (...) AND (<jql>)` only narrows while <jql> cannot close the injected group.
+    // An unbalanced clause turns the conjunction into a disjunction and widens egress (KEIKO-0026).
+    const escaped = 'text ~ "say \\"hi\\" now"';
+    for (const jql of [
+      "1=1) OR (project = SECRET",
+      "status = Done)",
+      "(status = Done",
+      'text ~ "x',
+      'text ~ "a\\"',
+    ]) {
+      expect(errorsOf(validateAtlassianSyncScope(jiraScope({ jql })))).toContain(
+        "scope.jql must have balanced parentheses and terminated string literals",
+      );
+    }
+    // Balanced clauses still pass, including parens inside a literal and escaped inner quotes.
+    expectOk(validateAtlassianSyncScope(jiraScope({ jql: 'labels = auth AND text ~ "log(in"' })));
+    expectOk(validateAtlassianSyncScope(jiraScope({ jql: escaped })));
+  });
+
   it("propagates widened bounds as scope errors", () => {
     const errors = errorsOf(
       validateAtlassianSyncScope(jiraScope({ bounds: bounds({ maxItems: 5_000 }) })),

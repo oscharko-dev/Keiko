@@ -49,7 +49,10 @@ import {
   type AgentRunGovernanceBinding,
 } from "./agent-run-governance.js";
 import { QueueEventSink } from "./sink.js";
-import { executeVerificationEnforced } from "./editor/verificationExecution.js";
+import {
+  executeVerificationEnforced,
+  probeNetworkIsolation,
+} from "./editor/verificationExecution.js";
 import type { ExecuteVerificationResult } from "./editor/verificationExecution.js";
 import type { AppliableSnapshot, RunRegistry, RunStatus } from "./runs.js";
 import {
@@ -255,6 +258,12 @@ function dispatchWorkflow(ctx: EngineContext, sink: QueueEventSink, runId: strin
   const commonDeps = {
     model: ports.model,
     ...(ports.spawn === undefined ? {} : { spawn: ports.spawn }),
+    // Probe THIS host for an enforcing egress backend and hand the answer to the verify stage, the
+    // same probe-then-enforce composition the editor verification path uses. Without it the stage
+    // could only ever see "no backend available" and had to choose between denying every
+    // network:"none" step and running model-authored code with inherited network (ADR-0043 D8).
+    verificationEnforcedNetworkAvailable: probeNetworkIsolation(workspaceRoot(ctx.request))
+      .available,
     sink,
     signal: controller.signal,
     idSource: (): string => runId,

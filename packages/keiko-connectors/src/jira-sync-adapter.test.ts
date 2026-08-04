@@ -133,6 +133,23 @@ describe("JQL composition", () => {
     );
   });
 
+  it("rejects user JQL that can close the injected project group", () => {
+    // The narrowing guarantee rests on `AND (<jql>)` staying one group. A clause that closes it
+    // early re-associates the query into `(scope AND ...) OR (...)` and reads unapproved
+    // projects (KEIKO-0026).
+    for (const jql of [
+      "1=1) OR (project = SECRET",
+      "status = Done)",
+      "(status = Done",
+      'text ~ "x',
+    ]) {
+      expect(() => composeJiraScopeJql(["APPROVED"], jql)).toThrow(AtlassianCredentialCustodyError);
+    }
+    expect(composeJiraScopeJql(["APPROVED"], "status = Done")).toBe(
+      "project IN (APPROVED) AND (status = Done)",
+    );
+  });
+
   it("transports the composed JQL in the search request URL", async () => {
     const harness = sourceFor([project("PLAT", [fixtureIssue(1)])], { jql: "labels = auth" });
     await harness.source.enumerate(harness.context);

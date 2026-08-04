@@ -30,7 +30,15 @@
 // dirs from a previously interrupted record() are cleaned up without a separate boot step.
 
 import { createHash, randomUUID } from "node:crypto";
-import { type Dirent, linkSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  type Dirent,
+  linkSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+} from "node:fs";
 import { join } from "node:path";
 import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
@@ -948,6 +956,18 @@ interface StoreCtx {
   readonly ensureSwept: () => void;
 }
 
+// Moves this attempt's staged side-files to the canonical per-run directory. Only ever called by
+// the attempt that WON the write-once JSON commit, so a directory still sitting at the canonical
+// path is an orphan from an aborted earlier attempt (no record for this runId existed a moment
+// ago, or the commit would have been rejected) and never a committed sibling's evidence.
+function publishStagedSideFiles(stagedRunDir: string, sideFileDir: string): void {
+  if (lstatSync(stagedRunDir, { throwIfNoEntry: false })?.isDirectory() !== true) {
+    return;
+  }
+  rmSync(sideFileDir, { recursive: true, force: true });
+  renameSync(stagedRunDir, sideFileDir);
+}
+
 function recordOp(ctx: StoreCtx, input: RecordFigmaSnapshotInput): RecordFigmaSnapshotResult {
   assertValidRunId(input.runId);
   ctx.ensureSwept();
@@ -956,28 +976,30 @@ function recordOp(ctx: StoreCtx, input: RecordFigmaSnapshotInput): RecordFigmaSn
   // Write-once pre-check BEFORE any side-file is written so a rejected re-record leaves no
   // partial render bytes behind. `atomicWriteOnce` re-checks via O_EXCL to close the TOCTOU gap.
   assertSnapshotAbsent(recordPath);
-  let rows: readonly FigmaSnapshotScreenRow[];
+  // Side-files are staged in an attempt-private directory and published only once this attempt has
+  // won that same write-once commit, mirroring its "commit once, atomically" discipline. Sharing
+  // the runId-keyed directory across attempts made a concurrent duplicate request destructive in
+  // both directions: a loser overwrote the winner's PNG bytes at the deterministic screen-N.png
+  // path (leaving the committed record referencing a sha256 that no longer matched disk), and its
+  // failure cleanup then deleted the winner's whole directory.
+  const stagingBase = join(ctx.sideFileBase, `.attempt-${randomUUID()}`);
+  const sideFileDir = join(ctx.sideFileBase, input.runId);
   try {
-    rows = writeScreenSideFiles(
-      ctx.sideFileBase,
+    const rows: readonly FigmaSnapshotScreenRow[] = writeScreenSideFiles(
+      stagingBase,
       input.runId,
       input.screens,
       ctx.fs,
       ctx.randomSuffix,
     );
-  } catch (error) {
-    // Side-file write failed: best-effort remove the run's side-dir so it is not orphaned.
-    rmSync(join(ctx.sideFileBase, input.runId), { recursive: true, force: true });
-    throw error;
-  }
-  try {
     atomicWriteOnce(recordPath, JSON.stringify(assembleRecord(input, rows)), ctx.randomSuffix);
-  } catch (error) {
-    // Record write failed after side-files succeeded: remove side-dir to avoid orphaning.
-    rmSync(join(ctx.sideFileBase, input.runId), { recursive: true, force: true });
-    throw error;
+    publishStagedSideFiles(join(stagingBase, input.runId), sideFileDir);
+  } finally {
+    // Only ever this attempt's own staging directory — never the canonical one, which by now
+    // belongs to whichever attempt committed the record.
+    rmSync(stagingBase, { recursive: true, force: true });
   }
-  return { recordPath, sideFileDir: join(ctx.sideFileBase, input.runId) };
+  return { recordPath, sideFileDir };
 }
 
 function loadOp(ctx: StoreCtx, runId: string): FigmaSnapshotRecord | undefined {

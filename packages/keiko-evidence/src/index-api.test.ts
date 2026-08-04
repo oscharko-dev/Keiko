@@ -136,16 +136,51 @@ describe("loadEvidence", () => {
     expect(() => loadEvidence(store, "run-x")).toThrow(EvidenceReadError);
   });
 
-  it("propagates the typed read error through listEvidence too", () => {
+  // The two cases below used to assert that listEvidence propagates these typed errors. The
+  // invariant they encode — a bad manifest raises a TYPED error rather than a raw exception — is
+  // preserved and now pinned where it belongs, on the single-run lookup. Enumeration answers a
+  // different question ("which runs can I show?") and is pinned separately below (KEIKO-0106/1033).
+  it("raises the typed read error from loadEvidence while listEvidence skips the entry", () => {
     const store = createInMemoryEvidenceStore();
     store.put("run-x", "not json at all");
-    expect(() => listEvidence(store)).toThrow(EvidenceReadError);
+    expect(() => loadEvidence(store, "run-x")).toThrow(EvidenceReadError);
+    expect(listEvidence(store)).toEqual([]);
   });
 
-  it("propagates a typed schema error through listEvidence too", () => {
+  it("raises the typed schema error from loadEvidence while listEvidence skips the entry", () => {
     const store = createInMemoryEvidenceStore();
     store.put("run-x", JSON.stringify({ evidenceSchemaVersion: "1" }));
-    expect(() => listEvidence(store)).toThrow(EvidenceSchemaError);
+    expect(() => loadEvidence(store, "run-x")).toThrow(EvidenceSchemaError);
+    expect(listEvidence(store)).toEqual([]);
+  });
+
+  it("keeps listing healthy runs when one manifest is unreadable, legacy or shape-invalid", () => {
+    // One foreign file in .keiko/evidence must not blank the audit ledger: a restored backup, a
+    // truncated write, or the first schema bump would otherwise hide every healthy run
+    // (KEIKO-0106 / KEIKO-1033).
+    const store = seed();
+    store.put("run-legacy", JSON.stringify({ evidenceSchemaVersion: "2", run: {} }));
+    store.put("run-torn", '{"evidenceSchemaVersion": "1", run');
+    store.put(
+      "run-corrupt",
+      JSON.stringify({ ...manifestFixture("run-corrupt", 300), stateTransitions: "not-an-array" }),
+    );
+    expect(listEvidence(store).map((entry) => entry.runId)).toEqual(["run-a", "run-b"]);
+    expect(() => loadEvidence(store, "run-legacy")).toThrow(EvidenceSchemaError);
+    expect(() => loadEvidence(store, "run-torn")).toThrow(EvidenceReadError);
+    expect(() => loadEvidence(store, "run-corrupt")).toThrow(EvidenceSchemaError);
+  });
+
+  it("still propagates an unexpected store failure out of listEvidence (fails closed)", () => {
+    const store = createInMemoryEvidenceStore();
+    store.put("run-a", JSON.stringify(manifestFixture("run-a", 100)));
+    const failing = {
+      ...store,
+      get: (runId: string): string | undefined => {
+        throw new Error(`store I/O failure for ${runId}`);
+      },
+    };
+    expect(() => listEvidence(failing)).toThrow("store I/O failure");
   });
 
   it("loads a PR5-shaped manifest carrying contextAssembly + compaction (ADR-0056 Gate 2)", () => {

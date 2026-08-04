@@ -466,6 +466,43 @@ describe("createNodeFigmaSnapshotStore", () => {
     expect(readFileSync(snapshotFile(), "utf8")).toBe(existing);
   });
 
+  it("keeps a committed record loadable when a losing concurrent record() cleans up", () => {
+    // A double-submit of the same runId races two record() calls. The write-once JSON commit picks
+    // one winner; the loser must not take the winner's image side-files with it on the way out,
+    // and must not have overwritten their bytes on the way in (KEIKO-0110).
+    const winner = createNodeFigmaSnapshotStore(dir);
+    const loserScreens = baseInput().screens.map((screen, index) => ({
+      ...screen,
+      image: { mimeType: "image/png" as const, bytes: png(200 + index) },
+    }));
+    let committed: ReturnType<FigmaSnapshotStore["record"]> | undefined;
+    const loser = createNodeFigmaSnapshotStore(dir, {
+      randomSuffix: () => {
+        // The winning attempt commits its record (and its side-files) while this attempt is
+        // between its own side-file writes and its write-once commit.
+        committed ??= winner.record(baseInput());
+        return "race";
+      },
+    });
+
+    expect(() => loser.record({ ...baseInput(), screens: loserScreens })).toThrow(
+      EvidenceWriteError,
+    );
+
+    const loaded = loadOrThrow(winner, RUN_ID);
+    expect(loaded.screens).toHaveLength(2);
+    // load() re-verifies each side-file's sha256, so a deleted or clobbered PNG throws here.
+    const first = firstScreen(loaded);
+    expect(first.image.sha256).toBe(
+      createHash("sha256")
+        .update(Buffer.from(png(10)))
+        .digest("hex"),
+    );
+    expect(readFileSync(join(committed?.sideFileDir ?? "", first.image.relativePath))).toEqual(
+      Buffer.from(png(10)),
+    );
+  });
+
   it("redacts secrets out of the persisted IR content (token never on disk)", () => {
     const store = createNodeFigmaSnapshotStore(dir);
 

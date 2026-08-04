@@ -309,4 +309,49 @@ describe("executor — ADR-0055 D4 shaped-observation attach", () => {
     expect(ctx.shapedObservations).toHaveLength(0);
     expect(ctx.messages[ctx.messages.length - 1]?.content).toBe(OUTPUT);
   });
+
+  // Shaping is additive (ADR-0055 D4): the tool has already succeeded and tool:call:completed has
+  // already been emitted by the time it runs. A fault here must not re-enter the failure path,
+  // emit a second terminal event for the same toolCallId, or end the run (KEIKO-0099).
+  const shaperFaults: readonly (readonly [string, HarnessShaperPort])[] = [
+    [
+      "a throwing port",
+      (): ContextToolObservation => {
+        throw new Error("shaper exploded");
+      },
+    ],
+    [
+      "an observation that cannot be serialized",
+      // A BigInt leaf makes JSON.stringify throw inside compactObservationContent.
+      (): ContextToolObservation =>
+        ({ ...DEFAULT_OBSERVATION, unserializable: 1n }) as unknown as ContextToolObservation,
+    ],
+  ];
+
+  for (const [label, port] of shaperFaults) {
+    it(`survives ${label} with the raw tool output and one terminal event`, async () => {
+      const { ctx, sink } = buildContext({
+        task: TASK,
+        model: { call: () => Promise.resolve(response()) },
+        tools: commandTool(OUTPUT),
+        shaperPort: port,
+      });
+      ctx.lastResponse = response({
+        finishReason: "tool_calls",
+        toolCalls: [toolCall("c1", "run_command")],
+      });
+
+      const step = await handleToolCall(ctx);
+
+      expect(step.to).not.toBe("failed");
+      expect(ctx.failure).toBeUndefined();
+      expect(
+        sink
+          .events()
+          .filter((event) => event.type.startsWith("tool:call:"))
+          .map((event) => event.type),
+      ).toEqual(["tool:call:started", "tool:call:completed"]);
+      expect(ctx.messages[ctx.messages.length - 1]?.content).toBe(OUTPUT);
+    });
+  }
 });

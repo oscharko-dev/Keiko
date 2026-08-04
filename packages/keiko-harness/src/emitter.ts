@@ -54,6 +54,10 @@ const REDACTORS: {
   "patch:proposed": (event) => ({ ...event, diff: redact(event.diff) }),
   "model:call:failed": (event) => ({ ...event, message: redact(event.message) }),
   "tool:call:failed": (event) => ({ ...event, message: redact(event.message) }),
+  // Browser free text can embed page- and URL-derived content (ADR-0017); `sessionId`/`code` are
+  // structured identifiers and stay verbatim, exactly as on the model/tool failure siblings.
+  "browser:trust-warning": (event) => ({ ...event, warning: redact(event.warning) }),
+  "browser:error": (event) => ({ ...event, message: redact(event.message) }),
   "verification:result": (event) => ({ ...event, detail: redact(event.detail) }),
   "run:completed": redactRunCompleted,
   "run:cancelled": (event) =>

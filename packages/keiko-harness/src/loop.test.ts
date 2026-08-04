@@ -628,4 +628,27 @@ describe("runLoop — limit breaches each map to their category", () => {
     expect(outcomeB).toBe("limit-exceeded");
     expect(failureCategory(sinkB.events())).toBe("HARNESS_LIMIT_WALL_TIME");
   });
+
+  it("keeps the handler's failure when a model error and the wall-time deadline coincide", async () => {
+    // A provider that errors slowly must be reported as a model error, not relabelled as budget
+    // exhaustion: the manifest's failure block is the audit surface for why a run stopped
+    // (ADR-0004 D1, KEIKO-0098).
+    const { AuthenticationError } = await import("@oscharko-dev/keiko-model-gateway");
+    const { clock, set } = stubClock(0);
+    const slowFailingModel: ModelPort = {
+      call: (): Promise<NormalizedResponse> => {
+        set(1000); // the deadline passes while the call is in flight
+        return Promise.reject(new AuthenticationError("provider returned 400 invalid request"));
+      },
+    };
+    const { ctx, sink } = buildContext({
+      task: EXPLAIN,
+      model: slowFailingModel,
+      clock,
+      limits: { maxWallTimeMs: 100 },
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("failed");
+    expect(failureCategory(sink.events())).toBe("HARNESS_MODEL_ERROR");
+  });
 });

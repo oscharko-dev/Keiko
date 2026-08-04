@@ -28,6 +28,7 @@ import {
   ATLASSIAN_SYNC_SCOPE_MAX_KEYS,
   ATLASSIAN_SYNC_TERMINAL_STATUSES,
   DEFAULT_ATLASSIAN_SYNC_BOUNDS,
+  hasBalancedJqlNesting,
   isAtlassianConnectorActionType,
   isAtlassianConnectorAuthRef,
   isAtlassianConnectorAuthScheme,
@@ -244,6 +245,13 @@ function validateOpaqueJql(value: unknown, errors: string[]): void {
     errors.push(
       `scope.jql must be a non-empty string of at most ${String(ATLASSIAN_JQL_MAX_CHARS)} characters`,
     );
+    return;
+  }
+  // Structural (not semantic) precondition of the `project IN (...) AND (<jql>)` composition the
+  // adapter builds: a clause that closes the injected group widens egress past the approved
+  // projects. Rejected here so a scope can never be persisted in that shape (ADR-0128 D5).
+  if (!hasBalancedJqlNesting(value)) {
+    errors.push("scope.jql must have balanced parentheses and terminated string literals");
   }
 }
 

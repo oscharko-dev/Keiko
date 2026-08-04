@@ -43,6 +43,7 @@
 
 import {
   ATLASSIAN_JQL_MAX_CHARS,
+  hasBalancedJqlNesting,
   isSafeAtlassianIdentifier,
   isSafeJiraProjectKey,
   type AtlassianSyncFailureReason,
@@ -182,7 +183,16 @@ export function composeJiraScopeJql(
   userJql: string | undefined,
 ): string {
   const scope = `project IN (${projectKeys.join(", ")})`;
-  return userJql === undefined ? `${scope} ORDER BY id ASC` : `${scope} AND (${userJql})`;
+  if (userJql === undefined) return `${scope} ORDER BY id ASC`;
+  // A clause that closes the injected group escapes the conjunction (`AND` binds tighter than
+  // `OR`) and reads unapproved projects. The wire boundary rejects the same shape, but a scope
+  // persisted before that guard existed is re-read here, so composition validates too.
+  if (!hasBalancedJqlNesting(userJql)) {
+    throw new AtlassianCredentialCustodyError("invalid-input", [
+      "jql must have balanced parentheses and terminated string literals",
+    ]);
+  }
+  return `${scope} AND (${userJql})`;
 }
 
 // ─── Enumeration (one bounded full id-set walk) ────────────────────────────────

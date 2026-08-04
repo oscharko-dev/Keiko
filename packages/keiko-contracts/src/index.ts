@@ -1127,6 +1127,7 @@ export {
   ATLASSIAN_SYNC_SCOPE_MAX_KEYS,
   ATLASSIAN_SYNC_TERMINAL_STATUSES,
   DEFAULT_ATLASSIAN_SYNC_BOUNDS,
+  hasBalancedJqlNesting,
   decideAtlassianConnectorAction,
   isAtlassianConnectionVerificationStatus,
   isAtlassianConnectorActionReviewReason,
