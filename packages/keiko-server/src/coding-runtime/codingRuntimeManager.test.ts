@@ -44,6 +44,10 @@ import {
 import { createInMemorySupervisedCodingApprovalStore } from "./supervisedCodingApprovalStore.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
+  codingToolApprovalBindingDigest,
+  createCodingToolApprovalBridge,
+} from "./codingToolApprovalBridge.js";
+import {
   OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
   OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
 } from "./opencodeProtocolSurface.js";
@@ -717,6 +721,10 @@ interface PermissionLineInput {
   readonly risk?: string | undefined;
   readonly policyReason?: string | undefined;
   readonly commandLabel?: string | undefined;
+  readonly actionId?: string | undefined;
+  readonly idempotencyKey?: string | undefined;
+  readonly approvalId?: string | undefined;
+  readonly approvalDigest?: string | undefined;
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly targetPath?: string | undefined;
   readonly allowedRelativePaths?: readonly string[] | undefined;
@@ -1990,6 +1998,65 @@ describe("coding runtime manager", () => {
     expect(manager.health()).toMatchObject({ status: "recovery-required" });
   });
 
+  it.each(["supervised-approval-store", "coding-tool-approval-bridge"] as const)(
+    "diagnoses a %s invalidation failure and still attempts the independent approval barrier",
+    async (failedBarrier) => {
+      const fixture = createManagedFixture();
+      const child = fakeChild();
+      const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+      const approvalStore = createInMemorySupervisedCodingApprovalStore();
+      const codingToolApprovals = createCodingToolApprovalBridge();
+      const approvalStoreInvalidation = vi.spyOn(approvalStore, "invalidateRun");
+      const codingToolInvalidation = vi.spyOn(codingToolApprovals, "invalidateRun");
+      const privateFailureBody = `private-${failedBarrier}-failure`;
+      const failedInvalidation =
+        failedBarrier === "supervised-approval-store"
+          ? approvalStoreInvalidation
+          : codingToolInvalidation;
+      failedInvalidation.mockImplementation(() => {
+        throw new TypeError(privateFailureBody);
+      });
+      const manager = createTestCodingRuntimeManager({
+        processEnv: {},
+        diagnostics,
+        approvalStore,
+        codingToolApprovals,
+        supervisor: testSupervisor(() => ({
+          ...child.handle,
+          kill: (signal): void => {
+            child.kills.push(signal);
+            child.exit(0);
+          },
+        })),
+        now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+      });
+
+      expect(
+        manager.start(
+          launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ).toMatchObject({ ok: true });
+      await expect(manager.stop("run-1988")).resolves.toEqual({
+        ok: false,
+        failureCode: "runtime-reap-unproven",
+        retryable: false,
+      });
+      expect(approvalStoreInvalidation).toHaveBeenCalledWith("run-1988");
+      expect(codingToolInvalidation).toHaveBeenCalledWith("run-1988");
+      expect(diagnostics.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          correlationId: "run-1988",
+          operation: "coding-runtime.approval-revocation",
+          source: `coding-runtime-manager.${failedBarrier}`,
+          errorClass: "TypeError",
+          message: "runtime-approval-revocation-failed",
+        }),
+      );
+      expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(privateFailureBody);
+      expect(manager.health()).toMatchObject({ status: "recovery-required" });
+    },
+  );
+
   it("stops the active sidecar and allows a clean restart", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
@@ -2313,6 +2380,126 @@ describe("coding runtime manager", () => {
     });
     expect(events.some((event) => event.kind === "permission-requested")).toBe(false);
     expect(JSON.stringify(events)).not.toMatch(/stdout|stderr|npm run typecheck/u);
+  });
+
+  it("activates one exact governed verification proof only after human approval", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const codingToolApprovals = createCodingToolApprovalBridge();
+    const request = {
+      action: "verification" as const,
+      actionId: "session:call",
+      idempotencyKey: "session:call",
+      verifierId: "typecheck",
+    };
+    const approvalProof = {
+      approvalId: request.actionId,
+      approvalDigest: codingToolApprovalBindingDigest("run-1991", request),
+    };
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      codingToolApprovals,
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    await manager.start(
+      governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "permission-verification",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "approval-required",
+        actionKind: "verification-command",
+        scopeLabel: "workspace-scope",
+        risk: "low",
+        policyReason: "approval-required",
+        commandLabel: request.verifierId,
+        actionId: request.actionId,
+        idempotencyKey: request.idempotencyKey,
+        approvalId: approvalProof.approvalId,
+        approvalDigest: approvalProof.approvalDigest,
+      }),
+    );
+    await settle();
+
+    expect(events.find((event) => event.kind === "permission-requested")).toMatchObject({
+      permissionRequest: {
+        requestId: "permission-verification",
+        commandLabel: "typecheck",
+      },
+    });
+    expect(
+      codingToolApprovals.consume({
+        runId: "run-1991",
+        request: { ...request, approvalProof },
+        nowMs: Date.parse("2026-07-07T13:00:00.000Z"),
+      }),
+    ).toBe(false);
+    expect(
+      manager.issueApproval({
+        runId: "run-1991",
+        requestId: "permission-verification",
+        actionKind: "verification-command",
+        approvedByUserId: "operator",
+      }).ok,
+    ).toBe(true);
+    expect(
+      codingToolApprovals.consume({
+        runId: "run-1991",
+        request: { ...request, approvalProof },
+        nowMs: Date.parse("2026-07-07T13:00:00.000Z"),
+      }),
+    ).toBe(true);
+    expect(
+      codingToolApprovals.consume({
+        runId: "run-1991",
+        request: { ...request, approvalProof },
+        nowMs: Date.parse("2026-07-07T13:00:00.000Z"),
+      }),
+    ).toBe(false);
+  });
+
+  it("rolls back the issued approval when verification bridge activation fails", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const approvalStore = createInMemorySupervisedCodingApprovalStore();
+    const consume = vi.spyOn(approvalStore, "consume");
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      approvalStore,
+      codingToolApprovals: createCodingToolApprovalBridge(),
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+    await manager.start(
+      governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    expect(
+      manager.issueApproval({
+        runId: "run-1991",
+        requestId: "permission-without-bridge-observation",
+        actionKind: "verification-command",
+        approvedByUserId: "operator",
+      }),
+    ).toEqual({ ok: false, failureCode: "approval-activation-failed", retryable: false });
+    expect(consume).toHaveBeenCalledOnce();
+    const rollback = consume.mock.calls[0]?.[0];
+    expect(rollback?.approval.approvalId).toMatch(/^sca_/u);
+    expect(rollback?.binding).toMatchObject({
+      runId: "run-1991",
+      requestId: "permission-without-bridge-observation",
+    });
+    expect(rollback?.nowMs).toBe(Date.parse("2026-07-07T13:00:00.000Z"));
   });
 
   it("refuses approval issuance while paused and restores it on resume (#2386)", async () => {
@@ -3187,6 +3374,79 @@ describe("coding runtime manager", () => {
     expect(events.filter((event) => event.kind === "failure-redacted")).toEqual([]);
   });
 
+  it("retains multiple OpenCode startup lines in FIFO order", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const observed: string[] = [];
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(() => child.handle),
+      openCodeLifecycleAdapter: {
+        handshake: async ({ startupOutput }) => {
+          observed.push(await startupOutput.nextLine());
+          observed.push(await startupOutput.nextLine());
+          return { ok: true } as const;
+        },
+      },
+    });
+
+    const starting = manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    child.stdout.write("line-one\nline-two\n");
+
+    await expect(starting).resolves.toMatchObject({ ok: true });
+    expect(observed).toEqual(["line-one\n", "line-two\n"]);
+  });
+
+  it("fails startup loudly when the bounded OpenCode mailbox overflows", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    let releaseHandshake: (() => void) | undefined;
+    let mailboxFailure: string | undefined;
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(() => ({
+        ...child.handle,
+        kill: (signal): void => {
+          child.kills.push(signal);
+          child.exit(0);
+        },
+      })),
+      openCodeLifecycleAdapter: {
+        handshake: async ({ startupOutput }) => {
+          await new Promise<void>((resolve) => {
+            releaseHandshake = resolve;
+          });
+          try {
+            await startupOutput.nextLine();
+          } catch (error) {
+            mailboxFailure = error instanceof Error ? error.message : "unknown";
+            throw error;
+          }
+          return { ok: true } as const;
+        },
+      },
+    });
+
+    const starting = manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    await vi.waitFor(() => {
+      expect(releaseHandshake).toBeTypeOf("function");
+    });
+    child.stdout.write(
+      Array.from({ length: 65 }, (_value, index) => `line-${String(index)}\n`).join(""),
+    );
+    releaseHandshake?.();
+
+    await expect(starting).resolves.toMatchObject({
+      ok: false,
+      failureCode: "protocol-schema-mismatch",
+    });
+    expect(mailboxFailure).toBe("runtime-startup-output-overflow");
+  });
+
   it("revokes and proves complete-tree reap when OpenCode readiness fails", async () => {
     const fixture = createManagedFixture();
     const child = fakeChild();
@@ -3231,6 +3491,51 @@ describe("coding runtime manager", () => {
       "release:run-1988",
     ]);
     expect(manager.health()).toEqual({ status: "stopped" });
+  });
+
+  it.each([
+    ["authenticated-health-version", "runtime-version-mismatch"],
+    ["authenticated-health", "protocol-schema-mismatch"],
+    ["endpoint-invalid", "protocol-schema-mismatch"],
+    ["preparation-missing", "protocol-schema-mismatch"],
+    ["readiness-failed", "protocol-schema-mismatch"],
+  ] as const)("maps the %s handshake reason precisely", async (reason, failureCode) => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      diagnostics,
+      supervisor: testSupervisor(() => ({
+        ...child.handle,
+        kill: (signal): void => {
+          child.kills.push(signal);
+          child.exit(0);
+        },
+      })),
+      openCodeLifecycleAdapter: {
+        handshake: vi.fn(() => Promise.resolve({ ok: false, reason })),
+      },
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+    });
+
+    await expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      failureCode,
+      retryable: false,
+    });
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        correlationId: "run-1988",
+        operation: "coding-runtime.handshake",
+        errorClass: "OpenCodeHandshakeFailure",
+        message: `runtime-handshake-phase:${reason}`,
+      }),
+    );
   });
 
   it("aborts the adapter-visible handshake signal on timeout and rejects a late ready result", async () => {
@@ -3282,12 +3587,15 @@ describe("coding runtime manager", () => {
     }
   });
 
-  it("treats a post-ready lifecycle monitor failure as a fail-closed stop", async () => {
+  it("single-flights a lifecycle failure stop observed by the outer orchestrator", async () => {
     const fixture = createManagedFixture();
     const child = fakeChild();
     const revokeRuntime = vi.fn(() => true);
     const abortInFlightActions = vi.fn(() => true);
+    const dispose = vi.fn(() => true);
+    const releaseRuntimeAfterReap = vi.fn(() => true);
     const events: CodingWorkbenchRuntimeEvent[] = [];
+    let observedStop: ReturnType<CodingRuntimeManager["stop"]> | undefined;
     let failMonitor: (() => void) | undefined;
     const monitor = vi.fn(
       ({ onFailure }: { readonly runId: string; readonly onFailure: () => void }): (() => void) => {
@@ -3299,6 +3607,9 @@ describe("coding runtime manager", () => {
       processEnv: {},
       onRuntimeEvent: (event): void => {
         events.push(event);
+        if (event.kind === "failure-redacted") {
+          observedStop = manager.stop(event.runId);
+        }
       },
       supervisor: testSupervisor(() => ({
         ...child.handle,
@@ -3309,10 +3620,12 @@ describe("coding runtime manager", () => {
       })),
       revokeRuntime,
       abortInFlightActions,
+      releaseRuntimeAfterReap,
       openCodeLifecycleAdapter: {
         handshake: vi.fn(() => Promise.resolve({ ok: true })),
         // #2254 lifecycle monitor contract: failures after ready must route through manager stop.
         monitor,
+        dispose,
       } as never,
     });
 
@@ -3326,11 +3639,17 @@ describe("coding runtime manager", () => {
     expect(monitorInput?.runId).toBe("run-1988");
     expect(typeof monitorInput?.onFailure).toBe("function");
     failMonitor?.();
+    await expect(observedStop).resolves.toEqual({ ok: true, status: "stopped" });
     await vi.waitFor(() => {
       expect(revokeRuntime).toHaveBeenCalledWith("run-1988");
       expect(abortInFlightActions).toHaveBeenCalledWith("run-1988");
       expect(manager.health()).toEqual({ status: "stopped" });
     });
+    expect(revokeRuntime).toHaveBeenCalledOnce();
+    expect(abortInFlightActions).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(releaseRuntimeAfterReap).toHaveBeenCalledOnce();
+    expect(manager.result("run-1988")?.status).toBe("failed");
     const terminalEvents = events.filter(
       (event) => event.kind === "failure-redacted" || event.kind === "runtime-stopped",
     );

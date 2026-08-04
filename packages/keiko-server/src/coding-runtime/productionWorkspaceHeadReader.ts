@@ -88,7 +88,7 @@ function resolveGitDir(
   if (pointer === undefined) return undefined;
   const pointed = resolve(workspaceRoot, pointer);
   const gitDir = canonicalDirectory(pointed, fileSystem);
-  return contained(commonRoot, gitDir) ? gitDir : undefined;
+  return containsCanonicalPath(commonRoot, gitDir) ? gitDir : undefined;
 }
 
 function readReference(
@@ -114,7 +114,7 @@ function resolveCommonDir(
   if (pointer === undefined || pointer.length === 0) return commonRoot;
   const pointed = resolve(gitDir, pointer);
   const candidate = canonicalDirectory(pointed, fileSystem);
-  if (candidate !== commonRoot && !contained(commonRoot, candidate)) {
+  if (!containsCanonicalPath(commonRoot, candidate)) {
     throw new Error("git-common-dir-invalid");
   }
   return candidate;
@@ -127,7 +127,10 @@ function readLooseReference(
 ): string | undefined {
   try {
     const candidate = resolve(root, reference);
-    if (!contained(root, dirname(candidate)) || fileSystem.realpath(candidate) !== candidate) {
+    if (
+      !containsCanonicalPath(root, dirname(candidate)) ||
+      fileSystem.realpath(candidate) !== candidate
+    ) {
       return undefined;
     }
     const value = boundedText(candidate, HEAD_BYTES, fileSystem)?.trim();
@@ -135,6 +138,11 @@ function readLooseReference(
   } catch {
     return undefined;
   }
+}
+
+function containsCanonicalPath(root: string, candidate: string): boolean {
+  const relation = relative(root, candidate);
+  return relation === "" || (!isAbsolute(relation) && relation.split(sep)[0] !== "..");
 }
 
 function readPackedReference(
@@ -262,9 +270,4 @@ function parseGitPointer(value: string | undefined): string | undefined {
 
 function safeRef(reference: string): boolean {
   return REF.test(reference) && !reference.includes("..") && !reference.includes("//");
-}
-
-function contained(root: string, candidate: string): boolean {
-  const rel = relative(root, candidate);
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }

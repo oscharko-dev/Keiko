@@ -166,6 +166,7 @@ function composeOpenCodeRun(
     diagnostics: input.diagnostics,
     onRuntimeEvent: run.onRuntimeEvent,
     authorityLifecycle: run.authorityLifecycle,
+    codingToolApprovals: run.codingToolApprovals,
   });
 }
 

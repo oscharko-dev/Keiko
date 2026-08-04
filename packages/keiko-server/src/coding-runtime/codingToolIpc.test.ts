@@ -121,6 +121,42 @@ describe("coding tool IPC auxiliary requests", () => {
   });
 });
 
+describe("coding tool IPC approval proofs", () => {
+  const proof = { approvalId: "call-1", approvalDigest: "b".repeat(64) };
+
+  it.each([
+    { action: "command", commandId: "typecheck" },
+    { action: "verification", verifierId: "typecheck" },
+  ] as const)("admits an exact $action proof and preserves its action binding", (action) => {
+    const request = {
+      ...action,
+      actionId: "call-1",
+      idempotencyKey: "call-1",
+      approvalProof: proof,
+    };
+    expect(parseCodingToolRequest(JSON.stringify(request), 262_144)).toEqual(request);
+  });
+
+  it.each([
+    ["an unknown proof key", { ...proof, authority: "model-supplied" }],
+    ["an empty approval id", { ...proof, approvalId: "" }],
+    ["a malformed digest", { ...proof, approvalDigest: "not-a-digest" }],
+  ])("rejects %s", (_label, approvalProof) => {
+    expect(
+      parseCodingToolRequest(
+        JSON.stringify({
+          action: "verification",
+          actionId: "call-1",
+          idempotencyKey: "call-1",
+          verifierId: "typecheck",
+          approvalProof,
+        }),
+        262_144,
+      ),
+    ).toBeUndefined();
+  });
+});
+
 /**
  * Where the shipped OpenCode runtime's edit containment actually lives.
  *

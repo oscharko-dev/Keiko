@@ -88,6 +88,7 @@ export type CodingWorkbenchRuntimeFailureCode =
   | "runtime-unavailable"
   | "active-run-conflict"
   | "invalid-intent"
+  | "approval-activation-failed"
   | "authority-resolution-failed"
   | "authority-expired"
   | "authority-replayed"
@@ -108,6 +109,7 @@ export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRun
     "runtime-unavailable",
     "active-run-conflict",
     "invalid-intent",
+    "approval-activation-failed",
     "authority-resolution-failed",
     "authority-expired",
     "authority-replayed",

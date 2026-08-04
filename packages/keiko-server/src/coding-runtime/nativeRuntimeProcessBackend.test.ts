@@ -11,6 +11,7 @@ import {
   type NativeRuntimeHelperProcess,
   type NativeRuntimeHelperSpawn,
 } from "./nativeRuntimeProcessBackend.js";
+import { encodeLaunchPacket, validateLaunchPacketRequest } from "./nativeRuntimeProcessProtocol.js";
 import type { RuntimeSupervisorLaunchRequest } from "./runtimeProcessSupervisor.js";
 
 const roots: string[] = [];
@@ -113,6 +114,24 @@ function response(kind: number, payload = Buffer.alloc(0)): Buffer {
 }
 
 describe("native runtime process backend", () => {
+  it("encodes the exact executable and workspace paths accepted by validation", () => {
+    const launch = request("/untrusted/runtime.exe", "/untrusted/workspace");
+    const validated = validateLaunchPacketRequest(launch, {
+      runtimeRoots: ["/validated/runtime"],
+      workspaceRoot: "/validated/workspace",
+      safeRealFile: () => "/validated/runtime/runtime.exe",
+      safeRealDirectory: () => "/validated/workspace",
+      pathIsContained: (root, candidate) => candidate.startsWith(root),
+      invalidRequest: () => {
+        throw new Error("unexpected-invalid-request");
+      },
+    });
+    expect(decodeLaunchStrings(encodeLaunchPacket(launch, validated)).slice(1, 3)).toEqual([
+      "/validated/runtime/runtime.exe",
+      "/validated/workspace",
+    ]);
+  });
+
   it("spawns the fixed helper without a shell and sends a bounded launch packet", () => {
     const { backend, child, paths, spawn } = backendFixture();
     const chunks: Buffer[] = [];

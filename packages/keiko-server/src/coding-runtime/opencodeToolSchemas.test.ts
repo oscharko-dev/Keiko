@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -28,6 +29,19 @@ function projectedTools(): readonly {
 }
 
 describe("OpenCode visible tool contract", () => {
+  it("keeps the runtime and portable verifier on the canonical pinned version", () => {
+    const consumers = [
+      new URL("./opencodeRuntimeComposition.ts", import.meta.url),
+      new URL("../update-portable-sidecar-verification.ts", import.meta.url),
+    ];
+
+    for (const consumer of consumers) {
+      const source = readFileSync(consumer, "utf8");
+      expect(source).toContain("OPENCODE_PINNED_VERSION");
+      expect(source).not.toContain('"1.17.17"');
+    }
+  });
+
   it("accepts only the pinned v1.17.17 verification projection", () => {
     expect(hasExactOpenCodeVisibleToolContract(projectedTools())).toBe(true);
   });

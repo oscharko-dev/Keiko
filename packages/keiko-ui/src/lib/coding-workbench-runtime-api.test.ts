@@ -301,6 +301,10 @@ describe("Coding Workbench runtime API endpoints", () => {
     expect((source as unknown as FakeEventSource).url).toBe(
       "/api/coding-workbench/runtime/runs/run-1/events",
     );
+    const resumed = createCodingWorkbenchRuntimeEventSource("run-1", "run-1:42");
+    expect((resumed as unknown as FakeEventSource).url).toBe(
+      "/api/coding-workbench/runtime/runs/run-1/events?cursor=run-1%3A42",
+    );
 
     vi.unstubAllGlobals();
     expect(() => createCodingWorkbenchRuntimeEventSource("run-1")).toThrowError(
