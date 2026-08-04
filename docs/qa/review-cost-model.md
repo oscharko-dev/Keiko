@@ -69,15 +69,19 @@ written: a heavy 135-file change is already there.
 
 Two different thresholds are easy to conflate, and how far apart they sit depends on the change:
 
-- the **allotment** meets the cap at about **115 files** — the formula grants 1.3 × 40,000 = 52,000
-  tokens per file, and the 6M ceiling divides by that at 115.4, with the line term only lowering
-  it. Past this point the engine is handed the ceiling rather than what the formula asked for;
-- the run actually **truncates** when consumption reaches 6M — around **135 files** for a change
-  as heavy as the incident's, which measured at the ceiling's edge, and further out for lighter
-  mixes. An earlier version said 240, from the unsettled 25k-per-file figure.
+- the **allotment** meets the cap at about **72 files** (action v0.13.0) — the formula grants
+  1.3 × 64,000 = 83,200 tokens per file, and the 6M ceiling divides by that at 72.1, with the line
+  term only lowering it. Past this point the engine is handed the ceiling rather than what the
+  formula asked for. (Under the pre-v0.13.0 coefficient of 40k/file this threshold sat at ~115
+  files; the coefficient moved to the measured live median after the 40k figure under-priced a
+  55-file run into a truncated 7.1M double-pay — Keiko#2981.);
+- the run actually **truncates** when consumption reaches 6M — around **90–135 files** depending
+  on the change's weight (the incident-class heavy mix measured ~65k/file live, which reaches 6M
+  near 92 files; lighter mixes sit further out). An earlier version said 240, from the unsettled
+  25k-per-file figure.
 
 So how far apart the two thresholds sit is a property of the change's weight, not of the formula:
-a heavy change is capped at 115 and truncates at about 135 — the thresholds nearly touch — while
+a heavy change is capped at 72 and truncates not far past it — the thresholds nearly touch — while
 a light change keeps real headroom between them. A change between the two numbers is capped but
 still completes.
 
@@ -171,8 +175,8 @@ a change will cost — "it is only documentation" is not the same as "it is not 
 1. **Keep the store working.** It is the only mechanism with a factor-of-twenty effect. Everything
    else is a factor of two or three.
 2. **Do not review the same change twice.** One branch per piece of work.
-3. **`token_budget`** is a ceiling, not a spend: the action allots
-   `min(ceiling, clamp(1.3 × (files × 40k + lines × 60), 80k, 6M))`, so ordinary pull requests sit
+3. **`token_budget`** is a ceiling, not a spend: the action (v0.13.0) allots
+   `min(ceiling, clamp(1.3 × (files × 64k + lines × 60), 150k, 6M))`, so ordinary pull requests sit
    far below it and lowering it changes nothing for them. It binds only large changes — and a change
    it truncates settles incomplete, which publishes a blocking conversation rather than passing
    silently.
