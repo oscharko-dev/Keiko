@@ -154,6 +154,26 @@ describe("task-workspace CLI", () => {
     expect(capture.out()).toBe("");
   });
 
+  it("cancels a response rejected by its declared content length", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      cancel(): void {
+        cancelled = true;
+      },
+    });
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(new Response(body, { headers: { "content-length": String(1_048_577) } })),
+    );
+    const capture = capturedIo();
+
+    const code = await runTaskWorkspaceCli(["health"], capture.io, {}, { fetchImpl });
+
+    expect(code).toBe(1);
+    expect(cancelled).toBe(true);
+    expect(capture.err()).toContain("RangeError");
+    expect(capture.out()).toBe("");
+  });
+
   it("applies a bounded deadline to a stalled loopback request", async () => {
     const controller = new AbortController();
     const createTimeoutSignal = vi.fn(() => controller.signal);

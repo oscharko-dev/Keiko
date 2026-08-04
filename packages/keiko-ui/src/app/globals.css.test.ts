@@ -303,7 +303,7 @@ describe("Design-token reference integrity", () => {
 
   it("requires every CSS Module and inline style token to be global or safely fall back", () => {
     const unresolved = unresolvedTokenReferences(
-      productionStyleSources(here),
+      [{ path: resolve(here, "globals.css"), source: css }, ...productionStyleSources(here)],
       declaredGlobalTokens(css),
     );
 
@@ -1831,7 +1831,7 @@ describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the ru
     expect(monacoSliderBlock).toContain("background: var(--ed-scrollbar-thumb) !important");
     expect(monacoSliderBlock).toContain("border-radius: 999px !important");
     expect(monacoSliderBlock).toContain(
-      "transition: background var(--motion-fast) var(--ease-out) !important",
+      "transition: background var(--dur-fast) var(--ease-out) !important",
     );
     expect(monacoSliderBlock).not.toContain("background-clip");
     expect(monacoSliderBlock).not.toContain("border:");
@@ -5024,7 +5024,7 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
 
   it("the browser evidence harness rejects HTTP method drift", (): void => {
     expect(browserCaptureSource).toContain(
-      'const POST_API_PATHS = new Set([\n  "/api/desktop/chats",\n  "/api/editor/agent/snapshot",\n  "/api/editor/language",\n]);',
+      'const POST_API_PATHS = new Set([\n  "/api/desktop/chats",\n  "/api/editor/agent/snapshot",\n  "/api/editor/language",\n  "/api/task-workspaces/reconciliation",\n]);',
     );
     expect(browserCaptureSource).toContain('return POST_API_PATHS.has(pathname) ? "POST" : "GET";');
     expect(browserCaptureSource).toContain("if (method !== expectedApiMethod(url.pathname)) {");

@@ -62,6 +62,7 @@ import {
 } from "../git-repository-state-events";
 import { WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationRoots } from "../workspace-file-events";
 import { requestEditorBufferReconciliation } from "../editor-buffer-reconciliation-events";
+import { restoreModalTriggerFocus } from "../../../hooks/useModalInteractionLock";
 import {
   BODY_STYLE,
   DIFF_HEADER_STYLE,
@@ -705,9 +706,8 @@ export function GitClientWindow({
   const resetStaging = staging.reset;
   const resetCommit = commit.reset;
 
-  const openNewBranchDialog = useCallback((): void => {
-    newBranchReturnFocusRef.current =
-      typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null);
+  const openNewBranchDialog = useCallback((trigger: HTMLButtonElement): void => {
+    newBranchReturnFocusRef.current = trigger;
     setNewBranchOpen(true);
   }, []);
 
@@ -715,7 +715,7 @@ export function GitClientWindow({
     setNewBranchOpen(false);
     const target = newBranchReturnFocusRef.current;
     newBranchReturnFocusRef.current = null;
-    if (target !== null) queueMicrotask(() => target.focus());
+    restoreModalTriggerFocus(target);
   }, []);
 
   const loadRepositories = useCallback((): void => {
@@ -1219,11 +1219,9 @@ export function GitClientWindow({
   );
 
   const switchBranch = useCallback(
-    (branchName: string): void => {
+    (branchName: string, trigger: HTMLButtonElement): void => {
       if (selectedPath === null) return;
-      worktreeConfirmationReturnFocusRef.current = document.querySelector<HTMLElement>(
-        '[role="combobox"][aria-label^="Branch:"]',
-      );
+      worktreeConfirmationReturnFocusRef.current = trigger;
       setWorktreeConfirmation({ kind: "branch-switch", branchName });
     },
     [selectedPath],
@@ -1320,7 +1318,7 @@ export function GitClientWindow({
     setWorktreeConfirmation(null);
     const target = worktreeConfirmationReturnFocusRef.current;
     worktreeConfirmationReturnFocusRef.current = null;
-    if (target !== null) queueMicrotask(() => target.focus());
+    restoreModalTriggerFocus(target);
   }, []);
 
   const confirmWorktreeMutation = useCallback((): void => {

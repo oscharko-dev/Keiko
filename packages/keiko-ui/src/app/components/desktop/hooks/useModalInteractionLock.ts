@@ -14,6 +14,20 @@ function emitModalLockChange(): void {
   for (const listener of modalLockListeners) listener();
 }
 
+export function restoreModalTriggerFocus(trigger: HTMLElement | null): void {
+  if (trigger?.isConnected !== true) return;
+  const startedAt = performance.now();
+  const attempt = (): void => {
+    if (!trigger.isConnected) return;
+    if (trigger.closest("[inert]") === null) {
+      trigger.focus();
+      if (document.activeElement === trigger) return;
+    }
+    if (performance.now() - startedAt < 1_000) window.requestAnimationFrame(attempt);
+  };
+  attempt();
+}
+
 export function useModalInteractionLockState(): boolean {
   return useSyncExternalStore(
     (onStoreChange): (() => void) => {
@@ -51,7 +65,7 @@ export function useModalInteractionLock({
         root.dataset.keikoModalOpenCount = String(nextCount);
       }
       emitModalLockChange();
-      if (restoreFocus) trigger?.focus?.();
+      if (restoreFocus) restoreModalTriggerFocus(trigger);
     };
   }, [active, initialFocusRef, restoreFocus]);
 }

@@ -4,6 +4,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { useDialogTabTrap } from "../../../hooks/useDialogTabTrap";
+import { useModalInteractionLock } from "../../../hooks/useModalInteractionLock";
 import { PRIMARY_BTN, SECONDARY_BTN } from "./git-client-styles";
 
 export type WorktreeMutationConfirmation =
@@ -23,6 +24,7 @@ export function WorktreeMutationConfirmDialog({
   const t = useOptionalWidgetTranslate();
   const dialogRef = useRef<HTMLDialogElement>(null);
   useDialogTabTrap(dialogRef);
+  useModalInteractionLock({ restoreFocus: false });
   const branchSwitch = request.kind === "branch-switch";
   const label = branchSwitch
     ? t("gitClientWindow.confirm.branchSwitch.title")

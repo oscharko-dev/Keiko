@@ -36,8 +36,8 @@ interface RepositoryToolbarProps {
   readonly syncOutcome: SyncOutcomeView | null;
   readonly syncError: string | null;
   readonly onSelectRepository: (path: string) => void;
-  readonly onSwitchBranch: (branchName: string) => void;
-  readonly onCreateBranch: () => void;
+  readonly onSwitchBranch: (branchName: string, trigger: HTMLButtonElement) => void;
+  readonly onCreateBranch: (trigger: HTMLButtonElement) => void;
   readonly onRunSync: () => void;
   readonly onOpenEditor?: ((root: string) => void) | undefined;
   readonly onOpenFiles?: ((root: string) => void) | undefined;

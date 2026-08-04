@@ -213,6 +213,7 @@ async function readBoundedResponseBody(response: Response): Promise<string> {
 async function readJsonResponse(response: Response): Promise<unknown> {
   const length = response.headers.get("content-length");
   if (length !== null && Number(length) > RESPONSE_MAX_BYTES) {
+    await response.body?.cancel();
     throw new RangeError("task-workspace response exceeds the size limit");
   }
   return JSON.parse(await readBoundedResponseBody(response)) as unknown;

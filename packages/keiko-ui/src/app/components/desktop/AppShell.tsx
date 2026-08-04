@@ -80,6 +80,7 @@ import { localizedWindowTitle, WIN_TYPES, type WindowType } from "./windows/Wind
 import type { AppWindow, Connection } from "./windows/types";
 import { registerSw } from "./install/registerSw";
 import { workspaceRootTargets } from "./workspaceRootTargets";
+import { workspaceInteractionLocked } from "./interactionGuards";
 import styles from "./AppShell.module.css";
 
 const APP_BOOT_RECOVERY_RELOAD_KEY = "keiko.app-boot-recovery-reload-count";
@@ -1374,6 +1375,7 @@ function AppShellInner(): ReactNode {
   // and editable-target guards apply to the unified quick-access surface.
   const dispatchShortcut = useCallback(
     (commandId: string): void => {
+      if (workspaceInteractionLocked()) return;
       if (commandId === "undo") undoStack.undo();
       else if (commandId === "redo") undoStack.redo();
       else if (commandId === "focus-status") statusRef.current?.focus();

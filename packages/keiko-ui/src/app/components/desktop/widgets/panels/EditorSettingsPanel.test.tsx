@@ -438,14 +438,14 @@ describe("EditorSettingsPanel AI activation confirmation", () => {
   });
 
   it("has no axe violations while the AI activation confirmation dialog is open", async () => {
-    const { container } = renderPanel();
+    renderPanel();
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Inline AI completion" }));
     const dialog = screen.getByRole("alertdialog");
     expect(dialog).toBeInTheDocument();
     expect(dialog.parentElement?.parentElement).toBe(document.body);
 
-    expect(await axe(container)).toHaveNoViolations();
+    expect(await axe(dialog)).toHaveNoViolations();
   });
 
   it("applies inline AI completion after the operator accepts the confirmation prompt", () => {

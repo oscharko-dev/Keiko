@@ -419,6 +419,7 @@ describe("AppShell grounding connections", () => {
   });
 
   afterEach((): void => {
+    delete document.documentElement.dataset.keikoModalOpen;
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -1316,6 +1317,20 @@ describe("AppShell grounding connections", () => {
     });
 
     expect(screen.getByTestId("quick-access-palette")).toBeInTheDocument();
+  });
+
+  it("keeps shell shortcuts inert while a governed modal owns interaction", async () => {
+    await renderMounted();
+    const keyboardProps = mocks.useKeyboardShortcuts.mock.calls[0]?.[0] as
+      { readonly dispatch?: (commandId: string) => void } | undefined;
+    document.documentElement.dataset.keikoModalOpen = "true";
+
+    await act(async () => {
+      keyboardProps?.dispatch?.("quick-access.files");
+    });
+
+    expect(screen.queryByTestId("quick-access-palette")).toBeNull();
+    delete document.documentElement.dataset.keikoModalOpen;
   });
 
   // GEN-UI-A11Y-004 — the shell always mounts one app-level status live-region pair (polite +

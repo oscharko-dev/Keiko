@@ -26,8 +26,8 @@ interface BranchSelectorProps {
   readonly loading: boolean;
   readonly disabled: boolean;
   readonly busy: boolean;
-  readonly onSwitchBranch: (branchName: string) => void;
-  readonly onCreateBranch: () => void;
+  readonly onSwitchBranch: (branchName: string, trigger: HTMLButtonElement) => void;
+  readonly onCreateBranch: (trigger: HTMLButtonElement) => void;
 }
 
 function branchMatches(branch: GitBranchListEntry, query: string): boolean {
@@ -59,7 +59,7 @@ export function BranchSelector({
 }: BranchSelectorProps): ReactNode {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const listboxId = useId();
+  const menuId = useId();
   const searchId = useId();
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -105,7 +105,7 @@ export function BranchSelector({
     } else if (event.key === "Tab") {
       // Tabbing out of either edge of the option list dismisses the popup (mirrors
       // KeikoSelect). Shift+Tab off the first option and Tab off the last option both
-      // leave the listbox; close without stealing focus so the browser's own Tab order
+      // leave the menu; close without stealing focus so the browser's own Tab order
       // carries focus onward to the neighbouring toolbar control.
       const first = index === 0 && event.shiftKey;
       const last = index === filtered.length - 1 && !event.shiftKey;
@@ -148,11 +148,10 @@ export function BranchSelector({
       <button
         ref={triggerRef}
         type="button"
-        role="combobox"
         aria-label={`Branch: ${triggerLabel}`}
-        aria-haspopup="listbox"
+        aria-haspopup="menu"
         aria-expanded={open}
-        aria-controls={listboxId}
+        aria-controls={menuId}
         disabled={disabled || loading || branches.length === 0}
         style={{ ...SECONDARY_BTN, minWidth: 168, ...disabledStyle(disabled || loading) }}
         onClick={toggleOpen}
@@ -167,7 +166,7 @@ export function BranchSelector({
         aria-label="New branch"
         disabled={disabled || loading || branches.length === 0 || busy}
         style={{ ...COMPACT_BTN, ...disabledStyle(disabled || loading || busy) }}
-        onClick={onCreateBranch}
+        onClick={(event) => onCreateBranch(event.currentTarget)}
       >
         <PlusIcon size={11} /> New
       </button>
@@ -205,8 +204,8 @@ export function BranchSelector({
             }}
           />
           <div
-            id={listboxId}
-            role="listbox"
+            id={menuId}
+            role="menu"
             aria-label="Branches"
             style={{ ...LIST_STYLE, maxHeight: 260, padding: 0 }}
           >
@@ -222,8 +221,8 @@ export function BranchSelector({
                       optionRefs.current[index] = node;
                     }}
                     type="button"
-                    role="option"
-                    aria-selected={selected}
+                    role="menuitemradio"
+                    aria-checked={selected}
                     disabled={busy}
                     style={{
                       ...REPO_OPTION_STYLE,
@@ -231,7 +230,8 @@ export function BranchSelector({
                       ...disabledStyle(busy),
                     }}
                     onClick={() => {
-                      if (!selected) onSwitchBranch(branch.name);
+                      const trigger = triggerRef.current;
+                      if (!selected && trigger !== null) onSwitchBranch(branch.name, trigger);
                       close(true);
                     }}
                     onKeyDown={(event) => onOptionKeyDown(event, index)}
