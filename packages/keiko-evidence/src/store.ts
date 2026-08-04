@@ -11,7 +11,6 @@
 
 import {
   closeSync,
-  fstatSync,
   fsyncSync,
   linkSync,
   readdirSync,
@@ -19,7 +18,6 @@ import {
   openSync,
   lstatSync,
   rmSync,
-  statSync,
   writeSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -306,15 +304,16 @@ function lockOwnerIsDead(lockPath: string): boolean {
   }
 }
 
-// Stages the owner stamp in a per-attempt file and returns the inode it was written to. The hard
-// link published below shares that inode, which is what identifies the lock we own: a lock that is
-// later reclaimed and recreated by another process occupies the same PATH but a different file.
-function stageLockOwnerPid(tempPath: string): bigint {
+// Stages the owner PID in a per-attempt file, fsynced before it is ever linked into place. Content
+// is byte-identical to the original writeLockOwnerPid output ("<pid>\n") so readLockOwnerPid/
+// lockOwnerIsDead (unchanged, per doNot) and the "stamps the acquiring PID" pin need no changes.
+function stageLockOwnerPid(tempPath: string): string {
+  const stamp = `${String(process.pid)}\n`;
   const fd = openSync(tempPath, "wx");
   try {
-    writeSync(fd, `${String(process.pid)}\n`);
+    writeSync(fd, stamp);
     fsyncSync(fd);
-    return fstatSync(fd, { bigint: true }).ino;
+    return stamp;
   } finally {
     closeSync(fd);
   }
@@ -325,16 +324,16 @@ function stageLockOwnerPid(tempPath: string): bigint {
 // That in-between state is indistinguishable from a crashed writer's abandoned lock, so the fast
 // reclaim above would delete a lock whose live owner had simply not finished acquiring it, and let
 // two processes into the same critical section (a silent lost update, not a torn file).
-function publishManifestLock(realBase: string, lockPath: string, deadline: number): bigint {
+function publishManifestLock(realBase: string, lockPath: string, deadline: number): string {
   for (;;) {
     // A fixed-length staging name (not `<lockPath>.<uuid>`) keeps the filename inside the POSIX
     // limit for every runId the lock name itself admits, so a long runId cannot surface an
     // ENAMETOOLONG carrying the absolute path (CWE-209, guarded above for the lock itself).
     const tempPath = resolveWithinWorkspace(realBase, `.${randomUUID()}.pidtmp`);
-    const ownedInode = stageLockOwnerPid(tempPath);
+    const stamp = stageLockOwnerPid(tempPath);
     try {
       linkSync(tempPath, lockPath);
-      return ownedInode;
+      return stamp;
     } catch (error) {
       if (retryManifestLock(error, lockPath, deadline)) continue;
       throw new EvidenceWriteError(
@@ -351,15 +350,22 @@ function acquireManifestLock(realBase: string, runId: string): () => void {
   assertLockFilenameFits(runId);
   const lockPath = resolveWithinWorkspace(realBase, `${runId}${MANIFEST_LOCK_SUFFIX}`);
   const deadline = Date.now() + MANIFEST_LOCK_TIMEOUT_MS;
-  const ownedInode = publishManifestLock(realBase, lockPath, deadline);
+  const ownedStamp = publishManifestLock(realBase, lockPath, deadline);
 
   return (): void => {
-    // Release only while the file at the path is still the one we published. Removing by path
+    // Release only while the lock's content is still the stamp we published. Removing by path
     // alone would drop a process that legitimately reclaimed this lock (as dead-owned or stale)
-    // out of its own critical section. A lock we decline to remove here is not stranded: the
-    // dead-owner and mtime-staleness reclaims still recover it.
-    const current = statSync(lockPath, { bigint: true, throwIfNoEntry: false });
-    if (current?.ino === ownedInode) {
+    // out of its own critical section — and comparing by inode instead of content would not: a
+    // deleted inode can be reused by the very next create on the same path, so two genuinely
+    // different lock files could transiently share an inode number. A lock we decline to remove
+    // here is not stranded: the dead-owner and mtime-staleness reclaims still recover it.
+    let current: string | undefined;
+    try {
+      current = readFileSync(lockPath, "utf8");
+    } catch {
+      current = undefined;
+    }
+    if (current === ownedStamp) {
       rmSync(lockPath, { force: true });
     }
   };
