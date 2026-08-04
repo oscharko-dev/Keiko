@@ -159,5 +159,11 @@
       "counterparts": ["packages/keiko-ui/src/lib/sse-types.ts"],
       "contract": "Every EvidenceBrowserEventType string literal must appear in the UI's ALL_SSE_EVENT_TYPES dispatch table"
     }
+  ],
+  "pathInstructions": [
+    {
+      "paths": ["docs/qa/ui-i18n-literal-baseline.json"],
+      "instructions": "This file is a SHRINKING baseline of hardcoded UI literals awaiting i18n extraction. Entries being removed is the desired direction: it means those strings moved into i18n message resources. Before reporting a removal as a defect, check whether this same change moves the strings into i18n resource files or removes the component; report only when the literals genuinely disappear from both sides. Growth of this baseline, not shrinkage, is the suspicious direction."
+    }
   ]
 }
