@@ -1124,18 +1124,24 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     expect(f.manager.resume).toHaveBeenLastCalledWith("run-1", "governed-assist");
   });
 
-  it("rejects follow-up task submission while paused", async () => {
+  it("dispatches the UI follow-up while the run remains paused", async () => {
     const f = await runningFixture();
     const paused = await f.orchestrator.pause("run-1", { requestId: "run-1" });
 
-    await expect(
-      f.orchestrator.submitFollowUp("run-1", {
-        requestId: "follow-up-paused",
-        expectedRevision: successfulSnapshot(paused).revision,
-        taskIntent: "must not be queued while paused",
-      }),
-    ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
-    expect(f.taskDispatcher.dispatch).toHaveBeenCalledOnce();
+    const followUp = await f.orchestrator.submitFollowUp("run-1", {
+      requestId: "follow-up-paused",
+      expectedRevision: successfulSnapshot(paused).revision,
+      taskIntent: "continue while operator control stays paused",
+    });
+
+    expect(successfulSnapshot(followUp)).toMatchObject({ state: "paused", revision: 5 });
+    expect(f.taskDispatcher.dispatch).toHaveBeenLastCalledWith({
+      runId: "run-1",
+      requestId: "follow-up-paused",
+      expectedRevision: successfulSnapshot(paused).revision,
+      taskIntent: "continue while operator control stays paused",
+    });
+    expect(f.manager.resume).not.toHaveBeenCalled();
   });
 
   it.each([60_000, 60_001])(

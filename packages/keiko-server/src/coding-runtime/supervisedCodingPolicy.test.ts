@@ -184,8 +184,10 @@ describe("supervised coding policy", () => {
     const { root } = workspaceFixture();
     const malformed = join(root, "src", `new\u0000dir`, "file.ts");
     const overlong = join(root, "src", "x".repeat(4_096), "file.ts");
+    const alternateStream = join(root, "src", "file.ts:payload");
+    writeFileSync(alternateStream, "hidden stream", "utf8");
 
-    for (const targetPath of [malformed, overlong]) {
+    for (const targetPath of [malformed, overlong, alternateStream]) {
       expect(decideSupervisedFileEdit(fileRequest(root, targetPath))).toMatchObject({
         status: "denied",
         reason: "out-of-scope-file-edit",

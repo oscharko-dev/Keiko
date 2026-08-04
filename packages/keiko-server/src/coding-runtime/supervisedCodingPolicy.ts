@@ -135,8 +135,14 @@ function candidatePathSyntaxAllowed(targetPath: string): boolean {
   if (!isAbsolute(targetPath)) return isContainedAgentPath(targetPath);
   return (
     !targetPath.includes("\u0000") &&
+    !hasAlternateDataStreamDelimiter(targetPath) &&
     Buffer.byteLength(targetPath, "utf8") <= EDITOR_AGENT_TARGET_PATH_MAX_BYTES
   );
+}
+
+function hasAlternateDataStreamDelimiter(targetPath: string): boolean {
+  const volumePrefixLength = /^[A-Za-z]:[\\/]/u.test(targetPath) ? 2 : 0;
+  return targetPath.slice(volumePrefixLength).includes(":");
 }
 
 function resolveCandidatePath(root: string, targetPath: string): string | undefined {

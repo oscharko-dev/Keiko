@@ -51,6 +51,11 @@ type PreparedRuntimeOperation =
     }
   | { readonly ok: false };
 
+const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
+  "running",
+  "paused",
+]);
+
 export class CodingRuntimeOperationCoordinator {
   private readonly replay = new RuntimeOperationReplayCoordinator();
 
@@ -61,7 +66,7 @@ export class CodingRuntimeOperationCoordinator {
       const operation = this.prepare(runId, input, ["requestId", "expectedRevision", "taskIntent"]);
       if (
         !operation.ok ||
-        operation.current.state !== "running" ||
+        !FOLLOW_UP_STATES.has(operation.current.state) ||
         !validTaskIntent(operation.value.taskIntent)
       ) {
         if (operation.ok) operation.reservation.release();
