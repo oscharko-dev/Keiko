@@ -2310,24 +2310,9 @@ export const DE_MESSAGES = {
   "gitClientWindow.panel.pullRequest": "Pull Request",
   "gitClientWindow.panel.merge": "Merge",
   "gitClientWindow.action.backToDiff": "Zurück zum Diff",
-  "gitClientWindow.history.commitUnavailable":
-    "Der angeforderte Commit ist im begrenzten Verlauf nicht verfügbar.",
-  "gitClientWindow.history.truncated":
-    "Es werden die neuesten {count} Commits angezeigt; der Verlauf ist gekürzt.",
-  "gitClientWindow.history.loadFailed": "Der Commit-Verlauf konnte nicht geladen werden.",
-  "gitClientWindow.history.loadMoreFailed": "Weitere Commits konnten nicht geladen werden.",
-  "gitClientWindow.history.loadMore": "Weitere Commits laden",
-  "gitClientWindow.history.loadingMore": "Weitere Commits werden geladen…",
-  "gitClientWindow.history.retryLoadMore": "Commits erneut laden",
-  "gitClientWindow.history.end": "Ende des Verlaufs. {count} Commits geladen.",
-  "gitClientWindow.history.paginationStatusAria": "Status der Verlaufsseiten",
-  "gitClientWindow.panel.pullRequestOpened": "Pull-Request-Panel geöffnet.",
-  "gitClientWindow.panel.mergeOpened": "Merge-Panel geöffnet.",
-  "gitClientWindow.panel.diffOpened": "Diff-Panel geöffnet.",
   // Zugängliche Namen der benannten <section>-Landmarks aus Welle #2721. Sie standen als
   // fest verdrahtetes Englisch auf den role="region"-Elementen, die diese Sections ersetzen;
   // ein Screenreader liest sie vor, also gehören sie wie jeder andere Nutzertext in den Katalog.
-  "gitClientWindow.history.commitDetailsAria": "Commit-Details",
   "runtimeHubWidget.auditMetadataAria": "Laufzeit-Audit-Metadaten",
   "installBanner.regionAria": "Keiko installieren",
   "markdown.codeBlock.regionAria": "Codeblock: {language}",

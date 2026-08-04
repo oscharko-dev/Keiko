@@ -33,6 +33,10 @@ describe("useModalInteractionLock", () => {
 
     view.rerender(<Harness open={false} />);
     expect(trigger).not.toHaveFocus();
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
+    expect(trigger).not.toHaveFocus();
     stage.removeAttribute("inert");
 
     await waitFor(() => expect(trigger).toHaveFocus());

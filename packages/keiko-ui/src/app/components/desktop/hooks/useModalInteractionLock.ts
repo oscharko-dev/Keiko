@@ -14,18 +14,15 @@ function emitModalLockChange(): void {
   for (const listener of modalLockListeners) listener();
 }
 
-export function restoreModalTriggerFocus(trigger: HTMLElement | null): void {
-  if (trigger?.isConnected !== true) return;
-  const startedAt = performance.now();
-  const attempt = (): void => {
-    if (!trigger.isConnected) return;
+export function restoreModalTriggerFocus(trigger: HTMLElement | null, remainingFrames = 60): void {
+  window.requestAnimationFrame(() => {
+    if (trigger?.isConnected !== true) return;
     if (trigger.closest("[inert]") === null) {
       trigger.focus();
-      if (document.activeElement === trigger) return;
+      return;
     }
-    if (performance.now() - startedAt < 1_000) window.requestAnimationFrame(attempt);
-  };
-  attempt();
+    if (remainingFrames > 1) restoreModalTriggerFocus(trigger, remainingFrames - 1);
+  });
 }
 
 export function useModalInteractionLockState(): boolean {

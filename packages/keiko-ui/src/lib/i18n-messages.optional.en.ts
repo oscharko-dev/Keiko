@@ -134,6 +134,21 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gitClientWindow.repository.reconnectFailed": "Repository reconnection failed: {detail}",
   "gitClientWindow.repository.workspaceUnavailable":
     "This repository is not currently connected to a workspace. Connect it again to continue.",
+  "gitClientWindow.history.commitUnavailable":
+    "The requested commit is not available in bounded history.",
+  "gitClientWindow.history.loadFailed": "Could not load commit history.",
+  "gitClientWindow.history.loadMoreFailed": "Could not load more commits.",
+  "gitClientWindow.history.truncated":
+    "Showing the most recent {count} commits; the history is truncated.",
+  "gitClientWindow.history.loadMore": "Load more commits",
+  "gitClientWindow.history.loadingMore": "Loading more commits…",
+  "gitClientWindow.history.retryLoadMore": "Retry loading commits",
+  "gitClientWindow.history.end": "End of history. {count} commits loaded.",
+  "gitClientWindow.history.paginationStatusAria": "History pagination status",
+  "gitClientWindow.history.commitDetailsAria": "Commit details",
+  "gitClientWindow.panel.pullRequestOpened": "Pull Request panel opened.",
+  "gitClientWindow.panel.mergeOpened": "Merge panel opened.",
+  "gitClientWindow.panel.diffOpened": "Diff panel opened.",
   "gitClientWindow.sync.editorReconciliationFailed":
     "Pull completed, but editor buffers need recovery. Review open files before continuing.",
   "chat.turn.failed": "Turn failed",

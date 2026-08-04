@@ -415,7 +415,6 @@ function chatIdFromWindow(win: AppWindow | undefined): string | undefined {
 
 class ChatBindingCompensationFailure extends Error {}
 class ChatMutationTimeoutFailure extends Error {}
-class ChatMutationQueueBlockedFailure extends ChatMutationTimeoutFailure {}
 
 interface ChatMutationQueue {
   readonly blocked: Set<string>;
@@ -428,34 +427,25 @@ interface ChatMutationAttempt {
 
 export const CHAT_MUTATION_TIMEOUT_MS = 15_000;
 
-function reportChatBindingCompensationFailure(): void {
-  const correlationId = newClientCorrelationId();
-  window.reportError(
-    new Error(`Chat binding compensation failed. Correlation ID: ${correlationId}`),
-  );
-}
-
 function reportGroundingMutationFailure(message: string): void {
   const correlationId = newClientCorrelationId();
   window.reportError(new Error(`${message} Correlation ID: ${correlationId}`));
 }
 
-function rejectGroundingMutationFailure(
+function groundingMutationFailureKey(
   error: unknown,
-  reject: (message: string) => false,
-  t: I18nTranslate,
   mutationFailedKey: "chat.grounding.connectSourceFailed" | "chat.grounding.connectKnowledgeFailed",
-): false {
+): "chat.grounding.recoveryRequired" | "chat.grounding.timeoutBlocked" | typeof mutationFailedKey {
   if (error instanceof ChatBindingCompensationFailure) {
-    reportChatBindingCompensationFailure();
-    return reject(t("chat.grounding.recoveryRequired"));
+    reportGroundingMutationFailure("Chat binding compensation failed.");
+    return "chat.grounding.recoveryRequired";
   }
   if (error instanceof ChatMutationTimeoutFailure) {
     reportGroundingMutationFailure("Chat grounding timeout.");
-    return reject(t("chat.grounding.timeoutBlocked"));
+    return "chat.grounding.timeoutBlocked";
   }
   reportGroundingMutationFailure("Chat grounding mutation failed.");
-  return reject(t(mutationFailedKey));
+  return mutationFailedKey;
 }
 
 async function persistCurrentChatBinding<T>(
@@ -504,10 +494,10 @@ async function serializeChatMutation<T>(
   chatKey: string,
   mutation: (attempt: ChatMutationAttempt) => Promise<T>,
 ): Promise<T> {
-  if (queue.blocked.has(chatKey)) throw new ChatMutationQueueBlockedFailure();
+  if (queue.blocked.has(chatKey)) throw new ChatMutationTimeoutFailure();
   const preceding = queue.tails.get(chatKey) ?? Promise.resolve();
   const execute = async (): Promise<T> => {
-    if (queue.blocked.has(chatKey)) throw new ChatMutationQueueBlockedFailure();
+    if (queue.blocked.has(chatKey)) throw new ChatMutationTimeoutFailure();
     try {
       return await mutationWithTimeout(mutation);
     } catch (error: unknown) {
@@ -914,11 +904,8 @@ function AppShellInner(): ReactNode {
         if (relationshipPath !== null) recordReadsContextRelationship(chat.id, relationshipPath);
         return true;
       } catch (error: unknown) {
-        return rejectGroundingMutationFailure(
-          error,
-          rejectForConnectionFailure,
-          t,
-          "chat.grounding.connectSourceFailed",
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "chat.grounding.connectSourceFailed")),
         );
       }
     },
@@ -954,11 +941,8 @@ function AppShellInner(): ReactNode {
             replaceFilesScopeNow(chatWindowId, nextScope, attempt, previousScope, target),
         );
       } catch (error: unknown) {
-        return rejectGroundingMutationFailure(
-          error,
-          rejectForConnectionFailure,
-          t,
-          "chat.grounding.connectSourceFailed",
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "chat.grounding.connectSourceFailed")),
         );
       }
     },
@@ -1040,11 +1024,8 @@ function AppShellInner(): ReactNode {
         setSourceConnectionNotice(null);
         return true;
       } catch (error: unknown) {
-        return rejectGroundingMutationFailure(
-          error,
-          rejectForConnectionFailure,
-          t,
-          "chat.grounding.connectKnowledgeFailed",
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "chat.grounding.connectKnowledgeFailed")),
         );
       }
     },
@@ -1073,11 +1054,8 @@ function AppShellInner(): ReactNode {
             handleConnectorBindNow(chatWindowId, scope, attempt, target),
         );
       } catch (error: unknown) {
-        return rejectGroundingMutationFailure(
-          error,
-          rejectForConnectionFailure,
-          t,
-          "chat.grounding.connectKnowledgeFailed",
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "chat.grounding.connectKnowledgeFailed")),
         );
       }
     },

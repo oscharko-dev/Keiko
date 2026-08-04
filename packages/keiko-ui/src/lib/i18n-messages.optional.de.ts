@@ -138,6 +138,21 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die Repository-Verbindung ist fehlgeschlagen: {detail}",
   "gitClientWindow.repository.workspaceUnavailable":
     "Dieses Repository ist derzeit mit keinem Workspace verbunden. Verbinden Sie es erneut, um fortzufahren.",
+  "gitClientWindow.history.commitUnavailable":
+    "Der angeforderte Commit ist im begrenzten Verlauf nicht verfügbar.",
+  "gitClientWindow.history.loadFailed": "Der Commit-Verlauf konnte nicht geladen werden.",
+  "gitClientWindow.history.loadMoreFailed": "Weitere Commits konnten nicht geladen werden.",
+  "gitClientWindow.history.truncated":
+    "Es werden die neuesten {count} Commits angezeigt; der Verlauf ist gekürzt.",
+  "gitClientWindow.history.loadMore": "Weitere Commits laden",
+  "gitClientWindow.history.loadingMore": "Weitere Commits werden geladen…",
+  "gitClientWindow.history.retryLoadMore": "Commits erneut laden",
+  "gitClientWindow.history.end": "Ende des Verlaufs. {count} Commits geladen.",
+  "gitClientWindow.history.paginationStatusAria": "Status der Verlaufsseiten",
+  "gitClientWindow.history.commitDetailsAria": "Commit-Details",
+  "gitClientWindow.panel.pullRequestOpened": "Pull-Request-Panel geöffnet.",
+  "gitClientWindow.panel.mergeOpened": "Merge-Panel geöffnet.",
+  "gitClientWindow.panel.diffOpened": "Diff-Panel geöffnet.",
   "gitClientWindow.sync.editorReconciliationFailed":
     "Der Pull wurde abgeschlossen, aber Editor-Puffer müssen wiederhergestellt werden. Prüfen Sie offene Dateien, bevor Sie fortfahren.",
   "chat.turn.failed": "Beitrag fehlgeschlagen",

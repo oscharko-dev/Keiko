@@ -896,7 +896,9 @@ export function GitClientWindow({
           requestedCommit === undefined ||
           res.entries.some((entry) => entry.sha === requestedCommit);
         if (commitLandingKey !== null) completedCommitLandingRef.current = commitLandingKey;
-        setHistoryError(hasRequestedCommit ? null : t("gitClientWindow.history.commitUnavailable"));
+        setHistoryError(
+          hasRequestedCommit ? null : optionalT("gitClientWindow.history.commitUnavailable"),
+        );
         setSelectedCommitSha(
           selectedHistoryCommitResolver(res.entries, requestedCommit, hasRequestedCommit),
         );
@@ -906,7 +908,7 @@ export function GitClientWindow({
         setHistory(null);
         setHistoryProjectKey(null);
         setHistoryLoading(false);
-        setHistoryError(t("gitClientWindow.history.loadFailed"));
+        setHistoryError(optionalT("gitClientWindow.history.loadFailed"));
       },
     );
     return () => {
@@ -915,7 +917,7 @@ export function GitClientWindow({
         historyRequestSequenceRef.current += 1;
       }
     };
-  }, [client, initialCommit, selectedPath, statusRevision, t, tab]);
+  }, [client, initialCommit, optionalT, selectedPath, statusRevision, tab]);
 
   const loadMoreHistory = useCallback((): void => {
     if (selectedPath === null || history === null || !history.truncated || historyLoadingMore) {
@@ -930,7 +932,7 @@ export function GitClientWindow({
         if (historyRequestSequenceRef.current !== requestSequence) return;
         if (!page.available) {
           setHistoryLoadingMore(false);
-          setHistoryLoadMoreError(t("gitClientWindow.history.loadMoreFailed"));
+          setHistoryLoadMoreError(optionalT("gitClientWindow.history.loadMoreFailed"));
           return;
         }
         setHistory((current) => (current === null ? null : appendHistoryPage(current, page)));
@@ -940,10 +942,10 @@ export function GitClientWindow({
       () => {
         if (historyRequestSequenceRef.current !== requestSequence) return;
         setHistoryLoadingMore(false);
-        setHistoryLoadMoreError(t("gitClientWindow.history.loadMoreFailed"));
+        setHistoryLoadMoreError(optionalT("gitClientWindow.history.loadMoreFailed"));
       },
     );
-  }, [client, history, historyLoadingMore, historyNextSkip, selectedPath, t]);
+  }, [client, history, historyLoadingMore, historyNextSkip, optionalT, selectedPath]);
 
   // Status load, re-run on every mutation (statusRevision bump). Prunes a selected change that no
   // longer exists (e.g. after a commit) so the diff pane returns to its empty state.
@@ -1337,23 +1339,23 @@ export function GitClientWindow({
       setRightPaneMode(mode);
       setRightPaneAnnouncement(
         mode === "pull-request"
-          ? t("gitClientWindow.panel.pullRequestOpened")
-          : t("gitClientWindow.panel.mergeOpened"),
+          ? optionalT("gitClientWindow.panel.pullRequestOpened")
+          : optionalT("gitClientWindow.panel.mergeOpened"),
       );
     },
-    [selectedPath, t],
+    [optionalT, selectedPath],
   );
 
   const returnToDiff = useCallback((): void => {
     setRightPaneMode("diff");
-    setRightPaneAnnouncement(t("gitClientWindow.panel.diffOpened"));
+    setRightPaneAnnouncement(optionalT("gitClientWindow.panel.diffOpened"));
     window.requestAnimationFrame(() => {
       // The diff pane's scroll region is a native <section> (#2721): its region role is
       // implicit, so a [role="region"] attribute selector no longer matches it.
       const diffRegion = diffPaneRef.current?.querySelector('section[aria-label="Diff"]');
       if (diffRegion instanceof HTMLElement) diffRegion.focus();
     });
-  }, [t]);
+  }, [optionalT]);
 
   const visibleStagingOutcome = staging.flow.outcome;
   const currentBranch = activeStatus?.branch ?? activeSummary?.branch;
