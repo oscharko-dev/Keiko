@@ -9,6 +9,7 @@ import {
   apiKeyHeaderValue,
   ConfigInvalidError,
   DEFAULT_API_KEY_HEADER_NAME,
+  ERROR_CODES,
   Gateway,
   createDefaultChatCapability,
   createDefaultEmbeddingCapability,
@@ -3259,6 +3260,91 @@ function setupFailureResult(
   };
 }
 
+const SETUP_CANDIDATE_NETWORK_FAILURE =
+  "The local setup service could not reach the provider endpoint. Check internet access, VPN/proxy/firewall, and the base URL.";
+const SETUP_CANDIDATE_AUTH_FAILURE =
+  "The provider rejected the credential. Check the API key, endpoint URL, and project/model access.";
+const SETUP_CANDIDATE_RATE_LIMIT_FAILURE =
+  "The provider rate-limited setup verification. Wait briefly and retry.";
+const SETUP_CANDIDATE_MODEL_FAILURE =
+  "The provider endpoint responded, but no discovered model accepted the chat smoke test. Enter a chat-capable model or deployment name and retry.";
+
+const SETUP_NETWORK_ERROR_CODES: ReadonlySet<string> = new Set([
+  "EACCES",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_SOCKET",
+  ERROR_CODES.TRANSPORT,
+  ERROR_CODES.TIMEOUT,
+  ERROR_CODES.PROXY_UNREACHABLE,
+  ERROR_CODES.PROXY_AUTH_REQUIRED,
+  ERROR_CODES.PROXY_EGRESS_FAILED,
+  ERROR_CODES.PROXY_BLOCKED_BY_POLICY,
+  ERROR_CODES.TLS_CA_FAILURE,
+]);
+
+function safeErrorProperty(error: unknown, property: string): unknown {
+  if ((typeof error !== "object" || error === null) && typeof error !== "function") {
+    return undefined;
+  }
+  try {
+    return Reflect.get(error, property);
+  } catch {
+    return undefined;
+  }
+}
+
+function isObjectLike(value: unknown): value is object {
+  return (typeof value === "object" && value !== null) || typeof value === "function";
+}
+
+function enqueueSetupError(value: unknown, pending: unknown[], seen: WeakSet<object>): void {
+  if (!isObjectLike(value) || seen.has(value)) {
+    return;
+  }
+  seen.add(value);
+  pending.push(value);
+}
+
+function setupErrorValue<T>(
+  error: unknown,
+  property: string,
+  accepts: (value: unknown) => value is T,
+): T | undefined {
+  const pending: unknown[] = [];
+  const seen = new WeakSet();
+  enqueueSetupError(error, pending, seen);
+  for (const current of pending) {
+    const value = safeErrorProperty(current, property);
+    if (accepts(value)) return value;
+    enqueueSetupError(safeErrorProperty(current, "cause"), pending, seen);
+    const nested = safeErrorProperty(current, "errors");
+    if (Array.isArray(nested)) {
+      for (const item of nested) {
+        enqueueSetupError(item, pending, seen);
+      }
+    }
+  }
+  return undefined;
+}
+
+function setupErrorCode(error: unknown): string | undefined {
+  return setupErrorValue(error, "code", (value): value is string => typeof value === "string");
+}
+
+function setupHttpStatus(error: unknown): number | undefined {
+  const isStatus = (value: unknown): value is number =>
+    typeof value === "number" && Number.isInteger(value);
+  return (
+    setupErrorValue(error, "httpStatus", isStatus) ?? setupErrorValue(error, "status", isStatus)
+  );
+}
+
 function figmaFailureStatus(code: FigmaConnectorErrorCode): number {
   switch (code) {
     case "FIGMA_TOKEN_INVALID":
@@ -3412,7 +3498,30 @@ function validateWorkflowEligibleModelIds(
   };
 }
 
-function setupCandidateError(): string {
+function setupCandidateError(error: unknown): string {
+  const code = setupErrorCode(error);
+  if (code === ERROR_CODES.AUTHENTICATION) {
+    return SETUP_CANDIDATE_AUTH_FAILURE;
+  }
+  if (code === ERROR_CODES.RATE_LIMIT) {
+    return SETUP_CANDIDATE_RATE_LIMIT_FAILURE;
+  }
+  if (code === ERROR_CODES.UNKNOWN_MODEL) {
+    return SETUP_CANDIDATE_MODEL_FAILURE;
+  }
+  if (code !== undefined && SETUP_NETWORK_ERROR_CODES.has(code)) {
+    return SETUP_CANDIDATE_NETWORK_FAILURE;
+  }
+  const status = setupHttpStatus(error);
+  if (status === 401 || status === 403) {
+    return SETUP_CANDIDATE_AUTH_FAILURE;
+  }
+  if (status === 429) {
+    return SETUP_CANDIDATE_RATE_LIMIT_FAILURE;
+  }
+  if (status === 404) {
+    return SETUP_CANDIDATE_MODEL_FAILURE;
+  }
   return bodyFreeVerificationFailure();
 }
 
@@ -3515,7 +3624,7 @@ async function verifyAndSaveGatewaySetup(
         request.correlationId,
         "gateway.setup.provider-verify",
       );
-      errors.push(`candidate ${String(errors.length + 1)}: ${setupCandidateError()}`);
+      errors.push(`candidate ${String(errors.length + 1)}: ${setupCandidateError(error)}`);
     }
   }
   return setupFailureResult(errors, request.correlationId);

@@ -636,11 +636,29 @@ export interface GatewaySetupResponse {
   readonly config: SafeGatewayConfig;
 }
 
+const GATEWAY_SETUP_NETWORK_ERROR_MESSAGE =
+  "Keiko could not reach the local setup service while testing credentials. Check that Keiko is still running, then retry.";
+
+function isFetchNetworkError(error: unknown): boolean {
+  return (
+    error instanceof TypeError &&
+    /(?:failed to fetch|fetch failed|load failed|networkerror)/iu.test(error.message)
+  );
+}
+
 export async function setupGateway(body: GatewaySetupInput): Promise<GatewaySetupResponse> {
-  const response = await fetchJson<GatewaySetupResponse>("/api/gateway/setup", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
+  let response: GatewaySetupResponse;
+  try {
+    response = await fetchJson<GatewaySetupResponse>("/api/gateway/setup", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    if (isFetchNetworkError(error)) {
+      throw new ApiError("GATEWAY_SETUP_NETWORK_ERROR", GATEWAY_SETUP_NETWORK_ERROR_MESSAGE, 0);
+    }
+    throw error;
+  }
   resetConfigRequestCache();
   resetModelRequestCache();
   invalidateVoiceCapability();
