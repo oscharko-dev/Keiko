@@ -4,6 +4,7 @@ import type { CodingToolActionRequest, CodingToolApprovalProof } from "./codingT
 
 const MAX_PENDING_RECORDS = 64;
 const MAX_APPROVED_RECORDS = 64;
+const MAX_BINDING_RECORDS = 64;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 
 export type ApprovableToolRequest = Extract<
@@ -90,13 +91,14 @@ export function codingToolApprovalBindingDigest(
 export function createCodingToolApprovalBridge(): CodingToolApprovalBridge {
   const pending = new Map<string, PendingApproval>();
   const approved = new Map<string, ApprovedAction>();
+  const bindings = new Map<string, number>();
   return {
-    observePermission: (input): boolean => observePermission(pending, approved, input),
-    activatePermission: (input): boolean => activatePermission(pending, approved, input),
+    observePermission: (input): boolean => observePermission(pending, approved, bindings, input),
+    activatePermission: (input): boolean => activatePermission(pending, approved, bindings, input),
     matches: (input): boolean => matchesApprovedAction(approved, input),
     consume: (input): boolean => consumeApprovedAction(approved, input),
     invalidateRun: (runId): void => {
-      invalidateRun(pending, approved, runId);
+      invalidateRun(pending, approved, bindings, runId);
     },
   };
 }
@@ -104,9 +106,10 @@ export function createCodingToolApprovalBridge(): CodingToolApprovalBridge {
 function observePermission(
   pending: Map<string, PendingApproval>,
   approved: Map<string, ApprovedAction>,
+  bindings: Map<string, number>,
   input: CodingToolApprovalObservation,
 ): boolean {
-  prune(pending, approved, input.nowMs);
+  prune(pending, approved, bindings, input.nowMs);
   const expiresAtMs = Date.parse(input.expiresAt);
   if (
     !Number.isFinite(expiresAtMs) ||
@@ -118,17 +121,27 @@ function observePermission(
     return false;
   }
   const key = permissionKey(input.runId, input.requestId);
-  if (pending.has(key) || pending.size >= MAX_PENDING_RECORDS) return false;
+  const exactBindingKey = bindingKey(input);
+  if (
+    pending.has(key) ||
+    bindings.has(exactBindingKey) ||
+    pending.size >= MAX_PENDING_RECORDS ||
+    bindings.size >= MAX_BINDING_RECORDS
+  ) {
+    return false;
+  }
   pending.set(key, { ...input, expiresAtMs });
+  bindings.set(exactBindingKey, expiresAtMs);
   return true;
 }
 
 function activatePermission(
   pending: Map<string, PendingApproval>,
   approved: Map<string, ApprovedAction>,
+  bindings: Map<string, number>,
   input: CodingToolApprovalActivation,
 ): boolean {
-  prune(pending, approved, input.nowMs);
+  prune(pending, approved, bindings, input.nowMs);
   const key = permissionKey(input.runId, input.requestId);
   const requested = pending.get(key);
   if (
@@ -138,7 +151,7 @@ function activatePermission(
   ) {
     return false;
   }
-  const approvedKey = actionKey(input.runId, requested.proof.approvalId);
+  const approvedKey = bindingKey(requested);
   if (approved.has(approvedKey) || approved.size >= MAX_APPROVED_RECORDS) return false;
   pending.delete(key);
   approved.set(approvedKey, {
@@ -158,9 +171,7 @@ function consumeApprovedAction(
   },
 ): boolean {
   if (!matchesApprovedAction(approved, input)) return false;
-  const proof = input.request.approvalProof;
-  if (proof === undefined) return false;
-  approved.delete(actionKey(input.runId, proof.approvalId));
+  approved.delete(requestBindingKey(input.runId, input.request));
   return true;
 }
 
@@ -175,7 +186,7 @@ function matchesApprovedAction(
   pruneApproved(approved, input.nowMs);
   const proof = input.request.approvalProof;
   if (proof === undefined) return false;
-  const key = actionKey(input.runId, proof.approvalId);
+  const key = requestBindingKey(input.runId, input.request);
   const record = approved.get(key);
   const digest = codingToolApprovalBindingDigest(input.runId, input.request);
   return approvedActionMatches(record, input.request, proof, digest);
@@ -193,6 +204,8 @@ function approvedActionMatches(
     record.actionId === request.actionId,
     record.idempotencyKey === request.idempotencyKey,
     record.targetId === targetId(request),
+    record.proof.approvalId === proof.approvalId,
+    proof.approvalId === request.actionId,
     DIGEST_PATTERN.test(record.approvalAuthorityDigest),
     safeDigestEqual(record.proof.approvalDigest, proof.approvalDigest),
     safeDigestEqual(digest, proof.approvalDigest),
@@ -230,8 +243,12 @@ function permissionKey(runId: string, requestId: string): string {
   return `${runId}\u0000${requestId}`;
 }
 
-function actionKey(runId: string, approvalId: string): string {
-  return `${runId}\u0000${approvalId}`;
+function bindingKey(input: ApprovalBinding): string {
+  return `${input.runId}\u0000${bindingDigest(input)}`;
+}
+
+function requestBindingKey(runId: string, request: ApprovableToolRequest): string {
+  return `${runId}\u0000${codingToolApprovalBindingDigest(runId, request)}`;
 }
 
 function safeDigestEqual(left: string, right: string): boolean {
@@ -243,12 +260,16 @@ function safeDigestEqual(left: string, right: string): boolean {
 function prune(
   pending: Map<string, PendingApproval>,
   approved: Map<string, ApprovedAction>,
+  bindings: Map<string, number>,
   nowMs: number,
 ): void {
   for (const [key, record] of pending) {
     if (record.expiresAtMs <= nowMs) pending.delete(key);
   }
   pruneApproved(approved, nowMs);
+  for (const [key, expiresAtMs] of bindings) {
+    if (expiresAtMs <= nowMs) bindings.delete(key);
+  }
 }
 
 function pruneApproved(approved: Map<string, ApprovedAction>, nowMs: number): void {
@@ -260,6 +281,7 @@ function pruneApproved(approved: Map<string, ApprovedAction>, nowMs: number): vo
 function invalidateRun(
   pending: Map<string, PendingApproval>,
   approved: Map<string, ApprovedAction>,
+  bindings: Map<string, number>,
   runId: string,
 ): void {
   const prefix = `${runId}\u0000`;
@@ -268,5 +290,8 @@ function invalidateRun(
   }
   for (const key of approved.keys()) {
     if (key.startsWith(prefix)) approved.delete(key);
+  }
+  for (const key of bindings.keys()) {
+    if (key.startsWith(prefix)) bindings.delete(key);
   }
 }

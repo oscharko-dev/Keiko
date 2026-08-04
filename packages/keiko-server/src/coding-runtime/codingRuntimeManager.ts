@@ -393,6 +393,11 @@ interface NormalizedCodingRuntimeManagerDeps {
   ) => boolean | Promise<boolean>;
 }
 
+type CodingRuntimeTerminalStatus = Extract<
+  CodingRuntimeRunResult["status"],
+  "cancelled" | "failed" | "succeeded"
+>;
+
 export interface CodingRuntimeManager {
   start(
     request: CodingRuntimeLaunchRequest,
@@ -400,10 +405,7 @@ export interface CodingRuntimeManager {
   issueApproval(request: CodingRuntimeApprovalIssueRequest): CodingRuntimeApprovalIssueResult;
   pause(runId: string): CodingRuntimePauseResult;
   resume(runId: string, requestedMode?: CodingWorkbenchMode): CodingRuntimePauseResult;
-  stop(
-    runId: string,
-    resultStatus?: Extract<CodingRuntimeRunResult["status"], "cancelled" | "failed" | "succeeded">,
-  ): Promise<CodingRuntimeStopResult>;
+  stop(runId: string, resultStatus?: CodingRuntimeTerminalStatus): Promise<CodingRuntimeStopResult>;
   takeover(runId: string): Promise<CodingRuntimeStopResult>;
   reconcile(runId: string): Promise<CodingRuntimeStopResult>;
   health(): CodingRuntimeHealthReport;
@@ -468,6 +470,7 @@ interface ActiveRuntime {
    */
   pendingApprovalReview: CodingWorkbenchRuntimePendingApprovalReview | undefined;
   shutdownBarrierComplete: boolean;
+  stopPromise: Promise<CodingRuntimeStopResult> | undefined;
   stopRequested: boolean;
   paused: boolean;
   status: CodingRuntimeStatus;
@@ -676,18 +679,29 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     return this.spawnRuntime(request, preflight.executablePath, env.value, portable, request.args);
   }
 
-  public async stop(
+  public stop(
     runId: string,
-    resultStatus: Extract<
-      CodingRuntimeRunResult["status"],
-      "cancelled" | "failed" | "succeeded"
-    > = "cancelled",
+    resultStatus: CodingRuntimeTerminalStatus = "cancelled",
   ): Promise<CodingRuntimeStopResult> {
     const active = this.active;
-    if (active === undefined) return { ok: true, status: "stopped" };
+    if (active === undefined) return Promise.resolve({ ok: true, status: "stopped" });
     if (active.context.runId !== runId) {
-      return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
+      return Promise.resolve({
+        ok: false,
+        failureCode: "runtime-run-mismatch",
+        retryable: false,
+      });
     }
+    if (active.stopPromise !== undefined) return active.stopPromise;
+    const stopping = this.stopActive(active, resultStatus);
+    active.stopPromise = stopping;
+    return stopping;
+  }
+
+  private async stopActive(
+    active: ActiveRuntime,
+    resultStatus: CodingRuntimeTerminalStatus,
+  ): Promise<CodingRuntimeStopResult> {
     active.stopRequested = true;
     active.status = "stopping";
     const receipt = await this.revokeAndTerminate(active);
@@ -1293,14 +1307,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
               retryable: false,
             }),
           );
-          void this.stop(active.context.runId).catch(() => {
+          void this.stop(active.context.runId, "failed").catch(() => {
             if (this.active === active) void this.enterRecoveryRequired(active);
           });
         },
       });
     } catch {
       if (this.active === active && !active.stopRequested && active.status === "ready") {
-        void this.stop(active.context.runId).catch(() => {
+        void this.stop(active.context.runId, "failed").catch(() => {
           if (this.active === active) void this.enterRecoveryRequired(active);
         });
       }
@@ -1955,6 +1969,7 @@ function createActiveRuntime(
     streamDrainComplete: Promise.resolve(false),
     pendingApprovalReview: undefined,
     shutdownBarrierComplete: false,
+    stopPromise: undefined,
     stopRequested: false,
     paused: false,
     status: "starting",
@@ -1989,6 +2004,7 @@ function createInactiveRuntime(
     streamDrainComplete: Promise.resolve(true),
     pendingApprovalReview: undefined,
     shutdownBarrierComplete: false,
+    stopPromise: undefined,
     stopRequested: false,
     paused: false,
     status: "stopped",

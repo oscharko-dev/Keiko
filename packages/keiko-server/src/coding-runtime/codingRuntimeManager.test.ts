@@ -3587,12 +3587,15 @@ describe("coding runtime manager", () => {
     }
   });
 
-  it("treats a post-ready lifecycle monitor failure as a fail-closed stop", async () => {
+  it("single-flights a lifecycle failure stop observed by the outer orchestrator", async () => {
     const fixture = createManagedFixture();
     const child = fakeChild();
     const revokeRuntime = vi.fn(() => true);
     const abortInFlightActions = vi.fn(() => true);
+    const dispose = vi.fn(() => true);
+    const releaseRuntimeAfterReap = vi.fn(() => true);
     const events: CodingWorkbenchRuntimeEvent[] = [];
+    let observedStop: ReturnType<CodingRuntimeManager["stop"]> | undefined;
     let failMonitor: (() => void) | undefined;
     const monitor = vi.fn(
       ({ onFailure }: { readonly runId: string; readonly onFailure: () => void }): (() => void) => {
@@ -3604,6 +3607,9 @@ describe("coding runtime manager", () => {
       processEnv: {},
       onRuntimeEvent: (event): void => {
         events.push(event);
+        if (event.kind === "failure-redacted") {
+          observedStop = manager.stop(event.runId, "failed");
+        }
       },
       supervisor: testSupervisor(() => ({
         ...child.handle,
@@ -3614,10 +3620,12 @@ describe("coding runtime manager", () => {
       })),
       revokeRuntime,
       abortInFlightActions,
+      releaseRuntimeAfterReap,
       openCodeLifecycleAdapter: {
         handshake: vi.fn(() => Promise.resolve({ ok: true })),
         // #2254 lifecycle monitor contract: failures after ready must route through manager stop.
         monitor,
+        dispose,
       } as never,
     });
 
@@ -3631,11 +3639,17 @@ describe("coding runtime manager", () => {
     expect(monitorInput?.runId).toBe("run-1988");
     expect(typeof monitorInput?.onFailure).toBe("function");
     failMonitor?.();
+    await expect(observedStop).resolves.toEqual({ ok: true, status: "stopped" });
     await vi.waitFor(() => {
       expect(revokeRuntime).toHaveBeenCalledWith("run-1988");
       expect(abortInFlightActions).toHaveBeenCalledWith("run-1988");
       expect(manager.health()).toEqual({ status: "stopped" });
     });
+    expect(revokeRuntime).toHaveBeenCalledOnce();
+    expect(abortInFlightActions).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(releaseRuntimeAfterReap).toHaveBeenCalledOnce();
+    expect(manager.result("run-1988")?.status).toBe("failed");
     const terminalEvents = events.filter(
       (event) => event.kind === "failure-redacted" || event.kind === "runtime-stopped",
     );
