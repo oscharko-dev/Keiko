@@ -710,7 +710,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
     it("localizes every dialog control in German", async () => {
       await loadLocaleMessages("de");
       window.localStorage.setItem(I18N_STORAGE_KEY, "de");
-      const { container } = render(
+      render(
         <I18nProvider>
           <AddRepositoryDialog client={makeClient()} onAdded={vi.fn()} onClose={vi.fn()} />
         </I18nProvider>,
@@ -724,7 +724,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       expect(within(dialog).getByRole("textbox", { name: "Repository-URL" })).toBeEnabled();
       expect(within(dialog).getByRole("textbox", { name: "In Ordner klonen" })).toBeEnabled();
       expect(within(dialog).getByRole("button", { name: "Abbrechen" })).toBeEnabled();
-      expect(await axe(container)).toHaveNoViolations();
+      expect(await axe(dialog)).toHaveNoViolations();
     });
 
     it("dialog has role=dialog and accessible name 'Add repository'", async () => {

@@ -43,7 +43,7 @@ describe("task-workspace CLI", () => {
       route: "/api/task-workspaces/health?root=%2Frepo+root",
     },
   ])("reads the $command.0 report from the running loopback server", async ({ command, route }) => {
-    const fetchImpl = vi.fn(() =>
+    const fetchImpl = vi.fn((_input: string, _init?: RequestInit) =>
       Promise.resolve(jsonResponse({ kind: "redacted-report", count: 2 })),
     );
     const capture = capturedIo();
@@ -56,10 +56,15 @@ describe("task-workspace CLI", () => {
     );
 
     expect(code).toBe(0);
-    expect(fetchImpl).toHaveBeenCalledWith(`http://localhost:21983${route}`, {
-      headers: { accept: "application/json" },
-      method: "GET",
-    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      `http://localhost:21983${route}`,
+      expect.objectContaining({
+        headers: { accept: "application/json" },
+        method: "GET",
+        redirect: "error",
+      }),
+    );
+    expect(fetchImpl.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
     expect(capture.out()).toContain('"kind": "redacted-report"');
     expect(capture.err()).toBe("");
   });
@@ -101,21 +106,88 @@ describe("task-workspace CLI", () => {
       body: { requestedBy: "keiko-cli", root: "/repo", operatorApproved: true },
     },
   ])("sends an approved governed mutation to $route", async ({ args, route, body }) => {
-    const fetchImpl = vi.fn(() => Promise.resolve(jsonResponse({ kind: "redacted-result" })));
+    const fetchImpl = vi.fn((_input: string, _init?: RequestInit) =>
+      Promise.resolve(jsonResponse({ kind: "redacted-result" })),
+    );
     const capture = capturedIo();
 
     const code = await runTaskWorkspaceCli(args, capture.io, {}, { fetchImpl });
 
     expect(code).toBe(0);
-    expect(fetchImpl).toHaveBeenCalledWith(`http://127.0.0.1:1983${route}`, {
-      body: JSON.stringify(body),
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json",
-        "x-keiko-csrf": "1",
+    expect(fetchImpl).toHaveBeenCalledWith(
+      `http://127.0.0.1:1983${route}`,
+      expect.objectContaining({
+        body: JSON.stringify(body),
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "x-keiko-csrf": "1",
+        },
+        method: "POST",
+        redirect: "error",
+      }),
+    );
+    expect(fetchImpl.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("cancels a streamed response as soon as the response cap is crossed", async () => {
+    let cancelled = false;
+    let emittedChunks = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller): void {
+        emittedChunks += 1;
+        controller.enqueue(new Uint8Array(emittedChunks === 1 ? 700_000 : 400_000));
       },
-      method: "POST",
+      cancel(): void {
+        cancelled = true;
+      },
     });
+    const fetchImpl = vi.fn(() => Promise.resolve(new Response(body)));
+    const capture = capturedIo();
+
+    const code = await runTaskWorkspaceCli(["health"], capture.io, {}, { fetchImpl });
+
+    expect(code).toBe(1);
+    expect(cancelled).toBe(true);
+    expect(emittedChunks).toBeGreaterThanOrEqual(2);
+    expect(capture.err()).toContain("RangeError");
+    expect(capture.out()).toBe("");
+  });
+
+  it("applies a bounded deadline to a stalled loopback request", async () => {
+    const controller = new AbortController();
+    const createTimeoutSignal = vi.fn(() => controller.signal);
+    const fetchImpl = vi.fn((_input: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            const reason: unknown = signal.reason;
+            reject(reason instanceof Error ? reason : new Error("request aborted"));
+          },
+          {
+            once: true,
+          },
+        );
+      });
+    });
+    const capture = capturedIo();
+
+    const pending = runTaskWorkspaceCli(
+      ["health"],
+      capture.io,
+      {},
+      {
+        fetchImpl,
+        createTimeoutSignal,
+      },
+    );
+    controller.abort(new DOMException("deadline exceeded", "TimeoutError"));
+
+    await expect(pending).resolves.toBe(1);
+    expect(createTimeoutSignal).toHaveBeenCalledWith(10_000);
+    expect(capture.err()).toContain("TimeoutError");
   });
 
   it("reports a redacted HTTP failure without echoing the response body", async () => {

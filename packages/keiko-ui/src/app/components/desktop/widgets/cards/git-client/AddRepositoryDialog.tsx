@@ -32,6 +32,7 @@ const OVERLAY_STYLE: CSSProperties = {
 };
 
 const DIALOG_STYLE: CSSProperties = {
+  position: "relative",
   display: "flex",
   flexDirection: "column",
   gap: "var(--space-5)",

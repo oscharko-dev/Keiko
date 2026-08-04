@@ -14,12 +14,18 @@ export async function expectViewportModal(page: Page, dialog: Locator): Promise<
 
   const viewport = page.viewportSize();
   const bounds = await backdrop.boundingBox();
+  const dialogBounds = await dialog.boundingBox();
   expect(viewport).not.toBeNull();
   expect(bounds).not.toBeNull();
-  if (viewport !== null && bounds !== null) {
+  expect(dialogBounds).not.toBeNull();
+  if (viewport !== null && bounds !== null && dialogBounds !== null) {
     expect(Math.abs(bounds.x)).toBeLessThanOrEqual(1);
     expect(Math.abs(bounds.y)).toBeLessThanOrEqual(1);
     expect(Math.abs(bounds.width - viewport.width)).toBeLessThanOrEqual(1);
     expect(Math.abs(bounds.height - viewport.height)).toBeLessThanOrEqual(1);
+    expect(Math.abs(dialogBounds.x + dialogBounds.width / 2 - viewport.width / 2)).toBeLessThan(2);
+    expect(Math.abs(dialogBounds.y + dialogBounds.height / 2 - viewport.height / 2)).toBeLessThan(
+      2,
+    );
   }
 }

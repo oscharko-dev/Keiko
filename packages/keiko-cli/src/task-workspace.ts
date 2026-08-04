@@ -21,6 +21,7 @@ const VALUE_OPTIONS: ReadonlySet<string> = new Set<ValueOption>([
 ]);
 const ENDPOINT_OPTIONS: ReadonlySet<string> = new Set(["--host", "--port"]);
 const RESPONSE_MAX_BYTES = 1024 * 1024;
+const REQUEST_TIMEOUT_MS = 10_000;
 const REQUESTED_BY = "keiko-cli";
 
 const USAGE = `Usage:
@@ -30,6 +31,7 @@ const USAGE = `Usage:
   keiko task-workspace cleanup <workspaceId> --mode request|complete --approve [--host HOST] [--port PORT]
   keiko task-workspace cleanup-orphans [--root PATH] --approve [--host HOST] [--port PORT]
 
+Reconciliation and health commands read the persisted reports without starting live recovery.
 Mutating commands require the explicit --approve flag. The local server is resolved from
 --host/--port, KEIKO_UI_HOST/KEIKO_UI_PORT, or the standard loopback defaults.
 `;
@@ -48,6 +50,7 @@ interface TaskWorkspaceRequest {
 
 export interface TaskWorkspaceCliDeps {
   readonly fetchImpl?: FetchFn | undefined;
+  readonly createTimeoutSignal?: ((timeoutMs: number) => AbortSignal) | undefined;
 }
 
 function parseTokens(args: readonly string[]): ParsedTokens | null {
@@ -185,16 +188,34 @@ function parseRequest(args: readonly string[]): TaskWorkspaceRequest | "help" | 
   return null;
 }
 
+async function readBoundedResponseBody(response: Response): Promise<string> {
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  try {
+    let chunk = await reader.read();
+    while (!chunk.done) {
+      totalBytes += chunk.value.byteLength;
+      if (totalBytes > RESPONSE_MAX_BYTES) {
+        await reader.cancel();
+        throw new RangeError("task-workspace response exceeds the size limit");
+      }
+      chunks.push(Buffer.from(chunk.value));
+      chunk = await reader.read();
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, totalBytes).toString("utf8");
+}
+
 async function readJsonResponse(response: Response): Promise<unknown> {
   const length = response.headers.get("content-length");
   if (length !== null && Number(length) > RESPONSE_MAX_BYTES) {
     throw new RangeError("task-workspace response exceeds the size limit");
   }
-  const text = await response.text();
-  if (Buffer.byteLength(text, "utf8") > RESPONSE_MAX_BYTES) {
-    throw new RangeError("task-workspace response exceeds the size limit");
-  }
-  return JSON.parse(text) as unknown;
+  return JSON.parse(await readBoundedResponseBody(response)) as unknown;
 }
 
 function responseErrorCode(payload: unknown): string | undefined {
@@ -209,6 +230,7 @@ async function executeRequest(
   io: CliIo,
   env: EnvSource,
   fetchImpl: FetchFn,
+  createTimeoutSignal: (timeoutMs: number) => AbortSignal,
 ): Promise<number> {
   const endpoint = resolveLoopbackEndpoint(request.endpoint, env);
   if (endpoint === null) {
@@ -216,7 +238,11 @@ async function executeRequest(
     return 2;
   }
   try {
-    const response = await fetchImpl(`${endpoint.baseUrl}${request.path}`, request.init);
+    const response = await fetchImpl(`${endpoint.baseUrl}${request.path}`, {
+      ...request.init,
+      redirect: "error",
+      signal: createTimeoutSignal(REQUEST_TIMEOUT_MS),
+    });
     const payload = await readJsonResponse(response);
     if (!response.ok) {
       const code = responseErrorCode(payload) ?? "UNSPECIFIED_ERROR";
@@ -247,5 +273,11 @@ export async function runTaskWorkspaceCli(
     io.err(USAGE);
     return 2;
   }
-  return executeRequest(request, io, env, deps.fetchImpl ?? fetch);
+  return executeRequest(
+    request,
+    io,
+    env,
+    deps.fetchImpl ?? fetch,
+    deps.createTimeoutSignal ?? ((timeoutMs): AbortSignal => AbortSignal.timeout(timeoutMs)),
+  );
 }
