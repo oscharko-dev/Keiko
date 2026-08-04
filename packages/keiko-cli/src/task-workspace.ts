@@ -23,6 +23,7 @@ const ENDPOINT_OPTIONS: ReadonlySet<string> = new Set(["--host", "--port"]);
 const RESPONSE_MAX_BYTES = 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
 const REQUESTED_BY = "keiko-cli";
+const RESERVED_WORKSPACE_IDS: ReadonlySet<string> = new Set<string>(["", ".", ".."]);
 
 const USAGE = `Usage:
   keiko task-workspace reconciliation [--root PATH] [--host HOST] [--port PORT]
@@ -31,8 +32,9 @@ const USAGE = `Usage:
   keiko task-workspace cleanup <workspaceId> --mode request|complete --approve [--host HOST] [--port PORT]
   keiko task-workspace cleanup-orphans [--root PATH] --approve [--host HOST] [--port PORT]
 
-Reconciliation and health commands read the persisted reports without starting live recovery.
-Mutating commands require the explicit --approve flag. The local server is resolved from
+Reconciliation reads its persisted report. Health performs a live, read-only filesystem and Git
+probe. Neither command starts recovery. Mutating commands require the explicit --approve flag.
+The local server is resolved from
 --host/--port, KEIKO_UI_HOST/KEIKO_UI_PORT, or the standard loopback defaults.
 `;
 
@@ -46,6 +48,11 @@ interface TaskWorkspaceRequest {
   readonly endpoint: LoopbackEndpointOptions;
   readonly path: string;
   readonly init: RequestInit;
+}
+
+interface ParsedJsonResponse {
+  readonly valid: boolean;
+  readonly value: unknown;
 }
 
 export interface TaskWorkspaceCliDeps {
@@ -124,6 +131,7 @@ function repairRequest(tokens: ParsedTokens): TaskWorkspaceRequest | null {
     !tokens.approved ||
     tokens.positionals.length !== 1 ||
     workspaceId === undefined ||
+    RESERVED_WORKSPACE_IDS.has(workspaceId) ||
     !usesOnlyOptions(tokens, new Set(["--strategy"])) ||
     !isWorkspaceRecoveryStrategy(strategy)
   ) {
@@ -153,6 +161,7 @@ function cleanupRequest(tokens: ParsedTokens): TaskWorkspaceRequest | null {
     !tokens.approved ||
     tokens.positionals.length !== 1 ||
     workspaceId === undefined ||
+    RESERVED_WORKSPACE_IDS.has(workspaceId) ||
     !usesOnlyOptions(tokens, new Set(["--mode"])) ||
     !isWorkspaceCleanupMode(mode)
   ) {
@@ -210,13 +219,19 @@ async function readBoundedResponseBody(response: Response): Promise<string> {
   return Buffer.concat(chunks, totalBytes).toString("utf8");
 }
 
-async function readJsonResponse(response: Response): Promise<unknown> {
+async function readJsonResponse(response: Response): Promise<ParsedJsonResponse> {
   const length = response.headers.get("content-length");
   if (length !== null && Number(length) > RESPONSE_MAX_BYTES) {
     await response.body?.cancel();
     throw new RangeError("task-workspace response exceeds the size limit");
   }
-  return JSON.parse(await readBoundedResponseBody(response)) as unknown;
+  const body = await readBoundedResponseBody(response);
+  if (body.trim().length === 0) return { valid: true, value: null };
+  try {
+    return { valid: true, value: JSON.parse(body) as unknown };
+  } catch {
+    return { valid: false, value: null };
+  }
 }
 
 function responseErrorCode(payload: unknown): string | undefined {
@@ -244,13 +259,19 @@ async function executeRequest(
       redirect: "error",
       signal: createTimeoutSignal(REQUEST_TIMEOUT_MS),
     });
-    const payload = await readJsonResponse(response);
+    const parsed = await readJsonResponse(response);
     if (!response.ok) {
-      const code = responseErrorCode(payload) ?? "UNSPECIFIED_ERROR";
+      const code = parsed.valid
+        ? (responseErrorCode(parsed.value) ?? "UNSPECIFIED_ERROR")
+        : "UNSPECIFIED_ERROR";
       io.err(`keiko task-workspace: HTTP ${String(response.status)} (${code}).\n`);
       return 1;
     }
-    io.out(`${JSON.stringify(payload, null, 2)}\n`);
+    if (!parsed.valid) {
+      io.err("keiko task-workspace: invalid JSON response.\n");
+      return 1;
+    }
+    io.out(`${JSON.stringify(parsed.value, null, 2)}\n`);
     return 0;
   } catch (error: unknown) {
     const kind = error instanceof Error ? error.name : "UnknownError";

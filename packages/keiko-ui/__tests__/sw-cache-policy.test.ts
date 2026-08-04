@@ -122,6 +122,7 @@ interface SwSandbox {
   readonly respondWithCalls: Array<Response | Promise<Response>>;
   readonly putCalls: Array<{ key: string; response: unknown }>;
   readonly fetchCalls: Array<string>;
+  readonly reportedErrors: Error[];
 }
 
 interface SyntheticEvent {
@@ -136,6 +137,7 @@ interface SyntheticEvent {
 function makeSandbox(
   seededCache: Record<string, unknown> = {},
   cachePutFailure?: Error,
+  cacheOpenFailure?: Error,
 ): {
   context: vm.Context;
   sandbox: SwSandbox;
@@ -144,6 +146,7 @@ function makeSandbox(
   const respondWithCalls: Array<Response | Promise<Response>> = [];
   const putCalls: Array<{ key: string; response: unknown }> = [];
   const fetchCalls: Array<string> = [];
+  const reportedErrors: Error[] = [];
 
   // Resolve a seeded cache entry by the request's url (the SW matches on the Request object).
   const matchSeeded = (req: { url: string } | string): unknown => {
@@ -162,7 +165,10 @@ function makeSandbox(
   };
 
   const cachesShim = {
-    open: async (_name: string): Promise<typeof cacheStub> => cacheStub,
+    open: async (_name: string): Promise<typeof cacheStub> => {
+      if (cacheOpenFailure !== undefined) throw cacheOpenFailure;
+      return cacheStub;
+    },
     keys: async (): Promise<readonly string[]> => [],
     delete: async (_name: string): Promise<boolean> => true,
     match: async (req: { url: string } | string): Promise<unknown> => matchSeeded(req),
@@ -173,6 +179,9 @@ function makeSandbox(
       handlers.set(event, handler);
     },
     location: { origin: "http://localhost:3000" },
+    reportError: (error: Error): void => {
+      reportedErrors.push(error);
+    },
   };
 
   const fetchShim = async (req: { url: string } | string): Promise<Response> => {
@@ -201,7 +210,7 @@ function makeSandbox(
 
   return {
     context,
-    sandbox: { handlers, respondWithCalls, putCalls, fetchCalls },
+    sandbox: { handlers, respondWithCalls, putCalls, fetchCalls, reportedErrors },
   };
 }
 
@@ -359,6 +368,28 @@ describe("sw.js cache policy — sandboxed fetch-handler evaluation", () => {
       fetchHandler?.(makeEvent("fetch", url, sandbox));
 
       await expect(sandbox.respondWithCalls[0]).resolves.toMatchObject({ ok: true, status: 200 });
+      expect(sandbox.reportedErrors.map((error) => error.message)).toStrictEqual([
+        "Service worker cache write failed.",
+      ]);
+    },
+  );
+
+  it.each([
+    { title: "cache-first asset", url: "http://localhost:3000/_next/static/chunk.js" },
+    { title: "network-first shell", url: "http://localhost:3000/" },
+  ])(
+    "returns a successful $title response when Cache Storage rejects opening the cache",
+    async ({ url }) => {
+      const { context, sandbox } = makeSandbox({}, undefined, new Error("StorageUnavailableError"));
+      vm.runInContext(SW_SOURCE, context);
+
+      const fetchHandler = sandbox.handlers.get("fetch");
+      fetchHandler?.(makeEvent("fetch", url, sandbox));
+
+      await expect(sandbox.respondWithCalls[0]).resolves.toMatchObject({ ok: true, status: 200 });
+      expect(sandbox.reportedErrors.map((error) => error.message)).toStrictEqual([
+        "Service worker cache write failed.",
+      ]);
     },
   );
 

@@ -322,14 +322,33 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     },
   );
 
-  it("keeps the policy refusal ahead of the minimum-modifier rule", () => {
+  it("rejects malformed input before applying a command's policy lock", () => {
     expect(
       validateEditorM7Keybinding({
         commandId: "editor.renameSymbol",
-        binding: "F2",
+        binding: "CtrlOrMeta+",
         activeBindings: {},
       }),
-    ).toMatchObject({ ok: false, reasonCode: "POLICY_LOCKED" });
+    ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
+  });
+
+  it.each([
+    "",
+    " ",
+    "+",
+    "+S",
+    "CtrlOrMeta+",
+    "CtrlOrMeta++S",
+    "CtrlOrMeta+\u0000S",
+    `CtrlOrMeta+${"A".repeat(4096)}`,
+  ])("rejects the malformed or hostile binding %j", (binding) => {
+    expect(
+      validateEditorM7Keybinding({
+        commandId: "quick-access.files",
+        binding,
+        activeBindings: {},
+      }),
+    ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
   });
 
   // 0.3.0 release audit (#2802) — `Ctrl` and `Meta` name the same position in the chord vocabulary

@@ -1369,12 +1369,15 @@ export function validateEditorM7Keybinding(args: {
   try {
     const command = commandFor(args.commandId);
     if (command === undefined) return { ok: false, reasonCode: "UNKNOWN_COMMAND" };
-    if (!command.rebindable) return { ok: false, reasonCode: "POLICY_LOCKED" };
+    if (utf8ByteLength(args.binding) > MAX_KEYBINDING_OVERRIDE_BYTES) {
+      return { ok: false, reasonCode: "INVALID_INPUT" };
+    }
     const canonical = canonicalBinding(args.binding);
     if (canonical === undefined) return { ok: false, reasonCode: "INVALID_INPUT" };
     if (!hasMinimumKeybindingModifier(canonical)) {
       return { ok: false, reasonCode: "INVALID_INPUT" };
     }
+    if (!command.rebindable) return { ok: false, reasonCode: "POLICY_LOCKED" };
     if (isReservedBinding(canonical)) {
       return { ok: false, reasonCode: "RESERVED_KEYBINDING" };
     }

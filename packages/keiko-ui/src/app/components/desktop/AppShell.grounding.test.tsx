@@ -1347,18 +1347,18 @@ describe("AppShell grounding connections", () => {
     expect(assertive).toHaveAttribute("aria-atomic", "true");
   });
 
-  // GEN-UI-A11Y-003 — the background window layer (`#main` / `.stage`) is NOT inert while no modal is
-  // open, and becomes inert + aria-hidden while a modal dialog (here: first-run gateway setup) is open.
-  it("does not inert the window layer while no modal dialog is open", async () => {
+  // GEN-UI-A11Y-003 — the complete background shell is available while no modal is open and becomes
+  // inert + aria-hidden while a modal dialog (here: first-run gateway setup) owns interaction.
+  it("does not inert the background shell while no modal dialog is open", async () => {
     await renderMounted();
 
-    const stage = document.getElementById("main");
-    expect(stage).not.toBeNull();
-    expect(stage?.hasAttribute("inert")).toBe(false);
-    expect(stage?.hasAttribute("aria-hidden")).toBe(false);
+    const background = document.querySelector(".app");
+    expect(background).not.toBeNull();
+    expect(background?.hasAttribute("inert")).toBe(false);
+    expect(background?.hasAttribute("aria-hidden")).toBe(false);
   });
 
-  it("inerts and aria-hides the window layer while the gateway-setup modal is open", async () => {
+  it("inerts and aria-hides the complete shell behind the gateway-setup modal", async () => {
     mocks.state.session = {
       ...(mocks.state.session as TestSession),
       models: [],
@@ -1368,10 +1368,13 @@ describe("AppShell grounding connections", () => {
 
     await renderMounted();
 
-    expect(screen.getByRole("dialog", { name: "Gateway setup" })).toBeInTheDocument();
-    const stage = document.getElementById("main");
-    expect(stage).not.toBeNull();
-    expect(stage?.hasAttribute("inert")).toBe(true);
-    expect(stage).toHaveAttribute("aria-hidden", "true");
+    const dialog = screen.getByRole("dialog", { name: "Gateway setup" });
+    const background = document.querySelector(".app");
+    expect(background).not.toBeNull();
+    expect(background?.hasAttribute("inert")).toBe(true);
+    expect(background).toHaveAttribute("aria-hidden", "true");
+    expect(background).toContainElement(document.querySelector("header"));
+    expect(background).toContainElement(document.querySelector("footer"));
+    expect(background).not.toContainElement(dialog);
   });
 });

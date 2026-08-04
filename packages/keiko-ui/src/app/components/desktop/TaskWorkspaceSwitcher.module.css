@@ -51,7 +51,7 @@
 
 .cmp-tc {
   color: var(--text-tertiary);
-  transition: transform 120ms var(--ease-out);
+  transition: transform var(--dur-fast) var(--ease-out);
 }
 
 .cmp-t[aria-expanded="true"] .cmp-tc {

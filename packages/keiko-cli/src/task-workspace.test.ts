@@ -86,6 +86,38 @@ describe("task-workspace CLI", () => {
   });
 
   it.each([
+    ["invalid recovery strategy", ["repair", "workspace-1", "--strategy", "unknown", "--approve"]],
+    ["invalid cleanup mode", ["cleanup", "workspace-1", "--mode", "unknown", "--approve"]],
+    ["unknown option", ["health", "--unknown", "value"]],
+    ["unknown command", ["unknown"]],
+    ["duplicate option", ["health", "--root", "/one", "--root", "/two"]],
+  ] as const)("rejects %s before issuing a request", async (_title, args) => {
+    const fetchImpl = vi.fn(() => Promise.resolve(jsonResponse({ ok: true })));
+    const capture = capturedIo();
+
+    const code = await runTaskWorkspaceCli(args, capture.io, {}, { fetchImpl });
+
+    expect(code).toBe(2);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(capture.err()).toContain("Usage:");
+  });
+
+  it.each([
+    ["repair", ".", ["repair", ".", "--strategy", "recreate-worktree", "--approve"]],
+    ["repair", "..", ["repair", "..", "--strategy", "recreate-worktree", "--approve"]],
+    ["cleanup", ".", ["cleanup", ".", "--mode", "request", "--approve"]],
+    ["cleanup", "..", ["cleanup", "..", "--mode", "request", "--approve"]],
+  ] as const)("rejects the %s dot-segment workspace id %s", async (_command, _id, args) => {
+    const fetchImpl = vi.fn(() => Promise.resolve(jsonResponse({ ok: true })));
+    const capture = capturedIo();
+
+    const code = await runTaskWorkspaceCli(args, capture.io, {}, { fetchImpl });
+
+    expect(code).toBe(2);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it.each([
     {
       args: ["repair", "workspace/1", "--strategy", "recreate-worktree", "--approve"],
       route: "/api/task-workspaces/workspace%2F1/repair",
@@ -227,5 +259,39 @@ describe("task-workspace CLI", () => {
     expect(capture.err()).toContain("HTTP 403");
     expect(capture.err()).toContain("OPERATOR_APPROVAL_REQUIRED");
     expect(capture.err()).not.toContain("sensitive body");
+  });
+
+  it("preserves the HTTP status when an error response is not valid JSON", async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(new Response("not-json", { status: 502 })));
+    const capture = capturedIo();
+
+    const code = await runTaskWorkspaceCli(["health"], capture.io, {}, { fetchImpl });
+
+    expect(code).toBe(1);
+    expect(capture.err()).toContain("HTTP 502 (UNSPECIFIED_ERROR)");
+    expect(capture.err()).not.toContain("not-json");
+  });
+
+  it("reports an invalid successful JSON response without echoing its body", async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(new Response("sensitive-not-json")));
+    const capture = capturedIo();
+
+    const code = await runTaskWorkspaceCli(["health"], capture.io, {}, { fetchImpl });
+
+    expect(code).toBe(1);
+    expect(capture.err()).toContain("invalid JSON response");
+    expect(capture.err()).not.toContain("sensitive-not-json");
+    expect(capture.out()).toBe("");
+  });
+
+  it("treats an empty successful response as a null JSON result", async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(new Response(null)));
+    const capture = capturedIo();
+
+    const code = await runTaskWorkspaceCli(["health"], capture.io, {}, { fetchImpl });
+
+    expect(code).toBe(0);
+    expect(capture.out()).toBe("null\n");
+    expect(capture.err()).toBe("");
   });
 });

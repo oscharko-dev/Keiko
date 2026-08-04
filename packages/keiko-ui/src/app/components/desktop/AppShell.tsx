@@ -1438,26 +1438,23 @@ function AppShellInner(): ReactNode {
     <Palette types={WIN_TYPES} order={paletteWindowOrder()} onAdd={pick} onClose={closePalette} />
   ) : null;
 
-  // GEN-UI-A11Y-003 — while a genuinely modal dialog is open, take the background window layer out of
-  // the accessibility tree and the tab order. These dialogs (NewWindowDialog / UnifiedQuickAccessPalette /
-  // GatewaySetupDialog) are each aria-modal and render as later siblings OUTSIDE `.stage`, so inerting
-  // `.stage` leaves them fully operable while nothing behind them can be tabbed to or read by AT. The
-  // non-modal `Palette` (palOpen) deliberately does NOT count here: it renders INSIDE `.stage` and is
-  // designed to keep the workspace behind it interactive, so inerting on `palOpen` would disable the
-  // Palette itself. `inert` implies aria-hidden in modern engines; the explicit aria-hidden is a
-  // fallback for older assistive tech that has not yet adopted inert.
+  // GEN-UI-A11Y-003 — while a genuinely modal dialog is open, take the complete background shell out
+  // of the accessibility tree and tab order. The modal dialogs render as later siblings OUTSIDE
+  // `.app`, so inerting `.app` leaves them fully operable while the header, rails, workspace, and
+  // footer are all unavailable. The non-modal `Palette` deliberately stays inside the workspace and
+  // does not count here because it is designed to keep the shell interactive.
   const nestedModalOpen = useModalInteractionLockState();
   const modalOpen =
     pending !== null || quickAccessMode !== null || needsGatewaySetup || nestedModalOpen;
   // GEN-UI-A11Y-003 — toggle `inert` imperatively so the modal lifecycle owns the exact presence of
   // the boolean attribute across supported renderers: set it while a modal dialog is open and remove
   // it otherwise. `aria-hidden` pairs with `inert` for older assistive technology.
-  const stageRef = useRef<HTMLDivElement>(null);
+  const backgroundRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const stage = stageRef.current;
-    if (stage === null) return;
-    if (modalOpen) stage.setAttribute("inert", "");
-    else stage.removeAttribute("inert");
+    const background = backgroundRef.current;
+    if (background === null) return;
+    if (modalOpen) background.setAttribute("inert", "");
+    else background.removeAttribute("inert");
   }, [modalOpen]);
 
   return (
@@ -1471,7 +1468,11 @@ function AppShellInner(): ReactNode {
             renders its role="status"/role="alert" regions as siblings of `.app`, OUTSIDE the window
             layer, so they never unmount and any surface can post an outcome via useAnnouncer(). */}
                 <AnnouncerProvider>
-                  <div className="app">
+                  <div
+                    ref={backgroundRef}
+                    className="app"
+                    aria-hidden={modalOpen ? true : undefined}
+                  >
                     {/* WCAG 2.4.1 — bypass blocks: the first focusable element jumps keyboard
               users past the header/rail straight to the workspace (design/accessibility.html §04). */}
                     <a className="skip-link" href="#main">
@@ -1496,15 +1497,7 @@ function AppShellInner(): ReactNode {
                           onToggleTheme={toggleTheme}
                         />
                       )}
-                      <div
-                        ref={stageRef}
-                        className="stage"
-                        id="main"
-                        tabIndex={-1}
-                        // GEN-UI-A11Y-003 — `inert` is toggled imperatively via stageRef (see effect above);
-                        // aria-hidden pairs with it for older AT while a modal dialog is open.
-                        aria-hidden={modalOpen ? true : undefined}
-                      >
+                      <div className="stage" id="main" tabIndex={-1}>
                         <Workspace
                           ws={ws}
                           wsRef={wsRef}
@@ -1551,28 +1544,27 @@ function AppShellInner(): ReactNode {
                       evidenceStatusLabel={footerEvidenceStatusLabel}
                       statusRef={setStatusRef}
                     />
-
-                    {pending !== null && (
-                      <NewWindowDialog
-                        type={pending}
-                        types={WIN_TYPES}
-                        filesContext={ws.api.currentFilesContext()}
-                        onConfirm={confirmNew}
-                        onClose={closeDialog}
-                      />
-                    )}
-                    {quickAccessMode !== null ? (
-                      <UnifiedQuickAccessPalette
-                        initialMode={quickAccessMode}
-                        root={quickAccessRoot}
-                        roots={quickAccessRoots}
-                        commands={quickAccessCommands}
-                        openEditorFile={ws.api.openEditorFile}
-                        onClose={closeQuickAccess}
-                      />
-                    ) : null}
-                    {needsGatewaySetup ? <GatewaySetupDialog /> : null}
                   </div>
+                  {pending !== null && (
+                    <NewWindowDialog
+                      type={pending}
+                      types={WIN_TYPES}
+                      filesContext={ws.api.currentFilesContext()}
+                      onConfirm={confirmNew}
+                      onClose={closeDialog}
+                    />
+                  )}
+                  {quickAccessMode !== null ? (
+                    <UnifiedQuickAccessPalette
+                      initialMode={quickAccessMode}
+                      root={quickAccessRoot}
+                      roots={quickAccessRoots}
+                      commands={quickAccessCommands}
+                      openEditorFile={ws.api.openEditorFile}
+                      onClose={closeQuickAccess}
+                    />
+                  ) : null}
+                  {needsGatewaySetup ? <GatewaySetupDialog /> : null}
                 </AnnouncerProvider>
               </WsContext.Provider>
             </WorkspaceReplaceBufferProvider>

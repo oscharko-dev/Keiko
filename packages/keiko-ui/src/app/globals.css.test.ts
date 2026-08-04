@@ -39,7 +39,12 @@ function productionStyleSources(directory: string): readonly StyleSource[] {
       entry.name.endsWith(".tsx") &&
       !entry.name.endsWith(".test.tsx") &&
       !entry.name.endsWith(".spec.tsx");
-    if (productionModule || productionComponent) {
+    const productionStyleHelper =
+      entry.name.endsWith(".ts") &&
+      !entry.name.endsWith(".d.ts") &&
+      !entry.name.endsWith(".test.ts") &&
+      !entry.name.endsWith(".spec.ts");
+    if (productionModule || productionComponent || productionStyleHelper) {
       sources.push({ path, source: readFileSync(path, "utf8") });
     }
   }
@@ -299,6 +304,34 @@ describe("Design-token reference integrity", () => {
     );
 
     expect(unresolved).toStrictEqual([]);
+  });
+
+  it("fails closed for unterminated, quoted, and circular hostile fallbacks", () => {
+    const unresolved = unresolvedTokenReferences(
+      [
+        {
+          path: resolve(here, "fixture.ts"),
+          source: [
+            "var(--unterminated, var(--known)",
+            'var(--quoted, "unterminated)',
+            "var(--cycle-a, var(--cycle-b, var(--cycle-a)))",
+          ].join(" "),
+        },
+      ],
+      new Set(["--known"]),
+    );
+
+    expect(unresolved).toStrictEqual([
+      "fixture.ts: --cycle-a",
+      "fixture.ts: --quoted",
+      "fixture.ts: --unterminated",
+    ]);
+  });
+
+  it("scans production TypeScript style helpers as well as components and CSS Modules", () => {
+    expect(
+      productionStyleSources(here).some(({ path }) => path.endsWith("git-client-styles.ts")),
+    ).toBe(true);
   });
 
   it("requires every CSS Module and inline style token to be global or safely fall back", () => {
