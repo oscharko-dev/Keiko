@@ -274,19 +274,8 @@ function DirtyCloseDialog(props: {
 }): ReactNode {
   const titleId = "editor-dirty-close-title";
   const dialogRef = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    // GEN-UI-FOCUS-006: capture the opener before moving focus into the dialog, and restore it on
-    // close/unmount so keyboard focus returns to where the user was (never lost to <body>).
-    const opener = document.activeElement as HTMLElement | null;
-    dialogRef.current?.focus();
-    return () => {
-      if (opener !== null && typeof opener.focus === "function" && opener.isConnected) {
-        opener.focus();
-      }
-    };
-  }, []);
   useDialogTabTrap(dialogRef);
-  useModalInteractionLock({ restoreFocus: false });
+  useModalInteractionLock({ initialFocusRef: dialogRef });
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (event.key === "Escape" && !props.pending.saving) props.onCancel();

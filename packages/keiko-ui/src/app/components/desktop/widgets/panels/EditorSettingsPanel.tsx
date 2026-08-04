@@ -417,17 +417,8 @@ function AiActivationConfirmDialog({
   const titleId = "editor-settings-ai-confirm-title";
   const descriptionId = "editor-settings-ai-confirm-description";
   const dialogRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    dialogRef.current?.focus();
-    return () => {
-      if (opener !== null && typeof opener.focus === "function" && opener.isConnected) {
-        opener.focus();
-      }
-    };
-  }, []);
   useDialogTabTrap(dialogRef);
-  useModalInteractionLock({ restoreFocus: false });
+  useModalInteractionLock({ initialFocusRef: dialogRef });
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (event.key === "Escape") onDecline();

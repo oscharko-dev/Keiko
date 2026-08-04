@@ -107,19 +107,8 @@ export function AddRepositoryDialog({
   const [error, setError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const firstFieldRef = useRef<HTMLInputElement | null>(null);
-  const triggerRef = useRef<HTMLElement | null>(null);
   useDialogTabTrap(dialogRef);
-  useModalInteractionLock({ restoreFocus: false });
-
-  // Capture the opener once on mount and restore focus to it when the dialog closes,
-  // so keyboard users return to where they were (WCAG 2.4.3 / EV4 modal-control).
-  useEffect(() => {
-    triggerRef.current = document.activeElement as HTMLElement | null;
-    return () => {
-      const trigger = triggerRef.current;
-      if (trigger?.isConnected === true) trigger.focus();
-    };
-  }, []);
+  useModalInteractionLock({ initialFocusRef: dialogRef });
 
   // Move initial focus into the dialog (first field, or the dialog container itself when a
   // mode has no field yet) so the Tab trap and Escape handler — both bound to the dialog —

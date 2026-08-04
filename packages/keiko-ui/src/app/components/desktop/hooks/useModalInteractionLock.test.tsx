@@ -38,7 +38,9 @@ describe("useModalInteractionLock", () => {
     trigger.focus();
 
     view.rerender(<Harness open />);
-    expect(screen.getByRole("button", { name: "Dialog action" })).toHaveFocus();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Dialog action" })).toHaveFocus(),
+    );
     stage.setAttribute("inert", "");
 
     view.rerender(<Harness open={false} />);

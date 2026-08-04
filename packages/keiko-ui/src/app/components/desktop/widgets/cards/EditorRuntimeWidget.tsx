@@ -2828,22 +2828,15 @@ function EditorRuntimeWidget({
   // settings, and debugging confirms use) instead of re-deriving the wrap here; it is a no-op while
   // the dialog is unmounted because the ref is then null.
   useDialogTabTrap(reloadConfirmRef);
-  useModalInteractionLock({ active: reloadConfirm, restoreFocus: false });
+  useModalInteractionLock({ active: reloadConfirm, initialFocusRef: reloadConfirmRef });
   useEffect(() => {
     if (!reloadConfirm) return;
-    // GEN-UI-FOCUS-006: capture the opener (the Reload button) before moving focus into the dialog,
-    // and restore it on close so keyboard focus returns to the trigger instead of being lost to <body>.
-    const opener = document.activeElement as HTMLElement | null;
-    reloadConfirmRef.current?.focus();
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (event.key === "Escape") cancelReloadDiscard();
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
-      if (opener !== null && typeof opener.focus === "function" && opener.isConnected) {
-        opener.focus();
-      }
     };
   }, [reloadConfirm, cancelReloadDiscard]);
 

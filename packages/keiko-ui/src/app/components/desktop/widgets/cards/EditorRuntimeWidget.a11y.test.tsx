@@ -550,7 +550,7 @@ describe("EditorRuntimeWidget reload-confirm dialog — focus restoration (GEN-U
     // Cancel the dialog — focus must return to the Reload trigger, not be lost to <body>.
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(document.activeElement).toBe(reload);
+    await waitFor(() => expect(document.activeElement).toBe(reload));
   });
 
   // GEN-UI-FOCUS-002 — "Discard unsaved changes?" is aria-modal="true", which tells assistive
@@ -584,7 +584,7 @@ describe("EditorRuntimeWidget reload-confirm dialog — focus restoration (GEN-U
 
     // Initial focus is the dialog container, so the very first Shift+Tab must wrap to the last
     // control rather than escaping to whatever was tabbable before the dialog opened.
-    expect(document.activeElement).toBe(dialog);
+    await waitFor(() => expect(document.activeElement).toBe(dialog));
     fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(cancel);
 

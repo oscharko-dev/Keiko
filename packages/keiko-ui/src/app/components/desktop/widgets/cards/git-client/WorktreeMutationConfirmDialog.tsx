@@ -24,23 +24,18 @@ export function WorktreeMutationConfirmDialog({
   const t = useOptionalWidgetTranslate();
   const dialogRef = useRef<HTMLDialogElement>(null);
   useDialogTabTrap(dialogRef);
-  useModalInteractionLock({ restoreFocus: false });
+  useModalInteractionLock({ initialFocusRef: dialogRef });
   const branchSwitch = request.kind === "branch-switch";
   const label = branchSwitch
     ? t("gitClientWindow.confirm.branchSwitch.title")
     : t("gitClientWindow.confirm.pull.title");
 
   useEffect(() => {
-    let active = true;
-    queueMicrotask(() => {
-      if (active) dialogRef.current?.focus();
-    });
     const onKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (event.key === "Escape") onCancel();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => {
-      active = false;
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [onCancel]);

@@ -53,7 +53,7 @@ export function NewBranchDialog({
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   useDialogTabTrap(dialogRef);
-  useModalInteractionLock({ initialFocusRef: inputRef, restoreFocus: false });
+  useModalInteractionLock({ initialFocusRef: inputRef });
 
   const trimmed = branchName.trim();
   const canSubmit = trimmed.length > 0 && baseBranchName.length > 0 && !busy;

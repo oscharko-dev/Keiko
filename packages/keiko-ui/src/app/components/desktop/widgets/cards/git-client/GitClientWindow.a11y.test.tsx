@@ -600,7 +600,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       expect(dialog).toHaveAttribute("aria-modal", "true");
       expect(dialog.parentElement).toBe(document.body);
       expect(document.documentElement.dataset.keikoModalOpen).toBe("true");
-      expect(within(dialog).getByLabelText("Branch name")).toHaveFocus();
+      await waitFor(() => expect(within(dialog).getByLabelText("Branch name")).toHaveFocus());
       within(dialog).getByRole("button", { name: "Cancel" }).focus();
       fireEvent.keyDown(dialog, { key: "Tab" });
       expect(dialog.contains(document.activeElement)).toBe(true);
@@ -615,7 +615,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       const dialog = screen.getByRole("dialog", { name: "Confirm branch switch" });
       expect(dialog).toHaveAttribute("aria-modal", "true");
       expect(document.documentElement.dataset.keikoModalOpen).toBe("true");
-      expect(dialog).toHaveFocus();
+      await waitFor(() => expect(dialog).toHaveFocus());
       within(dialog).getByRole("button", { name: "Switch branch" }).focus();
       fireEvent.keyDown(document, { key: "Tab" });
       expect(dialog.contains(document.activeElement)).toBe(true);

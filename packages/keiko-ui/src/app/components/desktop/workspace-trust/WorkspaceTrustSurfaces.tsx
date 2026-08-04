@@ -189,14 +189,7 @@ export function WorkspaceTrustDecisionDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   useDialogTabTrap(dialogRef);
-  useModalInteractionLock({ restoreFocus: false });
-  useEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    cancelRef.current?.focus();
-    return () => {
-      if (opener?.isConnected === true) opener.focus();
-    };
-  }, []);
+  useModalInteractionLock({ initialFocusRef: cancelRef });
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "Escape" && !mutating) onCancel();

@@ -151,7 +151,7 @@ describe("WorkspaceTrustPanel", () => {
 
     await user.click(screen.getByRole("button", { name: "Trust" }));
     const confirmGrant = screen.getByRole("button", { name: "Trust workspace" });
-    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus());
     await user.click(confirmGrant);
     expect(screen.getByText("Restricted Mode")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Revoke" })).toBeNull();
