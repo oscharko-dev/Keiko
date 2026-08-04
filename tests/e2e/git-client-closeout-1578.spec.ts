@@ -685,6 +685,7 @@ async function verifyChangesAndCommit(
   const commitSection = gitWindow.locator('section[aria-label="Commit"]');
   await commitSection.getByLabel("Summary").fill("test(git-ui): verify closeout evidence");
   await expect(page.locator('[data-testid="git-commit-preview"]')).toBeVisible();
+  expect(ledger.commitPreviews).toHaveLength(1);
   await commitSection.getByRole("button", { name: /Commit/u }).click();
   await expect
     .poll(() => ledger.commitExecutes.length, { message: "commit execute route called" })
