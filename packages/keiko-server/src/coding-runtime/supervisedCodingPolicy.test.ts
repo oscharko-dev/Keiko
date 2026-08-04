@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { validateCodingWorkbenchEvidenceRecord } from "@oscharko-dev/keiko-contracts";
+import {
+  EDITOR_AGENT_TARGET_PATH_MAX_BYTES,
+  validateCodingWorkbenchEvidenceRecord,
+} from "@oscharko-dev/keiko-contracts";
 
 import {
   decideSupervisedFileEdit,
@@ -193,6 +196,31 @@ describe("supervised coding policy", () => {
         reason: "out-of-scope-file-edit",
       });
     }
+  });
+
+  it("allows the absolute target byte limit and denies one byte beyond it", () => {
+    const { root } = workspaceFixture();
+    const targetPrefix = `${join(root, "src")}/`;
+    const targetSuffix = "allowed.ts";
+    const redundantBytes =
+      EDITOR_AGENT_TARGET_PATH_MAX_BYTES -
+      Buffer.byteLength(`${targetPrefix}${targetSuffix}`, "utf8");
+    const oddByteDetour = redundantBytes % 2 === 0 ? "" : "x/../";
+    const exactTarget = `${targetPrefix}${oddByteDetour}${"./".repeat(
+      (redundantBytes - Buffer.byteLength(oddByteDetour, "utf8")) / 2,
+    )}${targetSuffix}`;
+    const oneByteOver = `${exactTarget}x`;
+
+    expect(Buffer.byteLength(exactTarget, "utf8")).toBe(EDITOR_AGENT_TARGET_PATH_MAX_BYTES);
+    expect(decideSupervisedFileEdit(fileRequest(root, exactTarget))).toMatchObject({
+      status: "allowed",
+      reason: "scoped-file-edit",
+    });
+    expect(Buffer.byteLength(oneByteOver, "utf8")).toBe(EDITOR_AGENT_TARGET_PATH_MAX_BYTES + 1);
+    expect(decideSupervisedFileEdit(fileRequest(root, oneByteOver))).toMatchObject({
+      status: "denied",
+      reason: "out-of-scope-file-edit",
+    });
   });
 
   it("allows configured verification commands and persists only counts", () => {

@@ -1082,10 +1082,27 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     } catch {
       barrierComplete = false;
     }
-    try {
-      this.deps.approvalStore.invalidateRun(active.context.runId);
-      this.deps.codingToolApprovals?.invalidateRun(active.context.runId);
-    } catch {
+    const supervisedApprovalsInvalidated = invalidateApprovalBarrier(
+      this.deps.diagnostics,
+      active.context.runId,
+      "supervised-approval-store",
+      (runId): void => {
+        this.deps.approvalStore.invalidateRun(runId);
+      },
+      this.deps.now,
+    );
+    const codingToolApprovalsInvalidated = invalidateApprovalBarrier(
+      this.deps.diagnostics,
+      active.context.runId,
+      "coding-tool-approval-bridge",
+      this.deps.codingToolApprovals === undefined
+        ? undefined
+        : (runId): void => {
+            this.deps.codingToolApprovals?.invalidateRun(runId);
+          },
+      this.deps.now,
+    );
+    if (!supervisedApprovalsInvalidated || !codingToolApprovalsInvalidated) {
       barrierComplete = false;
     }
     try {
@@ -1445,6 +1462,30 @@ function emitRuntimeStreamDrainFailureDiagnostic(
     errorClass: contentFreeErrorClass(error),
     message: "runtime-stream-drain-failed",
   });
+}
+
+function invalidateApprovalBarrier(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  source: "coding-tool-approval-bridge" | "supervised-approval-store",
+  invalidateRun: ((runId: string) => void) | undefined,
+  now: () => number,
+): boolean {
+  if (invalidateRun === undefined) return true;
+  try {
+    invalidateRun(runId);
+    return true;
+  } catch (error) {
+    emitServerDiagnostic(diagnostics, {
+      correlationId: runId,
+      timestamp: new Date(now()).toISOString(),
+      operation: "coding-runtime.approval-revocation",
+      source: `coding-runtime-manager.${source}`,
+      errorClass: contentFreeErrorClass(error),
+      message: "runtime-approval-revocation-failed",
+    });
+    return false;
+  }
 }
 
 function resolvePortableRuntime(

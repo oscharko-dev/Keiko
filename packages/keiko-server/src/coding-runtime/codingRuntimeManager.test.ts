@@ -1998,6 +1998,65 @@ describe("coding runtime manager", () => {
     expect(manager.health()).toMatchObject({ status: "recovery-required" });
   });
 
+  it.each(["supervised-approval-store", "coding-tool-approval-bridge"] as const)(
+    "diagnoses a %s invalidation failure and still attempts the independent approval barrier",
+    async (failedBarrier) => {
+      const fixture = createManagedFixture();
+      const child = fakeChild();
+      const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+      const approvalStore = createInMemorySupervisedCodingApprovalStore();
+      const codingToolApprovals = createCodingToolApprovalBridge();
+      const approvalStoreInvalidation = vi.spyOn(approvalStore, "invalidateRun");
+      const codingToolInvalidation = vi.spyOn(codingToolApprovals, "invalidateRun");
+      const privateFailureBody = `private-${failedBarrier}-failure`;
+      const failedInvalidation =
+        failedBarrier === "supervised-approval-store"
+          ? approvalStoreInvalidation
+          : codingToolInvalidation;
+      failedInvalidation.mockImplementation(() => {
+        throw new TypeError(privateFailureBody);
+      });
+      const manager = createTestCodingRuntimeManager({
+        processEnv: {},
+        diagnostics,
+        approvalStore,
+        codingToolApprovals,
+        supervisor: testSupervisor(() => ({
+          ...child.handle,
+          kill: (signal): void => {
+            child.kills.push(signal);
+            child.exit(0);
+          },
+        })),
+        now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+      });
+
+      expect(
+        manager.start(
+          launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ).toMatchObject({ ok: true });
+      await expect(manager.stop("run-1988")).resolves.toEqual({
+        ok: false,
+        failureCode: "runtime-reap-unproven",
+        retryable: false,
+      });
+      expect(approvalStoreInvalidation).toHaveBeenCalledWith("run-1988");
+      expect(codingToolInvalidation).toHaveBeenCalledWith("run-1988");
+      expect(diagnostics.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          correlationId: "run-1988",
+          operation: "coding-runtime.approval-revocation",
+          source: `coding-runtime-manager.${failedBarrier}`,
+          errorClass: "TypeError",
+          message: "runtime-approval-revocation-failed",
+        }),
+      );
+      expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(privateFailureBody);
+      expect(manager.health()).toMatchObject({ status: "recovery-required" });
+    },
+  );
+
   it("stops the active sidecar and allows a clean restart", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();

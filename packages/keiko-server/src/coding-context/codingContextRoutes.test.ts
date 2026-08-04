@@ -7,7 +7,7 @@ import {
   type CodingWorkbenchConnectorScope,
   type CodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { composeCodingContextConnectors, handleCodingContextPack } from "./codingContextRoutes.js";
 import type { GitHubCodeContextApiPort } from "./githubCodeContextConnector.js";
@@ -20,6 +20,7 @@ import {
 } from "../editor/agentAuthorityRegistry.js";
 
 const WORKSPACE_ROOT = "/workspace/project";
+const TEST_NOW = "2026-07-07T13:00:00.000Z";
 
 function requestWithBody(body: unknown): IncomingMessage {
   const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage;
@@ -181,7 +182,13 @@ function bodyOf(result: RouteResult): Record<string, unknown> {
 
 describe("coding context pack route", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(TEST_NOW));
     editorAgentAuthorityRegistry.reset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("returns an untrusted-labeled pack with content-free evidence on the happy path", async () => {
