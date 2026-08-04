@@ -19,6 +19,7 @@ import { currentGatewayConfig } from "./deps.js";
 import { buildUiHandlerDeps } from "./deps.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
+  ERROR_CODES,
   parseGatewayConfig,
   resolveCodingSafeSidecarGatewayProfile,
   resolveVoiceCapability,
@@ -2974,6 +2975,177 @@ describe("handleGatewaySetup", () => {
     expect(JSON.stringify(result.body)).toContain("internet access");
     expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
     expect(JSON.stringify(result.body)).not.toContain("https://llm-gateway.example.com");
+    deps.store.close();
+  });
+
+  it("classifies nested provider status failures without reflecting upstream details", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-classified-failure-");
+    const evidenceDir = await tempDir("keiko-gw-ev-classified-failure-");
+    const upstreamDetails = "private upstream details";
+    const discoveryError = Object.assign(new AggregateError([]), {
+      errors: [Object.assign(new Error(`upstream said: ${upstreamDetails}`), { httpStatus: 429 })],
+    });
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.reject(discoveryError),
+      gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" }),
+      deps,
+    );
+
+    expect(result.status).toBe(502);
+    expect(JSON.stringify(result.body)).toContain("provider rate-limited setup verification");
+    expect(JSON.stringify(result.body)).not.toContain(upstreamDetails);
+    expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
+    deps.store.close();
+  });
+
+  it("classifies provider auth and model smoke-test failures", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-auth-model-failure-");
+    const evidenceDir = await tempDir("keiko-gw-ev-auth-model-failure-");
+    let attempt = 0;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => {
+        attempt += 1;
+        if (attempt === 1) {
+          return Promise.reject(Object.assign(new Error("provider body hidden"), { status: 401 }));
+        }
+        return Promise.reject(Object.assign(new Error("provider body hidden"), { status: 404 }));
+      },
+      gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+
+    expect(result.status).toBe(502);
+    expect(JSON.stringify(result.body)).toContain("provider rejected the credential");
+    expect(JSON.stringify(result.body)).toContain(
+      "no discovered model accepted the chat smoke test",
+    );
+    expect(JSON.stringify(result.body)).not.toContain("provider body hidden");
+    expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
+    deps.store.close();
+  });
+
+  it.each([
+    {
+      name: "authentication",
+      code: ERROR_CODES.AUTHENTICATION,
+      expected: "provider rejected the credential",
+    },
+    {
+      name: "rate limit",
+      code: ERROR_CODES.RATE_LIMIT,
+      expected: "provider rate-limited setup verification",
+    },
+    {
+      name: "unknown model",
+      code: ERROR_CODES.UNKNOWN_MODEL,
+      expected: "no discovered model accepted the chat smoke test",
+    },
+    {
+      name: "proxy egress",
+      code: ERROR_CODES.PROXY_EGRESS_FAILED,
+      expected: "local setup service could not reach",
+    },
+  ])("classifies nested provider $name codes without reflecting upstream details", async (item) => {
+    const uiDir = await tempDir(`keiko-gw-ui-code-${item.name.replace(/\W/gu, "-")}-`);
+    const evidenceDir = await tempDir(`keiko-gw-ev-code-${item.name.replace(/\W/gu, "-")}-`);
+    const upstreamDetails = `private provider details for ${item.name}`;
+    const discoveryError = Object.assign(new Error("outer provider setup failure"), {
+      cause: Object.assign(new Error(`upstream said: ${upstreamDetails}`), {
+        code: item.code,
+      }),
+    });
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.reject(discoveryError),
+      gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" }),
+      deps,
+    );
+
+    expect(result.status).toBe(502);
+    expect(JSON.stringify(result.body)).toContain(item.expected);
+    expect(JSON.stringify(result.body)).not.toContain(upstreamDetails);
+    expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
+    expect(JSON.stringify(result.body)).not.toContain("https://llm-gateway.example.com");
+    deps.store.close();
+  });
+
+  it("falls back for malformed provider errors without traversing hostile properties", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-generic-hostile-failure-");
+    const evidenceDir = await tempDir("keiko-gw-ev-generic-hostile-failure-");
+    const providerDetails = "private primitive provider details";
+    const hostileError = new Error("hostile provider wrapper") as Error & Record<string, unknown>;
+    Object.defineProperties(hostileError, {
+      code: {
+        get: () => {
+          throw new Error("secret code getter");
+        },
+      },
+      httpStatus: {
+        get: () => {
+          throw new Error("secret http status getter");
+        },
+      },
+      status: {
+        get: () => {
+          throw new Error("secret status getter");
+        },
+      },
+      cause: { get: () => hostileError },
+      errors: { get: () => [null, "ignored nested value", hostileError] },
+    });
+    let attempt = 0;
+    const genericError = new Error(providerDetails);
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => {
+        attempt += 1;
+        return Promise.reject(attempt === 1 ? genericError : hostileError);
+      },
+      gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+
+    const body = JSON.stringify(result.body);
+    expect(result.status).toBe(502);
+    expect(body).toContain(
+      "Provider verification failed without exposing upstream response details",
+    );
+    expect(body).not.toContain(providerDetails);
+    expect(body).not.toContain("secret code getter");
+    expect(body).not.toContain("secret http status getter");
+    expect(body).not.toContain("secret status getter");
+    expect(body).not.toContain("example-secret-token");
+    expect(body).not.toContain("https://llm-gateway.example.com");
     deps.store.close();
   });
 

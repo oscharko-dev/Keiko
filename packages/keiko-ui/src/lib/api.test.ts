@@ -1904,6 +1904,47 @@ describe("setupGateway", () => {
     expect((thrown as Error).message).toContain("local setup service");
     expect((thrown as Error).message).not.toBe("Failed to fetch");
   });
+
+  it.each([
+    {
+      name: "a non-network TypeError",
+      rejection: new TypeError("request schema validation failed"),
+    },
+    {
+      name: "a non-TypeError rejected value",
+      rejection: { code: "PLAIN_OBJECT", message: "Failed to fetch" },
+    },
+  ])("rethrows $name unchanged", async ({ rejection }) => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(rejection));
+
+    await expect(
+      setupGateway({ baseUrl: "https://api.openai.com/v1", apiKey: "secret" }),
+    ).rejects.toBe(rejection);
+  });
+
+  it("preserves BFF setup errors instead of treating them as transport failures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            error: {
+              code: "GATEWAY_SETUP_FAILED",
+              message: "Credentials could not be verified.",
+            },
+          },
+          502,
+        ),
+      ),
+    );
+
+    await expect(
+      setupGateway({ baseUrl: "https://api.openai.com/v1", apiKey: "secret" }),
+    ).rejects.toMatchObject({
+      code: "GATEWAY_SETUP_FAILED",
+      status: 502,
+    } satisfies Partial<ApiError>);
+  });
 });
 
 describe("fetchConfig", () => {
