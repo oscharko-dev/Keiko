@@ -198,6 +198,7 @@ function validLanguage(value: unknown): value is string {
 function validPattern(value: unknown): value is string {
   if (!validBoundedString(value, MAX_PATTERN_BYTES)) return false;
   if (value.startsWith("/") || value.includes("\\") || value.includes("\0")) return false;
+  if (value.split("**").length - 1 > 1) return false;
   return !value.split("/").some((segment) => segment === "." || segment === "..");
 }
 
@@ -553,11 +554,12 @@ export function matchingEditorM7Snippets(args: {
 }): readonly EditorM7SnippetCompletion[] {
   if (!args.insertionSafe || args.signal?.aborted === true) return [];
   const prefix = args.prefix.toLowerCase();
-  const matches = args.collection.snippets.flatMap((snippet) =>
-    snippetMatches(snippet, args.languageId, args.relativePath, prefix)
+  const matches = args.collection.snippets.flatMap((snippet) => {
+    if (args.signal?.aborted === true) return [];
+    return snippetMatches(snippet, args.languageId, args.relativePath, prefix)
       ? [snippetCompletion(snippet)]
-      : [],
-  );
+      : [];
+  });
   return [...dedupeSnippetCompletions(matches)].sort((left, right) =>
     left.sortText.localeCompare(right.sortText),
   );

@@ -49,7 +49,11 @@ import {
 import { handleGroundedAsk, type GroundedRunner, type HybridSeam } from "./grounded-qa.js";
 import { ClarificationNeededError } from "./grounded-orchestrator.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import type { RerankOutcome } from "@oscharko-dev/keiko-model-gateway";
+import {
+  parseGatewayConfig,
+  type ModelCapability,
+  type RerankOutcome,
+} from "@oscharko-dev/keiko-model-gateway";
 import type { GroundedRetriever } from "./grounded-qa-multi-source.js";
 import {
   EmbeddingAdapterError,
@@ -75,7 +79,42 @@ const NOW = 1_700_000_000_000;
 // literals below type-safe while tolerating real elapsed time on provider-backed paths.
 const ANY_LATENCY_MS = expect.any(Number) as unknown as number;
 const CHAT_MODEL = "example-chat-model";
+const ENTAILMENT_MODEL = "hybrid-entailment-model";
 const HYBRID_ANSWER_SENTINEL = "Hybrid answer from injected seam [1] [2].";
+
+function entailmentGatewayConfig(): ReturnType<typeof parseGatewayConfig> {
+  const capability: ModelCapability = {
+    id: ENTAILMENT_MODEL,
+    kind: "chat",
+    contextWindow: 128_000,
+    maxOutputTokens: 4_096,
+    toolCalling: true,
+    structuredOutput: true,
+    streaming: true,
+    supportsResponseFormat: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: true,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "test",
+    preferredUseCases: ["Chat"],
+    knownLimitations: [],
+  };
+  return parseGatewayConfig(
+    {
+      providers: [
+        {
+          modelId: ENTAILMENT_MODEL,
+          baseUrl: "https://fixture.example.com/v1",
+          apiKey: "fixture-key",
+          capability,
+        },
+      ],
+    },
+    {},
+  );
+}
 
 describe("hybrid scope hash compatibility", () => {
   it("keeps non-BMP connector identities on the UTF-16 hash contract", () => {
@@ -1322,33 +1361,42 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     const chat = store.findChatById(chatId);
     if (chat === undefined) throw new Error("expected hybrid chat");
     let answererCalls = 0;
+    let entailmentPortResolutions = 0;
     const result = await runHybridGroundedAsk({
       chat,
       content: "What package manager do I prefer?",
       answerContent:
         "User question:\nWhat package manager do I prefer?\n\nIncluded memory context:\nUse pnpm.",
       answerOnlyContextAvailable: true,
-      modelId: CHAT_MODEL,
+      modelId: ENTAILMENT_MODEL,
       contextProfile: undefined,
-      deps: hybridDeps(),
+      deps: hybridDeps({
+        config: entailmentGatewayConfig(),
+        configPresent: true,
+        modelPortFactory: (): ModelPort => {
+          entailmentPortResolutions += 1;
+          return { call: () => Promise.reject(new Error("no supported claim should be judged")) };
+        },
+      }),
       signal: new AbortController().signal,
       connectorRetrieve: () =>
         Promise.resolve({ references: [], noEvidence: true, reason: "no-vectors" }),
       answer: () => {
         answererCalls += 1;
-        return Promise.resolve("You prefer pnpm.");
+        return Promise.resolve("You prefer pnpm [src/preferences.ts:42].");
       },
     });
 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
     expect(answererCalls).toBe(1);
-    expect(answer.content).toBe("You prefer pnpm.");
+    expect(entailmentPortResolutions).toBe(1);
+    expect(answer.content).toContain("src/preferences.ts:42");
     expect(answer.citations).toEqual([]);
     expect(answer.knowledgeCitations).toEqual([]);
     expect(answer.evidenceRunId).toBeUndefined();
     expect(answer.evidenceRunIds).toEqual([]);
-    expect(answer.uncertainty.some((u) => u.kind === "unsupported-citation")).toBe(false);
+    expect(answer.uncertainty.some((u) => u.kind === "unsupported-citation")).toBe(true);
   });
 });
 

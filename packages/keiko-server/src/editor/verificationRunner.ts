@@ -23,7 +23,7 @@ import {
   type VerificationPlan,
   type VerificationReport,
 } from "@oscharko-dev/keiko-contracts";
-import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { DEFAULT_RETENTION, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   buildVerificationPlan,
   detectScripts,
@@ -47,7 +47,11 @@ import {
 } from "./verificationExecution.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { Project, UiStore } from "../store/index.js";
-import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  evidenceRetentionDiagnosticObserver,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 
 const DEFAULT_MAX_CONCURRENT_RUNS = 4;
 const CATALOG_KINDS: readonly VerificationKind[] = [
@@ -534,7 +538,13 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         report,
         startedAt,
       });
-      appendEditorVerificationRunEvidence(this.evidenceStore, entry, this.redactor);
+      appendEditorVerificationRunEvidence(
+        this.evidenceStore,
+        entry,
+        this.redactor,
+        DEFAULT_RETENTION,
+        evidenceRetentionDiagnosticObserver(this.diagnostics, "editor-verification-run"),
+      );
     } catch {
       throw new VerificationRunnerError(
         "EVIDENCE_WRITE_FAILED",
@@ -562,7 +572,13 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       cancelled,
     });
     try {
-      appendEditorVerificationRunEvidence(this.evidenceStore, evidence, this.redactor);
+      appendEditorVerificationRunEvidence(
+        this.evidenceStore,
+        evidence,
+        this.redactor,
+        DEFAULT_RETENTION,
+        evidenceRetentionDiagnosticObserver(this.diagnostics, "editor-verification-run"),
+      );
     } catch {
       throw new VerificationRunnerError(
         "EVIDENCE_WRITE_FAILED",
@@ -608,13 +624,24 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   }
 
   private emit(event: EditorVerificationEvent): void {
-    for (const listener of [...this.subscribers]) {
+    [...this.subscribers].forEach((listener) => {
       try {
         listener(event);
       } catch {
-        // A subscriber throwing must not stop fan-out (matches the command-runner/terminal pattern).
+        this.recordSubscriberFailure(event.runId);
       }
-    }
+    });
+  }
+
+  private recordSubscriberFailure(runId: string): void {
+    emitServerDiagnostic(this.diagnostics, {
+      correlationId: this.runs.get(runId)?.correlationId ?? runId,
+      timestamp: new Date(this.now()).toISOString(),
+      operation: "editor.verification.subscriber",
+      source: "editor.verification-runner",
+      errorClass: "VerificationSubscriber",
+      message: "A verification event subscriber failed.",
+    });
   }
 }
 

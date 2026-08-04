@@ -276,6 +276,13 @@ describe("Coding Workbench runtime contracts", () => {
     expect(
       validateCodingWorkbenchRuntimeState({ ...active, state: "failed", failureCode: undefined }),
     ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeState({
+        ...active,
+        state: "failed",
+        failureCode: "approval-activation-failed",
+      }),
+    ).toMatchObject({ ok: true });
     expect(validateCodingWorkbenchRuntimeState({ ...active, state: "idle" })).toMatchObject({
       ok: false,
     });
@@ -413,7 +420,12 @@ describe("Coding Workbench runtime contract failure branches", () => {
         ...runtimeAuthority(),
         issuedAt: "not-a-date",
       }),
-    ).toMatchObject({ ok: false, errors: ["issuedAt must be an ISO instant"] });
+    ).toMatchObject({ ok: false, errors: ["issuedAt must be a strict UTC instant"] });
+    for (const issuedAt of ["2026-02-31T00:00:00Z", "Jul 31 2026 Z"]) {
+      expect(
+        validateCodingWorkbenchRuntimeAuthorityEnvelope({ ...runtimeAuthority(), issuedAt }),
+      ).toMatchObject({ ok: false });
+    }
   });
 
   it("rejects empty optional identity fields and unknown model sources on runtime state", () => {

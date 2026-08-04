@@ -36,6 +36,11 @@ export interface CodingToolRequestIdentity {
   readonly idempotencyKey: string;
 }
 
+export interface CodingToolApprovalProof {
+  readonly approvalId: string;
+  readonly approvalDigest: string;
+}
+
 export type CodingToolActionRequest =
   | (CodingToolRequestIdentity & {
       readonly action: "read";
@@ -54,8 +59,16 @@ export type CodingToolActionRequest =
       readonly action: "edit";
       readonly changeset: EditorAgentChangeset;
     })
-  | (CodingToolRequestIdentity & { readonly action: "command"; readonly commandId: string })
-  | (CodingToolRequestIdentity & { readonly action: "verification"; readonly verifierId: string })
+  | (CodingToolRequestIdentity & {
+      readonly action: "command";
+      readonly commandId: string;
+      readonly approvalProof?: CodingToolApprovalProof | undefined;
+    })
+  | (CodingToolRequestIdentity & {
+      readonly action: "verification";
+      readonly verifierId: string;
+      readonly approvalProof?: CodingToolApprovalProof | undefined;
+    })
   | (CodingToolRequestIdentity & { readonly action: "git"; readonly operation: "read" | "write" })
   | (CodingToolRequestIdentity & {
       readonly action: "delivery";
@@ -168,17 +181,17 @@ function requestFromRecord(value: Record<string, unknown>): CodingToolActionRequ
     case "edit":
       return editRequest(value);
     case "command":
-      return namedRequest(value, "commandId", "command");
+      return approvableNamedRequest(value, "commandId", "command");
     case "verification":
-      return namedRequest(value, "verifierId", "verification");
+      return approvableNamedRequest(value, "verifierId", "verification");
     case "git":
       return gitRequest(value);
     case "delivery":
       return deliveryRequest(value);
     case "connector":
-      return namedRequest(value, "scope", "connector");
+      return simpleNamedRequest(value, "scope", "connector");
     case "egress":
-      return namedRequest(value, "target", "egress");
+      return simpleNamedRequest(value, "target", "egress");
     case "skill":
       return skillRequest(value);
     case "child-agent":
@@ -332,20 +345,65 @@ function exactPosition(value: unknown): boolean {
   return isRecord(value) && hasExactKeys(value, ["line", "character"]);
 }
 
-function namedRequest(
+function approvableNamedRequest(
   value: Record<string, unknown>,
-  key: "commandId" | "verifierId" | "scope" | "target",
-  action: "command" | "verification" | "connector" | "egress",
+  key: "commandId" | "verifierId",
+  action: "command" | "verification",
+): CodingToolActionRequest | undefined {
+  const identity = requestIdentity(value);
+  const approvalProof = optionalApprovalProof(value);
+  if (
+    identity === undefined ||
+    !hasAllowedKeys(value, ["action", "actionId", "idempotencyKey", key, "approvalProof"]) ||
+    !nonEmpty(value[key]) ||
+    approvalProof === "invalid"
+  )
+    return undefined;
+  if (action === "command")
+    return {
+      ...identity,
+      action,
+      commandId: value[key],
+      ...(approvalProof === undefined ? {} : { approvalProof }),
+    };
+  return {
+    ...identity,
+    action,
+    verifierId: value[key],
+    ...(approvalProof === undefined ? {} : { approvalProof }),
+  };
+}
+
+function optionalApprovalProof(
+  value: Record<string, unknown>,
+): CodingToolApprovalProof | undefined | "invalid" {
+  if (!Object.hasOwn(value, "approvalProof")) return undefined;
+  const proof = value.approvalProof;
+  if (
+    !isRecord(proof) ||
+    !hasExactKeys(proof, ["approvalId", "approvalDigest"]) ||
+    !nonEmpty(proof.approvalId) ||
+    typeof proof.approvalDigest !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(proof.approvalDigest)
+  ) {
+    return "invalid";
+  }
+  return { approvalId: proof.approvalId, approvalDigest: proof.approvalDigest };
+}
+
+function simpleNamedRequest(
+  value: Record<string, unknown>,
+  key: "scope" | "target",
+  action: "connector" | "egress",
 ): CodingToolActionRequest | undefined {
   const identity = requestIdentity(value);
   if (
     identity === undefined ||
     !hasExactKeys(value, ["action", "actionId", "idempotencyKey", key]) ||
     !nonEmpty(value[key])
-  )
+  ) {
     return undefined;
-  if (action === "command") return { ...identity, action, commandId: value[key] };
-  if (action === "verification") return { ...identity, action, verifierId: value[key] };
+  }
   return action === "connector"
     ? { ...identity, action, scope: value[key] }
     : { ...identity, action, target: value[key] };

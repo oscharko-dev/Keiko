@@ -61,7 +61,7 @@ describe("applyRetention — maxRuns", () => {
       ["run-mid", 200],
       ["run-new", 300],
     ]);
-    applyRetention(store, { maxRuns: 2 });
+    expect(applyRetention(store, { maxRuns: 2 })).toBe(1);
     expect([...store.list()].sort()).toEqual(["run-mid", "run-new"]);
   });
 
@@ -89,7 +89,7 @@ describe("applyRetention — maxRuns", () => {
       ["run-a", 100],
       ["run-b", 200],
     ]);
-    applyRetention(store, { maxRuns: 5 });
+    expect(applyRetention(store, { maxRuns: 5 })).toBe(0);
     expect([...store.list()].sort()).toEqual(["run-a", "run-b"]);
   });
 });
@@ -163,7 +163,7 @@ describe("applyRetention — disabled", () => {
       ["run-b", 200],
       ["run-c", 300],
     ]);
-    applyRetention(store, { maxRuns: 1, disabled: true });
+    expect(applyRetention(store, { maxRuns: 1, disabled: true })).toBe(0);
     expect(store.list()).toHaveLength(3);
   });
 });

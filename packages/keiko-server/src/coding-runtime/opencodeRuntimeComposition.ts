@@ -30,6 +30,7 @@ import {
   type OpenCodeLifecyclePrepareRequest,
   type OpenCodeLifecyclePrepareResult,
 } from "./codingRuntimeManager.js";
+import type { CodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
 import {
   CODING_TOOL_MAX_BODY_BYTES,
   CODING_TOOL_MAX_IN_FLIGHT,
@@ -64,8 +65,8 @@ import {
 } from "./opencodeProtocolSurface.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
+import { OPENCODE_PINNED_VERSION } from "./opencodeToolSchemas.js";
 
-const PINNED_VERSION = "1.17.17";
 const PINNED_RAW_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
 const DIGEST = /^[a-f0-9]{64}$/u;
 const ABORT_SETTLEMENT_TIMEOUT_MS = 30_000;
@@ -94,6 +95,7 @@ export interface OpenCodeRuntimeCompositionInput {
     readonly maxInFlight: number;
   };
   readonly toolFacade: CodingToolFacade;
+  readonly codingToolApprovals?: CodingToolApprovalBridge | undefined;
   readonly governedEventSink: {
     readonly execute: (
       identityKey: string,
@@ -217,6 +219,9 @@ export function createOpenCodeRuntimeComposition(
     openCodeLifecycleAdapter: lifecycle,
     portableRuntimeResolver: () => input.portable,
     ...(input.onRuntimeEvent ? { onRuntimeEvent: input.onRuntimeEvent } : {}),
+    ...(input.codingToolApprovals === undefined
+      ? {}
+      : { codingToolApprovals: input.codingToolApprovals }),
     ...input.authorityLifecycle,
   });
   return { manager, toolBridge: bridge.publicPort, runPort: createRunPort(runs) };
@@ -850,7 +855,7 @@ function verifiedProtocol(
   return (
     candidate === trusted &&
     candidate.summary.status === "verified" &&
-    candidate.summary.upstreamVersion === PINNED_VERSION &&
+    candidate.summary.upstreamVersion === OPENCODE_PINNED_VERSION &&
     candidate.availability.protocolSchemaVerified &&
     candidate.protocolSchemaRawSha256 === PINNED_RAW_SCHEMA_SHA256 &&
     runtimeField(candidate, "protocolHandshakeAlgorithm") ===

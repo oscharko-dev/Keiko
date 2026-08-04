@@ -35,6 +35,7 @@ export interface EvidencePersistContext {
   readonly env: EnvSource;
   readonly additionalSecrets?: readonly string[] | undefined;
   readonly retention?: RetentionPolicy | undefined;
+  readonly onRetentionDeleted?: ((deletedCount: number) => void) | undefined;
 }
 
 // Identity + timing the BFF already holds when a run terminates. `modelId` is the request model; the
@@ -100,6 +101,7 @@ export function persistExplainEvidence(
     ctx.store,
     redactor,
     ctx.retention ?? DEFAULT_RETENTION,
+    ctx.onRetentionDeleted,
   );
   return buildEvidenceReport(persisted.manifest, persisted.location);
 }
@@ -126,6 +128,7 @@ export function persistVerifyEvidence(
     ctx.store,
     redactor,
     ctx.retention ?? DEFAULT_RETENTION,
+    ctx.onRetentionDeleted,
   );
   return buildEvidenceReport(persisted.manifest, persisted.location);
 }

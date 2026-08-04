@@ -48,6 +48,18 @@ function runtimePauseFailureCode(
   return code === "runtime-run-mismatch" ? "authority-resolution-failed" : code;
 }
 
+type CodingRuntimeApprovalIssueFailureCode = Extract<
+  CodingRuntimeApprovalIssueResult,
+  { readonly ok: false }
+>["failureCode"];
+
+function runtimeApprovalIssueFailureCode(
+  code: CodingRuntimeApprovalIssueFailureCode,
+): CodingWorkbenchRuntimeFailureCode {
+  if (code === "approval-activation-failed") return code;
+  return code === "runtime-run-mismatch" ? "authority-resolution-failed" : "runtime-failed";
+}
+
 export type {
   CodingRuntimeApprovalAuthority,
   CodingRuntimeLaunchResolver,
@@ -61,6 +73,11 @@ interface ApprovalChallenge {
   readonly expiresAt: number;
   readonly permission: CodingWorkbenchRuntimePendingPermission;
   used: boolean;
+}
+
+interface ResumeAdmission {
+  readonly current: CodingRuntimeSnapshot;
+  readonly requestedMode: CodingWorkbenchMode;
 }
 
 const TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
@@ -244,22 +261,81 @@ export class CodingRuntimeOrchestrator {
   }
 
   resume(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
-    return this.serialValue(() => {
-      const current = this.current();
-      const parsed = parseCodingWorkbenchRuntimeResumeRequest(input);
-      if (!parsed.ok || parsed.value.requestId !== runId || current?.state !== "paused") {
-        return this.fail("invalid-intent");
-      }
-      const requestedMode =
-        parsed.value.requestedMode ?? this.activeEffectiveMode ?? current.requestedMode;
-      const resumed = this.deps.manager.resume(runId, requestedMode);
-      if (!resumed.ok) return this.fail(runtimePauseFailureCode(resumed.failureCode));
-      const effectiveMode = resumed.effectiveMode ?? requestedMode;
-      this.activeEffectiveMode = effectiveMode;
-      const transitioned = this.transition(current, "running");
-      this.activeEffectiveMode = effectiveModeAfterResume(transitioned, effectiveMode);
+    return this.serial(() => this.resumeCurrent(runId, input));
+  }
+
+  private async resumeCurrent(
+    runId: string,
+    input: unknown,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    const admitted = resumeAdmission(this.current(), runId, input, this.activeEffectiveMode);
+    if (admitted === undefined) return this.fail("invalid-intent");
+    const approval = this.approvals.get(runId);
+    if (approval !== undefined && approval.expiresAt <= this.now().getTime()) {
+      this.approvals.delete(runId);
+      return this.stopExpiredPausedRuntime(admitted.current);
+    }
+    const effectiveMode = admitted.requestedMode;
+    this.activeEffectiveMode = effectiveMode;
+    const nextState = approval === undefined ? "running" : "awaiting-approval";
+    const transitioned = this.transition(admitted.current, nextState);
+    if (!transitioned.ok || transitioned.snapshot.state !== nextState) {
+      await this.containPausedRuntime(runId);
       return transitioned;
-    });
+    }
+    const resumeFailure = await this.resumeManagerAfterTransition(runId, effectiveMode);
+    if (resumeFailure !== undefined) return resumeFailure;
+    this.activeEffectiveMode = effectiveModeAfterResume(transitioned, effectiveMode);
+    return transitioned;
+  }
+
+  private async resumeManagerAfterTransition(
+    runId: string,
+    effectiveMode: CodingWorkbenchMode,
+  ): Promise<CodingRuntimeOrchestratorResult | undefined> {
+    let resumed: ReturnType<CodingRuntimeManager["resume"]>;
+    try {
+      resumed = this.deps.manager.resume(runId, effectiveMode);
+    } catch {
+      return this.stopAfterResumeFailure(runtimePauseFailureCode("authority-resolution-failed"));
+    }
+    if (!resumed.ok) {
+      return this.stopAfterResumeFailure(runtimePauseFailureCode(resumed.failureCode));
+    }
+    if (resumed.effectiveMode !== undefined && resumed.effectiveMode !== effectiveMode) {
+      return this.stopAfterResumeFailure("authority-resolution-failed");
+    }
+    return undefined;
+  }
+
+  private async stopAfterResumeFailure(
+    failureCode: CodingWorkbenchRuntimeFailureCode,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    const current = this.current();
+    return current === undefined
+      ? this.fail(failureCode)
+      : this.stopAfterIssueFailure(current, failureCode);
+  }
+
+  private async containPausedRuntime(runId: string): Promise<void> {
+    try {
+      await this.deps.manager.stop(runId, "failed");
+    } catch {
+      // The failed state publish already put the run in recovery-required; containment stays open.
+    }
+  }
+
+  private async stopExpiredPausedRuntime(
+    current: CodingRuntimeSnapshot,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    try {
+      const stopped = await this.deps.manager.stop(current.runId, "failed");
+      return stopped.ok
+        ? this.transition(current, "failed", "authority-expired")
+        : this.transition(current, "recovery-required", "recovery-required");
+    } catch {
+      return this.transition(current, "recovery-required", "recovery-required");
+    }
   }
 
   /**
@@ -442,7 +518,7 @@ export class CodingRuntimeOrchestrator {
     actionKind: NonNullable<CodingWorkbenchRuntimePendingPermission["actionKind"]>,
   ): Promise<CodingRuntimeOrchestratorResult | undefined> {
     const principal = this.deps.serverPrincipal();
-    if (!principal) return this.transition(current, "failed", "authority-resolution-failed");
+    if (!principal) return this.stopAfterIssueFailure(current, "authority-resolution-failed");
     let issued: CodingRuntimeApprovalIssueResult;
     try {
       issued = this.deps.approvalAuthority.issue({
@@ -458,19 +534,25 @@ export class CodingRuntimeOrchestrator {
       });
     } catch {
       this.approvals.delete(current.runId);
-      return this.stopAfterIssueFailure(current);
+      return this.stopAfterIssueFailure(current, "authority-resolution-failed");
     }
-    if (!issued.ok) return this.transition(current, "failed", "runtime-failed");
+    if (!issued.ok) {
+      return this.stopAfterIssueFailure(
+        current,
+        runtimeApprovalIssueFailureCode(issued.failureCode),
+      );
+    }
     return undefined;
   }
 
   private async stopAfterIssueFailure(
     current: CodingRuntimeSnapshot,
+    failureCode: CodingWorkbenchRuntimeFailureCode = "authority-resolution-failed",
   ): Promise<CodingRuntimeOrchestratorResult> {
     try {
-      const stopped = await this.deps.manager.stop(current.runId);
+      const stopped = await this.deps.manager.stop(current.runId, "failed");
       return stopped.ok
-        ? this.transition(current, "failed", "authority-resolution-failed")
+        ? this.transition(current, "failed", failureCode)
         : this.transition(current, "recovery-required", "recovery-required");
     } catch {
       return this.transition(current, "recovery-required", "recovery-required");
@@ -501,27 +583,43 @@ export class CodingRuntimeOrchestrator {
 
   /** Accepts only manager events for the current slot and projects no event content into durable state. */
   ingest(event: CodingWorkbenchRuntimeEvent): Promise<CodingRuntimeOrchestratorResult> {
-    return this.serialValue(() => {
-      const current = this.current();
-      if (event.runId !== current?.runId) return this.fail("invalid-intent");
-      // A paused run is sticky: adapter events never auto-resume it or open a new approval. Only an
-      // explicit resume/answer/stop, or a terminal runtime outcome, leaves the paused state.
-      if (
-        current.state === "paused" &&
-        event.kind !== "runtime-stopped" &&
-        event.kind !== "failure-redacted"
-      ) {
-        return { ok: true, snapshot: this.projection.publicSnapshot(current) };
-      }
-      if (event.kind === "permission-requested") {
-        return this.ingestPermissionRequested(current, event);
-      }
-      if (event.kind === "task-submitted") return this.ingestTaskSubmitted(current);
-      if (event.kind === "runtime-stopped") return this.ingestRuntimeStopped(current);
-      if (event.kind === "failure-redacted")
-        return this.transition(current, "failed", "runtime-failed");
-      return this.publishOrRecover(current, event.kind, auxiliaryEventFacts(event));
-    });
+    return this.serial(() => this.ingestCurrent(event));
+  }
+
+  private async ingestCurrent(
+    event: CodingWorkbenchRuntimeEvent,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    const current = this.current();
+    if (event.runId !== current?.runId) return this.fail("invalid-intent");
+    if (event.kind === "failure-redacted") {
+      return this.stopAfterIssueFailure(current, "runtime-failed");
+    }
+    const paused = this.ingestPausedEvent(current, event);
+    return paused ?? this.ingestActiveEvent(current, event);
+  }
+
+  private ingestPausedEvent(
+    current: CodingRuntimeSnapshot,
+    event: CodingWorkbenchRuntimeEvent,
+  ): CodingRuntimeOrchestratorResult | undefined {
+    const terminal = event.kind === "runtime-stopped" || event.kind === "failure-redacted";
+    if (current.state !== "paused" || terminal) return undefined;
+    if (event.kind === "permission-requested" && !this.stashApproval(current, event)) {
+      return this.fail("invalid-intent");
+    }
+    return { ok: true, snapshot: this.projection.publicSnapshot(current) };
+  }
+
+  private ingestActiveEvent(
+    current: CodingRuntimeSnapshot,
+    event: CodingWorkbenchRuntimeEvent,
+  ): CodingRuntimeOrchestratorResult {
+    if (event.kind === "permission-requested") {
+      return this.ingestPermissionRequested(current, event);
+    }
+    if (event.kind === "task-submitted") return this.ingestTaskSubmitted(current);
+    if (event.kind === "runtime-stopped") return this.ingestRuntimeStopped(current);
+    return this.publishOrRecover(current, event.kind, auxiliaryEventFacts(event));
   }
 
   /**
@@ -544,10 +642,20 @@ export class CodingRuntimeOrchestrator {
     current: CodingRuntimeSnapshot,
     event: CodingWorkbenchRuntimeEvent,
   ): CodingRuntimeOrchestratorResult {
-    if (!event.permissionRequest?.actionKind) return this.fail("invalid-intent");
+    if (!this.stashApproval(current, event)) return this.fail("invalid-intent");
+    const next = this.transition(current, "awaiting-approval");
+    if (!next.ok) this.approvals.delete(current.runId);
+    return next;
+  }
+
+  private stashApproval(
+    current: CodingRuntimeSnapshot,
+    event: CodingWorkbenchRuntimeEvent,
+  ): boolean {
+    if (!event.permissionRequest?.actionKind) return false;
     const requested = Date.parse(event.permissionRequest.expiresAt);
     const nowMs = this.now().getTime();
-    if (!Number.isFinite(requested) || requested <= nowMs) return this.fail("invalid-intent");
+    if (!Number.isFinite(requested) || requested <= nowMs) return false;
     // Clamp the child-declared lifetime to the server ceiling and re-publish the clamped instant on
     // the permission itself, so the challenge expiry, the operator-visible deadline, and the minted
     // approval TTL are one value the server owns (MAX_APPROVAL_CHALLENGE_TTL_MS).
@@ -558,9 +666,7 @@ export class CodingRuntimeOrchestrator {
       permission: { ...event.permissionRequest, expiresAt: new Date(expiresAt).toISOString() },
       used: false,
     });
-    const next = this.transition(current, "awaiting-approval");
-    if (!next.ok) this.approvals.delete(current.runId);
-    return next;
+    return true;
   }
 
   private ingestTaskSubmitted(current: CodingRuntimeSnapshot): CodingRuntimeOrchestratorResult {
@@ -1064,7 +1170,26 @@ function effectiveModeAfterResume(
   result: CodingRuntimeOrchestratorResult,
   effectiveMode: CodingWorkbenchMode,
 ): CodingWorkbenchMode | undefined {
-  return result.ok && result.snapshot.state === "running" ? effectiveMode : undefined;
+  return result.ok &&
+    (result.snapshot.state === "running" || result.snapshot.state === "awaiting-approval")
+    ? effectiveMode
+    : undefined;
+}
+
+function resumeAdmission(
+  current: CodingRuntimeSnapshot | undefined,
+  runId: string,
+  input: unknown,
+  activeEffectiveMode: CodingWorkbenchMode | undefined,
+): ResumeAdmission | undefined {
+  const parsed = parseCodingWorkbenchRuntimeResumeRequest(input);
+  if (!parsed.ok || parsed.value.requestId !== runId || current?.state !== "paused") {
+    return undefined;
+  }
+  return {
+    current,
+    requestedMode: parsed.value.requestedMode ?? activeEffectiveMode ?? current.requestedMode,
+  };
 }
 
 export function createCodingRuntimeOrchestrator(

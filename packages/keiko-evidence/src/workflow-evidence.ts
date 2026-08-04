@@ -38,6 +38,7 @@ export interface EvidencePersistContext {
   readonly env: EnvSource;
   readonly additionalSecrets?: readonly string[] | undefined;
   readonly retention?: RetentionPolicy | undefined;
+  readonly onRetentionDeleted?: ((deletedCount: number) => void) | undefined;
   // Cost-class lookup port. Mirrors EvidenceDeps.costClassResolver so the evidence
   // package never imports the gateway capability registry directly. Absent → "unknown".
   readonly costClassResolver?: ((modelId: string) => CostClass | "unknown") | undefined;
@@ -179,6 +180,7 @@ export function persistWorkflowEvidence(
     ctx.store,
     redactor,
     ctx.retention ?? DEFAULT_RETENTION,
+    ctx.onRetentionDeleted,
   );
   return buildEvidenceReport(persisted.manifest, persisted.location);
 }

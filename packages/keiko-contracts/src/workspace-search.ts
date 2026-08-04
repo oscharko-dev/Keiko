@@ -428,7 +428,7 @@ function validateApplyFile(value: unknown, reasons: string[]): void {
     reasons.push("file invalid");
     return;
   }
-  if (typeof value.path !== "string" || !isRelativeWorkspacePathShape(value.path)) {
+  if (!isNonEmptyTrimmed(value.path) || !isValidScopePath(value.path, { mustBeRelative: true })) {
     reasons.push("file path invalid");
   }
   if (typeof value.baseContentHash !== "string" || !SHA256_HEX.test(value.baseContentHash)) {
@@ -439,10 +439,6 @@ function validateApplyFile(value: unknown, reasons: string[]): void {
     return;
   }
   for (const edit of value.edits) validateReplaceEdit(edit, reasons);
-}
-
-function isRelativeWorkspacePathShape(path: string): boolean {
-  return path.trim().length > 0 && isValidScopePath(path, { mustBeRelative: true });
 }
 
 export function validateWorkspaceSearchRequest(value: unknown): ValidationResult {
@@ -457,7 +453,8 @@ export function validateWorkspaceSearchRequest(value: unknown): ValidationResult
     }
     if (
       value.scopePath !== undefined &&
-      (typeof value.scopePath !== "string" || !isRelativeWorkspacePathShape(value.scopePath))
+      (!isNonEmptyTrimmed(value.scopePath) ||
+        !isValidScopePath(value.scopePath, { mustBeRelative: true }))
     ) {
       reasons.push("scopePath invalid");
     }
@@ -478,7 +475,8 @@ export function validateWorkspaceSymbolSearchRequest(value: unknown): Validation
   }
   if (
     value.scopePath !== undefined &&
-    (typeof value.scopePath !== "string" || !isRelativeWorkspacePathShape(value.scopePath))
+    (!isNonEmptyTrimmed(value.scopePath) ||
+      !isValidScopePath(value.scopePath, { mustBeRelative: true }))
   ) {
     reasons.push("scopePath invalid");
   }
@@ -521,6 +519,7 @@ export function validateWorkspaceReplaceApplyRequest(value: unknown): Validation
 export function isWorkspaceSearchResultMatch(value: unknown): value is WorkspaceSearchResultMatch {
   if (!isRecord(value)) return false;
   return (
+    isNonEmptyTrimmed(value.path) &&
     isValidScopePath(value.path, { mustBeRelative: true }) &&
     isValidLineRange(value.lineRange) &&
     typeof value.snippet === "string" &&

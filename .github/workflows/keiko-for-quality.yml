@@ -96,6 +96,9 @@ jobs:
       # Consumed by sign-store: everything the detached signer needs, none of it secret. The
       # signing itself deliberately does NOT happen in this job — see sign-store's note.
       outcome: ${{ steps.review.outputs.outcome }}
+      # v0.11.0 (Keiko-for-Quality#78): true whenever the action wrote a store worth persisting —
+      # including a budget-truncated run's earned verdicts, which `outcome == 'complete'` missed.
+      store-written: ${{ steps.review.outputs.store_written }}
       store-name: ${{ steps.store-identity.outputs.name }}
       action-sha: ${{ steps.store-identity.outputs.action-sha }}
       profile-hash: ${{ steps.store-identity.outputs.profile-hash }}
@@ -152,7 +155,7 @@ jobs:
           # duplication safe.
           # Quoted: a hypothetical all-digit sha would otherwise parse as a YAML number and reach
           # the shell in a normalized form, defeating the length check below.
-          ACTION_PIN: "ec48db94d70d9a07d729d814ea405157652530be" # v0.10.0 — keep in sync with Review's uses:
+          ACTION_PIN: "87afdeccdaba3e3e85b5c875d8e2081a79c9ca21" # v0.12.0 — keep in sync with Review's uses:
         run: |
           # The pin partitions the store because a wrapper release can change review or
           # sanitization SEMANTICS without changing the store's format. Three earlier rounds
@@ -404,7 +407,7 @@ jobs:
 
       - name: Review
         id: review
-        uses: oscharko-dev/Keiko-for-Quality@ec48db94d70d9a07d729d814ea405157652530be # v0.10.0
+        uses: oscharko-dev/Keiko-for-Quality@87afdeccdaba3e3e85b5c875d8e2081a79c9ca21 # v0.12.0
         env:
           # Passed by variable NAME to the action, never as an input value: an input appears in the
           # step context that every other action in the job can read.
@@ -442,20 +445,20 @@ jobs:
           #
           # Why a HIGH ceiling is the cheap setting, which is the opposite of the intuition. A run
           # that exhausts its allotment settles INCOMPLETE, and the hand-off and the signing job
-          # below both gate on `outcome == 'complete'`, so it persists nothing. A pull request in
+          # below gated on `outcome == 'complete'` (until v0.11.0 — see below), persisting nothing. A pull request in
           # the cold set therefore pays in full on every push. Lowering the ceiling moves MORE
           # pull requests into the cold set; raising it moves them out by letting the first review
           # finish. This argument does not depend on any upstream change: it is exactly why the 2M
           # cap set under credit pressure on 2026-08-02 was a false economy on large changes, and
           # it holds at the pin this workflow currently runs.
           #
-          # What the upstream fix would add, and why it is not what makes this ceiling right.
-          # Keiko-for-Quality#75 (merged as #76) lets a truncated run persist the verdicts for the
-          # files it DID reach, restricted to the engine's own account of what it covered. That is
-          # inert here until two things happen together: the pin advances to a release carrying it,
-          # AND the two conditions below move from `outcome == 'complete'` to the `store_written`
-          # output added by Keiko-for-Quality#78. Until then a truncated run still strands its
-          # store on the runner — which is the reason the ceiling, not the fix, is doing the work.
+          # Since v0.11.0 both halves of the upstream fix are LIVE here: the pin carries
+          # Keiko-for-Quality#76 (a truncated run persists the verdicts for the files it DID
+          # reach, restricted to the engine's own account of what it covered), and the hand-off
+          # plus the signing job below gate on the action's `store_written` output (#78) instead
+          # of `outcome == 'complete'`. A truncated or resumed-but-incomplete run now seeds the
+          # store it earned, which shrinks the cold set instead of merely arguing about it. The
+          # ceiling argument above still holds — it just stopped being the only line of defense.
           #
           # What the edge costs, stated rather than left to be discovered: a run consuming the full
           # 6M costs roughly 7 to 13 EUR depending on how much the provider serves from its prompt
@@ -491,7 +494,7 @@ jobs:
       # step of THIS job would expose it to that process. The unsigned artifact is worthless to
       # an attacker (they can fabricate unsigned stores anyway) and lives one day.
       - name: Hand off unsigned store
-        if: steps.review.outputs.outcome == 'complete' && steps.store-identity.outputs.store-enabled == 'true'
+        if: steps.review.outputs.store_written == 'true' && steps.store-identity.outputs.store-enabled == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: keiko-review-store-unsigned-${{ github.run_id }}
@@ -516,7 +519,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: review
-    if: needs.review.outputs.outcome == 'complete' && needs.review.outputs.store-enabled == 'true'
+    if: needs.review.outputs.store-written == 'true' && needs.review.outputs.store-enabled == 'true'
     permissions:
       actions: read
     environment: keiko-for-quality

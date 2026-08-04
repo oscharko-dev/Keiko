@@ -2982,6 +2982,33 @@ describe("handleGroundedAsk", () => {
     expect(evidenceStore.list()).toEqual([]);
   });
 
+  it("projects model citations without persisting them as source evidence", async () => {
+    const { chatId } = await setupChatWithScope();
+    const evidenceStore = createInMemoryEvidenceStore();
+    const sourcePack = packWithCitations();
+    const answerContent = "The implementation is here [src/foo.ts:10-20].";
+    const answerOnlyRunner: GroundedRunner = (): Promise<OrchestratorOutput> =>
+      Promise.resolve({
+        pack: sourcePack,
+        assistantContent: answerContent,
+        elapsedMs: 1,
+        noEvidence: true,
+        modelInvoked: true,
+      });
+
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "Where is the implementation?" })),
+      { ...deps(), evidenceStore },
+      answerOnlyRunner,
+    );
+
+    expect(result.status).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answer.citations).toHaveLength(1);
+    expect(answer.evidenceRunId).toBeUndefined();
+    expect(evidenceStore.list()).toEqual([]);
+  });
+
   it("contextPack.fileCount mirrors scope.relativePaths.length (files-scope = 3)", async () => {
     const project = store.createProject(tmp, "demo");
     const chat = store.createChat(project.path, "Three files", CHAT_MODEL);

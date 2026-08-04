@@ -20,6 +20,7 @@ import {
   type CodingToolGovernedPorts,
 } from "./codingToolGovernedDelegate.js";
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
+import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 
 export interface CodingToolAuthorityContext {
@@ -36,11 +37,13 @@ export interface CodingToolAuthorityContext {
 export type CodingToolAuthorityContextProvider = () => CodingToolAuthorityContext;
 
 interface CodingToolAuthorityPortOptions {
+  readonly approvalProofVerifier?: CodingToolApprovalProofVerifier | undefined;
   readonly requireProducerBinding?: boolean | undefined;
   readonly reserveEditDelegation?: boolean | undefined;
 }
 
 interface RuntimeCodingToolFacadeOptions extends CodingToolFacadeOptions {
+  readonly approvalProofVerifier?: CodingToolApprovalProofVerifier | undefined;
   readonly reserveEditDelegation?: boolean | undefined;
 }
 
@@ -59,6 +62,7 @@ export function createCodingToolAuthorityPort(
         context,
         capability,
         request,
+        options.approvalProofVerifier,
         options.requireProducerBinding === true,
         options.reserveEditDelegation === true,
       ),
@@ -73,6 +77,7 @@ function admit(
   context: CodingToolAuthorityContextProvider,
   capability: string | undefined,
   request: CodingToolActionRequest,
+  approvalProofVerifier: CodingToolApprovalProofVerifier | undefined,
   requireProducerBinding: boolean,
   reserveEditDelegation: boolean,
 ): ReturnType<CodingToolAuthorityPort["admit"]> {
@@ -90,25 +95,60 @@ function admit(
     deploymentCeiling: trusted.deploymentCeiling,
     nowIso: trusted.nowIso,
   });
-  if (!preflight.ok || !actionAllowed(preflight.envelope, request))
-    return { ok: false, reason: preflight.ok ? "action-not-authorized" : preflight.reason };
-  if (request.action === "edit" && !reserveEditDelegation) {
-    return guarded(authority, context, capability, request, binding);
+  if (!preflight.ok) return { ok: false, reason: preflight.reason };
+  const approvalMatched = approved(preflight.envelope, trusted, request, approvalProofVerifier);
+  if (!actionAllowed(preflight.envelope, request, approvalMatched)) {
+    return { ok: false, reason: "action-not-authorized" };
   }
-  const resolved = authority.resolveCapabilityForDelegation({
+  if (request.action === "edit" && !reserveEditDelegation) {
+    return guarded(authority, context, capability, request, binding, false);
+  }
+  const resolved = resolveDelegation(authority, trusted, capability, request);
+  if (!resolved.ok) return { ok: false, reason: resolved.reason };
+  if (!actionAllowed(resolved.envelope, request, approvalMatched)) {
+    return { ok: false, reason: "action-not-authorized" };
+  }
+  // A one-shot proof is consumed only after the delegation budget has been reserved. Consuming it
+  // during preflight or before the resolved envelope is authorized would make a transient failure
+  // permanently deny a valid action.
+  const approvalVerified = consumeMatchedApproval(
+    approvalMatched,
+    trusted,
+    request,
+    approvalProofVerifier,
+  );
+  return guarded(authority, context, capability, request, binding, approvalVerified);
+}
+
+function resolveDelegation(
+  authority: Pick<CodingRuntimeAuthorityService, "resolveCapabilityForDelegation">,
+  context: CodingToolAuthorityContext,
+  capability: string,
+  request: CodingToolActionRequest,
+): ReturnType<CodingRuntimeAuthorityService["resolveCapabilityForDelegation"]> {
+  return authority.resolveCapabilityForDelegation({
     capability,
-    adapterKind: trusted.adapterKind,
-    liveFacts: trusted.liveFacts,
+    adapterKind: context.adapterKind,
+    liveFacts: context.liveFacts,
     delegationId: request.actionId,
     idempotencyKey: request.idempotencyKey,
     usage: delegationUsage(request),
-    workspaceRoot: trusted.workspaceRoot,
-    deploymentCeiling: trusted.deploymentCeiling,
-    nowIso: trusted.nowIso,
+    workspaceRoot: context.workspaceRoot,
+    deploymentCeiling: context.deploymentCeiling,
+    nowIso: context.nowIso,
   });
-  return resolved.ok
-    ? guarded(authority, context, capability, request, binding)
-    : { ok: false, reason: resolved.reason };
+}
+
+function approved(
+  envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  context: CodingToolAuthorityContext,
+  request: CodingToolActionRequest,
+  verifier: CodingToolApprovalProofVerifier | undefined,
+): boolean {
+  return (
+    hasClasses(envelope.authority.actionClasses, requiredClasses(request)) &&
+    verifyApprovalProof(envelope, context, request, verifier)
+  );
 }
 
 function guarded(
@@ -120,11 +160,12 @@ function guarded(
   capability: string,
   request: CodingToolActionRequest,
   binding: CodingToolProducerBinding | undefined,
+  approvalVerified: boolean,
 ): ReturnType<CodingToolAuthorityPort["admit"]> {
   const mutationGuard = {
-    check: (): boolean => revalidate(authority, context, capability, request),
+    check: (): boolean => revalidate(authority, context, capability, request, approvalVerified),
     resolveParentAuthority: (): CodingWorkbenchAuthorityEnvelope | undefined =>
-      revalidateEnvelope(authority, context, capability, request)?.authority,
+      revalidateEnvelope(authority, context, capability, request, approvalVerified)?.authority,
     chargeDelegatedRead: (delegationId: string, idempotencyKey: string): boolean =>
       chargeDelegatedRead(authority, context, capability, delegationId, idempotencyKey),
     ...(binding === undefined ? {} : { binding }),
@@ -169,6 +210,7 @@ export function createRuntimeCodingToolFacade(
   return createCodingToolFacade(
     {
       authority: createCodingToolAuthorityPort(authority, context, {
+        approvalProofVerifier: options.approvalProofVerifier,
         requireProducerBinding: true,
         reserveEditDelegation: options.reserveEditDelegation === true,
       }),
@@ -183,8 +225,11 @@ function revalidate(
   context: CodingToolAuthorityContextProvider,
   capability: string,
   request: CodingToolActionRequest,
+  approvalVerified: boolean,
 ): boolean {
-  return revalidateEnvelope(authority, context, capability, request) !== undefined;
+  return (
+    revalidateEnvelope(authority, context, capability, request, approvalVerified) !== undefined
+  );
 }
 
 function revalidateEnvelope(
@@ -192,6 +237,7 @@ function revalidateEnvelope(
   context: CodingToolAuthorityContextProvider,
   capability: string,
   request: CodingToolActionRequest,
+  approvalVerified: boolean,
 ): CodingWorkbenchRuntimeAuthorityEnvelope | undefined {
   const trusted = context();
   const resolved = authority.revalidateCapabilityForMutation({
@@ -202,7 +248,9 @@ function revalidateEnvelope(
     deploymentCeiling: trusted.deploymentCeiling,
     nowIso: trusted.nowIso,
   });
-  return resolved.ok && actionAllowed(resolved.envelope, request) ? resolved.envelope : undefined;
+  return resolved.ok && actionAllowed(resolved.envelope, request, approvalVerified)
+    ? resolved.envelope
+    : undefined;
 }
 
 function chargeDelegatedRead(
@@ -229,10 +277,11 @@ function chargeDelegatedRead(
 function actionAllowed(
   envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
   request: CodingToolActionRequest,
+  approvalVerified: boolean,
 ): boolean {
   return (
     hasClasses(envelope.authority.actionClasses, requiredClasses(request)) &&
-    additionalPolicyAllowed(envelope, request)
+    additionalPolicyAllowed(envelope, request, approvalVerified)
   );
 }
 
@@ -273,6 +322,7 @@ function requiredClasses(request: CodingToolActionRequest): readonly RuntimeActi
 function additionalPolicyAllowed(
   envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
   request: CodingToolActionRequest,
+  approvalVerified: boolean,
 ): boolean {
   switch (request.action) {
     case "read":
@@ -280,9 +330,12 @@ function additionalPolicyAllowed(
     case "edit":
       return true;
     case "verification":
-      return workspaceMediumRiskAllowed(envelope);
+      return workspaceMediumRiskAllowed(envelope, approvalVerified);
     case "command":
-      return workspaceMediumRiskAllowed(envelope) && commandAllowed(envelope, request.commandId);
+      return (
+        workspaceMediumRiskAllowed(envelope, approvalVerified) &&
+        commandAllowed(envelope, request.commandId, approvalVerified)
+      );
     case "git":
       return gitPolicyAllowed(envelope, request.operation);
     case "delivery":
@@ -297,8 +350,12 @@ function additionalPolicyAllowed(
   }
 }
 
-function workspaceMediumRiskAllowed(envelope: CodingWorkbenchRuntimeAuthorityEnvelope): boolean {
+function workspaceMediumRiskAllowed(
+  envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  approvalVerified: boolean,
+): boolean {
   return (
+    approvalVerified ||
     codingWorkbenchPolicyEffectFor(
       envelope.authority.effectiveMode,
       "workspace-contained",
@@ -330,11 +387,62 @@ function connectorAllowed(
 function commandAllowed(
   envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
   commandId: string,
+  approvalVerified: boolean,
 ): boolean {
   const policy = envelope.authority.commandPolicy;
-  if (policy.mode === "deny" || policy.requirePerCommandApproval || policy.deny.includes(commandId))
+  if (
+    policy.mode === "deny" ||
+    (policy.requirePerCommandApproval && !approvalVerified) ||
+    policy.deny.includes(commandId)
+  )
     return false;
   return policy.mode !== "allowlisted" || policy.allow.includes(commandId);
+}
+
+function verifyApprovalProof(
+  envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  context: CodingToolAuthorityContext,
+  request: CodingToolActionRequest,
+  verifier: CodingToolApprovalProofVerifier | undefined,
+): boolean {
+  // A proof is required only when the ordinary policy denies this action without one. Keeping this
+  // guard inverted prevents an unrelated proof from becoming authority for an already-allowed act.
+  if (additionalPolicyAllowed(envelope, request, false)) return false;
+  if (
+    verifier === undefined ||
+    context.runId === undefined ||
+    (request.action !== "command" && request.action !== "verification") ||
+    request.approvalProof === undefined
+  ) {
+    return false;
+  }
+  const nowMs = Date.parse(context.nowIso);
+  return Number.isFinite(nowMs) && verifier.matches({ runId: context.runId, request, nowMs });
+}
+
+function consumeApprovalProof(
+  context: CodingToolAuthorityContext,
+  request: CodingToolActionRequest,
+  verifier: CodingToolApprovalProofVerifier | undefined,
+): boolean {
+  if (
+    verifier === undefined ||
+    context.runId === undefined ||
+    (request.action !== "command" && request.action !== "verification")
+  ) {
+    return false;
+  }
+  const nowMs = Date.parse(context.nowIso);
+  return Number.isFinite(nowMs) && verifier.consume({ runId: context.runId, request, nowMs });
+}
+
+function consumeMatchedApproval(
+  matched: boolean,
+  context: CodingToolAuthorityContext,
+  request: CodingToolActionRequest,
+  verifier: CodingToolApprovalProofVerifier | undefined,
+): boolean {
+  return matched && consumeApprovalProof(context, request, verifier);
 }
 
 function deliveryAllowed(

@@ -51,12 +51,14 @@ import {
   type SupervisedCodingApprovalClaim,
   type SupervisedCodingApprovalStore,
   type SupervisedCodingConsumedApproval,
+  type SupervisedCodingIssuedApproval,
 } from "./supervisedCodingApprovalStore.js";
 import {
   parseCodingSidecarEventLine,
   type SidecarHealthEvent,
   type SidecarPermissionEvent,
 } from "./codingSidecarEventParser.js";
+import type { CodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
 import {
   contentFreeErrorClass,
   emitServerDiagnostic,
@@ -220,7 +222,8 @@ export type CodingRuntimeApprovalIssueResult =
     }
   | {
       readonly ok: false;
-      readonly failureCode: "runtime-run-mismatch" | "runtime-stopped";
+      readonly failureCode:
+        "approval-activation-failed" | "runtime-run-mismatch" | "runtime-stopped";
       readonly retryable: false;
     };
 
@@ -230,6 +233,7 @@ export interface CodingRuntimeManagerDeps {
   readonly now?: (() => number) | undefined;
   readonly nowIso?: (() => string) | undefined;
   readonly approvalStore?: SupervisedCodingApprovalStore | undefined;
+  readonly codingToolApprovals?: CodingToolApprovalBridge | undefined;
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly openCodeLifecycleAdapter?: OpenCodeLifecycleAdapter | undefined;
@@ -362,6 +366,7 @@ interface NormalizedCodingRuntimeManagerDeps {
   readonly now: () => number;
   readonly nowIso: () => string;
   readonly approvalStore: SupervisedCodingApprovalStore;
+  readonly codingToolApprovals: CodingToolApprovalBridge | undefined;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined;
@@ -388,6 +393,20 @@ interface NormalizedCodingRuntimeManagerDeps {
   ) => boolean | Promise<boolean>;
 }
 
+type CodingRuntimeTerminalStatus = Extract<
+  CodingRuntimeRunResult["status"],
+  "cancelled" | "failed" | "succeeded"
+>;
+
+function mostSevereTerminalStatus(
+  current: CodingRuntimeTerminalStatus,
+  requested: CodingRuntimeTerminalStatus,
+): CodingRuntimeTerminalStatus {
+  if (current === "failed" || requested === "failed") return "failed";
+  if (current === "cancelled" || requested === "cancelled") return "cancelled";
+  return "succeeded";
+}
+
 export interface CodingRuntimeManager {
   start(
     request: CodingRuntimeLaunchRequest,
@@ -395,10 +414,7 @@ export interface CodingRuntimeManager {
   issueApproval(request: CodingRuntimeApprovalIssueRequest): CodingRuntimeApprovalIssueResult;
   pause(runId: string): CodingRuntimePauseResult;
   resume(runId: string, requestedMode?: CodingWorkbenchMode): CodingRuntimePauseResult;
-  stop(
-    runId: string,
-    resultStatus?: Extract<CodingRuntimeRunResult["status"], "cancelled" | "failed" | "succeeded">,
-  ): Promise<CodingRuntimeStopResult>;
+  stop(runId: string, resultStatus?: CodingRuntimeTerminalStatus): Promise<CodingRuntimeStopResult>;
   takeover(runId: string): Promise<CodingRuntimeStopResult>;
   reconcile(runId: string): Promise<CodingRuntimeStopResult>;
   health(): CodingRuntimeHealthReport;
@@ -443,6 +459,7 @@ interface ActiveRuntime {
   readonly tree: RuntimeProcessTree;
   readonly shutdownTimeoutMs: number;
   readonly approvalStore: SupervisedCodingApprovalStore;
+  readonly codingToolApprovals: CodingToolApprovalBridge | undefined;
   readonly nowMs: () => number;
   readonly nowIso: () => string;
   readonly openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined;
@@ -462,6 +479,8 @@ interface ActiveRuntime {
    */
   pendingApprovalReview: CodingWorkbenchRuntimePendingApprovalReview | undefined;
   shutdownBarrierComplete: boolean;
+  stopPromise: Promise<CodingRuntimeStopResult> | undefined;
+  stopResultStatus: CodingRuntimeTerminalStatus;
   stopRequested: boolean;
   paused: boolean;
   status: CodingRuntimeStatus;
@@ -498,6 +517,13 @@ interface ResolvedPortableRuntime {
 interface OpenCodeStartupMailbox extends OpenCodeStartupOutput {
   offer(line: string): void;
   close(): void;
+}
+
+interface OpenCodeStartupWaiter {
+  readonly resolve: (line: string) => void;
+  readonly reject: (error: Error) => void;
+  readonly signal: AbortSignal | undefined;
+  readonly abort: () => void;
 }
 
 const SECRET_ENV_NAME = /(AUTH|CREDENTIAL|KEY|PASSWORD|SECRET|TOKEN)/iu;
@@ -568,6 +594,7 @@ function normalizeDeps(deps: CodingRuntimeManagerDeps): NormalizedCodingRuntimeM
     now: deps.now ?? Date.now,
     nowIso: deps.nowIso ?? ((): string => new Date().toISOString()),
     approvalStore: deps.approvalStore ?? createInMemorySupervisedCodingApprovalStore(),
+    codingToolApprovals: deps.codingToolApprovals,
     onRuntimeEvent: deps.onRuntimeEvent ?? ((): void => undefined),
     diagnostics: deps.diagnostics,
     openCodeLifecycleAdapter: deps.openCodeLifecycleAdapter,
@@ -662,18 +689,27 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     return this.spawnRuntime(request, preflight.executablePath, env.value, portable, request.args);
   }
 
-  public async stop(
+  public stop(
     runId: string,
-    resultStatus: Extract<
-      CodingRuntimeRunResult["status"],
-      "cancelled" | "failed" | "succeeded"
-    > = "cancelled",
+    resultStatus: CodingRuntimeTerminalStatus = "cancelled",
   ): Promise<CodingRuntimeStopResult> {
     const active = this.active;
-    if (active === undefined) return { ok: true, status: "stopped" };
+    if (active === undefined) return Promise.resolve({ ok: true, status: "stopped" });
     if (active.context.runId !== runId) {
-      return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
+      return Promise.resolve({
+        ok: false,
+        failureCode: "runtime-run-mismatch",
+        retryable: false,
+      });
     }
+    active.stopResultStatus = mostSevereTerminalStatus(active.stopResultStatus, resultStatus);
+    if (active.stopPromise !== undefined) return active.stopPromise;
+    const stopping = this.stopActive(active);
+    active.stopPromise = stopping;
+    return stopping;
+  }
+
+  private async stopActive(active: ActiveRuntime): Promise<CodingRuntimeStopResult> {
     active.stopRequested = true;
     active.status = "stopping";
     const receipt = await this.revokeAndTerminate(active);
@@ -686,7 +722,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
     }
     active.status = "stopped";
-    this.captureResult(active, resultStatus, null);
+    this.captureResult(active, active.stopResultStatus, null);
     this.active = undefined;
     this.emit(
       runtimeEvent(active, this.nextSequence(active), "runtime-stopped", { health: "stopped" }),
@@ -781,6 +817,10 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       nowMs: this.deps.now(),
       ttlMs: request.ttlMs,
     });
+    if (!activateIssuedToolApproval(this.deps.codingToolApprovals, request, issued)) {
+      rollbackIssuedApproval(this.deps.approvalStore, binding, issued);
+      return { ok: false, failureCode: "approval-activation-failed", retryable: false };
+    }
     return {
       ok: true,
       approval: issued.approval,
@@ -841,14 +881,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
         failure(launched.failureCode, launched.failureCode === "spawn-failed"),
       );
     }
-    const active = createActiveRuntime(
-      request,
-      launched.tree,
-      this.deps.approvalStore,
-      this.deps.now,
-      this.deps.nowIso,
-      lifecycleAdapter,
-    );
+    const active = createActiveRuntime(request, launched.tree, this.deps, lifecycleAdapter);
     this.active = active;
     this.attachRuntime(active);
     if (request.adapterKind === "opencode-compatible" && lifecycleAdapter !== undefined) {
@@ -955,15 +988,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
         failure(launched.failureCode, launched.failureCode === "spawn-failed"),
       );
     }
-    const active = createActiveRuntime(
-      request,
-      launched.tree,
-      this.deps.approvalStore,
-      this.deps.now,
-      this.deps.nowIso,
-      undefined,
-      adapter,
-    );
+    const active = createActiveRuntime(request, launched.tree, this.deps, undefined, adapter);
     this.active = active;
     this.attachRuntime(active);
     return await this.attachCodexRuntime(request, active, adapter, deadline);
@@ -1025,9 +1050,16 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     active: ActiveRuntime,
     adapter: OpenCodeLifecycleAdapter,
   ): Promise<CodingRuntimeStartResult> {
-    const handshakeFailure = await openCodeHandshakeFailure(adapter, request, active, (event) => {
-      this.handleOpenCodePermission(active, event);
-    });
+    const handshakeFailure = await openCodeHandshakeFailure(
+      adapter,
+      request,
+      active,
+      (event) => {
+        this.handleOpenCodePermission(active, event);
+      },
+      this.deps.diagnostics,
+      this.deps.now,
+    );
     active.startupOutput?.close();
     active.startupOutput = undefined;
     active.stdoutParser = undefined;
@@ -1072,9 +1104,27 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     } catch {
       barrierComplete = false;
     }
-    try {
-      this.deps.approvalStore.invalidateRun(active.context.runId);
-    } catch {
+    const supervisedApprovalsInvalidated = invalidateApprovalBarrier(
+      this.deps.diagnostics,
+      active.context.runId,
+      "supervised-approval-store",
+      (runId): void => {
+        this.deps.approvalStore.invalidateRun(runId);
+      },
+      this.deps.now,
+    );
+    const codingToolApprovalsInvalidated = invalidateApprovalBarrier(
+      this.deps.diagnostics,
+      active.context.runId,
+      "coding-tool-approval-bridge",
+      this.deps.codingToolApprovals === undefined
+        ? undefined
+        : (runId): void => {
+            this.deps.codingToolApprovals?.invalidateRun(runId);
+          },
+      this.deps.now,
+    );
+    if (!supervisedApprovalsInvalidated || !codingToolApprovalsInvalidated) {
       barrierComplete = false;
     }
     try {
@@ -1265,14 +1315,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
               retryable: false,
             }),
           );
-          void this.stop(active.context.runId).catch(() => {
+          void this.stop(active.context.runId, "failed").catch(() => {
             if (this.active === active) void this.enterRecoveryRequired(active);
           });
         },
       });
     } catch {
       if (this.active === active && !active.stopRequested && active.status === "ready") {
-        void this.stop(active.context.runId).catch(() => {
+        void this.stop(active.context.runId, "failed").catch(() => {
           if (this.active === active) void this.enterRecoveryRequired(active);
         });
       }
@@ -1436,6 +1486,30 @@ function emitRuntimeStreamDrainFailureDiagnostic(
   });
 }
 
+function invalidateApprovalBarrier(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  source: "coding-tool-approval-bridge" | "supervised-approval-store",
+  invalidateRun: ((runId: string) => void) | undefined,
+  now: () => number,
+): boolean {
+  if (invalidateRun === undefined) return true;
+  try {
+    invalidateRun(runId);
+    return true;
+  } catch (error) {
+    emitServerDiagnostic(diagnostics, {
+      correlationId: runId,
+      timestamp: new Date(now()).toISOString(),
+      operation: "coding-runtime.approval-revocation",
+      source: `coding-runtime-manager.${source}`,
+      errorClass: contentFreeErrorClass(error),
+      message: "runtime-approval-revocation-failed",
+    });
+    return false;
+  }
+}
+
 function resolvePortableRuntime(
   request: CodingRuntimeLaunchRequest,
   deps: Pick<NormalizedCodingRuntimeManagerDeps, "portableRuntimeResolver">,
@@ -1514,7 +1588,11 @@ function cancellationFailure(
   }
 }
 
-type OpenCodeHandshakeOutcome = "aborted" | "failed" | "ok" | "timeout";
+type OpenCodeHandshakeSettlement =
+  | { readonly kind: "aborted" }
+  | { readonly kind: "ok" }
+  | { readonly kind: "timeout" }
+  | { readonly kind: "failed"; readonly reason: string };
 
 type CodexStartupCancellationCode = "start-aborted" | "start-timeout";
 type CodexStartupStep<T> =
@@ -1755,24 +1833,48 @@ async function openCodeHandshakeFailure(
   request: CodingRuntimeLaunchRequest,
   active: ActiveRuntime,
   onPermission: (event: SidecarPermissionEvent) => void,
+  diagnostics: ServerDiagnosticSink | undefined,
+  now: () => number,
 ): Promise<FailureResult | undefined> {
   const controller = new AbortController();
-  let resolveCancellation: ((outcome: OpenCodeHandshakeOutcome) => void) | undefined;
-  const cancellation = new Promise<OpenCodeHandshakeOutcome>((resolve) => {
+  let resolveCancellation: ((outcome: OpenCodeHandshakeSettlement) => void) | undefined;
+  const cancellation = new Promise<OpenCodeHandshakeSettlement>((resolve) => {
     resolveCancellation = resolve;
   });
   const abort = (): void => {
     controller.abort();
-    resolveCancellation?.("aborted");
+    resolveCancellation?.({ kind: "aborted" });
   };
   if (request.signal?.aborted === true) abort();
   else request.signal?.addEventListener("abort", abort, { once: true });
   const timer = setTimeout(() => {
     controller.abort();
-    resolveCancellation?.("timeout");
+    resolveCancellation?.({ kind: "timeout" });
   }, request.startTimeoutMs);
   timer.unref();
-  const handshake = Promise.resolve()
+  const handshake = settleOpenCodeHandshake(adapter, request, active, onPermission, controller);
+  try {
+    const outcome = await Promise.race([handshake, cancellation]);
+    if (outcome.kind === "ok") return undefined;
+    if (outcome.kind === "aborted") return failure("start-aborted", true);
+    if (outcome.kind === "timeout") return failure("start-timeout", true);
+    emitOpenCodeHandshakeDiagnostic(diagnostics, request.runId, outcome.reason, now);
+    return failure(openCodeHandshakeFailureCode(outcome.reason), false);
+  } finally {
+    clearTimeout(timer);
+    request.signal?.removeEventListener("abort", abort);
+    resolveCancellation = undefined;
+  }
+}
+
+function settleOpenCodeHandshake(
+  adapter: OpenCodeLifecycleAdapter,
+  request: CodingRuntimeLaunchRequest,
+  active: ActiveRuntime,
+  onPermission: (event: SidecarPermissionEvent) => void,
+  controller: AbortController,
+): Promise<OpenCodeHandshakeSettlement> {
+  return Promise.resolve()
     .then(() =>
       adapter.handshake({
         runId: request.runId,
@@ -1783,20 +1885,51 @@ async function openCodeHandshakeFailure(
       }),
     )
     .then(
-      (result): OpenCodeHandshakeOutcome => (result.ok ? "ok" : "failed"),
-      (): OpenCodeHandshakeOutcome => "failed",
+      (result): OpenCodeHandshakeSettlement =>
+        result.ok ? { kind: "ok" } : { kind: "failed", reason: result.reason },
+      (): OpenCodeHandshakeSettlement => ({ kind: "failed", reason: "handshake-rejected" }),
     );
-  try {
-    const outcome = await Promise.race([handshake, cancellation]);
-    if (outcome === "ok") return undefined;
-    if (outcome === "aborted") return failure("start-aborted", true);
-    if (outcome === "timeout") return failure("start-timeout", true);
-    return failure("protocol-schema-mismatch", false);
-  } finally {
-    clearTimeout(timer);
-    request.signal?.removeEventListener("abort", abort);
-    resolveCancellation = undefined;
-  }
+}
+
+const OPEN_CODE_HANDSHAKE_PHASES: ReadonlySet<string> = new Set([
+  "target-attestation",
+  "config-materialization",
+  "endpoint",
+  "authenticated-health",
+  "authenticated-health-version",
+  "unauthenticated-health",
+  "openapi-digest",
+  "gateway-challenge",
+  "tool-facade-challenge",
+  "sse-history-reconciliation",
+  "session-echo",
+  "endpoint-invalid",
+  "preparation-missing",
+  "readiness-failed",
+  "handshake-rejected",
+]);
+
+function openCodeHandshakeFailureCode(reason: string): CodingRuntimeFailureCode {
+  return reason === "authenticated-health-version"
+    ? "runtime-version-mismatch"
+    : "protocol-schema-mismatch";
+}
+
+function emitOpenCodeHandshakeDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  reason: string,
+  now: () => number,
+): void {
+  const phase = OPEN_CODE_HANDSHAKE_PHASES.has(reason) ? reason : "unclassified";
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date(now()).toISOString(),
+    operation: "coding-runtime.handshake",
+    source: "coding-runtime-manager.handshake",
+    errorClass: "OpenCodeHandshakeFailure",
+    message: `runtime-handshake-phase:${phase}`,
+  });
 }
 
 function validateAdapterSelection(
@@ -1815,9 +1948,10 @@ function validateAdapterSelection(
 function createActiveRuntime(
   request: CodingRuntimeLaunchRequest,
   tree: RuntimeProcessTree,
-  approvalStore: SupervisedCodingApprovalStore,
-  nowMs: () => number,
-  nowIso: () => string,
+  deps: Pick<
+    NormalizedCodingRuntimeManagerDeps,
+    "approvalStore" | "codingToolApprovals" | "now" | "nowIso"
+  >,
   openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined,
   codexLifecycleAdapter?: CodexLifecycleAdapter,
 ): ActiveRuntime {
@@ -1826,9 +1960,10 @@ function createActiveRuntime(
     effectiveMode: request.effectiveMode,
     tree,
     shutdownTimeoutMs: request.shutdownTimeoutMs,
-    approvalStore,
-    nowMs,
-    nowIso,
+    approvalStore: deps.approvalStore,
+    codingToolApprovals: deps.codingToolApprovals,
+    nowMs: deps.now,
+    nowIso: deps.nowIso,
     openCodeLifecycleAdapter,
     codexLifecycleAdapter,
     startupOutput:
@@ -1842,6 +1977,8 @@ function createActiveRuntime(
     streamDrainComplete: Promise.resolve(false),
     pendingApprovalReview: undefined,
     shutdownBarrierComplete: false,
+    stopPromise: undefined,
+    stopResultStatus: "succeeded",
     stopRequested: false,
     paused: false,
     status: "starting",
@@ -1861,6 +1998,7 @@ function createInactiveRuntime(
     tree: inertTree(),
     shutdownTimeoutMs: request.shutdownTimeoutMs,
     approvalStore,
+    codingToolApprovals: undefined,
     nowMs,
     nowIso,
     openCodeLifecycleAdapter: undefined,
@@ -1875,6 +2013,8 @@ function createInactiveRuntime(
     streamDrainComplete: Promise.resolve(true),
     pendingApprovalReview: undefined,
     shutdownBarrierComplete: false,
+    stopPromise: undefined,
+    stopResultStatus: "succeeded",
     stopRequested: false,
     paused: false,
     status: "stopped",
@@ -1908,50 +2048,55 @@ const closedStartupOutput: OpenCodeStartupOutput = {
   nextLine: () => Promise.reject(new Error("runtime-startup-output-closed")),
 };
 
+const OPEN_CODE_STARTUP_MAILBOX_MAX_LINES = 64;
+
 function createOpenCodeStartupMailbox(): OpenCodeStartupMailbox {
-  let retained: string | undefined;
-  let waiter: ((line: string) => void) | undefined;
-  let rejectWaiter: ((error: Error) => void) | undefined;
-  let closed = false;
+  const queued: string[] = [];
+  let waiter: OpenCodeStartupWaiter | undefined;
+  let terminalError: Error | undefined;
   return {
     nextLine(signal): Promise<string> {
-      if (retained !== undefined) {
-        const line = retained;
-        retained = undefined;
-        return Promise.resolve(line);
-      }
-      if (closed || signal?.aborted === true) {
-        return Promise.reject(new Error("runtime-startup-output-closed"));
-      }
+      if (terminalError !== undefined) return Promise.reject(terminalError);
+      const line = queued.shift();
+      if (line !== undefined) return Promise.resolve(line);
+      if (signal?.aborted === true)
+        return Promise.reject(new Error("runtime-startup-output-aborted"));
+      if (waiter !== undefined)
+        return Promise.reject(new Error("runtime-startup-output-concurrent-read"));
       return new Promise<string>((resolve, reject) => {
-        waiter = resolve;
-        rejectWaiter = reject;
-        signal?.addEventListener(
-          "abort",
-          () => {
+        const abort = (): void => {
+          if (waiter?.reject === reject) {
+            waiter = undefined;
             reject(new Error("runtime-startup-output-aborted"));
-          },
-          { once: true },
-        );
+          }
+        };
+        waiter = { resolve, reject, signal, abort };
+        signal?.addEventListener("abort", abort, { once: true });
       });
     },
     offer(line): void {
-      if (closed || retained !== undefined) return;
+      if (terminalError !== undefined) return;
       if (waiter !== undefined) {
-        const resolve = waiter;
+        const pending = waiter;
         waiter = undefined;
-        rejectWaiter = undefined;
-        resolve(line);
+        pending.signal?.removeEventListener("abort", pending.abort);
+        pending.resolve(line);
         return;
       }
-      retained = line;
+      if (queued.length >= OPEN_CODE_STARTUP_MAILBOX_MAX_LINES) {
+        terminalError = new Error("runtime-startup-output-overflow");
+        queued.length = 0;
+        return;
+      }
+      queued.push(line);
     },
     close(): void {
-      closed = true;
-      retained = undefined;
-      rejectWaiter?.(new Error("runtime-startup-output-closed"));
+      terminalError ??= new Error("runtime-startup-output-closed");
+      queued.length = 0;
+      const pending = waiter;
       waiter = undefined;
-      rejectWaiter = undefined;
+      pending?.signal?.removeEventListener("abort", pending.abort);
+      pending?.reject(terminalError);
     },
   };
 }
@@ -2324,6 +2469,9 @@ function sidecarRuntimeEvent(
       retryable: false,
     });
   }
+  if (!observeCodingToolApproval(active, event, request.actionKind)) {
+    return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
+  }
   active.pendingApprovalReview = approvalReviewFacts(event);
   return runtimeEvent(active, sequence, "permission-requested", {
     permissionRequest: request,
@@ -2557,6 +2705,9 @@ function supervisedMutationEvent(
     operatorStopped: false,
   });
   if (decision.status === "approval-required" && decision.permissionRequest !== undefined) {
+    if (!observeCodingToolApproval(active, event, actionKind)) {
+      return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
+    }
     return runtimeEvent(active, sequence, "permission-requested", {
       permissionRequest: decision.permissionRequest,
     });
@@ -2564,6 +2715,35 @@ function supervisedMutationEvent(
   if (decision.status === "allowed")
     return supervisedApprovalAcceptedEvent(active, sequence, decision);
   return supervisedFailureEvent(active, sequence, decision);
+}
+
+function observeCodingToolApproval(
+  active: ActiveRuntime,
+  event: SidecarPermissionEvent,
+  actionKind: CodingWorkbenchSupervisedActionKind | undefined,
+): boolean {
+  const bridge = active.codingToolApprovals;
+  if (bridge === undefined || actionKind !== "verification-command") return true;
+  if (
+    event.approvalId === undefined ||
+    event.approvalDigest === undefined ||
+    event.actionId === undefined ||
+    event.idempotencyKey === undefined ||
+    event.commandLabel === undefined
+  ) {
+    return false;
+  }
+  return bridge.observePermission({
+    runId: active.context.runId,
+    requestId: event.requestId,
+    action: "verification",
+    actionId: event.actionId,
+    idempotencyKey: event.idempotencyKey,
+    targetId: event.commandLabel,
+    proof: { approvalId: event.approvalId, approvalDigest: event.approvalDigest },
+    expiresAt: event.expiresAt,
+    nowMs: active.nowMs(),
+  });
 }
 
 function approvalBindingForIssue(
@@ -2576,6 +2756,34 @@ function approvalBindingForIssue(
     actionKind: request.actionKind,
     connectorScopes: request.connectorScopes,
   });
+}
+
+function activateIssuedToolApproval(
+  bridge: CodingToolApprovalBridge | undefined,
+  request: CodingRuntimeApprovalIssueRequest,
+  issued: SupervisedCodingIssuedApproval,
+): boolean {
+  if (request.actionKind !== "verification-command" || bridge === undefined) return true;
+  return bridge.activatePermission({
+    runId: request.runId,
+    requestId: request.requestId,
+    approvalAuthorityDigest: issued.approvalDigest,
+    expiresAtMs: issued.expiresAtMs,
+    nowMs: issued.approvedAtMs,
+  });
+}
+
+function rollbackIssuedApproval(
+  store: SupervisedCodingApprovalStore,
+  binding: SupervisedCodingApprovalBindingOnce,
+  issued: SupervisedCodingIssuedApproval,
+): void {
+  const rolledBack = store.consume({
+    approval: issued.approval,
+    binding,
+    nowMs: issued.approvedAtMs,
+  });
+  if (rolledBack === undefined) store.invalidateRun(binding.runId);
 }
 
 function approvalBindingForEvent(

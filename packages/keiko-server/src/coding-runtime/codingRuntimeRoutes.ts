@@ -27,7 +27,7 @@ import {
   type RouteDefinition,
   type RouteResult,
 } from "../routes.js";
-import { SSE_HEADERS } from "../sse.js";
+import { SSE_HEADERS, startSseHeartbeat } from "../sse.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 
@@ -132,10 +132,7 @@ async function withBody(work: () => Promise<RouteResult>): Promise<RouteResult> 
         status: 413,
         body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit."),
       };
-    return {
-      status: 400,
-      body: errorBody("CODING_RUNTIME_INVALID_INTENT", "Runtime request was rejected."),
-    };
+    throw error;
   }
 }
 
@@ -364,7 +361,7 @@ export function handleCodingRuntimeResearchRevoke(
     : mutation(ctx, deps, runId, (runtime, body) => runtime.revokeResearch(runId, body));
 }
 
-// Inline follow-up: a drafted message is admitted while the run is running or paused; the
+// Inline follow-up: a drafted message is admitted only while the run is running; the
 // orchestrator's operation coordinator enforces the revision and one-use request-id serial
 // admission, so exactly one turn is admitted per revision and no hidden prompt queue is possible.
 export function handleCodingRuntimeFollowUp(
@@ -502,13 +499,23 @@ function resetFrame(reason: string): string {
   return `event: reset\ndata: ${JSON.stringify({ reason, snapshotNeeded: true })}\n\n`;
 }
 
+function resolveEventCursor(
+  lastEventId: string | string[] | undefined,
+  queryCursor: string | null,
+): string | undefined {
+  if (Array.isArray(lastEventId)) return undefined;
+  if (typeof lastEventId === "string" && lastEventId.length > 0) return lastEventId;
+  return queryCursor === null || queryCursor.length === 0 ? undefined : queryCursor;
+}
+
 export function handleCodingRuntimeEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
   const required = requireRuntime(deps);
   if (isRouteResult(required)) return required;
   const runId = ctx.params.runId ?? "";
   if (!required.orchestrator.getSnapshot(runId)) return notFound();
   const lastEventId = ctx.req.headers["last-event-id"];
-  const cursor = typeof lastEventId === "string" ? lastEventId : undefined;
+  const queryCursor = ctx.url.searchParams.get("cursor");
+  const cursor = resolveEventCursor(lastEventId, queryCursor);
   openCodingRuntimeSse(ctx.res, ctx.req, required.eventHub, runId, cursor);
   return STREAMING;
 }
@@ -521,11 +528,13 @@ export function openCodingRuntimeSse(
   lastEventId: string | undefined,
 ): void {
   res.writeHead(200, SSE_HEADERS);
+  const stopHeartbeat = startSseHeartbeat(res, undefined, "heartbeat");
   let detach = (): void => undefined;
   let closed = false;
   const close = (): void => {
     if (closed) return;
     closed = true;
+    stopHeartbeat();
     detach();
     if (!res.writableEnded && !res.destroyed) res.end();
   };
@@ -539,7 +548,7 @@ export function openCodingRuntimeSse(
   });
   if (!subscribed.ok) {
     res.write(resetFrame(subscribed.reason));
-    res.end();
+    close();
     return;
   }
   detach = subscribed.detach;

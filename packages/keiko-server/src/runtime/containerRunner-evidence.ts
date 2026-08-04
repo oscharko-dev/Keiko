@@ -116,6 +116,7 @@ export function appendContainerRunEvidence(
   entry: ContainerRunEvidenceEntry,
   redact: (input: string) => string,
   retention: RetentionPolicy = DEFAULT_RETENTION,
+  onRetentionDeleted?: (deletedCount: number) => void,
 ): string {
-  return persistEvidenceManifest(entry, store, redact, retention).location;
+  return persistEvidenceManifest(entry, store, redact, retention, onRetentionDeleted).location;
 }

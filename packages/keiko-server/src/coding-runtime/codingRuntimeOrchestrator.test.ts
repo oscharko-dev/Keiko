@@ -669,10 +669,10 @@ describe("CodingRuntimeOrchestrator", () => {
       ok: true,
       snapshot: { state: "failed", failureCode: "authority-resolution-failed" },
     });
-    expect(f.manager.stop).toHaveBeenCalledWith("run-1");
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 
-  it("rejects stale route/body pairs and keeps a failed approval pending", async () => {
+  it("rejects stale route/body pairs and stops after approval activation fails", async () => {
     const f = fixture();
     await f.orchestrator.start(start);
     expect(await f.orchestrator.stop("other", { requestId: "run-1" })).toEqual({
@@ -704,7 +704,7 @@ describe("CodingRuntimeOrchestrator", () => {
     });
     f.approvalAuthority.issue.mockReturnValueOnce({
       ok: false,
-      failureCode: "runtime-stopped",
+      failureCode: "approval-activation-failed",
       retryable: false,
     });
     expect(
@@ -713,8 +713,12 @@ describe("CodingRuntimeOrchestrator", () => {
         decision: "approved",
         expectedRevision: 4,
       }),
-    ).toMatchObject({ ok: true, snapshot: { state: "failed", failureCode: "runtime-failed" } });
+    ).toMatchObject({
+      ok: true,
+      snapshot: { state: "failed", failureCode: "approval-activation-failed" },
+    });
     expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 
   it("requires recovery acknowledgement before fresh retry and records a predecessor", async () => {
@@ -960,7 +964,7 @@ describe("CodingRuntimeOrchestrator", () => {
       state: "failed",
       failureCode: "authority-resolution-failed",
     });
-    expect(f.manager.stop).toHaveBeenCalledWith("run-1");
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 
   it("moves to recovery when event admission fails and deletes evidence for pruned runs", async () => {
@@ -1005,8 +1009,8 @@ describe("CodingRuntimeOrchestrator", () => {
 });
 
 describe("pause and resume (#2386 adversarial-review regressions)", () => {
-  async function runningFixture(): Promise<ReturnType<typeof fixture>> {
-    const f = fixture();
+  async function runningFixture(clock?: () => Date): Promise<ReturnType<typeof fixture>> {
+    const f = fixture(undefined, clock);
     await f.orchestrator.start(start);
     await f.orchestrator.ingest({
       schemaVersion: "1",
@@ -1023,9 +1027,44 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     const paused = await f.orchestrator.pause("run-1", { requestId: "run-1" });
     expect(successfulSnapshot(paused).state).toBe("paused");
     expect(f.manager.pause).toHaveBeenCalledWith("run-1");
+    f.eventHub.publish.mockClear();
+    f.manager.resume.mockClear();
     const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
     expect(successfulSnapshot(resumed).state).toBe("running");
     expect(f.manager.resume).toHaveBeenCalledWith("run-1", "supervised-coding");
+    expect(f.eventHub.publish.mock.invocationCallOrder[0]).toBeLessThan(
+      f.manager.resume.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it("stops the paused manager when the durable resumed state cannot be published", async () => {
+    const f = await runningFixture();
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    f.eventHub.publish.mockReturnValueOnce({ ok: false });
+
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+
+    expect(successfulSnapshot(resumed).state).toBe("recovery-required");
+    expect(f.manager.resume).not.toHaveBeenCalled();
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+  });
+
+  it("stops and terminalizes when the manager rejects an already published resume", async () => {
+    const f = await runningFixture();
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    f.manager.resume.mockReturnValue({
+      ok: false,
+      failureCode: "authority-resolution-failed",
+      retryable: false,
+    });
+
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+
+    expect(successfulSnapshot(resumed)).toMatchObject({
+      state: "failed",
+      failureCode: "authority-resolution-failed",
+    });
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 
   it("persists a narrower resumed mode so a later mode-less resume cannot request widening", async () => {
@@ -1053,8 +1092,13 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     });
   });
 
-  it("keeps a paused run paused when adapter events arrive", async () => {
+  it("stashes a paused permission request until explicit resume", async () => {
     const f = await runningFixture();
+    f.manager.resume.mockImplementation(() => ({
+      ok: true,
+      paused: false,
+      effectiveMode: "governed-assist",
+    }));
     await f.orchestrator.pause("run-1", { requestId: "run-1" });
     const afterSubmit = await f.orchestrator.ingest({
       schemaVersion: "1",
@@ -1071,7 +1115,7 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
       occurredAt: "2026-01-01T00:00:02.000Z",
       kind: "permission-requested",
       permissionRequest: {
-        requestId: "permission-paused",
+        requestId: "permission-1",
         kind: "workspace-write",
         actionClass: "workspace-write",
         reasonCode: "approval-required",
@@ -1080,13 +1124,89 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
       },
     });
     expect(successfulSnapshot(afterPermission).state).toBe("paused");
-    const decided = await f.orchestrator.decideApproval("run-1", {
-      requestId: "permission-paused",
-      decision: "approved",
-      expectedRevision: 5,
+    expect(
+      await f.orchestrator.decideApproval("run-1", {
+        requestId: "permission-1",
+        decision: "approved",
+        expectedRevision: successfulSnapshot(afterPermission).revision,
+      }),
+    ).toEqual({ ok: false, failureCode: "invalid-intent" });
+
+    const resumed = await f.orchestrator.resume("run-1", {
+      requestId: "run-1",
+      requestedMode: "governed-assist",
     });
-    expect(decided.ok).toBe(false);
+    expect(successfulSnapshot(resumed)).toMatchObject({
+      state: "awaiting-approval",
+      effectiveMode: "governed-assist",
+      pendingPermission: { requestId: "permission-1" },
+    });
+    const decided = await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-1",
+      decision: "approved",
+      expectedRevision: successfulSnapshot(resumed).revision,
+    });
+    expect(decided.ok).toBe(true);
+    expect(f.approvalAuthority.issue).toHaveBeenCalledOnce();
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    await f.orchestrator.resume("run-1", { requestId: "run-1" });
+    expect(f.manager.resume).toHaveBeenLastCalledWith("run-1", "governed-assist");
   });
+
+  it("dispatches the UI follow-up while the run remains paused", async () => {
+    const f = await runningFixture();
+    const paused = await f.orchestrator.pause("run-1", { requestId: "run-1" });
+
+    const followUp = await f.orchestrator.submitFollowUp("run-1", {
+      requestId: "follow-up-paused",
+      expectedRevision: successfulSnapshot(paused).revision,
+      taskIntent: "continue while operator control stays paused",
+    });
+
+    expect(successfulSnapshot(followUp)).toMatchObject({ state: "paused", revision: 5 });
+    expect(f.taskDispatcher.dispatch).toHaveBeenLastCalledWith({
+      runId: "run-1",
+      requestId: "follow-up-paused",
+      expectedRevision: successfulSnapshot(paused).revision,
+      taskIntent: "continue while operator control stays paused",
+    });
+    expect(f.manager.resume).not.toHaveBeenCalled();
+  });
+
+  it.each([60_000, 60_001])(
+    "fails closed and stops the manager when a stashed permission expires at +%i ms",
+    async (elapsedMs) => {
+      let nowMs = FIXTURE_NOW_MS;
+      const f = await runningFixture(() => new Date(nowMs));
+      await f.orchestrator.pause("run-1", { requestId: "run-1" });
+      await f.orchestrator.ingest({
+        schemaVersion: "1",
+        eventId: "event-pause-expired",
+        runId: "run-1",
+        occurredAt: "2026-01-01T00:00:02.000Z",
+        kind: "permission-requested",
+        permissionRequest: {
+          requestId: "permission-1",
+          kind: "workspace-write",
+          actionClass: "workspace-write",
+          reasonCode: "approval-required",
+          actionKind: "file-edit",
+          expiresAt: "2026-01-01T00:01:00.000Z",
+        },
+      });
+      nowMs += elapsedMs;
+
+      const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+
+      expect(successfulSnapshot(resumed)).toMatchObject({
+        state: "failed",
+        failureCode: "authority-expired",
+      });
+      expect(f.manager.resume).not.toHaveBeenCalled();
+      expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+      expect(f.approvalAuthority.issue).not.toHaveBeenCalled();
+    },
+  );
 
   it("still terminates a paused run on a redacted runtime failure", async () => {
     const f = await runningFixture();
@@ -1099,6 +1219,7 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
       kind: "failure-redacted",
     });
     expect(successfulSnapshot(failed).state).toBe("failed");
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 
   it("projects the manager's body-free process result on terminal status", async () => {

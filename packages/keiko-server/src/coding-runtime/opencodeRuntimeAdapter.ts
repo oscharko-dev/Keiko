@@ -41,6 +41,7 @@ export type OpenCodeReadinessPhase =
   | "config-materialization"
   | "endpoint"
   | "authenticated-health"
+  | "authenticated-health-version"
   | "unauthenticated-health"
   | "openapi-digest"
   | "gateway-challenge"
@@ -480,9 +481,9 @@ async function startAdapter(
     if (endpoint === undefined) return fail("endpoint");
     phase = "authenticated-health";
     const authenticated = await readiness.health("basic");
-    if (authenticated.status !== 200 || authenticated.version !== OPENCODE_PINNED_VERSION) {
-      return fail("authenticated-health");
-    }
+    if (authenticated.status !== 200) return fail("authenticated-health");
+    if (authenticated.version !== OPENCODE_PINNED_VERSION)
+      return fail("authenticated-health-version");
     phase = "unauthenticated-health";
     const unauthenticated = await readiness.health("none");
     if (unauthenticated.status !== 401) return fail("unauthenticated-health");
@@ -899,15 +900,25 @@ function governedPermissionSource(): readonly string[] {
     '    metadata: { kind: "workspace-write", actionClass: "workspace-write", reasonCode: "approval-required", actionKind: "file-edit", scopeLabel: "workspace-scope", risk: "medium", policyReason: "approval-required", targetPath: patterns[0], allowedRelativePaths: patterns, fileCount: patterns.length, addedLines, deletedLines },',
     "  };",
     "}",
-    "function verificationPermission(args) {",
-    '  if (typeof args.verifierId !== "string") throw new Error("keiko-tool-invalid");',
+    "function verificationPermission(args, approvalProof) {",
+    '  if (typeof args.verifierId !== "string" || !approvalProof) throw new Error("keiko-tool-invalid");',
     "  return {",
-    '    patterns: [args.verifierId], metadata: { kind: "command-execution", actionClass: "verification", reasonCode: "approval-required", actionKind: "verification-command", scopeLabel: "workspace-scope", risk: "low", policyReason: "approval-required", commandLabel: args.verifierId },',
+    '    patterns: [args.verifierId], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: "verification-command", scopeLabel: "workspace-scope", risk: "low", policyReason: "approval-required", commandLabel: args.verifierId, ...approvalProof },',
     "  };",
     "}",
-    "async function askForGovernedPermission(args, context) {",
+    "async function toolApprovalProof(request) {",
+    '  if (process.env.KEIKO_CODING_MODE !== "governed-assist" || !["verification", "command"].includes(request.action)) return;',
+    "  const runId = process.env.KEIKO_CODING_RUN_ID;",
+    '  const targetId = request.action === "verification" ? request.verifierId : request.commandId;',
+    '  if (!runId || typeof targetId !== "string") throw new Error("keiko-tool-invalid");',
+    '  const payload = JSON.stringify(["coding-tool-approval-v1", runId, request.action, request.actionId, request.idempotencyKey, targetId]);',
+    '  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));',
+    '  const approvalDigest = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");',
+    "  return { actionId: request.actionId, idempotencyKey: request.idempotencyKey, approvalId: request.actionId, approvalDigest };",
+    "}",
+    "async function askForGovernedPermission(args, context, approvalProof) {",
     '  if (process.env.KEIKO_CODING_MODE !== "governed-assist") return;',
-    '  const request = action === "edit" ? editPermission(args) : action === "verification" ? verificationPermission(args) : undefined;',
+    '  const request = action === "edit" ? editPermission(args) : action === "verification" ? verificationPermission(args, approvalProof) : undefined;',
     "  if (!request) return;",
     "  await context.ask({",
     "    permission: governedPermission,",
@@ -951,7 +962,9 @@ function toolSource(
     "    const identity = `${context.sessionID}:${context.callID || context.messageID}`;",
     "    const request = { action, actionId: identity, idempotencyKey: identity };",
     "    for (const name of argumentNames) request[name] = args[name];",
-    "    await askForGovernedPermission(args, context);",
+    "    const approvalProof = await toolApprovalProof(request);",
+    "    await askForGovernedPermission(args, context, approvalProof);",
+    "    if (approvalProof) request.approvalProof = { approvalId: approvalProof.approvalId, approvalDigest: approvalProof.approvalDigest };",
     "    const body = JSON.stringify(request);",
     "    const controller = new AbortController();",
     "    const abort = () => controller.abort();",

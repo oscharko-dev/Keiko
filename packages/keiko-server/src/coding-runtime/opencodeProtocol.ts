@@ -228,6 +228,10 @@ const GOVERNED_VERIFICATION_METADATA_KEYS = [
   "risk",
   "policyReason",
   "commandLabel",
+  "actionId",
+  "idempotencyKey",
+  "approvalId",
+  "approvalDigest",
 ] as const;
 const GOVERNED_VERIFIERS = new Set(["test", "targeted-test", "typecheck", "lint", "build"]);
 // Colons are rejected wholesale: `C:/…` is drive-absolute under win32 resolution and
@@ -342,13 +346,11 @@ function projectGovernedVerificationPermission(
     !fixedPermissionMetadata(
       metadata,
       "command-execution",
-      "verification",
+      "command-execution",
       "verification-command",
       "low",
     ) ||
-    typeof metadata.commandLabel !== "string" ||
-    !GOVERNED_VERIFIERS.has(metadata.commandLabel) ||
-    !sameStrings(properties.patterns, [metadata.commandLabel])
+    !validVerificationApproval(properties, metadata)
   ) {
     return undefined;
   }
@@ -356,6 +358,38 @@ function projectGovernedVerificationPermission(
   return requestId === undefined
     ? undefined
     : { type: "permission-request", requestId, ...metadata };
+}
+
+function validVerificationApproval(
+  properties: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+): boolean {
+  const commandLabel = metadata.commandLabel;
+  const approvalDigest = metadata.approvalDigest;
+  return (
+    typeof commandLabel === "string" &&
+    GOVERNED_VERIFIERS.has(commandLabel) &&
+    validApprovalIdentities(metadata) &&
+    typeof approvalDigest === "string" &&
+    /^[0-9a-f]{64}$/u.test(approvalDigest) &&
+    sameStrings(properties.patterns, [commandLabel])
+  );
+}
+
+function validApprovalIdentities(metadata: Record<string, unknown>): boolean {
+  const actionId = metadata.actionId;
+  const idempotencyKey = metadata.idempotencyKey;
+  const approvalId = metadata.approvalId;
+  return (
+    boundedApprovalIdentity(actionId) &&
+    boundedApprovalIdentity(idempotencyKey) &&
+    boundedApprovalIdentity(approvalId) &&
+    approvalId === actionId
+  );
+}
+
+function boundedApprovalIdentity(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 512;
 }
 
 function fixedPermissionMetadata(

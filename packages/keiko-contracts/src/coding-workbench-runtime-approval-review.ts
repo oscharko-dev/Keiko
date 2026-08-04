@@ -6,6 +6,7 @@ import {
   isRecord,
   result,
   validateSafeId,
+  validateUntrustedDisplayText,
 } from "./coding-workbench-runtime-api-validation.js";
 import { CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS } from "./coding-workbench-runtime-api.js";
 import { isPortableWorkspaceRelativePath } from "./workspace-contract-primitives.js";
@@ -173,8 +174,7 @@ function validateReviewPaths(value: unknown, errors: string[]): void {
  */
 function isReviewablePath(value: unknown): boolean {
   return (
-    typeof value === "string" &&
-    value.length <= CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS &&
+    validateUntrustedDisplayText(value, CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS) &&
     !value.includes(":") &&
     isPortableWorkspaceRelativePath(value)
   );

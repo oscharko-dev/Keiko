@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -127,6 +127,56 @@ describe("production workspace HEAD reader worktree layouts", () => {
     const fixture = worktreeFixture();
     writeFileSync(join(fixture.worktreeGitDir, "HEAD"), `${MAIN_SHA}\n`);
     expect(readProductionWorkspaceHead(fixture.worktreeRoot, fixture.worktreeRoot)).toBe(MAIN_SHA);
+  });
+
+  it("matches linked-worktree internals using their canonical filesystem identity", () => {
+    const fixture = worktreeFixture();
+    const actualGitDir = realpathSync(fixture.worktreeGitDir);
+    const disguisedGitDir = `${actualGitDir.slice(0, -2)}WT`;
+    const actualPath = (path: string): string =>
+      path.startsWith(disguisedGitDir)
+        ? `${actualGitDir}${path.slice(disguisedGitDir.length)}`
+        : path;
+    const fileSystem: ProductionWorkspaceHeadFileSystem = {
+      close: closeSync,
+      fstat: fstatSync,
+      lstat: (path) => lstatSync(actualPath(path)),
+      open: (path) => openSync(actualPath(path), "r"),
+      read: readSync,
+      realpath: (path) => {
+        if (path.startsWith(disguisedGitDir)) return path;
+        const canonical = realpathSync(actualPath(path));
+        return canonical === actualGitDir ? disguisedGitDir : canonical;
+      },
+    };
+    expect(readProductionWorkspaceHead(fixture.worktreeRoot, fixture.repoRoot, fileSystem)).toBe(
+      MAIN_SHA,
+    );
+  });
+
+  it("rejects a git-dir whose canonical ancestor differs from the common root only by case", () => {
+    const fixture = worktreeFixture();
+    const actualCommon = realpathSync(fixture.commonGitDir);
+    const disguisedCommon = join(dirname(fixture.repoRoot), "REPO", ".git");
+    const disguisedGitDir = join(disguisedCommon, "worktrees", "wt");
+    writeFileSync(join(fixture.worktreeRoot, ".git"), `gitdir: ${disguisedGitDir}\n`);
+    const actualPath = (path: string): string =>
+      path.startsWith(disguisedCommon)
+        ? `${actualCommon}${path.slice(disguisedCommon.length)}`
+        : path;
+    const fileSystem: ProductionWorkspaceHeadFileSystem = {
+      close: closeSync,
+      fstat: fstatSync,
+      lstat: (path) => lstatSync(actualPath(path)),
+      open: (path) => openSync(actualPath(path), "r"),
+      read: readSync,
+      realpath: (path) =>
+        path.startsWith(disguisedCommon) ? path : realpathSync(actualPath(path)),
+    };
+
+    expect(
+      readProductionWorkspaceHead(fixture.worktreeRoot, fixture.repoRoot, fileSystem),
+    ).toBeUndefined();
   });
 
   it("fails closed when the commondir pointer escapes the repository git directory", () => {

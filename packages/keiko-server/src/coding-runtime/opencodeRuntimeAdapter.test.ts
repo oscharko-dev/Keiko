@@ -23,6 +23,7 @@ type ReadinessPhase =
   | "config-materialization"
   | "endpoint"
   | "authenticated-health"
+  | "authenticated-health-version"
   | "unauthenticated-health"
   | "openapi-digest"
   | "gateway-challenge"
@@ -225,10 +226,11 @@ function readinessPorts(failAt?: ReadinessPhase): {
           authorization: "basic" | "none",
         ): Promise<{ readonly status: number; readonly version?: string }> => {
           if (authorization === "basic") {
+            if (!failed("authenticated-health")) return Promise.resolve({ status: 500 });
             return Promise.resolve(
-              failed("authenticated-health")
+              failed("authenticated-health-version")
                 ? { status: 200, version: "1.17.17" }
-                : { status: 500 },
+                : { status: 200, version: "wrong-version" },
             );
           }
           return Promise.resolve({ status: failed("unauthenticated-health") ? 401 : 200 });
@@ -346,6 +348,18 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(bundle.toolSources.keiko_changeset_edit).toContain(
       'KEIKO_CODING_MODE !== "governed-assist"',
     );
+    const verificationSource = bundle.toolSources.keiko_verification;
+    if (verificationSource === undefined) throw new TypeError("verification source missing");
+    expect(verificationSource).toContain('actionClass: "command-execution"');
+    expect(verificationSource).toContain('crypto.subtle.digest("SHA-256"');
+    expect(verificationSource).toContain("includes(request.action)");
+    expect(verificationSource).toContain("actionId: request.actionId");
+    expect(verificationSource).toContain(
+      "request.approvalProof = { approvalId: approvalProof.approvalId",
+    );
+    expect(verificationSource.indexOf("await askForGovernedPermission")).toBeLessThan(
+      verificationSource.indexOf("fetch(endpoint"),
+    );
     // #2473 large-file read window: the child-side source forwards the optional window arguments
     // and validates the transient pagination facts the bridge returns.
     expect(bundle.toolSources.keiko_workspace_read).toContain('"startLine"');
@@ -364,6 +378,7 @@ describe("OpenCode runtime adapter readiness", () => {
     "config-materialization",
     "endpoint",
     "authenticated-health",
+    "authenticated-health-version",
     "unauthenticated-health",
     "openapi-digest",
     "gateway-challenge",

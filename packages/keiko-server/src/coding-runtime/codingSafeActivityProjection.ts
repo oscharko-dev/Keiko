@@ -210,6 +210,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   private readonly maxSignalIdentities: number;
   private readonly subscribers = new Set<(content: CodingSafeActivityContent | null) => void>();
   private entry: ProjectionEntry | undefined;
+  private subscriberRunId: string | undefined;
   private expiryTimer: ReturnType<typeof setTimeout> | undefined;
   private lastEmittedDropCount = 0;
 
@@ -236,7 +237,8 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       messageTurns: new Map(),
       feed: emptyFeed(input.runId, instant(now)),
     };
-    if (!validOpenInput(input, expiresAtMs, now)) this.expireCurrent("expiry");
+    if (this.subscribers.size > 0) this.subscriberRunId = input.runId;
+    if (!validOpenInput(input, expiresAtMs, now)) this.expireCurrent();
     else {
       this.lastEmittedDropCount = 0;
       this.scheduleExpiry(this.entry);
@@ -285,12 +287,12 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   }
 
   public purge(runId: string, reason: CodingSafeActivityPurgeReason): void {
-    if (this.entry?.runId !== runId) return;
-    this.expireCurrent(reason);
+    if (this.entry?.runId !== runId && this.subscriberRunId !== runId) return;
+    this.purgeCurrent(reason);
   }
 
   public purgeAll(reason: CodingSafeActivityPurgeReason): void {
-    if (this.entry !== undefined) this.expireCurrent(reason);
+    this.purgeCurrent(reason);
   }
 
   public markUnavailable(runId: string): void {
@@ -308,6 +310,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       messageTurns: new Map(),
       feed,
     };
+    if (this.subscribers.size > 0) this.subscriberRunId = runId;
     this.scheduleExpiry(this.entry);
     this.notify();
   }
@@ -326,10 +329,12 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       return { admitted: false, detach: (): void => undefined };
     }
     this.subscribers.add(listener);
+    if (this.entry !== undefined) this.subscriberRunId = this.entry.runId;
     return {
       admitted: true,
       detach: (): void => {
         this.subscribers.delete(listener);
+        if (this.subscribers.size === 0) this.subscriberRunId = undefined;
       },
     };
   }
@@ -339,11 +344,11 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (entry === undefined || (runId !== undefined && entry.runId !== runId)) return undefined;
     if (entry.feed.availability === "unavailable") return entry;
     if (this.now() >= entry.expiresAtMs) {
-      this.expireCurrent("expiry");
+      this.expireCurrent();
       return undefined;
     }
     if (!safeWorkspaceCheck(entry.workspaceIsCurrent)) {
-      this.expireCurrent("workspace-switch");
+      this.purgeCurrent("workspace-switch");
       return undefined;
     }
     return entry;
@@ -354,13 +359,27 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     return false;
   }
 
-  private expireCurrent(_reason: CodingSafeActivityPurgeReason): void {
+  private expireCurrent(): void {
+    const subscribers = [...this.subscribers];
+    this.clearCurrentEntry();
+    this.notifySubscribers(subscribers, null);
+  }
+
+  private purgeCurrent(reason: CodingSafeActivityPurgeReason): void {
+    const retained = this.entry !== undefined || this.subscribers.size > 0;
+    const notify = this.entry !== undefined;
+    const subscribers = [...this.subscribers];
+    this.clearCurrentEntry();
+    this.subscribers.clear();
+    this.subscriberRunId = undefined;
+    if (notify) this.notifySubscribers(subscribers, null);
+    if (retained) emitPurgeDiagnostic(this.diagnostics, this.now, reason);
+  }
+
+  private clearCurrentEntry(): void {
     if (this.expiryTimer !== undefined) clearTimeout(this.expiryTimer);
     this.expiryTimer = undefined;
     this.entry = undefined;
-    const subscribers = [...this.subscribers];
-    this.subscribers.clear();
-    this.notifySubscribers(subscribers, null);
   }
 
   private notify(): void {
@@ -379,6 +398,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
         this.subscribers.delete(subscriber);
       }
     }
+    if (this.subscribers.size === 0) this.subscriberRunId = undefined;
   }
 
   private emitDropMilestones(
@@ -404,7 +424,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (this.expiryTimer !== undefined) clearTimeout(this.expiryTimer);
     const delay = Math.max(0, entry.expiresAtMs - this.now());
     this.expiryTimer = setTimeout(() => {
-      if (this.entry === entry) this.expireCurrent("expiry");
+      if (this.entry === entry) this.expireCurrent();
     }, delay);
     this.expiryTimer.unref();
   }
@@ -886,6 +906,22 @@ function emitDropDiagnostic(
     message: `Safe-activity event dropped (${reason}); bounded count ${String(count)}.`,
     code: "CODING_SAFE_ACTIVITY_EVENT_DROPPED",
     occurrenceCount: count,
+  });
+}
+
+function emitPurgeDiagnostic(
+  sink: ServerDiagnosticSink | undefined,
+  now: () => number,
+  reason: CodingSafeActivityPurgeReason,
+): void {
+  emitServerDiagnostic(sink, {
+    correlationId: `safe-activity-purge-${reason}`,
+    timestamp: instant(now()),
+    operation: "coding-runtime.safe-activity",
+    source: "opencode.safe-activity",
+    errorClass: "SafeActivityProjectionPurge",
+    message: `Safe-activity projection purged (${reason}).`,
+    code: "CODING_SAFE_ACTIVITY_PURGED",
   });
 }
 

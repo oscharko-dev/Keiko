@@ -126,21 +126,15 @@ budget settles _incomplete_, and an incomplete run persists no store, so a large
 converges: every push starts empty and spends the ceiling again. A _lower_ ceiling makes this worse
 rather than better, by turning more pull requests into the non-converging case.
 
-Do not read this one in the past tense. The upstream fix exists — Keiko-for-Quality#75 lets a
-truncated run keep the verdicts for files it actually reached — but **this repository does not have
-it yet**, and adopting it takes two steps, not one:
-
-1. advance the pin to a release carrying #75; and
-2. move the store hand-off and the signing job off `outcome == 'complete'` and onto the
-   `store_written` output (Keiko-for-Quality#78), because budget exhaustion still settles
-   `INCOMPLETE` — without this the store is written on the review runner and stranded there.
-
-Until both are done, a large pull request here re-prices every file on every push **for as long as
-it has no retained complete store to fall back on**. The locator takes the newest eligible
-same-named artifact rather than the previous run's, so a pull request that completed while it was
-smaller keeps benefiting from that older store until the seven-day retention expires; the
-non-converging case is the one that has never completed under its current identity. Either way the
-honest budget response is to split the change rather than to raise or lower the ceiling.
+Read this one in the past tense since the v0.11.0 repin: the pin carries Keiko-for-Quality#76 (a
+truncated run keeps the verdicts for files it actually reached) and the workflow's store hand-off
+and signing job gate on the action's `store_written` output (#78) instead of
+`outcome == 'complete'` — both halves of the adoption landed together, because either alone
+changes nothing. A truncated run now seeds the store it earned, so the non-converging "cold set"
+shrinks to pull requests whose very first run fails before reaching any file. The locator behavior
+is unchanged: it takes the newest eligible same-named artifact, so an older complete store inside
+the seven-day retention still serves. Splitting an oversized change remains cheaper than arguing
+with the ceiling.
 
 ## How to tell whether memoization is working
 

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import { createProductionCodingRuntimeHost } from "./productionCodingRuntimeHost.js";
+import { RESEARCH_GRANT_DEFAULT_MAX_TTL_MS } from "./researchGrantRegistry.js";
 import type { CodingRuntimeEditorMutationLeaseBroker } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import type {
   CodingRuntimeStartConfirmationClaim,
@@ -26,6 +27,60 @@ afterEach(() => {
 });
 
 describe("production coding runtime resolver", () => {
+  it("starts an approved research grant lifetime at operator approval time", async () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) => ({
+      ...backendRun(input.request.runId),
+      manager: {
+        ...runtimeManager(input.request.runId),
+        issueApproval: () => ({
+          ok: true as const,
+          approval: {} as never,
+          approvalDigest: "b".repeat(64),
+          expiresAtMs: fixture.nowMs() + 20_000,
+        }),
+      },
+    }));
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+    const launch = host.launchResolver.resolve(request);
+    const manager = host.createManager(vi.fn());
+    await manager.start({
+      ...launch,
+      runId: request.runId,
+      workspaceRoot: fixture.workspace,
+      requestedMode: request.requestedMode,
+    });
+    const researchRequestId = host.pendingResearchApprovals?.request({
+      runId: request.runId,
+      url: new URL("https://example.com/reference"),
+      taskId: "task-1",
+      workspaceId: "workspace-1",
+      nowMs: fixture.nowMs(),
+    });
+    if (researchRequestId === undefined) throw new Error("expected pending research approval");
+    fixture.advanceNow(100_000);
+    const approvalNowMs = fixture.nowMs();
+
+    const issued = host.approvalAuthority.issue({
+      runId: request.runId,
+      requestId: researchRequestId,
+      actionKind: "research",
+      approvedByUserId: "operator-1",
+      ttlMs: 20_000,
+    });
+
+    expect(issued.ok).toBe(true);
+    expect(host.researchGrants?.activeGrants(request.runId, approvalNowMs)).toEqual([
+      expect.objectContaining({ expiresAtMs: approvalNowMs + RESEARCH_GRANT_DEFAULT_MAX_TTL_MS }),
+    ]);
+  });
+
   it("is unavailable without a trusted confirmation consumer and causes no backend side effects", () => {
     const fixture = workspaceFixture();
     const createRun = vi.fn();
@@ -367,6 +422,7 @@ function workspaceFixture() {
   const workspace = join(managed, "repo", "workspace");
   mkdirSync(workspace, { recursive: true });
   let head = "1".repeat(40);
+  let nowMs = Date.parse("2026-07-13T12:00:00.000Z");
   const instance = {
     workspaceId: "workspace-private",
     repositoryId: "repository-private",
@@ -389,7 +445,11 @@ function workspaceFixture() {
       managedTaskWorkspaceRoot: managed,
       deploymentCeiling: "supervised-coding" as const,
       readWorkspaceHead: () => head,
-      now: () => new Date("2026-07-13T12:00:00.000Z"),
+      now: () => new Date(nowMs),
+    },
+    nowMs: (): number => nowMs,
+    advanceNow: (elapsedMs: number): void => {
+      nowMs += elapsedMs;
     },
     setHead: (value: string): void => {
       head = value;

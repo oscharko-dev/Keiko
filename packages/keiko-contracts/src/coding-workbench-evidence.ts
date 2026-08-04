@@ -13,6 +13,7 @@ import {
   type CodingWorkbenchRuntimeSource,
   type CodingWorkbenchValidationResult,
 } from "./coding-workbench.js";
+import { isCodeTaskIsoInstant } from "./code-task-acceptance.js";
 
 export type CodingWorkbenchEvidenceKind =
   "run" | "permission" | "diff" | "verification" | "artifact" | "failure";
@@ -50,7 +51,6 @@ export interface CodingWorkbenchEvidenceRecord {
 }
 
 const HEX_64_PATTERN = /^[a-f0-9]{64}$/u;
-const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
 const SAFE_LABEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9.:/_-]{0,95}$/u;
 const URL_DETECTION_PATTERN = /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/\S+/u;
 const REDACTED_SUMMARY_PATTERN =
@@ -275,9 +275,7 @@ function isSafeIntegerOrZero(value: unknown): value is number {
 }
 
 function isIsoInstant(value: unknown): value is string {
-  return (
-    typeof value === "string" && ISO_INSTANT_PATTERN.test(value) && !Number.isNaN(Date.parse(value))
-  );
+  return isCodeTaskIsoInstant(value);
 }
 
 function validateAllowedKeys(

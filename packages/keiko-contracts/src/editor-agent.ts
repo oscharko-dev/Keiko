@@ -1204,7 +1204,7 @@ function hasOnlyObjectKeys(
 }
 
 function isPosixCanonicalQueryGitPath(value: unknown): value is string {
-  if (!isBoundedTargetPath(value) || !isContainedAgentPath(value) || value.includes("\\")) {
+  if (!isBoundedTargetPath(value) || !isContainedAgentPath(value)) {
     return false;
   }
   const segments = value.split("/");

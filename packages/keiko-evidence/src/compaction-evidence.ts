@@ -56,12 +56,14 @@ export interface CompactionEvidenceContext {
   readonly additionalSecrets?: readonly string[] | undefined;
   readonly costClassResolver?: ((modelId: string) => CostClass | "unknown") | undefined;
   readonly retention?: RetentionPolicy | undefined;
+  readonly onRetentionDeleted?: ((deletedCount: number) => void) | undefined;
 }
 
 export interface CompactionEvidencePersistResult {
   readonly manifest: EvidenceManifest;
   readonly location: string;
   readonly report: EvidenceReport;
+  readonly retentionDeletedCount: number;
 }
 
 function sha256Hex(value: string): string {
@@ -380,6 +382,7 @@ export function persistCompactionEvidence(
     ctx.store,
     redactor,
     ctx.retention ?? DEFAULT_RETENTION,
+    ctx.onRetentionDeleted,
   );
   return {
     ...persisted,

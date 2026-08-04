@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local test fixture callbacks are contextually typed. */
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
@@ -767,29 +767,35 @@ describe("coding runtime routes", () => {
     expect(stale).toMatchObject({ status: 404 });
   });
 
-  it("replays SSE events with Last-Event-ID and sends a bounded reset on cursor failure", () => {
-    const response = new FakeResponse();
-    const req = new EventEmitter() as unknown as RouteContext["req"];
-    const hub = {
-      subscribe: (_runId: string, cursor: string | undefined) =>
-        cursor === "bad"
-          ? {
-              ok: false as const,
-              reason: "cursor-malformed" as const,
-              snapshotNeeded: true as const,
-            }
-          : { ok: true as const, detach: () => undefined },
-    };
-    openCodingRuntimeSse(
-      response as unknown as RouteContext["res"],
-      req,
-      hub as never,
-      "run-1",
-      "bad",
-    );
-    expect(response.chunks.join("")).toContain("event: reset");
-    expect(response.chunks.join("")).toContain("cursor-malformed");
-    expect(response.writableEnded).toBe(true);
+  it("replays SSE events and closes the heartbeat after a bounded cursor reset", () => {
+    vi.useFakeTimers();
+    try {
+      const response = new FakeResponse();
+      const req = new EventEmitter() as unknown as RouteContext["req"];
+      const hub = {
+        subscribe: (_runId: string, cursor: string | undefined) =>
+          cursor === "bad"
+            ? {
+                ok: false as const,
+                reason: "cursor-malformed" as const,
+                snapshotNeeded: true as const,
+              }
+            : { ok: true as const, detach: () => undefined },
+      };
+      openCodingRuntimeSse(
+        response as unknown as RouteContext["res"],
+        req,
+        hub as never,
+        "run-1",
+        "bad",
+      );
+      expect(response.chunks.join("")).toContain("event: reset");
+      expect(response.chunks.join("")).toContain("cursor-malformed");
+      expect(response.writableEnded).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("destroys a slow SSE connection when the transport applies backpressure", () => {
@@ -834,6 +840,74 @@ describe("coding runtime routes", () => {
     expect((ctx.res as unknown as FakeResponse).chunks.join("")).toContain('"cursor":"run-1:0"');
   });
 
+  it("resumes a watchdog-recreated stream from its query cursor", () => {
+    const subscribe = vi.fn(() => ({ ok: true as const, detach: () => undefined }));
+    const ctx = context(
+      "",
+      { runId: "run-1" },
+      "/api/coding-workbench/runtime/runs/run-1/events?cursor=run-1%3A42",
+    );
+
+    expect(handleCodingRuntimeEvents(ctx, runtime({ codingRuntimeEventHub: { subscribe } }))).toBe(
+      STREAMING,
+    );
+    expect(subscribe).toHaveBeenCalledWith("run-1", "run-1:42", expect.any(Object));
+  });
+
+  it("treats an empty Last-Event-ID header as an absent cursor", () => {
+    const subscribe = vi.fn(() => ({ ok: true as const, detach: () => undefined }));
+    const ctx = context("", { runId: "run-1" });
+    ctx.req.headers["last-event-id"] = "";
+
+    expect(handleCodingRuntimeEvents(ctx, runtime({ codingRuntimeEventHub: { subscribe } }))).toBe(
+      STREAMING,
+    );
+    expect(subscribe).toHaveBeenCalledWith("run-1", undefined, expect.any(Object));
+  });
+
+  it("does not fall back to a query cursor for repeated Last-Event-ID headers", () => {
+    const subscribe = vi.fn(() => ({ ok: true as const, detach: () => undefined }));
+    const ctx = context(
+      "",
+      { runId: "run-1" },
+      "/api/coding-workbench/runtime/runs/run-1/events?cursor=run-1%3A42",
+    );
+    ctx.req.headers["last-event-id"] = ["run-1:1", "run-1:2"];
+
+    expect(handleCodingRuntimeEvents(ctx, runtime({ codingRuntimeEventHub: { subscribe } }))).toBe(
+      STREAMING,
+    );
+    expect(subscribe).toHaveBeenCalledWith("run-1", undefined, expect.any(Object));
+  });
+
+  it("keeps an idle runtime event stream alive and stops heartbeats on close", async () => {
+    vi.useFakeTimers();
+    try {
+      const response = new FakeResponse();
+      const req = new EventEmitter() as unknown as RouteContext["req"];
+      const hub = {
+        subscribe: () => ({ ok: true as const, detach: () => undefined }),
+      };
+      openCodingRuntimeSse(
+        response as unknown as RouteContext["res"],
+        req,
+        hub as never,
+        "run-1",
+        undefined,
+      );
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(response.chunks).toContain(": keep-alive\n\n");
+      expect(response.chunks).toContain("event: heartbeat\ndata: {}\n\n");
+      response.destroy();
+      const heartbeatCount = response.chunks.length;
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(response.chunks).toHaveLength(heartbeatCount);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects an over-budget mutation body with 413 without buffering it", async () => {
     const session = pairedAppSession();
     const oversized = "x".repeat(64 * 1024 + 1);
@@ -874,6 +948,23 @@ describe("coding runtime routes", () => {
     );
     expect(result).toMatchObject({ status: 400 });
     expect(JSON.stringify(result.body)).toContain("CODING_RUNTIME_INVALID_INTENT");
+  });
+
+  it("propagates unexpected orchestrator failures to the server diagnostic boundary", async () => {
+    const session = pairedAppSession();
+    const deps = runtime({ codingAppSessionChannel: session.channel });
+    const orchestrator = deps.codingRuntimeOrchestrator as unknown as {
+      start: (body: unknown) => Promise<never>;
+    };
+    const failure = new Error("runtime-start-failure");
+    orchestrator.start = () => Promise.reject(failure);
+
+    await expect(
+      handleCreateCodingRuntimeRun(
+        context("{}", {}, "/api/coding-workbench/runtime/runs", session.cookie),
+        deps,
+      ),
+    ).rejects.toBe(failure);
   });
 
   it("serves the singleton status and fails closed without the runtime", () => {

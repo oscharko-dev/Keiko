@@ -10,7 +10,7 @@
 // digests, counts, bounded reason codes, and validated public domains only — never raw pages,
 // prompts, queries beyond the sanitized visible text digest, child scratch, tool bodies, or secrets.
 import type { CodeTaskFact } from "./code-task-acceptance.js";
-import { isCodeTaskSha256Digest } from "./code-task-acceptance.js";
+import { isCodeTaskIsoInstant, isCodeTaskSha256Digest } from "./code-task-acceptance.js";
 import type {
   CodeTaskGrantId,
   CodeTaskIdempotencyKey,
@@ -57,7 +57,16 @@ const PUBLIC_DOMAIN_PATTERN = /^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?:\.(?!-)[a-z0
 // introduced a polynomial-time ReDoS on ":"-heavy input flagged by CodeQL. This pattern cannot
 // backtrack super-linearly.
 const IP_LITERAL_PATTERN = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/u;
-const RESERVED_DOMAIN_NAMES = Object.freeze(["localhost", "localhost.localdomain"]);
+const RESERVED_DOMAIN_NAMES = Object.freeze([
+  "localhost",
+  "localhost.localdomain",
+  "local",
+  "internal",
+  "home.arpa",
+  "test",
+  "invalid",
+  "example",
+]);
 // Content-free bounded reason code (mirrors the code-task-governance content-free rule).
 const REASON_CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/u;
 
@@ -90,6 +99,10 @@ export function isCodeTaskPublicDomain(value: unknown): value is string {
   // the canonical hostname; otherwise a numeric loopback/private target could masquerade as DNS.
   if (!isCanonicalUrlHostname(value)) return false;
   if (IP_LITERAL_PATTERN.test(value)) return false;
+  const finalLabel = value.split(".").at(-1);
+  // A purely numeric final label can be a legacy IPv4 spelling. Requiring at least one letter
+  // rejects that resolver ambiguity without excluding valid Punycode or alphanumeric DNS labels.
+  if (finalLabel === undefined || !/[a-z]/u.test(finalLabel)) return false;
   return !isReservedDomainName(value);
 }
 
@@ -165,7 +178,7 @@ export interface AuxiliaryResearchScopeV1 {
 const RESEARCH_SCOPE_KEYS = ["grantId", "domains", "expiresAt", "queryTextDigest"];
 
 function isCodeTaskIsoInstantLike(value: unknown): value is string {
-  return typeof value === "string" && !Number.isNaN(Date.parse(value)) && value.endsWith("Z");
+  return isCodeTaskIsoInstant(value);
 }
 
 function factErrors(

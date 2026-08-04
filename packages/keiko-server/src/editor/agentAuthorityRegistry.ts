@@ -1,11 +1,13 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   CODING_WORKBENCH_SCHEMA_VERSION,
+  codingWorkbenchPolicyEffectFor,
   resolveEffectiveCodingWorkbenchMode,
   validateCodingWorkbenchRuntimeAuthorityEnvelope,
   validateCodingWorkbenchRuntimeAuthorityFacts,
   validateCodingWorkbenchAuthorityEnvelope,
   type CodingWorkbenchAuthorityEnvelope,
+  type CodingWorkbenchConnectorScope,
   type CodingWorkbenchMode,
   type CodingWorkbenchRuntimeAuthorityEnvelope,
   type CodingWorkbenchRuntimeAuthorityFacts,
@@ -108,6 +110,23 @@ export function editorAgentAuthorityEnvelopeDigest(
   envelope: CodingWorkbenchAuthorityEnvelope,
 ): string {
   return createHash("sha256").update(canonicalJson(envelope), "utf8").digest("hex");
+}
+
+export function editorAgentAuthorizedConnectorScopes(
+  envelope: CodingWorkbenchAuthorityEnvelope,
+): readonly CodingWorkbenchConnectorScope[] | undefined {
+  const actionClasses = new Set(envelope.actionClasses);
+  if (
+    codingWorkbenchPolicyEffectFor(envelope.effectiveMode, "internet", "low") !== "allowed" ||
+    envelope.networkPolicy.mode === "deny-all" ||
+    !actionClasses.has("connector-access") ||
+    !actionClasses.has("network-egress")
+  ) {
+    return undefined;
+  }
+  const networkScopes = new Set(envelope.networkPolicy.connectorScopes);
+  const authorized = envelope.connectorScopes.filter((scope) => networkScopes.has(scope));
+  return authorized.length === 0 ? undefined : authorized;
 }
 
 function canonicalJson(value: unknown): string {

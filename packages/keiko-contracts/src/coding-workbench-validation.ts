@@ -1,6 +1,7 @@
 import { isCodeTaskChildRunId, isCodeTaskSkillId } from "./code-task-auxiliary.js";
 import { isCodingWorkbenchEvidenceSafeText } from "./coding-workbench-evidence.js";
 import { validateStrictUtcInstant } from "./coding-workbench-runtime-api-validation.js";
+import { isVerificationKind } from "./editor-verification.js";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_APPROVAL_RISKS,
@@ -538,7 +539,9 @@ function validatePermissionRequestOptionalFields(
   validateSafeEvidenceText(value.reasonCode, `${path}.reasonCode`, errors);
   validatePermissionRequestSupervisedFields(value, path, errors);
   validatePermissionRequestConnectorScopes(value, path, errors);
-  if (value.commandLabel !== undefined) {
+  const exactVerifier =
+    value.actionKind === "verification-command" && isVerificationKind(value.commandLabel);
+  if (value.commandLabel !== undefined && !exactVerifier) {
     validateSafeEvidenceText(value.commandLabel, `${path}.commandLabel`, errors);
   }
   if (!isIsoInstant(value.expiresAt)) {

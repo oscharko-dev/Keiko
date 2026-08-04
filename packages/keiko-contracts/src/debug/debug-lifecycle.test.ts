@@ -30,6 +30,22 @@ describe("debug lifecycle evidence", () => {
     },
   );
 
+  it("rejects prototype-backed, non-enumerable, and symbol-keyed evidence shapes", () => {
+    const nonEnumerable = { ...valid };
+    Object.defineProperty(nonEnumerable, "argv", { value: ["secret"], enumerable: false });
+    const nonEnumerableRequired = { ...valid };
+    Object.defineProperty(nonEnumerableRequired, "schemaVersion", {
+      value: "1",
+      enumerable: false,
+    });
+    const symbolKeyed = { ...valid, [Symbol("secret")]: "value" };
+
+    expect(isDebugLifecycleEvidence(Object.create(valid))).toBe(false);
+    expect(isDebugLifecycleEvidence(nonEnumerable)).toBe(false);
+    expect(isDebugLifecycleEvidence(nonEnumerableRequired)).toBe(false);
+    expect(isDebugLifecycleEvidence(symbolKeyed)).toBe(false);
+  });
+
   it("rejects invalid provisioning digests without throwing", () => {
     expect(() =>
       isDebugLifecycleEvidence({ ...valid, provisioningDigest: "secret" }),

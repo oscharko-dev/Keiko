@@ -426,6 +426,11 @@ that deliberately configure that migration-compatible behaviour. `maxRunsByParti
 with the global count/age/byte limits by unioning their delete sets; an explicit stricter policy
 therefore still governs regulated evidence. The default selects independent bounded counts for
 both recognised partitions, while byte and age caps remain available as explicit alternatives.
+`applyRetention` returns the number of manifests it deleted. Server-owned persistence paths observe
+that count and emit one content-free diagnostic containing only the fixed operation/source labels
+and the numeric deletion count. Retention remains best-effort for chat compaction, but a deletion is
+never operationally silent; manifest bodies, run identifiers, paths, and policy values never enter
+the diagnostic.
 
 ```typescript
 export interface RetentionPolicy {

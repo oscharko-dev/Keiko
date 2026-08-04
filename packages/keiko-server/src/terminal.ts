@@ -47,8 +47,12 @@ import {
   type TerminalEvidenceEntry,
 } from "./terminal-evidence.js";
 import { TerminalToolError } from "./terminal-errors.js";
-import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { DEFAULT_RETENTION, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { Project, UiStore } from "./store/index.js";
+import {
+  evidenceRetentionDiagnosticObserver,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
 
 const MAX_CONCURRENT_EXECUTIONS = 8;
 const MIN_TIMEOUT_MS = 1_000;
@@ -153,6 +157,7 @@ export interface TerminalExecutionManagerOptions {
   readonly policy?: SandboxPolicy | undefined;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly redactor?: ((input: string) => string) | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly runDeps?: Partial<RunCommandDeps> | undefined;
   readonly now?: (() => number) | undefined;
 }
@@ -678,6 +683,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
   private readonly policy: SandboxPolicy;
   private readonly processEnv: NodeJS.ProcessEnv;
   private readonly redactor: (input: string) => string;
+  private readonly diagnostics: ServerDiagnosticSink | undefined;
   private readonly runDeps: Partial<RunCommandDeps>;
   private readonly now: () => number;
   private readonly executions = new Map<string, InFlightExecution>();
@@ -689,6 +695,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
     this.policy = opts.policy ?? DEFAULT_SANDBOX_POLICY;
     this.processEnv = opts.processEnv ?? process.env;
     this.redactor = opts.redactor ?? defaultRedactor;
+    this.diagnostics = opts.diagnostics;
     this.runDeps = opts.runDeps ?? {};
     this.now = opts.now ?? Date.now;
   }
@@ -935,7 +942,13 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
       startedAt: counts.startedAt,
     });
     try {
-      appendTerminalEvidence(this.evidenceStore, entry, this.redactor);
+      appendTerminalEvidence(
+        this.evidenceStore,
+        entry,
+        this.redactor,
+        DEFAULT_RETENTION,
+        evidenceRetentionDiagnosticObserver(this.diagnostics, "terminal-execution"),
+      );
     } catch {
       throw new TerminalToolError(
         "EVIDENCE_WRITE_FAILED",
@@ -1007,13 +1020,13 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
   }
 
   private emit(event: TerminalEventEnvelope): void {
-    for (const listener of [...this.subscribers]) {
+    [...this.subscribers].forEach((listener) => {
       try {
         listener(event);
       } catch {
         // A subscriber throwing must not stop fan-out (matches the browser tool pattern).
       }
-    }
+    });
   }
 }
 
