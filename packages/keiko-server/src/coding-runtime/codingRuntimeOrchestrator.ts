@@ -263,21 +263,49 @@ export class CodingRuntimeOrchestrator {
       this.approvals.delete(runId);
       return this.stopExpiredPausedRuntime(admitted.current);
     }
-    const resumed = this.deps.manager.resume(runId, admitted.requestedMode);
-    if (!resumed.ok) return this.fail(runtimePauseFailureCode(resumed.failureCode));
-    const effectiveMode = resumed.effectiveMode ?? admitted.requestedMode;
+    const effectiveMode = admitted.requestedMode;
     this.activeEffectiveMode = effectiveMode;
     const nextState = approval === undefined ? "running" : "awaiting-approval";
     const transitioned = this.transition(admitted.current, nextState);
     if (!transitioned.ok || transitioned.snapshot.state !== nextState) {
-      await this.containResumedRuntime(runId);
+      await this.containPausedRuntime(runId);
       return transitioned;
     }
+    const resumeFailure = await this.resumeManagerAfterTransition(runId, effectiveMode);
+    if (resumeFailure !== undefined) return resumeFailure;
     this.activeEffectiveMode = effectiveModeAfterResume(transitioned, effectiveMode);
     return transitioned;
   }
 
-  private async containResumedRuntime(runId: string): Promise<void> {
+  private async resumeManagerAfterTransition(
+    runId: string,
+    effectiveMode: CodingWorkbenchMode,
+  ): Promise<CodingRuntimeOrchestratorResult | undefined> {
+    let resumed: ReturnType<CodingRuntimeManager["resume"]>;
+    try {
+      resumed = this.deps.manager.resume(runId, effectiveMode);
+    } catch {
+      return this.stopAfterResumeFailure(runtimePauseFailureCode("authority-resolution-failed"));
+    }
+    if (!resumed.ok) {
+      return this.stopAfterResumeFailure(runtimePauseFailureCode(resumed.failureCode));
+    }
+    if (resumed.effectiveMode !== undefined && resumed.effectiveMode !== effectiveMode) {
+      return this.stopAfterResumeFailure("authority-resolution-failed");
+    }
+    return undefined;
+  }
+
+  private async stopAfterResumeFailure(
+    failureCode: CodingWorkbenchRuntimeFailureCode,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    const current = this.current();
+    return current === undefined
+      ? this.fail(failureCode)
+      : this.stopAfterIssueFailure(current, failureCode);
+  }
+
+  private async containPausedRuntime(runId: string): Promise<void> {
     try {
       await this.deps.manager.stop(runId, "failed");
     } catch {

@@ -1024,12 +1024,17 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     const paused = await f.orchestrator.pause("run-1", { requestId: "run-1" });
     expect(successfulSnapshot(paused).state).toBe("paused");
     expect(f.manager.pause).toHaveBeenCalledWith("run-1");
+    f.eventHub.publish.mockClear();
+    f.manager.resume.mockClear();
     const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
     expect(successfulSnapshot(resumed).state).toBe("running");
     expect(f.manager.resume).toHaveBeenCalledWith("run-1", "supervised-coding");
+    expect(f.eventHub.publish.mock.invocationCallOrder[0]).toBeLessThan(
+      f.manager.resume.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
-  it("stops a resumed manager when the durable resumed state cannot be published", async () => {
+  it("stops the paused manager when the durable resumed state cannot be published", async () => {
     const f = await runningFixture();
     await f.orchestrator.pause("run-1", { requestId: "run-1" });
     f.eventHub.publish.mockReturnValueOnce({ ok: false });
@@ -1037,7 +1042,25 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
 
     expect(successfulSnapshot(resumed).state).toBe("recovery-required");
-    expect(f.manager.resume).toHaveBeenCalledWith("run-1", "supervised-coding");
+    expect(f.manager.resume).not.toHaveBeenCalled();
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+  });
+
+  it("stops and terminalizes when the manager rejects an already published resume", async () => {
+    const f = await runningFixture();
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    f.manager.resume.mockReturnValue({
+      ok: false,
+      failureCode: "authority-resolution-failed",
+      retryable: false,
+    });
+
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+
+    expect(successfulSnapshot(resumed)).toMatchObject({
+      state: "failed",
+      failureCode: "authority-resolution-failed",
+    });
     expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 
@@ -1106,7 +1129,10 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
       }),
     ).toEqual({ ok: false, failureCode: "invalid-intent" });
 
-    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+    const resumed = await f.orchestrator.resume("run-1", {
+      requestId: "run-1",
+      requestedMode: "governed-assist",
+    });
     expect(successfulSnapshot(resumed)).toMatchObject({
       state: "awaiting-approval",
       effectiveMode: "governed-assist",
