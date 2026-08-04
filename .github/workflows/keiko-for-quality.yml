@@ -155,7 +155,7 @@ jobs:
           # duplication safe.
           # Quoted: a hypothetical all-digit sha would otherwise parse as a YAML number and reach
           # the shell in a normalized form, defeating the length check below.
-          ACTION_PIN: "87afdeccdaba3e3e85b5c875d8e2081a79c9ca21" # v0.12.0 — keep in sync with Review's uses:
+          ACTION_PIN: "86cd076eb1675c2d7827c7eb5f347cec0426e710" # v0.13.0 — keep in sync with Review's uses:
         run: |
           # The pin partitions the store because a wrapper release can change review or
           # sanitization SEMANTICS without changing the store's format. Three earlier rounds
@@ -407,7 +407,7 @@ jobs:
 
       - name: Review
         id: review
-        uses: oscharko-dev/Keiko-for-Quality@87afdeccdaba3e3e85b5c875d8e2081a79c9ca21 # v0.12.0
+        uses: oscharko-dev/Keiko-for-Quality@86cd076eb1675c2d7827c7eb5f347cec0426e710 # v0.13.0
         env:
           # Passed by variable NAME to the action, never as an input value: an input appears in the
           # step context that every other action in the job can read.
@@ -426,15 +426,17 @@ jobs:
           app_id: ${{ secrets.KEIKO_QUALITY_APP_ID }}
           app_private_key: ${{ secrets.KEIKO_QUALITY_APP_PRIVATE_KEY }}
           target_branches: dev
-          # Ceiling, not the spend. The action allots
-          # min(ceiling, clamp(1.3 x (files x 40k + lines x 60), 80k, 6M)) per run and passes it to
-          # the engine's own --max-tokens-budget, which stops dispatching new files at the limit
-          # instead of reviewing everything first and confessing afterwards.
+          # Ceiling, not the spend. The action (v0.13.0) allots
+          # min(ceiling, clamp(1.3 x (files x 64k + lines x 60), 150k, 6M)) per run and passes it
+          # to the engine's own --max-tokens-budget, which stops dispatching new files at the limit
+          # instead of reviewing everything first and confessing afterwards. The 64k coefficient is
+          # the measured live median (v0.12.0 telemetry, 2026-08-04); the previous 40k under-priced
+          # a 55-file run into a truncated, store-less 7.1M double-pay (#2981).
           #
           # 6M is the MAXIMUM VALUE THAT DOES ANYTHING, not a preference: the clamp above caps at
           # 6,000,000 before this input applies, so a larger number is inert and would only suggest
           # headroom the reviewer cannot use. The formula keeps ordinary pull requests far below it
-          # either way — the allotment first meets the cap at about 115 reviewable files.
+          # either way — the allotment first meets the cap at about 72 reviewable files.
           #
           # One fact everything below leans on, stated once because it is easy to drop: an
           # incomplete run uploads NO replacement store, but the locate step scans every
