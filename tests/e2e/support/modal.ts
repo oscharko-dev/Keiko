@@ -9,8 +9,12 @@ export async function expectViewportModal(page: Page, dialog: Locator): Promise<
   const dialogSurface = directlyPortaled ? dialog.locator(":scope > section").first() : dialog;
   await expect(backdrop).toBeVisible();
   await expect(dialogSurface).toBeVisible();
-  await expect(page.locator(".stage")).toHaveAttribute("inert", "");
-  await expect(page.locator(".stage")).toHaveAttribute("aria-hidden", "true");
+  const background = page.locator(".app");
+  await expect(background).toHaveAttribute("inert", "");
+  await expect(background).toHaveAttribute("aria-hidden", "true");
+  await expect
+    .poll(() => dialog.evaluate((element) => element.closest(".app") === null))
+    .toBe(true);
   await expect
     .poll(() =>
       dialog.evaluate(
