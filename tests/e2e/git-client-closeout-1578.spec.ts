@@ -71,6 +71,8 @@ interface GitFixture {
 }
 
 interface RouteLedger {
+  readonly workspaceReads: unknown[];
+  readonly fileContentReads: unknown[];
   readonly stageCalls: unknown[];
   readonly commitPreviews: unknown[];
   readonly commitExecutes: unknown[];
@@ -447,7 +449,11 @@ function mergePreviewBody(): unknown {
   };
 }
 
-async function installReadRoutes(page: Page, fixture: GitFixture): Promise<void> {
+async function installReadRoutes(
+  page: Page,
+  fixture: GitFixture,
+  ledger: RouteLedger,
+): Promise<void> {
   let repositoryAdded = false;
   await page.route("**/api/projects**", (route) => {
     const project = projectBody();
@@ -464,8 +470,14 @@ async function installReadRoutes(page: Page, fixture: GitFixture): Promise<void>
   await page.route("**/api/git/history**", (route) => json(route, historyBody(fixture)));
   await page.route("**/api/git/remotes**", (route) => json(route, remotesBody()));
   await page.route("**/api/git/diff**", (route) => json(route, diffBody(route)));
-  await page.route("**/api/files/content**", (route) => json(route, filesContentBody(route)));
-  await page.route("**/api/workspaces", (route) => json(route, { manifests: [] }));
+  await page.route("**/api/files/content**", (route) => {
+    ledger.fileContentReads.push(true);
+    return json(route, filesContentBody(route));
+  });
+  await page.route("**/api/workspaces", (route) => {
+    ledger.workspaceReads.push(true);
+    return json(route, { manifests: [] });
+  });
 }
 
 async function installLocalWriteRoutes(page: Page, ledger: RouteLedger): Promise<void> {
@@ -532,7 +544,7 @@ async function installRemoteWriteRoutes(page: Page, ledger: RouteLedger): Promis
 }
 
 async function installRoutes(page: Page, fixture: GitFixture, ledger: RouteLedger): Promise<void> {
-  await installReadRoutes(page, fixture);
+  await installReadRoutes(page, fixture, ledger);
   await installLocalWriteRoutes(page, ledger);
   await installRemoteWriteRoutes(page, ledger);
 }
@@ -609,6 +621,8 @@ function writeManifest(ledger: RouteLedger): void {
       "path-free and credential-free browser evidence",
     ],
     assertions: {
+      workspaceReads: ledger.workspaceReads.length,
+      fileContentReads: ledger.fileContentReads.length,
       stageCalls: ledger.stageCalls.length,
       commitPreviews: ledger.commitPreviews.length,
       commitExecutes: ledger.commitExecutes.length,
@@ -630,6 +644,8 @@ function writeManifest(ledger: RouteLedger): void {
 
 function emptyLedger(): RouteLedger {
   return {
+    workspaceReads: [],
+    fileContentReads: [],
     stageCalls: [],
     commitPreviews: [],
     commitExecutes: [],
@@ -831,5 +847,11 @@ test("Issue #1578 - Git client closeout evidence covers integrated workflows", a
   await verifyBranchAndHistory(page, gitWindow, fixture, ledger);
   await verifySyncPull(page, gitWindow, ledger);
   await verifyPrAndMerge(page, gitWindow, fixture, ledger);
+  await expect
+    .poll(() => ledger.workspaceReads.length, { message: "workspace route called" })
+    .toBeGreaterThan(0);
+  await expect
+    .poll(() => ledger.fileContentReads.length, { message: "file content route called" })
+    .toBeGreaterThan(0);
   await captureCloseoutEvidence(page, gitWindow, fixture, ledger);
 });

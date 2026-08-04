@@ -50,6 +50,8 @@
     "path-free and credential-free browser evidence"
   ],
   "assertions": {
+    "workspaceReads": 2,
+    "fileContentReads": 1,
     "stageCalls": 1,
     "commitPreviews": 1,
     "commitExecutes": 1,
