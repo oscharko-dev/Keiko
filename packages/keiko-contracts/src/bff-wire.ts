@@ -816,11 +816,19 @@ export interface SafeCircuitBreakerConfig {
   readonly halfOpenProbes: number;
 }
 
+/** Wire mirror of the gateway's credential-free reranker projection (model-gateway config.ts). */
+export interface SafeRerankerConfig {
+  readonly modelId: string;
+  readonly credentialHeaderName: string;
+  readonly timeoutMs: number;
+}
+
 export interface SafeGatewayConfig {
   readonly providers: readonly SafeProviderConfig[];
   readonly circuitBreaker: SafeCircuitBreakerConfig;
   readonly capabilities?: readonly ModelCapability[];
   readonly grounding?: GroundingLimits;
+  readonly reranker?: SafeRerankerConfig;
 }
 
 // ─── Workflow descriptor wire shapes (BFF /api/workflows) ─────────────────────────
