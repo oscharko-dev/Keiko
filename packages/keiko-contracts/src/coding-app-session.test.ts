@@ -47,6 +47,7 @@ describe("coding app-session channel contract", () => {
     expect(
       validateCodingAppSessionChannelContent({ kind: "note", body: "visible\u202Espoof\u200B" }).ok,
     ).toBe(false);
+    expect(validateCodingAppSessionChannelContent({ kind: "note", body: "" }).ok).toBe(false);
   });
 
   it("accepts typed safe activity and rejects JSON smuggled through the generic body", () => {

@@ -257,7 +257,7 @@ export function emitEvidenceRetentionDiagnostic(
     operation: "evidence.retention",
     source: diagnosticLabel(source, SOURCE_LABEL_SHAPE, "server.diagnostic"),
     errorClass: "EvidenceRetention",
-    message: "Evidence retention deleted expired manifests.",
+    message: "Evidence retention deleted manifests.",
     occurrenceCount,
   });
 }

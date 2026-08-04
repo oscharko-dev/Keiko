@@ -732,6 +732,7 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(answererCalls).toBe(1);
     expect(answer.content).toContain("src/preferences.ts:42");
     expect(answer.citations).toEqual([]);
+    expect(answer.contextPack.citationCount).toBe(0);
     expect(answer.evidenceRunId).toBeUndefined();
     expect(answer.evidenceRunIds).toEqual([]);
     expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(true);

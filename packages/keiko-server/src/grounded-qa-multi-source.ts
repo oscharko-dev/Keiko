@@ -875,7 +875,7 @@ function assembleMultiSourceAnswer(
   const summaries = citationBundles.map(({ source: src, citations: sourceCitations }) =>
     buildGroundedAnswerContextPackSummary(
       src.pack,
-      ids.abstained ? 0 : sourceCitations.length,
+      modelInvoked ? sourceCitations.length : 0,
       src.elapsedMs,
       groundedContextSummaryInput({ contextProfile: ctx.contextProfile }, src.pack),
     ),

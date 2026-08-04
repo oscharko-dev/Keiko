@@ -22,6 +22,19 @@ const response = {
   ],
 };
 
+const RUNTIME_QUESTION_TEXT_SURFACES = [
+  "question",
+  "header",
+  "label",
+  "description",
+  "answer",
+] as const;
+
+const UNSAFE_UNICODE_FORMAT_CHARACTERS = [
+  ["RIGHT-TO-LEFT OVERRIDE", "\u202E"],
+  ["ZERO WIDTH SPACE", "\u200B"],
+] as const;
+
 describe("coding workbench runtime questions", () => {
   it("accepts bounded exact transient projections and internal answers", () => {
     expect(validateCodingWorkbenchRuntimeQuestionsResponse(response).ok).toBe(true);
@@ -51,31 +64,32 @@ describe("coding workbench runtime questions", () => {
     );
   });
 
-  it.each(["question", "header", "label", "description", "answer"])(
-    "rejects unsafe Unicode format characters in %s text",
-    (surface) => {
-      const unsafe = `visible\u202Espoof\u200B`;
-      if (surface === "answer") {
-        expect(parseCodingWorkbenchRuntimeQuestionAnswerRequest({ answers: [[unsafe]] }).ok).toBe(
-          false,
-        );
-        return;
-      }
-      const question = response.questions[0]?.questions[0];
-      if (question === undefined) throw new Error("expected question fixture");
-      const option = question.options[0];
-      if (option === undefined) throw new Error("expected option fixture");
-      const changed =
-        surface === "label" || surface === "description"
-          ? { ...question, options: [{ ...option, [surface]: unsafe }] }
-          : { ...question, [surface]: unsafe };
-      expect(
-        validateCodingWorkbenchRuntimeQuestionsResponse({
-          questions: [{ ...response.questions[0], questions: [changed] }],
-        }).ok,
-      ).toBe(false);
-    },
-  );
+  it.each(
+    UNSAFE_UNICODE_FORMAT_CHARACTERS.flatMap(([characterName, character]) =>
+      RUNTIME_QUESTION_TEXT_SURFACES.map((surface) => [surface, characterName, character] as const),
+    ),
+  )("rejects %s text containing %s", (surface, _characterName, character) => {
+    const unsafe = `visible${character}spoof`;
+    if (surface === "answer") {
+      expect(parseCodingWorkbenchRuntimeQuestionAnswerRequest({ answers: [[unsafe]] }).ok).toBe(
+        false,
+      );
+      return;
+    }
+    const question = response.questions[0]?.questions[0];
+    if (question === undefined) throw new Error("expected question fixture");
+    const option = question.options[0];
+    if (option === undefined) throw new Error("expected option fixture");
+    const changed =
+      surface === "label" || surface === "description"
+        ? { ...question, options: [{ ...option, [surface]: unsafe }] }
+        : { ...question, [surface]: unsafe };
+    expect(
+      validateCodingWorkbenchRuntimeQuestionsResponse({
+        questions: [{ ...response.questions[0], questions: [changed] }],
+      }).ok,
+    ).toBe(false);
+  });
 });
 
 describe("coding workbench runtime questions failure branches", () => {

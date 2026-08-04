@@ -138,10 +138,13 @@ function isNonnegativeInteger(value: unknown): value is number {
 
 function hasExactKeys(record: Record<string, unknown>): boolean {
   const names = Object.getOwnPropertyNames(record);
+  const enumerableNames = Object.keys(record);
   return (
     names.length === EVIDENCE_KEYS.size &&
+    enumerableNames.length === EVIDENCE_KEYS.size &&
     Object.getOwnPropertySymbols(record).length === 0 &&
-    names.every((key) => EVIDENCE_KEYS.has(key))
+    names.every((key) => EVIDENCE_KEYS.has(key)) &&
+    enumerableNames.every((key) => EVIDENCE_KEYS.has(key))
   );
 }
 

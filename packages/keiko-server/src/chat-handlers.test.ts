@@ -11,7 +11,7 @@ import {
   parseClientTurnId,
   parseExpectedGroundingScopeIdentity,
 } from "./chat-handlers.js";
-import { buildUiHandlerDeps } from "./deps.js";
+import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext } from "./routes.js";
 
 const VALID_GROUNDING_SCOPE_IDENTITY = `gsi-v1:${"a".repeat(64)}`;
@@ -96,76 +96,108 @@ function gatewayErrorCode(result: Awaited<ReturnType<typeof handleSendDesktopCha
   return body.error?.code;
 }
 
-describe("desktop chat production gateway reuse", () => {
-  it("opens one shared breaker across separate route requests", async () => {
-    const root = mkdtempSync(join(tmpdir(), "keiko-chat-breaker-"));
-    const projectPath = join(root, "repo");
+interface GatewayBreakerFixture {
+  readonly root: string;
+  readonly projectPath: string;
+  readonly chatId: string;
+  readonly deps: UiHandlerDeps;
+}
+
+function configureBreakerGateway(deps: UiHandlerDeps): void {
+  const runtimeConfig = deps.gatewayConfig;
+  if (runtimeConfig === undefined) throw new Error("expected runtime gateway config");
+  runtimeConfig.set(
+    parseGatewayConfig({
+      providers: [
+        {
+          modelId: "breaker-chat",
+          baseUrl: "https://provider.example.invalid/v1",
+          apiKey: "fake-test-key",
+          timeoutMs: 5_000,
+          maxRetries: 0,
+          retryBaseDelayMs: 1,
+        },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
+    }),
+    true,
+  );
+}
+
+async function createGatewayBreakerFixture(): Promise<GatewayBreakerFixture> {
+  const root = mkdtempSync(join(tmpdir(), "keiko-chat-breaker-"));
+  const projectPath = join(root, "repo");
+  let deps: UiHandlerDeps | undefined;
+  try {
     mkdirSync(projectPath);
-    const deps = buildUiHandlerDeps({
+    deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: join(root, "evidence"),
+      uiDbPath: join(root, "ui.db"),
       env: {},
     });
-    const runtimeConfig = deps.gatewayConfig;
-    if (runtimeConfig === undefined) throw new Error("expected runtime gateway config");
-    runtimeConfig.set(
-      parseGatewayConfig({
-        providers: [
-          {
-            modelId: "breaker-chat",
-            baseUrl: "https://provider.example.invalid/v1",
-            apiKey: "fake-test-key",
-            timeoutMs: 5_000,
-            maxRetries: 0,
-            retryBaseDelayMs: 1,
-          },
-        ],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
-      }),
-      true,
-    );
+    configureBreakerGateway(deps);
     deps.store.createProject(projectPath, "repo");
     const chat = deps.store.createChat(projectPath, "Breaker", "breaker-chat");
-    const fetchSpy = vi.fn(() =>
-      Promise.resolve(
-        new Response(JSON.stringify({ error: { message: "unavailable" } }), {
-          status: 503,
-          headers: { "content-type": "application/json" },
-        }),
-      ),
-    );
-    vi.stubGlobal("fetch", fetchSpy);
-
+    return { root, projectPath, chatId: chat.id, deps };
+  } catch (error) {
     try {
-      for (let index = 0; index < 5; index += 1) {
-        const result = await handleSendDesktopChat(
-          requestContext({
-            chatId: chat.id,
-            projectPath,
-            modelId: "breaker-chat",
-            content: `failure ${String(index)}`,
+      await deps?.dispose?.();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+    throw error;
+  }
+}
+
+async function disposeGatewayBreakerFixture(fixture: GatewayBreakerFixture): Promise<void> {
+  try {
+    await fixture.deps.dispose?.();
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+async function sendBreakerChat(
+  fixture: GatewayBreakerFixture,
+  content: string,
+): Promise<Awaited<ReturnType<typeof handleSendDesktopChat>>> {
+  return handleSendDesktopChat(
+    requestContext({
+      chatId: fixture.chatId,
+      projectPath: fixture.projectPath,
+      modelId: "breaker-chat",
+      content,
+    }),
+    fixture.deps,
+  );
+}
+
+describe("desktop chat production gateway reuse", () => {
+  it("opens one shared breaker across separate route requests", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    try {
+      const fetchSpy = vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ error: { message: "unavailable" } }), {
+            status: 503,
+            headers: { "content-type": "application/json" },
           }),
-          deps,
-        );
+        ),
+      );
+      vi.stubGlobal("fetch", fetchSpy);
+      for (let index = 0; index < 5; index += 1) {
+        const result = await sendBreakerChat(fixture, `failure ${String(index)}`);
         expect(gatewayErrorCode(result)).toBe("GATEWAY_PROVIDER_ERROR");
         expect(fetchSpy).toHaveBeenCalledTimes(index + 1);
       }
 
-      const rejected = await handleSendDesktopChat(
-        requestContext({
-          chatId: chat.id,
-          projectPath,
-          modelId: "breaker-chat",
-          content: "must fail before transport",
-        }),
-        deps,
-      );
+      const rejected = await sendBreakerChat(fixture, "must fail before transport");
       expect(gatewayErrorCode(rejected)).toBe("GATEWAY_CIRCUIT_OPEN");
       expect(fetchSpy).toHaveBeenCalledTimes(5);
     } finally {
       vi.unstubAllGlobals();
-      await deps.dispose?.();
-      rmSync(root, { recursive: true, force: true });
+      await disposeGatewayBreakerFixture(fixture);
     }
   });
 });

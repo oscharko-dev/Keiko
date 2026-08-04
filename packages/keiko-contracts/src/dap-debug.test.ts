@@ -485,6 +485,19 @@ describe("DAP debug leaf contracts", () => {
     expect(
       parseSetBreakpointsRequest({
         ...request,
+        breakpoints: [
+          {
+            ...breakpoint,
+            kind: "conditional",
+            condition: undefined,
+            hitCondition: "3",
+          },
+        ],
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      parseSetBreakpointsRequest({
+        ...request,
         breakpoints: [{ ...breakpoint, kind: "conditional", condition: { expression: "x" } }],
       }),
     ).toMatchObject({ ok: false });
@@ -518,6 +531,48 @@ describe("DAP debug leaf contracts", () => {
         breakpoints: [{ ...breakpoint, kind: "conditional", condition: "x\u0000y" }],
       }),
     ).toMatchObject({ ok: false });
+    expect(
+      parseSetBreakpointsRequest({
+        ...request,
+        breakpoints: [{ ...breakpoint, kind: "conditional", condition: "" }],
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("applies the same condition boundaries to logpoints", () => {
+    const request = {
+      schemaVersion,
+      workspaceId,
+      expectedRevision: 0,
+      fileId,
+    };
+    const logpoint = { ...breakpoint, kind: "logpoint", logMessage: "count={count}" };
+    expect(parseSetBreakpointsRequest({ ...request, breakpoints: [logpoint] })).toMatchObject({
+      ok: true,
+    });
+    expect(
+      parseSetBreakpointsRequest({
+        ...request,
+        breakpoints: [
+          {
+            ...logpoint,
+            condition: "x".repeat(DEFAULT_DEBUG_PAYLOAD_LIMITS.maxConditionBytes),
+          },
+        ],
+      }),
+    ).toMatchObject({ ok: true });
+    for (const condition of [
+      "",
+      "x\u0000y",
+      "x".repeat(DEFAULT_DEBUG_PAYLOAD_LIMITS.maxConditionBytes + 1),
+    ]) {
+      expect(
+        parseSetBreakpointsRequest({
+          ...request,
+          breakpoints: [{ ...logpoint, condition }],
+        }),
+      ).toMatchObject({ ok: false });
+    }
   });
 
   it.each(validRequests)("catches a throwing proxy for %s without throwing", (_name, parser) => {

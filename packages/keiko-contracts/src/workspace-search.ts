@@ -428,7 +428,7 @@ function validateApplyFile(value: unknown, reasons: string[]): void {
     reasons.push("file invalid");
     return;
   }
-  if (typeof value.path !== "string" || !isValidScopePath(value.path, { mustBeRelative: true })) {
+  if (!isNonEmptyTrimmed(value.path) || !isValidScopePath(value.path, { mustBeRelative: true })) {
     reasons.push("file path invalid");
   }
   if (typeof value.baseContentHash !== "string" || !SHA256_HEX.test(value.baseContentHash)) {
@@ -453,7 +453,7 @@ export function validateWorkspaceSearchRequest(value: unknown): ValidationResult
     }
     if (
       value.scopePath !== undefined &&
-      (typeof value.scopePath !== "string" ||
+      (!isNonEmptyTrimmed(value.scopePath) ||
         !isValidScopePath(value.scopePath, { mustBeRelative: true }))
     ) {
       reasons.push("scopePath invalid");
@@ -475,7 +475,7 @@ export function validateWorkspaceSymbolSearchRequest(value: unknown): Validation
   }
   if (
     value.scopePath !== undefined &&
-    (typeof value.scopePath !== "string" ||
+    (!isNonEmptyTrimmed(value.scopePath) ||
       !isValidScopePath(value.scopePath, { mustBeRelative: true }))
   ) {
     reasons.push("scopePath invalid");
@@ -519,6 +519,7 @@ export function validateWorkspaceReplaceApplyRequest(value: unknown): Validation
 export function isWorkspaceSearchResultMatch(value: unknown): value is WorkspaceSearchResultMatch {
   if (!isRecord(value)) return false;
   return (
+    isNonEmptyTrimmed(value.path) &&
     isValidScopePath(value.path, { mustBeRelative: true }) &&
     isValidLineRange(value.lineRange) &&
     typeof value.snippet === "string" &&

@@ -628,8 +628,19 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       try {
         listener(event);
       } catch {
-        // A subscriber throwing must not stop fan-out (matches the command-runner/terminal pattern).
+        this.recordSubscriberFailure(event.runId);
       }
+    });
+  }
+
+  private recordSubscriberFailure(runId: string): void {
+    emitServerDiagnostic(this.diagnostics, {
+      correlationId: this.runs.get(runId)?.correlationId ?? runId,
+      timestamp: new Date(this.now()).toISOString(),
+      operation: "editor.verification.subscriber",
+      source: "editor.verification-runner",
+      errorClass: "VerificationSubscriber",
+      message: "A verification event subscriber failed.",
     });
   }
 }

@@ -446,9 +446,14 @@ describe("editor workspace snippets — rejection and diagnostic paths", () => {
   it("rejects a glob containing repeated globstars before matching", () => {
     expect(
       parseEditorM7WorkspaceSnippetCollection(
-        rawCollection([rawSnippet({ include: [`${"**/".repeat(24)}x.ts`] })]),
+        rawCollection([rawSnippet({ include: ["**/src/**/x.ts"] })]),
       ),
     ).toMatchObject({ ok: false, reasonCode: "UNSAFE_PATH" });
+    expect(
+      parseEditorM7WorkspaceSnippetCollection(
+        rawCollection([rawSnippet({ include: ["src/**/x.ts"] })]),
+      ),
+    ).toMatchObject({ ok: true });
   });
 
   it.each([

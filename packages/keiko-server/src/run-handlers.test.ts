@@ -625,7 +625,7 @@ describe("FIX 1 — UI runs persist a redacted evidence manifest (AC5)", () => {
     await awaitTerminal(body.runId);
     await awaitEvidence(body.runId);
 
-    const firstChatFinishedAt = Date.now() + 1_000;
+    const firstChatFinishedAt = 1_700_000_100_000;
     for (let index = 0; index < 55; index += 1) {
       const finishedAt = firstChatFinishedAt + index;
       persistConnectedContextEvidence(
