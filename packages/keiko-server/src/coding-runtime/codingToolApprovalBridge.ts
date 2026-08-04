@@ -118,7 +118,7 @@ function observePermission(
     return false;
   }
   const key = permissionKey(input.runId, input.requestId);
-  if (!pending.has(key) && pending.size >= MAX_PENDING_RECORDS) return false;
+  if (pending.has(key) || pending.size >= MAX_PENDING_RECORDS) return false;
   pending.set(key, { ...input, expiresAtMs });
   return true;
 }

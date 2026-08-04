@@ -538,12 +538,17 @@ export class CodingRuntimeOrchestrator {
 
   /** Accepts only manager events for the current slot and projects no event content into durable state. */
   ingest(event: CodingWorkbenchRuntimeEvent): Promise<CodingRuntimeOrchestratorResult> {
-    return this.serialValue(() => this.ingestCurrent(event));
+    return this.serial(() => this.ingestCurrent(event));
   }
 
-  private ingestCurrent(event: CodingWorkbenchRuntimeEvent): CodingRuntimeOrchestratorResult {
+  private async ingestCurrent(
+    event: CodingWorkbenchRuntimeEvent,
+  ): Promise<CodingRuntimeOrchestratorResult> {
     const current = this.current();
     if (event.runId !== current?.runId) return this.fail("invalid-intent");
+    if (event.kind === "failure-redacted") {
+      return this.stopAfterIssueFailure(current, "runtime-failed");
+    }
     const paused = this.ingestPausedEvent(current, event);
     return paused ?? this.ingestActiveEvent(current, event);
   }
@@ -569,9 +574,6 @@ export class CodingRuntimeOrchestrator {
     }
     if (event.kind === "task-submitted") return this.ingestTaskSubmitted(current);
     if (event.kind === "runtime-stopped") return this.ingestRuntimeStopped(current);
-    if (event.kind === "failure-redacted") {
-      return this.transition(current, "failed", "runtime-failed");
-    }
     return this.publishOrRecover(current, event.kind, auxiliaryEventFacts(event));
   }
 

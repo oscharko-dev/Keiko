@@ -1190,6 +1190,7 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
       kind: "failure-redacted",
     });
     expect(successfulSnapshot(failed).state).toBe("failed");
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 
   it("projects the manager's body-free process result on terminal status", async () => {

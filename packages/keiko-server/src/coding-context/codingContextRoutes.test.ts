@@ -61,7 +61,7 @@ function depsFor(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
       GITHUB_CONNECTOR_AUTHORIZED: "true",
       JIRA_CONNECTOR_AUTHORIZED: "true",
     },
-    autonomousDeliveryDeploymentCeiling: "supervised-coding",
+    autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
     codingContextGitHubPort: fakeGitHubPort(),
     codingContextJiraPort: fakeJiraPort(),
     ...overrides,
@@ -78,7 +78,7 @@ interface AuthorityOptions {
 }
 
 function registerAuthority(options: AuthorityOptions = {}): Record<string, unknown> {
-  const deploymentCeiling = options.deploymentCeiling ?? "supervised-coding";
+  const deploymentCeiling = options.deploymentCeiling ?? "autonomous-delivery";
   const effectiveMode = options.effectiveMode ?? deploymentCeiling;
   const connectorScopes = options.connectorScopes ?? ["source-control.read", "issue-tracker.read"];
   const envelope: CodingWorkbenchAuthorityEnvelope = {
@@ -231,7 +231,7 @@ describe("coding context pack route", () => {
     const preflight = editorAgentAuthorityRegistry.resolve(
       reference,
       WORKSPACE_ROOT,
-      "supervised-coding",
+      "autonomous-delivery",
       new Date().toISOString(),
     );
     if (!preflight.ok) throw new Error("expected preflight authority");
@@ -289,6 +289,41 @@ describe("coding context pack route", () => {
     });
     expect(readJson).not.toHaveBeenCalled();
   });
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "denies connector reads without an approval workflow in %s mode",
+    async (effectiveMode) => {
+      const github = fakeGitHubPort();
+      const readJson = vi.fn((argv: readonly string[]) => github.readJson(argv));
+      const request = packRequest(
+        {
+          refs: [
+            {
+              source: "github",
+              objectKind: "issue",
+              ownerAndRepo: "oscharko-dev/Keiko",
+              objectId: "1989",
+            },
+          ],
+        },
+        { deploymentCeiling: effectiveMode, effectiveMode },
+      );
+
+      const result = await handleCodingContextPack(
+        ctxFor(request),
+        depsFor({
+          autonomousDeliveryDeploymentCeiling: effectiveMode,
+          codingContextGitHubPort: { readJson },
+        }),
+      );
+
+      expect(result).toMatchObject({
+        status: 403,
+        body: { error: { code: "CODING_CONTEXT_AUTHORITY_DENIED" } },
+      });
+      expect(readJson).not.toHaveBeenCalled();
+    },
+  );
 
   it("denies authority whose registered ceiling no longer matches server policy", async () => {
     const result = await handleCodingContextPack(

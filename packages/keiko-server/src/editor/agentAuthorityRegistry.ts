@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   CODING_WORKBENCH_SCHEMA_VERSION,
+  codingWorkbenchPolicyEffectFor,
   resolveEffectiveCodingWorkbenchMode,
   validateCodingWorkbenchRuntimeAuthorityEnvelope,
   validateCodingWorkbenchRuntimeAuthorityFacts,
@@ -116,6 +117,7 @@ export function editorAgentAuthorizedConnectorScopes(
 ): readonly CodingWorkbenchConnectorScope[] | undefined {
   const actionClasses = new Set(envelope.actionClasses);
   if (
+    codingWorkbenchPolicyEffectFor(envelope.effectiveMode, "internet", "low") !== "allowed" ||
     envelope.networkPolicy.mode === "deny-all" ||
     !actionClasses.has("connector-access") ||
     !actionClasses.has("network-egress")

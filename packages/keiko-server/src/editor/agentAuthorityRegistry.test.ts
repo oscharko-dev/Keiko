@@ -548,6 +548,42 @@ describe("EditorAgentAuthorityRegistry.reserveForConnector", () => {
     expect(editorAgentAuthorizedConnectorScopes(envelope(overrides))).toBeUndefined();
   });
 
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "requires an approval workflow before connector reads in %s mode",
+    (effectiveMode) => {
+      expect(
+        editorAgentAuthorizedConnectorScopes(
+          envelope({
+            requestedMode: effectiveMode,
+            effectiveMode,
+            actionClasses: CODING_WORKBENCH_ACTION_CLASSES,
+            connectorScopes: ["source-control.read"],
+            networkPolicy: {
+              mode: "connector-scoped-egress",
+              allowLoopback: false,
+              connectorScopes: ["source-control.read"],
+            },
+          }),
+        ),
+      ).toBeUndefined();
+    },
+  );
+
+  it("derives the scope intersection when full access allows the connector read", () => {
+    expect(
+      editorAgentAuthorizedConnectorScopes(
+        envelope({
+          connectorScopes: ["source-control.read", "issue-tracker.read"],
+          networkPolicy: {
+            mode: "connector-scoped-egress",
+            allowLoopback: false,
+            connectorScopes: ["source-control.read"],
+          },
+        }),
+      ),
+    ).toEqual(["source-control.read"]);
+  });
+
   it("refuses a local-bridge-bound envelope: one-shot editor authority is not connector-consumable", () => {
     const registry = new EditorAgentAuthorityRegistry();
     const snapshot = {
