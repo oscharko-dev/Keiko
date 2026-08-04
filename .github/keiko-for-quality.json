@@ -122,5 +122,42 @@
       "reason": "package-level tooling ignore and editor files. Three things are deliberately NOT here. The ROOT .gitignore: its entries protect .keiko/ audit evidence and /only-for-internal-use/, and no deterministic gate pins them. .gitattributes: it can mark sources binary and hide them from review. The Prettier controls: they steer a required gate's own verdict. Also LAST rather than a catch-all, so an unmatched path reaches inventory.unclassified_path and fails the run."
     }
   ],
-  "benignWarnings": []
+  "benignWarnings": [],
+  "contractPairs": [
+    {
+      "paths": ["packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts"],
+      "counterparts": ["packages/keiko-ui/src/lib/figma-snapshot-api.ts"],
+      "contract": "Figma Snapshot BFF response interfaces must stay structurally identical to the UI's independently declared fetch types"
+    },
+    {
+      "paths": ["packages/keiko-server/src/files.ts"],
+      "counterparts": ["packages/keiko-contracts/src/bff-wire.ts"],
+      "contract": "Files-browser interfaces re-declared in the route file must stay structurally identical to the published bff-wire contract"
+    },
+    {
+      "paths": ["packages/keiko-server/src/terminal.ts"],
+      "counterparts": ["packages/keiko-contracts/src/bff-wire.ts"],
+      "contract": "Bounded terminal-execution (ADR-0018) interfaces re-declared in the route file must stay structurally identical to the published bff-wire contract"
+    },
+    {
+      "paths": ["packages/keiko-model-gateway/src/config.ts"],
+      "counterparts": ["packages/keiko-contracts/src/bff-wire.ts"],
+      "contract": "The credential-free SafeGatewayConfig/SafeProviderConfig projection must stay structurally identical to the published bff-wire contract the UI imports"
+    },
+    {
+      "paths": ["packages/keiko-server/src/gitRoutes.ts"],
+      "counterparts": ["packages/keiko-ui/src/lib/api.ts"],
+      "contract": "GitBranchListEntry/GitBranchListResponse emitted by the git routes must stay structurally identical to the UI's independently declared fetch types"
+    },
+    {
+      "paths": ["packages/keiko-server/src/task-workspace/types.ts"],
+      "counterparts": ["packages/keiko-ui/src/lib/task-workspace-api.ts"],
+      "contract": "ActiveWorkspaceView must stay structurally identical to the UI's independently declared copy"
+    },
+    {
+      "paths": ["packages/keiko-contracts/src/evidence.ts"],
+      "counterparts": ["packages/keiko-ui/src/lib/sse-types.ts"],
+      "contract": "Every EvidenceBrowserEventType string literal must appear in the UI's ALL_SSE_EVENT_TYPES dispatch table"
+    }
+  ]
 }
