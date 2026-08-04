@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
+import { Buffer } from "node:buffer";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -22,6 +23,8 @@ import { expectViewportModal } from "./support/modal.js";
 const REPO_ROOT = resolve(process.cwd());
 const EVIDENCE_DIR = resolve(REPO_ROOT, "docs", "git-delivery", "evidence", "1578");
 const EVIDENCE_PROJECT_PATH = "keiko-git-client-closeout-1578";
+const FIXTURE_TIMESTAMP = Date.parse("2026-07-01T00:00:00.000Z");
+const FILE_CONTENT = "export const version = 2;\n";
 const ARTIFACT_NAMES = [
   "manifest.json",
   "git-client-closeout-desktop.png",
@@ -147,8 +150,8 @@ function projectBody(): Record<string, unknown> {
     path: EVIDENCE_PROJECT_PATH,
     name: "keiko-git-client-closeout-1578",
     favorite: false,
-    createdAt: Date.now(),
-    lastOpenedAt: Date.now(),
+    createdAt: FIXTURE_TIMESTAMP,
+    lastOpenedAt: FIXTURE_TIMESTAMP,
     available: true,
     workspaceAvailable: true,
   };
@@ -333,20 +336,21 @@ function filesContentBody(route: Route): unknown {
   const url = new URL(route.request().url());
   const root = url.searchParams.get("root") ?? EVIDENCE_PROJECT_PATH;
   const path = url.searchParams.get("path") ?? "src/app.ts";
+  const sizeBytes = Buffer.byteLength(FILE_CONTENT, "utf8");
   return {
     root,
     path,
     name: path.split("/").at(-1) ?? path,
-    sizeBytes: 24,
+    sizeBytes,
     modifiedAt: 1,
     extension: "ts",
     mime: "text/plain",
     symlink: false,
-    content: "export const version = 2;\n",
+    content: FILE_CONTENT,
     maxBytes: 1_000_000,
     session: {
       schemaVersion: "1",
-      version: { sizeBytes: 24, modifiedAt: 1, contentHash: "a".repeat(64) },
+      version: { sizeBytes, modifiedAt: 1, contentHash: "a".repeat(64) },
     },
   };
 }

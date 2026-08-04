@@ -1323,10 +1323,13 @@ describe("AppShell grounding connections", () => {
     await renderMounted();
     const keyboardProps = mocks.useKeyboardShortcuts.mock.calls[0]?.[0] as
       { readonly dispatch?: (commandId: string) => void } | undefined;
+    const dispatch = keyboardProps?.dispatch;
+    expect(dispatch).toBeTypeOf("function");
+    if (dispatch === undefined) throw new Error("keyboard shortcut dispatch is unavailable");
     document.documentElement.dataset.keikoModalOpen = "true";
 
     await act(async () => {
-      keyboardProps?.dispatch?.("quick-access.files");
+      dispatch("quick-access.files");
     });
 
     expect(screen.queryByTestId("quick-access-palette")).toBeNull();

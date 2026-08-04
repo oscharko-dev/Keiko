@@ -314,7 +314,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       expect(await screen.findByRole("combobox", { name: "Repository" })).toBeInTheDocument();
     });
 
-    it("Branch combobox has accessible name 'Branch'", async () => {
+    it("Branch menu trigger has accessible name 'Branch'", async () => {
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
       expect(await screen.findByRole("button", { name: "Branch: main" })).toBeInTheDocument();
     });

@@ -138,6 +138,7 @@ function makeSandbox(
   seededCache: Record<string, unknown> = {},
   cachePutFailure?: Error,
   cacheOpenFailure?: Error,
+  includeReportError = true,
 ): {
   context: vm.Context;
   sandbox: SwSandbox;
@@ -179,9 +180,13 @@ function makeSandbox(
       handlers.set(event, handler);
     },
     location: { origin: "http://localhost:3000" },
-    reportError: (error: Error): void => {
-      reportedErrors.push(error);
-    },
+    ...(includeReportError
+      ? {
+          reportError: (error: Error): void => {
+            reportedErrors.push(error);
+          },
+        }
+      : {}),
   };
 
   const fetchShim = async (req: { url: string } | string): Promise<Response> => {
@@ -390,6 +395,24 @@ describe("sw.js cache policy — sandboxed fetch-handler evaluation", () => {
       expect(sandbox.reportedErrors.map((error) => error.message)).toStrictEqual([
         "Service worker cache write failed.",
       ]);
+    },
+  );
+
+  it.each(["put", "open"] as const)(
+    "keeps the response successful when cache %s fails and reportError is unavailable",
+    async (failure) => {
+      const error = new Error("StorageFailure");
+      const { context, sandbox } =
+        failure === "put"
+          ? makeSandbox({}, error, undefined, false)
+          : makeSandbox({}, undefined, error, false);
+      vm.runInContext(SW_SOURCE, context);
+
+      const fetchHandler = sandbox.handlers.get("fetch");
+      fetchHandler?.(makeEvent("fetch", "http://localhost:3000/", sandbox));
+
+      await expect(sandbox.respondWithCalls[0]).resolves.toMatchObject({ ok: true, status: 200 });
+      expect(sandbox.reportedErrors).toHaveLength(0);
     },
   );
 
