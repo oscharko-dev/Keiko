@@ -397,8 +397,12 @@ export async function resolveRoot(
     : resolveRegisteredRoot(project, redactor);
 }
 
-export function normalizeRelativePath(pathInput: string | null): string {
-  const raw = typeof pathInput === "string" ? pathInput : "";
+export function normalizeRelativePath(pathInput: unknown): string {
+  if (pathInput === null) return "";
+  if (typeof pathInput !== "string") {
+    throw new FilesError(400, "BAD_PATH", "The path must be a string or null.");
+  }
+  const raw = pathInput;
   if (raw.includes("\0") || isAbsolute(raw)) {
     throw new FilesError(400, "BAD_PATH", "The path must be relative to the selected root.");
   }

@@ -32,7 +32,7 @@ import {
   searchFiles,
   writeFilesContent,
 } from "./index.js";
-import { resolveRoot } from "./files.js";
+import { normalizeRelativePath, resolveRoot } from "./files.js";
 import type { RouteContext, UiHandlerDeps } from "./index.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { createEditorLocalHistoryStore } from "./editor/localHistory/localHistoryStore.js";
@@ -403,6 +403,12 @@ describe("desktop files browser", () => {
       status: 400,
       code: "PATH_ESCAPE",
     });
+  });
+
+  it("rejects a non-string relative path at the runtime boundary", () => {
+    expect(() => Reflect.apply(normalizeRelativePath, undefined, [42])).toThrow(
+      "The path must be a string or null.",
+    );
   });
 
   it("rejects an absolute file identifier on the content and tree endpoints (#1374 AC1)", async () => {
