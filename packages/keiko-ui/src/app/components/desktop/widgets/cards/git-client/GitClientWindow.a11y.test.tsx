@@ -22,6 +22,7 @@ import type {
 } from "@/lib/types";
 import type { GitClientSeam } from "./git-client-seam";
 import { SIDEBAR_STYLE, TOOLBAR_STYLE } from "./git-client-styles";
+import { AddRepositoryDialog } from "./AddRepositoryDialog";
 import { GitClientWindow } from "./GitClientWindow";
 
 // ─── ResizeObserver stub (no global shim in vitest.setup.ts) ──────────────────
@@ -706,6 +707,26 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
   });
 
   describe("add-repository dialog", () => {
+    it("localizes every dialog control in German", async () => {
+      await loadLocaleMessages("de");
+      window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+      const { container } = render(
+        <I18nProvider>
+          <AddRepositoryDialog client={makeClient()} onAdded={vi.fn()} onClose={vi.fn()} />
+        </I18nProvider>,
+      );
+
+      const dialog = screen.getByRole("dialog", { name: "Repository hinzufügen" });
+      expect(within(dialog).getAllByRole("button", { name: "Repository klonen" })).toHaveLength(2);
+      expect(
+        within(dialog).getByRole("button", { name: "Lokales Repository öffnen" }),
+      ).toBeEnabled();
+      expect(within(dialog).getByRole("textbox", { name: "Repository-URL" })).toBeEnabled();
+      expect(within(dialog).getByRole("textbox", { name: "In Ordner klonen" })).toBeEnabled();
+      expect(within(dialog).getByRole("button", { name: "Abbrechen" })).toBeEnabled();
+      expect(await axe(container)).toHaveNoViolations();
+    });
+
     it("dialog has role=dialog and accessible name 'Add repository'", async () => {
       const user = userEvent.setup();
       render(<GitClientWindow client={makeClient()} />);

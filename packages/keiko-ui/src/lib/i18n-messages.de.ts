@@ -2328,6 +2328,17 @@ export const DE_MESSAGES = {
     "Die Repository-Verbindung ist fehlgeschlagen: {detail}",
   "gitClientWindow.repository.workspaceUnavailable":
     "Dieses Repository ist derzeit mit keinem Workspace verbunden. Verbinden Sie es erneut, um fortzufahren.",
+  "gitClientWindow.addRepository.title": "Repository hinzufügen",
+  "gitClientWindow.addRepository.close": "Schließen",
+  "gitClientWindow.addRepository.mode": "Hinzufügemodus",
+  "gitClientWindow.addRepository.clone": "Repository klonen",
+  "gitClientWindow.addRepository.open": "Repository öffnen",
+  "gitClientWindow.addRepository.openLocal": "Lokales Repository öffnen",
+  "gitClientWindow.addRepository.repositoryUrl": "Repository-URL",
+  "gitClientWindow.addRepository.cloneDestination": "In Ordner klonen",
+  "gitClientWindow.addRepository.localPath": "Lokaler Repository-Pfad",
+  "gitClientWindow.addRepository.cancel": "Abbrechen",
+  "gitClientWindow.addRepository.adding": "Wird hinzugefügt…",
   // Zugängliche Namen der benannten <section>-Landmarks aus Welle #2721. Sie standen als
   // fest verdrahtetes Englisch auf den role="region"-Elementen, die diese Sections ersetzen;
   // ein Screenreader liest sie vor, also gehören sie wie jeder andere Nutzertext in den Katalog.

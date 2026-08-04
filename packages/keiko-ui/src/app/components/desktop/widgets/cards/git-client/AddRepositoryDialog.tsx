@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../../Icons";
 import { useDialogTabTrap } from "../../../hooks/useDialogTabTrap";
@@ -75,14 +76,14 @@ interface AddRepositoryDialogProps {
   readonly initialMode?: AddMode | undefined;
 }
 
-function submitButtonLabel(busy: boolean, mode: AddMode): string {
+function submitButtonLabel(busy: boolean, mode: AddMode, t: I18nTranslate): string {
   let label: string;
   if (busy) {
-    label = "Adding…";
+    label = t("gitClientWindow.addRepository.adding");
   } else if (mode === "clone") {
-    label = "Clone repository";
+    label = t("gitClientWindow.addRepository.clone");
   } else {
-    label = "Open repository";
+    label = t("gitClientWindow.addRepository.open");
   }
   return label;
 }
@@ -93,6 +94,7 @@ export function AddRepositoryDialog({
   onClose,
   initialMode = "clone",
 }: AddRepositoryDialogProps): ReactNode {
+  const t = useTranslate();
   const [mode, setMode] = useState<AddMode>(initialMode);
   const [repositoryUrl, setRepositoryUrl] = useState("");
   const [destinationPath, setDestinationPath] = useState("");
@@ -168,7 +170,7 @@ export function AddRepositoryDialog({
         open
         ref={dialogRef}
         aria-modal="true"
-        aria-label="Add repository"
+        aria-label={t("gitClientWindow.addRepository.title")}
         tabIndex={-1}
         style={DIALOG_STYLE}
         onPointerDown={(event) => event.stopPropagation()}
@@ -176,15 +178,15 @@ export function AddRepositoryDialog({
       >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-4)" }}>
           <h2 style={{ margin: 0, font: "600 17px var(--font-ui)", color: "var(--fg)" }}>
-            Add repository
+            {t("gitClientWindow.addRepository.title")}
           </h2>
           <span style={{ flex: 1 }} />
           <button
             type="button"
             style={{ ...SECONDARY_BTN, padding: "0 var(--space-3)" }}
             onClick={onClose}
-            aria-label="Close"
-            title="Close"
+            aria-label={t("gitClientWindow.addRepository.close")}
+            title={t("gitClientWindow.addRepository.close")}
           >
             <CloseIcon size={14} />
           </button>
@@ -192,7 +194,7 @@ export function AddRepositoryDialog({
 
         <fieldset
           style={{ display: "flex", gap: "var(--space-3)", margin: 0, padding: 0, border: 0 }}
-          aria-label="Add mode"
+          aria-label={t("gitClientWindow.addRepository.mode")}
         >
           <button
             type="button"
@@ -200,7 +202,7 @@ export function AddRepositoryDialog({
             style={{ ...MODE_TAB_STYLE, ...(mode === "clone" ? MODE_TAB_ACTIVE_STYLE : {}) }}
             onClick={() => setMode("clone")}
           >
-            Clone repository
+            {t("gitClientWindow.addRepository.clone")}
           </button>
           <button
             type="button"
@@ -208,14 +210,14 @@ export function AddRepositoryDialog({
             style={{ ...MODE_TAB_STYLE, ...(mode === "open" ? MODE_TAB_ACTIVE_STYLE : {}) }}
             onClick={() => setMode("open")}
           >
-            Open local repository
+            {t("gitClientWindow.addRepository.openLocal")}
           </button>
         </fieldset>
 
         {mode === "clone" ? (
           <>
             <label style={FIELD_LABEL_STYLE}>
-              Repository URL
+              {t("gitClientWindow.addRepository.repositoryUrl")}
               {/* No text-node space intended: FIELD_LABEL_STYLE stacks label and input via a
                   CSS column layout, not inline text flow. */}
               <input
@@ -223,26 +225,26 @@ export function AddRepositoryDialog({
                 style={INPUT_STYLE}
                 value={repositoryUrl}
                 onChange={(event) => setRepositoryUrl(event.target.value)}
-                aria-label="Repository URL"
+                aria-label={t("gitClientWindow.addRepository.repositoryUrl")}
                 placeholder="https://github.com/org/repo.git"
               />
             </label>
             <label style={FIELD_LABEL_STYLE}>
-              Clone to folder
+              {t("gitClientWindow.addRepository.cloneDestination")}
               {/* No text-node space intended: FIELD_LABEL_STYLE stacks label and input via a
                   CSS column layout, not inline text flow. */}
               <input
                 style={INPUT_STYLE}
                 value={destinationPath}
                 onChange={(event) => setDestinationPath(event.target.value)}
-                aria-label="Clone to folder"
+                aria-label={t("gitClientWindow.addRepository.cloneDestination")}
                 placeholder="/Users/me/Work/repo"
               />
             </label>
           </>
         ) : (
           <label style={FIELD_LABEL_STYLE}>
-            Local repository path
+            {t("gitClientWindow.addRepository.localPath")}
             {/* No text-node space intended: FIELD_LABEL_STYLE stacks label and input via a
                 CSS column layout, not inline text flow. */}
             <input
@@ -250,7 +252,7 @@ export function AddRepositoryDialog({
               style={INPUT_STYLE}
               value={localPath}
               onChange={(event) => setLocalPath(event.target.value)}
-              aria-label="Local repository path"
+              aria-label={t("gitClientWindow.addRepository.localPath")}
               placeholder="/Users/me/Work/existing-repo"
             />
           </label>
@@ -264,7 +266,7 @@ export function AddRepositoryDialog({
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--space-4)" }}>
           <button type="button" style={SECONDARY_BTN} onClick={onClose}>
-            Cancel
+            {t("gitClientWindow.addRepository.cancel")}
           </button>
           <button
             type="button"
@@ -272,7 +274,7 @@ export function AddRepositoryDialog({
             disabled={busy || !canSubmit}
             onClick={submit}
           >
-            {submitButtonLabel(busy, mode)}
+            {submitButtonLabel(busy, mode, t)}
           </button>
         </div>
       </dialog>

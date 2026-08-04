@@ -156,14 +156,6 @@
       "Show project tree",
       "Unsaved editor changes"
     ],
-    "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/AddRepositoryDialog.tsx": [
-      "Add mode",
-      "Add repository",
-      "Clone to folder",
-      "Close",
-      "Local repository path",
-      "Repository URL"
-    ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/BranchSelector.tsx": [
       "Branches",
       "New branch",
