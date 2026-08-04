@@ -100,7 +100,9 @@ export function isCodeTaskPublicDomain(value: unknown): value is string {
   if (!isCanonicalUrlHostname(value)) return false;
   if (IP_LITERAL_PATTERN.test(value)) return false;
   const finalLabel = value.split(".").at(-1);
-  if (finalLabel === undefined || !/^[a-z]+$/u.test(finalLabel)) return false;
+  // A purely numeric final label can be a legacy IPv4 spelling. Requiring at least one letter
+  // rejects that resolver ambiguity without excluding valid Punycode or alphanumeric DNS labels.
+  if (finalLabel === undefined || !/[a-z]/u.test(finalLabel)) return false;
   return !isReservedDomainName(value);
 }
 

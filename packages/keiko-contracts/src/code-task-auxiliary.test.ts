@@ -73,10 +73,12 @@ describe("auxiliary branded-id and domain predicates", () => {
       "api.test",
       "api.invalid",
       "api.example",
-      "api.example.c0m",
+      "api.example.123",
     ]) {
       expect(isCodeTaskPublicDomain(host)).toBe(false);
     }
+    expect(isCodeTaskPublicDomain("docs.xn--p1ai")).toBe(true);
+    expect(isCodeTaskPublicDomain("service.c0m")).toBe(true);
   });
 
   it("rejects non-canonical IPv4 shorthand and octal forms", () => {
