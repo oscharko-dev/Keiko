@@ -432,6 +432,51 @@ describe("chat compaction evidence wiring (ADR-0057 D3)", () => {
     }
   });
 
+  it("reports a redacted occurrence count when retention deletes evidence", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const evidenceStore = createInMemoryEvidenceStore();
+    for (let index = 0; index < 50; index += 1) {
+      const runId = `existing-chat-${String(index).padStart(2, "0")}`;
+      evidenceStore.put(
+        runId,
+        JSON.stringify({
+          run: { runId, taskType: "connected-context", finishedAt: index + 1 },
+        }),
+      );
+    }
+    const base = deps(bufferedModel("answer"), evidenceStore, true);
+
+    persistChatCompactionEvidence(
+      { ...base, diagnostics: { record: (record) => records.push(record) } },
+      {
+        compaction: {
+          schemaVersion: "1",
+          laneId: "history-summary",
+          reason: "budget",
+          itemsBefore: 6,
+          itemsAfter: 4,
+          tokensBefore: 520,
+          tokensAfter: 400,
+        },
+        chatId: "retention-diagnostic-chat",
+        modelId: CHAT_MODEL,
+        messageCount: 4,
+        startedAt: 1_700_000_000_000,
+        finishedAt: 1_700_000_000_100,
+      },
+    );
+
+    expect(records).toMatchObject([
+      {
+        operation: "evidence.retention",
+        source: "chat-compaction-evidence",
+        errorClass: "EvidenceRetention",
+        occurrenceCount: 1,
+      },
+    ]);
+    expect(JSON.stringify(records)).not.toContain("retention-diagnostic-chat");
+  });
+
   it("later turns resurface persisted pinned facts from prior compaction evidence", async () => {
     const chatId = seedChat();
     seedStructuredOversizedHistory(chatId);

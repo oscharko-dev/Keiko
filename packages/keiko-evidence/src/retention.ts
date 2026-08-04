@@ -151,12 +151,14 @@ function computeDeleteSet(
   return doomed;
 }
 
-export function applyRetention(store: EvidenceStore, policy: RetentionPolicy): void {
+export function applyRetention(store: EvidenceStore, policy: RetentionPolicy): number {
   if (policy.disabled === true) {
-    return;
+    return 0;
   }
   const sorted = collectCandidates(store);
-  for (const runId of computeDeleteSet(sorted, policy)) {
+  const deleteSet = computeDeleteSet(sorted, policy);
+  for (const runId of deleteSet) {
     store.delete(runId);
   }
+  return deleteSet.size;
 }

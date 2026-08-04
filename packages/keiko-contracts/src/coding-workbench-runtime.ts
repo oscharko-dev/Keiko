@@ -282,7 +282,7 @@ export function validateCodingWorkbenchRuntimeAuthorityEnvelope(
   validateBinding(value.binding, errors);
   validateDigest(value.intentDigest, "intentDigest", errors);
   validateDigest(value.nonceDigest, "nonceDigest", errors);
-  validateIso(value.issuedAt, "issuedAt", errors);
+  validateStrictIso(value.issuedAt, "issuedAt", errors);
   if (authority.ok && authority.value.workspace.rootDigest !== bindingRootDigest(value.binding)) {
     errors.push("binding workspace root digest must match authority workspace");
   }
@@ -472,12 +472,6 @@ function bindingRootDigest(value: unknown): unknown {
 function validateDigest(value: unknown, path: string, errors: string[]): void {
   if (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)) {
     errors.push(`${path} must be a 64-character lowercase hex digest`);
-  }
-}
-
-function validateIso(value: unknown, path: string, errors: string[]): void {
-  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
-    errors.push(`${path} must be an ISO instant`);
   }
 }
 

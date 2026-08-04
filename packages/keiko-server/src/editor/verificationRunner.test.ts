@@ -318,6 +318,40 @@ describe("VerificationRunnerManager — cancellation (AC5)", () => {
 });
 
 describe("VerificationRunnerManager — async failure observability", () => {
+  it("records a content-free subscriber failure and continues lifecycle fan-out", async () => {
+    const secret = "subscriber-secret-payload";
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const manager = makeManager({
+      execute: fakePort(report(["targeted-test"])).port,
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+      now: () => 10,
+    });
+    manager.subscribe((event) => {
+      if (event.kind === "run-started") throw new Error(`${secret} at ${workspaceRoot}`);
+    });
+    const { events, done } = collect(manager);
+    manager.execute(
+      input({
+        kinds: ["targeted-test"],
+        targetPath: "src/a.test.ts",
+        correlationId: "subscriber-correlation-1",
+      }),
+    );
+    await done;
+
+    expect(events.at(-1)?.kind).toBe("run-completed");
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        correlationId: "subscriber-correlation-1",
+        operation: "editor.verification.subscriber",
+        errorClass: "VerificationSubscriber",
+        message: "A verification event subscriber failed.",
+      }),
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toContain(secret);
+    expect(JSON.stringify(diagnostics)).not.toContain(workspaceRoot);
+  });
+
   it("persists and emits only static failure data while recording the route correlation id", async () => {
     const secret = "secret-token-in-error";
     const diagnostics: ServerDiagnosticRecord[] = [];

@@ -9,6 +9,7 @@ import {
   CODING_WORKBENCH_RUNTIME_FAILURE_CODES,
   CODING_WORKBENCH_RUNTIME_STATE_NAMES,
 } from "./coding-workbench-runtime.js";
+import { stripUnsafeFormatChars } from "./text-safety.js";
 
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const STRICT_UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
@@ -48,6 +49,20 @@ export function validateSafeId(
   if (typeof value !== "string" || value.length > maxChars || !SAFE_IDENTIFIER.test(value)) {
     errors.push(`${path} must be a bounded safe identifier`);
   }
+}
+
+export function validateUntrustedDisplayText(
+  value: unknown,
+  maxChars: number,
+  options: { readonly minChars?: number | undefined } = {},
+): value is string {
+  const minChars = options.minChars ?? 1;
+  return (
+    typeof value === "string" &&
+    value.length >= minChars &&
+    value.length <= maxChars &&
+    stripUnsafeFormatChars(value) === value
+  );
 }
 
 export function validateStrictUtcInstant(value: unknown, path: string, errors: string[]): void {

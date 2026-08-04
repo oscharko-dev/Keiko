@@ -92,6 +92,7 @@ export function appendTerminalEvidence(
   entry: TerminalEvidenceEntry,
   redact: (input: string) => string,
   retention: RetentionPolicy = DEFAULT_RETENTION,
+  onRetentionDeleted?: (deletedCount: number) => void,
 ): string {
-  return persistEvidenceManifest(entry, store, redact, retention).location;
+  return persistEvidenceManifest(entry, store, redact, retention, onRetentionDeleted).location;
 }

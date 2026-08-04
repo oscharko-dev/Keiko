@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isWorkspaceSearchResultMatch,
   validateWorkspaceReplaceApplyRequest,
   validateWorkspaceReplacePreviewRequest,
   validateWorkspaceSearchRequest,
@@ -136,6 +137,32 @@ describe("workspace search wire validators", () => {
         "file path",
       );
     }
+  });
+
+  it("rejects whitespace-only paths on every relative-path input and result projection", () => {
+    expectInvalidWithReason(
+      validateWorkspaceSearchRequest(searchRequest({ scopePath: "   " })),
+      "scopePath",
+    );
+    expectInvalidWithReason(
+      validateWorkspaceSymbolSearchRequest(symbolRequest({ scopePath: "\t" })),
+      "scopePath",
+    );
+    expectInvalidWithReason(
+      validateWorkspaceReplaceApplyRequest({
+        ...applyRequest(),
+        files: [{ ...applyRequest().files[0], path: "\n" }],
+      }),
+      "file path",
+    );
+    expect(
+      isWorkspaceSearchResultMatch({
+        path: "   ",
+        lineRange: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 2 },
+        snippet: "match",
+        score: 1,
+      }),
+    ).toBe(false);
   });
 
   it("rejects empty and whitespace-only queries", () => {

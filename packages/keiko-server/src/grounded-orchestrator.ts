@@ -177,6 +177,10 @@ export interface OrchestratorOutput {
   // pack carried no usable evidence. The model was NOT called; assistantContent is the deterministic
   // no-evidence answer. Callers must suppress citations and skip persisting grounded evidence.
   readonly noEvidence?: boolean;
+  // Distinguishes a deterministic no-evidence abstention from an answer generated over explicit
+  // answer-only context. Citation and entailment checks follow model invocation; evidence
+  // persistence follows source availability.
+  readonly modelInvoked?: boolean;
 }
 
 // Epic #532 — retrieval-only output. The multi-source (1+N) path runs retrieval per connected
@@ -3210,12 +3214,8 @@ async function answerWithAvailableContext(
   );
   const elapsedMs = Math.max(0, nowMs() - start);
   const exhausted = exhaustedAnswerBudgetDimensions(answer, pack, elapsedMs);
-  const unsupportedMarker = sourceEvidenceAvailable
-    ? citationCoverageMarkerFor(answer.content, pack, nowMs())
-    : undefined;
-  const entailmentMarkers = sourceEvidenceAvailable
-    ? await entailmentMarkersFor(deps, answer.content, pack, nowMs())
-    : [];
+  const unsupportedMarker = citationCoverageMarkerFor(answer.content, pack, nowMs());
+  const entailmentMarkers = await entailmentMarkersFor(deps, answer.content, pack, nowMs());
   const groundedPack: ConnectedContextPack = {
     ...pack,
     usage: {
@@ -3236,6 +3236,7 @@ async function answerWithAvailableContext(
     pack: groundedPack,
     assistantContent: answer.content,
     elapsedMs,
+    modelInvoked: true,
     ...(plan === undefined ? {} : { plan }),
     ...(!sourceEvidenceAvailable ? { noEvidence: true } : {}),
   };

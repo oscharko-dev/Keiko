@@ -37,13 +37,17 @@ import {
   type CommandTaskKind,
   type CommandTaskRunResult,
 } from "@oscharko-dev/keiko-contracts";
-import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { DEFAULT_RETENTION, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { CommandRunnerError } from "./command-runner-errors.js";
 import {
   appendCommandRunEvidence,
   buildCommandRunEvidenceEntry,
 } from "./command-runner-evidence.js";
 import type { Project, UiStore } from "./store/index.js";
+import {
+  evidenceRetentionDiagnosticObserver,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
 
 const MAX_CONCURRENT_RUNS = 8;
 const MIN_TIMEOUT_MS = 1_000;
@@ -87,6 +91,7 @@ export interface CommandRunnerManagerOptions {
   readonly policy?: SandboxPolicy | undefined;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly redactor?: ((input: string) => string) | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly runDeps?: Partial<RunCommandDeps> | undefined;
   readonly isWorkspaceTrustedForPackageScripts?: CommandRunnerWorkspaceTrustDecider | undefined;
   readonly now?: (() => number) | undefined;
@@ -274,6 +279,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
   private readonly policy: SandboxPolicy;
   private readonly processEnv: NodeJS.ProcessEnv;
   private readonly redactor: (input: string) => string;
+  private readonly diagnostics: ServerDiagnosticSink | undefined;
   private readonly runDeps: Partial<RunCommandDeps>;
   private readonly isWorkspaceTrustedForPackageScripts: CommandRunnerWorkspaceTrustDecider;
   private readonly now: () => number;
@@ -286,6 +292,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     this.policy = opts.policy ?? COMMAND_RUNNER_SANDBOX_POLICY;
     this.processEnv = opts.processEnv ?? process.env;
     this.redactor = opts.redactor ?? ((input: string): string => input);
+    this.diagnostics = opts.diagnostics;
     this.runDeps = opts.runDeps ?? {};
     this.isWorkspaceTrustedForPackageScripts =
       opts.isWorkspaceTrustedForPackageScripts ?? ((): boolean => false);
@@ -513,7 +520,13 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
         stderrBytes: Buffer.byteLength(outcome.stderr, "utf8"),
         startedAt,
       });
-      appendCommandRunEvidence(this.evidenceStore, evidence, this.redactor);
+      appendCommandRunEvidence(
+        this.evidenceStore,
+        evidence,
+        this.redactor,
+        DEFAULT_RETENTION,
+        evidenceRetentionDiagnosticObserver(this.diagnostics, "command-runner"),
+      );
     } catch {
       throw new CommandRunnerError(
         "EVIDENCE_WRITE_FAILED",
@@ -523,13 +536,13 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
   }
 
   private emit(event: CommandRunnerEvent): void {
-    for (const listener of [...this.subscribers]) {
+    [...this.subscribers].forEach((listener) => {
       try {
         listener(event);
       } catch {
         // A subscriber throwing must not stop fan-out (matches the terminal/browser tool pattern).
       }
-    }
+    });
   }
 }
 

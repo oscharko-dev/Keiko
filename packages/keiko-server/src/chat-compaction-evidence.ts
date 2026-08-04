@@ -13,7 +13,11 @@ import type { ContextCompactionRecord } from "@oscharko-dev/keiko-contracts";
 import { randomUUID } from "node:crypto";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentAuditRedactString, currentRedactionSecrets } from "./deps.js";
-import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import {
+  evidenceRetentionDiagnosticObserver,
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+} from "./diagnostics-log.js";
 
 export interface ChatCompactionEvidenceInput {
   // The optional record returned by deriveCompactionOutcome; undefined on the fast path.
@@ -61,6 +65,10 @@ export function persistChatCompactionEvidence(
         env: deps.env,
         additionalSecrets: currentRedactionSecrets(deps),
         costClassResolver: resolveCostClass,
+        onRetentionDeleted: evidenceRetentionDiagnosticObserver(
+          deps.diagnostics,
+          "chat-compaction-evidence",
+        ),
       },
     );
   } catch (error) {

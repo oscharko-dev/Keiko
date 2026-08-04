@@ -32,6 +32,7 @@ import { isVoiceDictationCapable, isVoiceRealtimeCapable } from "./read-handlers
 import { evaluateSpokenActionGovernance } from "./voice-action-governance.js";
 import { resolveRegisteredOrManagedWorkspaceRoot } from "./task-workspace/authorization.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
+import { evidenceRetentionDiagnosticObserver } from "./diagnostics-log.js";
 import {
   agentRunSessionMatches,
   authorizeAgentRunMutation,
@@ -236,6 +237,7 @@ function buildEngineContext(
       store: deps.evidenceStore,
       env: deps.env,
       additionalSecrets: currentRedactionSecrets(deps),
+      onRetentionDeleted: evidenceRetentionDiagnosticObserver(deps.diagnostics, "run-engine"),
     },
     ...(deps.evidenceDir === undefined
       ? {}

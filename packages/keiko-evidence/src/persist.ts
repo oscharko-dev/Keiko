@@ -29,11 +29,13 @@ export interface PersistResult {
   readonly manifest: EvidenceManifest;
   readonly location: string;
   readonly report: EvidenceReport;
+  readonly retentionDeletedCount: number;
 }
 
 export interface PersistedEvidenceManifest {
   readonly manifest: EvidenceManifest;
   readonly location: string;
+  readonly retentionDeletedCount: number;
 }
 
 function defaultEvidenceDir(input: EvidenceBuildInput, env: EvidenceDeps["env"]): string {
@@ -48,11 +50,13 @@ export function persistEvidenceManifest(
   store: NonNullable<EvidenceDeps["store"]>,
   redact: (input: string) => string,
   retention: RetentionPolicy = DEFAULT_RETENTION,
+  onRetentionDeleted?: (deletedCount: number) => void,
 ): PersistedEvidenceManifest {
   const safeManifest = deepRedactStrings(manifest, redact) as EvidenceManifest;
   const location = store.put(safeManifest.run.runId, JSON.stringify(safeManifest, null, 2));
-  applyRetention(store, retention);
-  return { manifest: safeManifest, location };
+  const retentionDeletedCount = applyRetention(store, retention);
+  if (retentionDeletedCount > 0) onRetentionDeleted?.(retentionDeletedCount);
+  return { manifest: safeManifest, location, retentionDeletedCount };
 }
 
 export function persistEvidence(

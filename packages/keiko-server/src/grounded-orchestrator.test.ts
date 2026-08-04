@@ -1615,7 +1615,7 @@ describe("runGroundedExploration", () => {
         answerer: {
           answer: (question) => {
             receivedQuestion = question;
-            return Promise.resolve("You prefer pnpm.");
+            return Promise.resolve("You prefer pnpm [src/preferences.ts:42].");
           },
         },
         nowMs: () => NOW,
@@ -1624,11 +1624,12 @@ describe("runGroundedExploration", () => {
     );
 
     expect(receivedQuestion).toContain("Use pnpm");
-    expect(out.assistantContent).toBe("You prefer pnpm.");
+    expect(out.assistantContent).toContain("src/preferences.ts:42");
     expect(out.noEvidence).toBe(true);
+    expect(out.modelInvoked).toBe(true);
     expect(out.pack.files).toEqual([]);
     expect(out.pack.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(
-      false,
+      true,
     );
   });
 

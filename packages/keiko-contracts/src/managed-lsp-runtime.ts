@@ -269,7 +269,7 @@ function isWorkspaceRelativePath(value: unknown): value is ManagedLspWorkspaceRe
   if (value.kind !== "workspaceRelative" || typeof value.path !== "string") return false;
   if (new TextEncoder().encode(value.path).length > EDITOR_AGENT_TARGET_PATH_MAX_BYTES)
     return false;
-  if (!isContainedAgentPath(value.path) || value.path.includes("\\")) return false;
+  if (!isContainedAgentPath(value.path)) return false;
   return value.path.split("/").every((segment) => segment.length > 0 && segment !== ".");
 }
 

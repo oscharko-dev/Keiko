@@ -90,6 +90,7 @@ import {
 } from "./local-knowledge-grounded-qa.js";
 import { buildStoredPreviewCitations } from "./local-knowledge-preview-authority.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import { evidenceRetentionDiagnosticObserver } from "./diagnostics-log.js";
 import {
   normalizeGroundedAnswerPayload,
   type GroundedAnswerPayload,
@@ -1196,6 +1197,10 @@ function persistFolderEvidence(
         env: ctx.deps.env,
         additionalSecrets: currentRedactionSecrets(ctx.deps),
         costClassResolver: resolveCostClass,
+        onRetentionDeleted: evidenceRetentionDiagnosticObserver(
+          ctx.deps.diagnostics,
+          "grounded-qa-hybrid",
+        ),
       },
     );
     firstRunId ??= runId;
@@ -1669,9 +1674,20 @@ async function assembleHybridNoEvidenceRoute(
     ids: { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
     sourceEvidenceAvailable: false,
   });
+  const finalAnswer =
+    ctx.answerOnlyContextAvailable === true
+      ? await applyHybridEntailment(
+          ctx,
+          answer,
+          assistant.content,
+          meta.folderResult.retrieved,
+          meta.connectorResult.retrieved,
+        )
+      : answer;
+  ensureNotCancelled(ctx.signal);
   const previewCitations = selectedConnectorPreviewCitations(store, selected, ctx.deps.redactor);
-  ctx.deps.store.attachGroundedAnswer(assistantMessage.id, answer, previewCitations);
-  return { status: 200, body: answer };
+  ctx.deps.store.attachGroundedAnswer(assistantMessage.id, finalAnswer, previewCitations);
+  return { status: 200, body: finalAnswer };
 }
 
 export async function runHybridGroundedAsk(ctx: HybridGroundedAskCtx): Promise<RouteResult> {
