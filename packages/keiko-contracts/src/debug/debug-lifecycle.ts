@@ -137,8 +137,12 @@ function isNonnegativeInteger(value: unknown): value is number {
 }
 
 function hasExactKeys(record: Record<string, unknown>): boolean {
-  const keys = Object.keys(record);
-  return keys.length === EVIDENCE_KEYS.size && keys.every((key) => EVIDENCE_KEYS.has(key));
+  const names = Object.getOwnPropertyNames(record);
+  return (
+    names.length === EVIDENCE_KEYS.size &&
+    Object.getOwnPropertySymbols(record).length === 0 &&
+    names.every((key) => EVIDENCE_KEYS.has(key))
+  );
 }
 
 function hasClosedVocabulary(record: Record<string, unknown>): boolean {

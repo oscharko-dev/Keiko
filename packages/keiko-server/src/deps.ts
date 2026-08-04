@@ -42,6 +42,7 @@ import {
 import { GatewayModelPort, type ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   createAuditRedactor,
+  DEFAULT_RETENTION,
   writeSideFile,
   deepRedactStrings,
   createNodeEvidenceStore,
@@ -81,6 +82,7 @@ import {
 import { createRunRegistry } from "./runs.js";
 import type { ChatTurnSerializer } from "./chat-turn-serializer.js";
 import {
+  evidenceRetentionDiagnosticObserver,
   emitServerDiagnostic,
   serverDiagnosticFromError,
   type ServerDiagnosticSink,
@@ -1431,11 +1433,13 @@ function buildTerminalManager(options: {
   readonly evidenceStore: EvidenceStore;
   readonly env: EnvSource;
   readonly liveRedactor: Redactor;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
 }): TerminalExecutionManager {
   return createTerminalExecutionManager({
     store: options.store,
     evidenceStore: options.evidenceStore,
     processEnv: options.env,
+    diagnostics: options.diagnostics,
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
@@ -1451,12 +1455,14 @@ function buildCommandRunner(options: {
   readonly evidenceStore: EvidenceStore;
   readonly env: EnvSource;
   readonly liveRedactor: Redactor;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly workspaceScriptTrust: WorkspaceScriptTrustService;
 }): CommandRunnerManager {
   return createCommandRunnerManager({
     store: options.store,
     evidenceStore: options.evidenceStore,
     processEnv: options.env,
+    diagnostics: options.diagnostics,
     isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean =>
       options.workspaceScriptTrust.isTrusted(projectId, workspace),
     redactor: (value: string): string => {
@@ -1477,11 +1483,13 @@ function buildVerificationRunner(options: {
   readonly store: UiStore;
   readonly evidenceStore: EvidenceStore;
   readonly liveRedactor: Redactor;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly workspaceScriptTrust: WorkspaceScriptTrustService;
 }): VerificationRunnerManager {
   return createVerificationRunnerManager({
     store: options.store,
     evidenceStore: options.evidenceStore,
+    diagnostics: options.diagnostics,
     isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean =>
       options.workspaceScriptTrust.isTrusted(projectId, workspace),
     redactor: (value: string): string => {
@@ -1570,11 +1578,13 @@ function buildContainerRunner(options: {
   readonly evidenceStore: EvidenceStore;
   readonly env: EnvSource;
   readonly liveRedactor: Redactor;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
 }): ContainerRunnerManager {
   return createContainerRunnerManager({
     store: options.store,
     evidenceStore: options.evidenceStore,
     processEnv: options.env,
+    diagnostics: options.diagnostics,
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
@@ -1590,14 +1600,19 @@ function buildBrowserManager(options: {
   readonly evidenceDir: string;
   readonly evidenceStore: EvidenceStore;
   readonly redactor: Redactor;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
 }): BrowserSessionManager {
   return createBrowserSessionManager({
     evidenceDir: options.evidenceDir,
     evidenceStore: options.evidenceStore,
     redactor: options.redactor,
     evidenceManifestWriter: (manifest) =>
-      persistEvidenceManifest(manifest, options.evidenceStore, (value): string =>
-        redactEvidenceString(options.redactor, value),
+      persistEvidenceManifest(
+        manifest,
+        options.evidenceStore,
+        (value): string => redactEvidenceString(options.redactor, value),
+        DEFAULT_RETENTION,
+        evidenceRetentionDiagnosticObserver(options.diagnostics, "browser-capture"),
       ).location,
     costClassResolver: resolveCostClass,
     sideFileWriter: (basename, bytes, runId) =>
@@ -2620,18 +2635,21 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       evidenceStore: args.evidenceStore,
       env: args.options.env,
       liveRedactor: args.liveRedactor,
+      diagnostics: args.options.diagnostics,
     }),
     commandRunner: buildCommandRunner({
       store: args.uiStore,
       evidenceStore: args.evidenceStore,
       env: args.options.env,
       liveRedactor: args.liveRedactor,
+      diagnostics: args.options.diagnostics,
       workspaceScriptTrust,
     }),
     verificationRunner: buildVerificationRunner({
       store: args.uiStore,
       evidenceStore: args.evidenceStore,
       liveRedactor: args.liveRedactor,
+      diagnostics: args.options.diagnostics,
       workspaceScriptTrust,
     }),
     workspaceScriptTrust,
@@ -2652,11 +2670,13 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       evidenceStore: args.evidenceStore,
       env: args.options.env,
       liveRedactor: args.liveRedactor,
+      diagnostics: args.options.diagnostics,
     }),
     browser: buildBrowserManager({
       evidenceDir: resolveEvidenceDir(args.options.evidenceDir, args.options.env),
       evidenceStore: args.evidenceStore,
       redactor: args.liveRedactor,
+      diagnostics: args.options.diagnostics,
     }),
     memoryVault,
     editorHotExitStore:

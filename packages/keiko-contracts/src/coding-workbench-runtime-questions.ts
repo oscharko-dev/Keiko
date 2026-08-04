@@ -5,6 +5,7 @@ import {
   isOneOf,
   isRecord,
   result,
+  validateUntrustedDisplayText,
 } from "./coding-workbench-runtime-api-validation.js";
 
 export const CODING_WORKBENCH_RUNTIME_QUESTION_REQUEST_MAX_COUNT = 256;
@@ -249,7 +250,7 @@ function validateText(value: unknown, path: string, max: number, errors: string[
 }
 
 function validText(value: unknown, max: number): value is string {
-  return typeof value === "string" && value.length >= 1 && value.length <= max;
+  return validateUntrustedDisplayText(value, max);
 }
 
 function serializedBytes(value: object): number {

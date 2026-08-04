@@ -6,9 +6,9 @@ const TEXT_ENCODER = new TextEncoder();
 export function isContainedAgentPath(candidate: string): boolean {
   if (candidate.length === 0) return false;
   if (TEXT_ENCODER.encode(candidate).length > EDITOR_AGENT_TARGET_PATH_MAX_BYTES) return false;
-  if (candidate.startsWith("/") || candidate.startsWith("\\") || /^[A-Za-z]:/u.test(candidate)) {
+  if (candidate.startsWith("/") || /^[A-Za-z]:/u.test(candidate)) {
     return false;
   }
-  if (candidate.includes("\u0000")) return false;
-  return !candidate.split(/[/\\]/u).includes("..");
+  if (candidate.includes("\u0000") || candidate.includes("\\")) return false;
+  return !candidate.split("/").includes("..");
 }

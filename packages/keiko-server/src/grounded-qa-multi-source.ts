@@ -56,6 +56,7 @@ import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import { evidenceRetentionDiagnosticObserver } from "./diagnostics-log.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { splitExplorationBudgets } from "./grounded-multi-source-budget.js";
 import {
@@ -842,6 +843,10 @@ function persistPerSourceEvidence(
         env: ctx.deps.env,
         additionalSecrets: currentRedactionSecrets(ctx.deps),
         costClassResolver: resolveCostClass,
+        onRetentionDeleted: evidenceRetentionDiagnosticObserver(
+          ctx.deps.diagnostics,
+          "grounded-qa-multi-source",
+        ),
       },
     );
     firstRunId ??= runId;
@@ -864,8 +869,9 @@ function assembleMultiSourceAnswer(
   },
 ): GroundedAnswer {
   const { redactor } = ctx.deps;
+  const modelInvoked = !ids.abstained || ctx.answerOnlyContextAvailable === true;
   const citationBundles = sourceCitationBundles(sources, redactor, assistant.content);
-  const citations = ids.abstained ? [] : mergedCitations(citationBundles);
+  const citations = modelInvoked ? mergedCitations(citationBundles) : [];
   const summaries = citationBundles.map(({ source: src, citations: sourceCitations }) =>
     buildGroundedAnswerContextPackSummary(
       src.pack,
@@ -880,9 +886,9 @@ function assembleMultiSourceAnswer(
     : persistPerSourceEvidence(ctx, citationBundles);
   // GEN-AI-GROUNDING-001/-008 (RB-4): reconcile the model's inline citations against the merged
   // evidence packs the model actually received; flag references to un-retrieved files.
-  const reconciliationUncertainty = ids.abstained
-    ? []
-    : buildMultiSourceReconciliationUncertainty(assistant, sources, redactor);
+  const reconciliationUncertainty = modelInvoked
+    ? buildMultiSourceReconciliationUncertainty(assistant, sources, redactor)
+    : [];
   return {
     groundingKind: "connected-context",
     userMessageId: ids.userMessageId,
@@ -948,9 +954,9 @@ async function applyMultiSourceEntailment(
   assembled: GroundedAnswer,
   assistant: GroundedAnswerResult,
   retrieved: readonly RetrievedSource[],
-  abstained: boolean,
+  modelInvoked: boolean,
 ): Promise<GroundedAnswer> {
-  if (abstained) {
+  if (!modelInvoked) {
     return assembled;
   }
   const stage = createEntailmentStage(
@@ -1047,7 +1053,7 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
     }),
     assistant,
     retrieved,
-    abstained,
+    !abstained || ctx.answerOnlyContextAvailable === true,
   );
   ensureNotCancelled(ctx.signal);
   recordMultiSourceAnswer(ctx, retrieved, answer, persisted.assistantMessageId, abstained);

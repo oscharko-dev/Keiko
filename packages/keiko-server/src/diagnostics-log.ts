@@ -7,6 +7,8 @@
 // correlation-keyed operator record. It never surfaces raw content to the browser; the response body
 // stays opaque and the record is emitted only to the server's own diagnostic channel.
 
+import { randomUUID } from "node:crypto";
+
 export interface ServerDiagnosticRecord {
   readonly correlationId: string;
   readonly timestamp: string;
@@ -242,6 +244,29 @@ export function emitServerDiagnostic(
   } catch {
     // A logging failure is never allowed to escalate into a second, unhandled failure.
   }
+}
+
+export function emitEvidenceRetentionDiagnostic(
+  sink: ServerDiagnosticSink | undefined,
+  source: string,
+  occurrenceCount: number,
+): void {
+  emitServerDiagnostic(sink, {
+    correlationId: randomUUID(),
+    timestamp: new Date().toISOString(),
+    operation: "evidence.retention",
+    source: diagnosticLabel(source, SOURCE_LABEL_SHAPE, "server.diagnostic"),
+    errorClass: "EvidenceRetention",
+    message: "Evidence retention deleted expired manifests.",
+    occurrenceCount,
+  });
+}
+
+export function evidenceRetentionDiagnosticObserver(
+  sink: ServerDiagnosticSink | undefined,
+  source: string,
+): (occurrenceCount: number) => void {
+  return emitEvidenceRetentionDiagnostic.bind(undefined, sink, source);
 }
 
 // Convenience: build a record from an unknown error with a current timestamp. Kept separate from

@@ -8,7 +8,13 @@
 // is an HttpOnly cookie and is never represented here.
 
 import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
-import { exactKeys, invalid, isRecord, result } from "./coding-workbench-runtime-api-validation.js";
+import {
+  exactKeys,
+  invalid,
+  isRecord,
+  result,
+  validateUntrustedDisplayText,
+} from "./coding-workbench-runtime-api-validation.js";
 import {
   validateCodingSafeActivityFeed,
   type CodingSafeActivityFeed,
@@ -130,7 +136,9 @@ function checkChannelContent(value: unknown, path: string, errors: string[]): vo
   }
   errors.push(...exactKeys(value, ["kind", "body"], path));
   checkBoundedText(value.kind, `${path}.kind`, CODING_APP_SESSION_CHANNEL_KIND_MAX_CHARS, errors);
-  checkBoundedText(value.body, `${path}.body`, CODING_APP_SESSION_CHANNEL_BODY_MAX_CHARS, errors);
+  if (!validateUntrustedDisplayText(value.body, CODING_APP_SESSION_CHANNEL_BODY_MAX_CHARS)) {
+    errors.push(`${path}.body must be bounded non-empty display text`);
+  }
 }
 
 /** Validate a single bounded content item in isolation (used before projecting it into a snapshot). */

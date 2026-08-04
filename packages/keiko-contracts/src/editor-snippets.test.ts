@@ -373,6 +373,28 @@ describe("editor workspace snippets — rejection and diagnostic paths", () => {
     ).toEqual([]);
   });
 
+  it("matchingEditorM7Snippets observes an abort inside the snippet loop", () => {
+    const parsed = parseEditorM7WorkspaceSnippetCollection(rawCollection([rawSnippet()]));
+    if (!parsed.ok) throw new Error("expected valid collection");
+    let reads = 0;
+    const signal = {
+      get aborted(): boolean {
+        reads += 1;
+        return reads > 1;
+      },
+    } as AbortSignal;
+    expect(
+      matchingEditorM7Snippets({
+        collection: parsed.value,
+        languageId: "typescript",
+        relativePath: "src/app.ts",
+        prefix: "kte",
+        insertionSafe: true,
+        signal,
+      }),
+    ).toEqual([]);
+  });
+
   it("matchingEditorM7Snippets drops snippets whose prefix does not match", () => {
     const parsed = parseEditorM7WorkspaceSnippetCollection(rawCollection([rawSnippet()]));
     if (!parsed.ok) throw new Error("expected valid collection");
@@ -419,6 +441,14 @@ describe("editor workspace snippets — rejection and diagnostic paths", () => {
         insertionSafe: true,
       }),
     ).toHaveLength(1);
+  });
+
+  it("rejects a glob containing repeated globstars before matching", () => {
+    expect(
+      parseEditorM7WorkspaceSnippetCollection(
+        rawCollection([rawSnippet({ include: [`${"**/".repeat(24)}x.ts`] })]),
+      ),
+    ).toMatchObject({ ok: false, reasonCode: "UNSAFE_PATH" });
   });
 
   it.each([

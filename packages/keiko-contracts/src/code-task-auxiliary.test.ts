@@ -66,6 +66,17 @@ describe("auxiliary branded-id and domain predicates", () => {
     expect(isCodeTaskPublicDomain("example.com:8080")).toBe(false);
     expect(isCodeTaskPublicDomain("example")).toBe(false);
     expect(isCodeTaskPublicDomain("EXAMPLE.com")).toBe(false);
+    for (const host of [
+      "api.local",
+      "api.internal",
+      "api.home.arpa",
+      "api.test",
+      "api.invalid",
+      "api.example",
+      "api.example.c0m",
+    ]) {
+      expect(isCodeTaskPublicDomain(host)).toBe(false);
+    }
   });
 
   it("rejects non-canonical IPv4 shorthand and octal forms", () => {
@@ -305,6 +316,18 @@ describe("auxiliary request rejection paths", () => {
       }),
     ).toContain("researchScope.expiresAt must be an ISO-8601 UTC instant");
   });
+
+  it.each(["2026-04-31T00:00:00Z", "Jul 31 2026 Z", "2026-07-31 12:00:00 GMT+0000 Z"])(
+    "rejects a normalized or non-canonical auxiliary expiry: %s",
+    (expiresAt) => {
+      expect(
+        errorsFor({
+          ...researchRequest(),
+          research: { ...researchRequest().research, expiresAt },
+        }),
+      ).toContain("researchScope.expiresAt must be an ISO-8601 UTC instant");
+    },
+  );
 
   it("fails an empty domain list closed rather than reading it as unrestricted", () => {
     expect(

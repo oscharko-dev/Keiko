@@ -27,12 +27,17 @@ import {
   createInMemoryEvidenceStore,
   listEvidence,
   loadEvidence,
+  persistConnectedContextEvidence,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
-import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import {
+  CONNECTED_CONTEXT_SCHEMA_VERSION,
+  type ConnectedContextPack,
+  type WorkspaceInstance,
+} from "@oscharko-dev/keiko-contracts";
 import {
   deriveManagedWorktreePath,
   deriveRepositoryId,
@@ -73,6 +78,52 @@ function fakeModel(content: string): ModelPort {
     usage: { requestId: "r", promptTokens: 1, completionTokens: 1, latencyMs: 1, costClass: "low" },
   };
   return { call: (): Promise<NormalizedResponse> => Promise.resolve(response) };
+}
+
+function emptyConnectedContextPack(emittedAtMs: number): ConnectedContextPack {
+  return {
+    schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+    stableId: `ordinary-chat-pack-${String(emittedAtMs)}`,
+    scope: {
+      schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+      scopeId: "ordinary-chat-scope",
+      workspaceRoot: workspace,
+      kind: "directory",
+      relativePaths: [],
+      conversationId: "ordinary-chat",
+      connectedAtMs: emittedAtMs,
+    },
+    query: {
+      kind: "natural-language",
+      text: "ordinary chat turn",
+      caseSensitive: false,
+      maxResults: 1,
+      emittedAtMs,
+    },
+    budget: {
+      searchCallsMax: 1,
+      filesReadMax: 1,
+      excerptBytesMax: 1,
+      modelInputTokensMax: 1,
+      modelOutputTokensMax: 1,
+      elapsedMsMax: 1,
+      rerankCallsMax: 0,
+    },
+    usage: {
+      searchCalls: 0,
+      filesRead: 0,
+      excerptBytes: 0,
+      modelInputTokens: 0,
+      modelOutputTokens: 0,
+      elapsedMs: 0,
+      rerankCalls: 0,
+    },
+    files: [],
+    omitted: [],
+    uncertainty: [],
+    emittedAtMs,
+    ledgerRef: undefined,
+  };
 }
 
 let server: Server;
@@ -566,6 +617,35 @@ describe("FIX 1 — UI runs persist a redacted evidence manifest (AC5)", () => {
     });
     expect(JSON.stringify(manifest?.autonomy)).not.toMatch(/authorityRef|sessionId|prompt|file/iu);
     expect(JSON.stringify(manifest)).not.toContain(SECRET);
+  });
+
+  it("keeps governed run evidence after 55 ordinary connected-context writes", async () => {
+    await start(fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n")));
+    const { body } = await createRun();
+    await awaitTerminal(body.runId);
+    await awaitEvidence(body.runId);
+
+    const firstChatFinishedAt = Date.now() + 1_000;
+    for (let index = 0; index < 55; index += 1) {
+      const finishedAt = firstChatFinishedAt + index;
+      persistConnectedContextEvidence(
+        {
+          runId: `ordinary-chat-${String(index).padStart(2, "0")}`,
+          modelId: "test-model",
+          workspaceRoot: workspace,
+          chatId: "ordinary-chat",
+          pack: emptyConnectedContextPack(finishedAt),
+          citationCount: 0,
+          elapsedMs: 0,
+          startedAt: finishedAt,
+          finishedAt,
+        },
+        { store: evidenceStore, env: {} },
+      );
+    }
+
+    expect(loadEvidence(evidenceStore, body.runId)?.run.taskType).toBe("generate-unit-tests");
+    expect(listEvidence(evidenceStore)).toHaveLength(51);
   });
 
   it("persists a cancelled run with a cancelled outcome (literal AC5)", async () => {

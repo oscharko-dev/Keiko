@@ -50,6 +50,32 @@ describe("coding workbench runtime questions", () => {
       false,
     );
   });
+
+  it.each(["question", "header", "label", "description", "answer"])(
+    "rejects unsafe Unicode format characters in %s text",
+    (surface) => {
+      const unsafe = `visible\u202Espoof\u200B`;
+      if (surface === "answer") {
+        expect(parseCodingWorkbenchRuntimeQuestionAnswerRequest({ answers: [[unsafe]] }).ok).toBe(
+          false,
+        );
+        return;
+      }
+      const question = response.questions[0]?.questions[0];
+      if (question === undefined) throw new Error("expected question fixture");
+      const option = question.options[0];
+      if (option === undefined) throw new Error("expected option fixture");
+      const changed =
+        surface === "label" || surface === "description"
+          ? { ...question, options: [{ ...option, [surface]: unsafe }] }
+          : { ...question, [surface]: unsafe };
+      expect(
+        validateCodingWorkbenchRuntimeQuestionsResponse({
+          questions: [{ ...response.questions[0], questions: [changed] }],
+        }).ok,
+      ).toBe(false);
+    },
+  );
 });
 
 describe("coding workbench runtime questions failure branches", () => {

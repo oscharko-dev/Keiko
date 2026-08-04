@@ -521,6 +521,12 @@ function buildDebugLaunchTarget(value: DebugLaunchTarget): DebugLaunchTarget {
     : { kind: "file", fileId: value.fileId };
 }
 
+function hasValidBreakpointCondition(value: unknown): boolean {
+  return (
+    value === undefined || isBoundedText(value, DEFAULT_DEBUG_PAYLOAD_LIMITS.maxConditionBytes)
+  );
+}
+
 function isBreakpointKindConsistent(value: UnknownRecord): boolean {
   if (value.kind === "line") {
     return (
@@ -530,14 +536,17 @@ function isBreakpointKindConsistent(value: UnknownRecord): boolean {
     );
   }
   if (value.kind === "conditional") {
+    const conditionIsValid = hasValidBreakpointCondition(value.condition);
     return (
+      conditionIsValid &&
       (value.condition !== undefined || value.hitCondition !== undefined) &&
       value.logMessage === undefined
     );
   }
   return (
     value.kind === "logpoint" &&
-    isBoundedText(value.logMessage, DEFAULT_DEBUG_PAYLOAD_LIMITS.maxLogMessageBytes)
+    isBoundedText(value.logMessage, DEFAULT_DEBUG_PAYLOAD_LIMITS.maxLogMessageBytes) &&
+    hasValidBreakpointCondition(value.condition)
   );
 }
 
@@ -555,8 +564,6 @@ function hasValidBreakpointVocabulary(value: UnknownRecord): boolean {
   return (
     memberOf(value.kind, SOURCE_BREAKPOINT_KINDS) &&
     memberOf(value.verification, BREAKPOINT_VERIFICATIONS) &&
-    (value.condition === undefined ||
-      isBoundedText(value.condition, DEFAULT_DEBUG_PAYLOAD_LIMITS.maxConditionBytes)) &&
     (value.hitCondition === undefined ||
       isBoundedText(value.hitCondition, DEFAULT_DEBUG_PAYLOAD_LIMITS.maxHitConditionBytes)) &&
     isBreakpointKindConsistent(value)

@@ -500,6 +500,24 @@ describe("DAP debug leaf contracts", () => {
         ],
       }),
     ).toMatchObject({ ok: false });
+    expect(
+      parseSetBreakpointsRequest({
+        ...request,
+        breakpoints: [
+          {
+            ...breakpoint,
+            kind: "conditional",
+            condition: "x".repeat(DEFAULT_DEBUG_PAYLOAD_LIMITS.maxConditionBytes),
+          },
+        ],
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      parseSetBreakpointsRequest({
+        ...request,
+        breakpoints: [{ ...breakpoint, kind: "conditional", condition: "x\u0000y" }],
+      }),
+    ).toMatchObject({ ok: false });
   });
 
   it.each(validRequests)("catches a throwing proxy for %s without throwing", (_name, parser) => {

@@ -68,6 +68,8 @@ describe("coding workbench runtime approval review channel", () => {
     ["current directory segment", "./src/a.ts"],
     ["empty segment", "src//a.ts"],
     ["alternate data stream", "src/a.ts:stream"],
+    ["bidi override", "src/visible\u202Espoof.ts"],
+    ["zero-width character", "src/visible\u200Bspoof.ts"],
     ["empty", ""],
   ])("rejects a %s path", (_label, path) => {
     expect(errorsFor(activeReview({ paths: [path] }))).toContain(

@@ -37,7 +37,7 @@ import {
   type ContainerTask,
   type ContainerTaskCatalog,
 } from "@oscharko-dev/keiko-contracts";
-import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { DEFAULT_RETENTION, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { ContainerRunnerError } from "./containerRunner-errors.js";
 import {
   appendContainerRunEvidence,
@@ -45,6 +45,10 @@ import {
 } from "./containerRunner-evidence.js";
 import { detectContainerEngines, type ContainerProbeDeps } from "./containerEngineDetector.js";
 import type { Project, UiStore } from "../store/index.js";
+import {
+  evidenceRetentionDiagnosticObserver,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 
 // Tight cap — a container run is a high-trust surface, so a small number of concurrent runs.
 const MAX_CONCURRENT_CONTAINER_RUNS = 2;
@@ -159,6 +163,7 @@ export interface ContainerRunnerManagerOptions {
   readonly catalog?: readonly ContainerTask[] | undefined;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly redactor?: ((input: string) => string) | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly runDeps?: Partial<RunCommandDeps> | undefined; // injectable spawn seam
   // Injectable detector outcome (tests pass a fake; production uses detectContainerEngines).
   readonly detect?: ((projectId: string) => Promise<ContainerCapabilityResponse>) | undefined;
@@ -329,6 +334,7 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
   private readonly catalog: readonly ContainerTask[];
   private readonly processEnv: NodeJS.ProcessEnv;
   private readonly redactor: (input: string) => string;
+  private readonly diagnostics: ServerDiagnosticSink | undefined;
   private readonly runDeps: Partial<RunCommandDeps>;
   private readonly detect:
     ((projectId: string) => Promise<ContainerCapabilityResponse>) | undefined;
@@ -345,6 +351,7 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
     this.catalog = opts.catalog ?? DEFAULT_CONTAINER_TASKS;
     this.processEnv = opts.processEnv ?? process.env;
     this.redactor = opts.redactor ?? ((input: string): string => input);
+    this.diagnostics = opts.diagnostics;
     this.runDeps = opts.runDeps ?? {};
     this.detect = opts.detect;
     this.now = opts.now ?? Date.now;
@@ -606,7 +613,13 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
         stderrBytes: Buffer.byteLength(outcome.stderr, "utf8"),
         startedAt,
       });
-      appendContainerRunEvidence(this.evidenceStore, evidence, this.redactor);
+      appendContainerRunEvidence(
+        this.evidenceStore,
+        evidence,
+        this.redactor,
+        DEFAULT_RETENTION,
+        evidenceRetentionDiagnosticObserver(this.diagnostics, "container-runner"),
+      );
     } catch {
       throw new ContainerRunnerError(
         "EVIDENCE_WRITE_FAILED",
