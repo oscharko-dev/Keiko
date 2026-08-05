@@ -59,7 +59,14 @@ function provisionedRuntimeFixture() {
   writeFileSync(sourceBinary, "fixture USearch runtime");
   writeFileSync(sourceLicense, "fixture USearch license");
   return {
-    approved: { binarySha256: sha256(sourceBinary) },
+    approved: {
+      version: "fixture-version",
+      sourceCommit: "a".repeat(40),
+      tarballUrl: "https://example.test/usearch.tgz",
+      tarballSha256: "b".repeat(64),
+      binarySha256: sha256(sourceBinary),
+      licenseSha256: sha256(sourceLicense),
+    },
     sourceBinary,
     sourceLicense,
   };
@@ -172,12 +179,13 @@ describe("portable USearch staging", () => {
     expect(loadRuntime).toHaveBeenCalledWith(realpathSync(fixture.binary), "fixture-version");
   });
 
-  it("accepts only a native version accessor that reports the expected runtime version", () => {
+  it("validates the native version accessor when the pinned runtime exposes one", () => {
     expect(() =>
       loadAndSearch(nativeLoaderFixture("() => 'fixture-version'"), "fixture-version"),
     ).not.toThrow();
+    expect(() => loadAndSearch(nativeLoaderFixture("undefined"), "fixture-version")).not.toThrow();
 
-    for (const versionApi of ["() => 'wrong-version'", "'fixture-version'", "undefined"]) {
+    for (const versionApi of ["() => 'wrong-version'", "'fixture-version'"]) {
       expect(() => loadAndSearch(nativeLoaderFixture(versionApi), "fixture-version")).toThrow(
         "runtime version mismatch",
       );

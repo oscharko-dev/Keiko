@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import {
-  USEARCH_RUNTIME_MANIFEST,
+  usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 
@@ -709,29 +709,41 @@ function validateNativeAddons(manifest, failures, options) {
     return;
   }
   const target = portableTargetByName(manifest.artifact?.platformTarget);
+  const approval = usearchApprovalForPortableTarget(target);
   exactKeysAt(addon, NATIVE_ADDON_KEYS, path, failures);
+  validateNativeAddonIdentity(addon, target, approval, path, failures);
+  validateNativeAddonSource(addon, approval, path, failures, options);
+  digestAt(addon, "unsignedSha256", path, failures, options);
+  digestAt(addon, "shippedSha256", path, failures, options);
+  positiveNumberAt(addon, "sizeBytes", path, failures);
+  validateNativeHelperSigning(addon, target, path, failures, options);
+}
+
+function usearchApprovalForPortableTarget(target) {
+  if (target === undefined) return undefined;
+  return usearchRuntimeApproval(
+    usearchRuntimeTargetKey(target.nodePlatform, target.nodeArchitecture),
+  );
+}
+
+function validateNativeAddonIdentity(addon, target, approval, path, failures) {
   literalAt(addon, "name", "usearch", path, failures);
   literalAt(addon, "kind", "node-native-addon", path, failures);
-  literalAt(addon, "version", USEARCH_RUNTIME_MANIFEST.version, path, failures);
+  literalAt(addon, "version", approval?.version, path, failures);
   literalAt(addon, "platformTarget", target?.platformTarget, path, failures);
   literalAt(addon, "architecture", target?.nodeArchitecture, path, failures);
   literalAt(addon, "executablePath", "runtime/native/usearch.node", path, failures);
   literalAt(addon, "licensePath", "runtime/licenses/usearch/LICENSE", path, failures);
-  validateNativeAddonSource(addon, target, path, failures, options);
-  digestAt(addon, "unsignedSha256", path, failures, options);
-  digestAt(addon, "shippedSha256", path, failures, options);
-  positiveNumberAt(addon, "sizeBytes", path, failures);
   literalAt(
     addon,
     "sbomBomRef",
-    `pkg:npm/usearch@${USEARCH_RUNTIME_MANIFEST.version}?platform=${target?.platformTarget ?? ""}`,
+    `pkg:npm/usearch@${approval?.version ?? ""}?platform=${target?.platformTarget ?? ""}`,
     path,
     failures,
   );
-  validateNativeHelperSigning(addon, target, path, failures, options);
 }
 
-function validateNativeAddonSource(addon, target, path, failures, options) {
+function validateNativeAddonSource(addon, approval, path, failures, options) {
   const source = recordAt(addon, "source", path, failures);
   exactKeysAt(
     source,
@@ -739,29 +751,11 @@ function validateNativeAddonSource(addon, target, path, failures, options) {
     `${path}.source`,
     failures,
   );
-  literalAt(source, "commitSha", USEARCH_RUNTIME_MANIFEST.sourceCommit, `${path}.source`, failures);
-  literalAt(source, "tarballUrl", USEARCH_RUNTIME_MANIFEST.tarballUrl, `${path}.source`, failures);
-  literalAt(
-    source,
-    "tarballSha256",
-    USEARCH_RUNTIME_MANIFEST.tarballSha256,
-    `${path}.source`,
-    failures,
-  );
-  literalAt(
-    source,
-    "licenseSha256",
-    USEARCH_RUNTIME_MANIFEST.licenseSha256,
-    `${path}.source`,
-    failures,
-  );
-  const targetKey =
-    target === undefined
-      ? undefined
-      : usearchRuntimeTargetKey(target.nodePlatform, target.nodeArchitecture);
-  const approved =
-    targetKey === undefined ? undefined : USEARCH_RUNTIME_MANIFEST.targets[targetKey];
-  literalAt(source, "binarySha256", approved?.binarySha256, `${path}.source`, failures);
+  literalAt(source, "commitSha", approval?.sourceCommit, `${path}.source`, failures);
+  literalAt(source, "tarballUrl", approval?.tarballUrl, `${path}.source`, failures);
+  literalAt(source, "tarballSha256", approval?.tarballSha256, `${path}.source`, failures);
+  literalAt(source, "licenseSha256", approval?.licenseSha256, `${path}.source`, failures);
+  literalAt(source, "binarySha256", approval?.binarySha256, `${path}.source`, failures);
   digestAt(source, "binarySha256", `${path}.source`, failures, options);
 }
 

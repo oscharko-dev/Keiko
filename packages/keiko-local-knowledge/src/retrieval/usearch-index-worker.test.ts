@@ -38,7 +38,13 @@ const loadFixtureModule = createRequire(import.meta.url);
 const EXPECTED_VERSION = "test-usearch-1";
 
 type RuntimeMode =
-  "success" | "size-mismatch" | "build-error" | "search-error" | "mutate-on-load" | "side-effect";
+  | "success"
+  | "size-mismatch"
+  | "build-error"
+  | "search-error"
+  | "mutate-on-load"
+  | "side-effect"
+  | "version-unavailable";
 
 interface RuntimeTelemetry {
   readonly constructorArguments: readonly unknown[];
@@ -128,7 +134,7 @@ class CompiledIndex {
 module.exports = {
   CompiledIndex,
   telemetry,
-  version: () => ${JSON.stringify(EXPECTED_VERSION)},
+  ${mode === "version-unavailable" ? "" : `version: () => ${JSON.stringify(EXPECTED_VERSION)},`}
 };
 `;
 }
@@ -265,6 +271,22 @@ describe("USearch index worker", () => {
       expect(Atomics.load(harness.control, USEARCH_CONTROL.error)).toBe(
         USEARCH_ERROR.runtimeInvalid,
       );
+    } finally {
+      removeRuntimeFixture(runtime);
+    }
+  });
+
+  it("accepts a digest-pinned legacy runtime that does not expose a version accessor", async () => {
+    const runtime = createRuntimeFixture("version-unavailable");
+    const harness = createWorkerHarness(runtime);
+    vi.spyOn(Atomics, "wait").mockImplementation((): "ok" => {
+      Atomics.store(harness.control, USEARCH_CONTROL.command, USEARCH_COMMAND.close);
+      return "ok";
+    });
+    try {
+      await executeWorker(harness.data);
+      expect(Atomics.load(harness.control, USEARCH_CONTROL.state)).toBe(USEARCH_STATE.closed);
+      expect(Atomics.load(harness.control, USEARCH_CONTROL.error)).toBe(USEARCH_ERROR.none);
     } finally {
       removeRuntimeFixture(runtime);
     }

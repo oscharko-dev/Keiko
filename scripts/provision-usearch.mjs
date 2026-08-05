@@ -25,6 +25,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   USEARCH_RUNTIME_MANIFEST,
+  usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 
@@ -146,9 +147,10 @@ export function provisionedUsearchBinaryPath(
   hostArchitecture = arch,
 ) {
   const target = usearchRuntimeTargetKey(hostPlatform, hostArchitecture);
-  return target === undefined
+  const approval = usearchRuntimeApproval(target);
+  return approval === undefined
     ? undefined
-    : join(root, ".usearch", USEARCH_RUNTIME_MANIFEST.version, target, "usearch.node");
+    : join(root, ".usearch", approval.version, target, "usearch.node");
 }
 
 export function extractApprovedFiles(
@@ -164,14 +166,14 @@ export function extractApprovedFiles(
   );
 }
 
-function writeProvenance(targetDir, targetKey, runtimeManifest) {
+function writeProvenance(targetDir, targetKey, approval) {
   writeFileSync(
     join(targetDir, "PROVENANCE.txt"),
     [
-      `version=${runtimeManifest.version}`,
-      `sourceCommit=${runtimeManifest.sourceCommit}`,
+      `version=${approval.version}`,
+      `sourceCommit=${approval.sourceCommit}`,
       `target=${targetKey}`,
-      `tarballSha256=${runtimeManifest.tarballSha256}`,
+      `tarballSha256=${approval.tarballSha256}`,
       "",
     ].join("\n"),
     "utf8",
@@ -193,18 +195,18 @@ function provisionOptions(input) {
   };
 }
 
-function installUsearchRuntime(options, targetKey, target, targetDir, binaryPath, licensePath) {
-  const { downloadFile, extractFiles, failWith, log, runtimeManifest, trustFile } = options;
+function installUsearchRuntime(options, targetKey, approval, targetDir, binaryPath, licensePath) {
+  const { downloadFile, extractFiles, failWith, log, trustFile } = options;
   const staging = mkdtempSync(join(tmpdir(), "keiko-usearch-provision-"));
   try {
-    const tarball = join(staging, `usearch-${runtimeManifest.version}.tgz`);
-    downloadFile(tarball, runtimeManifest);
-    verify(tarball, runtimeManifest.tarballSha256, failWith);
-    extractFiles(tarball, staging, target.archivePath);
-    const extractedBinary = join(staging, target.archivePath);
+    const tarball = join(staging, `usearch-${approval.version}.tgz`);
+    downloadFile(tarball, approval);
+    verify(tarball, approval.tarballSha256, failWith);
+    extractFiles(tarball, staging, approval.archivePath);
+    const extractedBinary = join(staging, approval.archivePath);
     const extractedLicense = join(staging, LICENSE_ARCHIVE_PATH);
-    verify(extractedBinary, target.binarySha256, failWith);
-    verify(extractedLicense, runtimeManifest.licenseSha256, failWith);
+    verify(extractedBinary, approval.binarySha256, failWith);
+    verify(extractedLicense, approval.licenseSha256, failWith);
     rmSync(targetDir, { recursive: true, force: true });
     mkdirSync(targetDir, { recursive: true, mode: 0o755 });
     chmodSync(targetDir, 0o755);
@@ -212,11 +214,11 @@ function installUsearchRuntime(options, targetKey, target, targetDir, binaryPath
     copyFileSync(extractedLicense, licensePath);
     chmodSync(binaryPath, 0o755);
     chmodSync(licensePath, 0o644);
-    writeProvenance(targetDir, targetKey, runtimeManifest);
+    writeProvenance(targetDir, targetKey, approval);
     chmodSync(join(targetDir, "PROVENANCE.txt"), 0o644);
     if (
-      !trustFile(binaryPath, target.binarySha256) ||
-      !trustFile(licensePath, runtimeManifest.licenseSha256)
+      !trustFile(binaryPath, approval.binarySha256) ||
+      !trustFile(licensePath, approval.licenseSha256)
     ) {
       failWith("provisioned runtime ownership, permissions, or digest verification failed");
     }
@@ -237,18 +239,22 @@ export function provisionUsearch(input = {}) {
     );
     return undefined;
   }
-  const target = runtimeManifest.targets[targetKey];
-  const targetDir = join(root, ".usearch", runtimeManifest.version, targetKey);
+  const approval = usearchRuntimeApproval(targetKey, runtimeManifest);
+  if (approval === undefined) {
+    log(`provision-usearch: no approved runtime for ${targetKey}; skipping.`);
+    return undefined;
+  }
+  const targetDir = join(root, ".usearch", approval.version, targetKey);
   const binaryPath = join(targetDir, "usearch.node");
   const licensePath = join(targetDir, "LICENSE");
   if (
-    trustFile(binaryPath, target.binarySha256) &&
-    trustFile(licensePath, runtimeManifest.licenseSha256)
+    trustFile(binaryPath, approval.binarySha256) &&
+    trustFile(licensePath, approval.licenseSha256)
   ) {
     log(`provision-usearch: already verified at ${binaryPath}`);
     return binaryPath;
   }
-  return installUsearchRuntime(options, targetKey, target, targetDir, binaryPath, licensePath);
+  return installUsearchRuntime(options, targetKey, approval, targetDir, binaryPath, licensePath);
 }
 
 const entryPoint = process.argv[1];

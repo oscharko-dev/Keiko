@@ -6,6 +6,7 @@ import { URL, fileURLToPath } from "node:url";
 
 import {
   USEARCH_RUNTIME_MANIFEST,
+  usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 import { portableTargetByName } from "./portable-runtime.mjs";
@@ -100,14 +101,14 @@ function requiredCliStageRoot(value, targetName) {
   return expected;
 }
 
-function addonFrom(manifest, targetName, runtimeManifest) {
+function addonFrom(manifest, targetName, approval) {
   if (!Array.isArray(manifest.nativeAddons) || manifest.nativeAddons.length !== 1) {
     fail("manifest must bind exactly one native addon");
   }
   const addon = manifest.nativeAddons[0];
   if (
     addon.name !== "usearch" ||
-    addon.version !== runtimeManifest.version ||
+    addon.version !== approval.version ||
     addon.platformTarget !== targetName ||
     addon.executablePath !== USEARCH_BINARY_PATH ||
     addon.licensePath !== USEARCH_LICENSE_PATH
@@ -124,7 +125,7 @@ function resourceRoot(stageRoot, target) {
     : payload;
 }
 
-function assertEvidence(stageRoot, addon, runtimeManifest) {
+function assertEvidence(stageRoot, addon, approval) {
   const sbom = JSON.parse(
     readContainedText(
       stageRoot,
@@ -148,7 +149,7 @@ function assertEvidence(stageRoot, addon, runtimeManifest) {
     join(stageRoot, "evidence", "third-party-notices.txt"),
     "portable third-party notices",
   );
-  if (!notices.includes(`USearch ${runtimeManifest.version}`)) {
+  if (!notices.includes(`USearch ${approval.version}`)) {
     fail("third-party notice does not identify USearch");
   }
 }
@@ -156,7 +157,10 @@ function assertEvidence(stageRoot, addon, runtimeManifest) {
 export function loadAndSearch(binaryPath, runtimeVersion) {
   const require = createRequire(import.meta.url);
   const runtime = require(binaryPath);
-  if (typeof runtime.version !== "function" || runtime.version() !== runtimeVersion) {
+  if (
+    runtime.version !== undefined &&
+    (typeof runtime.version !== "function" || runtime.version() !== runtimeVersion)
+  ) {
     fail("runtime version mismatch");
   }
   const index = new runtime.CompiledIndex(2, "cos", "f32", 8, 32, 64, false);
@@ -182,24 +186,18 @@ function hasVerifiedProductionSignature(manifest, addon) {
 
 function requireApprovedAddon(manifest, target, targetName, runtimeManifest) {
   if (manifest.artifact?.platformTarget !== targetName) fail("manifest target mismatch");
-  const addon = addonFrom(manifest, targetName, runtimeManifest);
   const targetKey = usearchRuntimeTargetKey(target.nodePlatform, target.nodeArchitecture);
-  const approved = targetKey === undefined ? undefined : runtimeManifest.targets[targetKey];
-  if (approved === undefined || addon.unsignedSha256 !== approved.binarySha256) {
+  const approval = usearchRuntimeApproval(targetKey, runtimeManifest);
+  if (approval === undefined) fail("manifest upstream digest is not approved");
+  const addon = addonFrom(manifest, targetName, approval);
+  if (addon.unsignedSha256 !== approval.binarySha256) {
     fail("manifest upstream digest is not approved");
   }
   const signedProduction = hasVerifiedProductionSignature(manifest, addon);
-  return { addon, approvedBinarySha256: approved.binarySha256, signedProduction };
+  return { addon, approval, signedProduction };
 }
 
-function assertShippedRuntime(
-  stageRoot,
-  target,
-  addon,
-  runtimeManifest,
-  approvedBinarySha256,
-  signedProduction,
-) {
+function assertShippedRuntime(stageRoot, target, addon, approval, signedProduction) {
   const root = resourceRoot(stageRoot, target);
   const binary = containedDigest(
     stageRoot,
@@ -219,10 +217,10 @@ function assertShippedRuntime(
   // Platform signing changes Mach-O/PE bytes. Before that boundary, bind the bytes directly to the
   // immutable target digest. After it, the preceding platform verifier and verified-production
   // manifest state become the trust anchor while shippedSha256 continues to bind the loaded file.
-  if (!signedProduction && binary.sha256 !== approvedBinarySha256) {
+  if (!signedProduction && binary.sha256 !== approval.binarySha256) {
     fail("staged native addon digest is not approved");
   }
-  if (license.sha256 !== runtimeManifest.licenseSha256) {
+  if (license.sha256 !== approval.licenseSha256) {
     fail("shipped USearch license digest mismatch");
   }
   return binary.path;
@@ -246,12 +244,11 @@ export function smokePortableUsearch(stageRootValue, targetName, options = {}) {
     stageRoot,
     target,
     addon,
-    runtimeManifest,
-    approved.approvedBinarySha256,
+    approved.approval,
     approved.signedProduction,
   );
-  assertEvidence(stageRoot, addon, runtimeManifest);
-  loadRuntime(binaryPath, runtimeManifest.version);
+  assertEvidence(stageRoot, addon, approved.approval);
+  loadRuntime(binaryPath, approved.approval.version);
 }
 
 function main() {

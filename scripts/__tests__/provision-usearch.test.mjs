@@ -25,6 +25,10 @@ import {
   systemBinary,
   trustedPosixOwnerAndMode,
 } from "../provision-usearch.mjs";
+import {
+  USEARCH_RUNTIME_MANIFEST,
+  usearchRuntimeApproval,
+} from "../../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 
 const roots = [];
 
@@ -128,6 +132,59 @@ describe("provisioned USearch runtime trust", () => {
     const root = "/workspace";
     expect(provisionedUsearchBinaryPath(root, "linux", "x64")).toContain("/workspace/.usearch/");
     expect(provisionedUsearchBinaryPath(root, "freebsd", "x64")).toBeUndefined();
+  });
+
+  it("pins the compatible Intel macOS source without changing other platform approvals", () => {
+    expect(usearchRuntimeApproval("darwin-x64", USEARCH_RUNTIME_MANIFEST)).toMatchObject({
+      version: "2.21.4",
+      sourceCommit: "a2f17599101729d667dc0260dd278852d9098183",
+      tarballSha256: "f04ffee2386bb21d2ba3841d7ce3203530138772f408e9de767cb249fe5ccfda",
+      binarySha256: "c006e4774917d8bc1efc0382e7f31dcdb08c1f625091dbe7eeafd43ae7a660e6",
+    });
+    expect(usearchRuntimeApproval("darwin-arm64", USEARCH_RUNTIME_MANIFEST)?.version).toBe(
+      "2.26.0",
+    );
+    expect(usearchRuntimeApproval("win32-x64", USEARCH_RUNTIME_MANIFEST)?.version).toBe("2.26.0");
+  });
+
+  it("provisions a target-specific source approval and records its provenance", () => {
+    const provision = provisionFixture();
+    const targetSource = {
+      version: "1.2.2-compatible",
+      sourceCommit: "fedcba9876543210",
+      tarballUrl: "https://invalid.example.test/usearch-compatible.tgz",
+      tarballSha256: provision.runtimeManifest.tarballSha256,
+      licenseSha256: provision.runtimeManifest.licenseSha256,
+    };
+    provision.runtimeManifest.targets["linux-x64"].source = targetSource;
+    let downloadedApproval;
+
+    const binaryPath = provisionUsearch({
+      downloadFile: (destination, approval) => {
+        downloadedApproval = approval;
+        writeFileSync(destination, provision.archive);
+      },
+      extractFiles: (_tarball, staging, archivePath) => {
+        const extractedBinary = join(staging, archivePath);
+        const extractedLicense = join(staging, "package", "LICENSE");
+        mkdirSync(dirname(extractedBinary), { recursive: true });
+        mkdirSync(dirname(extractedLicense), { recursive: true });
+        writeFileSync(extractedBinary, provision.binary);
+        writeFileSync(extractedLicense, provision.license);
+      },
+      hostArchitecture: "x64",
+      hostPlatform: "linux",
+      root: provision.root,
+      runtimeManifest: provision.runtimeManifest,
+    });
+
+    expect(binaryPath).toBe(
+      join(provision.root, ".usearch", targetSource.version, "linux-x64", "usearch.node"),
+    );
+    expect(downloadedApproval).toMatchObject(targetSource);
+    expect(readFileSync(join(dirname(binaryPath), "PROVENANCE.txt"), "utf8")).toContain(
+      `version=${targetSource.version}`,
+    );
   });
 
   it("selects governed system binaries and fails closed when one is unavailable", () => {
