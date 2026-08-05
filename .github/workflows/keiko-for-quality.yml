@@ -155,7 +155,7 @@ jobs:
           # duplication safe.
           # Quoted: a hypothetical all-digit sha would otherwise parse as a YAML number and reach
           # the shell in a normalized form, defeating the length check below.
-          ACTION_PIN: "1ea5d97d066a2edf3450becab0a88f4dfeee3302" # v0.16.0 — keep in sync with Review's uses:
+          ACTION_PIN: "0346c557e77d598d13b55160dcd59328bdfd979b" # v0.17.0 — keep in sync with Review's uses:
         run: |
           # The pin no longer partitions the store, and that is a deliberate reversal. It used to,
           # because a wrapper release can change review or sanitization SEMANTICS without changing
@@ -375,7 +375,6 @@ jobs:
           STORE_PROFILE_HASH: ${{ hashFiles('.github/keiko-for-quality.json') }}
           STORE_MODEL_ID: ${{ vars.KEIKO_QUALITY_MODEL_ID }}
           STORE_MODEL_PROTOCOL: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
-          STORE_ACTION_SHA: ${{ steps.store-identity.outputs.action-sha }}
         run: |
           # An absent environment secret arrives as an empty string, and openssl happily HMACs
           # with an empty — publicly known — key, which would silently void this entire boundary.
@@ -399,8 +398,17 @@ jobs:
             # valid pair copied verbatim from another pull request or configuration fails on the
             # first differing dimension, because those bytes were signed under a different
             # context line. The store.context file inside the artifact is informational only.
-            EXPECTED="$(printf 'pr=%s profile=%s model=%s protocol=%s action=%s\n' \
-                "${STORE_PR}" "${STORE_PROFILE_HASH}" "${STORE_MODEL_ID}" "${STORE_MODEL_PROTOCOL}" "${STORE_ACTION_SHA}" \
+            #
+            # The action pin left this line, and its absence is the point. Dropping it from the
+            # artifact NAME alone (the previous change) achieved nothing: the store was found and
+            # then discarded here, one step later, with a scarier warning. What the pin was standing
+            # in for — "would this release publish a stored finding differently" — is answered
+            # inside the action from v0.16.0 on, per ENTRY rather than per release
+            # (`PUBLICATION_SEMANTICS`), which is the only place that knowledge exists. What stays
+            # bound is what genuinely must match for these bytes to be this pull request's:
+            # the pull request, the profile, the model, the protocol.
+            EXPECTED="$(printf 'pr=%s profile=%s model=%s protocol=%s\n' \
+                "${STORE_PR}" "${STORE_PROFILE_HASH}" "${STORE_MODEL_ID}" "${STORE_MODEL_PROTOCOL}" \
               | cat - "${STORE}" 2>/dev/null | openssl dgst -sha256 -hmac "${STORE_HMAC}" -r 2>/dev/null | cut -d' ' -f1)"
             ACTUAL="$(cut -d' ' -f1 < "${SIG}" 2>/dev/null)"
             # EXPECTED must be non-empty: if both reads failed, comparing empty to empty would
@@ -419,7 +427,7 @@ jobs:
 
       - name: Review
         id: review
-        uses: oscharko-dev/Keiko-for-Quality@1ea5d97d066a2edf3450becab0a88f4dfeee3302 # v0.16.0
+        uses: oscharko-dev/Keiko-for-Quality@0346c557e77d598d13b55160dcd59328bdfd979b # v0.17.0
         env:
           # Passed by variable NAME to the action, never as an input value: an input appears in the
           # step context that every other action in the job can read.
@@ -620,7 +628,6 @@ jobs:
           STORE_PROFILE_HASH: ${{ needs.review.outputs.profile-hash }}
           STORE_MODEL_ID: ${{ vars.KEIKO_QUALITY_MODEL_ID }}
           STORE_MODEL_PROTOCOL: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
-          STORE_ACTION_SHA: ${{ needs.review.outputs.action-sha }}
         run: |
           # Tolerant on purpose: the unsigned artifact came from the runner that executed the
           # external action, which can ship an unreadable (mode 000) store.json. A red job here
@@ -633,8 +640,8 @@ jobs:
             echo "signed=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
-          printf 'pr=%s profile=%s model=%s protocol=%s action=%s\n' \
-            "${STORE_PR}" "${STORE_PROFILE_HASH}" "${STORE_MODEL_ID}" "${STORE_MODEL_PROTOCOL}" "${STORE_ACTION_SHA}" \
+          printf 'pr=%s profile=%s model=%s protocol=%s\n' \
+            "${STORE_PR}" "${STORE_PROFILE_HASH}" "${STORE_MODEL_ID}" "${STORE_MODEL_PROTOCOL}" \
             > keiko-review-store/store.context
           if cat keiko-review-store/store.context keiko-review-store/store.json 2>/dev/null \
               | openssl dgst -sha256 -hmac "${STORE_HMAC}" -r \
