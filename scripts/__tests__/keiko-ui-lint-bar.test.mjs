@@ -60,8 +60,10 @@ function totalSuppressed(register) {
   let total = 0;
   for (const [file, byRule] of Object.entries(register)) {
     for (const [rule, entry] of Object.entries(byRule)) {
-      if (!Number.isInteger(entry?.count)) {
-        throw new TypeError(`${file} records a non-integer count for ${rule}`);
+      // Non-negative, not merely an integer: `Number.isInteger(-1)` is true, and a negative count
+      // would reduce the total and let the ceiling under-report the register it is guarding.
+      if (!Number.isInteger(entry?.count) || entry.count < 0) {
+        throw new TypeError(`${file} records a non-negative-integer count for ${rule}`);
       }
       total += entry.count;
     }
@@ -135,5 +137,13 @@ describe("keiko-ui suppression register (KEIKO-0118)", () => {
   // wholesale at a larger total. This is what makes the list shrink-only.
   it("does not exceed the recorded suppression ceiling", () => {
     expect(totalSuppressed(readSuppressions())).toBeLessThanOrEqual(SUPPRESSION_CEILING);
+  });
+
+  // A negative count would subtract from the total and let the ceiling under-report the register.
+  // `Number.isInteger(-1)` is true, so the shape check has to reject the sign explicitly.
+  it.each([[-1], [1.5], ["3"], [undefined]])("rejects a count of %p", (count) => {
+    expect(() => totalSuppressed({ "src/a.ts": { complexity: { count } } })).toThrow(
+      /non-negative-integer count/u,
+    );
   });
 });

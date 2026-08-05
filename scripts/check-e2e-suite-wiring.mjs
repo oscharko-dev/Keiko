@@ -181,9 +181,18 @@ const CONFIG_SUFFIX = ".config.ts";
 const CONFIG_FLAG = "--config";
 const CONFIG_FLAG_INLINE = `${CONFIG_FLAG}=`;
 
+// Whitespace splitting keeps the quote characters, so `--config="…/x.config.ts"` would otherwise
+// end in `.ts"` and match no config — a legitimate command reading as unowned.
+function unquote(value) {
+  const quoted = /^"([^"]*)"$|^'([^']*)'$/u.exec(value);
+  return quoted?.[1] ?? quoted?.[2] ?? value;
+}
+
 function configArgumentValue(token, nextToken) {
-  if (token.startsWith(CONFIG_FLAG_INLINE)) return token.slice(CONFIG_FLAG_INLINE.length);
-  return token === CONFIG_FLAG ? nextToken : undefined;
+  if (token.startsWith(CONFIG_FLAG_INLINE)) {
+    return unquote(token.slice(CONFIG_FLAG_INLINE.length));
+  }
+  return token === CONFIG_FLAG && nextToken !== undefined ? unquote(nextToken) : undefined;
 }
 
 export function playwrightConfigNames(command) {

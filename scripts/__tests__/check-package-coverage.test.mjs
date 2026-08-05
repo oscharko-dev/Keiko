@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -384,6 +384,33 @@ describe("coverage source-glob parity", () => {
 
     expect(UI_COVERAGE_INCLUDE).toEqual(config.test.coverage.include);
     expect(UI_COVERAGE_EXCLUDE).toEqual(config.test.coverage.exclude);
+  });
+
+  // Following symlinks (so the inventory matches what the coverage run measures) makes a cycle
+  // reachable: a link to an ancestor would recurse until the path or the stack is exhausted, and
+  // two links to one directory would list its files twice. Both are fatal to a gate whose job is to
+  // produce one honest number, so the walk tracks resolved directories.
+  it("terminates on a symlink cycle and counts a repeated target once", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-coverage-symlink-"));
+    try {
+      const src = join(root, "packages", "keiko-probe", "src");
+      mkdirSync(join(src, "nested"), { recursive: true });
+      writeFileSync(join(src, "real.ts"), "export const a = 1;\n");
+      writeFileSync(join(src, "nested", "deep.ts"), "export const b = 2;\n");
+      // Self-link, ancestor-link, and a second link to an already-walked directory.
+      symlinkSync(src, join(src, "self-link"), "dir");
+      symlinkSync(src, join(src, "nested", "ancestor-link"), "dir");
+      symlinkSync(join(src, "nested"), join(src, "nested-again"), "dir");
+
+      const files = listPackageSourceFiles(root, "keiko-probe");
+
+      expect(files).toEqual([
+        "packages/keiko-probe/src/nested/deep.ts",
+        "packages/keiko-probe/src/real.ts",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("excludes tests, __tests__, support files and configs from the live inventory", () => {

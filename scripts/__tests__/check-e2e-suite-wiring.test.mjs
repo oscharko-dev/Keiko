@@ -300,6 +300,17 @@ describe("config ownership (KEIKO-0077)", () => {
     ]);
   });
 
+  // Splitting on whitespace keeps the quotes, so an unquoted read would leave `.ts"` and match no
+  // config — a legitimate command reading as unowned.
+  it("reads a quoted --config value in both spellings", () => {
+    expect(playwrightConfigNames(`playwright test --config="tests/e2e/config/${ORPHAN}"`)).toEqual([
+      ORPHAN,
+    ]);
+    expect(playwrightConfigNames(`playwright test --config 'tests/e2e/config/${ORPHAN}'`)).toEqual([
+      ORPHAN,
+    ]);
+  });
+
   it("does not let a filename prefix satisfy a different config", () => {
     const longer = "playwright.issue-9999-orphan-extended.config.ts";
 

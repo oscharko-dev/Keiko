@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, matchesGlob, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -270,12 +278,19 @@ function isMeasuredSourcePath(repoRelativePath, { include, exclude }) {
 // run that follows it, and the reality guard would fail with a mismatch that names no cause. v8
 // measures whatever the module graph resolves to, so this follows symlinks to match, and a broken
 // one fails loudly rather than disappearing.
-function walkSourceFiles(directory) {
+// `seen` holds the REAL path of every directory already walked. Following symlinks (above) without
+// it lets a link pointing at an ancestor recurse until the path or the stack is exhausted, and lets
+// two links to the same directory list its files twice — a hang or a double-count in a gate whose
+// whole job is to produce one honest number.
+function walkSourceFiles(directory, seen = new Set()) {
+  const real = realpathSync(directory);
+  if (seen.has(real)) return [];
+  seen.add(real);
   const found = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const child = join(directory, entry.name);
     const stats = entry.isSymbolicLink() ? statSync(child) : entry;
-    if (stats.isDirectory()) found.push(...walkSourceFiles(child));
+    if (stats.isDirectory()) found.push(...walkSourceFiles(child, seen));
     else if (stats.isFile()) found.push(child);
   }
   return found;
