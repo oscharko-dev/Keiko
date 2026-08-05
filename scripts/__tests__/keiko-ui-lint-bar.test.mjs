@@ -22,8 +22,16 @@ const BARRED_RULES = [
 // The values are read from the ROOT config rather than restated here. A hand-written copy would
 // pass forever if the repo-wide bar moved and keiko-ui's did not — the exact "fixture restates a
 // formula the code owns" failure AGENTS.md §7 names.
+//
+// Selected by VALUE, not by position. Both configs define each rule more than once: the strict base
+// setting, then an `"off"` in a `files`-scoped block exempting test files from
+// max-lines-per-function. Taking the first or the last entry would compare an arbitrary one of
+// those — and taking the last would compare `"off"` against `"off"` in both configs, which passes
+// no matter how far keiko-ui's real bar drifts. The enabled setting is the one that is not "off".
 function enabledSetting(config, rule) {
-  return config.filter((block) => block?.rules?.[rule] !== undefined).map((b) => b.rules[rule])[0];
+  return config
+    .map((block) => block?.rules?.[rule])
+    .find((setting) => setting !== undefined && setting !== "off");
 }
 
 async function loadConfigs() {

@@ -1,14 +1,17 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
 import {
+  assertMeasurableBudget,
   evaluateGroundedLatency,
   evaluateLatencyBudget,
   evaluateRegressionProbe,
   percentile,
+  runGroundedRetrievalLatencyGate,
 } from "../check-grounded-retrieval-latency.mjs";
 
 // Audit KEIKO-0053. The gate itself measures the real grounded pipeline and takes tens of seconds;
@@ -92,6 +95,106 @@ describe("evaluateRegressionProbe", () => {
     expect(probe.failures).toHaveLength(1);
     expect(probe.failures[0]).toContain("tautological gate");
   });
+});
+
+describe("assertMeasurableBudget", () => {
+  // A zero `iterations` leaves `samples` empty, and `percentile([])` is 0 — which clears every
+  // ceiling. The gate would report PASS having measured nothing, which is the same false-green class
+  // the gate exists to catch. It must refuse the budget instead of measuring nothing quietly.
+  it.each([
+    ["iterations", 0],
+    ["iterations", -1],
+    ["iterations", 1.5],
+    ["iterations", "12"],
+    ["warmupIterations", -1],
+    ["warmupIterations", undefined],
+  ])("rejects a budget whose %s is %p", (field, value) => {
+    expect(() => assertMeasurableBudget({ ...budget, [field]: value })).toThrow(TypeError);
+  });
+
+  it("accepts zero warmup iterations but requires at least one measured iteration", () => {
+    expect(assertMeasurableBudget({ ...budget, warmupIterations: 0, iterations: 1 })).toBeTruthy();
+  });
+
+  it("accepts the committed budget", () => {
+    expect(assertMeasurableBudget(budget)).toBe(budget);
+  });
+});
+
+// The runner, driven end to end over the REAL pipeline with a one-iteration budget so the suite pays
+// for two evaluations rather than fifteen. This is what covers collectSamples, the reporting, and
+// the failure branch — the pure helpers above cannot reach any of it.
+describe("runGroundedRetrievalLatencyGate", () => {
+  // A named no-op: an empty arrow is a lint error, and the point is that these runs discard their
+  // log output rather than that nothing happens.
+  const discard = () => undefined;
+
+  function withBudgetFile(overrides, assert) {
+    const root = mkdtempSync(join(tmpdir(), "keiko-grounded-latency-"));
+    try {
+      const budgetPath = join(root, "budget.json");
+      writeFileSync(budgetPath, JSON.stringify({ ...budget, ...overrides }));
+      return assert(budgetPath);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  const FAST = { warmupIterations: 0, iterations: 1, regressionProbe: { judgeDelayMs: 200 } };
+
+  it("measures the real pipeline, reports both percentiles, and proves the probe fires", async () => {
+    await withBudgetFile(FAST, async (budgetPath) => {
+      const logs = [];
+      const failures = [];
+      const result = await runGroundedRetrievalLatencyGate({
+        budgetPath,
+        log: (m) => logs.push(m),
+        fail: (m) => failures.push(m),
+      });
+
+      expect(failures).toEqual([]);
+      expect(result.ok).toBe(true);
+      expect(result.p50).toBeGreaterThan(0);
+      expect(result.probe.detected).toBe(true);
+      expect(logs[0]).toContain("grounded-retrieval-latency: p50=");
+      expect(logs[1]).toContain("regression probe:");
+    });
+  }, 180_000);
+
+  it("fails when the measured percentiles breach an impossible budget", async () => {
+    await withBudgetFile({ ...FAST, p50BudgetMs: 0, p95BudgetMs: 0 }, async (budgetPath) => {
+      const failures = [];
+      const result = await runGroundedRetrievalLatencyGate({
+        budgetPath,
+        log: () => discard(),
+        fail: (m) => failures.push(m),
+      });
+
+      expect(result.ok).toBe(false);
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toContain("p50");
+      expect(failures[0]).toContain("p95");
+    });
+  }, 180_000);
+
+  // The self-proving half, exercised for real: with a budget wide enough to absorb the injected
+  // delay, the probe must report the gate as tautological rather than passing quietly.
+  it("fails closed when the budget is loose enough to absorb the injected regression", async () => {
+    await withBudgetFile(
+      { ...FAST, p50BudgetMs: 600_000, p95BudgetMs: 600_000 },
+      async (budgetPath) => {
+        const failures = [];
+        const result = await runGroundedRetrievalLatencyGate({
+          budgetPath,
+          log: () => discard(),
+          fail: (m) => failures.push(m),
+        });
+
+        expect(result.probe.detected).toBe(false);
+        expect(failures.join(" ")).toContain("tautological gate");
+      },
+    );
+  }, 180_000);
 });
 
 describe("committed budget document", () => {

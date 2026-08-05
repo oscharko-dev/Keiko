@@ -6,7 +6,7 @@ import { isMainModule } from "./lib/is-main-module.mjs";
 const MATRIX_PATH = join(import.meta.dirname, "security-regression-matrix.json");
 const REPO_ROOT = join(import.meta.dirname, "..");
 
-const EXPECTED_IDS = [
+export const EXPECTED_IDS = [
   "AUDIT-SEC-001",
   "AUDIT-FS-001",
   "AUDIT-EVID-001",
@@ -51,9 +51,23 @@ const EXPECTED_IDS = [
   "AUDIT-HARDEN-004",
 ];
 
-function fail(message) {
-  console.error(`security-regression-matrix: FAIL - ${message}`);
-  process.exit(1);
+// The CLI surface takes its sinks by injection so the suite can drive the real read/validate/report
+// path — including both failure branches — without spawning a subprocess or exiting the runner.
+const CONSOLE_REPORTER = {
+  log: (message) => {
+    console.log(message);
+  },
+  error: (message) => {
+    console.error(message);
+  },
+  exit: (code) => {
+    process.exit(code);
+  },
+};
+
+function fail(reporter, message) {
+  reporter.error(`security-regression-matrix: FAIL - ${message}`);
+  reporter.exit(1);
 }
 
 function stringArray(value) {
@@ -214,27 +228,34 @@ export function validateMatrix(matrix, repoRoot = REPO_ROOT) {
   return { failures, count: seen.size };
 }
 
-function printFailuresAndExit(failures) {
-  if (failures.length > 0) {
-    console.error("security-regression-matrix: FAIL");
-    for (const failure of failures) {
-      console.error(`  - ${failure}`);
-    }
-    process.exit(1);
+function printFailuresAndExit(reporter, failures) {
+  if (failures.length === 0) return false;
+  reporter.error("security-regression-matrix: FAIL");
+  for (const failure of failures) {
+    reporter.error(`  - ${failure}`);
   }
+  reporter.exit(1);
+  return true;
 }
 
-export function main() {
+export function main({
+  matrixPath = MATRIX_PATH,
+  repoRoot = REPO_ROOT,
+  reporter = CONSOLE_REPORTER,
+} = {}) {
   let matrix;
   try {
-    matrix = JSON.parse(readFileSync(MATRIX_PATH, "utf8"));
+    matrix = JSON.parse(readFileSync(matrixPath, "utf8"));
   } catch (error) {
-    fail(`matrix could not be read: ${error instanceof Error ? error.message : String(error)}`);
+    fail(
+      reporter,
+      `matrix could not be read: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return;
   }
-  const { failures, count } = validateMatrix(matrix, REPO_ROOT);
-  printFailuresAndExit(failures);
-  console.log(`security-regression-matrix: PASS - ${String(count)} findings mapped.`);
+  const { failures, count } = validateMatrix(matrix, repoRoot);
+  if (printFailuresAndExit(reporter, failures)) return;
+  reporter.log(`security-regression-matrix: PASS - ${String(count)} findings mapped.`);
 }
 
 // Run as a CLI unless imported by a test.

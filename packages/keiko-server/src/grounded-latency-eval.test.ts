@@ -27,9 +27,14 @@ describe("runGroundedRetrievalLatencyEval", () => {
     expect(sample.entailmentMs).toBeGreaterThanOrEqual(delayMs * 8);
   }, 30_000);
 
+  // Relative, not an absolute millisecond ceiling: an absolute threshold is a wall-clock assertion
+  // on a shared runner and would flake under load. The claim that matters is that the delay lever —
+  // and only the delay lever — moves the number, so compare the two runs against each other.
   it("is inert when no delay is injected", async () => {
-    const sample = await runGroundedRetrievalLatencyEval({ injectedJudgeDelayMs: 0 });
+    const delayMs = 20;
+    const clean = await runGroundedRetrievalLatencyEval({ injectedJudgeDelayMs: 0 });
+    const delayed = await runGroundedRetrievalLatencyEval({ injectedJudgeDelayMs: delayMs });
 
-    expect(sample.entailmentMs).toBeLessThan(100);
-  });
+    expect(clean.entailmentMs).toBeLessThan(delayed.entailmentMs - delayMs * 4);
+  }, 30_000);
 });

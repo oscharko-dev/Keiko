@@ -258,7 +258,9 @@ function readBaseline(repoRoot) {
   const parsed = JSON.parse(readFileSync(join(repoRoot, BASELINE_PATH), "utf8"));
   return {
     suites: validateBaselineSuites(parsed.suites),
-    configsWithoutScript: validateUnownedConfigs(parsed.configsWithoutScript),
+    // Absent field ⇒ nothing recorded ⇒ every scriptless config fails. That is the fail-closed
+    // direction, so a baseline predating this list degrades to "stricter", never to "silent".
+    configsWithoutScript: validateUnownedConfigs(parsed.configsWithoutScript ?? []),
   };
 }
 

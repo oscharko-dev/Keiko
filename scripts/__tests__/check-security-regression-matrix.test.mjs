@@ -4,7 +4,12 @@ import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { validateMatrix, verificationPathFailures } from "../check-security-regression-matrix.mjs";
+import {
+  EXPECTED_IDS,
+  main,
+  validateMatrix,
+  verificationPathFailures,
+} from "../check-security-regression-matrix.mjs";
 
 // The gate's core claim is coverage-of-record: every entry names a test or document that STILL
 // exists and can therefore still prove its finding. Before audit KEIKO-0030 the checker validated
@@ -149,6 +154,85 @@ describe("validateMatrix", () => {
         failures: ["matrix root must be a JSON array."],
         count: 0,
       });
+    });
+  });
+});
+
+// The CLI surface, driven end to end through the real read → validate → report path. Its sinks are
+// injected, so both failure branches are observable without spawning a process or exiting the
+// runner — and the gate's exit code, the thing CI actually reads, is asserted rather than assumed.
+describe("main", () => {
+  function captureRun(root, matrix) {
+    const matrixPath = join(root, "matrix.json");
+    writeFileSync(matrixPath, JSON.stringify(matrix));
+    const logs = [];
+    const errors = [];
+    const exits = [];
+    main({
+      matrixPath,
+      repoRoot: root,
+      reporter: {
+        log: (m) => logs.push(m),
+        error: (m) => errors.push(m),
+        exit: (c) => exits.push(c),
+      },
+    });
+    return { logs, errors, exits };
+  }
+
+  // Every EXPECTED id must be present, so a passing fixture has to carry all 42.
+  function completeMatrix(overrides = {}) {
+    return EXPECTED_IDS.map((id) => ({
+      id,
+      verification: overrides[id] ?? ["npm run arch:check"],
+      notes: `notes for ${id}`,
+    }));
+  }
+
+  it("reports PASS with the finding count and exits nowhere when the matrix is sound", () => {
+    withRepoRoot([], (root) => {
+      const { logs, errors, exits } = captureRun(root, completeMatrix());
+
+      expect(errors).toEqual([]);
+      expect(exits).toEqual([]);
+      expect(logs).toEqual([
+        `security-regression-matrix: PASS - ${String(EXPECTED_IDS.length)} findings mapped.`,
+      ]);
+    });
+  });
+
+  it("exits 1 listing each failure, and prints no PASS line, when an entry is broken", () => {
+    withRepoRoot([], (root) => {
+      const { logs, errors, exits } = captureRun(
+        root,
+        completeMatrix({ "AUDIT-SEC-001": ["npx vitest run gone.test.ts"] }),
+      );
+
+      expect(exits).toEqual([1]);
+      expect(errors[0]).toBe("security-regression-matrix: FAIL");
+      expect(errors).toContain("  - AUDIT-SEC-001 verification path does not exist: gone.test.ts");
+      expect(logs).toEqual([]);
+    });
+  });
+
+  it("exits 1 with a read error rather than throwing when the matrix is unreadable", () => {
+    withRepoRoot([], (root) => {
+      const logs = [];
+      const errors = [];
+      const exits = [];
+      main({
+        matrixPath: join(root, "absent.json"),
+        repoRoot: root,
+        reporter: {
+          log: (m) => logs.push(m),
+          error: (m) => errors.push(m),
+          exit: (c) => exits.push(c),
+        },
+      });
+
+      expect(exits).toEqual([1]);
+      expect(errors[0]).toContain("matrix could not be read");
+      expect(logs).toEqual([]);
     });
   });
 });

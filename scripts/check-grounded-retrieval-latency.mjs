@@ -79,6 +79,22 @@ export function evaluateRegressionProbe({ regressedMs, budget }) {
 
 // ─── Runner ─────────────────────────────────────────────────────────────────────
 
+// A non-positive `iterations` would leave `samples` empty, and `percentile([])` is 0 — which clears
+// every ceiling. The gate would report PASS having measured nothing at all, which is precisely the
+// false-green class this whole change set exists to remove. Reject the budget instead.
+export function assertMeasurableBudget(budget) {
+  for (const field of ["warmupIterations", "iterations"]) {
+    const value = budget[field];
+    if (!Number.isInteger(value) || value < (field === "iterations" ? 1 : 0)) {
+      throw new TypeError(
+        `check-grounded-retrieval-latency: budget.${field} must be a non-negative integer ` +
+          `(iterations at least 1); got ${JSON.stringify(value)}.`,
+      );
+    }
+  }
+  return budget;
+}
+
 async function collectSamples(budget) {
   for (let i = 0; i < budget.warmupIterations; i += 1) {
     await runGroundedRetrievalLatencyEval();
@@ -102,7 +118,7 @@ export async function runGroundedRetrievalLatencyGate({
       console.error(`grounded-retrieval-latency check failed: ${message}`);
       process.exit(1);
     });
-  const budget = JSON.parse(readFileSync(budgetPath, "utf8"));
+  const budget = assertMeasurableBudget(JSON.parse(readFileSync(budgetPath, "utf8")));
 
   const samples = await collectSamples(budget);
   const result = evaluateGroundedLatency({ samples, budget });

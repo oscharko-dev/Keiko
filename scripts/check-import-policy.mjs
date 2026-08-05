@@ -155,11 +155,17 @@ const CODING_RUNTIME_PROCESS_CAPABILITY_FILES = new Set([
   `${CODING_RUNTIME_ROOT}opencodeFunctionalHarness/_support.ts`,
 ]);
 
+// Matched as a prefix, not an exact name: several of these core modules ship a promises subpath
+// (`node:dns/promises` is real and grants full resolver capability), so an exact-match set would let
+// the capability back in through the subpath — the review finding on the first version of this rule.
+// Mirrors CONNECTORS_FORBIDDEN_PREFIXES. `fetch` carries no subpath but matches the same way.
 function isCodingRuntimeForbiddenCapability(specifier, path) {
-  if (CODING_RUNTIME_NETWORK_FORBIDDEN_EXACT.has(specifier)) {
+  const forbiddenAs = (prefixes) =>
+    [...prefixes].some((prefix) => matchesSpecifierPrefix(specifier, prefix));
+  if (forbiddenAs(CODING_RUNTIME_NETWORK_FORBIDDEN_EXACT)) {
     return !CODING_RUNTIME_NETWORK_CAPABILITY_FILES.has(path);
   }
-  if (CODING_RUNTIME_PROCESS_FORBIDDEN_EXACT.has(specifier)) {
+  if (forbiddenAs(CODING_RUNTIME_PROCESS_FORBIDDEN_EXACT)) {
     return !CODING_RUNTIME_PROCESS_CAPABILITY_FILES.has(path);
   }
   return false;
