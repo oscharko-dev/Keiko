@@ -277,6 +277,28 @@ describe("createNodeFigmaSnapshotStore", () => {
     }
   });
 
+  it("refuses a symlinked side-file root before staging any screen bytes", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    // mkdirSync(recursive) silently FOLLOWS a symlink at the figma-snapshots segment while creating
+    // the deeper `.attempt-*` directory under it, and writeSideFile's own lstat/realpath check then
+    // only inspects that deeper, genuinely-real component -- never the symlinked ancestor. Without
+    // validating the side-file base itself, pre-planted evidence input redirects every staged PNG
+    // outside the evidence tree while the JSON record still commits under qi/.
+    const outside = mkdtempSync(join(tmpdir(), "figma-snapshot-sidebase-"));
+    try {
+      mkdirSync(join(dir, QI_SUBDIR), { recursive: true });
+      symlinkSync(outside, join(dir, QI_SUBDIR, "figma-snapshots"), "dir");
+      const store = createNodeFigmaSnapshotStore(dir);
+
+      expect(() => store.record(baseInput())).toThrow(EvidenceWriteError);
+      // Nothing escaped: no attempt directory, and no PNG bytes, outside the evidence tree.
+      expect(readdirSync(outside)).toHaveLength(0);
+      expect(existsSync(snapshotFile())).toBe(false);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("stores mutable display metadata without mutating the immutable snapshot record", () => {
     const store = createNodeFigmaSnapshotStore(dir);
     store.record(baseInput());

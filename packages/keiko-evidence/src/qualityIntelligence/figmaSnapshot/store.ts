@@ -982,6 +982,12 @@ function publishStagedSideFiles(
   }
   rmSync(sideFileDir, { recursive: true, force: true });
   renameSync(stagedRunDir, sideFileDir);
+  // Matches atomicWriteOnce's own durability discipline (durable-write.ts): a rename's directory
+  // entry is not guaranteed durable until the containing directory is fsynced, so without this a
+  // crash right after renameSync returns can lose the entry while the JSON record — already
+  // fsynced by atomicWriteOnce — survives, reproducing the exact "record references missing
+  // images" gap this function exists to prevent, just via a crash instead of a thrown error.
+  fsyncDirectoryContaining(sideFileDir);
 }
 
 function recordOp(ctx: StoreCtx, input: RecordFigmaSnapshotInput): RecordFigmaSnapshotResult {
@@ -998,8 +1004,20 @@ function recordOp(ctx: StoreCtx, input: RecordFigmaSnapshotInput): RecordFigmaSn
   // both directions: a loser overwrote the winner's PNG bytes at the deterministic screen-N.png
   // path (leaving the committed record referencing a sha256 that no longer matched disk), and its
   // failure cleanup then deleted the winner's whole directory.
-  const stagingBase = join(ctx.sideFileBase, `.attempt-${randomUUID()}`);
-  const sideFileDir = join(ctx.sideFileBase, input.runId);
+  // Validated here rather than joined straight from ctx.sideFileBase: mkdirSync's recursive create
+  // silently follows a symlink planted at the figma-snapshots segment while creating a DEEPER path
+  // under it, and the writeSideFile's own lstat/realpath containment check then only sees that
+  // deeper, genuinely-real final component — never the symlinked ancestor above it. Deriving the
+  // staging base through prepareOwnedDirectory with parentReal here, from the already-validated
+  // realBase, mirrors containedSideFileRunDir's read-side check and closes that gap for writes.
+  const realSideFileBase = prepareOwnedDirectory(
+    join(realBase, SIDE_FILE_SUBDIR),
+    ctx.fs,
+    "Figma snapshot side-file root",
+    { parentReal: realBase },
+  );
+  const stagingBase = join(realSideFileBase, `.attempt-${randomUUID()}`);
+  const sideFileDir = join(realSideFileBase, input.runId);
   try {
     const rows: readonly FigmaSnapshotScreenRow[] = writeScreenSideFiles(
       stagingBase,

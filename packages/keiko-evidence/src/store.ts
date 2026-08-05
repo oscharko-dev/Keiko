@@ -330,8 +330,8 @@ function publishManifestLock(realBase: string, lockPath: string, deadline: numbe
     // limit for every runId the lock name itself admits, so a long runId cannot surface an
     // ENAMETOOLONG carrying the absolute path (CWE-209, guarded above for the lock itself).
     const tempPath = resolveWithinWorkspace(realBase, `.${randomUUID()}.pidtmp`);
-    const stamp = stageLockOwnerPid(tempPath);
     try {
+      const stamp = stageLockOwnerPid(tempPath);
       linkSync(tempPath, lockPath);
       return stamp;
     } catch (error) {

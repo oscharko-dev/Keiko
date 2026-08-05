@@ -114,6 +114,34 @@ describe("acquireManifestLock — mutual exclusion across processes", () => {
     expect(readdirSync(dir).filter((name) => name.includes("pidtmp"))).toEqual([]);
   });
 
+  it("wraps a staging failure as EvidenceWriteError and leaves no temp file behind", async () => {
+    // Staging the owner stamp can fail for reasons unrelated to contention (disk full, EACCES, a
+    // transient fs fault). That throw must not escape the evidence boundary raw: a Node fs error
+    // carries the absolute evidence path in its message (CWE-209), and the half-created .pidtmp
+    // must still be cleaned up.
+    const dir = freshDir();
+
+    vi.resetModules();
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    vi.doMock("node:fs", () => ({
+      ...actualFs,
+      default: actualFs,
+      fsyncSync: (): void => {
+        throw Object.assign(new Error(`ENOSPC: no space left on device, fsync '${dir}/x.pidtmp'`), {
+          code: "ENOSPC",
+        });
+      },
+    }));
+    const { createNodeEvidenceStore: createStore } = await import("./store.js");
+    const { EvidenceWriteError } = await import("./errors.js");
+
+    const store = createStore(dir);
+    expect(() => {
+      store.update?.("run-1", (existing) => `${existing ?? "[]"},2`);
+    }).toThrow(EvidenceWriteError);
+    expect(readdirSync(dir).filter((name) => name.includes("pidtmp"))).toEqual([]);
+  });
+
   it("does not remove a lock that another process reclaimed and now holds", () => {
     const dir = freshDir();
     const store = createNodeEvidenceStore(dir);
