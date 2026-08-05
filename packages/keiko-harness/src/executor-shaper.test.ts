@@ -345,6 +345,10 @@ describe("executor — ADR-0055 D4 shaped-observation attach", () => {
 
       expect(step.to).not.toBe("failed");
       expect(ctx.failure).toBeUndefined();
+      // The deferred commit (KEIKO-0099) must not leave a half-applied accumulator entry: a fault
+      // during shaping means NEITHER the observation nor its compacted message was ever recorded.
+      expect(ctx.shapedObservations).toHaveLength(0);
+      expect(ctx.compactedToolMessages.size).toBe(0);
       expect(
         sink
           .events()

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -10,8 +11,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { dirname, join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EvidenceReadError, EvidenceWriteError } from "../../../errors.js";
 import {
   __resetFigmaSnapshotSweepRegistryForTests,
@@ -55,6 +56,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Idempotent even when the test did not mock node:fs, so every test can rely on it running.
+  vi.doUnmock("node:fs");
+  vi.resetModules();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -501,6 +505,32 @@ describe("createNodeFigmaSnapshotStore", () => {
     expect(readFileSync(join(committed?.sideFileDir ?? "", first.image.relativePath))).toEqual(
       Buffer.from(png(10)),
     );
+  });
+
+  it("rolls back the committed record when installing its side-files throws", async () => {
+    // The record commits before its side-files are moved into place (KEIKO-0110's fix); if that
+    // install step throws, the committed record must not survive pointing at missing images.
+    // Durable writes elsewhere in the same call chain (the staged PNGs, the record's own
+    // write-once commit) ALSO rename through a temp file, so the fault is scoped to exactly the
+    // publish rename: its source is the attempt-private staging directory (basename `.attempt-*`),
+    // which no other renameSync call in this store ever passes.
+    vi.resetModules();
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    vi.doMock("node:fs", () => ({
+      ...actualFs,
+      default: actualFs,
+      renameSync: (source: string, destination: string): void => {
+        if (dirname(source).split("/").pop()?.startsWith(".attempt-") === true) {
+          throw new Error("simulated cross-device rename failure");
+        }
+        actualFs.renameSync(source, destination);
+      },
+    }));
+    const { createNodeFigmaSnapshotStore: createStore } = await import("../store.js");
+
+    const store = createStore(dir);
+    expect(() => store.record(baseInput())).toThrow("simulated cross-device rename failure");
+    expect(existsSync(snapshotFile())).toBe(false);
   });
 
   it("redacts secrets out of the persisted IR content (token never on disk)", () => {

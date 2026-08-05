@@ -993,7 +993,18 @@ function recordOp(ctx: StoreCtx, input: RecordFigmaSnapshotInput): RecordFigmaSn
       ctx.randomSuffix,
     );
     atomicWriteOnce(recordPath, JSON.stringify(assembleRecord(input, rows)), ctx.randomSuffix);
-    publishStagedSideFiles(join(stagingBase, input.runId), sideFileDir);
+    try {
+      publishStagedSideFiles(join(stagingBase, input.runId), sideFileDir);
+    } catch (error) {
+      // The record committed but installing its side-files then threw: roll back the record so a
+      // reader never observes it permanently referencing missing images, and so a retry passes
+      // assertSnapshotAbsent again. This closes the synchronous-failure half of the gap; a hard
+      // process kill between the two writes (not a thrown error) remains unmitigated here and
+      // would need two-phase-commit machinery to close — the orphaned staging directory is at
+      // least reclaimed by sweepOrphanedSideDirs, but the broken record is not self-healing.
+      rmSync(recordPath, { force: true });
+      throw error;
+    }
   } finally {
     // Only ever this attempt's own staging directory — never the canonical one, which by now
     // belongs to whichever attempt committed the record.

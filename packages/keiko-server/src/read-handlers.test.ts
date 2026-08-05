@@ -740,6 +740,33 @@ describe("GET /api/evidence", () => {
     expect(entries.map((entry) => entry.runId)).toEqual(["run-a", "run-b"]);
   });
 
+  it.each([
+    ["EvidenceReadError", new EvidenceReadError("store I/O failure"), "EVIDENCE_READ"],
+    ["EvidenceSchemaError", new EvidenceSchemaError("unsupported version", "9"), "EVIDENCE_SCHEMA"],
+  ])(
+    "maps an unexpected %s from the store itself to a 422, as defense in depth",
+    (_label, thrown, code) => {
+      // listEvidence already skips a single bad MANIFEST (the case above): this proves the
+      // route's OWN mapping fires for a fault listEvidence's per-entry skip does not cover — an
+      // error the store itself raises (e.g. a directory-listing I/O failure), matching what the
+      // sibling handleEvidenceDetail already guarantees.
+      const failingStore: EvidenceStore = {
+        put: () => "",
+        list: () => {
+          throw thrown;
+        },
+        get: () => undefined,
+        delete: () => undefined,
+      };
+      const result = handleEvidenceList(
+        ctx("/api/evidence"),
+        depsWith({ evidenceStore: failingStore }),
+      );
+      expect(result.status).toBe(422);
+      expect(result.body).toMatchObject({ error: { code } });
+    },
+  );
+
   it("filters by model and workspace metadata", () => {
     const store = storeFrom([
       manifestJson(

@@ -165,10 +165,16 @@ describe("loadEvidence", () => {
       "run-corrupt",
       JSON.stringify({ ...manifestFixture("run-corrupt", 300), stateTransitions: "not-an-array" }),
     );
+    // Also cover the two guard branches ahead of parseManifest: a non-record top level (null) and
+    // a record with no recognisable evidenceSchemaVersion at all (empty object).
+    store.put("run-null", "null");
+    store.put("run-empty", "{}");
     expect(listEvidence(store).map((entry) => entry.runId)).toEqual(["run-a", "run-b"]);
     expect(() => loadEvidence(store, "run-legacy")).toThrow(EvidenceSchemaError);
     expect(() => loadEvidence(store, "run-torn")).toThrow(EvidenceReadError);
     expect(() => loadEvidence(store, "run-corrupt")).toThrow(EvidenceSchemaError);
+    expect(() => loadEvidence(store, "run-null")).toThrow(EvidenceSchemaError);
+    expect(() => loadEvidence(store, "run-empty")).toThrow(EvidenceSchemaError);
   });
 
   it("still propagates an unexpected store failure out of listEvidence (fails closed)", () => {
