@@ -667,7 +667,7 @@ describe("runLoop — limit breaches each map to their category", () => {
       now: (): number => (calls++ < 16 ? 0 : 1000),
       sleep: (): Promise<void> => Promise.resolve(),
     };
-    const { port } = scriptedModel([response()]);
+    const { port, calls: modelCalls } = scriptedModel([response()]);
     const { ctx, sink } = buildContext({
       task: EXPLAIN,
       model: port,
@@ -677,5 +677,12 @@ describe("runLoop — limit breaches each map to their category", () => {
     const outcome = await runLoop(ctx);
     expect(outcome).toBe("limit-exceeded");
     expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_WALL_TIME");
+    // Both wall-time guards produce limit-exceeded/HARNESS_LIMIT_WALL_TIME, so the two assertions
+    // above cannot tell them apart: if a refactor shifted the clock reads so the deadline were
+    // crossed at the PRE-dispatch guard, runLoop would exit before dispatch and this test would
+    // still pass — while no longer exercising the post-dispatch guard it exists to pin. runLoop
+    // reaches the model only inside dispatch(), after that guard, so a non-zero model call count
+    // is what makes this pin non-vacuous.
+    expect(modelCalls()).toBe(1);
   });
 });
