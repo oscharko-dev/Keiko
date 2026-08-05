@@ -155,15 +155,27 @@ jobs:
           # duplication safe.
           # Quoted: a hypothetical all-digit sha would otherwise parse as a YAML number and reach
           # the shell in a normalized form, defeating the length check below.
-          ACTION_PIN: "966dc50f920c666842d440baea1115b88df90e34" # v0.15.0 — keep in sync with Review's uses:
+          ACTION_PIN: "1ea5d97d066a2edf3450becab0a88f4dfeee3302" # v0.16.0 — keep in sync with Review's uses:
         run: |
-          # The pin partitions the store because a wrapper release can change review or
-          # sanitization SEMANTICS without changing the store's format. Three earlier rounds
-          # derived it by reading this file (grep, then a YAML parse, then awk); two independent
-          # reviewers converged on the same objection, and they are right: an extraction tied to
-          # text layout makes a benign reformat — or moving the call into a reusable workflow —
-          # an OUTAGE OF THE REVIEWER, which costs far more than a lost cache. Identity therefore
-          # comes from the declared value above, and the parse survives only as a best-effort
+          # The pin no longer partitions the store, and that is a deliberate reversal. It used to,
+          # because a wrapper release can change review or sanitization SEMANTICS without changing
+          # the store's FORMAT, and this workflow cannot tell which releases did. Correct, and far
+          # too coarse: it discarded every entry of every open pull request on every release.
+          # Measured here — four pins in 33 hours, four total resets, against a 9% hit rate on
+          # large runs, while a truncated review re-priced all 37 files from zero on each of
+          # thirteen consecutive runs.
+          #
+          # From v0.16.0 the action stamps each entry with its own publication-contract id and
+          # drops only the mismatched entries on load (`PUBLICATION_SEMANTICS`, review-cache v3).
+          # The knowledge lives where it exists: the action knows whether a release changed what a
+          # stored finding list would publish today, and this file never could.
+          #
+          # The pin is still declared and still cross-checked, for the reason it always was. Three
+          # earlier rounds derived it by reading this file (grep, then a YAML parse, then awk); two
+          # independent reviewers converged on the same objection, and they are right: an
+          # extraction tied to text layout makes a benign reformat — or moving the call into a
+          # reusable workflow — an OUTAGE OF THE REVIEWER, which costs far more than a lost cache.
+          # Identity comes from the declared value above; the parse survives as a best-effort
           # CROSS-CHECK against the drift the declaration reintroduces (env says A, uses: runs B).
           # Neither path may fail the job: a disagreement or an unreadable pin disables the STORE
           # for this run — full-price review, reviewer intact — and never blocks integration.
@@ -184,8 +196,8 @@ jobs:
             echo "::warning::ACTION_PIN disagrees with the pinned uses: line — advance both together; running without the review store"
             STORE_ENABLED=false
           fi
-          IDENTITY="$(printf 'profile=%s model=%s protocol=%s action=%s' \
-              "${PROFILE_HASH}" "${MODEL_ID}" "${MODEL_PROTOCOL}" "${ACTION_PIN}" \
+          IDENTITY="$(printf 'profile=%s model=%s protocol=%s' \
+              "${PROFILE_HASH}" "${MODEL_ID}" "${MODEL_PROTOCOL}" \
             | openssl dgst -sha256 -r | cut -c1-16)"
           {
             echo "name=keiko-review-store-pr${PR_NUMBER}-${IDENTITY}"
@@ -407,7 +419,7 @@ jobs:
 
       - name: Review
         id: review
-        uses: oscharko-dev/Keiko-for-Quality@966dc50f920c666842d440baea1115b88df90e34 # v0.15.0
+        uses: oscharko-dev/Keiko-for-Quality@1ea5d97d066a2edf3450becab0a88f4dfeee3302 # v0.16.0
         env:
           # Passed by variable NAME to the action, never as an input value: an input appears in the
           # step context that every other action in the job can read.
