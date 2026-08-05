@@ -713,6 +713,15 @@ describe("Jira sync — degradation and validation", () => {
     );
     expect(unbalancedJql.status).toBe(400);
 
+    // A whitespace-only clause has trivially balanced nesting (no parens at all), so it slips
+    // past hasBalancedJqlNesting and needs its own rejection — otherwise it survives to compose
+    // `AND (   )`, a malformed query Jira rejects on every future re-sync of the pod.
+    const whitespaceJql = await handleStartAtlassianConnectorSync(
+      ctxFor("POST", { authRef: credential.authRef }, { projectKeys: ["PLAT"], jql: "   " }),
+      deps,
+    );
+    expect(whitespaceJql.status).toBe(400);
+
     const started = await startSync(deps, credential, { projectKeys: ["PLAT"] });
     await awaitTerminal(started.job.jobId);
     const resyncWithScope = await handleStartAtlassianConnectorSync(

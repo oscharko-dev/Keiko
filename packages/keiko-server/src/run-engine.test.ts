@@ -22,6 +22,7 @@ import {
 } from "./agent-run-governance.js";
 import { editorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import type { VerificationReport } from "@oscharko-dev/keiko-verification";
+import type { NetworkIsolationProbe } from "./editor/verificationExecution.js";
 
 const REJECT_MODEL: ModelPort = {
   call: (): Promise<NormalizedResponse> =>
@@ -305,8 +306,15 @@ describe("probeNetworkIsolationSafely", () => {
     // The probe touches the filesystem/OS to detect a sandbox backend; a governed run's
     // verification step must still get an answer rather than crash the whole dispatch if that
     // probe itself faults for an unexpected reason (a workspace root deleted mid-run, etc.).
+    // Spreading the actual module (rather than replacing it outright) keeps
+    // executeVerificationEnforced -- run-engine.ts's OTHER import from this same module -- real, so
+    // this mock cannot mask a break in that unrelated import.
     vi.resetModules();
+    const actualVerification = await vi.importActual<
+      typeof import("./editor/verificationExecution.js")
+    >("./editor/verificationExecution.js");
     vi.doMock("./editor/verificationExecution.js", () => ({
+      ...actualVerification,
       probeNetworkIsolation: (): never => {
         throw new Error("probe backend detection failed");
       },
@@ -314,6 +322,25 @@ describe("probeNetworkIsolationSafely", () => {
     const { probeNetworkIsolationSafely: probeSafely } = await import("./run-engine.js");
     expect(probeSafely("/nonexistent/workspace")).toBe(false);
   });
+
+  it.each([true, false])(
+    "passes through the real probe's available:%s without swallowing it",
+    async (available) => {
+      vi.resetModules();
+      const actualVerification = await vi.importActual<
+        typeof import("./editor/verificationExecution.js")
+      >("./editor/verificationExecution.js");
+      vi.doMock("./editor/verificationExecution.js", () => ({
+        ...actualVerification,
+        probeNetworkIsolation: (): NetworkIsolationProbe => ({
+          available,
+          backend: "test-backend",
+        }),
+      }));
+      const { probeNetworkIsolationSafely: probeSafely } = await import("./run-engine.js");
+      expect(probeSafely(workspaceRoot)).toBe(available);
+    },
+  );
 });
 
 describe("applyRun — verification egress probe threading", () => {

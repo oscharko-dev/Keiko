@@ -185,9 +185,11 @@ export function composeJiraScopeJql(
   const scope = `project IN (${projectKeys.join(", ")})`;
   if (userJql === undefined) return `${scope} ORDER BY id ASC`;
   // A clause that closes the injected group escapes the conjunction (`AND` binds tighter than
-  // `OR`) and reads unapproved projects. The wire boundary rejects the same shape, but a scope
-  // persisted before that guard existed is re-read here, so composition validates too.
-  if (!hasBalancedJqlNesting(userJql)) {
+  // `OR`) and reads unapproved projects; a whitespace-only clause instead composes a malformed
+  // query that Jira rejects, permanently failing every sync using this scope. The wire boundary
+  // rejects the same shapes, but a scope persisted before those guards existed is re-read here, so
+  // composition validates too.
+  if (!hasBalancedJqlNesting(userJql) || userJql.trim().length === 0) {
     throw new AtlassianCredentialCustodyError("invalid-input", [
       "jql must have balanced parentheses and terminated string literals",
     ]);

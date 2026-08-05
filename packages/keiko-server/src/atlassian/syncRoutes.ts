@@ -243,7 +243,12 @@ function validatedScopeKeys(
 // closed forever, reading scope back from that same persisted, already-broken row.
 function validatedOptionalJql(value: unknown): string | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "string" || value.length === 0 || value.length > ATLASSIAN_JQL_MAX_CHARS) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > ATLASSIAN_JQL_MAX_CHARS ||
+    value.trim().length === 0
+  ) {
     throw invalid(
       `jql must be a non-empty string of at most ${String(ATLASSIAN_JQL_MAX_CHARS)} characters`,
     );

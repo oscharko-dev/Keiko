@@ -62,6 +62,7 @@ import {
   type EvidencePersistContext,
   type RunIdentity,
 } from "./evidence.js";
+import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
 import { createWorkflowMemoryPort } from "./memory-workflow-port.js";
 import { buildGovernedHandoffEvidence } from "./governed-workflow.js";
 import { createServerHarnessToolShaper } from "./harness-tool-shaper.js";
@@ -253,11 +254,21 @@ function cancelWorkflow(controller: AbortController): (reason?: string) => void 
 // could throw for a workspaceRoot an earlier step already deleted or made unreadable. A governed
 // run's verification step must still get an answer rather than crash the whole dispatch; fail
 // closed (false) so the orchestrator's own fail-closed default applies exactly as if no probe had
-// run at all — never fail open into an unenforced network:"none" step.
+// run at all — never fail open into an unenforced network:"none" step. A failure is still recorded
+// through the server's single redacted diagnostic sink (no cwd, no raw error text — a content-free
+// error class only) so a probe that starts failing is operator-visible, not silently swallowed.
 export function probeNetworkIsolationSafely(cwd: string): boolean {
   try {
     return probeNetworkIsolation(cwd).available;
-  } catch {
+  } catch (error) {
+    emitServerDiagnostic(undefined, {
+      correlationId: randomUUID(),
+      timestamp: new Date().toISOString(),
+      operation: "workflow.network-isolation-probe",
+      source: "run-engine.probeNetworkIsolationSafely",
+      errorClass: contentFreeErrorClass(error),
+      message: "Network isolation probe failed; verification enforcement defaults to fail-closed.",
+    });
     return false;
   }
 }

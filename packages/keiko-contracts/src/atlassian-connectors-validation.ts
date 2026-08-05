@@ -241,7 +241,12 @@ const JIRA_SCOPE_KEYS: readonly string[] = ["provider", "projectKeys", "jql", "b
 // parsed and never surfaced in evidence (ADR-0128 D6 hashes or omits it).
 function validateOpaqueJql(value: unknown, errors: string[]): void {
   if (value === undefined) return;
-  if (typeof value !== "string" || value.length === 0 || value.length > ATLASSIAN_JQL_MAX_CHARS) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > ATLASSIAN_JQL_MAX_CHARS ||
+    value.trim().length === 0
+  ) {
     errors.push(
       `scope.jql must be a non-empty string of at most ${String(ATLASSIAN_JQL_MAX_CHARS)} characters`,
     );

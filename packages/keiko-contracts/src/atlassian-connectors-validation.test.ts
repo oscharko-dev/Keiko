@@ -311,12 +311,18 @@ describe("validateAtlassianSyncScope (hostile input)", () => {
     );
   });
 
-  it("bounds the opaque JQL and rejects non-string or empty JQL", () => {
+  it("bounds the opaque JQL and rejects non-string, empty, or whitespace-only JQL", () => {
     expect(
       errorsOf(validateAtlassianSyncScope(jiraScope({ jql: "x".repeat(2_049) }))).length,
     ).toBeGreaterThan(0);
     expect(errorsOf(validateAtlassianSyncScope(jiraScope({ jql: "" }))).length).toBeGreaterThan(0);
     expect(errorsOf(validateAtlassianSyncScope(jiraScope({ jql: 42 }))).length).toBeGreaterThan(0);
+    // A whitespace-only clause has non-zero length and trivially balanced nesting (no parens at
+    // all), so it needs its own check: composed, it would produce `AND (   )`, a malformed query
+    // Jira rejects, permanently failing every sync using that scope.
+    expect(errorsOf(validateAtlassianSyncScope(jiraScope({ jql: "   " }))).length).toBeGreaterThan(
+      0,
+    );
     expectOk(validateAtlassianSyncScope(jiraScope({ jql: "x".repeat(2_048) })));
   });
 

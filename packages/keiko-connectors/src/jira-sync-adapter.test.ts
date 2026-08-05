@@ -136,12 +136,14 @@ describe("JQL composition", () => {
   it("rejects user JQL that can close the injected project group", () => {
     // The narrowing guarantee rests on `AND (<jql>)` staying one group. A clause that closes it
     // early re-associates the query into `(scope AND ...) OR (...)` and reads unapproved
-    // projects (KEIKO-0026).
+    // projects (KEIKO-0026). A whitespace-only clause instead composes a malformed query that
+    // Jira rejects, permanently failing every sync using that scope.
     for (const jql of [
       "1=1) OR (project = SECRET",
       "status = Done)",
       "(status = Done",
       'text ~ "x',
+      "   ",
     ]) {
       expect(() => composeJiraScopeJql(["APPROVED"], jql)).toThrow(AtlassianCredentialCustodyError);
     }
