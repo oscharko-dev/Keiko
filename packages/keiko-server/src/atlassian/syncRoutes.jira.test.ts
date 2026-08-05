@@ -722,6 +722,22 @@ describe("Jira sync — degradation and validation", () => {
     );
     expect(whitespaceJql.status).toBe(400);
 
+    const unterminatedLiteralJql = await handleStartAtlassianConnectorSync(
+      ctxFor(
+        "POST",
+        { authRef: credential.authRef },
+        { projectKeys: ["PLAT"], jql: 'text ~ "unterminated' },
+      ),
+      deps,
+    );
+    expect(unterminatedLiteralJql.status).toBe(400);
+
+    // Every rejection above must fail before persistence, not just report 400: a job registered
+    // for a rejected scope would survive as a permanently-broken pod. atlassianSyncJobRegistry is
+    // the one place a started sync becomes observable, so zero jobs here proves none of the six
+    // rejected calls above reached startAtlassianSyncJob.
+    expect(atlassianSyncJobRegistry.jobCount).toBe(0);
+
     const started = await startSync(deps, credential, { projectKeys: ["PLAT"] });
     await awaitTerminal(started.job.jobId);
     const resyncWithScope = await handleStartAtlassianConnectorSync(
