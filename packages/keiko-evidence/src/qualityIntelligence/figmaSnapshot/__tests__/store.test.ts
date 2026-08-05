@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EvidenceReadError, EvidenceWriteError } from "../../../errors.js";
 import {
@@ -520,7 +520,7 @@ describe("createNodeFigmaSnapshotStore", () => {
       ...actualFs,
       default: actualFs,
       renameSync: (source: string, destination: string): void => {
-        if (dirname(source).split("/").pop()?.startsWith(".attempt-") === true) {
+        if (basename(dirname(source)).startsWith(".attempt-")) {
           throw new Error("simulated cross-device rename failure");
         }
         actualFs.renameSync(source, destination);
