@@ -129,12 +129,16 @@ describe("runGroundedRetrievalLatencyGate", () => {
   // log output rather than that nothing happens.
   const discard = () => undefined;
 
-  function withBudgetFile(overrides, assert) {
+  // `await assert(...)`, not `return assert(...)`: without the await the `finally` runs the moment
+  // the promise is returned, deleting the budget file underneath the run. It happens to survive
+  // today only because the gate reads the file synchronously before its first await — an ordering
+  // accident, not a guarantee.
+  async function withBudgetFile(overrides, assert) {
     const root = mkdtempSync(join(tmpdir(), "keiko-grounded-latency-"));
     try {
       const budgetPath = join(root, "budget.json");
       writeFileSync(budgetPath, JSON.stringify({ ...budget, ...overrides }));
-      return assert(budgetPath);
+      return await assert(budgetPath);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -205,9 +209,14 @@ describe("committed budget document", () => {
     expect(budget.p95BudgetMs).toBeGreaterThanOrEqual(budget.p50BudgetMs);
   });
 
-  // The probe's delay is multiplied by the fixture's 8 cited claims. If a future edit shrank it to
-  // something the budget absorbs, the gate would keep reporting PASS while proving nothing.
-  it("sets a probe delay whose 8-claim fan-out clears the p95 ceiling with margin", () => {
-    expect(budget.regressionProbe.judgeDelayMs * 8).toBeGreaterThan(budget.p95BudgetMs * 1.5);
+  // The probe's delay lands once per cited claim. If a future edit shrank either the delay or the
+  // fixture's claim count to something the budget absorbs, the gate would keep reporting PASS while
+  // proving nothing — so the claim count is read from the module that owns it, not written here.
+  it("sets a probe delay whose per-claim fan-out clears the p95 ceiling with margin", async () => {
+    const { FIXTURE_ANSWER_CLAIMS } = await import("@oscharko-dev/keiko-server");
+
+    expect(budget.regressionProbe.judgeDelayMs * FIXTURE_ANSWER_CLAIMS).toBeGreaterThan(
+      budget.p95BudgetMs * 1.5,
+    );
   });
 });

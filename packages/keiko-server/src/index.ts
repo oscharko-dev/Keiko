@@ -321,6 +321,7 @@ export {
 // scripts/check-grounded-retrieval-latency.mjs can measure it with a deterministic judge.
 export {
   runGroundedRetrievalLatencyEval,
+  FIXTURE_ANSWER_CLAIMS,
   type GroundedLatencySample,
   type GroundedLatencyEvalOptions,
 } from "./grounded-latency-eval.js";

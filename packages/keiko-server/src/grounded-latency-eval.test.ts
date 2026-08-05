@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { runGroundedRetrievalLatencyEval } from "./grounded-latency-eval.js";
+import { FIXTURE_ANSWER_CLAIMS, runGroundedRetrievalLatencyEval } from "./grounded-latency-eval.js";
 
 // Audit KEIKO-0053. The gate script owns the budget decision; this suite owns the measurement's
 // two load-bearing properties: it really runs both stages, and the injected-delay lever really
@@ -19,12 +19,15 @@ describe("runGroundedRetrievalLatencyEval", () => {
   // cited excerpt exceeds `maxExcerptChars`. An over-long fixture would therefore skip every judge
   // call and the injected delay would measure nothing — the gate would report PASS over an
   // entailment pass that never ran. This pins that the fixture stays on the judged side of that
-  // boundary: 8 cited claims must each reach the judge, so the delay lands 8 times.
+  // boundary: every cited claim must reach the judge, so the delay lands once per claim.
+  //
+  // The claim count comes from the module under test, not a literal here: a hard-coded 8 would keep
+  // passing at a lower expectation the moment the fixture shrank, which is the failure this guards.
   it("routes every cited claim through the judge, so an injected delay is visible", async () => {
     const delayMs = 20;
     const sample = await runGroundedRetrievalLatencyEval({ injectedJudgeDelayMs: delayMs });
 
-    expect(sample.entailmentMs).toBeGreaterThanOrEqual(delayMs * 8);
+    expect(sample.entailmentMs).toBeGreaterThanOrEqual(delayMs * FIXTURE_ANSWER_CLAIMS);
   }, 30_000);
 
   // Relative, not an absolute millisecond ceiling: an absolute threshold is a wall-clock assertion
