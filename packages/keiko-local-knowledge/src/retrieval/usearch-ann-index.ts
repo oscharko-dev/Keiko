@@ -9,7 +9,12 @@ import {
   type EmbeddingVectorMetric,
 } from "@oscharko-dev/keiko-contracts";
 
-import { USEARCH_RUNTIME_MANIFEST, usearchRuntimeTargetKey } from "./usearch-runtime-manifest.js";
+import {
+  USEARCH_RUNTIME_MANIFEST,
+  type UsearchRuntimeApproval,
+  usearchRuntimeApproval,
+  usearchRuntimeTargetKey,
+} from "./usearch-runtime-manifest.js";
 import {
   USEARCH_COMMAND,
   USEARCH_CONTROL,
@@ -303,32 +308,37 @@ function loadSharedVectors(
   return { entries, buffer, byteSize: buffer.byteLength + entries.length * 64 };
 }
 
+function approvedRuntimeFor(targetKey: string): Readonly<UsearchRuntimeApproval> {
+  const approval = usearchRuntimeApproval(targetKey);
+  if (approval === undefined) throw new Error("USearch runtime approval invariant failed");
+  return approval;
+}
+
 function targetRuntime(
   binaryPath: string | undefined,
-): { readonly path: string; readonly sha256: string } | "unavailable" | "invalid" {
+):
+  | { readonly path: string; readonly sha256: string; readonly expectedVersion: string }
+  | "unavailable"
+  | "invalid" {
   const targetKey = usearchRuntimeTargetKey(process.platform, process.arch);
   if (targetKey === undefined) return "unavailable";
-  const target = USEARCH_RUNTIME_MANIFEST.targets[targetKey];
+  const approval = approvedRuntimeFor(targetKey);
   const portablePath =
     process.platform === "darwin"
       ? resolve(dirname(process.execPath), "..", "..", "native", "usearch.node")
       : resolve(dirname(process.execPath), "..", "native", "usearch.node");
   const defaultPath = existsSync(portablePath)
     ? portablePath
-    : resolve(
-        process.cwd(),
-        ".usearch",
-        USEARCH_RUNTIME_MANIFEST.version,
-        targetKey,
-        "usearch.node",
-      );
+    : resolve(process.cwd(), ".usearch", approval.version, targetKey, "usearch.node");
   const path = binaryPath ?? process.env.KEIKO_USEARCH_BINARY_PATH ?? defaultPath;
   if (!existsSync(path)) return "unavailable";
   try {
     const stat = statSync(path);
     if (!stat.isFile()) return "invalid";
     const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
-    return digest === target.binarySha256 ? { path, sha256: digest } : "invalid";
+    return digest === approval.binarySha256
+      ? { path, sha256: digest, expectedVersion: approval.version }
+      : "invalid";
   } catch {
     return "invalid";
   }
@@ -420,13 +430,13 @@ function allocateAnnWorkerBuffers(
 function workerDataFor(
   partition: UsearchAnnPartition,
   vectors: SharedVectors,
-  runtime: { readonly path: string; readonly sha256: string },
+  runtime: { readonly path: string; readonly sha256: string; readonly expectedVersion: string },
   allocation: AnnWorkerAllocation,
 ): UsearchWorkerData {
   return {
     binaryPath: runtime.path,
     binarySha256: runtime.sha256,
-    expectedVersion: USEARCH_RUNTIME_MANIFEST.version,
+    expectedVersion: runtime.expectedVersion,
     dimensions: partition.identity.vectorDimensions,
     rowCount: partition.rowCount,
     connectivity: HNSW_CONNECTIVITY,
@@ -444,7 +454,7 @@ function workerDataFor(
 async function startWorker(
   partition: UsearchAnnPartition,
   vectors: SharedVectors,
-  runtime: { readonly path: string; readonly sha256: string },
+  runtime: { readonly path: string; readonly sha256: string; readonly expectedVersion: string },
   resultCapacity: number,
 ): Promise<AnnIndex | undefined> {
   const allocation = allocateAnnWorkerBuffers(partition, resultCapacity);
@@ -816,7 +826,9 @@ export function clearUsearchAnnCacheForGroup(groupKey: string): void {
 
 export const USEARCH_ANN_PROFILE = Object.freeze({
   provider: "usearch",
-  version: USEARCH_RUNTIME_MANIFEST.version,
+  version:
+    usearchRuntimeApproval(usearchRuntimeTargetKey(process.platform, process.arch))?.version ??
+    USEARCH_RUNTIME_MANIFEST.version,
   algorithm: "hnsw",
   connectivity: HNSW_CONNECTIVITY,
   expansionAdd: HNSW_EXPANSION_ADD,
