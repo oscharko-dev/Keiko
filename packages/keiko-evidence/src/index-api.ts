@@ -163,11 +163,18 @@ function toListEntry(manifest: EvidenceManifest): EvidenceListEntry {
 
 // Enumeration is a per-entry question ("which runs can I show?"), so one unreadable, legacy or
 // shape-invalid manifest is skipped instead of aborting the walk — a single restored backup,
-// truncated write, or the first schema bump would otherwise blank the whole audit ledger. Any
-// OTHER error still propagates: the list fails closed rather than passing a partial answer off as
-// a complete one. loadEvidence keeps throwing, because one manifest is its whole answer.
-function listEntryOrSkip(json: string, runId: string): EvidenceListEntry | undefined {
+// truncated write, or the first schema bump would otherwise blank the whole audit ledger. This
+// covers BOTH failure shapes: `store.get` itself can throw EvidenceReadError for a genuine
+// filesystem fault (e.g. an EACCES/read race on the node store), not only a value that reads
+// successfully but fails to parse or validate. Any OTHER error still propagates: the list fails
+// closed rather than passing a partial answer off as a complete one. loadEvidence keeps throwing,
+// because one manifest is its whole answer.
+function listEntryOrSkip(store: EvidenceStore, runId: string): EvidenceListEntry | undefined {
   try {
+    const json = store.get(runId);
+    if (json === undefined) {
+      return undefined;
+    }
     const parsed: unknown = parseJson(json, runId);
     if (!isRecord(parsed) || typeof parsed.evidenceSchemaVersion !== "string") {
       return undefined;
@@ -184,11 +191,7 @@ function listEntryOrSkip(json: string, runId: string): EvidenceListEntry | undef
 export function listEvidence(store: EvidenceStore): readonly EvidenceListEntry[] {
   const entries: EvidenceListEntry[] = [];
   for (const runId of store.list()) {
-    const json = store.get(runId);
-    if (json === undefined) {
-      continue;
-    }
-    const entry = listEntryOrSkip(json, runId);
+    const entry = listEntryOrSkip(store, runId);
     if (entry !== undefined) {
       entries.push(entry);
     }

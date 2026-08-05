@@ -767,6 +767,35 @@ describe("GET /api/evidence", () => {
     },
   );
 
+  it("never echoes the underlying fs error's absolute path back to the client", () => {
+    // EvidenceReadError wraps whatever the real fs call raised (e.g. store.ts's getManifest:
+    // "cannot read evidence manifest: " + error.message), and a raw EACCES/ENOENT message quotes
+    // the path it failed on — .keiko/evidence's absolute location must never leave the server.
+    const secretPath = "/Users/realuser/secret-workspace/.keiko/evidence/run-x.json";
+    const leaking = (): never => {
+      throw new EvidenceReadError(`cannot read evidence manifest: EACCES, open '${secretPath}'`);
+    };
+    const failingStore: EvidenceStore = {
+      put: () => "",
+      list: leaking,
+      get: leaking,
+      delete: () => undefined,
+    };
+    const listResult = handleEvidenceList(
+      ctx("/api/evidence"),
+      depsWith({ evidenceStore: failingStore }),
+    );
+    expect(listResult.status).toBe(422);
+    expect(JSON.stringify(listResult.body)).not.toContain(secretPath);
+
+    const detailResult = handleEvidenceDetail(
+      ctx("/api/evidence/run-x", { runId: "run-x" }),
+      depsWith({ evidenceStore: failingStore }),
+    );
+    expect(detailResult.status).toBe(422);
+    expect(JSON.stringify(detailResult.body)).not.toContain(secretPath);
+  });
+
   it("filters by model and workspace metadata", () => {
     const store = storeFrom([
       manifestJson(

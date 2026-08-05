@@ -12,7 +12,10 @@ import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   validateContextToolObservation,
 } from "@oscharko-dev/keiko-contracts";
-import type { ContextToolObservation } from "@oscharko-dev/keiko-contracts";
+import type {
+  ContextToolObservation,
+  ToolShapingDegradedReason,
+} from "@oscharko-dev/keiko-contracts";
 import { contextBytes } from "./context.js";
 import { handleToolCall } from "./executor.js";
 import type { ToolCallRequest, ToolCallResult, ToolPort } from "./ports.js";
@@ -312,23 +315,28 @@ describe("executor — ADR-0055 D4 shaped-observation attach", () => {
 
   // Shaping is additive (ADR-0055 D4): the tool has already succeeded and tool:call:completed has
   // already been emitted by the time it runs. A fault here must not re-enter the failure path,
-  // emit a second terminal event for the same toolCallId, or end the run (KEIKO-0099).
-  const shaperFaults: readonly (readonly [string, HarnessShaperPort])[] = [
+  // emit a second terminal event for the same toolCallId, or end the run (KEIKO-0099) — but it
+  // must still be operator-visible via a redacted, non-terminal diagnostic naming which of the two
+  // throwable steps actually failed.
+  const shaperFaults: readonly (readonly [string, HarnessShaperPort, ToolShapingDegradedReason])[] =
     [
-      "a throwing port",
-      (): ContextToolObservation => {
-        throw new Error("shaper exploded");
-      },
-    ],
-    [
-      "an observation that cannot be serialized",
-      // A BigInt leaf makes JSON.stringify throw inside compactObservationContent.
-      (): ContextToolObservation =>
-        ({ ...DEFAULT_OBSERVATION, unserializable: 1n }) as unknown as ContextToolObservation,
-    ],
-  ];
+      [
+        "a throwing port",
+        (): ContextToolObservation => {
+          throw new Error("shaper exploded");
+        },
+        "shaper-threw",
+      ],
+      [
+        "an observation that cannot be serialized",
+        // A BigInt leaf makes JSON.stringify throw inside compactObservationContent.
+        (): ContextToolObservation =>
+          ({ ...DEFAULT_OBSERVATION, unserializable: 1n }) as unknown as ContextToolObservation,
+        "unserializable-observation",
+      ],
+    ];
 
-  for (const [label, port] of shaperFaults) {
+  for (const [label, port, expectedReason] of shaperFaults) {
     it(`survives ${label} with the raw tool output and one terminal event`, async () => {
       const { ctx, sink } = buildContext({
         task: TASK,
@@ -356,6 +364,12 @@ describe("executor — ADR-0055 D4 shaped-observation attach", () => {
           .map((event) => event.type),
       ).toEqual(["tool:call:started", "tool:call:completed"]);
       expect(ctx.messages[ctx.messages.length - 1]?.content).toBe(OUTPUT);
+      const degraded = sink.events().find((event) => event.type === "tool:shaping:degraded");
+      expect(degraded).toMatchObject({
+        toolCallId: "c1",
+        toolName: "run_command",
+        reason: expectedReason,
+      });
     });
   }
 });

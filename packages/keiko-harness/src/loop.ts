@@ -23,13 +23,24 @@ function checkWallTime(ctx: RunContext): StateStep | null {
   return null;
 }
 
-// Post-dispatch the deadline may have passed while a handler was running, and that handler may
-// already have recorded the authoritative failure (e.g. onModelError's HARNESS_MODEL_ERROR).
-// Detecting the deadline here must not overwrite it: a terminal outcome the handler decided wins
-// outright, and the failure slot is only claimed while still unclaimed. A non-terminal step past
-// the deadline still terminates the run rather than looping again.
+// A handler may have already recorded why the run is stopping for a reason UNRELATED to the
+// deadline: a real failure (onModelError's HARNESS_MODEL_ERROR) or a real abort (cancelled). Those
+// two outcomes are the run's own decision and must not be relabelled. An ordinary successful
+// completion is NOT protected: the wall-time budget is a hard cap, so a model port that never
+// errors and only exceeds the budget must still resolve to limit-exceeded even when the dispatch
+// that finishes the run lands in one hop with no further loop iteration to catch it.
+const PROTECTED_POST_DISPATCH_STATES: ReadonlySet<HarnessStateName> = new Set([
+  "failed",
+  "cancelled",
+]);
+
+// Post-dispatch the deadline may have passed while a handler was running. Detecting it here must
+// not overwrite a protected outcome above, and the failure slot is only claimed while still
+// unclaimed. A non-protected step past the deadline still terminates the run rather than
+// continuing (including a step that already reached a terminal, non-protected state like
+// "completed" — see PROTECTED_POST_DISPATCH_STATES above).
 function checkWallTimePostDispatch(ctx: RunContext, dispatched: StateStep): StateStep | null {
-  if (TERMINAL_STATES.has(dispatched.to)) {
+  if (PROTECTED_POST_DISPATCH_STATES.has(dispatched.to)) {
     return null;
   }
   if (ctx.clock.now() - ctx.startedAt <= ctx.limits.maxWallTimeMs) {

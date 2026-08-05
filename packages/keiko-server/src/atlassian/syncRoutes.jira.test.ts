@@ -700,6 +700,19 @@ describe("Jira sync — degradation and validation", () => {
     );
     expect(oversizedJql.status).toBe(400);
 
+    // KEIKO-0026: composeJiraScopeJql rejects unbalanced JQL, but that only runs inside the
+    // BACKGROUND fetch — this wire-boundary check must reject it BEFORE startAtlassianSyncJob ever
+    // persists the pod, or a bad scope survives every future re-sync as a permanently failed job.
+    const unbalancedJql = await handleStartAtlassianConnectorSync(
+      ctxFor(
+        "POST",
+        { authRef: credential.authRef },
+        { projectKeys: ["PLAT"], jql: "status = Done) OR (project = SECRET" },
+      ),
+      deps,
+    );
+    expect(unbalancedJql.status).toBe(400);
+
     const started = await startSync(deps, credential, { projectKeys: ["PLAT"] });
     await awaitTerminal(started.job.jobId);
     const resyncWithScope = await handleStartAtlassianConnectorSync(

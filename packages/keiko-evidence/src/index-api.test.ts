@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { listEvidence, loadEvidence } from "./index-api.js";
-import { createInMemoryEvidenceStore } from "./store.js";
+import { createInMemoryEvidenceStore, type EvidenceStore } from "./store.js";
 import { EvidenceReadError, EvidenceSchemaError } from "./errors.js";
 import type { EvidenceManifest } from "./types.js";
 import { DEFAULT_TOKEN_ESTIMATOR_ID } from "@oscharko-dev/keiko-contracts";
@@ -175,6 +175,27 @@ describe("loadEvidence", () => {
     expect(() => loadEvidence(store, "run-corrupt")).toThrow(EvidenceSchemaError);
     expect(() => loadEvidence(store, "run-null")).toThrow(EvidenceSchemaError);
     expect(() => loadEvidence(store, "run-empty")).toThrow(EvidenceSchemaError);
+  });
+
+  it("skips a runId whose store.get() itself throws a typed read/schema error", () => {
+    // The node store's own get() can throw EvidenceReadError for a genuine filesystem fault (an
+    // EACCES/read race), not only return a value that reads but fails to parse — that throw must
+    // be treated the same as a malformed-content skip, not abort the whole enumeration.
+    const store = seed();
+    const withUnreadableEntry: EvidenceStore = {
+      ...store,
+      list: () => ["run-a", "run-b", "run-unreadable"],
+      get: (runId) => {
+        if (runId === "run-unreadable") {
+          throw new EvidenceReadError(`cannot read evidence manifest: ${runId}`);
+        }
+        return store.get(runId);
+      },
+    };
+    expect(listEvidence(withUnreadableEntry).map((entry) => entry.runId)).toEqual([
+      "run-a",
+      "run-b",
+    ]);
   });
 
   it("still propagates an unexpected store failure out of listEvidence (fails closed)", () => {

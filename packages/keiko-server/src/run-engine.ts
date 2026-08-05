@@ -249,6 +249,19 @@ function cancelWorkflow(controller: AbortController): (reason?: string) => void 
   };
 }
 
+// probeNetworkIsolation spawns no untrusted command, but it IS real filesystem/OS probing that
+// could throw for a workspaceRoot an earlier step already deleted or made unreadable. A governed
+// run's verification step must still get an answer rather than crash the whole dispatch; fail
+// closed (false) so the orchestrator's own fail-closed default applies exactly as if no probe had
+// run at all — never fail open into an unenforced network:"none" step.
+export function probeNetworkIsolationSafely(cwd: string): boolean {
+  try {
+    return probeNetworkIsolation(cwd).available;
+  } catch {
+    return false;
+  }
+}
+
 // Starts the underlying run for a workflow request: an AbortController drives cancellation (the
 // workflow honours deps.signal), and the BFF-owned runId is injected as the workflow idSource so the
 // streamed events carry the same runId the registry/SSE key on.
@@ -262,8 +275,7 @@ function dispatchWorkflow(ctx: EngineContext, sink: QueueEventSink, runId: strin
     // same probe-then-enforce composition the editor verification path uses. Without it the stage
     // could only ever see "no backend available" and had to choose between denying every
     // network:"none" step and running model-authored code with inherited network (ADR-0043 D8).
-    verificationEnforcedNetworkAvailable: probeNetworkIsolation(workspaceRoot(ctx.request))
-      .available,
+    verificationEnforcedNetworkAvailable: probeNetworkIsolationSafely(workspaceRoot(ctx.request)),
     sink,
     signal: controller.signal,
     idSource: (): string => runId,
@@ -646,6 +658,10 @@ export async function applyRun(
   const deps = {
     model: executionModel,
     ...(spawn === undefined ? {} : { spawn }),
+    // Apply replays an accepted snapshot through the same verify stage the initial dispatch used
+    // (dispatchWorkflow above); without this, a governed apply's network:"none" steps see no probe
+    // result and are denied even on hosts an enforcing backend IS available on (ADR-0043 D8).
+    verificationEnforcedNetworkAvailable: probeNetworkIsolationSafely(root),
     ...(snapshot.governedHandoff === undefined
       ? {}
       : { workflowHandoff: snapshot.governedHandoff }),

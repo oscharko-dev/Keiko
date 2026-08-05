@@ -12,7 +12,11 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { ToolError } from "@oscharko-dev/keiko-tools";
 import { WorkspaceError } from "@oscharko-dev/keiko-workspace";
-import type { ContextToolObservation, ToolCallResult } from "@oscharko-dev/keiko-contracts";
+import type {
+  ContextToolObservation,
+  ToolCallResult,
+  ToolShapingDegradedReason,
+} from "@oscharko-dev/keiko-contracts";
 import { contextBytes, type RunContext, type StateStep } from "./context.js";
 import { HARNESS_CODES, toFailure } from "./errors.js";
 import type { ToolCallMetadata } from "./ports.js";
@@ -385,14 +389,23 @@ function isSelectedToolMessage(
 // totality contract, or an observation that cannot be serialized, must therefore degrade to the
 // raw ToolCallResult: it may not re-enter the tool-failure path, may not emit a second,
 // contradictory terminal event for this toolCallId, and may not end the run. Both side effects are
-// committed only once every step that can still throw has succeeded.
+// committed only once every step that can still throw has succeeded. A degraded fallback still
+// emits a redacted, non-terminal diagnostic (tool:shaping:degraded) so a broken shaper port or a
+// non-serialisable observation is operator-visible instead of silently discarded — the two steps
+// that can throw are tried separately so the reason names which one actually failed.
 function shapeOrFallBackToRaw(
   ctx: RunContext,
   call: NormalizedToolCall,
   result: ToolCallResult,
 ): ToolMessageCandidate {
+  let enriched: ToolCallResult;
   try {
-    const enriched = enrichWithObservation(ctx, call, result);
+    enriched = enrichWithObservation(ctx, call, result);
+  } catch {
+    emitShapingDegraded(ctx, call, "shaper-threw");
+    return toolMessageCandidate(result);
+  }
+  try {
     const candidate = toolMessageCandidate(enriched);
     if (enriched.shapedObservation !== undefined) {
       ctx.shapedObservations.push(enriched.shapedObservation);
@@ -402,10 +415,24 @@ function shapeOrFallBackToRaw(
     }
     return candidate;
   } catch {
+    emitShapingDegraded(ctx, call, "unserializable-observation");
     // Intentionally terminal: the enrichment is optional, the tool call already succeeded, and the
     // raw output is the same model-facing message the harness produces with no port injected.
     return toolMessageCandidate(result);
   }
+}
+
+function emitShapingDegraded(
+  ctx: RunContext,
+  call: NormalizedToolCall,
+  reason: ToolShapingDegradedReason,
+): void {
+  ctx.emitter.emit({
+    type: "tool:shaping:degraded",
+    toolCallId: call.id,
+    toolName: call.name,
+    reason,
+  });
 }
 
 async function runOneTool(
