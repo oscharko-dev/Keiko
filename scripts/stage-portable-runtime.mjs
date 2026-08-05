@@ -35,7 +35,7 @@ import {
 } from "./portable-runtime.mjs";
 import { writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
 import {
-  USEARCH_RUNTIME_MANIFEST,
+  usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mjs";
@@ -1417,15 +1417,16 @@ function sbomForManifest(manifest) {
   };
 }
 
-function thirdPartyNotices() {
+function thirdPartyNotices(manifest) {
+  const addon = manifest.nativeAddons[0];
   return [
     "Portable runtime notices are assembled by the release pipeline.",
     "",
-    `USearch ${USEARCH_RUNTIME_MANIFEST.version}`,
+    `USearch ${addon.version}`,
     "Copyright Unum Cloud and contributors.",
     "Licensed under Apache-2.0.",
     "The complete upstream license is included at runtime/licenses/usearch/LICENSE.",
-    `Source: ${USEARCH_RUNTIME_MANIFEST.tarballUrl}`,
+    `Source: ${addon.source.tarballUrl}`,
     "",
   ].join("\n");
 }
@@ -1441,7 +1442,7 @@ function writeEvidence(stageRoot, manifest, provenanceStatement) {
     join(evidenceRoot, "sbom.cdx.json"),
     JSON.stringify(sbomForManifest(manifest), null, 2) + "\n",
   );
-  writeFileSync(join(evidenceRoot, "third-party-notices.txt"), thirdPartyNotices());
+  writeFileSync(join(evidenceRoot, "third-party-notices.txt"), thirdPartyNotices(manifest));
   writeFileSync(
     join(evidenceRoot, "signing-verification.json"),
     JSON.stringify(portableVerificationSummaryForManifest(manifest), null, 2) + "\n",
@@ -1566,15 +1567,16 @@ function stageSecureReadHelper(target, resourceRoot, options, hooks) {
 function provisionedUsearchRuntime(target) {
   const targetKey = usearchRuntimeTargetKey(target.nodePlatform, target.nodeArchitecture);
   if (targetKey === undefined) fail("USearch has no approved runtime for the portable target");
-  const approved = USEARCH_RUNTIME_MANIFEST.targets[targetKey];
-  const provisionedRoot = join(repoRoot, ".usearch", USEARCH_RUNTIME_MANIFEST.version, targetKey);
+  const approved = usearchRuntimeApproval(targetKey);
+  if (approved === undefined) fail("USearch has no approved runtime for the portable target");
+  const provisionedRoot = join(repoRoot, ".usearch", approved.version, targetKey);
   const sourceBinary = join(provisionedRoot, "usearch.node");
   const sourceLicense = join(provisionedRoot, "LICENSE");
   if (
     !existsSync(sourceBinary) ||
     !existsSync(sourceLicense) ||
     sha256Bytes(readFileSync(sourceBinary)) !== approved.binarySha256 ||
-    sha256Bytes(readFileSync(sourceLicense)) !== USEARCH_RUNTIME_MANIFEST.licenseSha256
+    sha256Bytes(readFileSync(sourceLicense)) !== approved.licenseSha256
   ) {
     fail("USearch runtime is absent or failed its pinned digest");
   }
@@ -1617,22 +1619,22 @@ export function stageUsearchAddon(
     {
       name: "usearch",
       kind: "node-native-addon",
-      version: USEARCH_RUNTIME_MANIFEST.version,
+      version: runtime.approved.version,
       platformTarget: target.platformTarget,
       architecture: target.nodeArchitecture,
       executablePath: staged.executablePath,
       licensePath: staged.licensePath,
       source: {
-        commitSha: USEARCH_RUNTIME_MANIFEST.sourceCommit,
-        tarballUrl: USEARCH_RUNTIME_MANIFEST.tarballUrl,
-        tarballSha256: USEARCH_RUNTIME_MANIFEST.tarballSha256,
+        commitSha: runtime.approved.sourceCommit,
+        tarballUrl: runtime.approved.tarballUrl,
+        tarballSha256: runtime.approved.tarballSha256,
         binarySha256: runtime.approved.binarySha256,
-        licenseSha256: USEARCH_RUNTIME_MANIFEST.licenseSha256,
+        licenseSha256: runtime.approved.licenseSha256,
       },
       unsignedSha256: runtime.approved.binarySha256,
       shippedSha256,
       sizeBytes: lstatSync(staged.destination).size,
-      sbomBomRef: `pkg:npm/usearch@${USEARCH_RUNTIME_MANIFEST.version}?platform=${target.platformTarget}`,
+      sbomBomRef: `pkg:npm/usearch@${runtime.approved.version}?platform=${target.platformTarget}`,
       signing: {
         signatureKind: target.signatureKind,
         verificationStatus: "unverified-staging",

@@ -45,6 +45,7 @@ import {
 import { writeZipArchiveFromDirectory } from "../lib/zip-archive.mjs";
 import {
   USEARCH_RUNTIME_MANIFEST,
+  usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "../../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 import { runtimeActivationManifest } from "../runtime-activation-manifest.mjs";
@@ -1011,7 +1012,8 @@ function writeSecureReadHelperFixture(target, destination) {
 function writeUsearchAddonFixture(target, resourceRoot) {
   const targetKey = usearchRuntimeTargetKey(target.nodePlatform, target.nodeArchitecture);
   if (targetKey === undefined) throw new Error("missing USearch fixture target");
-  const approved = USEARCH_RUNTIME_MANIFEST.targets[targetKey];
+  const approved = usearchRuntimeApproval(targetKey);
+  if (approved === undefined) throw new Error("missing USearch fixture approval");
   const executablePath = "runtime/native/usearch.node";
   const licensePath = "runtime/licenses/usearch/LICENSE";
   const destination = join(resourceRoot, ...executablePath.split("/"));
@@ -1024,22 +1026,22 @@ function writeUsearchAddonFixture(target, resourceRoot) {
     {
       name: "usearch",
       kind: "node-native-addon",
-      version: USEARCH_RUNTIME_MANIFEST.version,
+      version: approved.version,
       platformTarget: target.platformTarget,
       architecture: target.nodeArchitecture,
       executablePath,
       licensePath,
       source: {
-        commitSha: USEARCH_RUNTIME_MANIFEST.sourceCommit,
-        tarballUrl: USEARCH_RUNTIME_MANIFEST.tarballUrl,
-        tarballSha256: USEARCH_RUNTIME_MANIFEST.tarballSha256,
+        commitSha: approved.sourceCommit,
+        tarballUrl: approved.tarballUrl,
+        tarballSha256: approved.tarballSha256,
         binarySha256: approved.binarySha256,
-        licenseSha256: USEARCH_RUNTIME_MANIFEST.licenseSha256,
+        licenseSha256: approved.licenseSha256,
       },
       unsignedSha256: approved.binarySha256,
       shippedSha256: approved.binarySha256,
       sizeBytes: statSync(destination).size,
-      sbomBomRef: `pkg:npm/usearch@${USEARCH_RUNTIME_MANIFEST.version}?platform=${target.platformTarget}`,
+      sbomBomRef: `pkg:npm/usearch@${approved.version}?platform=${target.platformTarget}`,
       signing: {
         signatureKind: target.signatureKind,
         verificationStatus: "unverified-staging",
@@ -2955,11 +2957,13 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     const manifest = JSON.parse(
       readFileSync(join(outDir, "macos-x64", "manifest", "portable-manifest.json"), "utf8"),
     );
+    const approval = usearchRuntimeApproval("darwin-x64");
+    if (approval === undefined) throw new Error("missing macOS x64 USearch approval");
     expect(manifest.nativeAddons).toMatchObject([
       {
         name: "usearch",
         kind: "node-native-addon",
-        version: USEARCH_RUNTIME_MANIFEST.version,
+        version: approval.version,
         platformTarget: "macos-x64",
         executablePath: "runtime/native/usearch.node",
       },

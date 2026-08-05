@@ -52,6 +52,7 @@ interface RuntimeTelemetry {
 
 interface RuntimeFixtureModule {
   readonly telemetry: RuntimeTelemetry;
+  version?: () => string;
 }
 
 interface RuntimeFixture {
@@ -265,6 +266,24 @@ describe("USearch index worker", () => {
       expect(Atomics.load(harness.control, USEARCH_CONTROL.error)).toBe(
         USEARCH_ERROR.runtimeInvalid,
       );
+    } finally {
+      removeRuntimeFixture(runtime);
+    }
+  });
+
+  it("accepts a digest-pinned legacy runtime that does not expose a version accessor", async () => {
+    const runtime = createRuntimeFixture("success");
+    const loaded = loadFixtureModule(runtime.path) as RuntimeFixtureModule;
+    delete loaded.version;
+    const harness = createWorkerHarness(runtime);
+    vi.spyOn(Atomics, "wait").mockImplementation((): "ok" => {
+      Atomics.store(harness.control, USEARCH_CONTROL.command, USEARCH_COMMAND.close);
+      return "ok";
+    });
+    try {
+      await executeWorker(harness.data);
+      expect(Atomics.load(harness.control, USEARCH_CONTROL.state)).toBe(USEARCH_STATE.closed);
+      expect(Atomics.load(harness.control, USEARCH_CONTROL.error)).toBe(USEARCH_ERROR.none);
     } finally {
       removeRuntimeFixture(runtime);
     }
