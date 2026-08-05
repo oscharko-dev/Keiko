@@ -28,10 +28,19 @@ const BARRED_RULES = [
 // max-lines-per-function. Taking the first or the last entry would compare an arbitrary one of
 // those — and taking the last would compare `"off"` against `"off"` in both configs, which passes
 // no matter how far keiko-ui's real bar drifts. The enabled setting is the one that is not "off".
+// ESLint accepts a severity as a string OR a number, bare or as the head of an options array, so
+// `off`, `0`, `["off", …]` and `[0, …]` all mean disabled. Recognising only the string form would
+// read a `complexity: 0` in keiko-ui's config as the bar being enabled — the precise masking this
+// pin exists to prevent.
+function isDisabledSetting(setting) {
+  const severity = Array.isArray(setting) ? setting[0] : setting;
+  return severity === "off" || severity === 0;
+}
+
 function enabledSetting(config, rule) {
   return config
     .map((block) => block?.rules?.[rule])
-    .find((setting) => setting !== undefined && setting !== "off");
+    .find((setting) => setting !== undefined && !isDisabledSetting(setting));
 }
 
 async function loadConfigs() {
@@ -81,6 +90,23 @@ describe("keiko-ui is held to the repository lint bar (KEIKO-0118)", () => {
     const ignores = root.flatMap((block) => block?.ignores ?? []);
 
     expect(ignores).toContain("packages/keiko-ui/**");
+  });
+});
+
+describe("enabledSetting", () => {
+  // Every spelling ESLint accepts for "disabled" has to read as disabled, or the pin above would
+  // report a switched-off rule as the enabled bar.
+  it.each([["off"], [0], [["off"]], [["off", { max: 50 }]], [[0, 10]]])(
+    "treats %p as disabled",
+    (setting) => {
+      expect(enabledSetting([{ rules: { complexity: setting } }], "complexity")).toBeUndefined();
+    },
+  );
+
+  it("returns the first enabled setting, skipping disabled blocks in either spelling", () => {
+    const config = [{ rules: { complexity: 0 } }, { rules: { complexity: ["error", 10] } }];
+
+    expect(enabledSetting(config, "complexity")).toEqual(["error", 10]);
   });
 });
 
