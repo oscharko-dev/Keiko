@@ -284,9 +284,14 @@ The bar is strict and **machine-enforced** — match it or the build is red.
     root config rather than restating the numbers). The 1,325 violations that predate the bar are
     held in `packages/keiko-ui/eslint-suppressions.json`, an ESLint bulk-suppression register: new
     files and new violations in listed files fail the lint run, and the register may only shrink.
-    After removing a violation run `npm run lint:prune-suppressions --workspace
-@oscharko-dev/keiko-ui` and commit the smaller register. This is a temporary bridge, not a
-    carve-out — decomposing the oversized files is tracked separately (audit KEIKO-0118, #2891).
+    After removing a violation, prune the register and commit the smaller file:
+
+    ```bash
+    npm run lint:prune-suppressions --workspace @oscharko-dev/keiko-ui
+    ```
+
+    This is a temporary bridge, not a carve-out — decomposing the oversized files is tracked
+    separately (audit KEIKO-0118, #2891).
 - **Prettier (the formatter is law):** 2-space indent, **double quotes**, semicolons,
   `printWidth: 100`, trailing commas everywhere, LF endings. Run `npm run format` before you
   finish; `format:check` is a CI gate.

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, matchesGlob, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -265,12 +265,18 @@ function isMeasuredSourcePath(repoRelativePath, { include, exclude }) {
   return include.some((glob) => matchesGlob(repoRelativePath, glob));
 }
 
+// A symlink entry reports neither isDirectory() nor isFile(), so a naive walk silently skips a
+// symlinked source file or directory — the live inventory would then undercount against a coverage
+// run that follows it, and the reality guard would fail with a mismatch that names no cause. v8
+// measures whatever the module graph resolves to, so this follows symlinks to match, and a broken
+// one fails loudly rather than disappearing.
 function walkSourceFiles(directory) {
   const found = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const child = join(directory, entry.name);
-    if (entry.isDirectory()) found.push(...walkSourceFiles(child));
-    else if (entry.isFile()) found.push(child);
+    const stats = entry.isSymbolicLink() ? statSync(child) : entry;
+    if (stats.isDirectory()) found.push(...walkSourceFiles(child));
+    else if (stats.isFile()) found.push(child);
   }
   return found;
 }

@@ -32,7 +32,7 @@
 // it can still fail.
 
 import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { compareStrings } from "./lib/compare-strings.mjs";
@@ -172,16 +172,43 @@ const CONFIG_SUFFIX = ".config.ts";
  * re-deriving the `--config` argument: an owning script that reaches the file by any other spelling
  * is still an owning script, and this cannot drift from the flag's syntax.
  */
+/**
+ * The Playwright config basenames a command actually RUNS, read from its `--config` arguments in
+ * both spellings (`--config <path>` and `--config=<path>`). Returns basenames so an alternate but
+ * equivalent path spelling still resolves to the same config, while a bare mention of the filename
+ * somewhere else in the command resolves to nothing.
+ */
+const CONFIG_FLAG = "--config";
+const CONFIG_FLAG_INLINE = `${CONFIG_FLAG}=`;
+
+function configArgumentValue(token, nextToken) {
+  if (token.startsWith(CONFIG_FLAG_INLINE)) return token.slice(CONFIG_FLAG_INLINE.length);
+  return token === CONFIG_FLAG ? nextToken : undefined;
+}
+
+export function playwrightConfigNames(command) {
+  if (typeof command !== "string") return [];
+  const tokens = command.split(/\s+/u).filter((token) => token.length > 0);
+  const found = [];
+  for (const [index, token] of tokens.entries()) {
+    const value = configArgumentValue(token, tokens[index + 1]);
+    if (value?.endsWith(CONFIG_SUFFIX) === true) found.push(basename(value));
+  }
+  return found;
+}
+
 export function checkE2eConfigOwnership({ configs, scriptCommands, unownedConfigs }) {
   const recorded = new Set(unownedConfigs);
-  // A malformed `"test:e2e:x": null` in package.json would otherwise crash on `.includes` with an
-  // unhelpful TypeError. Skipping a non-string command is the fail-closed direction: the config it
-  // would have owned is reported unowned rather than silently blessed.
-  const owned = new Set(
-    configs.filter((config) =>
-      scriptCommands.some((command) => typeof command === "string" && command.includes(config)),
-    ),
+  // Ownership is decided by the RESOLVED `--config` argument, not by a substring of the command.
+  // A substring test accepted `echo playwright.issue-9999-orphan.config.ts` as ownership — a
+  // command that runs nothing — so any config could be waved through the OWNED invariant by
+  // mentioning its name. A non-string command (a malformed `"test:e2e:x": null`, which is valid
+  // JSON) yields no configs rather than crashing on `.includes`; both are the fail-closed
+  // direction, leaving the config unowned rather than silently blessed.
+  const ownedByCommands = new Set(
+    scriptCommands.flatMap((command) => playwrightConfigNames(command)),
   );
+  const owned = new Set(configs.filter((config) => ownedByCommands.has(config)));
   const problems = [];
 
   for (const config of [...configs].sort(compareStrings)) {
@@ -227,6 +254,36 @@ export function validateUnownedConfigs(configs) {
   return configs;
 }
 
+/**
+ * The recorded reason is the whole justification for a scriptless config, so it has to be
+ * enforced rather than merely conventional: an unreasoned entry is an unexplained exemption, and a
+ * reason left behind by a removed entry is stale evidence. Both fail closed here.
+ */
+export function validateUnownedConfigReasons(configs, reasons) {
+  if (typeof reasons !== "object" || reasons === null || Array.isArray(reasons)) {
+    throw new TypeError(`${BASELINE_PATH} must carry a "configsWithoutScriptReasons" object.`);
+  }
+  for (const config of configs) {
+    const reason = reasons[config];
+    if (typeof reason !== "string" || reason.trim().length === 0) {
+      throw new TypeError(
+        `${BASELINE_PATH} records ${config} with no reason. Every configsWithoutScript entry ` +
+          "needs a non-empty configsWithoutScriptReasons entry stating why a script would be wrong.",
+      );
+    }
+  }
+  const recorded = new Set(configs);
+  for (const config of Object.keys(reasons)) {
+    if (!recorded.has(config)) {
+      throw new TypeError(
+        `${BASELINE_PATH} carries a configsWithoutScriptReasons entry for ${config}, which is not ` +
+          "in configsWithoutScript. Remove the stale reason.",
+      );
+    }
+  }
+  return reasons;
+}
+
 function readE2eConfigs(repoRoot) {
   return readdirSync(join(repoRoot, CONFIG_DIR)).filter((name) => name.endsWith(CONFIG_SUFFIX));
 }
@@ -261,12 +318,11 @@ export function validateBaselineSuites(suites) {
 
 function readBaseline(repoRoot) {
   const parsed = JSON.parse(readFileSync(join(repoRoot, BASELINE_PATH), "utf8"));
-  return {
-    suites: validateBaselineSuites(parsed.suites),
-    // Absent field ⇒ nothing recorded ⇒ every scriptless config fails. That is the fail-closed
-    // direction, so a baseline predating this list degrades to "stricter", never to "silent".
-    configsWithoutScript: validateUnownedConfigs(parsed.configsWithoutScript ?? []),
-  };
+  // Absent field ⇒ nothing recorded ⇒ every scriptless config fails. That is the fail-closed
+  // direction, so a baseline predating this list degrades to "stricter", never to "silent".
+  const configsWithoutScript = validateUnownedConfigs(parsed.configsWithoutScript ?? []);
+  validateUnownedConfigReasons(configsWithoutScript, parsed.configsWithoutScriptReasons ?? {});
+  return { suites: validateBaselineSuites(parsed.suites), configsWithoutScript };
 }
 
 /**

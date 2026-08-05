@@ -12,7 +12,9 @@ import {
   isWiredInWorkflows,
   main,
   runE2eSuiteWiringGate,
+  playwrightConfigNames,
   validateBaselineSuites,
+  validateUnownedConfigReasons,
   validateUnownedConfigs,
 } from "../check-e2e-suite-wiring.mjs";
 
@@ -271,6 +273,56 @@ describe("config ownership (KEIKO-0077)", () => {
     expect(
       checkE2eConfigOwnership({ configs: [OWNED], scriptCommands: [null], unownedConfigs: [] }),
     ).toHaveLength(1);
+  });
+
+  // Ownership must mean "this command runs the config", not "this command mentions it". A substring
+  // test accepted `echo <name>` — a command that runs nothing — so any config could be waved past
+  // the OWNED invariant by naming it.
+  it("does not accept a mere mention of the config as ownership", () => {
+    expect(playwrightConfigNames(`echo ${ORPHAN}`)).toEqual([]);
+    expect(playwrightConfigNames(`# runs ${ORPHAN} one day`)).toEqual([]);
+    expect(
+      checkE2eConfigOwnership({
+        configs: [ORPHAN],
+        scriptCommands: [`echo ${ORPHAN}`],
+        unownedConfigs: [],
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("reads both --config spellings and an alternate path to the same file", () => {
+    expect(playwrightConfigNames(command(ORPHAN))).toEqual([ORPHAN]);
+    expect(playwrightConfigNames(`playwright test --config=tests/e2e/config/${ORPHAN}`)).toEqual([
+      ORPHAN,
+    ]);
+    expect(playwrightConfigNames(`playwright test --config ./tests/e2e/config/${ORPHAN}`)).toEqual([
+      ORPHAN,
+    ]);
+  });
+
+  it("does not let a filename prefix satisfy a different config", () => {
+    const longer = "playwright.issue-9999-orphan-extended.config.ts";
+
+    expect(
+      checkE2eConfigOwnership({
+        configs: [ORPHAN],
+        scriptCommands: [command(longer)],
+        unownedConfigs: [],
+      }),
+    ).toHaveLength(1);
+  });
+
+  // The recorded reason IS the justification for a scriptless config. An unreasoned entry is an
+  // unexplained exemption, and a reason outliving its entry is stale evidence — both fail closed.
+  it("requires a non-empty reason for every recorded config and rejects stale reasons", () => {
+    expect(() => validateUnownedConfigReasons([ORPHAN], {})).toThrow(/no reason/u);
+    expect(() => validateUnownedConfigReasons([ORPHAN], { [ORPHAN]: "   " })).toThrow(/no reason/u);
+    expect(() => validateUnownedConfigReasons([ORPHAN], { [ORPHAN]: 42 })).toThrow(/no reason/u);
+    expect(() => validateUnownedConfigReasons([], { [ORPHAN]: "why" })).toThrow(/stale reason/u);
+    expect(() => validateUnownedConfigReasons([], [])).toThrow(/configsWithoutScriptReasons/u);
+    expect(validateUnownedConfigReasons([ORPHAN], { [ORPHAN]: "why" })).toEqual({
+      [ORPHAN]: "why",
+    });
   });
 
   it("rejects duplicate and non-config register entries", () => {

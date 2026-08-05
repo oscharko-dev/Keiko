@@ -588,6 +588,12 @@ async function recordMixedGestures(
 test("keeps mixed heavy-window gestures within performance budgets @release-evidence", async ({
   page,
 }, testInfo) => {
+  // Chromium is the reference browser for frame-gap evidence. Headless WebKit on CI has no GPU and
+  // software-renders, producing frame gaps an order of magnitude larger than real hardware — an
+  // environment artifact the existing scenario already skips its timing budgets for. Recording a
+  // second evidence run under those conditions would commit numbers that describe the renderer
+  // rather than the product, so this scenario measures on chromium only.
+  test.skip(testInfo.project.name !== "chromium", "frame-gap evidence is chromium-only");
   test.setTimeout(180_000);
   await installSeededWorkspace(page, seedMixedWindows(), seedMixedConnections());
   await page.goto("/");
@@ -603,7 +609,10 @@ test("keeps mixed heavy-window gestures within performance budgets @release-evid
     ).toHaveCount(1);
   }
   await expect(page.locator(".window")).toHaveCount(WINDOW_COUNT);
-  await page.waitForTimeout(750);
+  // The heavy widgets' own content, not just their window frames: the Coding Workbench renders its
+  // labelled region once its lazily-loaded chunk has mounted, so this is an observable readiness
+  // condition rather than a fixed sleep whose adequacy depends on the host.
+  await expect(page.getByRole("region", { name: "Coding Workbench" }).first()).toBeVisible();
 
   const project = testInfo.project.name;
   const gestures = await recordMixedGestures(page, project);

@@ -111,7 +111,11 @@ function verificationFailures(id, verification, repoRoot) {
 // already trims or re-splits on whitespace. A `\s*(?:…)\s*` form lets the engine try each way of
 // dividing a whitespace run before failing the alternation, which is super-linear (sonarjs S8786).
 const COMMAND_SEPARATOR = /(?:&&|\|\||;)/u;
-const QUOTED_SEGMENT = /"[^"]*"|'[^']*'/gu;
+// Quotes are UNWRAPPED rather than stripped. Dropping the quoted text entirely let
+// `npx vitest run "gone.test.ts"` name a missing file and still pass — the token never reached the
+// stat-check. A quoted ripgrep PATTERN survives this too, but harmlessly: its words carry no
+// extension, or carry characters (`,` `|` space) outside the path class, so none is path-shaped.
+const QUOTE_MARKS = /["']/gu;
 // A whitespace-delimited token carrying a file extension. Deliberately extension-agnostic so a
 // future entry referencing an unanticipated file type is still checked rather than silently
 // skipped; runner words (`npx`, `vitest`), npm script names (`check:local-state`) and flags
@@ -130,6 +134,15 @@ function isPathShapedToken(token) {
   const lastDot = token.lastIndexOf(".");
   if (lastDot <= 0 || lastDot === token.length - 1) return false;
   return PATH_TOKEN_EXTENSION.test(token.slice(lastDot + 1));
+}
+
+// The operand a token carries, once quoting and an attached option value are accounted for. A flag
+// is skipped, but `--config=path/to.ts` carries a real operand after the `=`, and skipping the whole
+// token let a missing file through — the same bypass as the quoted form above.
+function tokenOperand(token) {
+  if (!token.startsWith("-")) return token;
+  const equals = token.indexOf("=");
+  return equals === -1 ? "" : token.slice(equals + 1);
 }
 
 export function verificationPathFailures(id, verification, repoRoot = REPO_ROOT) {
@@ -170,9 +183,10 @@ function missingSegmentPaths(segment, base, repoRoot) {
 
 function pathShapedTokens(segment) {
   return segment
-    .replace(QUOTED_SEGMENT, " ")
+    .replace(QUOTE_MARKS, "")
     .split(/\s+/u)
-    .filter((token) => !token.startsWith("-") && isPathShapedToken(token));
+    .map((token) => tokenOperand(token))
+    .filter((operand) => isPathShapedToken(operand));
 }
 
 function notesFailures(id, notes) {

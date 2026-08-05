@@ -45,10 +45,19 @@ function readSuppressions() {
   return JSON.parse(readFileSync(SUPPRESSIONS, "utf8"));
 }
 
+// Validates the shape while summing: a malformed entry would otherwise make the total NaN, and
+// `expect(NaN).toBeLessThanOrEqual(…)` fails without naming the file that caused it.
 function totalSuppressed(register) {
-  return Object.values(register)
-    .flatMap((byRule) => Object.values(byRule))
-    .reduce((sum, entry) => sum + entry.count, 0);
+  let total = 0;
+  for (const [file, byRule] of Object.entries(register)) {
+    for (const [rule, entry] of Object.entries(byRule)) {
+      if (!Number.isInteger(entry?.count)) {
+        throw new TypeError(`${file} records a non-integer count for ${rule}`);
+      }
+      total += entry.count;
+    }
+  }
+  return total;
 }
 
 // The recorded ceiling at the moment the bar was enabled. Lower it when suppressions are pruned;
@@ -76,12 +85,15 @@ describe("keiko-ui is held to the repository lint bar (KEIKO-0118)", () => {
 });
 
 describe("keiko-ui suppression register (KEIKO-0118)", () => {
-  it("exists and only records the three newly-barred rules", () => {
+  // A SUBSET check, not set equality. The register is shrink-only, so pruning the last `complexity`
+  // suppression legitimately leaves two rules — equality would fail on an improvement. What must
+  // never appear is a rule outside the three, which would mean something else got suppressed.
+  it("records nothing outside the three newly-barred rules", () => {
     const register = readSuppressions();
-    const rules = new Set(Object.values(register).flatMap((byRule) => Object.keys(byRule)));
+    const rules = [...new Set(Object.values(register).flatMap((byRule) => Object.keys(byRule)))];
 
     expect(Object.keys(register).length).toBeGreaterThan(0);
-    expect([...rules].sort()).toEqual([...BARRED_RULES].sort());
+    expect(rules.filter((rule) => !BARRED_RULES.includes(rule))).toEqual([]);
   });
 
   it("records no file that has since been deleted", () => {

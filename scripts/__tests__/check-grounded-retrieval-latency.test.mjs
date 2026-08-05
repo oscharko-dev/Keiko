@@ -112,6 +112,44 @@ describe("assertMeasurableBudget", () => {
     expect(() => assertMeasurableBudget({ ...budget, [field]: value })).toThrow(TypeError);
   });
 
+  // A non-numeric ceiling makes `observed > budget` false for ANY observation, switching that
+  // percentile's check off while the gate still reports PASS — the same false green as measuring
+  // nothing, arriving through a different field.
+  it.each([
+    ["p50BudgetMs", "disabled"],
+    ["p50BudgetMs", 0],
+    ["p50BudgetMs", -1],
+    ["p50BudgetMs", Number.NaN],
+    ["p50BudgetMs", Number.POSITIVE_INFINITY],
+    ["p95BudgetMs", null],
+    ["p95BudgetMs", 0],
+  ])("rejects a budget whose %s is %p", (field, value) => {
+    expect(() => assertMeasurableBudget({ ...budget, [field]: value })).toThrow(TypeError);
+  });
+
+  it("rejects a p95 ceiling tighter than the p50 ceiling", () => {
+    expect(() => assertMeasurableBudget({ ...budget, p50BudgetMs: 800, p95BudgetMs: 400 })).toThrow(
+      /p95BudgetMs/u,
+    );
+  });
+
+  // Without a real delay the probe injects no regression, so the non-tautology proof would pass
+  // having proven nothing.
+  it.each([undefined, 0, -5, "200", Number.NaN])(
+    "rejects a regression probe whose judgeDelayMs is %p",
+    (judgeDelayMs) => {
+      expect(() =>
+        assertMeasurableBudget({ ...budget, regressionProbe: { judgeDelayMs } }),
+      ).toThrow(/judgeDelayMs/u);
+    },
+  );
+
+  it("rejects a budget with no regressionProbe at all", () => {
+    const withoutProbe = { ...budget };
+    delete withoutProbe.regressionProbe;
+    expect(() => assertMeasurableBudget(withoutProbe)).toThrow(/judgeDelayMs/u);
+  });
+
   it("accepts zero warmup iterations but requires at least one measured iteration", () => {
     expect(assertMeasurableBudget({ ...budget, warmupIterations: 0, iterations: 1 })).toBeTruthy();
   });
@@ -166,19 +204,24 @@ describe("runGroundedRetrievalLatencyGate", () => {
   }, 180_000);
 
   it("fails when the measured percentiles breach an impossible budget", async () => {
-    await withBudgetFile({ ...FAST, p50BudgetMs: 0, p95BudgetMs: 0 }, async (budgetPath) => {
-      const failures = [];
-      const result = await runGroundedRetrievalLatencyGate({
-        budgetPath,
-        log: () => discard(),
-        fail: (m) => failures.push(m),
-      });
+    // Positive but unreachable: a zero ceiling is now rejected up front as unmeasurable, so the
+    // breach has to be forced with a budget that is valid and still cannot be met.
+    await withBudgetFile(
+      { ...FAST, p50BudgetMs: 0.001, p95BudgetMs: 0.001 },
+      async (budgetPath) => {
+        const failures = [];
+        const result = await runGroundedRetrievalLatencyGate({
+          budgetPath,
+          log: () => discard(),
+          fail: (m) => failures.push(m),
+        });
 
-      expect(result.ok).toBe(false);
-      expect(failures).toHaveLength(1);
-      expect(failures[0]).toContain("p50");
-      expect(failures[0]).toContain("p95");
-    });
+        expect(result.ok).toBe(false);
+        expect(failures).toHaveLength(1);
+        expect(failures[0]).toContain("p50");
+        expect(failures[0]).toContain("p95");
+      },
+    );
   }, 180_000);
 
   // The self-proving half, exercised for real: with a budget wide enough to absorb the injected

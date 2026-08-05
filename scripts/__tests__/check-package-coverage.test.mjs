@@ -348,14 +348,15 @@ describe("coverage baseline reality guard", () => {
   // against a live inventory taken with the coverage run's own include/exclude globs.
   it("records a file count matching a live source inventory (no partial undercount)", () => {
     const baseline = JSON.parse(readFileSync("docs/qa/package-coverage-baseline.json", "utf8"));
+    // Filter BEFORE mapping: countPackageSourceFiles walks the package tree, so mapping first would
+    // pay for a full walk of every intentionally-ungated package only to discard the result.
     const mismatches = Object.entries(baseline.packages)
+      .filter(([name]) => !INTENTIONALLY_UNGATED.has(name))
       .map(([name, entry]) => ({
         package: name,
         recorded: entry.files,
         live: countPackageSourceFiles(process.cwd(), name),
       }))
-      // An excluded package carries no live inventory to compare against.
-      .filter(({ package: name }) => !INTENTIONALLY_UNGATED.has(name))
       .filter(({ recorded, live }) => recorded !== live);
 
     expect(mismatches).toEqual([]);

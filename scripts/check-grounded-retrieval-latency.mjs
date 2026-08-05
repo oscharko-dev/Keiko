@@ -79,19 +79,45 @@ export function evaluateRegressionProbe({ regressedMs, budget }) {
 
 // ─── Runner ─────────────────────────────────────────────────────────────────────
 
-// A non-positive `iterations` would leave `samples` empty, and `percentile([])` is 0 — which clears
-// every ceiling. The gate would report PASS having measured nothing at all, which is precisely the
-// false-green class this whole change set exists to remove. Reject the budget instead.
-export function assertMeasurableBudget(budget) {
-  for (const field of ["warmupIterations", "iterations"]) {
-    const value = budget[field];
-    if (!Number.isInteger(value) || value < (field === "iterations" ? 1 : 0)) {
-      throw new TypeError(
-        `check-grounded-retrieval-latency: budget.${field} must be a non-negative integer ` +
-          `(iterations at least 1); got ${JSON.stringify(value)}.`,
-      );
-    }
+function rejectBudgetField(field, value, requirement) {
+  throw new TypeError(
+    `check-grounded-retrieval-latency: budget.${field} must be ${requirement}; got ` +
+      `${JSON.stringify(value)}.`,
+  );
+}
+
+// Every field this gate's verdict depends on is validated before a single measurement is taken.
+// Each unvalidated field is a way for the gate to report PASS while enforcing nothing:
+//   * a non-positive `iterations` leaves `samples` empty, and `percentile([])` is 0 — clearing
+//     every ceiling having measured nothing;
+//   * a non-numeric ceiling (`"disabled"`) makes `observed > budget` false for ANY observation,
+//     silently switching that percentile's check off;
+//   * a `p95BudgetMs` below `p50BudgetMs` is incoherent — the tail ceiling would be tighter than
+//     the median one, so the p50 check could never be the binding constraint it exists to be;
+//   * a missing or non-positive probe delay injects no regression, so the non-tautology proof
+//     passes without having proven anything.
+// This is the same false-green class the whole change set exists to remove, so it fails loudly.
+function assertIntegerAtLeast(field, value, minimum) {
+  if (!Number.isInteger(value) || value < minimum) {
+    rejectBudgetField(field, value, `an integer of at least ${String(minimum)}`);
   }
+}
+
+function assertFinitePositive(field, value) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    rejectBudgetField(field, value, "a finite positive number");
+  }
+}
+
+export function assertMeasurableBudget(budget) {
+  assertIntegerAtLeast("warmupIterations", budget.warmupIterations, 0);
+  assertIntegerAtLeast("iterations", budget.iterations, 1);
+  assertFinitePositive("p50BudgetMs", budget.p50BudgetMs);
+  assertFinitePositive("p95BudgetMs", budget.p95BudgetMs);
+  if (budget.p95BudgetMs < budget.p50BudgetMs) {
+    rejectBudgetField("p95BudgetMs", budget.p95BudgetMs, "at least budget.p50BudgetMs");
+  }
+  assertFinitePositive("regressionProbe.judgeDelayMs", budget.regressionProbe?.judgeDelayMs);
   return budget;
 }
 

@@ -288,6 +288,11 @@ jobs:
         # code-path cost and never model-serving variance. Generous p50/p95 ceilings, plus an
         # injected per-judge-call delay that MUST breach the p95 budget so the gate proves it can
         # fail. Uses the compiled keiko-server dist built by `npm run typecheck` above.
+        #
+        # Bounded explicitly: this step runs a real pipeline in a loop, so a hang inside it would
+        # otherwise burn the workflow-level default before the required check reports. 15 minutes is
+        # far above the measured budget (warmup + 12 iterations + one probe, ~35ms each).
+        timeout-minutes: 15
         run: npm run check:grounded-retrieval-latency
       - name: Grounded faithfulness gate (RB-4, GEN-AI-EVAL-003)
         # Scores the real citation-reconciliation + abstention logic over scripted answerer variants

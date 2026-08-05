@@ -106,6 +106,31 @@ describe("verification path existence", () => {
     });
   });
 
+  // Two ways a file operand can hide from a naive tokenizer. Dropping quoted text entirely, and
+  // skipping anything starting with `-`, both let a missing file through the stat-check — the gate
+  // would report PASS over exactly the dead reference it exists to catch.
+  it.each([
+    ['a quoted operand: npx vitest run "gone.test.ts"', 'npx vitest run "gone.test.ts"'],
+    ["a single-quoted operand", "npx vitest run 'gone.test.ts'"],
+    ["an attached option value: --config=gone.ts", "npx vitest run --config=gone.ts"],
+  ])("catches a missing path hidden by %s", (_label, command) => {
+    withRepoRoot([], (root) => {
+      expect(verificationPathFailures(REAL_ID, [command], root)).toHaveLength(1);
+    });
+  });
+
+  it("accepts those same forms when the file exists", () => {
+    withRepoRoot(["real.test.ts", "vitest.config.ts"], (root) => {
+      expect(
+        verificationPathFailures(
+          REAL_ID,
+          ['npx vitest run "real.test.ts" --config=vitest.config.ts'],
+          root,
+        ),
+      ).toEqual([]);
+    });
+  });
+
   // Runner words, npm script names and flags carry no extension, and a quoted ripgrep pattern may
   // contain any character at all — none of them is a path, and treating one as a path would make
   // the gate fail on entries that are perfectly healthy.
