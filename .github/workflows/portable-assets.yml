@@ -866,7 +866,7 @@ jobs:
       # are both thin, deprecated-warning-free wrappers around actions/attest; using actions/attest
       # directly avoids depending on the actions/attest-sbom wrapper, which is deprecated upstream.
       - name: Attest build provenance for portable release artifacts
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
           subject-path: |
             portable-release-assets/artifacts/*/keiko-*.zip
@@ -877,21 +877,21 @@ jobs:
       # only has the downloaded SBOM (for example a compliance review with no archive on hand) can
       # still run `gh attestation verify <sbom-file>` directly instead of only via the archive.
       - name: Attest build provenance for portable SBOM documents
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
           subject-path: "portable-release-assets/artifacts/*/evidence/sbom.cdx.json"
       - name: Attest SBOM for windows-x64 portable artifact
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
           subject-path: portable-release-assets/artifacts/windows-x64/keiko-windows-x64.zip
           sbom-path: portable-release-assets/artifacts/windows-x64/evidence/sbom.cdx.json
       - name: Attest SBOM for macos-arm64 portable artifact
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
           subject-path: portable-release-assets/artifacts/macos-arm64/keiko-macos-arm64.zip
           sbom-path: portable-release-assets/artifacts/macos-arm64/evidence/sbom.cdx.json
       - name: Attest SBOM for macos-x64 portable artifact
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
           subject-path: portable-release-assets/artifacts/macos-x64/keiko-macos-x64.zip
           sbom-path: portable-release-assets/artifacts/macos-x64/evidence/sbom.cdx.json
