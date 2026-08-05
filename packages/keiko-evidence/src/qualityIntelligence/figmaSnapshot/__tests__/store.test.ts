@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -10,8 +11,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { basename, dirname, join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EvidenceReadError, EvidenceWriteError } from "../../../errors.js";
 import {
   __resetFigmaSnapshotSweepRegistryForTests,
@@ -55,6 +56,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Idempotent even when the test did not mock node:fs, so every test can rely on it running.
+  vi.doUnmock("node:fs");
+  vi.resetModules();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -273,6 +277,28 @@ describe("createNodeFigmaSnapshotStore", () => {
     }
   });
 
+  it("refuses a symlinked side-file root before staging any screen bytes", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    // mkdirSync(recursive) silently FOLLOWS a symlink at the figma-snapshots segment while creating
+    // the deeper `.attempt-*` directory under it, and writeSideFile's own lstat/realpath check then
+    // only inspects that deeper, genuinely-real component -- never the symlinked ancestor. Without
+    // validating the side-file base itself, pre-planted evidence input redirects every staged PNG
+    // outside the evidence tree while the JSON record still commits under qi/.
+    const outside = mkdtempSync(join(tmpdir(), "figma-snapshot-sidebase-"));
+    try {
+      mkdirSync(join(dir, QI_SUBDIR), { recursive: true });
+      symlinkSync(outside, join(dir, QI_SUBDIR, "figma-snapshots"), "dir");
+      const store = createNodeFigmaSnapshotStore(dir);
+
+      expect(() => store.record(baseInput())).toThrow(EvidenceWriteError);
+      // Nothing escaped: no attempt directory, and no PNG bytes, outside the evidence tree.
+      expect(readdirSync(outside)).toHaveLength(0);
+      expect(existsSync(snapshotFile())).toBe(false);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("stores mutable display metadata without mutating the immutable snapshot record", () => {
     const store = createNodeFigmaSnapshotStore(dir);
     store.record(baseInput());
@@ -464,6 +490,104 @@ describe("createNodeFigmaSnapshotStore", () => {
       }),
     ).toThrow(EvidenceWriteError);
     expect(readFileSync(snapshotFile(), "utf8")).toBe(existing);
+  });
+
+  it("keeps a committed record loadable when a losing concurrent record() cleans up", () => {
+    // A double-submit of the same runId races two record() calls. The write-once JSON commit picks
+    // one winner; the loser must not take the winner's image side-files with it on the way out,
+    // and must not have overwritten their bytes on the way in (KEIKO-0110).
+    const winner = createNodeFigmaSnapshotStore(dir);
+    const loserScreens = baseInput().screens.map((screen, index) => ({
+      ...screen,
+      image: { mimeType: "image/png" as const, bytes: png(200 + index) },
+    }));
+    let committed: ReturnType<FigmaSnapshotStore["record"]> | undefined;
+    const loser = createNodeFigmaSnapshotStore(dir, {
+      randomSuffix: () => {
+        // The winning attempt commits its record (and its side-files) while this attempt is
+        // between its own side-file writes and its write-once commit.
+        committed ??= winner.record(baseInput());
+        return "race";
+      },
+    });
+
+    expect(() => loser.record({ ...baseInput(), screens: loserScreens })).toThrow(
+      EvidenceWriteError,
+    );
+
+    const loaded = loadOrThrow(winner, RUN_ID);
+    expect(loaded.screens).toHaveLength(2);
+    // load() re-verifies each side-file's sha256, so a deleted or clobbered PNG throws here.
+    const first = firstScreen(loaded);
+    expect(first.image.sha256).toBe(
+      createHash("sha256")
+        .update(Buffer.from(png(10)))
+        .digest("hex"),
+    );
+    expect(readFileSync(join(committed?.sideFileDir ?? "", first.image.relativePath))).toEqual(
+      Buffer.from(png(10)),
+    );
+  });
+
+  it("rolls back the committed record when installing its side-files throws", async () => {
+    // The record commits before its side-files are moved into place (KEIKO-0110's fix); if that
+    // install step throws, the committed record must not survive pointing at missing images.
+    // Durable writes elsewhere in the same call chain (the staged PNGs, the record's own
+    // write-once commit) ALSO rename through a temp file, so the fault is scoped to exactly the
+    // publish rename: its source is the attempt-private staging directory (basename `.attempt-*`),
+    // which no other renameSync call in this store ever passes.
+    vi.resetModules();
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    vi.doMock("node:fs", () => ({
+      ...actualFs,
+      default: actualFs,
+      renameSync: (source: string, destination: string): void => {
+        if (basename(dirname(source)).startsWith(".attempt-")) {
+          throw new Error("simulated cross-device rename failure");
+        }
+        actualFs.renameSync(source, destination);
+      },
+    }));
+    const { createNodeFigmaSnapshotStore: createStore } = await import("../store.js");
+
+    const store = createStore(dir);
+    expect(() => store.record(baseInput())).toThrow("simulated cross-device rename failure");
+    expect(existsSync(snapshotFile())).toBe(false);
+  });
+
+  it("rolls back the committed record when the staged side-files vanish before publish", () => {
+    // The orphan sweep (a concurrent store instance's OWN lazy first-use sweep) has no way to
+    // distinguish an abandoned attempt from one that is still in flight -- neither has a committed
+    // record yet -- so it can legitimately race and delete an in-flight attempt's staging
+    // directory moments before this attempt tries to publish it. For a non-empty snapshot (screens
+    // WERE staged), a missing staging directory at publish time must fail closed, not silently
+    // leave the just-committed record referencing images that were never installed.
+    //
+    // baseInput() has exactly 2 screens, so randomSuffix is called twice while staging them (once
+    // per writeSideFile) before the 3rd call, for the record's own atomicWriteOnce temp file --
+    // exactly when staging has finished but publish has not yet run. Deleting the REAL staging
+    // directory then (rather than mocking node:fs) reproduces the race without touching any other
+    // lstatSync call in the same code path. The staging directory's own name is a real UUID (not
+    // derived from randomSuffix), so it is located by listing sideFileBase for the sole entry
+    // staging ever creates there: the `.attempt-*` directory.
+    const sideFileBase = join(dir, "qi", "figma-snapshots");
+    let calls = 0;
+    const store = createNodeFigmaSnapshotStore(dir, {
+      randomSuffix: () => {
+        calls += 1;
+        if (calls === 3) {
+          const attemptDir = readdirSync(sideFileBase).find((name) => name.startsWith(".attempt-"));
+          if (attemptDir !== undefined) {
+            rmSync(join(sideFileBase, attemptDir), { recursive: true, force: true });
+          }
+        }
+        return `race-${String(calls)}`;
+      },
+    });
+
+    expect(() => store.record(baseInput())).toThrow(EvidenceWriteError);
+    expect(existsSync(snapshotFile())).toBe(false);
+    expect(existsSync(sideFileBase) ? readdirSync(sideFileBase) : []).not.toContain(RUN_ID);
   });
 
   it("redacts secrets out of the persisted IR content (token never on disk)", () => {

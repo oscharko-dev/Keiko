@@ -6,7 +6,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { createSession, type AgentConfig, type HarnessDeps } from "./session.js";
 import { counterIdSource } from "./fingerprint.js";
-import type { ModelPort, ToolPort } from "./ports.js";
+import type { EventSink, ModelPort, ToolPort } from "./ports.js";
 import { MemoryEventSink } from "./sinks.js";
 import type { HarnessEvent, TaskInput } from "./types.js";
 import { recordingTool, response, scriptedModel, stubClock } from "./_support.js";
@@ -248,5 +248,35 @@ describe("createSession", () => {
     const result = await session.result;
     expect(result.outcome).toBe("limit-exceeded");
     expect(result.failure?.category).toBe("HARNESS_LIMIT_WALL_TIME");
+  });
+
+  it("keeps a handler's recorded failure when the deadline timer fires right after it", async () => {
+    // The real-clock deadline timer writes the same failure slot as the loop guard, so it carries
+    // the same misattribution risk: once a handler has recorded WHY the run stopped, the timer
+    // must not relabel it as budget exhaustion (KEIKO-0098).
+    const { AuthenticationError } = await import("@oscharko-dev/keiko-model-gateway");
+    const deadline = manualDeadlineClock();
+    const events: HarnessEvent[] = [];
+    // Expiring the deadline the moment model:call:failed is emitted schedules the timer body to
+    // run after onModelError has synchronously recorded HARNESS_MODEL_ERROR — the exact interleave
+    // the finding describes, without relying on wall-clock timing.
+    const trigger: EventSink = {
+      emit: (event): void => {
+        events.push(event);
+        if (event.type === "model:call:failed") deadline.expire();
+      },
+    };
+    const model: ModelPort = {
+      call: (): Promise<NormalizedResponse> =>
+        Promise.reject(new AuthenticationError("provider returned 400 invalid request")),
+    };
+    const session = createSession(
+      EXPLAIN,
+      { ...CONFIG, limits: { maxWallTimeMs: 50 } },
+      { ...deps(model, new MemoryEventSink()), sink: trigger, clock: deadline.clock },
+    );
+    const result = await session.result;
+    expect(result.outcome).toBe("failed");
+    expect(result.failure?.category).toBe("HARNESS_MODEL_ERROR");
   });
 });

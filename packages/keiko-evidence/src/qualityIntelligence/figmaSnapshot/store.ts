@@ -30,7 +30,15 @@
 // dirs from a previously interrupted record() are cleaned up without a separate boot step.
 
 import { createHash, randomUUID } from "node:crypto";
-import { type Dirent, linkSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  type Dirent,
+  linkSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+} from "node:fs";
 import { join } from "node:path";
 import { compareStrings } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
@@ -948,6 +956,40 @@ interface StoreCtx {
   readonly ensureSwept: () => void;
 }
 
+// Moves this attempt's staged side-files to the canonical per-run directory. Only ever called by
+// the attempt that WON the write-once JSON commit, so a directory still sitting at the canonical
+// path is an orphan from an aborted earlier attempt (no record for this runId existed a moment
+// ago, or the commit would have been rejected) and never a committed sibling's evidence.
+//
+// A missing staging directory is legitimate ONLY when there were no screens to stage in the first
+// place (writeScreenSideFiles never creates it for an empty input) — expectedScreenCount
+// distinguishes that from a non-empty attempt whose directory disappeared, e.g. a concurrent
+// store instance's lazy orphan sweep racing this same window (it has no way to tell an in-flight
+// attempt from an abandoned one, since neither has a committed record yet). Silently no-op-ing in
+// THAT case would let the record commit above reference images that were never installed.
+function publishStagedSideFiles(
+  stagedRunDir: string,
+  sideFileDir: string,
+  expectedScreenCount: number,
+): void {
+  if (lstatSync(stagedRunDir, { throwIfNoEntry: false })?.isDirectory() !== true) {
+    if (expectedScreenCount > 0) {
+      throw new EvidenceWriteError(
+        "Figma snapshot side-file staging directory disappeared before publish",
+      );
+    }
+    return;
+  }
+  rmSync(sideFileDir, { recursive: true, force: true });
+  renameSync(stagedRunDir, sideFileDir);
+  // Matches atomicWriteOnce's own durability discipline (durable-write.ts): a rename's directory
+  // entry is not guaranteed durable until the containing directory is fsynced, so without this a
+  // crash right after renameSync returns can lose the entry while the JSON record — already
+  // fsynced by atomicWriteOnce — survives, reproducing the exact "record references missing
+  // images" gap this function exists to prevent, just via a crash instead of a thrown error.
+  fsyncDirectoryContaining(sideFileDir);
+}
+
 function recordOp(ctx: StoreCtx, input: RecordFigmaSnapshotInput): RecordFigmaSnapshotResult {
   assertValidRunId(input.runId);
   ctx.ensureSwept();
@@ -956,28 +998,53 @@ function recordOp(ctx: StoreCtx, input: RecordFigmaSnapshotInput): RecordFigmaSn
   // Write-once pre-check BEFORE any side-file is written so a rejected re-record leaves no
   // partial render bytes behind. `atomicWriteOnce` re-checks via O_EXCL to close the TOCTOU gap.
   assertSnapshotAbsent(recordPath);
-  let rows: readonly FigmaSnapshotScreenRow[];
+  // Side-files are staged in an attempt-private directory and published only once this attempt has
+  // won that same write-once commit, mirroring its "commit once, atomically" discipline. Sharing
+  // the runId-keyed directory across attempts made a concurrent duplicate request destructive in
+  // both directions: a loser overwrote the winner's PNG bytes at the deterministic screen-N.png
+  // path (leaving the committed record referencing a sha256 that no longer matched disk), and its
+  // failure cleanup then deleted the winner's whole directory.
+  // Validated here rather than joined straight from ctx.sideFileBase: mkdirSync's recursive create
+  // silently follows a symlink planted at the figma-snapshots segment while creating a DEEPER path
+  // under it, and the writeSideFile's own lstat/realpath containment check then only sees that
+  // deeper, genuinely-real final component — never the symlinked ancestor above it. Deriving the
+  // staging base through prepareOwnedDirectory with parentReal here, from the already-validated
+  // realBase, mirrors containedSideFileRunDir's read-side check and closes that gap for writes.
+  const realSideFileBase = prepareOwnedDirectory(
+    join(realBase, SIDE_FILE_SUBDIR),
+    ctx.fs,
+    "Figma snapshot side-file root",
+    { parentReal: realBase },
+  );
+  const stagingBase = join(realSideFileBase, `.attempt-${randomUUID()}`);
+  const sideFileDir = join(realSideFileBase, input.runId);
   try {
-    rows = writeScreenSideFiles(
-      ctx.sideFileBase,
+    const rows: readonly FigmaSnapshotScreenRow[] = writeScreenSideFiles(
+      stagingBase,
       input.runId,
       input.screens,
       ctx.fs,
       ctx.randomSuffix,
     );
-  } catch (error) {
-    // Side-file write failed: best-effort remove the run's side-dir so it is not orphaned.
-    rmSync(join(ctx.sideFileBase, input.runId), { recursive: true, force: true });
-    throw error;
-  }
-  try {
     atomicWriteOnce(recordPath, JSON.stringify(assembleRecord(input, rows)), ctx.randomSuffix);
-  } catch (error) {
-    // Record write failed after side-files succeeded: remove side-dir to avoid orphaning.
-    rmSync(join(ctx.sideFileBase, input.runId), { recursive: true, force: true });
-    throw error;
+    try {
+      publishStagedSideFiles(join(stagingBase, input.runId), sideFileDir, input.screens.length);
+    } catch (error) {
+      // The record committed but installing its side-files then threw: roll back the record so a
+      // reader never observes it permanently referencing missing images, and so a retry passes
+      // assertSnapshotAbsent again. This closes the synchronous-failure half of the gap; a hard
+      // process kill between the two writes (not a thrown error) remains unmitigated here and
+      // would need two-phase-commit machinery to close — the orphaned staging directory is at
+      // least reclaimed by sweepOrphanedSideDirs, but the broken record is not self-healing.
+      rmSync(recordPath, { force: true });
+      throw error;
+    }
+  } finally {
+    // Only ever this attempt's own staging directory — never the canonical one, which by now
+    // belongs to whichever attempt committed the record.
+    rmSync(stagingBase, { recursive: true, force: true });
   }
-  return { recordPath, sideFileDir: join(ctx.sideFileBase, input.runId) };
+  return { recordPath, sideFileDir };
 }
 
 function loadOp(ctx: StoreCtx, runId: string): FigmaSnapshotRecord | undefined {

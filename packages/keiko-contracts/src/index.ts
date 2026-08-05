@@ -89,6 +89,8 @@ export type {
   BrowserTrustWarningEvent,
   BrowserErrorEvent,
   BrowserEvent,
+  ToolShapingDegradedReason,
+  ToolShapingDegradedEvent,
   HarnessEvent,
 } from "./harness.js";
 export { TERMINAL_STATES, DEFAULT_LIMITS, HARNESS_CODES, HARNESS_VERSION } from "./harness.js";
@@ -1127,6 +1129,7 @@ export {
   ATLASSIAN_SYNC_SCOPE_MAX_KEYS,
   ATLASSIAN_SYNC_TERMINAL_STATUSES,
   DEFAULT_ATLASSIAN_SYNC_BOUNDS,
+  hasBalancedJqlNesting,
   decideAtlassianConnectorAction,
   isAtlassianConnectionVerificationStatus,
   isAtlassianConnectorActionReviewReason,

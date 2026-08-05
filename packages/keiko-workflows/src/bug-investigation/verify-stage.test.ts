@@ -51,7 +51,13 @@ function runState(
     {
       model: { call: () => Promise.reject(new Error("unused")) },
       fs,
-      ...(opts.spawn === undefined ? {} : { spawn: opts.spawn }),
+      // These cases exercise plan resolution and command selection, not the egress boundary, and a
+      // fake spawn cannot be sandboxed. The degrade mode is therefore requested BY NAME: it used to
+      // be inferred from the injected spawn, which silently applied to governed production runs too
+      // (KEIKO-0096). Egress enforcement itself is pinned in unit-tests/verify-stage.test.ts.
+      ...(opts.spawn === undefined
+        ? {}
+        : { spawn: opts.spawn, verificationNetworkEnforcement: "enforce-or-degrade" as const }),
     },
     computeBugFingerprint(input.report, "m"),
   );

@@ -12,7 +12,11 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { ToolError } from "@oscharko-dev/keiko-tools";
 import { WorkspaceError } from "@oscharko-dev/keiko-workspace";
-import type { ContextToolObservation, ToolCallResult } from "@oscharko-dev/keiko-contracts";
+import type {
+  ContextToolObservation,
+  ToolCallResult,
+  ToolShapingDegradedReason,
+} from "@oscharko-dev/keiko-contracts";
 import { contextBytes, type RunContext, type StateStep } from "./context.js";
 import { HARNESS_CODES, toFailure } from "./errors.js";
 import type { ToolCallMetadata } from "./ports.js";
@@ -156,9 +160,11 @@ function emitToolMetadata(
 }
 
 // ADR-0055 D4 (PR4-W3): additively attach a shaped observation to the completed ToolCallResult via
-// the optional injected port, accumulating it on ctx.shapedObservations. The port is pure/total; a
-// returned undefined means "no shape for this tool type" and leaves `result` untouched. No-op when
-// no port is injected (every existing caller), preserving byte-identical behavior.
+// the optional injected port. The port is pure/total; a returned undefined means "no shape for this
+// tool type" and leaves `result` untouched. No-op when no port is injected (every existing caller),
+// preserving byte-identical behavior. Accumulating onto ctx.shapedObservations is deliberately NOT
+// done here: the caller commits it only once the rest of the shaping step has succeeded, so a
+// failure cannot leave a half-applied observation behind.
 function enrichWithObservation(
   ctx: RunContext,
   call: NormalizedToolCall,
@@ -176,7 +182,6 @@ function enrichWithObservation(
   if (observation === undefined) {
     return result;
   }
-  ctx.shapedObservations.push(observation);
   return { ...result, shapedObservation: observation };
 }
 
@@ -379,6 +384,57 @@ function isSelectedToolMessage(
   return "message" in value;
 }
 
+// Shaping and compaction are additive (ADR-0055 D4) and run AFTER the tool has succeeded and
+// tool:call:completed has already been emitted. A shaper port that throws in violation of its own
+// totality contract, or an observation that cannot be serialized, must therefore degrade to the
+// raw ToolCallResult: it may not re-enter the tool-failure path, may not emit a second,
+// contradictory terminal event for this toolCallId, and may not end the run. Both side effects are
+// committed only once every step that can still throw has succeeded. A degraded fallback still
+// emits a redacted, non-terminal diagnostic (tool:shaping:degraded) so a broken shaper port or a
+// non-serialisable observation is operator-visible instead of silently discarded — the two steps
+// that can throw are tried separately so the reason names which one actually failed.
+function shapeOrFallBackToRaw(
+  ctx: RunContext,
+  call: NormalizedToolCall,
+  result: ToolCallResult,
+): ToolMessageCandidate {
+  let enriched: ToolCallResult;
+  try {
+    enriched = enrichWithObservation(ctx, call, result);
+  } catch {
+    emitShapingDegraded(ctx, call, "shaper-threw");
+    return toolMessageCandidate(result);
+  }
+  try {
+    const candidate = toolMessageCandidate(enriched);
+    if (enriched.shapedObservation !== undefined) {
+      ctx.shapedObservations.push(enriched.shapedObservation);
+    }
+    if (candidate.compact !== undefined) {
+      ctx.compactedToolMessages.set(call.id, candidate.compact);
+    }
+    return candidate;
+  } catch {
+    emitShapingDegraded(ctx, call, "unserializable-observation");
+    // Intentionally terminal: the enrichment is optional, the tool call already succeeded, and the
+    // raw output is the same model-facing message the harness produces with no port injected.
+    return toolMessageCandidate(result);
+  }
+}
+
+function emitShapingDegraded(
+  ctx: RunContext,
+  call: NormalizedToolCall,
+  reason: ToolShapingDegradedReason,
+): void {
+  ctx.emitter.emit({
+    type: "tool:shaping:degraded",
+    toolCallId: call.id,
+    toolName: call.name,
+    reason,
+  });
+}
+
 async function runOneTool(
   ctx: RunContext,
   call: NormalizedToolCall,
@@ -403,12 +459,7 @@ async function runOneTool(
       durationMs: result.durationMs,
     });
     emitToolMetadata(ctx, result.metadata, result.durationMs);
-    const enriched = enrichWithObservation(ctx, call, result);
-    const candidate = toolMessageCandidate(enriched);
-    if (candidate.compact !== undefined) {
-      ctx.compactedToolMessages.set(call.id, candidate.compact);
-    }
-    return candidate;
+    return shapeOrFallBackToRaw(ctx, call, result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "tool execution failed";
     ctx.emitter.emit({

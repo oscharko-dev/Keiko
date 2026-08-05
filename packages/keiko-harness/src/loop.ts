@@ -23,6 +23,33 @@ function checkWallTime(ctx: RunContext): StateStep | null {
   return null;
 }
 
+// A handler may have already recorded why the run is stopping for a reason UNRELATED to the
+// deadline: a real failure (onModelError's HARNESS_MODEL_ERROR) or a real abort (cancelled). Those
+// two outcomes are the run's own decision and must not be relabelled. An ordinary successful
+// completion is NOT protected: the wall-time budget is a hard cap, so a model port that never
+// errors and only exceeds the budget must still resolve to limit-exceeded even when the dispatch
+// that finishes the run lands in one hop with no further loop iteration to catch it.
+const PROTECTED_POST_DISPATCH_STATES: ReadonlySet<HarnessStateName> = new Set([
+  "failed",
+  "cancelled",
+]);
+
+// Post-dispatch the deadline may have passed while a handler was running. Detecting it here must
+// not overwrite a protected outcome above, and the failure slot is only claimed while still
+// unclaimed. A non-protected step past the deadline still terminates the run rather than
+// continuing (including a step that already reached a terminal, non-protected state like
+// "completed" — see PROTECTED_POST_DISPATCH_STATES above).
+function checkWallTimePostDispatch(ctx: RunContext, dispatched: StateStep): StateStep | null {
+  if (PROTECTED_POST_DISPATCH_STATES.has(dispatched.to)) {
+    return null;
+  }
+  if (ctx.clock.now() - ctx.startedAt <= ctx.limits.maxWallTimeMs) {
+    return null;
+  }
+  ctx.failure ??= toFailure(HARNESS_CODES.LIMIT_WALL_TIME, "wall-time budget exhausted");
+  return { to: "limit-exceeded", reason: "maxWallTimeMs exceeded" };
+}
+
 // Limit checks evaluated when re-entering planning (iterations) plus the wall-time gate for
 // the run as a whole.
 function checkLoopLimits(ctx: RunContext): StateStep | null {
@@ -163,7 +190,7 @@ export async function runLoop(ctx: RunContext): Promise<RunOutcome> {
       continue;
     }
     const dispatched = await dispatch(ctx, state);
-    const postDispatchGuard = checkWallTime(ctx);
+    const postDispatchGuard = checkWallTimePostDispatch(ctx, dispatched);
     state = transition(ctx, state, postDispatchGuard ?? dispatched);
   }
   if (!TERMINAL_STATES.has(state)) {

@@ -311,13 +311,39 @@ describe("validateAtlassianSyncScope (hostile input)", () => {
     );
   });
 
-  it("bounds the opaque JQL and rejects non-string or empty JQL", () => {
+  it("bounds the opaque JQL and rejects non-string, empty, or whitespace-only JQL", () => {
     expect(
       errorsOf(validateAtlassianSyncScope(jiraScope({ jql: "x".repeat(2_049) }))).length,
     ).toBeGreaterThan(0);
     expect(errorsOf(validateAtlassianSyncScope(jiraScope({ jql: "" }))).length).toBeGreaterThan(0);
     expect(errorsOf(validateAtlassianSyncScope(jiraScope({ jql: 42 }))).length).toBeGreaterThan(0);
+    // A whitespace-only clause has non-zero length and trivially balanced nesting (no parens at
+    // all), so it needs its own check: composed, it would produce `AND (   )`, a malformed query
+    // Jira rejects, permanently failing every sync using that scope.
+    expect(errorsOf(validateAtlassianSyncScope(jiraScope({ jql: "   " }))).length).toBeGreaterThan(
+      0,
+    );
     expectOk(validateAtlassianSyncScope(jiraScope({ jql: "x".repeat(2_048) })));
+  });
+
+  it("rejects JQL that can escape the composed project conjunction", () => {
+    // `project IN (...) AND (<jql>)` only narrows while <jql> cannot close the injected group.
+    // An unbalanced clause turns the conjunction into a disjunction and widens egress (KEIKO-0026).
+    const escaped = 'text ~ "say \\"hi\\" now"';
+    for (const jql of [
+      "1=1) OR (project = SECRET",
+      "status = Done)",
+      "(status = Done",
+      'text ~ "x',
+      'text ~ "a\\"',
+    ]) {
+      expect(errorsOf(validateAtlassianSyncScope(jiraScope({ jql })))).toContain(
+        "scope.jql must have balanced parentheses and terminated string literals",
+      );
+    }
+    // Balanced clauses still pass, including parens inside a literal and escaped inner quotes.
+    expectOk(validateAtlassianSyncScope(jiraScope({ jql: 'labels = auth AND text ~ "log(in"' })));
+    expectOk(validateAtlassianSyncScope(jiraScope({ jql: escaped })));
   });
 
   it("propagates widened bounds as scope errors", () => {

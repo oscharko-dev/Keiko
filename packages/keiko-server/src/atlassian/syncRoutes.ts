@@ -38,6 +38,7 @@ import type { IncomingMessage } from "node:http";
 import {
   ATLASSIAN_JQL_MAX_CHARS,
   ATLASSIAN_SYNC_SCOPE_MAX_KEYS,
+  hasBalancedJqlNesting,
   isAtlassianConnectorAuthRef,
   isSafeAtlassianDisplayName,
   isSafeAtlassianIdentifier,
@@ -234,13 +235,26 @@ function validatedScopeKeys(
   return value as readonly string[];
 }
 
-// Opaque JQL: bounded and transported only (#2240) — no parsing, no evidence exposure.
+// Opaque JQL: bounded and transported only (#2240) — no parsing, no evidence exposure. The
+// structural nesting check is the one exception: the persisted scope executes as
+// `project IN (...) AND (<jql>)`, and this is the wire boundary that would otherwise let an
+// unbalanced clause reach startAtlassianSyncJob and get persisted before the background fetch's
+// own composeJiraScopeJql check ever runs (KEIKO-0026) — every subsequent re-sync then fails
+// closed forever, reading scope back from that same persisted, already-broken row.
 function validatedOptionalJql(value: unknown): string | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "string" || value.length === 0 || value.length > ATLASSIAN_JQL_MAX_CHARS) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > ATLASSIAN_JQL_MAX_CHARS ||
+    value.trim().length === 0
+  ) {
     throw invalid(
       `jql must be a non-empty string of at most ${String(ATLASSIAN_JQL_MAX_CHARS)} characters`,
     );
+  }
+  if (!hasBalancedJqlNesting(value)) {
+    throw invalid("jql must have balanced parentheses and terminated string literals");
   }
   return value;
 }

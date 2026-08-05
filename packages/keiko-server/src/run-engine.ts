@@ -49,7 +49,10 @@ import {
   type AgentRunGovernanceBinding,
 } from "./agent-run-governance.js";
 import { QueueEventSink } from "./sink.js";
-import { executeVerificationEnforced } from "./editor/verificationExecution.js";
+import {
+  executeVerificationEnforced,
+  probeNetworkIsolation,
+} from "./editor/verificationExecution.js";
 import type { ExecuteVerificationResult } from "./editor/verificationExecution.js";
 import type { AppliableSnapshot, RunRegistry, RunStatus } from "./runs.js";
 import {
@@ -59,6 +62,7 @@ import {
   type EvidencePersistContext,
   type RunIdentity,
 } from "./evidence.js";
+import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
 import { createWorkflowMemoryPort } from "./memory-workflow-port.js";
 import { buildGovernedHandoffEvidence } from "./governed-workflow.js";
 import { createServerHarnessToolShaper } from "./harness-tool-shaper.js";
@@ -246,6 +250,29 @@ function cancelWorkflow(controller: AbortController): (reason?: string) => void 
   };
 }
 
+// probeNetworkIsolation spawns no untrusted command, but it IS real filesystem/OS probing that
+// could throw for a workspaceRoot an earlier step already deleted or made unreadable. A governed
+// run's verification step must still get an answer rather than crash the whole dispatch; fail
+// closed (false) so the orchestrator's own fail-closed default applies exactly as if no probe had
+// run at all — never fail open into an unenforced network:"none" step. A failure is still recorded
+// through the server's single redacted diagnostic sink (no cwd, no raw error text — a content-free
+// error class only) so a probe that starts failing is operator-visible, not silently swallowed.
+export function probeNetworkIsolationSafely(cwd: string): boolean {
+  try {
+    return probeNetworkIsolation(cwd).available;
+  } catch (error) {
+    emitServerDiagnostic(undefined, {
+      correlationId: randomUUID(),
+      timestamp: new Date().toISOString(),
+      operation: "workflow.network-isolation-probe",
+      source: "run-engine.probeNetworkIsolationSafely",
+      errorClass: contentFreeErrorClass(error),
+      message: "Network isolation probe failed; verification enforcement defaults to fail-closed.",
+    });
+    return false;
+  }
+}
+
 // Starts the underlying run for a workflow request: an AbortController drives cancellation (the
 // workflow honours deps.signal), and the BFF-owned runId is injected as the workflow idSource so the
 // streamed events carry the same runId the registry/SSE key on.
@@ -255,6 +282,11 @@ function dispatchWorkflow(ctx: EngineContext, sink: QueueEventSink, runId: strin
   const commonDeps = {
     model: ports.model,
     ...(ports.spawn === undefined ? {} : { spawn: ports.spawn }),
+    // Probe THIS host for an enforcing egress backend and hand the answer to the verify stage, the
+    // same probe-then-enforce composition the editor verification path uses. Without it the stage
+    // could only ever see "no backend available" and had to choose between denying every
+    // network:"none" step and running model-authored code with inherited network (ADR-0043 D8).
+    verificationEnforcedNetworkAvailable: probeNetworkIsolationSafely(workspaceRoot(ctx.request)),
     sink,
     signal: controller.signal,
     idSource: (): string => runId,
@@ -637,6 +669,10 @@ export async function applyRun(
   const deps = {
     model: executionModel,
     ...(spawn === undefined ? {} : { spawn }),
+    // Apply replays an accepted snapshot through the same verify stage the initial dispatch used
+    // (dispatchWorkflow above); without this, a governed apply's network:"none" steps see no probe
+    // result and are denied even on hosts an enforcing backend IS available on (ADR-0043 D8).
+    verificationEnforcedNetworkAvailable: probeNetworkIsolationSafely(root),
     ...(snapshot.governedHandoff === undefined
       ? {}
       : { workflowHandoff: snapshot.governedHandoff }),

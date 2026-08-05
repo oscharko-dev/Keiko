@@ -141,7 +141,13 @@ async function runWorkflow(
     sink: deps.sink,
     now: deps.now,
     idSource: deps.idSource,
-    ...(deps.spawn === undefined ? {} : { spawn: deps.spawn }),
+    // The verify stage's egress enforcement is explicit-only (KEIKO-0096): it no longer infers a
+    // test/fake spawn from injection alone, because a real governed run injects its spawn the same
+    // way. `fakeSpawn` here is a hardcoded, deterministic, offline-only stub (never real network),
+    // so this hermetic evaluation harness requests the degrade mode by name.
+    ...(deps.spawn === undefined
+      ? {}
+      : { spawn: deps.spawn, verificationNetworkEnforcement: "enforce-or-degrade" as const }),
   };
   if (fixture.workflowKind === "unit-tests") {
     const report = await generateUnitTests(

@@ -136,6 +136,12 @@ export class AtlassianSyncJobRegistry {
   private readonly jobs = new Map<string, MutableSyncJob>();
   private readonly activity: AtlassianConnectorActivityRecord[] = [];
 
+  // Rejected input (validation, scope checks) must never reach `register`; this is the one
+  // observable side-effect surface a wire-boundary test can assert stayed at zero.
+  get jobCount(): number {
+    return this.jobs.size;
+  }
+
   register(job: MutableSyncJob): void {
     this.jobs.set(job.jobId, job);
   }

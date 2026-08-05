@@ -88,6 +88,7 @@ const SUMMARISERS: {
   "browser:session-closed": (e) => `session=${e.sessionId} reason=${e.reason}`,
   "browser:trust-warning": (e) => `session=${e.sessionId} warning=${e.warning}`,
   "browser:error": (e) => `session=${e.sessionId} code=${e.code}`,
+  "tool:shaping:degraded": (e) => `tool=${e.toolName} id=${e.toolCallId} reason=${e.reason}`,
 };
 
 function summarise(event: HarnessEvent): string {

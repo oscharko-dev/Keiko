@@ -138,7 +138,10 @@ function armWallTimeDeadline(
       if (cleared || controller.signal.aborted) {
         return;
       }
-      ctx.failure = toFailure(HARNESS_CODES.LIMIT_WALL_TIME, "wall-time budget exhausted");
+      // Claim the failure slot only while it is unclaimed: a handler that already recorded why the
+      // run stopped owns that record, and the deadline must not relabel it as budget exhaustion.
+      // The abort below still stops the run either way.
+      ctx.failure ??= toFailure(HARNESS_CODES.LIMIT_WALL_TIME, "wall-time budget exhausted");
       ctx.cancelReason = "maxWallTimeMs exceeded";
       controller.abort("maxWallTimeMs exceeded");
     })
