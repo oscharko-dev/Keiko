@@ -234,12 +234,66 @@ async function replacePage(page: Page, windows: readonly SeedWindow[]): Promise<
   return replacement;
 }
 
+/**
+ * How long a root tab may take to appear before we call it missing.
+ *
+ * Deliberately far below the 180s test timeout: the point is that a tab which never renders fails
+ * HERE, naming the tab, instead of being absorbed into a bare "Test timeout exceeded" at the end of
+ * the run. Generous enough that a slow CI bootstrap is not mistaken for a missing tab.
+ */
+const ROOT_TAB_TIMEOUT_MS = 30_000;
+
+/**
+ * Whether a root tab is currently the selected one.
+ *
+ * The single `getAttribute` call this replaces looked harmless and was not, for two reasons. It
+ * waits only for ATTACHMENT and then samples once, so on a bootstrap slow enough that the tab has
+ * not rendered yet it blocks until the whole test times out — 180 seconds spent to learn nothing,
+ * and a failure message that names a `getAttribute` call rather than the tab that never appeared.
+ * That is exactly how this spec failed on `dev` (run 30985220224). And because `aria-selected` is
+ * set asynchronously during bootstrap, a single sample can observe the value of a tab that is
+ * about to become selected anyway.
+ *
+ * Waiting for visibility first fixes the first half. The caller asserting the END STATE rather than
+ * trusting its own click fixes the second — see `selectRootTab`.
+ */
+async function rootTabIsSelected(tab: Locator): Promise<boolean> {
+  await expect(tab).toBeVisible({ timeout: ROOT_TAB_TIMEOUT_MS });
+  return (await tab.getAttribute("aria-selected")) === "true";
+}
+
+/**
+ * Selects a root tab and proves it took, idempotently.
+ *
+ * Clicking is still conditional — clicking an already-selected tab is not a no-op in this UI, it
+ * re-enters the trust flow the caller may have just resolved. What changed is that the outcome is
+ * asserted with a retrying, web-first expectation instead of being inferred from the click having
+ * been issued: under the bootstrap race described in `rootTabIsSelected`, the click and the
+ * bootstrap's own selection can land in either order, and only the end state is stable.
+ */
+async function selectRootTab(tab: Locator): Promise<void> {
+  if (!(await rootTabIsSelected(tab))) await tab.click();
+  await expect(tab).toHaveAttribute("aria-selected", "true", { timeout: ROOT_TAB_TIMEOUT_MS });
+}
+
 async function restrictBetaAndExpectAlphaTrusted(page: Page): Promise<void> {
-  // Project bootstrap may focus either root when both registrations share the same timestamp.
-  // Select Beta explicitly so this proof never depends on catalog tie-breaking.
-  const betaTab = page.getByRole("tab", { name: /M11 Root Beta/u });
-  if ((await betaTab.getAttribute("aria-selected")) !== "true") await betaTab.click();
   const prompt = page.getByRole("alertdialog", { name: "Trust this workspace?" });
+  // Project bootstrap may focus either root when both registrations share the same timestamp, and
+  // WHICH one it focused decides whether Beta can be clicked at all. When bootstrap lands on Beta,
+  // Beta's trust prompt is already open — and it is `aria-modal`, so everything outside it leaves
+  // the accessibility tree. Role-based locators then resolve to nothing even though the tab is in
+  // the DOM and 235x32 pixels large: measured directly, `querySelector` finds the tablist in 3ms
+  // while `getByRole` reports "element(s) not found" for the entire timeout. That is the whole
+  // flake — not a slow bootstrap and not a sampling race, but a modal that legitimately hides the
+  // tab this step used to insist on clicking first.
+  //
+  // So the prompt is consulted BEFORE the tab. If it is already open, bootstrap focused Beta, the
+  // selection this function wanted has already happened, and clicking a tab that is not in the
+  // accessibility tree is both impossible and unnecessary.
+  if (!(await prompt.isVisible())) {
+    // Bootstrap focused Alpha instead: Beta is reachable, and selecting it raises its prompt.
+    await selectRootTab(page.getByRole("tab", { name: /M11 Root Beta/u }));
+  }
   await expect(prompt).toBeVisible();
   await prompt.getByRole("button", { name: "Stay restricted" }).click();
   await expect(page.getByRole("note", { name: "Restricted Mode", exact: true })).toContainText(
@@ -423,14 +477,14 @@ async function reopenTrustedAlphaAfterProfileSwitch(page: Page, root: string): P
   // Clear only Beta's expected restricted prompt when Beta is active, then select Alpha explicitly
   // and prove the profile switch preserved Alpha's server-owned grant.
   const betaTab = page.getByRole("tab", { name: /M11 Root Beta/u });
-  if ((await betaTab.getAttribute("aria-selected")) === "true") {
+  if (await rootTabIsSelected(betaTab)) {
     await page
       .getByRole("alertdialog", { name: "Trust this workspace?" })
       .getByRole("button", { name: "Stay restricted" })
       .click();
   }
   const alphaTab = page.getByRole("tab", { name: /M11 Root Alpha/u });
-  if ((await alphaTab.getAttribute("aria-selected")) !== "true") await alphaTab.click();
+  await selectRootTab(alphaTab);
   const editor = await openEditorWorkspace(page, { dismissTrustPrompt: false });
   await expect(page.getByRole("alertdialog", { name: "Trust this workspace?" })).toHaveCount(0);
   await expectRootStillTrusted(page.request, root);
