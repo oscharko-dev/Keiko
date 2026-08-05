@@ -153,14 +153,16 @@ function assertEvidence(stageRoot, addon, runtimeManifest) {
   }
 }
 
-function loadAndSearch(binaryPath, runtimeVersion) {
+export function loadAndSearch(binaryPath, runtimeVersion) {
   const require = createRequire(import.meta.url);
   const runtime = require(binaryPath);
-  if (runtime.version !== runtimeVersion) fail("runtime version mismatch");
+  if (typeof runtime.version !== "function" || runtime.version() !== runtimeVersion) {
+    fail("runtime version mismatch");
+  }
   const index = new runtime.CompiledIndex(2, "cos", "f32", 8, 32, 64, false);
   index.add(new BigUint64Array([0n, 1n]), new Float32Array([1, 0, 0, 1]), 1);
   const [keys, , counts] = index.search(new Float32Array([1, 0]), 1, 1);
-  if (counts[0] !== 1 || keys[0] !== 0n) fail("runtime search result is invalid");
+  if (counts[0] !== 1n || keys[0] !== 0n) fail("runtime search result is invalid");
 }
 
 function requireTarget(targetName) {

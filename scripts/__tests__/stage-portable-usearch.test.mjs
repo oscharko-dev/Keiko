@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { portableTargetByName } from "../portable-runtime.mjs";
 import {
   containedDigest,
+  loadAndSearch,
   readContainedText,
   requiredContainedFile,
   requiredStageRoot,
@@ -134,6 +135,26 @@ function sha256Fixture(path, content) {
   return sha256(path);
 }
 
+function nativeLoaderFixture(versionApi, counts = "new BigUint64Array([1n])") {
+  const modulePath = join(temporaryRoot(), "usearch-fixture.cjs");
+  writeFixture(
+    modulePath,
+    [
+      "module.exports = {",
+      `  version: ${versionApi},`,
+      "  CompiledIndex: class {",
+      "    add() {}",
+      "    search() {",
+      `      return [new BigUint64Array([0n]), new Float32Array([0]), ${counts}];`,
+      "    }",
+      "  },",
+      "};",
+      "",
+    ].join("\n"),
+  );
+  return modulePath;
+}
+
 afterEach(() => {
   while (roots.length > 0) rmSync(roots.pop(), { recursive: true, force: true });
 });
@@ -149,6 +170,30 @@ describe("portable USearch staging", () => {
     });
 
     expect(loadRuntime).toHaveBeenCalledWith(realpathSync(fixture.binary), "fixture-version");
+  });
+
+  it("accepts only a native version accessor that reports the expected runtime version", () => {
+    expect(() =>
+      loadAndSearch(nativeLoaderFixture("() => 'fixture-version'"), "fixture-version"),
+    ).not.toThrow();
+
+    for (const versionApi of ["() => 'wrong-version'", "'fixture-version'", "undefined"]) {
+      expect(() => loadAndSearch(nativeLoaderFixture(versionApi), "fixture-version")).toThrow(
+        "runtime version mismatch",
+      );
+    }
+  });
+
+  it("accepts only the native BigInt search-result count contract", () => {
+    expect(() =>
+      loadAndSearch(nativeLoaderFixture("() => 'fixture-version'"), "fixture-version"),
+    ).not.toThrow();
+
+    for (const counts of ["new Uint32Array([1])", "new BigUint64Array([0n])"]) {
+      expect(() =>
+        loadAndSearch(nativeLoaderFixture("() => 'fixture-version'", counts), "fixture-version"),
+      ).toThrow("runtime search result is invalid");
+    }
   });
 
   it("fails closed before loading a staged runtime whose digest has drifted", () => {
