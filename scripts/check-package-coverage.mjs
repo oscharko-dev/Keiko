@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, matchesGlob, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { KEIKO_REPOSITORY_GATE_CONTRACT } from "./sonar-quality-gate-contract.mjs";
@@ -200,6 +200,94 @@ export function listPackages(root) {
   return readdirSync(packagesDir)
     .filter((name) => existsSync(join(packagesDir, name, "package.json")))
     .sort((left, right) => left.localeCompare(right));
+}
+
+// KEIKO-0125 — the baseline's `files` is derived from the v8 coverage summary, which only ever
+// contains files a test actually imported. A source file no test touches never appears in the
+// summary at all, so a package can silently record fewer files than it really has: keiko-sandbox
+// recorded 6 against 9 real sources, and every one of the 3 invisible files was ungated. These two
+// arrays are a duplicate of `coverage.include`/`coverage.exclude` in
+// `vitest.coverage.packages.config.ts` kept honest by a parity test
+// (`scripts/__tests__/check-package-coverage.test.mjs`), which imports the real config and asserts
+// they are identical — the config cannot be imported from a plain `.mjs` script without pulling in
+// vitest, so this is the "duplicate with a parity test" side of AGENTS.md's rule rather than a
+// second hand-written definition that could drift.
+export const PACKAGE_COVERAGE_INCLUDE = [
+  "packages/*/src/**/*.{ts,tsx}",
+  "src/**/*.{ts,tsx}",
+  "scripts/check-lcov-source-mapping.mjs",
+  "scripts/check-mutation-quality.mjs",
+  "scripts/check-mutation-scope.mjs",
+  "scripts/check-sonar-analysis-log.mjs",
+  "scripts/check-sonar-main-quality-gate.mjs",
+  "scripts/check-sonar-pr-quality-gate.mjs",
+  "scripts/sonar-analysis-scope.mjs",
+  "scripts/sonar-quality-gate-contract.mjs",
+];
+export const PACKAGE_COVERAGE_EXCLUDE = [
+  "packages/keiko-ui/**",
+  "**/*.test.*",
+  "**/__tests__/**",
+  "**/_support.ts",
+  "**/test-support.ts",
+  "**/test-fixtures.ts",
+  "**/testing.ts",
+  "**/*.config.ts",
+  "dist/**",
+  "node_modules/**",
+];
+
+// keiko-ui is excluded from the package coverage run because it is measured by its own
+// (packages/keiko-ui/vitest.coverage.config.ts) — not because it has no sources. Asking "what would
+// the coverage run measure here" therefore has to use the globs of the run that actually measures
+// that package, or keiko-ui's live inventory comes back 0 against a real 248-file entry.
+const UI_PACKAGE = "keiko-ui";
+export const UI_COVERAGE_INCLUDE = ["packages/keiko-ui/src/**/*.{ts,tsx}"];
+export const UI_COVERAGE_EXCLUDE = [
+  "**/*.test.*",
+  "**/__tests__/**",
+  "**/_support.ts",
+  "**/test-support.ts",
+  "**/test-fixtures.ts",
+  "**/testing.ts",
+  "packages/keiko-ui/.next/**",
+  "packages/keiko-ui/out/**",
+];
+
+function coverageGlobsFor(packageName) {
+  return packageName === UI_PACKAGE
+    ? { include: UI_COVERAGE_INCLUDE, exclude: UI_COVERAGE_EXCLUDE }
+    : { include: PACKAGE_COVERAGE_INCLUDE, exclude: PACKAGE_COVERAGE_EXCLUDE };
+}
+
+function isMeasuredSourcePath(repoRelativePath, { include, exclude }) {
+  if (exclude.some((glob) => matchesGlob(repoRelativePath, glob))) return false;
+  return include.some((glob) => matchesGlob(repoRelativePath, glob));
+}
+
+function walkSourceFiles(directory) {
+  const found = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const child = join(directory, entry.name);
+    if (entry.isDirectory()) found.push(...walkSourceFiles(child));
+    else if (entry.isFile()) found.push(child);
+  }
+  return found;
+}
+
+/** Repository-relative source files the coverage run would measure for one workspace package. */
+export function listPackageSourceFiles(root, packageName) {
+  const packageSrc = join(root, "packages", packageName, "src");
+  if (!existsSync(packageSrc)) return [];
+  const globs = coverageGlobsFor(packageName);
+  return walkSourceFiles(packageSrc)
+    .map((absolute) => relative(root, absolute).split(sep).join("/"))
+    .filter((repoRelativePath) => isMeasuredSourcePath(repoRelativePath, globs))
+    .sort((left, right) => left.localeCompare(right));
+}
+
+export function countPackageSourceFiles(root, packageName) {
+  return listPackageSourceFiles(root, packageName).length;
 }
 
 function normalizeCoverageFile(root, file) {
@@ -756,8 +844,10 @@ export async function runCli(argv = process.argv.slice(2)) {
 }
 
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  runCli().catch((error) => {
+  try {
+    await runCli();
+  } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
-  });
+  }
 }

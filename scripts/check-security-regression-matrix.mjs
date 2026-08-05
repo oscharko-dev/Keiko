@@ -1,7 +1,10 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const MATRIX_PATH = join(import.meta.dirname, "security-regression-matrix.json");
+const REPO_ROOT = join(import.meta.dirname, "..");
 
 const EXPECTED_IDS = [
   "AUDIT-SEC-001",
@@ -75,11 +78,87 @@ function duplicateFindingIdFailures(id, seen) {
   return [`${id} appears more than once`];
 }
 
-function verificationFailures(id, verification) {
+function verificationFailures(id, verification, repoRoot) {
   if (!stringArray(verification) || verification.length === 0) {
     return [`${id} must list at least one verification command`];
   }
-  return placeholderVerificationFailures(id, verification);
+  return [
+    ...placeholderVerificationFailures(id, verification),
+    ...verificationPathFailures(id, verification, repoRoot),
+  ];
+}
+
+// A verification command is this matrix's coverage-of-record: the standing claim that a named test
+// or document still proves a specific security finding. A command naming a file that no longer
+// exists proves nothing, so every file-path-shaped token is resolved and stat-checked against the
+// tree. Shape-only validation let this gate report PASS while 13 of 42 entries pointed at deleted
+// or never-committed files, four of which were never in git history at all (audit KEIKO-0030).
+// Operators only, with no surrounding `\s*`: this is a `split()` separator, and every consumer
+// already trims or re-splits on whitespace. A `\s*(?:…)\s*` form lets the engine try each way of
+// dividing a whitespace run before failing the alternation, which is super-linear (sonarjs S8786).
+const COMMAND_SEPARATOR = /(?:&&|\|\||;)/u;
+const QUOTED_SEGMENT = /"[^"]*"|'[^']*'/gu;
+// A whitespace-delimited token carrying a file extension. Deliberately extension-agnostic so a
+// future entry referencing an unanticipated file type is still checked rather than silently
+// skipped; runner words (`npx`, `vitest`), npm script names (`check:local-state`) and flags
+// (`--config`) carry no extension and are not path-shaped.
+//
+// Split into two anchored single-class patterns plus a `lastIndexOf`, rather than one
+// `[\w@./-]+\.[A-Za-z0-9]+` — `.` belongs to both classes there, so the engine can split a
+// dotted path many ways and backtracks super-linearly on a non-match (sonarjs S8786). Each pattern
+// below has exactly one path through it.
+const PATH_TOKEN_CHARACTERS = /^[\w@./-]+$/u;
+const PATH_TOKEN_EXTENSION = /^[A-Za-z0-9]+$/u;
+const CHANGE_DIRECTORY = /^cd\s+(\S+)$/u;
+
+function isPathShapedToken(token) {
+  if (!PATH_TOKEN_CHARACTERS.test(token)) return false;
+  const lastDot = token.lastIndexOf(".");
+  if (lastDot <= 0 || lastDot === token.length - 1) return false;
+  return PATH_TOKEN_EXTENSION.test(token.slice(lastDot + 1));
+}
+
+export function verificationPathFailures(id, verification, repoRoot = REPO_ROOT) {
+  const failures = [];
+  for (const command of verification) {
+    for (const missing of missingCommandPaths(command, repoRoot)) {
+      failures.push(`${id} verification path does not exist: ${missing}`);
+    }
+  }
+  return failures;
+}
+
+// `cd <dir> && …` is a real shape in this matrix (the keiko-ui entries run vitest from the package
+// directory), so paths are resolved against the directory the command would actually run in.
+function missingCommandPaths(command, repoRoot) {
+  const missing = [];
+  let base = "";
+  for (const segment of command.split(COMMAND_SEPARATOR)) {
+    const target = CHANGE_DIRECTORY.exec(segment.trim())?.[1];
+    if (target === undefined) {
+      missing.push(...missingSegmentPaths(segment, base, repoRoot));
+      continue;
+    }
+    base = base === "" ? target : `${base}/${target}`;
+    if (!existsSync(resolve(repoRoot, base))) missing.push(base);
+  }
+  return missing;
+}
+
+function missingSegmentPaths(segment, base, repoRoot) {
+  const missing = [];
+  for (const token of pathShapedTokens(segment)) {
+    const relativePath = base === "" ? token : `${base}/${token}`;
+    if (!existsSync(resolve(repoRoot, relativePath))) missing.push(relativePath);
+  }
+  return missing;
+}
+
+function pathShapedTokens(segment) {
+  return segment
+    .replace(QUOTED_SEGMENT, " ")
+    .split(/\s+/u)
+    .filter((token) => !token.startsWith("-") && isPathShapedToken(token));
 }
 
 function notesFailures(id, notes) {
@@ -87,7 +166,7 @@ function notesFailures(id, notes) {
   return [`${id} must include non-empty notes`];
 }
 
-function validateMatrixEntry(entry, index, expected, seen) {
+function validateMatrixEntry(entry, index, expected, seen, repoRoot) {
   const failures = [];
   if (!isMatrixEntryObject(entry)) {
     return [`entry ${String(index)} must be an object`];
@@ -95,9 +174,11 @@ function validateMatrixEntry(entry, index, expected, seen) {
   const id = entry.id;
   const idFailure = knownFindingIdFailure(id, index, expected);
   if (idFailure !== undefined) return [idFailure];
-  failures.push(...duplicateFindingIdFailures(id, seen));
-  failures.push(...verificationFailures(id, entry.verification));
-  failures.push(...notesFailures(id, entry.notes));
+  failures.push(
+    ...duplicateFindingIdFailures(id, seen),
+    ...verificationFailures(id, entry.verification, repoRoot),
+    ...notesFailures(id, entry.notes),
+  );
   return failures;
 }
 
@@ -119,15 +200,15 @@ function missingExpectedIdFailures(expected, seen) {
   return failures;
 }
 
-function validateMatrix(matrix) {
+export function validateMatrix(matrix, repoRoot = REPO_ROOT) {
   if (!Array.isArray(matrix)) {
-    fail("matrix root must be a JSON array.");
+    return { failures: ["matrix root must be a JSON array."], count: 0 };
   }
   const expected = new Set(EXPECTED_IDS);
   const seen = new Set();
   const failures = [];
   for (const [index, entry] of matrix.entries()) {
-    failures.push(...validateMatrixEntry(entry, index, expected, seen));
+    failures.push(...validateMatrixEntry(entry, index, expected, seen, repoRoot));
   }
   failures.push(...missingExpectedIdFailures(expected, seen));
   return { failures, count: seen.size };
@@ -143,11 +224,20 @@ function printFailuresAndExit(failures) {
   }
 }
 
-function main() {
-  const matrix = JSON.parse(readFileSync(MATRIX_PATH, "utf8"));
-  const { failures, count } = validateMatrix(matrix);
+export function main() {
+  let matrix;
+  try {
+    matrix = JSON.parse(readFileSync(MATRIX_PATH, "utf8"));
+  } catch (error) {
+    fail(`matrix could not be read: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  const { failures, count } = validateMatrix(matrix, REPO_ROOT);
   printFailuresAndExit(failures);
   console.log(`security-regression-matrix: PASS - ${String(count)} findings mapped.`);
 }
 
-main();
+// Run as a CLI unless imported by a test.
+if (isMainModule(import.meta.url)) {
+  main();
+}

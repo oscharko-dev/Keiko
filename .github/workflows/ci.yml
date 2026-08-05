@@ -281,6 +281,14 @@ jobs:
         # PROVES the gate is non-vacuous by asserting an injected ranking/reranker regression drops
         # below the floors. Uses the compiled keiko-server dist built by `npm run typecheck` above.
         run: npm run check:grounded-retrieval-quality
+      - name: Grounded retrieval latency gate (audit KEIKO-0053)
+        # The LATENCY counterpart of the quality gate above: same real semantic + RRF + rerank path,
+        # extended through the real citation-reconciliation and claim-entailment pass, timed. The
+        # provider ports and the entailment judge are deterministic stubs, so this measures
+        # code-path cost and never model-serving variance. Generous p50/p95 ceilings, plus an
+        # injected per-judge-call delay that MUST breach the p95 budget so the gate proves it can
+        # fail. Uses the compiled keiko-server dist built by `npm run typecheck` above.
+        run: npm run check:grounded-retrieval-latency
       - name: Grounded faithfulness gate (RB-4, GEN-AI-EVAL-003)
         # Scores the real citation-reconciliation + abstention logic over scripted answerer variants
         # (faithful / hallucinated-citation / confident-over-empty / refusal). Fails closed if a

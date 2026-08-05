@@ -1,0 +1,17 @@
+{
+  "$comment": "Grounded retrieval + entailment latency budget (audit KEIKO-0053). Enforced by scripts/check-grounded-retrieval-latency.mjs (`npm run check:grounded-retrieval-latency`), which times keiko-server's runGroundedRetrievalLatencyEval: the REAL semantic + RRF + model-rerank path over the quality gate's distractor-dense corpus, followed by the REAL citation-reconciliation and claim-entailment pass. Both provider ports and the entailment judge are deterministic stubs, so the gate measures CODE-PATH cost and never model-serving variance. The budgets are generous p50/p95 CEILINGS (roughly 11x and 21x the locally observed values below) so they catch algorithmic regressions without flaking on CI machine class; they are NOT a target, and they are deliberately unrelated to DEFAULT_ENTAILMENT_OPTIONS.maxTotalMs (20000), which is a per-request safety ceiling rather than a performance goal. Methodology: warmupIterations discarded, then `iterations` timed runs; both percentiles must stay <= their budget. regressionProbe then adds judgeDelayMs to every judge call in one extra sample, which MUST breach p95BudgetMs — a gate that cannot fail proves nothing.",
+  "warmupIterations": 3,
+  "iterations": 12,
+  "p50BudgetMs": 400,
+  "p95BudgetMs": 800,
+  "regressionProbe": {
+    "judgeDelayMs": 200,
+    "$comment": "8 cited claims x 200ms = ~1600ms, twice the p95 ceiling, so detection does not depend on machine speed."
+  },
+  "observed": {
+    "$comment": "Local darwin/arm64, 16 logical cores. Informational provenance only; the gate compares against the budgets above.",
+    "p50Ms": 35,
+    "p95Ms": 37,
+    "injectedRegressionMs": 1641
+  }
+}

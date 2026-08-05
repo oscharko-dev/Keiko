@@ -137,6 +137,7 @@ describe("checkArchitectureImportPolicy", () => {
       "adr-0019-trust-9-local-knowledge-no-egress": 1,
       "adr-0112-provider-runtime-no-internal-bypass": 3,
       "adr-0128-connectors-no-direct-egress": 1,
+      "gen-arch-coding-runtime-restricted-egress": 1,
       "gen-perf-cli-001-cli-heavy-graphs-load-lazily": 1,
     });
   });

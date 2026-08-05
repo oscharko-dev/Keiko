@@ -277,6 +277,16 @@ The bar is strict and **machine-enforced** — match it or the build is red.
   lines and comments excluded; test `describe` blocks are exempt). Small functions, extract
   helpers. `no-console` is a warning in product code — route real output through the intended
   logger/diagnostic sink, not `console.*`.
+  - **`keiko-ui` is held to these three numbers too, with a shrink-only bridge.** It sits in the
+    root config's `ignores`, so `packages/keiko-ui/eslint.config.mjs` sets `complexity`,
+    `max-lines-per-function` and `explicit-function-return-type` itself, at the root config's exact
+    values (pinned by `scripts/__tests__/keiko-ui-lint-bar.test.mjs`, which compares against the
+    root config rather than restating the numbers). The 1,325 violations that predate the bar are
+    held in `packages/keiko-ui/eslint-suppressions.json`, an ESLint bulk-suppression register: new
+    files and new violations in listed files fail the lint run, and the register may only shrink.
+    After removing a violation run `npm run lint:prune-suppressions --workspace
+@oscharko-dev/keiko-ui` and commit the smaller register. This is a temporary bridge, not a
+    carve-out — decomposing the oversized files is tracked separately (audit KEIKO-0118, #2891).
 - **Prettier (the formatter is law):** 2-space indent, **double quotes**, semicolons,
   `printWidth: 100`, trailing commas everywhere, LF endings. Run `npm run format` before you
   finish; `format:check` is a CI gate.

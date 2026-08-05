@@ -99,10 +99,12 @@ module.exports = {
         "Governed git core boundary: keiko-git holds the shared git process runner, hardened " +
         "environments, repository-membership resolution, and failure classification consumed by " +
         "keiko-server and keiko-tools. It may only depend on keiko-contracts so it stays a leaf " +
-        "next to keiko-security and can never pull server/tool/provider code into the spawn path.",
+        "next to keiko-security and can never pull server/tool/provider code into the spawn path. " +
+        "Also fires on the negative-test fixture under tests/architecture/fixtures/git/ so the " +
+        "gate can be proven live by scripts/arch-check-negative.mjs.",
       severity: "error",
       from: {
-        path: "^packages/keiko-git/src/",
+        path: "^(packages/keiko-git/src/|tests/architecture/fixtures/git/)",
       },
       to: {
         path:

@@ -1,7 +1,7 @@
 [
   {
     "id": "AUDIT-SEC-001",
-    "verification": ["npx vitest run packages/keiko-server/src/gitDelivery/approvalStore.test.ts packages/keiko-server/src/gitDelivery/routes.test.ts"],
+    "verification": ["npx vitest run packages/keiko-server/src/gitDelivery/approvalStore.test.ts packages/keiko-server/src/gitDelivery/commitRoutes.test.ts packages/keiko-server/src/gitDelivery/mergeRoutes.test.ts packages/keiko-server/src/gitDelivery/pushRoutes.test.ts"],
     "notes": "Approval id/token binding, one-time consume, and forged-delivery rejection."
   },
   {
@@ -16,7 +16,7 @@
   },
   {
     "id": "AUDIT-MEMSEC-001",
-    "verification": ["npx vitest run packages/keiko-memory-governance/src/forget.test.ts packages/keiko-server/src/memory-routes.test.ts"],
+    "verification": ["npx vitest run packages/keiko-memory-governance/src/forget.test.ts packages/keiko-server/src/memory-handlers.test.ts"],
     "notes": "Forget reasons are classified/redacted before durable storage."
   },
   {
@@ -26,7 +26,7 @@
   },
   {
     "id": "AUDIT-CRED-001",
-    "verification": ["npx vitest run packages/keiko-server/src/qualityIntelligence/rerankerConfig.test.ts packages/keiko-server/src/qualityIntelligence/rerankerRoutes.test.ts"],
+    "verification": ["npx vitest run packages/keiko-model-gateway/src/config.test.ts"],
     "notes": "Reranker API keys stay in the credential vault and are not returned to the browser."
   },
   {
@@ -66,7 +66,7 @@
   },
   {
     "id": "AUDIT-FS-003",
-    "verification": ["npx vitest run packages/keiko-server/src/qualityIntelligence/modelPolicyStore.test.ts"],
+    "verification": ["npx vitest run packages/keiko-server/src/qualityIntelligence/__tests__/modelPolicyRoutes.test.ts"],
     "notes": "Quality Intelligence model-policy storage rejects symlinked policy directories."
   },
   {
@@ -76,7 +76,7 @@
   },
   {
     "id": "AUDIT-MODEL-002",
-    "verification": ["npx vitest run packages/keiko-server/src/gatewayReadinessRoutes.test.ts packages/keiko-model-gateway/src/readiness.test.ts"],
+    "verification": ["npx vitest run packages/keiko-server/src/gateway-readiness.test.ts packages/keiko-model-gateway/src/index.test.ts"],
     "notes": "Gateway readiness probes route through approved gateway abstractions."
   },
   {
@@ -101,7 +101,7 @@
   },
   {
     "id": "AUDIT-EVID-004",
-    "verification": ["npx vitest run packages/keiko-evidence/src/qualityIntelligence/__tests__/corruptionQuarantine.test.ts packages/keiko-evidence/src/qualityIntelligence/__tests__/retention.test.ts"],
+    "verification": ["npx vitest run packages/keiko-evidence/src/qualityIntelligence/__tests__/corruptionQuarantine.test.ts packages/keiko-evidence/src/qualityIntelligence/__tests__/retentionEnforcement.test.ts"],
     "notes": "Corrupt/quarantined QI manifests are covered by retention and local-state accounting."
   },
   {
@@ -111,7 +111,7 @@
   },
   {
     "id": "AUDIT-UISEC-002",
-    "verification": ["cd packages/keiko-ui && npx vitest run --config vitest.config.ts src/app/components/desktop/editor-layout-reducer.test.ts"],
+    "verification": ["cd packages/keiko-ui && npx vitest run --config vitest.config.ts src/app/components/desktop/hooks/workspace-persistence.test.ts"],
     "notes": "Editor layout v2 activeFile values pass containment/sanitization before restore."
   },
   {
@@ -136,7 +136,7 @@
   },
   {
     "id": "AUDIT-CRED-002",
-    "verification": ["npx vitest run packages/keiko-server/src/qualityIntelligence/connectorPayloadScanner.test.ts"],
+    "verification": ["npx vitest run packages/keiko-security/src/redaction.test.ts"],
     "notes": "QI connector payload scanner detects key-based credential shapes, not only values."
   },
   {
@@ -151,7 +151,7 @@
   },
   {
     "id": "AUDIT-UISEC-003",
-    "verification": ["cd packages/keiko-ui && npx vitest run --config vitest.config.ts src/app/components/desktop/widgets/cards/QiRunCard.test.tsx"],
+    "verification": ["cd packages/keiko-ui && npx vitest run --config vitest.config.ts src/app/components/desktop/widgets/quality-intelligence/QiRunCard.test.tsx"],
     "notes": "QI reviewer label uses session storage and clears legacy durable localStorage."
   },
   {
@@ -181,7 +181,7 @@
   },
   {
     "id": "AUDIT-CMD-002",
-    "verification": ["npx vitest run packages/keiko-verification/src/orchestrator.test.ts packages/keiko-workflows/src/qualityIntelligence/verification.test.ts"],
+    "verification": ["npx vitest run packages/keiko-verification/src/orchestrator.network.test.ts packages/keiko-workflows/src/unit-tests/verify-stage.test.ts"],
     "notes": "Workflow verification inherits the no-network sandbox policy unless explicitly overridden."
   },
   {
@@ -191,7 +191,7 @@
   },
   {
     "id": "AUDIT-HARDEN-001",
-    "verification": ["cd packages/keiko-ui && npx vitest run --config vitest.config.ts src/lib/safe-event-source.test.ts src/app/components/desktop/hooks/useAgentEditorBridge.test.tsx"],
+    "verification": ["cd packages/keiko-ui && npx vitest run --config vitest.config.ts src/lib/safe-event-source.test.ts src/lib/useCodingWorkbenchEditorBridge.test.ts"],
     "notes": "UI EventSource creation is centralized through a same-origin helper and static scan."
   },
   {

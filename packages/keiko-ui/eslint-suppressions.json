@@ -1,0 +1,2248 @@
+{
+  "__tests__/sw-cache-policy.test.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/AppShell.grounding.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 15
+    },
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/AppShell.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 4
+    },
+    "complexity": {
+      "count": 4
+    },
+    "max-lines-per-function": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/AttachmentStrip.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/ChatWindow.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 7
+    },
+    "complexity": {
+      "count": 6
+    },
+    "max-lines-per-function": {
+      "count": 23
+    }
+  },
+  "src/app/components/desktop/ComposerEmptyState.test.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/ConnectedScopePill.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/ConnectorScopePill.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/EditorMenu.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/EmptyWorkspaceBlob.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/Footer.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/GroundedAnswer.tsx": {
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/Header.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/Header.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/KeikoDesktop.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/KeikoSelect.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 3
+    },
+    "complexity": {
+      "count": 3
+    },
+    "max-lines-per-function": {
+      "count": 5
+    }
+  },
+  "src/app/components/desktop/LeftRail.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/ModelSelection.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/SafeMarkdown.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/SafeMarkdown.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/ScopeConnectButton.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/TaskWorkspaceSwitcher.a11y.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/TaskWorkspaceSwitcher.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/TaskWorkspaceSwitcher.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 3
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/VoiceDialogMode.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/VoiceDialogMode.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/VoiceDictation.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/VoicePlayback.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/VoiceRealtime.tsx": {
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/WorkflowHandoff.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/WorkflowHandoff.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/Workspace.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/Workspace.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 6
+    },
+    "complexity": {
+      "count": 3
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/WorkspaceShader.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 3
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/context/ChatSessionContext.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/context/TwinContext.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/figma-image-drag.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/format-error.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/assistant-speech-streaming.ts": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/canonical-voice-hasher.test.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/dictation-recorder.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/discussion-voice.test.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/discussion-voice.ts": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/documentContext.test.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/useActiveWorkspaceState.test.tsx": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/hooks/useActiveWorkspaceState.ts": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/useAssistantSpeech.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/hooks/useAutonomyModePolicy.ts": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/useChatSession.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 7
+    },
+    "complexity": {
+      "count": 10
+    },
+    "max-lines-per-function": {
+      "count": 11
+    }
+  },
+  "src/app/components/desktop/hooks/useDialogTabTrap.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/useDictation.test.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/useDictation.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "complexity": {
+      "count": 5
+    },
+    "max-lines-per-function": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/hooks/useEditorThemeVariant.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 5
+    }
+  },
+  "src/app/components/desktop/hooks/useEditorThemeVariant.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/useModalInteractionLock.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/useNativeFileDialogCapability.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/usePdfCitationPreview.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/hooks/useRealtimeVoice.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 3
+    },
+    "complexity": {
+      "count": 7
+    },
+    "max-lines-per-function": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/hooks/useUndoStack.ts": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/useVoiceCapability.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/useVoiceDialogMode.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/useVoicePlayback.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/useWorkspace.persistence.1580.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/hooks/useWorkspace.storage-sync.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/useWorkspace.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 11
+    },
+    "complexity": {
+      "count": 4
+    },
+    "max-lines-per-function": {
+      "count": 5
+    }
+  },
+  "src/app/components/desktop/hooks/useWorkspaceManifest.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/voice-action-intent.ts": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/voice-dialog-state.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/hooks/voice-dialogue-evaluation/latency.test.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/voice-latency-observer.test.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/voice-live-dictation-client.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/hooks/voice-playback-state.test.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/voice-playback-state.ts": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/voice-realtime-client.test.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/voice-realtime-client.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/hooks/voice-realtime-events.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/voice-rtc-transport.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/hooks/voice-timebase.ts": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/voice-transcript-segments.ts": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/voice-turn-manager.ts": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/hooks/workspace-persistence.ts": {
+    "complexity": {
+      "count": 8
+    }
+  },
+  "src/app/components/desktop/hooks/workspaceActions.ts": {
+    "complexity": {
+      "count": 4
+    },
+    "max-lines-per-function": {
+      "count": 9
+    }
+  },
+  "src/app/components/desktop/hooks/workspaceClipboard.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/install/InstallBanner.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 5
+    }
+  },
+  "src/app/components/desktop/install/InstallBanner.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/install/browserSupport.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/install/useInstallPrompt.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/keyboardShortcutsRegistry.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/modals/GatewaySetupDialog.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "complexity": {
+      "count": 5
+    },
+    "max-lines-per-function": {
+      "count": 4
+    }
+  },
+  "src/app/components/desktop/modals/NewWindowDialog.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/modals/NewWindowDialog.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 6
+    },
+    "complexity": {
+      "count": 3
+    },
+    "max-lines-per-function": {
+      "count": 5
+    }
+  },
+  "src/app/components/desktop/modals/Palette.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/modals/RelationshipCreateDialog.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 6
+    }
+  },
+  "src/app/components/desktop/modals/RelationshipCreateDialog.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/modals/UnifiedQuickAccessPalette.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/repositoryReferences.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/update/UpdateStartupNotice.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/update/UpdateWindow.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 4
+    },
+    "complexity": {
+      "count": 8
+    },
+    "max-lines-per-function": {
+      "count": 7
+    }
+  },
+  "src/app/components/desktop/update/update-copy.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/BoundRootTarget.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/DebugPanelSessionHost.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/MultiRootEditorHost.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/widgets/MultiRootEditorHost.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/SelectionAwareWorkspaceHosts.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/SelectionAwareWorkspaceHosts.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 6
+    },
+    "complexity": {
+      "count": 3
+    },
+    "max-lines-per-function": {
+      "count": 6
+    }
+  },
+  "src/app/components/desktop/widgets/cards/AgentConflictBanner.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/AgentConflictBanner.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/AgentGateCard.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/AgentRunWidget.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "complexity": {
+      "count": 5
+    },
+    "max-lines-per-function": {
+      "count": 4
+    }
+  },
+  "src/app/components/desktop/widgets/cards/BrowserWidget.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/CommandsWidget.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/cards/ConnectorPickerWidget.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/ContainerStatusWidget.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/DocumentationBrowserWidget.tsx": {
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorAgentActionsPanel.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorAgentActionsPanel.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorDebugSessionHost.test.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorDebugSessionHost.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 7
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorDiffSurface.test.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorDiffSurface.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorEmptyState.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorFileHistoryPanel.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 5
+    },
+    "max-lines-per-function": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorGitHunkPeek.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorOutlinePanel.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorRuntimeWidget.a11y.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorRuntimeWidget.formatting.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorRuntimeWidget.gitGutter.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorRuntimeWidget.replaceBuffer.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorRuntimeWidget.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 23
+    },
+    "complexity": {
+      "count": 25
+    },
+    "max-lines-per-function": {
+      "count": 17
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorSurface.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 4
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorSurface.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorTabChordCollision.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorTabNavigation.a11y.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorWidget.a11y.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorWidget.host.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 4
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorWidget.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 5
+    },
+    "complexity": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorWidget.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 9
+    },
+    "complexity": {
+      "count": 5
+    },
+    "max-lines-per-function": {
+      "count": 5
+    }
+  },
+  "src/app/components/desktop/widgets/cards/EditorWidget.workspace.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 3
+    },
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/FilePreview.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/FilesWidget.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 8
+    },
+    "complexity": {
+      "count": 9
+    },
+    "max-lines-per-function": {
+      "count": 8
+    }
+  },
+  "src/app/components/desktop/widgets/cards/GitDeliveryActionSheetCard.tsx": {
+    "max-lines-per-function": {
+      "count": 5
+    }
+  },
+  "src/app/components/desktop/widgets/cards/GovernedMergeCard.tsx": {
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 4
+    }
+  },
+  "src/app/components/desktop/widgets/cards/GovernedPullRequestCard.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/cards/MultiRootFilesWidget.a11y.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/MultiRootFilesWidget.rootIsolation.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/MultiRootFilesWidget.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/cards/MultiRootFilesWidget.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/cards/PdfCitationPreviewWindow.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 5
+    },
+    "complexity": {
+      "count": 5
+    },
+    "max-lines-per-function": {
+      "count": 7
+    }
+  },
+  "src/app/components/desktop/widgets/cards/ReviewWidget.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/RuntimeHubWidget.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/RuntimeHubWidget.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/TerminalWidget.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/debugSessionStore.ts": {
+    "complexity": {
+      "count": 4
+    }
+  },
+  "src/app/components/desktop/widgets/cards/editorAgentBridge.ts": {
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/editorCommands.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/editorExternalChangeState.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/editorHotExitStore.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 9
+    }
+  },
+  "src/app/components/desktop/widgets/cards/editorOutlineModel.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/editorPaneGeometry.test.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 5
+    }
+  },
+  "src/app/components/desktop/widgets/cards/editorPaneGeometry.ts": {
+    "complexity": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/widgets/cards/editorSemanticTokens.test.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/cards/editorSemanticTokens.ts": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/AddRepositoryDialog.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/BranchSelector.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/ChangesPane.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/CommitComposer.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/CommitComposer.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/ConnectPanel.tsx": {
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/DiffPane.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/DiffPane.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/GitClientWindow.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/GitClientWindow.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 6
+    },
+    "complexity": {
+      "count": 3
+    },
+    "max-lines-per-function": {
+      "count": 4
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/HistoryPane.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/NewBranchDialog.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/RepositoryToolbar.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/SyncControl.tsx": {
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/WorktreeMutationConfirmDialog.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/git-client-seam.ts": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/git-client/git-client-ui.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/pdf-citation-preview-session.ts": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/shared/diffParser.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/shared/diffView.tsx": {
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/sharedEventSource.test.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/sharedEventSource.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/useDebugSession.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/cards/useDebugSession.ts": {
+    "complexity": {
+      "count": 6
+    },
+    "max-lines-per-function": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/widgets/cards/useEditorSettings.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/useEditorVerificationRun.test.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 4
+    }
+  },
+  "src/app/components/desktop/widgets/cards/useEditorVerificationRun.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/useWorkspaceSnippets.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/cards/workspace-file-events.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchQuestions.tsx": {
+    "max-lines-per-function": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchSections.tsx": {
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchSetup.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchStartFailure.test.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchTimeline.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 5
+    }
+  },
+  "src/app/components/desktop/widgets/connectors/AtlassianConnectorsPanel.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/connectors/ConnectorApprovalsPanel.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/connectors/ConnectorScopeForm.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/connectors/ConnectorSyncPanel.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/figma/FigmaJsonSourceWindow.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/figma/FigmaSnapshotWindow.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 7
+    }
+  },
+  "src/app/components/desktop/widgets/figma/FigmaSnapshotWindow.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 5
+    },
+    "complexity": {
+      "count": 10
+    },
+    "max-lines-per-function": {
+      "count": 14
+    }
+  },
+  "src/app/components/desktop/widgets/figma/JsonSyntaxBlock.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/index.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 37
+    },
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/panels/AutonomySettings.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/panels/ChatHistoryPanel.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/panels/DebugPanel.tsx": {
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 4
+    }
+  },
+  "src/app/components/desktop/widgets/panels/DebuggingSettings.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/panels/EditorProfilesPanel.tsx": {
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/panels/EditorSettingsPanel.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/panels/EditorSettingsPanel.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 4
+    }
+  },
+  "src/app/components/desktop/widgets/panels/InspectorPanel.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/panels/KeyboardShortcutsPanel.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/panels/KeyboardShortcutsPanel.tsx": {
+    "max-lines-per-function": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/widgets/panels/ManagedLanguageSettings.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 5
+    }
+  },
+  "src/app/components/desktop/widgets/panels/ManagedLanguageSettings.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 5
+    }
+  },
+  "src/app/components/desktop/widgets/panels/PluginsPanel.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/panels/ProblemsPanel.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/panels/PromptEnhancerPanel.tsx": {
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 5
+    }
+  },
+  "src/app/components/desktop/widgets/panels/RelationshipEdgeBadge.tsx": {
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/widgets/panels/RelationshipHealthPanel.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/panels/RelationshipHealthPanel.tsx": {
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/panels/RelationshipImpactCard.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/panels/RelationshipImpactCard.tsx": {
+    "max-lines-per-function": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/widgets/panels/RelationshipInspectorPanel.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/widgets/panels/RelationshipInspectorPanel.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 5
+    }
+  },
+  "src/app/components/desktop/widgets/panels/RelationshipListPanel.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/panels/RelationshipListPanel.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/panels/SearchPanel.a11y.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/panels/SearchPanel.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/panels/SearchResultList.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/panels/SettingsPanel.debugging.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/widgets/panels/SettingsPanel.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 5
+    },
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 8
+    }
+  },
+  "src/app/components/desktop/widgets/panels/WorkspaceSnippetsPanel.tsx": {
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/panels/useDebuggingSettings.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/panels/useDebuggingSettings.ts": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/panels/useManagedLanguageSettings.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/panels/useRelationshipActivityStream.ts": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/quality-intelligence/CandidateEditForm.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/quality-intelligence/CandidatesPane.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 4
+    }
+  },
+  "src/app/components/desktop/widgets/quality-intelligence/DriftPanel.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/quality-intelligence/ExportBar.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/quality-intelligence/QiHubPanel.tsx": {
+    "max-lines-per-function": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/widgets/quality-intelligence/QiRunCard.tsx": {
+    "max-lines-per-function": {
+      "count": 4
+    }
+  },
+  "src/app/components/desktop/widgets/quality-intelligence/RunLauncher.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 4
+    }
+  },
+  "src/app/components/desktop/widgets/quality-intelligence/RunLauncher.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "complexity": {
+      "count": 6
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/widgets/quality-intelligence/connectedSources.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/widgets/shared/activityBus.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/windows/ConnectionsLayer.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 3
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/windows/WindowFrame.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 4
+    }
+  },
+  "src/app/components/desktop/windows/WindowFrame.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "complexity": {
+      "count": 5
+    },
+    "max-lines-per-function": {
+      "count": 4
+    }
+  },
+  "src/app/components/desktop/windows/connectionUtils.test.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/windows/connectionUtils.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 9
+    },
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/workspace-drop-listeners.perf.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/workspace-perf.1580.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 3
+    }
+  },
+  "src/app/components/desktop/workspace-trust/WorkspaceTrustPanel.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/workspace-trust/WorkspaceTrustPanel.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/components/desktop/workspace-trust/WorkspaceTrustSurfaces.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/components/desktop/workspace-trust/useWorkspaceTrust.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/globals.css.test.ts": {
+    "complexity": {
+      "count": 5
+    }
+  },
+  "src/app/local-knowledge/[capsuleId]/capsule-actions.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 4
+    },
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 5
+    }
+  },
+  "src/app/local-knowledge/[capsuleId]/capsule-detail-state.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/local-knowledge/[capsuleId]/capsule-detail.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 4
+    }
+  },
+  "src/app/local-knowledge/[capsuleId]/capsule-detail.tsx": {
+    "complexity": {
+      "count": 3
+    },
+    "max-lines-per-function": {
+      "count": 9
+    }
+  },
+  "src/app/local-knowledge/[capsuleId]/capsule-rename.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/local-knowledge/[capsuleId]/source-rebind-control.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/local-knowledge/capsule-set-compose.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/local-knowledge/capsule/page.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/local-knowledge/connector-drag.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/app/local-knowledge/connector-graph-state.ts": {
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/local-knowledge/connector-graph.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 4
+    }
+  },
+  "src/app/local-knowledge/connector-graph.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 7
+    },
+    "complexity": {
+      "count": 3
+    },
+    "max-lines-per-function": {
+      "count": 13
+    }
+  },
+  "src/app/local-knowledge/html-manual-pod-create.tsx": {
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/local-knowledge/html-manual-pod-refresh.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/local-knowledge/manual-pod-job-progress.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/memoriaviva/MemoriaVivaBrowserFlows.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 4
+    }
+  },
+  "src/app/memoriaviva/components/EditMemoryDialog.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/memoriaviva/components/ForgetConfirmDialog.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/memoriaviva/components/HealthScanFindings.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/memoriaviva/components/HealthScanFindings.tsx": {
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/memoriaviva/components/MemoriaVivaWindow.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 3
+    }
+  },
+  "src/app/memoriaviva/components/MemoriaVivaWindow.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/memoriaviva/components/MemoryActions.tsx": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/memoriaviva/components/MemoryConsolidation.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/memoriaviva/components/MemoryConsolidation.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 3
+    },
+    "max-lines-per-function": {
+      "count": 7
+    }
+  },
+  "src/app/memoriaviva/components/MemoryDetail.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 7
+    }
+  },
+  "src/app/memoriaviva/components/MemoryDetail.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/memoriaviva/components/MemoryFilters.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/app/memoriaviva/components/MemoryFilters.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/memoriaviva/components/MemoryJournal.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/app/memoriaviva/components/MemoryJournal.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/app/memoriaviva/components/MemoryList.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 7
+    }
+  },
+  "src/app/memoriaviva/components/MemoryList.tsx": {
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/app/memoriaviva/components/ReviewQueue.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 6
+    }
+  },
+  "src/app/memoriaviva/components/ReviewQueue.tsx": {
+    "max-lines-per-function": {
+      "count": 3
+    }
+  },
+  "src/app/memoriaviva/detail/MemoryDetailClient.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 4
+    }
+  },
+  "src/app/relationships/RelationshipsView.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 5
+    }
+  },
+  "src/app/relationships/RelationshipsView.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 5
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/lib/ResourceLimitDecisionsTable.tsx": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/lib/api.boundaries.test.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/lib/api.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/lib/chat-editor-apply.test.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 6
+    }
+  },
+  "src/lib/chat-editor-apply.ts": {
+    "complexity": {
+      "count": 3
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/lib/coding-workbench-live-state.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 17
+    },
+    "complexity": {
+      "count": 2
+    }
+  },
+  "src/lib/coding-workbench-provider-api.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/lib/coding-workbench-runtime-actions.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/lib/coding-workbench-runtime-effects.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/lib/coding-workbench-runtime-hooks.ts": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/lib/editor-root-sessions.ts": {
+    "complexity": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/lib/http.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/lib/i18n.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/lib/local-knowledge-api.test.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/lib/local-knowledge-api.ts": {
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/lib/memory-api.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/lib/quality-intelligence-api.ts": {
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/lib/run-summary.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/lib/safe-event-source.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/lib/safe-markdown.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "src/lib/useCodingWorkbenchChanges.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/lib/useCodingWorkbenchChanges.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 3
+    }
+  },
+  "src/lib/useCodingWorkbenchEditorBridge.test.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/lib/useCodingWorkbenchEditorBridge.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/lib/useCodingWorkbenchQuestions.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 3
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-lines-per-function": {
+      "count": 1
+    }
+  },
+  "src/lib/useCodingWorkbenchSafeActivity.test.tsx": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "src/lib/useCodingWorkbenchSafeActivity.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    }
+  },
+  "src/lib/useSSE.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 2
+    },
+    "max-lines-per-function": {
+      "count": 2
+    }
+  },
+  "src/lib/workspace-trust-api.test.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 1
+    }
+  },
+  "vitest.setup.ts": {
+    "@typescript-eslint/explicit-function-return-type": {
+      "count": 6
+    }
+  }
+}

@@ -64,6 +64,7 @@ const EXPECTED_DEPCRUISER_RULE_COUNTS = {
   "adr-0128-connectors-only-contracts-security": 1,
   "adr-0019-direction-1-contracts-leaf": 1,
   "adr-0019-direction-2-security-only-contracts": 1,
+  "adr-0019-direction-2b-git-only-contracts": 1,
   "adr-0019-direction-3a-model-gateway-only-contracts-security": 1,
   "adr-0019-direction-3b-workspace-only-contracts-security": 1,
   "adr-0019-direction-3c-tools-only-contracts-security-workspace": 1,
@@ -101,6 +102,7 @@ const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
   "adr-0019-trust-5-patch-routes-through-tools": 1,
   "adr-0019-trust-9-local-knowledge-no-egress": 1,
   "adr-0128-connectors-no-direct-egress": 1,
+  "gen-arch-coding-runtime-restricted-egress": 1,
   "adr-0112-provider-runtime-no-internal-bypass": 3,
 };
 

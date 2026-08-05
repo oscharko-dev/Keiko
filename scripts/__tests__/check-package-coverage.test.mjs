@@ -6,7 +6,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   CONSTITUTIONAL_COVERAGE_MINIMUM,
   COVERAGE_BASELINE_SCHEMA_VERSION,
+  PACKAGE_COVERAGE_EXCLUDE,
+  PACKAGE_COVERAGE_INCLUDE,
+  UI_COVERAGE_EXCLUDE,
+  UI_COVERAGE_INCLUDE,
   aggregatePackageCoverage,
+  countPackageSourceFiles,
+  listPackageSourceFiles,
   baselineSchemaFailures,
   buildCoverageBaseline,
   buildFileFloors,
@@ -332,6 +338,61 @@ describe("coverage baseline reality guard", () => {
     const baseline = JSON.parse(readFileSync("docs/qa/package-coverage-baseline.json", "utf8"));
     expect(baseline.packages["keiko-sandbox"]).toBeDefined();
     expect(typeof baseline.packages["keiko-sandbox"].coverage.lines).toBe("number");
+  });
+
+  // KEIKO-0125: enrollment and a well-formed `files` number are not the same claim as "the baseline
+  // measured this package". `files` comes from the v8 coverage summary, which only ever contains
+  // files a test imported — a source file no test touches is invisible to it. keiko-sandbox recorded
+  // files:6 against 9 real sources, so 3 files sat behind a green gate that had never seen them. The
+  // three assertions above would all have passed throughout. This one compares the recorded count
+  // against a live inventory taken with the coverage run's own include/exclude globs.
+  it("records a file count matching a live source inventory (no partial undercount)", () => {
+    const baseline = JSON.parse(readFileSync("docs/qa/package-coverage-baseline.json", "utf8"));
+    const mismatches = Object.entries(baseline.packages)
+      .map(([name, entry]) => ({
+        package: name,
+        recorded: entry.files,
+        live: countPackageSourceFiles(process.cwd(), name),
+      }))
+      // An excluded package carries no live inventory to compare against.
+      .filter(({ package: name }) => !INTENTIONALLY_UNGATED.has(name))
+      .filter(({ recorded, live }) => recorded !== live);
+
+    expect(mismatches).toEqual([]);
+  });
+});
+
+// AGENTS.md §7: a fixture must never restate a formula the code under test owns. The counting
+// helper's include/exclude arrays are a deliberate copy of the coverage run's own globs (a plain
+// `.mjs` script cannot import the TS config without pulling in vitest), so this test imports the
+// real config and pins the two definitions together. If the coverage run's globs change and the
+// helper's copy does not, the live inventory silently starts measuring something else — and the
+// reality guard above would keep passing over a wrong answer.
+describe("coverage source-glob parity", () => {
+  it("counts files with the same include/exclude globs the package coverage run declares", async () => {
+    const config = (await import("../../vitest.coverage.packages.config.ts")).default;
+
+    expect(PACKAGE_COVERAGE_INCLUDE).toEqual(config.test.coverage.include);
+    expect(PACKAGE_COVERAGE_EXCLUDE).toEqual(config.test.coverage.exclude);
+  });
+
+  // keiko-ui is excluded from the package run because its OWN run measures it. Its inventory must
+  // therefore follow that config's globs, or the guard compares a real 248-file package against 0.
+  it("counts keiko-ui with the globs its own coverage run declares", async () => {
+    const config = (await import("../../packages/keiko-ui/vitest.coverage.config.ts")).default;
+
+    expect(UI_COVERAGE_INCLUDE).toEqual(config.test.coverage.include);
+    expect(UI_COVERAGE_EXCLUDE).toEqual(config.test.coverage.exclude);
+  });
+
+  it("excludes tests, __tests__, support files and configs from the live inventory", () => {
+    const files = listPackageSourceFiles(process.cwd(), "keiko-sandbox");
+
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.every((file) => file.startsWith("packages/keiko-sandbox/src/"))).toBe(true);
+    expect(files.some((file) => file.includes(".test."))).toBe(false);
+    expect(files.some((file) => file.includes("/__tests__/"))).toBe(false);
+    expect(files.some((file) => file.endsWith(".config.ts"))).toBe(false);
   });
 });
 

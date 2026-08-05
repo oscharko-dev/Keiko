@@ -31,6 +31,7 @@ const config = require(configPath) as DependencyCruiserConfig;
 const STRICT_DIRECTION_VARIANTS = [
   "1",
   "2",
+  "2b",
   "3a",
   "3b",
   "3c",

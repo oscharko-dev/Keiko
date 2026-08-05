@@ -74,9 +74,17 @@ declare global {
   }
 }
 
+// Audit KEIKO-0113: the type was pinned to the literal "agents", so every perf scenario measured a
+// homogeneous fixture of the product's LIGHTEST window. The heavy windows a real desktop actually
+// holds — the Coding Workbench, the connector picker, the container-status surface — were
+// structurally unmeasurable. Widened to the subset of WindowType the mixed scenario seeds; each one
+// mounts through the real dynamic widget registry (packages/keiko-ui/.../widgets/index.tsx), not as
+// an inert cfg placeholder, or the new scenario would be exactly as tautological as the old one.
+type SeedWindowType = "agents" | "coding" | "connector" | "containerStatus";
+
 interface SeedWindow {
   readonly id: string;
-  readonly type: "agents";
+  readonly type: SeedWindowType;
   readonly x: number;
   readonly y: number;
   readonly w: number;
@@ -256,11 +264,15 @@ function installWorkspacePerfHarness({ windows, connections, keys }: SeedPayload
   }
 }
 
-async function installSeededWorkspace(page: Page): Promise<void> {
+async function installSeededWorkspace(
+  page: Page,
+  windows: readonly SeedWindow[] = seedWindows(),
+  connections: readonly SeedConnection[] = seedConnections(),
+): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 860 });
   await page.addInitScript(installWorkspacePerfHarness, {
-    windows: seedWindows(),
-    connections: seedConnections(),
+    windows,
+    connections,
     keys: {
       workspace: WORKSPACE_STORAGE_KEY,
       connections: CONNECTION_STORAGE_KEY,
@@ -336,12 +348,24 @@ function budgets(projectName: string): { p75: number; max: number } {
   return projectName === "webkit" ? { p75: 50, max: 150 } : { p75: 34, max: 120 };
 }
 
+// Audit KEIKO-0113 — budgets for the mixed heavy-window scenario. Deliberately a SEPARATE ceiling
+// rather than a widening of `budgets()`: loosening the homogeneous scenario to make room for the
+// heavier fixture would dilute the signal the existing scenario carries. Like the numbers above,
+// these are frame-budget ceilings expressed in whole 60Hz frames — 51ms is three frames (the
+// homogeneous tier allows two), 150ms max — not machine-calibrated absolute values, so they hold
+// across the machine classes this suite runs on. A heavy-render regression in CodingWorkbenchWindow
+// blows past three frames immediately; steady-state idle differences between hosts do not.
+function mixedWindowBudgets(projectName: string): { p75: number; max: number } {
+  return projectName === "webkit" ? { p75: 67, max: 180 } : { p75: 51, max: 150 };
+}
+
 function summarizeGesture(
   label: string,
   capture: GestureCapture,
   projectName: string,
+  budgetFor: (project: string) => { p75: number; max: number } = budgets,
 ): GestureEvidence {
-  const budget = budgets(projectName);
+  const budget = budgetFor(projectName);
   // Percentile/max over the gesture-phase frames only (fall back to all frames if the boundary was
   // never marked or captured too few), so idle settle frames do not dilute the percentile.
   const gestureFrames =
@@ -448,11 +472,13 @@ async function zoomWorkspace(page: Page): Promise<void> {
   await page.keyboard.up("Control");
 }
 
-async function dragWindow(page: Page): Promise<void> {
-  const header = page.locator('.window[data-window-id="agents-0"] .win-head');
+// The dragged window is a parameter because the mixed heavy-window scenario has no `agents-0`:
+// its first slots hold the heavy surfaces. Defaulting keeps the homogeneous scenario byte-identical.
+async function dragWindow(page: Page, windowId = "agents-0"): Promise<void> {
+  const header = page.locator(`.window[data-window-id="${windowId}"] .win-head`);
   await expect(header).toBeVisible();
   const box = await header.boundingBox();
-  if (box === null) throw new Error("agents-0 header has no box");
+  if (box === null) throw new Error(`${windowId} header has no box`);
   const startX = box.x + Math.min(80, box.width / 2);
   const startY = box.y + box.height / 2;
   await page.mouse.move(startX, startY);
@@ -511,6 +537,97 @@ test("keeps N+1 workspace gestures within performance budgets (#1580) @release-e
   ).toBeLessThanOrEqual(1);
 });
 
+// Audit KEIKO-0113 — the heavy-window scenario.
+//
+// The scenario above has measured a homogeneous fixture of 12 `agents` windows since before the
+// Coding Workbench existed. `agents` is the product's LIGHTEST surface, so the committed evidence
+// answered "can the workspace pan 12 cheap cards" — a question no user asks — while the windows
+// that actually cost something to render were never on the canvas. A heavy-render regression in
+// CodingWorkbenchWindow, ConnectorPickerWidget or the container-status surface could not move a
+// single number in that document.
+//
+// This scenario seeds the same geometry with the three heavy types mounted through the REAL dynamic
+// widget registry, and carries its own frame-gap ceilings so the homogeneous tier keeps its tighter
+// budget. It is recorded under its own evidence run key, so neither scenario overwrites the other.
+// Drags the HEAVY window so the gesture moves the expensive subtree rather than a small card.
+//
+// What this scenario does and does not catch, measured rather than assumed: a 45ms synchronous
+// blocking loop injected into CodingWorkbenchWindow's body does NOT breach these budgets, under any
+// of the three gestures, including this drag. Window drag is transform-only by design — the body is
+// not re-rendered per pointer move — so a render-time regression in a window body is structurally
+// invisible to frame-gap measurement. What this scenario adds over the homogeneous one is still
+// real: pan, zoom and drag are now measured over the heavy widgets' ACTUAL DOM (layout, paint and
+// compositing of a far larger subtree) instead of twelve inert `agents` cards. Catching render-cost
+// regressions needs a mount/hydration measurement, which this suite does not take.
+async function recordMixedGestures(
+  page: Page,
+  project: string,
+): Promise<readonly GestureEvidence[]> {
+  const draggedId = seedMixedWindows().find((w) => w.type === "coding")?.id ?? "agents-0";
+  const pan = summarizeGesture(
+    "mixed workspace pan",
+    await recordGesture(page, () => panWorkspace(page)),
+    project,
+    mixedWindowBudgets,
+  );
+  const zoom = summarizeGesture(
+    "mixed workspace zoom",
+    await recordGesture(page, () => zoomWorkspace(page)),
+    project,
+    mixedWindowBudgets,
+  );
+  const drag = summarizeGesture(
+    "mixed window drag",
+    await recordGesture(page, () => dragWindow(page, draggedId)),
+    project,
+    mixedWindowBudgets,
+  );
+  return [pan, zoom, drag];
+}
+
+test("keeps mixed heavy-window gestures within performance budgets @release-evidence", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  await installSeededWorkspace(page, seedMixedWindows(), seedMixedConnections());
+  await page.goto("/");
+  // The point of this scenario is the heavy surfaces. If one silently fails to mount, the gesture
+  // still runs, the budgets still pass, and the evidence quietly degrades back to agents-only — the
+  // exact failure mode being fixed. Assert each heavy window is on the canvas by id, which also
+  // settles the registry's lazily-loaded chunks (`networkidle` is unusable here: the shell holds
+  // long-lived event-stream connections, so the network never goes idle).
+  for (const seeded of seedMixedWindows().filter((w) => w.type !== "agents")) {
+    await expect(
+      page.locator(`.window[data-window-id="${seeded.id}"]`),
+      `heavy window ${seeded.id} (${seeded.type}) must mount through the real widget registry`,
+    ).toHaveCount(1);
+  }
+  await expect(page.locator(".window")).toHaveCount(WINDOW_COUNT);
+  await page.waitForTimeout(750);
+
+  const project = testInfo.project.name;
+  const gestures = await recordMixedGestures(page, project);
+  const evidence = writeMergedEvidence({
+    project: `${project}-mixed-windows`,
+    windowCount: WINDOW_COUNT,
+    connectionCount: WINDOW_COUNT - 1,
+    measuredAtIso: new Date().toISOString(),
+    gestures,
+    verdict: gestureVerdict(gestures),
+  });
+
+  await testInfo.attach("workspace-perf-evidence-mixed", {
+    body: JSON.stringify(evidence, null, 2),
+    contentType: "application/json",
+  });
+
+  for (const gesture of gestures) assertGesture(gesture, project);
+  expect(
+    gestures.find((gesture) => gesture.label === "mixed window drag")?.workspaceWrites,
+    "mixed drag should debounce workspace snapshot writes",
+  ).toBeLessThanOrEqual(1);
+});
+
 // --- Scale + low-end tier (GEN-PERF-BENCHMARK-005/-008/-012) ---------------------------------------
 //
 // Env-gated so the default @release-evidence run stays fast: set KEIKO_PERF_SCALE_WINDOWS=50 (or 100)
@@ -533,6 +650,59 @@ function seedWindowsN(count: number): readonly SeedWindow[] {
     cfg: {},
     max: false as const,
     zoom: 1 as const,
+  }));
+}
+
+// Audit KEIKO-0113 — the heavy-window fixture. The same 12-window geometry as seedWindows(), but
+// the first three slots hold the product's genuinely expensive surfaces instead of another agents
+// card. Sizes are large enough that each heavy widget actually lays out its content rather than
+// rendering into a box too small to exercise it.
+// `containerStatus` is deliberately NOT seeded: it re-probes the host container engine on every
+// mount, and under this harness (packaged CLI, no engine) it never reaches the canvas — the window
+// is dropped rather than rendering its unavailable state, so seeding it only makes the scenario
+// fail to start. `coding` and `connector` both mount through the real registry and are verified to
+// do so below, which is what makes this fixture non-tautological. Adding the container surface is
+// follow-up work on the widget, not on this gate.
+const MIXED_HEAVY_TYPES: readonly SeedWindowType[] = ["coding", "connector"];
+
+function mixedWindowType(index: number): SeedWindowType {
+  return MIXED_HEAVY_TYPES[index] ?? "agents";
+}
+
+// `coding` ignores cfg (it is a singleton driven by server projections); `connector` and
+// `containerStatus` read theirs, so they are seeded with the shape their registry entry expects —
+// an unset root/selection renders the surface's real empty state, which is still the real widget.
+function mixedWindowCfg(type: SeedWindowType): Record<string, unknown> {
+  if (type === "connector") return { presentation: "picker" };
+  if (type === "containerStatus") return {};
+  return {};
+}
+
+function seedMixedWindows(): readonly SeedWindow[] {
+  return Array.from({ length: WINDOW_COUNT }, (_unused, index) => {
+    const type = mixedWindowType(index);
+    const heavy = index < MIXED_HEAVY_TYPES.length;
+    return {
+      id: `${type}-${String(index)}`,
+      type,
+      x: 60 + (index % 4) * 300,
+      y: 60 + Math.floor(index / 4) * 255,
+      w: heavy ? 420 : 260,
+      h: heavy ? 320 : 210,
+      z: index + 1,
+      cfg: mixedWindowCfg(type),
+      max: false as const,
+      zoom: 1 as const,
+    };
+  });
+}
+
+function seedMixedConnections(): readonly SeedConnection[] {
+  const windows = seedMixedWindows();
+  return Array.from({ length: WINDOW_COUNT - 1 }, (_unused, index) => ({
+    id: `${windows[index]?.id ?? ""}~${windows[index + 1]?.id ?? ""}`,
+    a: windows[index]?.id ?? "",
+    b: windows[index + 1]?.id ?? "",
   }));
 }
 

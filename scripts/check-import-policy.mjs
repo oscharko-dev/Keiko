@@ -91,6 +91,80 @@ function isConnectorsForbiddenCapability(specifier) {
   return CONNECTORS_FORBIDDEN_PREFIXES.some((prefix) => matchesSpecifierPrefix(specifier, prefix));
 }
 
+// GEN-ARCH-CODING-RUNTIME-001 — the coding runtime is the server's largest single trust surface
+// (170+ files) and hosts the sole public-internet egress lane, yet carried no import-specifier
+// policy of its own: a new file could reach for a raw socket, an HTTP client, or a child process
+// and no gate would notice. dependency-cruiser cannot answer this — bare `fetch()` and `node:*`
+// core specifiers are not resolvable source-graph edges in this repository's configuration (see
+// the comment on `adr-0128-connectors-no-direct-egress`) — so this AST rule is the enforcement,
+// mirroring `adr-0019-trust-9-local-knowledge-no-egress`.
+//
+// Two capability classes, each with its own reviewed allow-list. Type-only imports are NOT
+// violations: `import type { IncomingMessage }` is erased at build and carries no capability, and
+// the route files legitimately type their handlers against it (see `matchesImportKind`).
+//
+// `researchEgressPort.ts` is deliberately NOT allow-listed for either class. It is documented as
+// THE public-internet lane, but it holds no RAW network capability: every outbound hop goes
+// through the governed `gatewayFetch` from keiko-model-gateway, under a registered research grant,
+// with DNS pinning, host allow-listing and loopback denial applied there. This rule now pins that
+// delegation — if that port ever reaches for a raw socket or bare `fetch`, the gate fires.
+const CODING_RUNTIME_ROOT = "packages/keiko-server/src/coding-runtime/";
+// Raw outbound/socket capability: bare `fetch` plus the network core modules. `child_process` and
+// `worker_threads` are handled by the process class below, so they are excluded here.
+const CODING_RUNTIME_NETWORK_FORBIDDEN_EXACT = new Set([
+  "fetch",
+  ...NETWORK_CORE_MODULES.filter(
+    (name) => name !== "child_process" && name !== "worker_threads",
+  ).flatMap((name) => [name, `node:${name}`]),
+]);
+const CODING_RUNTIME_PROCESS_FORBIDDEN_EXACT = new Set(
+  ["child_process", "worker_threads"].flatMap((name) => [name, `node:${name}`]),
+);
+// LOOPBACK-only network capability. Neither file performs public-internet egress, and neither is
+// granted `researchEgressPort.ts`'s lane: both are confined to `127.0.0.1` sidecar plumbing.
+//   * `opencodeRuntimeComposition.ts` — `createServer` builds the loopback tool-bridge the sidecar
+//     calls BACK into (inbound, governed tool facade), and its `unauthenticatedHealth` helper calls
+//     an INJECTED `fetch` parameter against the sidecar's own `/global/health` endpoint. The
+//     syntactic gate cannot distinguish an injected `fetch` binding from the global one.
+//   * `opencodeFunctionalHarness/_support.ts` — a test-only functional harness, referenced solely
+//     by `productionOpenCodeBackend*.test.ts`. It stands up a fake loopback gateway and drives it.
+const CODING_RUNTIME_NETWORK_CAPABILITY_FILES = new Set([
+  `${CODING_RUNTIME_ROOT}opencodeRuntimeComposition.ts`,
+  `${CODING_RUNTIME_ROOT}opencodeFunctionalHarness/_support.ts`,
+]);
+// OS-process control. Each file was read and is the process layer itself — it cannot route through
+// a workspace/tools port, because those ports are built ON these:
+//   * `devLaneRuntimeProcessBackend.ts`   — spawns the managed runtime as a POSIX process-group
+//                                           leader for dev-lane checkouts (ADR-0140).
+//   * `nativeRuntimeProcessBackend.ts`    — spawns the supervised native runtime helper process.
+//   * `productionPortableCodingRuntime.ts`— `spawnSync` during portable-installation verification.
+//   * `secureWorkspaceTextReadNodeProcess.ts` — spawns the secure text-read child (empty env,
+//                                           `shell: false`, piped stdio) behind the server-owned
+//                                           process seam.
+//   * `secureWorkspaceTextReadPlatformNode.ts` — `execFile` for platform code-identity inspection.
+//   * `windowsPortableAuthenticode.ts`    — `execFile`/`spawnSync` for Windows Authenticode checks.
+//   * `opencodeFunctionalHarness/_support.ts` — the test-only harness above; spawns the real
+//                                           sidecar under test.
+const CODING_RUNTIME_PROCESS_CAPABILITY_FILES = new Set([
+  `${CODING_RUNTIME_ROOT}devLaneRuntimeProcessBackend.ts`,
+  `${CODING_RUNTIME_ROOT}nativeRuntimeProcessBackend.ts`,
+  `${CODING_RUNTIME_ROOT}productionPortableCodingRuntime.ts`,
+  `${CODING_RUNTIME_ROOT}secureWorkspaceTextReadNodeProcess.ts`,
+  `${CODING_RUNTIME_ROOT}secureWorkspaceTextReadPlatformNode.ts`,
+  `${CODING_RUNTIME_ROOT}windowsPortableAuthenticode.ts`,
+  `${CODING_RUNTIME_ROOT}opencodeFunctionalHarness/_support.ts`,
+]);
+
+function isCodingRuntimeForbiddenCapability(specifier, path) {
+  if (CODING_RUNTIME_NETWORK_FORBIDDEN_EXACT.has(specifier)) {
+    return !CODING_RUNTIME_NETWORK_CAPABILITY_FILES.has(path);
+  }
+  if (CODING_RUNTIME_PROCESS_FORBIDDEN_EXACT.has(specifier)) {
+    return !CODING_RUNTIME_PROCESS_CAPABILITY_FILES.has(path);
+  }
+  return false;
+}
+
 // GEN-PERF-CLI-001 — the CLI barrel is evaluated on every `keiko` invocation (the
 // root bin imports it), so keiko-cli modules must not STATICALLY value-import the
 // heavy workspace package graphs or the keiko-sdk fat barrel at module scope. The
@@ -167,6 +241,19 @@ const IMPORT_POLICY_RULES = [
         ? path.startsWith(`${FIXTURE_ROOT}/connectors-no-egress/`)
         : path.startsWith("packages/keiko-connectors/src/"),
     matchesSpecifier: (specifier) => isConnectorsForbiddenCapability(specifier),
+  },
+  {
+    name: "gen-arch-coding-runtime-restricted-egress",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/coding-runtime-no-egress/`)
+        : path.startsWith(CODING_RUNTIME_ROOT),
+    matchesSpecifier: (specifier, path) => isCodingRuntimeForbiddenCapability(specifier, path),
+    // A fully type-only import is erased at build and grants no capability; the coding-runtime
+    // route handlers are typed against `node:http`'s `IncomingMessage`/`ServerResponse` and must
+    // stay able to be. Every value-carrying form (static, dynamic, require, bare `fetch` call) is
+    // in scope.
+    matchesImportKind: (kind) => kind !== "static-type" && kind !== "type",
   },
   {
     name: "adr-0112-provider-runtime-no-internal-bypass",
