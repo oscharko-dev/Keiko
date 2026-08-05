@@ -533,6 +533,41 @@ describe("createNodeFigmaSnapshotStore", () => {
     expect(existsSync(snapshotFile())).toBe(false);
   });
 
+  it("rolls back the committed record when the staged side-files vanish before publish", () => {
+    // The orphan sweep (a concurrent store instance's OWN lazy first-use sweep) has no way to
+    // distinguish an abandoned attempt from one that is still in flight -- neither has a committed
+    // record yet -- so it can legitimately race and delete an in-flight attempt's staging
+    // directory moments before this attempt tries to publish it. For a non-empty snapshot (screens
+    // WERE staged), a missing staging directory at publish time must fail closed, not silently
+    // leave the just-committed record referencing images that were never installed.
+    //
+    // baseInput() has exactly 2 screens, so randomSuffix is called twice while staging them (once
+    // per writeSideFile) before the 3rd call, for the record's own atomicWriteOnce temp file --
+    // exactly when staging has finished but publish has not yet run. Deleting the REAL staging
+    // directory then (rather than mocking node:fs) reproduces the race without touching any other
+    // lstatSync call in the same code path. The staging directory's own name is a real UUID (not
+    // derived from randomSuffix), so it is located by listing sideFileBase for the sole entry
+    // staging ever creates there: the `.attempt-*` directory.
+    const sideFileBase = join(dir, "qi", "figma-snapshots");
+    let calls = 0;
+    const store = createNodeFigmaSnapshotStore(dir, {
+      randomSuffix: () => {
+        calls += 1;
+        if (calls === 3) {
+          const attemptDir = readdirSync(sideFileBase).find((name) => name.startsWith(".attempt-"));
+          if (attemptDir !== undefined) {
+            rmSync(join(sideFileBase, attemptDir), { recursive: true, force: true });
+          }
+        }
+        return `race-${String(calls)}`;
+      },
+    });
+
+    expect(() => store.record(baseInput())).toThrow(EvidenceWriteError);
+    expect(existsSync(snapshotFile())).toBe(false);
+    expect(existsSync(sideFileBase) ? readdirSync(sideFileBase) : []).not.toContain(RUN_ID);
+  });
+
   it("redacts secrets out of the persisted IR content (token never on disk)", () => {
     const store = createNodeFigmaSnapshotStore(dir);
 

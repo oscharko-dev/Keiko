@@ -960,8 +960,24 @@ interface StoreCtx {
 // the attempt that WON the write-once JSON commit, so a directory still sitting at the canonical
 // path is an orphan from an aborted earlier attempt (no record for this runId existed a moment
 // ago, or the commit would have been rejected) and never a committed sibling's evidence.
-function publishStagedSideFiles(stagedRunDir: string, sideFileDir: string): void {
+//
+// A missing staging directory is legitimate ONLY when there were no screens to stage in the first
+// place (writeScreenSideFiles never creates it for an empty input) — expectedScreenCount
+// distinguishes that from a non-empty attempt whose directory disappeared, e.g. a concurrent
+// store instance's lazy orphan sweep racing this same window (it has no way to tell an in-flight
+// attempt from an abandoned one, since neither has a committed record yet). Silently no-op-ing in
+// THAT case would let the record commit above reference images that were never installed.
+function publishStagedSideFiles(
+  stagedRunDir: string,
+  sideFileDir: string,
+  expectedScreenCount: number,
+): void {
   if (lstatSync(stagedRunDir, { throwIfNoEntry: false })?.isDirectory() !== true) {
+    if (expectedScreenCount > 0) {
+      throw new EvidenceWriteError(
+        "Figma snapshot side-file staging directory disappeared before publish",
+      );
+    }
     return;
   }
   rmSync(sideFileDir, { recursive: true, force: true });
@@ -994,7 +1010,7 @@ function recordOp(ctx: StoreCtx, input: RecordFigmaSnapshotInput): RecordFigmaSn
     );
     atomicWriteOnce(recordPath, JSON.stringify(assembleRecord(input, rows)), ctx.randomSuffix);
     try {
-      publishStagedSideFiles(join(stagingBase, input.runId), sideFileDir);
+      publishStagedSideFiles(join(stagingBase, input.runId), sideFileDir, input.screens.length);
     } catch (error) {
       // The record committed but installing its side-files then threw: roll back the record so a
       // reader never observes it permanently referencing missing images, and so a retry passes
