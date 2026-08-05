@@ -1,10 +1,12 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 const root = resolve(import.meta.dirname, "..", "..");
 const mutation = readFileSync(resolve(root, ".github/workflows/mutation-security.yml"), "utf8");
 const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
+const ciWorkflow = parse(ci, { maxAliasCount: 0 });
 const mutationScope = readFileSync(resolve(root, "scripts/check-mutation-scope.mjs"), "utf8");
 const localSonar = readFileSync(resolve(root, "docker/gates/run-sonar.sh"), "utf8");
 const localSonarCompose = readFileSync(resolve(root, "docker/gates/sonar-compose.yml"), "utf8");
@@ -261,6 +263,14 @@ describe("dev quality workflows", () => {
     );
     expect(crossPlatform).toContain("npm run check:native:macos");
     expect(crossPlatform).toContain("npm run check:native:windows");
+    const iexpressSmoke = ciWorkflow.jobs["cross-platform-smoke"].steps.find(
+      (step) => step.name === "Smoke IExpress command execution",
+    );
+    expect(iexpressSmoke, "IExpress smoke step must exist").toBeDefined();
+    expect(iexpressSmoke.if).toBe("runner.os == 'Windows'");
+    expect(iexpressSmoke.run).toContain(
+      "node scripts/__tests__/windows-iexpress-command-smoke.mjs",
+    );
     expect(crossPlatform).toContain("Configure MSVC for native quality analysis");
     expect(crossPlatform).toContain('Join-Path $env:RUNNER_TEMP "keiko-vcvars-env.cmd"');
     expect(crossPlatform).toContain("$environment = & cmd.exe /d /c $vcvarsWrapper");

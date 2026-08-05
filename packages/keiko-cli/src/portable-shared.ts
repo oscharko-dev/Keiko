@@ -2,7 +2,7 @@ import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { basename, dirname, join } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
-export type PortableCommand = "setup" | "launch" | "status";
+export type PortableCommand = "setup" | "launch" | "status" | "resolve-root";
 export type PortableTarget = "windows-x64" | "macos-arm64" | "macos-x64";
 export type SetupStatus = "managed" | "setup-failed" | "unmanaged";
 export type SpawnFn = (
@@ -43,7 +43,7 @@ export const REGISTRATION_FILE = "portable-install-state.json";
 export const PACKAGE_NAME = "@oscharko-dev/keiko";
 
 export function isPortableCommand(value: string | undefined): value is PortableCommand {
-  return value === "setup" || value === "launch" || value === "status";
+  return value === "setup" || value === "launch" || value === "status" || value === "resolve-root";
 }
 
 export function isPortableTarget(value: string | undefined): value is PortableTarget {

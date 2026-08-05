@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 import {
   resolvePortableAssetsManifest,
@@ -30,8 +31,13 @@ const hasPowerShell =
   spawnSync("pwsh", ["-NoProfile", "-NonInteractive", "-Command", "exit 0"]).status === 0;
 
 const portableWorkflow = readFileSync(".github/workflows/portable-assets.yml", "utf8");
+const portableWorkflowDocument = parse(portableWorkflow);
 const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
 const windowsVerifier = readFileSync("scripts/verify-windows-portable-signing.ps1", "utf8");
+const windowsSetupVerifier = readFileSync(
+  "scripts/verify-windows-portable-setup-signing.ps1",
+  "utf8",
+);
 const windowsNativePolicy = readFileSync("scripts/windows-portable-native-policy.ps1", "utf8");
 const secureReadSmoke = readFileSync("scripts/portable-secure-read-smoke.mjs", "utf8");
 const secureReadHarness = readFileSync("native/secure-workspace-read/test-protocol.mjs", "utf8");
@@ -529,6 +535,11 @@ describe("Windows portable production signing workflow", () => {
     expect(assembleJob).toContain("attestations: write");
     expect(assembleJob).toContain("id-token: write");
     expect(assembleJob).toContain("actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6");
+    expect(assembleJob).toContain("subject-path: |");
+    expect(assembleJob).toContain("portable-release-assets/artifacts/*/keiko-*.zip");
+    expect(assembleJob).toContain(
+      "portable-release-assets/artifacts/windows-x64/keiko-windows-x64-setup.exe",
+    );
     // Together with the total-count and windowsJob assertions above, this proves the two
     // `id-token: write` occurrences are exactly stage-windows-production and assemble - no job
     // in between (macOS staging/signing, Windows/macOS qualification) carries either grant.
@@ -537,30 +548,80 @@ describe("Windows portable production signing workflow", () => {
   });
 
   it("signs the exact catalog and verifies before rebuilding and uploading", () => {
-    const inventory = portableWorkflow.indexOf("Inventory the bounded PE signing set");
-    const signing = portableWorkflow.indexOf("Sign the exact inventoried PE set");
-    const nativeVerification = portableWorkflow.indexOf(
+    const steps = portableWorkflowDocument.jobs["stage-windows-production"].steps;
+    const stepIndex = (name) => {
+      const indexes = steps.flatMap((step, index) => (step.name === name ? [index] : []));
+      expect(indexes, `${name} step name must be unique`).toHaveLength(1);
+      return indexes[0] ?? -1;
+    };
+    const inventory = stepIndex("Inventory the bounded PE signing set");
+    const signing = stepIndex("Sign the exact inventoried PE set");
+    const nativeVerification = stepIndex(
       "Verify the complete Authenticode chain, identity, and RFC3161 timestamp",
     );
-    const finalization = portableWorkflow.indexOf(
-      "Rebuild, bind, and verify the production archive",
-    );
-    const upload = portableWorkflow.indexOf("Upload verified Windows target artifact");
+    const finalization = stepIndex("Rebuild, bind, and verify the production archive");
+    const setupBuild = stepIndex("Build the Windows setup companion");
+    const setupSigning = stepIndex("Sign the Windows setup companion");
+    const setupVerification = stepIndex("Verify the signed Windows setup companion");
+    const setupScopeProof = stepIndex("Prove the setup companion is the only added stage PE");
+    const upload = stepIndex("Upload verified Windows target artifact");
+    const setupSigningStep = steps[setupSigning];
+    for (const [name, index] of Object.entries({
+      inventory,
+      signing,
+      nativeVerification,
+      finalization,
+      setupBuild,
+      setupSigning,
+      setupVerification,
+      setupScopeProof,
+      upload,
+    })) {
+      expect(index, `${name} step must exist`).toBeGreaterThan(-1);
+    }
     expect(inventory).toBeLessThan(signing);
     expect(signing).toBeLessThan(nativeVerification);
     expect(nativeVerification).toBeLessThan(finalization);
-    expect(finalization).toBeLessThan(upload);
-    expect(portableWorkflow).toContain("files-catalog:");
-    expect(portableWorkflow).toContain("file-digest: SHA256");
-    expect(portableWorkflow).toContain("timestamp-digest: SHA256");
+    expect(finalization).toBeLessThan(setupBuild);
+    expect(setupBuild).toBeLessThan(setupSigning);
+    expect(setupSigning).toBeLessThan(setupVerification);
+    expect(setupVerification).toBeLessThan(setupScopeProof);
+    expect(setupScopeProof).toBeLessThan(upload);
+    const setupScopeStep = steps[setupScopeProof];
+    expect(setupScopeStep.run).toContain("windows-portable-signing.mjs verify-setup-scope");
+    expect(setupScopeStep.run).toContain(
+      '--expected-inventory "$env:RUNNER_TEMP\\windows-pe-verified.json"',
+    );
+    expect(setupSigningStep.with["files-catalog"]).toBe(
+      ".portable-runtime/staging/windows-x64/windows-setup-signing-file.txt",
+    );
+    expect(setupSigningStep.with["file-digest"]).toBe("SHA256");
+    expect(setupSigningStep.with["timestamp-digest"]).toBe("SHA256");
+    const serializedSetupSigningInputs = JSON.stringify(setupSigningStep.with);
+    expect(serializedSetupSigningInputs).not.toContain("windows-signing-files.txt");
+    expect(serializedSetupSigningInputs).not.toContain("windows-attestation-signing-file.txt");
+    const setupCleanup = stepIndex("Remove transient setup signing inventory");
+    const setupCleanupStep = steps[setupCleanup];
+    expect(setupCleanup).toBeGreaterThan(setupVerification);
+    expect(setupCleanup).toBeLessThan(upload);
+    expect(setupCleanupStep.run).toContain("Test-Path -LiteralPath $catalog -PathType Leaf");
+    expect(setupCleanupStep.run).toContain(
+      "Remove-Item -LiteralPath $catalog -Force -ErrorAction Stop",
+    );
   });
 
   it("requires native chain, subscriber identity, and timestamp verification without raw output", () => {
     expect(windowsVerifier).toContain("signtool.exe verify /pa /all /tw /v");
+    expect(windowsSetupVerifier).toContain("signtool.exe verify /pa /all /tw /v");
     expect(windowsVerifier).toContain("Get-AuthenticodeSignature");
+    expect(windowsSetupVerifier).toContain("Get-AuthenticodeSignature");
+    expect(windowsSetupVerifier).toContain(
+      'GetFileName($setup) -ine "keiko-windows-x64-setup.exe"',
+    );
     expect(windowsNativePolicy).toContain('"1.3.6.1.5.5.7.3.3"');
     expect(windowsNativePolicy).toContain("$ExpectedIdentityEku");
     expect(windowsVerifier).toContain("[Keiko.Portable.WindowsPortableRfc3161]::VerifyFile");
+    expect(windowsSetupVerifier).toContain("[Keiko.Portable.WindowsPortableRfc3161]::VerifyFile");
     expect(readFileSync("scripts/windows-portable-rfc3161.cs", "utf8")).toContain(
       'found.EnhancedKeyUsages[0].Value == "1.3.6.1.5.5.7.3.8"',
     );
@@ -615,6 +676,7 @@ describe("Windows portable production signing workflow", () => {
     expect(simulation.filter((step) => step.always).map((step) => step.name)).toEqual([
       "Clear Azure before runtime qualification",
       "Clear the Azure CLI signing session",
+      "Clear Azure after setup companion signing",
     ]);
     expect(
       simulation.find((step) => step.name === "Clear Azure before runtime qualification")?.ran,
@@ -626,6 +688,9 @@ describe("Windows portable production signing workflow", () => {
       "Prove signing did not change the PE scope",
       "Verify the complete Authenticode chain, identity, and RFC3161 timestamp",
       "Rebuild, bind, and verify the production archive",
+      "Build the Windows setup companion",
+      "Sign the Windows setup companion",
+      "Verify the signed Windows setup companion",
       "Upload verified Windows target artifact",
     ]) {
       expect(simulation.find((step) => step.name === name)?.ran, name).toBe(false);
@@ -775,6 +840,8 @@ describe("macOS portable production signing workflow", () => {
 
   it("keeps dispatch staging secret-free and production artifacts out of the staging job", () => {
     expect(stagingJob).toContain("github.event_name == 'workflow_dispatch'");
+    expect(stagingJob).toContain("Build unsigned Windows setup companion");
+    expect(stagingJob).toContain("build-windows-portable-setup.mjs --stage-root");
     expect(stagingJob).not.toContain("secrets.");
     expect(stagingJob).not.toContain("environment: portable-release-signing");
   });
@@ -791,6 +858,23 @@ describe("macOS portable production signing workflow", () => {
     expect(assemble).toContain("needs.qualify-windows-production.result == 'success'");
     expect(assemble).toContain("needs.qualify-macos-production.result == 'success'");
     expect(assemble).not.toMatch(/result == 'success' \|\| needs\.[^.]+\.result == 'skipped'/u);
+  });
+
+  it("freshly re-verifies the signed Windows setup companion before payload execution", () => {
+    const qualification = portableWorkflow.slice(
+      portableWorkflow.indexOf("  qualify-windows-production:"),
+      portableWorkflow.indexOf("\n  qualify-macos-production:"),
+    );
+    const archiveVerification = qualification.indexOf("Re-verify final Authenticode bytes");
+    const setupVerification = qualification.indexOf("Re-verify signed Windows setup companion");
+    const payloadSmoke = qualification.indexOf(
+      "Execute terminal payload smoke without credential or file-command authority",
+    );
+    expect(archiveVerification).toBeLessThan(setupVerification);
+    expect(setupVerification).toBeLessThan(payloadSmoke);
+    expect(qualification).toContain("verify-windows-portable-setup-signing.ps1");
+    expect(qualification).toContain("build-windows-portable-setup.mjs");
+    expect(qualification).toContain("--verify-only");
   });
 
   it("runs only static verification, cleanup, finalization, and upload in the protected job", () => {

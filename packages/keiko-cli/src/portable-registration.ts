@@ -43,6 +43,10 @@ export interface FailedSetupRegistration extends SetupRegistrationBase {
   readonly status: "setup-failed";
   readonly updateEligible: false;
   readonly failureReason?: string | undefined;
+  readonly installRootPlatformTarget?: PortableTarget | undefined;
+  readonly setupManifestSha256?: string | undefined;
+  readonly installRootIdentitySha256?: string | undefined;
+  readonly launcherIdentitySha256?: string | undefined;
 }
 
 export type PortableInstallRegistration = ManagedSetupRegistration | FailedSetupRegistration;
@@ -52,6 +56,7 @@ export type ManagedRootLocator =
   | { readonly kind: "absolute-local"; readonly path: string };
 
 const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
+const SHA256_RE = /^[0-9a-f]{64}$/u;
 
 const SETUP_FAILURE_REASON_PATTERNS = [
   [".keiko runtime state", "managed-root-state-conflict"],
@@ -72,6 +77,10 @@ function sha256Text(value: string): string {
 
 function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+export function portableInstallRootIdentitySha256(path: string): string {
+  return sha256Text(realpathSync(path));
 }
 
 function readJson(path: string): unknown {
@@ -98,6 +107,24 @@ function assertStateDirSafe(stateDir: string): void {
     if (parent === cursor) return;
     cursor = parent;
   }
+}
+
+function registrationFileExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+export function hasPortableInstallRegistration(stateDir: string): boolean {
+  assertStateDirSafe(stateDir);
+  const path = join(stateDir, REGISTRATION_FILE);
+  if (!registrationFileExists(path)) return false;
+  assertRegistrationFileSafe(path);
+  return true;
 }
 
 function writeRegistration(stateDir: string, registration: PortableInstallRegistration): void {
@@ -168,6 +195,39 @@ function setupFailureReasonCode(message: string): string {
   return match?.[1] ?? "setup-failed";
 }
 
+function retainedInstallAttestation(registration: PortableInstallRegistration | undefined):
+  | {
+      readonly packageVersion: string;
+      readonly stable: boolean;
+      readonly installRootPlatformTarget: PortableTarget;
+      readonly setupManifestSha256: string;
+      readonly installRootIdentitySha256: string;
+      readonly launcherIdentitySha256: string;
+    }
+  | undefined {
+  if (registration === undefined) return undefined;
+  const installRootPlatformTarget =
+    registration.status === "managed"
+      ? registration.platformTarget
+      : registration.installRootPlatformTarget;
+  if (
+    installRootPlatformTarget === undefined ||
+    registration.setupManifestSha256 === undefined ||
+    registration.installRootIdentitySha256 === undefined ||
+    registration.launcherIdentitySha256 === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    packageVersion: registration.packageVersion,
+    stable: registration.stable,
+    installRootPlatformTarget,
+    setupManifestSha256: registration.setupManifestSha256,
+    installRootIdentitySha256: registration.installRootIdentitySha256,
+    launcherIdentitySha256: registration.launcherIdentitySha256,
+  };
+}
+
 export function writeManagedRegistration(input: {
   readonly stateDir: string;
   readonly layout: PortableLayout;
@@ -185,14 +245,17 @@ export function writeFailedRegistration(
   now: Date,
   failureReason: string,
 ): void {
+  const existingRegistration = readPortableInstallRegistration(stateDir);
+  const retainedAttestation = retainedInstallAttestation(existingRegistration);
   writeRegistration(stateDir, {
     schemaVersion: 1,
     status: "setup-failed",
     updateEligible: false,
     platformTarget: target,
-    packageVersion: "unknown",
-    stable: false,
+    packageVersion: retainedAttestation?.packageVersion ?? "unknown",
+    stable: retainedAttestation?.stable ?? false,
     failureReason: setupFailureReasonCode(failureReason),
+    ...retainedAttestation,
     updatedAt: now.toISOString(),
   });
 }
@@ -200,10 +263,8 @@ export function writeFailedRegistration(
 export function readPortableInstallRegistration(
   stateDir: string,
 ): PortableInstallRegistration | undefined {
-  assertStateDirSafe(stateDir);
+  if (!hasPortableInstallRegistration(stateDir)) return undefined;
   const path = join(stateDir, REGISTRATION_FILE);
-  if (!existsSync(path)) return undefined;
-  assertRegistrationFileSafe(path);
   const raw = readJson(path);
   if (isManagedRegistrationRecord(raw)) return managedRegistrationFromRecord(raw);
   if (isFailedRegistrationRecord(raw)) return failedRegistrationFromRecord(raw);
@@ -242,14 +303,15 @@ function managedRegistrationFromRecord(raw: Record<string, unknown>): ManagedSet
     packageVersion: String(raw.packageVersion),
     stable: raw.stable === true,
     managedRootLocator: parseManagedRootLocator(raw.managedRootLocator),
-    setupManifestSha256:
-      typeof raw.setupManifestSha256 === "string" ? raw.setupManifestSha256 : undefined,
-    installRootIdentitySha256:
-      typeof raw.installRootIdentitySha256 === "string" ? raw.installRootIdentitySha256 : undefined,
-    launcherIdentitySha256:
-      typeof raw.launcherIdentitySha256 === "string" ? raw.launcherIdentitySha256 : undefined,
+    setupManifestSha256: parseSha256(raw.setupManifestSha256),
+    installRootIdentitySha256: parseSha256(raw.installRootIdentitySha256),
+    launcherIdentitySha256: parseSha256(raw.launcherIdentitySha256),
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : "",
   };
+}
+
+function parseSha256(value: unknown): string | undefined {
+  return typeof value === "string" && SHA256_RE.test(value) ? value : undefined;
 }
 
 function parseManagedRootLocator(value: unknown): ManagedRootLocator | undefined {
@@ -311,6 +373,14 @@ function failedRegistrationFromRecord(raw: Record<string, unknown>): FailedSetup
     packageVersion: String(raw.packageVersion),
     stable: raw.stable === true,
     failureReason: typeof raw.failureReason === "string" ? raw.failureReason : undefined,
+    installRootPlatformTarget:
+      typeof raw.installRootPlatformTarget === "string" &&
+      isPortableTarget(raw.installRootPlatformTarget)
+        ? raw.installRootPlatformTarget
+        : undefined,
+    setupManifestSha256: parseSha256(raw.setupManifestSha256),
+    installRootIdentitySha256: parseSha256(raw.installRootIdentitySha256),
+    launcherIdentitySha256: parseSha256(raw.launcherIdentitySha256),
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : "",
   };
 }
@@ -325,7 +395,8 @@ export function registrationMatches(
     registration.packageVersion === manifest.packageVersion &&
     registration.stable === manifest.stable &&
     registration.setupManifestSha256 === sha256File(layout.setupManifestPath) &&
-    registration.installRootIdentitySha256 === sha256Text(realpathSync(layout.installRoot)) &&
+    registration.installRootIdentitySha256 ===
+      portableInstallRootIdentitySha256(layout.installRoot) &&
     registration.launcherIdentitySha256 === sha256File(layout.primaryLauncherPath)
   );
 }

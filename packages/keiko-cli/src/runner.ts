@@ -44,7 +44,7 @@ Usage:
   keiko repair [OPTIONS]   Repair a broken local install (offline remediation pass).
   keiko uninstall [OPTIONS] Remove Keiko's runtime artifacts (state, shortcuts, scripts).
   keiko update <status|check|apply> Inspect or run governed updates (UI remains primary).
-  keiko portable <setup|launch|status>
+  keiko portable <setup|launch|status|resolve-root>
                            Manage archive-first portable setup and launch.
   keiko start|stop|status|restart Manage the local Keiko UI process.
   keiko models list        List registered model capabilities.

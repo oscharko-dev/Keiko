@@ -14,7 +14,27 @@ function embeddedManifest() {
   return JSON.parse(match[1]);
 }
 
+function portableAssetsManifestExample() {
+  const section = workflow.slice(workflow.indexOf("The portable assets manifest"));
+  const match = /```json\n([\s\S]*?)\n```/u.exec(section);
+  if (match?.[1] === undefined) throw new Error("portable assets manifest example is missing");
+  return JSON.parse(match[1]);
+}
+
 describe("portable runtime release documentation", () => {
+  it("documents the required Windows setup companion operator fields", () => {
+    const example = portableAssetsManifestExample();
+    const windows = example.artifacts.find((artifact) => artifact.platformTarget === "windows-x64");
+
+    expect(windows).toMatchObject({
+      setupPath: "artifacts/windows-x64/keiko-windows-x64-setup.exe",
+      setupSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      setupSizeBytes: expect.any(Number),
+    });
+    expect(Number.isSafeInteger(windows.setupSizeBytes)).toBe(true);
+    expect(windows.setupSizeBytes).toBeGreaterThan(0);
+  });
+
   it("distinguishes portable manifest v1 from sidecar approval v2", () => {
     const manifest = embeddedManifest();
     const documented = manifest.sidecarRuntimes[0];

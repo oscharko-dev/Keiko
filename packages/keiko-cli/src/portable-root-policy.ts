@@ -113,9 +113,12 @@ export function assertManagedRootAllowed(
   const resolvedPath = resolvedCandidatePath(path);
   assertPathAllowed(resolvedPath, target);
   const resolvedState = resolvedCandidatePath(stateDir);
+  const normalizedRoot = normalizedPath(resolvedPath);
+  const normalizedState = normalizedPath(resolvedState);
   if (
-    normalizedPath(resolvedPath) === normalizedPath(resolvedState) ||
-    normalizedPath(resolvedPath).startsWith(`${normalizedPath(resolvedState)}/`)
+    normalizedRoot === normalizedState ||
+    normalizedRoot.startsWith(`${normalizedState}/`) ||
+    normalizedState.startsWith(`${normalizedRoot}/`)
   ) {
     throw new Error("managed install root must be separate from .keiko runtime state");
   }

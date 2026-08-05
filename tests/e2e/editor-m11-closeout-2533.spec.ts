@@ -20,10 +20,12 @@ import {
   revokeEditorWorkspaceTrust,
   typeIntoActiveEditor,
 } from "./support/editorWorkspace.js";
+import { editorRootTab, editorRootTabs } from "./support/multiRootEditor.js";
 import { FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET } from "./support/file-history-2531.js";
 
 const FILE = "src/app.ts";
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
+const EDITOR_WINDOW = '.window[data-window-id="issue-2533-editor"]';
 const SETTINGS_WINDOW = '.window[data-window-id="issue-2533-settings"]';
 const INITIAL_VERSION = 'export const historyValue = "initial";\n';
 const VERSION_ONE = 'export const historyValue = "one";\n';
@@ -234,12 +236,29 @@ async function replacePage(page: Page, windows: readonly SeedWindow[]): Promise<
   return replacement;
 }
 
+function seededEditorWindow(page: Page): Locator {
+  // Every root-tab lookup binds to this journey's own seeded editor window, so no other mounted
+  // editor can satisfy an assertion about which root is selected.
+  return page.locator(EDITOR_WINDOW).filter({ visible: true });
+}
+
 async function restrictBetaAndExpectAlphaTrusted(page: Page): Promise<void> {
   // Project bootstrap may focus either root when both registrations share the same timestamp.
-  // Select Beta explicitly so this proof never depends on catalog tie-breaking.
-  const betaTab = page.getByRole("tab", { name: /M11 Root Beta/u });
-  if ((await betaTab.getAttribute("aria-selected")) !== "true") await betaTab.click();
   const prompt = page.getByRole("alertdialog", { name: "Trust this workspace?" });
+  // `editorRootTabs` handles the host scoping and the inert-background case.
+  const editorWindow = seededEditorWindow(page);
+  await expect(editorWindow).toHaveCount(1);
+  const rootTabs = editorRootTabs(editorWindow);
+  await expect(rootTabs).toHaveCount(1);
+  const betaTab = editorRootTab(editorWindow, /M11 Root Beta/u);
+  // A selected restricted Beta opens the modal during bootstrap. The modal intentionally makes
+  // the background inert. Branch on the settled tab selection rather than sampling whether the
+  // asynchronously attached modal happens to exist at this instant.
+  await expect(rootTabs.getByRole("tab", { selected: true, includeHidden: true })).toHaveCount(1);
+  if ((await betaTab.getAttribute("aria-selected")) !== "true") {
+    await betaTab.click();
+    await expect(betaTab).toHaveAttribute("aria-selected", "true");
+  }
   await expect(prompt).toBeVisible();
   await prompt.getByRole("button", { name: "Stay restricted" }).click();
   await expect(page.getByRole("note", { name: "Restricted Mode", exact: true })).toContainText(
@@ -248,7 +267,7 @@ async function restrictBetaAndExpectAlphaTrusted(page: Page): Promise<void> {
   await expect(
     page.getByRole("treeitem", { name: "M11 Root Beta" }).getByLabel("Restricted Mode"),
   ).toBeVisible();
-  await page.getByRole("tab", { name: /M11 Root Alpha/u }).click();
+  await editorRootTab(editorWindow, /M11 Root Alpha/u).click();
   await expect(prompt).toHaveCount(0);
   await expect(
     page.getByRole("treeitem", { name: "M11 Root Alpha" }).getByLabel("Trusted workspace"),
@@ -260,7 +279,7 @@ async function switchProfile(
   root: string,
   profileRef: string,
 ): Promise<ProfileSwitchResult> {
-  await page.getByRole("tab", { name: /M11 Root Alpha/u }).click();
+  await editorRootTab(seededEditorWindow(page), /M11 Root Alpha/u).click();
   const settingsWindow = seededWindows(root).filter((window) => window.type === "settings");
   const settingsPage = await replacePage(page, settingsWindow);
   const settings = settingsPage.locator(SETTINGS_WINDOW);
@@ -422,14 +441,15 @@ async function reopenTrustedAlphaAfterProfileSwitch(page: Page, root: string): P
   // The active root is server-owned and can legitimately start on either root after replacement.
   // Clear only Beta's expected restricted prompt when Beta is active, then select Alpha explicitly
   // and prove the profile switch preserved Alpha's server-owned grant.
-  const betaTab = page.getByRole("tab", { name: /M11 Root Beta/u });
+  const editorWindow = seededEditorWindow(page);
+  const betaTab = editorRootTab(editorWindow, /M11 Root Beta/u);
   if ((await betaTab.getAttribute("aria-selected")) === "true") {
     await page
       .getByRole("alertdialog", { name: "Trust this workspace?" })
       .getByRole("button", { name: "Stay restricted" })
       .click();
   }
-  const alphaTab = page.getByRole("tab", { name: /M11 Root Alpha/u });
+  const alphaTab = editorRootTab(editorWindow, /M11 Root Alpha/u);
   if ((await alphaTab.getAttribute("aria-selected")) !== "true") await alphaTab.click();
   const editor = await openEditorWorkspace(page, { dismissTrustPrompt: false });
   await expect(page.getByRole("alertdialog", { name: "Trust this workspace?" })).toHaveCount(0);

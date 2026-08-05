@@ -17,6 +17,7 @@ import {
   hashDirectoryTree,
   portableVerificationSummaryForManifest,
   PORTABLE_TARGETS,
+  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
   sha256File,
   validatePortableCandidateManifest,
 } from "./portable-runtime.mjs";
@@ -24,6 +25,7 @@ import {
   RUNTIME_ACTIVATION_RELATIVE_PATH,
   runtimeActivationManifest,
 } from "./runtime-activation-manifest.mjs";
+import { isPortableExecutableFile } from "./lib/portable-executable.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -548,11 +550,30 @@ async function loadTarget(options, target) {
     (await sha256File(archivePath)) !== manifest.artifact?.sha256
   )
     fail(`${target.platformTarget} archive bytes do not match the manifest`);
+  const setupPath = windowsSetupCompanionPath(downloaded, target);
   assertEvidence(downloaded, manifest, target);
-  return { downloaded, manifest };
+  return { downloaded, manifest, setupPath };
 }
 
-export async function assemblePortableReleaseAssets(argv) {
+function windowsSetupCompanionPath(root, target) {
+  if (target.platformTarget !== "windows-x64") return undefined;
+  const setupPath = regularContainedFile(
+    root,
+    WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+    `${target.platformTarget} setup companion`,
+    MAX_ARCHIVE_BYTES,
+  );
+  if (!isPortableExecutableFile(setupPath)) {
+    fail(`${target.platformTarget} setup companion must be a PE file`);
+  }
+  return setupPath;
+}
+
+function notifyTargetCopied(deps, sourceRoot, target) {
+  deps.afterTargetCopy?.({ sourceRoot, target });
+}
+
+export async function assemblePortableReleaseAssets(argv, deps = {}) {
   const options = parseArgs(argv);
   requiredDirectory(options.bundleRoot, "bundle root");
   const artifactsRoot = requiredDirectory(join(options.bundleRoot, "artifacts"), "artifacts root");
@@ -571,19 +592,29 @@ export async function assemblePortableReleaseAssets(argv) {
     expected,
   );
   if (failures.length > 0) fail(`release set is invalid:\n  - ${failures.join("\n  - ")}`);
-  const artifacts = PORTABLE_TARGETS.map((target, index) => {
-    const finalRoot = join(artifactsRoot, target.platformTarget);
-    cpSync(loaded[index].downloaded, finalRoot, {
-      errorOnExist: true,
-      force: false,
-      recursive: true,
-    });
-    return {
-      platformTarget: target.platformTarget,
-      archivePath: `artifacts/${target.platformTarget}/${target.assetName}`,
-      manifestPath: `artifacts/${target.platformTarget}/manifest/portable-manifest.json`,
-    };
-  });
+  const artifacts = await Promise.all(
+    PORTABLE_TARGETS.map(async (target, index) => {
+      const finalRoot = join(artifactsRoot, target.platformTarget);
+      cpSync(loaded[index].downloaded, finalRoot, {
+        errorOnExist: true,
+        force: false,
+        recursive: true,
+      });
+      notifyTargetCopied(deps, loaded[index].downloaded, target);
+      const artifact = {
+        platformTarget: target.platformTarget,
+        archivePath: `artifacts/${target.platformTarget}/${target.assetName}`,
+        manifestPath: `artifacts/${target.platformTarget}/manifest/portable-manifest.json`,
+      };
+      if (loaded[index].setupPath !== undefined) {
+        artifact.setupPath = `artifacts/${target.platformTarget}/${WINDOWS_PORTABLE_SETUP_ASSET_NAME}`;
+        const copiedSetupPath = join(finalRoot, WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+        artifact.setupSha256 = await sha256File(copiedSetupPath);
+        artifact.setupSizeBytes = statSync(copiedSetupPath).size;
+      }
+      return artifact;
+    }),
+  );
   const manifest = { schemaVersion: 1, artifacts };
   writeFileSync(
     join(options.bundleRoot, BUNDLE_MANIFEST_NAME),

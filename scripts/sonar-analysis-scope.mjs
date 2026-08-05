@@ -243,12 +243,7 @@ export function isGeneratedOrBinaryPath(input) {
   );
 }
 
-// Top-level orchestration scripts whose only side effects are subprocess spawns v8 coverage
-// cannot cross. Their testable logic is extracted into `scripts/lib/*.mjs` modules covered by
-// their own pods; the orchestration itself is exercised end-to-end by the matching npm gate
-// (`npm run arch:check:negative`). Kept out of the LCOV coverage track AND excluded from the
-// `check:lcov-source-mapping` gate that would otherwise demand an importing pod for every
-// changed scripts/*.mjs — same rationale pattern as the packages/keiko-ui/public/ carve-out.
+// Top-level subprocess gates whose behavior cannot cross the Linux v8 coverage boundary.
 const NON_LCOV_SCRIPTS = new Set(["scripts/arch-check-negative.mjs"]);
 
 export function isCoverableProductSource(input) {

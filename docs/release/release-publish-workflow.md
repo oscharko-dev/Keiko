@@ -60,7 +60,10 @@ The portable assets manifest is a content-free operator input:
     {
       "platformTarget": "windows-x64",
       "archivePath": "artifacts/windows-x64/keiko-windows-x64.zip",
-      "manifestPath": "artifacts/windows-x64/manifest/portable-manifest.json"
+      "manifestPath": "artifacts/windows-x64/manifest/portable-manifest.json",
+      "setupPath": "artifacts/windows-x64/keiko-windows-x64-setup.exe",
+      "setupSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "setupSizeBytes": 48234496
     },
     {
       "platformTarget": "macos-arm64",
@@ -86,6 +89,15 @@ provenance/signing evidence assets with `gh release upload --clobber`, verifies 
 non-zero asset ids and HTTPS `browser_download_url` values, and performs unauthenticated full-byte
 digest checks for every uploaded portable asset. Generated archives and evidence remain
 release artifacts; they are not committed to Git.
+
+The Windows entry also requires `setupPath`, `setupSha256`, and `setupSizeBytes` from the generated
+reviewed release bundle. The digest and size values above illustrate the required JSON shape; an
+operator must use the values emitted for the exact setup companion bytes rather than copying the
+example values. Before upload, the publisher also verifies the setup companion's GitHub build-
+provenance attestation against this repository, the portable-assets workflow, and the exact source
+commit. It then binds the uploaded setup asset's GitHub identity, digest, and size into the
+published Windows manifest. Changing both the local setup bytes and their bundle metadata therefore
+cannot substitute an unqualified executable at the final publish boundary.
 
 Optional coding sidecar runtime payloads are release inputs, not customer-installed tools.
 `scripts/stage-portable-runtime.mjs` may receive controlled local sidecar specs through
@@ -124,6 +136,10 @@ it:
    architecture, Developer ID identity/team, hardened runtime, timestamp, stapling, and Gatekeeper
    over extracted final bytes, then run the terminal payload smoke without credential or Actions
    file-command authority.
+   The Windows production job also builds `keiko-windows-x64-setup.exe` from the already-finalized
+   ZIP, signs that companion through the same protected identity, verifies its Authenticode chain,
+   re-extracts it to prove the embedded script and ZIP digests, and carries it beside the Windows
+   archive into the reviewed release bundle.
 5. Assembles the exact-three, digest-cross-checked `portable-release-assets` bundle (with
    `portable-assets.json`) via `scripts/assemble-portable-release-assets.mjs` in exactly the layout
    the Release workflow consumes through `portable_assets_run_id`.

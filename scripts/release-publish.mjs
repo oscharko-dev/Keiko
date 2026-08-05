@@ -34,6 +34,10 @@ import {
 import { internalDependencyEntries, scope } from "./release-workspace-policy.mjs";
 import { renderReleaseImpactNotes } from "./release-impact-notes.mjs";
 import { parseDotEnvTokenLine } from "./dotenv-token.mjs";
+import {
+  normalizePortableSetupCompanion,
+  portableSetupCompanionRecord,
+} from "./lib/portable-setup-companion.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRegistryScope = scope.slice(0, -1);
@@ -666,8 +670,37 @@ function normalizePortableTargetAsset(
     failures.push(`missing portable asset entry for ${target.platformTarget}.`);
     return [];
   }
+  const context = portableTargetAssetContext(entry, target, baseDir, failures);
+  validatePortableAssetFiles({
+    target,
+    rootManifest,
+    qualification,
+    failures,
+    ...context,
+  });
+  return [
+    portableAssetRecord(
+      target,
+      context.archivePath,
+      context.manifestPath,
+      context.manifest,
+      entry,
+      failures,
+      context.setupPath,
+    ),
+  ];
+}
+
+function portableTargetAssetContext(entry, target, baseDir, failures) {
   const { archivePath, manifestPath } = portableTargetPaths(entry, target, baseDir, failures);
   const stageRoot = dirname(dirname(manifestPath));
+  const setupCompanion = normalizePortableSetupCompanion({
+    baseDir,
+    entry,
+    platformTarget: target.platformTarget,
+    stageRoot,
+  });
+  failures.push(...setupCompanion.failures);
   const archiveStat = regularContainedFile(
     archivePath,
     stageRoot,
@@ -684,19 +717,7 @@ function normalizePortableTargetAsset(
   const manifest = manifestStat
     ? readPortableManifestSafely(manifestPath, target.platformTarget, failures)
     : {};
-  validatePortableAssetFiles({
-    target,
-    archivePath,
-    archiveStat,
-    manifestPath,
-    manifest,
-    rootManifest,
-    qualification,
-    failures,
-  });
-  return [
-    portableAssetRecord(target, archivePath, manifestPath, manifest, entry, baseDir, failures),
-  ];
+  return { archivePath, archiveStat, manifest, manifestPath, setupPath: setupCompanion.setupPath };
 }
 
 function portableTargetPaths(entry, target, baseDir, failures) {
@@ -979,8 +1000,8 @@ function portableAssetRecord(
   manifestPath,
   manifest,
   entry,
-  baseDir,
   failures,
+  setupPath,
 ) {
   const stageRoot = dirname(dirname(manifestPath));
   const requiredEvidence = requiredPortableEvidence(target, stageRoot, manifest, failures);
@@ -989,14 +1010,24 @@ function portableAssetRecord(
     validateEvidenceContent(evidence.sourcePath, evidence.assetName, failures);
   }
   const evidenceFiles = [...requiredEvidence, ...extraEvidence];
-  return {
-    archiveAssetName: target.assetName,
-    archivePath,
-    evidenceFiles,
-    manifest,
-    platformTarget: target.platformTarget,
-    stageRoot,
-  };
+  const record = portableSetupCompanionRecord(
+    {
+      archiveAssetName: target.assetName,
+      archivePath,
+      evidenceFiles,
+      manifest,
+      platformTarget: target.platformTarget,
+      stageRoot,
+    },
+    setupPath,
+  );
+  return setupPath === undefined
+    ? record
+    : {
+        ...record,
+        setupSha256: entry.setupSha256,
+        setupSizeBytes: entry.setupSizeBytes,
+      };
 }
 
 function extraPortableEvidenceFiles(entry, stageRoot, target, failures) {
@@ -1127,6 +1158,7 @@ function publishPortableReleaseAssets(options, assets, releaseInfo) {
     console.log("release-publish: portable assets validated; upload skipped.");
     return;
   }
+  verifyPortableSetupAttestations(assets, releaseInfo);
   const evidenceUpload = preparePortableEvidenceUploadRoot();
   try {
     const archiveUpload = portableArchiveUploadFiles(assets);
@@ -1162,6 +1194,30 @@ function publishPortableReleaseAssets(options, assets, releaseInfo) {
   }
 }
 
+function verifyPortableSetupAttestations(assets, releaseInfo) {
+  const signerWorkflow = `${releaseInfo.repo}/${portableAssetsWorkflowPath}`;
+  const sourceDigest = process.env.KEIKO_PORTABLE_ASSETS_SOURCE_SHA;
+  if (!/^[a-f0-9]{40}$/u.test(sourceDigest ?? "")) {
+    fail("portable setup attestation source SHA must be exact.");
+  }
+  for (const asset of assets) {
+    if (asset.setupPath === undefined) continue;
+    runGh([
+      "attestation",
+      "verify",
+      asset.setupPath,
+      "--repo",
+      releaseInfo.repo,
+      "--signer-workflow",
+      signerWorkflow,
+      "--source-digest",
+      sourceDigest,
+      "--source-ref",
+      `refs/tags/${releaseInfo.tag}`,
+    ]);
+  }
+}
+
 function preparePortableEvidenceUploadRoot() {
   const root = mkdtempSync(join(tmpdir(), "keiko-portable-upload-"));
   return { root };
@@ -1179,6 +1235,15 @@ function portableArchiveUploadFiles(assets) {
       expectedSize: asset.manifest.artifact.sizeBytes,
       firstClassArchive: true,
     });
+    if (asset.setupPath !== undefined) {
+      addUploadPath(asset.setupPath, asset.setupAssetName, names, paths);
+      expected.push({
+        assetName: asset.setupAssetName,
+        expectedSha256: asset.setupSha256,
+        expectedSize: asset.setupSizeBytes,
+        firstClassArchive: false,
+      });
+    }
   }
   return { expected, paths };
 }
@@ -1247,10 +1312,12 @@ function bindPortableAssetToRemoteRelease(asset, releaseId, remoteByName) {
   if (!isRecord(remote) || !Number.isSafeInteger(remote.id) || remote.id <= 0) {
     fail(`${asset.archiveAssetName} must have a remote GitHub asset id before evidence upload.`);
   }
-  const manifest = boundPortableManifest(asset.manifest, releaseId, remote.id);
+  const setupBinding = remoteSetupBinding(asset, remoteByName);
+  const manifest = boundPortableManifest(asset.manifest, releaseId, remote.id, setupBinding);
   const failures = validatePortablePublishedManifest(manifest, {
     assetId: remote.id,
     releaseId,
+    ...(setupBinding === undefined ? {} : { setupAsset: setupBinding }),
   }).map((failure) => `${asset.platformTarget}.${failure}`);
   if (failures.length > 0) {
     fail(`portable manifest binding failed:\n  - ${failures.join("\n  - ")}`);
@@ -1258,8 +1325,22 @@ function bindPortableAssetToRemoteRelease(asset, releaseId, remoteByName) {
   return { ...asset, manifest };
 }
 
-function boundPortableManifest(source, releaseId, assetId) {
-  const manifest = JSON.parse(JSON.stringify(source));
+function remoteSetupBinding(asset, remoteByName) {
+  if (asset.setupPath === undefined) return undefined;
+  const remote = remoteByName.get(asset.setupAssetName);
+  if (!isRecord(remote) || !Number.isSafeInteger(remote.id) || remote.id <= 0) {
+    fail(`${asset.setupAssetName} must have a remote GitHub asset id before evidence upload.`);
+  }
+  return {
+    assetId: remote.id,
+    assetName: asset.setupAssetName,
+    sha256: asset.setupSha256,
+    sizeBytes: asset.setupSizeBytes,
+  };
+}
+
+function boundPortableManifest(source, releaseId, assetId, setupBinding) {
+  const manifest = structuredClone(source);
   manifest.release = { ...manifest.release, releaseId };
   manifest.artifact = { ...manifest.artifact, assetId };
   manifest.releaseImpact = {
@@ -1268,6 +1349,7 @@ function boundPortableManifest(source, releaseId, assetId) {
       ...manifest.releaseImpact.reviewedBinding,
       assetId,
       releaseId,
+      ...(setupBinding === undefined ? {} : { setupAsset: setupBinding }),
     },
   };
   return manifest;
