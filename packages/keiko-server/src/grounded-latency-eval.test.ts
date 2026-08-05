@@ -38,6 +38,11 @@ describe("runGroundedRetrievalLatencyEval", () => {
     const clean = await runGroundedRetrievalLatencyEval({ injectedJudgeDelayMs: 0 });
     const delayed = await runGroundedRetrievalLatencyEval({ injectedJudgeDelayMs: delayMs });
 
-    expect(clean.entailmentMs).toBeLessThan(delayed.entailmentMs - delayMs * 4);
+    // A DELTA assertion, not an absolute ceiling: the delayed run does strictly more work than the
+    // clean one, so machine load slows both and cancels out. The margin is half the injected total
+    // (delayMs x claims), which leaves the real gap — the full injected total — twice the headroom
+    // it needs, and is expressed against the producer's claim count rather than a bare multiplier.
+    const injectedTotalMs = delayMs * FIXTURE_ANSWER_CLAIMS;
+    expect(delayed.entailmentMs - clean.entailmentMs).toBeGreaterThan(injectedTotalMs / 2);
   }, 30_000);
 });

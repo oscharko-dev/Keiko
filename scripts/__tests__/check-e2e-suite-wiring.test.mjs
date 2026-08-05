@@ -258,6 +258,21 @@ describe("config ownership (KEIKO-0077)", () => {
     expect(problem).toContain("but one now runs it");
   });
 
+  // A malformed `"test:e2e:x": null` in package.json reaches here as a non-string command. Skipping
+  // it is fail-closed — the config stays unowned — where `.includes` on it would crash the gate.
+  it("treats a non-string script command as owning nothing rather than crashing", () => {
+    const problems = checkE2eConfigOwnership({
+      configs: [OWNED],
+      scriptCommands: [null, undefined, 42, command(OWNED)],
+      unownedConfigs: [],
+    });
+
+    expect(problems).toEqual([]);
+    expect(
+      checkE2eConfigOwnership({ configs: [OWNED], scriptCommands: [null], unownedConfigs: [] }),
+    ).toHaveLength(1);
+  });
+
   it("rejects duplicate and non-config register entries", () => {
     expect(() => validateUnownedConfigs([ORPHAN, ORPHAN])).toThrow(/more than once/u);
     expect(() => validateUnownedConfigs(["test:e2e:a"])).toThrow(/file names/u);

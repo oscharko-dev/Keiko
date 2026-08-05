@@ -174,8 +174,13 @@ const CONFIG_SUFFIX = ".config.ts";
  */
 export function checkE2eConfigOwnership({ configs, scriptCommands, unownedConfigs }) {
   const recorded = new Set(unownedConfigs);
+  // A malformed `"test:e2e:x": null` in package.json would otherwise crash on `.includes` with an
+  // unhelpful TypeError. Skipping a non-string command is the fail-closed direction: the config it
+  // would have owned is reported unowned rather than silently blessed.
   const owned = new Set(
-    configs.filter((config) => scriptCommands.some((command) => command.includes(config))),
+    configs.filter((config) =>
+      scriptCommands.some((command) => typeof command === "string" && command.includes(config)),
+    ),
   );
   const problems = [];
 
