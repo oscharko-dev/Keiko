@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { windowsLauncher } from "./launcher-platforms.js";
+import { parseWindowsLauncherContent, windowsLauncher } from "./launcher-platforms.js";
 import type { CliIo } from "./runner.js";
 import { defaultManagedRoot, type PortableLayout, type PortableTarget } from "./portable-shared.js";
 
@@ -31,8 +31,6 @@ interface ManagedInstallScan {
   readonly issues: readonly string[];
 }
 
-const WINDOWS_REGISTRATION_RE =
-  /^@start "" ([A-Za-z0-9_@\-./\\:]+) start --open(?: --port \d+)?\r?\n$/;
 const MANAGED_INSTALL_RULES: Readonly<
   Record<
     PortableLayout["rootKind"],
@@ -74,6 +72,7 @@ const MANAGED_INSTALL_RULES: Readonly<
     ],
   },
 };
+const WINDOWS_LAUNCHER_MAX_BYTES = 64 * 1024;
 
 function appDataDir(env: EnvSource, home: string): string {
   return env.APPDATA ?? join(home, "AppData", "Roaming");
@@ -85,8 +84,15 @@ export function windowsStartMenuRegistrationPath(env: EnvSource, home: string): 
 
 export function parseWindowsStartMenuRegistration(path: string): string | undefined {
   if (!existsSync(path)) return undefined;
-  const match = WINDOWS_REGISTRATION_RE.exec(readFileSync(path, "utf8"));
-  return match?.[1];
+  try {
+    assertNoSymlinkAncestor(path);
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1) return undefined;
+    if (stat.size <= 0 || stat.size > WINDOWS_LAUNCHER_MAX_BYTES) return undefined;
+    return parseWindowsLauncherContent(readFileSync(path, "utf8"));
+  } catch {
+    return undefined;
+  }
 }
 
 function resolvedDefaultManagedRoot(target: PortableTarget, env: EnvSource, home: string): string {

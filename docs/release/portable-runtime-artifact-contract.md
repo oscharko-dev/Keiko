@@ -15,10 +15,14 @@ Governing decisions:
 
 ## Product Contract
 
-Portable v1 is an archive-first delivery path for stable public releases. The promoted user journey
-is: download the platform ZIP, extract it, double-click `Keiko.exe` or `Keiko.app`, complete
-first-run setup into Keiko's target-specific managed install location, and launch Keiko afterward
-from the same native app surface or OS search entry.
+Portable v1 is an archive-backed delivery path for stable public releases with platform-specific
+promoted journeys. On Windows, ordinary users download and run the signed
+`keiko-windows-x64-setup.exe`; setup verifies its embedded canonical ZIP, completes first-run setup
+into Keiko's per-user managed install location, and launches Keiko. On macOS, users download the
+target ZIP, extract `Keiko.app`, and double-click it to complete first-run setup into the managed app
+location. After setup, users launch Keiko from the same native app surface or OS search entry. The
+Windows ZIP remains the canonical release payload and support/bootstrap surface, but it is not the
+promoted ordinary-user install journey.
 
 Users must not need system Node.js, npm, Yarn, a package manager, build tools, or shell commands on
 the primary install/start path. Shell launchers may exist only for support and automated diagnostics.
@@ -36,6 +40,14 @@ portable assets as a release-blocking set:
 
 The release is not portable-complete when any target is missing, mislabeled, checksum-mismatched,
 unsigned, unnotarized where required, or not represented in reviewed release-impact metadata.
+
+Stable releases also publish `keiko-windows-x64-setup.exe` as an Authenticode-signed companion to
+the canonical Windows ZIP. The setup embeds that exact ZIP, installs it under the per-user managed
+install root, and verifies that the launched Keiko process remains healthy. If a managed Keiko
+installation already exists, setup validates and launches that installation without replacing it;
+governed in-app update remains the upgrade authority. The setup is a convenience install surface
+for `windows-x64`, not a fourth platform target; release qualification and digest binding still
+derive from the ZIP and its reviewed evidence.
 
 ## Current Staging Status
 
@@ -73,6 +85,7 @@ Windows archive:
 ```text
 windows-x64/
   keiko-windows-x64.zip
+  keiko-windows-x64-setup.exe
   manifest/
     portable-manifest.json
   evidence/

@@ -59,6 +59,7 @@ import {
   hashDirectoryTree,
   portableVerificationSummaryForManifest,
   PORTABLE_TARGETS,
+  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "../portable-runtime.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -83,6 +84,15 @@ const NODE_VERSION = "24.0.0";
 
 function digestFor(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function portableExecutable(marker = 0) {
+  const bytes = Buffer.alloc(128, marker);
+  bytes[0] = 0x4d;
+  bytes[1] = 0x5a;
+  bytes.writeUInt32LE(64, 0x3c);
+  bytes.set([0x50, 0x45, 0x00, 0x00], 64);
+  return bytes;
 }
 
 function targetVerificationChecks(target) {
@@ -492,6 +502,7 @@ function portableUpdateEligibility() {
 // so a stub can flip "published"/"tagged" as the orchestrator drives it.
 function stubPrologue(logFile, stateFile) {
   return [
+    'import { createHash } from "node:crypto";',
     'import { appendFileSync, readFileSync, writeFileSync } from "node:fs";',
     `const LOG = ${JSON.stringify(logFile)};`,
     `const STATE = ${JSON.stringify(stateFile)};`,
@@ -511,6 +522,10 @@ function ghStubBody() {
   return [
     'log("gh");',
     "const sub = argv[0];",
+    'if (sub === "attestation" && argv[1] === "verify") {',
+    "  if (state().failSetupAttestation) { process.stderr.write('setup provenance verification failed\\n'); process.exit(46); }",
+    "  process.exit(0);",
+    "}",
     'if (sub === "api") {',
     '  if (argv[1] && argv[1].includes("/releases/tags/")) {',
     "    writeFileSync(1, JSON.stringify({ id: 987654321, assets: state().uploadedAssets || [] }));",
@@ -541,9 +556,14 @@ function ghStubBody() {
     "    if (name.endsWith('-portable-manifest.json')) {",
     "      const manifest = JSON.parse(readFileSync(path, 'utf8'));",
     "      const archive = byName.get(manifest.artifact.assetName);",
+    `      const setup = byName.get(${JSON.stringify(WINDOWS_PORTABLE_SETUP_ASSET_NAME)});`,
     "      if (!archive || manifest.release.releaseId !== 987654321 || manifest.artifact.assetId !== archive.id || manifest.releaseImpact.reviewedBinding.assetId !== archive.id || manifest.releaseImpact.reviewedBinding.releaseId !== 987654321) {",
     "        process.stderr.write('portable manifest was not rebound to the remote GitHub ids\\n');",
     "        process.exit(44);",
+    "      }",
+    "      if (manifest.artifact.platformTarget === 'windows-x64' && (!setup || manifest.releaseImpact.reviewedBinding.setupAsset?.assetId !== setup.id || manifest.releaseImpact.reviewedBinding.setupAsset?.assetName !== setup.name || manifest.releaseImpact.reviewedBinding.setupAsset?.sizeBytes !== setup.size || manifest.releaseImpact.reviewedBinding.setupAsset?.sha256 !== createHash('sha256').update(Buffer.from(setup.content, 'base64')).digest('hex'))) {",
+    "        process.stderr.write('portable setup asset was not rebound to the remote GitHub asset id\\n');",
+    "        process.exit(45);",
     "      }",
     "    }",
     "    byName.set(name, {",
@@ -553,6 +573,10 @@ function ghStubBody() {
     "      size: readFileSync(path).byteLength,",
     "      browser_download_url: `https://github.com/${repo}/releases/download/${tag}/${name}`",
     "    });",
+    "  }",
+    '  if (current.mutateSetupAfterArchiveUpload && files.some((path) => path.endsWith("keiko-windows-x64-setup.exe"))) {',
+    '    const setupPath = files.find((path) => path.endsWith("keiko-windows-x64-setup.exe"));',
+    "    writeFileSync(setupPath, 'mutated locally after verified remote upload');",
     "  }",
     "  setState({ uploadedAssets: [...byName.values()] });",
     "  process.exit(0);",
@@ -584,7 +608,7 @@ function makeStub(binDir, name, body, logFile, stateFile) {
 
 function curlStubBody() {
   return [
-    'log("curl");',
+    "appendFileSync(LOG, 'curl ' + JSON.stringify([argv.at(-1)]) + '\\n');",
     'const outputIndex = argv.indexOf("--output");',
     'const output = outputIndex >= 0 ? argv[outputIndex + 1] : "";',
     'const name = argv.at(-1).split("/").at(-1);',
@@ -624,7 +648,15 @@ function writePortableAssetsFixture(root, options = {}) {
       symlinkSync(outsideEvidence, sbomPath);
     }
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
-    return { archivePath, manifestPath, platformTarget: target.platformTarget };
+    const entry = { archivePath, manifestPath, platformTarget: target.platformTarget };
+    if (target.platformTarget === "windows-x64") {
+      const setupPath = join(targetRoot, WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+      writeFileSync(setupPath, portableExecutable(29));
+      entry.setupPath = setupPath;
+      entry.setupSha256 = digestFor(readFileSync(setupPath));
+      entry.setupSizeBytes = statSync(setupPath).size;
+    }
+    return entry;
   });
   const manifestPath = join(root, "portable-assets.json");
   const bundle = { schemaVersion: 1, artifacts };
@@ -1290,12 +1322,51 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         (l) => l.startsWith('gh ["release","upload"') && l.includes("keiko-windows-x64.zip"),
       );
       expect(uploadLine).toContain("keiko-windows-x64.zip");
+      expect(uploadLine).toContain(WINDOWS_PORTABLE_SETUP_ASSET_NAME);
       expect(uploadLine).toContain("keiko-macos-arm64.zip");
       expect(uploadLine).toContain("keiko-macos-x64.zip");
+      const setupAttestation = lastRun.calls.find((line) =>
+        line.startsWith('gh ["attestation","verify"'),
+      );
+      expect(setupAttestation).toContain(WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+      expect(setupAttestation).toContain(
+        '"--signer-workflow","oscharko-dev/Keiko/.github/workflows/portable-assets.yml"',
+      );
+      expect(setupAttestation).toContain(`"--source-digest","${HEAD_SHA}"`);
+      expect(setupAttestation).toContain(`"--source-ref","refs/tags/v${RELEASE_VERSION}"`);
+      expect(
+        indexOfCall(lastRun.calls, (l) => l.startsWith('gh ["release","upload"')),
+      ).toBeGreaterThan(indexOfCall(lastRun.calls, (l) => l === setupAttestation));
       expect(
         indexOfCall(lastRun.calls, (l) => l.startsWith('gh ["release","upload"')),
       ).toBeLessThan(publishCall);
-      expect(lastRun.calls.filter((l) => l.startsWith("curl [")).length).toBeGreaterThanOrEqual(3);
+      const setupDownload = lastRun.calls.find(
+        (line) =>
+          line.startsWith("curl [") &&
+          line.endsWith(
+            `"https://github.com/oscharko-dev/Keiko/releases/download/v${RELEASE_VERSION}/${WINDOWS_PORTABLE_SETUP_ASSET_NAME}"]`,
+          ),
+      );
+      expect(setupDownload).toBeDefined();
+    });
+
+    it("binds setup evidence to verified remote bytes after local post-upload mutation", () => {
+      const viewBody = [
+        '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+      ].join("\n");
+
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: {
+          mutateSetupAfterArchiveUpload: true,
+          published: true,
+          tagged: true,
+        },
+      });
+
+      expect(lastRun.status, lastRun.stderr).toBe(0);
+      expect(lastRun.stdout).toContain("portable assets uploaded and verified");
     });
 
     it("fails before npm publish when portable upload verification fails", () => {
@@ -1319,6 +1390,20 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
+    it("rejects an unattested setup companion before release upload or npm publication", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { failSetupAttestation: true, published: true, tagged: true },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("setup provenance verification failed");
+      expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+    });
+
     it("rejects same-size remote tampering before npm publish or dist-tag mutation", () => {
       const viewBody = [
         'if (argv.includes("version")) { process.stderr.write("npm error code E404\\n"); process.exit(1); }',
@@ -1334,6 +1419,42 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.stderr).toContain("downloaded portable asset bytes do not match");
       expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
       expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
+    });
+
+    it("rejects setup companion bytes that do not match the assembled bundle binding", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: {
+          mutateBundle: (bundle) => {
+            bundle.artifacts[0].setupSha256 = "0".repeat(64);
+          },
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("windows-x64.setupSha256 must match the setup companion");
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("rejects a setup companion size that does not match the assembled bundle binding", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: {
+          mutateBundle: (bundle) => {
+            bundle.artifacts[0].setupSizeBytes += 1;
+          },
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("windows-x64.setupSizeBytes must match the setup companion");
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
     });
 
     it("rejects a wrong remote GitHub asset name before npm publication", () => {

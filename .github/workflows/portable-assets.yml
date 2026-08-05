@@ -143,6 +143,9 @@ jobs:
         run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target ${{ matrix.platform_target }}
       - name: Functionally smoke the unsigned secure-read helper
         run: npm run smoke:portable-secure-read -- .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }} --load
+      - name: Build unsigned Windows setup companion
+        if: runner.os == 'Windows'
+        run: node scripts/build-windows-portable-setup.mjs --stage-root .portable-runtime/staging/${{ matrix.platform_target }}
       - name: Upload staged target artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -387,6 +390,72 @@ jobs:
             --stage-root .portable-runtime/staging/windows-x64 `
             --expected-inventory "$env:RUNNER_TEMP\windows-pe-verified.json" `
             --verification-input "$env:RUNNER_TEMP\windows-verification-input.json"
+      - name: Build the Windows setup companion
+        shell: pwsh
+        run: |
+          node scripts/build-windows-portable-setup.mjs `
+            --stage-root .portable-runtime/staging/windows-x64 `
+            --catalog .portable-runtime/staging/windows-x64/windows-setup-signing-file.txt
+      - name: Re-authenticate to Azure for the setup companion
+        uses: Azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          audience: api://AzureADTokenExchange
+      - name: Sign the Windows setup companion
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files-catalog: .portable-runtime/staging/windows-x64/windows-setup-signing-file.txt
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+          trace: false
+      - name: Clear Azure after setup companion signing
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          az logout *> $null
+          if ($LASTEXITCODE -ne 0) { throw "windows-portable-signing: Azure session cleanup failed" }
+          az account clear *> $null
+          if ($LASTEXITCODE -ne 0) { throw "windows-portable-signing: Azure session cleanup failed" }
+      - name: Verify the signed Windows setup companion
+        shell: pwsh
+        env:
+          EXPECTED_IDENTITY_EKU: ${{ vars.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU }}
+        run: |
+          ./scripts/verify-windows-portable-setup-signing.ps1 `
+            -SetupPath .portable-runtime/staging/windows-x64/keiko-windows-x64-setup.exe `
+            -ExpectedIdentityEku $env:EXPECTED_IDENTITY_EKU
+          node scripts/build-windows-portable-setup.mjs `
+            --stage-root .portable-runtime/staging/windows-x64 `
+            --verify-only
+      - name: Prove the setup companion is the only added stage PE
+        shell: pwsh
+        run: |
+          node scripts/windows-portable-signing.mjs verify-setup-scope `
+            --stage-root .portable-runtime/staging/windows-x64 `
+            --expected-inventory "$env:RUNNER_TEMP\windows-pe-verified.json"
+      - name: Remove transient setup signing inventory
+        shell: pwsh
+        run: |
+          $catalog = ".portable-runtime/staging/windows-x64/windows-setup-signing-file.txt"
+          if (Test-Path -LiteralPath $catalog -PathType Leaf) {
+            Remove-Item -LiteralPath $catalog -Force -ErrorAction Stop
+          }
       - name: Smoke test the verified production artifact
         run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target windows-x64
       - name: Functionally smoke the signed USearch addon
@@ -658,6 +727,17 @@ jobs:
         env:
           EXPECTED_IDENTITY_EKU: ${{ vars.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU }}
         run: ./scripts/verify-fresh-windows-portable-artifact.ps1 -ArtifactRoot .qualified-windows-stage/windows-x64 -ExpectedIdentityEku $env:EXPECTED_IDENTITY_EKU -ScratchRoot "$env:RUNNER_TEMP\keiko-windows-qualification"
+      - name: Re-verify signed Windows setup companion
+        shell: pwsh
+        env:
+          EXPECTED_IDENTITY_EKU: ${{ vars.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU }}
+        run: |
+          ./scripts/verify-windows-portable-setup-signing.ps1 `
+            -SetupPath .qualified-windows-stage/windows-x64/keiko-windows-x64-setup.exe `
+            -ExpectedIdentityEku $env:EXPECTED_IDENTITY_EKU
+          node scripts/build-windows-portable-setup.mjs `
+            --stage-root .qualified-windows-stage/windows-x64 `
+            --verify-only
       - name: Execute terminal payload smoke without credential or file-command authority
         env:
           GH_TOKEN: ""
@@ -788,7 +868,9 @@ jobs:
       - name: Attest build provenance for portable release artifacts
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
-          subject-path: "portable-release-assets/artifacts/*/keiko-*.zip"
+          subject-path: |
+            portable-release-assets/artifacts/*/keiko-*.zip
+            portable-release-assets/artifacts/windows-x64/keiko-windows-x64-setup.exe
       # The SBOM-attestation steps below bind each SBOM as the *predicate* of an attestation whose
       # *subject* is the matching ZIP — that does not create an attestation whose subject is the
       # SBOM file itself. Attest the SBOM documents' own build provenance too, so a consumer who

@@ -8,14 +8,15 @@ portable install and first-run setup journey delivered by #1942. Portable update
 
 The normal user path is intentionally simple:
 
-1. Download the Keiko ZIP for the user's platform from the public GitHub Release.
-2. Extract the ZIP.
-3. Open the extracted `Keiko` folder.
-4. Double-click `Keiko.exe` on Windows or `Keiko.app` on macOS.
-5. On macOS, approve the one-time Administrator, System Extension, and Full Disk Access dialogs when
+1. On Windows, download and open `keiko-windows-x64-setup.exe`. On macOS, download the Keiko ZIP
+   for the user's architecture from the public GitHub Release.
+2. On macOS, extract the ZIP and open the extracted `Keiko` folder.
+3. Double-click `Keiko.app` on macOS. The Windows setup companion installs and launches the same
+   reviewed portable ZIP automatically.
+4. On macOS, approve the one-time Administrator, System Extension, and Full Disk Access dialogs when
    macOS presents them; organization-managed Macs may have these permissions preapproved by MDM.
-6. Keiko continues automatically after the required approval and opens its local UI.
-7. Start Keiko afterward from the same app surface, Windows search, the Start Menu entry, Finder, or
+5. Keiko continues automatically after the required approval and opens its local UI.
+6. Start Keiko afterward from the same app surface, Windows search, the Start Menu entry, Finder, or
    Spotlight.
 
 The primary path does not ask users to install Node.js, install npm, run a package manager, type
@@ -35,6 +36,12 @@ first-class artifacts:
 | `macos-arm64`   | `keiko-macos-arm64.zip` | `Keiko.app`      |
 | `macos-x64`     | `keiko-macos-x64.zip`   | `Keiko.app`      |
 
+The release also provides `keiko-windows-x64-setup.exe` as the signed companion install surface for
+the Windows ZIP. Users who need the archive-first fallback may still download, extract, and open
+`keiko-windows-x64.zip`; both paths delegate managed installation to the same attested portable
+lifecycle. Reopening setup validates and launches an existing managed installation without
+replacing it. Governed in-app update remains the upgrade path.
+
 macOS arm64 and macOS x64 have the same release-blocking importance. A release is not
 portable-complete when either macOS architecture is missing, unsigned, unnotarized where required,
 or not covered by the same launch/setup verification.
@@ -48,6 +55,7 @@ operator can verify a downloaded file independently of Keiko's own release tooli
 
 ```console
 gh attestation verify keiko-windows-x64.zip --repo oscharko-dev/Keiko
+gh attestation verify keiko-windows-x64-setup.exe --repo oscharko-dev/Keiko
 gh attestation verify windows-x64-sbom.cdx.json --repo oscharko-dev/Keiko
 ```
 

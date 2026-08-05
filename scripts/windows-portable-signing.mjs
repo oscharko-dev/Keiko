@@ -23,6 +23,7 @@ import {
   PORTABLE_PAYLOAD_MAX_FILES as MAX_FILES,
   portablePayloadRelativePath as portablePath,
   validatePortableCandidateManifest,
+  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "./portable-runtime.mjs";
 import { rebindExistingSignedArchive, rebindSignedPayload } from "./portable-signed-archive.mjs";
 import { createPortableZipAdapter } from "./stage-portable-runtime.mjs";
@@ -142,8 +143,8 @@ function inspectPayloadFile(root, path, name, entry, state) {
   if (isPe) state.peFiles.push({ relativePath, sha256: sha256Bytes(readFileSync(path)) });
 }
 
-export function inventoryWindowsPortablePeFiles(payloadRoot) {
-  const root = resolve(payloadRoot);
+function inventoryPeFiles(rootPath) {
+  const root = resolve(rootPath);
   if (!existsSync(root) || !lstatSync(root).isDirectory()) fail("payload root is missing");
   const state = { fileCount: 0, peFiles: [] };
   walkFiles(root, root, 0, state);
@@ -151,7 +152,12 @@ export function inventoryWindowsPortablePeFiles(payloadRoot) {
   if (state.peFiles.length === 0 || state.peFiles.length > MAX_PE_FILES) {
     fail("PE inventory is empty or exceeds its bound");
   }
-  const paths = new Set(state.peFiles.map((file) => file.relativePath.toLowerCase()));
+  return { schemaVersion: 1, target: WINDOWS_TARGET, files: state.peFiles };
+}
+
+export function inventoryWindowsPortablePeFiles(payloadRoot) {
+  const inventory = inventoryPeFiles(payloadRoot);
+  const paths = new Set(inventory.files.map((file) => file.relativePath.toLowerCase()));
   if (!paths.has("keiko.exe")) fail("primary Keiko.exe is missing from the PE inventory");
   if (!paths.has("runtime/node/node.exe")) {
     fail("bundled Node executable is missing from the PE inventory");
@@ -162,7 +168,23 @@ export function inventoryWindowsPortablePeFiles(payloadRoot) {
   if (!paths.has("runtime/native/keiko-runtime-supervisor.exe")) {
     fail("runtime supervisor is missing from the PE inventory");
   }
-  return { schemaVersion: 1, target: WINDOWS_TARGET, files: state.peFiles };
+  return inventory;
+}
+
+export function inventoryWindowsPortableStagePeFiles(stageRoot) {
+  return inventoryPeFiles(stageRoot);
+}
+
+export function inventoryAddsOnlySetupCompanion(expectedPayload, actualStage) {
+  if (actualStage.files.length !== expectedPayload.files.length + 1) return false;
+  const actualByPath = new Map(
+    actualStage.files.map((file) => [file.relativePath.toLowerCase(), file.sha256]),
+  );
+  const payloadMatches = expectedPayload.files.every(
+    (file) => actualByPath.get(`payload/keiko/${file.relativePath.toLowerCase()}`) === file.sha256,
+  );
+  const setupDigest = actualByPath.get(WINDOWS_PORTABLE_SETUP_ASSET_NAME.toLowerCase());
+  return payloadMatches && typeof setupDigest === "string" && SHA256_PATTERN.test(setupDigest);
 }
 
 export function readWindowsPortablePeInventory(path) {
@@ -285,6 +307,18 @@ function compareWithAttestationCommand(options) {
   if (!inventoryAddsOnlyRuntimeAttestation(expected, actual)) {
     fail("PE inventory changed outside the runtime attestation carrier");
   }
+}
+
+function verifySetupScopeCommand(options) {
+  const stageRoot = resolve(required(options, "stage-root"));
+  const expected = readWindowsPortablePeInventory(required(options, "expected-inventory"));
+  const actual = inventoryWindowsPortableStagePeFiles(stageRoot);
+  if (!inventoryAddsOnlySetupCompanion(expected, actual)) {
+    fail("stage PE inventory changed outside the Windows setup companion");
+  }
+  console.log(
+    `windows-portable-signing: setup companion is the only added stage PE (${String(actual.files.length)} total)`,
+  );
 }
 
 function run(command, args, cwd, { surfaceOutputOnFailure = false } = {}) {
@@ -514,11 +548,12 @@ export async function main(argv = process.argv.slice(2)) {
   else if (command === "verify-inventory") verifyInventoryCommand(options);
   else if (command === "compare-paths") comparePathsCommand(options);
   else if (command === "compare-with-attestation") compareWithAttestationCommand(options);
+  else if (command === "verify-setup-scope") verifySetupScopeCommand(options);
   else if (command === "prepare-qualified-payload") prepareQualifiedPayloadCommand(options);
   else if (command === "finalize") await finalizeCommand(options);
   else
     fail(
-      "command must be validate-config, inventory, compare-paths, compare-with-attestation, verify-inventory, prepare-qualified-payload, or finalize",
+      "command must be validate-config, inventory, compare-paths, compare-with-attestation, verify-inventory, verify-setup-scope, prepare-qualified-payload, or finalize",
     );
 }
 

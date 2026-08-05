@@ -3,6 +3,7 @@ import {
   launcherFor,
   linuxLauncher,
   macosLauncher,
+  parseWindowsLauncherContent,
   windowsLauncher,
   validateExecPath,
   validatePort,
@@ -194,13 +195,54 @@ describe("windowsLauncher", () => {
       '@start "" C:\\Tools\\keiko.exe start --open --port 5000\r\n',
     );
   });
-  it("refuses an unsafe exec path", () => {
-    expect(() =>
-      windowsLauncher.generateContent({
-        exe: "C:\\Program Files\\Keiko\\keiko.exe",
-        port: undefined,
-      }),
-    ).toThrow(LauncherError);
+  it("encodes and round-trips Unicode and cmd metacharacters through ASCII-only content", () => {
+    const exe = "C:\\Users\\José\\Kéiko & 100% ! ^ (Programs)\\Keiko.exe";
+    const content = windowsLauncher.generateContent({ exe, port: undefined });
+
+    expect(content).toContain(
+      '@"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoLogo -NoProfile -NonInteractive -EncodedCommand ',
+    );
+    expect(content).not.toContain(exe);
+    expect(Array.from(content).every((character) => character.charCodeAt(0) <= 0x7f)).toBe(true);
+    expect(parseWindowsLauncherContent(content)).toBe(exe);
+  });
+  it("accepts the 4096-character Windows path boundary and rejects empty or longer paths", () => {
+    const boundary = `C:\\${"a".repeat(4093)}`;
+    expect(windowsLauncher.generateContent({ exe: boundary, port: undefined })).toContain("@start");
+    expect(() => windowsLauncher.generateContent({ exe: "", port: undefined })).toThrow(
+      "resolved executable path is empty",
+    );
+    expect(() => windowsLauncher.generateContent({ exe: `${boundary}a`, port: undefined })).toThrow(
+      "exceeds 4096",
+    );
+  });
+  it("rejects malformed encoded executable and port fields", () => {
+    const generated = windowsLauncher.generateContent({
+      exe: "C:\\Program Files\\Keiko\\keiko.exe",
+      port: 5000,
+    });
+    expect(
+      parseWindowsLauncherContent(generated.replace(/KEIKO_EXE_B64=[^"]+/u, "KEIKO_EXE_B64=%")),
+    ).toBeUndefined();
+    expect(
+      parseWindowsLauncherContent(generated.replace("KEIKO_PORT=5000", "KEIKO_PORT=80")),
+    ).toBeUndefined();
+  });
+  it.each(['C:\\bad"path\\keiko.exe', "C:\\bad\npath\\keiko.exe"])(
+    "refuses a Windows exec path that cannot be quoted safely: %s",
+    (exe) => {
+      expect(() => windowsLauncher.generateContent({ exe, port: undefined })).toThrow(
+        LauncherError,
+      );
+    },
+  );
+  it("rejects modified encoded registration content", () => {
+    const generated = windowsLauncher.generateContent({
+      exe: "C:\\Program Files\\100% Keiko\\keiko.exe",
+      port: 5000,
+    });
+    expect(parseWindowsLauncherContent(generated)).toBe("C:\\Program Files\\100% Keiko\\keiko.exe");
+    expect(parseWindowsLauncherContent(`${generated.slice(0, -3)}A\r\n`)).toBeUndefined();
   });
 });
 

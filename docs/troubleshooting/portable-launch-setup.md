@@ -14,8 +14,9 @@ the system Node/npm requirement, but it cannot bypass local security policy.
 
 **Symptom**
 
-The user downloads and extracts the correct portable ZIP, but `Keiko.exe` or `Keiko.app` does not
-start. Windows may show a Windows SmartScreen or Defender prompt. macOS may show a Gatekeeper,
+The user opens the signed Windows setup companion, or extracts the correct portable ZIP and opens
+`Keiko.exe` or `Keiko.app`, but Keiko does not start. Windows may show a Windows SmartScreen or
+Defender prompt. macOS may show a Gatekeeper,
 quarantine, signing, notarization, or "damaged app" prompt.
 
 **Root Cause**

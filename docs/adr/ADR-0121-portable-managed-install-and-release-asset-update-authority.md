@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (Issue #1946, 2026-07-05).
+Accepted (Issue #1946, 2026-07-05); amended for the Windows setup companion (Issue #2966,
+2026-08-04).
 
 ## Context
 
@@ -43,20 +44,26 @@ Out of scope:
 
 ## Decision
 
-### D1 — Portable delivery is archive-first
+### D1 — Portable delivery is governed-release-asset-first
 
-Keiko will ship the portable-managed product as archive-first release assets.
+Keiko will ship the portable-managed product as governed GitHub Release Assets.
 
-Each stable release will expose exactly three first-class portable assets:
+Each stable release will expose exactly three platform-target archive assets:
 
 - `windows-x64`
 - `macos-arm64`
 - `macos-x64`
 
-Those assets are the promoted portable delivery path for stable releases. They are the installable
-product surface for this wave. The three assets are release-blocking as a set: a stable release is
-not portable-complete when one platform is missing, unsigned, unnotarized where required, or
-unverified.
+Those archives remain the authoritative portable payloads and update inputs. The macOS archives
+are the promoted macOS install surface. Windows stable releases additionally expose the signed
+`keiko-windows-x64-setup.exe` companion as the promoted ordinary-user Windows install surface; the
+Windows ZIP remains the manual and troubleshooting fallback. The setup companion embeds the exact
+reviewed `windows-x64` archive and delegates installation and launch to the same portable lifecycle.
+It does not create another platform target, payload authority, or update channel.
+
+The three platform targets are release-blocking as a set, and the Windows setup companion is
+release-blocking for `windows-x64`. A stable release is not portable-complete when a required
+archive or companion is missing, unsigned, unnotarized where required, or unverified.
 
 Each asset must be accompanied by reviewed metadata that binds the artifact name, platform target,
 GitHub release id, release tag, asset id, asset name, size in bytes, Keiko version, bundled Node.js
@@ -65,6 +72,10 @@ signing/notarization status to the same reviewed release-impact entry. Tag or fi
 alone is insufficient. Any mismatch fails closed before extraction. Artifact metadata is
 operational evidence; it must not contain customer paths, credentials, prompts, model output,
 repository content, or raw logs.
+
+The Windows setup companion must be bound to the reviewed Windows archive name and digest, carry
+its own Authenticode chain and RFC3161 timestamp verification, and be proven as the only additional
+top-level PE after the Windows payload inventory is sealed.
 
 ### D2 — Launchers stay thin
 
@@ -256,8 +267,9 @@ remain Keiko's own reviewed, internally validated evidence. A GitHub Artifact At
 independently, cryptographically verifiable claim anchored to the exact GitHub Actions workflow run
 and commit that produced the artifact, checkable by any consumer with `gh attestation verify`
 without trusting Keiko's own manifest-validation code. Attestations are supplementary trust evidence
-only: they do not gate `verified-production` promotion, and the existing signing/notarization
-acceptance criteria are unchanged.
+for archive and SBOM consumers; they do not replace the existing signing/notarization acceptance
+criteria. The final publisher additionally requires the Windows setup companion's build-provenance
+attestation before release upload so locally replaced setup bytes cannot cross the publish boundary.
 
 ## Security and threat model
 
@@ -297,6 +309,17 @@ Security review for implementation under this ADR must cover:
 - **Ephemeral Apple material.** Imported Developer ID and notarization credentials are masked,
   owner-readable only, never passed on command lines, and removed in an always-run cleanup step
   together with the temporary keychain. Cleanup failure blocks promotion.
+- **Setup companion launch surface.** The Windows companion's IExpress launch fields must name an
+  absolute `System32\cmd.exe` interpreter. A `.cmd` payload is not an executable image, so naming
+  the script alone never reaches the installer, and naming `cmd.exe` without a path would let the
+  extraction directory or `PATH` choose the interpreter that runs before the payload is validated.
+  The path is resolved on the build host and embedded literally, because inside a SED a `%name%`
+  token is an IExpress `[Strings]` reference rather than an environment variable. Accepted residual:
+  WExtract's documented `/C:<command>` switch can still substitute the install command at invocation
+  time. It is unreachable for a user running the companion normally and grants an actor who can
+  already execute locally no new authority over Keiko state, but it does let a Keiko-signed binary
+  front arbitrary local code. Replacing the construction surface is tracked in issue #2992 and is
+  not settled by this ADR.
 - **Evidence provenance.** Native verification booleans are trusted only when produced in the same
   protected native job as signing and bound to the artifact digest and approved durable platform
   identity: the Windows subscriber EKU and Public Trust/code-signing chain, or the macOS Developer ID

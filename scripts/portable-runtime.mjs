@@ -7,6 +7,7 @@ import {
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 
 export const PORTABLE_MANIFEST_SCHEMA_VERSION = 1;
+export const WINDOWS_PORTABLE_SETUP_ASSET_NAME = "keiko-windows-x64-setup.exe";
 
 // Shared bounds for the platform-specific bounded payload-tree walkers (Windows PE and macOS
 // Mach-O inventory). Kept in one place so the two walkers cannot drift to different limits.
@@ -1565,7 +1566,7 @@ function validateEvidence(manifest, failures) {
   }
 }
 
-function validateReleaseImpact(manifest, failures) {
+function validateReleaseImpact(manifest, failures, options) {
   const releaseImpact = recordAt(manifest, "releaseImpact", "manifest", failures);
   relativePathAt(releaseImpact, "catalogPath", "releaseImpact", failures);
   stringAt(releaseImpact, "entryId", "releaseImpact", failures);
@@ -1585,13 +1586,43 @@ function validateReleaseImpact(manifest, failures) {
     manifest,
     recordAt(releaseImpact, "reviewedBinding", "releaseImpact", failures),
     failures,
+    options,
   );
 }
 
-function validateReviewedBinding(manifest, binding, failures) {
+function validateReviewedBinding(manifest, binding, failures, options) {
   for (const [key, expected] of reviewedBindingChecks(manifest)) {
     if (!bindingValuesMatch(binding[key], expected))
       push(failures, `releaseImpact.reviewedBinding.${key}`, "does not match manifest");
+  }
+  validatePublishedSetupAssetBinding(manifest, binding, failures, options);
+}
+
+function validatePublishedSetupAssetBinding(manifest, binding, failures, options) {
+  if (options.context !== "published") return;
+  const path = "releaseImpact.reviewedBinding.setupAsset";
+  if (manifest.artifact?.platformTarget !== "windows-x64") {
+    if (binding.setupAsset !== undefined) push(failures, path, "is supported only for Windows x64");
+    if (options.apiIdentity?.setupAsset !== undefined) {
+      push(failures, "validation.apiIdentity.setupAsset", "is supported only for Windows x64");
+    }
+    return;
+  }
+  const setupAsset = recordAt(binding, "setupAsset", "releaseImpact.reviewedBinding", failures);
+  exactKeysAt(setupAsset, ["assetId", "assetName", "sha256", "sizeBytes"], path, failures);
+  positiveNumberAt(setupAsset, "assetId", path, failures);
+  literalAt(setupAsset, "assetName", WINDOWS_PORTABLE_SETUP_ASSET_NAME, path, failures);
+  digestAt(setupAsset, "sha256", path, failures, options);
+  positiveNumberAt(setupAsset, "sizeBytes", path, failures);
+  const apiSetupAsset = options.apiIdentity?.setupAsset;
+  if (!isRecord(apiSetupAsset)) {
+    push(
+      failures,
+      "validation.apiIdentity.setupAsset",
+      "must be a verified GitHub setup asset snapshot",
+    );
+  } else if (!bindingValuesMatch(setupAsset, apiSetupAsset)) {
+    push(failures, path, "does not match the verified GitHub setup asset snapshot");
   }
 }
 
@@ -1925,7 +1956,7 @@ export function validatePortableManifest(manifest, options = {}) {
   validateStateExclusion(manifest, failures);
   validateSecurity(manifest, failures, normalized);
   validateEvidence(manifest, failures);
-  validateReleaseImpact(manifest, failures);
+  validateReleaseImpact(manifest, failures, normalized);
   validateUpdateEligibility(manifest, failures, normalized);
   scanForbidden(manifest, "manifest", failures);
   return failures;

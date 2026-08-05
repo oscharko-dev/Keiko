@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   hashDirectoryTree,
   PORTABLE_TARGETS,
+  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
   findPortableMetadataRedactionFailures,
   isSafePortableRelativePath,
   portableVerificationSummaryForManifest,
@@ -452,6 +453,15 @@ function digestBuffer(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
+function portableExecutable(marker = 0) {
+  const bytes = Buffer.alloc(128, marker);
+  bytes[0] = 0x4d;
+  bytes[1] = 0x5a;
+  bytes.writeUInt32LE(64, 0x3c);
+  bytes.set([0x50, 0x45, 0x00, 0x00], 64);
+  return bytes;
+}
+
 function tempDir() {
   const dir = mkdtempSync(join(tmpdir(), "keiko-portable-runtime-test-"));
   tempDirs.push(dir);
@@ -849,6 +859,9 @@ function writeAssemblerFixture(bundleRoot, largeArchive = false, unsafeSidecarKi
       archivePath,
       storedZipFixture(largeArchive && index === 0 ? 17 * 1024 * 1024 : 1),
     );
+    if (target.platformTarget === "windows-x64") {
+      writeFileSync(join(stageRoot, WINDOWS_PORTABLE_SETUP_ASSET_NAME), portableExecutable(42));
+    }
     const candidate = manifest();
     setManifestTarget(candidate, target.platformTarget);
     setVerificationState(candidate);
@@ -1429,6 +1442,82 @@ describe("verifySha256File", () => {
 });
 
 describe("validatePortableManifest", () => {
+  it("requires a complete setup-asset binding for published Windows manifests", () => {
+    const candidate = manifest();
+    addSidecarRuntime(candidate, "windows-x64");
+    const setupAsset = {
+      assetId: 789,
+      assetName: WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+      sha256: DIGEST_A,
+      sizeBytes: 12_345,
+    };
+    const apiIdentity = { assetId: 456, releaseId: 123, setupAsset };
+    candidate.release.releaseId = apiIdentity.releaseId;
+    candidate.artifact.assetId = apiIdentity.assetId;
+    syncReviewedBinding(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = apiIdentity.releaseId;
+
+    expect(validatePortablePublishedManifest(candidate, apiIdentity)).toContain(
+      "releaseImpact.reviewedBinding.setupAsset: is required",
+    );
+
+    candidate.releaseImpact.reviewedBinding.setupAsset = setupAsset;
+    expect(validatePortablePublishedManifest(candidate, apiIdentity)).toEqual([]);
+    expect(
+      validatePortablePublishedManifest(candidate, {
+        assetId: apiIdentity.assetId,
+        releaseId: apiIdentity.releaseId,
+      }),
+    ).toContain(
+      "validation.apiIdentity.setupAsset: must be a verified GitHub setup asset snapshot",
+    );
+
+    const nonObject = structuredClone(candidate);
+    nonObject.releaseImpact.reviewedBinding.setupAsset = [];
+    expect(validatePortablePublishedManifest(nonObject, apiIdentity)).toContain(
+      "releaseImpact.reviewedBinding.setupAsset: must be an object",
+    );
+
+    const extraField = structuredClone(candidate);
+    extraField.releaseImpact.reviewedBinding.setupAsset.downloadUrl = "https://example.invalid";
+    expect(validatePortablePublishedManifest(extraField, apiIdentity)).toContain(
+      "releaseImpact.reviewedBinding.setupAsset.downloadUrl: is not allowed",
+    );
+
+    for (const [field, value, expected] of [
+      ["assetId", 0, "assetId: must be greater than 0"],
+      ["assetName", "wrong.exe", `assetName: must be ${WINDOWS_PORTABLE_SETUP_ASSET_NAME}`],
+      ["sha256", "not-a-digest", "sha256: must be a SHA-256 digest"],
+      ["sizeBytes", 0, "sizeBytes: must be greater than 0"],
+    ]) {
+      const malformed = structuredClone(candidate);
+      malformed.releaseImpact.reviewedBinding.setupAsset[field] = value;
+      expect(validatePortablePublishedManifest(malformed, apiIdentity).join("\n")).toContain(
+        expected,
+      );
+    }
+
+    const substituted = structuredClone(candidate);
+    substituted.releaseImpact.reviewedBinding.setupAsset.assetId += 1;
+    expect(validatePortablePublishedManifest(substituted, apiIdentity)).toContain(
+      "releaseImpact.reviewedBinding.setupAsset: does not match the verified GitHub setup asset snapshot",
+    );
+
+    const macos = structuredClone(candidate);
+    setManifestTarget(macos, "macos-arm64");
+    setVerificationState(macos);
+    macos.releaseImpact.reviewedBinding.setupAsset = setupAsset;
+    expect(
+      validatePortablePublishedManifest(macos, {
+        assetId: apiIdentity.assetId,
+        releaseId: apiIdentity.releaseId,
+      }),
+    ).toContain("releaseImpact.reviewedBinding.setupAsset: is supported only for Windows x64");
+    expect(validatePortablePublishedManifest(macos, apiIdentity)).toContain(
+      "validation.apiIdentity.setupAsset: is supported only for Windows x64",
+    );
+  });
+
   it("separates staging, unpublished candidate, and API-bound published identities", () => {
     const candidate = manifest();
     addSidecarRuntime(candidate, "windows-x64");
@@ -1449,12 +1538,22 @@ describe("validatePortableManifest", () => {
     candidate.artifact.assetId = 456;
     syncReviewedBinding(candidate);
     candidate.releaseImpact.reviewedBinding.releaseId = 123;
+    candidate.releaseImpact.reviewedBinding.setupAsset = {
+      assetId: 789,
+      assetName: WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+      sha256: DIGEST_A,
+      sizeBytes: 12_345,
+    };
     expect(validatePortableCandidateManifest(candidate).join("\n")).toContain(
       "artifact.assetId: must be 0 before GitHub Release upload",
     );
-    expect(validatePortablePublishedManifest(candidate, { assetId: 456, releaseId: 123 })).toEqual(
-      [],
-    );
+    expect(
+      validatePortablePublishedManifest(candidate, {
+        assetId: 456,
+        releaseId: 123,
+        setupAsset: candidate.releaseImpact.reviewedBinding.setupAsset,
+      }),
+    ).toEqual([]);
     expect(validatePortablePublishedManifest(candidate, undefined)).toContain(
       "validation.apiIdentity: must be a positive GitHub API snapshot",
     );
@@ -1949,6 +2048,61 @@ describe("assemblePortableReleaseAssets bounds", () => {
     await expect(assemblePortableReleaseAssets(args(bundleRoot))).resolves.toMatchObject({
       schemaVersion: 1,
     });
+    const bundle = JSON.parse(readFileSync(join(bundleRoot, "portable-assets.json"), "utf8"));
+    const copiedSetup = readFileSync(
+      join(bundleRoot, "artifacts", "windows-x64", WINDOWS_PORTABLE_SETUP_ASSET_NAME),
+    );
+    expect(bundle.artifacts[0]).toMatchObject({
+      platformTarget: "windows-x64",
+      setupPath: `artifacts/windows-x64/${WINDOWS_PORTABLE_SETUP_ASSET_NAME}`,
+      setupSha256: createHash("sha256").update(copiedSetup).digest("hex"),
+      setupSizeBytes: copiedSetup.length,
+    });
+  });
+
+  it("records setup metadata from the copied companion bytes", async () => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot);
+    const stagedSetup = join(
+      bundleRoot,
+      "artifacts",
+      "portable-stage-windows-x64",
+      WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+    );
+    const copiedBytes = portableExecutable(42);
+    const mutatedSourceBytes = portableExecutable(43);
+
+    const bundle = await assemblePortableReleaseAssets(args(bundleRoot), {
+      afterTargetCopy: ({ sourceRoot, target }) => {
+        if (target.platformTarget === "windows-x64") {
+          writeFileSync(join(sourceRoot, WINDOWS_PORTABLE_SETUP_ASSET_NAME), mutatedSourceBytes);
+        }
+      },
+    });
+
+    expect(readFileSync(stagedSetup)).toEqual(mutatedSourceBytes);
+    expect(bundle.artifacts[0]).toMatchObject({
+      setupSha256: createHash("sha256").update(copiedBytes).digest("hex"),
+      setupSizeBytes: copiedBytes.length,
+    });
+  });
+
+  it("rejects a Windows setup companion whose bytes are not a PE file", async () => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot);
+    writeFileSync(
+      join(
+        bundleRoot,
+        "artifacts",
+        "portable-stage-windows-x64",
+        WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+      ),
+      "not a PE file",
+    );
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "windows-x64 setup companion must be a PE file",
+    );
   });
 
   it("rejects evidence larger than 16 MiB", async () => {

@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
@@ -8,11 +9,14 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import {
+  type FailedSetupRegistration,
   type ManagedRootLocator,
   type ManagedSetupRegistration,
   readManagedRegistration,
@@ -23,6 +27,7 @@ import {
   type PortableInstallRegistration,
 } from "./portable-registration.js";
 import {
+  inspectPortableManagedInstall,
   installNativeRegistration,
   parseWindowsStartMenuRegistration,
   removePortableManagedInstall,
@@ -62,6 +67,8 @@ export interface PortableManagedUpgradeInput {
   readonly now: Date;
 }
 
+type PortableManagedReplacementInput = Omit<PortableManagedUpgradeInput, "current">;
+
 interface StableVersion {
   readonly major: number;
   readonly minor: number;
@@ -89,8 +96,28 @@ class PortableUpgradeRollbackError extends Error {
   }
 }
 
+export class PortableSetupBusyError extends Error {
+  constructor() {
+    super("portable setup or upgrade is already in progress");
+    this.name = "PortableSetupBusyError";
+  }
+}
+
+class PortableSetupFailureRecordedError extends Error {
+  public constructor(public readonly original: unknown) {
+    super(original instanceof Error ? original.message : "portable setup failed");
+  }
+}
+
+class PortableManagedRegistrationRepairError extends Error {
+  public constructor(public readonly original: unknown) {
+    super(original instanceof Error ? original.message : "portable registration repair failed");
+  }
+}
+
 const STABLE_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const PORTABLE_TARGETS = ["windows-x64", "macos-arm64", "macos-x64"] as const;
+const PORTABLE_SETUP_LOCK = "portable-setup.lock";
 
 function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8")) as unknown;
@@ -342,13 +369,15 @@ function cleanupPortableUpgrade(paths: PortableUpgradePaths, removeBackup: boole
 }
 
 function promoteStagedUpgrade(
-  input: PortableManagedUpgradeInput,
+  input: PortableManagedReplacementInput,
   stagedSource: ValidatedPortableRoot,
   paths: PortableUpgradePaths,
+  verifyCurrent?: () => void,
 ): PortableLayout {
   let moved = false;
   let promoted = false;
   try {
+    if (verifyCurrent !== undefined) verifyCurrent();
     renameSync(paths.managedRoot, paths.backupTarget);
     moved = true;
     renameSync(paths.stagedTarget, paths.managedRoot);
@@ -380,22 +409,59 @@ function promoteStagedUpgrade(
   }
 }
 
-export function upgradeManagedInstall(input: PortableManagedUpgradeInput): PortableLayout {
-  if (!portableSourceCanReplaceManaged(input.source, input.current)) {
-    throw new Error("portable upgrade candidate must be newer than or target-corrective");
-  }
+function recoverFailedManagedInstall(
+  input: PortableManagedReplacementInput,
+  verifyCurrent: () => void,
+): PortableLayout {
   const paths = createPortableUpgradePaths(input.target, input.managedRoot, input.stateDir);
   let removeBackup = true;
   try {
     copyTreeSafe(input.source.layout.installRoot, paths.stagedTarget);
     const stagedSource = validatePortableRoot(input.target, paths.stagedTarget);
-    return promoteStagedUpgrade(input, stagedSource, paths);
+    return promoteStagedUpgrade(input, stagedSource, paths, verifyCurrent);
   } catch (error) {
     if (error instanceof PortableUpgradeRollbackError) removeBackup = false;
     throw error;
   } finally {
     cleanupPortableUpgrade(paths, removeBackup);
   }
+}
+
+export function upgradeManagedInstall(input: PortableManagedUpgradeInput): PortableLayout {
+  assertManagedRootAllowed(input.managedRoot, input.stateDir, input.target);
+  return withPortableSetupLocks(input, () => upgradeLockedManagedInstall(input));
+}
+
+function upgradeLockedManagedInstall(input: PortableManagedUpgradeInput): PortableLayout {
+  requireAttestedManagedUpgradeCurrent(input);
+  const paths = createPortableUpgradePaths(input.target, input.managedRoot, input.stateDir);
+  let removeBackup = true;
+  try {
+    copyTreeSafe(input.source.layout.installRoot, paths.stagedTarget);
+    const stagedSource = validatePortableRoot(input.target, paths.stagedTarget);
+    const verifyCurrent = (): void => {
+      requireAttestedManagedUpgradeCurrent(input);
+    };
+    return promoteStagedUpgrade(input, stagedSource, paths, verifyCurrent);
+  } catch (error) {
+    if (error instanceof PortableUpgradeRollbackError) removeBackup = false;
+    throw error;
+  } finally {
+    cleanupPortableUpgrade(paths, removeBackup);
+  }
+}
+
+function requireAttestedManagedUpgradeCurrent(
+  input: PortableManagedUpgradeInput,
+): ValidatedPortableRoot {
+  const current = attestedRecordedManagedInstall(input.managedRoot, input.stateDir);
+  if (current === undefined || inspectPortableManagedInstall(current.layout).issues.length > 0) {
+    throw new Error("portable managed install changed before upgrade");
+  }
+  if (!portableSourceCanReplaceManaged(input.source, current)) {
+    throw new Error("portable upgrade candidate must be newer than or target-corrective");
+  }
+  return current;
 }
 
 export function attestedManagedInstall(
@@ -511,6 +577,491 @@ function recordFailedSetup(options: SetupPortableOptions, now: Date, message: st
   }
 }
 
+function sameInstallRegistration(
+  left: PortableInstallRegistration | undefined,
+  right: PortableInstallRegistration | undefined,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function recordPreLockSetupFailure(
+  options: SetupPortableOptions,
+  registrationBeforeSetup: PortableInstallRegistration | undefined,
+  now: Date,
+  message: string,
+): void {
+  if (registrationBeforeSetup?.status === "managed") return;
+  let managedRootAllowed = true;
+  try {
+    assertManagedRootAllowed(options.managedRoot, options.stateDir, options.target);
+  } catch {
+    managedRootAllowed = false;
+  }
+  try {
+    const record = (): void => {
+      const current = readPortableInstallRegistration(options.stateDir);
+      if (!sameInstallRegistration(current, registrationBeforeSetup)) return;
+      recordFailedSetup(options, now, message);
+    };
+    if (managedRootAllowed) withPortableSetupLocks(options, record);
+    else withPortableStateSetupLock(options.stateDir, record);
+  } catch {
+    // A concurrent owner or unsafe lock state takes precedence over recording stale failure state.
+  }
+}
+
+function assertSamePathSetupAttested(options: SetupPortableOptions): void {
+  const sourceInstallRoot = layoutFor(options.target, options.portableRoot).installRoot;
+  if (!sameRealPath(sourceInstallRoot, options.managedRoot)) return;
+  if (attestedManagedInstall(options.target, options.managedRoot, options.stateDir) === undefined) {
+    throw new Error("existing same-path managed install root is not attested");
+  }
+}
+
+export function recoverableFailedManagedRoot(
+  target: PortableTarget,
+  managedRoot: string,
+  stateDir: string,
+): string | undefined {
+  return attestedFailedManagedInstall(target, managedRoot, stateDir)?.layout.installRoot;
+}
+
+function failedManagedAttestation(
+  registration: FailedSetupRegistration,
+): ManagedSetupRegistration | undefined {
+  if (
+    registration.installRootPlatformTarget === undefined ||
+    registration.setupManifestSha256 === undefined ||
+    registration.installRootIdentitySha256 === undefined ||
+    registration.launcherIdentitySha256 === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    status: "managed",
+    updateEligible: true,
+    platformTarget: registration.installRootPlatformTarget,
+    packageVersion: registration.packageVersion,
+    stable: registration.stable,
+    setupManifestSha256: registration.setupManifestSha256,
+    installRootIdentitySha256: registration.installRootIdentitySha256,
+    launcherIdentitySha256: registration.launcherIdentitySha256,
+    updatedAt: registration.updatedAt,
+  };
+}
+
+function attestedFailedManagedInstall(
+  target: PortableTarget,
+  managedRoot: string,
+  stateDir: string,
+): ValidatedPortableRoot | undefined {
+  const registration = readPortableInstallRegistration(stateDir);
+  if (registration?.status !== "setup-failed" || registration.platformTarget !== target)
+    return undefined;
+  const attestation = failedManagedAttestation(registration);
+  if (attestation === undefined) return undefined;
+  try {
+    assertManagedRootAllowed(managedRoot, stateDir, attestation.platformTarget);
+    const current = validatePortableRoot(attestation.platformTarget, managedRoot);
+    if (!registrationMatches(attestation, current.layout, current.manifest)) return undefined;
+    if (inspectPortableManagedInstall(current.layout).issues.length > 0) return undefined;
+    return current;
+  } catch {
+    return undefined;
+  }
+}
+
+export function recoverableFailedWindowsManagedRoot(
+  stateDir: string,
+  env: EnvSource,
+  home: string,
+): string | undefined {
+  const registeredExe = parseWindowsStartMenuRegistration(
+    windowsStartMenuRegistrationPath(env, home),
+  );
+  if (registeredExe === undefined) return undefined;
+  return recoverableFailedManagedRoot("windows-x64", dirname(registeredExe), stateDir);
+}
+
+function canRecoverFailedManagedInstall(options: SetupPortableOptions): boolean {
+  if (!existsSync(options.managedRoot)) return false;
+  return (
+    recoverableFailedManagedRoot(options.target, options.managedRoot, options.stateDir) !==
+    undefined
+  );
+}
+
+export interface PortableMutationLockOptions {
+  readonly target: PortableTarget;
+  readonly managedRoot: string;
+  readonly stateDir: string;
+}
+
+export function portableManagedSetupLockPath(target: PortableTarget, managedRoot: string): string {
+  // Lock identity must not change when the managed root appears between concurrent callers.
+  // Root policy rejects symlinked ancestors before mutation, so lexical normalization is both
+  // deterministic and aligned with the path that callers were authorized to manage.
+  const canonicalRoot = resolve(managedRoot);
+  const identity = target === "windows-x64" ? canonicalRoot.toLowerCase() : canonicalRoot;
+  const digest = createHash("sha256").update(identity, "utf8").digest("hex").slice(0, 24);
+  return join(dirname(canonicalRoot), `.keiko-portable-setup-${digest}.lock`);
+}
+
+function portableSetupLockPaths(options: PortableMutationLockOptions): readonly string[] {
+  return [
+    ...new Set([
+      join(options.stateDir, PORTABLE_SETUP_LOCK),
+      portableManagedSetupLockPath(options.target, options.managedRoot),
+    ]),
+  ].sort(comparePortableSetupLockPaths);
+}
+
+function comparePortableSetupLockPaths(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+const PORTABLE_SETUP_LOCK_OWNER = "owner.json";
+const OWNERLESS_STALE_LOCK_MS = 30 * 60 * 1000;
+
+interface PortableSetupLockOwner {
+  readonly schemaVersion: 1;
+  readonly pid: number;
+}
+
+function portableSetupLockOwnerValue(value: unknown): PortableSetupLockOwner | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  if (!("schemaVersion" in value) || value.schemaVersion !== 1) return undefined;
+  if (!("pid" in value) || typeof value.pid !== "number") return undefined;
+  if (!Number.isSafeInteger(value.pid) || value.pid <= 0) return undefined;
+  return value as PortableSetupLockOwner;
+}
+
+function portableSetupLockOwnerPath(path: string): string | undefined {
+  const entries = readdirSync(path);
+  if (entries.length !== 1 || entries[0] !== PORTABLE_SETUP_LOCK_OWNER) return undefined;
+  const ownerPath = join(path, PORTABLE_SETUP_LOCK_OWNER);
+  const ownerStat = lstatSync(ownerPath);
+  if (!ownerStat.isFile() || ownerStat.isSymbolicLink()) return undefined;
+  if (ownerStat.nlink !== 1 || ownerStat.size > 1024) return undefined;
+  return ownerPath;
+}
+
+function readPortableSetupLockOwner(path: string): PortableSetupLockOwner | undefined {
+  try {
+    const ownerPath = portableSetupLockOwnerPath(path);
+    if (ownerPath === undefined) return undefined;
+    const value = JSON.parse(readFileSync(ownerPath, "utf8")) as unknown;
+    return portableSetupLockOwnerValue(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+interface StalePortableSetupLock {
+  readonly device: number;
+  readonly inode: number;
+  readonly kind: "dead-owner" | "ownerless";
+}
+
+function stalePortableSetupLock(path: string): StalePortableSetupLock | undefined {
+  const pathStat = lstatSync(path);
+  if (!pathStat.isDirectory() || pathStat.isSymbolicLink()) return undefined;
+  const entries = readdirSync(path);
+  if (entries.length === 0) {
+    if (Date.now() - pathStat.mtimeMs < OWNERLESS_STALE_LOCK_MS) return undefined;
+    return { device: pathStat.dev, inode: pathStat.ino, kind: "ownerless" };
+  }
+  const owner = readPortableSetupLockOwner(path);
+  if (owner === undefined || processIsAlive(owner.pid)) return undefined;
+  return { device: pathStat.dev, inode: pathStat.ino, kind: "dead-owner" };
+}
+
+function samePortableSetupLock(
+  left: StalePortableSetupLock,
+  right: StalePortableSetupLock,
+): boolean {
+  return left.device === right.device && left.inode === right.inode && left.kind === right.kind;
+}
+
+function restoreClaimedPortableSetupLock(claimedPath: string, path: string): void {
+  try {
+    renameSync(claimedPath, path);
+  } catch {
+    // Preserve the claimed directory when the canonical path was concurrently recreated.
+  }
+}
+
+function reclaimPortableSetupLock(path: string): boolean {
+  const claimedPath = `${path}.reclaim-${String(process.pid)}-${randomUUID()}`;
+  let stale: StalePortableSetupLock;
+  try {
+    const inspected = stalePortableSetupLock(path);
+    if (inspected === undefined) return false;
+    stale = inspected;
+    renameSync(path, claimedPath);
+  } catch {
+    return false;
+  }
+  try {
+    const claimed = stalePortableSetupLock(claimedPath);
+    if (claimed === undefined || !samePortableSetupLock(stale, claimed)) {
+      restoreClaimedPortableSetupLock(claimedPath, path);
+      return false;
+    }
+    if (claimed.kind === "dead-owner") {
+      rmSync(join(claimedPath, PORTABLE_SETUP_LOCK_OWNER), { force: true });
+    }
+    rmdirSync(claimedPath);
+    return true;
+  } catch {
+    restoreClaimedPortableSetupLock(claimedPath, path);
+    return false;
+  }
+}
+
+function createPortableSetupLock(path: string): void {
+  mkdirSync(path, { mode: 0o700 });
+  try {
+    writeFileSync(
+      join(path, PORTABLE_SETUP_LOCK_OWNER),
+      `${JSON.stringify({ schemaVersion: 1, pid: process.pid })}\n`,
+      { encoding: "utf8", flag: "wx", mode: 0o600 },
+    );
+  } catch (error) {
+    try {
+      rmdirSync(path);
+    } catch {
+      // Preserve an unexpected replacement rather than deleting it recursively.
+    }
+    throw error;
+  }
+}
+
+function acquirePortableSetupLock(path: string): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  try {
+    createPortableSetupLock(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      if (!reclaimPortableSetupLock(path)) throw new PortableSetupBusyError();
+      try {
+        createPortableSetupLock(path);
+        return;
+      } catch (retryError) {
+        if ((retryError as NodeJS.ErrnoException).code === "EEXIST") {
+          throw new PortableSetupBusyError();
+        }
+        throw retryError;
+      }
+    }
+    throw error;
+  }
+}
+
+function releasePortableSetupLocks(paths: readonly string[]): void {
+  for (const path of [...paths].reverse()) {
+    try {
+      const owner = readPortableSetupLockOwner(path);
+      if (owner?.pid !== process.pid) continue;
+      rmSync(join(path, PORTABLE_SETUP_LOCK_OWNER), { force: true });
+      rmdirSync(path);
+    } catch {
+      // Refuse to recursively remove a replaced or non-empty lock artifact.
+    }
+  }
+}
+
+function acquirePortableSetupLocks(options: PortableMutationLockOptions): readonly string[] {
+  const acquired: string[] = [];
+  try {
+    for (const path of portableSetupLockPaths(options)) {
+      acquirePortableSetupLock(path);
+      acquired.push(path);
+    }
+    return acquired;
+  } catch (error) {
+    releasePortableSetupLocks(acquired);
+    throw error;
+  }
+}
+
+function withPortableSetupLocks<T>(options: PortableMutationLockOptions, operation: () => T): T {
+  const acquired = acquirePortableSetupLocks(options);
+  try {
+    return operation();
+  } finally {
+    releasePortableSetupLocks(acquired);
+  }
+}
+
+function withPortableStateSetupLock<T>(stateDir: string, operation: () => T): T {
+  const path = join(stateDir, PORTABLE_SETUP_LOCK);
+  acquirePortableSetupLock(path);
+  try {
+    return operation();
+  } finally {
+    releasePortableSetupLocks([path]);
+  }
+}
+
+export type PortableManagedUpgradeFn = (input: PortableManagedUpgradeInput) => PortableLayout;
+
+export async function withPortableManagedMutation<T>(
+  options: PortableMutationLockOptions,
+  operation: (upgrade: PortableManagedUpgradeFn) => Promise<T>,
+): Promise<T> {
+  const acquired = acquirePortableSetupLocks(options);
+  const expectedLocks = portableSetupLockPaths(options);
+  let active = true;
+  const upgrade: PortableManagedUpgradeFn = (input) => {
+    if (!active) throw new Error("portable upgrade lock capability is no longer active");
+    const inputLocks = portableSetupLockPaths(input);
+    if (
+      inputLocks.length !== expectedLocks.length ||
+      inputLocks.some((path, index) => path !== expectedLocks[index])
+    ) {
+      throw new Error("portable upgrade lock scope does not match the managed install");
+    }
+    return upgradeLockedManagedInstall(input);
+  };
+  try {
+    return await operation(upgrade);
+  } finally {
+    active = false;
+    releasePortableSetupLocks(acquired);
+  }
+}
+
+function assertFailedSetupRecoveryBound(options: SetupPortableOptions): void {
+  const registration = readPortableInstallRegistration(options.stateDir);
+  if (registration?.status !== "setup-failed") return;
+  if (registration.platformTarget !== options.target) {
+    throw new Error("failed managed install target does not match the requested target");
+  }
+  if (
+    registration.installRootIdentitySha256 !== undefined &&
+    existsSync(options.managedRoot) &&
+    !canRecoverFailedManagedInstall(options)
+  ) {
+    throw new Error("failed managed install root does not match its recorded identity");
+  }
+}
+
+interface PreparedPortableSetup {
+  readonly layout: PortableLayout;
+  readonly createdManagedInstall: boolean;
+  readonly message: string;
+}
+
+function validateExistingManagedSetup(
+  options: SetupPortableOptions,
+  source: ValidatedPortableRoot,
+  now: Date,
+): PreparedPortableSetup | undefined {
+  if (options.dryRun || sameRealPath(source.layout.installRoot, options.managedRoot)) {
+    return undefined;
+  }
+  const existing = attestedManagedInstall(options.target, options.managedRoot, options.stateDir);
+  if (existing === undefined) return undefined;
+  try {
+    finalizeManagedSetup(options, existing.layout, existing.manifest, now);
+  } catch (error) {
+    throw new PortableManagedRegistrationRepairError(error);
+  }
+  return {
+    layout: existing.layout,
+    createdManagedInstall: false,
+    message: "Keiko portable setup validated at managed root.\n",
+  };
+}
+
+function recoverBoundFailedSetup(
+  options: SetupPortableOptions,
+  source: ValidatedPortableRoot,
+  now: Date,
+): PreparedPortableSetup | undefined {
+  if (
+    options.dryRun ||
+    sameRealPath(source.layout.installRoot, options.managedRoot) ||
+    !canRecoverFailedManagedInstall(options)
+  ) {
+    return undefined;
+  }
+  return recoverLockedFailedSetup(options, source, now);
+}
+
+function recoverLockedFailedSetup(
+  options: SetupPortableOptions,
+  source: ValidatedPortableRoot,
+  now: Date,
+): PreparedPortableSetup {
+  const current = requireAttestedFailedManagedInstall(options);
+  if (compareStableVersions(source.manifest.packageVersion, current.manifest.packageVersion) < 0) {
+    throw new Error("portable recovery candidate must not be older than the managed install");
+  }
+  const verifyCurrent = (): void => {
+    requireAttestedFailedManagedInstall(options);
+  };
+  return {
+    layout: recoverFailedManagedInstall({ ...options, source, now }, verifyCurrent),
+    createdManagedInstall: false,
+    message: "Keiko portable setup recovered at managed root.\n",
+  };
+}
+
+function requireAttestedFailedManagedInstall(options: SetupPortableOptions): ValidatedPortableRoot {
+  const current = attestedFailedManagedInstall(
+    options.target,
+    options.managedRoot,
+    options.stateDir,
+  );
+  if (current === undefined) throw new Error("failed managed install changed during recovery");
+  return current;
+}
+
+function preparePortableSetup(
+  options: SetupPortableOptions,
+  source: ValidatedPortableRoot,
+  now: Date,
+): PreparedPortableSetup {
+  const existing = validateExistingManagedSetup(options, source, now);
+  if (existing !== undefined) return existing;
+  const recovered = recoverBoundFailedSetup(options, source, now);
+  if (recovered !== undefined) return recovered;
+  const layout = promoteToManaged(
+    options.target,
+    source.layout,
+    options.managedRoot,
+    options.stateDir,
+    options.dryRun,
+  );
+  const createdManagedInstall =
+    !options.dryRun && !sameRealPath(source.layout.installRoot, layout.installRoot);
+  try {
+    if (!options.dryRun) finalizeManagedSetup(options, layout, source.manifest, now);
+  } catch (error) {
+    if (createdManagedInstall) rollbackManagedSetup(layout);
+    throw error;
+  }
+  return {
+    layout,
+    createdManagedInstall,
+    message: `Keiko portable setup ready at ${options.dryRun ? "planned managed root" : "managed root"}.\n`,
+  };
+}
+
 export function setupPortable(
   options: SetupPortableOptions,
   io: CliIo,
@@ -518,26 +1069,43 @@ export function setupPortable(
 ): { readonly code: number; readonly layout: PortableLayout | undefined } {
   let managedLayout: PortableLayout | undefined;
   let createdManagedInstall = false;
+  let registrationBeforeSetup: PortableInstallRegistration | undefined;
   try {
+    registrationBeforeSetup = readPortableInstallRegistration(options.stateDir);
+    assertSamePathSetupAttested(options);
     const source = validatePortableRoot(options.target, options.portableRoot);
-    managedLayout = promoteToManaged(
-      options.target,
-      source.layout,
-      options.managedRoot,
-      options.stateDir,
-      options.dryRun,
-    );
-    createdManagedInstall =
-      !options.dryRun && !sameRealPath(source.layout.installRoot, managedLayout.installRoot);
-    if (!options.dryRun) finalizeManagedSetup(options, managedLayout, source.manifest, now);
-    io.out(
-      `Keiko portable setup ready at ${options.dryRun ? "planned managed root" : "managed root"}.\n`,
-    );
+    assertManagedRootAllowed(options.managedRoot, options.stateDir, options.target);
+    assertFailedSetupRecoveryBound(options);
+    const prepared = options.dryRun
+      ? preparePortableSetup(options, source, now)
+      : withPortableSetupLocks(options, () => {
+          try {
+            return preparePortableSetup(options, source, now);
+          } catch (error) {
+            const original =
+              error instanceof PortableManagedRegistrationRepairError ? error.original : error;
+            const message = original instanceof Error ? original.message : "portable setup failed";
+            if (!(error instanceof PortableManagedRegistrationRepairError)) {
+              recordFailedSetup(options, now, message);
+            }
+            throw new PortableSetupFailureRecordedError(original);
+          }
+        });
+    managedLayout = prepared.layout;
+    createdManagedInstall = prepared.createdManagedInstall;
+    io.out(prepared.message);
     return { code: 0, layout: managedLayout };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "portable setup failed";
+    const original = error instanceof PortableSetupFailureRecordedError ? error.original : error;
+    const message = original instanceof Error ? original.message : "portable setup failed";
     if (createdManagedInstall && managedLayout !== undefined) rollbackManagedSetup(managedLayout);
-    if (!options.dryRun) recordFailedSetup(options, now, message);
+    if (
+      !options.dryRun &&
+      !(error instanceof PortableSetupFailureRecordedError) &&
+      !(original instanceof PortableSetupBusyError)
+    ) {
+      recordPreLockSetupFailure(options, registrationBeforeSetup, now, message);
+    }
     io.err(`keiko portable setup: ${message}\n`);
     return { code: 1, layout: undefined };
   }

@@ -19,8 +19,10 @@ import {
   catalogForInventory,
   inventoriesMatch,
   inventoryAddsOnlyRuntimeAttestation,
+  inventoryAddsOnlySetupCompanion,
   inventoryPathsMatch,
   inventoryWindowsPortablePeFiles,
+  inventoryWindowsPortableStagePeFiles,
   main,
   rebindArchive,
 } from "../windows-portable-signing.mjs";
@@ -235,6 +237,38 @@ afterEach(() => {
 });
 
 describe("Windows portable PE signing inventory", () => {
+  it("accepts exactly one setup companion PE beyond the unchanged payload inventory", () => {
+    const { payload, stage } = validStage();
+    const expected = inventoryWindowsPortablePeFiles(payload);
+    write(join(stage, "keiko-windows-x64-setup.exe"), portableExecutable(9));
+    expect(
+      inventoryAddsOnlySetupCompanion(expected, inventoryWindowsPortableStagePeFiles(stage)),
+    ).toBe(true);
+
+    write(join(stage, "unexpected-helper.exe"), portableExecutable(10));
+    expect(
+      inventoryAddsOnlySetupCompanion(expected, inventoryWindowsPortableStagePeFiles(stage)),
+    ).toBe(false);
+    rmSync(join(stage, "unexpected-helper.exe"));
+    write(join(payload, "Keiko.exe"), portableExecutable(11));
+    expect(
+      inventoryAddsOnlySetupCompanion(expected, inventoryWindowsPortableStagePeFiles(stage)),
+    ).toBe(false);
+    write(join(payload, "Keiko.exe"), portableExecutable(1));
+    expect(inventoryAddsOnlySetupCompanion(expected, { files: [] })).toBe(false);
+    expect(
+      inventoryAddsOnlySetupCompanion(expected, {
+        files: [
+          ...expected.files.map((file) => ({
+            ...file,
+            relativePath: `payload/Keiko/${file.relativePath}`,
+          })),
+          { relativePath: "keiko-windows-x64-setup.exe", sha256: "not-a-digest", sizeBytes: 0 },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("binds qualification to the exact activation, helpers, OpenCode payload, and source", () => {
     const resourceRoot = root();
     const supervisorBytes = portableExecutable(6);

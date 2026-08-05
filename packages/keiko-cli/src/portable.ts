@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { arch as hostArch, homedir as defaultHomedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
@@ -8,16 +9,20 @@ import {
   type MacosRuntimeActivationFn,
 } from "./portable-macos-activation.js";
 import {
+  attestedPortableInstallRecord,
   attestedExistingPortableInstall,
   attestedManagedInstall,
   attestedRecordedManagedInstall,
   portableSourceCanReplaceManaged,
+  recoverableFailedManagedRoot,
+  recoverableFailedWindowsManagedRoot,
   sameRealPath,
   setupPortable,
   spawnManagedLauncher,
   statusPortable,
-  upgradeManagedInstall,
   validatePortableRoot,
+  withPortableManagedMutation,
+  type PortableManagedUpgradeFn,
   type ValidatedPortableRoot,
 } from "./portable-install.js";
 import {
@@ -30,6 +35,8 @@ import {
   type PortableTarget,
   type SpawnFn,
 } from "./portable-shared.js";
+import { hasPortableInstallRegistration } from "./portable-registration.js";
+import { assertManagedRootAllowed } from "./portable-root-policy.js";
 import type { CliIo } from "./runner.js";
 
 type LifecycleFn = (
@@ -76,6 +83,11 @@ interface PortableRuntimeDeps extends PortableArgDeps {
   readonly activateMacosRuntimeFn: MacosRuntimeActivationFn;
 }
 
+type PortableUpgradeDeps = Pick<
+  PortableRuntimeDeps,
+  "activateMacosRuntimeFn" | "now" | "lifecycleFn"
+>;
+
 interface PortableFlag {
   readonly name: string;
   readonly value: string | undefined;
@@ -95,6 +107,7 @@ const USAGE = `Usage:
   keiko portable setup  [--target TARGET] [--portable-root PATH] [--managed-root PATH] [--state-dir PATH] [--dry-run]
   keiko portable launch [--target TARGET] [--portable-root PATH] [--managed-root PATH] [--state-dir PATH]
   keiko portable status [--target TARGET] [--portable-root PATH] [--managed-root PATH] [--state-dir PATH]
+  keiko portable resolve-root [--target TARGET] [--managed-root PATH] [--state-dir PATH]
 
 Manages archive-first portable setup into Keiko's target-specific install root.
 `;
@@ -249,15 +262,36 @@ async function upgradeManagedFromClickedPackage(
   current: ValidatedPortableRoot,
   io: CliIo,
   env: EnvSource,
-  deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "now" | "lifecycleFn">,
+  deps: PortableUpgradeDeps,
 ): Promise<number> {
   if (!portableSourceCanReplaceManaged(source, current)) {
     return launchManaged(options.target, current.layout, io, env, options.stateDir, deps);
   }
+  try {
+    return await withPortableManagedMutation(options, (upgrade) =>
+      upgradeManagedWhileLocked(options, source, current, io, env, deps, upgrade),
+    );
+  } catch (error) {
+    io.err(
+      `keiko portable launch: ${error instanceof Error ? error.message : "portable upgrade failed"}\n`,
+    );
+    return 1;
+  }
+}
+
+async function upgradeManagedWhileLocked(
+  options: PortableCliOptions,
+  source: ValidatedPortableRoot,
+  current: ValidatedPortableRoot,
+  io: CliIo,
+  env: EnvSource,
+  deps: PortableUpgradeDeps,
+  upgrade: PortableManagedUpgradeFn,
+): Promise<number> {
   const stopped = await stopManaged(current.layout, io, env, options.stateDir, deps.lifecycleFn);
   if (stopped !== 0) return stopped;
   try {
-    const upgraded = upgradeManagedInstall({
+    const upgraded = upgrade({
       target: options.target,
       source,
       current,
@@ -286,11 +320,20 @@ async function upgradeManagedFromClickedPackage(
 
 function attestedKnownManagedInstall(
   options: PortableCliOptions,
+  env: EnvSource,
 ): ValidatedPortableRoot | undefined {
+  const registrationExists = hasPortableInstallRegistration(options.stateDir);
+  const record = attestedPortableInstallRecord(options.stateDir, env, options.home);
+  if (registrationExists) {
+    if (record === undefined) throw new Error("portable install registration is invalid");
+    if (record.registration.status !== "managed") return undefined;
+  }
   return (
     attestedManagedInstall(options.target, options.managedRoot, options.stateDir) ??
     attestedRecordedManagedInstall(options.managedRoot, options.stateDir) ??
-    attestedExistingPortableInstall(options.managedRoot, options.stateDir)
+    (registrationExists
+      ? undefined
+      : attestedExistingPortableInstall(options.managedRoot, options.stateDir))
   );
 }
 
@@ -328,7 +371,7 @@ async function launchPortable(
     if (sameRealPath(source.layout.installRoot, options.managedRoot)) {
       return await setupAndLaunchManaged(options, io, env, deps);
     }
-    const attestedKnownManaged = attestedKnownManagedInstall(options);
+    const attestedKnownManaged = attestedKnownManagedInstall(options, env);
     if (attestedKnownManaged !== undefined) {
       return await upgradeManagedFromClickedPackage(
         options,
@@ -339,7 +382,13 @@ async function launchPortable(
         deps,
       );
     }
-    return setupDownloadedPortable(options, io, env, deps);
+    const recoveryRoot = failedPortableRecoveryRoot(options, env);
+    return setupDownloadedPortable(
+      recoveryRoot === undefined ? options : { ...options, managedRoot: recoveryRoot },
+      io,
+      env,
+      deps,
+    );
   } catch (error) {
     io.err(`keiko portable launch: ${error instanceof Error ? error.message : "unavailable"}\n`);
     return 1;
@@ -359,6 +408,79 @@ function resolvedDeps(deps: PortableSetupDeps): PortableRuntimeDeps {
   };
 }
 
+function failedPortableRecoveryRoot(
+  options: PortableCliOptions,
+  env: EnvSource,
+): string | undefined {
+  const requestedRoot = recoverableFailedManagedRoot(
+    options.target,
+    options.managedRoot,
+    options.stateDir,
+  );
+  if (requestedRoot !== undefined || options.target !== "windows-x64") return requestedRoot;
+  return recoverableFailedWindowsManagedRoot(options.stateDir, env, options.home);
+}
+
+function resolvedPortableManagedRoot(options: PortableCliOptions, env: EnvSource): string {
+  const registrationExists = hasPortableInstallRegistration(options.stateDir);
+  const record = attestedPortableInstallRecord(options.stateDir, env, options.home);
+  if (record === undefined) {
+    if (registrationExists) throw new Error("portable install registration is invalid");
+    return options.managedRoot;
+  }
+  if (record.target !== options.target) {
+    throw new Error("registered managed install target does not match the requested target");
+  }
+  if (record.registration.status !== "managed") {
+    const recoveryRoot = failedPortableRecoveryRoot(options, env);
+    if (recoveryRoot !== undefined) return recoveryRoot;
+    if (
+      record.registration.installRootIdentitySha256 === undefined &&
+      !existsSync(options.managedRoot)
+    ) {
+      return options.managedRoot;
+    }
+    throw new Error(
+      "portable setup is incomplete; registered install root must be recovered before launch",
+    );
+  }
+  if (record.managedRoot === undefined) {
+    throw new Error("registered managed install root could not be attested");
+  }
+  return record.managedRoot;
+}
+
+function resolvePortableManagedRoot(
+  options: PortableCliOptions,
+  io: CliIo,
+  env: EnvSource,
+): number {
+  try {
+    emitPortableManagedRoot(resolvedPortableManagedRoot(options, env), options, io);
+    return 0;
+  } catch (error) {
+    io.err(
+      `keiko portable resolve-root: ${error instanceof Error ? error.message : "unavailable"}\n`,
+    );
+    return 1;
+  }
+}
+
+function emitPortableManagedRoot(
+  managedRoot: string,
+  options: PortableCliOptions,
+  io: CliIo,
+): void {
+  assertManagedRootAllowed(managedRoot, options.stateDir, options.target);
+  const hasControlCharacter = Array.from(managedRoot).some(
+    (character): boolean => (character.codePointAt(0) ?? 0) <= 0x1f,
+  );
+  if (hasControlCharacter || (options.target === "windows-x64" && managedRoot.includes('"'))) {
+    throw new Error("managed install root cannot be safely transported");
+  }
+  io.out(`${managedRoot}\n`);
+}
+
 export async function runPortableCli(
   args: readonly string[],
   io: CliIo,
@@ -375,6 +497,7 @@ export async function runPortableCli(
     io.err(USAGE);
     return 2;
   }
+  if (options.command === "resolve-root") return resolvePortableManagedRoot(options, io, env);
   if (options.command === "status") return statusPortable(options, io);
   if (options.command === "setup") return setupPortable({ ...options, env }, io, r.now()).code;
   return launchPortable(options, io, env, r);
