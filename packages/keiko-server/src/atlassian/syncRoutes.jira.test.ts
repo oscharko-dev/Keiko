@@ -700,6 +700,44 @@ describe("Jira sync — degradation and validation", () => {
     );
     expect(oversizedJql.status).toBe(400);
 
+    // KEIKO-0026: composeJiraScopeJql rejects unbalanced JQL, but that only runs inside the
+    // BACKGROUND fetch — this wire-boundary check must reject it BEFORE startAtlassianSyncJob ever
+    // persists the pod, or a bad scope survives every future re-sync as a permanently failed job.
+    const unbalancedJql = await handleStartAtlassianConnectorSync(
+      ctxFor(
+        "POST",
+        { authRef: credential.authRef },
+        { projectKeys: ["PLAT"], jql: "status = Done) OR (project = SECRET" },
+      ),
+      deps,
+    );
+    expect(unbalancedJql.status).toBe(400);
+
+    // A whitespace-only clause has trivially balanced nesting (no parens at all), so it slips
+    // past hasBalancedJqlNesting and needs its own rejection — otherwise it survives to compose
+    // `AND (   )`, a malformed query Jira rejects on every future re-sync of the pod.
+    const whitespaceJql = await handleStartAtlassianConnectorSync(
+      ctxFor("POST", { authRef: credential.authRef }, { projectKeys: ["PLAT"], jql: "   " }),
+      deps,
+    );
+    expect(whitespaceJql.status).toBe(400);
+
+    const unterminatedLiteralJql = await handleStartAtlassianConnectorSync(
+      ctxFor(
+        "POST",
+        { authRef: credential.authRef },
+        { projectKeys: ["PLAT"], jql: 'text ~ "unterminated' },
+      ),
+      deps,
+    );
+    expect(unterminatedLiteralJql.status).toBe(400);
+
+    // Every rejection above must fail before persistence, not just report 400: a job registered
+    // for a rejected scope would survive as a permanently-broken pod. atlassianSyncJobRegistry is
+    // the one place a started sync becomes observable, so zero jobs here proves none of the six
+    // rejected calls above reached startAtlassianSyncJob.
+    expect(atlassianSyncJobRegistry.jobCount).toBe(0);
+
     const started = await startSync(deps, credential, { projectKeys: ["PLAT"] });
     await awaitTerminal(started.job.jobId);
     const resyncWithScope = await handleStartAtlassianConnectorSync(

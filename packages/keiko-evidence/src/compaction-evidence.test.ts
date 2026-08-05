@@ -267,6 +267,28 @@ describe("compaction evidence (ADR-0056 W2)", () => {
     expect(serialized).toContain("[REDACTED]");
   });
 
+  it("returns the deep-redacted manifest, not only the persisted JSON", () => {
+    // `modelId` is carried through to manifest.model verbatim by the builder (no Layer 1 rule
+    // covers it), so it is the vehicle that distinguishes returning the pre-deep-redact manifest
+    // from returning the deep-redacted one — the invariant every sibling persist* upholds
+    // (KEIKO-1031).
+    const store = createInMemoryEvidenceStore();
+    const result = persistCompactionEvidence(
+      {
+        runId: "compaction-run-safe-manifest",
+        modelId: `model-${SK_FAKE}`,
+        workspaceRoot: ABS_PATH,
+        records: [compactionRecord()],
+        startedAt: NOW,
+        finishedAt: NOW + 5,
+      },
+      { store, env: {}, additionalSecrets: [SK_FAKE] },
+    );
+    expect(result.manifest.model.modelId).toBeDefined();
+    expect(result.manifest.model.modelId).not.toContain(SK_FAKE);
+    expect(store.get("compaction-run-safe-manifest") ?? "").not.toContain(SK_FAKE);
+  });
+
   it("Gate 4b — no raw absolute path appears in the stored manifest JSON", () => {
     const store = createInMemoryEvidenceStore();
     persistCompactionEvidence(

@@ -22,6 +22,7 @@ import {
 } from "./agent-run-governance.js";
 import { editorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import type { VerificationReport } from "@oscharko-dev/keiko-verification";
+import type { NetworkIsolationProbe } from "./editor/verificationExecution.js";
 
 const REJECT_MODEL: ModelPort = {
   call: (): Promise<NormalizedResponse> =>
@@ -292,5 +293,88 @@ describe("startRun explain-plan dispatch", () => {
     await waitForTerminal(result.runId);
     expect(prompt).toContain("--- src/discounts.ts ---");
     expect(prompt).toContain("export const discount = 100;");
+  });
+});
+
+describe("probeNetworkIsolationSafely", () => {
+  afterEach(() => {
+    vi.doUnmock("./editor/verificationExecution.js");
+    vi.resetModules();
+  });
+
+  it("fails closed (false) instead of throwing when the underlying probe throws", async () => {
+    // The probe touches the filesystem/OS to detect a sandbox backend; a governed run's
+    // verification step must still get an answer rather than crash the whole dispatch if that
+    // probe itself faults for an unexpected reason (a workspace root deleted mid-run, etc.).
+    // Spreading the actual module (rather than replacing it outright) keeps
+    // executeVerificationEnforced -- run-engine.ts's OTHER import from this same module -- real, so
+    // this mock cannot mask a break in that unrelated import.
+    vi.resetModules();
+    const actualVerification = await vi.importActual<
+      typeof import("./editor/verificationExecution.js")
+    >("./editor/verificationExecution.js");
+    vi.doMock("./editor/verificationExecution.js", () => ({
+      ...actualVerification,
+      probeNetworkIsolation: (): never => {
+        throw new Error("probe backend detection failed");
+      },
+    }));
+    const { probeNetworkIsolationSafely: probeSafely } = await import("./run-engine.js");
+    expect(probeSafely("/nonexistent/workspace")).toBe(false);
+  });
+
+  it.each([true, false])(
+    "passes through the real probe's available:%s without swallowing it",
+    async (available) => {
+      vi.resetModules();
+      const actualVerification = await vi.importActual<
+        typeof import("./editor/verificationExecution.js")
+      >("./editor/verificationExecution.js");
+      vi.doMock("./editor/verificationExecution.js", () => ({
+        ...actualVerification,
+        probeNetworkIsolation: (): NetworkIsolationProbe => ({
+          available,
+          backend: "test-backend",
+        }),
+      }));
+      const { probeNetworkIsolationSafely: probeSafely } = await import("./run-engine.js");
+      expect(probeSafely(workspaceRoot)).toBe(available);
+    },
+  );
+});
+
+describe("applyRun — verification egress probe threading", () => {
+  afterEach(() => {
+    vi.doUnmock("@oscharko-dev/keiko-workflows");
+    vi.resetModules();
+  });
+
+  it("threads a real verificationEnforcedNetworkAvailable into the replayed apply, like the initial dispatch does", async () => {
+    // dispatchWorkflow (the initial background run) and applyRun (replaying an accepted snapshot,
+    // run-handlers.ts's gated apply path) both reach the SAME verify stage; without this, apply's
+    // network:"none" verification steps are denied even on hosts the probe would have enforced on.
+    vi.resetModules();
+    let capturedDeps: Record<string, unknown> | undefined;
+    const actualWorkflows = await vi.importActual<typeof import("@oscharko-dev/keiko-workflows")>(
+      "@oscharko-dev/keiko-workflows",
+    );
+    vi.doMock("@oscharko-dev/keiko-workflows", () => ({
+      ...actualWorkflows,
+      generateUnitTests: (input: unknown, deps: Record<string, unknown>): Promise<unknown> => {
+        capturedDeps = deps;
+        return Promise.resolve({ status: "completed" });
+      },
+    }));
+    const { applyRun: apply } = await import("./run-engine.js");
+
+    await apply(
+      { kind: "unit-tests", payload: { workspaceRoot }, limits: undefined },
+      { call: () => Promise.reject(new Error("unused")) },
+      "m",
+      (value) => value,
+    );
+
+    expect(capturedDeps).toBeDefined();
+    expect(typeof capturedDeps?.verificationEnforcedNetworkAvailable).toBe("boolean");
   });
 });

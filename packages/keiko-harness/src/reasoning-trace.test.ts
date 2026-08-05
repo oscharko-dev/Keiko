@@ -180,4 +180,37 @@ describe("redaction at non-memory sinks (ADR-0004 D6)", () => {
     expect(JSON.stringify(received)).not.toContain(TOKEN_VALUE);
     expect(JSON.stringify(received)).toContain("[REDACTED]");
   });
+
+  it("redacts browser trust-warning and error free text for a non-retaining sink", () => {
+    // The browser-tool family carries page- and URL-derived free text in exactly the same shape
+    // as model:call:failed/tool:call:failed, so it belongs in the same redaction table
+    // (KEIKO-0028, ADR-0017 + ADR-0004 D6).
+    const received: HarnessEvent[] = [];
+    const nonMemorySink: EventSink = { emit: (e) => received.push(e) };
+    const memory = new MemoryEventSink();
+    const emitter = new Emitter([memory, nonMemorySink], stubClock().clock, "run-1", "fp");
+    emitter.emit({
+      type: "browser:trust-warning",
+      sessionId: "s1",
+      warning: `untrusted page echoed ${BEARER_FIXTURE}`,
+    });
+    emitter.emit({
+      type: "browser:error",
+      sessionId: "s1",
+      code: "NAVIGATION_FAILED",
+      message: `navigation failed for ${BEARER_FIXTURE}`,
+    });
+    expect(JSON.stringify(received)).not.toContain(TOKEN_VALUE);
+    expect(JSON.stringify(received)).toContain("[REDACTED]");
+    // The replay sink still sees the raw text, and structured identifiers stay untouched.
+    expect(JSON.stringify(memory.events())).toContain(TOKEN_VALUE);
+    const warning = received[0];
+    const error = received[1];
+    if (warning?.type === "browser:trust-warning") {
+      expect(warning.sessionId).toBe("s1");
+    }
+    if (error?.type === "browser:error") {
+      expect(error.code).toBe("NAVIGATION_FAILED");
+    }
+  });
 });

@@ -382,15 +382,36 @@ function matchesFilters(entry: EvidenceListEntry, filters: EvidenceFilters): boo
 // Route 10 — evidence list header projection, filtered server-side.
 export function handleEvidenceList(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const filters = readFilters(ctx.url);
-  const entries = listEvidence(deps.evidenceStore).filter((entry) =>
-    matchesFilters(entry, filters),
-  );
-  return { status: 200, body: { entries } };
+  try {
+    const entries = listEvidence(deps.evidenceStore).filter((entry) =>
+      matchesFilters(entry, filters),
+    );
+    return { status: 200, body: { entries } };
+  } catch (error) {
+    // listEvidence skips a single bad manifest, so reaching here means a store-level fault. Map it
+    // the way the detail sibling does instead of surfacing an opaque 500 for a diagnosable,
+    // pre-redacted condition; anything unrecognised still propagates to the top-level handler.
+    if (error instanceof EvidenceSchemaError) {
+      return { status: 422, body: errorBody("EVIDENCE_SCHEMA", error.message) };
+    }
+    if (error instanceof EvidenceReadError) {
+      return { status: 422, body: errorBody("EVIDENCE_READ", EVIDENCE_READ_CLIENT_MESSAGE) };
+    }
+    throw error;
+  }
 }
 
+// EvidenceReadError wraps whatever the underlying fs call's own error carried (constructed across
+// keiko-evidence, e.g. store.ts's getManifest: `cannot read evidence manifest: ${error.message}`),
+// and a raw Node fs error message can embed the evidence directory's absolute path (an EACCES/ENOENT
+// message quotes the path it failed on). EvidenceSchemaError's message never does — every
+// constructor call embeds only a bounded, already-client-known runId — so only EVIDENCE_READ needs
+// this static substitute.
+const EVIDENCE_READ_CLIENT_MESSAGE = "The evidence record could not be read.";
+
 // Route 11 — a single evidence manifest, served as-is (already redacted on disk). Invalid runId →
-// 400; absent → 404; an EvidenceSchemaError → 422; an EvidenceReadError → 422 (safe, pre-redacted
-// `.message`).
+// 400; absent → 404; an EvidenceSchemaError → 422 (safe, runId-only `.message`); an
+// EvidenceReadError → 422 with a static client message (see EVIDENCE_READ_CLIENT_MESSAGE).
 export function handleEvidenceDetail(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const runId = ctx.params.runId ?? "";
   try {
@@ -414,7 +435,7 @@ export function handleEvidenceDetail(ctx: RouteContext, deps: UiHandlerDeps): Ro
       return { status: 422, body: errorBody("EVIDENCE_SCHEMA", error.message) };
     }
     if (error instanceof EvidenceReadError) {
-      return { status: 422, body: errorBody("EVIDENCE_READ", error.message) };
+      return { status: 422, body: errorBody("EVIDENCE_READ", EVIDENCE_READ_CLIENT_MESSAGE) };
     }
     throw error;
   }

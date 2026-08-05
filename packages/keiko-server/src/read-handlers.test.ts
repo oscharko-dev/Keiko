@@ -718,6 +718,84 @@ describe("GET /api/evidence", () => {
     expect(entries[0]?.runId).toBe(expectedRunId);
   });
 
+  it("still serves the healthy runs when one stored manifest is unreadable", () => {
+    // The ledger is the product's primary governance surface; one foreign file in the evidence
+    // directory must not turn it into an empty page or an opaque 500 (KEIKO-0106).
+    const store = storeFrom([
+      manifestJson("run-a", "generate-unit-tests", "completed", Date.parse("2026-05-01T10:00:00Z")),
+      manifestJson("run-b", "investigate-bug", "failed", Date.parse("2026-05-02T10:00:00Z")),
+    ]);
+    const withBadEntry: EvidenceStore = {
+      ...store,
+      list: () => ["run-a", "run-b", "run-legacy"],
+      get: (runId) =>
+        runId === "run-legacy" ? JSON.stringify({ evidenceSchemaVersion: "2" }) : store.get(runId),
+    };
+    const result = handleEvidenceList(
+      ctx("/api/evidence"),
+      depsWith({ evidenceStore: withBadEntry }),
+    );
+    expect(result.status).toBe(200);
+    const entries = (result.body as { entries: { runId: string }[] }).entries;
+    expect(entries.map((entry) => entry.runId)).toEqual(["run-a", "run-b"]);
+  });
+
+  it.each([
+    ["EvidenceReadError", new EvidenceReadError("store I/O failure"), "EVIDENCE_READ"],
+    ["EvidenceSchemaError", new EvidenceSchemaError("unsupported version", "9"), "EVIDENCE_SCHEMA"],
+  ])(
+    "maps an unexpected %s from the store itself to a 422, as defense in depth",
+    (_label, thrown, code) => {
+      // listEvidence already skips a single bad MANIFEST (the case above): this proves the
+      // route's OWN mapping fires for a fault listEvidence's per-entry skip does not cover — an
+      // error the store itself raises (e.g. a directory-listing I/O failure), matching what the
+      // sibling handleEvidenceDetail already guarantees.
+      const failingStore: EvidenceStore = {
+        put: () => "",
+        list: () => {
+          throw thrown;
+        },
+        get: () => undefined,
+        delete: () => undefined,
+      };
+      const result = handleEvidenceList(
+        ctx("/api/evidence"),
+        depsWith({ evidenceStore: failingStore }),
+      );
+      expect(result.status).toBe(422);
+      expect(result.body).toMatchObject({ error: { code } });
+    },
+  );
+
+  it("never echoes the underlying fs error's absolute path back to the client", () => {
+    // EvidenceReadError wraps whatever the real fs call raised (e.g. store.ts's getManifest:
+    // "cannot read evidence manifest: " + error.message), and a raw EACCES/ENOENT message quotes
+    // the path it failed on — .keiko/evidence's absolute location must never leave the server.
+    const secretPath = "/Users/realuser/secret-workspace/.keiko/evidence/run-x.json";
+    const leaking = (): never => {
+      throw new EvidenceReadError(`cannot read evidence manifest: EACCES, open '${secretPath}'`);
+    };
+    const failingStore: EvidenceStore = {
+      put: () => "",
+      list: leaking,
+      get: leaking,
+      delete: () => undefined,
+    };
+    const listResult = handleEvidenceList(
+      ctx("/api/evidence"),
+      depsWith({ evidenceStore: failingStore }),
+    );
+    expect(listResult.status).toBe(422);
+    expect(JSON.stringify(listResult.body)).not.toContain(secretPath);
+
+    const detailResult = handleEvidenceDetail(
+      ctx("/api/evidence/run-x", { runId: "run-x" }),
+      depsWith({ evidenceStore: failingStore }),
+    );
+    expect(detailResult.status).toBe(422);
+    expect(JSON.stringify(detailResult.body)).not.toContain(secretPath);
+  });
+
   it("filters by model and workspace metadata", () => {
     const store = storeFrom([
       manifestJson(

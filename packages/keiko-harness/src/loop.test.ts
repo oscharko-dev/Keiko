@@ -628,4 +628,54 @@ describe("runLoop — limit breaches each map to their category", () => {
     expect(outcomeB).toBe("limit-exceeded");
     expect(failureCategory(sinkB.events())).toBe("HARNESS_LIMIT_WALL_TIME");
   });
+
+  it("keeps the handler's failure when a model error and the wall-time deadline coincide", async () => {
+    // A provider that errors slowly must be reported as a model error, not relabelled as budget
+    // exhaustion: the manifest's failure block is the audit surface for why a run stopped
+    // (ADR-0004 D1, KEIKO-0098).
+    const { AuthenticationError } = await import("@oscharko-dev/keiko-model-gateway");
+    const { clock, set } = stubClock(0);
+    const slowFailingModel: ModelPort = {
+      call: (): Promise<NormalizedResponse> => {
+        set(1000); // the deadline passes while the call is in flight
+        return Promise.reject(new AuthenticationError("provider returned 400 invalid request"));
+      },
+    };
+    const { ctx, sink } = buildContext({
+      task: EXPLAIN,
+      model: slowFailingModel,
+      clock,
+      limits: { maxWallTimeMs: 100 },
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("failed");
+    expect(failureCategory(sink.events())).toBe("HARNESS_MODEL_ERROR");
+  });
+
+  it("still converts a successful one-hop completion to limit-exceeded past the deadline", async () => {
+    // Only a handler's own recorded outcome (a real failure, an abort) may be protected from the
+    // post-dispatch deadline check — an ordinary successful completion must not be, per the
+    // wall-time budget's own acceptance criterion ("a model port that never errors ... still
+    // resolves to limit-exceeded"). reporting's dispatch goes straight to "completed" in one hop
+    // with no clock read in between, so a blanket "any terminal state bypasses the check" (as
+    // opposed to protecting only failed/cancelled) would silently drop enforcement here.
+    let calls = 0;
+    // Calls 1-16 land before reporting's own pre-dispatch guard (so dispatch is not blocked);
+    // call 17+ (this guard's own post-dispatch read) crosses the deadline — verified empirically
+    // against this exact EXPLAIN/scriptedModel/single-response shape.
+    const clock = {
+      now: (): number => (calls++ < 16 ? 0 : 1000),
+      sleep: (): Promise<void> => Promise.resolve(),
+    };
+    const { port } = scriptedModel([response()]);
+    const { ctx, sink } = buildContext({
+      task: EXPLAIN,
+      model: port,
+      clock,
+      limits: { maxWallTimeMs: 100 },
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("limit-exceeded");
+    expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_WALL_TIME");
+  });
 });

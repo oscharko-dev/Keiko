@@ -415,6 +415,19 @@ export type BrowserEvent =
   | BrowserTrustWarningEvent
   | BrowserErrorEvent;
 
+// ADR-0055 D4: shaping/compaction of a tool observation is additive — a fault there falls back to
+// the raw tool output rather than failing the run (KEIKO-0099). This is the observability signal
+// for that fallback: `reason` is a closed, safe vocabulary the harness itself chooses, never the
+// underlying error's message or the tool's raw output, so it needs no redaction.
+export type ToolShapingDegradedReason = "shaper-threw" | "unserializable-observation";
+
+export interface ToolShapingDegradedEvent extends BaseEvent {
+  readonly type: "tool:shaping:degraded";
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly reason: ToolShapingDegradedReason;
+}
+
 export type HarnessEvent =
   | RunStartedEvent
   | StateTransitionEvent
@@ -433,4 +446,5 @@ export type HarnessEvent =
   | RunCompletedEvent
   | RunCancelledEvent
   | RunFailedEvent
-  | BrowserEvent;
+  | BrowserEvent
+  | ToolShapingDegradedEvent;

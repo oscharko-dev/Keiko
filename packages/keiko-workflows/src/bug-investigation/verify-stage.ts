@@ -121,9 +121,12 @@ export async function runBugVerification(
     processEnv: state.deps.processEnv ?? process.env,
     now: state.now,
     fs,
-    networkEnforcement:
-      state.deps.verificationNetworkEnforcement ??
-      (state.deps.spawn !== undefined ? "enforce-or-degrade" : undefined),
+    // Explicit-only (ADR-0043 D8): leaving this undefined applies the orchestrator's fail-closed
+    // default. Deriving it from an injected dependency instead — `spawn !== undefined`, as shorthand
+    // for "a test harness is driving this" — also matched the production budget wrapper, which is
+    // exactly how a governed run injects its spawn, so the egress boundary was disabled on the one
+    // path that executes model-authored code.
+    networkEnforcement: state.deps.verificationNetworkEnforcement,
     ...(state.deps.verificationEnforcedNetworkAvailable === undefined
       ? {}
       : { enforcedNetworkAvailable: state.deps.verificationEnforcedNetworkAvailable }),
