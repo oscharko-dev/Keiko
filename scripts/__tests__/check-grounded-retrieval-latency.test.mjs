@@ -224,6 +224,31 @@ describe("runGroundedRetrievalLatencyGate", () => {
     );
   }, 180_000);
 
+  // An absent or malformed budget aborts the run either way. The point of catching it is that CI
+  // shows a named gate failure instead of a bare JSON-parser stack trace.
+  it.each([
+    ["absent", undefined],
+    ["malformed", "{ not json"],
+  ])("fails with a named diagnostic when the budget file is %s", async (_label, contents) => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-grounded-latency-bad-"));
+    try {
+      const budgetPath = join(root, "budget.json");
+      if (contents !== undefined) writeFileSync(budgetPath, contents);
+      const failures = [];
+      const result = await runGroundedRetrievalLatencyGate({
+        budgetPath,
+        log: () => discard(),
+        fail: (m) => failures.push(m),
+      });
+
+      expect(result.ok).toBe(false);
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toContain(`budget unusable at ${budgetPath}`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   // The self-proving half, exercised for real: with a budget wide enough to absorb the injected
   // delay, the probe must report the gate as tautological rather than passing quietly.
   it("fails closed when the budget is loose enough to absorb the injected regression", async () => {

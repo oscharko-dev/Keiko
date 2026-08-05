@@ -144,7 +144,17 @@ export async function runGroundedRetrievalLatencyGate({
       console.error(`grounded-retrieval-latency check failed: ${message}`);
       process.exit(1);
     });
-  const budget = assertMeasurableBudget(JSON.parse(readFileSync(budgetPath, "utf8")));
+  // An absent or malformed budget aborts the run either way; the difference is whether CI shows a
+  // named gate failure or a bare stack trace from a JSON parser.
+  let budget;
+  try {
+    budget = assertMeasurableBudget(JSON.parse(readFileSync(budgetPath, "utf8")));
+  } catch (error) {
+    onFail(
+      `budget unusable at ${budgetPath}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return { ok: false, p50: 0, p95: 0, failures: ["budget unusable"], probe: undefined };
+  }
 
   const samples = await collectSamples(budget);
   const result = evaluateGroundedLatency({ samples, budget });
