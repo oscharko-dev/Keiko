@@ -98,6 +98,7 @@ export const ASSURED_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
 ]);
 const ASSURED_PROOF_RULES: readonly CommandRule[] = Object.freeze([{ executable: "node" }]);
 let assuredIsolationProof: Promise<boolean> | undefined;
+const ASSURED_ISOLATION_PROOF_TIMEOUT_MS = 30_000;
 
 function npx(args: readonly string[]): SandboxedCommand {
   return { command: "npx", args };
@@ -205,14 +206,43 @@ function disposableWorkspace(root: string): WorkspaceInfo {
   };
 }
 
+// Probes host sandbox isolation once per process and caches ONLY a confirmed pass. The probe owns
+// its own AbortController -- deliberately NOT a caller's request-scoped signal -- so a routine
+// client disconnect (navigation, timeout, tab close) mid-probe can never be conflated with "this
+// host does not enforce the sandbox". A negative result is never memoized: it is cleared so the
+// next call re-probes, since a confirmed `true` is the only state that legitimately never changes
+// for the process's life (KEIKO-0124). `prove` defaults to the real probe; exported (and
+// injectable) so the caching/expiry contract is unit-testable the same way
+// disposableAssuredExecution.ts's node-effect ports are -- through an injected fake, never
+// `vi.mock`.
+export async function isolationProven(
+  root: string,
+  prove: (root: string, signal: AbortSignal) => Promise<boolean> = proveAssuredIsolation,
+): Promise<boolean> {
+  if (assuredIsolationProof === undefined) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort();
+    }, ASSURED_ISOLATION_PROOF_TIMEOUT_MS);
+    assuredIsolationProof = prove(root, controller.signal)
+      .finally(() => {
+        clearTimeout(timer);
+      })
+      .then((proven) => {
+        if (!proven) assuredIsolationProof = undefined;
+        return proven;
+      });
+  }
+  return assuredIsolationProof;
+}
+
 // Runs one untrusted command in the disposable root through the enforced sandbox (network:"none").
 async function runSandboxed(
   root: string,
   cmd: SandboxedCommand,
   signal: AbortSignal,
 ): Promise<SandboxedRunResult> {
-  const proof = (assuredIsolationProof ??= proveAssuredIsolation(root, signal));
-  if (!(await proof)) {
+  if (!(await isolationProven(root))) {
     return { exitCode: 1, networkEnforced: false, filesystemEnforced: false };
   }
   const result = await runCommand(

@@ -62,6 +62,11 @@ interface Harness {
   readonly onChange: ReturnType<typeof vi.fn>;
   readonly onStale: ReturnType<typeof vi.fn>;
   readonly setModel: (next: ConflictModel | null) => void;
+  /** Fires the editor's `onDidChangeModel` listeners, mirroring real Monaco's own event order:
+   * `getModel()` already returns the new model by the time this fires. Deliberately separate from
+   * `setModel` -- most existing cases in this file swap the model WITHOUT firing the event, to
+   * exercise the accept()-time staleness guard independently of model-change notification. */
+  readonly fireModelChange: () => void;
 }
 
 function setup(
@@ -77,8 +82,17 @@ function setup(
   const actions = new Map<string, () => void | Promise<void>>();
   const onChange = vi.fn();
   const onStale = vi.fn();
+  const modelListeners = new Set<() => void>();
   const editor = {
     getModel: (): ConflictModel | null => current,
+    onDidChangeModel: (listener: () => void): { dispose(): void } => {
+      modelListeners.add(listener);
+      return {
+        dispose: (): void => {
+          modelListeners.delete(listener);
+        },
+      };
+    },
     getPosition: (): { readonly lineNumber: number; readonly column: number } | null =>
       line === null ? null : { lineNumber: line, column: 1 },
     setPosition: vi.fn((position: { lineNumber: number }) => {
@@ -113,6 +127,9 @@ function setup(
     onStale,
     setModel: (next: ConflictModel | null): void => {
       current = next;
+    },
+    fireModelChange: (): void => {
+      for (const listener of modelListeners) listener();
     },
   };
 }
@@ -150,6 +167,33 @@ describe("registerConflictBridge", () => {
     harness.bridge.next();
     harness.bridge.previous();
     expect(harness.editor.setPosition.mock.calls).toHaveLength(2);
+    harness.bridge.dispose();
+  });
+
+  it("rebinds to a new model after a file switch and detects its conflicts (KEIKO-0034)", async () => {
+    vi.useFakeTimers();
+    const harness = setup(SOURCE);
+    await vi.runAllTimersAsync();
+    harness.bridge.next();
+    const [firstPosition] = harness.editor.setPosition.mock.calls.at(-1) as [
+      { lineNumber: number; column: number },
+    ];
+    harness.onChange.mockClear();
+    harness.editor.setPosition.mockClear();
+
+    // A second model with the SAME single conflict, shifted 3 lines down -- proves navigation
+    // after the switch reads the new model's coordinates, not the detached one's.
+    const shifted = model(`\n\n\n${SOURCE}`);
+    harness.setModel(shifted);
+    harness.fireModelChange();
+    await vi.runAllTimersAsync();
+
+    expect(harness.onChange).toHaveBeenCalledWith(1, false);
+    harness.bridge.next();
+    expect(harness.editor.setPosition).toHaveBeenLastCalledWith({
+      lineNumber: firstPosition.lineNumber + 3,
+      column: 1,
+    });
     harness.bridge.dispose();
   });
 

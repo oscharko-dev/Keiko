@@ -115,6 +115,12 @@ function registerFakeNavigationProvider(
   };
 }
 
+// Lets a test simulate Monaco's real async loader taking longer than a single microtask to fire
+// `onMount` (KEIKO-0033): the real `@monaco-editor/react` resolves through a dynamic `import()`
+// chain, not same-tick. `vi.hoisted` so the mock factory below (itself hoisted above these
+// `import`s) can close over the same mutable box the tests set.
+const hostMountControl = vi.hoisted(() => ({ extraMountMicrotasks: 0 }));
+
 vi.mock("@monaco-editor/react", () => {
   interface FakeSelection {
     startLineNumber: number;
@@ -394,7 +400,16 @@ vi.mock("@monaco-editor/react", () => {
   function scheduleMountOnce(state: MockState, onMount: MockProps["onMount"]): void {
     if (!state.mounted) {
       state.mounted = true;
-      queueMicrotask(() => onMount?.(state.fakeEditor, fakeMonaco));
+      let remaining = hostMountControl.extraMountMicrotasks;
+      const step = (): void => {
+        if (remaining <= 0) {
+          onMount?.(state.fakeEditor, fakeMonaco);
+          return;
+        }
+        remaining -= 1;
+        queueMicrotask(step);
+      };
+      queueMicrotask(step);
     }
   }
 
@@ -459,6 +474,7 @@ beforeEach(() => {
   captured.signatureHelp = [];
   captured.options = null;
   captured.keepCurrentModel = null;
+  hostMountControl.extraMountMicrotasks = 0;
 });
 
 afterEach(() => {
@@ -510,6 +526,65 @@ describe("KeikoCodeEditor — controlled editing", () => {
       string,
     ];
     expect(delta.text).toBe("const renamed = 1;\n");
+    expect(origin).toBe("applied-patch");
+  });
+
+  it("does not apply a host edit request while read-only, and reports it via onRuntimeError (KEIKO-0032)", async () => {
+    const onContentChange = vi.fn();
+    const onRuntimeError = vi.fn();
+    render(
+      <KeikoCodeEditor
+        {...baseProps({
+          onContentChange,
+          onRuntimeError,
+          fileModel: buildFileModel(true),
+          hostEditRequest: {
+            id: "rename-1",
+            text: "const renamed = 1;\n",
+            origin: "applied-patch",
+          },
+        })}
+      />,
+    );
+
+    await flushMount();
+    expect(captured.editor?.executeEdits).not.toHaveBeenCalled();
+    expect(onContentChange).not.toHaveBeenCalled();
+    expect(onRuntimeError).toHaveBeenCalledWith("host edit request ignored: buffer is read-only");
+  });
+
+  it("applies a host edit request that arrives before Monaco finishes mounting (KEIKO-0033)", async () => {
+    // The real `@monaco-editor/react` resolves `onMount` through an async loader, not same-tick.
+    // Force the mock past a single microtask hop so a one-shot retry (the pre-fix behaviour) would
+    // find the editor still unmounted and never try again.
+    hostMountControl.extraMountMicrotasks = 4;
+    const onContentChange = vi.fn();
+    render(
+      <KeikoCodeEditor
+        {...baseProps({
+          onContentChange,
+          hostEditRequest: {
+            id: "rename-2",
+            text: "const renamed = 2;\n",
+            origin: "applied-patch",
+          },
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(captured.editor?.executeEdits).toHaveBeenCalledWith("keiko.host-edit", [
+        {
+          range: { startLineNumber: 1, startColumn: 1, endLineNumber: 2, endColumn: 1 },
+          text: "const renamed = 2;\n",
+        },
+      ]);
+    });
+    const [delta, origin] = onContentChange.mock.calls.at(-1) as [
+      { text: string; sizeBytes: number },
+      string,
+    ];
+    expect(delta.text).toBe("const renamed = 2;\n");
     expect(origin).toBe("applied-patch");
   });
 

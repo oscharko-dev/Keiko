@@ -18,6 +18,7 @@ export interface ConflictModel {
 
 export interface ConflictEditor {
   getModel(): ConflictModel | null;
+  onDidChangeModel(listener: () => void): { dispose(): void };
   getPosition(): { readonly lineNumber: number; readonly column: number } | null;
   setPosition(position: { readonly lineNumber: number; readonly column: number }): void;
   revealRangeInCenterIfOutsideViewport(range: MonacoConflictRange): void;
@@ -153,15 +154,43 @@ class ConflictController implements ConflictBridge {
   private generation = 0;
   private disposed = false;
   private readonly actions: readonly { dispose(): void }[];
-  private readonly contentSub: { dispose(): void } | null;
+  private contentSub: { dispose(): void } | null = null;
+  private readonly modelSub: { dispose(): void };
 
   constructor(private readonly args: RegisterConflictBridgeArgs) {
     this.actions = this.installActions();
+    this.bindModel(args.editor.getModel());
+    this.modelSub = args.editor.onDidChangeModel(() => {
+      this.unbindModel();
+      this.bindModel(this.args.editor.getModel());
+    });
+  }
+
+  // Binds the content-change subscription to `model` and kicks off an immediate scan. Deliberately
+  // leaves `this.model` unset -- `scan()` sets it only once it has confirmed fresh data for
+  // `model`, so `navigate()`'s currency guard stays fail-closed for the window between a model
+  // swap and the next completed scan, instead of trusting a model this controller has not actually
+  // scanned yet.
+  private bindModel(model: ConflictModel | null): void {
     this.contentSub =
-      args.editor.getModel()?.onDidChangeContent(() => {
+      model?.onDidChangeContent(() => {
         this.schedule();
       }) ?? null;
     this.schedule(0);
+  }
+
+  // Mirrors diagnostics-bridge.ts's unbindModel: tear down the detached model's subscription and
+  // reset every piece of state derived from it. Resetting decorationIds against the (already
+  // swapped) editor is a bookkeeping reset, not a paint operation -- Monaco drops a detached
+  // model's rendered decorations on its own; this just stops the next scan from reusing stale ids.
+  private unbindModel(): void {
+    this.contentSub?.dispose();
+    this.contentSub = null;
+    this.blocks = [];
+    this.tokens = [];
+    this.version = -1;
+    this.decorationIds = this.args.editor.deltaDecorations(this.decorationIds, []);
+    this.model = null;
   }
 
   private async scan(): Promise<void> {
@@ -204,7 +233,12 @@ class ConflictController implements ConflictBridge {
   }
 
   private navigate(step: 1 | -1): void {
-    if (this.blocks.length === 0 || this.model === null) return;
+    if (
+      this.blocks.length === 0 ||
+      this.model === null ||
+      this.model !== this.args.editor.getModel()
+    )
+      return;
     const current = this.currentIndex();
     const index = resolveNavigationIndex(current, step, this.blocks.length);
     const block = this.blocks[index];
@@ -310,6 +344,7 @@ class ConflictController implements ConflictBridge {
     this.disposed = true;
     this.generation += 1;
     if (this.timer !== null) clearTimeout(this.timer);
+    this.modelSub.dispose();
     this.contentSub?.dispose();
     for (const action of this.actions) action.dispose();
     this.decorationIds = this.args.editor.deltaDecorations(this.decorationIds, []);

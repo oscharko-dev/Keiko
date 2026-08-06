@@ -29,7 +29,7 @@ describe("registerKeikoCallHierarchyAction", () => {
         return Promise.resolve({ request: query.request.request, roots: [] });
       },
       isCurrentDocument: () => true,
-      documentLanguage: "typescript",
+      documentLanguage: () => "typescript",
       streamId: "hierarchy",
       newRequestId: () => "request",
       labels: { command: "Show Call Hierarchy" },
@@ -63,7 +63,7 @@ describe("registerKeikoCallHierarchyAction", () => {
       resolve: (query) =>
         Promise.resolve({ request: query.request.request, roots: [], truncated: true }),
       isCurrentDocument: () => true,
-      documentLanguage: "typescript",
+      documentLanguage: () => "typescript",
       streamId: "hierarchy",
       newRequestId: () => "request",
       labels: { command: "Show Call Hierarchy" },

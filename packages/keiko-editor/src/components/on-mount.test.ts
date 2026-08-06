@@ -17,7 +17,10 @@ import type {
 } from "./completion-bridge.js";
 import type { MonacoDefinitionProvider, MonacoUriForPath } from "./definition-bridge.js";
 import type { EditorInlayHintsResolver } from "./inlay-hints-bridge.js";
-import type { EditorCallHierarchyResolver } from "./call-hierarchy-bridge.js";
+import type {
+  EditorCallHierarchyRequest,
+  EditorCallHierarchyResolver,
+} from "./call-hierarchy-bridge.js";
 import type {
   MonacoInlineCompletionsProvider,
   MonacoInlineCompletionsRegistrar,
@@ -31,6 +34,7 @@ import type {
   EditorFormattingResolver,
   EditorHoverResolver,
   EditorInlineCompletionResolver,
+  EditorLanguageId,
   EditorReferencesResolver,
   EditorSignatureHelpResolver,
   EditorSymbolsResolver,
@@ -1176,7 +1180,7 @@ function callHierarchyArg(): NonNullable<WireEditorOnMountArgs["callHierarchy"]>
     isCurrentDocument: () => true,
     streamId: "calls",
     newRequestId: () => "c",
-    documentLanguage: "typescript",
+    documentLanguage: () => "typescript",
     labels: { command: "Show Call Hierarchy" },
     onResult: vi.fn(),
   };
@@ -1228,6 +1232,54 @@ describe("wireEditorOnMount navigation/action/signature providers (#2104)", () =
     expect(fakes.actionDescriptors().map((action) => action.id)).toContain(
       "keiko.editor.showCallHierarchy",
     );
+  });
+
+  it("reads documentLanguage live at call-hierarchy action run time, not frozen at wiring time (KEIKO-0109)", async () => {
+    const fakes = buildFakes();
+    const model = {
+      getValue: (): string => "function target() {}",
+      uri: { toString: (): string => "keiko-editor://current" },
+      getLineCount: (): number => 1,
+      getLineMaxColumn: (): number => 21,
+    };
+    const editor = {
+      ...fakes.editor,
+      getPosition: (): { lineNumber: number; column: number } => ({ lineNumber: 1, column: 10 }),
+      getModel: () => model,
+    } as unknown as MountEditor;
+    let language: EditorLanguageId = "typescript";
+    const requests: EditorCallHierarchyRequest[] = [];
+    const resolve: EditorCallHierarchyResolver = (query) => {
+      requests.push(query.request);
+      return Promise.resolve({ request: query.request.request, roots: [] });
+    };
+    wire(fakes, {
+      editor,
+      callHierarchy: {
+        resolve,
+        isCurrentDocument: () => true,
+        streamId: "calls",
+        newRequestId: () => "c",
+        documentLanguage: () => language,
+        labels: { command: "Show Call Hierarchy" },
+        onResult: vi.fn(),
+      },
+    });
+    // Unlike the file's other actions, registerKeikoCallHierarchyAction's `run` is genuinely async
+    // (it awaits runLanguageBridgeCall internally); FakeActionDescriptor#run is typed `void` for
+    // its (synchronous) siblings, so reach the real returned promise through a local cast instead
+    // of widening the shared fake's type for every call site in this file.
+    const runCallHierarchyAction = fakes
+      .actionDescriptors()
+      .find((descriptor) => descriptor.id === "keiko.editor.showCallHierarchy")?.run as
+      ((editor: unknown) => Promise<void>) | undefined;
+
+    await runCallHierarchyAction?.(editor);
+    language = "python";
+    await runCallHierarchyAction?.(editor);
+
+    expect(requests[0]?.document.language).toBe("typescript");
+    expect(requests[1]?.document.language).toBe("python");
   });
 
   it("registers no providers and no F12/Shift+F12 actions when the host supplies no resolvers", () => {

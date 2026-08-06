@@ -912,6 +912,77 @@ describe("governed DAP debug routes", () => {
     expect(requiredFirst(state.breakpoints).verification).toBe("verified");
   });
 
+  it("recovers a replayed configure closure after a concurrent breakpoint edit (KEIKO-0097)", async () => {
+    // dapProcessManager reuses the SAME `configure` closure across its internal launch retries. This
+    // reproduces that reuse directly: capture the closure a real session-start built, let a
+    // breakpoint edit land afterward (simulating the race with an in-flight launch), then replay the
+    // SAME closure exactly as a retry would and assert it observes the edit instead of replaying
+    // whatever it read on its first run.
+    enableDebug();
+    const cookie = cookieFrom(await bootstrap());
+    const initial = (await (await instrumentation(cookie)).json()) as {
+      readonly revision: number;
+      readonly etag: string;
+    };
+    const firstEdit = await putBreakpoints(cookie, breakpointMutationBody(), initial.etag);
+    expect(firstEdit.status).toBe(200);
+
+    const started = await debugJson("/api/editor/debug/sessions", cookie, {
+      schemaVersion: "1",
+      workspaceId,
+      target: { kind: "file", fileId: "src/app.ts" },
+      activationRevision: ACTIVATION_REVISION,
+    });
+    expect(started.status).toBe(201);
+    const session = (await started.json()) as { readonly sessionId: string };
+    const configure = manager.starts.at(-1)?.configure;
+    expect(configure).toBeDefined();
+    // Stop the session so the concurrent edit below persists as pending instead of being live-armed
+    // through the (unrelated) active-session dispatch path -- isolating the closure-staleness bug
+    // this finding is about from that separate reconciliation path.
+    await manager.stop(session.sessionId);
+
+    const beforeSecondEdit = (await (await instrumentation(cookie)).json()) as {
+      readonly revision: number;
+      readonly etag: string;
+    };
+    const secondEdit = await putBreakpoints(
+      cookie,
+      {
+        schemaVersion: "1",
+        workspaceId,
+        expectedRevision: beforeSecondEdit.revision,
+        fileId: "src/private-entry.ts",
+        breakpoints: [
+          {
+            id: "request-breakpoint",
+            fileId: "src/private-entry.ts",
+            line: 34,
+            enabled: true,
+            kind: "line",
+            verification: "pending",
+          },
+        ],
+      },
+      beforeSecondEdit.etag,
+    );
+    expect(secondEdit.status).toBe(202);
+    const beforeReplay = (await (await instrumentation(cookie)).json()) as {
+      readonly breakpoints: readonly { readonly verification: string }[];
+    };
+    expect(requiredFirst(beforeReplay.breakpoints).verification).toBe("pending");
+
+    await configure?.({
+      request: <T>(command: string, args: unknown): Promise<T> =>
+        manager.request(session.sessionId, command, args, "inspection"),
+    }).catch(() => undefined);
+
+    const final = (await (await instrumentation(cookie)).json()) as {
+      readonly breakpoints: readonly { readonly verification: string }[];
+    };
+    expect(requiredFirst(final.breakpoints).verification).toBe("verified");
+  });
+
   it("reports persisted but not armed when an active adapter rejects breakpoint delivery", async () => {
     enableDebug();
     const cookie = cookieFrom(await bootstrap());

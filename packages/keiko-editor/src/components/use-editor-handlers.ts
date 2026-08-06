@@ -51,6 +51,7 @@ import type {
   EditorFormattingResponse,
   EditorHoverResponse,
   EditorInlineCompletionResponse,
+  EditorLanguageId,
   EditorReferencesResponse,
   EditorSignatureHelpResponse,
   EditorSymbolsResponse,
@@ -341,22 +342,46 @@ function useHostEditRequest(
   props: KeikoCodeEditorProps,
   refs: EditorRefs,
   programmaticChangeRef: ProgrammaticEditorChangeRef,
+  readOnly: boolean,
 ): void {
   const handledRequestIdRef = useRef<string | null>(null);
   useEffect(() => {
     const request = props.hostEditRequest;
     if (request === undefined || handledRequestIdRef.current === request.id) return;
-    const applyIfMounted = (): void => {
-      if (refs.editorRef.current === null || handledRequestIdRef.current === request.id) return;
+    if (readOnly) {
       handledRequestIdRef.current = request.id;
-      applyHostEditRequest(request, refs, props.onContentChange, programmaticChangeRef);
-    };
-    if (refs.editorRef.current === null) {
-      queueMicrotask(applyIfMounted);
+      props.onRuntimeError?.("host edit request ignored: buffer is read-only");
       return;
     }
-    applyIfMounted();
-  }, [programmaticChangeRef, props.hostEditRequest, props.onContentChange, refs]);
+    // Monaco's onMount resolves through @monaco-editor/react's async loader, not same-tick, so a
+    // single retry is not enough (KEIKO-0033) -- poll every frame, mirroring
+    // useControlledModelValueSync's syncWhenMounted, until the editor actually mounts.
+    let frame: number | null = null;
+    let cancelled = false;
+    const applyIfMounted = (): boolean => {
+      if (refs.editorRef.current === null) return false;
+      if (handledRequestIdRef.current === request.id) return true;
+      handledRequestIdRef.current = request.id;
+      applyHostEditRequest(request, refs, props.onContentChange, programmaticChangeRef);
+      return true;
+    };
+    const pollUntilMounted = (): void => {
+      if (cancelled || applyIfMounted()) return;
+      frame = window.requestAnimationFrame(pollUntilMounted);
+    };
+    pollUntilMounted();
+    return (): void => {
+      cancelled = true;
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, [
+    programmaticChangeRef,
+    props.hostEditRequest,
+    props.onContentChange,
+    props.onRuntimeError,
+    readOnly,
+    refs,
+  ]);
 }
 
 function useControlledModelValueSync(
@@ -711,7 +736,7 @@ function buildCallHierarchyWiring(
         ? Promise.reject(new Error("call-hierarchy resolver unavailable"))
         : live(query, signal);
     },
-    documentLanguage: latestProps.current.fileModel.identity.language,
+    documentLanguage: (): EditorLanguageId => latestProps.current.fileModel.identity.language,
     streamId,
     newRequestId: createEditorRequestId,
     labels: { command: labels.command },
@@ -1391,7 +1416,7 @@ export function useEditorHandlers(
     refs.debugBridgeRef.current?.refresh();
   }, [refs.debugBridgeRef]);
   useUnmountDisposal(refs);
-  useHostEditRequest(props, refs, programmaticChangeRef);
+  useHostEditRequest(props, refs, programmaticChangeRef, readOnly);
   useModelAttachmentSync(props, refs);
   useControlledModelValueSync(props, refs, programmaticChangeRef);
   useRevealRequest(props, refs);
