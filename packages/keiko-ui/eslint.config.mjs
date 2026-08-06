@@ -77,6 +77,28 @@ const config = [
       "@typescript-eslint/no-explicit-any": "error",
     },
   },
+  // Audit KEIKO-0118: keiko-ui is ignored by the root config (eslint.config.js), so the repo's
+  // complexity / function-length / explicit-return-type bar reached every package EXCEPT the
+  // largest TSX surface in the product. The values below are the root config's, verbatim
+  // (eslint.config.js: complexity 10, max-lines-per-function 50 skipping blanks and comments,
+  // explicit-function-return-type) — keiko-editor is the precedent: a large React/TSX package held
+  // to the full bar with no carve-out.
+  // Scoped to TypeScript: `public/` ships hand-written browser assets (the AudioWorklet processor)
+  // that no TS parser sees, and a TS-AST rule crashes outright on them.
+  {
+    files: ["**/*.ts", "**/*.tsx"],
+    rules: {
+      complexity: ["error", 10],
+      "max-lines-per-function": ["error", { max: 50, skipBlankLines: true, skipComments: true }],
+      "@typescript-eslint/explicit-function-return-type": "error",
+    },
+  },
+  // Mirrors eslint.config.js: a describe() block legitimately groups many it() cases, so test files
+  // are exempt from max-lines-per-function only — complexity and return types still apply.
+  {
+    files: ["**/*.test.ts", "**/*.test.tsx"],
+    rules: { "max-lines-per-function": "off" },
+  },
   jsxA11yStrict,
 ];
 

@@ -5,13 +5,17 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  checkE2eConfigOwnership,
   checkE2eSuiteWiring,
   executableWorkflowSegments,
   formatGateReport,
   isWiredInWorkflows,
   main,
   runE2eSuiteWiringGate,
+  playwrightConfigNames,
   validateBaselineSuites,
+  validateUnownedConfigReasons,
+  validateUnownedConfigs,
 } from "../check-e2e-suite-wiring.mjs";
 
 // Each caller owns its directory for the length of one test, so nothing is shared and no ordering
@@ -191,5 +195,169 @@ describe("e2e suite wiring gate (#2629)", () => {
     const written = [];
     expect(main((text) => written.push(text))).toBe(0);
     expect(written.join("")).toContain("e2e-suite-wiring: PASS");
+  });
+});
+
+// KEIKO-0077: the suite check starts from the scripts, so a fully-built suite whose config never
+// received a script is invisible to it — there is no script to find unwired. Four configs were in
+// that state. This check runs the other direction: enumerate the configs, require an owning script.
+describe("config ownership (KEIKO-0077)", () => {
+  const OWNED = "playwright.issue-2253-coding-workbench.config.ts";
+  const ORPHAN = "playwright.issue-9999-orphan.config.ts";
+  const command = (config) =>
+    `playwright test --config tests/e2e/config/${config} --project=chromium`;
+
+  it("fails for a config that no test:e2e:* script names", () => {
+    const problems = checkE2eConfigOwnership({
+      configs: [OWNED, ORPHAN],
+      scriptCommands: [command(OWNED)],
+      unownedConfigs: [],
+    });
+
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain(ORPHAN);
+    expect(problems[0]).toContain("has no test:e2e:* script that runs it");
+  });
+
+  it("passes once an owning script is added", () => {
+    expect(
+      checkE2eConfigOwnership({
+        configs: [OWNED, ORPHAN],
+        scriptCommands: [command(OWNED), command(ORPHAN)],
+        unownedConfigs: [],
+      }),
+    ).toEqual([]);
+  });
+
+  it("passes when the config is recorded in the register instead", () => {
+    expect(
+      checkE2eConfigOwnership({
+        configs: [OWNED, ORPHAN],
+        scriptCommands: [command(OWNED)],
+        unownedConfigs: [ORPHAN],
+      }),
+    ).toEqual([]);
+  });
+
+  // Same ratchet as the suites register: an entry that has since been given a script, or whose
+  // config was deleted, must leave. Without this the register accretes and stops meaning anything.
+  it("fails on a stale register entry (config deleted, or script since added)", () => {
+    expect(
+      checkE2eConfigOwnership({
+        configs: [OWNED],
+        scriptCommands: [command(OWNED)],
+        unownedConfigs: [ORPHAN],
+      }),
+    ).toEqual([
+      `docs/qa/unwired-e2e-suites.json records ${ORPHAN}, which no longer exists. Remove the entry.`,
+    ]);
+
+    const [problem] = checkE2eConfigOwnership({
+      configs: [ORPHAN],
+      scriptCommands: [command(ORPHAN)],
+      unownedConfigs: [ORPHAN],
+    });
+    expect(problem).toContain("but one now runs it");
+  });
+
+  // A malformed `"test:e2e:x": null` in package.json reaches here as a non-string command. Skipping
+  // it is fail-closed — the config stays unowned — where `.includes` on it would crash the gate.
+  it("treats a non-string script command as owning nothing rather than crashing", () => {
+    const problems = checkE2eConfigOwnership({
+      configs: [OWNED],
+      scriptCommands: [null, undefined, 42, command(OWNED)],
+      unownedConfigs: [],
+    });
+
+    expect(problems).toEqual([]);
+    expect(
+      checkE2eConfigOwnership({ configs: [OWNED], scriptCommands: [null], unownedConfigs: [] }),
+    ).toHaveLength(1);
+  });
+
+  // Ownership must mean "this command runs the config", not "this command mentions it". A substring
+  // test accepted `echo <name>` — a command that runs nothing — so any config could be waved past
+  // the OWNED invariant by naming it.
+  it("does not accept a mere mention of the config as ownership", () => {
+    expect(playwrightConfigNames(`echo ${ORPHAN}`)).toEqual([]);
+    expect(playwrightConfigNames(`# runs ${ORPHAN} one day`)).toEqual([]);
+    expect(
+      checkE2eConfigOwnership({
+        configs: [ORPHAN],
+        scriptCommands: [`echo ${ORPHAN}`],
+        unownedConfigs: [],
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("reads both --config spellings and an alternate path to the same file", () => {
+    expect(playwrightConfigNames(command(ORPHAN))).toEqual([ORPHAN]);
+    expect(playwrightConfigNames(`playwright test --config=tests/e2e/config/${ORPHAN}`)).toEqual([
+      ORPHAN,
+    ]);
+    expect(playwrightConfigNames(`playwright test --config ./tests/e2e/config/${ORPHAN}`)).toEqual([
+      ORPHAN,
+    ]);
+  });
+
+  // Splitting on whitespace keeps the quotes, so an unquoted read would leave `.ts"` and match no
+  // config — a legitimate command reading as unowned.
+  it("reads a quoted --config value in both spellings", () => {
+    expect(playwrightConfigNames(`playwright test --config="tests/e2e/config/${ORPHAN}"`)).toEqual([
+      ORPHAN,
+    ]);
+    expect(playwrightConfigNames(`playwright test --config 'tests/e2e/config/${ORPHAN}'`)).toEqual([
+      ORPHAN,
+    ]);
+  });
+
+  // A whitespace split would break the quoted path into two tokens and lose the config entirely.
+  it("reads a quoted --config value containing a space", () => {
+    const spaced = "playwright.issue with space.config.ts";
+
+    expect(playwrightConfigNames(`playwright test --config="tests/e2e/config/${spaced}"`)).toEqual([
+      spaced,
+    ]);
+    expect(playwrightConfigNames(`playwright test --config "tests/e2e/config/${spaced}"`)).toEqual([
+      spaced,
+    ]);
+  });
+
+  it("does not let a filename prefix satisfy a different config", () => {
+    const longer = "playwright.issue-9999-orphan-extended.config.ts";
+
+    expect(
+      checkE2eConfigOwnership({
+        configs: [ORPHAN],
+        scriptCommands: [command(longer)],
+        unownedConfigs: [],
+      }),
+    ).toHaveLength(1);
+  });
+
+  // The recorded reason IS the justification for a scriptless config. An unreasoned entry is an
+  // unexplained exemption, and a reason outliving its entry is stale evidence — both fail closed.
+  it("requires a non-empty reason for every recorded config and rejects stale reasons", () => {
+    expect(() => validateUnownedConfigReasons([ORPHAN], {})).toThrow(/no reason/u);
+    expect(() => validateUnownedConfigReasons([ORPHAN], { [ORPHAN]: "   " })).toThrow(/no reason/u);
+    expect(() => validateUnownedConfigReasons([ORPHAN], { [ORPHAN]: 42 })).toThrow(/no reason/u);
+    expect(() => validateUnownedConfigReasons([], { [ORPHAN]: "why" })).toThrow(/stale reason/u);
+    expect(() => validateUnownedConfigReasons([], [])).toThrow(/configsWithoutScriptReasons/u);
+    expect(validateUnownedConfigReasons([ORPHAN], { [ORPHAN]: "why" })).toEqual({
+      [ORPHAN]: "why",
+    });
+  });
+
+  it("rejects duplicate and non-config register entries", () => {
+    expect(() => validateUnownedConfigs([ORPHAN, ORPHAN])).toThrow(/more than once/u);
+    expect(() => validateUnownedConfigs(["test:e2e:a"])).toThrow(/file names/u);
+    expect(() => validateUnownedConfigs(undefined)).toThrow(/configsWithoutScript/u);
+    expect(validateUnownedConfigs([ORPHAN])).toEqual([ORPHAN]);
+  });
+
+  // The real repository must satisfy the invariant, not only the fixtures: a gate whose only
+  // coverage is synthetic never proves it can read its own inputs.
+  it("holds over the real repository", () => {
+    expect(runE2eSuiteWiringGate().problems).toEqual([]);
   });
 });

@@ -1,12 +1,13 @@
 {
-  "purpose": "Suites that exist as npm scripts but run in no workflow lane. A debt register, not an exemption list: scripts/check-e2e-suite-wiring.mjs fails on any suite missing from here, and fails again on any entry that has since been wired or deleted, so this list can only shrink.",
-  "recordedBy": "#2629 (epic #2285 Wave 2)",
-  "note": "Every entry predates the gate; none was added to silence a failure. Wiring one is a CI-minute decision owned by the suite area, not by this file. The creation date is in git history rather than duplicated here, where it could only drift. test:e2e:editor-perf is deliberate: it is driven by the D12 evidence regeneration flow (docs/qa/perf-evidence.md), not by a lane.",
+  "purpose": "Suites that exist as npm scripts but run in no workflow lane, and Playwright configs that have no owning npm script at all. A debt register, not an exemption list: scripts/check-e2e-suite-wiring.mjs fails on any suite or config missing from here, and fails again on any entry that has since been wired, given a script, or deleted, so these lists can only shrink.",
+  "recordedBy": "#2629 (epic #2285 Wave 2); configsWithoutScript added by #2891 (audit KEIKO-0077)",
+  "note": "Every entry predates the gate that records it; none was added to silence a failure. Wiring one is a CI-minute decision owned by the suite area, not by this file. The creation date is in git history rather than duplicated here, where it could only drift. test:e2e:editor-perf is deliberate: it is driven by the D12 evidence regeneration flow (docs/qa/perf-evidence.md), not by a lane.",
   "suites": [
     "test:e2e:coding-workbench-1990",
     "test:e2e:coding-workbench-1991",
     "test:e2e:coding-workbench-1992",
     "test:e2e:coding-workbench-1994",
+    "test:e2e:coding-workbench-2257",
     "test:e2e:editor-agent-1394",
     "test:e2e:editor-agent-docking-2122",
     "test:e2e:editor-chat-2119",
@@ -14,6 +15,7 @@
     "test:e2e:editor-fidelity-1296",
     "test:e2e:editor-governance-1395",
     "test:e2e:editor-perf",
+    "test:e2e:editor-provider-status-1382",
     "test:e2e:editor-source-control-2235",
     "test:e2e:managed-language-closeout-2282",
     "test:e2e:memoriaviva-m1",
@@ -22,5 +24,14 @@
     "test:e2e:update-ui-1696",
     "test:e2e:workspace-search-2090",
     "test:e2e:workspace-selection-2060"
-  ]
+  ],
+  "configsWithoutScriptNote": "A config with no owning script is less runnable than a suite that merely runs in no lane: nothing can even name it, so the suites list above cannot see it. Each entry states why a script would be wrong today rather than merely absent. Adding the script is the fix; recording it here is the interim. Reasons are in configsWithoutScriptReasons, keyed by the same file name.",
+  "configsWithoutScript": [
+    "playwright.code-task-real-binary.config.ts",
+    "playwright.issue-1405-human-loop.config.ts"
+  ],
+  "configsWithoutScriptReasons": {
+    "playwright.code-task-real-binary.config.ts": "Issue #2483 — drives code-task-authority.spec.ts against a staged, approved real OpenCode payload discovered through the production macOS dev-lane path, with no resolver/supervisor/KEIKO_OPENCODE_REAL_* seam to substitute. It requires that payload staged on the machine, so it is operator-run on a prepared checkout; a hosted runner has nothing to discover and the script could only ever fail.",
+    "playwright.issue-1405-human-loop.config.ts": "human-loop-1405.spec.ts renders a hand-authored HTML replica instead of driving the real app or the real AgentGateCard (open finding KEIKO-0140 / GEN-TEST-E2E-003). Giving it a script and a lane would gate on a fixture already known not to exercise the component it claims to cover. The script lands when that finding is repaired or the suite is rewritten."
+  }
 }

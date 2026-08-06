@@ -315,6 +315,17 @@ export {
   type GroundedRetrievalBudget,
 } from "./grounded-retrieval-eval.js";
 
+// Audit KEIKO-0053 — the LATENCY counterpart of the eval above. The quality gate drives the real
+// grounded path but records no timing, and check:retrieval-latency times only lexical searchText,
+// so nothing gated embedding/ANN/rerank/entailment wall-clock. Exposed so
+// scripts/check-grounded-retrieval-latency.mjs can measure it with a deterministic judge.
+export {
+  runGroundedRetrievalLatencyEval,
+  FIXTURE_ANSWER_CLAIMS,
+  type GroundedLatencySample,
+  type GroundedLatencyEvalOptions,
+} from "./grounded-latency-eval.js";
+
 // Knowledge M2.3 (#2567) — the single governed model-rerank facade shared by every grounded
 // orchestrator. Documents remain caller-shaped, while policy/config gating, provider mapping,
 // diagnostics, and deterministic fallback behavior stay centralized.

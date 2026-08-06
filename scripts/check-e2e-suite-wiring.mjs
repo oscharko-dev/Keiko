@@ -5,12 +5,21 @@
 // coverage. Epic #2285 shipped with seven of its eight end-to-end suites in exactly that state:
 // present in package.json, referenced by no lane, never executed by anything.
 //
-// Two invariants, both machine-checked:
+// Three invariants, all machine-checked:
 //   1. WIRED — every `test:e2e:*` script in package.json is invoked by at least one workflow, or is
 //      recorded in the baseline as a known-unwired suite.
 //   2. RATCHET — no baseline entry is stale. A recorded suite that has since been wired, or has
 //      been deleted, must leave the baseline. The list may therefore only shrink, which is what
 //      makes it a debt register rather than a permanent exemption.
+//   3. OWNED — every `tests/e2e/config/*.config.ts` is named by at least one `test:e2e:*` script's
+//      command, or is recorded in `configsWithoutScript`, with the same ratchet as (2).
+//
+// Invariant 3 closes the blind spot invariant 1 cannot see (audit KEIKO-0077). Invariant 1 starts
+// from the scripts, so a fully-built suite whose config never received a script is invisible to it:
+// there is no script to find unwired. Four configs were in exactly that state — a suite that no
+// script can even name is less runnable than one that merely runs in no lane, yet only the latter
+// was gated. Enumerating the configs and requiring an owning script is the only direction that
+// catches a config authored without one.
 //
 // The baseline exists because this gate was introduced over a tree that already had a backlog of
 // unwired suites. Wiring all of them is a different piece of work with a real CI-minute cost;
@@ -23,7 +32,7 @@
 // it can still fail.
 
 import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { compareStrings } from "./lib/compare-strings.mjs";
@@ -153,6 +162,150 @@ export function checkE2eSuiteWiring({ scripts, workflowText, baseline }) {
   return problems;
 }
 
+const CONFIG_DIR = join("tests", "e2e", "config");
+const CONFIG_SUFFIX = ".config.ts";
+
+/**
+ * Validate that every Playwright config has an owning `test:e2e:*` script. `scriptCommands` is the
+ * command strings of those scripts; a config is owned when one of them names its basename, which is
+ * what `--config tests/e2e/config/<name>` does. Deliberately matched on the basename rather than by
+ * re-deriving the `--config` argument: an owning script that reaches the file by any other spelling
+ * is still an owning script, and this cannot drift from the flag's syntax.
+ */
+/**
+ * The Playwright config basenames a command actually RUNS, read from its `--config` arguments in
+ * both spellings (`--config <path>` and `--config=<path>`). Returns basenames so an alternate but
+ * equivalent path spelling still resolves to the same config, while a bare mention of the filename
+ * somewhere else in the command resolves to nothing.
+ */
+const CONFIG_FLAG = "--config";
+const CONFIG_FLAG_INLINE = `${CONFIG_FLAG}=`;
+
+// Whitespace splitting keeps the quote characters, so `--config="…/x.config.ts"` would otherwise
+// end in `.ts"` and match no config — a legitimate command reading as unowned.
+function unquote(value) {
+  const quoted = /^"([^"]*)"$|^'([^']*)'$/u.exec(value);
+  return quoted?.[1] ?? quoted?.[2] ?? value;
+}
+
+function configArgumentValue(token, nextToken) {
+  if (token.startsWith(CONFIG_FLAG_INLINE)) {
+    return unquote(token.slice(CONFIG_FLAG_INLINE.length));
+  }
+  return token === CONFIG_FLAG && nextToken !== undefined ? unquote(nextToken) : undefined;
+}
+
+// Quote-aware, not a plain whitespace split: a quoted path may legitimately contain a space, and
+// splitting it into two tokens would lose the config and report an owned config as unowned.
+//
+// A token is a RUN of unquoted and quoted pieces, not an alternation between them. The simpler
+// `"…"|'…'|\S+` form still fails the attached spelling: at `--config="a b.ts"` the quote sits mid
+// token, so the quoted branch cannot start there and `\S+` grabs `--config="a` up to the space.
+// Repeating the group keeps `--config=` and `"a b.ts"` in one token.
+const SHELL_TOKEN = /(?:[^\s"']+|"[^"]*"|'[^']*')+/gu;
+
+export function playwrightConfigNames(command) {
+  if (typeof command !== "string") return [];
+  const tokens = command.match(SHELL_TOKEN) ?? [];
+  const found = [];
+  for (const [index, token] of tokens.entries()) {
+    const value = configArgumentValue(token, tokens[index + 1]);
+    if (value?.endsWith(CONFIG_SUFFIX) === true) found.push(basename(value));
+  }
+  return found;
+}
+
+export function checkE2eConfigOwnership({ configs, scriptCommands, unownedConfigs }) {
+  const recorded = new Set(unownedConfigs);
+  // Ownership is decided by the RESOLVED `--config` argument, not by a substring of the command.
+  // A substring test accepted `echo playwright.issue-9999-orphan.config.ts` as ownership — a
+  // command that runs nothing — so any config could be waved through the OWNED invariant by
+  // mentioning its name. A non-string command (a malformed `"test:e2e:x": null`, which is valid
+  // JSON) yields no configs rather than crashing on `.includes`; both are the fail-closed
+  // direction, leaving the config unowned rather than silently blessed.
+  const ownedByCommands = new Set(
+    scriptCommands.flatMap((command) => playwrightConfigNames(command)),
+  );
+  const owned = new Set(configs.filter((config) => ownedByCommands.has(config)));
+  const problems = [];
+
+  for (const config of [...configs].sort(compareStrings)) {
+    if (owned.has(config) || recorded.has(config)) continue;
+    problems.push(
+      `${join(CONFIG_DIR, config)} has no test:e2e:* script that runs it. Add one following the ` +
+        `"test:e2e:<slug>": "playwright test --config ${CONFIG_DIR}/<config> --project=chromium" ` +
+        `convention, or record it in ${BASELINE_PATH} with the reason it cannot have one yet.`,
+    );
+  }
+
+  const present = new Set(configs);
+  for (const config of [...recorded].sort(compareStrings)) {
+    if (!present.has(config)) {
+      problems.push(
+        `${BASELINE_PATH} records ${config}, which no longer exists. Remove the entry.`,
+      );
+    } else if (owned.has(config)) {
+      problems.push(
+        `${BASELINE_PATH} records ${config} as having no script, but one now runs it. Remove the ` +
+          "entry — the register only shrinks.",
+      );
+    }
+  }
+  return problems;
+}
+
+export function validateUnownedConfigs(configs) {
+  if (!Array.isArray(configs)) {
+    throw new TypeError(`${BASELINE_PATH} must carry a "configsWithoutScript" array.`);
+  }
+  const seen = new Set();
+  for (const config of configs) {
+    if (typeof config !== "string" || !config.endsWith(CONFIG_SUFFIX)) {
+      throw new TypeError(
+        `${BASELINE_PATH} configsWithoutScript entries must be "*${CONFIG_SUFFIX}" file names; ` +
+          `found ${JSON.stringify(config)}.`,
+      );
+    }
+    if (seen.has(config)) throw new TypeError(`${BASELINE_PATH} records ${config} more than once.`);
+    seen.add(config);
+  }
+  return configs;
+}
+
+/**
+ * The recorded reason is the whole justification for a scriptless config, so it has to be
+ * enforced rather than merely conventional: an unreasoned entry is an unexplained exemption, and a
+ * reason left behind by a removed entry is stale evidence. Both fail closed here.
+ */
+export function validateUnownedConfigReasons(configs, reasons) {
+  if (typeof reasons !== "object" || reasons === null || Array.isArray(reasons)) {
+    throw new TypeError(`${BASELINE_PATH} must carry a "configsWithoutScriptReasons" object.`);
+  }
+  for (const config of configs) {
+    const reason = reasons[config];
+    if (typeof reason !== "string" || reason.trim().length === 0) {
+      throw new TypeError(
+        `${BASELINE_PATH} records ${config} with no reason. Every configsWithoutScript entry ` +
+          "needs a non-empty configsWithoutScriptReasons entry stating why a script would be wrong.",
+      );
+    }
+  }
+  const recorded = new Set(configs);
+  for (const config of Object.keys(reasons)) {
+    if (!recorded.has(config)) {
+      throw new TypeError(
+        `${BASELINE_PATH} carries a configsWithoutScriptReasons entry for ${config}, which is not ` +
+          "in configsWithoutScript. Remove the stale reason.",
+      );
+    }
+  }
+  return reasons;
+}
+
+function readE2eConfigs(repoRoot) {
+  return readdirSync(join(repoRoot, CONFIG_DIR)).filter((name) => name.endsWith(CONFIG_SUFFIX));
+}
+
 function readWorkflowText(repoRoot) {
   const dir = join(repoRoot, ".github", "workflows");
   return readdirSync(dir)
@@ -183,7 +336,11 @@ export function validateBaselineSuites(suites) {
 
 function readBaseline(repoRoot) {
   const parsed = JSON.parse(readFileSync(join(repoRoot, BASELINE_PATH), "utf8"));
-  return validateBaselineSuites(parsed.suites);
+  // Absent field ⇒ nothing recorded ⇒ every scriptless config fails. That is the fail-closed
+  // direction, so a baseline predating this list degrades to "stricter", never to "silent".
+  const configsWithoutScript = validateUnownedConfigs(parsed.configsWithoutScript ?? []);
+  validateUnownedConfigReasons(configsWithoutScript, parsed.configsWithoutScriptReasons ?? {});
+  return { suites: validateBaselineSuites(parsed.suites), configsWithoutScript };
 }
 
 /**
@@ -193,20 +350,33 @@ function readBaseline(repoRoot) {
  */
 export function runE2eSuiteWiringGate(repoRoot = REPO_ROOT) {
   const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
-  const scripts = Object.keys(pkg.scripts ?? {});
-  const baseline = readBaseline(repoRoot);
+  const allScripts = pkg.scripts ?? {};
+  const scripts = Object.keys(allScripts);
+  const { suites: baseline, configsWithoutScript } = readBaseline(repoRoot);
+  const configs = readE2eConfigs(repoRoot);
   return {
-    problems: checkE2eSuiteWiring({
-      scripts,
-      workflowText: readWorkflowText(repoRoot),
-      baseline,
-    }),
+    problems: [
+      ...checkE2eSuiteWiring({
+        scripts,
+        workflowText: readWorkflowText(repoRoot),
+        baseline,
+      }),
+      ...checkE2eConfigOwnership({
+        configs,
+        scriptCommands: scripts
+          .filter((name) => name.startsWith(E2E_SCRIPT_PREFIX))
+          .map((name) => allScripts[name]),
+        unownedConfigs: configsWithoutScript,
+      }),
+    ],
     total: scripts.filter((name) => name.startsWith(E2E_SCRIPT_PREFIX)).length,
     recorded: baseline.length,
+    configs: configs.length,
+    unownedConfigs: configsWithoutScript.length,
   };
 }
 
-export function formatGateReport({ problems, total, recorded }) {
+export function formatGateReport({ problems, total, recorded, configs, unownedConfigs }) {
   if (problems.length > 0) {
     return [
       `e2e-suite-wiring: FAIL — ${String(problems.length)} problem(s)`,
@@ -216,7 +386,9 @@ export function formatGateReport({ problems, total, recorded }) {
   }
   return (
     `e2e-suite-wiring: PASS — ${String(total - recorded)} of ${String(total)} suite(s) run in a ` +
-    `workflow; ${String(recorded)} recorded as not yet wired.\n`
+    `workflow; ${String(recorded)} recorded as not yet wired. ` +
+    `${String(configs - unownedConfigs)} of ${String(configs)} config(s) have an owning script; ` +
+    `${String(unownedConfigs)} recorded as scriptless.\n`
   );
 }
 
