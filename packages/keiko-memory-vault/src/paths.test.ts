@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, symlinkSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, symlinkSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { MemoryStorageError } from "./errors.js";
@@ -141,8 +141,49 @@ describe("resolveMemoryDir", () => {
     stubbedHome.path = home;
     try {
       expect(resolveMemoryDir(undefined, emptyEnv())).toBe(
-        join(home, DEFAULT_STATE_DIR, MEMORY_DIR_NAME),
+        join(realpathSync(home), DEFAULT_STATE_DIR, MEMORY_DIR_NAME),
       );
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  // A relocated or mounted home is an ordinary setup, not the planted redirect this module guards
+  // against. hasSymlinkAncestor stops at the first EXISTING ancestor, so before ~/.keiko is created
+  // — i.e. on the very first run — that ancestor is the home directory itself, and guarding the
+  // unresolved path rejected those installs outright.
+  it("accepts a symlinked home directory before .keiko exists", () => {
+    const base = freshTmp();
+    const realHome = join(base, "real-home");
+    const linkedHome = join(base, "linked-home");
+    mkdirSync(realHome);
+    symlinkSync(realHome, linkedHome);
+    stubbedHome.path = linkedHome;
+    try {
+      expect(resolveMemoryDir(undefined, emptyEnv())).toBe(
+        join(realpathSync(realHome), DEFAULT_STATE_DIR, MEMORY_DIR_NAME),
+      );
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("still rejects a symlinked .keiko under a symlinked home", () => {
+    const base = freshTmp();
+    const realHome = join(base, "real-home");
+    const linkedHome = join(base, "linked-home");
+    const elsewhere = join(base, "elsewhere");
+    mkdirSync(realHome);
+    mkdirSync(elsewhere);
+    symlinkSync(realHome, linkedHome);
+    symlinkSync(elsewhere, join(realHome, DEFAULT_STATE_DIR));
+    stubbedHome.path = linkedHome;
+    try {
+      resolveMemoryDir(undefined, emptyEnv());
+      expect.fail("should have thrown");
+    } catch (err) {
+      if (!(err instanceof MemoryStorageError)) throw err;
+      expect(err.code).toBe("invalid-path");
     } finally {
       rmSync(base, { recursive: true, force: true });
     }

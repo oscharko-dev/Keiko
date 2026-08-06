@@ -11,7 +11,7 @@
 // points back into a sensitive location.
 
 import { homedir } from "node:os";
-import { existsSync, lstatSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, parse, resolve, sep } from "node:path";
 import { MemoryStorageError } from "./errors.js";
 
@@ -95,10 +95,26 @@ export function resolveMemoryDir(
   // otherwise redirect both silently. The CWD-containment check inside guard() is a no-op for a
   // homedir path unless the process is started from $HOME, where .keiko is the gitignored runtime
   // state root guard() already allows.
-  return guard(
-    join(homedir(), DEFAULT_STATE_DIR, MEMORY_DIR_NAME),
-    "Default memory vault directory",
-  );
+  return guard(defaultMemoryDirCandidate(), "Default memory vault directory");
+}
+
+// The home directory itself may legitimately BE a symlink — a relocated or mounted home is an
+// ordinary setup, not the planted redirect this module defends against. hasSymlinkAncestor stops
+// at the first EXISTING ancestor, so before ~/.keiko is created (i.e. on first run) that ancestor
+// IS the home directory, and guarding the unresolved path rejected those installs outright.
+// Resolving the home to its real location keeps every guard aimed at what the threat model is
+// about: a symlinked .keiko, or a symlinked memory/ inside it, are both still rejected because the
+// resolved path is checked in full.
+function defaultMemoryDirCandidate(): string {
+  const home = homedir();
+  try {
+    return join(realpathSync(home), DEFAULT_STATE_DIR, MEMORY_DIR_NAME);
+  } catch {
+    // A home that cannot be resolved (missing, or unreadable) is not decided here: the unresolved
+    // path still goes through guard(), which rejects it with the same typed error as any other
+    // invalid path rather than letting it through unchecked.
+    return join(home, DEFAULT_STATE_DIR, MEMORY_DIR_NAME);
+  }
 }
 
 export function resolveMemoryDbPath(
