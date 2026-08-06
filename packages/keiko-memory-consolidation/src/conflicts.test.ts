@@ -253,6 +253,22 @@ describe("findConflictPairs - value replacement conflicts", () => {
     },
   );
 
+  // The other branch of the guard: a keyword with no connector at all, and a connector with
+  // nothing after it. Neither may invent a fact, and a keyword-only body must not pair with one
+  // whose connector is left dangling.
+  it.each([
+    ["keyword alone", "database", "The database formatter runner tool model"],
+    ["connector with no value", "database=", "database:"],
+    ["keyword alone vs dangling connector", "database", "database="],
+    ["trailing whitespace only", "database   ", "database\t\n"],
+  ])("emits no value-replacement conflict for %s", (_label, olderBody, newerBody) => {
+    const older = makeRecord({ id: "m-old", body: olderBody, createdAt: 100 });
+    const newer = makeRecord({ id: "m-new", body: newerBody, createdAt: 200 });
+    const items = findConflictPairs([older, newer], [], CONFLICT_OVERLAP_THRESHOLD, options());
+    const kinds = items.flatMap((item) => item.evidence?.map((e) => e.kind) ?? []);
+    expect(kinds).not.toContain("value-replacement");
+  });
+
   // The boundary must not cost the punctuation connectors their no-space form.
   it("still extracts a value from a punctuation connector without surrounding space", () => {
     const older = makeRecord({ id: "m-old", body: "database=postgres", createdAt: 100 });

@@ -99,7 +99,18 @@ describe("clipToTokenBudget", () => {
   });
 
   it("never returns an excerpt costing more than the budget it was given", () => {
-    const bodies = ["alpha beta gamma delta epsilon", "x".repeat(4096), "😀".repeat(2048), "one"];
+    const bodies = [
+      "alpha beta gamma delta epsilon",
+      "x".repeat(4096),
+      "😀".repeat(2048),
+      "one",
+      // Words sitting exactly ON the threshold: appending the ellipsis lengthens the LAST kept
+      // word to 25 characters, which re-prices it as a long run and can blow a budget the
+      // un-suffixed excerpt fit comfortably.
+      [24, 24, 24].map((n) => "x".repeat(n)).join(" "),
+      `${"x".repeat(24)} ${"y".repeat(23)} ${"z".repeat(24)}`,
+      `short ${"x".repeat(24)} tail`,
+    ];
     for (const body of bodies) {
       for (let budget = 0; budget <= 40; budget += 1) {
         const clipped = clipToTokenBudget(body, budget);

@@ -134,7 +134,20 @@ export function clipToTokenBudget(body: string, tokenBudget: number): string {
     return clipLongWordToBudget(word, tokenBudget);
   }
   if (kept.length === words.length) return body;
-  return kept.join(" ") + "…";
+  return clipWithEllipsis(kept, tokenBudget);
+}
+
+// The ellipsis is appended to the LAST kept word rather than standing alone, so it lengthens that
+// word by one character — enough to carry a word sitting exactly on LONG_WORD_CHAR_THRESHOLD past
+// it and re-price the whole excerpt at the long-run rate. Drop words until the rendered form,
+// ellipsis included, is back inside the budget. The first candidate is almost always the answer;
+// the loop only iterates for words at the threshold, and a memory body is length-bounded.
+function clipWithEllipsis(kept: readonly string[], tokenBudget: number): string {
+  for (let end = kept.length; end > 0; end -= 1) {
+    const candidate = `${kept.slice(0, end).join(" ")}…`;
+    if (estimateTokens(candidate) <= tokenBudget) return candidate;
+  }
+  return "";
 }
 
 function wordsOf(body: string): readonly string[] {
