@@ -94,7 +94,13 @@ const KEY_VALUE_KEYWORD_RE = /\b(formatter|database|db|test\s+runner|runner|tool
 // the complexity threshold even after REGION_VALUE_RE's narrower 6-branch sibling stayed under
 // it). The connector is always non-capturing and optional, so skipping it in plain code before
 // applying the atom regex is behavior-identical to the original single pattern.
-const KEY_VALUE_CONNECTOR_RE = /^\s*(?:is|ist|=|:|to|auf|should\s+be|soll(?:te)?)\s*/iu;
+// The word connectors carry a trailing `\b`; the punctuation ones cannot and do not need one.
+// Without it an alphabetic connector matched a PREFIX of an ordinary word and the atom pass then
+// took the remainder of that same word as the value — "tool token" yielded tool=ken, "tool topic"
+// tool=pic, "tool issues" tool=sues, "database auftrag" database=trag. Requiring a connector is
+// only a guard if the connector has to be a whole token. `\b` is zero-width, so the linear-time
+// S8786 shape described above is unchanged.
+const KEY_VALUE_CONNECTOR_RE = /^\s*(?:(?:is|ist|to|auf|should\s+be|soll(?:te)?)\b|[=:])\s*/iu;
 const KEY_VALUE_ATOM_RE = /^\s*([a-z][a-z0-9+#._-]{1,40})\b/iu;
 
 interface KeyValueValueMatch {

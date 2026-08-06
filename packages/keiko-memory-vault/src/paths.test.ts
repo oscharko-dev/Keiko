@@ -106,8 +106,10 @@ describe("resolveMemoryDir", () => {
       resolveMemoryDir(undefined, emptyEnv());
       expect.fail("should have thrown");
     } catch (err) {
-      expect(err).toBeInstanceOf(MemoryStorageError);
-      expect((err as MemoryStorageError).code).toBe("invalid-path");
+      // Rethrown rather than cast: toBeInstanceOf does not narrow `err`, so a cast would read
+      // `.code` off whatever was actually thrown and report the wrong reason for the failure.
+      if (!(err instanceof MemoryStorageError)) throw err;
+      expect(err.code).toBe("invalid-path");
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
@@ -125,7 +127,8 @@ describe("resolveMemoryDir", () => {
       resolveMemoryDir(undefined, emptyEnv());
       expect.fail("should have thrown");
     } catch (err) {
-      expect((err as MemoryStorageError).code).toBe("invalid-path");
+      if (!(err instanceof MemoryStorageError)) throw err;
+      expect(err.code).toBe("invalid-path");
     } finally {
       rmSync(base, { recursive: true, force: true });
     }

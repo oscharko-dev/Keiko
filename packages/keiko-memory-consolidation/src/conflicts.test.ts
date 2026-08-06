@@ -233,6 +233,35 @@ describe("findConflictPairs - value replacement conflicts", () => {
     expect(items).toEqual([]);
   });
 
+  // Requiring a connector is only a guard if the connector has to be a whole token. The alphabetic
+  // alternatives carried no trailing boundary, so "to" matched the prefix of "token"/"topic" and
+  // "is" the prefix of "issues" — the engine then took the REMAINDER of the same word as the
+  // value ("tool token" -> tool=ken, "tool issues" -> tool=sues), fabricating exactly the
+  // unconnected facts this finding is about. Each body below pairs a keyword with an ordinary word
+  // that merely starts with a connector.
+  it.each([
+    ["to", "The support tool token was rotated.", "The support tool topic was closed."],
+    ["is", "The tool issues are known.", "The tool is broken."],
+    ["auf", "Die database auftrag lautet.", "Die database aufgabe lautet."],
+  ])(
+    "does not treat %s as a connector when it only prefixes a word",
+    (_label, olderBody, newerBody) => {
+      const older = makeRecord({ id: "m-old", body: olderBody, createdAt: 100 });
+      const newer = makeRecord({ id: "m-new", body: newerBody, createdAt: 200 });
+      const items = findConflictPairs([older, newer], [], CONFLICT_OVERLAP_THRESHOLD, options());
+      expect(items).toEqual([]);
+    },
+  );
+
+  // The boundary must not cost the punctuation connectors their no-space form.
+  it("still extracts a value from a punctuation connector without surrounding space", () => {
+    const older = makeRecord({ id: "m-old", body: "database=postgres", createdAt: 100 });
+    const newer = makeRecord({ id: "m-new", body: "database=mysql", createdAt: 200 });
+    const items = findConflictPairs([older, newer], [], CONFLICT_OVERLAP_THRESHOLD, options());
+    expect(items).toHaveLength(1);
+    expect(must(items[0]).evidence?.[0]?.detail).toContain("postgres -> mysql");
+  });
+
   // REGION_PATTERN and KEY_VALUE_PATTERN used to sandwich their optional connector token between
   // two independent `\s*`s (`\s*(?:connector)?\s*`). Once the trailing capture never matches — the
   // common case for a keyword mention with no real fact attached — the engine re-tries every split

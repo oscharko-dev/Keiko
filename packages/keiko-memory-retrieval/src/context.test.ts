@@ -53,6 +53,17 @@ describe("estimateTokens", () => {
     expect(estimateTokens(longRun)).toBeLessThan(2048);
   });
 
+  // Both sides of LONG_WORD_CHAR_THRESHOLD: at exactly the threshold a word is still ordinary, one
+  // character past it the run is charged by length.
+  it("charges a word at the long-run threshold as an ordinary word", () => {
+    expect(estimateTokens("x".repeat(24))).toBe(Math.ceil(1 * 1.3));
+    expect(estimateTokens(`${"x".repeat(24)} ${"y".repeat(24)}`)).toBe(Math.ceil(2 * 1.3));
+  });
+
+  it("charges a word one character past the threshold by length", () => {
+    expect(estimateTokens("x".repeat(25))).toBe(Math.ceil(25 / 4));
+  });
+
   it("prices a long run higher than the same character count split into prose words", () => {
     const chars = 400;
     const longRun = "x".repeat(chars);
@@ -75,6 +86,12 @@ describe("clipToTokenBudget", () => {
 
   it("returns an empty string for a non-positive budget", () => {
     expect(clipToTokenBudget("alpha beta", 0)).toBe("");
+    expect(clipToTokenBudget("alpha beta", -1)).toBe("");
+    expect(clipToTokenBudget("x".repeat(4096), -1)).toBe("");
+  });
+
+  it("keeps at least one ordinary word when the budget cannot even cover it", () => {
+    expect(clipToTokenBudget("alpha beta gamma", 1)).toBe("alpha…");
   });
 
   // The mirror image of the estimator gap: the old word-budget comparison was against word COUNT,
