@@ -17,18 +17,24 @@
 // surface). Callers render a generic "this looked like a credential" message keyed off the
 // reason class.
 
+import { hasPaymentCardPanShape } from "@oscharko-dev/keiko-contracts/memory";
+
 import type { RejectionReason } from "./errors.js";
 
 // ─── Credential-shape patterns (extends looksLikeSecretShape) ────────────────
 const CREDENTIAL_SHAPE_PATTERNS: readonly RegExp[] = [
-  // Parity with looksLikeSecretShape: sk-, AKIA, gh[pousr]_, xox[abporsu]-, JWT, PEM, digit runs.
+  // Parity with looksLikeSecretShape: sk-, AKIA, gh[pousr]_, xox[abporsu]-, JWT, PEM. Payment-card
+  // PANs are NOT a pattern here: they are detected by composing the canonical, Luhn-validating
+  // hasPaymentCardPanShape from keiko-contracts, exactly as looksLikeSecretShape composes it. The
+  // local /\b\d{13,19}\b/ this replaces was a second implementation of the same claim, and it had
+  // drifted in both directions — blind to the spaced/dashed numbers humans actually type, and
+  // rejecting benign long numbers that fail Luhn.
   /\bsk-[A-Za-z0-9_-]{20,}\b/,
   /\bAKIA[0-9A-Z]{16}\b/,
   /\bgh[pousr]_[A-Za-z0-9]{36,}\b/,
   /\bxox[abporsu]-[A-Za-z0-9-]{10,}\b/,
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
-  /\b\d{13,19}\b/,
   // Capture-layer extensions:
   // Opaque Bearer tokens (any non-whitespace token after "Bearer "). looksLikeSecretShape
   // intentionally skips this because audit summaries may legitimately mention the word "Bearer"
@@ -159,7 +165,7 @@ export function scanForSecrets(
   value: string,
   customerIdentifierMatchers: readonly RegExp[] = [],
 ): RejectionReason | null {
-  if (matchesAny(value, CREDENTIAL_SHAPE_PATTERNS)) {
+  if (matchesAny(value, CREDENTIAL_SHAPE_PATTERNS) || hasPaymentCardPanShape(value)) {
     return "credential-shape";
   }
   if (matchesAny(value, CREDENTIAL_PATH_PATTERNS)) {

@@ -3114,6 +3114,7 @@ export {
   assertNeverMemoryType,
   decayHalfLifeMultiplierForType,
   checkStatusTransition,
+  hasPaymentCardPanShape,
   hasStaleModelMetadata,
   isMemoryEdge,
   isMemoryRecord,

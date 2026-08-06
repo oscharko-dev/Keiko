@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { assembleContextBlock, estimateTokens } from "./context.js";
+import { assembleContextBlock, clipToTokenBudget, estimateTokens } from "./context.js";
 import type { IncludedMemory } from "./types.js";
 import { buildRecord, memoryId } from "./_support.js";
 
@@ -40,6 +40,58 @@ describe("estimateTokens", () => {
   it("is deterministic", () => {
     const t = "the quick brown fox jumps over the lazy dog";
     expect(estimateTokens(t)).toBe(estimateTokens(t));
+  });
+
+  // A word count is a serviceable token proxy for prose and a catastrophic one for the inputs a
+  // memory vault most often captures verbatim: a URL, a hash, a base64 blob or a line of minified
+  // JSON is ONE whitespace-free "word" of arbitrary length. Charging it flat priced a 4096-char
+  // run at 2 tokens against a real cost near 1024.
+  it("charges a long whitespace-free run proportionally to its length", () => {
+    const longRun = "x".repeat(4096);
+    expect(estimateTokens(longRun)).toBeGreaterThan(500);
+    // Same order of magnitude as a real tokenizer's ~bytes/4, not an exact match to one.
+    expect(estimateTokens(longRun)).toBeLessThan(2048);
+  });
+
+  it("prices a long run higher than the same character count split into prose words", () => {
+    const chars = 400;
+    const longRun = "x".repeat(chars);
+    const prose = Array.from({ length: chars / 8 }, () => "xxxxxxx").join(" ");
+    expect(estimateTokens(longRun)).toBeGreaterThan(estimateTokens(prose));
+  });
+});
+
+describe("clipToTokenBudget", () => {
+  it("returns the body unchanged when it already fits", () => {
+    const body = "alpha beta gamma delta";
+    expect(clipToTokenBudget(body, 100)).toBe(body);
+  });
+
+  it("clips ordinary prose on a word boundary with an ellipsis", () => {
+    const clipped = clipToTokenBudget("alpha beta gamma delta epsilon zeta eta theta", 4);
+    expect(clipped).toBe("alpha beta gamma…");
+    expect(estimateTokens(clipped)).toBeLessThanOrEqual(4);
+  });
+
+  it("returns an empty string for a non-positive budget", () => {
+    expect(clipToTokenBudget("alpha beta", 0)).toBe("");
+  });
+
+  // The mirror image of the estimator gap: the old word-budget comparison was against word COUNT,
+  // so a single 4096-char "word" (1 <= 38) was returned whole no matter how small the budget.
+  it("hard-truncates a single long run that alone exceeds the budget", () => {
+    const longRun = "x".repeat(4096);
+    const clipped = clipToTokenBudget(longRun, 50);
+    expect(clipped.length).toBeLessThan(longRun.length);
+    expect(estimateTokens(clipped)).toBeLessThanOrEqual(50);
+    expect(clipped.endsWith("…")).toBe(true);
+  });
+
+  it("never splits a surrogate pair when hard-truncating", () => {
+    const clipped = clipToTokenBudget("😀".repeat(2048), 20);
+    expect(estimateTokens(clipped)).toBeLessThanOrEqual(20);
+    expect(clipped).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    expect(clipped).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
   });
 });
 
@@ -121,6 +173,53 @@ describe("assembleContextBlock — caps and pressure", () => {
     const ranked = records.map((r) => included(r.id));
     const result = assembleContextBlock(ranked, records, { budgetTokens: 20, maxIncluded: 50 });
     expect(result.budget.used).toBeLessThanOrEqual(result.budget.tokens);
+  });
+
+  // The per-entry allowance used to be budget/maxIncluded — the CONFIGURED ceiling — so the common
+  // case of fewer surviving candidates than slots pre-divided the budget among slots that would
+  // never be filled, clipping the entries that did survive while most of the budget sat unused.
+  it("gives a lone candidate the whole budget instead of a 1/maxIncluded share", () => {
+    // 1200 ordinary words price at ~1560 tokens, comfortably past the 1500-token budget, so the
+    // budget — not the body — is what bounds the excerpt.
+    const body = Array.from({ length: 1200 }, (_, i) => `word${String(i)}`).join(" ");
+    const record = buildRecord({ id: "long", body });
+    const result = assembleContextBlock([included("long")], [record], {
+      budgetTokens: 1500,
+      maxIncluded: 12,
+    });
+    expect(result.included).toHaveLength(1);
+    expect(result.budget.used).toBeGreaterThan(0.5 * result.budget.tokens);
+    expect(result.budget.used).toBeLessThanOrEqual(result.budget.tokens);
+    // The old ceiling-based divisor gave this entry floor(1500/12) = 125 tokens, ~96 words.
+    expect(result.contextBlock.memories[0]?.bodyExcerpt).toContain("word900");
+  });
+
+  it("does not let a lone candidate overrun a budget it cannot fill", () => {
+    const record = buildRecord({ id: "short", body: "alpha beta gamma" });
+    const result = assembleContextBlock([included("short")], [record], {
+      budgetTokens: 1500,
+      maxIncluded: 12,
+    });
+    expect(result.contextBlock.memories[0]?.bodyExcerpt).toBe("alpha beta gamma");
+    expect(result.budget.used).toBeLessThanOrEqual(result.budget.tokens);
+  });
+
+  it("still shares the budget fairly once candidates reach maxIncluded", () => {
+    const ids = ["a", "b", "c", "d"];
+    const body = Array.from({ length: 400 }, (_, i) => `word${String(i)}`).join(" ");
+    const records = ids.map((id) => buildRecord({ id, body }));
+    const result = assembleContextBlock(
+      ids.map((id) => included(id)),
+      records,
+      { budgetTokens: 1500, maxIncluded: 4 },
+    );
+    expect(result.included).toHaveLength(4);
+    expect(result.budget.used).toBeLessThanOrEqual(result.budget.tokens);
+    const excerptLengths = result.contextBlock.memories.map((e) => e.bodyExcerpt.length);
+    // No entry monopolises the budget: each stays near its 1/4 share.
+    expect(Math.max(...excerptLengths) - Math.min(...excerptLengths)).toBeLessThan(
+      Math.max(...excerptLengths),
+    );
   });
 
   it("charges the rendered header and inclusion reason against the budget", () => {

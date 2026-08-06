@@ -739,6 +739,50 @@ describe("memory consolidation job handlers", () => {
     expect(fetched.job.result?.truncated).toBe(true);
   });
 
+  // The explicit-job loader does its own oldest-first pre-sort before slicing, so it reproduced
+  // the engine's frozen-window defect independently of the engine's own comparator: the newest
+  // memories were dropped before runConsolidation ever saw them. Both wired call sites have to
+  // window on recency, or fixing one leaves the other silently broken.
+  it("keeps the newest records when a selection exceeds maxRecordsPerRun", async () => {
+    const vault = makeVault();
+    const oldest = insertAcceptedMemory(vault, { id: "m-1", body: "unrelated archived note" });
+    const middle = insertAcceptedMemory(vault, { id: "m-2", body: "user prefers tabs in editor" });
+    const newest = insertAcceptedMemory(vault, { id: "m-3", body: "user prefers tabs in editor" });
+    // Distinct, increasing updatedAt values: the helper stamps Date.now(), so records inserted in
+    // one tick would otherwise be ordered only by the id tiebreak. Each stamp must stay at or
+    // after its own createdAt, which the record validator enforces.
+    vault.updateMemory(oldest.id, { tags: ["archive"] }, oldest.createdAt + 1_000);
+    vault.updateMemory(middle.id, { tags: ["archive"] }, middle.createdAt + 2_000);
+    vault.updateMemory(newest.id, { tags: ["archive"] }, newest.createdAt + 3_000);
+    const deps = makeDeps({ memoryVault: vault });
+    const createResult = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", {
+        scopes: [{ kind: "user", userId: "u-1" }],
+        settings: { maxRecordsPerRun: 2 },
+      }),
+      deps,
+    );
+    expect(createResult.status).toBe(202);
+    const createdJob = asJobEnvelope(createResult).job;
+    await flushImmediate();
+    const fetched = asJobEnvelope(
+      handleGetConsolidationJob(
+        makeCtx(`/api/memory/consolidation/jobs/${createdJob.id}`, {}, { jobId: createdJob.id }),
+        deps,
+      ),
+    );
+    expect(fetched.job.result?.recordsInspected).toBe(2);
+    expect(fetched.job.result?.truncated).toBe(true);
+    // The identical bodies of m-2/m-3 form a duplicate cluster, which surfaces as proposed edges.
+    // Nothing at all is proposed if the window kept m-1 and m-2 instead.
+    const endpoints =
+      fetched.job.result?.edgesProposed.flatMap((edge) => [edge.fromMemoryId, edge.toMemoryId]) ??
+      [];
+    expect(endpoints).toContain("m-3");
+    expect(endpoints).toContain("m-2");
+    expect(endpoints).not.toContain("m-1");
+  });
+
   it("cancels a queued job before execution starts", async () => {
     const vault = makeVault();
     insertAcceptedMemory(vault, { id: "m-1", body: "user prefers tabs in editor" });

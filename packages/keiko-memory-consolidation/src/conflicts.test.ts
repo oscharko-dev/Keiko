@@ -205,6 +205,34 @@ describe("findConflictPairs - value replacement conflicts", () => {
     expect(must(items[0]).evidence?.[0]?.detail).toContain("is -> postgres");
   });
 
+  // KEY_VALUE_KEYWORD_RE matches bare generic English words ("tool", "model", "database",
+  // "runner"). execKeyValueValue used to let connectorLength fall back to 0 when no connector
+  // matched and then grab the very next lowercase word as the "value", so a keyword mentioned in
+  // passing produced a fact with no semantic link at all. Two such facts sharing a keyword are
+  // then reported as a value replacement — and value-replacement evidence is the one signal that
+  // bypasses the Jaccard textual-similarity floor entirely, so nothing else stops the pairing.
+  it("does not invent a value fact from a bare keyword mention with no connector", () => {
+    const older = makeRecord({
+      id: "m-old",
+      body: "I use my phone as a tool sometimes.",
+      createdAt: 100,
+    });
+    const newer = makeRecord({
+      id: "m-new",
+      body: "The support tool is broken again.",
+      createdAt: 200,
+    });
+    const items = findConflictPairs([older, newer], [], CONFLICT_OVERLAP_THRESHOLD, options());
+    expect(items).toEqual([]);
+  });
+
+  it("does not pair two unrelated bodies that merely share the keyword 'model'", () => {
+    const older = makeRecord({ id: "m-old", body: "The model railway club meets on Fridays." });
+    const newer = makeRecord({ id: "m-new", body: "Her model portfolio was updated." });
+    const items = findConflictPairs([older, newer], [], CONFLICT_OVERLAP_THRESHOLD, options());
+    expect(items).toEqual([]);
+  });
+
   // REGION_PATTERN and KEY_VALUE_PATTERN used to sandwich their optional connector token between
   // two independent `\s*`s (`\s*(?:connector)?\s*`). Once the trailing capture never matches — the
   // common case for a keyword mention with no real fact attached — the engine re-tries every split

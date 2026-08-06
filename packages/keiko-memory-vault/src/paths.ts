@@ -89,7 +89,16 @@ export function resolveMemoryDir(
       "KEIKO_STATE_DIR/memory",
     );
   }
-  return join(homedir(), DEFAULT_STATE_DIR, MEMORY_DIR_NAME);
+  // The default branch is guarded exactly like the three configured branches above: it is the one
+  // every install without explicit configuration takes, and it is where the encrypted DB — plus,
+  // on the keyfile tier, the plaintext vault key — lands. A ~/.keiko planted as a symlink would
+  // otherwise redirect both silently. The CWD-containment check inside guard() is a no-op for a
+  // homedir path unless the process is started from $HOME, where .keiko is the gitignored runtime
+  // state root guard() already allows.
+  return guard(
+    join(homedir(), DEFAULT_STATE_DIR, MEMORY_DIR_NAME),
+    "Default memory vault directory",
+  );
 }
 
 export function resolveMemoryDbPath(

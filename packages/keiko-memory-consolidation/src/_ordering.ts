@@ -47,6 +47,15 @@ export function compareRecordsByAge(a: MemoryRecord, b: MemoryRecord): number {
   return cmpNumber(a.createdAt, b.createdAt) || cmpString(a.id, b.id);
 }
 
+// Records competing for a bounded CPU work window: newest first; id as tiebreak. Deliberately the
+// mirror of compareRecordsByAge, which answers a different question — which member of an
+// already-formed duplicate cluster is the canonical one. Selecting a work window with the
+// canonical-member comparator kept the window pinned to the oldest records forever, so nothing
+// newly captured was ever inspected once a vault outgrew the cap.
+export function compareRecordsByRecency(a: MemoryRecord, b: MemoryRecord): number {
+  return cmpNumber(b.createdAt, a.createdAt) || cmpString(a.id, b.id);
+}
+
 // Edges are sorted by (kind, fromMemoryId, toMemoryId, id).
 export function compareEdges(a: MemoryEdge, b: MemoryEdge): number {
   return (

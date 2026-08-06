@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, symlinkSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,19 @@ import {
   resolveMemoryDir,
 } from "./paths.js";
 
+// The no-explicit-dir/no-env fallback branch resolves against homedir(), so the only way to
+// exercise its path guards is to point homedir() at a temp tree we control. The stub is opt-in:
+// while `stubbedHome.path` is undefined every caller — including this file's own `homedir()`
+// import — sees the real value, so the pre-existing cases below stay byte-identical.
+const stubbedHome = vi.hoisted(() => ({ path: undefined as string | undefined }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return {
+    ...actual,
+    homedir: (): string => stubbedHome.path ?? actual.homedir(),
+  };
+});
+
 function freshTmp(): string {
   return mkdtempSync(join(tmpdir(), "keiko-mem-paths-"));
 }
@@ -20,6 +33,10 @@ function emptyEnv(): Readonly<Record<string, string | undefined>> {
 }
 
 describe("resolveMemoryDir", () => {
+  afterEach(() => {
+    stubbedHome.path = undefined;
+  });
+
   it("uses the explicit option when present", () => {
     const dir = freshTmp();
     try {
@@ -70,6 +87,62 @@ describe("resolveMemoryDir", () => {
     expect(resolveMemoryDir(undefined, emptyEnv())).toBe(
       join(homedir(), DEFAULT_STATE_DIR, MEMORY_DIR_NAME),
     );
+  });
+
+  // The default branch is the one taken by essentially every install, and it used to be the ONLY
+  // branch that returned a bare join() instead of routing through guard(). A ~/.keiko that is (or
+  // becomes) a symlink then silently redirects the encrypted memory DB — and, on the keyfile tier,
+  // the plaintext AES-256-GCM vault key — to wherever it points. The two cases below are the
+  // default-branch mirrors of the explicit-path symlink rejections already pinned above.
+  it("rejects the default path when .keiko itself is a symlink", () => {
+    const base = freshTmp();
+    const home = join(base, "home");
+    const elsewhere = join(base, "elsewhere");
+    mkdirSync(home);
+    mkdirSync(elsewhere);
+    symlinkSync(elsewhere, join(home, DEFAULT_STATE_DIR));
+    stubbedHome.path = home;
+    try {
+      resolveMemoryDir(undefined, emptyEnv());
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MemoryStorageError);
+      expect((err as MemoryStorageError).code).toBe("invalid-path");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects the default path when .keiko/memory itself is a symlink", () => {
+    const base = freshTmp();
+    const home = join(base, "home");
+    const elsewhere = join(base, "elsewhere");
+    mkdirSync(join(home, DEFAULT_STATE_DIR), { recursive: true });
+    mkdirSync(elsewhere);
+    symlinkSync(elsewhere, join(home, DEFAULT_STATE_DIR, MEMORY_DIR_NAME));
+    stubbedHome.path = home;
+    try {
+      resolveMemoryDir(undefined, emptyEnv());
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as MemoryStorageError).code).toBe("invalid-path");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("still returns the default path when the home tree is clean", () => {
+    const base = freshTmp();
+    const home = join(base, "home");
+    mkdirSync(join(home, DEFAULT_STATE_DIR), { recursive: true });
+    stubbedHome.path = home;
+    try {
+      expect(resolveMemoryDir(undefined, emptyEnv())).toBe(
+        join(home, DEFAULT_STATE_DIR, MEMORY_DIR_NAME),
+      );
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 
   it("rejects relative paths", () => {

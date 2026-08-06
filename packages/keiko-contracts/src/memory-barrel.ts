@@ -97,6 +97,7 @@ export type {
 } from "./memory-validation.js";
 export {
   checkStatusTransition,
+  hasPaymentCardPanShape,
   hasStaleModelMetadata,
   looksLikeSecretShape,
   validateMemoryEdge,

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { looksLikeSecretShape } from "@oscharko-dev/keiko-contracts/memory";
+
 import { looksLikeEuDePii, scanForSecrets } from "./secret-patterns.js";
 
 // Literal credential shapes are assembled by string concatenation so push-protection scanners
@@ -40,6 +42,48 @@ describe("scanForSecrets — credential-shape patterns (looksLikeSecretShape par
   it("rejects a long contiguous digit run (PAN/IBAN shape)", () => {
     const shape = "4111111111111111";
     expect(scanForSecrets(`card: ${shape}`)).toBe("credential-shape");
+  });
+
+  // This module's header claims parity with looksLikeSecretShape, but its digit element was a bare
+  // /\b\d{13,19}\b/ where the contracts implementation strips separators and Luhn-validates. The
+  // divergence ran in BOTH directions, and the wrong way round: the PRIMARY write-time boundary
+  // missed the human-typed spaced/dashed card numbers the weaker audit-time check catches, while
+  // rejecting benign long numbers the audit-time check accepts.
+  it("rejects a space-separated payment card number", () => {
+    expect(scanForSecrets("My card is 4111 1111 1111 1111, please charge it")).toBe(
+      "credential-shape",
+    );
+  });
+
+  it("rejects a dash-separated payment card number", () => {
+    expect(scanForSecrets("4111-1111-1111-1111 is the number")).toBe("credential-shape");
+  });
+
+  it("does not reject a benign long digit run that fails the Luhn check", () => {
+    expect(scanForSecrets("order reference 1234567890123")).toBeNull();
+  });
+
+  // The two "parity" claims must not be able to drift apart again silently. The write-time gate is
+  // allowed to be STRICTER (it owns Bearer tokens, URL creds and form-encoded assignments), but on
+  // PAN-shaped input alone the two must agree exactly.
+  it("classifies PAN-shaped input identically to looksLikeSecretShape", () => {
+    const panShapedInputs = [
+      "4111111111111111",
+      "My card is 4111 1111 1111 1111, please charge it",
+      "4111-1111-1111-1111 is the number",
+      "5500 0000 0000 0004",
+      "340000000000009",
+      "order reference 1234567890123",
+      "we have 12 open issues",
+      "build 20240131 finished",
+      "ticket 9999999999999999 closed",
+    ];
+    for (const input of panShapedInputs) {
+      expect([input, scanForSecrets(input) === "credential-shape"]).toEqual([
+        input,
+        looksLikeSecretShape(input),
+      ]);
+    }
   });
 
   it("rejects an opaque Bearer authorization header", () => {

@@ -31,7 +31,12 @@ import {
   SEMANTIC_SIMILARITY_DEFAULT,
   STALE_CONFIDENCE_DEFAULT,
 } from "./_constants.js";
-import { compareEdges, compareRecordsByAge, compareReviewItems } from "./_ordering.js";
+import {
+  compareEdges,
+  compareRecordsByAge,
+  compareRecordsByRecency,
+  compareReviewItems,
+} from "./_ordering.js";
 import { CONFLICT_OVERLAP_THRESHOLD, detectConflicts, findConflictPairs } from "./conflicts.js";
 import { scanDuplicateClusters, type DuplicateCluster } from "./dedupe.js";
 import { normalizeBody } from "./similarity.js";
@@ -206,11 +211,23 @@ function eligibleMemories(
   return eligible;
 }
 
+// Selects the run's CPU work window. This is NOT canonical-member selection: it must be ordered by
+// recency, not by compareRecordsByAge. With the oldest-first comparator the window past the cap was
+// a permanently frozen prefix of the oldest records — and because every merge becomes a review item
+// awaiting a human rather than an automatic deletion, that prefix never shrank, so no memory
+// captured after the vault reached the cap was ever deduplicated, conflict-checked or stale-flagged
+// again. Newest-first keeps the window on the live head of the vault, which is where new duplicates
+// and contradictions actually appear.
+//
+// Records older than the window are still not re-inspected on a later run; closing that residual
+// tail needs a persisted (scope, type) rotation cursor, which would have to enter through the
+// options seam to keep runConsolidation's "same input + same options => byte-identical result"
+// contract. That is tracked separately — it is a different change from correcting the comparator.
 function boundedEligibleMemories(
   memories: readonly MemoryRecord[],
   resolved: ResolvedOptions,
 ): { readonly records: readonly MemoryRecord[]; readonly truncated: boolean } {
-  const sorted = [...memories].sort(compareRecordsByAge);
+  const sorted = [...memories].sort(compareRecordsByRecency);
   return {
     records: sorted.slice(0, resolved.maxRecordsPerRun),
     truncated: sorted.length > resolved.maxRecordsPerRun,

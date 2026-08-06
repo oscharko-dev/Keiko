@@ -331,6 +331,17 @@ function applyRelevanceFloor(
   const kept: IncludedMemory[] = [];
   const omitted: OmittedMemory[] = [];
   for (const entry of ranked) {
+    // relevance/semantic/graph are the query-derived subscores, so a zero across all three means
+    // "this turn does not touch that memory". pinned and correction are NOT query-derived — the
+    // ranker computes them from the record alone precisely so the user's standing rules and
+    // accepted corrections apply regardless of wording — so they are exempt from a floor that
+    // only reasons about query overlap. Exemption is by subscore, not by MemoryType: `pinned` is
+    // a boolean flag that can elevate any type (keiko-contracts/memory.ts), and `correction`
+    // covers both type "correction" and sourceKind "accepted-correction".
+    if (entry.subscores.pinned > 0 || entry.subscores.correction > 0) {
+      kept.push(entry);
+      continue;
+    }
     if (
       entry.subscores.relevance === 0 &&
       entry.subscores.semantic === 0 &&

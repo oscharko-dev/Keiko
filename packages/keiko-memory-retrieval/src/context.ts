@@ -27,6 +27,44 @@ import type {
 
 export const TOKEN_PER_WORD_RATIO = 1.3;
 
+// Above this length a whitespace-free run stops behaving like a word and starts behaving like
+// dense data. An English word averages ~5 characters, so 24 leaves every ordinary prose token
+// charged at exactly TOKEN_PER_WORD_RATIO and catches only the pathological runs.
+const LONG_WORD_CHAR_THRESHOLD = 24;
+// Chars-per-token for a run charged by length. Independent of TOKEN_PER_WORD_RATIO, which remains
+// the ordinary-word unit; ~4 is the conventional dense-text rate the rest of the codebase prices
+// non-prose at (see requiresDenseTokenizerFloor in keiko-contracts/context-engineering.ts).
+const LONG_WORD_CHARS_PER_TOKEN = 4;
+
+// A word count is a serviceable token proxy for prose and inverts completely for the inputs a
+// memory vault captures verbatim — a URL, hash, base64 blob or minified-JSON line is ONE
+// whitespace-free "word" of unbounded length. Charging by length above the threshold keeps the
+// proxy honest for those without moving the price of any ordinary word.
+//
+// The two classes are accumulated SEPARATELY rather than summed per word, because ordinary words
+// must keep the single multiplication they were always priced with: adding TOKEN_PER_WORD_RATIO
+// ten times yields 13.000000000000002, whose ceil is 14, where `10 * 1.3` is exactly 13. Long
+// runs are already whole tokens and simply add.
+interface TokenCharge {
+  readonly ordinaryWords: number;
+  readonly longRunTokens: number;
+}
+
+const NO_CHARGE: TokenCharge = { ordinaryWords: 0, longRunTokens: 0 };
+
+function chargeWord(charge: TokenCharge, word: string): TokenCharge {
+  return word.length <= LONG_WORD_CHAR_THRESHOLD
+    ? { ...charge, ordinaryWords: charge.ordinaryWords + 1 }
+    : {
+        ...charge,
+        longRunTokens: charge.longRunTokens + Math.ceil(word.length / LONG_WORD_CHARS_PER_TOKEN),
+      };
+}
+
+function chargeTokens(charge: TokenCharge): number {
+  return charge.ordinaryWords * TOKEN_PER_WORD_RATIO + charge.longRunTokens;
+}
+
 // NOTE (GEN-DUP-SEMANTIC-002): intentionally NOT the canonical byte-based estimateTokens in
 // @oscharko-dev/keiko-contracts. This word-count estimate is inverted here by clipToTokenBudget's
 // exact 1.3 round-trip (token budget -> word budget), so it must stay a self-consistent local unit.
@@ -37,7 +75,11 @@ export function estimateTokens(text: string): number {
     .split(/\s+/u)
     .filter((w) => w.length > 0);
   if (words.length === 0) return 0;
-  return Math.ceil(words.length * TOKEN_PER_WORD_RATIO);
+  // Wrapped rather than passed directly: reduce supplies index and array as extra arguments
+  // (typescript:S7727).
+  return Math.ceil(
+    chargeTokens(words.reduce((charge, word) => chargeWord(charge, word), NO_CHARGE)),
+  );
 }
 
 export interface AssembleContextOptions {
@@ -51,14 +93,45 @@ function buildRecordIndex(records: readonly MemoryRecord[]): ReadonlyMap<MemoryI
   return m;
 }
 
-function clipToTokenBudget(body: string, tokenBudget: number): string {
+// Cut a single over-budget run mid-word. Reserves one character for the ellipsis so the result
+// still prices at or under `tokenBudget` under estimateTokens' own long-word rate.
+function clipLongWordToBudget(word: string, tokenBudget: number): string {
+  const maxChars = Math.max(1, tokenBudget * LONG_WORD_CHARS_PER_TOKEN - 1);
+  let end = 0;
+  for (const codePoint of word) {
+    const next = end + codePoint.length;
+    // Advance by whole code points so a surrogate pair is never split into a lone half. The first
+    // code point is always taken: an empty excerpt is worse than one character of overshoot.
+    if (end > 0 && next > maxChars) break;
+    end = next;
+  }
+  return word.slice(0, end) + "…";
+}
+
+// Not exported on the package barrel — module-scoped so its own contract can be pinned directly.
+export function clipToTokenBudget(body: string, tokenBudget: number): string {
   if (tokenBudget <= 0) return "";
-  // Convert tokens back to a word budget — inverse of the 1.3 ratio. floor() ensures we
-  // never overshoot the per-entry token allowance.
-  const wordBudget = Math.max(1, Math.floor(tokenBudget / TOKEN_PER_WORD_RATIO));
   const words = body.split(/\s+/u).filter((w) => w.length > 0);
-  if (words.length <= wordBudget) return body;
-  return words.slice(0, wordBudget).join(" ") + "…";
+  const kept: string[] = [];
+  let charge = NO_CHARGE;
+  for (const word of words) {
+    const next = chargeWord(charge, word);
+    if (chargeTokens(next) <= tokenBudget) {
+      kept.push(word);
+      charge = next;
+      continue;
+    }
+    if (kept.length > 0) break;
+    // Nothing kept yet and the first word alone blows the budget. A long run has to be cut
+    // mid-word: the previous word-COUNT comparison returned it whole (1 word <= any word budget),
+    // which is how a 4096-char body passed a 50-token allowance untouched. An ordinary short word
+    // is still kept whole, preserving the old floor of at least one word per excerpt.
+    if (word.length > LONG_WORD_CHAR_THRESHOLD) return clipLongWordToBudget(word, tokenBudget);
+    kept.push(word);
+    charge = next;
+  }
+  if (kept.length === words.length) return body;
+  return kept.join(" ") + "…";
 }
 
 function wordsOf(body: string): readonly string[] {
@@ -149,9 +222,14 @@ function greedyAssemble(
   const entries: MemoryContextBlockEntry[] = [];
   const omitted: OmittedMemory[] = [];
   let used = 0;
-  // Per-entry token allowance: divide the budget evenly across the cap; a per-entry clip
-  // keeps any one memory from monopolising the budget.
-  const perEntry = Math.max(1, Math.floor(options.budgetTokens / Math.max(1, options.maxIncluded)));
+  // Per-entry token allowance: divide the budget across however many candidates can actually be
+  // considered, bounded by the cap — not the configured ceiling alone. A per-entry clip still
+  // keeps any one memory from monopolising the budget when candidates reach the cap, but sizing
+  // the divisor off the ceiling pre-divided the budget among slots that would never be filled, so
+  // the common case of fewer survivors than slots clipped every entry to a fixed 1/maxIncluded
+  // share while most of the budget sat unused.
+  const effectiveSlots = Math.max(1, Math.min(options.maxIncluded, ranked.length));
+  const perEntry = Math.max(1, Math.floor(options.budgetTokens / effectiveSlots));
   for (const rank of ranked) {
     if (included.length >= options.maxIncluded) {
       omitted.push({ memoryId: rank.memoryId, reason: "budget-exceeded" });
