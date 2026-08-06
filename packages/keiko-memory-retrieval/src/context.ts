@@ -109,8 +109,13 @@ function clipLongWordToBudget(word: string, tokenBudget: number): string {
 }
 
 // Not exported on the package barrel — module-scoped so its own contract can be pinned directly.
+// Contract: estimateTokens(clipToTokenBudget(body, n)) <= n, for every n.
 export function clipToTokenBudget(body: string, tokenBudget: number): string {
-  if (tokenBudget <= 0) return "";
+  // Any non-empty excerpt is at least one "word" and so costs at least TOKEN_PER_WORD_RATIO, which
+  // rounds up to 2 — even a lone ellipsis does. Below that floor there is no in-budget non-empty
+  // answer, so an empty excerpt is the only one that honours the budget. The old word-count form
+  // returned one word here regardless (Math.max(1, …)), quietly costing double the budget.
+  if (tokenBudget < TOKEN_PER_WORD_RATIO) return "";
   const words = body.split(/\s+/u).filter((w) => w.length > 0);
   const kept: string[] = [];
   let charge = NO_CHARGE;
@@ -122,13 +127,11 @@ export function clipToTokenBudget(body: string, tokenBudget: number): string {
       continue;
     }
     if (kept.length > 0) break;
-    // Nothing kept yet and the first word alone blows the budget. A long run has to be cut
-    // mid-word: the previous word-COUNT comparison returned it whole (1 word <= any word budget),
-    // which is how a 4096-char body passed a 50-token allowance untouched. An ordinary short word
-    // is still kept whole, preserving the old floor of at least one word per excerpt.
-    if (word.length > LONG_WORD_CHAR_THRESHOLD) return clipLongWordToBudget(word, tokenBudget);
-    kept.push(word);
-    charge = next;
+    // Nothing kept yet and the first word alone blows the budget, so it has to be cut mid-word:
+    // the previous word-COUNT comparison returned it whole (1 word <= any word budget), which is
+    // how a 4096-char body passed a 50-token allowance untouched. Only a long run reaches here —
+    // an ordinary word costs TOKEN_PER_WORD_RATIO, which the floor above guarantees room for.
+    return clipLongWordToBudget(word, tokenBudget);
   }
   if (kept.length === words.length) return body;
   return kept.join(" ") + "…";
@@ -183,13 +186,18 @@ function fitEntryToBudget(
   budgetTokens: number,
   perEntry: number,
 ): MemoryContextBlockEntry | undefined {
+  const words = wordsOf(record.body);
   const initialExcerpt = clipToTokenBudget(record.body, perEntry);
-  const initialEntry = entryForRank(rank, record, initialExcerpt);
-  if (renderedCost([...entries, initialEntry]) <= budgetTokens) {
-    return initialEntry;
+  // An empty excerpt from a non-empty body means the per-entry allowance could not hold a single
+  // word. Admitting it would put a memory with no text into the block, so fall through to the
+  // search below, which sizes the excerpt against the real budget rather than the per-entry share.
+  if (initialExcerpt !== "" || words.length === 0) {
+    const initialEntry = entryForRank(rank, record, initialExcerpt);
+    if (renderedCost([...entries, initialEntry]) <= budgetTokens) {
+      return initialEntry;
+    }
   }
 
-  const words = wordsOf(record.body);
   let lo = 1;
   let hi = Math.min(words.length, Math.max(1, Math.floor(perEntry / TOKEN_PER_WORD_RATIO)));
   let best: MemoryContextBlockEntry | undefined;

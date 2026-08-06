@@ -90,8 +90,26 @@ describe("clipToTokenBudget", () => {
     expect(clipToTokenBudget("x".repeat(4096), -1)).toBe("");
   });
 
-  it("keeps at least one ordinary word when the budget cannot even cover it", () => {
-    expect(clipToTokenBudget("alpha beta gamma", 1)).toBe("alpha…");
+  // Every non-empty excerpt is at least one "word", so it costs TOKEN_PER_WORD_RATIO and rounds up
+  // to 2 — a lone ellipsis included. Below that floor the only excerpt that honours the budget is
+  // the empty one; the old word-count form returned a word regardless and cost double the budget.
+  it("returns an empty string when no excerpt could fit the budget", () => {
+    expect(clipToTokenBudget("alpha beta gamma", 1)).toBe("");
+    expect(clipToTokenBudget("x".repeat(4096), 1)).toBe("");
+  });
+
+  it("never returns an excerpt costing more than the budget it was given", () => {
+    const bodies = ["alpha beta gamma delta epsilon", "x".repeat(4096), "😀".repeat(2048), "one"];
+    for (const body of bodies) {
+      for (let budget = 0; budget <= 40; budget += 1) {
+        const clipped = clipToTokenBudget(body, budget);
+        expect([body.slice(0, 8), budget, estimateTokens(clipped) <= budget]).toEqual([
+          body.slice(0, 8),
+          budget,
+          true,
+        ]);
+      }
+    }
   });
 
   // The mirror image of the estimator gap: the old word-budget comparison was against word COUNT,
