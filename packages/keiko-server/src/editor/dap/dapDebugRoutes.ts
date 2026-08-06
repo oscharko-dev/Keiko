@@ -545,11 +545,16 @@ async function handleDebugBootstrap(ctx: RouteContext, deps: UiHandlerDeps): Pro
 function sessionConfiguration(
   service: DapDebugRouteService,
   workspace: AuthorizedWorkspace,
-  initial: InstrumentationSnapshot,
 ): (port: DapSessionConfigurationPort) => Promise<void> {
-  let configured = initial;
   return async (port): Promise<void> => {
-    configured = await configureInstrumentation(port, configured, (current, fileId, response) => {
+    // Re-read the breakpoint snapshot fresh on EVERY invocation -- including a dapProcessManager
+    // internal launch retry, which reuses this same closure verbatim -- instead of closing over a
+    // snapshot captured once per HTTP request. A stale snapshot makes a concurrent breakpoint edit
+    // fail identically on every retry attempt and burns the 2-attempt restart-throttle budget on a
+    // race, not a real adapter failure (KEIKO-0097).
+    const fresh = service.breakpoints.snapshot(workspace.realRoot);
+    if (!fresh.ok) throw new DapProcessManagerError("INVALID_CAPSULE_PLAN");
+    await configureInstrumentation(port, fresh.snapshot, (current, fileId, response) => {
       const reconciled = service.breakpoints.setBreakpointVerifications(
         workspace.realRoot,
         current.revision,
@@ -557,7 +562,9 @@ function sessionConfiguration(
         fileId,
         verificationUpdates(fileId, current, response),
       );
-      if (!reconciled.ok) throw new Error("DEBUG_BREAKPOINT_RECONCILIATION_FAILED");
+      // Non-retriable: a second reconciliation conflict on a freshly re-read snapshot is a real
+      // race, not stale input -- tear down instead of recursing on unchanged state.
+      if (!reconciled.ok) throw new DapProcessManagerError("INVALID_CAPSULE_PLAN");
       return reconciled.snapshot;
     });
   };
@@ -601,7 +608,7 @@ export async function handleStartDebugSession(
     adapterRuntime: "node",
     adapterProviderId: "node",
     planCandidate: request.target,
-    configure: sessionConfiguration(service, authorized.workspace, snapshot.snapshot),
+    configure: sessionConfiguration(service, authorized.workspace),
   });
   const projection = service.manager.health(sessionId);
   if (projection === undefined) throw new Error("DEBUG_SESSION_PROJECTION_UNAVAILABLE");
