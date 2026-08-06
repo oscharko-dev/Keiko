@@ -361,7 +361,9 @@ export interface WireEditorCallHierarchy {
   readonly isCurrentDocument: (documentUri: string) => boolean;
   readonly streamId: string;
   readonly newRequestId: () => string;
-  readonly documentLanguage: EditorLanguageId;
+  /** Read live at action-run time, not captured at wiring time -- a document language switch with
+   * no other wiring change must still be reflected on the next Call Hierarchy invocation. */
+  readonly documentLanguage: () => EditorLanguageId;
   readonly labels: CallHierarchyActionLabels;
   readonly onResult: (response: EditorCallHierarchyResponse) => void;
 }
