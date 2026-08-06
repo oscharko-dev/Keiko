@@ -119,6 +119,26 @@ describe("verification path existence", () => {
     });
   });
 
+  // This matrix records coverage held IN this repository. A path resolving outside it is not
+  // satisfiable evidence regardless of what happens to exist there, so containment is checked
+  // before existence and the failure says which problem it is.
+  it.each([
+    ["a traversing operand", "npx vitest run ../outside.test.ts"],
+    ["a traversing cd target", "cd .. && npx vitest run x.test.ts"],
+    ["a nested escape", "npx vitest run packages/../../outside.test.ts"],
+    // A traversing `cd` reports twice — the target itself, and the file resolved against it. Both
+    // are true, so this asserts every reported failure is a containment failure rather than a count.
+  ])("rejects %s as resolving outside the repository", (_label, command) => {
+    withRepoRoot([], (root) => {
+      const failures = verificationPathFailures(REAL_ID, [command], root);
+
+      expect(failures.length).toBeGreaterThan(0);
+      expect(failures.every((failure) => failure.includes("resolves outside the repository"))).toBe(
+        true,
+      );
+    });
+  });
+
   it("accepts those same forms when the file exists", () => {
     withRepoRoot(["real.test.ts", "vitest.config.ts"], (root) => {
       expect(

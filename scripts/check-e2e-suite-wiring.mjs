@@ -195,9 +195,18 @@ function configArgumentValue(token, nextToken) {
   return token === CONFIG_FLAG && nextToken !== undefined ? unquote(nextToken) : undefined;
 }
 
+// Quote-aware, not a plain whitespace split: a quoted path may legitimately contain a space, and
+// splitting it into two tokens would lose the config and report an owned config as unowned.
+//
+// A token is a RUN of unquoted and quoted pieces, not an alternation between them. The simpler
+// `"…"|'…'|\S+` form still fails the attached spelling: at `--config="a b.ts"` the quote sits mid
+// token, so the quoted branch cannot start there and `\S+` grabs `--config="a` up to the space.
+// Repeating the group keeps `--config=` and `"a b.ts"` in one token.
+const SHELL_TOKEN = /(?:[^\s"']+|"[^"]*"|'[^']*')+/gu;
+
 export function playwrightConfigNames(command) {
   if (typeof command !== "string") return [];
-  const tokens = command.split(/\s+/u).filter((token) => token.length > 0);
+  const tokens = command.match(SHELL_TOKEN) ?? [];
   const found = [];
   for (const [index, token] of tokens.entries()) {
     const value = configArgumentValue(token, tokens[index + 1]);

@@ -311,6 +311,18 @@ describe("config ownership (KEIKO-0077)", () => {
     ]);
   });
 
+  // A whitespace split would break the quoted path into two tokens and lose the config entirely.
+  it("reads a quoted --config value containing a space", () => {
+    const spaced = "playwright.issue with space.config.ts";
+
+    expect(playwrightConfigNames(`playwright test --config="tests/e2e/config/${spaced}"`)).toEqual([
+      spaced,
+    ]);
+    expect(playwrightConfigNames(`playwright test --config "tests/e2e/config/${spaced}"`)).toEqual([
+      spaced,
+    ]);
+  });
+
   it("does not let a filename prefix satisfy a different config", () => {
     const longer = "playwright.issue-9999-orphan-extended.config.ts";
 

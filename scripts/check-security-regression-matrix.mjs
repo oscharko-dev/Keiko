@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { isMainModule } from "./lib/is-main-module.mjs";
 
@@ -155,6 +155,19 @@ export function verificationPathFailures(id, verification, repoRoot = REPO_ROOT)
   return failures;
 }
 
+// This matrix records coverage held IN this repository, so a path that resolves outside it is not
+// satisfiable evidence no matter what happens to exist there — `npx vitest run ../../etc/hosts`
+// would otherwise resolve to a real file and count as coverage-of-record. Containment is checked
+// before existence, so an escaping path is reported as such rather than as merely missing.
+function unresolvablePath(relativePath, repoRoot) {
+  const absolute = resolve(repoRoot, relativePath);
+  const contained = relative(repoRoot, absolute);
+  if (contained.startsWith("..") || isAbsolute(contained)) {
+    return `${relativePath} (resolves outside the repository)`;
+  }
+  return existsSync(absolute) ? undefined : relativePath;
+}
+
 // `cd <dir> && …` is a real shape in this matrix (the keiko-ui entries run vitest from the package
 // directory), so paths are resolved against the directory the command would actually run in.
 function missingCommandPaths(command, repoRoot) {
@@ -167,7 +180,8 @@ function missingCommandPaths(command, repoRoot) {
       continue;
     }
     base = base === "" ? target : `${base}/${target}`;
-    if (!existsSync(resolve(repoRoot, base))) missing.push(base);
+    const failure = unresolvablePath(base, repoRoot);
+    if (failure !== undefined) missing.push(failure);
   }
   return missing;
 }
@@ -176,7 +190,8 @@ function missingSegmentPaths(segment, base, repoRoot) {
   const missing = [];
   for (const token of pathShapedTokens(segment)) {
     const relativePath = base === "" ? token : `${base}/${token}`;
-    if (!existsSync(resolve(repoRoot, relativePath))) missing.push(relativePath);
+    const failure = unresolvablePath(relativePath, repoRoot);
+    if (failure !== undefined) missing.push(failure);
   }
   return missing;
 }
