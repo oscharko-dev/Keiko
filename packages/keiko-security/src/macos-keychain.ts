@@ -66,15 +66,29 @@ function resolveSpawn(options: MacosKeychainOptions): ResolvedSpawn {
   };
 }
 
-// `ETIMEDOUT` is Node's own marker for a spawn its timeout terminated. Measured rather than assumed:
-// on a timed-out execFileSync the thrown error carries `code: "ETIMEDOUT"` while `killed` is
-// undefined and `status` is null, so neither of those is usable here. A refused call (a keychain
-// answering "no such item") carries an exit status and no such code, which is the distinction the
-// caller depends on.
-function killedByTimeout(error: unknown): boolean {
+// `security` exits 44 (errSecItemNotFound) when the item simply is not there. Measured against the
+// shipped binary, alongside 2 for a malformed invocation and 1 for an unknown subcommand.
+const ITEM_NOT_FOUND_STATUS = 44;
+
+function itemNotFound(error: unknown): boolean {
   return (
-    typeof error === "object" && error !== null && "code" in error && error.code === "ETIMEDOUT"
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    error.status === ITEM_NOT_FOUND_STATUS
   );
+}
+
+// Only "the item is not there" invites a write. Everything else — a locked or denied keychain, a
+// policy refusal, a missing binary, a timeout — means the keychain did not answer, and a write
+// would meet the same wall and spend a second bounded wait on the boot path for nothing.
+//
+// This deliberately keys on the one status that means "absent" rather than trying to enumerate the
+// failures that mean "unavailable": a keychain can refuse immediately, without a timeout, and an
+// enumeration would have to grow to keep catching that. A timed-out spawn carries a null status and
+// lands here as unavailable for the same reason every other non-44 outcome does.
+function readOutcome(error: unknown): MacosKeychainRead {
+  return itemNotFound(error) ? { kind: "absent" } : { kind: "unavailable" };
 }
 
 /** Reads the generic password for `service`/`account`. Never throws. */
@@ -98,7 +112,7 @@ export function readMacosKeychainSecret(
     ).trim();
     return { kind: "found", secret };
   } catch (error) {
-    return killedByTimeout(error) ? { kind: "unavailable" } : { kind: "absent" };
+    return readOutcome(error);
   }
 }
 
@@ -115,15 +129,18 @@ export function writeMacosKeychainSecret(
   const spawn = resolveSpawn(options);
   if (!spawn.darwin) return false;
   try {
-    execFileSync(
-      spawn.executable,
-      ["add-generic-password", "-s", service, "-a", account, "-w", secret],
-      {
-        stdio: ["ignore", "ignore", "ignore"],
-        timeout: spawn.timeout,
-        killSignal: spawn.killSignal,
-      },
-    );
+    // The secret goes over stdin, never in the argument vector: `ps` exposes a process's arguments
+    // to every process of the same user, which is precisely the audience this tier exists to keep
+    // the key away from. Bare `-w` makes `security` read the value, and it asks for it twice —
+    // measured against the shipped binary, which prompts "password data" then "retype password"
+    // and refuses on a mismatch. A piped stdin satisfies both reads without a terminal, so this
+    // does not reintroduce the interactive wait the timeout above exists to bound.
+    execFileSync(spawn.executable, ["add-generic-password", "-s", service, "-a", account, "-w"], {
+      input: `${secret}\n${secret}\n`,
+      stdio: ["pipe", "ignore", "ignore"],
+      timeout: spawn.timeout,
+      killSignal: spawn.killSignal,
+    });
     return true;
   } catch {
     return false;

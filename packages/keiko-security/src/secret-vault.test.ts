@@ -530,15 +530,21 @@ describe("createKeychainCommandRunner", () => {
   it("gives up on a keychain that never answers instead of waiting for it", () => {
     // Stands in for `security` blocked on a macOS unlock dialog. Against an unbounded spawn this
     // waits the full 30s and the test fails on the suite timeout.
-    const dir = mkdtempSync(join(tmpdir(), "keiko-secret-vault-keychain-"));
-    const hangs = join(dir, "security");
-    writeFileSync(hangs, "#!/bin/sh\nsleep 30\n");
-    chmodSync(hangs, 0o700);
-    const run = createKeychainCommandRunner(hangs, 250);
+    const fakeDir = mkdtempSync(join(tmpdir(), "keiko-secret-vault-keychain-"));
+    try {
+      const hangs = join(fakeDir, "security");
+      writeFileSync(hangs, "#!/bin/sh\nsleep 30\n");
+      chmodSync(hangs, 0o700);
+      const run = createKeychainCommandRunner(hangs, 250);
 
-    const started = process.hrtime.bigint();
-    expect(() => run(["find-generic-password"])).toThrow();
-    expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(5_000);
+      const started = process.hrtime.bigint();
+      expect(() => run(["find-generic-password"])).toThrow();
+      // The 20x margin between the 250ms bound and this 5s ceiling keeps the assertion insensitive
+      // to runner scheduling while still failing against the previous unbounded spawn.
+      expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(5_000);
+    } finally {
+      rmSync(fakeDir, { recursive: true, force: true });
+    }
   }, 15_000);
 });
 
