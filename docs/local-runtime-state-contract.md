@@ -1,7 +1,7 @@
 # Local Runtime State Contract
 
 This document enumerates the local paths, environment variables, and durable stores that Keiko
-intentionally reads or writes at `0.2.15`. It is a current-state contract, not a historical rollout
+intentionally reads or writes at `0.3.0`. It is a current-state contract, not a historical rollout
 or compatibility playbook.
 
 ## Principles
@@ -121,7 +121,7 @@ real `.keiko` tree.
 | Update recovery manifests (`updates/*`)                                                                            | yes              | n/a                | n/a (content-free)                        | yes (one prev) | manifest validation                                                               | [ADR-0099](adr/ADR-0099-governed-in-app-updates-and-release-impact-contract.md)                         |
 
 `deferred` is a documented, bounded decision — not an oversight. Customer-reconstructive evidence
-artifacts are not encrypted at rest in `0.2.15`; the compensating controls are owner-only permissions,
+artifacts are not encrypted at rest in `0.3.0`; the compensating controls are owner-only permissions,
 redaction-before-persist, and deterministic bounded retention. See
 [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md) and
 [Evidence artifact confidentiality](#evidence-artifact-confidentiality).
@@ -185,7 +185,7 @@ enforced once per snapshot-store instance. Startup-purge receipts are not yet wr
 persistent audit ledger (keiko-server has none today); the purge is deterministic but, like the
 user-initiated delete route, not yet attested in an audit trail.
 
-**Encryption scope.** In `0.2.15`, customer-reconstructive evidence artifacts are **not** encrypted
+**Encryption scope.** In `0.3.0`, customer-reconstructive evidence artifacts are **not** encrypted
 at rest. The compensating controls are owner-only `0o600` permissions, deterministic bounded
 retention, and redaction-before-persist. This deferral is explicit and documented in
 [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md); the atomic write boundary in every

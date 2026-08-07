@@ -800,7 +800,7 @@
       "remediation": "no-action-required",
       "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
-        "Every save is a restore point — browse, compare, and restore file history locally."
+        "Every save is a restore point \u2014 browse, compare, and restore file history locally."
       ],
       "internalOnly": false,
       "observableImpact": true,
@@ -819,8 +819,84 @@
         "reviewer": "release-owner",
         "reviewedAt": "2026-07-19",
         "humanApproved": true,
-        "approvalReference": "issue:#2531",
-        "rationale": "Issue #2531 explicitly classifies this child as a user-visible new addition, supplies the customer release-note bullet, and sets Human Review Required to No for the epic feature-branch flow."
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#1800#4618551973",
+        "rationale": "Issue #2531 classifies this child as a user-visible new addition, supplies the customer release-note bullet, and sets Human Review Required to No for the epic feature-branch flow. That issue-scoped reference did not satisfy the publish gate, which requires the release-owner authority to be recorded as an APPROVED GitHub pull-request review. This entry belongs to the 0.2.15 line, whose recorded release-owner authority is PR review #4618551973, and it is bound to that authority like its two sibling 0.2.15 entries. Version 0.2.15 was never published to any registry, so no published catalog contains this entry and the repair violates no append-only guarantee."
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.0",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.0",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "id": "2026-08-07-keiko-0.3.0-release-readiness",
+      "releaseNoteCategory": "state-or-compatibility-changes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Keiko 0.3.0 completes the release-readiness program: multi-root editor workspaces with an explicit Workspace Trust gate, editor profiles and per-file local history, approximate-nearest-neighbour local knowledge retrieval, and a governed Coding Workbench whose runtime actions are bound to the authenticated launcher session. Every autonomy-capable surface now reports readiness truthfully instead of showing green over an unusable gateway, and failed actions surface a diagnosable error instead of failing silently.",
+      "affectedStateStores": [
+        "ui-store-schema",
+        "workspace-manifests",
+        "editor-local-history",
+        "local-knowledge",
+        "coding-runtime"
+      ],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "The local UI store migrates forward automatically on first start (schema 9 to 19). Migrations are additive: new tables for workspace manifests, workspace trust, editor profiles, local history, coding-runtime snapshots and memory autonomy policy, plus new columns on existing chat rows. No existing row is deleted or rewritten destructively. After the migration an older Keiko binary refuses to open the store rather than corrupting it.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "workspace-manifests",
+          "description": "Workspaces become explicit manifests with per-root trust decisions. An existing single-folder binding is migrated into a one-root manifest. The first time a workspace is opened, Keiko starts in Restricted Mode and asks for an explicit trust decision before scripts, language servers or agent execution are available.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "local-knowledge",
+          "description": "Local knowledge retrieval moves to an approximate-nearest-neighbour index built on demand from the vectors already stored. Stored encrypted vectors remain intact and are reused, so no pod has to be re-indexed; only cached materialization state is discarded and rebuilt.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "coding-runtime",
+          "description": "Coding Workbench state-changing actions are bound to the authenticated, launcher-attested browser session. A window that is not paired with the launcher can read status but is refused run start, approvals, stop/takeover and follow-up prompts, and the surface now says so instead of appearing ready.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "releaseNoteBullets": [
+        "Added multi-root editor workspaces with an explicit Workspace Trust gate: a new workspace opens in Restricted Mode until you grant trust, and scripts, language servers and agent execution stay unavailable until you do.",
+        "Added editor profiles, portable profile import and export, and per-file local history with a keyboard-operable timeline and honest restore.",
+        "Local knowledge now uses an approximate-nearest-neighbour index for retrieval, built on demand from the vectors already stored; existing pods do not need to be re-indexed.",
+        "Coding Workbench, Chat, Git, Prompt Enhancer, MemoriaViva and Quality Intelligence now report readiness and outcomes truthfully: no green state over an unusable gateway, no silent failure, and every refused action names its reason with a copyable support id.",
+        "Voice turns now carry their staged attachments and document context, and interrupting the assistant cancels only the answer it owns instead of blocking sending elsewhere.",
+        "Governed Git delivery authenticates on every network path, reports commit signing honestly, and distinguishes offline from authentication failures instead of reporting one generic error."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-07",
+        "humanApproved": true,
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#PENDING#PENDING",
+        "rationale": "The maintainer explicitly commissioned the 0.3.0 release in the local session and directed the portable delivery scope (bundled Node.js and OpenCode sidecar for macOS and Windows). The entry covers the release-readiness audit programme tracked in epic #2802 and the implementation waves merged into dev. The approval reference is backfilled from the release owner's APPROVED review on the version-bump pull request before any publish gate consumes it."
       }
     }
   ]

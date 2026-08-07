@@ -119,7 +119,7 @@ describe("runtime supervisor build", () => {
       ),
       "utf8",
     );
-    expect(plist).toContain("<string>0.2.15</string>");
+    expect(plist).toContain("<string>0.3.0</string>");
     expect(plist).not.toContain("__KEIKO_VERSION__");
   });
 
