@@ -9,10 +9,50 @@ import {
   npmCommand,
   pairedDevBrowserUrl,
   resolveDevPairingSecret,
+  requiredRuntimeHealth,
   resolveExternalOpener,
   run,
   shouldShellNpmCommand,
 } from "../dev-start.mjs";
+
+describe("dev-start runtime health gate", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // The gate, not the display string. codingRuntimeHealth reports an available-but-unverified
+  // runtime as "ok" followed by its honest evidence detail (ADR-0163 D9); a gate that compared
+  // against the bare literal turned every macOS dev:start into a 60s timeout against a healthy
+  // server, and the pin on codingRuntimeHealth alone could not fail on it.
+  it("passes an available runtime whose evidence class is weaker than platform-qualified", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        runtimeAvailable: true,
+        runtimeEvidenceClass: "functional-not-platform-qualified",
+      }),
+    });
+
+    const health = await requiredRuntimeHealth("http://127.0.0.1:1");
+
+    expect(health.startsWith("ok")).toBe(true);
+    expect(health).not.toContain("runtime:");
+  });
+
+  it("still fails an unavailable runtime", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        runtimeAvailable: false,
+        runtimeUnavailableReason: "runtime-unqualified",
+      }),
+    });
+
+    const health = await requiredRuntimeHealth("http://127.0.0.1:1");
+
+    expect(health).toBe("runtime: unavailable (runtime-unqualified)");
+  });
+});
 
 describe("dev-start coding runtime lifecycle", () => {
   afterEach(() => {
@@ -72,14 +112,14 @@ describe("dev-start coding runtime lifecycle", () => {
             runtimeEvidenceClass: "functional-not-platform-qualified",
           }),
       },
-      expected: "ok (unverified evaluation runtime — no platform signature)",
+      expected: "ok · unverified evaluation runtime (no platform signature)",
     },
     {
       response: {
         ok: true,
         json: () => Promise.resolve({ runtimeAvailable: true }),
       },
-      expected: "ok (unverified evaluation runtime — no platform signature)",
+      expected: "ok · unverified evaluation runtime (no platform signature)",
     },
     {
       response: {

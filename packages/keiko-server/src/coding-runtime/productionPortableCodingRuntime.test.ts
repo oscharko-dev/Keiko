@@ -182,6 +182,57 @@ describe("production portable OpenCode discovery", () => {
  * exactly as strict, which the adversarial suite below asserts one mutation at a time.
  */
 describe("packaged evaluation lane", () => {
+  it("refuses the evaluation lane on an install that carries a release signature", () => {
+    // The lane downgrade this guards: the declaration lives in .portable/runtime-activation.json,
+    // inside the resource root, and honouring it is what turns the platform seal off. Without this
+    // refusal, anyone able to rewrite that one file on a SIGNED install could switch off the very
+    // codesign/Authenticode check that would have detected the rewrite, and every surviving
+    // predicate would still pass because they are all recomputed against that same manifest.
+    const root = portableInstall("evaluation");
+    // A real install always ships the launcher; the fixture does not, and without signable code
+    // there is nothing to downgrade FROM.
+    writeFileSync(join(root, "Keiko.exe"), "launcher");
+
+    const runtime = discoverQualifiedPortableOpenCode({
+      env: {},
+      installRoot: root,
+      platform: "win32",
+      arch: "x64",
+      // Stands for a release-signed launcher: the Authenticode probe yields a signer thumbprint.
+      // An unsigned one yields none, which is why an evaluation build is unaffected. (The macOS
+      // half of the same guard reads `codesign -d`, where a signed bundle reports a real
+      // TeamIdentifier and the shipped unsigned artifact reports "not set" — measured.)
+      commandRunner: () => ({ status: 0, stdout: `${"A".repeat(40)}\n`, stderr: "" }),
+      attestation: {
+        readReceipt: (): never => {
+          throw new Error("discovery must refuse before reaching platform attestation");
+        },
+      },
+    });
+
+    expect(runtime).toBeUndefined();
+  });
+
+  it("still activates the evaluation lane when the install carries no release signature", () => {
+    const root = portableInstall("evaluation");
+    writeFileSync(join(root, "Keiko.exe"), "launcher");
+
+    const runtime = discoverQualifiedPortableOpenCode({
+      env: {},
+      installRoot: root,
+      platform: "win32",
+      arch: "x64",
+      commandRunner: () => ({ status: 0, stdout: "", stderr: "" }),
+      attestation: {
+        readReceipt: (): never => {
+          throw new Error("platform attestation must not run on the evaluation lane");
+        },
+      },
+    });
+
+    expect(runtime).toMatchObject({ platformAssurance: "evaluation-unqualified" });
+  });
+
   it("activates a declared evaluation artifact without any platform attestation", () => {
     const root = portableInstall("evaluation");
 

@@ -32,6 +32,7 @@ import { safeRealDirectory, safeRealFile } from "./nativeRuntimeProcessPaths.js"
 import { declaredPortableRuntimeLane, type PortableRuntimeLane } from "./portableRuntimeLane.js";
 import {
   windowsPublisherIdentityMatches,
+  windowsSignerIdentity,
   windowsSystemEnvironment,
 } from "./windowsPortableAuthenticode.js";
 
@@ -93,6 +94,8 @@ export interface PortableOpenCodeDiscoveryInput {
   readonly installRoot?: string | undefined;
   readonly attestation?: PortableRuntimeAttestationPort | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  /** Test seam for the lane-downgrade probe; production spawns the real platform verifier. */
+  readonly commandRunner?: PortableRuntimeCommandRunner | undefined;
 }
 
 interface PortableRuntimeCandidate {
@@ -150,7 +153,7 @@ function portableRuntimeCandidate(
   if (root === undefined || !setupMatches(root, target)) return undefined;
   const bound = boundActivation(root, target);
   if (bound === undefined) return undefined;
-  const platformAssurance = artifactDeclaredLane(bound.activation);
+  const platformAssurance = honouredLane(bound.activation, root, target, input);
   if (platformAssurance === undefined) return undefined;
   const helpers = boundHelperDigests(root, bound.activation, target);
   const sidecar = qualifiedSidecar(root, bound.activation, target, platformAssurance);
@@ -165,6 +168,84 @@ function portableRuntimeCandidate(
     sidecar,
     platformAssurance,
   };
+}
+
+/**
+ * The lane this artifact declares, once it is safe to honour. The evaluation lane is refused on an
+ * install that carries a release signature — see releaseSignedInstall for why that anchor is the
+ * only one an artifact cannot forge from inside itself.
+ */
+function honouredLane(
+  activation: Record<string, unknown>,
+  root: string,
+  target: UpdatePortableTarget,
+  input: PortableOpenCodeDiscoveryInput,
+): PortableRuntimeLane | undefined {
+  const declared = artifactDeclaredLane(activation);
+  if (declared === undefined) return undefined;
+  if (declared === "evaluation-unqualified" && releaseSignedInstall(root, target, input)) {
+    return undefined;
+  }
+  return declared;
+}
+
+/**
+ * Refuses a LANE DOWNGRADE. The evaluation lane is a property of an artifact that was never signed,
+ * and honouring it is what turns off `codesign --verify --deep` / the Authenticode publisher match
+ * further down. But the declaration lives in `.portable/runtime-activation.json`, inside the
+ * resource root — so without this check, anyone able to rewrite that one file could switch off the
+ * very seal that would have detected the rewrite, and every surviving predicate would still pass
+ * because they are all recomputed against the manifest the attacker now owns.
+ *
+ * The anchor therefore has to be something the artifact cannot forge from inside itself: the
+ * platform's own answer to "is this install signed?". A release-signed macOS bundle reports a real
+ * `TeamIdentifier`; an unsigned or ad-hoc one reports `not set` (measured). A release-signed Windows
+ * launcher yields a signer thumbprint; an unsigned one yields none. So an unsigned evaluation build
+ * is unaffected, and a signed install can never be talked out of its own verification.
+ *
+ * A probe that cannot answer is treated as "signed" — the fail-closed direction, since the only
+ * thing this predicate may do is REFUSE the weaker lane.
+ */
+function releaseSignedInstall(
+  root: string,
+  target: UpdatePortableTarget,
+  input: PortableOpenCodeDiscoveryInput,
+): boolean {
+  const signedCode = releaseSignedCodePath(root, target);
+  // No signable code where a real install always has some: there is no release seal to downgrade
+  // FROM, so this is not the attack this predicate guards. Discovery's own checks still apply.
+  if (signedCode === undefined) return false;
+  try {
+    const run = input.commandRunner ?? runPortableRuntimeCommand;
+    if (target === "windows-x64") {
+      return (
+        windowsSignerIdentity(signedCode, (command, args, options) =>
+          run(command, args, { env: options.env, timeout: options.timeout }),
+        ) !== undefined
+      );
+    }
+    const result = run("/usr/bin/codesign", ["-d", "--verbose=4", signedCode], {
+      env: { PATH: "/usr/bin:/usr/sbin" },
+      timeout: 15_000,
+    });
+    if (result.status !== 0) return false;
+    return macosTeamIdentifierFromOutput(`${result.stdout}\n${result.stderr}`) !== undefined;
+  } catch {
+    // The probe itself failed on code that IS present. Refusing the weaker lane is the only
+    // fail-closed direction available here.
+    return true;
+  }
+}
+
+/** The signed artifact for the target, or undefined when the install carries none. */
+function releaseSignedCodePath(root: string, target: UpdatePortableTarget): string | undefined {
+  try {
+    return target === "windows-x64"
+      ? safeRealFile(join(root, "Keiko.exe"))
+      : macosRuntimeCodePaths(root).appRoot;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
