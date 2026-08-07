@@ -155,7 +155,7 @@ jobs:
           # duplication safe.
           # Quoted: a hypothetical all-digit sha would otherwise parse as a YAML number and reach
           # the shell in a normalized form, defeating the length check below.
-          ACTION_PIN: "b398ea7b9db8d6b16d5922b38ea3d8e47bd20563" # v0.19.2 — keep in sync with Review's uses:
+          ACTION_PIN: "f09528308a7ffdf6ca60840e253a8fc085e9c9a3" # v0.20.0 — keep in sync with Review's uses:
         run: |
           # The pin no longer partitions the store, and that is a deliberate reversal. It used to,
           # because a wrapper release can change review or sanitization SEMANTICS without changing
@@ -427,11 +427,16 @@ jobs:
 
       - name: Review
         id: review
-        uses: oscharko-dev/Keiko-for-Quality@b398ea7b9db8d6b16d5922b38ea3d8e47bd20563 # v0.19.2
+        uses: oscharko-dev/Keiko-for-Quality@f09528308a7ffdf6ca60840e253a8fc085e9c9a3 # v0.20.0
         env:
           # Passed by variable NAME to the action, never as an input value: an input appears in the
           # step context that every other action in the job can read.
           KEIKO_QUALITY_MODEL_TOKEN: ${{ secrets.KEIKO_QUALITY_MODEL_TOKEN }}
+          # v0.20.0's qualified single-shot mode: one model call per file, corpus recall 28/29 and
+          # 27/29 across two waves, completion gate 100% (3/3 x 19/19 on this repository's #3011),
+          # seed gate GREEN at noise 0 - at ~1/5 the agentic spend. Evidence lives in the reviewer
+          # repository under corpus/evidence/qualification-2026-08-07-single-shot.md.
+          KFQ_SINGLE_SHOT: "1"
         with:
           profile: .github/keiko-for-quality.json
           # Secret, not a variable: repository variables are not masked, and an endpoint can be a
