@@ -266,8 +266,11 @@ function healthError(name, error) {
 
 // Exported for test: the gate that consumes codingRuntimeHealth. It went untested, which is how an
 // honest status string could break every macOS `dev:start` while the suite stayed green.
-export async function requiredRuntimeHealth(baseUrl) {
-  if (!codingRuntimeRequired()) return "ok";
+export async function requiredRuntimeHealth(baseUrl, required = codingRuntimeRequired()) {
+  // `required` is a parameter so the gate is assertable on any host: codingRuntimeRequired() is
+  // true only where a dev-lane target exists (darwin), so a test that let it default would take
+  // the short-circuit on Linux CI and pass without ever reaching the code under test.
+  if (!required) return "ok";
   try {
     const runtime = await codingRuntimeHealth(baseUrl);
     // `startsWith`, not equality: an available runtime reports "ok" possibly followed by its

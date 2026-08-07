@@ -33,10 +33,17 @@ describe("dev-start runtime health gate", () => {
       }),
     });
 
-    const health = await requiredRuntimeHealth("http://127.0.0.1:1");
+    const health = await requiredRuntimeHealth("http://127.0.0.1:1", true);
 
     expect(health.startsWith("ok")).toBe(true);
     expect(health).not.toContain("runtime:");
+  });
+
+  it("skips the runtime gate entirely on a host with no dev lane", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    expect(await requiredRuntimeHealth("http://127.0.0.1:1", false)).toBe("ok");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("still fails an unavailable runtime", async () => {
@@ -48,7 +55,7 @@ describe("dev-start runtime health gate", () => {
       }),
     });
 
-    const health = await requiredRuntimeHealth("http://127.0.0.1:1");
+    const health = await requiredRuntimeHealth("http://127.0.0.1:1", true);
 
     expect(health).toBe("runtime: unavailable (runtime-unqualified)");
   });
