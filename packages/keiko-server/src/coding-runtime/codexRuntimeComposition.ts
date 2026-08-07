@@ -3,6 +3,7 @@ import { join, posix, win32 } from "node:path";
 
 import {
   CODING_WORKBENCH_SCHEMA_VERSION,
+  KEIKO_PRODUCT_VERSION,
   validateCodingWorkbenchCodexSubscriptionProfile,
   validateCodingWorkbenchRuntimeEvent,
   type CodingWorkbenchRuntimeEvent,
@@ -33,7 +34,9 @@ import type { RuntimeProcessTree } from "./runtimeProcessSupervisor.js";
 /* eslint-disable complexity -- protocol projection variants intentionally fail closed independently. */
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- contextual port types are authoritative. */
 
-const CLIENT_VERSION = "0.2.15";
+// Derived, never restated: a literal here silently drifts from the product version at every
+// release bump, and no gate compares the two (0.3.0 release audit).
+const CLIENT_VERSION = KEIKO_PRODUCT_VERSION;
 const MAX_TOOL_TEXT_BYTES = 32 * 1024;
 const MAX_USER_AGENT_BYTES = 64 * 1024;
 

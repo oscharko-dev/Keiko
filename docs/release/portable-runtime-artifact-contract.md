@@ -58,8 +58,9 @@ Windows signing, macOS signing and notarization, native runtime qualification, r
 published-asset verification. First-run setup promotes the verified bundle into the managed install
 root before the Coding Workbench may activate the bundled runtime.
 
-Manifest schema v1 has three explicit validation contexts. Staging manifests use
-`verificationPolicy: "staging"`,
+Manifest schema v1 has four explicit pre-publication validation contexts — staging, evaluation,
+candidate, and published (plus the `published-contract` context used to validate this document's own
+example). Staging manifests use `verificationPolicy: "staging"`,
 `verificationStatus: "unverified-staging"`, `signatureVerified: false`,
 `notarizationVerified: false`, target-specific `verificationChecks` set to `false`, and
 `platformSignatureLocallyVerified: false`. They also use `artifact.assetId: 0` because GitHub
@@ -68,6 +69,35 @@ must use `release.releaseId: 0`, `artifact.assetId: 0`, and matching zero-id rel
 any positive pre-upload identity is rejected. After upload, the published context requires positive
 ids that exactly match the GitHub API release/asset snapshot. The manifest example below remains the
 production-complete contract for artifacts that may be promoted as portable release assets.
+
+### The evaluation lane (ADR-0163 D9)
+
+An explicitly requested `workflow_dispatch` run (`evaluation_build: true`) produces the fourth
+context instead of staging. Its declared triple is `verificationPolicy: "evaluation"`,
+`verificationStatus: "evaluation-unqualified"`, and reason codes exactly
+`["evaluation-artifact", "evaluation-unsigned-allowed"]`, written in the manifest security block,
+every sidecar signing block, every native-helper signing block, and the native addon. Its
+`runtimeActivation.trustAnchor` is `evaluation-unqualified` — the anchor states plainly that NO
+platform seal binds the activation document the runtime reads at discovery. Like staging, it uses
+`release.releaseId: 0` and `artifact.assetId: 0`.
+
+Unlike staging, an evaluation artifact ACTIVATES: the packaged runtime will run its bundled
+OpenCode sidecar. What that waives is exactly the platform signature, notarization and attestation
+gates. Everything else stays mandatory and identical to production — `payloadSha256`, `sizeBytes`,
+`payloadRootPath` equality and containment of `executablePath`, all three `shippedExecutable*`
+fields (validated in this context, not only under the production policy), the exact 11-key sidecar
+signing set, license and SBOM evidence paths and digests, the complete portable provenance pin, and
+both native-helper digests re-hashed from disk at discovery AND again at launch. The waived platform
+booleans must be present and `false`, never absent: a manifest that omits `verificationChecks` or
+asserts any single platform check is rejected.
+
+An evaluation artifact is never publishable and never update-eligible. The `assemble` job runs only
+from a stable-tag push and still requires three mutually consistent `verified-production` targets;
+`scripts/verify-portable-runtime-signing.mjs` explicitly refuses `--policy evaluation`; and the
+update preflight and staging-download predicates still demand production/verified-production. The
+schema shape of an evaluation manifest is pinned in `scripts/__tests__/portable-runtime.test.mjs`
+rather than as a second JSON fence here, because `check:portable-manifest` validates only the FIRST
+fence in this document under the published-contract context.
 
 ## Archive And Evidence Layout
 
@@ -812,11 +842,12 @@ Validation rules:
   stapling, and assessment proof where applicable.
 - `release.stable` and `updateEligibility.stableOnly` must both be `true` for one-click portable
   update eligibility. Prerelease, beta, canary, downgrade, and rollback paths are out of scope.
-- `security.verificationPolicy` is one of `staging`, `development`, `pull-request`, or
+- `security.verificationPolicy` is one of `staging`, `development`, `pull-request`, `evaluation`, or
   `production`; `security.verificationStatus` must match that policy and whether the target's
   signature/notarization checks are complete.
 - `security.verificationReasonCodes` is a bounded, redacted enum list. It may record policy or
-  failure reasons such as `staging-unverified`, `non-production-unsigned-allowed`, or
+  failure reasons such as `staging-unverified`, `non-production-unsigned-allowed`,
+  `evaluation-artifact`, `evaluation-unsigned-allowed`, or
   `macos-staple-unverified`, but it must never store certificate subjects, team ids, account ids,
   keychain names, private endpoints, or raw signing/notarization output.
 - `security.verificationChecks` stores target-specific redacted booleans only:

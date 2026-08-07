@@ -33,19 +33,39 @@ export function WorkbenchHeader({
   // (`canStart` — model source incl. the sidecar gateway profile, workspace, runtime, run), so
   // the header can never claim ready while any of those resources is unavailable or unconfirmed.
   const blockedIdle = snapshotState === "idle" && !state.canStart;
+  // ADR-0163 D9: an unverified evaluation runtime is a READINESS fact this pill already claims to
+  // carry, so the idle label must not read as the plain "Ready to start", and the run states must
+  // not paint the success colour over it.
+  const evaluation =
+    state.runtime.value?.runtimeEvidenceClass === "functional-not-platform-qualified";
   return (
     <header className={styles.header}>
       <h2 className={styles.title} ref={focusRef} tabIndex={-1}>
         {sharedT("rail.coding")}
       </h2>
-      <span className={styles.statePill} data-state={blockedIdle ? "not-ready" : snapshotState}>
+      <span
+        className={styles.statePill}
+        data-state={blockedIdle ? "not-ready" : snapshotState}
+        {...(evaluation ? { "data-assurance": "evaluation" } : {})}
+      >
         <span className={styles.statusSymbol} aria-hidden="true">
           {activeRunState(snapshotState) ? "●" : "○"}
         </span>
-        {blockedIdle ? t("codingWorkbench.header.notReady") : runStateLabel(snapshotState, t)}
+        {headerStateLabel(blockedIdle, evaluation, snapshotState, t)}
       </span>
     </header>
   );
+}
+
+function headerStateLabel(
+  blockedIdle: boolean,
+  evaluation: boolean,
+  snapshotState: CodingWorkbenchRuntimeStateName,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (blockedIdle) return t("codingWorkbench.header.notReady");
+  if (evaluation && snapshotState === "idle") return t("codingWorkbench.header.readyEvaluation");
+  return runStateLabel(snapshotState, t);
 }
 
 export interface TaskComposerActions {

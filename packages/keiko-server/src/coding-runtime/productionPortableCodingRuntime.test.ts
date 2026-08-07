@@ -175,6 +175,352 @@ describe("production portable OpenCode discovery", () => {
   });
 });
 
+/**
+ * ADR-0163 D9. The declared evaluation lane activates WITHOUT any platform attestation, and the
+ * attestation port is never consulted — `refusingAttestation` throws if it is reached, so this is
+ * a structural-skip proof, not a tolerate-the-failure one. Every other integrity predicate stays
+ * exactly as strict, which the adversarial suite below asserts one mutation at a time.
+ */
+describe("packaged evaluation lane", () => {
+  it("refuses the evaluation lane on an install that carries a release signature", () => {
+    // The lane downgrade this guards: the declaration lives in .portable/runtime-activation.json,
+    // inside the resource root, and honouring it is what turns the platform seal off. Without this
+    // refusal, anyone able to rewrite that one file on a SIGNED install could switch off the very
+    // codesign/Authenticode check that would have detected the rewrite, and every surviving
+    // predicate would still pass because they are all recomputed against that same manifest.
+    const root = portableInstall("evaluation");
+    // A real install always ships the launcher; the fixture does not, and without signable code
+    // there is nothing to downgrade FROM.
+    writeFileSync(join(root, "Keiko.exe"), "launcher");
+
+    const runtime = discoverQualifiedPortableOpenCode({
+      env: {},
+      installRoot: root,
+      platform: "win32",
+      arch: "x64",
+      // Stands for a release-signed launcher: the Authenticode probe yields a signer thumbprint.
+      // An unsigned one yields none, which is why an evaluation build is unaffected. (The macOS
+      // half of the same guard reads `codesign -d`, where a signed bundle reports a real
+      // TeamIdentifier and the shipped unsigned artifact reports "not set" — measured.)
+      commandRunner: () => ({ status: 0, stdout: `${"A".repeat(40)}\n`, stderr: "" }),
+      attestation: {
+        readReceipt: (): never => {
+          throw new Error("discovery must refuse before reaching platform attestation");
+        },
+      },
+    });
+
+    expect(runtime).toBeUndefined();
+  });
+
+  it("still activates the evaluation lane when the install carries no release signature", () => {
+    const root = portableInstall("evaluation");
+    writeFileSync(join(root, "Keiko.exe"), "launcher");
+
+    const runtime = discoverQualifiedPortableOpenCode({
+      env: {},
+      installRoot: root,
+      platform: "win32",
+      arch: "x64",
+      commandRunner: () => ({ status: 0, stdout: "", stderr: "" }),
+      attestation: {
+        readReceipt: (): never => {
+          throw new Error("platform attestation must not run on the evaluation lane");
+        },
+      },
+    });
+
+    expect(runtime).toMatchObject({ platformAssurance: "evaluation-unqualified" });
+  });
+
+  it("activates a declared evaluation artifact without any platform attestation", () => {
+    const root = portableInstall("evaluation");
+
+    const runtime = discoverEvaluation(root);
+
+    expect(runtime).toMatchObject({
+      installRoot: realpathSync(root),
+      target: TARGET,
+      platformAssurance: "evaluation-unqualified",
+      sidecar: { summary: { name: "opencode-compatible" } },
+      qualification: { platform: "win32", arch: "x64", backend: "windows-job-object" },
+    });
+    expect(runtime?.qualification.releaseReceipt).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    // The honest availability record travels with the verification to every downstream consumer.
+    expect(runtime?.sidecar.availability).toMatchObject({
+      signatureVerified: false,
+      qualificationVerified: false,
+      archiveDigestVerified: true,
+      executableTreeDigestVerified: true,
+    });
+  });
+
+  it("still reports release-qualified for a production artifact", () => {
+    expect(discover(portableInstall())).toMatchObject({
+      platformAssurance: "release-qualified",
+    });
+  });
+
+  // A plain staging artifact is the default output of `stage-portable-runtime.mjs`. It must stay
+  // refused, before and after the lane exists — nothing is promoted by accident.
+  it.each(["staging"] as const)("refuses a plain %s artifact", (lane) => {
+    const root = portableInstall(lane);
+    expect(discoverEvaluation(root)).toBeUndefined();
+    expect(discover(root)).toBeUndefined();
+  });
+
+  // The lane is ONE coherent artifact-wide declaration, never a per-block waiver.
+  it.each([
+    [
+      "security declares evaluation while the sidecar declares production",
+      (activation: FixtureActivation): void => {
+        activation.security = laneSecurity("evaluation");
+        activation.sidecarRuntimes[0].signing = {
+          ...activation.sidecarRuntimes[0].signing,
+          ...laneSecurity("production"),
+        };
+      },
+    ],
+    [
+      "security declares production while the sidecar declares evaluation",
+      (activation: FixtureActivation): void => {
+        activation.security = laneSecurity("production");
+        activation.sidecarRuntimes[0].signing = {
+          ...activation.sidecarRuntimes[0].signing,
+          ...laneSecurity("evaluation"),
+        };
+      },
+    ],
+    [
+      "a native helper declares the other lane",
+      (activation: FixtureActivation): void => {
+        activation.nativeHelpers[0].signing = laneHelperSigning("production");
+      },
+    ],
+    [
+      "a native helper carries no signing block at all",
+      (activation: FixtureActivation): void => {
+        delete activation.nativeHelpers[1].signing;
+      },
+    ],
+    [
+      "the security block is absent",
+      (activation: FixtureActivation): void => {
+        delete activation.security;
+      },
+    ],
+  ])("refuses a mixed declaration: %s", (_name, mutate) => {
+    const root = portableInstall("evaluation");
+    mutateActivation(root, mutate);
+    expect(discoverEvaluation(root)).toBeUndefined();
+  });
+
+  // EVERY integrity check the owner listed as NOT waived, one mutation at a time.
+  it.each([
+    [
+      "one byte flipped in the sidecar executable",
+      (root: string): void => {
+        writeFileSync(join(root, SIDECAR_ROOT, "opencode.cmd"), "@echo off\r\r");
+      },
+    ],
+    [
+      "an extra file added under the sidecar payload root",
+      (root: string): void => {
+        writeFileSync(join(root, SIDECAR_ROOT, "smuggled.txt"), "extra");
+      },
+    ],
+    [
+      "the license evidence mutated",
+      (root: string): void => {
+        writeFileSync(join(root, SIDECAR_ROOT, "LICENSE.txt"), "tampered license");
+      },
+    ],
+    [
+      "the SBOM evidence mutated",
+      (root: string): void => {
+        writeFileSync(join(root, SIDECAR_ROOT, "evidence", "sbom.cdx.json"), "{}");
+      },
+    ],
+    [
+      "the supervisor helper bytes drifted",
+      (root: string): void => {
+        writeFileSync(join(root, "runtime", "native", "keiko-runtime-supervisor.exe"), "drifted");
+      },
+    ],
+    [
+      "the secure-read helper bytes drifted",
+      (root: string): void => {
+        writeFileSync(
+          join(root, "runtime", "native", "keiko-secure-workspace-read.exe"),
+          "drifted!!",
+        );
+      },
+    ],
+  ])("refuses an evaluation artifact with %s", (_name, tamper) => {
+    const root = portableInstall("evaluation");
+    tamper(root);
+    expect(discoverEvaluation(root)).toBeUndefined();
+  });
+
+  it.each([
+    // Discovery rejects a malformed sizeBytes; it does NOT recompute the declared byte count from
+    // disk, because the payload tree digest already binds the bytes exactly (an off-by-one payload
+    // is caught by the "one byte flipped" and "extra file" cases above). The declared value's own
+    // correctness is a producer-schema obligation (validateSidecarPayload), pinned in
+    // scripts/__tests__/portable-runtime.test.mjs.
+    [
+      "a zero sizeBytes",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].sizeBytes = 0;
+      },
+    ],
+    [
+      "a negative sizeBytes",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].sizeBytes = -1;
+      },
+    ],
+    [
+      "a non-integer sizeBytes",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].sizeBytes = 12.5;
+      },
+    ],
+    [
+      "a payloadRootPath that is not the sidecar's own root",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].payloadRootPath = "runtime/sidecars/other";
+      },
+    ],
+    [
+      "an executablePath resolved outside the payload root",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].executablePath = "runtime/native/opencode.cmd";
+      },
+    ],
+    [
+      "a foreign shipped executable tree algorithm",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].signing = {
+          ...activation.sidecarRuntimes[0].signing,
+          shippedExecutableTreeAlgorithm: "sha256",
+        };
+      },
+    ],
+    [
+      "an absent shipped executable digest",
+      (activation: FixtureActivation): void => {
+        const signing = { ...activation.sidecarRuntimes[0].signing };
+        delete signing.shippedExecutableSha256;
+        activation.sidecarRuntimes[0].signing = signing;
+      },
+    ],
+    [
+      "a non-hex shipped executable digest",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].signing = {
+          ...activation.sidecarRuntimes[0].signing,
+          shippedExecutableSha256: "not-a-digest",
+        };
+      },
+    ],
+    [
+      "a drifted payloadSha256",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].payloadSha256 = "1".repeat(64);
+      },
+    ],
+    [
+      "a native-helper sizeBytes that disagrees with disk",
+      (activation: FixtureActivation): void => {
+        activation.nativeHelpers[0].sizeBytes = Number(activation.nativeHelpers[0].sizeBytes) + 1;
+      },
+    ],
+    [
+      "a native-helper shippedSha256 that disagrees with disk",
+      (activation: FixtureActivation): void => {
+        activation.nativeHelpers[1].shippedSha256 = "2".repeat(64);
+      },
+    ],
+    [
+      "a sourceCommitSha that is not 40 hex characters",
+      (activation: FixtureActivation): void => {
+        activation.sourceCommitSha = "not-a-commit";
+      },
+    ],
+    [
+      "a broken redistribution approval",
+      (activation: FixtureActivation): void => {
+        activation.sidecarRuntimes[0].releaseApproval = {
+          redistribution: { status: "withdrawn" },
+        };
+      },
+    ],
+  ])("refuses an evaluation artifact declaring %s", (_name, mutate) => {
+    const root = portableInstall("evaluation");
+    mutateActivation(root, mutate);
+    expect(discoverEvaluation(root)).toBeUndefined();
+  });
+
+  /**
+   * The synthesized receipt is computed over the COMPLETE qualification binding, so the activation
+   * digest and both native-helper digests remain load-bearing for the runtime identity: a swapped
+   * supervisor binary still changes the receipt.
+   */
+  it("binds the synthesized receipt to the artifact rather than to a constant", () => {
+    const first = discoverEvaluation(portableInstall("evaluation"))?.qualification.releaseReceipt;
+    const second = discoverEvaluation(portableInstall("evaluation"))?.qualification.releaseReceipt;
+    expect(first).toBeDefined();
+    // Two byte-identical artifacts agree: the receipt is deterministic, not random.
+    expect(second).toBe(first);
+
+    const drifted = portableInstall("evaluation");
+    mutateActivation(drifted, (activation) => {
+      activation.product = { packageName: "@oscharko-dev/keiko", packageVersion: "0.3.0" };
+    });
+    expect(discoverEvaluation(drifted)?.qualification.releaseReceipt).not.toBe(first);
+  });
+});
+
+type FixtureRecord = Record<string, unknown>;
+
+interface FixtureSidecar extends FixtureRecord {
+  signing: FixtureRecord;
+}
+
+interface FixtureHelper extends FixtureRecord {
+  signing?: FixtureRecord;
+}
+
+// Tuple shapes, not arrays: the fixture always carries exactly one sidecar and exactly two native
+// helpers, so the mutators below index them without an undefined narrowing at every call.
+interface FixtureActivation extends FixtureRecord {
+  sidecarRuntimes: [FixtureSidecar, ...FixtureSidecar[]];
+  nativeHelpers: [FixtureHelper, FixtureHelper, ...FixtureHelper[]];
+}
+
+function mutateActivation(root: string, mutate: (activation: FixtureActivation) => void): void {
+  const path = join(root, ".portable", "runtime-activation.json");
+  const activation = JSON.parse(readFileSync(path, "utf8")) as FixtureActivation;
+  mutate(activation);
+  writeFileSync(path, JSON.stringify(activation));
+}
+
+/** Discovery with an attestation port that FAILS if the platform chain is ever reached. */
+function discoverEvaluation(root: string): ReturnType<typeof discoverQualifiedPortableOpenCode> {
+  return discoverQualifiedPortableOpenCode({
+    env: {},
+    installRoot: root,
+    platform: "win32",
+    arch: "x64",
+    attestation: {
+      readReceipt: (): never => {
+        throw new Error("platform attestation must not run on the evaluation lane");
+      },
+    },
+  });
+}
+
 function discover(
   root: string,
   stale = false,
@@ -217,9 +563,9 @@ function attestation(
   };
 }
 
-function portableInstall(): string {
+function portableInstall(lane: FixtureLane = "production"): string {
   const root = mkdtempSync(join(tmpdir(), "keiko-portable-runtime-"));
-  const sidecar = sidecarFixture();
+  const sidecar = sidecarFixture(lane);
   mkdirSync(join(root, ".portable"), { recursive: true });
   mkdirSync(join(root, "runtime", "native"), { recursive: true });
   writeFileSync(join(root, "runtime", "native", "keiko-runtime-supervisor.exe"), SUPERVISOR);
@@ -235,12 +581,12 @@ function portableInstall(): string {
   }
   writeFileSync(
     join(root, ".portable", "runtime-activation.json"),
-    JSON.stringify(runtimeActivation(sidecar.runtime)),
+    JSON.stringify(runtimeActivation(sidecar.runtime, lane)),
   );
   return root;
 }
 
-function sidecarFixture(): {
+function sidecarFixture(lane: FixtureLane = "production"): {
   readonly runtime: Record<string, unknown>;
   readonly files: Readonly<Record<string, string>>;
   readonly payloadSha256: string;
@@ -304,14 +650,7 @@ function sidecarFixture(): {
         sha256: sha256(files["evidence/sbom.cdx.json"]),
       },
       signing: {
-        verificationPolicy: "production",
-        verificationStatus: "verified-production",
-        verificationReasonCodes: [],
-        signatureKind: "authenticode",
-        signatureVerified: true,
-        notarizationRequired: false,
-        notarizationVerified: false,
-        verificationChecks: { publisherChainVerified: true, timestampVerified: true },
+        ...laneSecurity(lane),
         shippedExecutableSha256: executableSha256,
         shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
         shippedExecutableTreeSha256: sha256(`opencode.cmd\0${executableSha256}\0`),
@@ -320,7 +659,64 @@ function sidecarFixture(): {
   };
 }
 
-function runtimeActivation(runtime: Record<string, unknown>): Record<string, unknown> {
+type FixtureLane = "production" | "evaluation" | "staging";
+
+/**
+ * The declared verification lane a real activation document carries at the top level, in each
+ * sidecar signing block, and (in its 5-key shape) in each native-helper signing block.
+ */
+function laneSecurity(lane: FixtureLane): Record<string, unknown> {
+  if (lane === "production") {
+    return {
+      verificationPolicy: "production",
+      verificationStatus: "verified-production",
+      verificationReasonCodes: [],
+      signatureKind: "authenticode",
+      signatureVerified: true,
+      notarizationRequired: false,
+      notarizationVerified: false,
+      verificationChecks: { publisherChainVerified: true, timestampVerified: true },
+    };
+  }
+  if (lane === "evaluation") {
+    return {
+      verificationPolicy: "evaluation",
+      verificationStatus: "evaluation-unqualified",
+      verificationReasonCodes: ["evaluation-artifact", "evaluation-unsigned-allowed"],
+      signatureKind: "authenticode",
+      signatureVerified: false,
+      notarizationRequired: false,
+      notarizationVerified: false,
+      verificationChecks: { publisherChainVerified: false, timestampVerified: false },
+    };
+  }
+  return {
+    verificationPolicy: "staging",
+    verificationStatus: "unverified-staging",
+    verificationReasonCodes: ["staging-unverified"],
+    signatureKind: "authenticode",
+    signatureVerified: false,
+    notarizationRequired: false,
+    notarizationVerified: false,
+    verificationChecks: { publisherChainVerified: false, timestampVerified: false },
+  };
+}
+
+function laneHelperSigning(lane: FixtureLane): Record<string, unknown> {
+  const security = laneSecurity(lane);
+  return {
+    signatureKind: "authenticode",
+    verificationStatus: security.verificationStatus,
+    signatureVerified: security.signatureVerified,
+    notarizationRequired: false,
+    notarizationVerified: false,
+  };
+}
+
+function runtimeActivation(
+  runtime: Record<string, unknown>,
+  lane: FixtureLane = "production",
+): Record<string, unknown> {
   return {
     schemaVersion: 1,
     suiteVersion: "runtime-tree-qualification-v1",
@@ -328,21 +724,30 @@ function runtimeActivation(runtime: Record<string, unknown>): Record<string, unk
     sourceCommitSha: COMMIT,
     platformTarget: TARGET,
     runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+    // The activation document a production build actually ships: `runtimeActivationManifest`
+    // clones `security` and `nativeHelpers` verbatim, and the release-assembly gate deep-equality
+    // pins the on-disk bytes against that projection, so the declared lane is present artifact-wide.
+    security: laneSecurity(lane),
     nativeHelpers: [
-      nativeHelper("keiko-secure-workspace-read", SECURE_READ),
-      nativeHelper("keiko-runtime-supervisor", SUPERVISOR),
+      nativeHelper("keiko-secure-workspace-read", SECURE_READ, lane),
+      nativeHelper("keiko-runtime-supervisor", SUPERVISOR, lane),
     ],
     sidecarRuntimes: [runtime],
   };
 }
 
-function nativeHelper(name: string, bytes: string): Record<string, unknown> {
+function nativeHelper(
+  name: string,
+  bytes: string,
+  lane: FixtureLane = "production",
+): Record<string, unknown> {
   return {
     name,
     platformTarget: TARGET,
     executablePath: `runtime/native/${name}.exe`,
     shippedSha256: sha256(bytes),
     sizeBytes: Buffer.byteLength(bytes),
+    signing: laneHelperSigning(lane),
   };
 }
 

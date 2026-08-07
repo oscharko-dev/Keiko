@@ -75,11 +75,17 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The task branch for this coding run already exists. Remove the previous branch or its managed workspace. Alternatively, choose a different target branch.",
   "codingWorkbench.setup.runtimeUnavailable":
     "Starting a coding run is unavailable on this installation until the coding runtime is active. You can bind a workspace now; the run becomes startable once the runtime is confirmed.",
+  "codingWorkbench.setup.runtimeEvaluation":
+    "This installation runs an unverified evaluation runtime. It carries no Apple or Microsoft code signature, and on macOS it runs without the Endpoint Security containment a release build uses. Its payload integrity is still checked byte for byte on every start.",
   "codingWorkbench.readiness.modelSource.label": "Model source",
   "codingWorkbench.readiness.modelSource.select": "Select an available source",
   "codingWorkbench.readiness.workspace.label": "Task workspace",
   "codingWorkbench.readiness.workspace.none": "No active task workspace",
   "codingWorkbench.readiness.eventStream.label": "Event stream",
+  "codingWorkbench.readiness.runtime.label": "Coding runtime",
+  "codingWorkbench.readiness.runtime.verified": "Platform-verified — signed and notarized runtime",
+  "codingWorkbench.readiness.runtime.evaluation":
+    "Unverified evaluation runtime — no platform signature",
   "codingWorkbench.timeline.eyebrow": "Authenticated activity",
   "codingWorkbench.timeline.title": "Live activity timeline",
   "codingWorkbench.timeline.empty": "No confirmed activity yet.",
@@ -302,6 +308,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.recovery.retry": "Retry as a fresh run",
   "codingWorkbench.recovery.acknowledge": "Acknowledge recovery",
   "codingWorkbench.header.notReady": "Not ready to start",
+  "codingWorkbench.header.readyEvaluation": "Start — unverified evaluation runtime",
   "codingWorkbench.runState.idle": "Ready to start",
   "codingWorkbench.runState.unavailable": "Runtime unavailable",
   "codingWorkbench.runState.starting": "Starting",
@@ -346,6 +353,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.announcement.runtime.ready": "Runtime ready.",
   "codingWorkbench.announcement.runtime.notSelected": "Runtime not selected.",
   "codingWorkbench.announcement.runtime.notChecked": "Runtime not checked.",
+  "codingWorkbench.announcement.runtime.evaluation":
+    "Runtime available as an unverified evaluation runtime. It carries no platform signature.",
   "codingWorkbench.announcement.authenticationNotSelected":
     "Subscription authentication not selected.",
   "codingWorkbench.announcement.authenticationChecking": "Authentication checking.",

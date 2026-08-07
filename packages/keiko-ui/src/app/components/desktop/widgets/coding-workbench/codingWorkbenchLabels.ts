@@ -125,7 +125,7 @@ export function lifecycleAnnouncement(
     readinessAnnouncement("modelSource", state.source.status, sourceAvailable, t),
     authenticationAnnouncement(state, t),
     readinessAnnouncement("workspace", state.workspace.status, workspaceAvailable, t),
-    readinessAnnouncement("runtime", state.runtime.status, runtimeAvailable, t),
+    runtimeAssuranceAnnouncement(state, runtimeAvailable, t),
     recovery,
     researchAnnouncement(researchGrant, t),
     setupAnnouncement(state.codexSetup.status, t),
@@ -158,6 +158,31 @@ function readinessAnnouncementState(
   if (status === "ready") return available ? "ready" : "unavailable";
   if (status === "empty") return "notSelected";
   return "notChecked";
+}
+
+/**
+ * SUBSTITUTES the generic runtime readiness line — never appends to it. "Runtime ready." spoken
+ * over an unverified evaluation runtime is the same false green in the assistive-technology
+ * channel that the pill's plain "Ready to start" is on screen (audit F-01, ADR-0163 D9).
+ *
+ * It is a dedicated helper rather than a new `ReadinessAnnouncementState` member because
+ * `readinessAnnouncement` builds its key as a template literal typed against
+ * `CodingWorkbenchMessageKey`: adding a state would force `modelSource.evaluation` and
+ * `workspace.evaluation` keys to exist for resources that can never have that state.
+ */
+function runtimeAssuranceAnnouncement(
+  state: CodingWorkbenchRuntimeState,
+  runtimeAvailable: boolean,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (
+    runtimeAvailable &&
+    state.runtime.status === "ready" &&
+    state.runtime.value?.runtimeEvidenceClass === "functional-not-platform-qualified"
+  ) {
+    return t("codingWorkbench.announcement.runtime.evaluation");
+  }
+  return readinessAnnouncement("runtime", state.runtime.status, runtimeAvailable, t);
 }
 
 function readinessAnnouncement(

@@ -170,6 +170,7 @@ describe("Coding Workbench runtime API contracts", () => {
       deploymentCeiling: "governed-assist",
       effectiveMode: "governed-assist",
       runtimeAvailable: true,
+      runtimeEvidenceClass: "platform-qualified",
     };
     expect(validateCodingWorkbenchRuntimeReadiness(readiness)).toEqual({
       ok: true,
@@ -190,6 +191,7 @@ describe("Coding Workbench runtime API contracts", () => {
         deploymentCeiling: "autonomous-delivery",
         effectiveMode: "supervised-coding",
         runtimeAvailable: true,
+        runtimeEvidenceClass: "platform-qualified",
       }),
     ).toMatchObject({ ok: true });
     expect(
@@ -204,9 +206,17 @@ describe("Coding Workbench runtime API contracts", () => {
       deploymentCeiling: "governed-assist",
       effectiveMode: "governed-assist",
       runtimeAvailable: true,
+      runtimeEvidenceClass: "platform-qualified",
+    };
+    const availableWithoutEvidence = {
+      schemaVersion: available.schemaVersion,
+      requestedMode: available.requestedMode,
+      deploymentCeiling: available.deploymentCeiling,
+      effectiveMode: available.effectiveMode,
+      runtimeAvailable: available.runtimeAvailable,
     };
     const unavailable = {
-      ...available,
+      ...availableWithoutEvidence,
       runtimeAvailable: false,
       runtimeUnavailableReason: "payload-missing",
     };
@@ -215,7 +225,10 @@ describe("Coding Workbench runtime API contracts", () => {
       value: unavailable,
     });
     expect(
-      validateCodingWorkbenchRuntimeReadiness({ ...available, runtimeAvailable: false }),
+      validateCodingWorkbenchRuntimeReadiness({
+        ...availableWithoutEvidence,
+        runtimeAvailable: false,
+      }),
     ).toEqual({
       ok: false,
       errors: ["runtimeUnavailableReason is required when the runtime is unavailable"],
@@ -458,6 +471,7 @@ describe("Coding Workbench runtime API failure branches", () => {
         deploymentCeiling: "governed-assist",
         effectiveMode: "governed-assist",
         runtimeAvailable: true,
+        runtimeEvidenceClass: "platform-qualified",
       }),
     ).toMatchObject({ ok: false, errors: ["schemaVersion is invalid"] });
     expect(

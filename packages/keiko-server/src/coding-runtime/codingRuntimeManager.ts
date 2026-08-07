@@ -33,10 +33,7 @@ import {
   type PortableSidecarAvailabilityInput,
   type PortableSidecarRuntimeVerification,
 } from "../update-portable-sidecar-verification.js";
-import {
-  inspectStagedSidecarPayload,
-  type PortableSidecarDiskEvidence,
-} from "../update-portable-sidecar-staging-verification.js";
+import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
 import {
   decideSupervisedFileEdit,
   decideSupervisedMutation,
@@ -503,7 +500,8 @@ interface SupervisedRuntimeEvidenceContext {
  * never claims platform signature or supervisor qualification, so re-asserting them would refuse
  * an honestly weaker record. Absent markers fail closed to the release-qualified policy.
  */
-type PortableRuntimeAdmissionPolicy = "release-qualified" | "functional-dev-lane";
+type PortableRuntimeAdmissionPolicy =
+  "release-qualified" | "functional-dev-lane" | "functional-evaluation-lane";
 
 interface ResolvedPortableRuntime {
   readonly verification: PortableSidecarRuntimeVerification;
@@ -1533,41 +1531,18 @@ function portableAvailabilityFailure(
 ): FailureResult | undefined {
   if (resolved === undefined) return undefined;
   const disk = inspectStagedSidecarPayload(resolved.resourceRoot, resolved.verification);
-  if (resolved.admission === "functional-dev-lane") {
-    return devLaneLaunchAvailabilityFailure(resolved.verification, disk);
-  }
   const availability = evaluatePortableSidecarAvailability(resolved.verification, {
     target: resolved.target,
+    // Every disk fact is recomputed on every lane, so the discovery-to-launch tamper window stays
+    // fail-closed everywhere. Only the two checks the admitting policy never performed are omitted:
+    // the functional dev lane and the packaged evaluation lane claim no platform signature and no
+    // supervisor qualification, so re-asserting them would refuse an honestly weaker record. An
+    // absent admission marker still takes the full release-qualified re-check.
+    platformAttested:
+      resolved.admission === undefined || resolved.admission === "release-qualified",
     ...disk,
   });
   return availability.available ? undefined : failure(availability.reason, false);
-}
-
-/**
- * Launch gate for dev-lane-admitted records: every disk fact is recomputed (the discovery-to-
- * launch tamper window stays fail-closed) and every stored check the lane's admission actually
- * performs is re-asserted. Signature and supervisor qualification are out of that admission
- * domain — they stay honestly unverified in the record and are never consulted here.
- */
-function devLaneLaunchAvailabilityFailure(
-  verification: PortableSidecarRuntimeVerification,
-  disk: PortableSidecarDiskEvidence,
-): FailureResult | undefined {
-  if (!verification.availability.redistributionApproved) {
-    return failure("redistribution-unapproved", false);
-  }
-  if (!disk.payloadPresent) return failure("payload-missing", false);
-  if (!disk.archiveDigestVerified) return failure("archive-digest-mismatch", false);
-  if (!disk.executableTreeDigestVerified) {
-    return failure("executable-tree-digest-mismatch", false);
-  }
-  if (!verification.availability.runtimeVersionVerified) {
-    return failure("runtime-version-mismatch", false);
-  }
-  if (!verification.availability.protocolSchemaVerified) {
-    return failure("protocol-schema-mismatch", false);
-  }
-  return undefined;
 }
 
 function cancellationFailure(

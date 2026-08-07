@@ -55,6 +55,14 @@ export function parseArgs(argv) {
   if (!PORTABLE_VERIFICATION_POLICIES.includes(policy)) {
     fail(`unsupported verification policy: ${policy}`);
   }
+  // The evaluation lane joined the shared policy array, which alone makes `--policy evaluation`
+  // syntactically valid here. This verifier has no evaluation arm: it would fall through to the
+  // non-production status and reason codes and then persist that WRONG lane over security, every
+  // sidecar signing block, the reviewed binding and updateEligibility. The evaluation lane is
+  // written once by the staging producer and is never re-derived from a platform probe.
+  if (policy === "evaluation") {
+    fail("the evaluation lane is producer-declared and is never verified by this script");
+  }
   return { manifest, policy, verificationInput };
 }
 

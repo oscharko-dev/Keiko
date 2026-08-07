@@ -235,7 +235,19 @@ export async function codingRuntimeHealth(baseUrl, fetchFn = globalThis.fetch) {
   });
   if (!response.ok) return `HTTP ${String(response.status)}`;
   const body = await response.json();
-  if (body?.runtimeAvailable === true) return "ok";
+  // The launcher's success line must not imply platform qualification either (ADR-0163 D9). An
+  // available runtime always declares how strong its evidence is; an absent or weak class reports
+  // the honest posture instead of a bare "ok".
+  if (body?.runtimeAvailable === true) {
+    // The status word stays exactly "ok" because three private gates below compare against that
+    // literal — requiredRuntimeHealth, devServerHealth's early return, and waitForHealth's success
+    // test. Encoding the honesty signal INTO the word made every macOS `dev:start` skip the
+    // remaining checks and then time out against a perfectly healthy server; the detail travels
+    // beside the status instead.
+    return body?.runtimeEvidenceClass === "platform-qualified"
+      ? "ok"
+      : "ok · unverified evaluation runtime (no platform signature)";
+  }
   const reason =
     typeof body?.runtimeUnavailableReason === "string"
       ? body.runtimeUnavailableReason
@@ -252,11 +264,18 @@ function healthError(name, error) {
   return `${name}: ${String(error)}`;
 }
 
-async function requiredRuntimeHealth(baseUrl) {
-  if (!codingRuntimeRequired()) return "ok";
+// Exported for test: the gate that consumes codingRuntimeHealth. It went untested, which is how an
+// honest status string could break every macOS `dev:start` while the suite stayed green.
+export async function requiredRuntimeHealth(baseUrl, required = codingRuntimeRequired()) {
+  // `required` is a parameter so the gate is assertable on any host: codingRuntimeRequired() is
+  // true only where a dev-lane target exists (darwin), so a test that let it default would take
+  // the short-circuit on Linux CI and pass without ever reaching the code under test.
+  if (!required) return "ok";
   try {
     const runtime = await codingRuntimeHealth(baseUrl);
-    return runtime === "ok" ? "ok" : `runtime: ${runtime}`;
+    // `startsWith`, not equality: an available runtime reports "ok" possibly followed by its
+    // honest evidence detail, and only an UNAVAILABLE runtime may fail the gate.
+    return runtime.startsWith("ok") ? runtime : `runtime: ${runtime}`;
   } catch (error) {
     return healthError("runtime", error);
   }
@@ -294,7 +313,8 @@ async function devServerHealth(port) {
   ];
 
   const runtime = await requiredRuntimeHealth(baseUrl);
-  if (runtime !== "ok") return runtime;
+  if (!runtime.startsWith("ok")) return runtime;
+  const runtimeDetail = runtime === "ok" ? "" : runtime.slice("ok".length);
 
   for (const check of checks) {
     try {
@@ -304,7 +324,7 @@ async function devServerHealth(port) {
       return healthError(check.name, error);
     }
   }
-  return "ok";
+  return `ok${runtimeDetail}`;
 }
 
 async function stopUnhealthyRunner(pid) {
@@ -333,7 +353,10 @@ async function waitForHealth(port, child) {
       throw new Error(`development server exited early; see ${logFile}`);
     }
     lastError = await devServerHealth(port);
-    if (lastError === "ok") return;
+    // Same rule as the gate above: the status word is "ok", anything after it is the runtime's
+    // honest evidence detail and must never turn a healthy server into a failed start.
+    if (lastError.startsWith("ok"))
+      return lastError === "ok" ? undefined : lastError.slice(2).trim();
     if (lastError.startsWith("runtime: unavailable")) {
       throw new Error(`coding runtime failed readiness: ${lastError}; see ${logFile}`);
     }
@@ -504,12 +527,16 @@ async function launchDevelopmentRunner() {
   const pairingSecret = resolveDevPairingSecret();
   const child = spawnDevelopmentRunner(bffPort, nextPort, pairingSecret);
 
+  let runtimeNote;
   try {
-    await waitForHealth(publicPort, child);
+    runtimeNote = await waitForHealth(publicPort, child);
   } catch (error) {
     stopSpawnedChild(child);
     throw error;
   }
+  // ADR-0163 D9: the launcher's success line must not imply platform qualification. The detail is
+  // printed beside the success, never folded into the word the health gates compare against.
+  if (runtimeNote !== undefined) console.log(`Coding runtime: ${runtimeNote}`);
 
   console.log(
     `Keiko dev UI running on ${publicBrowserUrl(publicPort)} (pid ${String(child.pid)}).`,

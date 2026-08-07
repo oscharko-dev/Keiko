@@ -2,7 +2,10 @@ import { PassThrough } from "node:stream";
 
 import { describe, expect, it, vi } from "vitest";
 
-import type { CodingWorkbenchCodexSubscriptionProfile } from "@oscharko-dev/keiko-contracts";
+import {
+  KEIKO_PRODUCT_VERSION,
+  type CodingWorkbenchCodexSubscriptionProfile,
+} from "@oscharko-dev/keiko-contracts";
 
 import {
   createCodexAuthNavigationIntentCoordinator,
@@ -67,6 +70,16 @@ describe("Codex runtime composition", () => {
           optOutNotificationMethods: [],
         },
       },
+    });
+  });
+
+  it("announces the product version to the sidecar rather than a restated literal", async () => {
+    const harness = createHarness();
+    await prepare(harness);
+    await attach(harness);
+    expect(harness.frames[0]).toMatchObject({
+      method: "initialize",
+      params: { clientInfo: { name: "keiko", version: KEIKO_PRODUCT_VERSION } },
     });
   });
 

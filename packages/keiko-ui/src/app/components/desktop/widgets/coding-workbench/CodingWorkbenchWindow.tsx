@@ -39,7 +39,10 @@ import {
 import { useOptionalActiveWorkspace } from "../../context/ActiveWorkspaceContext";
 import { DiffFileSection } from "../cards/shared/diffView";
 import { PanelTitle, TaskStartSection, Timeline, WorkbenchHeader } from "./CodingWorkbenchSections";
-import { CodingWorkbenchSetup } from "./CodingWorkbenchSetup";
+import {
+  CodingWorkbenchSetup,
+  type CodingWorkbenchSetupRuntimePosture,
+} from "./CodingWorkbenchSetup";
 import { CodingWorkbenchChanges, diffLabels } from "./CodingWorkbenchChanges";
 import { ResearchGrantChip } from "./CodingWorkbenchResearchGrant";
 import {
@@ -61,6 +64,21 @@ const EMPTY_WORKSPACE = {
   error: null,
   refresh: (): Promise<void> => Promise.resolve(),
 } as const;
+
+/**
+ * The bootstrap setup section's honest posture. Readiness that has not RESOLVED yields "verified"
+ * so neither note flashes during load; a resolved-but-unverified runtime yields "evaluation"
+ * (ADR-0163 D9), which is what keeps the first screen of a fresh evaluation install honest.
+ */
+function setupRuntimePosture(
+  state: CodingWorkbenchRuntimeState,
+): CodingWorkbenchSetupRuntimePosture {
+  if (state.runtime.status !== "ready") return "verified";
+  if (state.runtime.value?.runtimeAvailable === false) return "unavailable";
+  return state.runtime.value?.runtimeEvidenceClass === "functional-not-platform-qualified"
+    ? "evaluation"
+    : "verified";
+}
 
 function latestChangesSignal(events: readonly CodingWorkbenchRuntimeSseEvent[]): string | null {
   for (let index = events.length - 1; index >= 0; index -= 1) {
@@ -231,8 +249,7 @@ function WorkbenchColumns({
   // explains why a run cannot start yet (#2476 AC4). Once a binding lands it yields to the task-start
   // flow. The honest note shows only once readiness has RESOLVED as unavailable, never during load.
   const showSetup = bootstrapSetupVisible(state, activeWorkspace);
-  const runtimeUnavailable =
-    state.runtime.status === "ready" && state.runtime.value?.runtimeAvailable === false;
+  const runtimePosture = setupRuntimePosture(state);
   // Monotonic, not a count: the event buffer is capped (CODING_WORKBENCH_EVENT_RETENTION_LIMIT), so
   // its length plateaus on a long run and every change-driven resync — questions and the activity
   // feed's automatic reconnect — would silently stop firing exactly when a run is busiest. The
@@ -292,7 +309,7 @@ function WorkbenchColumns({
         <CodingWorkbenchSetup
           selectedRoot={selectedRoot}
           refreshWorkspace={(root) => activeWorkspace.refresh(root)}
-          runtimeUnavailable={runtimeUnavailable}
+          runtimePosture={runtimePosture}
         />
       </div>
     );
@@ -424,6 +441,7 @@ function SessionContextBar({
         </span>
         <span className={styles.contextValue}>{sourceValue}</span>
       </span>
+      <RuntimeAssuranceContextItem state={state} t={t} />
       <span
         className={styles.contextItem}
         {...(confirmedMode === null ? {} : { "data-mode": confirmedMode })}
@@ -436,6 +454,34 @@ function SessionContextBar({
         </span>
       </span>
     </div>
+  );
+}
+
+/**
+ * ADR-0163 D9. The context bar renders on every path and is never conditional, and it already
+ * carries this kind of honesty (an unhealthy source name reads "— Unavailable" rather than plain).
+ * An unverified evaluation runtime is a standing fact, so it belongs here. Absent readiness
+ * degrades to the evaluation wording, never to "verified".
+ */
+function RuntimeAssuranceContextItem({
+  state,
+  t,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const verified = state.runtime.value?.runtimeEvidenceClass === "platform-qualified";
+  return (
+    <span className={styles.contextItem} {...(verified ? {} : { "data-tone": "warning" })}>
+      <span className={styles.contextLabel}>{t("codingWorkbench.readiness.runtime.label")}</span>
+      <span className={styles.contextValue}>
+        {t(
+          verified
+            ? "codingWorkbench.readiness.runtime.verified"
+            : "codingWorkbench.readiness.runtime.evaluation",
+        )}
+      </span>
+    </span>
   );
 }
 

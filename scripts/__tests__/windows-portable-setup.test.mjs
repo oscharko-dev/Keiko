@@ -198,7 +198,12 @@ describe("windows portable setup companion", () => {
     );
   });
 
-  it("reports both candidate and staging manifest failures for invalid stages", async () => {
+  // RELOCATED, NOT RELAXED (ADR-0163 D9). The invariant this pin protects is "an invalid stage
+  // manifest is refused with named failures". It used to be expressed through the "pass if EITHER
+  // the candidate or the staging validator accepts" shape, which is strictly weaker than asking
+  // the manifest which lifecycle lane it declares and holding it to exactly that lane's rules. A
+  // manifest that declares no stageable lane — including an empty one — is now refused outright.
+  it("refuses a stage manifest that declares no stageable lifecycle lane", async () => {
     const dir = root();
     mkdirSync(join(dir, "manifest"), { recursive: true });
     writeFileSync(join(dir, "keiko-windows-x64.zip"), "zip fixture");
@@ -212,8 +217,30 @@ describe("windows portable setup companion", () => {
     }
 
     expect(error).toBeInstanceOf(WindowsPortableSetupError);
-    expect(error.message).toContain("candidate validation:");
-    expect(error.message).toContain("staging validation:");
+    expect(error.message).toContain("security.verificationPolicy");
+    expect(error.message).toContain("declares no stageable lifecycle lane");
+  });
+
+  it("holds a lane-declaring stage manifest to exactly that lane's rules", async () => {
+    const dir = root();
+    mkdirSync(join(dir, "manifest"), { recursive: true });
+    writeFileSync(join(dir, "keiko-windows-x64.zip"), "zip fixture");
+    // Declares the production lane but carries nothing else: the previous "either validator wins"
+    // shape let a manifest slip through on the staging validator's verdict.
+    writeFileSync(
+      join(dir, "manifest", "portable-manifest.json"),
+      `${JSON.stringify({ security: { verificationPolicy: "production" } })}\n`,
+    );
+
+    let error;
+    try {
+      await validateWindowsSetupStage(dir);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(WindowsPortableSetupError);
+    expect(error.message).not.toContain("declares no stageable lifecycle lane");
   });
 
   it("bounds malformed stage roots and payload files", async () => {

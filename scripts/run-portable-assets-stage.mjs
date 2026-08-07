@@ -20,6 +20,7 @@ function fail(message) {
 
 function parseArgs(argv) {
   const options = {
+    evaluation: false,
     outDir: join(repoRoot, ".portable-runtime", "staging"),
     payloadRoot: join(repoRoot, ".portable-sidecar-payloads"),
     target: "",
@@ -27,6 +28,12 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     const value = argv[index + 1];
+    // Bare flag, matched before the value guard below: every other argument consumes the next
+    // token, so a value-less flag has to be handled first or it fails (or swallows a sibling).
+    if (arg === "--evaluation") {
+      options.evaluation = true;
+      continue;
+    }
     if (value === undefined || value.startsWith("--")) fail(`${arg} requires a value`);
     if (arg === "--target") options.target = value;
     else if (arg === "--out-dir") options.outDir = resolve(value);
@@ -104,6 +111,9 @@ export function stageArgumentsForTarget(
   for (const specPath of collectSidecarSpecPaths(options.payloadRoot, options.target)) {
     args.push("--sidecar-runtime-spec", specPath);
   }
+  // Absent by default and present exactly once when the caller opted in; nothing else in this
+  // wrapper — no environment variable, no approval file — can introduce it.
+  if (options.evaluation === true) args.push("--evaluation-build");
   return args;
 }
 
@@ -128,8 +138,9 @@ export function runPortableAssetsStage(argv, env = process.env) {
     env.APPLE_TEAM_ID,
   );
   const specCount = args.filter((arg) => arg === "--sidecar-runtime-spec").length;
+  const lane = options.evaluation === true ? "evaluation-unqualified" : "unverified-staging";
   console.log(
-    `portable-assets-stage: staging ${options.target} with node ${approvals.node.version} and ${String(specCount)} sidecar spec(s)`,
+    `portable-assets-stage: staging ${options.target} (${lane}) with node ${approvals.node.version} and ${String(specCount)} sidecar spec(s)`,
   );
   const result = spawnSync(process.execPath, args, { cwd: repoRoot, stdio: "inherit" });
   if (result.status !== 0) fail(`staging failed for ${options.target}`);

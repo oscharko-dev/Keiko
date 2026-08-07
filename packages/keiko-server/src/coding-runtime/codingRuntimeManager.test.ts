@@ -819,6 +819,7 @@ describe("coding runtime manager", () => {
 
     const result = resolveCodingRuntimeSidecarLaunchTarget(managedInstallRoot, sidecar, {
       target: "macos-arm64",
+      platformAttested: true,
       qualificationVerified: true,
     });
 
@@ -1482,6 +1483,96 @@ describe("coding runtime manager", () => {
       ),
     ).toEqual({ ok: false, failureCode: "archive-digest-mismatch", retryable: false });
     expect(harness.children).toHaveLength(0);
+  });
+
+  // ADR-0163 D9: the packaged evaluation lane is the second admission policy that honestly claims
+  // no platform signature and no supervisor qualification. It shares the ONE parameterized
+  // evaluator with the dev lane — a third hand-written check list would guarantee drift between
+  // the discovery-time and launch-time gates.
+  describe("evaluation-lane admission launch gate", () => {
+    function evaluationManager(
+      portable: ReturnType<typeof createPortableRuntimeFixture>,
+      harness: ReturnType<typeof createSpawnHarness>,
+      availabilityOverrides: Partial<
+        ReturnType<typeof createPortableRuntimeFixture>["verification"]["availability"]
+      > = {},
+    ): CodingRuntimeManager {
+      return createTestCodingRuntimeManager({
+        supervisor: testSupervisor(harness.spawn),
+        processEnv: {},
+        portableRuntimeResolver: () => ({
+          verification: {
+            ...portable.verification,
+            availability: {
+              ...portable.verification.availability,
+              signatureVerified: false,
+              qualificationVerified: false,
+              ...availabilityOverrides,
+            },
+          },
+          resourceRoot: portable.resourceRoot,
+          target: "windows-x64",
+          admission: "functional-evaluation-lane",
+        }),
+      });
+    }
+
+    it("admits an honestly unqualified evaluation record whose disk facts verify", () => {
+      const fixture = createManagedFixture();
+      const portable = createPortableRuntimeFixture();
+      const harness = createSpawnHarness();
+      expect(
+        evaluationManager(portable, harness).start(
+          launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ).toEqual({ ok: true, runId: "run-1988", status: "ready" });
+      expect(harness.children).toHaveLength(1);
+    });
+
+    it.each([
+      ["the sidecar payload", "archive-digest-mismatch"],
+      ["only the executable", "archive-digest-mismatch"],
+    ] as const)(
+      "keeps the discovery-to-launch tamper window fail-closed when %s drifts",
+      (scenario, failureCode) => {
+        const fixture = createManagedFixture();
+        const portable = createPortableRuntimeFixture();
+        const harness = createSpawnHarness();
+        const manager = evaluationManager(portable, harness);
+        if (scenario === "only the executable") {
+          writeFileSync(portable.executablePath, "tampered executable\n");
+        } else {
+          writeFileSync(
+            join(portable.resourceRoot, portable.verification.licenseEvidencePath),
+            "tampered\n",
+          );
+        }
+        expect(
+          manager.start(
+            launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+          ),
+        ).toEqual({ ok: false, failureCode, retryable: false });
+        expect(harness.children).toHaveLength(0);
+      },
+    );
+
+    it("re-asserts every stored check inside the evaluation admission domain", () => {
+      const fixture = createManagedFixture();
+      for (const { overrides, failureCode } of [
+        { overrides: { redistributionApproved: false }, failureCode: "redistribution-unapproved" },
+        { overrides: { runtimeVersionVerified: false }, failureCode: "runtime-version-mismatch" },
+        { overrides: { protocolSchemaVerified: false }, failureCode: "protocol-schema-mismatch" },
+      ] as const) {
+        const portable = createPortableRuntimeFixture();
+        const harness = createSpawnHarness();
+        expect(
+          evaluationManager(portable, harness, overrides).start(
+            launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+          ),
+        ).toEqual({ ok: false, failureCode, retryable: false });
+        expect(harness.children).toHaveLength(0);
+      }
+    });
   });
 
   // #2475 / ADR-0140: the launch-time availability re-check asserts exactly the checks the

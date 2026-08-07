@@ -140,7 +140,7 @@ function composeOpenCodeRun(
       verification: input.portable.sidecar,
       resourceRoot: input.portable.installRoot,
       target: input.portable.target,
-      admission: isDevLaneRuntime(input.portable) ? "functional-dev-lane" : "release-qualified",
+      admission: admissionPolicy(input.portable),
     },
     stateBaseRoot: join(input.runtimeStateRoot, "coding-runtime", "opencode"),
     capabilities: {
@@ -373,7 +373,10 @@ function runtimeSupervisor(
   if (input.createSupervisor) {
     return input.createSupervisor({ workspaceRoot, portable: input.portable });
   }
-  if (isDevLaneRuntime(input.portable)) return devLaneSupervisor(input.portable);
+  if (isDevLaneRuntime(input.portable)) return appSandboxSupervisor(input.portable);
+  if (isEvaluationLaneRuntime(input.portable) && input.portable.target !== "windows-x64") {
+    return appSandboxSupervisor(input.portable);
+  }
   return createRuntimeProcessSupervisor({
     backend: createNativeRuntimeProcessBackend({
       helperPath: input.portable.nativeHelperPath,
@@ -385,19 +388,25 @@ function runtimeSupervisor(
   });
 }
 
-/** Only the dev-lane union member carries the structural `lane` marker. */
-function isDevLaneRuntime(
-  portable: ResolvedPortableOpenCodeRuntime,
-): portable is DevLanePortableOpenCodeRuntime {
-  return "lane" in portable;
-}
-
 /**
- * Dev-lane supervision (#2475, ADR-0140): the process backend spawns the verified staged payload
- * directly and terminates its POSIX process group. It carries none of the release-qualified
- * containment or orphan-reaping guarantees; the runtime's evidence class records that posture.
+ * The weaker, honestly declared macOS app-sandbox supervision, shared by the two lanes that cannot
+ * have the real thing. It spawns the verified staged payload directly and terminates its POSIX
+ * process group; it carries none of the release-qualified descendant-containment or orphan-reaping
+ * guarantees, and each lane's evidence class records that posture.
+ *
+ * Dev lane (#2475, ADR-0140): no packaged install exists to supervise natively.
+ * Evaluation lane (ADR-0163 D9): the native supervisor connects to the runtime monitor socket served
+ * ONLY by the Endpoint Security system extension, which requires an Apple-entitled, notarized,
+ * user-approved install; on an unsigned build it fails at first spawn with
+ * ERROR_MONITOR_UNAVAILABLE. Windows evaluation is unaffected — its Job Object supervisor needs no
+ * signature and its containment is real.
+ *
+ * One body for both, because two byte-identical copies would let a future edit weaken one lane's
+ * supervision while the other silently kept the old shape.
  */
-function devLaneSupervisor(portable: DevLanePortableOpenCodeRuntime): RuntimeProcessSupervisor {
+function appSandboxSupervisor(
+  portable: QualifiedPortableOpenCodeRuntime | DevLanePortableOpenCodeRuntime,
+): RuntimeProcessSupervisor {
   return createRuntimeProcessSupervisor({
     backend: createDevLaneRuntimeProcessBackend({
       identity: {
@@ -409,6 +418,32 @@ function devLaneSupervisor(portable: DevLanePortableOpenCodeRuntime): RuntimePro
     }),
     qualifications: [portable.qualification],
   });
+}
+
+/** Only the dev-lane union member carries the structural `lane` marker. */
+function isDevLaneRuntime(
+  portable: ResolvedPortableOpenCodeRuntime,
+): portable is DevLanePortableOpenCodeRuntime {
+  return "lane" in portable;
+}
+
+/** Only the packaged union member carries `platformAssurance` (ADR-0163 D9). */
+function isEvaluationLaneRuntime(
+  portable: ResolvedPortableOpenCodeRuntime,
+): portable is QualifiedPortableOpenCodeRuntime {
+  return "platformAssurance" in portable && portable.platformAssurance === "evaluation-unqualified";
+}
+
+/**
+ * The single producer of the admission marker the launch-time availability re-check reads. An
+ * evaluation runtime marked `release-qualified` here would be demanded to prove the full packaged
+ * evidence set at start and refused.
+ */
+function admissionPolicy(
+  portable: ResolvedPortableOpenCodeRuntime,
+): NonNullable<OpenCodeRuntimeCompositionInput["portable"]["admission"]> {
+  if (isDevLaneRuntime(portable)) return "functional-dev-lane";
+  return isEvaluationLaneRuntime(portable) ? "functional-evaluation-lane" : "release-qualified";
 }
 
 function idempotentEventSink(

@@ -172,6 +172,7 @@ function liveState(
         deploymentCeiling: "supervised-coding",
         effectiveMode: "governed-assist",
         runtimeAvailable: true,
+        runtimeEvidenceClass: "platform-qualified",
       },
       error: null,
     },
@@ -445,6 +446,77 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByText("Not ready to start")).toBeInTheDocument();
     // The model-source context line must not present the unavailable gateway as a healthy source.
     expect(screen.getByText(/Keiko Gateway — Unavailable/u)).toBeInTheDocument();
+  });
+
+  /**
+   * ADR-0163 D9 / audit F-01. An unverified evaluation runtime must never render as plain green:
+   * not in the idle pill's label, not in the run-state pill's colour, and not by silence in the
+   * session context bar.
+   */
+  describe("unverified evaluation runtime", () => {
+    function evaluationState(
+      overrides: Partial<CodingWorkbenchRuntimeState> = {},
+    ): CodingWorkbenchRuntimeState {
+      const base = liveState(overrides);
+      return {
+        ...base,
+        runtime: {
+          ...base.runtime,
+          value: {
+            ...base.runtime.value,
+            runtimeEvidenceClass: "functional-not-platform-qualified",
+          },
+        } as CodingWorkbenchRuntimeState["runtime"],
+      };
+    }
+
+    it("never renders the plain Ready to start label over an evaluation runtime", (): void => {
+      renderWorkbench(evaluationState({ run: { status: "ready", value: null, error: null } }));
+
+      expect(screen.queryByText("Ready to start")).not.toBeInTheDocument();
+      expect(screen.getByText("Start — unverified evaluation runtime")).toBeInTheDocument();
+    });
+
+    it("marks the state pill so the success colour cannot win mid-run", (): void => {
+      renderWorkbench(evaluationState());
+
+      const pill = document.querySelector('[data-assurance="evaluation"]');
+      expect(pill).not.toBeNull();
+    });
+
+    it("states the unverified runtime in the always-present session context bar", (): void => {
+      renderWorkbench(evaluationState());
+
+      expect(screen.getByText("Coding runtime")).toBeInTheDocument();
+      expect(
+        screen.getByText("Unverified evaluation runtime — no platform signature"),
+      ).toBeInTheDocument();
+      expect(document.querySelector('[data-tone="warning"]')).not.toBeNull();
+    });
+
+    it("raises no alert and does not preempt a concurrent refresh failure", (): void => {
+      renderWorkbench(
+        evaluationState({
+          workspace: {
+            status: "error",
+            value: null,
+            error: { code: "WORKSPACE_REFRESH_FAILED", message: "redacted", retryable: true },
+          },
+        }),
+      );
+
+      expect(screen.getByRole("alert")).toHaveTextContent(/workspace/iu);
+    });
+
+    it("keeps a platform-qualified runtime rendering exactly as before", (): void => {
+      renderWorkbench(liveState({ run: { status: "ready", value: null, error: null } }));
+
+      expect(screen.getByText("Ready to start")).toBeInTheDocument();
+      expect(document.querySelector('[data-assurance="evaluation"]')).toBeNull();
+      expect(
+        screen.getByText("Platform-verified — signed and notarized runtime"),
+      ).toBeInTheDocument();
+    });
   });
 
   it("keeps a drifted worktree visible in the session context", (): void => {

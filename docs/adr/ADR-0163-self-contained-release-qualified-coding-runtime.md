@@ -73,8 +73,21 @@ ZIP contains:
 
 Staging, signing, qualification, assembly, publishing, and fresh-runner smoke checks fail closed if
 any required component is absent, duplicated, unsigned, unnotarized where applicable,
-architecture-mismatched, stale, or not bound to the source commit and target. Manual staging may
-remain unsigned and unqualified, but it can never produce a production-available runtime.
+architecture-mismatched, stale, or not bound to the source commit and target.
+
+There are exactly three pre-signing lanes, and a lane is a declaration the artifact carries in its
+own manifest, never an argument a caller supplies:
+
+1. **Plain staging** (`staging` / `unverified-staging`) — the default output of every manual
+   dispatch. It is unsigned, unqualified, and **not activatable**: the runtime refuses it.
+2. **Evaluation** (`evaluation` / `evaluation-unqualified`) — the explicitly requested, unsigned but
+   **activatable** lane defined in D9. It is never publishable.
+3. **Production** (`production` / `verified-production`) — the only lane that can produce a
+   production-available runtime.
+
+Neither of the first two can produce a production-available runtime, and neither can enter the
+release bundle: assembly runs only from a stable-tag push and its own predicates still demand
+`verified-production`.
 
 The automatic managed-install copy remains the default first launch. Windows uses its user-local
 managed root. Both macOS targets use exactly `/Applications/Keiko.app`; another macOS root is not
@@ -187,6 +200,11 @@ Codex subscription activation remains disabled for this release. No missing Open
 falls back to Codex, a globally installed executable, `PATH`, npm, a network download, or a
 development payload.
 
+This prohibition is about FALLBACK, and it stands unchanged. The D9 evaluation payload is not a
+fallback: it is the same review-approved OpenCode payload, staged by the same producer, verified by
+the same digests, and reached only because the artifact itself declares that lane. Nothing about a
+missing or failing prerequisite can select it, and no lane is chosen after another one fails.
+
 ### D7 — Installation never widens authority
 
 The installed deployment ceiling defaults to `governed-assist` (**Ask for approval**). The operator
@@ -222,6 +240,82 @@ The checks run with signing credentials removed before payload execution. A qual
 produce evidence but cannot publish or widen a manifest. Assembly still requires all three exact
 targets from one commit and one successful stable-tag workflow.
 
+### D9 — One explicitly declared, unsigned evaluation lane may activate
+
+Keiko ships a portable EVALUATION build in which the bundled OpenCode sidecar actually runs without
+Apple or Microsoft code signing. The lane exists because platform signing credentials are a
+procurement dependency, and a product that cannot be exercised at all until they land cannot be
+evaluated at all.
+
+**How it is entered.** Only `workflow_dispatch` with `evaluation_build: true`, which appends one
+bare `--evaluation-build` flag to the staging producer. There is no environment variable, no
+default, and no checkout marker. The producer then writes `evaluation` / `evaluation-unqualified`
+plus the reason codes `evaluation-artifact` and `evaluation-unsigned-allowed` in all four places it
+declares a lane — the manifest security block, every sidecar signing block, every native-helper
+signing block, and the native addon — and stamps the activation document's `trustAnchor` as
+`evaluation-unqualified`. A manifest that declares the lane in some of those places and not others
+is rejected by the schema, and an artifact whose activation document is incoherent across those
+blocks is refused at discovery.
+
+**Exactly what is waived — and nothing else.** The lane waives the platform signature,
+notarization and platform-attestation gates. It waives nothing else:
+
+| Stays mandatory on the evaluation lane                             |
+| ------------------------------------------------------------------ |
+| `payloadSha256` (recomputed directory-tree digest, at discovery and again at launch) |
+| `sizeBytes` shape, `payloadRootPath` equality and safe-relative form |
+| `executablePath` containment under the payload root                 |
+| `shippedExecutableSha256`, `shippedExecutableTreeAlgorithm`, `shippedExecutableTreeSha256` |
+| the exact 11-key sidecar signing set and the target's `signatureKind` |
+| license and SBOM evidence path containment plus digests             |
+| the complete portable provenance pin (upstream identity, adapter identity, protocol-schema digest, redistribution approval, archive target and digest) |
+| both native-helper digests and byte lengths, re-hashed from disk    |
+| the closed 12-key secure-read helper shape, its KSR1/KSS1 protocol pin, source commit/path/tree pin, size ceiling and SBOM bom-ref binding |
+| the point-of-use same-identity open, link-count and metadata equality, and full re-hash of every byte read |
+
+The waived platform booleans are **asserted present and FALSE**, never skipped. A signing or
+security block that omits `verificationChecks`, or asserts any single platform check, or claims
+`signatureVerified`, is refused — a half-truthful mix is not a lane.
+
+**What is genuinely given up.** On **macOS** the Endpoint Security system extension is not active:
+it requires an Apple-entitled, notarized, user-approved install. Descendant containment is therefore
+NOT proven, and process supervision is weaker — the runtime declares the `macos-app-sandbox` backend
+and spawns through the dev-lane process backend rather than claiming an Endpoint Security
+containment it does not have. On **Windows** the Job Object supervisor needs no signature, so the
+native backend and its `windows-job-object` containment are unchanged and real. No integrity
+guarantee is given up on either platform; what is given up is platform provenance on both, and
+descendant containment on macOS only.
+
+**How the runtime identity stays bound.** No platform seal binds the evaluation activation document.
+Its only bindings are its own internal consistency, the disk re-hash of both native helpers, and the
+sidecar payload re-inspection at discovery AND again at launch. The synthesized qualification
+receipt is computed over the complete qualification binding — target, source commit, activation
+manifest digest, supervisor digest, secure-read digest and sidecar payload digest — so a swapped
+supervisor binary still changes the runtime identity. It is deliberately NOT routed through the
+platform receipt parser, which would force a macOS receipt to assert `macos-endpoint-security`: a
+forged containment claim.
+
+**`SecureWorkspaceTextReadArtifact.signed` is a structural artifact-shape literal, not a signature
+claim.** It means "this record is the verified artifact identity". The artifact validator requires
+it truthy before the point-of-use verifier runs at all, so setting it `false` on this lane would
+silently disable every workspace read with no diagnostic. It stays `true` on every lane; ADR-0140's
+dev lane sets it `true` on an ad-hoc-signed helper for the same reason.
+
+**It is never promotable.** The lane is reachable only from the activation entry point, which takes
+it as an explicit, closed-by-default argument. The update/promotion entry point takes no lane
+argument at all, and the preflight and staging-download predicates are untouched: an evaluation
+artifact stays update-INELIGIBLE. The runtime may activate an unsigned sidecar; the product may
+never self-update from one. The signing verifier explicitly REJECTS `--policy evaluation` rather
+than laundering it into a pull-request-shaped lane.
+
+**It is never silently green.** The readiness contract carries `runtimeEvidenceClass`, REQUIRED
+whenever `runtimeAvailable` is true, and the evaluation lane reports ADR-0140's existing
+`functional-not-platform-qualified`. Every server-side default along that path resolves to the weak
+value, so an unthreaded path degrades to "unverified" and never to "verified". The header pill, the
+session context bar, the spoken readiness announcement and the bootstrap setup screen all state
+plainly that the runtime is an unverified evaluation runtime; none of them renders it as plain
+green. This is the class audit finding F-01 closed, and it must not be reintroduced.
+
 ## Consequences
 
 - A customer artifact has no hidden Node.js, npm, OpenCode, supervisor, receipt, or secure-read
@@ -235,9 +329,14 @@ targets from one commit and one successful stable-tag workflow.
 - A future Keiko Native distribution may replace the portable host and onboarding surface, but it
   cannot weaken the same Endpoint Security entitlement, user/MDM approval, tree ownership, Model
   Gateway, or authority invariants.
-- Production macOS artifacts cannot be emitted until the Apple Developer ID and separately granted
-  Endpoint Security entitlement are provisioned. This is a release prerequisite, not a code
-  fallback.
+- **Production** macOS artifacts cannot be emitted until the Apple Developer ID and separately
+  granted Endpoint Security entitlement are provisioned. This is a release prerequisite, not a code
+  fallback. The D9 evaluation lane does not change that: it produces a runnable, downloadable
+  artifact for evaluation only, it is never publishable, and its macOS build carries weaker process
+  containment precisely because that entitlement is absent.
+- An evaluation build is honest about being one, everywhere an operator can see it: the artifact
+  name, the manifest lane, the activation trust anchor, the readiness projection, and four UI
+  surfaces.
 
 ## Alternatives rejected
 
@@ -251,7 +350,22 @@ targets from one commit and one successful stable-tag workflow.
   descendant-ownership proof.
 - **Treat notarization as Endpoint Security authorization.** Notarization and the Endpoint Security
   entitlement are distinct, and macOS or MDM still controls extension activation.
-- **Enable the development lane in packaged installs.** ADR-0140 structurally forbids it and its
-  weaker evidence class cannot satisfy a customer release.
+- **Enable the development lane in packaged installs.** Still rejected. ADR-0140 structurally
+  forbids it — `discoverDevLaneOpenCode` refuses the moment a packaged setup manifest exists — and
+  its weaker evidence class cannot satisfy a customer release. The D9 evaluation lane is NOT that
+  alternative and is not confined the same way. The dev lane is gated by an environment token plus
+  structural checkout markers on a developer's working copy, and it synthesizes its own payload
+  metadata from local files. The evaluation lane is a declaration a PACKAGED artifact carries in
+  its own manifest, written only when a release explicitly requests it, carrying the complete
+  integrity evidence set of a production artifact — every digest, size, containment, license, SBOM
+  and provenance predicate — and differing from production only in the platform signature it never
+  claims to have.
+- **Reuse the existing `development`/`pull-request` lane instead of adding a third.** Rejected for
+  three independent reasons. The manifest schema validated the shipped-executable digests only under
+  the production policy, so that lane would ship the three digests the runtime demands and never
+  check them. Every routine CI pull-request artifact already carries that lane, so teaching the
+  runtime to activate it would promote EVERY pull-request build into an activating runtime and make
+  "only when explicitly requested" unenforceable. And an operator reading `unsigned-non-production`
+  in a shipped bundle learns nothing about evaluation. The machinery is reused; the lane is not.
 - **Auto-select Full access after successful setup.** Installation state is not human authorization
   and may never widen the deployment ceiling.

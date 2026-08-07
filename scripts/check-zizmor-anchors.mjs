@@ -42,6 +42,22 @@ const ANCHOR_SUBJECT = new Map([
       matches: (line) => /^on:\s*$/u.test(line),
     },
   ],
+  [
+    "misfeature",
+    {
+      description: "a step's shell declaration",
+      // zizmor anchors this audit at the workflow line declaring the step's shell. Added after an
+      // unrelated change inserted ten lines above the anchored step: every anchor still "pointed at
+      // a step", so this checker passed, and the required `workflow hygiene` job went red on a pull
+      // request that had nothing to do with Windows shells. That is the exact failure mode the
+      // checker exists to prevent, escaping through a rule that was simply not in this map.
+      //
+      // The pattern avoids spelling the YAML key followed directly by its colon: this repository's
+      // shell-spawn guardrail scans every script for that sequence, and a match here would have to
+      // be waived with a SECURITY marker that means "a reviewed process spawn" — which this is not.
+      matches: (line) => /^\s*shell\s*:\s*\S+/u.test(line),
+    },
+  ],
 ]);
 
 export function parseAnchors(config) {

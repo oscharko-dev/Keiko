@@ -22,10 +22,9 @@ import { isPortableExecutableFile } from "./lib/portable-executable.mjs";
 
 import {
   PORTABLE_TARGETS,
+  portableManifestValidationFailuresForDeclaredLane,
   readPortableManifest,
   sha256File,
-  validatePortableCandidateManifest,
-  validatePortableStagingManifest,
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "./portable-runtime.mjs";
 
@@ -158,15 +157,11 @@ function windowsSetupStageInputs(stageRoot) {
   return { archivePath, archiveStat, manifestPath, stageRoot: canonicalRoot };
 }
 
+// Asking the manifest which lane it declares is strictly stronger than the previous "pass if
+// EITHER the candidate or the staging validator accepts" shape: a manifest now has to satisfy the
+// rules of the exact lifecycle lane it claims.
 function portableManifestValidationFailures(manifest) {
-  const candidateFailures = validatePortableCandidateManifest(manifest);
-  const stagingFailures = validatePortableStagingManifest(manifest);
-  return candidateFailures.length > 0 && stagingFailures.length > 0
-    ? [
-        ...candidateFailures.map((failure) => `candidate validation: ${failure}`),
-        ...stagingFailures.map((failure) => `staging validation: ${failure}`),
-      ]
-    : [];
+  return portableManifestValidationFailuresForDeclaredLane(manifest);
 }
 
 function validateWindowsPortableManifestIdentity(manifest) {

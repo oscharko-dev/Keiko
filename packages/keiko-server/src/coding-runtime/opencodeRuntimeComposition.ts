@@ -77,7 +77,8 @@ interface VerifiedPortableInput {
   readonly resourceRoot: string;
   readonly target: UpdatePortableTarget;
   /** Admission policy that vouched for the record; absent fails closed to release-qualified. */
-  readonly admission?: "release-qualified" | "functional-dev-lane" | undefined;
+  readonly admission?:
+    "release-qualified" | "functional-dev-lane" | "functional-evaluation-lane" | undefined;
 }
 
 /** Terminal states for a tool action's safe-activity settlement (#2386). */

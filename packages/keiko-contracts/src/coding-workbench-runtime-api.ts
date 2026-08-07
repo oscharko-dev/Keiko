@@ -74,6 +74,18 @@ export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbe
     "runtime-unqualified",
   ] as const);
 
+/**
+ * How much evidence backs an AVAILABLE runtime. `platform-qualified` is the release-signed,
+ * notarized/Authenticode-attested packaged artifact. `functional-not-platform-qualified` covers
+ * every runtime whose integrity is proven by recomputed digests alone and that carries no platform
+ * signature chain — the macOS dev lane (ADR-0140) and the packaged evaluation lane (ADR-0163 D9).
+ */
+export type CodingWorkbenchRuntimeEvidenceClass =
+  "platform-qualified" | "functional-not-platform-qualified";
+
+export const CODING_WORKBENCH_RUNTIME_EVIDENCE_CLASSES: readonly CodingWorkbenchRuntimeEvidenceClass[] =
+  Object.freeze(["platform-qualified", "functional-not-platform-qualified"] as const);
+
 /** Content-free server authority and runtime-composition projection used before Start is enabled. */
 export interface CodingWorkbenchRuntimeReadiness {
   readonly schemaVersion: typeof CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION;
@@ -83,6 +95,12 @@ export interface CodingWorkbenchRuntimeReadiness {
   readonly runtimeAvailable: boolean;
   /** Present exactly when `runtimeAvailable` is false; names the first failed prerequisite. */
   readonly runtimeUnavailableReason?: CodingWorkbenchRuntimeUnavailableReason | undefined;
+  /**
+   * Present exactly when `runtimeAvailable` is true. An available runtime must always say how
+   * strong its evidence is: an absent field that read as "verified" would be a fail-open default
+   * and would reproduce the green-readiness-over-an-unverified-runtime class (audit F-01).
+   */
+  readonly runtimeEvidenceClass?: CodingWorkbenchRuntimeEvidenceClass | undefined;
 }
 
 export interface CodingWorkbenchRuntimeStartRequest {
@@ -457,6 +475,7 @@ export function validateCodingWorkbenchRuntimeReadiness(
       "effectiveMode",
       "runtimeAvailable",
       "runtimeUnavailableReason",
+      "runtimeEvidenceClass",
     ],
     "runtimeReadiness",
   );
@@ -467,6 +486,7 @@ export function validateCodingWorkbenchRuntimeReadiness(
     if (!isOneOf(value[field], CODING_WORKBENCH_MODES)) errors.push(`${field} is invalid`);
   }
   validateRuntimeUnavailableReason(value, errors);
+  validateRuntimeEvidenceClass(value, errors);
   // The server may confirm a NARROWER effective mode than the plain request/ceiling clamp (the
   // #2386 mode-change gate anchors it to the live run), but never a wider one: widening past the
   // clamp is the fail-closed contract boundary.
@@ -501,6 +521,28 @@ function validateRuntimeUnavailableReason(value: Record<string, unknown>, errors
   }
   if (value.runtimeAvailable === false && reason === undefined) {
     errors.push("runtimeUnavailableReason is required when the runtime is unavailable");
+  }
+}
+
+/**
+ * The exact mirror of the unavailable reason, bound to the AVAILABLE branch. Requiring it there is
+ * the load-bearing half: an optional field whose absence reads as "verified" would let an
+ * unverified evaluation runtime render as plain green.
+ */
+function validateRuntimeEvidenceClass(value: Record<string, unknown>, errors: string[]): void {
+  const evidenceClass = value.runtimeEvidenceClass;
+  if (
+    evidenceClass !== undefined &&
+    !isOneOf(evidenceClass, CODING_WORKBENCH_RUNTIME_EVIDENCE_CLASSES)
+  ) {
+    errors.push("runtimeEvidenceClass is invalid");
+    return;
+  }
+  if (value.runtimeAvailable === true && evidenceClass === undefined) {
+    errors.push("runtimeEvidenceClass is required when the runtime is available");
+  }
+  if (value.runtimeAvailable === false && evidenceClass !== undefined) {
+    errors.push("runtimeEvidenceClass must be absent when the runtime is unavailable");
   }
 }
 

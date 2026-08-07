@@ -17,13 +17,13 @@
 // graph state, and pure validation helpers. No implementation — types only. Implementation
 // lands in subsequent epic children.
 
-export const KEIKO_CONTRACTS_VERSION = "0.2.15" as const;
+export const KEIKO_CONTRACTS_VERSION = "0.3.0" as const;
 
 // Single-source product version. Surfaced as `keiko --version`, in the BFF healthcheck
 // response, and as the SDK's exported `SDK_VERSION` constant. Kept here on the leaf
 // package so every consumer reaches it through one stable import path. Bump in lockstep
 // with the root package.json "version" field as part of every release.
-export const KEIKO_PRODUCT_VERSION = "0.2.15" as const;
+export const KEIKO_PRODUCT_VERSION = "0.3.0" as const;
 
 // ─── Shared numeric primitive (GEN-DUP-SEMANTIC-003) ────────────────────────────
 export { clampUnit } from "./numeric.js";
@@ -1202,6 +1202,7 @@ export {
 export type {
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
+  CodingWorkbenchRuntimeEvidenceClass,
   CodingWorkbenchRuntimePendingPermission,
   CodingWorkbenchRuntimePreference,
   CodingWorkbenchRuntimeReadiness,
@@ -1225,6 +1226,7 @@ export type {
 export {
   CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS,
+  CODING_WORKBENCH_RUNTIME_EVIDENCE_CLASSES,
   CODING_WORKBENCH_RUNTIME_PREFERENCES,
   CODING_WORKBENCH_RUNTIME_SSE_CURSOR_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_SSE_EVENT_KINDS,

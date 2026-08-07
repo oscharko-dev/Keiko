@@ -564,6 +564,32 @@ describe("portable assets stage helper", () => {
     expect(args).not.toContain("--apple-team-id");
   });
 
+  // ACCIDENT PREVENTION: absent by default, present exactly once when explicitly requested. There
+  // is no environment variable and no approval-file field that can introduce the flag.
+  it("omits the evaluation opt-in unless the caller asks for it, and then emits it exactly once", async () => {
+    const { stageArgumentsForTarget } = await import("../run-portable-assets-stage.mjs");
+    const approvals = loadPortableRuntimeApprovals(repoRoot);
+    const base = { outDir: "/tmp/out", payloadRoot: tempRoot(), target: "windows-x64" };
+
+    const plain = stageArgumentsForTarget(base, approvals, "a".repeat(40), "0.2.14", {
+      runAttempt: 3,
+      runId: 987654321,
+    });
+    expect(plain).not.toContain("--evaluation-build");
+    expect(plain).not.toContain("--evaluation");
+
+    const evaluation = stageArgumentsForTarget(
+      { ...base, evaluation: true },
+      approvals,
+      "a".repeat(40),
+      "0.2.14",
+      { runAttempt: 3, runId: 987654321 },
+    );
+    expect(evaluation.filter((arg) => arg === "--evaluation-build")).toHaveLength(1);
+    // The opt-in is additive: it changes nothing else the wrapper derives.
+    expect(evaluation.filter((arg) => arg !== "--evaluation-build")).toEqual(plain);
+  });
+
   it("collects sidecar specs and derives approved stage arguments", async () => {
     const { collectSidecarSpecPaths, stageArgumentsForTarget } =
       await import("../run-portable-assets-stage.mjs");
