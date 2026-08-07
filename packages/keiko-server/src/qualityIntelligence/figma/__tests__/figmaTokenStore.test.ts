@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -15,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   NO_FIGMA_KEYCHAIN,
   createFigmaTokenStore,
+  keyFromKeychain,
   resolveFigmaVaultKey,
 } from "../figmaTokenStore.js";
 import { FigmaConnectorError } from "../figmaConnectorErrors.js";
@@ -173,6 +175,24 @@ describe("resolveFigmaVaultKey precedence", () => {
     expect(resolved.source).toBe("keychain");
     expect(resolved.key.equals(fromKeychain)).toBe(true);
   });
+
+  it("falls through to the keyfile when the keychain never answers", () => {
+    // Proves this surface really is wired to the bounded shared owner, not just that the owner is
+    // bounded: a `security` that returns nothing until a human acts must not stall the caller.
+    const hangs = join(mkdtempSync(join(REAL_TMPDIR, "keiko-figma-keychain-")), "security");
+    writeFileSync(hangs, "#!/bin/sh\nsleep 30\n");
+    chmodSync(hangs, 0o700);
+
+    const started = process.hrtime.bigint();
+    const resolved = resolveFigmaVaultKey({}, dir, () =>
+      keyFromKeychain({ executable: hangs, timeoutMs: 250, platform: "darwin" }),
+    );
+
+    // Against the previous unbounded spawn this blocks and fails on the suite timeout.
+    expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(5_000);
+    expect(resolved.source).toBe("keyfile");
+    expect(resolved.key).toHaveLength(32);
+  }, 15_000);
 
   it("prefers the env key over the keychain tier when both are present", () => {
     // The env-tier test above injects NO_FIGMA_KEYCHAIN, so it cannot prove env BEATS keychain.
