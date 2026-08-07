@@ -15,10 +15,19 @@ const CONFIG = `rules:
       - other.yml:1
   misfeature:
     ignore:
+      - ci.yml:4
+  adhoc-packages:
+    ignore:
       - ci.yml:99
 `;
 
-const CI = ["jobs:", "  a:", "      uses: actions/cache@abc # v6", "      run: echo"].join("\n");
+const CI = [
+  "jobs:",
+  "  a:",
+  "      uses: actions/cache@abc # v6",
+  "        shell: cmd",
+  "      run: echo",
+].join("\n");
 const OTHER = ["      uses: actions/cache@abc # v6"].join("\n");
 
 const read = (file) => ({ "ci.yml": CI, "other.yml": OTHER })[file];
@@ -28,7 +37,8 @@ describe("zizmor ignore anchors", () => {
     expect(parseAnchors(CONFIG)).toEqual([
       { rule: "cache-poisoning", file: "ci.yml", line: 3 },
       { rule: "cache-poisoning", file: "other.yml", line: 1 },
-      { rule: "misfeature", file: "ci.yml", line: 99 },
+      { rule: "misfeature", file: "ci.yml", line: 4 },
+      { rule: "adhoc-packages", file: "ci.yml", line: 99 },
     ]);
   });
 
@@ -40,15 +50,17 @@ describe("zizmor ignore anchors", () => {
   // required zizmor job would go red on someone else's pull request.
   it("fails a drifted anchor and names the corrected line", () => {
     const shifted = ["# inserted above the cache step", ...CI.split("\n")].join("\n");
-    const failures = anchorFailures(parseAnchors(CONFIG), (file) =>
-      file === "ci.yml" ? shifted : read(file),
+    const failures = anchorFailures(
+      [{ rule: "cache-poisoning", file: "ci.yml", line: 3 }],
+      (file) => (file === "ci.yml" ? shifted : read(file)),
     );
     expect(failures).toEqual([expect.stringContaining("update the anchor to ci.yml:4")]);
   });
 
   it("fails an anchor whose step is gone rather than guessing a replacement", () => {
-    const failures = anchorFailures(parseAnchors(CONFIG), (file) =>
-      file === "ci.yml" ? "jobs:\n  a:\n    run: echo" : read(file),
+    const failures = anchorFailures(
+      [{ rule: "cache-poisoning", file: "ci.yml", line: 3 }],
+      (file) => (file === "ci.yml" ? "jobs:\n  a:\n    run: echo" : read(file)),
     );
     expect(failures).toEqual([expect.stringContaining("no such step exists")]);
   });
@@ -70,7 +82,19 @@ describe("zizmor ignore anchors", () => {
   });
 
   it("leaves a rule it does not know how to position-check unenforced rather than wrong", () => {
-    expect(anchorFailures([{ rule: "misfeature", file: "ci.yml", line: 99 }], read)).toEqual([]);
+    expect(anchorFailures([{ rule: "adhoc-packages", file: "ci.yml", line: 99 }], read)).toEqual(
+      [],
+    );
+  });
+
+  // The gap this map closed: `misfeature` anchors at a step's `shell:` line, and a drifted one made
+  // the required `workflow hygiene` job go red on a pull request that changed nothing about shells.
+  it("fails a drifted misfeature anchor and names the corrected line", () => {
+    const shifted = ["# inserted above the shell step", ...CI.split("\n")].join("\n");
+    const failures = anchorFailures([{ rule: "misfeature", file: "ci.yml", line: 4 }], (file) =>
+      file === "ci.yml" ? shifted : read(file),
+    );
+    expect(failures).toEqual([expect.stringContaining("update the anchor to ci.yml:5")]);
   });
 
   // Reality guard: the committed configuration must satisfy its own checker.
