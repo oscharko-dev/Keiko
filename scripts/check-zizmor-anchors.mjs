@@ -42,6 +42,18 @@ const ANCHOR_SUBJECT = new Map([
       matches: (line) => /^on:\s*$/u.test(line),
     },
   ],
+  [
+    "misfeature",
+    {
+      description: "a step's `shell:` declaration",
+      // zizmor anchors this audit at the `shell:` line it objects to. Added after an unrelated
+      // change inserted ten lines above the anchored step: every anchor still "pointed at a step",
+      // so this checker passed, and the required `workflow hygiene` job went red on a pull request
+      // that had nothing to do with Windows shells. That is the exact failure mode the checker
+      // exists to prevent, escaping through a rule that was simply not in this map.
+      matches: (line) => /^\s*shell:\s*\S+/u.test(line),
+    },
+  ],
 ]);
 
 export function parseAnchors(config) {
