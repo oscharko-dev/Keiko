@@ -373,9 +373,9 @@ function runtimeSupervisor(
   if (input.createSupervisor) {
     return input.createSupervisor({ workspaceRoot, portable: input.portable });
   }
-  if (isDevLaneRuntime(input.portable)) return devLaneSupervisor(input.portable);
+  if (isDevLaneRuntime(input.portable)) return appSandboxSupervisor(input.portable);
   if (isEvaluationLaneRuntime(input.portable) && input.portable.target !== "windows-x64") {
-    return macosEvaluationSupervisor(input.portable);
+    return appSandboxSupervisor(input.portable);
   }
   return createRuntimeProcessSupervisor({
     backend: createNativeRuntimeProcessBackend({
@@ -389,16 +389,23 @@ function runtimeSupervisor(
 }
 
 /**
- * macOS evaluation supervision (ADR-0163 D9). The native supervisor connects to the runtime
- * monitor socket served ONLY by the Endpoint Security system extension, which requires an
- * Apple-entitled, notarized, user-approved install; on an unsigned build it fails at first spawn
- * with ERROR_MONITOR_UNAVAILABLE. macOS evaluation therefore uses the same weaker, honestly
- * declared app-sandbox backend the dev lane uses: no descendant containment is proven and process
- * supervision is weaker. Windows evaluation keeps the native Job Object supervisor, which needs no
- * signature and provides real containment.
+ * The weaker, honestly declared macOS app-sandbox supervision, shared by the two lanes that cannot
+ * have the real thing. It spawns the verified staged payload directly and terminates its POSIX
+ * process group; it carries none of the release-qualified descendant-containment or orphan-reaping
+ * guarantees, and each lane's evidence class records that posture.
+ *
+ * Dev lane (#2475, ADR-0140): no packaged install exists to supervise natively.
+ * Evaluation lane (ADR-0163 D9): the native supervisor connects to the runtime monitor socket served
+ * ONLY by the Endpoint Security system extension, which requires an Apple-entitled, notarized,
+ * user-approved install; on an unsigned build it fails at first spawn with
+ * ERROR_MONITOR_UNAVAILABLE. Windows evaluation is unaffected — its Job Object supervisor needs no
+ * signature and its containment is real.
+ *
+ * One body for both, because two byte-identical copies would let a future edit weaken one lane's
+ * supervision while the other silently kept the old shape.
  */
-function macosEvaluationSupervisor(
-  portable: QualifiedPortableOpenCodeRuntime,
+function appSandboxSupervisor(
+  portable: QualifiedPortableOpenCodeRuntime | DevLanePortableOpenCodeRuntime,
 ): RuntimeProcessSupervisor {
   return createRuntimeProcessSupervisor({
     backend: createDevLaneRuntimeProcessBackend({
@@ -437,25 +444,6 @@ function admissionPolicy(
 ): NonNullable<OpenCodeRuntimeCompositionInput["portable"]["admission"]> {
   if (isDevLaneRuntime(portable)) return "functional-dev-lane";
   return isEvaluationLaneRuntime(portable) ? "functional-evaluation-lane" : "release-qualified";
-}
-
-/**
- * Dev-lane supervision (#2475, ADR-0140): the process backend spawns the verified staged payload
- * directly and terminates its POSIX process group. It carries none of the release-qualified
- * containment or orphan-reaping guarantees; the runtime's evidence class records that posture.
- */
-function devLaneSupervisor(portable: DevLanePortableOpenCodeRuntime): RuntimeProcessSupervisor {
-  return createRuntimeProcessSupervisor({
-    backend: createDevLaneRuntimeProcessBackend({
-      identity: {
-        platform: "darwin",
-        arch: portable.qualification.arch,
-        backend: "macos-app-sandbox",
-      },
-      runtimeRoot: join(portable.installRoot, portable.sidecar.payloadRootPath),
-    }),
-    qualifications: [portable.qualification],
-  });
 }
 
 function idempotentEventSink(

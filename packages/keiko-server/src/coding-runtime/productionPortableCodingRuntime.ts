@@ -287,7 +287,8 @@ function evaluationQualification(
   const windows = candidate.target === "windows-x64";
   return {
     platform: windows ? "win32" : "darwin",
-    arch: candidate.target === "macos-x64" ? "x64" : windows ? "x64" : "arm64",
+    // macos-arm64 is the only Apple Silicon target; the other two are x64.
+    arch: candidate.target === "macos-arm64" ? "arm64" : "x64",
     backend: windows ? "windows-job-object" : "macos-app-sandbox",
     releaseReceipt: `sha256:${sha256Text(
       JSON.stringify({ lane: "evaluation-unqualified", ...binding }),
