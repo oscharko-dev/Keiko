@@ -33,7 +33,7 @@
     "@oscharko-dev/keiko-model-gateway": "0.2.15",
     "@oscharko-dev/keiko-security": "0.2.15",
     "@oscharko-dev/keiko-workspace": "0.2.15",
-    "pdfjs-dist": "^6.0.227",
+    "pdfjs-dist": "^6.2.108",
     "yauzl": "^3.3.2"
   },
   "optionalDependencies": {
