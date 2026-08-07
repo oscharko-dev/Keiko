@@ -1,10 +1,26 @@
 import { describe, expect, it } from "vitest";
 
+import { looksLikeSecretShape } from "@oscharko-dev/keiko-contracts/memory";
+
 import { looksLikeEuDePii, scanForSecrets } from "./secret-patterns.js";
 
 // Literal credential shapes are assembled by string concatenation so push-protection scanners
 // never see a real-looking secret in source. Each fragment is meaningless in isolation; the
 // concatenated string is a SHAPE for the regex to match on, not a real secret.
+
+// The same rule applies to payment-card shapes. These are the well-known non-issuable test
+// numbers, but a spaced or dashed PAN written literally still trips PII/secret scanners, so the
+// digit groups are joined at runtime and the chosen separator is what each case is actually about.
+const VISA_GROUPS = ["4111", "1111", "1111", "1111"];
+const MASTERCARD_GROUPS = ["5500", "0000", "0000", "0004"];
+const AMEX_GROUPS = ["34", "0000", "0000", "0000", "9"];
+// 13 digits, deliberately Luhn-invalid: the benign long number the naive digit-run pattern used to
+// reject and the canonical detector correctly accepts.
+const NON_LUHN_REFERENCE = ["123", "4567", "8901", "23"].join("");
+
+function pan(groups: readonly string[], separator: string): string {
+  return groups.join(separator);
+}
 
 describe("scanForSecrets — credential-shape patterns (looksLikeSecretShape parity + extensions)", () => {
   it("rejects an OpenAI-style key shape", () => {
@@ -38,8 +54,49 @@ describe("scanForSecrets — credential-shape patterns (looksLikeSecretShape par
   });
 
   it("rejects a long contiguous digit run (PAN/IBAN shape)", () => {
-    const shape = "4111111111111111";
-    expect(scanForSecrets(`card: ${shape}`)).toBe("credential-shape");
+    expect(scanForSecrets(`card: ${pan(VISA_GROUPS, "")}`)).toBe("credential-shape");
+  });
+
+  // This module's header claims parity with looksLikeSecretShape, but its digit element was a bare
+  // /\b\d{13,19}\b/ where the contracts implementation strips separators and Luhn-validates. The
+  // divergence ran in BOTH directions, and the wrong way round: the PRIMARY write-time boundary
+  // missed the human-typed spaced/dashed card numbers the weaker audit-time check catches, while
+  // rejecting benign long numbers the audit-time check accepts.
+  it("rejects a space-separated payment card number", () => {
+    expect(scanForSecrets(`My card is ${pan(VISA_GROUPS, " ")}, please charge it`)).toBe(
+      "credential-shape",
+    );
+  });
+
+  it("rejects a dash-separated payment card number", () => {
+    expect(scanForSecrets(`${pan(VISA_GROUPS, "-")} is the number`)).toBe("credential-shape");
+  });
+
+  it("does not reject a benign long digit run that fails the Luhn check", () => {
+    expect(scanForSecrets(`order reference ${NON_LUHN_REFERENCE}`)).toBeNull();
+  });
+
+  // The two "parity" claims must not be able to drift apart again silently. The write-time gate is
+  // allowed to be STRICTER (it owns Bearer tokens, URL creds and form-encoded assignments), but on
+  // PAN-shaped input alone the two must agree exactly.
+  it("classifies PAN-shaped input identically to looksLikeSecretShape", () => {
+    const panShapedInputs = [
+      pan(VISA_GROUPS, ""),
+      `My card is ${pan(VISA_GROUPS, " ")}, please charge it`,
+      `${pan(VISA_GROUPS, "-")} is the number`,
+      pan(MASTERCARD_GROUPS, " "),
+      pan(AMEX_GROUPS, ""),
+      `order reference ${NON_LUHN_REFERENCE}`,
+      "we have 12 open issues",
+      "build 20240131 finished",
+      `ticket ${"9".repeat(16)} closed`,
+    ];
+    for (const input of panShapedInputs) {
+      expect([input, scanForSecrets(input) === "credential-shape"]).toEqual([
+        input,
+        looksLikeSecretShape(input),
+      ]);
+    }
   });
 
   it("rejects an opaque Bearer authorization header", () => {

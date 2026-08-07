@@ -325,6 +325,49 @@ describe("runConsolidation - maxRecordsPerRun bound", () => {
     const result = runConsolidation([makeRecord()], baseOptions({ maxRecordsPerRun: 1_001 }));
     expect(result.state).toBe("failed");
   });
+
+  // The record budget is a CPU bound, not a canonical-member selection, and it used to be taken
+  // with compareRecordsByAge — oldest first. Past the cap the window was therefore a permanently
+  // frozen prefix of the oldest records: because merges become review items awaiting a human, the
+  // prefix never shrank, so nothing newer was ever deduplicated or conflict-checked again.
+  it("inspects the newest records, so a new duplicate of an in-window record is still found", () => {
+    const records = [
+      ...Array.from({ length: 1_000 }, (_, index) =>
+        makeRecord({
+          id: `m-${index.toString().padStart(4, "0")}`,
+          body: `unique memory body ${index.toString()}`,
+          createdAt: index,
+        }),
+      ),
+      makeRecord({
+        id: "m-newest",
+        body: "unique memory body 999",
+        createdAt: 1_000,
+      }),
+    ];
+    const result = runConsolidation(records, baseOptions());
+    expect(result.recordsInspected).toBe(1_000);
+    expect(result.truncated).toBe(true);
+    const related = [...result.reviewItems.flatMap((item) => item.relatedMemoryIds)];
+    const edgeIds = result.edgesProposed.flatMap((edge) => [edge.fromMemoryId, edge.toMemoryId]);
+    expect([...related, ...edgeIds]).toContain("m-newest");
+    expect([...related, ...edgeIds]).toContain("m-0999");
+  });
+
+  it("drops the oldest record rather than the newest when the cap binds", () => {
+    const records = Array.from({ length: 1_001 }, (_, index) =>
+      makeRecord({
+        id: `m-${index.toString().padStart(4, "0")}`,
+        body: `unique memory body ${index.toString()}`,
+        createdAt: index,
+      }),
+    );
+    const result = runConsolidation(records, baseOptions({ staleConfidenceThreshold: 1 }));
+    expect(result.recordsInspected).toBe(1_000);
+    const flagged = result.staleFlags.map((flag) => String(flag.memoryId));
+    expect(flagged).toContain("m-1000");
+    expect(flagged).not.toContain("m-0000");
+  });
 });
 
 describe("runConsolidation - cancellation", () => {

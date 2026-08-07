@@ -501,6 +501,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof mod.isScopeReachable).toBe("function");
     expect(typeof mod.assertNeverMemoryType).toBe("function");
     expect(typeof mod.looksLikeSecretShape).toBe("function");
+    expect(typeof mod.hasPaymentCardPanShape).toBe("function");
     expect(typeof mod.hasStaleModelMetadata).toBe("function");
   });
 

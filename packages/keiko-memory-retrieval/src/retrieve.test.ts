@@ -496,6 +496,49 @@ describe("retrieveMemoryContext — type filter + explainability + determinism",
     });
   });
 
+  // The relevance floor enumerates the three QUERY-DERIVED subscores (relevance/semantic/graph) to
+  // decide an entry is untouched by this turn. The ranker computes `pinned` and `correction`
+  // independently of query overlap — that is their entire purpose — so a floor that ignores them
+  // drops the two highest-authority signals on any turn whose wording happens not to overlap them,
+  // and chat-handlers.ts sets queryText to the raw user message on EVERY turn.
+  it("keeps pinned and correction memories under the relevance floor while still omitting ordinary ones", () => {
+    const pinned = buildRecord({
+      id: "pinned",
+      body: "deploys happen on Tuesdays",
+      type: "episodic",
+      pinned: true,
+      updatedAt: now,
+      confidence: 0.95,
+    });
+    const correction = buildRecord({
+      id: "correction",
+      body: "invoices live in the legacy archive",
+      sourceKind: "accepted-correction",
+      updatedAt: now,
+      confidence: 0.95,
+    });
+    const ordinary = buildRecord({
+      id: "ordinary",
+      body: "the office plants are watered weekly",
+      updatedAt: now,
+      confidence: 0.95,
+    });
+    const { port } = portReturning({ "user:u1": [pinned, correction, ordinary] });
+    const result = retrieveMemoryContext(
+      baseRequest({ queryText: "Which formatter should I use?", budgetTokens: 500 }),
+      port,
+    );
+    expect(result.included.map((i) => i.memoryId)).toEqual(
+      expect.arrayContaining([memoryId("pinned"), memoryId("correction")]),
+    );
+    expect(result.omitted).toContainEqual({
+      memoryId: memoryId("ordinary"),
+      reason: "below-threshold",
+    });
+    expect(result.omitted.map((o) => o.memoryId)).not.toContain(memoryId("pinned"));
+    expect(result.omitted.map((o) => o.memoryId)).not.toContain(memoryId("correction"));
+  });
+
   it("treats semantic scores below the configured floor as absent", () => {
     const semanticOnly = buildRecord({
       id: "semantic-low",

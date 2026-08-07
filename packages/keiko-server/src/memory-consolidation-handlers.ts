@@ -365,16 +365,20 @@ function loadSelectedMemories(
       includeExpired: selection.includeExpired,
       limit: remaining,
       orderBy: "updatedAt",
-      orderDir: "asc",
+      orderDir: "desc",
     });
     for (const record of records) {
       seen.set(record.id, record);
       if (seen.size >= detectionLimit) break;
     }
   }
+  // Newest first, matching the engine's own work-window ordering (boundedEligibleMemories). This
+  // loader slices to maxRecords BEFORE runConsolidation sees the records, so an oldest-first order
+  // here reproduced the frozen-window defect independently of the engine: past the cap the newest
+  // memories were discarded before any duplicate or conflict scan could reach them.
   const sorted = [...seen.values()]
     .sort((a, b) => {
-      if (a.updatedAt !== b.updatedAt) return a.updatedAt - b.updatedAt;
+      if (a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt;
       return a.id.localeCompare(b.id);
     })
     .slice(0, maxRecords);
