@@ -84,7 +84,21 @@ const INVALID_LIFECYCLE_STATES = LIFECYCLE_CONTEXTS.flatMap((context) => {
     ),
   );
 });
-const PORTABLE_RELEASE_IMPACT_ENTRY_ID = `2026-07-06-keiko-${ROOT_PACKAGE_VERSION}-portable-runtime-staging-contract`;
+// Derived from the catalog with the producer's own predicate rather than rebuilt from a date
+// prefix: the id's date is the day the entry was written, which nothing constrains to match any
+// earlier release's date. A restated formula here passes only until the next release adds its
+// entry on a different day (AGENTS.md §7).
+const PORTABLE_RELEASE_IMPACT_ENTRY_ID = JSON.parse(
+  readFileSync("release-impact.catalog.json", "utf8"),
+).entries.find(
+  (entry) =>
+    entry.packageName === ROOT_MANIFEST.name &&
+    entry.packageVersion === ROOT_PACKAGE_VERSION &&
+    entry.releaseTag === ROOT_RELEASE_TAG &&
+    entry.review?.status === "reviewed" &&
+    entry.review?.humanApproved === true &&
+    entry.portableRuntimeArtifactContract !== undefined,
+)?.id;
 let packageSurfacePreparedForTest = false;
 
 describe("findPortableMetadataRedactionFailures", () => {
