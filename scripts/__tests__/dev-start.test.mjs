@@ -50,12 +50,36 @@ describe("dev-start coding runtime lifecycle", () => {
       response: { ok: false, status: 503 },
       expected: "HTTP 503",
     },
+    // ADR-0163 D9: a bare "ok" is reserved for a platform-qualified runtime. An available runtime
+    // whose evidence class is weak — or absent, which fails closed to weak — says so.
+    {
+      response: {
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            runtimeAvailable: true,
+            runtimeEvidenceClass: "platform-qualified",
+          }),
+      },
+      expected: "ok",
+    },
+    {
+      response: {
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            runtimeAvailable: true,
+            runtimeEvidenceClass: "functional-not-platform-qualified",
+          }),
+      },
+      expected: "ok (unverified evaluation runtime — no platform signature)",
+    },
     {
       response: {
         ok: true,
         json: () => Promise.resolve({ runtimeAvailable: true }),
       },
-      expected: "ok",
+      expected: "ok (unverified evaluation runtime — no platform signature)",
     },
     {
       response: {

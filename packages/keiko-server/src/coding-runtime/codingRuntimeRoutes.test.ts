@@ -600,6 +600,9 @@ describe("coding runtime routes", () => {
         deploymentCeiling: "supervised-coding",
         effectiveMode: "supervised-coding",
         runtimeAvailable: true,
+        // ADR-0163 D9 fail-closed default: this deps fixture threads NO evidence class, and an
+        // unthreaded path must degrade to the weak value, never silently to a verified claim.
+        runtimeEvidenceClass: "functional-not-platform-qualified",
       },
     });
     const serialized = JSON.stringify(result.body);

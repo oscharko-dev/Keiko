@@ -14,7 +14,17 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      evaluation_build:
+        description: >-
+          Stage an UNSIGNED evaluation runtime (verificationPolicy "evaluation"). The bundled
+          OpenCode sidecar runs without Apple/Microsoft code signing; every digest, size,
+          containment and provenance check stays mandatory. Never publishable: the release
+          bundle is assembled only from push-tag production jobs.
+        type: boolean
+        default: false
+        required: false
 
 permissions: {}
 
@@ -135,8 +145,14 @@ jobs:
         run: npm run provision:usearch
       - name: Prepare approved sidecar payloads
         run: node scripts/prepare-approved-sidecar-payloads.mjs --target ${{ matrix.platform_target }}
+      # Two mutually exclusive steps rather than one interpolated command line: zizmor's
+      # template-injection rule (workflow hygiene) fires on `${{ inputs.* }}` inside `run:`.
       - name: Stage portable runtime from approved inputs
+        if: ${{ !inputs.evaluation_build }}
         run: node scripts/run-portable-assets-stage.mjs --target ${{ matrix.platform_target }}
+      - name: Stage UNSIGNED evaluation portable runtime from approved inputs
+        if: ${{ inputs.evaluation_build }}
+        run: node scripts/run-portable-assets-stage.mjs --target ${{ matrix.platform_target }} --evaluation
       - name: Functionally smoke the staged USearch addon
         run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }}
       - name: Smoke test the staged artifact
@@ -149,7 +165,9 @@ jobs:
       - name: Upload staged target artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: portable-stage-${{ matrix.platform_target }}
+          # The evaluation bundle names itself so a downloaded ZIP can never be mistaken for the
+          # ordinary unsigned staging output.
+          name: portable-stage-${{ matrix.platform_target }}${{ inputs.evaluation_build && '-evaluation-unsigned' || '' }}
           path: .portable-runtime/staging/${{ matrix.platform_target }}
           if-no-files-found: error
           retention-days: 30

@@ -36,6 +36,15 @@ carries `evidenceClass: "functional-not-platform-qualified"` and an availability
 only checks the lane actually performs are marked verified (`signatureVerified: false`,
 `qualificationVerified: false`). Nothing on this lane may present itself as platform-qualified.
 
+`functional-not-platform-qualified` is no longer server-internal. It is now a value of the
+`runtimeEvidenceClass` field on the coding-workbench readiness contract, REQUIRED whenever
+`runtimeAvailable` is true, and the packaged evaluation lane (ADR-0163 D9) is its second producer.
+One vocabulary answers "how strong is this available runtime's evidence?" for both lanes, and the
+anti-false-green rule above now binds the UI as well as the server: a runtime in this class is
+never narrated, labelled or coloured as a plain ready runtime. This also repairs a pre-existing
+hole — the dev lane's evidence class previously reached no UI surface, so a dev-lane runtime
+announced "Runtime ready."
+
 `npm run dev:start` is the trusted development launcher and is itself the operator's explicit
 selection of this repository-confined lane. On a supported macOS checkout it supplies the enable
 token to the BFF, evaluates production discovery after the package build, stages the
@@ -50,8 +59,16 @@ Dev-lane discovery refuses, before evaluating any payload trust, whenever the re
 root carries a packaged-install manifest (`.portable/update-portable-manifest.json` or
 `.portable/setup-manifest.json`) or lacks repository-checkout markers (`.git` or
 `tsconfig.packages.json`). Packaged installs — Windows and macOS alike — therefore cannot adopt
-the dev lane as a de-facto activation path; their behavior is unchanged and remains fail-closed
-until the Wave-5 packaged qualification supplies the evidence ADR-0137 D5 demands.
+the dev lane as a de-facto activation path; that confinement is unchanged and still absolute.
+
+A packaged artifact now has a second, differently confined availability source: the ADR-0163 D9
+evaluation lane. It is not this lane and does not weaken this confinement. The distinction is the
+confinement rule itself. The dev lane is selected by an environment token on a repository checkout
+and refuses the moment a packaged install marker exists. The evaluation lane is selected by a
+declaration the packaged artifact carries in its own manifest, written only when a release
+explicitly requests it, and it carries the complete integrity evidence set of a production
+artifact. Neither can be reached from the other, and neither can be entered by a fallback after
+some other prerequisite fails.
 
 ### D3 — Verified payload, declared forgone guarantees
 

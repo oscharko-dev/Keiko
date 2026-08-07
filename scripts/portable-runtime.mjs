@@ -61,24 +61,29 @@ export const PORTABLE_VERIFICATION_POLICIES = Object.freeze([
   "staging",
   "development",
   "pull-request",
+  "evaluation",
   "production",
 ]);
 export const PORTABLE_VERIFICATION_STATUSES = Object.freeze([
   "unverified-staging",
   "unsigned-non-production",
   "verified-non-production",
+  "evaluation-unqualified",
   "verified-production",
   "verification-failed",
 ]);
 export const PORTABLE_MANIFEST_VALIDATION_CONTEXTS = Object.freeze([
   "staging",
   "non-production",
+  "evaluation",
   "candidate",
   "published",
   "published-contract",
 ]);
 export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
   "credential-unavailable",
+  "evaluation-artifact",
+  "evaluation-unsigned-allowed",
   "macos-assessment-unverified",
   "macos-developer-id-unverified",
   "macos-notarization-unverified",
@@ -279,11 +284,14 @@ function isRecord(value) {
 }
 
 function usesZeroReleaseIdentity(options) {
-  return new Set(["staging", "non-production", "candidate"]).has(options.context);
+  return new Set(["staging", "non-production", "evaluation", "candidate"]).has(options.context);
 }
 
+// The evaluation lane (ADR-0163 D9) waives exactly the platform signature, notarization and
+// qualification gates and nothing else. Every digest, size, containment and provenance predicate
+// stays outside this Set and therefore stays mandatory on every lane.
 function requiresProductionVerification(options) {
-  return !new Set(["staging", "non-production"]).has(options.context);
+  return !new Set(["staging", "non-production", "evaluation"]).has(options.context);
 }
 
 function push(failures, path, message) {
@@ -527,13 +535,29 @@ function validateRuntimeActivation(manifest, failures, options) {
   literalAt(value, "path", ".portable/runtime-activation.json", "runtimeActivation", failures);
   digestAt(value, "sha256", "runtimeActivation", failures, options);
   const trustAnchor = stringAt(value, "trustAnchor", "runtimeActivation", failures);
+  validateRuntimeActivationTrustAnchor(manifest, trustAnchor, failures, options);
+}
+
+/**
+ * The pre-signing contexts each pin their own anchor. No platform seal binds an evaluation
+ * activation document, so its anchor must say so plainly rather than borrow a production anchor or
+ * the staging one (ADR-0163 D9).
+ */
+function validateRuntimeActivationTrustAnchor(manifest, trustAnchor, failures, options) {
+  const preSigningAnchor = { staging: "unverified-staging", evaluation: "evaluation-unqualified" }[
+    options.context
+  ];
+  if (preSigningAnchor !== undefined) {
+    if (trustAnchor !== preSigningAnchor) {
+      push(failures, "runtimeActivation.trustAnchor", `must be ${preSigningAnchor}`);
+    }
+    return;
+  }
+  if (!requiresProductionVerification(options)) return;
   const target = portableTargetByName(manifest.artifact?.platformTarget);
   const expected =
     target?.nodePlatform === "win32" ? "authenticode-attestor" : "developer-id-app-resource-seal";
-  if (options.context === "staging" && trustAnchor !== "unverified-staging") {
-    push(failures, "runtimeActivation.trustAnchor", "must remain unverified during staging");
-  }
-  if (requiresProductionVerification(options) && trustAnchor !== expected) {
+  if (trustAnchor !== expected) {
     push(failures, "runtimeActivation.trustAnchor", `must be ${expected}`);
   }
 }
@@ -905,18 +929,26 @@ function validateNativeHelperSigningLifecycle(target, path, failures, options, s
     push(failures, `${path}.signing.notarizationRequired`, "must match target");
   if (target?.nodePlatform !== "darwin" && state.notarizationVerified)
     push(failures, `${path}.signing.notarizationVerified`, "must be false for non-macOS targets");
-  if (options.context === "staging" && violatesStagingSigning(state)) {
-    push(failures, `${path}.signing`, "must remain explicitly unverified during staging");
+  if (violatesPreSigningHelperSigning(options.context, state)) {
+    push(
+      failures,
+      `${path}.signing`,
+      `must remain explicitly unverified during ${options.context}`,
+    );
   }
   if (requiresProductionVerification(options) && violatesProductionSigning(target, state)) {
     push(failures, `${path}.signing`, "must be verified for production");
   }
 }
 
-function violatesStagingSigning(state) {
-  return (
-    state.status !== "unverified-staging" || state.signatureVerified || state.notarizationVerified
-  );
+/**
+ * Staging and evaluation are both pre-signing lanes: each pins its own status and neither may ever
+ * assert a platform proof. One predicate keeps the two from drifting apart.
+ */
+function violatesPreSigningHelperSigning(context, state) {
+  const expected = { staging: "unverified-staging", evaluation: "evaluation-unqualified" }[context];
+  if (expected === undefined) return false;
+  return state.status !== expected || state.signatureVerified || state.notarizationVerified;
 }
 
 function violatesProductionSigning(target, state) {
@@ -1379,8 +1411,12 @@ function validateSidecarSigningKeys(signing, signingPath, failures) {
   );
 }
 
+// The evaluation lane ships a runnable, downloadable artifact whose shipped-executable digests the
+// runtime verifies against disk at discovery AND at launch, so the schema must demand them here
+// too. Validating them only under production would produce a lane that passes CI and fails at
+// activation (ADR-0163 D9).
 function validateShippedExecutableEvidence(signing, policy, path, failures, options) {
-  if (policy !== "production") return;
+  if (policy !== "production" && policy !== "evaluation") return;
   digestAt(signing, "shippedExecutableSha256", path, failures, options);
   literalAt(signing, "shippedExecutableTreeAlgorithm", EXECUTABLE_TREE_ALGORITHM, path, failures);
   digestAt(signing, "shippedExecutableTreeSha256", path, failures, options);
@@ -1397,10 +1433,7 @@ function validateLifecycleVerificationContext(policy, status, path, options, fai
     }
     return;
   }
-  const expected =
-    options.context === "staging"
-      ? { policy: "staging", status: "unverified-staging" }
-      : { policy: "production", status: "verified-production" };
+  const expected = lifecycleVerificationExpectation(options.context);
   if (policy !== expected.policy || status !== expected.status) {
     push(
       failures,
@@ -1408,6 +1441,12 @@ function validateLifecycleVerificationContext(policy, status, path, options, fai
       `verification must match ${options.context} lifecycle context (${expected.policy}/${expected.status})`,
     );
   }
+}
+
+function lifecycleVerificationExpectation(context) {
+  if (context === "staging") return { policy: "staging", status: "unverified-staging" };
+  if (context === "evaluation") return { policy: "evaluation", status: "evaluation-unqualified" };
+  return { policy: "production", status: "verified-production" };
 }
 
 function validateSidecarVerificationChecks(signing, target, path, failures) {
@@ -1421,6 +1460,15 @@ function validateSidecarVerificationState(policy, status, reasonCodes, verified,
     requireStatusForPath(status, "unverified-staging", path, failures);
     requireReasonForPath(reasonCodes, "staging-unverified", path, failures);
     if (verified) push(failures, `${path}.verificationStatus`, "must stay unverified for staging");
+    return;
+  }
+  if (policy === "evaluation") {
+    requireStatusForPath(status, "evaluation-unqualified", path, failures);
+    requireReasonForPath(reasonCodes, "evaluation-artifact", path, failures);
+    requireReasonForPath(reasonCodes, "evaluation-unsigned-allowed", path, failures);
+    if (verified) {
+      push(failures, `${path}.verificationStatus`, "must stay unverified for evaluation");
+    }
     return;
   }
   validateSignedSidecarVerificationState(policy, status, reasonCodes, verified, path, failures);
@@ -1500,6 +1548,10 @@ function validateVerificationState(manifest, policy, status, reasonCodes, failur
     if (verified) push(failures, "security.verificationStatus", "must stay unverified for staging");
     return;
   }
+  if (policy === "evaluation") {
+    validateEvaluationVerificationState(status, reasonCodes, verified, failures);
+    return;
+  }
   if (policy === "production") {
     if (verified) {
       requireVerificationStatus(status, "verified-production", failures);
@@ -1525,6 +1577,15 @@ function validateVerificationState(manifest, policy, status, reasonCodes, failur
   }
   requireVerificationStatus(status, "unsigned-non-production", failures);
   requireReasonCode(reasonCodes, "non-production-unsigned-allowed", failures);
+}
+
+function validateEvaluationVerificationState(status, reasonCodes, verified, failures) {
+  requireVerificationStatus(status, "evaluation-unqualified", failures);
+  requireReasonCode(reasonCodes, "evaluation-artifact", failures);
+  requireReasonCode(reasonCodes, "evaluation-unsigned-allowed", failures);
+  if (verified) {
+    push(failures, "security.verificationStatus", "must stay unverified for evaluation");
+  }
 }
 
 function requireVerificationStatus(actual, expected, failures) {
@@ -1964,6 +2025,20 @@ export function validatePortableStagingManifest(manifest, options = {}) {
   });
 }
 
+/**
+ * The unsigned, explicitly declared evaluation lane (ADR-0163 D9). Every integrity predicate the
+ * staging and production contexts apply still applies here; only the platform signature,
+ * notarization and qualification gates are waived, and the lane must ASSERT they are declared
+ * negative rather than skip them.
+ */
+export function validatePortableEvaluationManifest(manifest, options = {}) {
+  return validatePortableManifest(manifest, {
+    ...options,
+    context: "evaluation",
+    requireNativeHelpers: true,
+  });
+}
+
 export function validatePortableCandidateManifest(manifest, options = {}) {
   return validatePortableManifest(manifest, {
     ...options,
@@ -1979,6 +2054,20 @@ export function validatePortablePublishedManifest(manifest, apiIdentity, options
     context: "published",
     requireNativeHelpers: true,
   });
+}
+
+/**
+ * Selects the lifecycle validator a staged manifest declares for itself. Callers that used to ask
+ * a binary "production or staging?" question now ask the manifest which lane it carries, so a
+ * third lane cannot be silently validated against a fourth one's rules. An undeclared or
+ * unsupported policy fails closed with an explicit failure rather than defaulting to a lane.
+ */
+export function portableManifestValidationFailuresForDeclaredLane(manifest) {
+  const policy = manifest?.security?.verificationPolicy;
+  if (policy === "production") return validatePortableCandidateManifest(manifest);
+  if (policy === "staging") return validatePortableStagingManifest(manifest);
+  if (policy === "evaluation") return validatePortableEvaluationManifest(manifest);
+  return [`security.verificationPolicy: declares no stageable lifecycle lane (${String(policy)})`];
 }
 
 export function findPortableMetadataRedactionFailures(value, path = "metadata") {

@@ -76,7 +76,11 @@ function workspaceApi(overrides: Partial<ActiveWorkspaceApi> = {}): ActiveWorksp
   };
 }
 
-function liveState(runtimeAvailable = true): CodingWorkbenchRuntimeState {
+function liveState(
+  runtimeAvailable = true,
+  runtimeEvidenceClass:
+    "platform-qualified" | "functional-not-platform-qualified" = "platform-qualified",
+): CodingWorkbenchRuntimeState {
   return {
     ...createInitialCodingWorkbenchRuntimeState(),
     runtime: {
@@ -87,6 +91,7 @@ function liveState(runtimeAvailable = true): CodingWorkbenchRuntimeState {
         deploymentCeiling: "supervised-coding",
         effectiveMode: "governed-assist",
         runtimeAvailable,
+        ...(runtimeAvailable ? { runtimeEvidenceClass } : {}),
       },
       error: null,
     },
@@ -153,6 +158,38 @@ describe("CodingWorkbenchSetup", () => {
         ["serious", "critical"].includes(violation.impact ?? ""),
       ),
     ).toEqual([]);
+  });
+
+  // ADR-0163 D9: the bootstrap setup section is the FIRST screen a fresh evaluation install shows.
+  // A clean form here would imply a verified runtime.
+  it("states the unverified evaluation runtime on the bootstrap setup screen", async () => {
+    const { container } = renderWorkbench(
+      workspaceApi(),
+      liveState(true, "functional-not-platform-qualified"),
+    );
+
+    expect(setupSection()).toBeInTheDocument();
+    const note = screen.getByTestId("coding-workbench-setup-runtime-evaluation-note");
+    expect(note).toHaveTextContent(/unverified evaluation runtime/iu);
+    // The unavailable note states a different condition and must not appear alongside it.
+    expect(screen.queryByTestId("coding-workbench-setup-runtime-note")).not.toBeInTheDocument();
+
+    const report = await axe(container);
+    expect(
+      report.violations.filter((violation) =>
+        ["serious", "critical"].includes(violation.impact ?? ""),
+      ),
+    ).toEqual([]);
+  });
+
+  it("renders neither runtime note on a platform-qualified install", () => {
+    renderWorkbench(workspaceApi(), liveState(true, "platform-qualified"));
+
+    expect(setupSection()).toBeInTheDocument();
+    expect(screen.queryByTestId("coding-workbench-setup-runtime-note")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("coding-workbench-setup-runtime-evaluation-note"),
+    ).not.toBeInTheDocument();
   });
 
   it("prefills the selected Workbench repository without granting managed execution authority", () => {

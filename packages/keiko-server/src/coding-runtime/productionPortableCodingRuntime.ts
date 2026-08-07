@@ -29,6 +29,7 @@ import {
   macosTeamIdentifierFromOutput,
 } from "./macosPortableCodeIdentity.js";
 import { safeRealDirectory, safeRealFile } from "./nativeRuntimeProcessPaths.js";
+import { declaredPortableRuntimeLane, type PortableRuntimeLane } from "./portableRuntimeLane.js";
 import {
   windowsPublisherIdentityMatches,
   windowsSystemEnvironment,
@@ -48,6 +49,14 @@ export interface QualifiedPortableOpenCodeRuntime {
   readonly sidecar: PortableSidecarRuntimeVerification;
   readonly qualification: LongLivedRuntimeQualification;
   readonly nativeHelperPath: string;
+  /**
+   * The lane this artifact DECLARES in its own activation document (ADR-0163 D9). The field is
+   * deliberately not called `evidenceClass` or `lane`: both names are structural discriminators
+   * elsewhere (`"evidenceClass" in portable` at productionOpenCodeActivation.ts and
+   * `"lane" in portable` there and in productionOpenCodeBackend.ts), and either would silently
+   * reroute every packaged runtime to a different code path with no diagnostic.
+   */
+  readonly platformAssurance: PortableRuntimeLane;
 }
 
 interface PortableRuntimeAttestationPort {
@@ -95,6 +104,7 @@ interface PortableRuntimeCandidate {
   readonly supervisorSha256: string;
   readonly secureReadSha256: string;
   readonly sidecar: PortableSidecarRuntimeVerification;
+  readonly platformAssurance: PortableRuntimeLane;
 }
 
 interface BoundActivation {
@@ -140,8 +150,10 @@ function portableRuntimeCandidate(
   if (root === undefined || !setupMatches(root, target)) return undefined;
   const bound = boundActivation(root, target);
   if (bound === undefined) return undefined;
+  const platformAssurance = artifactDeclaredLane(bound.activation);
+  if (platformAssurance === undefined) return undefined;
   const helpers = boundHelperDigests(root, bound.activation, target);
-  const sidecar = qualifiedSidecar(root, bound.activation, target);
+  const sidecar = qualifiedSidecar(root, bound.activation, target, platformAssurance);
   if (helpers === undefined || sidecar === undefined) return undefined;
   return {
     root,
@@ -151,7 +163,48 @@ function portableRuntimeCandidate(
     sourceCommitSha: bound.sourceCommitSha,
     ...helpers,
     sidecar,
+    platformAssurance,
   };
+}
+
+/**
+ * The lane is a fact the artifact declares about ITSELF, never an argument a caller supplies, and
+ * it must be declared coherently artifact-wide. A staging or pull-request artifact resolves to
+ * `undefined` and is refused here, before any other work; a hand-edited manifest that declares one
+ * lane at the top level and another in a sidecar or native-helper signing block is a refusal, not
+ * a partial waiver.
+ */
+function artifactDeclaredLane(
+  activation: Record<string, unknown>,
+): PortableRuntimeLane | undefined {
+  const declared = declaredPortableRuntimeLane(record(activation.security));
+  if (declared === undefined) return undefined;
+  const blocks = [
+    ...signingBlocks(activation.sidecarRuntimes),
+    ...signingBlocks(activation.nativeHelpers),
+  ];
+  if (blocks.length === 0) return undefined;
+  return blocks.every((block) => blockDeclaresLane(block, declared)) ? declared : undefined;
+}
+
+function signingBlocks(entries: unknown): readonly (Record<string, unknown> | undefined)[] {
+  return Array.isArray(entries) ? entries.map((entry) => record(record(entry)?.signing)) : [];
+}
+
+/**
+ * The native-helper signing block carries `verificationStatus` but no `verificationPolicy`, so the
+ * lane is matched on the status alone for those; sidecar blocks carry the full declared pair.
+ */
+function blockDeclaresLane(
+  block: Record<string, unknown> | undefined,
+  lane: PortableRuntimeLane,
+): boolean {
+  if (block === undefined) return false;
+  if (block.verificationPolicy !== undefined) return declaredPortableRuntimeLane(block) === lane;
+  return (
+    block.verificationStatus ===
+    (lane === "release-qualified" ? "verified-production" : "evaluation-unqualified")
+  );
 }
 
 function boundActivation(root: string, target: UpdatePortableTarget): BoundActivation | undefined {
@@ -168,11 +221,25 @@ function qualifiedRuntime(
   candidate: PortableRuntimeCandidate,
   port: PortableRuntimeAttestationPort | undefined,
 ): QualifiedPortableOpenCodeRuntime | undefined {
-  const receipt = (port ?? PLATFORM_ATTESTATION).readReceipt({
-    resourceRoot: candidate.root,
+  const binding = receiptBinding(candidate);
+  const qualification =
+    candidate.platformAssurance === "evaluation-unqualified"
+      ? evaluationQualification(candidate, binding)
+      : platformQualification(candidate, binding, port);
+  if (qualification === undefined) return undefined;
+  return {
+    installRoot: candidate.root,
     target: candidate.target,
-  });
-  const binding: RuntimeQualificationReceiptBinding = {
+    manifest: candidate.activation,
+    sidecar: candidate.sidecar,
+    qualification,
+    nativeHelperPath: helperPath(candidate.root, candidate.target, "keiko-runtime-supervisor"),
+    platformAssurance: candidate.platformAssurance,
+  };
+}
+
+function receiptBinding(candidate: PortableRuntimeCandidate): RuntimeQualificationReceiptBinding {
+  return {
     platformTarget: candidate.target,
     sourceCommitSha: candidate.sourceCommitSha,
     activationManifestSha256: candidate.activationSha256,
@@ -182,15 +249,49 @@ function qualifiedRuntime(
       { name: candidate.sidecar.summary.name, sha256: candidate.sidecar.summary.payloadSha256 },
     ],
   };
-  const result = qualificationFromReceipt(receipt, binding);
-  if (!result.ok) return undefined;
-  return {
-    installRoot: candidate.root,
+}
+
+function platformQualification(
+  candidate: PortableRuntimeCandidate,
+  binding: RuntimeQualificationReceiptBinding,
+  port: PortableRuntimeAttestationPort | undefined,
+): LongLivedRuntimeQualification | undefined {
+  const receipt = (port ?? PLATFORM_ATTESTATION).readReceipt({
+    resourceRoot: candidate.root,
     target: candidate.target,
-    manifest: candidate.activation,
-    sidecar: candidate.sidecar,
-    qualification: result.qualification,
-    nativeHelperPath: helperPath(candidate.root, candidate.target, "keiko-runtime-supervisor"),
+  });
+  const result = qualificationFromReceipt(receipt, binding);
+  return result.ok ? result.qualification : undefined;
+}
+
+/**
+ * THE ONE PLACE THE PLATFORM-ATTESTATION WAIVER LIVES (ADR-0163 D9). On the declared evaluation
+ * lane the codesign/spctl/system-extension chain and the Authenticode carrier probe are skipped
+ * STRUCTURALLY — never attempted and tolerated on failure — and the qualification is synthesized
+ * from the same binding the platform receipt would have had to match.
+ *
+ * It cannot be routed through `qualificationFromReceipt`: `backendMatchesTarget` forces
+ * `macos-endpoint-security` for macOS receipts, and an unsigned build has no Endpoint Security
+ * system extension, so a synthetic receipt would have to FORGE a containment claim. The declared
+ * backend here is the containment the build actually has — a Job Object on Windows, the app
+ * sandbox on macOS.
+ *
+ * The receipt is computed over the COMPLETE binding, so the activation-manifest digest, both
+ * native-helper digests and the sidecar payload digest all stay load-bearing for the runtime
+ * identity: a swapped supervisor binary still changes the receipt.
+ */
+function evaluationQualification(
+  candidate: PortableRuntimeCandidate,
+  binding: RuntimeQualificationReceiptBinding,
+): LongLivedRuntimeQualification {
+  const windows = candidate.target === "windows-x64";
+  return {
+    platform: windows ? "win32" : "darwin",
+    arch: candidate.target === "macos-x64" ? "x64" : windows ? "x64" : "arm64",
+    backend: windows ? "windows-job-object" : "macos-app-sandbox",
+    releaseReceipt: `sha256:${sha256Text(
+      JSON.stringify({ lane: "evaluation-unqualified", ...binding }),
+    )}`,
   };
 }
 
@@ -403,14 +504,19 @@ function qualifiedSidecar(
   root: string,
   activation: Record<string, unknown>,
   target: UpdatePortableTarget,
+  lane: PortableRuntimeLane,
 ): PortableSidecarRuntimeVerification | undefined {
-  const sidecars = verifyPortableAttestedSidecars(activation, target).sidecars;
+  const sidecars = verifyPortableAttestedSidecars(activation, target, lane).sidecars;
   if (sidecars.length !== 1 || sidecars[0]?.summary.name !== "opencode-compatible") {
     return undefined;
   }
   const sidecar = sidecars[0];
   const disk = inspectStagedSidecarPayload(root, sidecar);
-  const availability = evaluatePortableSidecarAvailability(sidecar, { target, ...disk });
+  const availability = evaluatePortableSidecarAvailability(sidecar, {
+    target,
+    platformAttested: lane === "release-qualified",
+    ...disk,
+  });
   return availability.available ? sidecar : undefined;
 }
 
@@ -510,4 +616,8 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function sha256Text(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }

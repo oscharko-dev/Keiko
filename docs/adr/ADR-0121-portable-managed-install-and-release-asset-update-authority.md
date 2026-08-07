@@ -258,8 +258,12 @@ mutually consistent, qualification-bound targets. A missing, mismatched, or non-
 fails that gate before any attestation step runs; there is no path that attests an incomplete or
 unverified release set. The `ci` workflow's root, per-workspace, and UI CycloneDX SBOMs receive the
 same treatment as build-provenance attestations of the SBOM documents themselves, scoped to `push`
-events on integration branches, so pull-request and `workflow_dispatch` runs stay unverified-staging
-and do not accumulate attestations for commits that never ship.
+events on integration branches, so pull-request and `workflow_dispatch` runs stay pre-signing and do
+not accumulate attestations for commits that never ship. A `workflow_dispatch` run produces
+`unverified-staging` by default and, when the run explicitly requests the ADR-0163 D9 evaluation
+build, `evaluation-unqualified` instead. Neither is a production lane, neither is attested, and
+neither can reach the `assemble` job — which runs only from a stable-tag push and still demands
+three mutually consistent `verified-production` targets.
 
 This is additive evidence, not a replacement for the existing portable manifest, the content-free
 `evidence/signing-verification.json` projection, or the `provenance.intoto.jsonl` statement. Those
@@ -398,3 +402,7 @@ Security review for implementation under this ADR must cover:
   exception for release-qualified macOS bundles. Administrator, System Extension, and Full Disk
   Access approval dialogs are part of the one-time first start; MDM may preinstall or preapprove
   them. Windows and every other system-managed path remain unchanged and fail closed.
+- **2026-08-07 — ADR-0163 D9:** Amended D8's `workflow_dispatch` sentence. A dispatch run is no
+  longer necessarily `unverified-staging`: an explicitly requested evaluation build produces
+  `evaluation-unqualified`. Neither is attested and neither can reach `assemble`. D7 is unchanged
+  and remains the sentence that keeps production signing unrelaxed.

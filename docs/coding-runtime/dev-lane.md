@@ -67,8 +67,14 @@ exports `KEIKO_UI_PORT` to the BFF (mirroring the packaged CLI), so activation c
 loopback gateway URL.
 
 `GET /api/coding-workbench/runtime/readiness?requestedMode=…` then reports
-`runtimeAvailable: true`. When it reports `false`, the `runtimeUnavailableReason` names the first
-failed prerequisite:
+`runtimeAvailable: true` together with
+`runtimeEvidenceClass: "functional-not-platform-qualified"` — the dev lane is functionally proven,
+never platform-qualified, so the Coding Workbench narrates and renders it as an unverified runtime
+rather than a plain ready one (ADR-0140 D1, ADR-0163 D9). The same class is reported by a packaged
+evaluation build; only a release-signed packaged artifact reports `platform-qualified`. The field is
+required whenever `runtimeAvailable` is true.
+
+When readiness reports `false`, the `runtimeUnavailableReason` names the first failed prerequisite:
 
 | Reason                    | Meaning                                                                                                                    | Typical fix                                                 |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |

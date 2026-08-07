@@ -57,6 +57,7 @@ import {
   UNVERIFIED_GATEWAY,
   type CodingWorkbenchMode,
   type CodingWorkbenchModelSource,
+  type CodingWorkbenchRuntimeEvidenceClass,
   type CodingWorkbenchRuntimeUnavailableReason,
   type DebugDeploymentPolicy,
   type DebugProductSupport,
@@ -500,6 +501,12 @@ export interface UiHandlerDeps {
   readonly codingRuntimeHostQualified?: boolean | undefined;
   /** Content-free reason naming the first failed activation prerequisite when unqualified. */
   readonly codingRuntimeUnavailableReason?: CodingWorkbenchRuntimeUnavailableReason | undefined;
+  /**
+   * Available-branch twin of the reason above: how strong the qualified runtime's evidence is.
+   * Every default along this path resolves to the WEAK value, so an unthreaded path degrades to
+   * "unverified" and never silently to "verified".
+   */
+  readonly codingRuntimeEvidenceClass?: CodingWorkbenchRuntimeEvidenceClass | undefined;
   // Server-owned deployment ceiling for coding-runtime authority. Undefined fails closed to
   // governed-assist; the readiness projection reports the same ceiling the mint clamp enforces.
   readonly codingRuntimeDeploymentCeiling?: CodingWorkbenchMode | undefined;
@@ -3522,6 +3529,7 @@ function buildRuntimeUiHandlerDeps(
   const codingRuntimeControlPlaneDeps = buildCodingRuntimeControlPlaneDeps(
     services.codingRuntimeControlPlane,
     services.runtimeComposition.unavailableReason,
+    services.runtimeComposition.evidenceClass,
   );
   return {
     codingAppSessionChannel: services.codingAppSessionChannel,
@@ -3690,6 +3698,7 @@ interface CodingRuntimeControlPlaneDeps {
   codingRuntimeHostQualified?: UiHandlerDeps["codingRuntimeHostQualified"];
   codingSafeActivityProjection?: UiHandlerDeps["codingSafeActivityProjection"];
   codingRuntimeUnavailableReason?: UiHandlerDeps["codingRuntimeUnavailableReason"];
+  codingRuntimeEvidenceClass?: UiHandlerDeps["codingRuntimeEvidenceClass"];
   codingSidecarGatewayCancellationRegistry?: UiHandlerDeps["codingSidecarGatewayCancellationRegistry"];
   runtimeCapabilityAuthenticator?: UiHandlerDeps["runtimeCapabilityAuthenticator"];
   openCodeGatewayReadinessRegistry?: UiHandlerDeps["openCodeGatewayReadinessRegistry"];
@@ -3698,6 +3707,7 @@ interface CodingRuntimeControlPlaneDeps {
 function buildCodingRuntimeControlPlaneDeps(
   controlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
   unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined,
+  evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined,
 ): CodingRuntimeControlPlaneDeps {
   if (controlPlane === undefined) return {};
   return {
@@ -3709,7 +3719,7 @@ function buildCodingRuntimeControlPlaneDeps(
       : {}),
     ...(!controlPlane.runtimeHostQualified
       ? { codingRuntimeUnavailableReason: unavailableReason ?? "runtime-unqualified" }
-      : {}),
+      : { codingRuntimeEvidenceClass: evidenceClass ?? "functional-not-platform-qualified" }),
     ...(controlPlane.cancellationRegistry !== undefined
       ? {
           codingSidecarGatewayCancellationRegistry: controlPlane.cancellationRegistry,
@@ -3755,6 +3765,7 @@ function resolveCodingRuntimeDeploymentCeiling(
 interface ProductionRuntimeComposition {
   readonly resolver: ProductionCodingRuntimeResolver | undefined;
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
+  readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined;
   readonly runtimeMutationLease?: CodingRuntimeEditorMutationLeasePort | undefined;
   readonly dispose?: (() => void) | undefined;
 }
@@ -3762,13 +3773,14 @@ interface ProductionRuntimeComposition {
 interface ProductionRuntimePortResolution {
   readonly ports: ProductionCodingRuntimePorts | undefined;
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
+  readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined;
   readonly activated: boolean;
 }
 
 function unqualifiedComposition(
   unavailableReason: CodingWorkbenchRuntimeUnavailableReason,
 ): ProductionRuntimeComposition {
-  return { resolver: undefined, unavailableReason };
+  return { resolver: undefined, unavailableReason, evidenceClass: undefined };
 }
 
 // The attested-portable activation path supplies Keiko's own confirmation plane; injected
@@ -3781,7 +3793,14 @@ function resolveProductionRuntimePorts(
 ): ProductionRuntimePortResolution {
   const injectedPorts = args.options.codingRuntimeProductionPorts;
   if (injectedPorts !== undefined) {
-    return { ports: injectedPorts, unavailableReason: undefined, activated: false };
+    // A composition/test injection has no discovered artifact, so it may never claim platform
+    // qualification; it degrades to the weak class exactly as every other default here does.
+    return {
+      ports: injectedPorts,
+      unavailableReason: undefined,
+      evidenceClass: "functional-not-platform-qualified",
+      activated: false,
+    };
   }
   const activation = resolveProductionOpenCodeActivation({
     env: args.options.env,
@@ -3793,6 +3812,7 @@ function resolveProductionRuntimePorts(
   return {
     ports: activation.ports,
     unavailableReason: activation.unavailableReason,
+    evidenceClass: activation.evidenceClass,
     activated: activation.ports !== undefined,
   };
 }
@@ -3868,24 +3888,60 @@ function productionRuntimeResolver(
     readiness,
     workspaceLifecycle,
   );
-  if (resolution.ports === undefined) {
+  const ports = resolution.ports;
+  if (ports === undefined) {
     return unqualifiedComposition(resolution.unavailableReason ?? "runtime-unqualified");
   }
   if (!materializedManagedRoot(managedTaskWorkspaceRoot, args.options.diagnostics)) {
     return unqualifiedComposition("runtime-unqualified");
   }
-  const confirmationConsumer = runtimeStartConfirmationConsumer(args, resolution.activated);
   const runtimeMutationLeaseBroker = createCodingRuntimeEditorMutationLeaseBroker();
-  const resolver = createProductionCodingRuntimeResolver({
+  return qualifiedProductionRuntimeComposition(
+    qualifiedRuntimeResolver({
+      args,
+      deploymentCeiling,
+      managedTaskWorkspaceRoot,
+      ports,
+      activated: resolution.activated,
+      runtimeMutationLeaseBroker,
+      verificationRunner,
+      workspaceLifecycle,
+    }),
+    readiness,
+    runtimeMutationLeaseBroker,
+    // Fail-closed default: an unthreaded activation degrades to the weak class, never to verified.
+    resolution.evidenceClass ?? "functional-not-platform-qualified",
+  );
+}
+
+interface QualifiedRuntimeResolverInput {
+  readonly args: UiHandlerDepsAssemblyArgs;
+  readonly deploymentCeiling: CodingWorkbenchMode;
+  readonly managedTaskWorkspaceRoot: string;
+  readonly ports: ProductionCodingRuntimePorts;
+  readonly activated: boolean;
+  readonly runtimeMutationLeaseBroker: ReturnType<
+    typeof createCodingRuntimeEditorMutationLeaseBroker
+  >;
+  readonly verificationRunner: PeripheralManagers["verificationRunner"];
+  readonly workspaceLifecycle: WorkspaceLifecycleService;
+}
+
+function qualifiedRuntimeResolver(
+  input: QualifiedRuntimeResolverInput,
+): ProductionCodingRuntimeResolver {
+  const { args } = input;
+  const confirmationConsumer = runtimeStartConfirmationConsumer(args, input.activated);
+  return createProductionCodingRuntimeResolver({
     workspaceAuthority: runtimeWorkspaceAuthority(
       args,
-      workspaceLifecycle,
-      managedTaskWorkspaceRoot,
-      deploymentCeiling,
+      input.workspaceLifecycle,
+      input.managedTaskWorkspaceRoot,
+      input.deploymentCeiling,
     ),
-    ...resolution.ports,
-    verificationRunner,
-    runtimeMutationLeaseBroker,
+    ...input.ports,
+    verificationRunner: input.verificationRunner,
+    runtimeMutationLeaseBroker: input.runtimeMutationLeaseBroker,
     gatewayEgress: () => args.runtimeConfig.current()?.egress ?? args.egress,
     childModelPortFactory:
       args.options.modelPortFactory ?? defaultModelPortFactory(args.runtimeConfig),
@@ -3896,13 +3952,13 @@ function productionRuntimeResolver(
     ...(args.options.diagnostics ? { diagnostics: args.options.diagnostics } : {}),
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
   });
-  return qualifiedProductionRuntimeComposition(resolver, readiness, runtimeMutationLeaseBroker);
 }
 
 function qualifiedProductionRuntimeComposition(
   resolver: ProductionCodingRuntimeResolver,
   readiness: OpenCodeGatewayReadinessRegistry,
   runtimeMutationLeaseBroker: ReturnType<typeof createCodingRuntimeEditorMutationLeaseBroker>,
+  evidenceClass: CodingWorkbenchRuntimeEvidenceClass,
 ): ProductionRuntimeComposition {
   return {
     resolver: {
@@ -3914,6 +3970,7 @@ function qualifiedProductionRuntimeComposition(
       },
     },
     unavailableReason: undefined,
+    evidenceClass,
     runtimeMutationLease: runtimeMutationLeaseBroker,
     dispose: (): void => {
       runtimeMutationLeaseBroker.dispose();

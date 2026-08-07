@@ -235,7 +235,14 @@ export async function codingRuntimeHealth(baseUrl, fetchFn = globalThis.fetch) {
   });
   if (!response.ok) return `HTTP ${String(response.status)}`;
   const body = await response.json();
-  if (body?.runtimeAvailable === true) return "ok";
+  // The launcher's success line must not imply platform qualification either (ADR-0163 D9). An
+  // available runtime always declares how strong its evidence is; an absent or weak class reports
+  // the honest posture instead of a bare "ok".
+  if (body?.runtimeAvailable === true) {
+    return body?.runtimeEvidenceClass === "platform-qualified"
+      ? "ok"
+      : "ok (unverified evaluation runtime — no platform signature)";
+  }
   const reason =
     typeof body?.runtimeUnavailableReason === "string"
       ? body.runtimeUnavailableReason

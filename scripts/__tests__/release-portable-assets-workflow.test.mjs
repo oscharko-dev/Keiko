@@ -469,6 +469,51 @@ describe("portable asset workflow run resolution", () => {
   });
 });
 
+/**
+ * THE MACHINE-CHECKED PROOF THAT PRODUCTION WAS NOT RELAXED (ADR-0163 D9). The evaluation opt-in
+ * exists only on the dispatch-only `stage` job, as two mutually exclusive steps, and the string
+ * appears in NO production job slice.
+ */
+describe("unsigned evaluation staging opt-in", () => {
+  it("exposes the opt-in as a typed, default-false workflow_dispatch input", () => {
+    const input = portableWorkflowDocument.on.workflow_dispatch.inputs.evaluation_build;
+    expect(input.type).toBe("boolean");
+    expect(input.default).toBe(false);
+    expect(input.description).toContain("UNSIGNED");
+  });
+
+  it("splits staging into two mutually exclusive steps rather than interpolating the input", () => {
+    const stagingJob = workflowJob("  stage:", "\n  stage-windows-production:");
+    expect(stagingJob).toContain("if: ${{ !inputs.evaluation_build }}");
+    expect(stagingJob).toContain("if: ${{ inputs.evaluation_build }}");
+    // zizmor's template-injection rule fires on `${{ inputs.* }}` inside a `run:` body.
+    const runLines = stagingJob
+      .split("\n")
+      .filter((line) => line.trimStart().startsWith("run:") || line.includes("node scripts/"));
+    for (const line of runLines) expect(line).not.toContain("inputs.evaluation_build");
+    expect(stagingJob.match(/--evaluation\b/gu)).toHaveLength(1);
+    // The downloadable bundle names itself so it cannot be mistaken for plain staging output.
+    expect(stagingJob).toContain("-evaluation-unsigned");
+  });
+
+  it("keeps the evaluation opt-in out of every production job slice", () => {
+    const productionSlices = [
+      ["  stage-windows-production:", "\n  stage-macos-production:"],
+      ["  stage-macos-production:", "\n  seal-macos-production:"],
+      ["  seal-macos-production:", "\n  assemble:"],
+      ["  assemble:", undefined],
+    ];
+    for (const [start, end] of productionSlices) {
+      const slice =
+        end === undefined
+          ? portableWorkflow.slice(portableWorkflow.indexOf(start))
+          : workflowJob(start, end);
+      expect(slice).not.toContain("--evaluation");
+      expect(slice).not.toContain("evaluation_build");
+    }
+  });
+});
+
 describe("Windows portable production signing workflow", () => {
   it("uses only preinstalled archive tools and fails closed in both Windows paths", () => {
     const stagingJob = workflowJob("  stage:", "\n  stage-windows-production:");

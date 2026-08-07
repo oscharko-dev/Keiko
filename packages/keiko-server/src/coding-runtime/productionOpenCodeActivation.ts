@@ -1,7 +1,10 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-import type { CodingWorkbenchRuntimeUnavailableReason } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchRuntimeEvidenceClass,
+  CodingWorkbenchRuntimeUnavailableReason,
+} from "@oscharko-dev/keiko-contracts";
 import {
   createFetchEditorAgentHttpTransport,
   EditorAgentHttpClient,
@@ -53,9 +56,15 @@ export interface ProductionOpenCodeActivationInput {
 }
 
 export type ProductionOpenCodeActivationResult =
-  | { readonly ports: ProductionOpenCodePorts; readonly unavailableReason?: undefined }
+  | {
+      readonly ports: ProductionOpenCodePorts;
+      /** How strong the activated runtime's evidence is; never optional on the success branch. */
+      readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass;
+      readonly unavailableReason?: undefined;
+    }
   | {
       readonly ports?: undefined;
+      readonly evidenceClass?: undefined;
       readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason;
     };
 
@@ -82,6 +91,7 @@ export function resolveProductionOpenCodeActivation(
     return { unavailableReason: "secure-read-unavailable" };
   }
   return {
+    evidenceClass: runtimeEvidenceClass(runtime.portable),
     ports: {
       backend: createProductionOpenCodeBackend({
         portable: runtime.portable,
@@ -101,6 +111,20 @@ export function resolveProductionOpenCodeActivation(
         }),
     },
   };
+}
+
+/**
+ * The single junction where all three runtime union members converge into ports, and therefore the
+ * one place the readiness evidence class is derived. ONLY the release-signed packaged artifact is
+ * platform-qualified; the packaged evaluation lane, the macOS dev lane and the functional-harness
+ * stand-in all report the honest weaker class (ADR-0140 D1, ADR-0163 D9).
+ */
+function runtimeEvidenceClass(
+  portable: ResolvedPortableOpenCodeRuntime,
+): CodingWorkbenchRuntimeEvidenceClass {
+  return "platformAssurance" in portable && portable.platformAssurance === "release-qualified"
+    ? "platform-qualified"
+    : "functional-not-platform-qualified";
 }
 
 type ResolvedRuntime =

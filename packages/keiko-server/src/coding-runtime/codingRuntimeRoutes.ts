@@ -227,8 +227,14 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
       deploymentCeiling,
       effectiveMode: confirmedEffectiveMode(deps, parsed.value.requestedMode, deploymentCeiling),
       runtimeAvailable,
+      // Both branches name themselves. The available branch's `??` is the fail-closed default: an
+      // unthreaded dep yields `undefined`, and `undefined` must never serialize into a verified
+      // claim (audit F-01).
       ...(runtimeAvailable
-        ? {}
+        ? {
+            runtimeEvidenceClass:
+              deps.codingRuntimeEvidenceClass ?? "functional-not-platform-qualified",
+          }
         : {
             runtimeUnavailableReason: deps.codingRuntimeUnavailableReason ?? "runtime-unqualified",
           }),

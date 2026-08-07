@@ -77,11 +77,18 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der Aufgabenbranch für diesen Coding-Lauf existiert bereits. Entferne den früheren Branch oder den zugehörigen verwalteten Arbeitsbereich. Alternativ kannst du einen anderen Zielbranch wählen.",
   "codingWorkbench.setup.runtimeUnavailable":
     "Das Starten eines Coding-Laufs ist auf dieser Installation nicht verfügbar, bis die Coding-Runtime aktiv ist. Du kannst jetzt einen Workspace binden; der Lauf wird startbar, sobald die Runtime bestätigt ist.",
+  "codingWorkbench.setup.runtimeEvaluation":
+    "Diese Installation nutzt eine ungeprüfte Evaluations-Runtime. Sie trägt keine Apple- oder Microsoft-Codesignatur und läuft unter macOS ohne die Endpoint-Security-Eingrenzung eines Release-Builds. Die Integrität ihrer Nutzdaten wird bei jedem Start weiterhin Byte für Byte geprüft.",
   "codingWorkbench.readiness.modelSource.label": "Modellquelle",
   "codingWorkbench.readiness.modelSource.select": "Verfügbare Quelle auswählen",
   "codingWorkbench.readiness.workspace.label": "Aufgabenarbeitsbereich",
   "codingWorkbench.readiness.workspace.none": "Kein aktiver Aufgabenarbeitsbereich",
   "codingWorkbench.readiness.eventStream.label": "Ereignisstrom",
+  "codingWorkbench.readiness.runtime.label": "Coding-Runtime",
+  "codingWorkbench.readiness.runtime.verified":
+    "Plattformgeprüft — signierte und notarisierte Runtime",
+  "codingWorkbench.readiness.runtime.evaluation":
+    "Ungeprüfte Evaluations-Runtime — ohne Plattformsignatur",
   "codingWorkbench.timeline.eyebrow": "Authentifizierte Aktivität",
   "codingWorkbench.timeline.title": "Live-Aktivitätszeitleiste",
   "codingWorkbench.timeline.empty": "Noch keine bestätigte Aktivität.",
@@ -312,6 +319,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.recovery.retry": "Als neuen Lauf wiederholen",
   "codingWorkbench.recovery.acknowledge": "Wiederherstellung bestätigen",
   "codingWorkbench.header.notReady": "Nicht startbereit",
+  "codingWorkbench.header.readyEvaluation": "Start — ungeprüfte Evaluations-Runtime",
   "codingWorkbench.runState.idle": "Bereit zum Starten",
   "codingWorkbench.runState.unavailable": "Runtime nicht verfügbar",
   "codingWorkbench.runState.starting": "Wird gestartet",
@@ -360,6 +368,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.announcement.runtime.ready": "Runtime bereit.",
   "codingWorkbench.announcement.runtime.notSelected": "Runtime nicht ausgewählt.",
   "codingWorkbench.announcement.runtime.notChecked": "Runtime nicht geprüft.",
+  "codingWorkbench.announcement.runtime.evaluation":
+    "Runtime verfügbar als ungeprüfte Evaluations-Runtime. Sie trägt keine Plattformsignatur.",
   "codingWorkbench.announcement.authenticationNotSelected":
     "Abonnementauthentifizierung nicht ausgewählt.",
   "codingWorkbench.announcement.authenticationChecking": "Authentifizierung wird geprüft.",

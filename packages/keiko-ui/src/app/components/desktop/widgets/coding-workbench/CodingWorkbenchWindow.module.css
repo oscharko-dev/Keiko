@@ -77,6 +77,14 @@
   color: var(--feedback-warning);
 }
 
+/* ADR-0163 D9: the assurance rule follows the run-state rules above so it WINS over
+   [data-state="ready"] and [data-state="running"] at equal specificity — an unverified evaluation
+   runtime must never render the success colour mid-run. */
+.statePill[data-assurance="evaluation"] .statusSymbol,
+.contextItem[data-tone="warning"] .contextValue {
+  color: var(--feedback-warning);
+}
+
 .statePill[data-state="failed"] .statusSymbol,
 .statusBadge[data-tone="danger"],
 .resourceState[data-tone="danger"],

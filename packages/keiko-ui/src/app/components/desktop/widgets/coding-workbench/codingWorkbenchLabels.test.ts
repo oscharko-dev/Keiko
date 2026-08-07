@@ -338,3 +338,61 @@ describe("activeRunState", () => {
     expect(activeRunState(undefined)).toBe(false);
   });
 });
+
+/**
+ * F-01 PIN, EXTENDED TO THE EVALUATION LANE (ADR-0163 D9). "Runtime ready." spoken over an
+ * unverified evaluation runtime is the same false green in the assistive-technology channel that
+ * the header pill's plain "Ready to start" is on screen. The evaluation sentence SUBSTITUTES the
+ * generic one; it never rides alongside it.
+ */
+describe("lifecycleAnnouncement runtime assurance", () => {
+  function runtimeState(
+    runtimeAvailable: boolean,
+    runtimeEvidenceClass?: "platform-qualified" | "functional-not-platform-qualified",
+  ): CodingWorkbenchRuntimeState {
+    return {
+      ...createInitialCodingWorkbenchRuntimeState(),
+      runtime: ready({
+        schemaVersion: "1",
+        requestedMode: "governed-assist",
+        deploymentCeiling: "governed-assist",
+        effectiveMode: "governed-assist",
+        runtimeAvailable,
+        ...(runtimeEvidenceClass === undefined ? {} : { runtimeEvidenceClass }),
+        ...(runtimeAvailable ? {} : { runtimeUnavailableReason: "runtime-unqualified" }),
+      } as never),
+    };
+  }
+
+  it("announces the evaluation runtime instead of a plain ready runtime", () => {
+    const announcement = lifecycleAnnouncement(
+      runtimeState(true, "functional-not-platform-qualified"),
+      t,
+    );
+    expect(announcement).toContain("codingWorkbench.announcement.runtime.evaluation");
+    expect(announcement).not.toContain("codingWorkbench.announcement.runtime.ready");
+  });
+
+  it("keeps announcing a platform-qualified runtime as ready", () => {
+    const announcement = lifecycleAnnouncement(runtimeState(true, "platform-qualified"), t);
+    expect(announcement).toContain("codingWorkbench.announcement.runtime.ready");
+    expect(announcement).not.toContain("codingWorkbench.announcement.runtime.evaluation");
+  });
+
+  it("never claims the evaluation posture over an unavailable runtime", () => {
+    const announcement = lifecycleAnnouncement(
+      runtimeState(false, "functional-not-platform-qualified"),
+      t,
+    );
+    expect(announcement).toContain("codingWorkbench.announcement.runtime.unavailable");
+    expect(announcement).not.toContain("codingWorkbench.announcement.runtime.evaluation");
+  });
+
+  // An evaluation runtime is a standing fact, not a blocking or recoverable condition, so it must
+  // not take the single role="alert" slot away from a real refresh failure.
+  it("raises no alert for an evaluation runtime", () => {
+    expect(
+      visibleAlert(runtimeState(true, "functional-not-platform-qualified"), t, false),
+    ).toBeNull();
+  });
+});

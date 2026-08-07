@@ -49,10 +49,15 @@ export interface CodingWorkbenchSetupProps {
   // ActiveWorkspaceApi.refresh from the shared context — re-reads the active binding after the
   // workbench-initiated bind so every bound surface flips to the new workspace atomically.
   readonly refreshWorkspace: (root: string) => Promise<void>;
-  // True only once runtime readiness has RESOLVED as unavailable — drives the honest pre-activation
-  // note. A still-pending readiness check keeps this false so the note never flashes during load.
-  readonly runtimeUnavailable: boolean;
+  // The honest pre-activation posture. "unavailable" only once readiness has RESOLVED as
+  // unavailable, "evaluation" once it has resolved as available over an unverified evaluation
+  // runtime, "verified" otherwise — a still-pending readiness check stays "verified" so neither
+  // note flashes during load. The bootstrap section is the FIRST screen a fresh evaluation install
+  // shows, so a clean form here would imply a verified runtime (ADR-0163 D9).
+  readonly runtimePosture: CodingWorkbenchSetupRuntimePosture;
 }
+
+export type CodingWorkbenchSetupRuntimePosture = "unavailable" | "evaluation" | "verified";
 
 // Strips a run of leading and/or trailing "-" characters. Plain index scanning instead of a
 // regex (SonarCloud S8786 flagged /^-+|-+$/gu, an alternation of two unbounded quantifiers) —
@@ -148,19 +153,27 @@ function submitLabel(status: SetupStatus, t: CodingWorkbenchTranslate): string {
 }
 
 function SetupNotices({
-  runtimeUnavailable,
+  runtimePosture,
   status,
   t,
 }: {
-  readonly runtimeUnavailable: boolean;
+  readonly runtimePosture: CodingWorkbenchSetupRuntimePosture;
   readonly status: SetupStatus;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return (
     <>
-      {runtimeUnavailable ? (
+      {runtimePosture === "unavailable" ? (
         <p className={styles.boundaryNote} data-testid="coding-workbench-setup-runtime-note">
           {t("codingWorkbench.setup.runtimeUnavailable")}
+        </p>
+      ) : null}
+      {runtimePosture === "evaluation" ? (
+        <p
+          className={styles.boundaryNote}
+          data-testid="coding-workbench-setup-runtime-evaluation-note"
+        >
+          {t("codingWorkbench.setup.runtimeEvaluation")}
         </p>
       ) : null}
       {status.kind === "error" ? (
@@ -175,7 +188,7 @@ function SetupNotices({
 export function CodingWorkbenchSetup({
   selectedRoot,
   refreshWorkspace,
-  runtimeUnavailable,
+  runtimePosture,
 }: CodingWorkbenchSetupProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const [repositoryPath, setRepositoryPath] = useState(selectedRoot ?? "");
@@ -206,7 +219,7 @@ export function CodingWorkbenchSetup({
       <PanelTitle eyebrow={t("codingWorkbench.setup.eyebrow")} id="coding-workbench-setup-title">
         {t("codingWorkbench.setup.title")}
       </PanelTitle>
-      <SetupNotices runtimeUnavailable={runtimeUnavailable} status={status} t={t} />
+      <SetupNotices runtimePosture={runtimePosture} status={status} t={t} />
       <form onSubmit={onSubmit}>
         <SetupFields
           repositoryPath={repositoryPath}

@@ -140,7 +140,7 @@ function composeOpenCodeRun(
       verification: input.portable.sidecar,
       resourceRoot: input.portable.installRoot,
       target: input.portable.target,
-      admission: isDevLaneRuntime(input.portable) ? "functional-dev-lane" : "release-qualified",
+      admission: admissionPolicy(input.portable),
     },
     stateBaseRoot: join(input.runtimeStateRoot, "coding-runtime", "opencode"),
     capabilities: {
@@ -374,6 +374,9 @@ function runtimeSupervisor(
     return input.createSupervisor({ workspaceRoot, portable: input.portable });
   }
   if (isDevLaneRuntime(input.portable)) return devLaneSupervisor(input.portable);
+  if (isEvaluationLaneRuntime(input.portable) && input.portable.target !== "windows-x64") {
+    return macosEvaluationSupervisor(input.portable);
+  }
   return createRuntimeProcessSupervisor({
     backend: createNativeRuntimeProcessBackend({
       helperPath: input.portable.nativeHelperPath,
@@ -385,11 +388,55 @@ function runtimeSupervisor(
   });
 }
 
+/**
+ * macOS evaluation supervision (ADR-0163 D9). The native supervisor connects to the runtime
+ * monitor socket served ONLY by the Endpoint Security system extension, which requires an
+ * Apple-entitled, notarized, user-approved install; on an unsigned build it fails at first spawn
+ * with ERROR_MONITOR_UNAVAILABLE. macOS evaluation therefore uses the same weaker, honestly
+ * declared app-sandbox backend the dev lane uses: no descendant containment is proven and process
+ * supervision is weaker. Windows evaluation keeps the native Job Object supervisor, which needs no
+ * signature and provides real containment.
+ */
+function macosEvaluationSupervisor(
+  portable: QualifiedPortableOpenCodeRuntime,
+): RuntimeProcessSupervisor {
+  return createRuntimeProcessSupervisor({
+    backend: createDevLaneRuntimeProcessBackend({
+      identity: {
+        platform: "darwin",
+        arch: portable.qualification.arch,
+        backend: "macos-app-sandbox",
+      },
+      runtimeRoot: join(portable.installRoot, portable.sidecar.payloadRootPath),
+    }),
+    qualifications: [portable.qualification],
+  });
+}
+
 /** Only the dev-lane union member carries the structural `lane` marker. */
 function isDevLaneRuntime(
   portable: ResolvedPortableOpenCodeRuntime,
 ): portable is DevLanePortableOpenCodeRuntime {
   return "lane" in portable;
+}
+
+/** Only the packaged union member carries `platformAssurance` (ADR-0163 D9). */
+function isEvaluationLaneRuntime(
+  portable: ResolvedPortableOpenCodeRuntime,
+): portable is QualifiedPortableOpenCodeRuntime {
+  return "platformAssurance" in portable && portable.platformAssurance === "evaluation-unqualified";
+}
+
+/**
+ * The single producer of the admission marker the launch-time availability re-check reads. An
+ * evaluation runtime marked `release-qualified` here would be demanded to prove the full packaged
+ * evidence set at start and refused.
+ */
+function admissionPolicy(
+  portable: ResolvedPortableOpenCodeRuntime,
+): NonNullable<OpenCodeRuntimeCompositionInput["portable"]["admission"]> {
+  if (isDevLaneRuntime(portable)) return "functional-dev-lane";
+  return isEvaluationLaneRuntime(portable) ? "functional-evaluation-lane" : "release-qualified";
 }
 
 /**

@@ -121,6 +121,7 @@ function readiness(): unknown {
     deploymentCeiling: "autonomous-delivery",
     effectiveMode: "supervised-coding",
     runtimeAvailable: true,
+    runtimeEvidenceClass: "platform-qualified",
   };
 }
 

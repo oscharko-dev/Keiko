@@ -14,6 +14,35 @@ describe("Coding Workbench translations", () => {
     );
   });
 
+  // ADR-0163 D9: every new key resolves non-empty in BOTH catalogs and the two strings differ, so
+  // a German entry copied from the English one cannot pass as a translation. The wording must never
+  // present the evaluation runtime with an unqualified "ready", "verified" or "confirmed".
+  it.each([
+    "codingWorkbench.readiness.runtime.label",
+    "codingWorkbench.readiness.runtime.verified",
+    "codingWorkbench.readiness.runtime.evaluation",
+    "codingWorkbench.header.readyEvaluation",
+    "codingWorkbench.announcement.runtime.evaluation",
+    "codingWorkbench.setup.runtimeEvaluation",
+  ] as const)("localizes %s in both catalogs", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en.length).toBeGreaterThan(0);
+    expect(de.length).toBeGreaterThan(0);
+    expect(de).not.toBe(en);
+  });
+
+  it.each([
+    "codingWorkbench.readiness.runtime.evaluation",
+    "codingWorkbench.header.readyEvaluation",
+    "codingWorkbench.announcement.runtime.evaluation",
+    "codingWorkbench.setup.runtimeEvaluation",
+  ] as const)("names %s as unverified rather than ready or verified", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    expect(en.toLowerCase()).toContain("unverified");
+    expect(en).not.toMatch(/\bverified\b(?!\s*evaluation)/u);
+  });
+
   it("interpolates runtime state and revision in both catalogs", () => {
     expect(
       translateCodingWorkbench("en", "codingWorkbench.announcement.runRevision", {

@@ -62,6 +62,7 @@ describe("Coding Workbench runtime API", () => {
       deploymentCeiling: "governed-assist",
       effectiveMode: "governed-assist",
       runtimeAvailable: true,
+      runtimeEvidenceClass: "platform-qualified",
     };
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(readiness));
     vi.stubGlobal("fetch", fetchMock);

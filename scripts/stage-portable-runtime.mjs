@@ -30,6 +30,7 @@ import {
   PORTABLE_TARGET_NAMES,
   portableVerificationSummaryForManifest,
   sha256File,
+  validatePortableEvaluationManifest,
   validatePortableStagingManifest,
   verifySha256File,
 } from "./portable-runtime.mjs";
@@ -105,6 +106,7 @@ function parseArgs(argv) {
     appleTeamId: undefined,
     commitSha: process.env.GITHUB_SHA,
     dryRun: false,
+    evaluation: false,
     launcherBinary: undefined,
     nodeArchive: undefined,
     nodeArchiveUrl: undefined,
@@ -139,6 +141,13 @@ function applyArg(argv, index, options) {
   const arg = argv[index];
   if (arg === "--dry-run") {
     options.dryRun = true;
+    return index;
+  }
+  // Bare opt-in flag, deliberately outside the `fields` map below (every entry there consumes a
+  // value). This is the ONLY way to produce the unsigned evaluation lane; there is no environment
+  // variable and no default that can set it.
+  if (arg === "--evaluation-build") {
+    options.evaluation = true;
     return index;
   }
   if (arg === "--sidecar-runtime-spec") {
@@ -241,12 +250,14 @@ function validateWorkflowIdentityOptions(options) {
   }
 }
 
-function normalizeSidecarRuntimeSpecs(specs, target) {
+function normalizeSidecarRuntimeSpecs(specs, target, evaluation) {
   const names = new Set();
-  return specs.map((spec, index) => normalizeSidecarRuntimeSpec(spec, target, names, index));
+  return specs.map((spec, index) =>
+    normalizeSidecarRuntimeSpec(spec, target, names, index, evaluation),
+  );
 }
 
-function normalizeSidecarRuntimeSpec(spec, target, names, index) {
+function normalizeSidecarRuntimeSpec(spec, target, names, index, evaluation) {
   if (!isRecord(spec)) fail(`sidecar spec ${String(index + 1)} must be an object`);
   requireExactSpecKeys(spec, [
     "approvalSchemaVersion",
@@ -283,6 +294,7 @@ function normalizeSidecarRuntimeSpec(spec, target, names, index) {
     payloadSha256,
     files,
     sourceRoot,
+    evaluation,
   );
   validateSidecarMetadata(metadata);
   return { ...metadata, sourceRoot };
@@ -298,7 +310,15 @@ function normalizeSidecarName(spec, names) {
   return name;
 }
 
-function sidecarMetadataForSpec(spec, target, payloadRootPath, payloadSha256, files, sourceRoot) {
+function sidecarMetadataForSpec(
+  spec,
+  target,
+  payloadRootPath,
+  payloadSha256,
+  files,
+  sourceRoot,
+  evaluation,
+) {
   const paths = sidecarPathsForSpec(spec, payloadRootPath, files);
   const provenance = sidecarProvenanceForSpec(spec, target);
   const executable = sidecarExecutableForSpec(spec, sourceRoot, paths.executableSourcePath);
@@ -315,7 +335,7 @@ function sidecarMetadataForSpec(spec, target, payloadRootPath, payloadSha256, fi
     payloadSha256,
     sizeBytes: sidecarTreeSize(files),
     ...evidence,
-    signing: sidecarStagingSigning(target, executable),
+    signing: sidecarStagingSigning(target, executable, evaluation),
   };
 }
 
@@ -621,11 +641,33 @@ function sidecarEvidence(sourceRoot, sourcePath, payloadPath) {
   };
 }
 
-function sidecarStagingSigning(target, executable) {
+/**
+ * The one place this producer names a pre-signing lane. `--evaluation-build` is the only way to
+ * reach the evaluation triple; without it every writer emits the unchanged staging triple. Neither
+ * lane may ever assert a platform proof — `signatureVerified`, `notarizationVerified` and every
+ * entry of `createPortableVerificationChecks(..., false)` stay hard-coded false on both.
+ */
+function stageVerificationLane(evaluation) {
+  return evaluation
+    ? {
+        verificationPolicy: "evaluation",
+        verificationStatus: "evaluation-unqualified",
+        verificationReasonCodes: ["evaluation-artifact", "evaluation-unsigned-allowed"],
+      }
+    : {
+        verificationPolicy: "staging",
+        verificationStatus: "unverified-staging",
+        verificationReasonCodes: ["staging-unverified"],
+      };
+}
+
+function nativeHelperStagingStatus(evaluation) {
+  return evaluation ? "evaluation-unqualified" : "unverified-staging";
+}
+
+function sidecarStagingSigning(target, executable, evaluation) {
   return {
-    verificationPolicy: "staging",
-    verificationStatus: "unverified-staging",
-    verificationReasonCodes: ["staging-unverified"],
+    ...stageVerificationLane(evaluation),
     signatureKind: target.signatureKind,
     signatureVerified: false,
     notarizationRequired: target.nodePlatform === "darwin",
@@ -1604,7 +1646,12 @@ function failUsearchStaging(onFailure, message) {
 export function stageUsearchAddon(
   target,
   resourceRoot,
-  { copyFile = copyFileSync, onFailure = fail, resolveRuntime = provisionedUsearchRuntime } = {},
+  {
+    copyFile = copyFileSync,
+    onFailure = fail,
+    resolveRuntime = provisionedUsearchRuntime,
+    evaluation = false,
+  } = {},
 ) {
   const runtime = resolveRuntime(target);
   const staged = stageUsearchFiles(resourceRoot, runtime, copyFile);
@@ -1637,7 +1684,7 @@ export function stageUsearchAddon(
       sbomBomRef: `pkg:npm/usearch@${runtime.approved.version}?platform=${target.platformTarget}`,
       signing: {
         signatureKind: target.signatureKind,
-        verificationStatus: "unverified-staging",
+        verificationStatus: nativeHelperStagingStatus(evaluation),
         signatureVerified: false,
         notarizationRequired: target.nodePlatform === "darwin",
         notarizationVerified: false,
@@ -1746,7 +1793,7 @@ function nativeHelperMetadata(input) {
     sbomBomRef: `pkg:generic/${input.name}@${rootPackage.version}?platform=${input.target.platformTarget}`,
     signing: {
       signatureKind: input.target.signatureKind,
-      verificationStatus: "unverified-staging",
+      verificationStatus: nativeHelperStagingStatus(input.options.evaluation === true),
       signatureVerified: false,
       notarizationRequired: input.target.nodePlatform === "darwin",
       notarizationVerified: false,
@@ -2028,11 +2075,9 @@ function manifestStateExclusion() {
   };
 }
 
-function manifestSecurity(target) {
+function manifestSecurity(target, evaluation) {
   return {
-    verificationPolicy: "staging",
-    verificationStatus: "unverified-staging",
-    verificationReasonCodes: ["staging-unverified"],
+    ...stageVerificationLane(evaluation),
     signatureKind: target.signatureKind,
     signatureVerified: false,
     notarizationRequired: target.nodePlatform === "darwin",
@@ -2135,7 +2180,7 @@ function manifestFor(
 ) {
   const assetSha = digests.assetSha256;
   const nodeIdentity = `node-v${options.nodeVersion}-${target.runtimeTarget}`;
-  const security = manifestSecurity(target);
+  const security = manifestSecurity(target, options.evaluation === true);
   const releaseImpactEntry = reviewedReleaseImpactEntry(options);
   const manifest = {
     schemaVersion: 1,
@@ -2222,7 +2267,11 @@ function sameStringSet(actual, expected) {
 
 export async function assemblePortableStage(options, hooks = {}) {
   const target = portableTargetByName(options.target);
-  const sidecarSpecs = normalizeSidecarRuntimeSpecs(options.sidecarRuntimeSpecs ?? [], target);
+  const sidecarSpecs = normalizeSidecarRuntimeSpecs(
+    options.sidecarRuntimeSpecs ?? [],
+    target,
+    options.evaluation === true,
+  );
   const tmp = mkdtempSync(join(tmpdir(), "keiko-portable-stage-"));
   const paths = portableStagePaths(tmp, target, options);
   rmSync(paths.finalRoot, { recursive: true, force: true });
@@ -2263,7 +2312,9 @@ async function assembleStageRoot(options, hooks, target, sidecarSpecs, paths) {
     stageSecureReadHelper(target, paths.resourceRoot, options, hooks),
     stageRuntimeSupervisor(target, paths.resourceRoot, options, hooks),
   ];
-  const nativeAddons = (hooks.stageUsearchAddon ?? stageUsearchAddon)(target, paths.resourceRoot);
+  const nativeAddons = (hooks.stageUsearchAddon ?? stageUsearchAddon)(target, paths.resourceRoot, {
+    evaluation: options.evaluation === true,
+  });
   const sidecarRuntimes = stageSidecarRuntimes(sidecarSpecs, paths.resourceRoot);
   const staged = {
     nodeArchiveSha256,
@@ -2277,7 +2328,7 @@ async function assembleStageRoot(options, hooks, target, sidecarSpecs, paths) {
   writeRuntimeActivationManifest(paths.resourceRoot, manifestInput.manifest);
   writeEvidence(paths.stageRoot, manifestInput.manifest, manifestInput.provenanceStatement);
   writeManifest(paths.stageRoot, manifestInput.manifest);
-  validateGeneratedManifest(manifestInput.manifest);
+  validateGeneratedManifest(manifestInput.manifest, options.evaluation === true);
   return { manifest: manifestInput.manifest, tarball };
 }
 
@@ -2313,8 +2364,10 @@ async function manifestInputFor(options, target, paths, tarball, staged) {
   };
 }
 
-function validateGeneratedManifest(manifest) {
-  const failures = validatePortableStagingManifest(manifest);
+function validateGeneratedManifest(manifest, evaluation) {
+  const failures = evaluation
+    ? validatePortableEvaluationManifest(manifest)
+    : validatePortableStagingManifest(manifest);
   if (failures.length > 0) fail(`generated manifest is invalid:\n  - ${failures.join("\n  - ")}`);
 }
 

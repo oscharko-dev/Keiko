@@ -9,10 +9,9 @@ import { performance } from "node:perf_hooks";
 import { clearTimeout, setTimeout } from "node:timers";
 
 import {
+  portableManifestValidationFailuresForDeclaredLane,
   portableTargetByName,
   sha256File,
-  validatePortableCandidateManifest,
-  validatePortableStagingManifest,
 } from "./portable-runtime.mjs";
 
 function fail(message) {
@@ -73,9 +72,7 @@ function decode(bytes) {
 }
 
 function manifestFailures(manifest) {
-  return manifest.security?.verificationPolicy === "production"
-    ? validatePortableCandidateManifest(manifest)
-    : validatePortableStagingManifest(manifest);
+  return portableManifestValidationFailuresForDeclaredLane(manifest);
 }
 
 export async function smokePortableSecureRead(stageRoot, platformTarget, load = false) {

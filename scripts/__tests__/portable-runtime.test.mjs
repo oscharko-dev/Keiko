@@ -19,14 +19,19 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   hashDirectoryTree,
+  PORTABLE_MANIFEST_VALIDATION_CONTEXTS,
   PORTABLE_TARGETS,
+  PORTABLE_VERIFICATION_POLICIES,
+  PORTABLE_VERIFICATION_STATUSES,
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
   findPortableMetadataRedactionFailures,
   isSafePortableRelativePath,
   portableVerificationSummaryForManifest,
   safeArchiveEntryPath,
   sha256File,
+  portableManifestValidationFailuresForDeclaredLane,
   validatePortableCandidateManifest,
+  validatePortableEvaluationManifest,
   validatePortableManifest,
   validatePortablePublishedManifest,
   validatePortableStagingManifest,
@@ -64,20 +69,25 @@ const VERIFY_SIGNING_SCRIPT = "scripts/verify-portable-runtime-signing.mjs";
 const ROOT_MANIFEST = JSON.parse(readFileSync("package.json", "utf8"));
 const ROOT_PACKAGE_VERSION = ROOT_MANIFEST.version;
 const ROOT_RELEASE_TAG = `v${ROOT_PACKAGE_VERSION}`;
-const LIFECYCLE_CONTEXTS = ["staging", "candidate", "published", "published-contract"];
-const VERIFICATION_POLICIES = ["staging", "development", "pull-request", "production"];
-const VERIFICATION_STATUSES = [
-  "unverified-staging",
-  "unsigned-non-production",
-  "verified-non-production",
-  "verified-production",
-  "verification-failed",
-];
+// DERIVED FROM THE PRODUCER, NOT RESTATED (AGENTS.md §7). The three vocabularies below are the
+// frozen arrays `portable-runtime.mjs` itself validates against, and the per-context expectation is
+// a single map the matrix reads. Restating them locally let a new lane join the producer while this
+// matrix silently kept covering strictly less. "non-production" is excluded because its rule is a
+// policy SET rather than one exact pair, and it carries its own dedicated assertions.
+const LIFECYCLE_EXPECTATIONS = new Map([
+  ["staging", ["staging", "unverified-staging"]],
+  ["evaluation", ["evaluation", "evaluation-unqualified"]],
+  ["candidate", ["production", "verified-production"]],
+  ["published", ["production", "verified-production"]],
+  ["published-contract", ["production", "verified-production"]],
+]);
+const LIFECYCLE_CONTEXTS = PORTABLE_MANIFEST_VALIDATION_CONTEXTS.filter((context) =>
+  LIFECYCLE_EXPECTATIONS.has(context),
+);
+const VERIFICATION_POLICIES = PORTABLE_VERIFICATION_POLICIES;
+const VERIFICATION_STATUSES = PORTABLE_VERIFICATION_STATUSES;
 const INVALID_LIFECYCLE_STATES = LIFECYCLE_CONTEXTS.flatMap((context) => {
-  const expected =
-    context === "staging"
-      ? ["staging", "unverified-staging"]
-      : ["production", "verified-production"];
+  const expected = LIFECYCLE_EXPECTATIONS.get(context);
   return VERIFICATION_POLICIES.flatMap((policy) =>
     VERIFICATION_STATUSES.filter((status) => policy !== expected[0] || status !== expected[1]).map(
       (status) => [context, policy, status],
@@ -986,11 +996,19 @@ function preparePackageSurfaceForTest() {
   packageSurfacePreparedForTest = true;
 }
 
-async function assembleStageForTest(target, nodeArchive, outDir, dir, sidecarRuntimeSpecs = []) {
+async function assembleStageForTest(
+  target,
+  nodeArchive,
+  outDir,
+  dir,
+  sidecarRuntimeSpecs = [],
+  evaluation = false,
+) {
   return assemblePortableStage(
     {
       commitSha: COMMIT_SHA,
       dryRun: false,
+      evaluation,
       appleTeamId: target === "windows-x64" ? undefined : "AB12CD34EF",
       nodeArchive: nodeArchive.path,
       nodeArchiveUrl: undefined,
@@ -1023,7 +1041,9 @@ function writeSecureReadHelperFixture(target, destination) {
   writeFileSync(destination, `fixture secure read helper for ${target.platformTarget}\n`);
 }
 
-function writeUsearchAddonFixture(target, resourceRoot) {
+// The hook mirrors the real `stageUsearchAddon` signature so the lane it is handed is the lane it
+// writes; a hard-coded staging status here would make the producer double-run pin below vacuous.
+function writeUsearchAddonFixture(target, resourceRoot, { evaluation = false } = {}) {
   const targetKey = usearchRuntimeTargetKey(target.nodePlatform, target.nodeArchitecture);
   if (targetKey === undefined) throw new Error("missing USearch fixture target");
   const approved = usearchRuntimeApproval(targetKey);
@@ -1058,7 +1078,7 @@ function writeUsearchAddonFixture(target, resourceRoot) {
       sbomBomRef: `pkg:npm/usearch@${approved.version}?platform=${target.platformTarget}`,
       signing: {
         signatureKind: target.signatureKind,
-        verificationStatus: "unverified-staging",
+        verificationStatus: evaluation ? "evaluation-unqualified" : "unverified-staging",
         signatureVerified: false,
         notarizationRequired: target.nodePlatform === "darwin",
         notarizationVerified: false,
@@ -1257,6 +1277,46 @@ function verifiedSidecarSigning(target) {
     shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
     shippedExecutableTreeSha256: DIGEST_C,
   };
+}
+
+/**
+ * The evaluation sibling of `stagingSidecarSigning`. It differs ONLY in the declared lane: every
+ * shipped-executable digest field is present and identical, which is what the schema pins below
+ * assert stays mandatory.
+ */
+function evaluationSidecarSigning(target) {
+  return {
+    ...stagingSidecarSigning(target),
+    verificationPolicy: "evaluation",
+    verificationStatus: "evaluation-unqualified",
+    verificationReasonCodes: ["evaluation-artifact", "evaluation-unsigned-allowed"],
+  };
+}
+
+function evaluationManifest(platformTarget = "windows-x64") {
+  const candidate = manifest();
+  setVerificationState(candidate, {
+    verificationChecks:
+      platformTarget === "windows-x64"
+        ? windowsVerificationChecks({ publisherChainVerified: false, timestampVerified: false })
+        : macVerificationChecks({
+            assessmentVerified: false,
+            developerIdVerified: false,
+            notarizationVerified: false,
+            stapleVerified: false,
+          }),
+    verificationPolicy: "evaluation",
+    verificationReasonCodes: ["evaluation-artifact", "evaluation-unsigned-allowed"],
+    verificationStatus: "evaluation-unqualified",
+  });
+  candidate.runtimeActivation.trustAnchor = "evaluation-unqualified";
+  candidate.release.releaseId = 0;
+  candidate.artifact.assetId = 0;
+  addSidecarRuntime(candidate, platformTarget, {
+    signing: evaluationSidecarSigning(portableTarget(platformTarget)),
+  });
+  candidate.releaseImpact.reviewedBinding.releaseId = 0;
+  return candidate;
 }
 
 function stagingSidecarSigning(target) {
@@ -1886,6 +1946,179 @@ describe("validatePortableManifest", () => {
     syncReviewedBinding(candidate);
     candidate.releaseImpact.reviewedBinding.releaseId = 0;
     expect(validatePortableStagingManifest(candidate)).toEqual([]);
+  });
+
+  // SIBLINGS, NOT EDITS: the two pins above keep their assertions verbatim; the evaluation lane
+  // gets its own copies so a future change cannot satisfy one lane by loosening the other.
+  it("accepts unsigned manifests in the explicitly declared evaluation lane", () => {
+    const candidate = evaluationManifest();
+
+    expect(validatePortableManifest(candidate).join("\n")).toContain(
+      "security.signatureVerified: must be true",
+    );
+    expect(validatePortableEvaluationManifest(candidate)).toEqual([]);
+  });
+
+  it("reserves missing release asset ids for the evaluation lane too", () => {
+    const candidate = evaluationManifest();
+
+    expect(validatePortableManifest(candidate).join("\n")).toContain(
+      "artifact.assetId: must be greater than 0",
+    );
+    expect(validatePortableEvaluationManifest(candidate)).toEqual([]);
+  });
+
+  /**
+   * THE PIN THAT PREVENTS THE "REUSE THE NON-PRODUCTION LANE" MISTAKE. Before this change,
+   * `validateShippedExecutableEvidence` returned early for every policy that is not production, so
+   * a new lane would have written those three fields and never checked them while the server still
+   * demanded them — a lane that validates in CI and fails at activation.
+   */
+  it.each([
+    ["shippedExecutableSha256", (signing) => delete signing.shippedExecutableSha256],
+    ["shippedExecutableTreeSha256", (signing) => delete signing.shippedExecutableTreeSha256],
+    ["shippedExecutableTreeAlgorithm", (signing) => delete signing.shippedExecutableTreeAlgorithm],
+  ])("requires sidecar %s in the evaluation lane", (field, mutate) => {
+    const candidate = evaluationManifest();
+    mutate(candidate.sidecarRuntimes[0].signing);
+    syncReviewedBinding(candidate);
+
+    expect(validatePortableEvaluationManifest(candidate).join("\n")).toContain(
+      `sidecarRuntimes[0].signing.${field}`,
+    );
+  });
+
+  it.each([
+    ["shippedExecutableSha256", "not-a-digest"],
+    ["shippedExecutableTreeSha256", "0".repeat(63)],
+  ])("rejects a non-digest sidecar %s in the evaluation lane", (field, value) => {
+    const candidate = evaluationManifest();
+    candidate.sidecarRuntimes[0].signing[field] = value;
+    syncReviewedBinding(candidate);
+
+    expect(validatePortableEvaluationManifest(candidate).join("\n")).toContain(
+      `sidecarRuntimes[0].signing.${field}`,
+    );
+  });
+
+  // `verified === false` is ASSERTED on the evaluation lane, never merely skipped. The SCHEMA
+  // answers "does this manifest claim a verified platform signature?"; a Windows manifest with one
+  // of its two checks asserted and signatureVerified false is schema-consistent and is refused one
+  // layer up, by the RUNTIME lane predicate that requires every platform boolean present AND false
+  // (pinned in packages/keiko-server/src/coding-runtime/portableRuntimeLane.test.ts).
+  it.each([
+    [
+      "root security claims a verified platform signature",
+      (candidate) => {
+        candidate.security.signatureVerified = true;
+        candidate.security.verificationChecks = windowsVerificationChecks();
+      },
+    ],
+    [
+      "root security declares both asserted Windows platform checks",
+      (candidate) => {
+        candidate.security.verificationChecks = windowsVerificationChecks();
+      },
+    ],
+    [
+      "the sidecar signing block claims a verified signature",
+      (candidate) => {
+        candidate.sidecarRuntimes[0].signing.signatureVerified = true;
+      },
+    ],
+    [
+      "a native helper claims a verified signature",
+      (candidate) => {
+        candidate.nativeHelpers[0].signing.signatureVerified = true;
+      },
+    ],
+    [
+      "a native helper claims the production status",
+      (candidate) => {
+        candidate.nativeHelpers[0].signing.verificationStatus = "verified-production";
+      },
+    ],
+    [
+      "the sidecar omits an evaluation reason code",
+      (candidate) => {
+        candidate.sidecarRuntimes[0].signing.verificationReasonCodes = ["evaluation-artifact"];
+      },
+    ],
+  ])("rejects an evaluation manifest where %s", (_name, mutate) => {
+    const candidate = evaluationManifest();
+    mutate(candidate);
+    syncReviewedBinding(candidate);
+
+    expect(validatePortableEvaluationManifest(candidate)).not.toEqual([]);
+  });
+
+  it.each(["developer-id-app-resource-seal", "authenticode-attestor", "unverified-staging"])(
+    "rejects the %s trust anchor on an evaluation manifest",
+    (trustAnchor) => {
+      const candidate = evaluationManifest();
+      candidate.runtimeActivation.trustAnchor = trustAnchor;
+
+      expect(validatePortableEvaluationManifest(candidate).join("\n")).toContain(
+        "runtimeActivation.trustAnchor: must be evaluation-unqualified",
+      );
+    },
+  );
+
+  it("keeps the evaluation lane isolated from every other lifecycle validator", () => {
+    const candidate = evaluationManifest();
+
+    expect(validatePortableStagingManifest(candidate)).not.toEqual([]);
+    expect(validatePortableCandidateManifest(candidate)).not.toEqual([]);
+    expect(
+      validatePortablePublishedManifest(candidate, { assetId: 456, releaseId: 123 }),
+    ).not.toEqual([]);
+    // ...and the staging lane is equally isolated from the evaluation validator.
+    const staging = manifest();
+    setVerificationState(staging, {
+      verificationChecks: windowsVerificationChecks({
+        publisherChainVerified: false,
+        timestampVerified: false,
+      }),
+      verificationPolicy: "staging",
+      verificationReasonCodes: ["staging-unverified"],
+      verificationStatus: "unverified-staging",
+    });
+    expect(validatePortableEvaluationManifest(staging)).not.toEqual([]);
+  });
+
+  it("routes a staged manifest to the validator for the lane it declares", () => {
+    const evaluation = evaluationManifest();
+    expect(portableManifestValidationFailuresForDeclaredLane(evaluation)).toEqual([]);
+    expect(portableManifestValidationFailuresForDeclaredLane(evaluation)).toEqual(
+      validatePortableEvaluationManifest(evaluation),
+    );
+    // A production declaration keeps routing to the candidate validator, verbatim.
+    const production = manifest();
+    expect(portableManifestValidationFailuresForDeclaredLane(production)).toEqual(
+      validatePortableCandidateManifest(production),
+    );
+    const staging = manifest();
+    setVerificationState(staging, {
+      verificationChecks: windowsVerificationChecks({
+        publisherChainVerified: false,
+        timestampVerified: false,
+      }),
+      verificationPolicy: "staging",
+      verificationReasonCodes: ["staging-unverified"],
+      verificationStatus: "unverified-staging",
+    });
+    expect(portableManifestValidationFailuresForDeclaredLane(staging)).toEqual(
+      validatePortableStagingManifest(staging),
+    );
+    // An undeclared or unsupported lane fails closed with a named failure instead of defaulting.
+    expect(portableManifestValidationFailuresForDeclaredLane({}).join("\n")).toContain(
+      "declares no stageable lifecycle lane",
+    );
+    const nonProduction = manifest();
+    nonProduction.security.verificationPolicy = "pull-request";
+    expect(portableManifestValidationFailuresForDeclaredLane(nonProduction).join("\n")).toContain(
+      "declares no stageable lifecycle lane",
+    );
   });
 
   it("requires explicit verification policy metadata for production manifests", () => {
@@ -2899,6 +3132,116 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     expect(supportScript).toContain('exec "$SCRIPT_DIR/../Keiko.app/Contents/MacOS/Keiko" "$@"');
     expect(existsSync(join(root, "payload", "Keiko", "app"))).toBe(false);
   }, 360_000);
+
+  /**
+   * THE "ONLY SIGNATURES ARE WAIVED" PIN. The same fixture is staged twice by the SAME producer —
+   * once plain, once with the evaluation opt-in — and every integrity fact is compared field by
+   * field. Both sides are derived from the production entry point, so this is the one test that can
+   * detect a future edit quietly widening the waiver past the platform-signature lane.
+   */
+  it("waives only the declared verification lane between a plain and an evaluation stage", async () => {
+    const dir = tempDir();
+    const nodeArchive = createNodeArchiveFixture(dir, "windows-x64");
+    const sidecarSpec = createSidecarFixture(dir, "windows-x64");
+
+    const plain = await assembleStageForTest(
+      "windows-x64",
+      nodeArchive,
+      join(dir, "out-plain"),
+      dir,
+      [sidecarSpec],
+    );
+    const evaluation = await assembleStageForTest(
+      "windows-x64",
+      nodeArchive,
+      join(dir, "out-evaluation"),
+      dir,
+      [sidecarSpec],
+      true,
+    );
+
+    const plainSidecar = plain.manifest.sidecarRuntimes[0];
+    const evaluationSidecar = evaluation.manifest.sidecarRuntimes[0];
+    for (const field of [
+      "payloadSha256",
+      "sizeBytes",
+      "payloadRootPath",
+      "executablePath",
+      "executableTreeSha256",
+      "executableTreeAlgorithm",
+    ]) {
+      expect(evaluationSidecar[field]).toEqual(plainSidecar[field]);
+    }
+    for (const field of [
+      "shippedExecutableSha256",
+      "shippedExecutableTreeAlgorithm",
+      "shippedExecutableTreeSha256",
+    ]) {
+      expect(evaluationSidecar.signing[field]).toEqual(plainSidecar.signing[field]);
+    }
+    expect(evaluationSidecar.licenseEvidence).toEqual(plainSidecar.licenseEvidence);
+    expect(evaluationSidecar.sbomEvidence).toEqual(plainSidecar.sbomEvidence);
+    // `artifact.sha256` is deliberately NOT compared: the archive contains
+    // `.portable/runtime-activation.json`, which carries the declared lane, so the two archives are
+    // genuinely different bytes. The claim under test is that every SHIPPED PAYLOAD digest — the
+    // sidecar tree, the sidecar executable, both native helpers, the license and SBOM evidence —
+    // is identical, which is what the comparisons here and above assert.
+    expect(evaluation.manifest.nativeHelpers.map((helper) => helper.shippedSha256)).toEqual(
+      plain.manifest.nativeHelpers.map((helper) => helper.shippedSha256),
+    );
+    expect(evaluation.manifest.nativeHelpers.map((helper) => helper.sizeBytes)).toEqual(
+      plain.manifest.nativeHelpers.map((helper) => helper.sizeBytes),
+    );
+
+    // The ONLY differences are the declared lane and the trust anchor derived from it. Neither run
+    // may ever assert a platform proof.
+    for (const source of [plain.manifest, evaluation.manifest]) {
+      expect(source.security.signatureVerified).toBe(false);
+      expect(source.security.notarizationVerified).toBe(false);
+      expect(Object.values(source.security.verificationChecks)).not.toContain(true);
+      expect(source.sidecarRuntimes[0].signing.signatureVerified).toBe(false);
+    }
+    expect(plain.manifest.security.verificationPolicy).toBe("staging");
+    expect(plain.manifest.security.verificationStatus).toBe("unverified-staging");
+    expect(plain.manifest.runtimeActivation.trustAnchor).toBe("unverified-staging");
+    expect(evaluation.manifest.security.verificationPolicy).toBe("evaluation");
+    expect(evaluation.manifest.security.verificationStatus).toBe("evaluation-unqualified");
+    expect(evaluation.manifest.security.verificationReasonCodes).toEqual([
+      "evaluation-artifact",
+      "evaluation-unsigned-allowed",
+    ]);
+    expect(evaluation.manifest.runtimeActivation.trustAnchor).toBe("evaluation-unqualified");
+
+    // All FOUR writers move together, and the staging vocabulary appears nowhere in the evaluation
+    // manifest or in the activation document the runtime reads at discovery.
+    for (const helper of evaluation.manifest.nativeHelpers) {
+      expect(helper.signing.verificationStatus).toBe("evaluation-unqualified");
+    }
+    expect(evaluation.manifest.nativeAddons[0].signing.verificationStatus).toBe(
+      "evaluation-unqualified",
+    );
+    expect(JSON.stringify(evaluation.manifest)).not.toContain("unverified-staging");
+    const activation = readFileSync(
+      join(
+        dir,
+        "out-evaluation",
+        "windows-x64",
+        "payload",
+        "Keiko",
+        ".portable",
+        "runtime-activation.json",
+      ),
+      "utf8",
+    );
+    expect(activation).not.toContain("unverified-staging");
+    expect(JSON.parse(activation).security.verificationStatus).toBe("evaluation-unqualified");
+
+    // The lane the producer emits is the lane the manifest validates against, and only that one.
+    expect(validatePortableEvaluationManifest(evaluation.manifest)).toEqual([]);
+    expect(validatePortableStagingManifest(evaluation.manifest)).not.toEqual([]);
+    expect(validatePortableStagingManifest(plain.manifest)).toEqual([]);
+    expect(validatePortableEvaluationManifest(plain.manifest)).not.toEqual([]);
+  }, 720_000);
 
   it("stages Windows resources with an extracted bundled Node runtime", async () => {
     const dir = tempDir();

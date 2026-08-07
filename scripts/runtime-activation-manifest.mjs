@@ -58,7 +58,19 @@ export function writeRuntimeActivationManifest(resourceRoot, manifest) {
     schemaVersion: 1,
     path: RUNTIME_ACTIVATION_RELATIVE_PATH,
     sha256,
-    trustAnchor: "unverified-staging",
+    trustAnchor: stageTrustAnchor(manifest),
   };
   return { path, sha256 };
+}
+
+/**
+ * The pre-signing trust anchor is derived from the lane the manifest declares, never assumed. The
+ * production anchors are stamped later by the platform signing scripts; an evaluation bundle
+ * carries no platform seal at all and must say `evaluation-unqualified` rather than borrow the
+ * staging anchor (ADR-0163 D9).
+ */
+function stageTrustAnchor(manifest) {
+  return manifest.security?.verificationPolicy === "evaluation"
+    ? "evaluation-unqualified"
+    : "unverified-staging";
 }

@@ -3,8 +3,8 @@ import { join } from "node:path";
 
 import {
   PORTABLE_TARGETS,
+  portableManifestValidationFailuresForDeclaredLane,
   validatePortableCandidateManifest,
-  validatePortableStagingManifest,
 } from "./portable-runtime.mjs";
 
 function fail(message) {
@@ -64,10 +64,12 @@ function validateTargetRoot(targetRoot, target, options) {
   for (const [label, path] of Object.entries(layout))
     assertFile(path, `${target.platformTarget} ${label}`);
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  // An explicit candidate request stays pinned to the production validator; only the pre-release
+  // stage lanes ask the manifest which lifecycle lane it declares (staging or evaluation).
   const failures =
     options.context === "candidate"
       ? validatePortableCandidateManifest(manifest)
-      : validatePortableStagingManifest(manifest);
+      : portableManifestValidationFailuresForDeclaredLane(manifest);
   if (failures.length > 0)
     fail(`${target.platformTarget} manifest invalid:\n  - ${failures.join("\n  - ")}`);
   validateSetupManifest(layout.setupManifest, target);
