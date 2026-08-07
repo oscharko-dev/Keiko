@@ -67,6 +67,10 @@
       "types": "./dist/fs-hardening.d.ts",
       "import": "./dist/fs-hardening.js"
     },
+    "./macos-keychain": {
+      "types": "./dist/macos-keychain.d.ts",
+      "import": "./dist/macos-keychain.js"
+    },
     "./sqlite-corruption": {
       "types": "./dist/sqlite-corruption.d.ts",
       "import": "./dist/sqlite-corruption.js"

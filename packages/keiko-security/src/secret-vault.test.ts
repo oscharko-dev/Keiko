@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -17,6 +18,7 @@ import { SecretboxError } from "./errors/secretbox.js";
 import {
   NO_LOCAL_VAULT_KEYCHAIN,
   SecretVaultStoreError,
+  createKeychainCommandRunner,
   createKeychainVaultKeyAccess,
   createLocalSecretVault,
   createShardedLocalSecretVault,
@@ -524,6 +526,35 @@ describe("createLocalSecretVault — additional isStoreFile branches", () => {
   });
 });
 
+// `security` signals "the item could not be found" with exit status 44, and only that status may
+// lead to a write. A bare Error stands for every OTHER failure — a timeout, a locked keychain, a
+// policy refusal — where a write would meet the same wall and cost a second bounded wait.
+function itemNotFound(): Error & { status: number } {
+  return Object.assign(new Error("not found"), { status: 44 });
+}
+
+describe("createKeychainCommandRunner", () => {
+  it("gives up on a keychain that never answers instead of waiting for it", () => {
+    // Stands in for `security` blocked on a macOS unlock dialog. Against an unbounded spawn this
+    // waits the full 30s and the test fails on the suite timeout.
+    const fakeDir = mkdtempSync(join(tmpdir(), "keiko-secret-vault-keychain-"));
+    try {
+      const hangs = join(fakeDir, "security");
+      writeFileSync(hangs, "#!/bin/sh\nsleep 30\n");
+      chmodSync(hangs, 0o700);
+      const run = createKeychainCommandRunner(hangs, 250);
+
+      const started = process.hrtime.bigint();
+      expect(() => run(["find-generic-password"])).toThrow();
+      // The 20x margin between the 250ms bound and this 5s ceiling keeps the assertion insensitive
+      // to runner scheduling while still failing against the previous unbounded spawn.
+      expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(5_000);
+    } finally {
+      rmSync(fakeDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+});
+
 describe("createKeychainVaultKeyAccess", () => {
   const originalPlatform = process.platform;
 
@@ -546,6 +577,19 @@ describe("createKeychainVaultKeyAccess", () => {
     expect(called).toBe(false);
   });
 
+  it("does not attempt a write when the read failed for any reason other than a missing item", () => {
+    // A blocked or refused read must not be followed by a store attempt: that is a SECOND bounded
+    // wait on a path a caller may be blocking on, which is the cost the classification removes.
+    setPlatform("darwin");
+    const commands: string[][] = [];
+    const runner = (args: readonly string[]): string => {
+      commands.push([...args]);
+      throw new Error("keychain did not answer");
+    };
+    expect(createKeychainVaultKeyAccess("svc", runner)()).toBeUndefined();
+    expect(commands.map((c) => c[0])).toEqual(["find-generic-password"]);
+  });
+
   it("reads an existing 32-byte key from the keychain (read hit)", () => {
     setPlatform("darwin");
     const stored = Buffer.alloc(32, 5).toString("base64");
@@ -563,7 +607,7 @@ describe("createKeychainVaultKeyAccess", () => {
     const commands: string[][] = [];
     const runner = (args: readonly string[]): string => {
       commands.push([...args]);
-      if (args[0] === "find-generic-password") throw new Error("not found");
+      if (args[0] === "find-generic-password") throw itemNotFound();
       return "";
     };
     const key = createKeychainVaultKeyAccess("svc", runner)();

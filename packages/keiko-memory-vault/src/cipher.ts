@@ -9,11 +9,11 @@
 //   3. Keyfile           — <memoryDir>/vault.key, mode 0600. Documented WEAKER tier: the key sits
 //                          next to the DB, so an attacker with the directory has both halves.
 //
-// The keychain call is the only OS boundary in this module, so it is the only place wrapped in
-// try/catch: any failure (no `security` binary, locked keychain, non-darwin) falls through to the
-// keyfile tier rather than bricking the vault.
+// The keychain call is the only OS boundary in this module. It is delegated to the shared bounded
+// owner in keiko-security: any failure OR non-answer (no `security` binary, locked or absent
+// keychain, a keychain that raises a modal prompt instead of returning, non-darwin) falls through to
+// the keyfile tier within a bounded time rather than bricking the vault or hanging the boot path.
 
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
@@ -25,13 +25,17 @@ import {
   sealBytes,
   sealString,
 } from "@oscharko-dev/keiko-security";
+import {
+  readMacosKeychainSecret,
+  writeMacosKeychainSecret,
+  type MacosKeychainOptions,
+} from "@oscharko-dev/keiko-security/macos-keychain";
 import { chmodIfPresent, ensureDirHardened } from "./db.js";
 import { MemoryStorageError } from "./errors.js";
 
 const KEY_BYTES = 32;
 const KEYFILE_NAME = "vault.key";
 const KEYCHAIN_SERVICE = "keiko-memory-vault";
-const MACOS_SECURITY_EXECUTABLE = "/usr/bin/security";
 
 export type VaultKeySource = "env" | "keychain" | "keyfile";
 
@@ -67,35 +71,29 @@ function keyFromEnv(env: Readonly<Record<string, string | undefined>>): Buffer |
   return decodeKeyOrThrow(raw, "KEIKO_MEMORY_KEY");
 }
 
-// macOS Keychain via the `security` CLI. find→use; on miss, generate+store. Every spawn is wrapped
-// so a hardened/locked/headless keychain degrades to the keyfile tier instead of throwing.
-function keyFromKeychain(): Buffer | undefined {
-  if (process.platform !== "darwin") return undefined;
+// macOS Keychain via the shared bounded owner. find→use; on miss, generate+store. A keychain that
+// does not answer (`unavailable`) skips the store attempt: it would meet the same wall and spend a
+// second timeout on the boot path for nothing. `options` is a test seam only — production calls it
+// with none and gets the real `security` CLI and the production bound.
+export function keyFromKeychain(options: MacosKeychainOptions = {}): Buffer | undefined {
   const account = userInfo().username;
-  try {
-    const found = execFileSync(
-      MACOS_SECURITY_EXECUTABLE,
-      ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-    ).trim();
-    return decodeKeyOrThrow(found, "Keychain key");
-  } catch {
-    return generateKeychainKey(account);
+  const read = readMacosKeychainSecret(KEYCHAIN_SERVICE, account, options);
+  if (read.kind === "unavailable") return undefined;
+  if (read.kind === "found") {
+    try {
+      return decodeKeyOrThrow(read.secret, "Keychain key");
+    } catch {
+      // A stored value we cannot decode is replaced, exactly as before.
+    }
   }
+  return generateKeychainKey(account, options);
 }
 
-function generateKeychainKey(account: string): Buffer | undefined {
+function generateKeychainKey(account: string, options: MacosKeychainOptions): Buffer | undefined {
   const key = randomBytes(KEY_BYTES);
-  try {
-    execFileSync(
-      MACOS_SECURITY_EXECUTABLE,
-      ["add-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w", key.toString("base64")],
-      { stdio: ["ignore", "ignore", "ignore"] },
-    );
-    return key;
-  } catch {
-    return undefined;
-  }
+  return writeMacosKeychainSecret(KEYCHAIN_SERVICE, account, key.toString("base64"), options)
+    ? key
+    : undefined;
 }
 
 function keyFromKeyfile(memoryDir: string): Buffer {
