@@ -46,6 +46,10 @@ export type MacosKeychainRead =
   | { readonly kind: "absent" }
   | { readonly kind: "unavailable" };
 
+function positiveTimeout(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 interface ResolvedSpawn {
   readonly darwin: boolean;
   readonly executable: string;
@@ -59,7 +63,10 @@ function resolveSpawn(options: MacosKeychainOptions): ResolvedSpawn {
   return {
     darwin: (options.platform ?? process.platform) === "darwin",
     executable: options.executable ?? MACOS_SECURITY_EXECUTABLE,
-    timeout: options.timeoutMs ?? KEYCHAIN_SPAWN_TIMEOUT_MS,
+    // Only a positive finite override is honoured. `execFileSync` reads `timeout: 0` as "no
+    // timeout", so accepting a caller's 0 would silently restore the unbounded spawn this module
+    // exists to prevent — a bound that any caller can switch off is not a bound.
+    timeout: positiveTimeout(options.timeoutMs) ?? KEYCHAIN_SPAWN_TIMEOUT_MS,
     // SIGKILL rather than SIGTERM: a process blocked in a system modal is exactly the case that may
     // not act on a catchable signal, and this tier has no cleanup to run.
     killSignal: "SIGKILL",
@@ -70,7 +77,13 @@ function resolveSpawn(options: MacosKeychainOptions): ResolvedSpawn {
 // shipped binary, alongside 2 for a malformed invocation and 1 for an unknown subcommand.
 const ITEM_NOT_FOUND_STATUS = 44;
 
-function itemNotFound(error: unknown): boolean {
+/**
+ * True only for `security`'s "the item could not be found" status. Exported because the third
+ * keychain surface in this package (`secret-vault.ts`) keeps its own injectable command runner and
+ * must apply the same rule at its own catch site — a shared predicate rather than a second copy of
+ * the number.
+ */
+export function keychainItemNotFound(error: unknown): boolean {
   return (
     typeof error === "object" &&
     error !== null &&
@@ -88,7 +101,7 @@ function itemNotFound(error: unknown): boolean {
 // enumeration would have to grow to keep catching that. A timed-out spawn carries a null status and
 // lands here as unavailable for the same reason every other non-44 outcome does.
 function readOutcome(error: unknown): MacosKeychainRead {
-  return itemNotFound(error) ? { kind: "absent" } : { kind: "unavailable" };
+  return keychainItemNotFound(error) ? { kind: "absent" } : { kind: "unavailable" };
 }
 
 /** Reads the generic password for `service`/`account`. Never throws. */
@@ -135,12 +148,21 @@ export function writeMacosKeychainSecret(
     // measured against the shipped binary, which prompts "password data" then "retype password"
     // and refuses on a mismatch. A piped stdin satisfies both reads without a terminal, so this
     // does not reintroduce the interactive wait the timeout above exists to bound.
-    execFileSync(spawn.executable, ["add-generic-password", "-s", service, "-a", account, "-w"], {
-      input: `${secret}\n${secret}\n`,
-      stdio: ["pipe", "ignore", "ignore"],
-      timeout: spawn.timeout,
-      killSignal: spawn.killSignal,
-    });
+    // `-U` updates an existing item. Without it `security` rejects a duplicate with status 45, so
+    // the documented "replace a stored value that does not decode" path would report failure and
+    // fall through to the weaker keyfile tier instead of ever replacing anything. Measured against
+    // the shipped binary: a second add without `-U` exits 45; with `-U` it exits 0 and the stored
+    // value really changes.
+    execFileSync(
+      spawn.executable,
+      ["add-generic-password", "-U", "-s", service, "-a", account, "-w"],
+      {
+        input: `${secret}\n${secret}\n`,
+        stdio: ["pipe", "ignore", "ignore"],
+        timeout: spawn.timeout,
+        killSignal: spawn.killSignal,
+      },
+    );
     return true;
   } catch {
     return false;

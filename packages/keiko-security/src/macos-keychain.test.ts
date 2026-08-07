@@ -94,6 +94,22 @@ describe("readMacosKeychainSecret", () => {
     expect(Number.isFinite(KEYCHAIN_SPAWN_TIMEOUT_MS)).toBe(true);
   });
 
+  it("refuses a caller-supplied timeout that would disable the bound", () => {
+    // execFileSync reads `timeout: 0` as "no timeout". Honouring a caller's 0 would restore the
+    // unbounded spawn this module exists to remove — so the production bound applies instead, and
+    // the call still returns rather than waiting for the 30s fixture.
+    for (const timeoutMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const started = process.hrtime.bigint();
+      const read = readMacosKeychainSecret("svc", "acct", {
+        executable: HANGS,
+        timeoutMs,
+        platform: "darwin",
+      });
+      expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(10_000);
+      expect(read).toEqual({ kind: "unavailable" });
+    }
+  }, 60_000);
+
   it("defaults the platform and the bound when only the executable is supplied", () => {
     // Exercises the production defaults for platform and timeout against a controlled fixture, so
     // no test ever reaches the host keychain. On darwin the fixture answers "no such item"; on any
@@ -155,6 +171,22 @@ describe("writeMacosKeychainSecret", () => {
 
     expect(readFileSync(join(dir, "argv"), "utf8")).not.toContain(secret);
     expect(readFileSync(join(dir, "stdin"), "utf8")).toContain(secret);
+  });
+
+  it("updates an existing item rather than being refused as a duplicate", () => {
+    // Without `-U`, `security` rejects an add whose item already exists (status 45, measured), so
+    // the documented "replace an undecodable stored key" path would silently never replace.
+    const dir = mkdtempSync(join(tmpdir(), "keiko-keychain-update-"));
+    fakeDirs.push(dir);
+    const recorder = join(dir, "security");
+    writeFileSync(recorder, `#!/bin/sh\nprintf '%s\\n' "$@" > "${dir}/argv"\ncat > /dev/null\n`);
+    chmodSync(recorder, 0o700);
+
+    writeMacosKeychainSecret("svc", "acct", "secret", {
+      executable: recorder,
+      platform: "darwin",
+    });
+    expect(readFileSync(join(dir, "argv"), "utf8").split("\n")).toContain("-U");
   });
 
   it("does not spawn off darwin", () => {

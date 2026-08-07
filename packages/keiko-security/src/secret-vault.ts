@@ -43,7 +43,7 @@ import { isSealed, openString, sealString } from "./secretbox.js";
 // pair; import it from the sibling module (relative — we ARE keiko-security).
 import { chmodIfPresent, ensureDirHardened, FILE_MODE } from "./fs-hardening.js";
 // Shared keychain-spawn bound [GEN-MAINT-COUPLING-006], so the three surfaces cannot drift apart.
-import { KEYCHAIN_SPAWN_TIMEOUT_MS } from "./macos-keychain.js";
+import { KEYCHAIN_SPAWN_TIMEOUT_MS, keychainItemNotFound } from "./macos-keychain.js";
 
 const KEY_BYTES = 32;
 const STORE_VERSION = 1;
@@ -168,8 +168,9 @@ export function createKeychainVaultKeyAccess(
   return (): Buffer | undefined => {
     if (process.platform !== "darwin") return undefined;
     const account = userInfo().username;
+    let found: string;
     try {
-      const found = runCommand([
+      found = runCommand([
         "find-generic-password",
         "-s",
         keychainService,
@@ -177,8 +178,18 @@ export function createKeychainVaultKeyAccess(
         account,
         "-w",
       ]).trim();
+    } catch (error) {
+      // Only "the item is not there" invites a write. A read that timed out, or a keychain that
+      // refused outright, means a store attempt would meet the same wall and spend a SECOND bounded
+      // wait — on a path a caller may be blocking on. Same rule, same predicate, as the shared owner.
+      return keychainItemNotFound(error)
+        ? generateKeychainKey(keychainService, account, runCommand)
+        : undefined;
+    }
+    try {
       return decodeKeyOrThrow(found);
     } catch {
+      // A stored value we cannot decode is replaced, as before.
       return generateKeychainKey(keychainService, account, runCommand);
     }
   };
@@ -193,6 +204,9 @@ function generateKeychainKey(
   try {
     runCommand([
       "add-generic-password",
+      // `-U` updates an existing item; without it `security` rejects a duplicate (status 45) and
+      // the "replace an undecodable stored key" path above would never actually replace anything.
+      "-U",
       "-s",
       keychainService,
       "-a",
