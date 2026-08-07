@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { createMemoryContentCipher, NO_KEYCHAIN, resolveVaultKey } from "./cipher.js";
+import {
+  createMemoryContentCipher,
+  keyFromKeychain,
+  NO_KEYCHAIN,
+  resolveVaultKey,
+} from "./cipher.js";
 import { MemoryStorageError } from "./errors.js";
 
 let dir: string;
@@ -63,6 +68,26 @@ describe("resolveVaultKey — keyfile tier", () => {
     expect(second.source).toBe("keyfile");
     expect(second.key.equals(first.key)).toBe(true);
   });
+
+  it("falls through to the keyfile when the keychain never answers, instead of hanging the boot path", () => {
+    // Stands in for `security` blocked on a macOS unlock dialog: it returns nothing until a human
+    // acts. resolveVaultKey is on the server boot path, so an unbounded wait here is a start that
+    // never completes — observed against the shipped portable app during the 0.3.0 rehearsal.
+    const hangs = join(mkdtempSync(join(tmpdir(), "keiko-keychain-")), "security");
+    writeFileSync(hangs, "#!/bin/sh\nsleep 30\n");
+    chmodSync(hangs, 0o700);
+
+    const started = process.hrtime.bigint();
+    const resolved = resolveVaultKey({}, dir, () =>
+      keyFromKeychain({ executable: hangs, timeoutMs: 250, platform: "darwin" }),
+    );
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+
+    // Against the previous unbounded spawn this blocks for 30s and fails on the suite timeout.
+    expect(elapsedMs).toBeLessThan(5_000);
+    expect(resolved.source).toBe("keyfile");
+    expect(resolved.key).toHaveLength(32);
+  }, 15_000);
 });
 
 describe("createMemoryContentCipher", () => {

@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -17,6 +18,7 @@ import { SecretboxError } from "./errors/secretbox.js";
 import {
   NO_LOCAL_VAULT_KEYCHAIN,
   SecretVaultStoreError,
+  createKeychainCommandRunner,
   createKeychainVaultKeyAccess,
   createLocalSecretVault,
   createShardedLocalSecretVault,
@@ -522,6 +524,22 @@ describe("createLocalSecretVault — additional isStoreFile branches", () => {
     const vault = vaultAt(storePath);
     expectStoreFault(() => vault.list(), "SECRET_VAULT_STORE_INVALID_SCHEMA");
   });
+});
+
+describe("createKeychainCommandRunner", () => {
+  it("gives up on a keychain that never answers instead of waiting for it", () => {
+    // Stands in for `security` blocked on a macOS unlock dialog. Against an unbounded spawn this
+    // waits the full 30s and the test fails on the suite timeout.
+    const dir = mkdtempSync(join(tmpdir(), "keiko-secret-vault-keychain-"));
+    const hangs = join(dir, "security");
+    writeFileSync(hangs, "#!/bin/sh\nsleep 30\n");
+    chmodSync(hangs, 0o700);
+    const run = createKeychainCommandRunner(hangs, 250);
+
+    const started = process.hrtime.bigint();
+    expect(() => run(["find-generic-password"])).toThrow();
+    expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(5_000);
+  }, 15_000);
 });
 
 describe("createKeychainVaultKeyAccess", () => {

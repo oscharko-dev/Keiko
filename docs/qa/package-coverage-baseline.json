@@ -222,15 +222,15 @@
       }
     },
     "keiko-security": {
-      "files": 21,
+      "files": 22,
       "uncoveredFiles": 0,
-      "uncoveredLines": 9,
-      "totalLines": 540,
+      "uncoveredLines": 8,
+      "totalLines": 557,
       "coverage": {
-        "lines": 98.33,
-        "statements": 97.95,
-        "branches": 94.95,
-        "functions": 97.58
+        "lines": 98.56,
+        "statements": 98.18,
+        "branches": 95.29,
+        "functions": 98.45
       }
     },
     "keiko-server": {
