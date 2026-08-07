@@ -28,6 +28,15 @@ export { sealString, openString, sealBytes, openBytes, isSealed } from "./secret
 // packages that previously each carried a private copy [GEN-MAINT-COUPLING-005].
 export { DIR_MODE, FILE_MODE, ensureDirHardened, chmodIfPresent } from "./fs-hardening.js";
 
+// Shared, bounded macOS Keychain key tier — one owner for the vault surfaces that previously each
+// carried a private copy of the same unbounded `security` spawn [GEN-MAINT-COUPLING-006].
+export type { MacosKeychainOptions, MacosKeychainRead } from "./macos-keychain.js";
+export {
+  KEYCHAIN_SPAWN_TIMEOUT_MS,
+  readMacosKeychainSecret,
+  writeMacosKeychainSecret,
+} from "./macos-keychain.js";
+
 // Shared, fs-agnostic SQLite corruption classifier — the pure subset lifted out of the per-store db
 // lifecycles [GEN-DUP-SEMANTIC-019 / GEN-DUP-NEAR-002].
 export type { SqliteErrorLike, SqliteErrorUnwrap } from "./sqlite-corruption.js";

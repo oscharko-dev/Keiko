@@ -42,6 +42,8 @@ import { isSealed, openString, sealString } from "./secretbox.js";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: this package now owns the 0o700/0o600 hardening
 // pair; import it from the sibling module (relative — we ARE keiko-security).
 import { chmodIfPresent, ensureDirHardened, FILE_MODE } from "./fs-hardening.js";
+// Shared keychain-spawn bound [GEN-MAINT-COUPLING-006], so the three surfaces cannot drift apart.
+import { KEYCHAIN_SPAWN_TIMEOUT_MS, keychainItemNotFound } from "./macos-keychain.js";
 
 const KEY_BYTES = 32;
 const STORE_VERSION = 1;
@@ -138,12 +140,24 @@ function keyFromEnv(
 // (read-hit, read-miss-then-generate, generate-failure) is unit-testable with a fake runner.
 export type KeychainCommandRunner = (args: readonly string[]) => string;
 
-function defaultKeychainCommandRunner(args: readonly string[]): string {
-  return execFileSync(MACOS_SECURITY_EXECUTABLE, args, {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
+// The spawn is bounded for the reason the shared owner documents [GEN-MAINT-COUPLING-006]: a locked,
+// absent, or policy-withheld keychain makes `security` raise a modal dialog instead of returning, and
+// an unbounded call then waits for a human forever. The bound is imported rather than restated so
+// all three keychain surfaces share one number. `executable` and `timeoutMs` are test seams only.
+export function createKeychainCommandRunner(
+  executable = MACOS_SECURITY_EXECUTABLE,
+  timeoutMs = KEYCHAIN_SPAWN_TIMEOUT_MS,
+): KeychainCommandRunner {
+  return (args: readonly string[]): string =>
+    execFileSync(executable, args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: timeoutMs,
+      killSignal: "SIGKILL",
+    });
 }
+
+const defaultKeychainCommandRunner = createKeychainCommandRunner();
 
 // Builds the default keychain-backed key access for a service. Exported with an injectable runner so
 // the reader/generate branches are deterministically testable without the real login keychain.
@@ -154,8 +168,9 @@ export function createKeychainVaultKeyAccess(
   return (): Buffer | undefined => {
     if (process.platform !== "darwin") return undefined;
     const account = userInfo().username;
+    let found: string;
     try {
-      const found = runCommand([
+      found = runCommand([
         "find-generic-password",
         "-s",
         keychainService,
@@ -163,8 +178,18 @@ export function createKeychainVaultKeyAccess(
         account,
         "-w",
       ]).trim();
+    } catch (error) {
+      // Only "the item is not there" invites a write. A read that timed out, or a keychain that
+      // refused outright, means a store attempt would meet the same wall and spend a SECOND bounded
+      // wait — on a path a caller may be blocking on. Same rule, same predicate, as the shared owner.
+      return keychainItemNotFound(error)
+        ? generateKeychainKey(keychainService, account, runCommand)
+        : undefined;
+    }
+    try {
       return decodeKeyOrThrow(found);
     } catch {
+      // A stored value we cannot decode is replaced, as before.
       return generateKeychainKey(keychainService, account, runCommand);
     }
   };
@@ -179,6 +204,9 @@ function generateKeychainKey(
   try {
     runCommand([
       "add-generic-password",
+      // `-U` updates an existing item; without it `security` rejects a duplicate (status 45) and
+      // the "replace an undecodable stored key" path above would never actually replace anything.
+      "-U",
       "-s",
       keychainService,
       "-a",
