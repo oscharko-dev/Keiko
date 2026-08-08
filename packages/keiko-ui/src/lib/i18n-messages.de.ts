@@ -237,6 +237,8 @@ export const DE_MESSAGES = {
   "gatewaySetup.upload.applied": "Konfiguration geladen — {count} Feld(er) unten ausgefüllt.",
   "gatewaySetup.upload.invalid": "Diese Datei ist keine lesbare Keiko-Konfiguration.",
   "gatewaySetup.upload.fileTooLarge": "Diese Datei überschreitet die unterstützten 256 KB.",
+  "gatewaySetup.upload.unsupportedKind":
+    "Diese Datei enthält Voice- oder OCR-Provider, die dieser Upload nicht ausfüllen kann — trage diese Abschnitte manuell ein und entferne sie aus der Datei.",
   "gatewaySetup.loading.title": "Modell-Gateway-Einrichtung wird vorbereitet",
   "gatewaySetup.loading.description":
     "Die lokalen Einrichtungsfelder werden geladen. Es wurde noch keine Anbieteranfrage gestartet.",

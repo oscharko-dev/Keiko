@@ -803,6 +803,109 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("refuses a changed gateway URL that would inherit the stored token (exfiltration guard)", async () => {
+    // Review finding on #3031: in update mode a submitted base URL that differs from the stored
+    // one, with no fresh token beside it, would send the STORED token to the NEW endpoint during
+    // verification — a supplied keiko.config.json (or a typo'd URL) could exfiltrate it. The
+    // refusal is server-side so no client path can bypass it.
+    const uiDir = await tempDir("keiko-gw-ui-fresh-token-");
+    const evidenceDir = await tempDir("keiko-gw-ev-fresh-token-");
+    let smokeCalls = 0;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => {
+        smokeCalls += 1;
+        return Promise.resolve([modelIds[0] ?? "example-chat-model"]);
+      },
+    });
+
+    const first = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(first.status).toBe(200);
+    expect(smokeCalls).toBe(1);
+
+    const hijacked = await handleGatewaySetup(
+      ctx({ preserveExisting: true, baseUrl: "https://attacker.example.com/v1" }),
+      deps,
+    );
+    expect(hijacked.status).toBe(400);
+    expect(JSON.stringify(hijacked.body)).toContain("GATEWAY_URL_CHANGE_REQUIRES_TOKEN");
+    // The stored token never reached any verification against the new endpoint.
+    expect(smokeCalls).toBe(1);
+    expect(currentGatewayConfig(deps)?.providers[0]?.baseUrl).toBe(
+      "https://llm-gateway.example.com/v1",
+    );
+
+    // A fresh token beside the new URL is the legitimate path and still works.
+    const legitimate = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://new-gateway.example.com/v1",
+        apiKey: "fresh-secret-token",
+      }),
+      deps,
+    );
+    expect(legitimate.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.providers[0]?.baseUrl).toBe(
+      "https://new-gateway.example.com/v1",
+    );
+    deps.store.close();
+  });
+
+  it("refuses a changed voice endpoint that would inherit the stored credential", async () => {
+    // Same exfiltration class as the main gateway; the voice path's EXISTING replace guard owns
+    // this refusal — pinned here so the class stays closed on both connections.
+    const uiDir = await tempDir("keiko-gw-ui-voice-fresh-");
+    const evidenceDir = await tempDir("keiko-gw-ev-voice-fresh-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+    });
+
+    const initial = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(initial.status).toBe(200);
+    const voiceStored = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://voice-gateway.example.com/openai/v1",
+        voiceApiKey: "voice-secret-token",
+        voiceApiKeyHeaderName: "api-key",
+        voiceModelId: "keiko-stt",
+        voiceProviderLocality: "azure-foundry",
+      }),
+      deps,
+    );
+    expect(voiceStored.status).toBe(200);
+
+    const hijacked = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://attacker-voice.example.com/openai/v1",
+        voiceModelId: "keiko-stt",
+      }),
+      deps,
+    );
+    expect(hijacked.status).toBe(400);
+    expect(JSON.stringify(hijacked.body)).toContain(
+      "Replacing an audio endpoint requires a fresh audio credential.",
+    );
+    deps.store.close();
+  });
+
   it("stores optional voice dictation credentials as an STT-only provider in update mode", async () => {
     const uiDir = await tempDir("keiko-gw-ui-voice-");
     const evidenceDir = await tempDir("keiko-gw-ev-voice-");

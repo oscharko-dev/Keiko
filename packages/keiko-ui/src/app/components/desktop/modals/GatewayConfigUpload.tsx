@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ChangeEvent, type ReactNode } from "react";
+import { useRef, useState, type ChangeEvent, type ReactNode } from "react";
 
 import { useTranslate } from "@/lib/i18n";
 import {
@@ -12,11 +12,51 @@ import {
 import styles from "./GatewaySetupDialog.module.css";
 
 interface UploadState {
-  readonly issue: "invalid" | "fileTooLarge" | undefined;
+  readonly issue: "invalid" | "fileTooLarge" | "unsupportedKind" | undefined;
   readonly appliedCount: number | undefined;
 }
 
 const INITIAL_STATE: UploadState = { issue: undefined, appliedCount: undefined };
+
+async function handleUploadedFile(
+  event: ChangeEvent<HTMLInputElement>,
+  onApply: (fields: GatewayConfigUploadFields) => void,
+  setState: (state: UploadState) => void,
+  sequence: { current: number },
+): Promise<void> {
+  const file = event.target.files?.[0];
+  // Same file again must re-trigger onChange after a fix-and-retry.
+  event.target.value = "";
+  if (file === undefined) return;
+  // A newer selection supersedes any read still in flight; the slower older read must never
+  // overwrite the newer outcome (review finding on #3031).
+  const token = sequence.current + 1;
+  sequence.current = token;
+  if (file.size > MAX_GATEWAY_CONFIG_BYTES) {
+    setState({ issue: "fileTooLarge", appliedCount: undefined });
+    return;
+  }
+  let serialized;
+  try {
+    serialized = await file.text();
+  } catch {
+    // A read failure (revoked permission, vanished file) is the same user outcome as an
+    // unreadable configuration — reported, never an unhandled rejection.
+    serialized = undefined;
+  }
+  if (sequence.current !== token) return;
+  const result = serialized === undefined ? undefined : parseGatewayConfigUpload(serialized);
+  if (result === undefined || result.outcome === "invalid") {
+    setState({ issue: "invalid", appliedCount: undefined });
+    return;
+  }
+  if (result.outcome === "unsupportedKind") {
+    setState({ issue: "unsupportedKind", appliedCount: undefined });
+    return;
+  }
+  onApply(result.fields);
+  setState({ issue: undefined, appliedCount: appliedGatewayConfigFieldCount(result.fields) });
+}
 
 /**
  * The manual-entry alternative on the first setup page: load an existing `keiko.config.json`
@@ -24,35 +64,6 @@ const INITIAL_STATE: UploadState = { issue: undefined, appliedCount: undefined }
  * the same form state (and therefore the same validation and one-time token test) as manual
  * input — the upload can never bypass what typing could not.
  */
-async function handleUploadedFile(
-  event: ChangeEvent<HTMLInputElement>,
-  onApply: (fields: GatewayConfigUploadFields) => void,
-  setState: (state: UploadState) => void,
-): Promise<void> {
-  const file = event.target.files?.[0];
-  // Same file again must re-trigger onChange after a fix-and-retry.
-  event.target.value = "";
-  if (file === undefined) return;
-  if (file.size > MAX_GATEWAY_CONFIG_BYTES) {
-    setState({ issue: "fileTooLarge", appliedCount: undefined });
-    return;
-  }
-  let fields;
-  try {
-    fields = parseGatewayConfigUpload(await file.text());
-  } catch {
-    // A read failure (revoked permission, vanished file) is the same user outcome as an
-    // unreadable configuration — reported, never an unhandled rejection.
-    fields = undefined;
-  }
-  if (fields === undefined) {
-    setState({ issue: "invalid", appliedCount: undefined });
-    return;
-  }
-  onApply(fields);
-  setState({ issue: undefined, appliedCount: appliedGatewayConfigFieldCount(fields) });
-}
-
 export function GatewayConfigUpload({
   disabled,
   onApply,
@@ -62,6 +73,7 @@ export function GatewayConfigUpload({
 }): ReactNode {
   const t = useTranslate();
   const [state, setState] = useState<UploadState>(INITIAL_STATE);
+  const sequence = useRef(0);
 
   return (
     <section className={styles["cmp-config-upload"]} aria-labelledby="gw-config-upload-title">
@@ -81,7 +93,7 @@ export function GatewayConfigUpload({
           accept="application/json,.json"
           className="visually-hidden"
           disabled={disabled}
-          onChange={(event) => void handleUploadedFile(event, onApply, setState)}
+          onChange={(event) => void handleUploadedFile(event, onApply, setState, sequence)}
         />
       </label>
       <GatewayConfigUploadStatus state={state} />

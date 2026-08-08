@@ -227,6 +227,8 @@ export const EN_MESSAGES = {
   "gatewaySetup.upload.applied": "Configuration loaded — {count} field(s) filled in below.",
   "gatewaySetup.upload.invalid": "This file is not a readable Keiko configuration.",
   "gatewaySetup.upload.fileTooLarge": "This file exceeds the supported 256 KB.",
+  "gatewaySetup.upload.unsupportedKind":
+    "This file contains voice or OCR providers this upload cannot fill in — enter those sections manually and remove them from the file.",
   "gatewaySetup.loading.title": "Preparing model gateway setup",
   "gatewaySetup.loading.description":
     "Loading the local setup controls. No provider request has been started.",

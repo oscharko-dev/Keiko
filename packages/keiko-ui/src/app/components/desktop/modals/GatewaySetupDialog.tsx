@@ -2274,13 +2274,17 @@ export function GatewaySetupDialog({
     if (fields.apiKeyHeaderName !== undefined) setApiKeyHeaderName(fields.apiKeyHeaderName);
     if (fields.timeoutMs !== undefined) setTimeoutMs(fields.timeoutMs);
     if (fields.deploymentNames.length > 0) setDeploymentNames(fields.deploymentNames.join("\n"));
-    if (fields.imageInputModelIds.length > 0) {
+    // A defined-but-empty flag list is the file explicitly declaring "none" and must clear the
+    // field exactly like manual emptying would (review finding on #3031); only an undefined list
+    // (the file never speaks about the flag) leaves the field untouched.
+    if (fields.imageInputModelIds !== undefined) {
       setImageInputModelIds(fields.imageInputModelIds.join("\n"));
     }
-    if (fields.workflowEligibleModelIds.length > 0) {
+    if (fields.workflowEligibleModelIds !== undefined) {
       setWorkflowEligibleModelIdsConfigured(true);
       setWorkflowEligibleModelIds(fields.workflowEligibleModelIds.join("\n"));
     }
+    if (fields.figmaAccessToken !== undefined) setFigmaAccessToken(fields.figmaAccessToken);
   }
 
   async function submit(event: FormSubmitEvent): Promise<void> {

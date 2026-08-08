@@ -1665,6 +1665,38 @@ function setupVoiceApiKeyHeaderSource(
   return provider?.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
 }
 
+/**
+ * A changed endpoint never inherits the stored secret: in update mode a submitted base URL that
+ * differs from the stored one, with no fresh token beside it, would send the STORED token to the
+ * NEW endpoint during verification — so a supplied configuration file (or a typo'd URL) could
+ * exfiltrate it (review finding on #3031). Server-side so no client path can bypass it.
+ */
+function inheritedTokenForChangedEndpoint(
+  raw: Record<string, unknown>,
+  submittedKeys: { readonly baseUrl: string; readonly apiKey: string },
+  storedBaseUrl: string | undefined,
+  preserveExisting: boolean,
+): boolean {
+  const submittedBaseUrl = trimmedSubmittedString(raw, submittedKeys.baseUrl);
+  return (
+    preserveExisting &&
+    submittedBaseUrl !== undefined &&
+    storedBaseUrl !== undefined &&
+    !sameBaseUrlIdentity(submittedBaseUrl, storedBaseUrl) &&
+    trimmedSubmittedString(raw, submittedKeys.apiKey) === undefined
+  );
+}
+
+function changedEndpointRequiresTokenError(): RouteResult {
+  return {
+    status: 400,
+    body: errorBody(
+      "GATEWAY_URL_CHANGE_REQUIRES_TOKEN",
+      "A changed gateway URL requires a fresh API token.",
+    ),
+  };
+}
+
 function readSetupGatewayCredentials(
   raw: Record<string, unknown>,
   env: EnvSource,
@@ -1672,6 +1704,16 @@ function readSetupGatewayCredentials(
   preserveExisting: boolean,
 ): SetupGatewayCredentials | RouteResult {
   const provider = firstProvider(current);
+  if (
+    inheritedTokenForChangedEndpoint(
+      raw,
+      { baseUrl: "baseUrl", apiKey: "apiKey" },
+      provider?.baseUrl,
+      preserveExisting,
+    )
+  ) {
+    return changedEndpointRequiresTokenError();
+  }
   const baseUrl = submittedOrInheritedString(raw, "baseUrl", provider?.baseUrl, preserveExisting);
   const apiKey = submittedOrInheritedString(raw, "apiKey", provider?.apiKey, preserveExisting);
   if (baseUrl.length === 0 || apiKey.length === 0) {
