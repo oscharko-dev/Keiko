@@ -3409,6 +3409,176 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("classifies stored-provider sharing from the persisted file, not the env-resolved runtime view", async () => {
+    // Codex finding deferred on #3037: the preserve-mode rebuild judged connection sharing on the
+    // RUNTIME GatewayConfig, which folds in transient per-model environment overrides
+    // (KEIKO_MODEL_<ID>_BASE_URL / _API_KEY). An override moving only the chat provider made the
+    // durable file-level sharing relationship invisible, so a credential rotation restored the
+    // same-connection OCR provider as "dedicated" with its already-dead token. Sharing is now
+    // classified on the persisted configuration (vault-resolved, per-model overrides masked) —
+    // the same disk-vs-runtime rule withPersistedGatewayEgress draws for egress.
+    const uiDir = await tempDir("keiko-gw-ui-durable-share-");
+    const evidenceDir = await tempDir("keiko-gw-ev-durable-share-");
+    const ocrCapability = (id: string): Record<string, unknown> => ({
+      id,
+      kind: "ocr-vision",
+      contextWindow: 32_000,
+      maxOutputTokens: 4_096,
+      toolCalling: false,
+      structuredOutput: false,
+      streaming: false,
+      supportsImageInput: false,
+      supportsDocumentInput: true,
+      workflowEligible: false,
+      costClass: "low",
+      latencyClass: "fast",
+      throughputHint: "test ocr deployment",
+      preferredUseCases: ["Document OCR"],
+      knownLimitations: [],
+    });
+    // The stored file: chat and scan-ocr SHARE one connection; remote-ocr owns a dedicated one.
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "scan-ocr",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            capability: ocrCapability("scan-ocr"),
+          },
+          {
+            modelId: "remote-ocr",
+            baseUrl: "https://ocr.example.com",
+            apiKey: "dedicated-ocr-token",
+            capability: ocrCapability("remote-ocr"),
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    // A transient operator override moves ONLY the chat provider at runtime — the durable
+    // file-level relationship (chat and scan-ocr share a connection) must survive it.
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {
+        ...VAULT_ENV,
+        KEIKO_MODEL_EXAMPLE_CHAT_BASE_URL: "https://elsewhere.example.com/v1",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve(
+          modelIds.filter((modelId) => modelId !== "scan-ocr" && modelId !== "remote-ocr"),
+        ),
+    });
+    const savedConnections = (): ReadonlyMap<string, { apiKey: string }> =>
+      new Map(
+        (currentGatewayConfig(deps)?.providers ?? []).map((provider) => [
+          provider.modelId,
+          { apiKey: provider.apiKey },
+        ]),
+      );
+
+    const rotated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "example-rotated-token" }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    // The old token dies with the rotation: the file-sharing OCR must follow it even though the
+    // runtime view shows the chat provider on the overridden endpoint.
+    expect(savedConnections().get("scan-ocr")).toEqual({ apiKey: "example-rotated-token" });
+    expect(savedConnections().get("remote-ocr")).toEqual({ apiKey: "dedicated-ocr-token" });
+
+    // Second rotation against the now-SEALED persisted file (apiKeys live in the vault after the
+    // first save): the durable classification must resolve vault references, or every provider
+    // would classify as dedicated on the second rotation.
+    const resealed = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "example-second-token" }),
+      deps,
+    );
+    expect(resealed.status).toBe(200);
+    expect(savedConnections().get("scan-ocr")).toEqual({ apiKey: "example-second-token" });
+    expect(savedConnections().get("remote-ocr")).toEqual({ apiKey: "dedicated-ocr-token" });
+    deps.store.close();
+  });
+
+  it("keeps a transient credential override from declassifying file-level sharing", async () => {
+    // Same class, credential axis: KEIKO_MODEL_<ID>_API_KEY on the chat provider made the
+    // runtime primary's credential diverge from the stored file, so every file-sharing provider
+    // compared unequal and was restored with its obsolete token after a rotation.
+    const uiDir = await tempDir("keiko-gw-ui-durable-cred-");
+    const evidenceDir = await tempDir("keiko-gw-ev-durable-cred-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "scan-ocr",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            capability: {
+              id: "scan-ocr",
+              kind: "ocr-vision",
+              contextWindow: 32_000,
+              maxOutputTokens: 4_096,
+              toolCalling: false,
+              structuredOutput: false,
+              streaming: false,
+              supportsImageInput: false,
+              supportsDocumentInput: true,
+              workflowEligible: false,
+              costClass: "low",
+              latencyClass: "fast",
+              throughputHint: "test ocr deployment",
+              preferredUseCases: ["Document OCR"],
+              knownLimitations: [],
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {
+        ...VAULT_ENV,
+        KEIKO_MODEL_EXAMPLE_CHAT_API_KEY: "transient-ops-token",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve(modelIds.filter((modelId) => modelId !== "scan-ocr")),
+    });
+
+    const rotated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "example-rotated-token",
+      }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const scanOcr = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "scan-ocr",
+    );
+    expect(scanOcr?.apiKey).toBe("example-rotated-token");
+    deps.store.close();
+  });
+
   it("classifies the stored primary by capability, not by array position", async () => {
     // Review finding on #3037: a valid stored file may list a dedicated voice provider FIRST.
     // Position-zero primary derivation then compared the embedding against the VOICE connection,

@@ -14,9 +14,11 @@ import {
   createDefaultChatCapability,
   createDefaultEmbeddingCapability,
   findConfiguredCapability,
+  GatewayError,
   isLikelyEmbeddingModelId,
   isVoiceCapability,
   listConfiguredCapabilities,
+  loadConfigFromFile,
   modelSupportsRealtimeVoice,
   modelSupportsSpeechInput,
   modelSupportsSpeechOutput,
@@ -64,6 +66,7 @@ import {
   tryParseJudgeVerdict,
 } from "./qualityIntelligence/judgePort.js";
 import { persistSealedGatewayConfig } from "./credentialPersistence.js";
+import { createProviderSecretResolver } from "./credentialVault.js";
 
 const MAX_BODY_BYTES = 64_000;
 // Issue #144: exported so discovery-normalization tests can pin the slice cap
@@ -1480,6 +1483,11 @@ interface SetupRequest {
   readonly storedEmbeddingModelIds: readonly string[];
   /** Client-asserted embedding ids (validated against the deployment set) — same authority. */
   readonly submittedEmbeddingModelIds: readonly string[];
+  /**
+   * The DURABLE stored view for restore classification — the persisted file with per-model env
+   * overrides masked (see {@link durableStoredGatewayConfig}); undefined on a fresh setup.
+   */
+  readonly stored: GatewayConfig | undefined;
   /**
    * Model ids whose stored capability kind is `ocr-vision` — the rebuild neither chat-probes
    * nor re-derives them; the stored providers are restored verbatim, exactly like voice
@@ -3175,6 +3183,8 @@ interface SetupRequestAssembly {
   readonly correlationId: string | undefined;
   readonly credentials: SetupGatewayCredentials;
   readonly current: GatewayConfig | undefined;
+  /** The durable stored view for restore classification — see {@link durableStoredGatewayConfig}. */
+  readonly stored: GatewayConfig | undefined;
   readonly figmaAccessToken: string | undefined;
   readonly modelLists: SetupModelLists;
   readonly preserveExisting: boolean;
@@ -3203,13 +3213,15 @@ function storedRestoreListsForSetup(
     // Stored embedding kinds follow the same inherited-only rule as every other stored list: an
     // explicitly submitted deployment list is authoritative, and unioning the stored kinds over
     // it would make it impossible for a corrected upload to turn a mis-kinded embedding back
-    // into a chat deployment (review finding on #3037).
-    storedEmbeddingModelIds: inheritedDeployments ? currentEmbeddingModelIds(input.current) : [],
-    storedOcrModelIds: inheritedDeployments ? currentOcrModelIds(input.current) : [],
+    // into a chat deployment (review finding on #3037). All four lists read the DURABLE stored
+    // view: the dedicated-embedding list compares connection identities, which a transient
+    // per-model env override must not skew (review finding on #3037).
+    storedEmbeddingModelIds: inheritedDeployments ? currentEmbeddingModelIds(input.stored) : [],
+    storedOcrModelIds: inheritedDeployments ? currentOcrModelIds(input.stored) : [],
     storedDedicatedEmbeddingModelIds: inheritedDeployments
-      ? currentDedicatedEmbeddingModelIds(input.current)
+      ? currentDedicatedEmbeddingModelIds(input.stored)
       : [],
-    storedVoiceModelIds: inheritedDeployments ? currentVoiceModelIds(input.current) : [],
+    storedVoiceModelIds: inheritedDeployments ? currentVoiceModelIds(input.stored) : [],
   };
 }
 
@@ -3230,6 +3242,7 @@ function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | Route
     imageInputModelIds: resolved.imageInputModelIds,
     imageInputModelIdsProvided: hasListField(input.raw, "imageInputModelIds"),
     submittedEmbeddingModelIds: input.modelLists.embeddingModelIds ?? [],
+    stored: input.stored,
     ...storedRestoreListsForSetup(input),
     workflowEligibleModelIds: resolved.workflowEligibleModelIds,
     workflowEligibleModelIdsConfigured: hasListField(input.raw, "workflowEligibleModelIds"),
@@ -3249,6 +3262,7 @@ function readSetupRequest(
   raw: unknown,
   env: EnvSource,
   current: GatewayConfig | undefined,
+  stored: GatewayConfig | undefined,
   correlationId: string | undefined,
 ): SetupRequest | RouteResult {
   if (!isRecord(raw)) {
@@ -3284,6 +3298,7 @@ function readSetupRequest(
   return assembleSetupRequest({
     raw,
     current,
+    stored,
     correlationId,
     preserveExisting,
     credentials,
@@ -3339,6 +3354,8 @@ interface SetupVerificationInput {
   readonly storedEmbeddingModelIds: readonly string[];
   /** Client-asserted embedding ids — see {@link SetupRequest}. */
   readonly submittedEmbeddingModelIds: readonly string[];
+  /** The durable stored view for restore classification — see {@link SetupRequest}. */
+  readonly stored: GatewayConfig | undefined;
   /** Stored `ocr-vision` ids restored verbatim instead of probed — see {@link SetupRequest}. */
   readonly storedOcrModelIds: readonly string[];
   /** Dedicated-connection embedding ids restored verbatim — see {@link SetupRequest}. */
@@ -3541,14 +3558,17 @@ function finalRawConfigForSetup(
       ? {}
       : { figma: { accessToken: input.figmaAccessToken } }),
   };
+  // Verbatim restoration reads the DURABLE stored view: restored values are what the FILE
+  // holds, so a transient per-model env override neither hides a sharing relationship nor gets
+  // baked into the rebuilt persisted config (review finding on #3037).
   return applyStoredDedicatedProviders(
     applyVoiceProviders(
       rawConfigWithOptionalBlocks,
       input.voiceProviders.length > 0
         ? input.voiceProviders
-        : setupVoiceProvidersFromCurrent(input.current),
+        : setupVoiceProvidersFromCurrent(input.stored),
     ),
-    input.current,
+    input.stored,
     [...input.storedOcrModelIds, ...input.storedDedicatedEmbeddingModelIds],
     {
       baseUrl: input.baseUrl,
@@ -3970,6 +3990,7 @@ async function trySetupCandidate(
     storedOcrModelIds: request.storedOcrModelIds,
     storedDedicatedEmbeddingModelIds: request.storedDedicatedEmbeddingModelIds,
     storedVoiceModelIds: request.storedVoiceModelIds,
+    stored: request.stored,
     workflowEligibleModelIds: request.workflowEligibleModelIdsConfigured
       ? request.workflowEligibleModelIds
       : undefined,
@@ -4011,6 +4032,44 @@ function withDiskGatewayEgress(
   const withoutEgress = { ...raw };
   delete withoutEgress.egress;
   return withPersistedGatewayEgress(withoutEgress, storagePath, deps);
+}
+
+// Per-model environment overrides (KEIKO_MODEL_<ID>_*) are TRANSIENT operator state layered over
+// the stored file at parse time. Masking exactly that namespace recovers the durable connection
+// identities; global fallbacks stay, because they apply to every provider uniformly and cannot
+// make one provider's stored connection diverge from another's.
+function withoutPerModelEnvOverrides(env: EnvSource): EnvSource {
+  return Object.fromEntries(
+    Object.entries(env).filter(([name]) => !name.startsWith("KEIKO_MODEL_")),
+  );
+}
+
+// The DURABLE connection identities for preserve-mode classification: the persisted file at
+// storagePath, vault references resolved, per-model env overrides masked. The runtime
+// GatewayConfig folds those overrides in, so a transient KEIKO_MODEL_<ID>_BASE_URL or _API_KEY
+// on one shared provider made the durable file-level sharing relationship invisible — a
+// credential rotation then restored the other provider as "dedicated" with its already-dead
+// token (review finding on #3037; the same disk-vs-runtime distinction withDiskGatewayEgress
+// draws for egress). Falls back to the runtime view when nothing is stored yet or the stored
+// file cannot be parsed — exactly the pre-existing behavior for those states.
+function durableStoredGatewayConfig(
+  current: GatewayConfig | undefined,
+  storagePath: string,
+  deps: UiHandlerDeps,
+): GatewayConfig | undefined {
+  if (current === undefined || !existsSync(storagePath)) return current;
+  try {
+    return loadConfigFromFile(storagePath, withoutPerModelEnvOverrides(deps.env), {
+      ...linkLocalGatewayOverrideOptions(deps.env),
+      secretResolver: createProviderSecretResolver({
+        configPath: storagePath,
+        env: deps.env,
+      }),
+    });
+  } catch (error) {
+    if (error instanceof GatewayError) return current;
+    throw error;
+  }
 }
 
 function validateWorkflowEligibleModelIds(
@@ -4198,11 +4257,12 @@ export async function handleGatewaySetup(
   }
   const { gatewayConfig } = deps;
   const current = currentGatewayConfig(deps);
+  const stored = durableStoredGatewayConfig(current, gatewayConfig.storagePath, deps);
   const bodyResult = await readJsonSetupBody(ctx);
   if ("status" in bodyResult) {
     return bodyResult;
   }
-  const request = readSetupRequest(bodyResult.parsed, deps.env, current, ctx.correlationId);
+  const request = readSetupRequest(bodyResult.parsed, deps.env, current, stored, ctx.correlationId);
   if ("status" in request) {
     return request;
   }
