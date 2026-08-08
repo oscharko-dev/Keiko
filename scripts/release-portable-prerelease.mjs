@@ -265,9 +265,16 @@ function repositorySlug() {
 }
 
 function existingReleaseTags() {
-  return ghJson(["api", "repos/{owner}/{repo}/releases?per_page=100"]).map(
-    (entry) => entry.tag_name,
-  );
+  // --paginate fetches EVERY page: with more than 100 releases, a first-page snapshot could
+  // omit the selected version's betas and re-issue an old number or skip the supersede pointer
+  // (review finding on #3037). --slurp wraps the pages into one array of arrays.
+  const pages = ghJson([
+    "api",
+    "--paginate",
+    "--slurp",
+    "repos/{owner}/{repo}/releases?per_page=100",
+  ]);
+  return pages.flat().map((entry) => entry.tag_name);
 }
 
 function listWorkflowRunIds(ref) {

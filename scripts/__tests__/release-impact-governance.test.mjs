@@ -595,8 +595,10 @@ describe("release-impact governance", () => {
       expect(spaceTab.ok).toBe(false);
       expect(messages(spaceTab)).toContain("on a line of its own");
 
+      // STRENGTHENED (review finding on #3037): the marker must start at column zero — ANY
+      // leading indentation can be list-item continuation context, so it never approves now.
       const threeSpaces = validateWith(approvalComment({ body: `   ${phrase}` }));
-      expect(threeSpaces.ok).toBe(true);
+      expect(threeSpaces.ok).toBe(false);
     });
 
     it("rejects a phrase hidden inside an HTML comment", () => {
@@ -611,6 +613,18 @@ describe("release-impact governance", () => {
         approvalComment({ body: `<!--\nexample\n-->\n\n${phrase}` }),
       );
       expect(afterComment.ok).toBe(true);
+    });
+
+    it("rejects an indented marker in a list item's blank-separated child paragraph", () => {
+      // Review finding on #3037: "- Example approval:" + blank line + a two-space-indented
+      // marker is a SECOND paragraph inside the same list item. Column-zero anchoring makes the
+      // whole indentation class unreachable; the unindented phrase after the list approves.
+      const phrase = approvalPhrase();
+      const child = validateWith(approvalComment({ body: `- Example approval:\n\n  ${phrase}` }));
+      expect(child.ok).toBe(false);
+
+      const plain = validateWith(approvalComment({ body: `- Example approval:\n\n${phrase}` }));
+      expect(plain.ok).toBe(true);
     });
 
     it("rejects a marker nested in a list item, including its lazy continuation", () => {
@@ -684,13 +698,15 @@ describe("release-impact governance", () => {
       expect(messages(tabbed)).toContain("on a line of its own");
     });
 
-    it("accepts a phrase indented by up to three spaces (paragraph, not code)", () => {
-      // The CommonMark boundary sits at four: up to three leading spaces is ordinary paragraph
-      // indentation, so the owner's statement still stands on a plain line of its own.
-      const result = validateWith(approvalComment({ body: `   ${approvalPhrase()}` }));
+    it("rejects any leading indentation on the marker (strengthened to column zero)", () => {
+      // STRENGTHENED relocation of the former three-space paragraph tolerance (review finding
+      // on #3037): leading indentation can be list-item continuation context, so the marker
+      // must start at column zero. Trailing whitespace stays tolerated.
+      const indented = validateWith(approvalComment({ body: `   ${approvalPhrase()}` }));
+      expect(indented.ok).toBe(false);
 
-      expect(messages(result)).not.toContain("approvalReference");
-      expect(result.ok).toBe(true);
+      const trailing = validateWith(approvalComment({ body: `${approvalPhrase()}  ` }));
+      expect(trailing.ok).toBe(true);
     });
 
     it("accepts a real standalone phrase even when a fenced example precedes it", () => {

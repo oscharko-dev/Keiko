@@ -532,6 +532,30 @@ describe("parseGatewayConfigUpload", () => {
     expect(parseGatewayConfigUpload(orphanVersion)).toEqual({ outcome: "invalid" });
   });
 
+  it("refuses base URLs the canonical parser cannot accept", () => {
+    // Mirrors validateBaseUrl (review finding on #3037): absolute http(s) only, plaintext http
+    // only for loopback — a malformed or off-loopback-http URL would fail Test & Save after a
+    // reported upload success.
+    for (const badUrl of ["not a URL", "http://litellm.internal/v1", "https://x.example/v1?q=1"]) {
+      const refused = JSON.stringify({ providers: [providerFixture({ baseUrl: badUrl })] });
+      expect(parseGatewayConfigUpload(refused)).toEqual({ outcome: "invalid" });
+    }
+    const loopback = fieldsOf(
+      JSON.stringify({ providers: [providerFixture({ baseUrl: "http://127.0.0.1:4000/v1" })] }),
+    );
+    expect(loopback.baseUrl).toBe("http://127.0.0.1:4000/v1");
+  });
+
+  it("refuses a provider carrying a secret reference the form cannot apply", () => {
+    // The token field takes a plaintext key; silently dropping apiKeySecretRef would strand the
+    // provider's only credential source (#3037). The product's own persisted file never carries
+    // the field — its credentials live in the sealed vault outside the JSON.
+    const withRef = JSON.stringify({
+      providers: [providerFixture({ apiKeySecretRef: "vault:main-token" })],
+    });
+    expect(parseGatewayConfigUpload(withRef)).toEqual({ outcome: "unsupportedSetting" });
+  });
+
   it("rejects a voice locality on a non-voice capability", () => {
     // The canonical parser rejects a chat/embedding capability carrying voiceProviderLocality
     // (assertNoVoiceFieldsForNonVoiceKind) — reporting upload success would hand the route a

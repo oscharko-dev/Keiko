@@ -226,7 +226,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
   function staticGhAnswer(joined) {
     const answers = [
       ["repo view", '{"nameWithOwner":"oscharko-dev/Keiko"}'],
-      ["api repos/{owner}/{repo}/releases", JSON.stringify([{ tag_name: previousTag }])],
+      ["repos/{owner}/{repo}/releases?per_page", JSON.stringify([{ tag_name: previousTag }])],
       // The manifest at the BUILT commit, served through the GitHub contents API: by default it
       // agrees with the local checkout; the red paths override it (review finding on #3037).
       ["contents/package.json", JSON.stringify({ version: localVersion })],
@@ -360,7 +360,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     const overrides = {
       answers: [
         [
-          "api repos/{owner}/{repo}/releases",
+          "repos/{owner}/{repo}/releases?per_page",
           JSON.stringify([{ tag_name: previousTag }, { tag_name: currentTag }]),
         ],
         [`release view ${currentTag}`, '{"isDraft":true}'],
@@ -392,7 +392,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     const overrides = {
       answers: [
         [
-          "api repos/{owner}/{repo}/releases",
+          "repos/{owner}/{repo}/releases?per_page",
           JSON.stringify([{ tag_name: previousTag }, { tag_name: currentTag }]),
         ],
         [`release view ${currentTag}`, '{"isDraft":true}'],
@@ -513,7 +513,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     const overrides = {
       answers: [
         [
-          "api repos/{owner}/{repo}/releases",
+          "repos/{owner}/{repo}/releases?per_page",
           JSON.stringify([{ tag_name: previousTag }, { tag_name: currentTag }]),
         ],
         [`release view ${currentTag}`, '{"isDraft":false}'],
@@ -818,7 +818,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
       answers: [
         [`release view ${currentTag}`, '{"isDraft":true}'],
         [
-          "api repos/{owner}/{repo}/releases",
+          "repos/{owner}/{repo}/releases?per_page",
           JSON.stringify([{ tag_name: previousTag }, { tag_name: currentTag }]),
         ],
       ],
@@ -845,7 +845,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     const overrides = {
       answers: [
         [
-          "api repos/{owner}/{repo}/releases",
+          "repos/{owner}/{repo}/releases?per_page",
           JSON.stringify([{ tag_name: `v${localVersion}-beta.9` }]),
         ],
       ],
@@ -952,7 +952,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
 
   it("publishes a first beta without touching a predecessor", () => {
     const recorded = [];
-    const overrides = { answers: [["api repos/{owner}/{repo}/releases", "[]"]] };
+    const overrides = { answers: [["repos/{owner}/{repo}/releases?per_page", "[]"]] };
     withHostPlatform("darwin", () =>
       withProcessRunner(ghDouble(recorded, overrides), () =>
         runPortablePrerelease(["--run-id", "42", "--tag", `v${localVersion}-beta.0`]),

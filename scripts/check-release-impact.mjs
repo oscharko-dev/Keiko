@@ -468,7 +468,10 @@ function phraseStandsOnPlainLine(body, phrase) {
   };
   for (const rawLine of body.split("\n")) {
     if (approvalContextLine(rawLine, state)) continue;
-    if (rawLine.trim() === phrase) return true;
+    // The marker must start at COLUMN ZERO: any leading indentation can place it inside a list
+    // item's child paragraph or other continuation context (review finding on #3037) — the
+    // documented contract is an unindented line of its own.
+    if (rawLine.trimEnd() === phrase) return true;
   }
   return false;
 }

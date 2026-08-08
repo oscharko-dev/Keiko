@@ -40,6 +40,15 @@ const SUPPORTED_API_KEY_HEADER_NAMES = new Set([
  * Retry tuning (maxRetries, retryBaseDelayMs) stays tolerated everywhere: the form has no field
  * for it either, but it does not change which endpoint or protocol the connection speaks.
  */
+/**
+ * A secret REFERENCE is a credential source the form cannot carry (the token field takes a
+ * plaintext key that the save re-seals into the vault) — silently dropping a provider's only
+ * credential source would leave the form unsavable or inherit an unrelated stored token. The
+ * product's own persisted file never carries the field (its credentials live in the sealed
+ * vault, outside the JSON), so refusing cannot reject a round-trip (review finding on #3037).
+ */
+const UNSUPPORTED_CREDENTIAL_REFERENCE = "apiKeySecretRef";
+
 const UNSUPPORTED_GENERIC_PROVIDER_SETTINGS = [
   "endpointStyle",
   "apiVersion",
@@ -351,6 +360,24 @@ function readVoiceProfiles(value: unknown): {
   return { ok: true, value: profiles };
 }
 
+// Mirrors the canonical validateBaseUrl shape rules: absolute http(s), plaintext http only for
+// loopback hosts, no credentials, query, or fragment — a malformed URL would turn a reported
+// upload success into a guaranteed Test & Save failure (review finding on #3037).
+function representableBaseUrl(value: string | undefined): boolean {
+  if (value === undefined) return true;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  const loopback = new Set(["127.0.0.1", "localhost", "[::1]"]);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback.has(url.hostname))) {
+    return false;
+  }
+  return url.username === "" && url.password === "" && url.search === "" && url.hash === "";
+}
+
 function providerConnectionScalars(value: Record<string, unknown>): ConnectionScalars | undefined {
   const baseUrl = readString(value.baseUrl);
   const apiKey = readString(value.apiKey);
@@ -363,6 +390,7 @@ function providerConnectionScalars(value: Record<string, unknown>): ConnectionSc
   ) {
     return undefined;
   }
+  if (!representableBaseUrl(baseUrl.value)) return undefined;
   return {
     baseUrl: baseUrl.value,
     apiKey: apiKey.value,
@@ -524,8 +552,10 @@ function carriesUnsupportedGenericSetting(
     (entry) =>
       objectRecord(entry) &&
       typeof entry.modelId === "string" &&
-      genericIds.has(entry.modelId.trim()) &&
-      UNSUPPORTED_GENERIC_PROVIDER_SETTINGS.some((setting) => entry[setting] !== undefined),
+      ((genericIds.has(entry.modelId.trim()) &&
+        UNSUPPORTED_GENERIC_PROVIDER_SETTINGS.some((setting) => entry[setting] !== undefined)) ||
+        // A secret reference refuses on EVERY provider kind — no form field can carry it.
+        entry[UNSUPPORTED_CREDENTIAL_REFERENCE] !== undefined),
   );
 }
 
