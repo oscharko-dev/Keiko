@@ -19,7 +19,7 @@
   <img alt="TypeScript" src="https://img.shields.io/badge/language-TypeScript-3178C6.svg?logo=typescript&logoColor=white">
   <img alt="Local first" src="https://img.shields.io/badge/runtime-local--first-1F2937.svg">
   <a href="https://sonarcloud.io/summary/new_code?id=oscharko-dev_Keiko"><img alt="SonarCloud Quality Gate" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=alert_status"></a>
-  <a href="https://github.com/oscharko-dev/Keiko-for-Quality"><img alt="Reviewed by Keiko for Quality" src="https://raw.githubusercontent.com/oscharko-dev/Keiko-for-Quality/kq-assets-v1/.github/assets/kq/badge-reviewed.svg" height="20"></a>
+  <a href="https://github.com/oscharko-dev/Keiko-for-Quality"><img alt="Reviewed by Keiko for Quality" src="https://raw.githubusercontent.com/oscharko-dev/Keiko-for-Quality/1869ec1ce1f4fa465d5a0d512f11f18b76ba9a9c/.github/assets/kq/badge-reviewed.svg" height="20"></a>
 </p>
 
 <!-- Live review-record widget, enabled once quality.keiko.dev is deployed (Keiko-for-Quality/widget):
