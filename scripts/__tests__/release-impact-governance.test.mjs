@@ -613,6 +613,19 @@ describe("release-impact governance", () => {
       expect(afterComment.ok).toBe(true);
     });
 
+    it("rejects a close-then-reopen comment line hiding the phrase", () => {
+      // Review finding on #3037: "--> <!--" on one line closes a comment AND opens the next, so
+      // the following phrase still renders invisibly — every marker on the line is walked in
+      // order. An INLINE comment line leaves no open state: the phrase after it approves.
+      const phrase = approvalPhrase();
+      const reopened = validateWith(approvalComment({ body: `<!--\nx --> <!--\n${phrase}\n-->` }));
+      expect(reopened.ok).toBe(false);
+      expect(messages(reopened)).toContain("on a line of its own");
+
+      const inline = validateWith(approvalComment({ body: `<!-- note -->\n\n${phrase}` }));
+      expect(inline.ok).toBe(true);
+    });
+
     it("rejects a phrase that appears only inside a blockquote", () => {
       // Review finding on #3037: a quoted line ("> Approved-for-publish: ...") cites the phrase,
       // typically while discussing it — it is not the owner's own standalone statement.

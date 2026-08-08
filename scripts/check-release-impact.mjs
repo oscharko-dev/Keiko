@@ -375,15 +375,27 @@ function isIndentedCodeLine(rawLine) {
 // must never approve (review finding on #3037). Single-line comments never equal the bare
 // phrase; only the multi-line block state needs tracking.
 function htmlCommentContextLine(line, state) {
-  if (state.inHtmlComment) {
-    if (line.includes("-->")) state.inHtmlComment = false;
-    return true;
+  const isContext = state.inHtmlComment || line.includes("<!--") || line.includes("-->");
+  if (!isContext) return false;
+  // Walk EVERY marker on the line in order — a single "-->" followed by "<!--" closes one
+  // comment and opens the next, so judging only the first marker would end the comment state
+  // while GitHub still renders the following lines invisibly (review finding on #3037). A line
+  // carrying any marker is never the bare phrase itself, so context lines always skip.
+  let index = 0;
+  for (;;) {
+    if (state.inHtmlComment) {
+      const close = line.indexOf("-->", index);
+      if (close === -1) break;
+      state.inHtmlComment = false;
+      index = close + 3;
+    } else {
+      const open = line.indexOf("<!--", index);
+      if (open === -1) break;
+      state.inHtmlComment = true;
+      index = open + 4;
+    }
   }
-  if (line.includes("<!--") && !line.includes("-->")) {
-    state.inHtmlComment = true;
-    return true;
-  }
-  return false;
+  return true;
 }
 
 function approvalContextLine(rawLine, state) {
