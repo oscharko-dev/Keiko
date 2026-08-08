@@ -2366,12 +2366,17 @@ export function GatewaySetupDialog({
     // A defined-but-empty flag list is the file explicitly declaring "none" and must clear the
     // field exactly like manual emptying would (review finding on #3031); only an undefined list
     // (the file never speaks about the flag) leaves the field untouched.
+    // The CONFIGURED flags are invisible state and therefore file-scoped like every other hidden
+    // import: each upload states whether THIS file speaks about the flag lists. The visible
+    // textarea values persist unless the file replaces them (the user can see and correct
+    // those), but a stale invisible flag from an earlier file's explicit empty list would turn
+    // the next submit into a stored-flag clear the current file never asked for (#3037).
+    setImageInputModelIdsConfigured(fields.imageInputModelIds !== undefined);
     if (fields.imageInputModelIds !== undefined) {
-      setImageInputModelIdsConfigured(true);
       setImageInputModelIds(fields.imageInputModelIds.join("\n"));
     }
+    setWorkflowEligibleModelIdsConfigured(fields.workflowEligibleModelIds !== undefined);
     if (fields.workflowEligibleModelIds !== undefined) {
-      setWorkflowEligibleModelIdsConfigured(true);
       setWorkflowEligibleModelIds(fields.workflowEligibleModelIds.join("\n"));
     }
     // Imported embedding kinds ride along invisibly — they assert the kind to the setup route

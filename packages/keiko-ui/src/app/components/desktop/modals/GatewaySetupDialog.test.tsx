@@ -1493,6 +1493,58 @@ describe("GatewaySetupDialog", () => {
     expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).not.toHaveProperty("embeddingModelIds");
   });
 
+  it("resets the invisible configured flags when a corrected file stays silent about them", async () => {
+    // File 1 declares an explicit EMPTY image list (a clear request); the corrected file 2 says
+    // nothing about the flag lists. A stale invisible configured flag would turn the submit into
+    // a stored-flag clear file 2 never asked for (#3037).
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    const upload = await screen.findByLabelText(/load keiko\.config\.json/i);
+    const fileOf = (payload: Record<string, unknown>): File =>
+      new File([JSON.stringify(payload)], "keiko.config.json", { type: "application/json" });
+
+    await userEvent.upload(
+      upload,
+      fileOf({
+        providers: [
+          {
+            modelId: "gpt-5o",
+            baseUrl: "https://llm-gateway.example.com/v1",
+            capability: { id: "gpt-5o", kind: "chat", supportsImageInput: false },
+          },
+        ],
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/base url/i)).toHaveValue("https://llm-gateway.example.com/v1"),
+    );
+    // The corrected file carries no capability records — it never speaks about the flag lists.
+    await userEvent.upload(
+      upload,
+      fileOf({
+        providers: [{ modelId: "gpt-5o", baseUrl: "https://llm-gateway.example.com/v1" }],
+      }),
+    );
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(setupGateway).mock.calls[0]?.[0];
+    expect(payload).not.toHaveProperty("imageInputModelIds");
+    expect(payload).not.toHaveProperty("workflowEligibleModelIds");
+  });
+
   it("clears the imported endpoint protocol when the user retypes the voice endpoint", async () => {
     // The protocol belongs to the imported connection: after the user manually replaces the
     // uploaded Azure speech endpoint with an OpenAI-compatible one, the submit must not carry
