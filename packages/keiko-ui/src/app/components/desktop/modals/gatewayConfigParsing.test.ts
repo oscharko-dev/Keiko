@@ -54,6 +54,7 @@ const NO_VOICE_FIELDS = {
   voiceProfilesReduced: false,
   voiceProviderLocality: undefined,
   voiceRealtimeSkipped: false,
+  voiceRetryTuningReset: false,
 } as const;
 
 function fieldsOf(serialized: string): GatewayConfigUploadFields {
@@ -177,6 +178,7 @@ describe("parseGatewayConfigUpload", () => {
       voiceProfilesReduced: true,
       voiceProviderLocality: "azure-foundry",
       voiceRealtimeSkipped: true,
+      voiceRetryTuningReset: false,
     });
     expect(appliedGatewayConfigFieldCount(fields)).toBe(13);
   });
@@ -464,6 +466,53 @@ describe("parseGatewayConfigUpload", () => {
     });
 
     expect(parseGatewayConfigUpload(unknownStyle)).toEqual({ outcome: "invalid" });
+  });
+
+  it("refuses an api version the gateway's format rule rejects", () => {
+    // Mirrors resolveProviderApiVersion (YYYY-MM-DD or YYYY-MM-DD-preview): accepting a
+    // malformed version would turn the reported upload success into a guaranteed Test & Save
+    // failure (#3037).
+    const malformed = JSON.stringify({
+      providers: [
+        providerFixture(),
+        voiceProviderFixture(
+          "keiko-stt",
+          { supportsSpeechInput: true },
+          { endpointStyle: "azure-openai-deployment", apiVersion: "not-a-date" },
+        ),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(malformed)).toEqual({ outcome: "invalid" });
+  });
+
+  it("states the retry-tuning reset for an imported voice provider, loudly", () => {
+    // The persisted product configuration carries per-role voice retry tuning (the owner's file
+    // has maxRetries 3 on TTS) that the flat form cannot express — the import applies with the
+    // reset STATED, never silently and never as a refusal that would lose the file (#3037).
+    const tuned = fieldsOf(
+      JSON.stringify({
+        providers: [
+          providerFixture(),
+          voiceProviderFixture("keiko-stt", { supportsSpeechInput: true }, { maxRetries: 3 }),
+        ],
+      }),
+    );
+    expect(tuned.voiceRetryTuningReset).toBe(true);
+
+    const defaults = fieldsOf(
+      JSON.stringify({
+        providers: [
+          providerFixture(),
+          voiceProviderFixture(
+            "keiko-stt",
+            { supportsSpeechInput: true },
+            { maxRetries: 1, retryBaseDelayMs: 500 },
+          ),
+        ],
+      }),
+    );
+    expect(defaults.voiceRetryTuningReset).toBe(false);
   });
 
   it("refuses an api version outside the Azure deployment shape", () => {

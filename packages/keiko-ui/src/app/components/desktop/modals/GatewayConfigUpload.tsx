@@ -19,6 +19,7 @@ interface UploadState {
   readonly appliedCount: number | undefined;
   readonly realtimeSkipped: boolean;
   readonly profilesReduced: boolean;
+  readonly retryTuningReset: boolean;
 }
 
 const INITIAL_STATE: UploadState = {
@@ -26,6 +27,7 @@ const INITIAL_STATE: UploadState = {
   appliedCount: undefined,
   realtimeSkipped: false,
   profilesReduced: false,
+  retryTuningReset: false,
 };
 
 async function handleUploadedFile(
@@ -108,6 +110,7 @@ function applyReadOutcome(
     appliedCount: appliedGatewayConfigFieldCount(result.fields),
     realtimeSkipped: result.fields.voiceRealtimeSkipped,
     profilesReduced: result.fields.voiceProfilesReduced,
+    retryTuningReset: result.fields.voiceRetryTuningReset,
   });
 }
 
@@ -176,6 +179,7 @@ function GatewayConfigUploadStatus({ state }: { readonly state: UploadState }): 
         : t("gatewaySetup.upload.appliedMany", { count: state.appliedCount })}
       {state.realtimeSkipped ? ` ${t("gatewaySetup.upload.realtimeSkipped")}` : null}
       {state.profilesReduced ? ` ${t("gatewaySetup.upload.voiceProfilesReduced")}` : null}
+      {state.retryTuningReset ? ` ${t("gatewaySetup.upload.voiceRetryTuningReset")}` : null}
     </output>
   );
 }

@@ -139,6 +139,12 @@ export interface GatewayConfigUploadFields {
    * exactly this shape: realtime on the gateway endpoint, speech on a dedicated one).
    */
   readonly voiceRealtimeSkipped: boolean;
+  /**
+   * True when an imported voice provider tunes maxRetries/retryBaseDelayMs away from the values
+   * a fresh save persists (1/500) — the flat form cannot express per-role retry tuning, so the
+   * reset is stated loudly instead of silently rewriting or refusing the file (#3037).
+   */
+  readonly voiceRetryTuningReset: boolean;
   readonly figmaAccessToken: string | undefined;
 }
 
@@ -770,6 +776,10 @@ const VOICE_REALTIME_AUTH_MODES = new Set(["api-key", "ephemeral-session"]);
  * mode must be values the gateway speaks, and an apiVersion is only meaningful for the Azure
  * deployment shape.
  */
+// Mirrors the model gateway's API_VERSION_RE (resolveProviderApiVersion): an invalid version
+// would turn a reported upload success into a guaranteed Test & Save failure (#3037).
+const AZURE_API_VERSION_RE = /^\d{4}-\d{2}-\d{2}(?:-preview)?$/u;
+
 function representableVoiceEndpoint(endpoint: VoiceEndpointScalars): boolean {
   if (endpoint.endpointStyle !== undefined && !VOICE_ENDPOINT_STYLES.has(endpoint.endpointStyle)) {
     return false;
@@ -778,6 +788,9 @@ function representableVoiceEndpoint(endpoint: VoiceEndpointScalars): boolean {
     endpoint.realtimeAuthMode !== undefined &&
     !VOICE_REALTIME_AUTH_MODES.has(endpoint.realtimeAuthMode)
   ) {
+    return false;
+  }
+  if (endpoint.apiVersion !== undefined && !AZURE_API_VERSION_RE.test(endpoint.apiVersion)) {
     return false;
   }
   // The canonical parser binds apiVersion to the Azure deployment shape — in both directions.
@@ -826,6 +839,7 @@ function fieldsFrom(
   generic: ConnectionScalars,
   voice: VoiceFields,
   figmaAccessToken: string | undefined,
+  voiceRetryTuningReset: boolean,
 ): GatewayConfigUploadFields {
   // Only a CHAT capability can speak about the chat flag lists: an embedding-only declaration
   // must not clear stored chat image/workflow flags the file never mentioned (review finding on
@@ -864,6 +878,7 @@ function fieldsFrom(
     voiceProfilesReduced: voice.voiceProfilesReduced,
     voiceProviderLocality: voice.voiceProviderLocality,
     voiceRealtimeSkipped: voice.voiceRealtimeSkipped,
+    voiceRetryTuningReset,
   };
 }
 
@@ -936,8 +951,43 @@ function assembledFields(
   if (!figma.ok) return { outcome: "invalid" };
   return {
     outcome: "fields",
-    fields: fieldsFrom(partition, generic, voice, figma.value),
+    fields: fieldsFrom(
+      partition,
+      generic,
+      voice,
+      figma.value,
+      importedVoiceRetryTuningReset(root.providers, voice),
+    ),
   };
+}
+
+/** The voice route persists exactly these retry values on a FRESH import (no stored template). */
+const REBUILT_VOICE_RETRY = { maxRetries: 1, retryBaseDelayMs: 500 };
+
+function voiceRetryTuningRepresentable(value: Record<string, unknown>): boolean {
+  const keys = Object.keys(REBUILT_VOICE_RETRY) as readonly (keyof typeof REBUILT_VOICE_RETRY)[];
+  return keys.every((key) => value[key] === undefined || value[key] === REBUILT_VOICE_RETRY[key]);
+}
+
+// A file tuning an imported voice provider's retries differently is applied WITH the reduction
+// stated loudly — never silently rewritten and never a refusal that would lose the whole file
+// (the persisted product configuration this feature exists for carries per-role voice retry
+// tuning the flat form cannot express; same policy as voiceProfilesReduced — review finding on
+// #3037). A SKIPPED realtime provider is not imported, so its tuning is not lost and not counted.
+function importedVoiceRetryTuningReset(rawProviders: unknown, voice: VoiceFields): boolean {
+  if (!Array.isArray(rawProviders)) return false;
+  const importedIds = new Set(
+    [voice.voiceModelId, voice.voiceSpeechOutputModelId, voice.voiceRealtimeModelId].filter(
+      (id): id is string => id !== undefined,
+    ),
+  );
+  return rawProviders.some(
+    (entry) =>
+      objectRecord(entry) &&
+      typeof entry.modelId === "string" &&
+      importedIds.has(entry.modelId.trim()) &&
+      !voiceRetryTuningRepresentable(entry),
+  );
 }
 
 /**

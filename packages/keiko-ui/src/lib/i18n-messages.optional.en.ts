@@ -775,6 +775,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The realtime voice model uses its own endpoint and was not applied — add it in the voice settings after saving.",
   "gatewaySetup.upload.voiceProfilesReduced":
     "The file configures several output voices; the neutral voice was applied — the others can be reselected later.",
+  "gatewaySetup.upload.voiceRetryTuningReset":
+    "The file tunes voice retry settings this form cannot carry — saving applies the standard retry behavior.",
   "gatewaySetup.badge.setup": "Model gateway setup",
   "gatewaySetup.badge.update": "Credential update",
   "gatewaySetup.voice.title": "Audio & Digital Voice",

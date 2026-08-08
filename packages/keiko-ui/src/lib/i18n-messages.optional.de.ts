@@ -806,6 +806,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Das Realtime-Sprachmodell nutzt einen eigenen Endpoint und wurde nicht übernommen — ergänze es nach dem Speichern über die Sprach-Einstellungen.",
   "gatewaySetup.upload.voiceProfilesReduced":
     "Die Datei konfiguriert mehrere Ausgabestimmen; übernommen wurde die neutrale Stimme — die übrigen lassen sich später neu wählen.",
+  "gatewaySetup.upload.voiceRetryTuningReset":
+    "Die Datei stimmt Sprach-Wiederholversuche ab, die dieses Formular nicht übernehmen kann — beim Speichern gilt das Standard-Wiederholverhalten.",
   "gatewaySetup.badge.setup": "Modell-Gateway-Einrichtung",
   "gatewaySetup.badge.update": "Zugangsdaten aktualisieren",
   "gatewaySetup.voice.title": "Audio & Digital Voice",
