@@ -3390,23 +3390,6 @@ describe("handleGatewaySetup", () => {
         );
       },
     });
-    const ocrCapability = (id: string): Record<string, unknown> => ({
-      id,
-      kind: "ocr-vision",
-      contextWindow: 32_000,
-      maxOutputTokens: 4_096,
-      toolCalling: false,
-      structuredOutput: false,
-      streaming: false,
-      supportsImageInput: false,
-      supportsDocumentInput: true,
-      workflowEligible: false,
-      costClass: "low",
-      latencyClass: "fast",
-      throughputHint: "test ocr deployment",
-      preferredUseCases: ["Document OCR"],
-      knownLimitations: [],
-    });
     const gatewayConfig = deps.gatewayConfig;
     if (gatewayConfig === undefined) throw new Error("expected gateway config store");
     gatewayConfig.set(
@@ -3421,13 +3404,13 @@ describe("handleGatewaySetup", () => {
             modelId: "scan-ocr",
             baseUrl: "https://llm.example.com/v1",
             apiKey: "chat-token",
-            capability: ocrCapability("scan-ocr"),
+            capability: durableOcrCapability("scan-ocr"),
           },
           {
             modelId: "remote-ocr",
             baseUrl: "https://ocr.example.com",
             apiKey: "dedicated-ocr-token",
-            capability: ocrCapability("remote-ocr"),
+            capability: durableOcrCapability("remote-ocr"),
           },
         ],
         circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
@@ -3535,6 +3518,276 @@ describe("handleGatewaySetup", () => {
     expect(replaced.status).toBe(200);
     expect(savedOcr().get("scan-ocr")).toBeUndefined();
     expect(savedOcr().get("remote-ocr")).toBeUndefined();
+    deps.store.close();
+  });
+
+  // Shared by the two durable-classification tests below (review finding on #3040).
+  const durableOcrCapability = (id: string): Record<string, unknown> => ({
+    id,
+    kind: "ocr-vision",
+    contextWindow: 32_000,
+    maxOutputTokens: 4_096,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: true,
+    workflowEligible: false,
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "test ocr deployment",
+    preferredUseCases: ["Document OCR"],
+    knownLimitations: [],
+  });
+
+  it("classifies stored-provider sharing from the persisted file, not the env-resolved runtime view", async () => {
+    // Codex finding deferred on #3037: the preserve-mode rebuild judged connection sharing on the
+    // RUNTIME GatewayConfig, which folds in transient per-model environment overrides
+    // (KEIKO_MODEL_<ID>_BASE_URL / _API_KEY). An override moving only the chat provider made the
+    // durable file-level sharing relationship invisible, so a credential rotation restored the
+    // same-connection OCR provider as "dedicated" with its already-dead token. Sharing is now
+    // classified on the persisted configuration (vault-resolved, per-model overrides masked) —
+    // the same disk-vs-runtime rule withDiskGatewayEgress draws for egress.
+    const uiDir = await tempDir("keiko-gw-ui-durable-share-");
+    const evidenceDir = await tempDir("keiko-gw-ev-durable-share-");
+    // The stored file: chat and scan-ocr SHARE one connection; remote-ocr owns a dedicated one.
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "scan-ocr",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            capability: durableOcrCapability("scan-ocr"),
+          },
+          {
+            modelId: "remote-ocr",
+            baseUrl: "https://ocr.example.com",
+            apiKey: "dedicated-ocr-token",
+            capability: durableOcrCapability("remote-ocr"),
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    // A transient operator override moves ONLY the chat provider at runtime — the durable
+    // file-level relationship (chat and scan-ocr share a connection) must survive it.
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {
+        ...VAULT_ENV,
+        KEIKO_MODEL_EXAMPLE_CHAT_BASE_URL: "https://elsewhere.example.com/v1",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve(
+          modelIds.filter((modelId) => modelId !== "scan-ocr" && modelId !== "remote-ocr"),
+        ),
+    });
+    const savedConnections = (): ReadonlyMap<string, { apiKey: string; baseUrl: string }> =>
+      new Map(
+        (currentGatewayConfig(deps)?.providers ?? []).map((provider) => [
+          provider.modelId,
+          { apiKey: provider.apiKey, baseUrl: provider.baseUrl },
+        ]),
+      );
+
+    const rotated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "example-rotated-token" }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    // The old token dies with the rotation: the file-sharing OCR must follow it even though the
+    // runtime view shows the chat provider on the overridden endpoint.
+    // The shared OCR follows the VERIFIED connection (the runtime-inherited, overridden URL —
+    // the smoke test ran there), while the dedicated OCR keeps its own endpoint untouched.
+    expect(savedConnections().get("scan-ocr")).toEqual({
+      apiKey: "example-rotated-token",
+      baseUrl: "https://elsewhere.example.com/v1",
+    });
+    expect(savedConnections().get("remote-ocr")).toEqual({
+      apiKey: "dedicated-ocr-token",
+      baseUrl: "https://ocr.example.com",
+    });
+
+    // Second rotation against the now-SEALED persisted file (apiKeys live in the vault after the
+    // first save): the durable classification must resolve vault references, or every provider
+    // would classify as dedicated on the second rotation.
+    const resealed = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "example-second-token" }),
+      deps,
+    );
+    expect(resealed.status).toBe(200);
+    expect(savedConnections().get("scan-ocr")).toEqual({
+      apiKey: "example-second-token",
+      baseUrl: "https://elsewhere.example.com/v1",
+    });
+    expect(savedConnections().get("remote-ocr")).toEqual({
+      apiKey: "dedicated-ocr-token",
+      baseUrl: "https://ocr.example.com",
+    });
+    deps.store.close();
+  });
+
+  it("falls back to the runtime view when the persisted file is not a valid gateway config", async () => {
+    // The documented fail-safe of durableStoredGatewayConfig: a stored file the gateway parser
+    // refuses must not fail the setup — classification degrades to the env-resolved runtime
+    // view (exactly the pre-change behavior) and the rotation still completes. The file stays
+    // VALID JSON on purpose: byte-corrupt JSON is refused by the separate egress-preservation
+    // guard (persistedGatewayEgress fails a preserve-mode save closed rather than risk dropping
+    // a persisted egress block it cannot read — review finding on #3040).
+    const uiDir = await tempDir("keiko-gw-ui-durable-corrupt-");
+    const evidenceDir = await tempDir("keiko-gw-ev-durable-corrupt-");
+    const schemaInvalid = JSON.stringify({ providers: [{ modelId: "half-a-provider" }] });
+    writeFileSync(join(uiDir, "keiko.config.json"), schemaInvalid, "utf8");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const fresh = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm.example.com/v1", apiKey: "chat-token" }),
+      deps,
+    );
+    expect(fresh.status).toBe(200);
+    // The fresh save rewrote the file with valid content — break it AGAIN so the rotation's
+    // durable parse actually takes the GatewayError fallback (review finding on #3040).
+    writeFileSync(join(uiDir, "keiko.config.json"), schemaInvalid, "utf8");
+
+    const rotated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "example-rotated-token" }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.providers[0]?.apiKey).toBe("example-rotated-token");
+    deps.store.close();
+  });
+
+  it("keeps parser-required per-model protocol overrides while masking connection identity", async () => {
+    // Codex finding on #3040: masking the ENTIRE KEIKO_MODEL_* namespace broke the durable parse
+    // for a stored Azure provider whose apiVersion arrives via KEIKO_MODEL_<ID>_API_VERSION —
+    // ConfigInvalidError, silent fallback to the env-resolved runtime view, and the
+    // misclassification this change exists to fix came back exactly when a URL override was also
+    // present. Only the CONNECTION-IDENTITY fields (base URL, api key, header) are masked now;
+    // protocol overrides cannot skew sharing and stay available to the parser.
+    const uiDir = await tempDir("keiko-gw-ui-durable-protocol-");
+    const evidenceDir = await tempDir("keiko-gw-ev-durable-protocol-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://azure.example.com/v1",
+            apiKey: "chat-token",
+            endpointStyle: "azure-openai-deployment",
+          },
+          {
+            modelId: "scan-ocr",
+            baseUrl: "https://azure.example.com/v1",
+            apiKey: "chat-token",
+            endpointStyle: "azure-openai-deployment",
+            capability: durableOcrCapability("scan-ocr"),
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {
+        ...VAULT_ENV,
+        // The parser REQUIRES an api version for the deployment style — supplied only via env,
+        // together with the style override the same operator ships (the probe candidates carry
+        // no file style, so version-without-style would refuse the whole setup).
+        KEIKO_MODEL_EXAMPLE_CHAT_ENDPOINT_STYLE: "azure-openai-deployment",
+        KEIKO_MODEL_EXAMPLE_CHAT_API_VERSION: "2025-04-01-preview",
+        KEIKO_MODEL_SCAN_OCR_ENDPOINT_STYLE: "azure-openai-deployment",
+        KEIKO_MODEL_SCAN_OCR_API_VERSION: "2025-04-01-preview",
+        // And the transient identity override that hid the sharing relationship.
+        KEIKO_MODEL_EXAMPLE_CHAT_BASE_URL: "https://elsewhere.example.com/v1",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve(modelIds.filter((modelId) => modelId !== "scan-ocr")),
+    });
+
+    const rotated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "example-rotated-token" }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const scanOcr = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "scan-ocr",
+    );
+    expect(scanOcr?.apiKey).toBe("example-rotated-token");
+    deps.store.close();
+  });
+
+  it("keeps a transient credential override from declassifying file-level sharing", async () => {
+    // Same class, credential axis: KEIKO_MODEL_<ID>_API_KEY on the chat provider made the
+    // runtime primary's credential diverge from the stored file, so every file-sharing provider
+    // compared unequal and was restored with its obsolete token after a rotation.
+    const uiDir = await tempDir("keiko-gw-ui-durable-cred-");
+    const evidenceDir = await tempDir("keiko-gw-ev-durable-cred-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "scan-ocr",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            capability: durableOcrCapability("scan-ocr"),
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {
+        ...VAULT_ENV,
+        KEIKO_MODEL_EXAMPLE_CHAT_API_KEY: "transient-ops-token",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve(modelIds.filter((modelId) => modelId !== "scan-ocr")),
+    });
+
+    const rotated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "example-rotated-token",
+      }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const scanOcr = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "scan-ocr",
+    );
+    expect(scanOcr?.apiKey).toBe("example-rotated-token");
     deps.store.close();
   });
 
