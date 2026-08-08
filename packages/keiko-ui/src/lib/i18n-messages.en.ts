@@ -220,6 +220,13 @@ export const EN_MESSAGES = {
   "common.advanced": "advanced",
   "gatewaySetup.badge.setup": "Model gateway setup",
   "gatewaySetup.badge.update": "Credential update",
+  "gatewaySetup.upload.title": "Load a configuration file",
+  "gatewaySetup.upload.hint":
+    "Have a keiko.config.json? Load it to fill in every field it covers — the file stays on this machine, and anything it does not contain (such as the API token) you add below.",
+  "gatewaySetup.upload.action": "Load keiko.config.json",
+  "gatewaySetup.upload.applied": "Configuration loaded — {count} field(s) filled in below.",
+  "gatewaySetup.upload.invalid": "This file is not a readable Keiko configuration.",
+  "gatewaySetup.upload.fileTooLarge": "This file exceeds the supported 256 KB.",
   "gatewaySetup.loading.title": "Preparing model gateway setup",
   "gatewaySetup.loading.description":
     "Loading the local setup controls. No provider request has been started.",

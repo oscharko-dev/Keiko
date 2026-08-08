@@ -37,3 +37,82 @@
     background: ButtonFace;
   }
 }
+
+.cmp-config-upload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: var(--space-4);
+  background: var(--surface-elevated);
+}
+
+.cmp-config-upload > div {
+  flex: 1 1 240px;
+}
+
+.cmp-config-upload h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+}
+
+.cmp-config-upload p {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+}
+
+.cmp-config-upload-action {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-control);
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-primary);
+  background: var(--surface-overlay);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.cmp-config-upload-action:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-elevated);
+}
+
+.cmp-config-upload-action:focus-within {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.cmp-config-upload-action:has(input:disabled) {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.cmp-config-upload-alert {
+  flex-basis: 100%;
+  color: var(--feedback-danger);
+  font-size: var(--text-caption);
+}
+
+.cmp-config-upload-applied {
+  flex-basis: 100%;
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+}
+
+@media (forced-colors: active) {
+  .cmp-config-upload,
+  .cmp-config-upload-action {
+    border-color: ButtonText;
+    color: ButtonText;
+    background: ButtonFace;
+  }
+}

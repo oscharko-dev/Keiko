@@ -230,6 +230,13 @@ export const DE_MESSAGES = {
   "common.advanced": "erweitert",
   "gatewaySetup.badge.setup": "Modell-Gateway-Einrichtung",
   "gatewaySetup.badge.update": "Zugangsdaten aktualisieren",
+  "gatewaySetup.upload.title": "Konfigurationsdatei laden",
+  "gatewaySetup.upload.hint":
+    "Du hast eine keiko.config.json? Lade sie und alle enthaltenen Felder werden ausgefüllt — die Datei bleibt auf diesem Rechner, und was sie nicht enthält (etwa den API-Token), ergänzt du unten.",
+  "gatewaySetup.upload.action": "keiko.config.json laden",
+  "gatewaySetup.upload.applied": "Konfiguration geladen — {count} Feld(er) unten ausgefüllt.",
+  "gatewaySetup.upload.invalid": "Diese Datei ist keine lesbare Keiko-Konfiguration.",
+  "gatewaySetup.upload.fileTooLarge": "Diese Datei überschreitet die unterstützten 256 KB.",
   "gatewaySetup.loading.title": "Modell-Gateway-Einrichtung wird vorbereitet",
   "gatewaySetup.loading.description":
     "Die lokalen Einrichtungsfelder werden geladen. Es wurde noch keine Anbieteranfrage gestartet.",

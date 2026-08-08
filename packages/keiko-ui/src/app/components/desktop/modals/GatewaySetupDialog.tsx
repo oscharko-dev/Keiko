@@ -24,6 +24,8 @@ import KeikoSelect from "../KeikoSelect";
 import { useTheme } from "../hooks/useTheme";
 import { NATIVE_BLOCK_STYLE } from "../native-element-styles";
 import { notifyGatewayConfigUpdated } from "../widgets/shared/gatewaySetupBus";
+import { GatewayConfigUpload } from "./GatewayConfigUpload";
+import type { GatewayConfigUploadFields } from "./gatewayConfigParsing";
 import styles from "./GatewaySetupDialog.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
@@ -2266,6 +2268,21 @@ export function GatewaySetupDialog({
     }
   }, [apiKey, baseUrl, busy, error, preserveExisting]);
 
+  function applyUploadedConfig(fields: GatewayConfigUploadFields): void {
+    if (fields.baseUrl !== undefined) setBaseUrl(fields.baseUrl);
+    if (fields.apiKey !== undefined) setApiKey(fields.apiKey);
+    if (fields.apiKeyHeaderName !== undefined) setApiKeyHeaderName(fields.apiKeyHeaderName);
+    if (fields.timeoutMs !== undefined) setTimeoutMs(fields.timeoutMs);
+    if (fields.deploymentNames.length > 0) setDeploymentNames(fields.deploymentNames.join("\n"));
+    if (fields.imageInputModelIds.length > 0) {
+      setImageInputModelIds(fields.imageInputModelIds.join("\n"));
+    }
+    if (fields.workflowEligibleModelIds.length > 0) {
+      setWorkflowEligibleModelIdsConfigured(true);
+      setWorkflowEligibleModelIds(fields.workflowEligibleModelIds.join("\n"));
+    }
+  }
+
   async function submit(event: FormSubmitEvent): Promise<void> {
     event.preventDefault();
     if (busy) return;
@@ -2482,6 +2499,11 @@ export function GatewaySetupDialog({
             <h1 id="gw-setup-title">{dialogCopy.title}</h1>
             <p id="gw-setup-desc">{dialogCopy.description}</p>
           </div>
+
+          <GatewayConfigUpload
+            disabled={busy || success !== undefined}
+            onApply={applyUploadedConfig}
+          />
 
           <GatewayModelSection
             preserveExisting={preserveExisting}
