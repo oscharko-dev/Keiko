@@ -10,11 +10,12 @@
  * 2. The publish set is EXACTLY four assets — three target ZIPs plus the Windows setup companion.
  *    Stray loose binaries inside artifacts are never published.
  * 3. SHA-256 checksums for all four assets are computed locally and embedded in the release body.
- * 4. On a darwin host the macOS arm64 bundle is verified the way Gatekeeper judges it before
- *    anything is published: `codesign --verify --deep --strict` must pass, and the historical
- *    "code has no resources but signature indicates they must be present" (beta.0's "damaged"
- *    dead end) must not appear. On a non-darwin host the script says the verification did not
- *    run — a skipped check is reported, never silently dropped.
+ * 4. On a darwin host BOTH macOS bundles (arm64 and x64) are verified the way Gatekeeper judges
+ *    them before anything is published: `codesign --verify --deep --strict` must pass for each,
+ *    and the historical "code has no resources but signature indicates they must be present"
+ *    (beta.0's "damaged" dead end) must not appear. codesign verifies the x64 seal statically on
+ *    an arm64 host — no execution involved. On a non-darwin host the script says the verification
+ *    did not run — a skipped check is reported, never silently dropped.
  * 5. The release is created as a PRERELEASE with provenance (source commit + workflow run id) in
  *    the body, and the previous beta of the same version gets a superseded pointer prepended.
  *
@@ -25,7 +26,9 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  copyFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -51,6 +54,9 @@ const PUBLISH_ASSETS = [
   { artifact: EVALUATION_ARTIFACTS[2], file: "keiko-windows-x64.zip" },
   { artifact: EVALUATION_ARTIFACTS[2], file: "keiko-windows-x64-setup.exe" },
 ];
+const MACOS_SEALED_ASSETS = PUBLISH_ASSETS.filter((asset) =>
+  asset.file.startsWith("keiko-macos-"),
+).map((asset) => asset.file);
 const DAMAGED_SIGNATURE_TEXT = "code has no resources but signature indicates they must be present";
 const POLL_INTERVAL_MS = 30_000;
 const MAX_WAIT_MS = 60 * 60 * 1000;
@@ -95,6 +101,7 @@ export function parseArgs(argv) {
 let processRunner = spawnSyncRunner;
 let hostPlatform = process.platform;
 let sleeper = atomicsSleep;
+let assetCopier = fsAssetCopier;
 
 /** Test seam: pretend to run on another platform for a callback's duration. */
 export function withHostPlatform(platform, callback) {
@@ -127,6 +134,25 @@ export function withSleeper(replacement, callback) {
   } finally {
     sleeper = previous;
   }
+}
+
+/**
+ * Test seam: swap the publish-set asset copier for a callback's duration, always restoring it.
+ * The hermetic suite injects a corrupted copier here to prove the publish-set guard catches a
+ * stray file dropped next to a target (review finding on #3037).
+ */
+export function withAssetCopier(copier, callback) {
+  const previous = assetCopier;
+  assetCopier = copier;
+  try {
+    return callback();
+  } finally {
+    assetCopier = previous;
+  }
+}
+
+function fsAssetCopier(source, destination) {
+  copyFileSync(source, destination);
 }
 
 function spawnSyncRunner(command, args, options = {}) {
@@ -305,10 +331,10 @@ function assembleDownloadedAssets(runId, workDir) {
     gh(["run", "download", runId, "--name", artifact, "--dir", join(workDir, artifact)]);
   }
   const publishDir = join(workDir, "publish");
-  run("/bin/mkdir", ["-p", publishDir]);
+  mkdirSync(publishDir, { recursive: true });
   for (const asset of PUBLISH_ASSETS) {
     const source = findAssetFile(join(workDir, asset.artifact), asset.file);
-    run("/bin/cp", [source, join(publishDir, asset.file)]);
+    assetCopier(source, join(publishDir, asset.file));
   }
   const byName = (left, right) => left.localeCompare(right);
   const names = readdirSync(publishDir).sort(byName);
@@ -341,29 +367,40 @@ function checksumLines(publishDir) {
 }
 
 /**
- * The beta.0 pin, run where Gatekeeper actually runs: an unsealed bundle inside the ZIP is the
- * "damaged" dead end and must never publish again. Only darwin can execute codesign; any other
- * host states the skip out loud instead of implying coverage.
+ * The beta.0 pin, run where Gatekeeper actually runs: an unsealed bundle inside a ZIP is the
+ * "damaged" dead end and must never publish again. BOTH macOS archives are judged — codesign
+ * verifies the x64 seal statically on an arm64 host (no execution involved), so publishing
+ * keiko-macos-x64.zip without evidence about its own bytes is never necessary (review finding on
+ * #3037). A failure in either archive refuses the publish. Only darwin can execute codesign; any
+ * other host states the skip out loud instead of implying coverage.
  */
 function verifyMacosSeal(publishDir) {
   if (hostPlatform !== "darwin") {
     log(
-      "WARNING: macOS seal verification did not run (non-darwin host) — verify the arm64 asset on a Mac before announcing the release.",
+      "WARNING: macOS seal verification did not run (non-darwin host) — verify both macOS assets on a Mac before announcing the release.",
     );
     return "skipped-non-darwin";
   }
-  const extractDir = join(publishDir, "..", "seal-check");
-  run("/usr/bin/unzip", ["-q", join(publishDir, "keiko-macos-arm64.zip"), "-d", extractDir]);
+  for (const file of MACOS_SEALED_ASSETS) {
+    verifyMacosAssetSeal(publishDir, file);
+  }
+  return `verified (${MACOS_SEALED_ASSETS.join(", ")})`;
+}
+
+function verifyMacosAssetSeal(publishDir, file) {
+  const extractDir = join(publishDir, "..", `seal-check-${file}`);
+  run("/usr/bin/unzip", ["-q", join(publishDir, file), "-d", extractDir]);
   const app = join(extractDir, "Keiko", "Keiko.app");
   const result = processRunner("/usr/bin/codesign", ["--verify", "--deep", "--strict", app], {});
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   if (output.includes(DAMAGED_SIGNATURE_TEXT)) {
-    fail(`the arm64 bundle is unsealed (the beta.0 "damaged" regression): ${output.trim()}`);
+    fail(`the ${file} bundle is unsealed (the beta.0 "damaged" regression): ${output.trim()}`);
   }
-  if (result.status !== 0) fail(`codesign --verify --deep --strict failed: ${output.trim()}`);
+  if (result.status !== 0) {
+    fail(`codesign --verify --deep --strict failed for ${file}: ${output.trim()}`);
+  }
   rmSync(extractDir, { recursive: true, force: true });
-  log("macOS arm64 bundle seal verified (codesign --verify --deep --strict).");
-  return "verified";
+  log(`${file} bundle seal verified (codesign --verify --deep --strict).`);
 }
 
 export function releaseBody(input) {
@@ -453,6 +490,9 @@ export function runPortablePrerelease(argv) {
   const runId = options.runId ?? dispatchWorkflow(options.ref);
   log(`waiting for workflow run ${runId} ...`);
   const view = waitForRun(runId);
+  // A "failure" conclusion is still publishable on purpose: the run-level conclusion aggregates
+  // non-gating lanes (the evaluation lane may fail), while the jobs that actually produce the
+  // published assets are separately and strictly asserted by assertStagingJobsSucceeded below.
   if (view.conclusion !== "success" && view.conclusion !== "failure") {
     fail(`run ${runId} concluded ${view.conclusion}; refusing to publish from it.`);
   }

@@ -2,7 +2,7 @@ import * as fsModule from "node:fs";
 import * as pathModule from "node:path";
 import { readFileSync } from "node:fs";
 import { spawnSync as realSpawnSync } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   nextBetaTag,
   parseArgs,
@@ -10,10 +10,19 @@ import {
   releaseBody,
   run,
   runPortablePrerelease,
+  withAssetCopier,
   withHostPlatform,
   withProcessRunner,
   withSleeper,
 } from "../release-portable-prerelease.mjs";
+
+// Resolved ONCE from this test file's own location — never from the process cwd (review finding
+// on #3037).
+const PRODUCTION_SCRIPT = pathModule.resolve(
+  import.meta.dirname,
+  "..",
+  "release-portable-prerelease.mjs",
+);
 
 function realSpawn(command, args, options) {
   return realSpawnSync(command, args, { encoding: "utf8", ...options });
@@ -88,33 +97,22 @@ describe("releaseBody", () => {
   });
 });
 
-describe("encoded publishing lessons (source pins)", () => {
-  const source = readFileSync("scripts/release-portable-prerelease.mjs", "utf8");
+describe("encoded publishing lessons (source pins without a behavioral twin)", () => {
+  // Every other former source-text pin here is proven behaviorally by the hermetic suite below
+  // (publish-set guard, three-staging-job rule, damaged-signature refusal, prerelease creation
+  // and supersede pointer) — only pins with no behavioral twin remain (review finding on #3037).
+  const source = readFileSync(PRODUCTION_SCRIPT, "utf8");
 
-  it("publishes exactly the four-asset set and refuses drift", () => {
-    expect(source).toContain('"keiko-macos-arm64.zip"');
-    expect(source).toContain('"keiko-macos-x64.zip"');
-    expect(source).toContain('"keiko-windows-x64.zip"');
-    expect(source).toContain('"keiko-windows-x64-setup.exe"');
-    expect(source).toContain("publish set must be exactly");
-  });
-
-  it("dispatches only the evaluation build and requires all three staging jobs", () => {
+  it("dispatches only the evaluation build", () => {
+    // The hermetic dispatch double accepts any `gh workflow run` line, so only this pin holds
+    // the dispatch to the evaluation lane.
     expect(source).toContain("evaluation_build=true");
-    expect(source).toContain("expected 3 staging jobs");
-    expect(source).toContain('job.conclusion !== "success"');
   });
 
-  it("pins the beta.0 damaged-bundle regression by its exact codesign text", () => {
-    expect(source).toContain("code has no resources but signature indicates they must be present");
-    expect(source).toContain('"--verify", "--deep", "--strict"');
-    // A skipped verification is stated, never silent.
+  it("states a skipped seal verification in the operator log, never silently", () => {
+    // The release-body line has a behavioral twin (the non-darwin plan-only test); the WARNING
+    // in the terminal log does not — it is what an operator watching the run sees.
     expect(source).toContain("verification did not run");
-  });
-
-  it("creates the release as a prerelease and marks the predecessor superseded", () => {
-    expect(source).toContain('"--prerelease"');
-    expect(source).toContain("markPreviousSuperseded");
   });
 });
 
@@ -129,18 +127,14 @@ describe("hermetic end-to-end (scripted gh double)", () => {
   const currentTag = `v${localVersion}-beta.2`;
 
   function ghDouble(recorded, overrides = {}) {
-    return (command, args, options = {}) => {
+    return (command, args) => {
       const line = [command.split("/").pop(), ...args].join(" ");
       recorded.push(line);
-      if (command.endsWith("cp") && overrides.strayOnCopy === true) {
-        const result = realSpawn(command, args, options);
-        // A corrupted copy step drops an extra file next to the target — the publish-set guard
-        // must catch exactly this class.
-        writeFileSync(join(pathModule.dirname(args.at(-1)), "stray.bin"), "stray");
-        return result;
-      }
-      if (command.endsWith("mkdir") || command.endsWith("cp") || command.endsWith("sh")) {
-        return realSpawn(command, args, options);
+      if (line.startsWith("gh release create")) {
+        // The notes file dies with the temp directory — snapshot the rendered release body while
+        // it still exists, so tests can assert what the published surface actually said.
+        const notesPath = args[args.indexOf("--notes-file") + 1];
+        recorded.push(`release-body: ${readFileSync(notesPath, "utf8")}`);
       }
       if (command === "/usr/bin/unzip") {
         const dir = args[args.indexOf("-d") + 1];
@@ -148,7 +142,11 @@ describe("hermetic end-to-end (scripted gh double)", () => {
         return { status: 0, stdout: "", stderr: "" };
       }
       if (command === "/usr/bin/codesign") {
-        return overrides.codesign ?? { status: 0, stdout: "", stderr: "" };
+        const app = String(args.at(-1));
+        return (
+          overrides.codesignFor?.(app) ??
+          overrides.codesign ?? { status: 0, stdout: "", stderr: "" }
+        );
       }
       return ghAnswer(args, overrides);
     };
@@ -235,12 +233,22 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     // The built commit's manifest was read at the exact head sha the run reports — the version
     // binding judges the BUILT commit, not the local checkout alone (review finding on #3037).
     expect(recorded.some((line) => line.includes("contents/package.json?ref=b2e3900a"))).toBe(true);
+    // Exactly the four-asset publish set, by name — the behavioral twin of the former source pin.
     expect(createLine).toContain("keiko-macos-arm64.zip");
+    expect(createLine).toContain("keiko-macos-x64.zip");
+    expect(createLine).toContain("keiko-windows-x64.zip");
     expect(createLine).toContain("keiko-windows-x64-setup.exe");
     // The predecessor got the superseded pointer prepended.
     expect(recorded.some((line) => line.startsWith(`gh release edit ${previousTag}`))).toBe(true);
-    // The seal was verified on the darwin host before anything published.
-    expect(recorded.some((line) => line.includes("codesign --verify --deep --strict"))).toBe(true);
+    // BOTH macOS seals were verified on the darwin host before anything published, and the
+    // release body names what was verified (review finding on #3037).
+    expect(
+      recorded.filter((line) => line.includes("codesign --verify --deep --strict")).length,
+    ).toBe(2);
+    const bodyLine = recorded.find((line) => line.startsWith("release-body: "));
+    expect(bodyLine).toContain(
+      "macOS seal verification: verified (keiko-macos-arm64.zip, keiko-macos-x64.zip).",
+    );
   });
 
   it("refuses to publish when a staging job failed", () => {
@@ -333,16 +341,56 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
   });
 
+  it("refuses a damaged x64 seal even when the arm64 bundle is healthy", () => {
+    // Review finding on #3037: only the arm64 archive was ever codesign-verified, so
+    // keiko-macos-x64.zip could publish with zero evidence about its own bytes. Both macOS
+    // archives must be extracted and judged; a failure in either refuses the publish.
+    const recorded = [];
+    const codesignFor = (app) =>
+      app.includes("keiko-macos-x64.zip")
+        ? {
+            status: 1,
+            stdout: "",
+            stderr: "code has no resources but signature indicates they must be present",
+          }
+        : { status: 0, stdout: "", stderr: "" };
+
+    expect(() =>
+      withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble(recorded, { codesignFor }), () =>
+          runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
+        ),
+      ),
+    ).toThrowError(/damaged/u);
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+    // Both bundles were extracted and judged — the x64 seal is evidence, not a bystander.
+    expect(
+      recorded.filter((line) => line.includes("codesign --verify --deep --strict")).length,
+    ).toBe(2);
+  });
+
   it("states the skipped seal verification out loud on a non-darwin host", () => {
     const recorded = [];
-    withHostPlatform("linux", () =>
-      withProcessRunner(ghDouble(recorded), () =>
-        runPortablePrerelease(["--plan-only", "--run-id", "42", "--tag", currentTag]),
-      ),
-    );
+    const stdout = [];
+    const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      stdout.push(String(chunk));
+      return true;
+    });
+    try {
+      withHostPlatform("linux", () =>
+        withProcessRunner(ghDouble(recorded), () =>
+          runPortablePrerelease(["--plan-only", "--run-id", "42", "--tag", currentTag]),
+        ),
+      );
+    } finally {
+      write.mockRestore();
+    }
 
     expect(recorded.some((line) => line.includes("codesign"))).toBe(false);
     expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+    // The skip reaches the published surface, not only the log: the rendered release body states
+    // it (review finding on #3037).
+    expect(stdout.join("")).toContain("macOS seal verification: skipped-non-darwin.");
   });
 
   it("dispatches and binds to the run created by this dispatch, never a pre-existing one", () => {
@@ -537,11 +585,19 @@ describe("hermetic end-to-end (scripted gh double)", () => {
 
   it("refuses a stray extra file in the assembled publish set", () => {
     const recorded = [];
+    // A corrupted copy step drops an extra file next to the target — the publish-set guard must
+    // catch exactly this class. Injected through the copier seam, like every other seam.
+    const strayCopier = (source, destination) => {
+      fsModule.copyFileSync(source, destination);
+      writeFileSync(join(pathModule.dirname(destination), "stray.bin"), "stray");
+    };
 
     expect(() =>
-      withHostPlatform("darwin", () =>
-        withProcessRunner(ghDouble(recorded, { strayOnCopy: true }), () =>
-          runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
+      withAssetCopier(strayCopier, () =>
+        withHostPlatform("darwin", () =>
+          withProcessRunner(ghDouble(recorded), () =>
+            runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
+          ),
         ),
       ),
     ).toThrowError(/publish set must be exactly/u);
@@ -599,10 +655,7 @@ describe("run (process seam)", () => {
 
 describe("CLI shim", () => {
   it("exits 1 with the usage line when invoked directly with unusable flags", () => {
-    const result = realSpawn(process.execPath, [
-      "scripts/release-portable-prerelease.mjs",
-      "--bogus",
-    ]);
+    const result = realSpawn(process.execPath, [PRODUCTION_SCRIPT, "--bogus"]);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("usage: release-portable-prerelease");

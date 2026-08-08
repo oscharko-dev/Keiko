@@ -261,9 +261,11 @@ function parseGithubIssueCommentReference(reference) {
 /**
  * The literal, version-bound phrase an approval comment must carry. Derived from the catalog
  * entry under validation — the record being approved — never re-read from disk, so the phrase can
- * only ever bind to the exact package identity the gate is judging.
+ * only ever bind to the exact package identity the gate is judging. Exported so test fixtures
+ * derive the phrase from this producer instead of hand-rebuilding the template (review finding on
+ * #3037).
  */
-function publishApprovalPhrase(entry) {
+export function publishApprovalPhrase(entry) {
   return `Approved-for-publish: ${String(entry.packageName)}@${String(entry.packageVersion)}`;
 }
 

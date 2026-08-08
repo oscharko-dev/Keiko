@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  publishApprovalPhrase,
   validateReleaseImpactCatalog,
   validateReleaseImpactRoot,
   withGithubResourceReader,
@@ -455,11 +456,14 @@ describe("release-impact governance", () => {
       });
     }
 
+    // The fixture phrase derives from the exported production template applied to the entry under
+    // validation — never a hand-rebuilt copy that could drift silently (review finding on #3037).
+    const approvalPhrase = () => publishApprovalPhrase(commentEntry());
+
     function approvalComment(overrides = {}) {
-      const manifest = rootManifest();
       return {
         issue_url: "https://api.github.com/repos/oscharko-dev/Keiko/issues/2802",
-        body: `Approved-for-publish: ${manifest.name}@${manifest.version}`,
+        body: approvalPhrase(),
         user: { login: "release-owner-login" },
         ...overrides,
       };
@@ -482,6 +486,7 @@ describe("release-impact governance", () => {
       const result = validateWith(approvalComment());
 
       expect(messages(result)).not.toContain("approvalReference");
+      expect(result.ok).toBe(true);
     });
 
     it("rejects a comment that belongs to a different issue", () => {
@@ -502,10 +507,7 @@ describe("release-impact governance", () => {
       expect(messages(result)).toContain("approvalReference comment must carry");
       // The demanded phrase binds to the exact entry under validation — package name AND version
       // come from the record being approved, never from a second manifest read.
-      const manifest = rootManifest();
-      expect(messages(result)).toContain(
-        `Approved-for-publish: ${manifest.name}@${manifest.version}`,
-      );
+      expect(messages(result)).toContain(approvalPhrase());
     });
 
     it("rejects a comment authored outside the release-owner allow-list", () => {
@@ -525,18 +527,11 @@ describe("release-impact governance", () => {
     it("rejects a comment that only QUOTES the phrase inside a denial", () => {
       // Review finding on #3028: a substring match would read "DO NOT use Approved-for-publish:
       // ..." as an affirmative approval. The phrase must stand on a line of its own.
-      const manifest = rootManifest();
-      const denial = validateWith(
-        approvalComment({
-          body: `DO NOT use Approved-for-publish: ${manifest.name}@${manifest.version} yet.`,
-        }),
-      );
+      const denial = validateWith(approvalComment({ body: `DO NOT use ${approvalPhrase()} yet.` }));
       expect(messages(denial)).toContain("on a line of its own");
 
       const inline = validateWith(
-        approvalComment({
-          body: `I think Approved-for-publish: ${manifest.name}@${manifest.version} applies.`,
-        }),
+        approvalComment({ body: `I think ${approvalPhrase()} applies.` }),
       );
       expect(messages(inline)).toContain("on a line of its own");
     });
@@ -544,8 +539,7 @@ describe("release-impact governance", () => {
     it("rejects a phrase that appears only inside a Markdown code fence", () => {
       // Review finding on #3037: a fenced example ("here is what the gate expects") documents
       // the phrase — it never grants the approval. Backtick and tilde fences alike.
-      const manifest = rootManifest();
-      const phrase = `Approved-for-publish: ${manifest.name}@${manifest.version}`;
+      const phrase = approvalPhrase();
       const backtickFenced = validateWith(
         approvalComment({ body: `The gate expects:\n\n\`\`\`\n${phrase}\n\`\`\`` }),
       );
@@ -558,9 +552,9 @@ describe("release-impact governance", () => {
     it("rejects a phrase that appears only inside a blockquote", () => {
       // Review finding on #3037: a quoted line ("> Approved-for-publish: ...") cites the phrase,
       // typically while discussing it — it is not the owner's own standalone statement.
-      const manifest = rootManifest();
-      const phrase = `Approved-for-publish: ${manifest.name}@${manifest.version}`;
-      const result = validateWith(approvalComment({ body: `Quoting:\n\n> ${phrase}\n\nHm.` }));
+      const result = validateWith(
+        approvalComment({ body: `Quoting:\n\n> ${approvalPhrase()}\n\nHm.` }),
+      );
 
       expect(messages(result)).toContain("on a line of its own");
     });
@@ -568,8 +562,7 @@ describe("release-impact governance", () => {
     it("accepts a real standalone phrase even when a fenced example precedes it", () => {
       // The fence toggles closed again: a documented example above must not poison the owner's
       // actual approval line below it.
-      const manifest = rootManifest();
-      const phrase = `Approved-for-publish: ${manifest.name}@${manifest.version}`;
+      const phrase = approvalPhrase();
       const result = validateWith(
         approvalComment({
           body: `The gate expects:\n\n\`\`\`\n${phrase}\n\`\`\`\n\nAnd here it is for real:\n\n${phrase}`,
@@ -577,6 +570,7 @@ describe("release-impact governance", () => {
       );
 
       expect(messages(result)).not.toContain("approvalReference");
+      expect(result.ok).toBe(true);
     });
 
     it("rejects one issue-comment artifact reused by two catalog records", () => {
