@@ -9,6 +9,10 @@ import {
   type MacosRuntimeActivationFn,
 } from "./portable-macos-activation.js";
 import {
+  notifyPortableLaunchFailure,
+  type PortableFailureNotifierFn,
+} from "./portable-launch-notifier.js";
+import {
   attestedPortableInstallRecord,
   attestedExistingPortableInstall,
   attestedManagedInstall,
@@ -67,6 +71,7 @@ export interface PortableSetupDeps {
   readonly spawnFn?: SpawnFn | undefined;
   readonly lifecycleFn?: LifecycleFn | undefined;
   readonly activateMacosRuntimeFn?: MacosRuntimeActivationFn | undefined;
+  readonly notifyFailureFn?: PortableFailureNotifierFn | undefined;
 }
 
 interface PortableArgDeps {
@@ -223,9 +228,17 @@ async function launchManaged(
   stateDir: string,
   deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "lifecycleFn">,
 ): Promise<number> {
-  if (target !== "windows-x64" && !(await deps.activateMacosRuntimeFn(layout))) {
-    io.err("keiko portable launch: macOS runtime activation is incomplete\n");
-    return 1;
+  if (target !== "windows-x64") {
+    const activation = await deps.activateMacosRuntimeFn(layout, target);
+    if (activation === "unavailable") {
+      io.err("keiko portable launch: macOS runtime activation is incomplete\n");
+      return 1;
+    }
+    if (activation === "waived-unsigned") {
+      io.out(
+        "Keiko platform runtime containment is waived: this install carries no release signature.\n",
+      );
+    }
   }
   return deps.lifecycleFn("start", ["--open", "--state-dir", stateDir], io, env, {
     cwd: layout.appRoot,
@@ -499,6 +512,27 @@ export async function runPortableCli(
   }
   if (options.command === "resolve-root") return resolvePortableManagedRoot(options, io, env);
   if (options.command === "status") return statusPortable(options, io);
-  if (options.command === "setup") return setupPortable({ ...options, env }, io, r.now()).code;
-  return launchPortable(options, io, env, r);
+  let lastError = "";
+  const trackedIo: CliIo = {
+    out: (text): void => {
+      io.out(text);
+    },
+    err: (text): void => {
+      lastError = text;
+      io.err(text);
+    },
+  };
+  const code =
+    options.command === "setup"
+      ? setupPortable({ ...options, env }, trackedIo, r.now()).code
+      : await launchPortable(options, trackedIo, env, r);
+  if (code !== 0) {
+    const notify =
+      deps.notifyFailureFn ??
+      ((message: string, notifyEnv: EnvSource): void => {
+        notifyPortableLaunchFailure(message, notifyEnv, { reportAlertFailure: io.err });
+      });
+    notify(lastError, env);
+  }
+  return code;
 }

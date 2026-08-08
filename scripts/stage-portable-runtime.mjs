@@ -2323,9 +2323,17 @@ async function assembleStageRoot(options, hooks, target, sidecarSpecs, paths) {
     nativeAddons,
   };
   const firstPass = await manifestInputFor(options, target, paths, tarball, staged);
-  writeRuntimeActivationManifest(paths.resourceRoot, firstPass.manifest);
+  const firstActivation = writeRuntimeActivationManifest(paths.resourceRoot, firstPass.manifest);
+  sealMacosAppBundle(target, paths.payloadRoot, hooks);
   const manifestInput = await manifestInputFor(options, target, paths, tarball, staged);
-  writeRuntimeActivationManifest(paths.resourceRoot, manifestInput.manifest);
+  const finalActivation = writeRuntimeActivationManifest(
+    paths.resourceRoot,
+    manifestInput.manifest,
+  );
+  if (target.nodePlatform === "darwin" && firstActivation.sha256 !== finalActivation.sha256) {
+    fail("runtime activation manifest changed after the app bundle was sealed");
+  }
+  verifyMacosAppBundleSeal(target, paths.payloadRoot, hooks);
   writeEvidence(paths.stageRoot, manifestInput.manifest, manifestInput.provenanceStatement);
   writeManifest(paths.stageRoot, manifestInput.manifest);
   validateGeneratedManifest(manifestInput.manifest, options.evaluation === true);
@@ -2362,6 +2370,72 @@ async function manifestInputFor(options, target, paths, tarball, staged) {
     ),
     provenanceStatement,
   };
+}
+
+/**
+ * Seals the assembled macOS app bundle with an ad-hoc code signature. Every Mach-O inside the
+ * bundle is already individually signed (linker ad-hoc at minimum), but Gatekeeper judges the
+ * BUNDLE: a bundle whose main executable carries a signature while the bundle has no resource
+ * seal is reported as "damaged", and macOS then offers no "Open Anyway" approval path at all —
+ * the one journey an unsigned evaluation download depends on (ADR-0163 D9). The ad-hoc seal
+ * asserts no author; it makes the bundle internally consistent so the platform can offer its
+ * normal unidentified-developer approval. The Developer ID lane later replaces this seal with
+ * the real one (`codesign --force` in run-macos-portable-signing.sh), so sealing here is safe
+ * for every lane. The seal must cover the final runtime-activation manifest, so it runs after
+ * that write and before the shipped ZIP is created.
+ */
+function sealMacosAppBundle(target, payloadRoot, hooks) {
+  if (target.nodePlatform !== "darwin") return;
+  const appRoot = join(payloadRoot, "Keiko.app");
+  if (hooks.sealMacosAppBundle !== undefined) {
+    hooks.sealMacosAppBundle(appRoot);
+    return;
+  }
+  requireDarwinBuilder(target, "sealing");
+  // Inside-out, nested code first. The arm64 linker ad-hoc signs every Mach-O at link time, but
+  // the x86_64 one does not, and codesign refuses to seal a bundle over unsigned subcomponents —
+  // measured on macos-15-intel: "code object is not signed at all — In subcomponent:
+  // …/KeikoSystemExtensionManager". Signing these two here is digest-safe: they are bound by the
+  // outer seal and the install-time identity, both computed after this step, and NOT by the
+  // nativeHelpers digests, which cover only the supervisor executable staged under Resources.
+  run("/usr/bin/codesign", [
+    "--force",
+    "--sign",
+    "-",
+    join(appRoot, "Contents", "Library", "SystemExtensions", MACOS_SYSTEM_EXTENSION_ID),
+  ]);
+  run("/usr/bin/codesign", [
+    "--force",
+    "--sign",
+    "-",
+    join(appRoot, "Contents", "MacOS", "KeikoSystemExtensionManager"),
+  ]);
+  run("/usr/bin/codesign", ["--force", "--sign", "-", appRoot]);
+}
+
+/**
+ * The platform's own verifier is the fail-closed assert that nothing mutated the bundle after the
+ * seal: a divergent activation rewrite, a stray staging write, or a broken nested signature all
+ * fail `--verify --deep --strict`, and a bundle that fails it here would have shown the beta.0
+ * "damaged" dead end on the first customer double-click.
+ */
+function verifyMacosAppBundleSeal(target, payloadRoot, hooks) {
+  if (target.nodePlatform !== "darwin") return;
+  const appRoot = join(payloadRoot, "Keiko.app");
+  if (hooks.verifyMacosAppBundleSeal !== undefined) {
+    hooks.verifyMacosAppBundleSeal(appRoot);
+    return;
+  }
+  requireDarwinBuilder(target, "seal verification");
+  run("/usr/bin/codesign", ["--verify", "--deep", "--strict", appRoot]);
+}
+
+function requireDarwinBuilder(target, step) {
+  if (process.platform !== "darwin") {
+    fail(
+      `${step} for ${target.platformTarget} requires a native darwin builder or an injected hook`,
+    );
+  }
 }
 
 function validateGeneratedManifest(manifest, evaluation) {

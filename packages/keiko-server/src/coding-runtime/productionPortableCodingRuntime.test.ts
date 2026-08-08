@@ -9,7 +9,10 @@ import type { RuntimeQualificationReceipt } from "@oscharko-dev/keiko-sandbox";
 
 import { verifyPortableAttestedSidecars } from "../update-portable-sidecar-verification.js";
 import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
-import { discoverQualifiedPortableOpenCode } from "./productionPortableCodingRuntime.js";
+import {
+  discoverQualifiedPortableOpenCode,
+  portableInstallCarriesReleaseSignature,
+} from "./productionPortableCodingRuntime.js";
 
 const TARGET = "windows-x64";
 const COMMIT = "c".repeat(40);
@@ -211,6 +214,41 @@ describe("packaged evaluation lane", () => {
     });
 
     expect(runtime).toBeUndefined();
+  });
+
+  it("answers the public release-signature probe with the launch surface's fail-closed contract", () => {
+    // The portable launcher waives macOS containment activation only on this probe's "false" —
+    // an install the platform reports as unsigned. Its fail-closed direction must match the lane
+    // guard exactly: a probe that cannot answer counts as signed.
+    const root = portableInstall("evaluation");
+    expect(
+      portableInstallCarriesReleaseSignature(root, TARGET, () => ({
+        status: 0,
+        stdout: `${"A".repeat(40)}\n`,
+        stderr: "",
+      })),
+    ).toBe(false); // no launcher on disk: nothing to downgrade from
+
+    writeFileSync(join(root, "Keiko.exe"), "launcher");
+    expect(
+      portableInstallCarriesReleaseSignature(root, TARGET, () => ({
+        status: 0,
+        stdout: `${"A".repeat(40)}\n`,
+        stderr: "",
+      })),
+    ).toBe(true); // signer thumbprint present: release-signed
+    expect(
+      portableInstallCarriesReleaseSignature(root, TARGET, () => ({
+        status: 0,
+        stdout: "",
+        stderr: "",
+      })),
+    ).toBe(false); // platform reports no signer: unsigned
+    expect(
+      portableInstallCarriesReleaseSignature(root, TARGET, () => {
+        throw new Error("probe unavailable");
+      }),
+    ).toBe(true); // probe failure on present code: fail closed toward "signed"
   });
 
   it("still activates the evaluation lane when the install carries no release signature", () => {

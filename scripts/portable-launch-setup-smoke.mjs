@@ -289,7 +289,7 @@ async function runFixtureManualUpgradeClick(
     second.io,
     env,
     {
-      activateMacosRuntimeFn: () => Promise.resolve(true),
+      activateMacosRuntimeFn: () => Promise.resolve("active"),
       arch: () => target.nodeArchitecture,
       homedir: () => home,
       lifecycleFn: (command) => {
@@ -328,7 +328,7 @@ async function runFixtureRelaunch({
     second.io,
     env,
     {
-      activateMacosRuntimeFn: () => Promise.resolve(true),
+      activateMacosRuntimeFn: () => Promise.resolve("active"),
       arch: () => target.nodeArchitecture,
       homedir: () => home,
       lifecycleFn: (_command, _args, _io, _env, deps) => {
