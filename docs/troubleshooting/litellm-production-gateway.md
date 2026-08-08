@@ -47,7 +47,10 @@ KEIKO_HDR="$(mktemp)"; KEIKO_HDR_LLK="$(mktemp)"
 # The trap covers an interrupted run; the explicit rm at the end of THIS block covers the
 # sequential case — a later block reassigns KEIKO_HDR and replaces the trap, which would
 # otherwise strand these files (review finding on #3042).
-trap 'rm -f "$KEIKO_HDR" "$KEIKO_HDR_LLK"' EXIT INT TERM
+# A signal handler must TERMINATE: cleaning up and returning would let the shell resume and
+# recreate the just-deleted path non-exclusively on the next write (review finding on #3042).
+trap 'rm -f "$KEIKO_HDR" "$KEIKO_HDR_LLK"' EXIT
+trap 'rm -f "$KEIKO_HDR" "$KEIKO_HDR_LLK"; exit 130' INT TERM
 read -rs -p 'Paste gateway key (not echoed): ' KEY; echo
 printf 'Authorization: Bearer %s\n' "$KEY" > "$KEIKO_HDR"
 printf 'x-litellm-key: Bearer %s\n' "$KEY" > "$KEIKO_HDR_LLK"
@@ -180,7 +183,8 @@ LITELLM_HOST=your-proxy.example.com
 # writing the credential and installing a trap would otherwise strand it (review finding on
 # #3042).
 KEIKO_HDR="$(mktemp)"; KEIKO_BODY="$(mktemp)"
-trap 'rm -f "$KEIKO_HDR" "$KEIKO_BODY"' EXIT INT TERM
+trap 'rm -f "$KEIKO_HDR" "$KEIKO_BODY"' EXIT
+trap 'rm -f "$KEIKO_HDR" "$KEIKO_BODY"; exit 130' INT TERM
 read -rs -p 'Paste gateway key (not echoed): ' KEY; echo
 printf 'Authorization: Bearer %s\n' "$KEY" > "$KEIKO_HDR"; unset KEY
 # The body goes to a temp file so a TRANSPORT failure surfaces as a curl error (and a non-zero

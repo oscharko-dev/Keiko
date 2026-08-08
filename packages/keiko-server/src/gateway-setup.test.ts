@@ -1268,6 +1268,69 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("keeps a stored disabled streaming across a preserve-mode endpoint move", async () => {
+    // Review finding on #3042: the endpoint-move carry-over preserved only toolCalling, so a
+    // readiness-recorded streaming: false was restored to the permissive chat default (true)
+    // at the new endpoint — and the setup smoke test performs buffered chat only, so nothing
+    // observed streaming there. Both permissive defaults must survive the move.
+    const uiDir = await tempDir("keiko-gw-ui-streaming-move-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-streaming-move-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://old.example.com/v1",
+            apiKey: "old-token",
+            capability: {
+              id: "example-chat",
+              kind: "chat",
+              contextWindow: 128_000,
+              maxOutputTokens: 4_096,
+              toolCalling: true,
+              structuredOutput: true,
+              streaming: false,
+              supportsImageInput: false,
+              supportsDocumentInput: false,
+              workflowEligible: false,
+              costClass: "low",
+              latencyClass: "fast",
+              throughputHint: "t",
+              preferredUseCases: ["Chat"],
+              knownLimitations: [],
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const moved = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://new.example.com/v1",
+        apiKey: "new-token",
+        deploymentNames: ["example-chat"],
+      }),
+      deps,
+    );
+    expect(moved.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (item) => item.id === "example-chat",
+    );
+    expect(capability?.streaming).toBe(false);
+    deps.store.close();
+  });
+
   it("does not carry a stored disabled toolCalling into a non-preserving fresh setup", async () => {
     // Review finding on #3042: the endpoint-move restriction is PRESERVE semantics — a fresh
     // replacement (preserveExisting omitted) deliberately treats stored capabilities as absent

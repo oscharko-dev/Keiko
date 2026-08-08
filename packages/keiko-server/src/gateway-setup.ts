@@ -327,20 +327,33 @@ function existingCapabilityForSetup(
   return current?.capabilities?.find((candidate) => candidate.id === modelId);
 }
 
+// The readiness-verifiable chat flags whose DEFAULT is permissive: a stored false is a real
+// observation, a restored default is a claim nothing verified. structuredOutput,
+// supportsImageInput and supportsDocumentInput default to false already, so they need no
+// carry-over (review finding on #3042 — streaming was the missing twin of toolCalling).
+const PERMISSIVE_CHAT_DEFAULTS = ["toolCalling", "streaming"] as const;
+
 // A chat capability the stored config DISABLED stays disabled until re-verified: when the
 // endpoint moves, sameBaseUrlIdentity breaks and the URL-matched `existing` misses, and without
-// this carry-over a stored toolCalling: false silently flipped back to the default true for
-// every non-Mistral model — the setup smoke test never probes tool calling, so nothing verified
-// the flip (#3037 follow-up). The sanctioned re-enable path is unchanged: the readiness endpoint
-// (replaceModelCapability, gated on a fresh observation), or live discovery metadata, which
-// overrides this restriction with fresh evidence exactly as it overrides a URL-matched stored
-// value. The kind guard keeps a corrected embedding-to-chat deployment on the chat default.
+// this carry-over a stored toolCalling: false (or streaming: false) silently flipped back to the
+// permissive default — the setup smoke test probes neither (it performs buffered chat only), so
+// nothing verified the flip (#3037 follow-up, extended on #3042). The sanctioned re-enable path
+// is unchanged: the readiness endpoint (replaceModelCapability, gated on a fresh observation), or
+// live discovery metadata, which overrides this restriction with fresh evidence exactly as it
+// overrides a URL-matched stored value. The kind guard keeps a corrected embedding-to-chat
+// deployment on the chat default.
 function storedToolCallingRestriction(
   current: GatewayConfig | undefined,
   modelId: string,
 ): Partial<ModelCapability> {
   const stored = current?.capabilities?.find((candidate) => candidate.id === modelId);
-  return stored?.kind === "chat" && !stored.toolCalling ? { toolCalling: false } : {};
+  if (stored?.kind !== "chat") return {};
+  return Object.fromEntries(
+    PERMISSIVE_CHAT_DEFAULTS.filter((field) => stored[field] === false).map((field) => [
+      field,
+      false,
+    ]),
+  );
 }
 
 function codingUseCases(capability: ModelCapability): readonly string[] {
