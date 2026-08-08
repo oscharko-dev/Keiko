@@ -723,6 +723,24 @@ describe("parseGatewayConfigUpload", () => {
     expect(parseGatewayConfigUpload(sttOnly)).toEqual({ outcome: "invalid" });
   });
 
+  it("rejects a declared-false synthesis flag without speech output", () => {
+    // Codex finding on #3041: the canonical assertVoiceTuningInvariants checks field PRESENCE —
+    // supportsSpeechSynthesisInstructions: false without supportsSpeechOutput is refused by the
+    // product parser just like true; accepting it here reported success for a file the product
+    // cannot load and silently dropped the declaration on save.
+    const declaredFalse = JSON.stringify({
+      providers: [
+        providerFixture(),
+        voiceProviderFixture("keiko-stt", {
+          supportsSpeechInput: true,
+          supportsSpeechSynthesisInstructions: false,
+        }),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(declaredFalse)).toEqual({ outcome: "invalid" });
+  });
+
   it("rejects synthesis instructions on a non-voice capability", () => {
     const misplaced = JSON.stringify({
       providers: [

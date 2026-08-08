@@ -321,8 +321,12 @@ function realtimeTuningMatchesSupport(value: Record<string, unknown>): boolean {
   if (value.realtimeTranscriptionModel !== undefined && value.supportsRealtimeVoice !== true) {
     return false;
   }
-  // Synthesis instructions are speech-output tuning (canonical: requires supportsSpeechOutput).
-  if (value.supportsSpeechSynthesisInstructions === true && value.supportsSpeechOutput !== true) {
+  // Synthesis instructions are speech-output tuning — the canonical parser checks field
+  // PRESENCE (a declared false without speech output refuses too, review finding on #3041).
+  if (
+    value.supportsSpeechSynthesisInstructions !== undefined &&
+    value.supportsSpeechOutput !== true
+  ) {
     return false;
   }
   return !(value.supportsSemanticTurnDetection === true && value.supportsRealtimeVoice !== true);

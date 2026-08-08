@@ -1608,6 +1608,159 @@ describe("GatewaySetupDialog", () => {
     });
   });
 
+  it("clears synthesis support explicitly when the speech-output identity changes", async () => {
+    // Codex finding on #3041: marking the hidden pair unconfigured OMITTED the field, so the
+    // server template (the old provider's rawCapability at the same endpoint) re-inherited
+    // instruction support onto the replacement model — speech requests would send instructions
+    // to a deployment that never declared them. The identity transition now submits an explicit
+    // clear.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.upload(
+      await screen.findByLabelText(/load keiko\.config\.json/i),
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                capability: { id: "gpt-5o", kind: "chat" },
+              },
+              {
+                modelId: "keiko-tts",
+                baseUrl: "https://speech.example.com",
+                capability: {
+                  id: "keiko-tts",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsSpeechOutput: true,
+                  supportsSpeechSynthesisInstructions: true,
+                },
+                voiceProfiles: [{ persona: "neutral", voiceId: "ash" }],
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/read aloud.*speech-output deployment/i)).toHaveValue(
+        "keiko-tts",
+      ),
+    );
+    // The user replaces the speech-output model — the imported flag belongs to the OLD model.
+    await userEvent.clear(screen.getByLabelText(/read aloud.*speech-output deployment/i));
+    await userEvent.type(
+      screen.getByLabelText(/read aloud.*speech-output deployment/i),
+      "other-tts",
+    );
+    await userEvent.type(screen.getByLabelText(/output voice/i), "coral");
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).toMatchObject({
+      voiceSpeechOutputModelId: "other-tts",
+      voiceSupportsSpeechSynthesisInstructions: false,
+    });
+  });
+
+  it("drops stale synthesis support when a corrected upload omits the TTS role", async () => {
+    // Codex finding on #3041: in a fresh dialog the speech-output identity ref starts undefined,
+    // so an STT-only re-upload after a TTS upload never triggered the dependency reset — the
+    // stale configured true was submitted without a speech-output role and the corrected file
+    // became unsavable against the server's relationship validation.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+    const upload = async (providers: readonly Record<string, unknown>[]): Promise<void> => {
+      await userEvent.upload(
+        await screen.findByLabelText(/load keiko\.config\.json/i),
+        new File([JSON.stringify({ providers })], "keiko.config.json", {
+          type: "application/json",
+        }),
+      );
+    };
+
+    await upload([
+      {
+        modelId: "gpt-5o",
+        baseUrl: "https://llm-gateway.example.com/v1",
+        capability: { id: "gpt-5o", kind: "chat" },
+      },
+      {
+        modelId: "keiko-tts",
+        baseUrl: "https://speech.example.com",
+        capability: {
+          id: "keiko-tts",
+          kind: "voice",
+          voiceProviderLocality: "azure-foundry",
+          supportsSpeechOutput: true,
+          supportsSpeechSynthesisInstructions: true,
+        },
+        voiceProfiles: [{ persona: "neutral", voiceId: "ash" }],
+      },
+    ]);
+    await waitFor(() =>
+      expect(screen.getByLabelText(/read aloud.*speech-output deployment/i)).toHaveValue(
+        "keiko-tts",
+      ),
+    );
+    // The corrected file keeps the voice section but drops the TTS role entirely.
+    await upload([
+      {
+        modelId: "gpt-5o",
+        baseUrl: "https://llm-gateway.example.com/v1",
+        capability: { id: "gpt-5o", kind: "chat" },
+      },
+      {
+        modelId: "keiko-stt",
+        baseUrl: "https://speech.example.com",
+        capability: {
+          id: "keiko-stt",
+          kind: "voice",
+          voiceProviderLocality: "azure-foundry",
+          supportsSpeechInput: true,
+        },
+      },
+    ]);
+    await waitFor(() =>
+      expect(screen.getByLabelText(/read aloud.*speech-output deployment/i)).toHaveValue(""),
+    );
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).not.toHaveProperty(
+      "voiceSupportsSpeechSynthesisInstructions",
+    );
+  });
+
   it("submits the imported endpoint protocol while the form still points at the uploaded endpoint", async () => {
     // The positive branch of the URL binding: without a manual retype, the imported protocol
     // rides the submit verbatim (#3037).

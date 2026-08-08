@@ -1138,6 +1138,67 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("carries a submitted synthesis tri-state through the preserve-mode provider merge", async () => {
+    // Codex finding on #3041: mergedGeneratedVoiceCapabilities rebuilt the merged capability set
+    // without supportsSpeechSynthesisInstructions, so on a preserve-mode update of an EXISTING
+    // speech-output provider the submitted true could not enable (and false could not clear) the
+    // stored flag even though the request returned success.
+    const uiDir = await tempDir("keiko-gw-ui-synthesis-merge-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-synthesis-merge-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const fresh = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "chat-token",
+        voiceBaseUrl: "https://audio.example.com/v1",
+        voiceApiKey: "audio-token",
+        voiceSpeechOutputModelId: "speech-model",
+        voiceOutputVoiceId: "ash",
+      }),
+      deps,
+    );
+    expect(fresh.status).toBe(200);
+
+    // Enable on the EXISTING provider (merge path) — same model, same connection.
+    const enabled = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceSpeechOutputModelId: "speech-model",
+        voiceOutputVoiceId: "ash",
+        voiceSupportsSpeechSynthesisInstructions: true,
+      }),
+      deps,
+    );
+    expect(enabled.status).toBe(200);
+    const flagAfterEnable = currentGatewayConfig(deps)?.capabilities?.find(
+      (item) => item.id === "speech-model",
+    )?.supportsSpeechSynthesisInstructions;
+    expect(flagAfterEnable).toBe(true);
+
+    // And the explicit clear must travel the same path.
+    const cleared = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceSpeechOutputModelId: "speech-model",
+        voiceOutputVoiceId: "ash",
+        voiceSupportsSpeechSynthesisInstructions: false,
+      }),
+      deps,
+    );
+    expect(cleared.status).toBe(200);
+    const flagAfterClear = currentGatewayConfig(deps)?.capabilities?.find(
+      (item) => item.id === "speech-model",
+    )?.supportsSpeechSynthesisInstructions;
+    expect(flagAfterClear).not.toBe(true);
+    deps.store.close();
+  });
+
   it("persists the submitted voice endpoint protocol on a fresh setup", async () => {
     // A fresh save has no stored template, so without the explicit fields an Azure speech
     // endpoint would be persisted shapeless and every audio call would take the

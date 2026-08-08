@@ -2871,19 +2871,30 @@ function mergedGeneratedVoiceCapabilities(
   const transcriptionSource = generated.capabilities.realtime
     ? generated.capabilities
     : existing.capabilities;
+  const speechOutput = mergeVoiceRole(
+    generated.capabilities.speechOutput,
+    existing.capabilities.speechOutput,
+    replacements.speechOutput,
+  );
+  // The submitted synthesis tri-state must survive the merge: generated carries it only when the
+  // request stated it (true sets, false clears — false must keep overriding the stored template
+  // downstream), otherwise the existing provider's stored value rides along (review finding on
+  // #3041).
+  const supportsSpeechSynthesisInstructions =
+    generated.capabilities.supportsSpeechSynthesisInstructions ??
+    existing.capabilities.supportsSpeechSynthesisInstructions;
   return {
     speechInput: mergeVoiceRole(
       generated.capabilities.speechInput,
       existing.capabilities.speechInput,
       replacements.speechInput,
     ),
-    speechOutput: mergeVoiceRole(
-      generated.capabilities.speechOutput,
-      existing.capabilities.speechOutput,
-      replacements.speechOutput,
-    ),
+    speechOutput,
     realtime,
     supportsSemanticTurnDetection: realtime && supportsSemanticTurnDetection ? true : undefined,
+    ...(speechOutput && supportsSpeechSynthesisInstructions !== undefined
+      ? { supportsSpeechSynthesisInstructions }
+      : {}),
     realtimeTranscriptionModel: realtime
       ? transcriptionSource.realtimeTranscriptionModel
       : undefined,
