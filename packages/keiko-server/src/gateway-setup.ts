@@ -349,10 +349,7 @@ function storedToolCallingRestriction(
   const stored = current?.capabilities?.find((candidate) => candidate.id === modelId);
   if (stored?.kind !== "chat") return {};
   return Object.fromEntries(
-    PERMISSIVE_CHAT_DEFAULTS.filter((field) => stored[field] === false).map((field) => [
-      field,
-      false,
-    ]),
+    PERMISSIVE_CHAT_DEFAULTS.filter((field) => !stored[field]).map((field) => [field, false]),
   );
 }
 
